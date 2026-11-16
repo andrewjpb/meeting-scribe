@@ -1,0 +1,10 @@
+{
+  "metadata": {
+    "errors": [
+      "Your account does not have access to this LLM Gateway model"
+    ]
+  },
+  "request_id": "e2f3aa4d-61cb-48d6-bcae-e62be47c6a16",
+  "message": "invalid request body",
+  "code": 400
+}

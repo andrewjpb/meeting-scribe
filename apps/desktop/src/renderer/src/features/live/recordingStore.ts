@@ -1,0 +1,422 @@
+// Gravação em andamento. A sessão vive aqui, não na tela: trocar de tela no meio não para a captura.
+// A transcrição (contrato 04) só conecta em modo real: no smoke o áudio é gerado e nenhuma rede é
+// tocada; o probe injeta os trechos da fixture. Com o motor Claude CLI (contrato 05) o processo do
+// `claude` abre no main junto com a gravação, continua aberto na pausa e fecha ao encerrar. Com
+// "Salvar áudio e transcrição numa pasta" (contrato 07), um gravador à parte mistura as duas fontes e
+// manda o áudio ao main em pedaços; ao encerrar, o main renomeia o arquivo e escreve a transcrição ao lado.
+import { create } from 'zustand'
+import { audioExtension } from '@shared/meeting-files'
+import { defaultMeetingTitle, MEETING_TITLE_MAX, type Meeting } from '@shared/meetings'
+import { TRANSCRIPT_VERSION, type TranscriptDocument, type TranscriptionTokenResult } from '@shared/transcription'
+import { effectiveTranslationModel, type AppSettings } from '@shared/settings-defaults'
+import { useSettings } from '../../app/settingsStore'
+import { CaptureSession, type CaptureState } from '../../audio/capture'
+import { captureEnvironment, loadCaptureEnvironment, type CaptureEnvironment } from '../../audio/environment'
+import { CountingFrameSink, type AudioSource, type FrameSink } from '../../audio/frames'
+import { AudioFileRecorder, type MeetingAudioRecorder } from '../../audio/recorder'
+import { TranscriptionSession } from '../../transcription/session'
+import type { StreamingSocket } from '../../transcription/sink'
+import { persistableTranscript, useTranscription, type TranscriptionSegment } from '../../transcription/store'
+import { TapeHistory } from './tapeHistory'
+import { tapeStats } from './tapeStats'
+
+interface RecordingState {
+  session: CaptureSession | null
+  capture: CaptureState | null
+  transcription: TranscriptionSession | null
+  tape: TapeHistory | null
+  title: string
+  startedAt: string | null
+  saving: boolean
+  saveFailed: boolean
+  /** Reunião já criada numa tentativa de "Encerrar" que falhou depois: "Tentar de novo" não duplica. */
+  savedMeeting: Meeting | null
+  /** O ambiente de captura não carregou: "Nova gravação" mostra o aviso em vez de gravar. */
+  startFailed: boolean
+  /**
+   * Arquivo de áudio da reunião (contrato 07): `off` com a opção desligada; `recording` mostra o marcador
+   * "Gravando áudio"; `failed` mostra o aviso de pasta e a gravação segue.
+   */
+  audio: 'off' | 'recording' | 'failed'
+  /** Reunião encerrada cujo arquivo não foi escrito na pasta: o detalhe mostra o mesmo aviso. */
+  filesFailedMeetingId: string | null
+  /** Inicia a captura. Chamar direto do gesto (clique, tecla ou menu); devolve falso se já havia uma. */
+  start: () => boolean
+  /** "Tentar de novo" do aviso de início: recarrega o ambiente e começa (o clique é o gesto). */
+  retryStart: () => Promise<void>
+  togglePause: () => void
+  setTitle: (title: string) => void
+  /** Encerra, salva o registro e a transcrição, e devolve a reunião salva (ou `null` se não salvou). */
+  end: () => Promise<Meeting | null>
+}
+
+/** Contagem de quadros da gravação (o smoke confere que a captura continua entregando quadros). */
+const frameCounts: Record<AudioSource, number> = { mic: 0, system: 0 }
+
+/** Gravação que abriu o processo do `claude` no main e o aviso de estado que ela assina. */
+let claudeRun: { session: CaptureSession; off: () => void } | null = null
+
+/**
+ * Abre (aquece) o `claude` no main, antes do primeiro trecho. Não encontrado: a transcrição segue sem
+ * tradução e a coluna mostra o aviso (CA11). Reaberto ou parado de vez: chega por `scribe:claude-state`.
+ */
+function startClaude(session: CaptureSession): void {
+  const api = window.__scribeApi
+  const off = api.on?.('scribe:claude-state', (state) => useTranscription.getState().setClaude(state)) ?? ((): void => undefined)
+  claudeRun = { session, off }
+  void Promise.resolve(api.invoke('scribe:claude-start')).then(
+    (result) => {
+      if (claudeRun?.session !== session) return
+      useTranscription.getState().setClaude(result?.ok ? 'running' : 'not-found')
+    },
+    () => {
+      if (claudeRun?.session === session) useTranscription.getState().setClaude('not-found')
+    },
+  )
+}
+
+/** Encerrar: o main espera a fila por até 5 s, fecha o stdin e mata o processo. */
+async function stopClaude(session: CaptureSession): Promise<void> {
+  if (claudeRun?.session !== session) return
+  const { off } = claudeRun
+  claudeRun = null
+  try {
+    await window.__scribeApi.invoke('scribe:claude-stop')
+  } catch {
+    // O main mata o processo de qualquer forma ao sair.
+  } finally {
+    off()
+  }
+}
+
+/** Gravação com arquivo na pasta: o gravador, a mistura das fontes e o id da sessão de arquivos no main. */
+interface AudioRun {
+  session: CaptureSession
+  handle: MeetingAudioRecorder | null
+  file: AudioFileRecorder | null
+  /** Id da sessão no main; `null` se a pasta não abriu (ou a opção foi desligada no meio). */
+  begin: Promise<string | null>
+}
+
+let audioRun: AudioRun | null = null
+/** Último gravador de arquivo, para o smoke comparar bytes com o arquivo depois de encerrar. */
+let lastAudioFile: AudioFileRecorder | null = null
+
+/**
+ * Começa o arquivo da reunião: escolhe o formato, cria o gravador e pede ao main o `.part` na pasta. O
+ * gravador começa na hora (o primeiro pedaço só sai depois de 5 s, quando o main já respondeu); cada
+ * fonte entra na mistura quando a captura a abre (`onStream`).
+ */
+function startAudioFile(env: CaptureEnvironment, startedAt: Date, title: string, onState: (audio: RecordingState['audio']) => void): Omit<AudioRun, 'session'> {
+  const api = window.__scribeApi
+  const mime = env.recorderMime()
+  let handle: MeetingAudioRecorder | null
+  try {
+    handle = mime ? env.createRecorder(mime) : null
+  } catch {
+    handle = null
+  }
+  const request = { startedAt: startedAt.toISOString(), title, extension: handle && mime ? audioExtension(mime) : null }
+  const result = Promise.resolve(api.invoke('scribe:audio-begin', request)).catch(() => ({ ok: false as const, error: 'unwritable' as const }))
+  const begin = result.then((value) => (value?.ok ? value.id : null))
+  const file = handle
+    ? new AudioFileRecorder({
+        recorder: handle.recorder,
+        writer: {
+          append: async (data) => {
+            const id = await begin
+            return id !== null && (await api.invoke('scribe:audio-append', { id, data })) === true
+          },
+        },
+        onFailure: () => onState('failed'),
+      })
+    : null
+  lastAudioFile = file
+  file?.start()
+  void result.then((value) => {
+    if (value?.ok) {
+      if (!file) onState('failed')
+      return
+    }
+    // Desligada entre a leitura da configuração e o pedido: nada é gravado e não há aviso.
+    if (value?.error === 'disabled') {
+      file?.cancel()
+      onState('off')
+    } else if (file) file.fail()
+    else onState('failed')
+  })
+  return { handle, file, begin }
+}
+
+/**
+ * Encerrar, primeira parte: para o gravador (o último pedaço espera até 5 s) e fecha a mistura, antes de
+ * parar a captura, para o arquivo não terminar com o silêncio das trilhas paradas.
+ */
+async function stopAudioFile(run: AudioRun | null): Promise<void> {
+  if (!run) return
+  await run.file?.stop()
+  await run.handle?.close()
+}
+
+/** Encerrar, segunda parte: o main renomeia o `.part`, escreve o `.md` e grava os caminhos. Falso se algo falhou. */
+async function finishAudioFile(run: AudioRun, meetingId: string): Promise<boolean> {
+  const id = await run.begin
+  if (id === null) return run.file === null || run.file.ok
+  try {
+    const result = await window.__scribeApi.invoke('scribe:audio-finish', { id, meetingId })
+    return result.ok
+  } catch {
+    return false
+  }
+}
+
+/** Pedido do token ao main: a chave nunca chega ao renderer. Falha de canal vira erro de rede. */
+async function requestToken(): Promise<TranscriptionTokenResult> {
+  try {
+    const result: unknown = await window.__scribeApi.invoke('scribe:transcription-token')
+    if (!result || typeof result !== 'object' || typeof (result as { ok?: unknown }).ok !== 'boolean') return { ok: false, error: 'network' }
+    return result as TranscriptionTokenResult
+  } catch {
+    return { ok: false, error: 'network' }
+  }
+}
+
+export const useRecording = create<RecordingState>()((set, get) => ({
+  session: null,
+  capture: null,
+  transcription: null,
+  tape: null,
+  title: '',
+  startedAt: null,
+  saving: false,
+  saveFailed: false,
+  savedMeeting: null,
+  startFailed: false,
+  audio: 'off',
+  filesFailedMeetingId: null,
+
+  start: () => {
+    if (get().session) return false
+    let env: ReturnType<typeof captureEnvironment>
+    try {
+      env = captureEnvironment()
+    } catch {
+      set({ startFailed: true })
+      return false
+    }
+    // Microfone, cancelamento de eco e idiomas como estão em Configurações no momento de começar.
+    const settings = useSettings.getState().settings
+    const { echoCancellation, micDeviceId } = settings
+    const counting = new CountingFrameSink()
+    // A transcrição nasce depois da captura (precisa do relógio dela); o sink a lê na hora de cada quadro.
+    let transcription: TranscriptionSession | null = null
+    // Cada quadro é contado e segue para a transcrição. Os primeiros podem chegar antes de a sessão de
+    // transcrição começar: passam pelo contador e são descartados sem quebrar a captura.
+    const sink: FrameSink = {
+      write: (frame) => {
+        frameCounts[frame.source]++
+        counting.write(frame)
+        transcription?.write(frame)
+      },
+    }
+    const startedAt = new Date()
+    const title = defaultMeetingTitle(startedAt)
+    // Arquivo da reunião, se a opção está ligada: o gravador lê as mesmas trilhas que a captura abrir.
+    let audio: Omit<AudioRun, 'session'> | null = null
+    const session = new CaptureSession({
+      media: env.media,
+      createPipeline: env.createPipeline,
+      sink,
+      settings: { echoCancellation, micDeviceId },
+      onStream: (source, stream) => audio?.handle?.addStream(source, stream),
+    })
+    if (settings.saveToFolder) {
+      audio = startAudioFile(env, startedAt, title, (state) => {
+        if (audioRun?.session === session) set({ audio: state })
+      })
+      audioRun = { session, ...audio }
+    }
+    const real = env.mode === 'real'
+    transcription = real
+      ? new TranscriptionSession({
+          sources: ['mic', 'system'],
+          settings,
+          elapsedMs: () => session.clock.elapsedMs,
+          getToken: requestToken,
+          openSocket: (url) => new WebSocket(url) as unknown as StreamingSocket,
+          onMessage: (envelope) => useTranscription.getState().receive(envelope),
+          onStatus: (source, status) => useTranscription.getState().updateSource(source, status),
+        })
+      : null
+    useTranscription.getState().attach(transcription, settings)
+    if (settings.translationEnabled && settings.translationEngine === 'claude-cli') startClaude(session)
+    // No smoke (sinal gerado) não há sink: o estado sem chave precisa vir da configuração.
+    if (!real) {
+      void Promise.resolve(window.__scribeApi.invoke('scribe:key-status'))
+        .then(
+        (status) => {
+          if (!status.configured && get().session === session) useTranscription.getState().markNoKey()
+        },
+          () => undefined,
+        )
+    }
+    session.subscribe((capture) => set({ capture }))
+    set({
+      session,
+      transcription,
+      tape: new TapeHistory(),
+      capture: session.getState(),
+      title,
+      startedAt: startedAt.toISOString(),
+      saving: false,
+      saveFailed: false,
+      savedMeeting: null,
+      startFailed: false,
+      // Sem formato aceito ou gravador que nem começou: o aviso já aparece aqui.
+      audio: audioRun?.session === session ? (audioRun.file?.ok ? 'recording' : 'failed') : 'off',
+    })
+    frameCounts.mic = 0
+    frameCounts.system = 0
+    // A parte síncrona de `start()` já pede as duas fontes, ainda dentro do gesto.
+    session
+      .start()
+      .catch(() => undefined)
+      .then(() => {
+        // Só a fonte que a captura abriu recebe conexão: evita sessão ociosa cobrada na outra.
+        const capture = session.getState()
+        const active = (['mic', 'system'] as const).filter((source) => capture[source] !== 'failed')
+        if (transcription && get().session === session) transcription.start(active)
+      })
+    return true
+  },
+
+  retryStart: async () => {
+    try {
+      await loadCaptureEnvironment()
+    } catch {
+      set({ startFailed: true })
+      return
+    }
+    get().start()
+  },
+
+  togglePause: () => {
+    const { session, capture, transcription } = get()
+    if (!session || !capture) return
+    // O arquivo da reunião pausa junto: não guarda o silêncio da pausa (contrato 07, CA6).
+    const file = audioRun?.session === session ? audioRun.file : null
+    if (capture.phase === 'recording') {
+      transcription?.pause()
+      file?.pause()
+      session.pause()
+    } else if (capture.phase === 'paused') {
+      session.resume()
+      file?.resume()
+      transcription?.resume()
+    }
+  },
+
+  setTitle: (title) => {
+    const value = title.trim().slice(0, MEETING_TITLE_MAX)
+    if (value) set({ title: value })
+  },
+
+  end: async () => {
+    const { session, transcription, startedAt } = get()
+    if (!session || !startedAt || get().saving) return null
+    set({ saving: true, saveFailed: false })
+    const settings = useSettings.getState().settings
+    const audio = audioRun?.session === session ? audioRun : null
+    try {
+      await stopAudioFile(audio)
+      const result = lastResult.get(session) ?? (await stopOnce(session))
+      lastResult.set(session, result)
+      // Termina a transcrição antes de persistir: espera o `Termination` por até 3 s (CA7) e as
+      // traduções de reserva ainda pendentes por até 5 s, para o resultado delas entrar no arquivo. Com o
+      // Claude CLI, os trechos finais já foram para a fila do main; ele espera a mesma janela e fecha.
+      await transcription?.end()
+      await Promise.all([useTranscription.getState().settleTranslations(), stopClaude(session)])
+      const meeting =
+        get().savedMeeting ??
+        (await window.__scribeApi.invoke('scribe:meetings-create', { title: get().title, startedAt, durationMs: result.durationMs, sources: result.sources }))
+      set({ savedMeeting: meeting })
+      const hasTranscript = await saveTranscript(meeting.id, useTranscription.getState().segments, settings)
+      // Depois da transcrição interna salva: o main renomeia o áudio e escreve o `.md` (CA6, CA6b).
+      if (audio) {
+        const filesOk = await finishAudioFile(audio, meeting.id)
+        if (audioRun === audio) audioRun = null
+        set({ filesFailedMeetingId: filesOk && get().audio !== 'failed' ? null : meeting.id })
+      }
+      // Resumo (contrato 08, CA4): com algum trecho, o main resume em segundo plano, depois dos arquivos
+      // (o `- resumo.md` vai ao lado deles). Só com "Resumir ao encerrar" ligado e o `claude` encontrado;
+      // quem decide é o main. A tela não espera.
+      if (hasTranscript) void Promise.resolve(window.__scribeApi.invoke('scribe:summary-generate', { meetingId: meeting.id, auto: true })).catch(() => undefined)
+      useTranscription.getState().reset()
+      set({
+        session: null,
+        capture: null,
+        transcription: null,
+        tape: null,
+        title: '',
+        startedAt: null,
+        saving: false,
+        savedMeeting: null,
+        audio: 'off',
+      })
+      return meeting
+    } catch {
+      set({ saving: false, saveFailed: true })
+      return null
+    }
+  },
+}))
+
+// "Remover eco do alto-falante" trocado em Configurações vale para a gravação em curso (contrato 06,
+// CA7): os trechos que já existem são reavaliados na hora. Repassa sempre, inclusive enquanto
+// "Encerrar" salva; sem gravação não faz nada (a próxima lê a configuração ao começar).
+useSettings.subscribe((state, previous) => {
+  if (state.settings.removeEcho !== previous.settings.removeEcho) useTranscription.getState().setRemoveEcho(state.settings.removeEcho)
+})
+
+type StopResult = Awaited<ReturnType<CaptureSession['stop']>>
+
+/** Resultado da captura já encerrada, para "Tentar de novo" salvar sem parar de novo. */
+const lastResult = new WeakMap<CaptureSession, StopResult>()
+
+/**
+ * Para a captura. Se `stop()` já foi tentado e falhou no meio (a sessão não está mais ativa), o
+ * registro sai do cronômetro, que `stop()` para antes de qualquer outra coisa, e das fontes ouvidas.
+ */
+async function stopOnce(session: CaptureSession): Promise<StopResult> {
+  const { phase, heard } = session.getState()
+  if (phase === 'stopping' || phase === 'stopped') return { durationMs: session.clock.elapsedMs, sources: { mic: heard.mic, system: heard.system } }
+  return session.stop()
+}
+
+/** Grava a transcrição em `meetings/<id>.json` (CA12). Sem trechos (sem chave), nada é escrito e devolve falso. */
+async function saveTranscript(meetingId: string, segments: readonly TranscriptionSegment[], settings: AppSettings): Promise<boolean> {
+  const persisted = persistableTranscript(segments)
+  if (!persisted.length) return false
+  const document: TranscriptDocument = {
+    version: TRANSCRIPT_VERSION,
+    meetingId,
+    sourceLanguage: settings.sourceLanguage,
+    targetLanguage: settings.translationEnabled ? settings.targetLanguage : null,
+    // Com o Claude CLI, `claude-cli:<modelo>` (contrato 05, CA14).
+    translationModel: settings.translationEnabled ? effectiveTranslationModel(settings) : null,
+    segments: persisted,
+  }
+  await window.__scribeApi.invoke('scribe:transcript-save', { document })
+  return persisted.some((segment) => segment.text.trim() !== '')
+}
+
+/** Smoke: estado da captura, quadros contados, quadros desenhados pela fita e a fixture na tela. */
+export function exposeRecordingProbe(): void {
+  captureEnvironment().exposeProbe({
+    state: () => useRecording.getState().capture,
+    frames: () => ({ ...frameCounts }),
+    tapeFrames: () => tapeStats.frames,
+    replay: (segments) => useTranscription.getState().replay(segments as TranscriptionSegment[]),
+    audioFile: () => (lastAudioFile ? { chunks: lastAudioFile.chunks, bytes: lastAudioFile.bytes, ok: lastAudioFile.ok } : null),
+  })
+}

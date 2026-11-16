@@ -1,0 +1,41 @@
+{
+  "request": {
+    "model": "qwen3.5-4b-32k-fast",
+    "max_tokens": 1
+  },
+  "request_id": "32e867bf-6117-4b3c-adaa-47b4ae041480",
+  "model": "qwen3.5-4b-32k-fast",
+  "choices": [
+    {
+      "index": 0,
+      "finish_reason": "length",
+      "message": {
+        "role": "assistant",
+        "content": "Great"
+      }
+    }
+  ],
+  "usage": {
+    "input_tokens": 13,
+    "prompt_tokens": 13,
+    "output_tokens": 1,
+    "completion_tokens": 1,
+    "total_tokens": 14,
+    "prompt_tokens_details": {
+      "cached_tokens": 0,
+      "audio_tokens": 0,
+      "cache_creation": {
+        "ephemeral_5m_input_tokens": 0,
+        "ephemeral_1h_input_tokens": 0
+      }
+    },
+    "completion_tokens_details": {
+      "reasoning_tokens": 0,
+      "audio_tokens": 0,
+      "accepted_prediction_tokens": 0,
+      "rejected_prediction_tokens": 0
+    }
+  },
+  "response_time": 46403316,
+  "llm_status_code": 200
+}

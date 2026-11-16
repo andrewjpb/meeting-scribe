@@ -1,0 +1,17 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "lib": ["ES2023"],
+    "types": ["node"],
+    "noEmit": true
+  },
+  "include": [
+    "electron.vite.config.ts",
+    "vitest.config.mts",
+    "src/main/**/*",
+    "src/shared/**/*",
+    "src/renderer/src/app/theme.ts",
+    "test/**/*"
+  ],
+  "exclude": ["test/renderer/**/*"]
+}

@@ -1,0 +1,12 @@
+{
+  "metadata": {
+    "errors": [
+      "model is a required field",
+      "one of messages or prompt required",
+      "model  is not supported"
+    ]
+  },
+  "request_id": "221cd57b-812d-43d1-b333-e3d2e8703422",
+  "message": "invalid request body",
+  "code": 400
+}

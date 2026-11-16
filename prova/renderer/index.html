@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <title>Meeting Scribe — prova</title>
+  <style>
+    body { font: 13px -apple-system, system-ui, sans-serif; margin: 12px; }
+    button { margin: 0 4px 6px 0; }
+    .painel { border: 1px solid #ccc; border-radius: 6px; padding: 8px; margin: 8px 0; }
+    .painel h2 { font-size: 14px; margin: 0 0 6px; }
+    .barra { height: 12px; background: #eee; width: 100%; }
+    .barra div { height: 100%; width: 0; background: #2a9d4b; }
+    pre { margin: 4px 0; white-space: pre-wrap; word-break: break-all; font-size: 11px; }
+    .eventos { max-height: 60px; overflow: auto; }
+    #aviso { color: #fff; background: #c62828; padding: 6px; font-weight: bold; display: none; }
+    #log { height: 140px; overflow: auto; background: #f6f6f6; }
+  </style>
+</head>
+<body>
+  <div>
+    <button id="btn-mic">Mic</button>
+    <button id="btn-sistema">Sistema</button>
+    <button id="btn-ambos">Mic + Sistema</button>
+    <button id="btn-parar">Parar</button>
+    <button id="btn-gravar">Gravar 30 s</button>
+    <label><input type="checkbox" id="restrict"> restrictOwnAudio</label>
+    <button id="btn-tom">Tocar tom de teste</button>
+  </div>
+  <div>Microfone (getMediaAccessStatus): <b id="mic-status">?</b> · <span id="suporte"></span> · <span id="gravacao"></span></div>
+  <div id="aviso"></div>
+
+  <section class="painel" id="painel-mic">
+    <h2>Mic</h2>
+    <div>readyState: <b class="estado">—</b> · AudioContext.sampleRate: <b class="ctx">—</b> · <span class="db">—</span></div>
+    <div class="barra"><div></div></div>
+    <pre class="settings"></pre>
+    <pre class="eventos"></pre>
+  </section>
+
+  <section class="painel" id="painel-sistema">
+    <h2>Sistema (loopback)</h2>
+    <div>readyState: <b class="estado">—</b> · AudioContext.sampleRate: <b class="ctx">—</b> · <span class="db">—</span></div>
+    <div class="barra"><div></div></div>
+    <pre class="settings"></pre>
+    <pre class="eventos"></pre>
+  </section>
+
+  <pre id="log"></pre>
+  <script src="app.js"></script>
+</body>
+</html>

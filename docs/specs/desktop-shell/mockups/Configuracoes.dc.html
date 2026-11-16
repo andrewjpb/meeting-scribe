@@ -1,0 +1,189 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<title>Configurações</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0}
+a{color:#1E5BB8}a:hover{color:#0A2A5E}
+</style>
+</helmet>
+<div style="display: flex; flex-wrap: wrap; min-height: 1360px; background: #FFFFFF; color: #061A3D; font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; font-size: 13px; line-height: 1.4">
+
+<nav aria-label="Principal" style="flex: 1 0 224px; max-width: 224px; box-sizing: border-box; background: #0A2A5E; color: #FFFFFF; display: flex; flex-direction: column; gap: 24px; padding: 52px 12px 20px">
+<div style="display: flex; align-items: center; gap: 10px; padding: 0 8px">
+<svg width="28" height="28" viewBox="0 0 100 100" role="img" aria-label="LAP"><rect x="0" y="0" width="100" height="100" rx="6" fill="#FFFFFF"></rect><path d="M 20 25 L 20 75 L 55 75" fill="none" stroke="#0A2A5E" stroke-width="8" stroke-linecap="square" stroke-linejoin="miter"></path><rect x="62" y="58" width="22" height="22" fill="#3B82F6"></rect></svg>
+<div style="display: flex; flex-direction: column; gap: 2px">
+<span style="font-size: 15px; font-weight: 700; letter-spacing: -0.2px">Meeting Scribe</span>
+<span style="font-size: 10px; font-weight: 500; letter-spacing: 0.14em; color: #A8B5CC">LAP SOFTWARE</span>
+</div>
+</div>
+<div style="display: flex; flex-direction: column; gap: 2px">
+<a href="Reunioes.dc.html" style="display: flex; align-items: center; gap: 10px; height: 40px; padding: 0 10px; border-radius: 4px; color: #A8B5CC; text-decoration: none; font-size: 13px">
+<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" aria-hidden="true"><rect x="4" y="3" width="16" height="18"></rect><path d="M8 8h8M8 12h8M8 16h5"></path></svg>
+Reuniões
+</a>
+<a href="Configuracoes.dc.html" aria-current="page" style="display: flex; align-items: center; gap: 10px; height: 40px; padding: 0 10px; border-radius: 4px; background: rgba(255,255,255,0.12); color: #FFFFFF; text-decoration: none; font-size: 13px; font-weight: 500">
+<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h2M10 17h10"></path><rect x="14" y="5" width="4" height="4"></rect><rect x="6" y="15" width="4" height="4"></rect></svg>
+Configurações
+</a>
+</div>
+<div style="margin-top: auto; display: flex; flex-direction: column; gap: 10px; padding: 16px 10px 0; border-top: 1px solid rgba(255,255,255,0.12)">
+<span style="font-size: 10px; font-weight: 500; letter-spacing: 0.14em; color: #A8B5CC">PERMISSÕES</span>
+<div style="display: flex; align-items: center; gap: 8px; font-size: 12px"><span style="width: 6px; height: 6px; background: #3B82F6" aria-hidden="true"></span><span style="flex-grow: 1">Microfone</span><span style="color: #A8B5CC">concedido</span></div>
+<div style="display: flex; align-items: center; gap: 8px; font-size: 12px"><span style="width: 6px; height: 6px; background: #A8B5CC" aria-hidden="true"></span><span style="flex-grow: 1">Áudio do sistema</span><span style="color: #A8B5CC">não verificado</span></div>
+</div>
+</nav>
+
+<main style="flex: 999 1 560px; min-width: 0; box-sizing: border-box; padding: 28px 40px 48px">
+<div style="display: flex; flex-direction: column; gap: 40px; width: 100%; max-width: 680px">
+
+<h1 style="margin: 0; font-size: 26px; line-height: 32px; font-weight: 700; letter-spacing: -0.3px; color: #0A2A5E">Configurações</h1>
+
+<section style="display: flex; flex-direction: column">
+<h2 style="margin: 0; font-size: 17px; line-height: 24px; font-weight: 700; color: #0A2A5E">Transcrição</h2>
+<span style="width: 24px; height: 2px; margin: 8px 0 8px; background: #0A2A5E" aria-hidden="true"></span>
+<div style="display: flex; flex-direction: column; gap: 12px; padding: 16px 0; border-bottom: 1px solid #E3E9F2">
+<div style="display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 8px">
+<label for="chave" style="font-size: 13px; font-weight: 500">Chave da AssemblyAI</label>
+<span style="display: flex; align-items: center; gap: 6px; font-size: 12px; color: #1E5BB8; font-weight: 500"><span style="width: 6px; height: 6px; background: #1E5BB8" aria-hidden="true"></span>Chave válida · termina em ••••4f2a</span>
+</div>
+<div style="display: flex; flex-wrap: wrap; gap: 8px">
+<input id="chave" type="password" placeholder="Cole uma chave nova para substituir" autocomplete="off" style="flex: 1 1 280px; min-width: 0; height: 40px; box-sizing: border-box; padding: 0 12px; border: 1px solid #C9D4E5; border-radius: 4px; background: #FFFFFF; color: #061A3D; font: inherit">
+<button type="button" style="height: 40px; padding: 0 16px; border: 0; border-radius: 4px; background: #1E5BB8; color: #FFFFFF; font: inherit; font-weight: 500; cursor: pointer">Salvar</button>
+<button type="button" style="height: 40px; padding: 0 14px; border: 0; border-radius: 4px; background: transparent; color: #C62F34; font: inherit; font-weight: 500; cursor: pointer">Remover</button>
+</div>
+<p style="margin: 0; font-size: 12px; color: #5B6B85">Guardada cifrada neste Mac, protegida pelo Chaveiro do macOS. <a href="https://www.assemblyai.com/dashboard">Criar chave</a></p>
+</div>
+</section>
+
+<section style="display: flex; flex-direction: column">
+<h2 style="margin: 0; font-size: 17px; line-height: 24px; font-weight: 700; color: #0A2A5E">Áudio</h2>
+<span style="width: 24px; height: 2px; margin: 8px 0 8px; background: #0A2A5E" aria-hidden="true"></span>
+<div style="display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; min-height: 64px; padding: 8px 0; box-sizing: border-box; border-bottom: 1px solid #E3E9F2">
+<div style="display: flex; flex-direction: column; gap: 2px">
+<label for="mic" style="font-size: 13px; font-weight: 500">Microfone</label>
+<span style="font-size: 12px; color: #5B6B85">Usado para a sua voz.</span>
+</div>
+<select id="mic" style="height: 40px; min-width: 240px; padding: 0 10px; border: 1px solid #C9D4E5; border-radius: 4px; background: #FFFFFF; color: #061A3D; font: inherit">
+<option>Padrão do sistema</option>
+<option>Microfone (MacBook Air)</option>
+</select>
+</div>
+<div style="display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; min-height: 64px; padding: 8px 0; box-sizing: border-box; border-bottom: 1px solid #E3E9F2">
+<div style="display: flex; flex-direction: column; gap: 2px; max-width: 440px">
+<span id="eco-nome" style="font-size: 13px; font-weight: 500">Cancelamento de eco</span>
+<span style="font-size: 12px; color: #5B6B85">Ligue se usar alto-falante em vez de fone, para a fala dos participantes não entrar pelo seu microfone.</span>
+</div>
+<button type="button" role="switch" aria-checked="false" aria-labelledby="eco-nome" style="display: flex; align-items: center; width: 44px; height: 24px; padding: 3px; box-sizing: border-box; border: 1px solid #C9D4E5; border-radius: 4px; background: #EEF2F9; cursor: pointer"><span style="width: 16px; height: 16px; background: #5B6B85; border-radius: 2px"></span></button>
+</div>
+</section>
+
+<section style="display: flex; flex-direction: column">
+<h2 style="margin: 0; font-size: 17px; line-height: 24px; font-weight: 700; color: #0A2A5E">Idiomas</h2>
+<span style="width: 24px; height: 2px; margin: 8px 0 8px; background: #0A2A5E" aria-hidden="true"></span>
+<div style="display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; min-height: 64px; padding: 8px 0; box-sizing: border-box; border-bottom: 1px solid #E3E9F2">
+<div style="display: flex; flex-direction: column; gap: 2px">
+<label for="origem" style="font-size: 13px; font-weight: 500">Idioma falado</label>
+<span style="font-size: 12px; color: #5B6B85">O idioma da reunião.</span>
+</div>
+<select id="origem" style="height: 40px; min-width: 240px; padding: 0 10px; border: 1px solid #C9D4E5; border-radius: 4px; background: #FFFFFF; color: #061A3D; font: inherit">
+<option>Português</option><option>Inglês</option><option>Espanhol</option><option>Japonês</option><option>Coreano</option><option>Chinês</option>
+</select>
+</div>
+<div style="display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; min-height: 64px; padding: 8px 0; box-sizing: border-box; border-bottom: 1px solid #E3E9F2">
+<div style="display: flex; flex-direction: column; gap: 2px">
+<span id="trad-nome" style="font-size: 13px; font-weight: 500">Traduzir ao vivo</span>
+<span style="font-size: 12px; color: #5B6B85">A tradução aparece abaixo de cada fala.</span>
+</div>
+<button type="button" role="switch" aria-checked="true" aria-labelledby="trad-nome" style="display: flex; align-items: center; justify-content: flex-end; width: 44px; height: 24px; padding: 3px; box-sizing: border-box; border: 1px solid #1E5BB8; border-radius: 4px; background: #1E5BB8; cursor: pointer"><span style="width: 16px; height: 16px; background: #FFFFFF; border-radius: 2px"></span></button>
+</div>
+<div style="display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; min-height: 64px; padding: 8px 0; box-sizing: border-box; border-bottom: 1px solid #E3E9F2">
+<label for="destino" style="font-size: 13px; font-weight: 500">Traduzir para</label>
+<select id="destino" style="height: 40px; min-width: 240px; padding: 0 10px; border: 1px solid #C9D4E5; border-radius: 4px; background: #FFFFFF; color: #061A3D; font: inherit">
+<option>Inglês</option><option>Português</option><option>Espanhol</option><option>Japonês</option><option>Coreano</option><option>Chinês</option>
+</select>
+</div>
+</section>
+
+<section style="display: flex; flex-direction: column">
+<h2 style="margin: 0; font-size: 17px; line-height: 24px; font-weight: 700; color: #0A2A5E">Modelo de tradução</h2>
+<span style="width: 24px; height: 2px; margin: 8px 0 16px; background: #0A2A5E" aria-hidden="true"></span>
+<div style="display: flex; flex-direction: column; border: 1px solid #C9D4E5; border-radius: 6px; overflow: hidden">
+<div style="display: flex; align-items: center; gap: 10px; padding: 0 12px; border-bottom: 1px solid #C9D4E5; background: #EEF2F9">
+<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#5B6B85" stroke-width="1.5" stroke-linecap="square" aria-hidden="true"><circle cx="11" cy="11" r="6"></circle><path d="M16 16l4 4"></path></svg>
+<input type="search" aria-label="Buscar modelo" placeholder="Buscar por nome ou id" style="flex-grow: 1; min-width: 0; height: 44px; border: 0; background: transparent; color: #061A3D; font: inherit">
+<span style="font-size: 12px; color: #5B6B85">60 modelos</span>
+</div>
+
+<button type="button" aria-pressed="true" style="display: flex; flex-wrap: wrap; align-items: center; gap: 12px; min-height: 56px; padding: 8px 12px; border: 0; border-bottom: 1px solid #E3E9F2; background: #FFFFFF; color: #061A3D; font: inherit; text-align: left; cursor: pointer">
+<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#1E5BB8" stroke-width="2" stroke-linecap="square" aria-hidden="true"><path d="M5 12l5 5 9-10"></path></svg>
+<span style="flex: 1 1 200px; display: flex; flex-direction: column; gap: 2px"><span style="font-weight: 500">Qwen3.5 4B Fast</span><span style="font-family: Menlo, ui-monospace, monospace; font-size: 11px; color: #5B6B85">qwen3.5-4b-32k-fast</span></span>
+<span style="font-size: 12px; font-variant-numeric: tabular-nums">US$ 0,10 / 0,50 por 1M</span>
+<span style="flex: 0 0 40px; text-align: right; font-size: 12px; color: #5B6B85; font-variant-numeric: tabular-nums">32k</span>
+</button>
+<button type="button" aria-pressed="false" style="display: flex; flex-wrap: wrap; align-items: center; gap: 12px; min-height: 56px; padding: 8px 12px; border: 0; border-bottom: 1px solid #E3E9F2; background: #FFFFFF; color: #061A3D; font: inherit; text-align: left; cursor: pointer">
+<span style="width: 16px" aria-hidden="true"></span>
+<span style="flex: 1 1 200px; display: flex; flex-direction: column; gap: 2px"><span style="font-weight: 500">GPT-5 Nano</span><span style="font-family: Menlo, ui-monospace, monospace; font-size: 11px; color: #5B6B85">gpt-5-nano</span></span>
+<span style="font-size: 12px; font-variant-numeric: tabular-nums">US$ 0,05 / 0,40 por 1M</span>
+<span style="flex: 0 0 40px; text-align: right; font-size: 12px; color: #5B6B85; font-variant-numeric: tabular-nums">400k</span>
+</button>
+<button type="button" aria-pressed="false" style="display: flex; flex-wrap: wrap; align-items: center; gap: 12px; min-height: 56px; padding: 8px 12px; border: 0; border-bottom: 1px solid #E3E9F2; background: #FFFFFF; color: #061A3D; font: inherit; text-align: left; cursor: pointer">
+<span style="width: 16px" aria-hidden="true"></span>
+<span style="flex: 1 1 200px; display: flex; flex-direction: column; gap: 2px"><span style="font-weight: 500">Haiku 5.5</span><span style="font-family: Menlo, ui-monospace, monospace; font-size: 11px; color: #5B6B85">claude-haiku-5-5</span></span>
+<span style="font-size: 12px; font-variant-numeric: tabular-nums">US$ 0,10 / 0,50 por 1M</span>
+<span style="flex: 0 0 40px; text-align: right; font-size: 12px; color: #5B6B85; font-variant-numeric: tabular-nums">1M</span>
+</button>
+<button type="button" aria-pressed="false" style="display: flex; flex-wrap: wrap; align-items: center; gap: 12px; min-height: 56px; padding: 8px 12px; border: 0; border-bottom: 1px solid #E3E9F2; background: #FFFFFF; color: #061A3D; font: inherit; text-align: left; cursor: pointer">
+<span style="width: 16px" aria-hidden="true"></span>
+<span style="flex: 1 1 200px; display: flex; flex-direction: column; gap: 2px"><span style="font-weight: 500">GPT OSS 120B</span><span style="font-family: Menlo, ui-monospace, monospace; font-size: 11px; color: #5B6B85">gpt-oss-120b</span></span>
+<span style="font-size: 12px; font-variant-numeric: tabular-nums">US$ 0,15 / 0,60 por 1M</span>
+<span style="flex: 0 0 40px; text-align: right; font-size: 12px; color: #5B6B85; font-variant-numeric: tabular-nums">131k</span>
+</button>
+<button type="button" aria-pressed="false" aria-disabled="true" style="display: flex; flex-wrap: wrap; align-items: center; gap: 12px; min-height: 56px; padding: 8px 12px; border: 0; border-bottom: 1px solid #E3E9F2; background: #EEF2F9; color: #5B6B85; font: inherit; text-align: left; cursor: not-allowed">
+<span style="width: 16px" aria-hidden="true"></span>
+<span style="flex: 1 1 200px; display: flex; flex-direction: column; gap: 2px"><span style="font-weight: 500">Gemini 2.5 Flash Lite</span><span style="font-family: Menlo, ui-monospace, monospace; font-size: 11px">gemini-2.5-flash-lite</span></span>
+<span style="font-size: 12px; font-weight: 500">Não liberado na sua conta</span>
+<span style="flex: 0 0 40px; text-align: right; font-size: 12px; font-variant-numeric: tabular-nums">1M</span>
+</button>
+<button type="button" aria-pressed="false" style="display: flex; flex-wrap: wrap; align-items: center; gap: 12px; min-height: 56px; padding: 8px 12px; border: 0; background: #FFFFFF; color: #061A3D; font: inherit; text-align: left; cursor: pointer">
+<span style="width: 16px" aria-hidden="true"></span>
+<span style="flex: 1 1 200px; display: flex; flex-direction: column; gap: 2px"><span style="font-weight: 500">DeepSeek V4.1 Flash</span><span style="font-family: Menlo, ui-monospace, monospace; font-size: 11px; color: #5B6B85">deepseek-v4.1-flash</span></span>
+<span style="font-size: 12px; font-variant-numeric: tabular-nums">US$ 0,30 / 1,20 por 1M</span>
+<span style="flex: 0 0 40px; text-align: right; font-size: 12px; color: #5B6B85; font-variant-numeric: tabular-nums">1M</span>
+</button>
+</div>
+<p style="margin: 10px 0 0; font-size: 12px; color: #5B6B85">Preço de entrada e de saída por 1 milhão de tokens. Ao escolher, o app confere se o modelo está liberado na sua conta.</p>
+</section>
+
+<section style="display: flex; flex-direction: column">
+<h2 style="margin: 0; font-size: 17px; line-height: 24px; font-weight: 700; color: #0A2A5E">Aparência</h2>
+<span style="width: 24px; height: 2px; margin: 8px 0 8px; background: #0A2A5E" aria-hidden="true"></span>
+<div style="display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; min-height: 64px; padding: 8px 0; box-sizing: border-box; border-bottom: 1px solid #E3E9F2">
+<span id="tema-nome" style="font-size: 13px; font-weight: 500">Tema</span>
+<div role="group" aria-labelledby="tema-nome" style="display: flex; border: 1px solid #C9D4E5; border-radius: 4px; overflow: hidden">
+<button type="button" aria-pressed="true" style="height: 40px; padding: 0 16px; border: 0; background: #0A2A5E; color: #FFFFFF; font: inherit; font-weight: 500; cursor: pointer">Sistema</button>
+<button type="button" aria-pressed="false" style="height: 40px; padding: 0 16px; border: 0; border-left: 1px solid #C9D4E5; background: #FFFFFF; color: #061A3D; font: inherit; cursor: pointer">Claro</button>
+<button type="button" aria-pressed="false" style="height: 40px; padding: 0 16px; border: 0; border-left: 1px solid #C9D4E5; background: #FFFFFF; color: #061A3D; font: inherit; cursor: pointer">Escuro</button>
+</div>
+</div>
+</section>
+
+</div>
+</main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1280,"height":1360}}'>
+class Component extends DCLogic {
+renderVals() {
+return {};
+}
+}
+</script>
+</body>
+</html>

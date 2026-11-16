@@ -1,0 +1,5 @@
+{
+  "error": "Authentication error, API token missing/invalid",
+  "status": "error",
+  "request_id": "1063e600-39f2-411f-9267-3ee4b736e843"
+}

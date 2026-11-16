@@ -1,0 +1,3254 @@
+{
+  "data": [
+    {
+      "default_parameters": {
+        "temperature": null,
+        "top_p": null,
+        "frequency_penalty": null
+      },
+      "id": "qwen3.5-4b-32k-fast",
+      "name": "Qwen3.5 4B Fast",
+      "description": "",
+      "supported_parameters": [
+        "max_tokens",
+        "temperature",
+        "stream"
+      ],
+      "top_provider": {
+        "is_moderated": false,
+        "context_length": 32768,
+        "max_completion_tokens": 8192
+      },
+      "context_length": 32768,
+      "pricing": {
+        "global": {
+          "completions": 0.5,
+          "prompt": 0.1
+        }
+      },
+      "creator": "assemblyai",
+      "retirement_date": 0,
+      "available_regions": [
+        "us",
+        "eu"
+      ],
+      "providers": [
+        {
+          "id": "assemblyai",
+          "name": "AssemblyAI"
+        }
+      ],
+      "default_provider": {
+        "id": "assemblyai",
+        "name": "AssemblyAI"
+      },
+      "date_added": null,
+      "rate_limits": {
+        "rpm": 30,
+        "tpm": 30000
+      }
+    },
+    {
+      "default_parameters": {
+        "temperature": null,
+        "top_p": null,
+        "frequency_penalty": null
+      },
+      "id": "claude-haiku-4-5-20251001",
+      "name": "Haiku 4.5",
+      "description": "",
+      "supported_parameters": [
+        "max_tokens",
+        "temperature",
+        "tools",
+        "tool_choice",
+        "response_format",
+        "stream"
+      ],
+      "top_provider": {
+        "is_moderated": false,
+        "context_length": 200000,
+        "max_completion_tokens": 64000
+      },
+      "context_length": 200000,
+      "pricing": {
+        "global": {
+          "completions": 5,
+          "prompt": 1,
+          "input_cache_read": 0.1,
+          "input_cache_write": 1.25,
+          "input_cache_write_1h": 2
+        },
+        "regional_increase_percent": 0.1
+      },
+      "creator": "Claude",
+      "retirement_date": 0,
+      "available_regions": [
+        "us",
+        "eu",
+        "global"
+      ],
+      "providers": [
+        {
+          "id": "bedrock",
+          "name": "AWS Bedrock"
+        }
+      ],
+      "default_provider": {
+        "id": "bedrock",
+        "name": "AWS Bedrock"
+      },
+      "date_added": null,
+      "rate_limits": {
+        "rpm": 30,
+        "tpm": 30000
+      }
+    },
+    {
+      "default_parameters": {
+        "temperature": null,
+        "top_p": null,
+        "frequency_penalty": null
+      },
+      "id": "claude-haiku-5-5",
+      "name": "Haiku 5.5",
+      "description": "",
+      "supported_parameters": [
+        "max_tokens",
+        "tools",
+        "tool_choice",
+        "response_format",
+        "stream",
+        "reasoning_effort"
+      ],
+      "top_provider": {
+        "is_moderated": false,
+        "context_length": 1000000,
+        "max_completion_tokens": 128000
+      },
+      "context_length": 1000000,
+      "pricing": {
+        "global": {
+          "completions": 0.5,
+          "prompt": 0.1,
+          "input_cache_read": 0.01,
+          "input_cache_write": 0.125,
+          "input_cache_write_1h": 0.2
+        },
+        "regional_increase_percent": 0.1
+      },
+      "creator": "Claude",
+      "retirement_date": 0,
+      "available_regions": [
+        "us",
+        "eu",
+        "global"
+      ],
+      "providers": [
+        {
+          "id": "bedrock",
+          "name": "AWS Bedrock"
+        }
+      ],
+      "default_provider": {
+        "id": "bedrock",
+        "name": "AWS Bedrock"
+      },
+      "date_added": "2026-10-07",
+      "rate_limits": {
+        "rpm": 30,
+        "tpm": 40500
+      }
+    },
+    {
+      "default_parameters": {
+        "temperature": null,
+        "top_p": null,
+        "frequency_penalty": null
+      },
+      "id": "claude-opus-4-5-20251101",
+      "name": "Opus 4.5",
+      "description": "",
+      "supported_parameters": [
+        "max_tokens",
+        "temperature",
+        "tools",
+        "tool_choice",
+        "response_format",
+        "stream"
+      ],
+      "top_provider": {
+        "is_moderated": false,
+        "context_length": 200000,
+        "max_completion_tokens": 32768
+      },
+      "context_length": 200000,
+      "pricing": {
+        "global": {
+          "completions": 25,
+          "prompt": 5,
+          "input_cache_read": 0.5,
+          "input_cache_write": 6.25,
+          "input_cache_write_1h": 10
+        },
+        "regional_increase_percent": 0.1
+      },
+      "creator": "Claude",
+      "retirement_date": 0,
+      "available_regions": [
+        "us",
+        "global"
+      ],
+      "providers": [
+        {
+          "id": "bedrock",
+          "name": "AWS Bedrock"
+        }
+      ],
+      "default_provider": {
+        "id": "bedrock",
+        "name": "AWS Bedrock"
+      },
+      "date_added": null,
+      "rate_limits": {
+        "rpm": 30,
+        "tpm": 20000
+      }
+    },
+    {
+      "default_parameters": {
+        "temperature": null,
+        "top_p": null,
+        "frequency_penalty": null
+      },
+      "id": "claude-opus-4-6",
+      "name": "Opus 4.6",
+      "description": "",
+      "supported_parameters": [
+        "max_tokens",
+        "temperature",
+        "tools",
+        "tool_choice",
+        "response_format",
+        "stream"
+      ],
+      "top_provider": {
+        "is_moderated": false,
+        "context_length": 200000,
+        "max_completion_tokens": 128000
+      },
+      "context_length": 200000,
+      "pricing": {
+        "global": {
+          "completions": 25,
+          "prompt": 5,
+          "input_cache_read": 0.5,
+          "input_cache_write": 6.25,
+          "input_cache_write_1h": 10
+        },
+        "regional_increase_percent": 0.1
+      },
+      "creator": "Claude",
+      "retirement_date": 0,
+      "available_regions": [
+        "us",
+        "global"
+      ],
+      "providers": [
+        {
+          "id": "bedrock",
+          "name": "AWS Bedrock"
+        }
+      ],
+      "default_provider": {
+        "id": "bedrock",
+        "name": "AWS Bedrock"
+      },
+      "date_added": null,
+      "rate_limits": {
+        "rpm": 30,
+        "tpm": 20000
+      }
+    },
+    {
+      "default_parameters": {
+        "temperature": null,
+        "top_p": null,
+        "frequency_penalty": null
+      },
+      "id": "claude-opus-4-7",
+      "name": "Opus 4.7",
+      "description": "",
+      "supported_parameters": [
+        "max_tokens",
+        "tools",
+        "tool_choice",
+        "response_format",
+        "stream",
+        "reasoning_effort"
+      ],
+      "top_provider": {
+        "is_moderated": false,
+        "context_length": 1000000,
+        "max_completion_tokens": 128000
+      },
+      "context_length": 1000000,
+      "pricing": {
+        "global": {
+          "completions": 25,
+          "prompt": 5,
+          "input_cache_read": 0.5,
+          "input_cache_write": 6.25,
+          "input_cache_write_1h": 10
+        },
+        "regional_increase_percent": 0.1
+      },
+      "creator": "Claude",
+      "retirement_date": 0,
+      "available_regions": [
+        "us",
+        "global"
+      ],
+      "providers": [
+        {
+          "id": "bedrock",
+          "name": "AWS Bedrock"
+        }
+      ],
+      "default_provider": {
+        "id": "bedrock",
+        "name": "AWS Bedrock"
+      },
+      "date_added": null,
+      "rate_limits": {
+        "rpm": 30,
+        "tpm": 90000
+      }
+    },
+    {
+      "default_parameters": {
+        "temperature": null,
+        "top_p": null,
+        "frequency_penalty": null
+      },
+      "id": "claude-opus-4-8",
+      "name": "Opus 4.8",
+      "description": "",
+      "supported_parameters": [
+        "max_tokens",
+        "tools",
+        "tool_choice",
+        "response_format",
+        "stream",
+        "reasoning_effort"
+      ],
+      "top_provider": {
+        "is_moderated": false,
+        "context_length": 1000000,
+        "max_completion_tokens": 128000
+      },
+      "context_length": 1000000,
+      "pricing": {
+        "global": {
+          "completions": 25,
+          "prompt": 5,
+          "input_cache_read": 0.5,
+          "input_cache_write": 6.25,
+          "input_cache_write_1h": 10
+        },
+        "regional_increase_percent": 0.1
+      },
+      "creator": "Claude",
+      "retirement_date": 0,
+      "available_regions": [
+        "us"
+      ],
+      "providers": [
+        {
+          "id": "bedrock",
+          "name": "AWS Bedrock"
+        }
+      ],
+      "default_provider": {
+        "id": "bedrock",
+        "name": "AWS Bedrock"
+      },
+      "date_added": null,
+      "rate_limits": {
+        "rpm": 30,
+        "tpm": 90000
+      }
+    },
+    {
+      "default_parameters": {
+        "temperature": null,
+        "top_p": null,
+        "frequency_penalty": null
+      },
+      "id": "claude-opus-5",
+      "name": "Opus 5",
+      "description": "",
+      "supported_parameters": [
+        "max_tokens",
+        "tools",
+        "tool_choice",
+        "response_format",
+        "stream",
+        "reasoning_effort"
+      ],
+      "top_provider": {
+        "is_moderated": false,
+        "context_length": 200000,
+        "max_completion_tokens": 128000
+      },
+      "context_length": 200000,
+      "pricing": {
+        "global": {
+          "completions": 25,
+          "prompt": 5,
+          "input_cache_read": 0.5,
+          "input_cache_write": 6.25,
+          "input_cache_write_1h": 10
+        },
+        "regional_increase_percent": 0.1
+      },
+      "creator": "Claude",
+      "retirement_date": 0,
+      "available_regions": [
+        "us",
+        "global"
+      ],
+      "providers": [
+        {
+          "id": "bedrock",
+          "name": "AWS Bedrock"
+        }
+      ],
+      "default_provider": {
+        "id": "bedrock",
+        "name": "AWS Bedrock"
+      },
+      "date_added": null,
+      "rate_limits": {
+        "rpm": 30,
+        "tpm": 90000
+      }
+    },
+    {
+      "default_parameters": {
+        "temperature": null,
+        "top_p": null,
+        "frequency_penalty": null
+      },
+      "id": "claude-opus-5-5",
+      "name": "Opus 5.5",
+      "description": "",
+      "supported_parameters": [
+        "max_tokens",
+        "tools",
+        "tool_choice",
+        "response_format",
+        "stream",
+        "reasoning_effort"
+      ],
+      "top_provider": {
+        "is_moderated": false,
+        "context_length": 1000000,
+        "max_completion_tokens": 128000
+      },
+      "context_length": 1000000,
+      "pricing": {
+        "global": {
+          "completions": 20,
+          "prompt": 4,
+          "input_cache_read": 0.2,
+          "input_cache_write": 5,
+          "input_cache_write_1h": 8
+        },
+        "regional_increase_percent": 0.1
+      },
+      "creator": "Claude",
+      "retirement_date": 0,
+      "available_regions": [
+        "us",
+        "eu",
+        "global"
+      ],
+      "providers": [
+        {
+          "id": "bedrock",
+          "name": "AWS Bedrock"
+        }
+      ],
+      "default_provider": {
+        "id": "bedrock",
+        "name": "AWS Bedrock"
+      },
+      "date_added": "2026-09-22",
+      "rate_limits": {
+        "rpm": 30,
+        "tpm": 90000
+      }
+    },
+    {
+      "default_parameters": {
+        "temperature": null,
+        "top_p": null,
+        "frequency_penalty": null
+      },
+      "id": "claude-sonnet-4-5-20250929",
+      "name": "Sonnet 4.5",
+      "description": "",
+      "supported_parameters": [
+        "max_tokens",
+        "temperature",
+        "tools",
+        "tool_choice",
+        "response_format",
+        "stream"
+      ],
+      "top_provider": {
+        "is_moderated": false,
+        "context_length": 200000,
+        "max_completion_tokens": 64000
+      },
+      "context_length": 200000,
+      "pricing": {
+        "global": {
+          "completions": 15,
+          "prompt": 3,
+          "input_cache_read": 0.3,
+          "input_cache_write": 3.75,
+          "input_cache_write_1h": 6
+        },
+        "regional_increase_percent": 0.1
+      },
+      "creator": "Claude",
+      "retirement_date": 0,
+      "available_regions": [
+        "us",
+        "eu",
+        "global"
+      ],
+      "providers": [
+        {
+          "id": "bedrock",
+          "name": "AWS Bedrock"
+        }
+      ],
+      "default_provider": {
+        "id": "bedrock",
+        "name": "AWS Bedrock"
+      },
+      "date_added": null,
+      "rate_limits": {
+        "rpm": 30,
+        "tpm": 20000
+      }
+    },
+    {
+      "default_parameters": {
+        "temperature": null,
+        "top_p": null,
+        "frequency_penalty": null
+      },
+      "id": "claude-sonnet-4-6",
+      "name": "Sonnet 4.6",
+      "description": "",
+      "supported_parameters": [
+        "max_tokens",
+        "temperature",
+        "tools",
+        "tool_choice",
+        "response_format",
+        "stream",
+        "reasoning_effort"
+      ],
+      "top_provider": {
+        "is_moderated": false,
+        "context_length": 200000,
+        "max_completion_tokens": 128000
+      },
+      "context_length": 200000,
+      "pricing": {
+        "global": {
+          "completions": 15,
+          "prompt": 3,
+          "input_cache_read": 0.3,
+          "input_cache_write": 3.75,
+          "input_cache_write_1h": 6
+        },
+        "regional_increase_percent": 0.1
+      },
+      "creator": "Claude",
+      "retirement_date": 0,
+      "available_regions": [
+        "us",
+        "eu",
+        "global"
+      ],
+      "providers": [
+        {
+          "id": "bedrock",
+          "name": "AWS Bedrock"
+        }
+      ],
+      "default_provider": {
+        "id": "bedrock",
+        "name": "AWS Bedrock"
+      },
+      "date_added": null,
+      "rate_limits": {
+        "rpm": 30,
+        "tpm": 20000
+      }
+    },
+    {
+      "default_parameters": {
+        "temperature": null,
+        "top_p": null,
+        "frequency_penalty": null
+      },
+      "id": "claude-sonnet-5",
+      "name": "Sonnet 5",
+      "description": "",
+      "supported_parameters": [
+        "max_tokens",
+        "tools",
+        "tool_choice",
+        "response_format",
+        "stream",
+        "reasoning_effort"
+      ],
+      "top_provider": {
+        "is_moderated": false,
+        "context_length": 200000,
+        "max_completion_tokens": 128000
+      },
+      "context_length": 200000,
+      "pricing": {
+        "global": {
+          "completions": 15,
+          "prompt": 3,
+          "input_cache_read": 0.3,
+          "input_cache_write": 3.75,
+          "input_cache_write_1h": 6
+        },
+        "regional_increase_percent": 0.1
+      },
+      "creator": "Claude",
+      "retirement_date": 0,
+      "available_regions": [
+        "us",
+        "global"
+      ],
+      "providers": [
+        {
+          "id": "bedrock",
+          "name": "AWS Bedrock"
+        }
+      ],
+      "default_provider": {
+        "id": "bedrock",
+        "name": "AWS Bedrock"
+      },
+      "date_added": null,
+      "rate_limits": {
+        "rpm": 30,
+        "tpm": 20000
+      }
+    },
+    {
+      "default_parameters": {
+        "temperature": null,
+        "top_p": null,
+        "frequency_penalty": null
+      },
+      "id": "claude-sonnet-5-5",
+      "name": "Sonnet 5.5",
+      "description": "",
+      "supported_parameters": [
+        "max_tokens",
+        "tools",
+        "tool_choice",
+        "response_format",
+        "stream",
+        "reasoning_effort"
+      ],
+      "top_provider": {
+        "is_moderated": false,
+        "context_length": 1000000,
+        "max_completion_tokens": 128000
+      },
+      "context_length": 1000000,
+      "pricing": {
+        "global": {
+          "completions": 10,
+          "prompt": 2,
+          "input_cache_read": 0.1,
+          "input_cache_write": 2.5,
+          "input_cache_write_1h": 4
+        },
+        "regional_increase_percent": 0.1
+      },
+      "creator": "Claude",
+      "retirement_date": 0,
+      "available_regions": [
+        "us",
+        "global"
+      ],
+      "providers": [
+        {
+          "id": "bedrock",
+          "name": "AWS Bedrock"
+        }
+      ],
+      "default_provider": {
+        "id": "bedrock",
+        "name": "AWS Bedrock"
+      },
+      "date_added": null,
+      "rate_limits": {
+        "rpm": 30,
+        "tpm": 20000
+      }
+    },
+    {
+      "default_parameters": {
+        "temperature": null,
+        "top_p": null,
+        "frequency_penalty": null
+      },
+      "id": "deepseek-v4.1-flash",
+      "name": "DeepSeek V4.1 Flash",
+      "description": "",
+      "supported_parameters": [
+        "max_tokens",
+        "temperature",
+        "tools",
+        "tool_choice",
+        "response_format",
+        "reasoning_effort",
+        "stream"
+      ],
+      "top_provider": {
+        "is_moderated": false,
+        "context_length": 1048576,
+        "max_completion_tokens": 393216
+      },
+      "context_length": 1048576,
+      "pricing": {
+        "global": {
+          "completions": 1.2,
+          "prompt": 0.3,
+          "input_cache_read": 0.006
+        }
+      },
+      "creator": "DeepSeek",
+      "retirement_date": 0,
+      "available_regions": [
+        "us"
+      ],
+      "providers": [
+        {
+          "id": "digital_ocean",
+          "name": "Digital Ocean"
+        },
+        {
+          "id": "fireworks",
+          "name": "Fireworks"
+        }
+      ],
+      "default_provider": {
+        "id": "digital_ocean",
+        "name": "Digital Ocean"
+      },
+      "date_added": null,
+      "rate_limits": {
+        "rpm": 30,
+        "tpm": 20000
+      }
+    },
+    {
+      "default_parameters": {
+        "temperature": null,
+        "top_p": null,
+        "frequency_penalty": null
+      },
+      "id": "deepseek-v4.1-flash-1017",
+      "name": "DeepSeek V4.1 Flash 1017",
+      "description": "",
+      "supported_parameters": [
+        "max_tokens",
+        "temperature",
+        "tools",
+        "tool_choice",
+        "response_format",
+        "reasoning_effort",
+        "stream"
+      ],
+      "top_provider": {
+        "is_moderated": false,
+        "context_length": 1048576,
+        "max_completion_tokens": 393216
+      },
+      "context_length": 1048576,
+      "pricing": {
+        "global": {
+          "completions": 1.2,
+          "prompt": 0.3,
+          "input_cache_read": 0.006
+        }
+      },
+      "creator": "DeepSeek",
+      "retirement_date": 0,
+      "available_regions": [
+        "us"
+      ],
+      "providers": [
+        {
+          "id": "fireworks",
+          "name": "Fireworks"
+        }
+      ],
+      "default_provider": {
+        "id": "fireworks",
+        "name": "Fireworks"
+      },
+      "date_added": "2026-10-21",
+      "rate_limits": {
+        "rpm": 30,
+        "tpm": 64800
+      }
+    },
+    {
+      "default_parameters": {
+        "temperature": null,
+        "top_p": null,
+        "frequency_penalty": null
+      },
+      "id": "gemini-2.5-flash",
+      "name": "Gemini 2.5 Flash",
+      "description": "",
+      "supported_parameters": [
+        "max_tokens",
+        "response_format",
+        "temperature",
+        "tools",
+        "tool_choice",
+        "stream",
+        "reasoning_effort"
+      ],
+      "top_provider": {
+        "is_moderated": false,
+        "context_length": 1048576,
+        "max_completion_tokens": 65535
+      },
+      "context_length": 1048576,
+      "pricing": {
+        "global": {
+          "completions": 2.5,
+          "prompt": 0.3,
+          "input_cache_read": 0.03
+        },
+        "regional_increase_percent": 0.1
+      },
+      "creator": "Google",
+      "retirement_date": 0,
+      "available_regions": [
+        "us",
+        "eu",
+        "global"
+      ],
+      "providers": [
+        {
+          "id": "vertex",
+          "name": "Vertex"
+        }
+      ],
+      "default_provider": {
+        "id": "vertex",
+        "name": "Vertex"
+      },
+      "date_added": null,
+      "rate_limits": {
+        "rpm": 30,
+        "tpm": 150000
+      }
+    },
+    {
+      "default_parameters": {
+        "temperature": null,
+        "top_p": null,
+        "frequency_penalty": null
+      },
+      "id": "gemini-2.5-flash-lite",
+      "name": "Gemini 2.5 Flash Lite",
+      "description": "",
+      "supported_parameters": [
+        "max_tokens",
+        "response_format",
+        "temperature",
+        "tools",
+        "tool_choice",
+        "stream"
+      ],
+      "top_provider": {
+        "is_moderated": false,
+        "context_length": 1048576,
+        "max_completion_tokens": 65535
+      },
+      "context_length": 1048576,
+      "pricing": {
+        "global": {
+          "completions": 0.4,
+          "prompt": 0.1,
+          "input_cache_read": 0.01
+        },
+        "regional_increase_percent": 0.1
+      },
+      "creator": "Google",
+      "retirement_date": 0,
+      "available_regions": [
+        "us",
+        "eu",
+        "global"
+      ],
+      "providers": [
+        {
+          "id": "vertex",
+          "name": "Vertex"
+        }
+      ],
+      "default_provider": {
+        "id": "vertex",
+        "name": "Vertex"
+      },
+      "date_added": null,
+      "rate_limits": {
+        "rpm": 30,
+        "tpm": 150000
+      }
+    },
+    {
+      "default_parameters": {
+        "temperature": null,
+        "top_p": null,
+        "frequency_penalty": null
+      },
+      "id": "gemini-2.5-pro",
+      "name": "Gemini 2.5 Pro",
+      "description": "",
+      "supported_parameters": [
+        "max_tokens",
+        "response_format",
+        "temperature",
+        "tools",
+        "tool_choice",
+        "stream",
+        "reasoning_effort"
+      ],
+      "top_provider": {
+        "is_moderated": false,
+        "context_length": 200000,
+        "max_completion_tokens": 65535
+      },
+      "context_length": 200000,
+      "pricing": {
+        "global": {
+          "completions": 10,
+          "prompt": 1.25,
+          "input_cache_read": 0.125
+        },
+        "regional_increase_percent": 0.1
+      },
+      "creator": "Google",
+      "retirement_date": 0,
+      "available_regions": [
+        "us",
+        "eu",
+        "global"
+      ],
+      "providers": [
+        {
+          "id": "vertex",
+          "name": "Vertex"
+        }
+      ],
+      "default_provider": {
+        "id": "vertex",
+        "name": "Vertex"
+      },
+      "date_added": null,
+      "rate_limits": {
+        "rpm": 30,
+        "tpm": 30000
+      }
+    },
+    {
+      "default_parameters": {
+        "temperature": null,
+        "top_p": null,
+        "frequency_penalty": null
+      },
+      "id": "gemini-3.1-flash-lite",
+      "name": "Gemini 3.1 Flash Lite",
+      "description": "",
+      "supported_parameters": [
+        "max_tokens",
+        "response_format",
+        "temperature",
+        "tools",
+        "tool_choice",
+        "stream"
+      ],
+      "top_provider": {
+        "is_moderated": false,
+        "context_length": 1048575,
+        "max_completion_tokens": 65535
+      },
+      "context_length": 1048575,
+      "pricing": {
+        "global": {
+          "completions": 1.5,
+          "prompt": 0.25,
+          "input_cache_read": 0.025
+        },
+        "regional_increase_percent": 0.1
+      },
+      "creator": "Google",
+      "retirement_date": 1809648000,
+      "available_regions": [
+        "us",
+        "eu",
+        "global"
+      ],
+      "providers": [
+        {
+          "id": "vertex",
+          "name": "Vertex"
+        }
+      ],
+      "default_provider": {
+        "id": "vertex",
+        "name": "Vertex"
+      },
+      "date_added": null,
+      "rate_limits": {
+        "rpm": 30,
+        "tpm": 150000
+      }
+    },
+    {
+      "default_parameters": {
+        "temperature": null,
+        "top_p": null,
+        "frequency_penalty": null
+      },
+      "id": "gemini-3.5-flash",
+      "name": "Gemini 3.5 Flash",
+      "description": "",
+      "supported_parameters": [
+        "max_tokens",
+        "response_format",
+        "temperature",
+        "tools",
+        "tool_choice",
+        "stream",
+        "reasoning_effort"
+      ],
+      "top_provider": {
+        "is_moderated": false,
+        "context_length": 1048575,
+        "max_completion_tokens": 65535
+      },
+      "context_length": 1048575,
+      "pricing": {
+        "global": {
+          "completions": 9,
+          "prompt": 1.25,
+          "input_cache_read": 0.125
+        },
+        "regional_increase_percent": 0.1
+      },
+      "creator": "Google",
+      "retirement_date": 0,
+      "available_regions": [
+        "us",
+        "eu",
+        "global"
+      ],
+      "providers": [
+        {
+          "id": "vertex",
+          "name": "Vertex"
+        }
+      ],
+      "default_provider": {
+        "id": "vertex",
+        "name": "Vertex"
+      },
+      "date_added": null,
+      "rate_limits": {
+        "rpm": 30,
+        "tpm": 150000
+      }
+    },
+    {
+      "default_parameters": {
+        "temperature": null,
+        "top_p": null,
+        "frequency_penalty": null
+      },
+      "id": "gemini-3.5-flash-lite",
+      "name": "Gemini 3.5 Flash Lite",
+      "description": "",
+      "supported_parameters": [
+        "max_tokens",
+        "response_format",
+        "temperature",
+        "tools",
+        "tool_choice",
+        "stream",
+        "reasoning_effort"
+      ],
+      "top_provider": {
+        "is_moderated": false,
+        "context_length": 1048575,
+        "max_completion_tokens": 65535
+      },
+      "context_length": 1048575,
+      "pricing": {
+        "global": {
+          "completions": 2.5,
+          "prompt": 0.3,
+          "input_cache_read": 0.03
+        },
+        "regional_increase_percent": 0.1
+      },
+      "creator": "Google",
+      "retirement_date": 0,
+      "available_regions": [
+        "us",
+        "eu",
+        "global"
+      ],
+      "providers": [
+        {
+          "id": "vertex",
+          "name": "Vertex"
+        }
+      ],
+      "default_provider": {
+        "id": "vertex",
+        "name": "Vertex"
+      },
+      "date_added": null,
+      "rate_limits": {
+        "rpm": 30,
+        "tpm": 150000
+      }
+    },
+    {
+      "default_parameters": {
+        "temperature": null,
+        "top_p": null,
+        "frequency_penalty": null
+      },
+      "id": "gemini-3.6-flash",
+      "name": "Gemini 3.6 Flash",
+      "description": "",
+      "supported_parameters": [
+        "max_tokens",
+        "response_format",
+        "temperature",
+        "tools",
+        "tool_choice",
+        "stream",
+        "reasoning_effort"
+      ],
+      "top_provider": {
+        "is_moderated": false,
+        "context_length": 1048575,
+        "max_completion_tokens": 65535
+      },
+      "context_length": 1048575,
+      "pricing": {
+        "global": {
+          "completions": 7.5,
+          "prompt": 1.5,
+          "input_cache_read": 0.15
+        },
+        "regional_increase_percent": 0.1
+      },
+      "creator": "Google",
+      "retirement_date": 0,
+      "available_regions": [
+        "us",
+        "eu",
+        "global"
+      ],
+      "providers": [
+        {
+          "id": "vertex",
+          "name": "Vertex"
+        }
+      ],
+      "default_provider": {
+        "id": "vertex",
+        "name": "Vertex"
+      },
+      "date_added": null,
+      "rate_limits": {
+        "rpm": 30,
+        "tpm": 150000
+      }
+    },
+    {
+      "default_parameters": {
+        "temperature": null,
+        "top_p": null,
+        "frequency_penalty": null
+      },
+      "id": "gemini-3.7-flash",
+      "name": "Gemini 3.7 Flash",
+      "description": "",
+      "supported_parameters": [
+        "max_tokens",
+        "response_format",
+        "temperature",
+        "tools",
+        "tool_choice",
+        "stream",
+        "reasoning_effort"
+      ],
+      "top_provider": {
+        "is_moderated": false,
+        "context_length": 1048575,
+        "max_completion_tokens": 65535
+      },
+      "context_length": 1048575,
+      "pricing": {
+        "global": {
+          "completions": 3.75,
+          "prompt": 0.75,
+          "input_cache_read": 0.075
+        },
+        "regional_increase_percent": 0.1
+      },
+      "creator": "Google",
+      "retirement_date": 0,
+      "available_regions": [
+        "us",
+        "eu",
+        "global"
+      ],
+      "providers": [
+        {
+          "id": "vertex",
+          "name": "Vertex"
+        }
+      ],
+      "default_provider": {
+        "id": "vertex",
+        "name": "Vertex"
+      },
+      "date_added": null,
+      "rate_limits": {
+        "rpm": 30,
+        "tpm": 150000
+      }
+    },
+    {
+      "default_parameters": {
+        "temperature": null,
+        "top_p": null,
+        "frequency_penalty": null
+      },
+      "id": "gemini-3.8-flash",
+      "name": "Gemini 3.8 Flash",
+      "description": "",
+      "supported_parameters": [
+        "max_tokens",
+        "response_format",
+        "temperature",
+        "tools",
+        "tool_choice",
+        "stream",
+        "reasoning_effort"
+      ],
+      "top_provider": {
+        "is_moderated": false,
+        "context_length": 1048575,
+        "max_completion_tokens": 65535
+      },
+      "context_length": 1048575,
+      "pricing": {
+        "global": {
+          "completions": 3.75,
+          "prompt": 0.75,
+          "input_cache_read": 0.075
+        },
+        "regional_increase_percent": 0.1
+      },
+      "creator": "Google",
+      "retirement_date": 0,
+      "available_regions": [
+        "us",
+        "eu",
+        "global"
+      ],
+      "providers": [
+        {
+          "id": "vertex",
+          "name": "Vertex"
+        }
+      ],
+      "default_provider": {
+        "id": "vertex",
+        "name": "Vertex"
+      },
+      "date_added": null,
+      "rate_limits": {
+        "rpm": 30,
+        "tpm": 150000
+      }
+    },
+    {
+      "default_parameters": {
+        "temperature": null,
+        "top_p": null,
+        "frequency_penalty": null
+      },
+      "id": "gemini-4-argon",
+      "name": "Gemini 4 Argon",
+      "description": "",
+      "supported_parameters": [
+        "max_tokens",
+        "response_format",
+        "tools",
+        "tool_choice",
+        "stream",
+        "reasoning_effort"
+      ],
+      "top_provider": {
+        "is_moderated": false,
+        "context_length": 1048576,
+        "max_completion_tokens": 32768
+      },
+      "context_length": 1048576,
+      "pricing": {
+        "global": {
+          "completions": 10,
+          "prompt": 2,
+          "input_cache_read": 0.1
+        },
+        "regional_increase_percent": 0.1
+      },
+      "creator": "Google",
+      "retirement_date": 0,
+      "available_regions": [
+        "us",
+        "eu",
+        "global"
+      ],
+      "providers": [
+        {
+          "id": "vertex",
+          "name": "Vertex"
+        }
+      ],
+      "default_provider": {
+        "id": "vertex",
+        "name": "Vertex"
+      },
+      "date_added": "2026-10-13",
+      "rate_limits": {
+        "rpm": 30,
+        "tpm": 150000
+      }
+    },
+    {
+      "default_parameters": {
+        "temperature": null,
+        "top_p": null,
+        "frequency_penalty": null
+      },
+      "id": "gemini-4-hydrogen",
+      "name": "Gemini 4 Hydrogen",
+      "description": "",
+      "supported_parameters": [
+        "max_tokens",
+        "response_format",
+        "tools",
+        "tool_choice",
+        "stream",
+        "reasoning_effort"
+      ],
+      "top_provider": {
+        "is_moderated": false,
+        "context_length": 1048576,
+        "max_completion_tokens": 65536
+      },
+      "context_length": 1048576,
+      "pricing": {
+        "global": {
+          "completions": 7.5,
+          "prompt": 1.5,
+          "input_cache_read": 0.075
+        },
+        "regional_increase_percent": 0.1
+      },
+      "creator": "Google",
+      "retirement_date": 0,
+      "available_regions": [
+        "us",
+        "eu",
+        "global"
+      ],
+      "providers": [
+        {
+          "id": "vertex",
+          "name": "Vertex"
+        }
+      ],
+      "default_provider": {
+        "id": "vertex",
+        "name": "Vertex"
+      },
+      "date_added": "2026-11-13",
+      "rate_limits": {
+        "rpm": 30,
+        "tpm": 150000
+      }
+    },
+    {
+      "default_parameters": {
+        "temperature": null,
+        "top_p": null,
+        "frequency_penalty": null
+      },
+      "id": "gemma-4-31b",
+      "name": "gemma-4-31b",
+      "description": "",
+      "supported_parameters": [
+        "max_tokens",
+        "response_format",
+        "temperature",
+        "tools",
+        "tool_choice",
+        "stream",
+        "reasoning_effort"
+      ],
+      "top_provider": {
+        "is_moderated": false,
+        "context_length": 256000,
+        "max_completion_tokens": 32000
+      },
+      "context_length": 256000,
+      "pricing": {
+        "global": {
+          "completions": 0.4,
+          "prompt": 0.14
+        }
+      },
+      "creator": "Google",
+      "retirement_date": 0,
+      "available_regions": [
+        "us"
+      ],
+      "providers": [
+        {
+          "id": "bedrock_mantle",
+          "name": "AWS Bedrock"
+        }
+      ],
+      "default_provider": {
+        "id": "bedrock_mantle",
+        "name": "AWS Bedrock"
+      },
+      "date_added": null,
+      "rate_limits": {
+        "rpm": 30,
+        "tpm": 300000
+      }
+    },
+    {
+      "default_parameters": {
+        "temperature": null,
+        "top_p": null,
+        "frequency_penalty": null
+      },
+      "id": "mercury-3",
+      "name": "Mercury 3",
+      "description": "",
+      "supported_parameters": [
+        "max_tokens",
+        "tools",
+        "tool_choice",
+        "response_format",
+        "stream",
+        "reasoning_effort"
+      ],
+      "top_provider": {
+        "is_moderated": false,
+        "context_length": 1000000,
+        "max_completion_tokens": 131072
+      },
+      "context_length": 1000000,
+      "pricing": {
+        "global": {
+          "completions": 0.35,
+          "prompt": 0.1,
+          "input_cache_read": 0.01
+        }
+      },
+      "creator": "Inception Labs",
+      "retirement_date": 0,
+      "available_regions": [
+        "us"
+      ],
+      "providers": [
+        {
+          "id": "inception_labs",
+          "name": "Inception Labs"
+        }
+      ],
+      "default_provider": {
+        "id": "inception_labs",
+        "name": "Inception Labs"
+      },
+      "date_added": null,
+      "rate_limits": {
+        "rpm": 30,
+        "tpm": 30000
+      }
+    },
+    {
+      "default_parameters": {
+        "temperature": null,
+        "top_p": null,
+        "frequency_penalty": null
+      },
+      "id": "mercury-voice",
+      "name": "Mercury Voice",
+      "description": "",
+      "supported_parameters": [
+        "max_tokens",
+        "tools",
+        "tool_choice",
+        "response_format",
+        "stream",
+        "reasoning_effort"
+      ],
+      "top_provider": {
+        "is_moderated": false,
+        "context_length": 128000,
+        "max_completion_tokens": 50000
+      },
+      "context_length": 128000,
+      "pricing": {
+        "global": {
+          "completions": 0.75,
+          "prompt": 0.2,
+          "input_cache_read": 0.02
+        }
+      },
+      "creator": "Inception Labs",
+      "retirement_date": 0,
+      "available_regions": [
+        "us"
+      ],
+      "providers": [
+        {
+          "id": "inception_labs",
+          "name": "Inception Labs"
+        }
+      ],
+      "default_provider": {
+        "id": "inception_labs",
+        "name": "Inception Labs"
+      },
+      "date_added": null,
+      "rate_limits": {
+        "rpm": 30,
+        "tpm": 30000
+      }
+    },
+    {
+      "default_parameters": {
+        "temperature": null,
+        "top_p": null,
+        "frequency_penalty": null
+      },
+      "id": "muse-spark-open",
+      "name": "Muse Spark Open",
+      "description": "",
+      "supported_parameters": [
+        "max_tokens",
+        "tools",
+        "tool_choice",
+        "response_format",
+        "stream",
+        "reasoning_effort"
+      ],
+      "top_provider": {
+        "is_moderated": false,
+        "context_length": 1000000,
+        "max_completion_tokens": 512000
+      },
+      "context_length": 1000000,
+      "pricing": {
+        "global": {
+          "completions": 4.25,
+          "prompt": 1.25,
+          "input_cache_read": 0.15
+        }
+      },
+      "creator": "Meta",
+      "retirement_date": 0,
+      "available_regions": [
+        "us"
+      ],
+      "providers": [
+        {
+          "id": "fireworks",
+          "name": "Fireworks"
+        }
+      ],
+      "default_provider": {
+        "id": "fireworks",
+        "name": "Fireworks"
+      },
+      "date_added": null,
+      "rate_limits": {
+        "rpm": 30,
+        "tpm": 21600
+      }
+    },
+    {
+      "default_parameters": {
+        "temperature": null,
+        "top_p": null,
+        "frequency_penalty": null
+      },
+      "id": "minimax-m3",
+      "name": "Minimax M3",
+      "description": "",
+      "supported_parameters": [
+        "max_tokens",
+        "tools",
+        "tool_choice",
+        "response_format",
+        "stream",
+        "reasoning_effort"
+      ],
+      "top_provider": {
+        "is_moderated": false,
+        "context_length": 512000,
+        "max_completion_tokens": 512000
+      },
+      "context_length": 512000,
+      "pricing": {
+        "global": {
+          "completions": 1.2,
+          "prompt": 0.3,
+          "input_cache_read": 0.06
+        }
+      },
+      "creator": "Minimax",
+      "retirement_date": 0,
+      "available_regions": [
+        "us"
+      ],
+      "providers": [
+        {
+          "id": "fireworks",
+          "name": "Fireworks"
+        }
+      ],
+      "default_provider": {
+        "id": "fireworks",
+        "name": "Fireworks"
+      },
+      "date_added": null,
+      "rate_limits": {
+        "rpm": 30,
+        "tpm": 21600
+      }
+    },
+    {
+      "default_parameters": {
+        "temperature": null,
+        "top_p": null,
+        "frequency_penalty": null
+      },
+      "id": "kimi-k3",
+      "name": "Kimi K3",
+      "description": "",
+      "supported_parameters": [
+        "max_tokens",
+        "tools",
+        "tool_choice",
+        "response_format",
+        "stream",
+        "reasoning_effort"
+      ],
+      "top_provider": {
+        "is_moderated": false,
+        "context_length": 1000000,
+        "max_completion_tokens": 1000000
+      },
+      "context_length": 1000000,
+      "pricing": {
+        "global": {
+          "completions": 15,
+          "prompt": 3,
+          "input_cache_read": 0.3,
+          "input_cache_write": 3.75
+        },
+        "regional_increase_percent": 0.1
+      },
+      "creator": "Moonshot AI",
+      "retirement_date": 0,
+      "available_regions": [
+        "us",
+        "global"
+      ],
+      "providers": [
+        {
+          "id": "bedrock",
+          "name": "AWS Bedrock"
+        },
+        {
+          "id": "fireworks",
+          "name": "Fireworks"
+        }
+      ],
+      "default_provider": {
+        "id": "bedrock",
+        "name": "AWS Bedrock"
+      },
+      "date_added": null,
+      "rate_limits": {
+        "rpm": 30,
+        "tpm": 60000
+      }
+    },
+    {
+      "default_parameters": {
+        "temperature": null,
+        "top_p": null,
+        "frequency_penalty": null
+      },
+      "id": "kimi-k3.1-pro",
+      "name": "Kimi K3.1 Pro",
+      "description": "",
+      "supported_parameters": [
+        "max_tokens",
+        "tools",
+        "tool_choice",
+        "response_format",
+        "stream",
+        "reasoning_effort"
+      ],
+      "top_provider": {
+        "is_moderated": false,
+        "context_length": 1048576,
+        "max_completion_tokens": 131072
+      },
+      "context_length": 1048576,
+      "pricing": {
+        "global": {
+          "completions": 10,
+          "prompt": 2,
+          "input_cache_read": 0.2
+        }
+      },
+      "creator": "Moonshot AI",
+      "retirement_date": 0,
+      "available_regions": [
+        "us"
+      ],
+      "providers": [
+        {
+          "id": "fireworks",
+          "name": "Fireworks"
+        },
+        {
+          "id": "digital_ocean",
+          "name": "Digital Ocean"
+        }
+      ],
+      "default_provider": {
+        "id": "fireworks",
+        "name": "Fireworks"
+      },
+      "date_added": "2026-11-06",
+      "rate_limits": {
+        "rpm": 30,
+        "tpm": 21600
+      }
+    },
+    {
+      "default_parameters": {
+        "temperature": null,
+        "top_p": null,
+        "frequency_penalty": null
+      },
+      "id": "nemotron-3-nano-30b-a3b",
+      "name": "Nemotron 3 Nano 30B A3B",
+      "description": "",
+      "supported_parameters": [
+        "max_tokens",
+        "temperature",
+        "tools",
+        "tool_choice",
+        "response_format",
+        "stream"
+      ],
+      "top_provider": {
+        "is_moderated": false,
+        "context_length": 256000,
+        "max_completion_tokens": 8000
+      },
+      "context_length": 256000,
+      "pricing": {
+        "us": {
+          "completions": 0.24,
+          "prompt": 0.06
+        },
+        "eu": {
+          "completions": 0.28,
+          "prompt": 0.07
+        },
+        "global": {
+          "completions": 0.24,
+          "prompt": 0.06
+        }
+      },
+      "creator": "Nvidia",
+      "retirement_date": 0,
+      "available_regions": [
+        "us",
+        "eu"
+      ],
+      "providers": [
+        {
+          "id": "bedrock",
+          "name": "AWS Bedrock"
+        }
+      ],
+      "default_provider": {
+        "id": "bedrock",
+        "name": "AWS Bedrock"
+      },
+      "date_added": "2026-09-18",
+      "rate_limits": {
+        "rpm": 30,
+        "tpm": 300000
+      }
+    },
+    {
+      "default_parameters": {
+        "temperature": null,
+        "top_p": null,
+        "frequency_penalty": null
+      },
+      "id": "nemotron-3-super-120b-a12b",
+      "name": "Nemotron 3 Super 120B A12B",
+      "description": "",
+      "supported_parameters": [
+        "max_tokens",
+        "temperature",
+        "tools",
+        "tool_choice",
+        "response_format",
+        "stream"
+      ],
+      "top_provider": {
+        "is_moderated": false,
+        "context_length": 256000,
+        "max_completion_tokens": 32000
+      },
+      "context_length": 256000,
+      "pricing": {
+        "us": {
+          "completions": 0.65,
+          "prompt": 0.15
+        },
+        "eu": {
+          "completions": 0.78,
+          "prompt": 0.18
+        },
+        "global": {
+          "completions": 0.65,
+          "prompt": 0.15
+        }
+      },
+      "creator": "Nvidia",
+      "retirement_date": 0,
+      "available_regions": [
+        "us",
+        "eu"
+      ],
+      "providers": [
+        {
+          "id": "bedrock",
+          "name": "AWS Bedrock"
+        }
+      ],
+      "default_provider": {
+        "id": "bedrock",
+        "name": "AWS Bedrock"
+      },
+      "date_added": "2026-09-18",
+      "rate_limits": {
+        "rpm": 30,
+        "tpm": 300000
+      }
+    },
+    {
+      "default_parameters": {
+        "temperature": null,
+        "top_p": null,
+        "frequency_penalty": null
+      },
+      "id": "nemotron-lightning-3p5-30b-a3b",
+      "name": "Nemotron Lightning 3.5 30B A3B",
+      "description": "",
+      "supported_parameters": [
+        "max_tokens",
+        "temperature",
+        "tools",
+        "tool_choice",
+        "response_format",
+        "reasoning_effort",
+        "stream"
+      ],
+      "top_provider": {
+        "is_moderated": false,
+        "context_length": 262000,
+        "max_completion_tokens": 8192
+      },
+      "context_length": 262000,
+      "pricing": {
+        "global": {
+          "completions": 0.2,
+          "prompt": 0.05,
+          "input_cache_read": 0.01
+        }
+      },
+      "creator": "Nvidia",
+      "retirement_date": 0,
+      "available_regions": [
+        "us"
+      ],
+      "providers": [
+        {
+          "id": "fireworks",
+          "name": "Fireworks"
+        }
+      ],
+      "default_provider": {
+        "id": "fireworks",
+        "name": "Fireworks"
+      },
+      "date_added": "2026-09-18",
+      "rate_limits": {
+        "rpm": 30,
+        "tpm": 21600
+      }
+    },
+    {
+      "default_parameters": {
+        "temperature": null,
+        "top_p": null,
+        "frequency_penalty": null
+      },
+      "id": "nemotron-nano-9b-v2",
+      "name": "Nemotron Nano 9B v2",
+      "description": "",
+      "supported_parameters": [
+        "max_tokens",
+        "temperature",
+        "tools",
+        "tool_choice",
+        "response_format",
+        "stream"
+      ],
+      "top_provider": {
+        "is_moderated": false,
+        "context_length": 128000,
+        "max_completion_tokens": 8000
+      },
+      "context_length": 128000,
+      "pricing": {
+        "us": {
+          "completions": 0.23,
+          "prompt": 0.06
+        },
+        "eu": {
+          "completions": 0.27,
+          "prompt": 0.07
+        },
+        "global": {
+          "completions": 0.23,
+          "prompt": 0.06
+        }
+      },
+      "creator": "Nvidia",
+      "retirement_date": 0,
+      "available_regions": [
+        "us",
+        "eu"
+      ],
+      "providers": [
+        {
+          "id": "bedrock",
+          "name": "AWS Bedrock"
+        }
+      ],
+      "default_provider": {
+        "id": "bedrock",
+        "name": "AWS Bedrock"
+      },
+      "date_added": "2026-09-18",
+      "rate_limits": {
+        "rpm": 30,
+        "tpm": 300000
+      }
+    },
+    {
+      "default_parameters": {
+        "temperature": null,
+        "top_p": null,
+        "frequency_penalty": null
+      },
+      "id": "gpt-oss-120b",
+      "name": "GPT OSS 120B",
+      "description": "",
+      "supported_parameters": [
+        "max_tokens",
+        "response_format",
+        "temperature",
+        "tools",
+        "tool_choice"
+      ],
+      "top_provider": {
+        "is_moderated": false,
+        "context_length": 131072,
+        "max_completion_tokens": 131072
+      },
+      "context_length": 131072,
+      "pricing": {
+        "global": {
+          "completions": 0.6,
+          "prompt": 0.15
+        }
+      },
+      "creator": "Open AI",
+      "retirement_date": 0,
+      "available_regions": [
+        "us"
+      ],
+      "providers": [
+        {
+          "id": "bedrock",
+          "name": "AWS Bedrock"
+        }
+      ],
+      "default_provider": {
+        "id": "bedrock",
+        "name": "AWS Bedrock"
+      },
+      "date_added": null,
+      "rate_limits": {
+        "rpm": 30,
+        "tpm": 300000
+      }
+    },
+    {
+      "default_parameters": {
+        "temperature": null,
+        "top_p": null,
+        "frequency_penalty": null
+      },
+      "id": "gpt-oss-20b",
+      "name": "GPT OSS 20B",
+      "description": "",
+      "supported_parameters": [
+        "max_tokens",
+        "temperature",
+        "tools",
+        "tool_choice"
+      ],
+      "top_provider": {
+        "is_moderated": false,
+        "context_length": 131072,
+        "max_completion_tokens": 131072
+      },
+      "context_length": 131072,
+      "pricing": {
+        "global": {
+          "completions": 0.3,
+          "prompt": 0.07
+        }
+      },
+      "creator": "Open AI",
+      "retirement_date": 0,
+      "available_regions": [
+        "us"
+      ],
+      "providers": [
+        {
+          "id": "bedrock",
+          "name": "AWS Bedrock"
+        }
+      ],
+      "default_provider": {
+        "id": "bedrock",
+        "name": "AWS Bedrock"
+      },
+      "date_added": null,
+      "rate_limits": {
+        "rpm": 30,
+        "tpm": 300000
+      }
+    },
+    {
+      "default_parameters": {
+        "temperature": null,
+        "top_p": null,
+        "frequency_penalty": null
+      },
+      "id": "gpt-4.1",
+      "name": "GPT-4.1",
+      "description": "",
+      "supported_parameters": [
+        "max_tokens",
+        "temperature",
+        "tools",
+        "tool_choice",
+        "stream"
+      ],
+      "top_provider": {
+        "is_moderated": false,
+        "context_length": 1047576,
+        "max_completion_tokens": 32768
+      },
+      "context_length": 1047576,
+      "pricing": {
+        "global": {
+          "completions": 8,
+          "prompt": 2,
+          "input_cache_read": 0.5
+        },
+        "regional_increase_percent": 0.1
+      },
+      "creator": "Open AI",
+      "retirement_date": 1799884800,
+      "available_regions": [
+        "us"
+      ],
+      "providers": [
+        {
+          "id": "open_ai",
+          "name": "Open AI"
+        }
+      ],
+      "default_provider": {
+        "id": "open_ai",
+        "name": "Open AI"
+      },
+      "date_added": null,
+      "rate_limits": {
+        "rpm": 30,
+        "tpm": 90000
+      }
+    },
+    {
+      "default_parameters": {
+        "temperature": null,
+        "top_p": null,
+        "frequency_penalty": null
+      },
+      "id": "gpt-5",
+      "name": "GPT-5",
+      "description": "",
+      "supported_parameters": [
+        "max_tokens",
+        "temperature",
+        "tools",
+        "tool_choice",
+        "stream",
+        "response_format"
+      ],
+      "top_provider": {
+        "is_moderated": false,
+        "context_length": 400000,
+        "max_completion_tokens": 128000
+      },
+      "context_length": 400000,
+      "pricing": {
+        "global": {
+          "completions": 10,
+          "prompt": 1.25,
+          "input_cache_read": 0.125
+        },
+        "regional_increase_percent": 0.1
+      },
+      "creator": "Open AI",
+      "retirement_date": 0,
+      "available_regions": [
+        "us"
+      ],
+      "providers": [
+        {
+          "id": "open_ai",
+          "name": "Open AI"
+        }
+      ],
+      "default_provider": {
+        "id": "open_ai",
+        "name": "Open AI"
+      },
+      "date_added": null,
+      "rate_limits": {
+        "rpm": 30,
+        "tpm": 120000
+      }
+    },
+    {
+      "default_parameters": {
+        "temperature": null,
+        "top_p": null,
+        "frequency_penalty": null
+      },
+      "id": "gpt-5-nano",
+      "name": "GPT-5 Nano",
+      "description": "",
+      "supported_parameters": [
+        "max_tokens",
+        "response_format",
+        "temperature",
+        "tools",
+        "tool_choice",
+        "stream"
+      ],
+      "top_provider": {
+        "is_moderated": false,
+        "context_length": 400000,
+        "max_completion_tokens": 128000
+      },
+      "context_length": 400000,
+      "pricing": {
+        "global": {
+          "completions": 0.4,
+          "prompt": 0.05,
+          "input_cache_read": 0.005
+        },
+        "regional_increase_percent": 0.1
+      },
+      "creator": "Open AI",
+      "retirement_date": 0,
+      "available_regions": [
+        "us"
+      ],
+      "providers": [
+        {
+          "id": "open_ai",
+          "name": "Open AI"
+        }
+      ],
+      "default_provider": {
+        "id": "open_ai",
+        "name": "Open AI"
+      },
+      "date_added": null,
+      "rate_limits": {
+        "rpm": 30,
+        "tpm": 540000
+      }
+    },
+    {
+      "default_parameters": {
+        "temperature": null,
+        "top_p": null,
+        "frequency_penalty": null
+      },
+      "id": "gpt-5-mini",
+      "name": "GPT-5 mini",
+      "description": "",
+      "supported_parameters": [
+        "max_tokens",
+        "response_format",
+        "temperature",
+        "tools",
+        "tool_choice",
+        "stream"
+      ],
+      "top_provider": {
+        "is_moderated": false,
+        "context_length": 400000,
+        "max_completion_tokens": 128000
+      },
+      "context_length": 400000,
+      "pricing": {
+        "global": {
+          "completions": 2,
+          "prompt": 0.25,
+          "input_cache_read": 0.025
+        },
+        "regional_increase_percent": 0.1
+      },
+      "creator": "Open AI",
+      "retirement_date": 0,
+      "available_regions": [
+        "us"
+      ],
+      "providers": [
+        {
+          "id": "open_ai",
+          "name": "Open AI"
+        }
+      ],
+      "default_provider": {
+        "id": "open_ai",
+        "name": "Open AI"
+      },
+      "date_added": null,
+      "rate_limits": {
+        "rpm": 30,
+        "tpm": 540000
+      }
+    },
+    {
+      "default_parameters": {
+        "temperature": null,
+        "top_p": null,
+        "frequency_penalty": null
+      },
+      "id": "gpt-5.1",
+      "name": "GPT-5.1",
+      "description": "",
+      "supported_parameters": [
+        "max_tokens",
+        "response_format",
+        "temperature",
+        "tools",
+        "tool_choice",
+        "stream",
+        "reasoning_effort"
+      ],
+      "top_provider": {
+        "is_moderated": false,
+        "context_length": 400000,
+        "max_completion_tokens": 128000
+      },
+      "context_length": 400000,
+      "pricing": {
+        "global": {
+          "completions": 10,
+          "prompt": 1.25,
+          "input_cache_read": 0.125
+        },
+        "regional_increase_percent": 0.1
+      },
+      "creator": "Open AI",
+      "retirement_date": 0,
+      "available_regions": [
+        "us"
+      ],
+      "providers": [
+        {
+          "id": "open_ai",
+          "name": "Open AI"
+        }
+      ],
+      "default_provider": {
+        "id": "open_ai",
+        "name": "Open AI"
+      },
+      "date_added": null,
+      "rate_limits": {
+        "rpm": 30,
+        "tpm": 120000
+      }
+    },
+    {
+      "default_parameters": {
+        "temperature": null,
+        "top_p": null,
+        "frequency_penalty": null
+      },
+      "id": "gpt-5.2",
+      "name": "GPT-5.2",
+      "description": "",
+      "supported_parameters": [
+        "max_tokens",
+        "response_format",
+        "temperature",
+        "tools",
+        "tool_choice",
+        "stream",
+        "reasoning_effort"
+      ],
+      "top_provider": {
+        "is_moderated": false,
+        "context_length": 400000,
+        "max_completion_tokens": 128000
+      },
+      "context_length": 400000,
+      "pricing": {
+        "global": {
+          "completions": 14,
+          "prompt": 1.75,
+          "input_cache_read": 0.175
+        },
+        "regional_increase_percent": 0.1
+      },
+      "creator": "Open AI",
+      "retirement_date": 0,
+      "available_regions": [
+        "us"
+      ],
+      "providers": [
+        {
+          "id": "open_ai",
+          "name": "Open AI"
+        }
+      ],
+      "default_provider": {
+        "id": "open_ai",
+        "name": "Open AI"
+      },
+      "date_added": null,
+      "rate_limits": {
+        "rpm": 30,
+        "tpm": 120000
+      }
+    },
+    {
+      "default_parameters": {
+        "temperature": null,
+        "top_p": null,
+        "frequency_penalty": null
+      },
+      "id": "gpt-5.5",
+      "name": "GPT-5.5",
+      "description": "",
+      "supported_parameters": [
+        "max_tokens",
+        "response_format",
+        "tools",
+        "tool_choice",
+        "stream",
+        "reasoning_effort"
+      ],
+      "top_provider": {
+        "is_moderated": false,
+        "context_length": 272000,
+        "max_completion_tokens": 128000
+      },
+      "context_length": 272000,
+      "pricing": {
+        "global": {
+          "completions": 30,
+          "prompt": 5,
+          "input_cache_read": 0.5
+        },
+        "regional_increase_percent": 0.1
+      },
+      "creator": "Open AI",
+      "retirement_date": 0,
+      "available_regions": [
+        "us",
+        "global"
+      ],
+      "providers": [
+        {
+          "id": "open_ai",
+          "name": "Open AI"
+        }
+      ],
+      "default_provider": {
+        "id": "open_ai",
+        "name": "Open AI"
+      },
+      "date_added": null,
+      "rate_limits": {
+        "rpm": 30,
+        "tpm": 120000
+      }
+    },
+    {
+      "default_parameters": {
+        "temperature": null,
+        "top_p": null,
+        "frequency_penalty": null
+      },
+      "id": "gpt-5.6-luna",
+      "name": "GPT-5.6 Luna",
+      "description": "",
+      "supported_parameters": [
+        "max_tokens",
+        "response_format",
+        "tools",
+        "tool_choice",
+        "stream",
+        "reasoning_effort"
+      ],
+      "top_provider": {
+        "is_moderated": false,
+        "context_length": 270000,
+        "max_completion_tokens": 128000
+      },
+      "context_length": 270000,
+      "pricing": {
+        "global": {
+          "completions": 1.2,
+          "prompt": 0.2,
+          "input_cache_read": 0.02,
+          "input_cache_write": 0.25
+        },
+        "regional_increase_percent": 0.1
+      },
+      "creator": "Open AI",
+      "retirement_date": 0,
+      "available_regions": [
+        "us",
+        "eu",
+        "global"
+      ],
+      "providers": [
+        {
+          "id": "open_ai",
+          "name": "Open AI"
+        }
+      ],
+      "default_provider": {
+        "id": "open_ai",
+        "name": "Open AI"
+      },
+      "date_added": null,
+      "rate_limits": {
+        "rpm": 30,
+        "tpm": 540000
+      }
+    },
+    {
+      "default_parameters": {
+        "temperature": null,
+        "top_p": null,
+        "frequency_penalty": null
+      },
+      "id": "gpt-5.6-sol",
+      "name": "GPT-5.6 Sol",
+      "description": "",
+      "supported_parameters": [
+        "max_tokens",
+        "response_format",
+        "tools",
+        "tool_choice",
+        "stream",
+        "reasoning_effort"
+      ],
+      "top_provider": {
+        "is_moderated": false,
+        "context_length": 270000,
+        "max_completion_tokens": 128000
+      },
+      "context_length": 270000,
+      "pricing": {
+        "global": {
+          "completions": 20,
+          "prompt": 4,
+          "input_cache_read": 0.4,
+          "input_cache_write": 5
+        },
+        "regional_increase_percent": 0.1
+      },
+      "creator": "Open AI",
+      "retirement_date": 0,
+      "available_regions": [
+        "us",
+        "global"
+      ],
+      "providers": [
+        {
+          "id": "open_ai",
+          "name": "Open AI"
+        }
+      ],
+      "default_provider": {
+        "id": "open_ai",
+        "name": "Open AI"
+      },
+      "date_added": null,
+      "rate_limits": {
+        "rpm": 30,
+        "tpm": 120000
+      }
+    },
+    {
+      "default_parameters": {
+        "temperature": null,
+        "top_p": null,
+        "frequency_penalty": null
+      },
+      "id": "gpt-5.6-terra",
+      "name": "GPT-5.6 Terra",
+      "description": "",
+      "supported_parameters": [
+        "max_tokens",
+        "response_format",
+        "tools",
+        "tool_choice",
+        "stream",
+        "reasoning_effort"
+      ],
+      "top_provider": {
+        "is_moderated": false,
+        "context_length": 270000,
+        "max_completion_tokens": 128000
+      },
+      "context_length": 270000,
+      "pricing": {
+        "global": {
+          "completions": 12,
+          "prompt": 2,
+          "input_cache_read": 0.2,
+          "input_cache_write": 2.5
+        },
+        "regional_increase_percent": 0.1
+      },
+      "creator": "Open AI",
+      "retirement_date": 0,
+      "available_regions": [
+        "us",
+        "global"
+      ],
+      "providers": [
+        {
+          "id": "open_ai",
+          "name": "Open AI"
+        }
+      ],
+      "default_provider": {
+        "id": "open_ai",
+        "name": "Open AI"
+      },
+      "date_added": null,
+      "rate_limits": {
+        "rpm": 30,
+        "tpm": 120000
+      }
+    },
+    {
+      "default_parameters": {
+        "temperature": null,
+        "top_p": null,
+        "frequency_penalty": null
+      },
+      "id": "gpt-6-astra",
+      "name": "GPT-6 Astra",
+      "description": "",
+      "supported_parameters": [
+        "max_tokens",
+        "tools",
+        "tool_choice",
+        "stream",
+        "response_format",
+        "reasoning_effort"
+      ],
+      "top_provider": {
+        "is_moderated": false,
+        "context_length": 270000,
+        "max_completion_tokens": 128000
+      },
+      "context_length": 270000,
+      "pricing": {
+        "global": {
+          "completions": 50,
+          "prompt": 10,
+          "input_cache_read": 1,
+          "input_cache_write": 12.5
+        },
+        "regional_increase_percent": 0.1
+      },
+      "creator": "Open AI",
+      "retirement_date": 0,
+      "available_regions": [
+        "us"
+      ],
+      "providers": [
+        {
+          "id": "open_ai",
+          "name": "Open AI"
+        },
+        {
+          "id": "bedrock_mantle",
+          "name": "AWS Bedrock"
+        }
+      ],
+      "default_provider": {
+        "id": "open_ai",
+        "name": "Open AI"
+      },
+      "date_added": null,
+      "rate_limits": {
+        "rpm": 30,
+        "tpm": 120000
+      }
+    },
+    {
+      "default_parameters": {
+        "temperature": null,
+        "top_p": null,
+        "frequency_penalty": null
+      },
+      "id": "gpt-6-luna",
+      "name": "GPT-6 Luna",
+      "description": "",
+      "supported_parameters": [
+        "max_tokens",
+        "tools",
+        "tool_choice",
+        "stream",
+        "response_format",
+        "reasoning_effort"
+      ],
+      "top_provider": {
+        "is_moderated": false,
+        "context_length": 922000,
+        "max_completion_tokens": 128000
+      },
+      "context_length": 922000,
+      "pricing": {
+        "global": {
+          "completions": 0.5,
+          "prompt": 0.1,
+          "input_cache_read": 0.01,
+          "input_cache_write": 0.125
+        },
+        "regional_increase_percent": 0.1
+      },
+      "creator": "Open AI",
+      "retirement_date": 0,
+      "available_regions": [
+        "us",
+        "global"
+      ],
+      "providers": [
+        {
+          "id": "bedrock",
+          "name": "AWS Bedrock"
+        },
+        {
+          "id": "open_ai",
+          "name": "Open AI"
+        }
+      ],
+      "default_provider": {
+        "id": "bedrock",
+        "name": "AWS Bedrock"
+      },
+      "date_added": "2026-09-22",
+      "rate_limits": {
+        "rpm": 30,
+        "tpm": 240000
+      }
+    },
+    {
+      "default_parameters": {
+        "temperature": null,
+        "top_p": null,
+        "frequency_penalty": null
+      },
+      "id": "gpt-6-sol",
+      "name": "GPT-6 Sol",
+      "description": "",
+      "supported_parameters": [
+        "max_tokens",
+        "tools",
+        "tool_choice",
+        "stream",
+        "response_format",
+        "reasoning_effort"
+      ],
+      "top_provider": {
+        "is_moderated": false,
+        "context_length": 922000,
+        "max_completion_tokens": 128000
+      },
+      "context_length": 922000,
+      "pricing": {
+        "global": {
+          "completions": 10,
+          "prompt": 2,
+          "input_cache_read": 0.2,
+          "input_cache_write": 2.5
+        },
+        "regional_increase_percent": 0.1
+      },
+      "creator": "Open AI",
+      "retirement_date": 0,
+      "available_regions": [
+        "us",
+        "global"
+      ],
+      "providers": [
+        {
+          "id": "bedrock",
+          "name": "AWS Bedrock"
+        },
+        {
+          "id": "open_ai",
+          "name": "Open AI"
+        }
+      ],
+      "default_provider": {
+        "id": "bedrock",
+        "name": "AWS Bedrock"
+      },
+      "date_added": "2026-09-22",
+      "rate_limits": {
+        "rpm": 30,
+        "tpm": 120000
+      }
+    },
+    {
+      "default_parameters": {
+        "temperature": null,
+        "top_p": null,
+        "frequency_penalty": null
+      },
+      "id": "gpt-6.1-sol",
+      "name": "GPT-6.1 Sol",
+      "description": "",
+      "supported_parameters": [
+        "max_tokens",
+        "stream",
+        "response_format",
+        "reasoning_effort"
+      ],
+      "top_provider": {
+        "is_moderated": false,
+        "context_length": 922000,
+        "max_completion_tokens": 128000
+      },
+      "context_length": 922000,
+      "pricing": {
+        "global": {
+          "completions": 10,
+          "prompt": 2,
+          "input_cache_read": 0.1,
+          "input_cache_write": 2.5
+        },
+        "regional_increase_percent": 0.1
+      },
+      "creator": "Open AI",
+      "retirement_date": 0,
+      "available_regions": [
+        "us"
+      ],
+      "providers": [
+        {
+          "id": "bedrock",
+          "name": "AWS Bedrock"
+        },
+        {
+          "id": "open_ai",
+          "name": "Open AI"
+        }
+      ],
+      "default_provider": {
+        "id": "bedrock",
+        "name": "AWS Bedrock"
+      },
+      "date_added": "2026-09-30",
+      "rate_limits": {
+        "rpm": 30,
+        "tpm": 120000
+      }
+    },
+    {
+      "default_parameters": {
+        "temperature": null,
+        "top_p": null,
+        "frequency_penalty": null
+      },
+      "id": "gpt-6.1-terra",
+      "name": "GPT-6.1 Terra",
+      "description": "",
+      "supported_parameters": [
+        "max_tokens",
+        "stream",
+        "response_format",
+        "reasoning_effort",
+        "tools",
+        "tool_choice"
+      ],
+      "top_provider": {
+        "is_moderated": false,
+        "context_length": 922000,
+        "max_completion_tokens": 128000
+      },
+      "context_length": 922000,
+      "pricing": {
+        "global": {
+          "completions": 5,
+          "prompt": 1,
+          "input_cache_read": 0.05,
+          "input_cache_write": 1.25
+        },
+        "regional_increase_percent": 0.1
+      },
+      "creator": "Open AI",
+      "retirement_date": 0,
+      "available_regions": [
+        "us"
+      ],
+      "providers": [
+        {
+          "id": "bedrock",
+          "name": "AWS Bedrock"
+        },
+        {
+          "id": "open_ai",
+          "name": "Open AI"
+        }
+      ],
+      "default_provider": {
+        "id": "bedrock",
+        "name": "AWS Bedrock"
+      },
+      "date_added": "2026-10-26",
+      "rate_limits": {
+        "rpm": 30,
+        "tpm": 120000
+      }
+    },
+    {
+      "default_parameters": {
+        "temperature": null,
+        "top_p": null,
+        "frequency_penalty": null
+      },
+      "id": "qwen3-32B",
+      "name": "Qwen3 32B",
+      "description": "",
+      "supported_parameters": [
+        "max_tokens",
+        "temperature",
+        "tools",
+        "tool_choice",
+        "response_format",
+        "stream"
+      ],
+      "top_provider": {
+        "is_moderated": false,
+        "context_length": 200000,
+        "max_completion_tokens": 32768
+      },
+      "context_length": 200000,
+      "pricing": {
+        "global": {
+          "completions": 0.6,
+          "prompt": 0.15
+        }
+      },
+      "creator": "Qwen",
+      "retirement_date": 0,
+      "available_regions": [
+        "us",
+        "eu"
+      ],
+      "providers": [
+        {
+          "id": "bedrock",
+          "name": "AWS Bedrock"
+        }
+      ],
+      "default_provider": {
+        "id": "bedrock",
+        "name": "AWS Bedrock"
+      },
+      "date_added": null,
+      "rate_limits": {
+        "rpm": 30,
+        "tpm": 300000
+      }
+    },
+    {
+      "default_parameters": {
+        "temperature": null,
+        "top_p": null,
+        "frequency_penalty": null
+      },
+      "id": "qwen3-next-80b-a3b",
+      "name": "Qwen3 Next 80B A3B",
+      "description": "",
+      "supported_parameters": [
+        "max_tokens",
+        "temperature",
+        "tools",
+        "tool_choice",
+        "response_format",
+        "stream"
+      ],
+      "top_provider": {
+        "is_moderated": false,
+        "context_length": 200000,
+        "max_completion_tokens": 32768
+      },
+      "context_length": 200000,
+      "pricing": {
+        "global": {
+          "completions": 1.2,
+          "prompt": 0.15
+        }
+      },
+      "creator": "Qwen",
+      "retirement_date": 0,
+      "available_regions": [
+        "us",
+        "eu"
+      ],
+      "providers": [
+        {
+          "id": "bedrock",
+          "name": "AWS Bedrock"
+        }
+      ],
+      "default_provider": {
+        "id": "bedrock",
+        "name": "AWS Bedrock"
+      },
+      "date_added": null,
+      "rate_limits": {
+        "rpm": 30,
+        "tpm": 300000
+      }
+    },
+    {
+      "default_parameters": {
+        "temperature": null,
+        "top_p": null,
+        "frequency_penalty": null
+      },
+      "id": "beam-1.0",
+      "name": "Beam 1.0",
+      "description": "",
+      "supported_parameters": [
+        "max_tokens",
+        "temperature",
+        "tools",
+        "tool_choice",
+        "response_format",
+        "reasoning_effort",
+        "stream"
+      ],
+      "top_provider": {
+        "is_moderated": false,
+        "context_length": 1048576,
+        "max_completion_tokens": 131072
+      },
+      "context_length": 1048576,
+      "pricing": {
+        "global": {
+          "completions": 1.2,
+          "prompt": 0.4,
+          "input_cache_read": 0.04
+        }
+      },
+      "creator": "Reflection AI",
+      "retirement_date": 0,
+      "available_regions": [
+        "us"
+      ],
+      "providers": [
+        {
+          "id": "digital_ocean",
+          "name": "Digital Ocean"
+        }
+      ],
+      "default_provider": {
+        "id": "digital_ocean",
+        "name": "Digital Ocean"
+      },
+      "date_added": "2026-10-22",
+      "rate_limits": {
+        "rpm": 30,
+        "tpm": 20000
+      }
+    },
+    {
+      "default_parameters": {
+        "temperature": null,
+        "top_p": null,
+        "frequency_penalty": null
+      },
+      "id": "glm-5.3",
+      "name": "GLM-5.3",
+      "description": "",
+      "supported_parameters": [
+        "max_tokens",
+        "temperature",
+        "tools",
+        "tool_choice",
+        "response_format",
+        "reasoning_effort",
+        "stream"
+      ],
+      "top_provider": {
+        "is_moderated": false,
+        "context_length": 1040000,
+        "max_completion_tokens": 131072
+      },
+      "context_length": 1040000,
+      "pricing": {
+        "global": {
+          "completions": 3.4,
+          "prompt": 0.95,
+          "input_cache_read": 0.2
+        }
+      },
+      "creator": "ZAI",
+      "retirement_date": 0,
+      "available_regions": [
+        "us"
+      ],
+      "providers": [
+        {
+          "id": "digital_ocean",
+          "name": "Digital Ocean"
+        },
+        {
+          "id": "fireworks",
+          "name": "Fireworks"
+        }
+      ],
+      "default_provider": {
+        "id": "digital_ocean",
+        "name": "Digital Ocean"
+      },
+      "date_added": "2026-09-18",
+      "rate_limits": {
+        "rpm": 30,
+        "tpm": 20000
+      }
+    },
+    {
+      "default_parameters": {
+        "temperature": null,
+        "top_p": null,
+        "frequency_penalty": null
+      },
+      "id": "glm-5.3-flash",
+      "name": "GLM-5.3 Flash",
+      "description": "",
+      "supported_parameters": [
+        "max_tokens",
+        "temperature",
+        "tools",
+        "tool_choice",
+        "response_format",
+        "reasoning_effort",
+        "stream"
+      ],
+      "top_provider": {
+        "is_moderated": false,
+        "context_length": 1040000,
+        "max_completion_tokens": 131072
+      },
+      "context_length": 1040000,
+      "pricing": {
+        "global": {
+          "completions": 0.5,
+          "prompt": 0.15,
+          "input_cache_read": 0.03
+        }
+      },
+      "creator": "ZAI",
+      "retirement_date": 0,
+      "available_regions": [
+        "us"
+      ],
+      "providers": [
+        {
+          "id": "digital_ocean",
+          "name": "Digital Ocean"
+        },
+        {
+          "id": "fireworks",
+          "name": "Fireworks"
+        }
+      ],
+      "default_provider": {
+        "id": "digital_ocean",
+        "name": "Digital Ocean"
+      },
+      "date_added": "2026-09-18",
+      "rate_limits": {
+        "rpm": 30,
+        "tpm": 20000
+      }
+    },
+    {
+      "default_parameters": {
+        "temperature": null,
+        "top_p": null,
+        "frequency_penalty": null
+      },
+      "id": "grok-4.7",
+      "name": "Grok 4.7",
+      "description": "",
+      "supported_parameters": [
+        "max_tokens",
+        "temperature",
+        "tools",
+        "tool_choice",
+        "stream",
+        "response_format",
+        "reasoning_effort"
+      ],
+      "top_provider": {
+        "is_moderated": false,
+        "context_length": 500000,
+        "max_completion_tokens": 500000
+      },
+      "context_length": 500000,
+      "pricing": {
+        "global": {
+          "completions": 6,
+          "prompt": 2,
+          "input_cache_read": 0.5
+        },
+        "regional_increase_percent": 0.1
+      },
+      "creator": "xAI",
+      "retirement_date": 0,
+      "available_regions": [
+        "us",
+        "global"
+      ],
+      "providers": [
+        {
+          "id": "bedrock",
+          "name": "AWS Bedrock"
+        }
+      ],
+      "default_provider": {
+        "id": "bedrock",
+        "name": "AWS Bedrock"
+      },
+      "date_added": "2026-09-29",
+      "rate_limits": {
+        "rpm": 30,
+        "tpm": 30000
+      }
+    }
+  ]
+}

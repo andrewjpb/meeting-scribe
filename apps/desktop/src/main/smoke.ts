@@ -1,0 +1,2228 @@
+// Smoke do build de produção: abre cada tela nos dois temas, grava PNG e `out/smoke/report.json`
+// e confere segurança, origem, OPFS, AudioWorklet, navegação, gravação, marca, troca de tema e
+// movimento reduzido, Configurações (chave, modelo, áudio, idiomas, tema) e o bloco de permissões. A
+// janela nunca aparece: transparente, sem clique, sem foco e com o app fora do Dock; `userData` numa pasta
+// temporária apagada no fim. A gravação usa o sinal gerado (o main responde `synthetic` ao renderer só
+// no smoke): nenhum microfone nem áudio do sistema é aberto. A AssemblyAI e o macOS ficam de fora:
+// gateway de fixtures, Chaveiro em memória com chave fictícia e permissão de microfone substituta. O
+// Claude CLI é o binário falso (test/fixtures/fake-claude.mjs); o `claude` de verdade nunca roda, nem
+// para o resumo da reunião (contrato 08). A marca própria (contrato 09) usa o logo de
+// test/fixtures/brand/ pelo diálogo substituto, e o Dock de verdade nunca é tocado.
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { basename, join } from 'node:path'
+import { app, ipcMain, Menu, nativeTheme, session, type BrowserWindow, type WebContents } from 'electron'
+import { ASSEMBLYAI_DASHBOARD_URL } from '../shared/assemblyai'
+import type { CspViolation } from '../shared/ipc'
+import type { Meeting } from '../shared/meetings'
+import { summaryMarkdown, type MeetingSummary } from '../shared/meeting-summary'
+import { PRIVACY_PANE_URLS } from '../shared/privacy'
+import { BRAND_LOGO_INVALID_MESSAGE, BRAND_LOGO_PATTERN, DEFAULT_BRAND_NAME, DEFAULT_BRAND_SUBTITLE } from '../shared/branding'
+import { DEFAULT_SETTINGS, type AppSettings } from '../shared/settings-defaults'
+import { transcriptMarkdown } from '../shared/transcript-markdown'
+import { TRANSCRIPT_VERSION, type RuntimeSegment, type TranscriptDocument } from '../shared/transcription'
+import { applyMessage, emptyTranscriptState, persistableSegments, type StreamEnvelope } from '../renderer/src/transcription/reducer'
+import { DEFAULT_FOLDER_NAME } from './audio-files/service'
+import { SUMMARY_FILE_SUFFIX, summaryFileTarget } from './audio-files/summary-file'
+import { BRANDING_DIR } from './branding/service'
+import { summaryInput, summaryLines } from './claude-cli/summary'
+import { MENU_IDS } from './menu'
+import { MEETINGS_FILE } from './meetings/store'
+import { originOf } from './security'
+import { SETTINGS_FILE } from './settings/store'
+import {
+  SMOKE_FAKE_KEY,
+  SMOKE_NOT_ALLOWED_MODEL,
+  SMOKE_OFFLINE_KEY,
+  SMOKE_OFFLINE_MODEL,
+  SMOKE_REFUSED_KEY,
+  type SmokeFixtures,
+} from './smoke-fixtures'
+
+const TIMEOUT_MS = 180_000
+const THEMES = ['light', 'dark'] as const
+/** Telas fotografadas em cada tema, na ordem do roteiro de `runSmoke`. */
+const SCREENS = [
+  'reunioes',
+  'gravacao',
+  'gravacao-ao-vivo',
+  'reunioes-com-dados',
+  'detalhe',
+  'detalhe-resumo',
+  'configuracoes',
+  'configuracoes-seletor',
+  'configuracoes-claude',
+  'configuracoes-arquivos',
+  'configuracoes-marca',
+] as const
+/** Tempo de gravação até a fita encher a largura da janela (uma coluna a cada 50 ms). */
+const TAPE_FILL_MS = 12_500
+const MIN_TAPE_FPS = 30
+
+export interface SmokeContext {
+  appOrigin: string
+  userDataDir: string
+  outDir: string
+  /** Gateway, Chaveiro e permissão de microfone substitutos (`smoke-fixtures.ts`). */
+  fixtures: SmokeFixtures
+  openWindow: (query: Record<string, string>) => BrowserWindow
+}
+
+interface Check {
+  ok: boolean
+  detail: string
+}
+
+interface Screenshot {
+  name: string
+  file: string
+  /** Tamanho em pontos (px lógicos), o que o critério de 1120×740 mede. */
+  width: number
+  height: number
+  devicePixelRatio: number
+  pixelWidth: number
+  pixelHeight: number
+  distinctColors: number
+}
+
+export function isSmokeRun(argv: readonly string[]): boolean {
+  return argv.includes('--smoke')
+}
+
+/**
+ * Antes de `ready`: `userData` temporário, sem ícone no Dock e sem roubar o foco. A pasta vem de
+ * `scripts/smoke.mjs` (que a apaga depois que o Electron sai); sem ele, cria uma aqui.
+ */
+export function prepareSmokeEnvironment(argv: readonly string[]): string {
+  const given = argv.find((arg) => arg.startsWith('--smoke-user-data='))?.slice('--smoke-user-data='.length)
+  const temp = realpathSync(tmpdir())
+  const dir = given ? realpathSync(given) : realpathSync(mkdtempSync(join(tmpdir(), 'meeting-scribe-smoke-')))
+  if (!dir.startsWith(`${temp}/`)) throw new Error(`smoke: userData fora da pasta temporária (${dir})`)
+  app.setPath('userData', dir)
+  app.setPath('sessionData', dir)
+  if (process.platform === 'darwin') app.setActivationPolicy('accessory')
+  return dir
+}
+
+const wait = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))
+
+async function evaluate<T>(contents: WebContents, script: string): Promise<T> {
+  return (await contents.executeJavaScript(script, true)) as T
+}
+
+async function waitFor(contents: WebContents, predicate: string, timeoutMs = 5000): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    if (await evaluate<boolean>(contents, `Boolean(${predicate})`)) return true
+    await wait(50)
+  }
+  return false
+}
+
+/** Fontes carregadas, transição de rota terminada e um quadro pintado. */
+async function settle(contents: WebContents): Promise<void> {
+  await evaluate(contents, 'document.fonts.ready.then(() => true)')
+  await wait(400)
+}
+
+async function loadAndWait(win: BrowserWindow): Promise<void> {
+  const contents = win.webContents
+  if (contents.isLoading()) await new Promise<void>((resolve) => contents.once('did-finish-load', () => resolve()))
+  if (!(await waitFor(contents, "document.querySelector('main[data-route]')", 10_000))) {
+    throw new Error('o renderer não montou a área principal')
+  }
+}
+
+const currentRoute = (contents: WebContents): Promise<string> =>
+  evaluate<string>(contents, "document.querySelector('main')?.dataset.route ?? ''")
+
+const activeNav = (contents: WebContents): Promise<string> =>
+  evaluate<string>(contents, `document.querySelector('[aria-current="page"]')?.dataset.nav ?? ''`)
+
+async function clickSelector(contents: WebContents, selector: string): Promise<void> {
+  const found = await evaluate<boolean>(
+    contents,
+    `(() => { const el = document.querySelector(${JSON.stringify(selector)}); if (!el) return false; el.click(); return true })()`,
+  )
+  if (!found) throw new Error(`elemento não encontrado: ${selector}`)
+}
+
+const routeIs = (route: string): string => `document.querySelector('main')?.dataset.route === '${route}'`
+const probeJs = (expression: string): string => `window.__smokeProbe?.${expression}`
+
+async function captureState(contents: WebContents): Promise<{ phase?: string; mic?: string; system?: string } | null> {
+  return evaluate(contents, `${probeJs('state()')} ?? null`)
+}
+
+async function frameCounts(contents: WebContents): Promise<{ mic: number; system: number } | null> {
+  return evaluate(contents, `${probeJs('frames()')} ?? null`)
+}
+
+/** Quadros desenhados pela fita em 1 s. */
+async function tapeFps(contents: WebContents): Promise<number> {
+  const before = await evaluate<number>(contents, `${probeJs('tapeFrames()')} ?? 0`)
+  await wait(1000)
+  return (await evaluate<number>(contents, `${probeJs('tapeFrames()')} ?? 0`)) - before
+}
+
+function readMeetings(userDataDir: string): Meeting[] {
+  const file = join(userDataDir, MEETINGS_FILE)
+  if (!existsSync(file)) return []
+  return (JSON.parse(readFileSync(file, 'utf8')) as { meetings: Meeting[] }).meetings
+}
+
+interface FixtureLine {
+  at: number
+  source: 'mic' | 'system'
+  sessionId: string
+  offsetMs: number
+  message: unknown
+}
+
+/**
+ * A sessão real gravada em 14/11/2026 (mic de 30 s, com tradução). É a mesma fixture dos testes do
+ * redutor: o smoke não inventa texto nem conecta — mostra o que o app mostraria com ela. Com
+ * `echo-session.jsonl`, o eco do alto-falante do contrato 06 (o exemplo real, nas duas trilhas).
+ */
+function readSessionFixture(name = 'aai-session.jsonl'): FixtureLine[] {
+  const file = join(app.getAppPath(), 'test', 'fixtures', 'session', name)
+  return readFileSync(file, 'utf8')
+    .trim()
+    .split('\n')
+    .map((line) => JSON.parse(line) as FixtureLine)
+    .filter((line) => line.message !== undefined)
+}
+
+const fixtureEnvelope = (line: FixtureLine): StreamEnvelope => ({ source: line.source, sessionId: line.sessionId, offsetMs: line.offsetMs, message: line.message })
+
+function fixtureSegments(lines: readonly FixtureLine[]): RuntimeSegment[] {
+  return lines.reduce((state, line) => applyMessage(state, fixtureEnvelope(line)), emptyTranscriptState()).segments
+}
+
+/** Texto que só o trecho do eco tem (o mic e o sistema dizem "direto na minha conta"). */
+const ECHO_PHRASE = 'direto na minha conta'
+
+/**
+ * Contrato 06, CA8: a fixture de eco entra na coluna ao vivo em dois tempos, na ordem real. Com o mic
+ * fechado e só o parcial do sistema, a fala aparece em "Você"; com o final do sistema, ela fica só em
+ * "Participantes" (sem animação nem aviso). Fotografa `gravacao-eco-light`.
+ */
+async function echoCheck(win: BrowserWindow, outDir: string): Promise<{ check: Check; shot: Screenshot }> {
+  const contents = win.webContents
+  const lines = readSessionFixture('echo-session.jsonl')
+  const systemFinal = lines.findIndex((line) => line.source === 'system' && (line.message as { end_of_turn?: unknown } | null)?.end_of_turn === true)
+  const rows = `[...document.querySelectorAll('[data-transcript-list] li')].map((li) => ({ label: li.querySelector('.caps')?.textContent ?? '', text: li.querySelector('[data-transcript-text]')?.textContent ?? '' }))`
+  const withPhrase = (list: { label: string; text: string }[]): string[] => list.filter((row) => row.text.includes(ECHO_PHRASE)).map((row) => row.label)
+
+  await evaluate(contents, `window.__smokeProbe.replay(${JSON.stringify(fixtureSegments(lines.slice(0, systemFinal)))})`)
+  await waitFor(contents, `document.querySelectorAll('[data-transcript-list] li').length === 3`)
+  const before = await evaluate<{ label: string; text: string }[]>(contents, rows)
+  await evaluate(contents, `window.__smokeProbe.replay(${JSON.stringify(fixtureSegments(lines))})`)
+  await waitFor(contents, `document.querySelectorAll('[data-transcript-list] li').length === 2`)
+  await settle(contents)
+  const after = await evaluate<{ label: string; text: string }[]>(contents, rows)
+  const shot = await capture(win, outDir, 'gravacao-eco-light')
+  const beforeLabels = withPhrase(before)
+  const afterLabels = withPhrase(after)
+  return {
+    check: {
+      ok:
+        beforeLabels.includes('Você') &&
+        afterLabels.length === 1 &&
+        afterLabels[0] === 'Participante A' &&
+        after.some((row) => row.label === 'Você' && row.text.startsWith('Pode falar')),
+      detail: `antes do final do sistema: "${ECHO_PHRASE}" em [${beforeLabels.join(', ')}]; depois: em [${afterLabels.join(', ')}]; linhas na tela: ${after.map((row) => row.label).join(', ')}`,
+    },
+    shot,
+  }
+}
+
+/** Coluna ao vivo: a conversa até o primeiro parcial do terceiro turno (dois finais + parcial). */
+function liveFixtureLines(lines: readonly FixtureLine[]): FixtureLine[] {
+  const index = lines.findIndex((line) => {
+    const message = line.message as { type?: unknown; turn_order?: unknown; end_of_turn?: unknown } | null
+    return message?.type === 'Turn' && message.turn_order === 2 && message.end_of_turn === false
+  })
+  return index === -1 ? [...lines] : lines.slice(0, index + 1)
+}
+
+function transcriptDocument(meetingId: string, lines: readonly FixtureLine[]): TranscriptDocument {
+  return {
+    version: TRANSCRIPT_VERSION,
+    meetingId,
+    sourceLanguage: DEFAULT_SETTINGS.sourceLanguage,
+    targetLanguage: DEFAULT_SETTINGS.targetLanguage,
+    translationModel: DEFAULT_SETTINGS.translationModel,
+    segments: persistableSegments({ segments: fixtureSegments(lines), pendingTranslations: {} }),
+  }
+}
+
+/** Três reuniões gravadas: hoje, ontem e três dias atrás (a última só com o microfone). */
+function seedMeetings(userDataDir: string): void {
+  const at = (daysAgo: number, hours: number, minutes: number): string => {
+    const date = new Date()
+    date.setDate(date.getDate() - daysAgo)
+    date.setHours(hours, minutes, 0, 0)
+    return date.toISOString()
+  }
+  const meetings: Meeting[] = [
+    { id: 'smoke-1', title: 'Planejamento da migração do banco', startedAt: at(0, 9, 30), durationMs: 32 * 60_000, sources: { mic: true, system: true }, audioPath: null, transcriptPath: null },
+    { id: 'smoke-2', title: 'Revisão do contrato com a agência', startedAt: at(1, 16, 10), durationMs: 47 * 60_000, sources: { mic: true, system: true }, audioPath: null, transcriptPath: null },
+    { id: 'smoke-3', title: 'Notas da visita à fábrica', startedAt: at(3, 11, 0), durationMs: 72 * 60_000, sources: { mic: true, system: false }, audioPath: null, transcriptPath: null },
+  ]
+  writeFileSync(join(userDataDir, MEETINGS_FILE), `${JSON.stringify({ version: 1, meetings }, null, 2)}\n`)
+  // A primeira reunião tem a transcrição da fixture: o detalhe fotografado abre com texto salvo.
+  const transcripts = join(userDataDir, 'meetings')
+  mkdirSync(transcripts, { recursive: true })
+  writeFileSync(join(transcripts, 'smoke-1.json'), `${JSON.stringify(transcriptDocument('smoke-1', readSessionFixture()), null, 2)}\n`)
+}
+
+/** Pasta pessoal do smoke, dentro do `userData` temporário: o smoke nunca escreve em ~/Documents. */
+const smokeHome = (ctx: SmokeContext): string => join(ctx.userDataDir, 'home')
+const defaultMeetingFolder = (ctx: SmokeContext): string => join(smokeHome(ctx), 'Documents', DEFAULT_FOLDER_NAME)
+
+function folderFiles(dir: string): { name: string; size: number }[] {
+  if (!existsSync(dir)) return []
+  return readdirSync(dir)
+    .sort()
+    .map((name) => ({ name, size: statSync(join(dir, name)).size }))
+}
+
+/** Áudio de uma gravação do smoke com o título padrão ("Reunião de DD/MM HH:mm", sem barra nem dois-pontos). */
+const SMOKE_AUDIO_FILE = /^\d{4}-\d{2}-\d{2} \d{2}h\d{2} - Reunião de \d{2}-\d{2} \d{2}-\d{2}\.(m4a|webm)$/
+
+type AudioProbe = { chunks: number; bytes: number; ok: boolean } | null
+const audioProbe = (contents: WebContents): Promise<AudioProbe> => evaluate<AudioProbe>(contents, `${probeJs('audioFile()')} ?? null`)
+
+/**
+ * Formato que o `MediaRecorder` deste Electron aceita e o tamanho real do arquivo (contrato 07, CA3):
+ * 4 s de dois tons misturados num destino mono a 64 kbps, a mesma montagem de `audio/mixer.ts`. Só
+ * mede; nada vai para o disco (o fluxo da gravação usa o gravador falso).
+ */
+async function recorderFormat(contents: WebContents): Promise<Check & { measured: Record<string, unknown> }> {
+  const measured = await evaluate<{ supported: string[]; mime: string | null; recorderMime: string; bytes: number; chunks: number; ms: number; head: string; error: string }>(
+    contents,
+    `(async () => {
+      const types = ['audio/mp4;codecs=mp4a.40.2', 'audio/mp4', 'audio/webm;codecs=opus', 'audio/webm']
+      const supported = types.filter((type) => MediaRecorder.isTypeSupported(type))
+      const mime = supported[0] ?? null
+      const out = { supported, mime, recorderMime: '', bytes: 0, chunks: 0, ms: 0, head: '', error: '' }
+      if (!mime) return out
+      try {
+        const context = new AudioContext()
+        const destination = context.createMediaStreamDestination()
+        destination.channelCount = 1
+        destination.channelCountMode = 'explicit'
+        destination.channelInterpretation = 'speakers'
+        const gain = context.createGain()
+        gain.gain.value = 0.2
+        for (const frequency of [220, 330]) {
+          const tone = context.createOscillator()
+          tone.frequency.value = frequency
+          tone.connect(gain)
+          tone.start()
+        }
+        gain.connect(destination)
+        await context.resume()
+        const recorder = new MediaRecorder(destination.stream, { mimeType: mime, audioBitsPerSecond: 64000 })
+        out.recorderMime = recorder.mimeType
+        const pending = []
+        recorder.ondataavailable = (event) => {
+          out.bytes += event.data.size
+          out.chunks++
+          if (out.chunks === 1) pending.push(event.data.slice(0, 12).arrayBuffer().then((buffer) => { out.head = String.fromCharCode(...new Uint8Array(buffer).slice(4, 8)) }))
+        }
+        const started = performance.now()
+        recorder.start(1000)
+        await new Promise((resolve) => setTimeout(resolve, 4000))
+        await new Promise((resolve) => { recorder.onstop = resolve; recorder.stop() })
+        out.ms = Math.round(performance.now() - started)
+        await Promise.all(pending)
+        await context.close()
+      } catch (error) { out.error = String(error) }
+      return out
+    })()`,
+  )
+  const kbps = measured.ms ? Math.round((measured.bytes * 8) / measured.ms) : 0
+  const mbPerHour = Math.round(((measured.bytes / Math.max(1, measured.ms)) * 3_600_000) / 1_000_000)
+  return {
+    ok: measured.mime !== null && measured.bytes > 0 && measured.chunks >= 3 && !measured.error,
+    detail: `aceitos: [${measured.supported.join(', ')}]; escolhido ${measured.mime} (gravador: ${measured.recorderMime}, caixa "${measured.head}"); ${measured.bytes} bytes em ${measured.ms} ms e ${measured.chunks} pedaços = ~${kbps} kbps, ~${mbPerHour} MB por hora${measured.error ? `; erro ${measured.error}` : ''}`,
+    measured: { ...measured, kbps, mbPerHour },
+  }
+}
+
+/** Contrato 07, CA9 e CA4: marcador "Gravando áudio" e o `.part` crescendo em pedaços na pasta. */
+async function audioWhileRecording(contents: WebContents, folder: string): Promise<Check> {
+  const marker = await text(contents, '[data-audio-marker]')
+  const probe = await audioProbe(contents)
+  const files = folderFiles(folder)
+  const part = files[0]
+  return {
+    ok: marker === 'Gravando áudio' && files.length === 1 && part !== undefined && /\.(m4a|webm)\.part$/.test(part.name) && part.size > 0 && (probe?.chunks ?? 0) >= 2,
+    detail: `marcador "${marker}"; pasta ${JSON.stringify(files)}; gravador ${JSON.stringify(probe)}`,
+  }
+}
+
+/**
+ * Contrato 07, CA6, CA6b e CA10 depois de "Encerrar": o `.part` virou o arquivo final com todos os
+ * pedaços, o `.md` ao lado tem o texto do "Exportar" da transcrição salva, os caminhos estão na reunião e
+ * o detalhe mostra "Áudio" e "Transcrição" com Abrir e Mostrar no Finder.
+ */
+async function audioAfterEnd(win: BrowserWindow, ctx: SmokeContext, record: Meeting | undefined): Promise<{ saved: Check; detail: Check; shot: Screenshot }> {
+  const contents = win.webContents
+  const folder = defaultMeetingFolder(ctx)
+  // O resumo (contrato 08) também vai para a pasta; aqui contam só o áudio e a transcrição do contrato 07.
+  const files = folderFiles(folder).filter((file) => !file.name.endsWith(SUMMARY_FILE_SUFFIX))
+  const probe = await audioProbe(contents)
+  const audio = files.find((file) => SMOKE_AUDIO_FILE.test(file.name))
+  const md = files.find((file) => file.name.endsWith('.md'))
+  const transcriptFile = record ? join(ctx.userDataDir, 'meetings', `${record.id}.json`) : ''
+  const document = transcriptFile && existsSync(transcriptFile) ? (JSON.parse(readFileSync(transcriptFile, 'utf8')) as TranscriptDocument) : null
+  const mdText = md ? readFileSync(join(folder, md.name), 'utf8') : ''
+  const expected = record && document ? transcriptMarkdown(record, document) : null
+  const saved: Check = {
+    ok:
+      files.length === 2 &&
+      audio !== undefined &&
+      md !== undefined &&
+      probe?.ok === true &&
+      audio.size === probe.bytes &&
+      md.name === audio.name.replace(/\.(m4a|webm)$/, '.md') &&
+      mdText === expected &&
+      mdText.includes(ECHO_PHRASE) &&
+      record?.audioPath === join(folder, audio.name) &&
+      record.transcriptPath === join(folder, md.name),
+    detail: `pasta ${JSON.stringify(files)}; gravador ${JSON.stringify(probe)}; .md igual ao "Exportar"=${mdText === expected} (${mdText.split('\n').length} linhas); reunião audioPath=${record?.audioPath ? basename(record.audioPath) : null}, transcriptPath=${record?.transcriptPath ? basename(record.transcriptPath) : null}`,
+  }
+
+  // Os arquivos ficam na aba "Áudio" (contrato 08).
+  await clickSelector(contents, '[data-tab="audio"]')
+  await waitFor(contents, `document.querySelector('[data-file="audio"][data-exists="true"]') && document.querySelector('[data-file="transcript"][data-exists="true"]')`)
+  const rows = await evaluate<{ kind: string; label: string; name: string }[]>(
+    contents,
+    `[...document.querySelectorAll('[data-meeting-files] li')].map((li) => ({ kind: li.dataset.file, label: li.querySelector('span')?.textContent ?? '', name: li.querySelector('[data-file-name]')?.textContent ?? '' }))`,
+  )
+  const openedBefore = ctx.fixtures.openedFiles.length
+  await clickSelector(contents, '[data-action="open-audio"]')
+  await clickSelector(contents, '[data-action="reveal-transcript"]')
+  for (let attempt = 0; attempt < 40 && ctx.fixtures.openedFiles.length < openedBefore + 2; attempt++) await wait(50)
+  const opened = ctx.fixtures.openedFiles.slice(openedBefore)
+  await settle(contents)
+  const shot = await capture(win, ctx.outDir, 'detalhe-arquivos-light')
+  const detail: Check = {
+    ok:
+      rows.length === 2 &&
+      rows[0]?.label === 'Áudio' &&
+      rows[0].name === audio?.name &&
+      rows[1]?.label === 'Transcrição' &&
+      rows[1].name === md?.name &&
+      opened.length === 2 &&
+      opened[0]?.action === 'open' &&
+      opened[0].path === record?.audioPath &&
+      opened[1]?.action === 'reveal' &&
+      opened[1].path === record?.transcriptPath,
+    detail: `linhas ${JSON.stringify(rows)}; Abrir/Mostrar no Finder -> ${JSON.stringify(opened.map((item) => ({ action: item.action, file: basename(item.path) })))}`,
+  }
+  return { saved, detail, shot }
+}
+
+/** Medidas do resumo com o `claude` falso, para o relatório (contrato 08, notas do coordenador). */
+interface SummaryMeasured {
+  /** Do clique em "Encerrar" até o resumo aparecer na aba. */
+  elapsedMs: number
+  /** Caracteres que foram pelo stdin (pedido + transcrição). */
+  promptChars: number
+  segments: number
+  /** O `claude` falso informa US$ 0; o real cobra da assinatura, nominal. */
+  costUsdNominal: number
+}
+
+/**
+ * Contrato 08, CA4, CA5, CA6, CA8 e CA10 depois de "Encerrar": o resumo é gerado sozinho (uma execução do
+ * `claude` falso, com o isolamento do contrato 05 e a transcrição só no stdin), o detalhe abre na aba
+ * "Resumo" com as três seções e o rodapé, `meetings/<id>.summary.json` vale pelo esquema e a pasta
+ * ganha `<nome> - resumo.md` com o mesmo Markdown do "Copiar resumo".
+ */
+async function summaryAfterEnd(win: BrowserWindow, ctx: SmokeContext, record: Meeting | undefined, endedAt: number, copy: boolean): Promise<{ check: Check; measured: SummaryMeasured }> {
+  const contents = win.webContents
+  const ready = await waitFor(
+    contents,
+    `document.querySelector('[data-tab="resumo"]')?.getAttribute('aria-selected') === 'true' && document.querySelector('[data-summary="ready"] [data-summary-footer]')`,
+    15_000,
+  )
+  const elapsedMs = Date.now() - endedAt
+  const file = record ? join(ctx.userDataDir, 'meetings', `${record.id}.summary.json`) : ''
+  const summary = file && existsSync(file) ? (JSON.parse(readFileSync(file, 'utf8')) as MeetingSummary) : null
+  const transcriptFile = record ? join(ctx.userDataDir, 'meetings', `${record.id}.json`) : ''
+  const document = transcriptFile && existsSync(transcriptFile) ? (JSON.parse(readFileSync(transcriptFile, 'utf8')) as TranscriptDocument) : null
+  const lines = document ? summaryLines(document) : []
+  const target = record ? summaryFileTarget(record) : null
+  const folderPath = target ? join(target.folder, target.name) : ''
+  // A cópia na pasta é escrita logo depois do `summary.json`.
+  for (let attempt = 0; attempt < 40 && folderPath && !existsSync(folderPath); attempt++) await wait(50)
+  const folderText = folderPath && existsSync(folderPath) ? readFileSync(folderPath, 'utf8') : ''
+  const expected = record && summary ? summaryMarkdown(record, summary) : null
+  const screen = await evaluate<{ tabs: string[]; sections: string[]; decisions: number; rows: string[][]; footer: string; buttons: string[] }>(
+    contents,
+    `({
+      tabs: [...document.querySelectorAll('[role="tab"]')].map((tab) => tab.textContent),
+      sections: [...document.querySelectorAll('[data-summary] h2')].map((h) => h.textContent),
+      decisions: document.querySelectorAll('[data-summary-decisions] li').length,
+      rows: [...document.querySelectorAll('[data-summary-tasks] tr')].map((tr) => [...tr.children].map((cell) => cell.textContent)),
+      footer: document.querySelector('[data-summary-footer]')?.textContent ?? '',
+      buttons: [...document.querySelectorAll('[data-summary] button')].map((button) => button.textContent),
+    })`,
+  )
+  const spawn = [...ctx.fixtures.claudeSpawns].reverse().find((item) => item.args[item.args.indexOf('--output-format') + 1] === 'json')
+  const spawnArgs = spawn?.args ?? []
+  const leaked = lines.some((line) => spawnArgs.some((arg) => arg.includes(line.slice(line.indexOf(': ') + 2, line.indexOf(': ') + 30))))
+
+  let copied = ''
+  if (copy) {
+    const before = ctx.fixtures.copiedTexts.length
+    await clickSelector(contents, '[data-action="copy-summary"]')
+    for (let attempt = 0; attempt < 40 && ctx.fixtures.copiedTexts.length === before; attempt++) await wait(50)
+    copied = ctx.fixtures.copiedTexts.at(-1) ?? ''
+  }
+  const check: Check = {
+    ok:
+      ready &&
+      summary !== null &&
+      summary.meetingId === record?.id &&
+      summary.model === 'claude-cli:haiku' &&
+      summary.tasks.length === 2 &&
+      JSON.stringify(screen.tabs) === JSON.stringify(['Resumo', 'Transcrição', 'Áudio']) &&
+      JSON.stringify(screen.sections) === JSON.stringify(['O que aconteceu', 'Decisões', 'Tarefas']) &&
+      screen.decisions === summary.decisions.length &&
+      JSON.stringify(screen.rows[0]) === JSON.stringify(['Tarefa', 'Quem', 'Prazo']) &&
+      screen.rows.length === 3 &&
+      screen.rows[2]?.[2] === '—' &&
+      screen.footer.startsWith('Gerado pelo Claude em ') &&
+      screen.footer.endsWith('· claude-cli:haiku') &&
+      screen.buttons.includes('Copiar resumo') &&
+      screen.buttons.includes('Gerar de novo') &&
+      folderText !== '' &&
+      folderText === expected &&
+      (!copy || copied === expected) &&
+      spawn !== undefined &&
+      spawn.cwd === join(ctx.userDataDir, 'claude-cwd') &&
+      spawnArgs.includes('--strict-mcp-config') &&
+      spawnArgs[spawnArgs.indexOf('--setting-sources') + 1] === '' &&
+      spawnArgs[spawnArgs.indexOf('--tools') + 1] === '' &&
+      !spawn.envNames.some((name) => name.startsWith('ELECTRON') || name.includes('ASSEMBLYAI')) &&
+      !leaked,
+    detail: `pronto=${ready} em ${elapsedMs} ms; summary.json ${summary ? `${summary.decisions.length} decisões, ${summary.tasks.length} tarefas, ${summary.model}` : 'ausente'}; abas ${JSON.stringify(screen.tabs)}; seções ${JSON.stringify(screen.sections)}; tarefas ${JSON.stringify(screen.rows)}; rodapé "${screen.footer}"; pasta ${target ? target.name : 'sem arquivo'} igual ao Markdown=${folderText === expected}${copy ? `; "Copiar resumo" igual=${copied === expected}` : ''}; processo ${JSON.stringify(spawn ? { cwd: basename(spawn.cwd), args: spawnArgs.filter((arg) => arg.startsWith('--')), env: spawn.envNames } : null)}; transcrição nos argumentos=${leaked}`,
+  }
+  return { check, measured: { elapsedMs, promptChars: summaryInput(lines).length, segments: lines.length, costUsdNominal: 0 } }
+}
+
+/**
+ * Contrato 08, CA7, no tema claro: na aba "Áudio", "Baixar áudio…" abre o diálogo de salvar (substituto)
+ * com o nome do arquivo e copia o áudio para onde ele "responde"; "Baixar resumo…" escreve o `.md` na
+ * hora. Fotografa `detalhe-audio-light`.
+ */
+async function downloadsCheck(win: BrowserWindow, ctx: SmokeContext, record: Meeting | undefined): Promise<{ check: Check; shot: Screenshot }> {
+  const contents = win.webContents
+  const out = join(ctx.userDataDir, 'baixados')
+  mkdirSync(out, { recursive: true })
+  const dialogsBefore = ctx.fixtures.saveDialogs.length
+  await waitFor(contents, `document.querySelector('[data-action="download-audio"]') && document.querySelector('[data-download="summary"]')`)
+  ctx.fixtures.savePath = join(out, 'copia.m4a')
+  await clickSelector(contents, '[data-action="download-audio"]')
+  const audioSaved = await waitFor(contents, `document.querySelector('[data-action="download-audio"]')?.textContent === 'Salvo'`)
+  ctx.fixtures.savePath = join(out, 'resumo.md')
+  await clickSelector(contents, '[data-action="download-summary"]')
+  const summarySaved = await waitFor(contents, `document.querySelector('[data-action="download-summary"]')?.textContent === 'Salvo'`)
+  ctx.fixtures.savePath = null
+  const dialogs = ctx.fixtures.saveDialogs.slice(dialogsBefore)
+  const audioCopy = existsSync(join(out, 'copia.m4a')) ? statSync(join(out, 'copia.m4a')).size : -1
+  const audioSize = record?.audioPath && existsSync(record.audioPath) ? statSync(record.audioPath).size : -2
+  const summary = record ? (JSON.parse(readFileSync(join(ctx.userDataDir, 'meetings', `${record.id}.summary.json`), 'utf8')) as MeetingSummary) : null
+  const summaryText = existsSync(join(out, 'resumo.md')) ? readFileSync(join(out, 'resumo.md'), 'utf8') : ''
+  await settle(contents)
+  const shot = await capture(win, ctx.outDir, 'detalhe-audio-light')
+  const downloads = join(smokeHome(ctx), 'Downloads')
+  return {
+    check: {
+      ok:
+        audioSaved &&
+        summarySaved &&
+        dialogs.length === 2 &&
+        record?.audioPath !== null &&
+        dialogs[0] === join(downloads, basename(record?.audioPath ?? '')) &&
+        dialogs[1] === join(downloads, basename(record?.audioPath ?? '').replace(/\.(m4a|webm)$/, SUMMARY_FILE_SUFFIX)) &&
+        audioCopy === audioSize &&
+        summary !== null &&
+        record !== undefined &&
+        summaryText === summaryMarkdown(record, summary),
+      detail: `diálogos ${JSON.stringify(dialogs.map((path) => basename(path)))}; áudio copiado ${audioCopy} de ${audioSize} bytes; resumo baixado igual ao Markdown=${summary && record ? summaryText === summaryMarkdown(record, summary) : false}`,
+    },
+    shot,
+  }
+}
+
+/** Contrato 08, CA3: "Resumir ao encerrar", ligado por padrão, com a ajuda; desligar e religar grava. */
+async function summarizeSetting(contents: WebContents, userDataDir: string): Promise<Check> {
+  await clickSelector(contents, '[data-nav="configuracoes"]')
+  await waitFor(contents, `document.querySelector('[aria-labelledby="settings-summarize"]')`)
+  const row = await evaluate<string>(contents, `document.querySelector('#settings-summarize')?.parentElement?.textContent ?? ''`)
+  const on = await evaluate<string | null>(contents, `document.querySelector('[aria-labelledby="settings-summarize"]')?.getAttribute('aria-checked') ?? null`)
+  await clickSelector(contents, '[aria-labelledby="settings-summarize"]')
+  await waitFor(contents, `document.querySelector('[aria-labelledby="settings-summarize"]')?.getAttribute('aria-checked') === 'false'`)
+  const offSaved = readSettings(userDataDir).summarizeOnStop
+  await clickSelector(contents, '[aria-labelledby="settings-summarize"]')
+  await waitFor(contents, `document.querySelector('[aria-labelledby="settings-summarize"]')?.getAttribute('aria-checked') === 'true'`)
+  const onSaved = readSettings(userDataDir).summarizeOnStop
+  return {
+    ok:
+      on === 'true' &&
+      row.includes('Resumir ao encerrar') &&
+      row.includes('Ao encerrar, o Claude lê a transcrição e escreve o resumo, as decisões e as tarefas.') &&
+      offSaved === false &&
+      onSaved === true,
+    detail: `"${row}" ligado=${on}; desligado -> ${offSaved}; religado -> ${onSaved}`,
+  }
+}
+
+/**
+ * Contrato 07, CA2 e a invariante, no tema claro: o bloco "Arquivos da reunião" ligado com a pasta
+ * padrão encurtada; "Escolher pasta…" grava a pasta pelo diálogo (substituto); desligado, uma gravação
+ * não escreve nada em nenhuma das pastas. Termina ligado, com a pasta escolhida.
+ */
+async function meetingFilesSettings(win: BrowserWindow, ctx: SmokeContext): Promise<Check> {
+  const contents = win.webContents
+  const section = `section[aria-label="Arquivos da reunião"]`
+  await clickSelector(contents, '[data-nav="configuracoes"]')
+  await waitFor(contents, `${routeIs('configuracoes')} && document.querySelector('${section}')`)
+  await scrollToSection(contents, 'Arquivos da reunião')
+  const before = await evaluate<{ text: string; on: string }>(
+    contents,
+    `({ text: document.querySelector('${section}')?.innerText ?? '', on: document.querySelector('[aria-labelledby="settings-save-folder"]')?.getAttribute('aria-checked') ?? '' })`,
+  )
+  await waitFor(contents, `document.querySelector('${section}')?.innerText.includes('~/Documents/${DEFAULT_FOLDER_NAME}')`)
+  const defaultShown = await evaluate<string>(contents, `document.querySelector('${section}')?.innerText ?? ''`)
+
+  const chosen = join(smokeHome(ctx), 'Reuniões gravadas')
+  mkdirSync(chosen, { recursive: true })
+  ctx.fixtures.chosenFolder = chosen
+  await clickSelector(contents, '[data-action="choose-folder"]')
+  const shownChosen = await waitFor(contents, `document.querySelector('${section}')?.innerText.includes('~/Reuniões gravadas')`)
+  const savedFolder = readSettings(ctx.userDataDir).audioFolder
+
+  // Desligado: nenhum byte na pasta (nem na padrão, nem na escolhida), nenhum marcador, nenhuma linha no detalhe.
+  await clickSelector(contents, '[aria-labelledby="settings-save-folder"]')
+  const rowGone = await waitFor(contents, `!document.querySelector('[data-action="choose-folder"]')`)
+  const offSaved = readSettings(ctx.userDataDir).saveToFolder
+  const snapshot = (): string => JSON.stringify([folderFiles(defaultMeetingFolder(ctx)), folderFiles(chosen)])
+  const filesBefore = snapshot()
+  Menu.getApplicationMenu()?.getMenuItemById(MENU_IDS.newRecording)?.click()
+  await waitFor(contents, `${routeIs('gravacao')} && ${probeJs('state()?.mic')} === 'live'`)
+  await wait(1500)
+  const markerOff = await evaluate<boolean>(contents, `Boolean(document.querySelector('[data-audio-marker]'))`)
+  await clickSelector(contents, '[data-action="end-recording"]')
+  await waitFor(contents, `${routeIs('detalhe')} && ${DETAIL_ID} !== ''`)
+  await settle(contents)
+  const detailFiles = await evaluate<boolean>(contents, `Boolean(document.querySelector('[data-meeting-files]'))`)
+  const filesAfter = snapshot()
+
+  await clickSelector(contents, '[data-nav="configuracoes"]')
+  await waitFor(contents, `document.querySelector('[aria-labelledby="settings-save-folder"]')`)
+  await clickSelector(contents, '[aria-labelledby="settings-save-folder"]')
+  const backOn = await waitFor(contents, `document.querySelector('[data-action="choose-folder"]')`)
+  return {
+    ok:
+      before.on === 'true' &&
+      before.text.includes('Salvar áudio e transcrição numa pasta') &&
+      before.text.includes('Para cada reunião: um arquivo de áudio (você e os participantes) e a transcrição em texto. Avise as pessoas antes de gravar.') &&
+      defaultShown.includes(`~/Documents/${DEFAULT_FOLDER_NAME}`) &&
+      shownChosen &&
+      savedFolder === chosen &&
+      rowGone &&
+      offSaved === false &&
+      !markerOff &&
+      !detailFiles &&
+      filesBefore === filesAfter &&
+      backOn &&
+      readSettings(ctx.userDataDir).saveToFolder === true,
+    detail: `ligado=${before.on}, pasta padrão mostrada=${defaultShown.includes(`~/Documents/${DEFAULT_FOLDER_NAME}`)}; "Escolher pasta…" -> mostrada=${shownChosen}, audioFolder=${savedFolder ? basename(savedFolder) : null}; desligado -> linha da pasta sumiu=${rowGone}, saveToFolder=${offSaved}, marcador na gravação=${markerOff}, linhas no detalhe=${detailFiles}, pastas iguais antes e depois=${filesBefore === filesAfter}; religado=${backOn}`,
+  }
+}
+
+/** Enter num campo de texto (o React ouve o `keydown` que sobe até a raiz). */
+async function pressEnterIn(contents: WebContents, selector: string): Promise<void> {
+  await evaluate(contents, `document.querySelector(${JSON.stringify(selector)})?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })) ?? false`)
+}
+
+/** Saída do campo: o `onBlur` do React ouve o `focusout` (a janela do smoke não recebe foco de verdade). */
+async function leaveField(contents: WebContents, selector: string): Promise<void> {
+  await evaluate(contents, `document.querySelector(${JSON.stringify(selector)})?.dispatchEvent(new FocusEvent('focusout', { bubbles: true })) ?? false`)
+}
+
+interface SidebarBrand {
+  name: string
+  subtitle: string | null
+  logoSrc: string
+  logoBox: { width: number; height: number } | null
+  logoFit: string
+  logoRadius: string
+  symbol: boolean
+}
+
+const sidebarBrand = (contents: WebContents): Promise<SidebarBrand> =>
+  evaluate<SidebarBrand>(
+    contents,
+    `(() => {
+      const aside = document.querySelector('aside')
+      const img = aside?.querySelector('img[data-brand-logo]')
+      const box = img?.getBoundingClientRect()
+      return {
+        name: aside?.querySelector('[data-brand-name]')?.textContent ?? '',
+        subtitle: aside?.querySelector('[data-brand-subtitle]')?.textContent ?? null,
+        logoSrc: img?.getAttribute('src') ?? '',
+        logoBox: box ? { width: Math.round(box.width), height: Math.round(box.height) } : null,
+        logoFit: img ? getComputedStyle(img).objectFit : '',
+        logoRadius: img ? getComputedStyle(img).borderTopLeftRadius : '',
+        symbol: Boolean(aside?.querySelector('svg[aria-label="LAP"]')),
+      }
+    })()`,
+  )
+
+/**
+ * Contrato 09, CA2 a CA7, no tema claro: o bloco "Marca" é o primeiro de Configurações; "Escolher
+ * imagem…" (diálogo substituto) põe o logo de fixture na barra lateral como data URL, nome e subtítulo
+ * novos mudam a barra, o título da janela e o `document.title` na hora; uma imagem inválida mostra a
+ * mensagem e não muda nada; "Usar o logo da LAP" e os campos de volta ao padrão restauram tudo. O
+ * `userData` e o `app.getName()` não mudam em nenhum momento.
+ */
+async function brandingChecks(win: BrowserWindow, ctx: SmokeContext): Promise<{ check: Check; shot: Screenshot }> {
+  const contents = win.webContents
+  const section = 'section[aria-label="Marca"]'
+  const userDataBefore = app.getPath('userData')
+  const dockFrom = ctx.fixtures.dockIcons.length
+  await clickSelector(contents, '[data-nav="configuracoes"]')
+  await waitFor(contents, `${routeIs('configuracoes')} && document.querySelector('${section}')`)
+  await scrollToSection(contents, 'Marca')
+  const block = await evaluate<{ first: string; text: string; namePlaceholder: string; subtitlePlaceholder: string; resetShown: boolean; preview: number }>(
+    contents,
+    `({
+      first: document.querySelector('[data-settings-scroll] section')?.getAttribute('aria-label') ?? '',
+      text: document.querySelector('${section}')?.innerText ?? '',
+      namePlaceholder: document.querySelector('#brand-name')?.getAttribute('placeholder') ?? '',
+      subtitlePlaceholder: document.querySelector('#brand-subtitle')?.getAttribute('placeholder') ?? '',
+      resetShown: Boolean(document.querySelector('[data-action="reset-brand-logo"]')),
+      preview: Math.round(document.querySelector('[data-brand-logo-preview] svg')?.getBoundingClientRect().width ?? 0),
+    })`,
+  )
+
+  // Logo de fixture (640×400) pelo diálogo substituto.
+  ctx.fixtures.chosenImage = join(app.getAppPath(), 'test', 'fixtures', 'brand', 'logo-smoke.png')
+  await clickSelector(contents, '[data-action="choose-brand-logo"]')
+  const logoShown = await waitFor(contents, `document.querySelector('aside img[data-brand-logo]')?.getAttribute('src')?.startsWith('data:image/png;base64,')`)
+  const savedLogo = readSettings(ctx.userDataDir).brandLogo ?? null
+  const logoFile = savedLogo !== null && BRAND_LOGO_PATTERN.test(savedLogo) && existsSync(join(ctx.userDataDir, BRANDING_DIR, savedLogo))
+  const resetAppears = await waitFor(contents, `document.querySelector('[data-action="reset-brand-logo"]')`)
+
+  // Nome (Enter) e subtítulo (saída do campo).
+  const name = 'Atas da Diretoria'
+  const subtitle = 'Jurídico'
+  await setValue(contents, '#brand-name', `  ${name}  `)
+  await pressEnterIn(contents, '#brand-name')
+  await setValue(contents, '#brand-subtitle', subtitle)
+  await leaveField(contents, '#brand-subtitle')
+  const textsShown = await waitFor(
+    contents,
+    `document.querySelector('aside [data-brand-name]')?.textContent === ${JSON.stringify(name)} && document.querySelector('aside [data-brand-subtitle]')?.textContent === ${JSON.stringify(subtitle)}`,
+  )
+  const titled = await waitFor(contents, `document.title === ${JSON.stringify(name)}`)
+  const custom = await sidebarBrand(contents)
+  const customSettings = readSettings(ctx.userDataDir)
+  const windowTitle = win.getTitle()
+  await settle(contents)
+  const shot = await capture(win, ctx.outDir, 'barra-marca-propria-light')
+
+  // Imagem inválida: mensagem e nada muda.
+  const svg = join(smokeHome(ctx), 'logo.svg')
+  mkdirSync(smokeHome(ctx), { recursive: true })
+  writeFileSync(svg, '<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>')
+  ctx.fixtures.chosenImage = svg
+  await clickSelector(contents, '[data-action="choose-brand-logo"]')
+  const invalidShown = await waitFor(contents, `document.querySelector('[data-brand-logo-invalid]')?.textContent === ${JSON.stringify(BRAND_LOGO_INVALID_MESSAGE)}`)
+  const afterInvalid = readSettings(ctx.userDataDir).brandLogo ?? null
+  const srcAfterInvalid = (await sidebarBrand(contents)).logoSrc
+
+  // De volta ao padrão: "Usar o logo da LAP", nome vazio e o subtítulo padrão.
+  await clickSelector(contents, '[data-action="reset-brand-logo"]')
+  await waitFor(contents, `document.querySelector('aside svg[aria-label="LAP"]')`)
+  await setValue(contents, '#brand-name', '')
+  await pressEnterIn(contents, '#brand-name')
+  await setValue(contents, '#brand-subtitle', DEFAULT_BRAND_SUBTITLE)
+  await pressEnterIn(contents, '#brand-subtitle')
+  const backShown = await waitFor(
+    contents,
+    `document.querySelector('aside [data-brand-name]')?.textContent === ${JSON.stringify(DEFAULT_BRAND_NAME)} && document.querySelector('aside [data-brand-subtitle]')?.textContent === ${JSON.stringify(DEFAULT_BRAND_SUBTITLE)} && document.title === ${JSON.stringify(DEFAULT_BRAND_NAME)}`,
+  )
+  const back = await sidebarBrand(contents)
+  const backSettings = readSettings(ctx.userDataDir)
+  const brandingDir = join(ctx.userDataDir, BRANDING_DIR)
+  const leftFiles = existsSync(brandingDir) ? readdirSync(brandingDir) : []
+  const backTitle = win.getTitle()
+  const resetGone = await waitFor(contents, `!document.querySelector('[data-action="reset-brand-logo"]') && !document.querySelector('[data-brand-logo-invalid]')`)
+  const dock = ctx.fixtures.dockIcons.slice(dockFrom)
+  const userDataSame = app.getPath('userData') === userDataBefore && userDataBefore === ctx.userDataDir
+  const packageName = app.getName()
+
+  return {
+    check: {
+      ok:
+        block.first === 'Marca' &&
+        block.text.includes('Nome do app') &&
+        block.text.includes('Subtítulo') &&
+        block.text.includes('Logo') &&
+        block.text.includes('Escolher imagem…') &&
+        block.text.includes('Aparece na barra lateral, no título da janela e no ícone do Dock. O nome no Finder e na pasta Aplicativos não muda.') &&
+        block.namePlaceholder === DEFAULT_BRAND_NAME &&
+        block.subtitlePlaceholder === 'Sem subtítulo' &&
+        !block.resetShown &&
+        block.preview === 28 &&
+        logoShown &&
+        logoFile &&
+        resetAppears &&
+        textsShown &&
+        titled &&
+        custom.logoSrc.startsWith('data:image/png;base64,') &&
+        !custom.symbol &&
+        custom.logoBox?.width === 28 &&
+        custom.logoBox.height === 28 &&
+        custom.logoFit === 'contain' &&
+        custom.logoRadius === '4px' &&
+        customSettings.brandName === name &&
+        customSettings.brandSubtitle === subtitle &&
+        windowTitle === name &&
+        invalidShown &&
+        afterInvalid === savedLogo &&
+        srcAfterInvalid === custom.logoSrc &&
+        backShown &&
+        back.symbol &&
+        back.logoSrc === '' &&
+        backSettings.brandName === null &&
+        backSettings.brandSubtitle === null &&
+        backSettings.brandLogo === null &&
+        leftFiles.length === 0 &&
+        backTitle === DEFAULT_BRAND_NAME &&
+        resetGone &&
+        dock.join(',') === 'custom,default' &&
+        userDataSame &&
+        packageName === 'Meeting Scribe',
+      detail:
+        `bloco: primeiro="${block.first}", miniatura=${block.preview}px, "Usar o logo da LAP" antes=${block.resetShown}; ` +
+        `logo -> barra=${logoShown}, arquivo=${savedLogo}, existe=${logoFile}, img ${custom.logoBox?.width}x${custom.logoBox?.height} ${custom.logoFit} raio ${custom.logoRadius}, símbolo=${custom.symbol}; ` +
+        `nome/subtítulo -> barra="${custom.name}"/"${custom.subtitle}", título="${windowTitle}", document.title=${titled}, gravado=${JSON.stringify([customSettings.brandName, customSettings.brandSubtitle])}; ` +
+        `SVG -> mensagem=${invalidShown}, logo igual=${afterInvalid === savedLogo}; ` +
+        `padrão -> barra="${back.name}"/"${back.subtitle}", símbolo=${back.symbol}, gravado=${JSON.stringify([backSettings.brandName, backSettings.brandSubtitle, backSettings.brandLogo])}, sobras=${leftFiles.length}, título="${backTitle}"; ` +
+        `Dock=[${dock.join(', ')}]; userData igual=${userDataSame}, app.getName()="${packageName}"`,
+    },
+    shot,
+  }
+}
+
+async function scrollToSection(contents: WebContents, label: string): Promise<void> {
+  await evaluate(
+    contents,
+    `(() => {
+      const scroller = document.querySelector('[data-settings-scroll]')
+      const section = document.querySelector('section[aria-label=${JSON.stringify(label)}]')
+      scroller.scrollTop += section.getBoundingClientRect().top - scroller.getBoundingClientRect().top
+      return true
+    })()`,
+  )
+}
+
+function countDistinctColors(bitmap: Buffer): number {
+  const colors = new Set<number>()
+  for (let i = 0; i + 3 < bitmap.length; i += 4) colors.add(bitmap.readUInt32LE(i))
+  return colors.size
+}
+
+async function capture(win: BrowserWindow, outDir: string, name: string): Promise<Screenshot> {
+  const image = await win.webContents.capturePage()
+  const file = join(outDir, `${name}.png`)
+  writeFileSync(file, image.toPNG())
+  const pixels = image.getSize()
+  const devicePixelRatio = await evaluate<number>(win.webContents, 'window.devicePixelRatio')
+  return {
+    name,
+    file,
+    width: Math.round(pixels.width / devicePixelRatio),
+    height: Math.round(pixels.height / devicePixelRatio),
+    devicePixelRatio,
+    pixelWidth: pixels.width,
+    pixelHeight: pixels.height,
+    distinctColors: countDistinctColors(image.toBitmap()),
+  }
+}
+
+async function probeOrigin(contents: WebContents): Promise<{ origin: string; opfs: boolean; workletAddModule: boolean; errors: string[] }> {
+  return evaluate(
+    contents,
+    `(async () => {
+      const errors = []
+      let opfs = false
+      try {
+        const root = await navigator.storage.getDirectory()
+        const handle = await root.getFileHandle('smoke-probe.txt', { create: true })
+        const writable = await handle.createWritable()
+        await writable.write('scribe-opfs-ok')
+        await writable.close()
+        const text = await (await handle.getFile()).text()
+        await root.removeEntry('smoke-probe.txt')
+        opfs = text === 'scribe-opfs-ok'
+      } catch (error) { errors.push('opfs: ' + error) }
+      let workletAddModule = false
+      try {
+        const ctx = new OfflineAudioContext(1, 128, 16000)
+        const url = new URL('/probe-worklet.js', location.origin).href
+        await ctx.audioWorklet.addModule(url)
+        new AudioWorkletNode(ctx, 'scribe-probe')
+        workletAddModule = url.startsWith(location.origin + '/')
+      } catch (error) { errors.push('worklet: ' + error) }
+      return { origin: location.origin, opfs, workletAddModule, errors }
+    })()`,
+  )
+}
+
+/** Tab até o item "Configurações" e Enter, com eventos de teclado reais do Chromium. */
+async function keyboardNavigation(contents: WebContents): Promise<Check> {
+  await evaluate(contents, "document.activeElement instanceof HTMLElement && document.activeElement.blur(), true")
+  for (let i = 0; i < 6; i++) {
+    contents.sendInputEvent({ type: 'keyDown', keyCode: 'Tab' })
+    contents.sendInputEvent({ type: 'keyUp', keyCode: 'Tab' })
+    await wait(60)
+    const focused = await evaluate<string>(contents, "document.activeElement?.dataset?.nav ?? ''")
+    if (focused === 'configuracoes') {
+      contents.sendInputEvent({ type: 'keyDown', keyCode: 'Return' })
+      contents.sendInputEvent({ type: 'char', keyCode: 'Return' })
+      contents.sendInputEvent({ type: 'keyUp', keyCode: 'Return' })
+      await wait(200)
+      const route = await currentRoute(contents)
+      const nav = await activeNav(contents)
+      return { ok: route === 'configuracoes' && nav === 'configuracoes', detail: `Tab x${i + 1} + Enter -> rota ${route}, aria-current em ${nav}` }
+    }
+  }
+  return { ok: false, detail: 'Tab não chegou ao item Configurações' }
+}
+
+async function themeLiveSwitch(contents: WebContents): Promise<Check> {
+  nativeTheme.themeSource = 'light'
+  const light = await waitFor(contents, "document.documentElement.dataset.theme === 'light'")
+  await evaluate(contents, 'window.__smokeMarker = 1, true')
+  nativeTheme.themeSource = 'dark'
+  const dark = await waitFor(contents, "document.documentElement.dataset.theme === 'dark'")
+  const kept = await evaluate<boolean>(contents, 'window.__smokeMarker === 1')
+  nativeTheme.themeSource = 'system'
+  return {
+    ok: light && dark && kept,
+    detail: `tema system: claro=${light}, escuro=${dark}, mesma página (sem recarregar)=${kept}`,
+  }
+}
+
+/** Maior duração de transição/animação entre todos os elementos, em ms. */
+const MAX_MOTION_MS = `(() => {
+  const ms = (v) => Math.max(0, ...v.split(',').map((s) => parseFloat(s) * (s.trim().endsWith('ms') ? 1 : 1000)))
+  let max = 0
+  for (const el of document.querySelectorAll('*')) {
+    const cs = getComputedStyle(el)
+    if (cs.transitionProperty !== 'none') max = Math.max(max, ms(cs.transitionDuration))
+    if (cs.animationName !== 'none') max = Math.max(max, ms(cs.animationDuration))
+  }
+  return max
+})()`
+
+async function reducedMotion(contents: WebContents): Promise<Check> {
+  const normal = await evaluate<number>(contents, MAX_MOTION_MS)
+  contents.debugger.attach('1.3')
+  try {
+    await contents.debugger.sendCommand('Emulation.setEmulatedMedia', {
+      features: [{ name: 'prefers-reduced-motion', value: 'reduce' }],
+    })
+    const reduced = await evaluate<number>(contents, MAX_MOTION_MS)
+    await contents.debugger.sendCommand('Emulation.setEmulatedMedia', { features: [] })
+    return { ok: normal > 0 && reduced === 0, detail: `maior duração: normal ${normal} ms, reduzido ${reduced} ms` }
+  } finally {
+    contents.debugger.detach()
+  }
+}
+
+/**
+ * O worklet da captura de verdade (o smoke grava com sinal gerado e não passa por ele): carrega pela
+ * própria origem, liga um oscilador a ele num `OfflineAudioContext` a 48 kHz e confere que blocos
+ * chegam à thread principal.
+ */
+async function probeCaptureWorklet(contents: WebContents, appPath: string): Promise<Check> {
+  const asset = readdirSync(join(appPath, 'out', 'renderer', 'assets')).find((file) => /^pcm-worklet-.*\.js$/.test(file))
+  if (!asset) return { ok: false, detail: 'pcm-worklet-*.js ausente do build' }
+  const result = await evaluate<{ blocks: number; channels: number; frames: number; error: string }>(
+    contents,
+    `(async () => {
+      try {
+        const ctx = new OfflineAudioContext(1, 48000, 48000)
+        await ctx.audioWorklet.addModule('/assets/${asset}')
+        const node = new AudioWorkletNode(ctx, 'scribe-pcm')
+        let blocks = 0, channels = 0, frames = 0
+        node.port.onmessage = (event) => { blocks++; channels = event.data.channels.length; frames += event.data.channels[0].length }
+        const osc = new OscillatorNode(ctx, { frequency: 440 })
+        osc.connect(node)
+        node.connect(ctx.destination)
+        osc.start()
+        await ctx.startRendering()
+        await new Promise((resolve) => setTimeout(resolve, 200))
+        return { blocks, channels, frames, error: '' }
+      } catch (error) { return { blocks: 0, channels: 0, frames: 0, error: String(error) } }
+    })()`,
+  )
+  return {
+    ok: !result.error && result.blocks > 0 && result.channels === 1 && result.frames >= 1024,
+    detail: `/assets/${asset}: ${result.blocks} lotes, ${result.channels} canal, ${result.frames} amostras${result.error ? `; ${result.error}` : ''}`,
+  }
+}
+
+const TIMER = `document.querySelector('[aria-label="Tempo gravado"]')?.textContent ?? ''`
+const STATUS = `document.querySelector('[data-status]')?.textContent ?? ''`
+const DETAIL_ID = `(document.querySelector('main [data-meeting]:not(a)')?.dataset.meeting ?? '')`
+const NOTICE_SYSTEM = `document.querySelector('[data-notice="system-silent"]')`
+
+/** Silencia o áudio do sistema até o aviso aparecer, fotografa e devolve o som. */
+async function captureSystemNotice(
+  win: BrowserWindow,
+  outDir: string,
+  name: string,
+): Promise<{ shown: boolean; href: string; label: string; gone: boolean; sidebar: string; sidebarAfter: string; shot: Screenshot }> {
+  const contents = win.webContents
+  await evaluate(contents, `${probeJs("mute('system', true)")}, true`)
+  const shown = await waitFor(contents, NOTICE_SYSTEM, 6000)
+  // Bloco de permissões da barra lateral acompanha o detector (CA12).
+  await waitFor(contents, `document.querySelector('[data-permission="system"]')?.dataset.state === 'silent'`, 1000)
+  const sidebar = await evaluate<string>(contents, `document.querySelector('[data-permission="system"]')?.textContent ?? ''`)
+  const href = await evaluate<string>(contents, `${NOTICE_SYSTEM}?.querySelector('a')?.getAttribute('href') ?? ''`)
+  const label = await evaluate<string>(contents, `document.querySelector('[data-source-label="sys"]')?.textContent ?? ''`)
+  await settle(contents)
+  const shot = await capture(win, outDir, name)
+  await evaluate(contents, `${probeJs("mute('system', false)")}, true`)
+  const gone = await waitFor(contents, `!${NOTICE_SYSTEM}`, 3000)
+  await waitFor(contents, `document.querySelector('[data-permission="system"]')?.dataset.state === 'ok'`, 1000)
+  const sidebarAfter = await evaluate<string>(contents, `document.querySelector('[data-permission="system"]')?.textContent ?? ''`)
+  return { shown, href, label, gone, sidebar, sidebarAfter, shot }
+}
+
+/**
+ * Leitura do detalhe que falha (meetings.json trocado por uma pasta: a leitura dá EISDIR): a tela
+ * mostra o aviso com "Tentar de novo" em vez de ficar em branco, e o botão abre a reunião quando o
+ * arquivo volta.
+ */
+async function detailLoadFailure(contents: WebContents, userDataDir: string): Promise<Check> {
+  const file = join(userDataDir, MEETINGS_FILE)
+  const backup = `${file}.smoke-backup`
+  await clickSelector(contents, '[data-nav="reunioes"]')
+  await waitFor(contents, "document.querySelectorAll('main a[data-meeting]').length > 0")
+  renameSync(file, backup)
+  mkdirSync(file)
+  let shown: boolean
+  let text: string
+  try {
+    await clickSelector(contents, 'main a[data-meeting]')
+    shown = await waitFor(contents, `${routeIs('detalhe')} && document.querySelector('[data-notice="detail-load-failed"]')`)
+    text = await evaluate<string>(contents, `document.querySelector('[data-notice="detail-load-failed"]')?.textContent ?? ''`)
+  } finally {
+    rmSync(file, { recursive: true, force: true })
+    renameSync(backup, file)
+  }
+  await clickSelector(contents, '[data-notice="detail-load-failed"] button')
+  const recovered = await waitFor(contents, `${DETAIL_ID} !== '' && !document.querySelector('[data-notice="detail-load-failed"]')`)
+  return {
+    ok: shown && text.includes('Tentar de novo') && recovered,
+    detail: `leitura falhou -> aviso=${shown} ("${text}"); "Tentar de novo" com o arquivo de volta -> reunião ${await evaluate<string>(contents, DETAIL_ID)}`,
+  }
+}
+
+/** Nome do app, título da janela e barra lateral opaca em --side-bg com o símbolo da LAP. */
+async function brandCheck(win: BrowserWindow): Promise<Check> {
+  const sidebar = await evaluate<{ background: string; sideBg: string; symbol: boolean; signature: string }>(
+    win.webContents,
+    `(() => {
+      const aside = document.querySelector('aside')
+      const probe = document.createElement('div')
+      probe.style.background = 'var(--side-bg)'
+      document.body.append(probe)
+      const sideBg = getComputedStyle(probe).backgroundColor
+      probe.remove()
+      return {
+        background: aside ? getComputedStyle(aside).backgroundColor : '',
+        sideBg,
+        symbol: Boolean(aside?.querySelector('svg[aria-label="LAP"]')),
+        signature: aside?.textContent ?? '',
+      }
+    })()`,
+  )
+  const name = app.getName()
+  const title = win.getTitle()
+  return {
+    ok:
+      name === 'Meeting Scribe' &&
+      title === 'LAP Reuniões' &&
+      sidebar.background === sidebar.sideBg &&
+      sidebar.background === 'rgb(10, 42, 94)' &&
+      sidebar.symbol &&
+      sidebar.signature.includes('LAP Reuniões') &&
+      sidebar.signature.includes('LAP Software'),
+    detail: `app.getName()="${name}", título="${title}", barra lateral ${sidebar.background} (--side-bg ${sidebar.sideBg}), símbolo=${sidebar.symbol}`,
+  }
+}
+
+async function pressSpace(contents: WebContents): Promise<void> {
+  await evaluate(contents, 'document.activeElement instanceof HTMLElement && document.activeElement.blur(), true')
+  contents.sendInputEvent({ type: 'keyDown', keyCode: 'Space' })
+  contents.sendInputEvent({ type: 'char', keyCode: 'Space' })
+  contents.sendInputEvent({ type: 'keyUp', keyCode: 'Space' })
+}
+
+/**
+ * Tema claro: "Nova gravação" do cabeçalho, pausa (cronômetro, fita e quadros parados, trilhas
+ * vivas), barra de espaço, aviso de silêncio do sistema, encerrar, excluir com confirmação e o menu
+ * "Nova gravação" (⌘N). Grava também o PNG do aviso.
+ */
+async function recordingChecks(
+  win: BrowserWindow,
+  ctx: SmokeContext,
+  navigation: Record<string, Check>,
+  recording: Record<string, Check>,
+  screenshots: Screenshot[],
+): Promise<void> {
+  const contents = win.webContents
+  const bothLive = `${probeJs('state()?.mic')} === 'live' && ${probeJs('state()?.system')} === 'live'`
+
+  await clickSelector(contents, '[data-nav="reunioes"]')
+  await waitFor(contents, "document.querySelectorAll('main a[data-meeting]').length > 0")
+  await clickSelector(contents, 'main header [data-action="new-recording"]')
+  const live = await waitFor(contents, bothLive)
+  navigation['headerNewRecording'] = {
+    ok: live && (await currentRoute(contents)) === 'gravacao',
+    detail: `"Nova gravação" do cabeçalho de Reuniões -> rota ${await currentRoute(contents)}, captura ${JSON.stringify(await captureState(contents))}`,
+  }
+  await wait(1200)
+
+  await clickSelector(contents, '[data-action="toggle-pause"]')
+  await waitFor(contents, `${probeJs('state()?.phase')} === 'paused'`)
+  await wait(100)
+  const before = { timer: await evaluate<string>(contents, TIMER), frames: await frameCounts(contents), tape: await evaluate<number>(contents, probeJs('tapeFrames()')) }
+  await wait(1200)
+  const after = { timer: await evaluate<string>(contents, TIMER), frames: await frameCounts(contents), tape: await evaluate<number>(contents, probeJs('tapeFrames()')) }
+  const paused = await captureState(contents)
+  const status = await evaluate<string>(contents, STATUS)
+  recording['pause'] = {
+    ok:
+      paused?.phase === 'paused' &&
+      paused.mic === 'live' &&
+      paused.system === 'live' &&
+      status === 'Pausado' &&
+      before.timer === after.timer &&
+      before.tape === after.tape &&
+      JSON.stringify(before.frames) === JSON.stringify(after.frames) &&
+      (before.frames?.mic ?? 0) > 0,
+    detail: `estado ${JSON.stringify(paused)}, "${status}"; em 1,2 s: cronômetro ${before.timer} -> ${after.timer}, quadros ${JSON.stringify(before.frames)} -> ${JSON.stringify(after.frames)}, fita ${before.tape} -> ${after.tape} desenhos`,
+  }
+
+  await pressSpace(contents)
+  const resumed = await waitFor(contents, `${probeJs('state()?.phase')} === 'recording'`, 2000)
+  await wait(800)
+  const framesResumed = await frameCounts(contents)
+  recording['spaceResumes'] = {
+    ok: resumed && (framesResumed?.mic ?? 0) > (after.frames?.mic ?? 0) && (await evaluate<string>(contents, TIMER)) !== after.timer,
+    detail: `barra de espaço -> ${(await captureState(contents))?.phase}; quadros ${JSON.stringify(after.frames)} -> ${JSON.stringify(framesResumed)}`,
+  }
+
+  const { shown, href, label, gone, sidebar, sidebarAfter, shot } = await captureSystemNotice(win, ctx.outDir, 'gravacao-aviso-light')
+  screenshots.push(shot)
+  recording['systemSilenceNotice'] = {
+    ok: shown && href === PRIVACY_PANE_URLS['audio-capture'] && label === 'Participantessem sinal' && gone && sidebar === 'Áudio do sistemasem áudio' && sidebarAfter === 'Áudio do sistemaok',
+    detail: `zero absoluto no sistema -> aviso=${shown}, link=${href}, rótulo="${label}", barra lateral "${sidebar}"; som de volta -> aviso sumiu=${gone}, barra lateral "${sidebarAfter}"`,
+  }
+
+  const countBefore = readMeetings(ctx.userDataDir).length
+  await clickSelector(contents, '[data-action="end-recording"]')
+  await waitFor(contents, `${routeIs('detalhe')} && ${DETAIL_ID} !== ''`)
+  const id = await evaluate<string>(contents, DETAIL_ID)
+  recording['endFromHeader'] = {
+    ok: (await currentRoute(contents)) === 'detalhe' && readMeetings(ctx.userDataDir).length === countBefore + 1 && readMeetings(ctx.userDataDir).some((m) => m.id === id),
+    detail: `"Encerrar" -> rota ${await currentRoute(contents)}, reunião ${id}, ${countBefore} -> ${readMeetings(ctx.userDataDir).length} registros`,
+  }
+
+  await clickSelector(contents, '[data-action="delete-meeting"]')
+  const asked = await waitFor(contents, `document.querySelector('[data-action="confirm-delete"]')`)
+  const keptWhileAsking = readMeetings(ctx.userDataDir).some((m) => m.id === id)
+  // Contrato 07, CA8: a confirmação avisa que os arquivos da pasta ficam, e eles ficam.
+  const confirmText = await text(contents, '[aria-label="Confirmar exclusão"] p')
+  const ownFiles = readMeetings(ctx.userDataDir).find((m) => m.id === id)
+  await clickSelector(contents, '[data-action="confirm-delete"]')
+  await waitFor(contents, routeIs('reunioes'))
+  recording['deleteKeepsFiles'] = {
+    ok:
+      confirmText === 'Excluir esta reunião? Os arquivos na pasta continuam.' &&
+      typeof ownFiles?.audioPath === 'string' &&
+      existsSync(ownFiles.audioPath) &&
+      // Sem trecho (esta gravação não tem transcrição), não há .md.
+      (ownFiles.transcriptPath === null || existsSync(ownFiles.transcriptPath)),
+    detail: `confirmação "${confirmText}"; depois de excluir: áudio existe=${ownFiles?.audioPath ? existsSync(ownFiles.audioPath) : 'sem caminho'}, .md existe=${ownFiles?.transcriptPath ? existsSync(ownFiles.transcriptPath) : 'sem caminho'}`,
+  }
+  recording['deleteWithConfirmation'] = {
+    ok: asked && keptWhileAsking && (await currentRoute(contents)) === 'reunioes' && !readMeetings(ctx.userDataDir).some((m) => m.id === id),
+    detail: `"Excluir" pediu confirmação=${asked}, manteve até confirmar=${keptWhileAsking}; depois rota ${await currentRoute(contents)}, ${readMeetings(ctx.userDataDir).length} registros`,
+  }
+
+  const newRecording = Menu.getApplicationMenu()?.getMenuItemById(MENU_IDS.newRecording)
+  newRecording?.click()
+  const menuLive = await waitFor(contents, `${routeIs('gravacao')} && ${bothLive}`)
+  navigation['menuNovaGravacao'] = {
+    ok: newRecording?.accelerator === 'CmdOrCtrl+N' && menuLive,
+    detail: `menu "${newRecording?.label ?? '?'}" (${newRecording?.accelerator ?? '?'}) -> rota ${await currentRoute(contents)}, captura ${JSON.stringify(await captureState(contents))}`,
+  }
+  await clickSelector(contents, '[data-action="end-recording"]')
+  await waitFor(contents, routeIs('detalhe'))
+}
+
+function readSettings(userDataDir: string): Partial<AppSettings> {
+  const file = join(userDataDir, SETTINGS_FILE)
+  if (!existsSync(file)) return {}
+  return (JSON.parse(readFileSync(file, 'utf8')) as { settings: Partial<AppSettings> }).settings
+}
+
+/** Escreve num campo controlado pelo React (setter nativo + evento), como a digitação faria. */
+async function setValue(contents: WebContents, selector: string, value: string, event: 'input' | 'change' = 'input'): Promise<void> {
+  const found = await evaluate<boolean>(
+    contents,
+    `(() => {
+      const el = document.querySelector(${JSON.stringify(selector)})
+      if (!el) return false
+      Object.getOwnPropertyDescriptor(Object.getPrototypeOf(el), 'value').set.call(el, ${JSON.stringify(value)})
+      el.dispatchEvent(new Event(${JSON.stringify(event)}, { bubbles: true }))
+      return true
+    })()`,
+  )
+  if (!found) throw new Error(`campo não encontrado: ${selector}`)
+}
+
+const text = (contents: WebContents, selector: string): Promise<string> =>
+  evaluate<string>(contents, `document.querySelector(${JSON.stringify(selector)})?.textContent ?? ''`)
+
+const KEY_STATUS = '[data-key-status]'
+const PERMISSION = (name: 'mic' | 'system'): string => `document.querySelector('[data-permission="${name}"]')`
+const permissionState = (contents: WebContents, name: 'mic' | 'system'): Promise<string> =>
+  evaluate<string>(contents, `${PERMISSION(name)}?.dataset.state ?? ''`)
+
+/** Configurações prontas para a foto: chave conferida e catálogo carregado. */
+async function settingsReady(contents: WebContents): Promise<boolean> {
+  return waitFor(contents, `${routeIs('configuracoes')} && document.querySelector('[data-key-state="valid"]') && document.querySelector('[data-model-picker="ready"]')`, 8000)
+}
+
+/** Rola até o "Modelo de tradução" e marca um modelo não liberado. */
+async function openModelPicker(contents: WebContents): Promise<boolean> {
+  await evaluate(
+    contents,
+    `(() => {
+      const scroller = document.querySelector('[data-settings-scroll]')
+      const section = document.querySelector('section[aria-label="Modelo de tradução"]')
+      scroller.scrollTop += section.getBoundingClientRect().top - scroller.getBoundingClientRect().top
+      return true
+    })()`,
+  )
+  await clickSelector(contents, `[data-model="${SMOKE_NOT_ALLOWED_MODEL}"]`)
+  // A lista fica no topo: o modelo atual com a marca na primeira linha e o não liberado logo abaixo,
+  // como no mockup aprovado (do mais barato ao mais caro, o gpt-oss-20b cai na quinta linha).
+  const marked = await waitFor(
+    contents,
+    `document.querySelector('[data-model="${SMOKE_NOT_ALLOWED_MODEL}"]')?.dataset.modelState === 'not-allowed' && document.querySelector('[data-model]')?.dataset.modelState === 'selected'`,
+  )
+  return marked
+}
+
+/**
+ * CA16: nenhum controle de Configurações fica sob a faixa arrastável de 52 px (ou, se ficar, tem
+ * `no-drag`) em nenhuma posição da rolagem; depois de rolar até o fim e voltar, um clique de verdade no
+ * primeiro controle (o campo da chave) dá foco a ele.
+ */
+async function settingsReachable(contents: WebContents): Promise<Check> {
+  const result = await evaluate<{ scrollerTop: number; positions: number; blocked: string[]; first: { x: number; y: number; id: string } | null }>(
+    contents,
+    `(() => {
+      const STRIP = 52
+      const scroller = document.querySelector('[data-settings-scroll]')
+      const controls = () => [...document.querySelectorAll('main input, main select, main button, main a[href], main [tabindex]')]
+      const blocked = new Set()
+      let positions = 0
+      const check = () => {
+        positions++
+        const sr = scroller.getBoundingClientRect()
+        for (const el of controls()) {
+          const r = el.getBoundingClientRect()
+          if (!r.width || !r.height) continue
+          const inside = scroller.contains(el)
+          const top = inside ? Math.max(r.top, sr.top) : r.top
+          const bottom = inside ? Math.min(r.bottom, sr.bottom) : r.bottom
+          if (bottom <= top || top >= STRIP) continue
+          let node = el, region = ''
+          while (node && !region) { const v = getComputedStyle(node).getPropertyValue('app-region') || getComputedStyle(node).getPropertyValue('-webkit-app-region'); if (v && v !== 'none' && v !== 'auto') region = v; node = node.parentElement }
+          if (region !== 'no-drag') blocked.add(el.outerHTML.slice(0, 80))
+        }
+      }
+      for (let y = 0; y <= scroller.scrollHeight; y += 80) { scroller.scrollTop = y; check() }
+      scroller.scrollTop = scroller.scrollHeight
+      check()
+      scroller.scrollTop = 0
+      check()
+      const first = controls().find((el) => scroller.contains(el))
+      const r = first?.getBoundingClientRect()
+      const scrollerTop = Math.round(scroller.getBoundingClientRect().top)
+      return { scrollerTop, positions, blocked: [...blocked], first: r ? { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2), id: first.id } : null }
+    })()`,
+  )
+  let focused = ''
+  if (result.first) {
+    await evaluate(contents, 'document.activeElement instanceof HTMLElement && document.activeElement.blur(), true')
+    const { x, y } = result.first
+    contents.sendInputEvent({ type: 'mouseDown', x, y, button: 'left', clickCount: 1 })
+    contents.sendInputEvent({ type: 'mouseUp', x, y, button: 'left', clickCount: 1 })
+    await wait(150)
+    focused = await evaluate<string>(contents, 'document.activeElement?.id ?? ""')
+  }
+  return {
+    ok: result.scrollerTop >= 52 && result.blocked.length === 0 && result.first !== null && focused === result.first.id && focused !== '',
+    detail: `área que rola começa em y=${result.scrollerTop}; ${result.positions} posições de rolagem conferidas, controles sob a faixa sem no-drag: ${result.blocked.length ? result.blocked.join(' | ') : 'nenhum'}; clique no primeiro controle (#${result.first?.id ?? '?'}) -> foco em #${focused || 'nada'}`,
+  }
+}
+
+/**
+ * Bloco de permissões (CA12), tema claro, logo depois da foto de Reuniões: microfone "não pedido" com
+ * "Permitir" (o substituto concede sem diálogo), negado com o link para os Ajustes, releitura ao ganhar
+ * foco, e o áudio do sistema "não verificado" antes da primeira captura.
+ */
+async function permissionChecks(contents: WebContents, fixtures: SmokeFixtures): Promise<Check> {
+  const before = { mic: await permissionState(contents, 'mic'), system: await permissionState(contents, 'system'), systemText: await evaluate<string>(contents, `${PERMISSION('system')}?.textContent ?? ''`) }
+  const allowButton = await evaluate<boolean>(contents, `Boolean(${PERMISSION('mic')}?.querySelector('[data-action="allow-mic"]'))`)
+  await clickSelector(contents, '[data-action="allow-mic"]')
+  const granted = await waitFor(contents, `${PERMISSION('mic')}?.dataset.state === 'granted' && ${PERMISSION('mic')}.textContent.includes('concedido')`)
+  const asked = fixtures.media.asked
+
+  fixtures.media.set('denied')
+  await evaluate(contents, "window.dispatchEvent(new Event('focus')), true")
+  const denied = await waitFor(contents, `${PERMISSION('mic')}?.dataset.state === 'denied'`)
+  const href = await evaluate<string>(contents, `${PERMISSION('mic')}?.querySelector('a')?.getAttribute('href') ?? ''`)
+  const opened = fixtures.openedUrls.length
+  await clickSelector(contents, '[data-action="open-mic-settings"]')
+  await wait(100)
+  const openedUrl = fixtures.openedUrls.slice(opened).join(', ')
+
+  fixtures.media.set('granted')
+  await evaluate(contents, "window.dispatchEvent(new Event('focus')), true")
+  const back = await waitFor(contents, `${PERMISSION('mic')}?.dataset.state === 'granted'`)
+  return {
+    ok:
+      before.mic === 'not-determined' &&
+      allowButton &&
+      before.system === 'unknown' &&
+      before.systemText.includes('não verificado') &&
+      granted &&
+      asked === 1 &&
+      denied &&
+      href === PRIVACY_PANE_URLS.microphone &&
+      openedUrl === PRIVACY_PANE_URLS.microphone &&
+      back,
+    detail: `início: microfone ${before.mic} (Permitir=${allowButton}), sistema ${before.system} ("${before.systemText}"); Permitir -> ${granted ? 'concedido' : 'falhou'} (${asked} pedido ao substituto); negado + foco -> ${denied}, link ${href}, clique abriu ${openedUrl || 'nada'}; concedido + foco -> ${back}`,
+  }
+}
+
+/**
+ * Configurações no tema claro, depois das fotos: chave (CA4, CA5), seletor (CA7, CA8), áudio (CA9, CA17),
+ * idiomas e barra da gravação (CA10). Termina com tudo de volta ao padrão e a chave fictícia salva.
+ */
+async function settingsChecks(win: BrowserWindow, ctx: SmokeContext, checks: Record<string, Check>): Promise<void> {
+  const contents = win.webContents
+  const { fixtures, userDataDir } = ctx
+  const keyInput = '#assemblyai-key'
+  const keyStatus = (): Promise<{ configured: boolean; last4: string | null; source: string | null }> => evaluate(contents, "window.__scribeApi.invoke('scribe:key-status')")
+  const saveKey = async (key: string): Promise<void> => {
+    await setValue(contents, keyInput, key)
+    await clickSelector(contents, '[data-action="save-key"]')
+    await wait(50)
+    await waitFor(contents, `document.querySelector('[data-key-state]') && !document.querySelector('${KEY_STATUS}')?.textContent.includes('Verificando')`)
+    await wait(100)
+  }
+
+  await clickSelector(contents, '[data-nav="configuracoes"]')
+  if (!(await settingsReady(contents))) throw new Error('Configurações não ficaram prontas')
+  checks['reachable'] = await settingsReachable(contents)
+
+  // CA5: campo de senha, só os quatro últimos, frase do Chaveiro e "Criar chave".
+  const field = await evaluate<{ type: string; value: string; help: string; link: string }>(
+    contents,
+    `(() => ({ type: document.querySelector('${keyInput}').type, value: document.querySelector('${keyInput}').value, help: document.querySelector('#assemblyai-key-help').textContent, link: document.querySelector('[data-action="create-key"]').getAttribute('href') }))()`,
+  )
+  const statusText = await text(contents, KEY_STATUS)
+  const openedBefore = fixtures.openedUrls.length
+  await clickSelector(contents, '[data-action="create-key"]')
+  await wait(100)
+  checks['keyField'] = {
+    ok:
+      field.type === 'password' &&
+      field.value === '' &&
+      statusText === 'Chave válida · termina em ••••4f2a' &&
+      !(await evaluate<string>(contents, 'document.body.innerText')).includes(SMOKE_FAKE_KEY) &&
+      field.help.includes('Guardada cifrada neste Mac, protegida pelo Chaveiro do macOS.') &&
+      field.link === ASSEMBLYAI_DASHBOARD_URL &&
+      fixtures.openedUrls.slice(openedBefore).join() === ASSEMBLYAI_DASHBOARD_URL,
+    detail: `type=${field.type}, valor no campo="${field.value}", estado "${statusText}", "Criar chave" -> ${fixtures.openedUrls.slice(openedBefore).join() || 'nada'}`,
+  }
+
+  // CA4: recusada não salva; sem rede salva com "Tentar de novo"; válida salva.
+  await saveKey(SMOKE_REFUSED_KEY)
+  const refusedText = await text(contents, KEY_STATUS)
+  const afterRefused = await keyStatus()
+  await setValue(contents, keyInput, '')
+  await saveKey(SMOKE_OFFLINE_KEY)
+  const offlineNotice = await text(contents, '[data-notice="key-unverified"]')
+  const afterOffline = await keyStatus()
+  await saveKey(SMOKE_FAKE_KEY)
+  const validText = await text(contents, KEY_STATUS)
+  const afterValid = await keyStatus()
+  checks['keySave'] = {
+    ok:
+      refusedText === 'Chave recusada pela AssemblyAI' &&
+      afterRefused.last4 === '4f2a' &&
+      offlineNotice.includes('Não foi possível verificar agora') &&
+      offlineNotice.includes('Tentar de novo') &&
+      afterOffline.last4 === SMOKE_OFFLINE_KEY.slice(-4) &&
+      validText === 'Chave válida · termina em ••••4f2a' &&
+      afterValid.last4 === '4f2a' &&
+      afterValid.source === 'saved',
+    detail: `401 -> "${refusedText}", guardada continua ••••${afterRefused.last4}; sem rede -> "${offlineNotice}", guardada ••••${afterOffline.last4}; válida -> "${validText}"`,
+  }
+
+  // CA8: busca por nome ou id, sem maiúsculas nem acentos.
+  await waitFor(contents, "document.querySelector('[data-model-picker=\"ready\"]')")
+  const search = async (query: string): Promise<{ ids: string[]; count: string }> => {
+    await setValue(contents, '[data-model-search]', query)
+    await wait(80)
+    return evaluate(contents, `({ ids: [...document.querySelectorAll('[data-model]')].map((el) => el.dataset.model), count: document.querySelector('[data-model-search]').nextElementSibling.textContent })`)
+  }
+  const byName = await search('FLASH LÍTE')
+  const byId = await search('QWEN3.5-4B')
+  const none = await search('modelo-que-nao-existe')
+  await search('')
+  const rowText = await text(contents, '[data-model="qwen3.5-4b-32k-fast"]')
+  const selectedMark = await evaluate<boolean>(contents, `document.querySelector('[data-model="qwen3.5-4b-32k-fast"]')?.getAttribute('aria-pressed') === 'true' && Boolean(document.querySelector('[data-model="qwen3.5-4b-32k-fast"] svg'))`)
+  checks['modelSearch'] = {
+    ok:
+      byName.ids.length > 0 &&
+      byName.ids.every((id) => id.includes('flash-lite')) &&
+      byId.ids.join() === 'qwen3.5-4b-32k-fast' &&
+      none.ids.length === 0 &&
+      rowText.includes('US$ 0,10 / 0,50 por 1M') &&
+      rowText.includes('32k') &&
+      selectedMark,
+    detail: `"FLASH LÍTE" -> ${byName.ids.join(', ')} (${byName.count}); "QWEN3.5-4B" -> ${byId.ids.join(', ')}; sem resultado -> ${none.ids.length}; linha atual "${rowText}", marca=${selectedMark}`,
+  }
+
+  // CA7: liberado grava; sem rede mantém a anterior e oferece "Tentar de novo".
+  await clickSelector(contents, '[data-model="gpt-oss-120b"]')
+  const switched = await waitFor(contents, `document.querySelector('[data-model="gpt-oss-120b"]')?.dataset.modelState === 'selected'`)
+  const savedModel = readSettings(userDataDir).translationModel
+  await clickSelector(contents, `[data-model="${SMOKE_OFFLINE_MODEL}"]`)
+  const failed = await waitFor(contents, `document.querySelector('[data-notice="model-select-failed"]')`)
+  const failedText = await text(contents, '[data-notice="model-select-failed"]')
+  const keptModel = readSettings(userDataDir).translationModel
+  await clickSelector(contents, '[data-model="qwen3.5-4b-32k-fast"]')
+  const back = await waitFor(contents, `document.querySelector('[data-model="qwen3.5-4b-32k-fast"]')?.dataset.modelState === 'selected' && !document.querySelector('[data-notice="model-select-failed"]')`)
+  const modelCalls = fixtures.calls.filter((call) => call.path === '/v1/chat/completions' && call.model !== null).map((call) => call.model)
+  checks['modelSelect'] = {
+    ok: switched && savedModel === 'gpt-oss-120b' && failed && failedText.includes('Tentar de novo') && keptModel === 'gpt-oss-120b' && back && readSettings(userDataDir).translationModel === DEFAULT_SETTINGS.translationModel,
+    detail: `gpt-oss-120b -> selecionado=${switched}, settings.json ${savedModel}; ${SMOKE_OFFLINE_MODEL} sem rede -> "${failedText}", settings.json continua ${keptModel}; volta ao padrão=${back}; conferências no gateway: ${modelCalls.join(', ')}`,
+  }
+
+  // CA5 e CA8: remover pede confirmação; sem chave o seletor convida a adicionar.
+  await clickSelector(contents, '[data-action="remove-key"]')
+  const asked = await waitFor(contents, "document.querySelector('[data-action=\"confirm-remove-key\"]')")
+  const keptWhileAsking = (await keyStatus()).configured
+  await clickSelector(contents, '[data-action="confirm-remove-key"]')
+  const invite = await waitFor(contents, `document.querySelector('[data-model-picker="no-key"] [data-notice="model-no-key"]')`)
+  const removed = await keyStatus()
+  const current = await evaluate<string>(contents, "document.querySelector('[data-current-model]')?.dataset.currentModel ?? ''")
+  checks['keyRemoveAndInvite'] = {
+    ok: asked && keptWhileAsking && !removed.configured && invite && current === DEFAULT_SETTINGS.translationModel,
+    detail: `"Remover" pediu confirmação=${asked}, manteve até confirmar=${keptWhileAsking}; depois configured=${removed.configured}; seletor sem chave mostra o convite=${invite} e o modelo atual ${current}`,
+  }
+
+  // CA8: catálogo sem rede mostra o erro com "Tentar de novo" e o modelo atual pelo id.
+  fixtures.failCatalog = true
+  await saveKey(SMOKE_FAKE_KEY)
+  const offlineCatalog = await waitFor(contents, `document.querySelector('[data-notice="models-load-failed"]')`)
+  const offlineText = await text(contents, '[data-notice="models-load-failed"]')
+  const offlineCurrent = await evaluate<string>(contents, "document.querySelector('[data-current-model]')?.dataset.currentModel ?? ''")
+  fixtures.failCatalog = false
+  await clickSelector(contents, '[data-notice="models-load-failed"] button')
+  const recovered = await waitFor(contents, `document.querySelector('[data-model-picker="ready"]')`)
+  checks['catalogOffline'] = {
+    ok: offlineCatalog && offlineText.includes('Tentar de novo') && offlineCurrent === DEFAULT_SETTINGS.translationModel && recovered,
+    detail: `catálogo sem rede -> "${offlineText}", modelo atual ${offlineCurrent}; "Tentar de novo" com rede -> lista=${recovered}`,
+  }
+
+  // CA10: origem e destino nunca iguais.
+  // Os seletores são controlados: só mostram o valor novo quando o main devolve o que gravou.
+  const languagesAre = (source: string, target: string): string =>
+    `document.querySelector('#settings-source')?.value === '${source}' && document.querySelector('#settings-target')?.value === '${target}'`
+  await setValue(contents, '#settings-target', 'pt', 'change')
+  await waitFor(contents, languagesAre('en', 'pt'))
+  const swapped = readSettings(userDataDir)
+  const swappedUi = await evaluate<{ source: string; target: string }>(contents, "({ source: document.querySelector('#settings-source').value, target: document.querySelector('#settings-target').value })")
+  await setValue(contents, '#settings-source', 'pt', 'change')
+  await waitFor(contents, languagesAre('pt', 'en'))
+  const restored = readSettings(userDataDir)
+  checks['languages'] = {
+    ok: swapped.sourceLanguage === 'en' && swapped.targetLanguage === 'pt' && swappedUi.source === 'en' && swappedUi.target === 'pt' && restored.sourceLanguage === 'pt' && restored.targetLanguage === 'en',
+    detail: `destino = origem (pt) -> settings.json ${swapped.sourceLanguage} → ${swapped.targetLanguage}, tela ${swappedUi.source} → ${swappedUi.target}; origem = destino de volta -> ${restored.sourceLanguage} → ${restored.targetLanguage}`,
+  }
+
+  // CA9: microfone e cancelamento de eco gravam; um microfone que sumiu aparece como indisponível.
+  await setValue(contents, '#settings-mic', 'smoke-usb', 'change')
+  await waitFor(contents, "document.querySelector('#settings-mic')?.value === 'smoke-usb'")
+  const micSaved = readSettings(userDataDir).micDeviceId
+  await evaluate(contents, "window.__scribeApi.invoke('scribe:settings-update', { micDeviceId: 'microfone-que-sumiu' }).then(() => true)")
+  await waitFor(contents, "document.querySelector('#settings-mic')?.value === 'microfone-que-sumiu'")
+  const unavailable = await evaluate<string>(contents, "document.querySelector('#settings-mic')?.selectedOptions[0]?.textContent ?? ''")
+  const micLabels = await evaluate<string[]>(contents, "[...document.querySelectorAll('#settings-mic option')].map((o) => o.textContent)")
+  await clickSelector(contents, '[role="switch"][aria-labelledby="settings-echo"]')
+  await waitFor(contents, "document.querySelector('[aria-labelledby=\"settings-echo\"]')?.getAttribute('aria-checked') === 'true'")
+  const echoSaved = readSettings(userDataDir).echoCancellation
+  const echoUi = await evaluate<string>(contents, "document.querySelector('[aria-labelledby=\"settings-echo\"]')?.getAttribute('aria-checked') ?? ''")
+  checks['audio'] = {
+    ok: micSaved === 'smoke-usb' && unavailable === 'Dispositivo indisponível' && micLabels[0] === 'Padrão do sistema' && echoSaved === true && echoUi === 'true',
+    detail: `opções ${JSON.stringify(micLabels)}; escolher "Microfone USB" -> settings.json ${micSaved}; id salvo que sumiu -> "${unavailable}"; cancelamento de eco -> settings.json ${echoSaved}, aria-checked=${echoUi}`,
+  }
+
+  // CA10, CA17 e CA9: sem tradução, a barra mostra só o idioma de origem e nenhum modelo; a gravação usa o
+  // eco ligado e, com o microfone salvo sumido, o padrão (sem deviceId).
+  await clickSelector(contents, '[role="switch"][aria-labelledby="settings-translate"]')
+  await waitFor(contents, "document.querySelector('[aria-labelledby=\"settings-translate\"]')?.getAttribute('aria-checked') === 'false'")
+  await clickSelector(contents, '[data-nav="reunioes"]')
+  await waitFor(contents, `${routeIs('reunioes')} && document.querySelector('main [data-action="new-recording"]')`)
+  await clickSelector(contents, 'main [data-action="new-recording"]')
+  await waitFor(contents, `${routeIs('gravacao')} && ${probeJs('state()?.mic')} === 'live'`)
+  const constraints = await evaluate<{ audio?: { echoCancellation?: boolean; deviceId?: unknown } } | null>(contents, `${probeJs('micConstraints()')} ?? null`)
+  const barOff = await text(contents, '[role="toolbar"]')
+  const modelTagOff = await evaluate<boolean>(contents, "Boolean(document.querySelector('[role=\"toolbar\"] .font-mono'))")
+  await evaluate(contents, "window.__scribeApi.invoke('scribe:settings-update', { translationEnabled: true, sourceLanguage: 'es', targetLanguage: 'ja' }).then(() => true)")
+  await waitFor(contents, "document.querySelector('[role=\"toolbar\"]')?.textContent.includes('ES → JA')")
+  const barOn = await text(contents, '[role="toolbar"]')
+  await clickSelector(contents, '[data-action="end-recording"]')
+  await waitFor(contents, routeIs('detalhe'))
+  checks['recordingUsesSettings'] = {
+    ok:
+      constraints?.audio?.echoCancellation === true &&
+      constraints.audio.deviceId === undefined &&
+      barOff.includes('PT') &&
+      !barOff.includes('→') &&
+      !modelTagOff &&
+      barOn.includes('ES → JA') &&
+      barOn.includes(DEFAULT_SETTINGS.translationModel),
+    detail: `restrições do microfone ${JSON.stringify(constraints)}; barra sem tradução "${barOff}" (etiqueta de modelo=${modelTagOff}); com tradução ES → JA "${barOn}"`,
+  }
+
+  // `translationModel`, `claudePath`, `audioFolder` e `brandLogo` não passam pelo canal de configurações; o modelo já
+  // voltou ao padrão pelo seletor, e o caminho do `claude` e a pasta dos arquivos nunca saíram do padrão.
+  const { translationModel: _model, claudePath: _claudePath, audioFolder: _audioFolder, brandLogo: _brandLogo, ...resettable } = DEFAULT_SETTINGS
+  await evaluate(contents, `window.__scribeApi.invoke('scribe:settings-update', ${JSON.stringify(resettable)}).then(() => true)`)
+  const reset = readSettings(userDataDir)
+  if (JSON.stringify(reset) !== JSON.stringify(DEFAULT_SETTINGS)) checks['reset'] = { ok: false, detail: `padrões não voltaram: ${JSON.stringify(reset)}` }
+}
+
+/** Contrato 05, CA10: "Traduzir com" em Claude CLI, com o binário falso encontrado. */
+async function showClaudeSettings(contents: WebContents): Promise<boolean> {
+  await clickSelector(contents, '[data-engine-option="claude-cli"]')
+  const found = await waitFor(contents, `document.querySelector('[data-claude-state="found"]') && !document.querySelector('[data-model-picker]')`, 8000)
+  await evaluate(
+    contents,
+    `(() => {
+      const scroller = document.querySelector('[data-settings-scroll]')
+      const section = document.querySelector('section[aria-label="Modelo de tradução"]')
+      scroller.scrollTop += section.getBoundingClientRect().top - scroller.getBoundingClientRect().top
+      return true
+    })()`,
+  )
+  return found
+}
+
+/**
+ * Contrato 05 no tema claro, com o binário falso: estado e modelo em Configurações (CA10), um trecho de
+ * ponta a ponta pelo processo (CA4, CA6, CA9, CA12), "não encontrado" com o campo do caminho e o aviso
+ * na gravação (CA11). Termina com o motor de volta na AssemblyAI.
+ */
+async function claudeChecks(win: BrowserWindow, ctx: SmokeContext): Promise<Check> {
+  const contents = win.webContents
+  const { fixtures, userDataDir } = ctx
+  const statusText = await text(contents, '[data-claude-status]')
+  const engineSaved = readSettings(userDataDir).translationEngine
+  const modelLabels = await evaluate<string[]>(contents, "[...document.querySelectorAll('[data-claude-model-option]')].map((el) => el.textContent)")
+  await clickSelector(contents, '[data-claude-model-option="sonnet"]')
+  await waitFor(contents, `document.querySelector('[data-claude-model-option="sonnet"]')?.getAttribute('aria-pressed') === 'true'`)
+  const sonnetSaved = readSettings(userDataDir).claudeModel
+  await clickSelector(contents, '[data-claude-model-option="haiku"]')
+  await waitFor(contents, `document.querySelector('[data-claude-model-option="haiku"]')?.getAttribute('aria-pressed') === 'true'`)
+
+  // Um trecho pelo processo falso, pelos mesmos canais da gravação.
+  const spawnsBefore = fixtures.claudeSpawns.length
+  const started = await evaluate<{ ok: boolean; version?: string }>(contents, "window.__scribeApi.invoke('scribe:claude-start')")
+  const translated = await evaluate<{ ok: boolean; translation?: string; model?: string }>(
+    contents,
+    "window.__scribeApi.invoke('scribe:claude-translate', { segmentId: 'mic-smoke-0', source: 'mic', turnOrder: 0, text: 'Alguma dúvida até aqui?' })",
+  )
+  await evaluate(contents, "window.__scribeApi.invoke('scribe:claude-stop')")
+  const spawn = fixtures.claudeSpawns[spawnsBefore]
+  for (let attempt = 0; attempt < 40 && spawn && !spawn.exited; attempt++) await wait(50)
+  const allowedEnv = ['HOME', 'LANG', 'LC_ALL', 'LC_CTYPE', 'LOGNAME', 'PATH', 'SHELL', 'TMPDIR', 'USER']
+  const spawnOk =
+    fixtures.claudeSpawns.length === spawnsBefore + 1 &&
+    spawn !== undefined &&
+    spawn.exited &&
+    spawn.args.includes('--strict-mcp-config') &&
+    spawn.args.includes('--no-session-persistence') &&
+    !spawn.args.join(' ').includes('Alguma dúvida') &&
+    spawn.cwd === join(userDataDir, 'claude-cwd') &&
+    spawn.envNames.every((name) => allowedEnv.includes(name))
+
+  // Binário sumido: "não encontrado" com o campo do caminho; caminho que não responde é recusado.
+  fixtures.claudeMissing = true
+  await clickSelector(contents, '[data-engine-option="assemblyai"]')
+  await waitFor(contents, "document.querySelector('[data-model-picker]')")
+  await clickSelector(contents, '[data-engine-option="claude-cli"]')
+  // Com "Resumir ao encerrar" ligado, o estado do Claude CLI também aparece no motor AssemblyAI (contrato
+  // 08): espera o bloco do motor Claude, não o anterior.
+  await waitFor(contents, `!document.querySelector('[data-model-picker]') && document.querySelector('[data-claude-model-option]')`)
+  const notFound = await waitFor(contents, `document.querySelector('[data-claude-state="not-found"]') && document.querySelector('#claude-path') && document.querySelector('[data-action="use-claude-path"]')`)
+  const notFoundText = await text(contents, '[data-claude-status]')
+  await setValue(contents, '#claude-path', '/tmp/nao-existe/claude')
+  await clickSelector(contents, '[data-action="use-claude-path"]')
+  const rejected = await waitFor(contents, "document.querySelector('[data-claude-path-rejected]')")
+  const pathKept = readSettings(userDataDir).claudePath ?? null
+
+  // CA11: gravação com o Claude CLI não encontrado mostra o aviso com o caminho para Configurações.
+  await clickSelector(contents, '[data-nav="reunioes"]')
+  await waitFor(contents, "document.querySelector('main header [data-action=\"new-recording\"]')")
+  await clickSelector(contents, 'main header [data-action="new-recording"]')
+  await waitFor(contents, `${routeIs('gravacao')} && ${probeJs('state()?.mic')} === 'live'`)
+  const notice = await waitFor(contents, "document.querySelector('[data-notice=\"claude-not-found\"]')")
+  const noticeText = await text(contents, '[data-notice="claude-not-found"]')
+  const spawnsWhileMissing = fixtures.claudeSpawns.length
+  await clickSelector(contents, '[data-action="open-settings-from-claude"]')
+  const toSettings = await waitFor(contents, routeIs('configuracoes'))
+  await clickSelector(contents, '[data-nav="reunioes"]')
+  await waitFor(contents, "document.querySelector('main header [data-action=\"new-recording\"]')")
+  await clickSelector(contents, 'main header [data-action="new-recording"]')
+  await waitFor(contents, routeIs('gravacao'))
+  await clickSelector(contents, '[data-action="end-recording"]')
+  await waitFor(contents, routeIs('detalhe'))
+  fixtures.claudeMissing = false
+
+  await evaluate(contents, "window.__scribeApi.invoke('scribe:settings-update', { translationEngine: 'assemblyai' }).then(() => true)")
+  const back = readSettings(userDataDir).translationEngine
+  return {
+    ok:
+      statusText.includes('Claude Code 2.1.312 encontrado') &&
+      engineSaved === 'claude-cli' &&
+      JSON.stringify(modelLabels) === JSON.stringify(['Haiku (mais rápido)', 'Sonnet']) &&
+      sonnetSaved === 'sonnet' &&
+      started.ok &&
+      started.version === '2.1.312' &&
+      translated.ok &&
+      translated.translation === '[EN] Alguma dúvida até aqui?' &&
+      translated.model === 'claude-cli:haiku' &&
+      spawnOk &&
+      notFound &&
+      notFoundText.includes('Claude CLI não encontrado nesta máquina') &&
+      rejected &&
+      pathKept === null &&
+      notice &&
+      noticeText.includes('Claude CLI não encontrado. Ajuste em Configurações.') &&
+      spawnsWhileMissing === spawnsBefore + 1 &&
+      toSettings &&
+      back === 'assemblyai',
+    detail: `estado "${statusText}", settings.json ${engineSaved}; modelos ${JSON.stringify(modelLabels)}, Sonnet -> ${sonnetSaved}; início ${JSON.stringify(started)}; trecho -> ${JSON.stringify(translated)}; processo ${JSON.stringify(spawn ? { ...spawn, args: spawn.args.filter((arg) => arg.startsWith('--')) } : null)}; sem binário -> "${notFoundText}", campo=${notFound}, caminho errado recusado=${rejected} (claudePath ${pathKept}); gravação -> aviso "${noticeText}", Configurações=${toSettings}; motor de volta ${back}`,
+  }
+}
+
+/**
+ * CA10 e CA11: sem chave, a coluna mostra a frase do estado, o botão para Configurações e "Ver exemplo";
+ * a captura (níveis, cronômetro e registro) continua igual. Com chave, o link de exemplo some.
+ */
+async function transcriptionChecks(win: BrowserWindow, recording: Record<string, Check>): Promise<void> {
+  const contents = win.webContents
+  const routeToReunioes = '[data-nav="reunioes"]'
+  await evaluate(contents, "window.__scribeApi.invoke('scribe:key-remove').then(() => true)")
+  await clickSelector(contents, routeToReunioes)
+  await waitFor(contents, "document.querySelector('main header [data-action=\"new-recording\"]')")
+  await clickSelector(contents, 'main header [data-action="new-recording"]')
+  const live = await waitFor(contents, `${routeIs('gravacao')} && ${probeJs('state()?.mic')} === 'live'`)
+  const shown = await waitFor(contents, `document.querySelector('[data-transcript-state="no-key"]')`)
+  const noKeyText = await text(contents, '[data-transcript-state="no-key"]')
+  await clickSelector(contents, '[data-action="show-example"]')
+  const example = await waitFor(contents, `document.querySelector('[data-transcript-state="example"]')`)
+  await clickSelector(contents, '[data-action="hide-example"]')
+  await waitFor(contents, `document.querySelector('[data-transcript-state="no-key"]')`)
+  await clickSelector(contents, '[data-action="open-settings-from-transcript"]')
+  const wentToSettings = await waitFor(contents, routeIs('configuracoes'))
+  // Devolve a chave fictícia (o gateway de fixtures aceita) e encerra a gravação sem chave.
+  const started = await captureState(contents)
+  await evaluate(contents, `window.__scribeApi.invoke('scribe:key-save', { key: ${JSON.stringify(SMOKE_FAKE_KEY)} }).then(() => true)`)
+  await clickSelector(contents, routeToReunioes)
+  await waitFor(contents, "document.querySelector('main header [data-action=\"new-recording\"]')")
+  await clickSelector(contents, 'main header [data-action="new-recording"]')
+  await waitFor(contents, `${routeIs('gravacao')} && ${probeJs('state()?.mic')} === 'live'`)
+  await clickSelector(contents, '[data-action="end-recording"]')
+  await waitFor(contents, routeIs('detalhe'))
+  // Com chave, uma gravação nova não mostra o estado sem chave nem o link de exemplo.
+  await clickSelector(contents, routeToReunioes)
+  await waitFor(contents, "document.querySelector('main header [data-action=\"new-recording\"]')")
+  await clickSelector(contents, 'main header [data-action="new-recording"]')
+  await waitFor(contents, `${routeIs('gravacao')} && ${probeJs('state()?.mic')} === 'live'`)
+  const withKey = await waitFor(contents, `!document.querySelector('[data-transcript-state="no-key"]')`)
+  const exampleWithKey = await evaluate<boolean>(contents, "Boolean(document.querySelector('[data-action=\"show-example\"]'))")
+  await clickSelector(contents, '[data-action="end-recording"]')
+  await waitFor(contents, routeIs('detalhe'))
+  recording['noKeyState'] = {
+    ok:
+      live &&
+      shown &&
+      noKeyText.includes('Adicione sua chave da AssemblyAI para transcrever.') &&
+      noKeyText.includes('Abrir Configurações') &&
+      noKeyText.includes('Ver exemplo') &&
+      example &&
+      wentToSettings &&
+      withKey &&
+      !exampleWithKey,
+    detail: `sem chave -> captura ${JSON.stringify(started)}, aviso=${shown} "${noKeyText}"; exemplo=${example}; "Abrir Configurações" -> ${wentToSettings}; com chave -> link de exemplo=${exampleWithKey}`,
+  }
+}
+
+/** CA11: na janela sem tema forçado, "Claro", "Escuro" e "Sistema" trocam o tema na hora e gravam. */
+async function appearanceCheck(contents: WebContents, userDataDir: string): Promise<Check> {
+  const theme = (value: string): string => `document.documentElement.dataset.theme === '${value}'`
+  // A opção só fica marcada quando o main devolve o que gravou: ler o arquivo antes disso é corrida.
+  const pressed = (option: string): string => `document.querySelector('[data-theme-option="${option}"]')?.getAttribute('aria-pressed') === 'true'`
+  await clickSelector(contents, '[data-nav="configuracoes"]')
+  await waitFor(contents, `${routeIs('configuracoes')} && ${pressed('system')}`)
+  // Ponto de partida conhecido: o macOS claro já aplicado, qualquer que seja o tema da máquina.
+  nativeTheme.themeSource = 'light'
+  const start = await waitFor(contents, theme('light'))
+  await clickSelector(contents, '[data-theme-option="dark"]')
+  const dark = await waitFor(contents, `${pressed('dark')} && ${theme('dark')}`)
+  const savedDark = readSettings(userDataDir).theme
+  await clickSelector(contents, '[data-theme-option="light"]')
+  const light = await waitFor(contents, `${pressed('light')} && ${theme('light')}`)
+  const savedLight = readSettings(userDataDir).theme
+  nativeTheme.themeSource = 'dark'
+  // O macOS escuro não pode mudar nada com "Claro" escolhido: espera o tempo de a troca chegar e confere.
+  await waitFor(contents, "window.matchMedia('(prefers-color-scheme: dark)').matches")
+  await wait(150)
+  const keptLight = (await evaluate<string>(contents, 'document.documentElement.dataset.theme')) === 'light'
+  await clickSelector(contents, '[data-theme-option="system"]')
+  const system = await waitFor(contents, `${pressed('system')} && ${theme('dark')}`)
+  const savedSystem = readSettings(userDataDir).theme
+  nativeTheme.themeSource = 'system'
+  return {
+    ok: start && dark && savedDark === 'dark' && light && savedLight === 'light' && keptLight && system && savedSystem === 'system',
+    detail: `macOS claro -> light=${start}; Escuro -> marcado e data-theme dark=${dark}, settings.json ${savedDark}; Claro -> light=${light}, ${savedLight}, com o macOS escuro continua claro=${keptLight}; Sistema -> segue o macOS=${system}, ${savedSystem}`,
+  }
+}
+
+type LayoutScreen = 'configuracoes' | 'gravacao' | 'detalhe'
+
+/**
+ * Medidas em px lógicos contra os mockups aprovados (docs/specs/desktop-shell/mockups): barra lateral de
+ * 224, item de navegação de 40, quadrado de permissão de 6, conteúdo a 28 do topo (24 no detalhe) e 40 da
+ * lateral, campo, seletor e botão de 40, linha de configuração de 64 no mínimo, linha de modelo de 56,
+ * fita de 96, calha da transcrição de 64 e as linhas de texto/tradução de 26/22. Lidas da tela, para a
+ * escala de espaço não encolher de novo.
+ */
+async function layoutMetrics(contents: WebContents, screen: LayoutScreen): Promise<Record<string, number>> {
+  return evaluate(
+    contents,
+    `(() => {
+      const box = (selector) => document.querySelector(selector)?.getBoundingClientRect() ?? null
+      const main = box('main')
+      const header = document.querySelector('main header')
+      const round = (n) => Math.round(n * 10) / 10
+      const lineHeight = (selector) => round(parseFloat(getComputedStyle(document.querySelector(selector)).lineHeight))
+      const out = {
+        sidebarWidth: round(box('aside')?.width ?? 0),
+        navItemHeight: round(box('[data-nav="reunioes"]')?.height ?? 0),
+        permissionSquare: round(box('[data-permission="mic"] span[aria-hidden="true"]')?.width ?? 0),
+      }
+      if (${JSON.stringify(screen)} === 'configuracoes') {
+        const title = box('main h1')
+        Object.assign(out, {
+          contentTop: round(title.top - main.top),
+          contentLeft: round(title.left - main.left),
+          inputHeight: round(box('#assemblyai-key').height),
+          selectHeight: round(box('#settings-mic').height),
+          buttonHeight: round(box('[data-action="save-key"]').height),
+          settingRowHeight: round(document.querySelector('#settings-source').closest('div.border-b').getBoundingClientRect().height),
+          modelRowHeight: round(box('[data-model]').height),
+        })
+      } else {
+        const style = getComputedStyle(header)
+        Object.assign(out, {
+          contentTop: round(box('main header').top - main.top + parseFloat(style.paddingTop)),
+          contentLeft: round(box('main header').left - main.left + parseFloat(style.paddingLeft)),
+          transcriptGutter: round(parseFloat(getComputedStyle(document.querySelector('[data-transcript-list] li')).gridTemplateColumns)),
+        })
+        if (${JSON.stringify(screen)} === 'gravacao') {
+          out.tapeHeight = round(box('[aria-label="Níveis de áudio de você e dos participantes"]').height)
+        } else {
+          out.transcriptTextLineHeight = lineHeight('[data-transcript-text]')
+          out.transcriptTranslationLineHeight = lineHeight('[data-transcript-translation]')
+          out.copyButtonHeight = round(box('[data-action="copy-transcript"]').height)
+        }
+      }
+      return out
+    })()`,
+  )
+}
+
+interface Expectation {
+  min: number
+  max: number
+}
+
+const COMMON_LAYOUT: Record<string, Expectation> = {
+  sidebarWidth: { min: 224, max: 224 },
+  navItemHeight: { min: 40, max: 40 },
+  permissionSquare: { min: 6, max: 6 },
+  contentLeft: { min: 40, max: 40 },
+  transcriptGutter: { min: 64, max: 64 },
+}
+
+const SCREEN_LAYOUT: Record<LayoutScreen, Record<string, Expectation>> = {
+  configuracoes: {
+    contentTop: { min: 28, max: 28 },
+    inputHeight: { min: 40, max: 40 },
+    selectHeight: { min: 40, max: 40 },
+    buttonHeight: { min: 40, max: 40 },
+    settingRowHeight: { min: 64, max: 80 },
+    modelRowHeight: { min: 56, max: 64 },
+  },
+  gravacao: {
+    contentTop: { min: 28, max: 28 },
+    tapeHeight: { min: 96, max: 96 },
+  },
+  detalhe: {
+    // Mockup do detalhe: cabeçalho a 24 do topo, texto 16/26 e tradução 14/22.
+    contentTop: { min: 24, max: 24 },
+    transcriptTextLineHeight: { min: 26, max: 26 },
+    transcriptTranslationLineHeight: { min: 22, max: 22 },
+    copyButtonHeight: { min: 40, max: 40 },
+  },
+}
+
+function layoutCheck(screen: LayoutScreen, metrics: Record<string, number>): Check {
+  const expected = { ...COMMON_LAYOUT, ...SCREEN_LAYOUT[screen] }
+  const off = Object.entries(metrics).filter(([name, value]) => {
+    const target = expected[name]
+    return !target || value < target.min - 0.5 || value > target.max + 0.5
+  })
+  return { ok: off.length === 0, detail: `${JSON.stringify(metrics)}${off.length ? `; fora do mockup: ${off.map(([n]) => n).join(', ')}` : ''}` }
+}
+
+export async function runSmoke(ctx: SmokeContext): Promise<number> {
+  const timer = setTimeout(() => {
+    console.error(`[smoke] tempo esgotado (${TIMEOUT_MS} ms)`)
+    app.exit(1)
+  }, TIMEOUT_MS)
+
+  rmSync(ctx.outDir, { recursive: true, force: true })
+  mkdirSync(ctx.outDir, { recursive: true })
+
+  const consoleErrors: string[] = []
+  const cspViolations: CspViolation[] = []
+  const externalRequests: string[] = []
+  const failures: string[] = []
+  const screenshots: Screenshot[] = []
+  const navigation: Record<string, Check> = {}
+  const recording: Record<string, Check> = {}
+  const settings: Record<string, Check> = {}
+  const layout: Record<string, Check> = {}
+
+  session.defaultSession.webRequest.onBeforeRequest((details, callback) => {
+    const origin = originOf(details.url)
+    const local = details.url.startsWith('data:') || details.url.startsWith('blob:') || details.url.startsWith('devtools:')
+    if (!local && origin !== ctx.appOrigin) externalRequests.push(details.url)
+    callback({})
+  })
+  ipcMain.on('scribe:csp-violation', (_event, report: CspViolation) => cspViolations.push(report))
+
+  const watch = (win: BrowserWindow): void => {
+    win.webContents.on('console-message', (event) => {
+      if (event.level === 'error') consoleErrors.push(`${event.message} (${event.sourceId}:${event.lineNumber})`)
+    })
+    win.webContents.on('render-process-gone', (_event, details) => failures.push(`renderer encerrou: ${details.reason}`))
+    win.webContents.on('did-fail-load', (_event, code, description, url) => failures.push(`falha ao carregar ${url}: ${code} ${description}`))
+  }
+
+  let webPreferences: Record<string, unknown> = {}
+  let probe = { origin: '', opfs: false, workletAddModule: false, errors: [] as string[] }
+  let bridge: Check = { ok: false, detail: 'não executado' }
+  let theme: Check = { ok: false, detail: 'não executado' }
+  let motion: Check = { ok: false, detail: 'não executado' }
+  const brand: Record<string, Check> = {}
+  let recorderMeasured: Record<string, unknown> = {}
+  let summaryMeasured: SummaryMeasured | null = null
+
+  // A fixture da sessão real, reduzida pelo mesmo redutor do app: a mesma dos testes (CA4) e do smoke.
+  const sessionFixture = readSessionFixture()
+  const liveSegments = fixtureSegments(liveFixtureLines(sessionFixture))
+
+  try {
+    for (const themeName of THEMES) {
+      // Cada tema começa com o microfone "não pedido", como em Reuniões vazia no mockup.
+      ctx.fixtures.media.set('not-determined')
+      const win = ctx.openWindow({ theme: themeName })
+      watch(win)
+      await loadAndWait(win)
+      const contents = win.webContents
+
+      if (themeName === 'light') {
+        // `getLastWebPreferences` existe no Electron 45 mas não está no electron.d.ts.
+        const prefs = (contents as WebContents & { getLastWebPreferences(): Record<string, unknown> | null }).getLastWebPreferences() ?? {}
+        webPreferences = {
+          contextIsolation: prefs.contextIsolation,
+          sandbox: prefs.sandbox,
+          nodeIntegration: prefs.nodeIntegration,
+          webSecurity: prefs.webSecurity,
+        }
+        probe = await probeOrigin(contents)
+        recording['captureWorklet'] = await probeCaptureWorklet(contents, app.getAppPath())
+        const format = await recorderFormat(contents)
+        recording['recorderFormat'] = { ok: format.ok, detail: format.detail }
+        recorderMeasured = format.measured
+        const info = await evaluate<{ name?: string; electron?: string } | null>(
+          contents,
+          "window.__scribeApi.invoke('scribe:app-info').catch(() => null)",
+        )
+        const exposed = await evaluate<string[]>(contents, "Object.keys(window).filter((k) => k.startsWith('__scribe'))")
+        bridge = {
+          ok: info?.electron === process.versions.electron && exposed.length === 1 && exposed[0] === '__scribeApi',
+          detail: `invoke scribe:app-info -> ${JSON.stringify(info)}; globais expostos: ${exposed.join(', ')}`,
+        }
+      }
+
+      const shoot = async (name: (typeof SCREENS)[number], route: string): Promise<void> => {
+        if (!(await waitFor(contents, routeIs(route)))) failures.push(`${name}/${themeName}: rota ${route} não abriu`)
+        const dataTheme = await evaluate<string>(contents, 'document.documentElement.dataset.theme ?? ""')
+        if (dataTheme !== themeName) failures.push(`${name}/${themeName}: data-theme=${dataTheme}`)
+        await settle(contents)
+        screenshots.push(await capture(win, ctx.outDir, `${name}-${themeName}`))
+      }
+
+      // 1. Reuniões vazia, com "Permitir" no bloco de permissões. Depois o microfone fica concedido.
+      await waitFor(contents, `document.querySelector('[data-permission="mic"]')?.dataset.state === 'not-determined'`)
+      await shoot('reunioes', 'reunioes')
+      if (themeName === 'light') settings['permissions'] = await permissionChecks(contents, ctx.fixtures)
+      else await clickSelector(contents, '[data-action="allow-mic"]')
+
+      // 2. "Nova gravação" do estado vazio inicia a captura (sinal gerado) e abre a gravação.
+      await clickSelector(contents, '[data-action="new-recording"]')
+      const recordingFrom = Date.now()
+      const live = await waitFor(contents, `${probeJs('state()?.mic')} === 'live' && ${probeJs('state()?.system')} === 'live'`)
+      if (themeName === 'light') {
+        navigation['emptyStateButton'] = {
+          ok: live && (await currentRoute(contents)) === 'gravacao',
+          detail: `"Nova gravação" do estado vazio -> rota ${await currentRoute(contents)}, captura ${JSON.stringify(await captureState(contents))}`,
+        }
+      }
+      await wait(1500)
+      await shoot('gravacao', 'gravacao')
+
+      // 3. Fita cheia e a coluna com a fixture da sessão gravada (nenhuma conexão: modo sintético).
+      await evaluate(contents, `window.__smokeProbe.replay(${JSON.stringify(liveSegments)})`)
+      await waitFor(contents, "document.querySelectorAll('[data-transcript-list] li').length === 3")
+      if (themeName === 'light') {
+        const fps = await tapeFps(contents)
+        recording['tapeFps'] = { ok: fps >= MIN_TAPE_FPS, detail: `${fps} quadros desenhados em 1 s (mínimo ${MIN_TAPE_FPS})` }
+      }
+      await wait(Math.max(0, TAPE_FILL_MS - (Date.now() - recordingFrom)))
+      await shoot('gravacao-ao-vivo', 'gravacao')
+      if (themeName === 'light') layout['gravacao'] = layoutCheck('gravacao', await layoutMetrics(contents, 'gravacao'))
+      // Contrato 07: com a opção ligada (padrão), o áudio vai em pedaços para o `.part` na pasta.
+      if (themeName === 'light') recording['audioWhileRecording'] = await audioWhileRecording(contents, defaultMeetingFolder(ctx))
+
+      // Contrato 06: o eco do alto-falante some de "Você" (a gravação deste passo salva a fixture de eco).
+      if (themeName === 'light') {
+        const echo = await echoCheck(win, ctx.outDir)
+        recording['echoRemoved'] = echo.check
+        screenshots.push(echo.shot)
+      }
+
+      // No escuro, o aviso de sistema sem som também é fotografado (o claro sai em `recordingChecks`).
+      if (themeName === 'dark') {
+        const notice = await captureSystemNotice(win, ctx.outDir, 'gravacao-aviso-dark')
+        screenshots.push(notice.shot)
+        if (!notice.shown || !notice.gone) failures.push(`gravacao-aviso-dark: aviso=${notice.shown}, sumiu=${notice.gone}`)
+      }
+
+      // 4. Encerrar salva o registro e abre o detalhe.
+      const recordedMs = Date.now() - recordingFrom
+      const endedAt = Date.now()
+      await clickSelector(contents, '[data-action="end-recording"]')
+      await waitFor(contents, routeIs('detalhe'))
+      const saved = readMeetings(ctx.userDataDir)
+      const record = saved[0]
+      // Contrato 08: o resumo sai sozinho (claude falso) e o detalhe abre na aba "Resumo".
+      const summaryResult = await summaryAfterEnd(win, ctx, record, endedAt, themeName === 'light')
+      recording[themeName === 'light' ? 'summary' : 'summaryDark'] = summaryResult.check
+      if (themeName === 'light') summaryMeasured = summaryResult.measured
+      await shoot('detalhe-resumo', 'detalhe')
+      if (themeName === 'light') {
+        // A reunião salva fica sem o trecho repetido do microfone (contrato 06, CA4).
+        const transcriptFile = record ? join(ctx.userDataDir, 'meetings', `${record.id}.json`) : ''
+        const savedSegments = transcriptFile && existsSync(transcriptFile) ? (JSON.parse(readFileSync(transcriptFile, 'utf8')) as TranscriptDocument).segments : []
+        const echoSources = savedSegments.filter((segment) => segment.text.includes(ECHO_PHRASE)).map((segment) => segment.source)
+        recording['echoNotSaved'] = {
+          ok: echoSources.length === 1 && echoSources[0] === 'system' && savedSegments.some((segment) => segment.source === 'mic'),
+          detail: `${savedSegments.length} trechos salvos; "${ECHO_PHRASE}" em [${echoSources.join(', ')}]`,
+        }
+        recording['endSavesAndOpensDetail'] = {
+          ok:
+            (await currentRoute(contents)) === 'detalhe' &&
+            saved.length === 1 &&
+            record !== undefined &&
+            Math.abs(record.durationMs - recordedMs) < 1500 &&
+            record.sources.mic &&
+            record.sources.system &&
+            /^Reunião de \d{2}\/\d{2} \d{2}:\d{2}$/.test(record.title),
+          detail: `rota ${await currentRoute(contents)}; registro ${JSON.stringify(record)}; gravado ~${recordedMs} ms`,
+        }
+        // Contrato 07: o arquivo final, o .md e as linhas do detalhe.
+        const files = await audioAfterEnd(win, ctx, record)
+        recording['audioSaved'] = files.saved
+        recording['audioDetail'] = files.detail
+        screenshots.push(files.shot)
+        // Contrato 08, CA7: "Baixar…" na aba "Áudio".
+        const downloads = await downloadsCheck(win, ctx, record)
+        recording['summaryDownload'] = downloads.check
+        screenshots.push(downloads.shot)
+      }
+
+      // 5. Lista com três reuniões semeadas.
+      seedMeetings(ctx.userDataDir)
+      await clickSelector(contents, '[data-nav="reunioes"]')
+      await waitFor(contents, "document.querySelectorAll('main a[data-meeting]').length === 3")
+      await shoot('reunioes-com-dados', 'reunioes')
+
+      // 6. Clique na primeira linha abre o detalhe.
+      await clickSelector(contents, 'main a[data-meeting]')
+      await waitFor(contents, "document.querySelector('main [data-meeting]:not(a)') && document.querySelectorAll('[data-transcript-list] li').length === 3")
+      await shoot('detalhe', 'detalhe')
+      if (themeName === 'light') {
+        layout['detalhe'] = layoutCheck('detalhe', await layoutMetrics(contents, 'detalhe'))
+        // CA12: "Copiar transcrição" põe o Markdown na área de transferência (fixture em memória).
+        // O "Copiar resumo" do passo 4 (contrato 08) já pôs um texto ali: espera o próximo.
+        const copiedBefore = ctx.fixtures.copiedTexts.length
+        await clickSelector(contents, '[data-action="copy-transcript"]')
+        for (let attempt = 0; attempt < 40 && ctx.fixtures.copiedTexts.length === copiedBefore; attempt++) await wait(50)
+        const markdown = ctx.fixtures.copiedTexts.at(-1) ?? ''
+        recording['copyTranscript'] = {
+          ok:
+            markdown.startsWith('# Planejamento da migração do banco') &&
+            markdown.includes('**Você** · 00:00') &&
+            markdown.includes('> must operate without interfering with the microphone.'),
+          detail: `${markdown.split('\n').length} linhas; começa "${markdown.split('\n')[0] ?? ''}"`,
+        }
+        // Excluir a reunião apaga também a transcrição dela.
+        await clickSelector(contents, '[data-action="delete-meeting"]')
+        await clickSelector(contents, '[data-action="confirm-delete"]')
+        const back = await waitFor(contents, routeIs('reunioes'))
+        const transcriptGone = !existsSync(join(ctx.userDataDir, 'meetings', 'smoke-1.json'))
+        recording['deleteTranscript'] = {
+          ok: back && transcriptGone && readMeetings(ctx.userDataDir).length === 2,
+          detail: `"Excluir" -> rota ${await currentRoute(contents)}, transcrição apagada=${transcriptGone}, ${readMeetings(ctx.userDataDir).length} reuniões`,
+        }
+      }
+
+      // 7. Configurações (chave conferida, catálogo das fixtures) e o seletor com um modelo não liberado.
+      await clickSelector(contents, '[data-nav="configuracoes"]')
+      if (!(await settingsReady(contents))) failures.push(`configuracoes/${themeName}: chave ou catálogo não carregou`)
+      await shoot('configuracoes', 'configuracoes')
+      if (themeName === 'light') layout['configuracoes'] = layoutCheck('configuracoes', await layoutMetrics(contents, 'configuracoes'))
+      brand[themeName] = await brandCheck(win)
+      if (!(await openModelPicker(contents))) failures.push(`configuracoes-seletor/${themeName}: modelo não liberado não foi marcado`)
+      await shoot('configuracoes-seletor', 'configuracoes')
+      // Contrato 05: Claude CLI encontrado (binário falso), sem o seletor do gateway.
+      if (!(await showClaudeSettings(contents))) failures.push(`configuracoes-claude/${themeName}: Claude CLI falso não foi encontrado`)
+      await shoot('configuracoes-claude', 'configuracoes')
+      await clickSelector(contents, '[data-engine-option="assemblyai"]')
+      await waitFor(contents, "document.querySelector('[data-model-picker]')")
+      // Contrato 07, CA2: o bloco "Arquivos da reunião", ligado, com a pasta padrão.
+      await scrollToSection(contents, 'Arquivos da reunião')
+      await waitFor(contents, `document.querySelector('section[aria-label="Arquivos da reunião"]')?.innerText.includes('~/')`)
+      await shoot('configuracoes-arquivos', 'configuracoes')
+      // Contrato 09, CA2: o bloco "Marca", primeiro da tela, com o símbolo da LAP.
+      await scrollToSection(contents, 'Marca')
+      await shoot('configuracoes-marca', 'configuracoes')
+
+      if (themeName === 'light') navigation['detailLoadFailure'] = await detailLoadFailure(contents, ctx.userDataDir)
+
+      if (themeName === 'light') {
+        await transcriptionChecks(win, recording)
+        await recordingChecks(win, ctx, navigation, recording, screenshots)
+        await settingsChecks(win, ctx, settings)
+        await clickSelector(contents, '[data-nav="configuracoes"]')
+        await waitFor(contents, routeIs('configuracoes'))
+        settings['claudeCli'] = (await showClaudeSettings(contents)) ? await claudeChecks(win, ctx) : { ok: false, detail: 'Claude CLI falso não foi encontrado' }
+        settings['meetingFiles'] = await meetingFilesSettings(win, ctx)
+        settings['summarizeOnStop'] = await summarizeSetting(contents, ctx.userDataDir)
+        // Contrato 09: logo, nome e subtítulo próprios e a volta ao padrão.
+        const branding = await brandingChecks(win, ctx)
+        settings['branding'] = branding.check
+        screenshots.push(branding.shot)
+
+        // Barra lateral, menu ⌘, e teclado.
+        await clickSelector(contents, '[data-nav="reunioes"]')
+        await waitFor(contents, routeIs('reunioes'))
+        navigation['sidebarReunioes'] = {
+          ok: (await currentRoute(contents)) === 'reunioes' && (await activeNav(contents)) === 'reunioes',
+          detail: `clique em Reuniões -> rota ${await currentRoute(contents)}, aria-current em ${await activeNav(contents)}`,
+        }
+
+        await clickSelector(contents, '[data-nav="configuracoes"]')
+        await waitFor(contents, routeIs('configuracoes'))
+        navigation['sidebarConfiguracoes'] = {
+          ok: (await currentRoute(contents)) === 'configuracoes' && (await activeNav(contents)) === 'configuracoes',
+          detail: `clique em Configurações -> rota ${await currentRoute(contents)}, aria-current em ${await activeNav(contents)}`,
+        }
+
+        await clickSelector(contents, '[data-nav="reunioes"]')
+        await waitFor(contents, routeIs('reunioes'))
+        const settingsItem = Menu.getApplicationMenu()?.getMenuItemById(MENU_IDS.settings)
+        settingsItem?.click()
+        await waitFor(contents, routeIs('configuracoes'))
+        navigation['menuConfiguracoes'] = {
+          ok: settingsItem?.accelerator === 'CmdOrCtrl+,' && (await currentRoute(contents)) === 'configuracoes',
+          detail: `menu "${settingsItem?.label ?? '?'}" (${settingsItem?.accelerator ?? '?'}) -> rota ${await currentRoute(contents)}`,
+        }
+
+        await clickSelector(contents, '[data-nav="reunioes"]')
+        await waitFor(contents, routeIs('reunioes'))
+        navigation['keyboard'] = await keyboardNavigation(contents)
+
+        motion = await reducedMotion(contents)
+      }
+      rmSync(join(ctx.userDataDir, MEETINGS_FILE), { force: true })
+      win.destroy()
+    }
+
+    // Tema `system` (sem parâmetro) acompanha o macOS sem recarregar.
+    const win = ctx.openWindow({})
+    watch(win)
+    await loadAndWait(win)
+    settings['appearance'] = await appearanceCheck(win.webContents, ctx.userDataDir)
+    theme = await themeLiveSwitch(win.webContents)
+    win.destroy()
+  } catch (error) {
+    failures.push(`erro: ${error instanceof Error ? (error.stack ?? error.message) : String(error)}`)
+  }
+
+  // Coleta o que pode ter chegado depois do último quadro.
+  await wait(100)
+
+  if (webPreferences['contextIsolation'] !== true) failures.push('contextIsolation não está true')
+  if (webPreferences['sandbox'] !== true) failures.push('sandbox não está true')
+  if (webPreferences['nodeIntegration'] !== false) failures.push('nodeIntegration não está false')
+  if (probe.origin !== 'scribe://app') failures.push(`origem ${probe.origin}`)
+  if (!probe.opfs) failures.push('OPFS falhou')
+  if (!probe.workletAddModule) failures.push('audioWorklet.addModule falhou')
+  if (!bridge.ok) failures.push(`ponte do preload: ${bridge.detail}`)
+  if (consoleErrors.length) failures.push(`${consoleErrors.length} erro(s) no console`)
+  if (cspViolations.length) failures.push(`${cspViolations.length} violação(ões) de CSP`)
+  if (externalRequests.length) failures.push(`${externalRequests.length} requisição(ões) externa(s)`)
+  for (const [name, check] of Object.entries(navigation)) if (!check.ok) failures.push(`navegação ${name}: ${check.detail}`)
+  for (const [name, check] of Object.entries(recording)) if (!check.ok) failures.push(`gravação ${name}: ${check.detail}`)
+  for (const [name, check] of Object.entries(brand)) if (!check.ok) failures.push(`marca ${name}: ${check.detail}`)
+  for (const [name, check] of Object.entries(settings)) if (!check.ok) failures.push(`configurações ${name}: ${check.detail}`)
+  for (const name of ['configuracoes', 'gravacao', 'detalhe']) {
+    const check = layout[name]
+    if (!check) failures.push(`medidas ${name}: não executado`)
+    else if (!check.ok) failures.push(`medidas ${name}: ${check.detail}`)
+  }
+  for (const name of ['permissions', 'reachable', 'keyField', 'keySave', 'modelSearch', 'modelSelect', 'keyRemoveAndInvite', 'catalogOffline', 'languages', 'audio', 'recordingUsesSettings', 'appearance', 'claudeCli', 'meetingFiles', 'summarizeOnStop', 'branding']) {
+    if (!settings[name]) failures.push(`configurações ${name}: não executado`)
+  }
+  // Nenhuma chamada saiu para a AssemblyAI: todas passaram pelo gateway de fixtures.
+  if (!ctx.fixtures.calls.some((call) => call.path === '/v1/models')) failures.push('gateway de fixtures: catálogo não foi pedido')
+  if (Object.keys(brand).length !== THEMES.length) failures.push('marca: não executado nos dois temas')
+  for (const name of ['emptyStateButton', 'headerNewRecording', 'menuNovaGravacao', 'sidebarReunioes', 'keyboard', 'detailLoadFailure']) {
+    if (!navigation[name]) failures.push(`navegação ${name}: não executado`)
+  }
+  for (const name of ['captureWorklet', 'tapeFps', 'endSavesAndOpensDetail', 'pause', 'spaceResumes', 'systemSilenceNotice', 'endFromHeader', 'deleteWithConfirmation', 'noKeyState', 'copyTranscript', 'deleteTranscript', 'echoRemoved', 'echoNotSaved', 'recorderFormat', 'audioWhileRecording', 'audioSaved', 'audioDetail', 'deleteKeepsFiles', 'summary', 'summaryDark', 'summaryDownload']) {
+    if (!recording[name]) failures.push(`gravação ${name}: não executado`)
+  }
+  if (!theme.ok) failures.push(`tema: ${theme.detail}`)
+  if (!motion.ok) failures.push(`movimento reduzido: ${motion.detail}`)
+  // Mais o aviso de sistema sem som, nos dois temas, o eco removido, os arquivos no detalhe, a aba
+  // "Áudio" depois de baixar e a barra com a marca própria (só no claro).
+  const expectedShots = SCREENS.length * THEMES.length + 6
+  if (screenshots.length !== expectedShots) failures.push(`${screenshots.length} PNGs em vez de ${expectedShots}`)
+  for (const shot of screenshots) {
+    if (shot.width < 1120 || shot.height < 740) failures.push(`${shot.name}: ${shot.width}x${shot.height} abaixo de 1120x740`)
+    if (shot.distinctColors <= 50) failures.push(`${shot.name}: só ${shot.distinctColors} cores distintas`)
+  }
+
+  const userDataIsTemp = ctx.userDataDir.startsWith(realpathSync(tmpdir())) && app.getPath('userData') === ctx.userDataDir
+  if (!userDataIsTemp) failures.push('userData fora da pasta temporária')
+
+  const report = {
+    generatedAt: new Date().toISOString(),
+    electron: process.versions.electron,
+    chrome: process.versions.chrome,
+    userDataDir: ctx.userDataDir,
+    userDataIsTemp,
+    webPreferences,
+    origin: probe.origin,
+    opfs: probe.opfs,
+    workletAddModule: probe.workletAddModule,
+    probeErrors: probe.errors,
+    bridge,
+    consoleErrors,
+    cspViolations,
+    externalRequests,
+    navigation,
+    recording,
+    settings,
+    layout,
+    gatewayFixtureCalls: ctx.fixtures.calls,
+    recorderFormat: recorderMeasured,
+    summary: summaryMeasured,
+    meetingFolder: folderFiles(defaultMeetingFolder(ctx)),
+    openedFiles: ctx.fixtures.openedFiles.map((item) => ({ action: item.action, file: basename(item.path) })),
+    claudeFakeSpawns: ctx.fixtures.claudeSpawns.map((spawn) => ({ ...spawn, args: spawn.args.filter((arg) => arg.startsWith('--')) })),
+    openedExternally: ctx.fixtures.openedUrls,
+    dockIcons: ctx.fixtures.dockIcons,
+    keychain: 'substituto em memória (safeStorage real nunca chamado no smoke)',
+    brand,
+    themeLiveSwitch: theme,
+    reducedMotion: motion,
+    screenshots: screenshots.map((shot) => ({ ...shot, file: shot.file.replace(`${ctx.outDir}/`, '') })),
+    failures,
+  }
+  writeFileSync(join(ctx.outDir, 'report.json'), `${JSON.stringify(report, null, 2)}\n`)
+
+  clearTimeout(timer)
+
+  for (const failure of failures) console.error(`[smoke] ${failure}`)
+  console.log(`[smoke] ${screenshots.length} PNGs e report.json em ${ctx.outDir}; ${failures.length ? 'FALHOU' : 'ok'}`)
+  return failures.length ? 1 : 0
+}

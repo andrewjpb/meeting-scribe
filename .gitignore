@@ -1,0 +1,18 @@
+node_modules/
+dist/
+out/
+.env
+.env.*
+!.env.example
+*.log
+.DS_Store
+
+# app de prova da fase 0
+prova/out/
+prova/dist/
+
+# Fora do repositório público: descrevem o app do Notion por dentro (decisão do Andrew, 15/11/2026).
+# Ficam só no Mac e no cofre Obsidian.
+docs/pesquisa/
+docs/fase0/fase0-electron-catap.md
+docs/specs/meeting-scribe/spec-meeting-scribe-v1.2.md

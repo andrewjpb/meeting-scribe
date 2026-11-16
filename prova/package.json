@@ -1,0 +1,15 @@
+{
+  "name": "meeting-scribe-prova",
+  "version": "0.0.0",
+  "private": true,
+  "description": "App de prova da fase 0 (descartável): mic + áudio do sistema via Core Audio Tap",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "pack": "bash scripts/pack.sh"
+  },
+  "devDependencies": {
+    "@electron/packager": "20.3.0",
+    "electron": "45.3.1"
+  }
+}

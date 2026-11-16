@@ -1,0 +1,109 @@
+// Coluna de transcrição (CA11): horário na calha de 64 px, rótulo de quem fala na cor da fonte, texto
+// 16/26, tradução 14/22 com filete; parcial em --text-muted itálico. Rola sozinha até o fim; se o
+// usuário subir, para de rolar e mostra "Ir para o fim". Sem sombra, sem raio acima do token.
+import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { formatClock, speakerLabel, type TranscriptSource, type TranslationState } from '@shared/transcription'
+
+export interface TranscriptItem {
+  id: string
+  source: TranscriptSource
+  speaker: string | null
+  startMs: number
+  text: string
+  translation: string | null
+  partial: boolean
+  translationState: TranslationState
+}
+
+interface TranscriptListProps {
+  items: readonly TranscriptItem[]
+  /** Espaço no fim (a barra de controles flutua por cima) e começo da lista. */
+  bottomInset?: boolean
+  /** Caixa alta: só a gravação rola sozinha; o detalhe abre no topo. */
+  autoScroll?: boolean
+  onRetryTranslation?: (id: string) => void
+  /** Aviso antes da lista (estado sem chave, exemplo etc.). */
+  header?: ReactNode
+}
+
+export function TranscriptList({ items, bottomInset = false, autoScroll = false, onRetryTranslation, header }: TranscriptListProps) {
+  const scrollRef = useRef<HTMLDivElement>(null)
+  const [atBottom, setAtBottom] = useState(true)
+
+  // Rolar sempre que o texto muda, enquanto o usuário não tiver subido.
+  useEffect(() => {
+    if (!autoScroll) return
+    const element = scrollRef.current
+    if (!element || !atBottom) return
+    element.scrollTop = element.scrollHeight
+  }, [items, atBottom, autoScroll])
+
+  const onScroll = (): void => {
+    const element = scrollRef.current
+    if (!element) return
+    setAtBottom(element.scrollHeight - element.scrollTop - element.clientHeight < 32)
+  }
+
+  const toEnd = (): void => {
+    const element = scrollRef.current
+    if (!element) return
+    element.scrollTo({ top: element.scrollHeight, behavior: 'auto' })
+    setAtBottom(true)
+  }
+
+  return (
+    <div data-transcript-scroll ref={scrollRef} onScroll={onScroll} className={`relative min-h-0 flex-1 overflow-y-auto px-10 ${bottomInset ? 'pb-28' : 'pb-10'}`}>
+      <div className="mx-auto w-full max-w-[680px]">
+        {header}
+        {items.length > 0 && (
+          <ol data-transcript-list className="flex flex-col gap-[22px] pt-7 pb-1">
+            {items.map((item) => (
+              <Segment key={item.id} item={item} onRetryTranslation={onRetryTranslation} />
+            ))}
+          </ol>
+        )}
+      </div>
+      {autoScroll && !atBottom && items.length > 0 && (
+        <div className="pointer-events-none sticky bottom-24 z-10 mx-auto flex max-w-[680px] justify-end pr-1">
+          <button
+            type="button"
+            data-action="scroll-to-end"
+            onClick={toEnd}
+            className="no-drag pointer-events-auto inline-flex h-7 items-center rounded-[var(--radius-control)] border border-line-strong bg-bg-raised px-2.5 text-12 font-medium text-accent transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-bg-sunken"
+          >
+            Ir para o fim
+          </button>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function Segment({ item, onRetryTranslation }: { item: TranscriptItem; onRetryTranslation?: ((id: string) => void) | undefined }) {
+  const showUnavailable = !item.partial && item.translationState === 'unavailable' && !item.translation
+  return (
+    <li className="grid grid-cols-[64px_minmax(0,1fr)]">
+      <time className="pt-0.5 text-12 text-text-faint tabular">{formatClock(item.startMs)}</time>
+      <div className="flex min-w-0 flex-col gap-1">
+        <p className={`caps ${item.source === 'mic' ? 'text-mic' : 'text-sys'}`}>{speakerLabel(item.source, item.speaker)}</p>
+        <p data-transcript-text className={`text-16 select-text ${item.partial ? 'text-text-muted italic' : 'text-text'}`}>{item.text}</p>
+        {item.translation && <p data-transcript-translation className="border-l-2 border-line-strong pl-3 text-14 text-text-muted select-text">{item.translation}</p>}
+        {showUnavailable && (
+          <div className="flex flex-wrap items-center gap-3 border-l-2 border-line-strong pl-3 text-14 text-text-muted">
+            <span>Tradução indisponível</span>
+            {onRetryTranslation && (
+              <button
+                type="button"
+                data-action="retry-translation"
+                onClick={() => onRetryTranslation(item.id)}
+                className="no-drag inline-flex h-7 items-center rounded-[var(--radius-control)] border border-line-strong bg-bg-raised px-2.5 text-12 font-medium text-accent transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-bg-sunken"
+              >
+                Tentar de novo
+              </button>
+            )}
+          </div>
+        )}
+      </div>
+    </li>
+  )
+}

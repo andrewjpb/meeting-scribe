@@ -1,0 +1,17 @@
+{
+  "name": "meeting-scribe",
+  "private": true,
+  "packageManager": "pnpm@11.4.0",
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "scripts": {
+    "dev": "pnpm --filter @meeting-scribe/desktop dev",
+    "build": "pnpm --filter @meeting-scribe/desktop build",
+    "typecheck": "pnpm --filter @meeting-scribe/desktop typecheck",
+    "lint": "pnpm --filter @meeting-scribe/desktop lint",
+    "test": "pnpm --filter @meeting-scribe/desktop test",
+    "smoke": "pnpm --filter @meeting-scribe/desktop smoke",
+    "gates": "bash apps/desktop/scripts/gates.sh"
+  }
+}

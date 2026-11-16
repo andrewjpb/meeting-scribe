@@ -1,0 +1,116 @@
+/*
+ * Tokens do Meeting Scribe (docs/specs/desktop-shell/design.md, identidade LAP). Único arquivo do
+ * renderer com literal de cor: componentes usam só as variáveis. O teste test/tokens.test.ts lê este
+ * arquivo e confere os contrastes mínimos de design.md nos dois temas.
+ */
+
+:root,
+[data-theme='light'] {
+  color-scheme: light;
+
+  --bg: #ffffff;
+  --bg-raised: #ffffff;
+  --bg-sunken: #eef2f9;
+  --line: #e3e9f2;
+  --line-strong: #c9d4e5;
+  --title: #0a2a5e;
+  --text: #061a3d;
+  --text-muted: #5b6b85;
+  --text-faint: #7f8da6;
+  --accent: #1e5bb8;
+  --on-accent: #ffffff;
+  --mic: #1e5bb8;
+  --sys: #5b6b85;
+  --rec: #c62f34;
+  --ok: #1e5bb8;
+  --focus: #1e5bb8;
+
+  --side-bg: #0a2a5e;
+  --side-text: #ffffff;
+  --side-muted: #a8b5cc;
+  --side-active: rgba(255, 255, 255, 0.12);
+  /* Fios sobre o azul (divisores da barra de controles), como nos mockups aprovados. */
+  --side-divider: rgba(255, 255, 255, 0.2);
+  /* Quadrado de "Encerrar" sobre o azul: o --rec claro some sobre #0A2A5E (2,6:1). */
+  --side-rec: #f0646a;
+  /* Contorno da barra de controles: só no escuro, onde o azul dela encosta no fundo. */
+  --side-edge: transparent;
+  /* Estado ok sobre o azul (quadrado das permissões), o azul vibrante do logo, como nos mockups. */
+  --side-ok: #3b82f6;
+  /* Contorno de botão pequeno sobre o azul ("Permitir" das permissões). */
+  --side-outline: rgba(255, 255, 255, 0.4);
+}
+
+[data-theme='dark'] {
+  color-scheme: dark;
+
+  --bg: #061a3d;
+  --bg-raised: #0a2a5e;
+  --bg-sunken: #04122b;
+  --line: rgba(201, 212, 229, 0.14);
+  --line-strong: rgba(201, 212, 229, 0.28);
+  --title: #ffffff;
+  --text: #ffffff;
+  --text-muted: #a8b5cc;
+  --text-faint: #7c8cab;
+  /* design.md pede #3B82F6; sobre --bg-raised dava 3,79:1. Mesmo matiz, luminosidade 60% -> 65%. */
+  --accent: #5392f7;
+  --on-accent: #061a3d;
+  --mic: #5392f7;
+  --sys: #a8b5cc;
+  /* design.md pede #F0646A; sobre --bg-raised dava 4,47:1. Mesmo matiz, luminosidade +0,2%. */
+  --rec: #f0656b;
+  --ok: #5392f7;
+  --focus: #3b82f6;
+
+  --side-bg: #0a2a5e;
+  --side-text: #ffffff;
+  --side-muted: #a8b5cc;
+  --side-active: rgba(255, 255, 255, 0.12);
+  --side-divider: rgba(255, 255, 255, 0.2);
+  --side-rec: #f0646a;
+  --side-edge: rgba(201, 212, 229, 0.28);
+  --side-ok: #3b82f6;
+  --side-outline: rgba(255, 255, 255, 0.4);
+}
+
+:root {
+  /* Símbolo da LAP na versão para fundo azul (design.md, Marca): iguais nos dois temas. */
+  --logo-tile: #ffffff;
+  --logo-mark: #0a2a5e;
+  --logo-dot: #3b82f6;
+
+  --font-interface: 'Helvetica Neue', Helvetica, Arial, sans-serif;
+  --font-code: Menlo, ui-monospace, monospace;
+
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-12: 48px;
+  --space-16: 64px;
+
+  --radius-control: 4px;
+  --radius-panel: 6px;
+
+  --sidebar-width: 224px;
+  --titlebar-height: 52px;
+
+  --duration-fast: 120ms;
+  --duration-base: 160ms;
+  --duration-slow: 180ms;
+  --ease-out: cubic-bezier(0.2, 0, 0, 1);
+}
+
+/* Com movimento reduzido, nada anima nem transiciona (inclui o pulso do quadrado de gravação). */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation: none !important;
+    transition: none !important;
+    scroll-behavior: auto !important;
+  }
+}

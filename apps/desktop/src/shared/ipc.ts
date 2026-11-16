@@ -1,0 +1,211 @@
+// Contrato das mensagens entre main e renderer. Canal novo entra aqui primeiro: no mapa do
+// sentido certo e na lista de canais permitidos logo abaixo (o preload recusa o que não estiver nela).
+import type { BrandingInfo, BrandLogoChoice } from './branding'
+import type { KeySaveResult, KeyStatus, MicAccess, ModelCheck, ModelsResult } from './assemblyai'
+import type { ClaudeLocateResult, ClaudeRunState, ClaudeStartResult, ClaudeTranslateRequest, ClaudeTranslateResult } from './claude-cli'
+import type { AudioBeginResult, AudioExtension, AudioFinishResult, AudioFolderInfo, MeetingDownloadKind, MeetingDownloadResult, MeetingFileKind, MeetingFilesInfo } from './meeting-files'
+import type { SummaryStatus } from './meeting-summary'
+import type { Meeting, NewMeeting } from './meetings'
+import type { RouteId } from './routes'
+import type { AppSettings, SettingsPatch } from './settings-defaults'
+import type { TranscriptCopyResult, TranscriptDocument, TranslateTurnResult, TranscriptionTokenResult } from './transcription'
+
+export interface AppInfo {
+  name: string
+  version: string
+  electron: string
+  chrome: string
+}
+
+export interface CspViolation {
+  directive: string
+  blockedUri: string
+  sourceFile: string
+}
+
+/**
+ * De onde vem o áudio da gravação. `synthetic` (sinal gerado, sem microfone nem áudio do sistema)
+ * só existe no smoke: o main decide pelo argumento `--smoke`, nunca o renderer.
+ */
+export type CaptureMode = 'real' | 'synthetic'
+
+/** Painéis de privacidade dos Ajustes do Sistema que o app abre. */
+export type PrivacyPane = 'microphone' | 'audio-capture'
+
+/** renderer -> main, com resposta (`__scribeApi.invoke` / `ipcMain.handle`). */
+export interface InvokeChannels {
+  'scribe:app-info': { request: undefined; response: AppInfo }
+  'scribe:capture-mode': { request: undefined; response: CaptureMode }
+  'scribe:meetings-list': { request: undefined; response: Meeting[] }
+  'scribe:meetings-get': { request: { id: string }; response: Meeting | null }
+  'scribe:meetings-create': { request: NewMeeting; response: Meeting }
+  'scribe:meetings-rename': { request: { id: string; title: string }; response: Meeting | null }
+  'scribe:meetings-delete': { request: { id: string }; response: boolean }
+  'scribe:settings-get': { request: undefined; response: AppSettings }
+  'scribe:settings-update': { request: SettingsPatch; response: AppSettings }
+  /** Só o estado da chave; nenhum canal devolve a chave. */
+  'scribe:key-status': { request: undefined; response: KeyStatus }
+  'scribe:key-save': { request: { key: string }; response: KeySaveResult }
+  /** "Tentar de novo": confere outra vez a chave já salva. */
+  'scribe:key-verify': { request: undefined; response: KeySaveResult }
+  'scribe:key-remove': { request: undefined; response: KeyStatus }
+  'scribe:models-list': { request: undefined; response: ModelsResult }
+  /** Confere o modelo no gateway e, se liberado, grava `translationModel`. */
+  'scribe:model-select': { request: { id: string }; response: { check: ModelCheck; settings: AppSettings } }
+  'scribe:mic-access': { request: undefined; response: MicAccess }
+  /** "Permitir": pede o microfone ao macOS. */
+  'scribe:mic-access-request': { request: undefined; response: MicAccess }
+  /** Token temporário de streaming; a chave fica no main (CA1). */
+  'scribe:transcription-token': { request: undefined; response: TranscriptionTokenResult }
+  /** Salva a transcrição ao encerrar, em `meetings/<id>.json` (CA12). */
+  'scribe:transcript-save': { request: { document: TranscriptDocument }; response: boolean }
+  'scribe:transcript-get': { request: { meetingId: string }; response: TranscriptDocument | null }
+  /** "Copiar transcrição": o main monta o Markdown e escreve na área de transferência (CA12). */
+  'scribe:transcript-copy': { request: { meetingId: string }; response: TranscriptCopyResult }
+  /** Tradução avulsa de um trecho quando o gateway não respondeu na conexão (CA9). */
+  'scribe:translate-turn': {
+    request: { text: string; source: AppSettings['sourceLanguage']; target: AppSettings['targetLanguage']; model: string }
+    response: TranslateTurnResult
+  }
+  /** Onde está o `claude` e qual versão respondeu (contrato 05). */
+  'scribe:claude-locate': { request: undefined; response: ClaudeLocateResult }
+  /** Caminho escolhido em Configurações; só grava se o `claude` responder ali. `null` volta a procurar sozinho. */
+  'scribe:claude-path-set': { request: { path: string | null }; response: { result: ClaudeLocateResult; settings: AppSettings } }
+  /** Início da gravação com o motor Claude CLI: abre (aquece) o processo. */
+  'scribe:claude-start': { request: undefined; response: ClaudeStartResult }
+  /** Um trecho final; a resposta é a tradução daquele trecho. */
+  'scribe:claude-translate': { request: ClaudeTranslateRequest; response: ClaudeTranslateResult }
+  /** Encerrar a gravação: espera a fila por até 5 s e fecha o processo. */
+  'scribe:claude-stop': { request: undefined; response: boolean }
+  /** Pasta dos arquivos da reunião (contrato 07), com o caminho encurtado para a tela. */
+  'scribe:audio-folder': { request: undefined; response: AudioFolderInfo }
+  /** "Escolher pasta…": diálogo nativo no main; só ele grava `audioFolder`. */
+  'scribe:audio-folder-choose': { request: undefined; response: { chosen: boolean; folder: AudioFolderInfo; settings: AppSettings } }
+  /** Início da gravação com "Salvar áudio e transcrição numa pasta": cria o `.part`. */
+  'scribe:audio-begin': { request: { startedAt: string; title: string; extension: AudioExtension | null }; response: AudioBeginResult }
+  /** Um pedaço de 5 s do gravador. */
+  'scribe:audio-append': { request: { id: string; data: Uint8Array }; response: boolean }
+  /** Encerrar: renomeia o `.part`, escreve o `.md` e grava os caminhos na reunião. */
+  'scribe:audio-finish': { request: { id: string; meetingId: string }; response: AudioFinishResult }
+  /** Arquivos da reunião para o detalhe; `null` quando ela não tem arquivo na pasta. */
+  'scribe:meeting-files': { request: { meetingId: string }; response: MeetingFilesInfo | null }
+  /** "Abrir": o arquivo no app padrão do Mac. O caminho sai do registro no main, nunca do renderer. */
+  'scribe:meeting-file-open': { request: { meetingId: string; kind: MeetingFileKind }; response: boolean }
+  /** "Mostrar no Finder". */
+  'scribe:meeting-file-reveal': { request: { meetingId: string; kind: MeetingFileKind }; response: boolean }
+  /** "Baixar…" (contrato 08): diálogo de salvar no main e cópia; a origem sai do registro, nunca do renderer. */
+  'scribe:meeting-file-download': { request: { meetingId: string; kind: MeetingDownloadKind }; response: MeetingDownloadResult }
+  /** Resumo da reunião (contrato 08): o que a aba "Resumo" mostra. */
+  'scribe:summary-get': { request: { meetingId: string }; response: SummaryStatus }
+  /**
+   * "Gerar resumo" / "Gerar de novo", ou `auto` ao encerrar a gravação (só com "Resumir ao encerrar"
+   * ligado e o `claude` encontrado). Responde na hora; o resultado chega por `scribe:summary-state`.
+   */
+  'scribe:summary-generate': { request: { meetingId: string; auto?: boolean }; response: SummaryStatus }
+  /** "Copiar resumo": o main monta o Markdown e escreve na área de transferência. */
+  'scribe:summary-copy': { request: { meetingId: string }; response: TranscriptCopyResult }
+  /** Marca do app (contrato 09): nome, subtítulo e o logo como data URL PNG, nunca um caminho. */
+  'scribe:branding-get': { request: undefined; response: BrandingInfo }
+  /** "Escolher imagem…": diálogo nativo no main; só ele confere, copia e grava `brandLogo`. */
+  'scribe:brand-logo-choose': { request: undefined; response: { result: BrandLogoChoice; branding: BrandingInfo; settings: AppSettings } }
+  /** "Usar o logo da LAP": apaga o logo próprio. */
+  'scribe:brand-logo-reset': { request: undefined; response: { branding: BrandingInfo; settings: AppSettings } }
+}
+
+/** renderer -> main, sem resposta (`__scribeApi.send` / `ipcMain.on`). */
+export interface RendererEvents {
+  'scribe:csp-violation': CspViolation
+  'scribe:open-privacy-settings': PrivacyPane
+  /** "Criar chave": o main abre o painel da AssemblyAI no navegador padrão. */
+  'scribe:open-key-dashboard': undefined
+}
+
+/** main -> renderer (`webContents.send` / `__scribeApi.on`). */
+export interface MainEvents {
+  'scribe:navigate': RouteId
+  /** Menu "Nova gravação" (⌘N): o main já marcou o gesto do usuário no frame antes de mandar. */
+  'scribe:new-recording': undefined
+  /** Configurações gravadas, para todas as janelas. */
+  'scribe:settings-changed': AppSettings
+  /** Processo do Claude CLI da gravação: reaberto ou parado de vez. */
+  'scribe:claude-state': ClaudeRunState
+  /** Resumo de uma reunião começou, terminou ou falhou. */
+  'scribe:summary-state': { meetingId: string; status: SummaryStatus }
+}
+
+export type InvokeChannel = keyof InvokeChannels
+export type RendererEvent = keyof RendererEvents
+export type MainEvent = keyof MainEvents
+
+export type InvokeArgs<C extends InvokeChannel> = InvokeChannels[C]['request'] extends undefined
+  ? []
+  : [request: InvokeChannels[C]['request']]
+
+// `Record<..., true>` obriga a listar todo canal declarado nos mapas acima.
+const INVOKE: Record<InvokeChannel, true> = {
+  'scribe:app-info': true,
+  'scribe:capture-mode': true,
+  'scribe:meetings-list': true,
+  'scribe:meetings-get': true,
+  'scribe:meetings-create': true,
+  'scribe:meetings-rename': true,
+  'scribe:meetings-delete': true,
+  'scribe:settings-get': true,
+  'scribe:settings-update': true,
+  'scribe:key-status': true,
+  'scribe:key-save': true,
+  'scribe:key-verify': true,
+  'scribe:key-remove': true,
+  'scribe:models-list': true,
+  'scribe:model-select': true,
+  'scribe:mic-access': true,
+  'scribe:mic-access-request': true,
+  'scribe:transcription-token': true,
+  'scribe:transcript-save': true,
+  'scribe:transcript-get': true,
+  'scribe:transcript-copy': true,
+  'scribe:translate-turn': true,
+  'scribe:claude-locate': true,
+  'scribe:claude-path-set': true,
+  'scribe:claude-start': true,
+  'scribe:claude-translate': true,
+  'scribe:claude-stop': true,
+  'scribe:audio-folder': true,
+  'scribe:audio-folder-choose': true,
+  'scribe:audio-begin': true,
+  'scribe:audio-append': true,
+  'scribe:audio-finish': true,
+  'scribe:meeting-files': true,
+  'scribe:meeting-file-open': true,
+  'scribe:meeting-file-reveal': true,
+  'scribe:meeting-file-download': true,
+  'scribe:summary-get': true,
+  'scribe:summary-generate': true,
+  'scribe:summary-copy': true,
+  'scribe:branding-get': true,
+  'scribe:brand-logo-choose': true,
+  'scribe:brand-logo-reset': true,
+}
+const RENDERER_EVENTS: Record<RendererEvent, true> = {
+  'scribe:csp-violation': true,
+  'scribe:open-privacy-settings': true,
+  'scribe:open-key-dashboard': true,
+}
+const MAIN_EVENTS: Record<MainEvent, true> = {
+  'scribe:navigate': true,
+  'scribe:new-recording': true,
+  'scribe:settings-changed': true,
+  'scribe:claude-state': true,
+  'scribe:summary-state': true,
+}
+
+export const INVOKE_CHANNELS = Object.keys(INVOKE) as InvokeChannel[]
+export const RENDERER_EVENT_CHANNELS = Object.keys(RENDERER_EVENTS) as RendererEvent[]
+export const MAIN_EVENT_CHANNELS = Object.keys(MAIN_EVENTS) as MainEvent[]
+
+/** API exposta pelo preload em `window.__scribeApi`. */
+export interface ScribeApi {
+  invoke<C extends InvokeChannel>(channel: C, ...args: InvokeArgs<C>): Promise<InvokeChannels[C]['response']>
+  send<C extends RendererEvent>(channel: C, payload: RendererEvents[C]): void
+  on<C extends MainEvent>(channel: C, listener: (payload: MainEvents[C]) => void): () => void
+}
