@@ -1,5 +1,5 @@
 # Contrato 12 — Agendas Google e Microsoft: avisar a reunião e avisar quando não está gravando
-Feature: desktop-shell  ·  Wave: 12  ·  Depende de: 11 (OAuth com PKCE + loopback, bloco "Contas", cofre de tokens)
+Feature: desktop-shell  ·  Wave: 22  ·  Depende de: 11 (OAuth com PKCE + loopback, aba "Contas", cofre de tokens) e 22 (bloqueio: notificações não mostram conteúdo com o app bloqueado)
 
 ## Pré-condições
 - Contrato 11 aceito; `gates.sh` verde.
