@@ -7,7 +7,7 @@ import type * as acp from '@agentclientprotocol/sdk/unstable'
 import type { AgentProfileId } from '../../../shared/settings-defaults'
 import type { AcpPackage } from '../install'
 
-export type AcpPurpose = 'chat' | 'translate' | 'summary' | 'analysis'
+export type AcpPurpose = 'chat' | 'translate' | 'summary' | 'analysis' | 'draft'
 
 /** O que a fábrica de sessões recebe (CA4d), sem nada do agente. */
 export interface AcpSessionRequest {

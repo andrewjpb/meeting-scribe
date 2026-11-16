@@ -1,0 +1,50 @@
+# Serviço local do WhatsApp (experimental)
+
+> **Antes de conectar o seu WhatsApp.** Este recurso usa um cliente não oficial do WhatsApp (neonize/whatsmeow).
+> O WhatsApp pode suspender ou bloquear o seu número, de forma temporária ou definitiva, sem aviso. A LAP não tem
+> como desfazer um bloqueio. Use por sua conta e risco.
+
+Serviço pequeno em Python que o LAP Reuniões instala e liga no próprio Mac para ler as suas conversas do
+WhatsApp e enviar mensagens **só quando você clica em "Enviar"**. Nada vai para servidor da LAP: a sessão do
+WhatsApp e as mensagens ficam em `~/Library/Application Support/Meeting Scribe/whatsapp/`.
+
+## Como o app usa
+
+- **Instalar** (Configurações › Contas › WhatsApp, depois de aceitar o aviso): o app cria um ambiente Python
+  isolado em `userData/whatsapp/venv` com o `python3` do sistema (3.10 ou mais novo) e instala
+  `requirements.txt` com `pip install --require-hashes`, só do PyPI. É o único momento em que há rede para isso.
+- **Ligar**: o app sobe `server.py` como processo filho (morre junto com o app), em `127.0.0.1` e numa porta
+  livre. Toda rota exige `Authorization: Bearer <token>`; o token fica num arquivo 0600 que o app cria.
+- **Parear**: o app mostra o aviso de risco de novo e só depois desenha o QR code que vem de `GET /pair`.
+- **Sair da conta** (`POST /logout`) apaga a sessão e as mensagens guardadas. **Remover** apaga também o ambiente.
+
+## Rotas
+
+| Rota | O que faz |
+|---|---|
+| `GET /health` | versão e estado: `pairing`, `connected`, `disconnected` ou `banned` |
+| `GET /pair` | QR code em texto; com `?phone=5511…`, o código de pareamento por número |
+| `POST /logout` | sai da conta e apaga a sessão |
+| `GET /chats` | conversas: id, nome, pessoa ou grupo, última mensagem, não lidas |
+| `GET /chats/:id/messages?before&limit` | mensagens (texto, autor, hora, tipo; mídia só como metadado) |
+| `GET /search?q` | busca no texto das mensagens guardadas |
+| `POST /chats/:id/send` | envia um texto; responde com o id da mensagem |
+| `GET /events` | SSE com as mensagens novas e as mudanças de estado |
+
+O serviço nunca envia nada sozinho, não baixa mídia e não manda recibo de leitura. Logs não levam texto de
+mensagem.
+
+## Desenvolvimento
+
+`backend_fake.py` é o cliente falso (sem neonize, sem rede) usado pelos testes e pelo smoke do app. Os testes
+rodam no `apps/desktop/scripts/gates.sh`, num ambiente próprio em `.venv-test/` com `requirements-dev.txt`:
+
+```bash
+python3 -m venv .venv-test && .venv-test/bin/pip install --require-hashes -r requirements-dev.txt
+.venv-test/bin/python -m pytest -q tests
+```
+
+Licenças: o neonize 0.10.0 é Apache-2.0 e embute o whatsmeow, MPL-2.0. O app é MIT e não copia código de
+nenhum dos dois; o serviço só os instala no Mac de quem pediu.
+
+Pré-requisito do neonize no Mac: a `libmagic` (`brew install libmagic`), usada pelo `python-magic`.

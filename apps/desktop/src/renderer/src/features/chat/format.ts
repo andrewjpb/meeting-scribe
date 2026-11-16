@@ -1,6 +1,7 @@
 // Textos da tela "Perguntar" v2 (contrato 16): modelo, tempo, tokens, custo, escopo, totais da conversa,
 // sugestões e a lista de conversas agrupada por dia. Sem DOM: testado em test/renderer/chat.test.ts.
 import type { ChatListItem, ChatMessage, ChatScope } from '@shared/chat'
+import { WHATSAPP_DEFAULT_SCOPE_DAYS } from '@shared/whatsapp'
 import type { ChatModel } from '@shared/settings-defaults'
 import { dayKey, groupDayLabel } from '../meetings/format'
 
@@ -52,12 +53,19 @@ export function chosenMeetings(scope: ChatScope, exists: ((id: string) => boolea
   return exists ? ids.filter(exists) : [...ids]
 }
 
-/** Rótulo do escopo: "Todas as reuniões (6)", "Últimos 7 dias", "Reuniões escolhidas (2)". */
+/** Contrato 24: o escopo novo leva junto as conversas do WhatsApp escolhidas no anterior. */
+export function withWhatsApp(next: ChatScope, from: ChatScope): ChatScope {
+  return from.whatsappChats?.length ? { ...next, whatsappChats: [...from.whatsappChats], whatsappDays: from.whatsappDays ?? WHATSAPP_DEFAULT_SCOPE_DAYS } : next
+}
+
+/** Rótulo do escopo: "Todas as reuniões (6)", "Últimos 7 dias", "Reuniões escolhidas (2)"; com " + 2 conversas" do WhatsApp. */
 export function scopeLabel(scope: ChatScope, total: number | null, exists: ((id: string) => boolean) | null = null): string {
-  if (scope.kind === '7d') return 'Últimos 7 dias'
-  if (scope.kind === '30d') return 'Últimos 30 dias'
-  if (scope.kind === 'meetings') return `Reuniões escolhidas (${chosenMeetings(scope, exists).length})`
-  return total === null ? 'Todas as reuniões' : `Todas as reuniões (${total})`
+  const chats = scope.whatsappChats?.length ?? 0
+  const extra = chats ? ` + ${chats} ${chats === 1 ? 'conversa' : 'conversas'}` : ''
+  if (scope.kind === '7d') return `Últimos 7 dias${extra}`
+  if (scope.kind === '30d') return `Últimos 30 dias${extra}`
+  if (scope.kind === 'meetings') return `Reuniões escolhidas (${chosenMeetings(scope, exists).length})${extra}`
+  return `${total === null ? 'Todas as reuniões' : `Todas as reuniões (${total})`}${extra}`
 }
 
 /** Tokens da resposta: a entrada conta o que veio do cache. */

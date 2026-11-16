@@ -23,6 +23,7 @@ import { SummaryTab } from './SummaryTab'
 import { useAnalyses } from './useAnalyses'
 import { useSummary, type SummaryView } from './useSummary'
 import { rereadWhenUnlocked } from '../../app/lockStore'
+import { MeetingWhatsAppLink } from './MeetingWhatsAppLink'
 
 type DetailTab = 'resumo' | 'anotacoes' | 'perguntar' | 'transcricao' | 'audio'
 
@@ -195,6 +196,8 @@ export function MeetingDetailScreen() {
           {AUDIO_FOLDER_FAILED_TEXT}
         </Note>
       )}
+      {/* Contrato 24: a conversa do WhatsApp ligada à reunião (só com o WhatsApp conectado ou já ligada). */}
+      {ready && <MeetingWhatsAppLink meetingId={ready.meeting.id} />}
       {ready && (
         <div role="tabpanel" id={tabPanelId(TABS_ID, tab)} aria-labelledby={tabId(TABS_ID, tab)} data-tab-panel={tab} className="flex min-h-0 flex-1 flex-col">
           {tab === 'resumo' && <SummaryTab meetingId={ready.meeting.id} view={summary.view} onGenerate={summary.generate} analyses={analyses} onJump={jumpTo} />}

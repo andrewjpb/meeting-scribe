@@ -116,6 +116,16 @@ Depois disso, as versões novas chegam pelo próprio app.
 
 ---
 
+## Experimental
+
+### WhatsApp pessoal (por sua conta e risco)
+
+> Este recurso usa um cliente não oficial do WhatsApp (neonize/whatsmeow). O WhatsApp pode suspender ou bloquear o seu número, de forma temporária ou definitiva, sem aviso. A LAP não tem como desfazer um bloqueio. Use por sua conta e risco.
+
+Desligado por padrão. Em Configurações › Contas › WhatsApp, depois de aceitar o aviso, o app instala um serviço pequeno em Python neste Mac (precisa do Python 3.10 ou mais novo e da `libmagic`: `brew install python libmagic`), liga, mostra o aviso de novo e o QR code para conectar como um aparelho. A tela **WhatsApp** lista as conversas e mensagens; o **Perguntar** pode ler até 10 conversas junto com as reuniões; e o **Rascunho com o Claude** escreve uma resposta no campo. **Nenhuma mensagem sai sem o seu clique em "Enviar"**: o Claude e os agentes só leem e escrevem rascunhos. A sessão e as mensagens ficam só no Mac. Detalhes em [`services/whatsapp-bridge/`](services/whatsapp-bridge/README.md).
+
+---
+
 ## Em breve
 
 - **Agendas Google e Microsoft**: aviso 5 min antes da reunião, aviso quando a reunião começou e não está sendo gravada ou foi cancelada, título e participantes vindos do evento.
@@ -156,6 +166,7 @@ Se o script falhar no meio, ele volta a versão no `package.json`. Se o commit j
 ### Estrutura
 
 - `apps/desktop/` — o app (main, preload, renderer, testes, smoke).
+- `services/whatsapp-bridge/` — o serviço local do WhatsApp (experimental), com os testes em pytest.
 - `docs/specs/desktop-shell/` — spec, design e contratos de cada etapa.
 - `docs/fase0.md` — prova técnica (captura de áudio, provedores).
 - `docs/images/` — prints usados neste README.
@@ -165,4 +176,4 @@ Se o script falhar no meio, ele volta a versão no `package.json`. Se o commit j
 
 ## Licença
 
-[MIT](LICENSE) © LAP Software. O agente do Claude e o Claude Agent SDK, baixados pelo app na primeira vez, têm licenças próprias da Anthropic e dos seus autores.
+[MIT](LICENSE) © LAP Software. O agente do Claude e o Claude Agent SDK, baixados pelo app na primeira vez, têm licenças próprias da Anthropic e dos seus autores. O neonize (Apache-2.0) e o whatsmeow (MPL-2.0), instalados pelo app só se você ligar o WhatsApp, também.

@@ -27,6 +27,12 @@ cp -R out "$STAGE/out"
 rm -rf "$STAGE/out/smoke"
 mkdir -p "$STAGE/resources" "$STAGE/node_modules"
 cp -R resources/brand "$STAGE/resources/brand"
+# Contrato 24: os arquivos do serviço local do WhatsApp (o app copia para o userData ao ligar). O cliente falso
+# do smoke e os testes ficam de fora; o neonize nunca vai no pacote (é instalado com o clique da pessoa).
+mkdir -p "$STAGE/resources/whatsapp-bridge"
+for f in server.py bridge_store.py backend_neonize.py requirements.txt README.md; do
+  cp "../../services/whatsapp-bridge/$f" "$STAGE/resources/whatsapp-bridge/$f"
+done
 cp -RL node_modules/zod "$STAGE/node_modules/zod"
 cat > "$STAGE/package.json" <<JSON
 { "name": "lap-reunioes", "productName": "$NOME", "version": "$VERSAO", "main": "out/main/index.js", "private": true, "dependencies": { "zod": "$ZOD" } }
@@ -47,6 +53,13 @@ APP="dist/$NOME-darwin-$ARCH/$NOME.app"
 codesign --force --deep --sign - --entitlements build/entitlements.plist "$APP"
 codesign --verify --deep --strict "$APP" && echo "assinatura ok"
 npx -y @electron/asar list "$APP/Contents/Resources/app.asar" | grep -q "^/node_modules/zod/package.json" && echo "zod ok"
+ASAR_LIST=$(npx -y @electron/asar list "$APP/Contents/Resources/app.asar")
+grep -q "^/resources/whatsapp-bridge/server.py$" <<<"$ASAR_LIST" || { echo "pack.sh: o pacote não leva o serviço do WhatsApp" >&2; exit 1; }
+echo "serviço do WhatsApp ok"
+if grep -qiE "backend_fake|neonize-|\.dylib$" <<<"$ASAR_LIST"; then
+  echo "pack.sh: o pacote leva o cliente falso do WhatsApp ou o neonize" >&2
+  exit 1
+fi
 plutil -p "$APP/Contents/Info.plist" | grep -E 'CFBundleIdentifier|CFBundleName|NSMicrophoneUsageDescription|NSAudioCaptureUsageDescription'
 
 # Nome que o app procura no release do GitHub (contrato 14): LAP-Reunioes-<versão>-<arch>.dmg, com o

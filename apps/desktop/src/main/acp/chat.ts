@@ -40,6 +40,8 @@ export interface AcpChatOptions {
   model: ChatModel
   thinkMore: boolean
   scope: ChatFolder
+  /** Contrato 24: a pasta tem conversas do WhatsApp (a instrução diz como citar). */
+  whatsapp?: boolean
   cwd: string
   titleOf?: (meetingId: string) => string | null
   timers?: Timers
@@ -189,7 +191,7 @@ export class AcpChat implements ChatEngine {
           purpose: 'chat',
           cwd: this.options.cwd,
           model: this.model,
-          systemPrompt: chatSystemPrompt(this.options.scope),
+          systemPrompt: chatSystemPrompt(this.options.scope, this.options.whatsapp ?? false),
           tools: 'read',
           thinkMore: this.thinkMore,
         })

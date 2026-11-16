@@ -58,6 +58,11 @@ import { agentProfile, type AgentProfile } from './acp/profiles'
 import { createUpdateService, type UpdateService } from './updates/service'
 import { netDownload, netDownloadTarball, netFetch } from './updates/transport'
 import { createMainWindow } from './window'
+import { runClaudeOneShot } from './meetings/claude-one-shot'
+import { ACP_DRAFT_DIR, DRAFT_TIMEOUT_MS, draftSystemPrompt, parseDraft } from './whatsapp/draft'
+import { BRIDGE_FAKE_FILE, BRIDGE_FILES, nodeExec, PYTHON_CANDIDATES, WHATSAPP_DIR } from './whatsapp/install'
+import { INSTALL_TEST_ENV, runInstallTest } from './whatsapp/install-test'
+import { createWhatsAppService, sendDialogText, type SendQuestion, type WhatsAppService } from './whatsapp/service'
 
 // `app.setName` fixa o `userData` (~/Library/Application Support/Meeting Scribe) e o item do Chaveiro:
 // trocar este nome perderia reuniões, configurações e a chave. O nome que a pessoa vê é o da marca
@@ -65,11 +70,13 @@ import { createMainWindow } from './window'
 const APP_NAME = 'Meeting Scribe'
 const PACKAGE_DISPLAY_NAME = DEFAULT_BRAND_NAME
 const smoke = isSmokeRun(process.argv)
+/** Contrato 24: autoteste da instalação do WhatsApp no app empacotado, sem janela, sem `userData`, sem rede. */
+const whatsappInstallTest = !smoke && process.env[INSTALL_TEST_ENV] === '1'
 
 // O smoke troca o userData por uma pasta temporária; precisa acontecer antes de `ready`.
 const smokeUserData = smoke ? prepareSmokeEnvironment(process.argv) : null
 // Smoke: catálogo e respostas do gateway de fixtures, Chaveiro e permissão de microfone substitutos.
-const smokeFixtures: SmokeFixtures | null = smoke ? createSmokeFixtures(app.getVersion()) : null
+const smokeFixtures: SmokeFixtures | null = smoke && smokeUserData ? createSmokeFixtures(app.getVersion(), smokeUserData) : null
 
 registerAppScheme()
 app.setName(APP_NAME)
@@ -103,6 +110,8 @@ const recordingSessions = createRecordingSessions(() => {
 let leaveAsked = false
 /** Envio ao Google Drive (contrato 11), para "Guardar no Google Drive" desligado esvaziar a fila. */
 let driveService: DriveSyncService | null = null
+/** WhatsApp (contrato 24): ao desbloquear, o estado volta às janelas; janela fechada esquece os cliques dela. */
+let whatsappService: WhatsAppService | null = null
 
 /**
  * ⌘W ou ⌘Q com gravação em andamento: diálogo nativo. Bloqueado, só "Cancelar"; desbloqueado, também
@@ -146,6 +155,8 @@ function applyLockStatus(status: LockStatus): void {
   const item = Menu.getApplicationMenu()?.getMenuItemById(MENU_IDS.lock)
   if (item) item.enabled = status.canLock && !status.locked
   broadcast(BrowserWindow.getAllWindows(), 'scribe:lock-state', status)
+  // Contrato 24: bloqueado, nada do WhatsApp chega às janelas; ao desbloquear, o estado de agora.
+  if (!status.locked && whatsappService) broadcast(BrowserWindow.getAllWindows(), 'scribe:whatsapp-state', whatsappService.status())
 }
 
 /** "Bloquear" pelo menu ou ⌘⇧L, pelo `powerMonitor` ou por falta de uso; só bloqueia com senha ou Touch ID. */
@@ -161,7 +172,9 @@ function openMainWindow(query?: Record<string, string>, invisible = false): Brow
     event.preventDefault()
     void confirmLeave(win)
   })
+  const contentsId = win.webContents.id
   win.on('closed', () => {
+    whatsappService?.forgetSender(contentsId)
     if (mainWindow === win) mainWindow = null
     // No macOS o app segue aberto sem janela: as conversas do chat morrem em 5 min, como ao sair da tela.
     chatService?.leaveAll()
@@ -246,6 +259,17 @@ interface AppServices {
   /** Conta Google e envio ao Drive (contrato 11). */
   google: GoogleAccountService
   drive: DriveSyncService
+  /** WhatsApp pessoal pelo serviço local (contrato 24). */
+  whatsapp: WhatsAppService
+}
+
+/**
+ * Arquivos do serviço do WhatsApp (contrato 24): o empacotado leva em `resources/whatsapp-bridge` dentro do
+ * `app.asar` (pack.sh; o app copia para o `userData` antes do `pip` e do Python); em desenvolvimento e no smoke, os
+ * do repositório.
+ */
+function bridgeSourceDir(): string {
+  return app.isPackaged ? join(app.getAppPath(), 'resources', 'whatsapp-bridge') : join(app.getAppPath(), '..', '..', 'services', 'whatsapp-bridge')
 }
 
 function fetchImpl(url: string, init: FetchInit): Promise<FetchResponse> {
@@ -359,12 +383,61 @@ function createAppServices(userData: string): AppServices {
     // Custo nominal e trocas de processo só nos logs de desenvolvimento.
     ...(app.isPackaged ? {} : { log: (message: string) => console.log(message) }),
   })
+  // WhatsApp pessoal (contrato 24): desligado por padrão; o serviço é processo filho, só depois de "Instalar" e
+  // "Ligar". No smoke, o cliente falso (`backend_fake.py`) e um índice de pacotes falso numa pasta local: nenhum
+  // neonize, nenhuma rede, nenhum número de verdade.
+  const whatsapp = createWhatsAppService({
+    root: join(userData, WHATSAPP_DIR),
+    bridgeSource: bridgeSourceDir(),
+    bridgeFiles: smokeFixtures ? [...BRIDGE_FILES, BRIDGE_FAKE_FILE] : BRIDGE_FILES,
+    backend: smokeFixtures ? 'fake' : 'neonize',
+    index: smokeFixtures ? { kind: 'local', dir: smokeFixtures.whatsapp.indexDir } : { kind: 'pypi' },
+    ...(smokeFixtures ? { requirements: smokeFixtures.whatsapp.requirements } : {}),
+    pythonCandidates: PYTHON_CANDIDATES,
+    exec: nodeExec,
+    safeStorage: smokeFixtures ? memorySafeStorage() : safeStorage,
+    baseEnv: process.env,
+    // "Rascunho com o Claude": o motor do contrato 17, numa execução curta sem ferramenta nenhuma.
+    draft: async (input) => {
+      const found = await claude.locate()
+      if (!found.ok) return { ok: false, error: 'not-found' }
+      const { result } = await runClaudeOneShot(
+        {
+          settings,
+          spawn: smokeClaude?.spawnSummary ?? nodeSpawnSummary,
+          openAcp,
+          acpAvailable: async () => (await acpAgent.current()).available(),
+          userData,
+          baseEnv: process.env,
+          ...(app.isPackaged ? {} : { log: (message: string) => console.log(message) }),
+        },
+        { claudePath: found.path, purpose: 'draft', acpDir: ACP_DRAFT_DIR, systemPrompt: draftSystemPrompt(), parse: parseDraft, input, label: 'rascunho do WhatsApp', timeoutMs: DRAFT_TIMEOUT_MS, signal: new AbortController().signal },
+      )
+      return result
+    },
+    meeting: async (meetingId) => {
+      const meeting = await meetings.get(meetingId)
+      return meeting ? { meeting, summary: await summaries.get(meetingId).catch(() => null) } : null
+    },
+    // Bloqueado (contrato 22), nada do WhatsApp vai às janelas; o serviço segue conectado.
+    onStatus: (status) => {
+      if (!lockService?.isLocked()) broadcast(BrowserWindow.getAllWindows(), 'scribe:whatsapp-state', status)
+    },
+    onMessage: (message, chatName) => {
+      if (!lockService?.isLocked()) broadcast(BrowserWindow.getAllWindows(), 'scribe:whatsapp-message', { message, chatName })
+    },
+    // Só estados, nunca texto de mensagem.
+    ...(app.isPackaged ? {} : { log: (message: string) => console.log(message) }),
+  })
+  whatsappService = whatsapp
   // Acervo do chat (contrato 15): um `.md` por reunião e o índice, reescritos a cada mudança da reunião.
   const corpus = createChatCorpus({ dir: userData, meetings, transcripts, summaries, notes })
   // Chat "Perguntar": o mesmo `claude` e o mesmo caminho configurado, um processo por conversa, só leitura.
   const chat = createChatService({
     store: createFileChatStore({ dir: userData }),
     corpus,
+    // Contrato 24: só a exportação das conversas para a pasta de escopo; o envio não chega aqui.
+    whatsapp: { exportChats: (folder, chatIds, days) => whatsapp.exportChats(folder, chatIds, days) },
     settings,
     meetings,
     locate: () => claude.locate(),
@@ -384,6 +457,7 @@ function createAppServices(userData: string): AppServices {
     summaries,
     notes,
     analyses,
+    whatsappMaterial: (meetingId) => whatsapp.meetingMaterial(meetingId),
     locate: () => claude.locate(),
     spawn: smokeClaude?.spawnSummary ?? nodeSpawnSummary,
     openAcp,
@@ -409,6 +483,7 @@ function createAppServices(userData: string): AppServices {
     transcripts,
     notes,
     analyses,
+    whatsappMaterial: (meetingId) => whatsapp.meetingMaterial(meetingId),
     locate: () => claude.locate(),
     spawn: smokeClaude?.spawnSummary ?? nodeSpawnSummary,
     openAcp,
@@ -532,6 +607,7 @@ function createAppServices(userData: string): AppServices {
     lock,
     google,
     drive,
+    whatsapp,
   }
 }
 
@@ -602,8 +678,24 @@ function openExternal(url: string): void {
   else void shell.openExternal(url)
 }
 
+/**
+ * Contrato 24: "Enviar para <nome>?" com o texto (até 300 caracteres), num diálogo nativo do macOS aberto pelo main,
+ * em todo envio. "Cancelar" é o padrão. No smoke, o substituto responde e o diálogo fica registrado.
+ */
+async function confirmWhatsAppSend(win: BrowserWindow | null, question: SendQuestion): Promise<boolean> {
+  const { message, detail } = sendDialogText(question)
+  const buttons = ['Cancelar', 'Enviar']
+  if (smokeFixtures) {
+    smokeFixtures.whatsappSendDialogs.push({ message, detail, buttons })
+    return smokeFixtures.whatsappSendChoice === 1
+  }
+  const options = { type: 'question' as const, message, detail, buttons, defaultId: 0, cancelId: 0, noLink: true }
+  const result = win && !win.isDestroyed() ? await dialog.showMessageBox(win, options) : await dialog.showMessageBox(options)
+  return result.response === 1
+}
+
 function registerIpc(services: AppServices): void {
-  const { settings, meetings, meetingsService, meetingsIndex, tokenClient, translation, claude, files, summary, analysis, download, branding, updates, chat, corpus, acp, lock, google, drive } = services
+  const { settings, meetings, meetingsService, meetingsIndex, tokenClient, translation, claude, files, summary, analysis, download, branding, updates, chat, corpus, acp, lock, google, drive, whatsapp } = services
   /** Reunião salva, renomeada ou com anotações novas: o `.md` dela no acervo do chat é reescrito. */
   const touched = (meetingId: string): void => void corpus.sync(meetingId).catch(() => undefined)
   /** Contrato 11: quando a reunião que acabou de ser gravada entra na fila do Drive. */
@@ -629,7 +721,12 @@ function registerIpc(services: AppServices): void {
     return meeting
   })
   // Excluir a reunião apaga também a transcrição, o resumo e as anotações internos dela; os arquivos da pasta ficam.
-  handle('scribe:meetings-delete', appOrigin, (_event, { id }) => meetingsService.deleteMeeting(id))
+  handle('scribe:meetings-delete', appOrigin, async (_event, { id }) => {
+    const deleted = await meetingsService.deleteMeeting(id)
+    // Contrato 24: a conversa do WhatsApp ligada a ela sai junto.
+    if (deleted) await whatsapp.removeMeeting(id).catch(() => undefined)
+    return deleted
+  })
   handle('scribe:meetings-overview', appOrigin, () => meetingsIndex.overview())
   handle('scribe:meetings-search', appOrigin, (_event, request) => meetingsIndex.search((request as { term?: unknown } | undefined)?.term))
   handle('scribe:settings-get', appOrigin, () => settings.getSettings())
@@ -731,6 +828,24 @@ function registerIpc(services: AppServices): void {
     openExternal(url)
     return true
   })
+  // WhatsApp (contrato 24): o envio só com o token de clique que o preload registrou nesta mesma janela.
+  handle('scribe:whatsapp-status', appOrigin, () => whatsapp.status())
+  handle('scribe:whatsapp-risk-accept', appOrigin, (_event, request) => whatsapp.acceptRisk(request))
+  handle('scribe:whatsapp-install', appOrigin, () => whatsapp.install())
+  handle('scribe:whatsapp-start', appOrigin, () => whatsapp.start())
+  handle('scribe:whatsapp-stop', appOrigin, () => whatsapp.stop())
+  handle('scribe:whatsapp-pair', appOrigin, (_event, request) => whatsapp.pair(request))
+  handle('scribe:whatsapp-logout', appOrigin, () => whatsapp.logout())
+  handle('scribe:whatsapp-remove', appOrigin, () => whatsapp.remove())
+  handle('scribe:whatsapp-chats', appOrigin, () => whatsapp.chats().catch(() => []))
+  handle('scribe:whatsapp-messages', appOrigin, (_event, request) => whatsapp.messages(request).catch(() => []))
+  handle('scribe:whatsapp-search', appOrigin, (_event, request) => whatsapp.search(request).catch(() => []))
+  handle('scribe:whatsapp-send', appOrigin, (event, request) => whatsapp.send(event.sender.id, request, (question) => confirmWhatsAppSend(BrowserWindow.fromWebContents(event.sender), question)))
+  handle('scribe:whatsapp-draft', appOrigin, (_event, request) => whatsapp.draft(request))
+  handle('scribe:whatsapp-link-get', appOrigin, (_event, request) => whatsapp.link((request as { meetingId?: unknown } | undefined)?.meetingId))
+  handle('scribe:whatsapp-link-set', appOrigin, (_event, request) => whatsapp.setLink(request))
+  onEvent('scribe:whatsapp-click', appOrigin, (event, token) => whatsapp.registerClick(event.sender.id, token))
+  onEvent('scribe:whatsapp-pair-cancel', appOrigin, () => whatsapp.cancelPair())
   // Gravação em curso: o token vale até o fim do "Encerrar" ou até a janela que a abriu sumir.
   handle('scribe:recording-session-open', appOrigin, (event) => recordingSessions.open(event.sender))
   handle('scribe:recording-session-close', appOrigin, (_event, request) => recordingSessions.close((request as { token?: unknown } | undefined)?.token))
@@ -787,7 +902,7 @@ function installMenu(): void {
 
 // Uma instância por `userData`: uma segunda (ex.: `open -n`) renomearia o `.part` da gravação em curso
 // para "(incompleto)" ao abrir. Ela sai e a primeira vem para a frente.
-if (!app.requestSingleInstanceLock()) app.quit()
+if (!whatsappInstallTest && !app.requestSingleInstanceLock()) app.quit()
 app.on('second-instance', () => {
   const window = BrowserWindow.getAllWindows()[0]
   if (!window) return
@@ -796,6 +911,10 @@ app.on('second-instance', () => {
 })
 
 void app.whenReady().then(async () => {
+  if (whatsappInstallTest) {
+    app.exit(await runInstallTest(bridgeSourceDir()))
+    return
+  }
   const ses = session.defaultSession
   applySessionSecurity(ses, appOrigin, isDev ? 'development' : 'production')
   registerDisplayMediaHandler(ses, appOrigin)
@@ -811,6 +930,8 @@ void app.whenReady().then(async () => {
   )
   const lockAtLaunch = await services.lock.init()
   registerIpc(services)
+  // Contrato 24: o WhatsApp sobe sozinho só se a pessoa o deixou ligado (e reencontra um serviço já rodando).
+  void services.whatsapp.init().catch(() => undefined)
   // Marca gravada: título da primeira janela, "Sobre" e ícone do Dock antes de abrir.
   applyBrand(await services.settings.getSettings())
   // Fila do Drive deixada por uma execução anterior (contrato 11): continua sozinha, também bloqueado.
@@ -836,6 +957,7 @@ void app.whenReady().then(async () => {
     services.chat.dispose()
     services.updates.dispose()
     services.drive.dispose()
+    void services.whatsapp.dispose()
   })
   installMenu()
   applyLockStatus(lockAtLaunch)
@@ -861,6 +983,7 @@ void app.whenReady().then(async () => {
       userDataDir: smokeUserData,
       outDir: join(app.getAppPath(), 'out', 'smoke'),
       fixtures: smokeFixtures,
+      whatsapp: services.whatsapp,
       openWindow: (query) => openMainWindow(query, true),
     })
     // `app.exit` não passa por `will-quit`.
@@ -870,6 +993,7 @@ void app.whenReady().then(async () => {
     services.chat.dispose()
     services.updates.dispose()
     services.drive.dispose()
+    await services.whatsapp.dispose()
     app.exit(code)
     return
   }

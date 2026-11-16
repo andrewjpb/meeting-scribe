@@ -40,6 +40,8 @@ export interface SummaryServiceDeps {
   notes?: Pick<NotesStore, 'get'>
   /** Análises da reunião (contrato 19): as perguntas em aberto da última vão no pedido e no Markdown. */
   analyses?: Pick<AnalysesStore, 'get'>
+  /** Contrato 24: mensagens do dia da conversa do WhatsApp ligada, quando a pessoa ligou a opção (padrão desligada). */
+  whatsappMaterial?: (meetingId: string) => Promise<string[]>
   /** O mesmo `locate` do tradutor: caminho configurado, lista fixa e shell de login. */
   locate: () => Promise<ClaudeLocateResult>
   spawn: SpawnSummary
@@ -127,6 +129,7 @@ export function createSummaryService(deps: SummaryServiceDeps): SummaryService {
     // As anotações de agora: "Gerar de novo" depois de editar uma usa o texto novo.
     const noteLines = summaryNoteLines((await deps.notes?.get(meetingId).catch(() => [])) ?? [])
     const openLines = openQuestionLines(await analysesOf(meetingId))
+    const whatsappLines = (await deps.whatsappMaterial?.(meetingId).catch(() => [])) ?? []
     const found = await deps.locate().catch((): ClaudeLocateResult => ({ ok: false, error: 'not-found' }))
     if (job.cancelled) return
     if (!found.ok) {
@@ -145,7 +148,7 @@ export function createSummaryService(deps: SummaryServiceDeps): SummaryService {
       acpDir: ACP_SUMMARY_DIR,
       systemPrompt: summarySystemPrompt(),
       parse: parseSummaryResult,
-      input: summaryInput(input, noteLines, openLines),
+      input: summaryInput(input, noteLines, openLines, whatsappLines),
       label: 'resumo',
       timeoutMs: deps.timeoutMs,
       signal: job.abort.signal,

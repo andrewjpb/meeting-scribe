@@ -17,6 +17,7 @@ import type { RouteId } from './routes'
 import type { AppSettings, SettingsPatch } from './settings-defaults'
 import type { TranscriptCopyResult, TranscriptDocument, TranslateTurnResult, TranscriptionTokenResult } from './transcription'
 import type { UpdateState } from './updates'
+import type { WhatsAppChat, WhatsAppDraftRequest, WhatsAppDraftResult, WhatsAppError, WhatsAppMeetingLink, WhatsAppMessage, WhatsAppPairing, WhatsAppSearchHit, WhatsAppSendRequest, WhatsAppSendResult, WhatsAppStatus } from './whatsapp'
 
 export interface AppInfo {
   name: string
@@ -202,6 +203,34 @@ export interface InvokeChannels {
   'scribe:drive-retry': { request: { meetingId: string }; response: DriveMeetingStatus }
   /** "Abrir no Drive": o main monta o endereço da pasta e abre no navegador. */
   'scribe:drive-open': { request: { meetingId: string }; response: boolean }
+  /** WhatsApp pessoal (contrato 24): estado do serviço local, sem token nem porta. */
+  'scribe:whatsapp-status': { request: undefined; response: WhatsAppStatus }
+  /** "Entendo o risco e quero continuar": registra a aceitação com a data, para instalar ou para um pareamento. */
+  'scribe:whatsapp-risk-accept': { request: { purpose: 'install' | 'pair' }; response: WhatsAppStatus }
+  /** "Instalar": só com o clique e a aceitação recente do aviso; o andamento chega por `scribe:whatsapp-state`. */
+  'scribe:whatsapp-install': { request: undefined; response: WhatsAppStatus }
+  'scribe:whatsapp-start': { request: undefined; response: WhatsAppStatus }
+  'scribe:whatsapp-stop': { request: undefined; response: WhatsAppStatus }
+  /** QR em texto (o app desenha) ou, com `phone`, o código por número; só depois da tela de risco. */
+  'scribe:whatsapp-pair': { request: { phone?: string }; response: WhatsAppPairing | { error: WhatsAppError } }
+  /** "Sair da conta": `/logout` e a sessão apagada. */
+  'scribe:whatsapp-logout': { request: undefined; response: WhatsAppStatus }
+  /** "Remover": o ambiente Python e a sessão. */
+  'scribe:whatsapp-remove': { request: undefined; response: WhatsAppStatus }
+  'scribe:whatsapp-chats': { request: undefined; response: WhatsAppChat[] }
+  /** Mensagens de uma conversa; com `before`, as anteriores (carregar mais ao rolar). */
+  'scribe:whatsapp-messages': { request: { chatId: string; before?: number; beforeId?: string }; response: WhatsAppMessage[] }
+  'scribe:whatsapp-search': { request: { term: string }; response: WhatsAppSearchHit[] }
+  /**
+   * Enviar (CA4): só com o token de clique que o preload gera no clique em "Enviar" (`ScribeApi.whatsappSend`), de
+   * uso único e com validade de 10 s, e depois do "Enviar" no diálogo nativo que o main abre em todo envio.
+   */
+  'scribe:whatsapp-send': { request: WhatsAppSendRequest; response: WhatsAppSendResult }
+  /** "Rascunho com o Claude": o texto volta para o campo; nada é enviado. */
+  'scribe:whatsapp-draft': { request: WhatsAppDraftRequest; response: WhatsAppDraftResult }
+  /** "Ligar conversa do WhatsApp" no detalhe da reunião. */
+  'scribe:whatsapp-link-get': { request: { meetingId: string }; response: WhatsAppMeetingLink | null }
+  'scribe:whatsapp-link-set': { request: { meetingId: string; link: WhatsAppMeetingLink | null }; response: WhatsAppMeetingLink | null }
 }
 
 /** renderer -> main, sem resposta (`__scribeApi.send` / `ipcMain.on`). */
@@ -218,6 +247,10 @@ export interface RendererEvents {
   'scribe:open-link': string
   /** Uso do app (tecla, clique, movimento), no máximo um a cada 15 s: "Bloquear sozinho depois de …" (contrato 22). */
   'scribe:lock-activity': undefined
+  /** Clique em "Enviar" do WhatsApp (contrato 24): só o preload manda, com a ativação do usuário viva. */
+  'scribe:whatsapp-click': string
+  /** Saiu da tela do QR: a aceitação do aviso deste pareamento acaba. */
+  'scribe:whatsapp-pair-cancel': undefined
 }
 
 /** main -> renderer (`webContents.send` / `__scribeApi.on`). */
@@ -247,6 +280,10 @@ export interface MainEvents {
   'scribe:google-state': GoogleAccountStatus
   /** Uma reunião mudou de estado no Drive (enviando com a porcentagem, no Drive, erro). */
   'scribe:drive-state': { meetingId: string; status: DriveMeetingStatus }
+  /** O serviço do WhatsApp mudou de estado (contrato 24). Não chega com o app bloqueado. */
+  'scribe:whatsapp-state': WhatsAppStatus
+  /** Mensagem nova pelo `/events` do serviço. Não chega com o app bloqueado. */
+  'scribe:whatsapp-message': { message: WhatsAppMessage; chatName: string }
 }
 
 export type InvokeChannel = keyof InvokeChannels
@@ -342,6 +379,21 @@ const INVOKE: Record<InvokeChannel, true> = {
   'scribe:drive-status': true,
   'scribe:drive-retry': true,
   'scribe:drive-open': true,
+  'scribe:whatsapp-status': true,
+  'scribe:whatsapp-risk-accept': true,
+  'scribe:whatsapp-install': true,
+  'scribe:whatsapp-start': true,
+  'scribe:whatsapp-stop': true,
+  'scribe:whatsapp-pair': true,
+  'scribe:whatsapp-logout': true,
+  'scribe:whatsapp-remove': true,
+  'scribe:whatsapp-chats': true,
+  'scribe:whatsapp-messages': true,
+  'scribe:whatsapp-search': true,
+  'scribe:whatsapp-send': true,
+  'scribe:whatsapp-draft': true,
+  'scribe:whatsapp-link-get': true,
+  'scribe:whatsapp-link-set': true,
 }
 const RENDERER_EVENTS: Record<RendererEvent, true> = {
   'scribe:csp-violation': true,
@@ -351,6 +403,8 @@ const RENDERER_EVENTS: Record<RendererEvent, true> = {
   'scribe:chat-leave': true,
   'scribe:open-link': true,
   'scribe:lock-activity': true,
+  'scribe:whatsapp-click': true,
+  'scribe:whatsapp-pair-cancel': true,
 }
 const MAIN_EVENTS: Record<MainEvent, true> = {
   'scribe:navigate': true,
@@ -366,6 +420,8 @@ const MAIN_EVENTS: Record<MainEvent, true> = {
   'scribe:recording-end-and-quit': true,
   'scribe:google-state': true,
   'scribe:drive-state': true,
+  'scribe:whatsapp-state': true,
+  'scribe:whatsapp-message': true,
 }
 
 /**
@@ -491,6 +547,23 @@ export const WHEN_LOCKED: Readonly<Record<InvokeChannel, LockedPolicy>> = Object
   'scribe:drive-status': 'refused',
   'scribe:drive-retry': 'refused',
   'scribe:drive-open': 'refused',
+  // WhatsApp (contrato 24, CA6): tudo recusado com o app bloqueado. O serviço continua conectado no main (as
+  // mensagens não se perdem), mas nada chega à tela até desbloquear.
+  'scribe:whatsapp-status': 'refused',
+  'scribe:whatsapp-risk-accept': 'refused',
+  'scribe:whatsapp-install': 'refused',
+  'scribe:whatsapp-start': 'refused',
+  'scribe:whatsapp-stop': 'refused',
+  'scribe:whatsapp-pair': 'refused',
+  'scribe:whatsapp-logout': 'refused',
+  'scribe:whatsapp-remove': 'refused',
+  'scribe:whatsapp-chats': 'refused',
+  'scribe:whatsapp-messages': 'refused',
+  'scribe:whatsapp-search': 'refused',
+  'scribe:whatsapp-send': 'refused',
+  'scribe:whatsapp-draft': 'refused',
+  'scribe:whatsapp-link-get': 'refused',
+  'scribe:whatsapp-link-set': 'refused',
 })
 
 /**
@@ -505,7 +578,12 @@ export const RENDERER_EVENTS_WHEN_LOCKED: Readonly<Record<RendererEvent, 'pass' 
   'scribe:open-privacy-settings': 'ignored',
   'scribe:open-key-dashboard': 'ignored',
   'scribe:open-link': 'ignored',
+  'scribe:whatsapp-click': 'ignored',
+  'scribe:whatsapp-pair-cancel': 'pass',
 })
+
+/** Mensagens que só o próprio preload manda (o `send` genérico recusa): o clique do envio do WhatsApp. */
+export const PRELOAD_ONLY_EVENTS: readonly RendererEvent[] = ['scribe:whatsapp-click']
 
 export const INVOKE_CHANNELS = Object.keys(INVOKE) as InvokeChannel[]
 export const RENDERER_EVENT_CHANNELS = Object.keys(RENDERER_EVENTS) as RendererEvent[]
@@ -518,4 +596,9 @@ export interface ScribeApi {
   invokeInSession<C extends RecordingSessionChannel>(token: string, channel: C, request: InvokeChannels[C]['request']): Promise<InvokeChannels[C]['response']>
   send<C extends RendererEvent>(channel: C, payload: RendererEvents[C]): void
   on<C extends MainEvent>(channel: C, listener: (payload: MainEvents[C]) => void): () => void
+  /**
+   * "Enviar" do WhatsApp (contrato 24, CA4): chamado no clique (ou ⌘↵) da pessoa. O preload confere a ativação do
+   * usuário no frame, gera o token de clique, registra no main e envia com ele. Sem clique de verdade, recusado.
+   */
+  whatsappSend(request: Omit<WhatsAppSendRequest, 'clickToken'>): Promise<WhatsAppSendResult>
 }

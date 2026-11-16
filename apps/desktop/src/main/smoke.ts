@@ -40,12 +40,19 @@
 // Contrato 11: antes do bloqueio, a conta Google e o Drive com o Google falso em memória (`googleChecks`): o
 // cadastro do cliente, o login (o smoke faz o papel do navegador no servidor local do app), uma gravação que vai
 // inteira para o Drive falso, "Gerar de novo" substituindo o resumo e "Sair". Nada sai da máquina.
+//
+// Contrato 24: antes do bloqueio, o WhatsApp com o serviço falso em Python (`backend_fake.py`, sem neonize e sem
+// rede) e um índice de pacotes falso numa pasta local (`whatsappChecks`): detectar, instalar, a tela de risco antes
+// do QR, o pareamento, a tela, o SSE, o rascunho pelo agente ACP falso, o envio só com o clique e o "Perguntar" com
+// uma conversa; depois do bloqueio, os canais recusados com o app bloqueado (`whatsappLockCheck`). Nenhum número
+// de verdade é pareado.
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { request as httpRequest } from 'node:http'
 import { tmpdir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
 import { app, ipcMain, Menu, nativeTheme, session, type BrowserWindow, type MenuItem, type WebContents } from 'electron'
 import { DRIVE_ROOT_FOLDER_NAME } from '../shared/accounts'
+import { WHATSAPP_EXPORT_PREFIX, WHATSAPP_FIXED_WARNING, WHATSAPP_PAIR_HINT, WHATSAPP_RISK_CHECKBOX, WHATSAPP_RISK_TEXT, WHATSAPP_RISK_TITLE } from '../shared/whatsapp'
 import { ASSEMBLYAI_DASHBOARD_URL } from '../shared/assemblyai'
 import { INVOKE_CHANNELS, WHEN_LOCKED, type CspViolation } from '../shared/ipc'
 import { LOCK_DISABLED_HINT, LOCKED_ERROR, lockedWindowTitle, TOUCH_ID_FAILED_TEXT } from '../shared/lock'
@@ -63,6 +70,7 @@ import { transcriptMarkdown } from '../shared/transcript-markdown'
 import { REPOSITORY_URL, UPDATE_HASH_MISMATCH_MESSAGE, UPDATE_INSTALL_INSTRUCTION, UPDATE_QUIT_BLOCKED_MESSAGE, updateAssetName } from '../shared/updates'
 import { TRANSCRIPT_VERSION, type RuntimeSegment, type TranscriptDocument } from '../shared/transcription'
 import { applyMessage, emptyTranscriptState, persistableSegments, type StreamEnvelope } from '../renderer/src/transcription/reducer'
+import { encodeQr } from '../renderer/src/features/whatsapp/qr'
 import { CALLBACK_DONE_TEXT } from './accounts/oauth'
 import { DEFAULT_FOLDER_NAME } from './audio-files/service'
 import { SUMMARY_FILE_SUFFIX, summaryFileTarget } from './audio-files/summary-file'
@@ -80,6 +88,7 @@ import { createFileSettingsStore, SETTINGS_FILE } from './settings/store'
 import { CHAT_ALLOWED_TOOLS, CHAT_DISALLOWED_TOOLS } from './claude-cli/chat'
 import { MEETINGS_FILE } from './meetings/store'
 import { originOf } from './security'
+import type { WhatsAppService } from './whatsapp/service'
 import { SETTINGS_VERSION } from './settings/schema'
 import { CLAUDE_DISALLOWED_TOOLS, CLAUDE_READ_TOOLS } from './acp/profiles/claude'
 import { LATEST_RELEASE_URL, RELEASE_DOWNLOAD_PREFIX, RELEASE_REDIRECT_HOSTS } from './updates/release'
@@ -94,8 +103,9 @@ import {
   type SmokeFixtures,
 } from './smoke-fixtures'
 
-// Contrato 22: o bloqueio, no fim, soma uns 25 s ao roteiro; o contrato 11 (conta Google e Drive), uns 20 s.
-const TIMEOUT_MS = 300_000
+// Contrato 22: o bloqueio, no fim, soma uns 25 s ao roteiro; o contrato 11 (conta Google e Drive), uns 20 s; o
+// contrato 24 (WhatsApp, com o `venv` e o `pip` de verdade do índice local), uns 40 s.
+const TIMEOUT_MS = 420_000
 const THEMES = ['light', 'dark'] as const
 /** Telas fotografadas em cada tema, na ordem do roteiro de `runSmoke`. */
 const SCREENS = [
@@ -127,6 +137,8 @@ export interface SmokeContext {
   outDir: string
   /** Gateway, Chaveiro e permissão de microfone substitutos (`smoke-fixtures.ts`). */
   fixtures: SmokeFixtures
+  /** Contrato 24: o serviço do WhatsApp do app, para o smoke fazer o papel do celular no serviço falso. */
+  whatsapp: Pick<WhatsAppService, 'fake' | 'status'>
   openWindow: (query: Record<string, string>) => BrowserWindow
 }
 
@@ -3619,7 +3631,9 @@ async function settingsTabsChecks(contents: WebContents, ctx: SmokeContext, shot
     contas.includes('Conta Google') &&
     contas.includes('Para guardar as reuniões no seu Google Drive.') &&
     !contas.includes('Em breve') &&
-    JSON.stringify(contasButtons) === JSON.stringify(['Configurar…']) &&
+    // Contrato 24: o bloco "WhatsApp" (não instalado) com o "Instalar" e o aviso fixo.
+    JSON.stringify(contasButtons) === JSON.stringify(['Configurar…', 'Instalar']) &&
+    contas.includes(WHATSAPP_FIXED_WARNING) &&
     ctx.fixtures.google.calls.length === 0 &&
     sobreOpen &&
     sobre.includes(app.getVersion()) &&
@@ -4410,6 +4424,364 @@ async function lockChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => void
   dark.destroy()
 }
 
+// Contrato 24: o QR fixo e a conta do serviço falso (`services/whatsapp-bridge/backend_fake.py`).
+const WA_FAKE_QR = '2@smoke-qr-falso,AbCdEfGhIjKlMnOpQrStUvWxYz0123456789+/=,smoke-chave-publica-falsa,smoke-segredo-falso'
+const WA_ANA = '5511911110000@s.whatsapp.net'
+const WA_ATLAS = '120363000000000001@g.us'
+const WA_STATE = `(document.querySelector('[data-whatsapp-state]')?.dataset.whatsappState ?? '')`
+const WA_INSTRUCTION = 'responda confirmando a reunião de sexta'
+
+/** O que o serviço falso "enviou" (só na memória dele). */
+async function waSent(ctx: SmokeContext): Promise<{ id: string; chatId: string; text: string }[]> {
+  const result = (await ctx.whatsapp.fake('sent')) as { sent?: { id: string; chatId: string; text: string }[] }
+  return result.sent ?? []
+}
+
+/**
+ * Contrato 24 (CA7), numa janela clara e depois numa escura, com o serviço falso em Python (sem neonize, sem rede) e
+ * o índice de pacotes falso: "Não instalado" sem nenhum processo; "Instalar" pela tela de risco (o `venv` e o `pip
+ * --require-hashes` de verdade, do índice local); "Ligar"; "Parear" mostra a tela de risco antes de qualquer QR
+ * (botão desabilitado até marcar a caixa; "Cancelar" não mostra QR) e o QR desenhado do texto fixo; o celular falso
+ * lê o QR; as conversas, a conversa aberta (texto como texto, mídia como metadado) e a mensagem nova pelo SSE;
+ * "Rascunho com o Claude" (agente ACP falso) preenche o campo sem enviar; o envio sem clique recusado (canal com
+ * token inventado, `whatsappSend` sem ativação do usuário, o evento do clique pelo `send` genérico) e o envio com o
+ * clique e a confirmação; e o escopo do "Perguntar" com uma conversa.
+ */
+async function whatsappChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => void, checks: Record<string, Check>, shots: Screenshot[]): Promise<void> {
+  const win = ctx.openWindow({ theme: 'light' })
+  watch(win)
+  await loadAndWait(win)
+  const contents = win.webContents
+  const root = join(ctx.userDataDir, 'whatsapp')
+
+  // Não instalado: nada roda, nenhuma pasta, nenhuma tela na barra lateral.
+  await openSettingsTab(contents, 'contas')
+  const notInstalled = await waitFor(contents, `${WA_STATE} === 'not-installed'`)
+  const lineBefore = await text(contents, '[data-whatsapp-line]')
+  const warning = await text(contents, '[data-notice="whatsapp-warning"]')
+  const navHidden = await evaluate<boolean>(contents, `!document.querySelector('[data-nav="whatsapp"]')`)
+  const nothingYet = !existsSync(join(root, 'venv')) && ctx.whatsapp.status().state === 'not-installed'
+  checks['detect'] = {
+    ok: notInstalled && lineBefore === 'Não instalado' && warning === WHATSAPP_FIXED_WARNING && navHidden && nothingYet,
+    detail: `estado=${notInstalled} "${lineBefore}"; aviso fixo="${warning}"; sem item na barra=${navHidden}; sem venv nem processo=${nothingYet}`,
+  }
+
+  // Instalar: a tela de risco antes, e o ambiente de verdade a partir do índice local.
+  await clickSelector(contents, '[data-action="whatsapp-install"]')
+  const installRisk = await waitFor(contents, `document.querySelector('[data-whatsapp-risk]') && document.querySelector('[data-action="whatsapp-install-confirm"]')?.disabled === true`)
+  await clickSelector(contents, '[data-whatsapp-risk-check]')
+  await waitFor(contents, `document.querySelector('[data-action="whatsapp-install-confirm"]')?.disabled === false`)
+  await clickSelector(contents, '[data-action="whatsapp-install-confirm"]')
+  const installing = await waitFor(contents, `${WA_STATE} === 'installing' || ${WA_STATE} === 'stopped'`)
+  const installed = await waitFor(contents, `${WA_STATE} === 'stopped'`, 180_000)
+  const installedLine = await text(contents, '[data-whatsapp-line]')
+  const venvOk = existsSync(join(root, 'venv', 'bin', 'python')) && existsSync(join(root, 'installed.json'))
+  const acceptances = (): { at: string; purpose: string }[] => {
+    try {
+      return (JSON.parse(readFileSync(join(root, 'aceite.json'), 'utf8')) as { acceptances: { at: string; purpose: string }[] }).acceptances
+    } catch {
+      return []
+    }
+  }
+  const afterInstall = acceptances()
+  checks['install'] = {
+    ok: installRisk && installing && installed && installedLine === 'Parado' && venvOk && afterInstall.length === 1 && afterInstall[0]?.purpose === 'install' && mode(join(root, 'aceite.json')) === '600',
+    detail: `tela de risco antes (botão desabilitado)=${installRisk}; instalando=${installing}; instalado=${installed} "${installedLine}"; venv=${venvOk}; aceite.json ${mode(join(root, 'aceite.json'))} ${JSON.stringify(afterInstall.map((item) => item.purpose))}; erro=${ctx.whatsapp.status().error ?? 'nenhum'}`,
+  }
+
+  // Ligar: o serviço falso sobe como processo filho e fica aguardando o pareamento.
+  await clickSelector(contents, '[data-action="whatsapp-start"]')
+  const started = await waitFor(contents, `${WA_STATE} === 'pairing'`, 30_000)
+  const navShown = await waitFor(contents, `document.querySelector('[data-nav="whatsapp"]')`)
+  const tokenGone = !existsSync(join(root, 'token'))
+  const serviceBin = mode(join(root, 'service.bin'))
+
+  // Parear: a tela de risco vem antes de qualquer QR; "Cancelar" volta sem QR.
+  await clickSelector(contents, '[data-action="whatsapp-pair"]')
+  const riskShown = await waitFor(contents, `document.querySelector('[data-whatsapp-risk]')`)
+  const riskTitle = await text(contents, '[data-whatsapp-risk] h3')
+  const riskText = await text(contents, '[data-whatsapp-risk-text]')
+  const riskCheckbox = await evaluate<string>(contents, `document.querySelector('[data-whatsapp-risk] label')?.textContent ?? ''`)
+  const qrBeforeAccept = await evaluate<boolean>(contents, `Boolean(document.querySelector('[data-whatsapp-qr]'))`)
+  const disabledBefore = await evaluate<boolean>(contents, `document.querySelector('[data-action="whatsapp-show-qr"]')?.disabled === true`)
+  const pairWithoutRisk = await evaluate<unknown>(contents, `window.__scribeApi.invoke('scribe:whatsapp-pair', {})`)
+  await clickSelector(contents, '[data-action="whatsapp-risk-cancel"]')
+  const cancelled = await waitFor(contents, `!document.querySelector('[data-whatsapp-risk]') && !document.querySelector('[data-whatsapp-qr]') && !document.querySelector('[data-whatsapp-pairing]')`)
+  await clickSelector(contents, '[data-action="whatsapp-pair"]')
+  await waitFor(contents, `document.querySelector('[data-whatsapp-risk]')`)
+  await settle(contents)
+  shots.push(await capture(win, ctx.outDir, 'whatsapp-risco-light'))
+  await clickSelector(contents, '[data-whatsapp-risk-check]')
+  const enabledAfter = await waitFor(contents, `document.querySelector('[data-action="whatsapp-show-qr"]')?.disabled === false`)
+  await clickSelector(contents, '[data-action="whatsapp-show-qr"]')
+  const qrShown = await waitFor(contents, `document.querySelector('[data-whatsapp-qr]')`, 8000)
+  const qrModules = await evaluate<number>(contents, `Number(document.querySelector('[data-whatsapp-qr]')?.dataset.qrModules ?? 0)`)
+  const pairHint = await text(contents, '[data-whatsapp-pair-hint]')
+  await settle(contents)
+  shots.push(await capture(win, ctx.outDir, 'whatsapp-pareamento-light'))
+  checks['risk'] = {
+    ok:
+      started &&
+      navShown &&
+      tokenGone &&
+      serviceBin === '600' &&
+      riskShown &&
+      riskTitle === WHATSAPP_RISK_TITLE &&
+      riskText === WHATSAPP_RISK_TEXT &&
+      riskCheckbox === WHATSAPP_RISK_CHECKBOX &&
+      !qrBeforeAccept &&
+      disabledBefore &&
+      JSON.stringify(pairWithoutRisk) === JSON.stringify({ error: 'risk' }) &&
+      cancelled &&
+      enabledAfter &&
+      qrShown &&
+      qrModules === encodeQr(WA_FAKE_QR).length &&
+      pairHint === WHATSAPP_PAIR_HINT &&
+      acceptances().filter((item) => item.purpose === 'pair').length === 1,
+    detail: `ligado=${started}, item na barra=${navShown}, token em texto apagado=${tokenGone}, service.bin ${serviceBin}; risco antes do QR=${riskShown} "${riskTitle}" (texto igual=${riskText === WHATSAPP_RISK_TEXT}, caixa "${riskCheckbox}"), QR antes do aceite=${qrBeforeAccept}, botão desabilitado=${disabledBefore}, /pair sem aceite=${JSON.stringify(pairWithoutRisk)}; "Cancelar" sem QR=${cancelled}; habilitado com a caixa=${enabledAfter}; QR=${qrShown} com ${qrModules} módulos (esperado ${encodeQr(WA_FAKE_QR).length}); "${pairHint}"; aceites de pareamento=${acceptances().filter((item) => item.purpose === 'pair').length}`,
+  }
+
+  // O celular falso lê o QR: conectado, o painel fecha e o próximo pareamento pede o aviso de novo.
+  await ctx.whatsapp.fake('scan')
+  const connected = await waitFor(contents, `${WA_STATE} === 'connected' && !document.querySelector('[data-whatsapp-pairing]')`, 8000)
+  const connectedLine = await text(contents, '[data-whatsapp-line]')
+  const pairAgain = await evaluate<unknown>(contents, `window.__scribeApi.invoke('scribe:whatsapp-pair', {})`)
+  await settle(contents)
+  shots.push(await capture(win, ctx.outDir, 'configuracoes-whatsapp-light'))
+  checks['paired'] = {
+    ok: connected && connectedLine === 'Conectado como Andrea Teste (+55 11 90000-0000)' && JSON.stringify(pairAgain) === JSON.stringify({ error: 'risk' }),
+    detail: `conectado=${connected} "${connectedLine}"; /pair depois (aceite gasto)=${JSON.stringify(pairAgain)}`,
+  }
+
+  // A tela "WhatsApp": conversas (grupo marcado, não lidas), a conversa aberta e a mensagem nova pelo SSE.
+  await clickSelector(contents, '[data-nav="whatsapp"]')
+  const listed = await waitFor(contents, `${routeIs('whatsapp')} && document.querySelectorAll('[data-whatsapp-chat]').length === 3`, 8000)
+  const rows = await evaluate<{ id: string; text: string; group: boolean; unread: string }[]>(
+    contents,
+    `[...document.querySelectorAll('[data-whatsapp-chat]')].map((row) => ({ id: row.dataset.whatsappChat, text: row.textContent, group: Boolean(row.querySelector('[data-whatsapp-group]')), unread: row.querySelector('[data-whatsapp-unread]')?.textContent ?? '' }))`,
+  )
+  await clickSelector(contents, `[data-whatsapp-chat="${WA_ATLAS}"]`)
+  const atlasOpen = await waitFor(contents, `document.querySelector('[data-whatsapp-conversation="${WA_ATLAS}"] [data-whatsapp-media]')`)
+  const media = await text(contents, '[data-whatsapp-media]')
+  const noImage = await evaluate<boolean>(contents, `!document.querySelector('[data-whatsapp-messages] img')`)
+  await clickSelector(contents, `[data-whatsapp-chat="${WA_ANA}"]`)
+  const anaOpen = await waitFor(contents, `document.querySelectorAll('[data-whatsapp-conversation="${WA_ANA}"] [data-whatsapp-message]').length === 3`)
+  const htmlAsText = await evaluate<{ text: string; tags: number }>(
+    contents,
+    `(() => { const el = document.querySelector('[data-whatsapp-message="m3"] [data-whatsapp-text]'); return { text: el?.textContent ?? '', tags: el?.querySelectorAll('b').length ?? -1 } })()`,
+  )
+  await ctx.whatsapp.fake('incoming', { chatId: WA_ANA, text: 'Chegou agora pelo SSE' })
+  const sse = await waitFor(contents, `[...document.querySelectorAll('[data-whatsapp-conversation="${WA_ANA}"] [data-whatsapp-text]')].some((el) => el.textContent === 'Chegou agora pelo SSE')`, 5000)
+  checks['screen'] = {
+    ok:
+      listed &&
+      rows.map((row) => row.id).join(',') === [WA_ATLAS, WA_ANA, '5511922220000@s.whatsapp.net'].join(',') &&
+      rows[0]?.group === true &&
+      rows[1]?.group === false &&
+      rows[0]?.unread === '2' &&
+      atlasOpen &&
+      media === 'imagem · 120 KB' &&
+      noImage &&
+      anaOpen &&
+      htmlAsText.text === 'Combinado. <b>Não</b> esquece a pauta.' &&
+      htmlAsText.tags === 0 &&
+      sse,
+    detail: `lista=${listed} ${JSON.stringify(rows.map((row) => ({ id: row.id.slice(0, 8), group: row.group, unread: row.unread })))}; mídia "${media}" sem <img>=${noImage}; conversa=${anaOpen}; HTML como texto "${htmlAsText.text}" (${htmlAsText.tags} <b>); SSE=${sse}`,
+  }
+
+  // "Rascunho com o Claude" pelo agente ACP falso: o texto vai para o campo e nada é enviado.
+  const transportBefore = readSettings(ctx.userDataDir).claudeTransport
+  await evaluate(contents, "window.__scribeApi.invoke('scribe:settings-update', { claudeTransport: 'acp' }).then(() => true)")
+  const acpStatus = await evaluate<{ state?: string }>(contents, "window.__scribeApi.invoke('scribe:acp-status')")
+  if (acpStatus.state !== 'installed') await evaluate(contents, "window.__scribeApi.invoke('scribe:acp-install').then(() => true)")
+  const acpLogBefore = readAcpLog(ctx.userDataDir).length
+  await clickSelector(contents, '[data-action="whatsapp-draft"]')
+  await waitFor(contents, `document.querySelector('[data-whatsapp-draft-panel]')`)
+  await setValue(contents, '#whatsapp-draft-instruction', WA_INSTRUCTION)
+  await clickSelector(contents, '[data-action="whatsapp-draft-run"]')
+  const drafted = await waitFor(contents, `(document.querySelector('[data-whatsapp-composer]')?.value ?? '').startsWith('Oi, Ana!')`, 15_000)
+  // O print com o campo já preenchido pelo rascunho.
+  await settle(contents)
+  shots.push(await capture(win, ctx.outDir, 'whatsapp-rascunho-light'))
+  const draftText = await evaluate<string>(contents, `document.querySelector('[data-whatsapp-composer]')?.value ?? ''`)
+  const draftLog = readAcpLog(ctx.userDataDir).slice(acpLogBefore)
+  const draftSession = draftLog.find((entry) => entry.method === 'session/new' && entry.purpose === 'draft')
+  const sentAfterDraft = await waSent(ctx)
+  checks['draft'] = {
+    ok: drafted && draftText.includes('confirmando a reunião de sexta') && Boolean(draftSession) && draftLog.some((entry) => entry.method === 'session/prompt' && entry.purpose === 'draft') && sentAfterDraft.length === 0,
+    detail: `campo preenchido=${drafted} "${draftText}"; sessão ACP de rascunho=${Boolean(draftSession)} (mcp ${JSON.stringify((draftSession as { mcpServers?: unknown } | undefined)?.mcpServers ?? null)}); enviadas depois do rascunho=${sentAfterDraft.length}`,
+  }
+
+  // Sem clique, nada sai: token inventado pelo canal, o evento do clique pelo `send` genérico e o `whatsappSend` sem
+  // a ativação do usuário (passada a validade da ativação do último clique do smoke).
+  const forged = await evaluate<unknown>(contents, `window.__scribeApi.invoke('scribe:whatsapp-send', { chatId: '${WA_ANA}', text: 'forjada', clickToken: crypto.randomUUID() })`)
+  const noToken = await evaluate<string>(contents, `window.__scribeApi.invoke('scribe:whatsapp-send', { chatId: '${WA_ANA}', text: 'forjada' }).then((r) => JSON.stringify(r), (e) => 'erro ' + String(e?.message ?? e).slice(0, 60))`)
+  const genericClick = await evaluate<string>(contents, `(() => { try { window.__scribeApi.send('scribe:whatsapp-click', crypto.randomUUID()); return 'mandou' } catch (error) { return String(error?.message ?? error) } })()`)
+  await wait(5500)
+  const withoutGesture = (await contents.executeJavaScript(`window.__scribeApi.whatsappSend({ chatId: '${WA_ANA}', text: 'sem clique' })`, false)) as unknown
+  const sentWithoutClick = await waSent(ctx)
+
+  // Com o clique, o main abre o diálogo nativo "Enviar para Ana Souza?" com o texto, em todo envio. "Cancelar"
+  // (o substituto responde 0): nada sai e o texto fica no campo. "Enviar": sai. Enter não envia; ⌘↵ também passa
+  // pelo diálogo.
+  const dialogs = ctx.fixtures.whatsappSendDialogs
+  const dialogsBefore = dialogs.length
+  ctx.fixtures.whatsappSendChoice = 0
+  await clickSelector(contents, '[data-action="whatsapp-send"]')
+  const cancelShown = await waitFor(contents, `document.querySelector('[data-whatsapp-send-error]')`)
+  const cancelDialog = dialogs[dialogsBefore]
+  const keptText = await evaluate<string>(contents, `document.querySelector('[data-whatsapp-composer]')?.value ?? ''`)
+  const sentAfterCancel = (await waSent(ctx)).length
+  ctx.fixtures.whatsappSendChoice = 1
+  await clickSelector(contents, '[data-action="whatsapp-send"]')
+  let sent = await waSent(ctx)
+  for (let attempt = 0; attempt < 50 && sent.length < 1; attempt++) {
+    await wait(100)
+    sent = await waSent(ctx)
+  }
+  const cleared = await waitFor(contents, `(document.querySelector('[data-whatsapp-composer]')?.value ?? 'x') === ''`)
+  await setValue(contents, '[data-whatsapp-composer]', 'Segunda mensagem')
+  await pressEnterIn(contents, '[data-whatsapp-composer]')
+  await wait(300)
+  const afterEnter = (await waSent(ctx)).length
+  await evaluate(contents, `document.querySelector('[data-whatsapp-composer]')?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', metaKey: true, bubbles: true }))`)
+  let second = await waSent(ctx)
+  for (let attempt = 0; attempt < 50 && second.length < 2; attempt++) {
+    await wait(100)
+    second = await waSent(ctx)
+  }
+  ctx.fixtures.whatsappSendChoice = 0
+  const ourDialogs = dialogs.slice(dialogsBefore)
+  const shownSent = await waitFor(contents, `[...document.querySelectorAll('[data-whatsapp-message][data-from-me="true"] [data-whatsapp-text]')].some((el) => el.textContent === 'Segunda mensagem')`)
+  await settle(contents)
+  shots.push(await capture(win, ctx.outDir, 'whatsapp-light'))
+  checks['send'] = {
+    ok:
+      JSON.stringify(forged) === JSON.stringify({ ok: false, error: 'click' }) &&
+      noToken === JSON.stringify({ ok: false, error: 'click' }) &&
+      genericClick.includes('Canal não permitido') &&
+      JSON.stringify(withoutGesture) === JSON.stringify({ ok: false, error: 'click' }) &&
+      sentWithoutClick.length === 0 &&
+      cancelShown &&
+      cancelDialog?.message === 'Enviar para Ana Souza?' &&
+      cancelDialog.detail === draftText &&
+      JSON.stringify(cancelDialog.buttons) === JSON.stringify(['Cancelar', 'Enviar']) &&
+      keptText === draftText &&
+      sentAfterCancel === 0 &&
+      ourDialogs.length === 3 &&
+      ourDialogs[2]?.detail === 'Segunda mensagem' &&
+      sent.length >= 1 &&
+      sent[0]?.text === draftText &&
+      sent[0]?.chatId === WA_ANA &&
+      cleared &&
+      afterEnter === 1 &&
+      second.length === 2 &&
+      second[1]?.text === 'Segunda mensagem' &&
+      shownSent,
+    detail: `token inventado=${JSON.stringify(forged)}; sem token=${noToken}; clique pelo send genérico="${genericClick.slice(0, 60)}"; whatsappSend sem ativação=${JSON.stringify(withoutGesture)}; enviadas sem clique=${sentWithoutClick.length}; diálogo nativo "${cancelDialog?.message ?? ''}" com o texto=${cancelDialog?.detail === draftText} botões ${JSON.stringify(cancelDialog?.buttons ?? [])}, "Cancelar" -> enviadas=${sentAfterCancel}, texto mantido=${keptText === draftText}; "Enviar" -> enviada=${sent.length} (igual ao rascunho=${sent[0]?.text === draftText}); campo limpo=${cleared}; Enter não enviou=${afterEnter === 1}; ⌘↵ com diálogo de novo=${ourDialogs.length === 3}, enviada=${second.length === 2}; na conversa=${shownSent}`,
+  }
+
+  // "Perguntar" com a conversa da Ana no escopo: o `.md` dela na pasta da conversa e no índice.
+  await clickSelector(contents, '[data-nav="perguntar"]')
+  await waitFor(contents, routeIs('perguntar'))
+  await clickSelector(contents, '[data-action="chat-new"]')
+  await waitFor(contents, `document.querySelector('[data-chat-input]') && !document.querySelector('[data-chat-message]')`)
+  await clickSelector(contents, '[data-action="chat-scope-label"]')
+  const section = await waitFor(contents, `document.querySelector('[data-chat-whatsapp] [data-scope-whatsapp="${WA_ANA}"]')`, 8000)
+  await clickSelector(contents, `[data-scope-whatsapp="${WA_ANA}"]`)
+  const label = await waitFor(contents, `(document.querySelector('[data-action="chat-scope-label"]')?.textContent ?? '').includes('+ 1 conversa')`)
+  const asked = await askChat(contents, 'O que a Ana pediu?')
+  const chatId = await evaluate<string>(contents, `window.__scribeApi.invoke('scribe:chat-list', { meetingId: null }).then((list) => list[0]?.id ?? '')`)
+  const scopeDir = join(ctx.userDataDir, CHAT_SCOPE_DIR, chatId)
+  const scopeFiles = existsSync(scopeDir) ? readdirSync(scopeDir) : []
+  const waFile = scopeFiles.find((name) => name.startsWith(WHATSAPP_EXPORT_PREFIX)) ?? ''
+  const waText = waFile ? readFileSync(join(scopeDir, waFile), 'utf8') : ''
+  const index = existsSync(join(scopeDir, CHAT_INDEX_FILE)) ? readFileSync(join(scopeDir, CHAT_INDEX_FILE), 'utf8') : ''
+  const savedScope = chatFile(ctx.userDataDir, chatId)?.scope as { whatsappChats?: string[] } | undefined
+  checks['ask'] = {
+    ok:
+      section &&
+      label &&
+      asked.done &&
+      waFile.startsWith('WhatsApp - Ana Souza - ') &&
+      waText.includes('- Citar como: [Ana Souza · dd/mm hh:mm]') &&
+      waText.includes('Chegou agora pelo SSE') &&
+      waText.includes('Segunda mensagem') &&
+      index.includes(`- arquivo: ${waFile}`) &&
+      mode(join(scopeDir, waFile)) === '600' &&
+      JSON.stringify(savedScope?.whatsappChats ?? []) === JSON.stringify([WA_ANA]),
+    detail: `seção no Contexto=${section}; rótulo do escopo=${label}; resposta=${asked.done}; pasta ${scopeFiles.length} arquivos, "${waFile}" ${mode(join(scopeDir, waFile))}; citação no .md=${waText.includes('Citar como')}; no índice=${index.includes(waFile)}; escopo gravado=${JSON.stringify(savedScope?.whatsappChats ?? [])}`,
+  }
+  await evaluate(contents, `window.__scribeApi.invoke('scribe:settings-update', { claudeTransport: '${transportBefore === 'acp' ? 'acp' : 'cli'}' }).then(() => true)`)
+  win.destroy()
+
+  // Escuro: a tela com a conversa aberta.
+  const dark = ctx.openWindow({ theme: 'dark' })
+  watch(dark)
+  await loadAndWait(dark)
+  await waitFor(dark.webContents, `document.querySelector('[data-nav="whatsapp"]')`)
+  await clickSelector(dark.webContents, '[data-nav="whatsapp"]')
+  await waitFor(dark.webContents, `document.querySelectorAll('[data-whatsapp-chat]').length === 3`, 8000)
+  await clickSelector(dark.webContents, `[data-whatsapp-chat="${WA_ANA}"]`)
+  const darkOpen = await waitFor(dark.webContents, `document.querySelectorAll('[data-whatsapp-conversation="${WA_ANA}"] [data-whatsapp-message]').length >= 5`)
+  await settle(dark.webContents)
+  shots.push(await capture(dark, ctx.outDir, 'whatsapp-dark'))
+  checks['dark'] = { ok: darkOpen, detail: `conversa no escuro=${darkOpen}` }
+  dark.destroy()
+}
+
+/**
+ * Contrato 24 (CA6), depois do bloqueio (a senha já existe): bloqueado, todo canal do WhatsApp é recusado e a tela
+ * some atrás da camada; o serviço continua conectado e guarda a mensagem que chega, que não vai à janela até
+ * desbloquear.
+ */
+async function whatsappLockCheck(ctx: SmokeContext, watch: (win: BrowserWindow) => void, checks: Record<string, Check>): Promise<void> {
+  const win = ctx.openWindow({ theme: 'light' })
+  watch(win)
+  await loadAndWait(win)
+  const contents = win.webContents
+  await waitFor(contents, `document.querySelector('[data-nav="whatsapp"]')`)
+  await clickSelector(contents, '[data-nav="whatsapp"]')
+  await waitFor(contents, `document.querySelectorAll('[data-whatsapp-chat]').length === 3`, 8000)
+  await clickSelector(contents, `[data-whatsapp-chat="${WA_ANA}"]`)
+  await waitFor(contents, `document.querySelector('[data-whatsapp-conversation="${WA_ANA}"] [data-whatsapp-message]')`)
+  await evaluate(contents, "window.__scribeApi.invoke('scribe:lock-now').then(() => true)")
+  const locked = await waitFor(contents, LOCK_LAYER)
+  const channels = INVOKE_CHANNELS.filter((channel) => channel.startsWith('scribe:whatsapp-'))
+  const refused = await evaluate<{ locked: number; others: string[] }>(
+    contents,
+    `(async () => {
+      let locked = 0
+      const others = []
+      for (const channel of ${JSON.stringify(channels)}) {
+        try {
+          await window.__scribeApi.invoke(channel, { chatId: '${WA_ANA}', text: 'bloqueado', clickToken: crypto.randomUUID(), meetingId: 'x', term: 'ana', purpose: 'pair' })
+          others.push(channel + ': respondeu')
+        } catch (error) {
+          if (String(error?.message ?? error).endsWith('Error: ${LOCKED_ERROR}')) locked++
+          else others.push(channel + ': ' + String(error?.message ?? error).slice(0, 60))
+        }
+      }
+      const send = await window.__scribeApi.whatsappSend({ chatId: '${WA_ANA}', text: 'bloqueado' }).then((r) => JSON.stringify(r), (e) => String(e?.message ?? e))
+      return { locked, others: send.endsWith('Error: ${LOCKED_ERROR}') ? others : [...others, 'whatsappSend: ' + send.slice(0, 60)] }
+    })()`,
+  )
+  const inert = await evaluate<boolean>(contents, `document.querySelector('[data-app-content]')?.inert === true`)
+  const stillConnected = ctx.whatsapp.status().state === 'connected'
+  await ctx.whatsapp.fake('incoming', { chatId: WA_ANA, text: 'Chegou com o app bloqueado' })
+  await wait(600)
+  const notDelivered = await evaluate<boolean>(contents, `![...document.querySelectorAll('[data-whatsapp-text]')].some((el) => el.textContent === 'Chegou com o app bloqueado')`)
+  const sent = await waSent(ctx)
+  await typeLockPassword(contents, LOCK_PASSWORD)
+  const unlocked = await waitFor(contents, `!${LOCK_LAYER}`)
+  const kept = await evaluate<boolean>(contents, `window.__scribeApi.invoke('scribe:whatsapp-messages', { chatId: '${WA_ANA}' }).then((list) => list.some((m) => m.text === 'Chegou com o app bloqueado'))`)
+  checks['locked'] = {
+    ok: locked && refused.locked === channels.length && refused.others.length === 0 && inert && stillConnected && notDelivered && sent.every((item) => item.text !== 'bloqueado') && unlocked && kept,
+    detail: `bloqueado=${locked}; ${refused.locked}/${channels.length} canais recusados ${JSON.stringify(refused.others)}; tela inerte=${inert}; serviço conectado=${stillConnected}; mensagem não chegou à janela=${notDelivered}, guardada pelo serviço=${kept}; desbloqueado=${unlocked}`,
+  }
+  win.destroy()
+}
+
 export async function runSmoke(ctx: SmokeContext): Promise<number> {
   const timer = setTimeout(() => {
     console.error(`[smoke] tempo esgotado (${TIMEOUT_MS} ms)`)
@@ -4462,6 +4834,8 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
   const lock: Record<string, Check> = {}
   /** Contrato 11: conta Google e Drive. */
   const google: Record<string, Check> = {}
+  /** Contrato 24: WhatsApp pelo serviço falso. */
+  const whatsapp: Record<string, Check> = {}
   let analysisMeasured: AnalysisMeasured | null = null
 
   // A fixture da sessão real, reduzida pelo mesmo redutor do app: a mesma dos testes (CA4) e do smoke.
@@ -4792,8 +5166,14 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
     // Contrato 11: conta Google e Drive falsos, antes do bloqueio (que termina com a conta já fora).
     await googleChecks(ctx, watch, google, screenshots)
 
+    // Contrato 24: WhatsApp com o serviço falso, antes do bloqueio (que também recusa os canais dele).
+    await whatsappChecks(ctx, watch, whatsapp, screenshots)
+
     // Contrato 22: bloqueio do app, por último (a senha criada vale para o userData inteiro).
     await lockChecks(ctx, watch, lock, screenshots)
+
+    // Contrato 24 (CA6): com a senha criada, o bloqueio recusa o WhatsApp e o serviço segue conectado.
+    await whatsappLockCheck(ctx, watch, whatsapp)
   } catch (error) {
     failures.push(`erro: ${error instanceof Error ? (error.stack ?? error.message) : String(error)}`)
   }
@@ -4838,6 +5218,8 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
   }
   for (const [name, check] of Object.entries(google)) if (!check.ok) failures.push(`google ${name}: ${check.detail}`)
   for (const name of ['client', 'signIn', 'upload', 'replaceSummary', 'signOut']) if (!google[name]) failures.push(`google ${name}: não executado`)
+  for (const [name, check] of Object.entries(whatsapp)) if (!check.ok) failures.push(`whatsapp ${name}: ${check.detail}`)
+  for (const name of ['detect', 'install', 'risk', 'paired', 'screen', 'draft', 'send', 'ask', 'dark', 'locked']) if (!whatsapp[name]) failures.push(`whatsapp ${name}: não executado`)
   for (const [name, check] of Object.entries(lock)) if (!check.ok) failures.push(`bloqueio ${name}: ${check.detail}`)
   for (const name of ['password', 'layer', 'channels', 'unlock', 'shortcutAndTouchId', 'recordingContinues', 'leaveDialog', 'endWhileLocked', 'reopen', 'reopenFromDisk', 'dark']) if (!lock[name]) failures.push(`bloqueio ${name}: não executado`)
   if (!theme.ok) failures.push(`tema: ${theme.detail}`)
@@ -4848,8 +5230,9 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
   // (contrato 17), as abas "Contas" e "Sobre" e a busca das Configurações (contrato 18), só no claro; a aba
   // "Análise" da gravação nos dois temas e a seção "Perguntas em aberto" do detalhe, no claro (contrato 19); a
   // camada de bloqueio nos dois temas, bloqueada na gravação e o bloco "Bloqueio" (contrato 22); a aba "Contas"
-  // logada nos dois temas, deslogada no escuro e a aba "Áudio" com "No Drive" (contrato 11).
-  const expectedShots = SCREENS.length * THEMES.length + 25
+  // logada nos dois temas, deslogada no escuro e a aba "Áudio" com "No Drive" (contrato 11); a tela "WhatsApp" nos
+  // dois temas, o bloco em Configurações, a tela de risco, o pareamento e o rascunho, no claro (contrato 24).
+  const expectedShots = SCREENS.length * THEMES.length + 31
   if (screenshots.length !== expectedShots) failures.push(`${screenshots.length} PNGs em vez de ${expectedShots}`)
   for (const shot of screenshots) {
     if (shot.width < 1120 || shot.height < 740) failures.push(`${shot.name}: ${shot.width}x${shot.height} abaixo de 1120x740`)
@@ -4891,6 +5274,8 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
     google,
     googleFakeCalls: ctx.fixtures.google.calls,
     googleFakeDrive: [...ctx.fixtures.google.files.values()].map((file) => ({ name: file.name, mimeType: file.mimeType, bytes: file.content.byteLength, uploads: file.uploads, trashed: file.trashed })),
+    // Contrato 24: só os resultados; nenhum texto de mensagem além dos fixos do serviço falso.
+    whatsapp,
     meetingFolder: folderFiles(defaultMeetingFolder(ctx)),
     openedFiles: ctx.fixtures.openedFiles.map((item) => ({ action: item.action, file: basename(item.path) })),
     claudeFakeSpawns: ctx.fixtures.claudeSpawns.map((spawn) => ({ ...spawn, args: spawn.args.filter((arg) => arg.startsWith('--')) })),

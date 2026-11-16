@@ -27,6 +27,7 @@ import process from 'node:process'
 import { createInterface } from 'node:readline'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { FAKE_ANALYSIS_DELAY_MS, fakeAnalysis } from './fake-analysis.mjs'
+import { fakeDraft } from './fake-draft.mjs'
 
 const args = process.argv.slice(2)
 
@@ -144,6 +145,14 @@ if (args.includes('--include-partial-messages')) {
   })
   process.stdin.on('end', async () => {
     const systemPrompt = args[args.indexOf('--system-prompt') + 1] ?? ''
+    // Contrato 24: o rascunho do WhatsApp, só texto.
+    if (systemPrompt.startsWith('Você escreve rascunhos')) {
+      process.stdout.write(
+        `${JSON.stringify({ type: 'result', subtype: 'success', is_error: false, duration_ms: Date.now() - started, result: fakeDraft(input), usage: { input_tokens: Math.ceil(input.length / 4), output_tokens: 30 }, total_cost_usd: 0 })}\n`,
+        () => process.exit(0),
+      )
+      return
+    }
     if (systemPrompt.startsWith('Você analisa')) {
       await sleep(FAKE_ANALYSIS_DELAY_MS)
       process.stdout.write(

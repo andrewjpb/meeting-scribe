@@ -87,6 +87,10 @@ export interface ChatScope {
   kind: ChatScopeKind
   /** Só em `meetings`. */
   meetingIds?: string[] | undefined
+  /** Contrato 24 (CA5): conversas do WhatsApp lidas junto com as reuniões, até 10, em qualquer escopo. */
+  whatsappChats?: string[] | undefined
+  /** Últimos N dias dessas conversas (7, 30 ou 90; padrão 30). */
+  whatsappDays?: number | undefined
 }
 
 export const DEFAULT_CHAT_SCOPE: ChatScope = { kind: 'all' }

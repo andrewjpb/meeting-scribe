@@ -26,6 +26,7 @@ import { setTimeout as sleep } from 'node:timers/promises'
 import { pathToFileURL } from 'node:url'
 import * as acp from '@agentclientprotocol/sdk/unstable'
 import { fakeAnalysis } from './fake-analysis.mjs'
+import { fakeDraft } from './fake-draft.mjs'
 
 export const FAKE_ACP_VERSION = '0.107.0-falso'
 const MODEL_IDS = { haiku: 'claude-haiku-5-5', sonnet: 'claude-sonnet-5-5', opus: 'claude-opus-5-5', default: 'claude-sonnet-5-5' }
@@ -96,6 +97,7 @@ export function fakeAcpAgent({ log = () => undefined, pause = 300 } = {}) {
     if (prompt.startsWith('You translate')) return 'translate'
     if (prompt.startsWith('Você resume')) return 'summary'
     if (prompt.startsWith('Você analisa')) return 'analysis'
+    if (prompt.startsWith('Você escreve rascunhos')) return 'draft'
     return 'chat'
   }
 
@@ -178,6 +180,12 @@ export function fakeAcpAgent({ log = () => undefined, pause = 300 } = {}) {
         const text = `\`\`\`json\n${JSON.stringify(summary, null, 2)}\n\`\`\``
         for (let at = 0; at < text.length; at += 80) await say(text.slice(at, at + 80))
         return { stopReason: 'end_turn', usage: { totalTokens: Math.ceil(content.length / 4) + 120, inputTokens: Math.ceil(content.length / 4), outputTokens: 120 } }
+      }
+
+      // Contrato 24: o rascunho do WhatsApp, só texto (o agente nunca envia nada).
+      if (state.purpose === 'draft') {
+        await say(fakeDraft(content))
+        return { stopReason: 'end_turn', usage: { totalTokens: Math.ceil(content.length / 4) + 30, inputTokens: Math.ceil(content.length / 4), outputTokens: 30 } }
       }
 
       if (state.purpose === 'analysis') {

@@ -34,6 +34,7 @@ import {
 } from '../../shared/chat'
 import type { ClaudeLocateResult } from '../../shared/claude-cli'
 import { CHAT_MODELS, type ChatModel, type ClaudeTransport } from '../../shared/settings-defaults'
+import { WHATSAPP_DEFAULT_SCOPE_DAYS } from '../../shared/whatsapp'
 import type { AcpOpenResult, AcpSessionRequest } from '../acp/agent'
 import { AcpChat, type ChatEngine } from '../acp/chat'
 import { ClaudeChat, type ChatAnswer } from '../claude-cli/chat'
@@ -49,7 +50,12 @@ export const CHAT_LEAVE_MS = 5 * 60_000
 
 export interface ChatServiceDeps {
   store: ChatStore
-  corpus: Pick<ChatCorpus, 'dir' | 'ensure' | 'scope' | 'scopeMany' | 'dropScope' | 'remove'>
+  corpus: Pick<ChatCorpus, 'dir' | 'ensure' | 'scope' | 'scopeMany' | 'dropScope' | 'remove'> & Partial<Pick<ChatCorpus, 'reindexScope'>>
+  /**
+   * Contrato 24 (CA5): as conversas do WhatsApp escolhidas vão como `.md` para a pasta de escopo da conversa. Só
+   * leitura: o chat não tem acesso ao envio.
+   */
+  whatsapp?: { exportChats(folder: string, chatIds: readonly string[], days: number): Promise<string[]> }
   settings: Pick<SettingsStore, 'get'>
   meetings: Pick<MeetingsStore, 'get' | 'list'>
   /** "Copiar" de uma resposta (a área de transferência do main). */
@@ -137,7 +143,11 @@ const updateSchema = z
 const redoSchema = z.object({ id: chatIdSchema, text: questionSchema.optional() }).strict()
 const copySchema = z.object({ id: chatIdSchema, index: z.number().int().min(0).max(10_000) }).strict()
 
-const sameScope = (a: ChatScope, b: ChatScope): boolean => a.kind === b.kind && (a.meetingIds ?? []).join(',') === (b.meetingIds ?? []).join(',')
+const sameScope = (a: ChatScope, b: ChatScope): boolean =>
+  a.kind === b.kind &&
+  (a.meetingIds ?? []).join(',') === (b.meetingIds ?? []).join(',') &&
+  (a.whatsappChats ?? []).join(',') === (b.whatsappChats ?? []).join(',') &&
+  (a.whatsappDays ?? null) === (b.whatsappDays ?? null)
 
 interface Session {
   claude: ChatEngine
@@ -247,18 +257,26 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
     let cwd: string
     let scope: string | null = null
     let folder: 'all' | 'subset' | 'meeting' = 'all'
+    // Contrato 24: conversas do WhatsApp só na tela "Perguntar", e só com o serviço ligado.
+    const whatsappChats = chat.meetingId || !deps.whatsapp ? [] : (chat.scope.whatsappChats ?? [])
+    let whatsapp = false
     if (chat.meetingId) {
       scope = await deps.corpus.scope(chat.meetingId, chat.id)
       if (!scope) return null
       cwd = scope
       folder = 'meeting'
-    } else if (chat.scope.kind !== 'all') {
-      // Só as reuniões do escopo, numa pasta da conversa com o índice delas.
+    } else if (chat.scope.kind !== 'all' || whatsappChats.length) {
+      // Só as reuniões do escopo (e as conversas do WhatsApp), numa pasta da conversa com o índice delas.
       const ids = scopeMeetingIds(chat.scope, await deps.meetings.list(), now())
       scope = await deps.corpus.scopeMany(ids, chat.id)
       if (!scope) return null
+      if (whatsappChats.length && deps.whatsapp) {
+        const written = await deps.whatsapp.exportChats(scope, whatsappChats, chat.scope.whatsappDays ?? WHATSAPP_DEFAULT_SCOPE_DAYS).catch(() => [])
+        whatsapp = written.length > 0
+        if (whatsapp) await deps.corpus.reindexScope?.(chat.id)
+      }
       cwd = scope
-      folder = 'subset'
+      folder = chat.scope.kind === 'all' ? 'all' : 'subset'
     } else {
       await deps.corpus.ensure()
       cwd = deps.corpus.dir
@@ -273,6 +291,7 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
             model,
             thinkMore: chat.thinkMore,
             scope: folder,
+            whatsapp,
             cwd,
             titleOf,
             now,
@@ -284,6 +303,7 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
             binaryPath,
             model,
             scope: folder,
+            whatsapp,
             cwd,
             titleOf,
             env: claudeEnv(deps.baseEnv, binaryPath),

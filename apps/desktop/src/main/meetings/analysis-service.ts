@@ -31,6 +31,8 @@ export interface AnalysisServiceDeps extends OneShotEngine {
   now?: () => number
   newId?: () => string
   timeoutMs?: number
+  /** Contrato 24: mensagens do dia da conversa do WhatsApp ligada (só na análise da reunião inteira, com a opção ligada). */
+  whatsappMaterial?: (meetingId: string) => Promise<string[]>
   /** As análises gravadas de uma reunião mudaram (o detalhe aberto relê). */
   onChange?: (meetingId: string) => void
 }
@@ -83,6 +85,7 @@ export function createAnalysisService(deps: AnalysisServiceDeps): AnalysisServic
     if (!found.ok) return { ok: false, error: 'not-found' }
     // Só as mais recentes vão no pedido: ele não cresce sem fim.
     const previous = previousAnalysisLines(recentAnalyses(request.previous))
+    const whatsappLines = meetingId ? ((await deps.whatsappMaterial?.(meetingId).catch(() => [])) ?? []) : []
     const startedAt = now()
     const { result, model } = await runClaudeOneShot(deps, {
       claudePath: found.path,
@@ -90,7 +93,7 @@ export function createAnalysisService(deps: AnalysisServiceDeps): AnalysisServic
       acpDir: ACP_ANALYSIS_DIR,
       systemPrompt: analysisSystemPrompt(),
       parse: analysisParser(previous.refs),
-      input: analysisInput(lines, analysisNoteLines(request.notes), previous.lines),
+      input: analysisInput(lines, analysisNoteLines(request.notes), previous.lines, whatsappLines),
       label: 'análise',
       timeoutMs: deps.timeoutMs ?? ANALYSIS_TIMEOUT_MS,
       signal,

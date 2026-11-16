@@ -24,6 +24,7 @@ import { tabId, tabPanelId, Tabs } from '../../design/Tabs'
 import { SearchField } from '../meetings/SearchField'
 import { AboutSection } from './AboutSection'
 import { AccountsSection } from './AccountsSection'
+import { WhatsAppSection } from './WhatsAppSection'
 import { AcpAgentField } from './AcpAgentField'
 import { ApiKeyField } from './ApiKeyField'
 import { BrandSection } from './BrandSection'
@@ -388,8 +389,14 @@ function SettingsTabs({ tab }: { tab: SettingsTab }) {
 
           {panel('arquivos', <MeetingFilesSection />)}
 
-          {/* Contrato 11: a conta Google e o Drive; a Microsoft e as agendas vêm no contrato 12. */}
-          {panel('contas', <AccountsSection />)}
+          {/* Contrato 11: a conta Google e o Drive; a Microsoft e as agendas vêm no contrato 12. Contrato 24: o WhatsApp. */}
+          {panel(
+            'contas',
+            <>
+              <AccountsSection />
+              <WhatsAppSection />
+            </>,
+          )}
 
           {panel('sobre', <AboutSection />)}
 

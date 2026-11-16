@@ -4,6 +4,7 @@ import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron'
 import {
   INVOKE_CHANNELS,
   MAIN_EVENT_CHANNELS,
+  PRELOAD_ONLY_EVENTS,
   RECORDING_SESSION_CHANNELS,
   RENDERER_EVENT_CHANNELS,
   type RecordingSessionTag,
@@ -27,7 +28,16 @@ const api: ScribeApi = {
   },
   send(channel, payload) {
     assertChannel(RENDERER_EVENT_CHANNELS, channel)
+    if (PRELOAD_ONLY_EVENTS.includes(channel)) throw new Error(`Canal não permitido: ${channel}`)
     ipcRenderer.send(channel, payload)
+  },
+  // Contrato 24, CA4: o token de clique nasce aqui, só com a ativação do usuário viva (um clique ou tecla de
+  // verdade nos últimos segundos; `element.click()` de um script não conta), e vai ao main antes do pedido.
+  whatsappSend(request) {
+    if (!navigator.userActivation.isActive) return Promise.resolve({ ok: false, error: 'click' })
+    const clickToken = crypto.randomUUID()
+    ipcRenderer.send('scribe:whatsapp-click', clickToken)
+    return ipcRenderer.invoke('scribe:whatsapp-send', { chatId: request.chatId, text: request.text, clickToken })
   },
   on(channel, listener) {
     assertChannel(MAIN_EVENT_CHANNELS, channel)

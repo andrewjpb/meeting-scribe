@@ -12,7 +12,7 @@ import { Note } from '../../design/Note'
 import { AssistantMessage, LiveAssistantMessage, UserMessage } from './ChatMessages'
 import { draftOf, listKey, useChat, viewKey } from './chatStore'
 import { ContextPanel, MODEL_OPTIONS } from './ContextPanel'
-import { chatSuggestionGroups, chosenMeetings, modelLabel, scopeLabel } from './format'
+import { chatSuggestionGroups, chosenMeetings, modelLabel, scopeLabel, withWhatsApp } from './format'
 import type { ChatMeetings } from './useChatMeetings'
 
 interface ChatConversationProps {
@@ -238,7 +238,7 @@ export function ChatConversation({ chatId, meetingId, meetings, contextOpen, onC
     else useChat.getState().setDraft(meetingId, { thinkMore: !thinkMore })
   }
   const pickScope = (kind: ChatScopeKind): void => {
-    changeScope(kind === 'meetings' ? { kind, meetingIds: scope.meetingIds ?? [] } : { kind })
+    changeScope(withWhatsApp(kind === 'meetings' ? { kind, meetingIds: scope.meetingIds ?? [] } : { kind }, scope))
     // "Reuniões escolhidas" se escolhe no painel.
     if (kind === 'meetings') onContextOpen(true)
   }

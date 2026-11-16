@@ -15,6 +15,7 @@ import { notesInOrder, type MeetingNote } from '../../shared/meeting-notes'
 import { escapeHeadings, taskLine, type MeetingSummary } from '../../shared/meeting-summary'
 import type { Meeting } from '../../shared/meetings'
 import { firstSentence } from '../../shared/meetings-overview'
+import { WHATSAPP_EXPORT_PREFIX } from '../../shared/whatsapp'
 import { durationLabel } from '../../shared/transcript-markdown'
 import { formatClock, type TranscriptDocument } from '../../shared/transcription'
 import { cleanFileTitle } from '../audio-files/names'
@@ -104,8 +105,8 @@ export function corpusIndexLine(meeting: Meeting, summary: MeetingSummary | null
   return `- ${date} · ${oneLine(meeting.title)} · ${overview} · arquivo: ${corpusFileName(meeting)} · ${MEETING_LINK_SCHEME}${meeting.id}`
 }
 
-/** `INDICE.md`: uma linha por reunião, da mais recente para a mais antiga. */
-export function corpusIndexMarkdown(entries: readonly { meeting: Meeting; summary: MeetingSummary | null }[]): string {
+/** `INDICE.md`: uma linha por reunião, da mais recente para a mais antiga; no fim, as conversas do WhatsApp da pasta (contrato 24). */
+export function corpusIndexMarkdown(entries: readonly { meeting: Meeting; summary: MeetingSummary | null }[], whatsappFiles: readonly string[] = []): string {
   const sorted = [...entries].sort((a, b) => Date.parse(b.meeting.startedAt) - Date.parse(a.meeting.startedAt))
   const lines = [
     '# Índice das reuniões',
@@ -113,6 +114,7 @@ export function corpusIndexMarkdown(entries: readonly { meeting: Meeting; summar
     'Uma linha por reunião, da mais recente para a mais antiga: data e hora · título · primeira frase do resumo · arquivo · link para citar.',
     '',
     ...(sorted.length ? sorted.map(({ meeting, summary }) => corpusIndexLine(meeting, summary)) : ['Nenhuma reunião gravada.']),
+    ...(whatsappFiles.length ? ['', '## Conversas do WhatsApp', '', 'Um arquivo por conversa escolhida, com as mensagens dos últimos dias.', '', ...whatsappFiles.map((file) => `- arquivo: ${file}`)] : []),
   ]
   return `${lines.join('\n')}\n`
 }
@@ -166,6 +168,8 @@ export interface ChatCorpus {
    * delas (contrato 16). Reunião que não existe fica de fora.
    */
   scopeMany(meetingIds: readonly string[], key: string): Promise<string | null>
+  /** Reescreve o `INDICE.md` de uma pasta de escopo (as conversas do WhatsApp entraram nela; contrato 24). */
+  reindexScope(key: string): Promise<void>
   /** Apaga a pasta temporária de uma conversa. */
   dropScope(key: string): Promise<void>
   /** Ao abrir o app: apaga as pastas temporárias que sobraram. */
@@ -226,7 +230,8 @@ export function createChatCorpus(deps: ChatCorpusDeps): ChatCorpus {
     const meetings = (await deps.meetings.list()).filter((meeting) => wanted.has(meeting.id))
     const entries = await Promise.all(meetings.map(async (meeting) => ({ meeting, summary: await deps.summaries.get(meeting.id).catch(() => null) })))
     const file = join(target, CHAT_INDEX_FILE)
-    await writeAtomic(file, corpusIndexMarkdown(entries))
+    const whatsappFiles = (await readdir(target).catch(() => [] as string[])).filter((name) => name.startsWith(WHATSAPP_EXPORT_PREFIX) && name.endsWith('.md')).sort()
+    await writeAtomic(file, corpusIndexMarkdown(entries, whatsappFiles))
     await chmod(file, 0o600)
   }
 
@@ -368,6 +373,15 @@ export function createChatCorpus(deps: ChatCorpusDeps): ChatCorpus {
         }
         await writeScopeIndex(target, meetings.map((meeting) => meeting.id))
         return target
+      }),
+
+    reindexScope: (key) =>
+      serial(async () => {
+        const folder = safeKey(key)
+        if (!folder) return
+        const target = join(scopes, folder)
+        if (!(await exists(target))) return
+        await writeScopeIndex(target, idsIn(await readdir(target)))
       }),
 
     // Na fila: a pasta apagada ao fechar uma conversa nunca some depois de a próxima pergunta montá-la de novo.

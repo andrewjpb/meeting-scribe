@@ -126,6 +126,9 @@
   --logo-tile: #ffffff;
   --logo-mark: #0a2a5e;
   --logo-dot: #3b82f6;
+  /* QR code do pareamento do WhatsApp (contrato 24): escuro sobre branco nos dois temas, como o celular lê. */
+  --qr-dark: #061a3d;
+  --qr-light: #ffffff;
 
   --font-interface: 'Helvetica Neue', Helvetica, Arial, sans-serif;
   --font-code: Menlo, ui-monospace, monospace;

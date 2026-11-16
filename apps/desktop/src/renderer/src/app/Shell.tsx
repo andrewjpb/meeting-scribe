@@ -2,6 +2,7 @@ import { Route, Routes, useLocation } from 'react-router'
 import { APP_ROUTES, routeIdOf } from './routes'
 import { Sidebar } from './Sidebar'
 import { useMainNavigation } from './useMainNavigation'
+import { useWhatsAppSync } from '../features/whatsapp/whatsappStore'
 
 /**
  * Esqueleto da janela: barra lateral azul à esquerda, área principal em `--bg`. A faixa arrastável de
@@ -11,6 +12,7 @@ import { useMainNavigation } from './useMainNavigation'
 export function Shell() {
   const location = useLocation()
   useMainNavigation()
+  useWhatsAppSync()
   const routeId = routeIdOf(location.pathname)
   // Trocar de aba em Configurações não remonta a tela (nem refaz a transição de rota).
   const routeKey = routeId === 'configuracoes' ? routeId : location.pathname

@@ -6,6 +6,7 @@ import { execFile, spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { EventEmitter } from 'node:events'
 import { createServer } from 'node:http'
+import { join } from 'node:path'
 import { gzipSync } from 'node:zlib'
 import { updateAssetName } from '../shared/updates'
 import type { FetchInit, FetchLike, FetchResponse } from './assemblyai/gateway'
@@ -16,6 +17,7 @@ import type { SpawnAcp } from './acp/agent'
 import { NPM_REGISTRY, type AcpPackage, type DownloadTarball } from './acp/install'
 import { createFakeGoogle, type FakeGoogle } from './google/fake-google'
 import { fakeMediaAccess } from './permissions'
+import { writeFakeIndex } from './whatsapp/fake-index'
 import type { DownloadRequest } from './updates/download'
 import { LATEST_RELEASE_URL, RELEASE_DOWNLOAD_PREFIX } from './updates/release'
 
@@ -170,6 +172,11 @@ export interface SmokeFixtures {
   leaveChoice: number
   /** Google falso (contrato 11): token, perfil, foto e Drive em memória; nada sai da máquina. */
   google: FakeGoogle
+  /** WhatsApp (contrato 24): o índice de pacotes falso numa pasta local (o serviço é o `backend_fake.py`). */
+  whatsapp: { indexDir: string; requirements: string }
+  /** Diálogos nativos de "Enviar para …?" (o de verdade nunca abre no smoke) e o botão que o substituto "clica" (1 é "Enviar"). */
+  whatsappSendDialogs: { message: string; detail: string; buttons: string[] }[]
+  whatsappSendChoice: number
 }
 
 export interface SmokeLock {
@@ -271,7 +278,7 @@ export function createSmokeUpdates(currentVersion: string): SmokeUpdates {
 
 const reply = (status: number, body: unknown): FetchResponse => ({ status, text: () => Promise.resolve(JSON.stringify(body)) })
 
-export function createSmokeFixtures(currentVersion: string): SmokeFixtures {
+export function createSmokeFixtures(currentVersion: string, userDataDir: string): SmokeFixtures {
   const fixtures: SmokeFixtures = {
     updates: createSmokeUpdates(currentVersion),
     media: fakeMediaAccess('not-determined'),
@@ -293,6 +300,9 @@ export function createSmokeFixtures(currentVersion: string): SmokeFixtures {
     leaveDialogs: [],
     leaveChoice: 0,
     google: createFakeGoogle({ clientId: SMOKE_GOOGLE_CLIENT_ID, clientSecret: SMOKE_GOOGLE_CLIENT_SECRET, profile: { name: 'Andrea Teste', email: 'andrea.teste@example.com' } }),
+    whatsapp: writeFakeIndex(join(userDataDir, 'whatsapp-indice-falso')),
+    whatsappSendDialogs: [],
+    whatsappSendChoice: 0,
     lock: { skewMs: 0, touchIdAvailable: true, touchIdApproves: true, touchIdPrompts: 0, power: new EventEmitter(), refresh: () => undefined },
     fetch: (url: string, init: FetchInit) => {
       const path = new URL(url).pathname

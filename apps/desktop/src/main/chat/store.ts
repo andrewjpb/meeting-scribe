@@ -28,8 +28,10 @@ import {
   CHAT_TITLE_MAX,
   type Chat,
   type ChatListItem,
+  type ChatScope,
 } from '../../shared/chat'
 import { CHAT_MODELS } from '../../shared/settings-defaults'
+import { WHATSAPP_CHAT_ID_PATTERN, WHATSAPP_DEFAULT_SCOPE_DAYS, WHATSAPP_SCOPE_CHATS_MAX, WHATSAPP_SCOPE_DAYS } from '../../shared/whatsapp'
 
 export const CHATS_DIR = 'chats'
 
@@ -67,10 +69,21 @@ export const chatScopeSchema = z
   .object({
     kind: z.enum(CHAT_SCOPE_KINDS),
     meetingIds: z.array(meetingIdSchema).max(CHAT_SCOPE_MEETINGS_MAX).optional(),
+    // Contrato 24: conversas do WhatsApp no escopo, em qualquer tipo.
+    whatsappChats: z.array(z.string().regex(WHATSAPP_CHAT_ID_PATTERN)).max(WHATSAPP_SCOPE_CHATS_MAX).optional(),
+    whatsappDays: z
+      .number()
+      .int()
+      .refine((days) => (WHATSAPP_SCOPE_DAYS as readonly number[]).includes(days))
+      .optional(),
   })
   .strict()
-  // Só "Reuniões escolhidas" leva a lista.
-  .transform((scope) => (scope.kind === 'meetings' ? { kind: scope.kind, meetingIds: [...new Set(scope.meetingIds ?? [])] } : { kind: scope.kind }))
+  // Só "Reuniões escolhidas" leva a lista; as conversas do WhatsApp vão em qualquer escopo.
+  .transform((scope): ChatScope => {
+    const base: ChatScope = scope.kind === 'meetings' ? { kind: scope.kind, meetingIds: [...new Set(scope.meetingIds ?? [])] } : { kind: scope.kind }
+    const chats = [...new Set(scope.whatsappChats ?? [])]
+    return chats.length ? { ...base, whatsappChats: chats, whatsappDays: scope.whatsappDays ?? WHATSAPP_DEFAULT_SCOPE_DAYS } : base
+  })
 
 const messageSchema = z.object({
   role: z.enum(['user', 'assistant']),

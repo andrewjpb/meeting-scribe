@@ -9,8 +9,9 @@ import { Icon } from '../../design/Icon'
 import { Segmented } from '../../design/Segmented'
 import { dayLabel, timeLabel } from '../meetings/format'
 import { useMeetingsSearch } from '../meetings/useMeetingsOverview'
-import { answerTimeLabel, CHAT_MODEL_LABELS, chatTotals, chosenMeetings, consultedIn, COST_HINT, costLabel, scopeLabel, tokensLabel } from './format'
+import { answerTimeLabel, CHAT_MODEL_LABELS, chatTotals, chosenMeetings, consultedIn, COST_HINT, costLabel, scopeLabel, tokensLabel, withWhatsApp } from './format'
 import type { ChatMeetings } from './useChatMeetings'
+import { WhatsAppScopeSection } from './WhatsAppScopeSection'
 
 const SCOPE_OPTIONS: readonly { kind: ChatScopeKind; label: (total: number | null) => string }[] = [
   { kind: 'all', label: (total) => scopeLabel({ kind: 'all' }, total) },
@@ -132,7 +133,7 @@ export function ContextPanel({ meetingId, scope, model, messages, meetings, onSc
   // Só as que ainda existem: a excluída sai da lista na próxima mudança.
   const chosen = chosenMeetings(scope, meetings.list ? (id) => meetings.byId.has(id) : null)
   const radios = useRef<HTMLDivElement | null>(null)
-  const pick = (kind: ChatScopeKind): void => onScope(kind === 'meetings' ? { kind: 'meetings', meetingIds: chosen } : { kind })
+  const pick = (kind: ChatScopeKind): void => onScope(withWhatsApp(kind === 'meetings' ? { kind: 'meetings', meetingIds: chosen } : { kind }, scope))
   // Grupo de rádio com tabindex móvel: Tab entra na opção marcada; setas, Home e End trocam e marcam.
   const onRadioKey = (event: KeyboardEvent<HTMLDivElement>): void => {
     const at = SCOPE_OPTIONS.findIndex((option) => option.kind === scope.kind)
@@ -193,7 +194,7 @@ export function ContextPanel({ meetingId, scope, model, messages, meetings, onSc
                 )
               })}
             </div>
-            {scope.kind === 'meetings' && <MeetingPicker meetings={meetings} chosen={chosen} onChange={(ids) => onScope({ kind: 'meetings', meetingIds: ids })} />}
+            {scope.kind === 'meetings' && <MeetingPicker meetings={meetings} chosen={chosen} onChange={(ids) => onScope(withWhatsApp({ kind: 'meetings', meetingIds: ids }, scope))} />}
             {notice && (
               <p data-chat-scope-notice role="status" className="text-12 text-text-muted">
                 {notice}
@@ -202,6 +203,7 @@ export function ContextPanel({ meetingId, scope, model, messages, meetings, onSc
           </>
         )}
       </PanelSection>
+      {!meetingId && <WhatsAppScopeSection scope={scope} onScope={onScope} />}
       <PanelSection title="Consultadas nesta conversa">
         {consulted.length ? (
           <ul data-chat-context-consulted className="-mx-1 flex flex-col">

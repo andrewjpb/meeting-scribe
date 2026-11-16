@@ -6,6 +6,8 @@ import { UpdateNotice } from '../features/settings/UpdateNotice'
 import { useBranding } from './brandingStore'
 import { LockButton } from './LockButton'
 import { ROUTE_PATHS } from '@shared/routes'
+import { whatsappInstalled } from '@shared/whatsapp'
+import { useWhatsApp } from '../features/whatsapp/whatsappStore'
 import { APP_ROUTES } from './routes'
 
 // O item leva ao caminho da rota (Configurações sem a aba abre a última aberta) e fica ativo nas sub-rotas dela.
@@ -17,6 +19,9 @@ const NAV_ITEMS = APP_ROUTES.flatMap((route) => (route.nav ? [{ ...route.nav, id
  */
 export function Sidebar() {
   const branding = useBranding((state) => state.branding)
+  // Contrato 24: "WhatsApp" só com o serviço instalado.
+  const whatsapp = useWhatsApp((state) => (state.status ? whatsappInstalled(state.status.state) : false))
+  const items = NAV_ITEMS.filter((item) => item.id !== 'whatsapp' || whatsapp)
   return (
     <aside className="on-side flex w-[var(--sidebar-width)] shrink-0 flex-col bg-side-bg px-3 text-side-text">
       <div className="drag h-[var(--titlebar-height)] shrink-0" />
@@ -34,7 +39,7 @@ export function Sidebar() {
         </p>
       </div>
       <nav aria-label="Navegação principal" className="mt-6 flex flex-col gap-0.5">
-        {NAV_ITEMS.map((item) => (
+        {items.map((item) => (
           <NavLink
             key={item.id}
             to={item.path}
