@@ -8,5 +8,8 @@ export default defineConfig({
   test: {
     include: ['test/**/*.test.ts'],
     environment: 'node',
+    // Testes de tempo (busca de 300 h, troca de sessão da tradução, parser do chat) falhavam com um
+    // processo por arquivo disputando a CPU; 4 de cada vez deixa a suíte estável numa máquina carregada.
+    maxWorkers: 4,
   },
 })
