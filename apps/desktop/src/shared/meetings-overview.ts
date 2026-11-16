@@ -30,6 +30,8 @@ export interface MeetingOverview {
   summaryState: ListSummaryState
   /** Anotações com texto (contrato 13); a lista mostra "N anotações" quando passa de zero. */
   notes: number
+  /** Já está no Google Drive (contrato 11): a lista mostra um ícone de nuvem. Ausente é não. */
+  inDrive?: boolean
 }
 
 export type SearchField = 'title' | 'transcript' | 'summary' | 'notes'

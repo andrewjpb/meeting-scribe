@@ -1,12 +1,16 @@
 // Processo principal: esquema do app, segurança da sessão, IPC, menu e janela.
+import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { app, BrowserWindow, clipboard, dialog, Menu, nativeImage, net, powerMonitor, safeStorage, session, shell, systemPreferences, type OpenDialogOptions, type SaveDialogOptions } from 'electron'
+import { DRIVE_FOLDER_URL_PREFIX } from '../shared/accounts'
 import { ASSEMBLYAI_DASHBOARD_URL } from '../shared/assemblyai'
 import { brandTexts, DEFAULT_BRAND_NAME } from '../shared/branding'
 import { lockedWindowTitle, type LockStatus } from '../shared/lock'
 import { privacyPaneUrl } from '../shared/privacy'
 import type { AgentProfileId, AppSettings } from '../shared/settings-defaults'
 import type { TranscriptDocument } from '../shared/transcription'
+import { isBrowserUrl } from './accounts/oauth'
+import { netHttp } from './accounts/transport'
 import { createGatewayClient, type FetchInit, type FetchResponse } from './assemblyai/gateway'
 import { createTokenClient, requestToken } from './assemblyai/token'
 import { createTranslationService } from './assemblyai/translation'
@@ -19,6 +23,8 @@ import { registerDisplayMediaHandler } from './capture/display-media'
 import { createChatCorpus, type ChatCorpus } from './chat/corpus'
 import { createChatService, type ChatService } from './chat/service'
 import { createFileChatStore } from './chat/store'
+import { createGoogleAccount, type GoogleAccountService } from './google/account'
+import { createDriveSync, createEndOfRecordingHooks, type DriveSyncService } from './google/drive-sync'
 import { nodeExecFile } from './claude-cli/locate'
 import { createClaudeService, type ClaudeService } from './claude-cli/service'
 import { nodeSpawnSummary } from './claude-cli/summary'
@@ -95,6 +101,8 @@ const recordingSessions = createRecordingSessions(() => {
 })
 /** Um diálogo de "gravação em andamento" por vez. */
 let leaveAsked = false
+/** Envio ao Google Drive (contrato 11), para "Guardar no Google Drive" desligado esvaziar a fila. */
+let driveService: DriveSyncService | null = null
 
 /**
  * ⌘W ou ⌘Q com gravação em andamento: diálogo nativo. Bloqueado, só "Cancelar"; desbloqueado, também
@@ -168,6 +176,9 @@ function broadcastSettings(settings: AppSettings): void {
   applyBrand(settings)
   // "Usar Touch ID" muda o que o botão "Bloquear" pode.
   void lockService?.refresh().catch(() => undefined)
+  // "Guardar no Google Drive" desligado: a fila esvazia; ligado, ela volta a andar.
+  if (settings.saveToDrive) driveService?.start()
+  else driveService?.clear()
 }
 
 /** Ícone do Dock. No smoke nada toca o Dock de verdade: só o resultado fica registrado. */
@@ -232,6 +243,9 @@ interface AppServices {
   corpus: ChatCorpus
   /** Bloqueio do app (contrato 22): senha, Touch ID, espera e estado. */
   lock: LockService
+  /** Conta Google e envio ao Drive (contrato 11). */
+  google: GoogleAccountService
+  drive: DriveSyncService
 }
 
 function fetchImpl(url: string, init: FetchInit): Promise<FetchResponse> {
@@ -257,6 +271,30 @@ function createAppServices(userData: string): AppServices {
   const notes = createFileNotesStore({ dir: userData })
   // Análises "Analisar até agora" (contrato 19), salvas com a reunião.
   const analyses = createFileAnalysesStore({ dir: userData })
+  // Conta Google e fila do Drive (contrato 11). Rede só pelo `net.fetch` do main; no smoke, o Google falso em
+  // memória (`google/fake-google.ts`) com o `safeStorage` substituto, e o "navegador" é o próprio smoke.
+  const googleFetch = smokeFixtures ? smokeFixtures.google.fetch : netHttp
+  if (smokeFixtures) smokeFixtures.google.photo = readFileSync(join(app.getAppPath(), 'test', 'fixtures', 'brand', 'logo-smoke.png'))
+  const google = createGoogleAccount({
+    dir: userData,
+    safeStorage: smokeFixtures ? memorySafeStorage() : safeStorage,
+    fetch: googleFetch,
+    openExternal: openBrowser,
+    photoToDataUrl,
+    onStatus: (status) => broadcast(BrowserWindow.getAllWindows(), 'scribe:google-state', status),
+    onSignedIn: (email) => drive.signedIn(email),
+    onSignedOut: () => drive.clear(),
+  })
+  const drive = createDriveSync({
+    dir: userData,
+    account: google,
+    enabled: async () => (await settings.get()).saveToDrive,
+    files: { meetings, transcripts, summaries, notes, analyses },
+    fetch: googleFetch,
+    onStatus: (meetingId, status) => broadcast(BrowserWindow.getAllWindows(), 'scribe:drive-state', { meetingId, status }),
+    ...(app.isPackaged ? {} : { log: (message: string) => console.log(message) }),
+  })
+  driveService = drive
   // No smoke a área de transferência fica só na memória: o clipboard do Mac não é tocado.
   const appClipboard = smokeFixtures ? { writeText: (text: string): void => void smokeFixtures.copiedTexts.push(text) } : clipboard
   // Tradução pelo `claude` local. No smoke, só o binário falso (test/fixtures/fake-claude.mjs): o
@@ -355,8 +393,11 @@ function createAppServices(userData: string): AppServices {
     clipboard: appClipboard,
     writeToFolder: (meeting, result, meetingAnalyses) => writeSummaryFile(meeting, result, true, meetingAnalyses),
     onStatus: (meetingId, status) => {
-      // Resumo novo entra no acervo do chat.
-      if (status.state === 'ready') void corpus.sync(meetingId).catch(() => undefined)
+      // Resumo novo entra no acervo do chat e vai para o Drive (substitui o anterior lá).
+      if (status.state === 'ready') {
+        void corpus.sync(meetingId).catch(() => undefined)
+        void drive.enqueue(meetingId, ['summary']).catch(() => undefined)
+      }
       broadcast(BrowserWindow.getAllWindows(), 'scribe:summary-state', { meetingId, status })
     },
     ...(app.isPackaged ? {} : { log: (message: string) => console.log(message) }),
@@ -382,7 +423,7 @@ function createAppServices(userData: string): AppServices {
   // internos; os arquivos da pasta ficam.
   const meetingsService = createMeetingsService({ meetings, transcripts, summaries: summary, notes, analyses: analysis, chats: chat, clipboard: appClipboard })
   // Lista e busca da tela de Reuniões (contrato 10): lê só o disco local; o estado "gerando" vem do resumo.
-  const meetingsIndex = createMeetingsIndex({ dir: userData, meetings, transcripts, summaries, notes, activity: (id) => summary.activity(id) })
+  const meetingsIndex = createMeetingsIndex({ dir: userData, meetings, transcripts, summaries, notes, activity: (id) => summary.activity(id), inDrive: (id) => drive.inDrive(id) })
   // Arquivos da reunião (contrato 07). No smoke, a "pasta pessoal" fica dentro do userData temporário
   // (nada vai para ~/Documents), o diálogo responde o que o smoke mandar e nada abre no Finder.
   const home = smokeUserData ? join(smokeUserData, 'home') : app.getPath('home')
@@ -489,7 +530,25 @@ function createAppServices(userData: string): AppServices {
     corpus,
     acp: acpAgent,
     lock,
+    google,
+    drive,
   }
+}
+
+/** Foto do perfil Google em data URL PNG, com até 256 px no lado maior; `null` se não for imagem. */
+function photoToDataUrl(bytes: Uint8Array): string | null {
+  const image = nativeImage.createFromBuffer(Buffer.from(bytes))
+  if (image.isEmpty()) return null
+  const { width, height } = image.getSize()
+  const sized = width > 256 || height > 256 ? image.resize(width >= height ? { width: 256, quality: 'best' } : { height: 256, quality: 'best' }) : image
+  return sized.toDataURL()
+}
+
+/** Login da conta (contratos 11 e 12): só a página do Google ou da Microsoft, no navegador do sistema. */
+async function openBrowser(url: string): Promise<void> {
+  if (!isBrowserUrl(url)) throw new Error('endereço de login fora da lista')
+  if (smokeFixtures) smokeFixtures.openedUrls.push(url)
+  else await shell.openExternal(url)
 }
 
 /** "Escolher pasta…": diálogo do macOS preso à janela principal, com "Nova pasta". */
@@ -544,9 +603,11 @@ function openExternal(url: string): void {
 }
 
 function registerIpc(services: AppServices): void {
-  const { settings, meetings, meetingsService, meetingsIndex, tokenClient, translation, claude, files, summary, analysis, download, branding, updates, chat, corpus, acp, lock } = services
+  const { settings, meetings, meetingsService, meetingsIndex, tokenClient, translation, claude, files, summary, analysis, download, branding, updates, chat, corpus, acp, lock, google, drive } = services
   /** Reunião salva, renomeada ou com anotações novas: o `.md` dela no acervo do chat é reescrito. */
   const touched = (meetingId: string): void => void corpus.sync(meetingId).catch(() => undefined)
+  /** Contrato 11: quando a reunião que acabou de ser gravada entra na fila do Drive. */
+  const driveEnd = createEndOfRecordingHooks({ enqueue: (meetingId, kinds) => drive.enqueue(meetingId, kinds), filesPending: () => files.hasOpenSession() })
   handle('scribe:app-info', appOrigin, () => ({
     name: brandName,
     version: app.getVersion(),
@@ -585,6 +646,8 @@ function registerIpc(services: AppServices): void {
   handle('scribe:transcript-save', appOrigin, async (_event, { document }) => {
     await meetingsService.saveTranscript(document as TranscriptDocument)
     touched((document as TranscriptDocument).meetingId)
+    // Contrato 11: sem pasta, a transcrição vai para o Drive montada na hora; com pasta, espera o `audio-finish`.
+    driveEnd.transcriptSaved((document as TranscriptDocument).meetingId)
     return true
   })
   handle('scribe:transcript-get', appOrigin, (_event, { meetingId }) => meetingsService.getTranscript(meetingId))
@@ -613,7 +676,12 @@ function registerIpc(services: AppServices): void {
   handle('scribe:audio-folder-choose', appOrigin, () => files.chooseFolder())
   handle('scribe:audio-begin', appOrigin, (_event, request) => files.begin(request))
   handle('scribe:audio-append', appOrigin, (_event, request) => files.append(request))
-  handle('scribe:audio-finish', appOrigin, (_event, request) => files.finish(request))
+  handle('scribe:audio-finish', appOrigin, async (_event, request) => {
+    const result = await files.finish(request)
+    // Contrato 11: o áudio e o `.md` da pasta vão para o Drive, com o nome base de verdade.
+    driveEnd.filesFinished((request as { meetingId: string }).meetingId)
+    return result
+  })
   handle('scribe:meeting-files', appOrigin, (_event, request) => files.info((request as { meetingId?: unknown } | undefined)?.meetingId))
   handle('scribe:meeting-file-open', appOrigin, (_event, request) => files.open(request))
   handle('scribe:meeting-file-reveal', appOrigin, (_event, request) => files.reveal(request))
@@ -649,6 +717,20 @@ function registerIpc(services: AppServices): void {
   handle('scribe:lock-password-set', appOrigin, (_event, request) => lock.setPassword(request))
   handle('scribe:lock-password-remove', appOrigin, (_event, request) => lock.removePassword(request))
   onEvent('scribe:lock-activity', appOrigin, () => lock.activity())
+  // Conta Google e Drive (contrato 11): a chave secreta e os tokens nunca voltam por aqui.
+  handle('scribe:google-status', appOrigin, () => google.status())
+  handle('scribe:google-client-save', appOrigin, (_event, request) => google.saveClient(request))
+  handle('scribe:google-sign-in', appOrigin, () => google.signIn())
+  handle('scribe:google-sign-in-cancel', appOrigin, () => google.cancelSignIn())
+  handle('scribe:google-sign-out', appOrigin, () => google.signOut())
+  handle('scribe:drive-status', appOrigin, (_event, request) => drive.status((request as { meetingId?: unknown } | undefined)?.meetingId))
+  handle('scribe:drive-retry', appOrigin, (_event, request) => drive.retry((request as { meetingId?: unknown } | undefined)?.meetingId))
+  handle('scribe:drive-open', appOrigin, (_event, request) => {
+    const url = drive.folderUrl((request as { meetingId?: unknown } | undefined)?.meetingId)
+    if (!url?.startsWith(DRIVE_FOLDER_URL_PREFIX)) return false
+    openExternal(url)
+    return true
+  })
   // Gravação em curso: o token vale até o fim do "Encerrar" ou até a janela que a abriu sumir.
   handle('scribe:recording-session-open', appOrigin, (event) => recordingSessions.open(event.sender))
   handle('scribe:recording-session-close', appOrigin, (_event, request) => recordingSessions.close((request as { token?: unknown } | undefined)?.token))
@@ -731,6 +813,8 @@ void app.whenReady().then(async () => {
   registerIpc(services)
   // Marca gravada: título da primeira janela, "Sobre" e ícone do Dock antes de abrir.
   applyBrand(await services.settings.getSettings())
+  // Fila do Drive deixada por uma execução anterior (contrato 11): continua sozinha, também bloqueado.
+  services.drive.start()
   // `.part` deixado por um app fechado ou travado no meio da gravação vira "(incompleto)" (CA7).
   void services.files.recover().catch(() => undefined)
   // Acervo do chat: pastas temporárias de conversas de uma reunião que sobraram, e o acervo refeito se faltar.
@@ -751,6 +835,7 @@ void app.whenReady().then(async () => {
     services.analysis.dispose()
     services.chat.dispose()
     services.updates.dispose()
+    services.drive.dispose()
   })
   installMenu()
   applyLockStatus(lockAtLaunch)
@@ -784,6 +869,7 @@ void app.whenReady().then(async () => {
     services.analysis.dispose()
     services.chat.dispose()
     services.updates.dispose()
+    services.drive.dispose()
     app.exit(code)
     return
   }

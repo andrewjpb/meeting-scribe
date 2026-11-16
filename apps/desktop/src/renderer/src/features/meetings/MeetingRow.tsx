@@ -1,7 +1,9 @@
+import { Cloud } from 'lucide-react'
 import { Link } from 'react-router'
 import { notesCountLabel } from '@shared/meeting-notes'
 import type { MeetingOverview, SearchField, SnippetPart } from '@shared/meetings-overview'
 import { meetingPath } from '@shared/routes'
+import { Icon } from '../../design/Icon'
 import { attendeesLabel, countLabel, durationLabel, timeLabel } from './format'
 import { SourceDots } from './SourceDots'
 
@@ -21,7 +23,7 @@ interface MeetingRowProps {
 /**
  * Linha da lista (contrato 10, CA3): título; hora, duração e participantes da agenda; a primeira frase do
  * resumo em até duas linhas; "N tarefas", "N decisões" e "N anotações" (contrato 13); "Gerando resumo…"
- * enquanto gera. A linha inteira
+ * enquanto gera; à direita, a nuvem quando a reunião está no Google Drive (contrato 11). A linha inteira
  * é o link para o detalhe, inclusive pelo teclado.
  */
 export function MeetingRow({ entry, found }: MeetingRowProps) {
@@ -76,7 +78,13 @@ export function MeetingRow({ entry, found }: MeetingRowProps) {
           </p>
         )}
       </div>
-      <span className="pt-2">
+      <span className="flex items-center gap-2 pt-1">
+        {/* Contrato 11: discreto, só quando a reunião já está no Google Drive. */}
+        {entry.inDrive && (
+          <span data-in-drive role="img" aria-label="No Google Drive" title="No Google Drive" className="text-text-faint">
+            <Icon icon={Cloud} size={14} />
+          </span>
+        )}
         <SourceDots sources={meeting.sources} />
       </span>
     </Link>

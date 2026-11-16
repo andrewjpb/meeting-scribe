@@ -69,6 +69,7 @@ const lenientSchema = z.object({
   lockAfterMinutes: lockAfterMinutesSchema.catch(D.lockAfterMinutes),
   lockOnSystemLock: z.boolean().catch(D.lockOnSystemLock),
   lockOnLaunch: z.boolean().catch(D.lockOnLaunch),
+  saveToDrive: z.boolean().catch(D.saveToDrive),
 })
 
 const patchSchema = z
@@ -95,6 +96,7 @@ const patchSchema = z
     lockAfterMinutes: lockAfterMinutesSchema,
     lockOnSystemLock: z.boolean(),
     lockOnLaunch: z.boolean(),
+    saveToDrive: z.boolean(),
   })
   .partial()
   .strict()

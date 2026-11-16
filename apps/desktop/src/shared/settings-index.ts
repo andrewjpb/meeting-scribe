@@ -51,6 +51,8 @@ export function settingsIndex(agent: string): SettingsEntry[] {
     row('claude', 'Chat e resumo', 'Resumir ao encerrar', 'Ao encerrar, o Claude lê a transcrição e escreve o resumo, as decisões e as tarefas.'),
     row('arquivos', 'Arquivos da reunião', 'Salvar áudio e transcrição numa pasta', 'Para cada reunião: um arquivo de áudio (você e os participantes) e a transcrição em texto. Avise as pessoas antes de gravar.'),
     row('arquivos', 'Arquivos da reunião', 'Pasta', 'Onde ficam o áudio e a transcrição de cada reunião.', '"Salvar áudio e transcrição numa pasta" está ligado'),
+    row('contas', 'Google', 'Conta Google', 'Entrar com a conta Google para guardar as reuniões no Drive.'),
+    row('contas', 'Google', 'Guardar no Google Drive', 'Depois de cada reunião, o áudio, a transcrição e o resumo vão para a pasta "LAP Reuniões" do seu Drive.', 'a conta Google está conectada'),
     row('sobre', 'Sobre', 'Versão', 'Versão instalada do app.'),
     row('sobre', 'Sobre', 'Electron', 'Base do app.'),
     row('sobre', 'Sobre', 'Chrome', 'Motor das telas.'),

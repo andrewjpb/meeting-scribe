@@ -37,6 +37,8 @@ export interface MeetingsIndexDeps {
   /** Anotações (contrato 13): "N anotações" na lista e a busca "nas anotações". */
   notes?: Pick<NotesStore, 'get'>
   activity: (meetingId: string) => SummaryActivity
+  /** Contrato 11: a reunião já está no Google Drive (ícone de nuvem na lista). */
+  inDrive?: (meetingId: string) => boolean
 }
 
 export interface MeetingsIndex {
@@ -273,7 +275,7 @@ export function createMeetingsIndex(deps: MeetingsIndexDeps): MeetingsIndex {
   function entryOf(meeting: Meeting, summary: MeetingSummary | null, notesCount: number): MeetingOverview {
     const activity = deps.activity(meeting.id)
     const summaryState: ListSummaryState = activity ?? (summary ? 'ready' : 'none')
-    return { meeting, summary: summary ? summaryPreview(summary) : null, summaryState, notes: notesCount }
+    return { meeting, summary: summary ? summaryPreview(summary) : null, summaryState, notes: notesCount, ...(deps.inDrive?.(meeting.id) ? { inDrive: true } : {}) }
   }
 
   async function overview(): Promise<MeetingOverview[]> {

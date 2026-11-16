@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import type { MeetingDownloadKind, MeetingFileInfo, MeetingFileKind, MeetingFilesInfo } from '@shared/meeting-files'
 import { rereadWhenUnlocked } from '../../app/lockStore'
+import { DriveStatusRow } from './DriveStatusRow'
 
 const LABELS: Record<MeetingFileKind, { name: string; missing: string }> = {
   audio: { name: 'Áudio', missing: 'Áudio não encontrado em' },
@@ -23,7 +24,7 @@ const ROW_CLASS = 'flex min-h-8 items-center gap-4 border-t border-line py-1.5 f
  * para a transcrição, com "Abrir", "Mostrar no Finder" e "Baixar…"; arquivo apagado ou movido diz onde
  * deveria estar. Sem arquivos: o aviso de que o áudio não fica guardado e a transcrição para baixar em
  * Markdown. O resumo, quando existe, também pode ser baixado. Os caminhos ficam no main: o renderer só
- * pede pela reunião e pelo tipo.
+ * pede pela reunião e pelo tipo. Por último, o estado da reunião no Google Drive (contrato 11).
  */
 export function MeetingFiles({ meetingId, hasFiles, hasTranscript, hasSummary }: { meetingId: string; hasFiles: boolean; hasTranscript: boolean; hasSummary: boolean }) {
   const [info, setInfo] = useState<MeetingFilesInfo | null>(null)
@@ -73,6 +74,10 @@ export function MeetingFiles({ meetingId, hasFiles, hasTranscript, hasSummary }:
             ))}
           </ul>
         )}
+        {/* Contrato 11: o estado no Google Drive, com "Abrir no Drive" ou "Tentar de novo". */}
+        <ul data-meeting-drive aria-label="Google Drive" className="flex flex-col empty:hidden">
+          <DriveStatusRow meetingId={meetingId} rowClass={ROW_CLASS} actionClass={ACTION_CLASS} />
+        </ul>
       </div>
     </div>
   )

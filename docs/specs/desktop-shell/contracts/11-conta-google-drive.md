@@ -1,8 +1,9 @@
 # Contrato 11 — Entrar com a conta Google e guardar cada reunião no Google Drive
-Feature: desktop-shell  ·  Wave: 11  ·  Depende de: 10
+Feature: desktop-shell  ·  Wave: 21  ·  Depende de: 22 (bloqueio), 18 (aba Contas), 17 (motor), 13/19 (notas e análises no `.md`)
 
 ## Pré-condições
-- Contratos 01 a 10 aceitos; `gates.sh` verde.
+- Contratos 01 a 22 aceitos (0.5.0); `SMOKE_NO_SANDBOX=1 bash apps/desktop/scripts/gates.sh` verde.
+- Atualização de 16/11/2026 17:20: o Andrew pediu para fazer a aba **Contas** agora (print da aba com "Em breve"). Desde o contrato 18 existe a aba Configurações › **Contas** (hoje só o texto "Em breve: Google Drive e agendas Google e Microsoft."); o bloco deste contrato vai **nela**, substituindo o texto. Os canais IPC novos entram na tabela `WHEN_LOCKED` do 22 (todos recusados com o app bloqueado, salvo o que a fila de envio precisa no main). O `.md` enviado ao Drive é o mesmo da pasta (com anotações do 13 e perguntas em aberto do 19).
 - Pedido do Andrew (15/11/2026 20:40): "guardar automaticamente fazendo uma integração com Google, entrando com a conta do Google e puxando as informações dele". Escolha às 20:48: **tudo numa pasta** (áudio, transcrição e resumo) no Drive.
 - O Andrew cria o cadastro no Google Cloud (projeto, Drive API e Calendar API ligadas, tela de consentimento "Externo" em teste com o e-mail dele como usuário de teste, cliente OAuth do tipo **"App para computador"**). Ele cola o **ID do cliente** e a **chave secreta do cliente** no app (CA2). Nada disso fica no código, no repositório ou no cofre.
 - Login de app de computador pelo padrão do Google: navegador do sistema, redirecionamento para `http://127.0.0.1:<porta livre>` (loopback), PKCE S256 e `state`. Nada de janela de login dentro do Electron (o Google bloqueia e seria inseguro).
@@ -16,7 +17,7 @@ Feature: desktop-shell  ·  Wave: 11  ·  Depende de: 10
 
 ## Critérios de aceite
 - CA1: módulo `oauth.ts` puro + injetável: gera `code_verifier`/`code_challenge` S256 e `state` aleatórios; sobe um servidor HTTP em `127.0.0.1` porta 0 que aceita **um** pedido em `GET /callback`, confere o `state`, responde uma página simples "Pronto, pode voltar ao app." e fecha; tempo limite de 5 min; abre a URL de autorização com `shell.openExternal` (só `https://accounts.google.com/` e, no 12, `https://login.microsoftonline.com/`); troca o código por tokens no endpoint de token com `net.fetch` no main. Erros: `cancelled`, `timeout`, `state`, `denied`, `network`, `invalid-client`. Testes com servidor e endpoint falsos.
-- CA2: Configurações ganha o bloco **"Contas"** (logo depois de "Marca"):
+- CA2: a aba Configurações › **Contas** ganha o bloco "Google" (no lugar do texto "Em breve"; a linha da Microsoft vem no contrato 12):
   - linha "Google": sem cadastro, botão "Configurar…" abre um painel com os campos "ID do cliente" e "Chave secreta do cliente" (a chave em campo de senha), ajuda "Crie em console.cloud.google.com → Clientes → App para computador." e "Salvar"; os dois ficam cifrados com `safeStorage` (como a chave da AssemblyAI) e nunca voltam ao renderer (só "configurado: sim/não" e o ID com o meio mascarado);
   - com cadastro e sem login: "Entrar com Google"; durante: "Continue no navegador…" + "Cancelar";
   - logado: foto (data URL baixada no main, até 256 px), nome e e-mail; botão "Sair" (revoga o token em `https://oauth2.googleapis.com/revoke` e apaga do disco);

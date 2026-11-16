@@ -14,6 +14,7 @@ import type { SpawnSummary } from './claude-cli/summary'
 import type { SpawnClaude } from './claude-cli/translator'
 import type { SpawnAcp } from './acp/agent'
 import { NPM_REGISTRY, type AcpPackage, type DownloadTarball } from './acp/install'
+import { createFakeGoogle, type FakeGoogle } from './google/fake-google'
 import { fakeMediaAccess } from './permissions'
 import type { DownloadRequest } from './updates/download'
 import { LATEST_RELEASE_URL, RELEASE_DOWNLOAD_PREFIX } from './updates/release'
@@ -30,6 +31,9 @@ export const SMOKE_OFFLINE_KEY = 'smoke-chave-sem-rede-7c1e'
  */
 export const SMOKE_NOT_ALLOWED_MODEL = 'gpt-oss-20b'
 export const SMOKE_OFFLINE_MODEL = 'deepseek-v4.1-flash'
+/** Cadastro OAuth inventado do Google falso (contrato 11): o smoke cola os dois em Configurações › Contas. */
+export const SMOKE_GOOGLE_CLIENT_ID = '000000000000-smokefalso.apps.googleusercontent.com'
+export const SMOKE_GOOGLE_CLIENT_SECRET = 'smoke-segredo-falso-0000'
 
 const CATALOG = {
   data: [
@@ -164,6 +168,8 @@ export interface SmokeFixtures {
   leaveDialogs: { message: string; buttons: string[] }[]
   /** Botão que o substituto "clica" (0 é "Cancelar"). */
   leaveChoice: number
+  /** Google falso (contrato 11): token, perfil, foto e Drive em memória; nada sai da máquina. */
+  google: FakeGoogle
 }
 
 export interface SmokeLock {
@@ -286,6 +292,7 @@ export function createSmokeFixtures(currentVersion: string): SmokeFixtures {
     dockIcons: [],
     leaveDialogs: [],
     leaveChoice: 0,
+    google: createFakeGoogle({ clientId: SMOKE_GOOGLE_CLIENT_ID, clientSecret: SMOKE_GOOGLE_CLIENT_SECRET, profile: { name: 'Andrea Teste', email: 'andrea.teste@example.com' } }),
     lock: { skewMs: 0, touchIdAvailable: true, touchIdApproves: true, touchIdPrompts: 0, power: new EventEmitter(), refresh: () => undefined },
     fetch: (url: string, init: FetchInit) => {
       const path = new URL(url).pathname

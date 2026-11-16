@@ -23,6 +23,7 @@ import { Switch } from '../../design/Switch'
 import { tabId, tabPanelId, Tabs } from '../../design/Tabs'
 import { SearchField } from '../meetings/SearchField'
 import { AboutSection } from './AboutSection'
+import { AccountsSection } from './AccountsSection'
 import { AcpAgentField } from './AcpAgentField'
 import { ApiKeyField } from './ApiKeyField'
 import { BrandSection } from './BrandSection'
@@ -387,13 +388,8 @@ function SettingsTabs({ tab }: { tab: SettingsTab }) {
 
           {panel('arquivos', <MeetingFilesSection />)}
 
-          {panel(
-            'contas',
-            // Reservada para os contratos 11 e 12 (Google Drive e agendas).
-            <section aria-label="Contas" data-settings-empty className="rounded-[var(--radius-panel)] border border-line-strong bg-bg-raised px-6 py-10 text-center">
-              <p className="text-13 text-text-muted">Em breve: Google Drive e agendas Google e Microsoft.</p>
-            </section>,
-          )}
+          {/* Contrato 11: a conta Google e o Drive; a Microsoft e as agendas vêm no contrato 12. */}
+          {panel('contas', <AccountsSection />)}
 
           {panel('sobre', <AboutSection />)}
 

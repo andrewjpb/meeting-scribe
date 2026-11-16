@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react'
+import type { DriveMeetingStatus } from '@shared/accounts'
 import { SEARCH_TERM_MAX, SEARCH_TERM_MIN, withSummaryStatus, type MeetingOverview, type MeetingSearchResult } from '@shared/meetings-overview'
 import { rereadWhenUnlocked } from '../../app/lockStore'
+import { inDriveAfter } from './driveFormat'
 
 /** Espera depois da última tecla antes de pedir a busca ao main. */
 export const SEARCH_DELAY_MS = 200
@@ -9,6 +11,11 @@ export const SEARCH_DELAY_MS = 200
 export function searchTermOf(input: string): string | null {
   const term = input.trim().replace(/\s+/g, ' ')
   return term.length >= SEARCH_TERM_MIN && term.length <= SEARCH_TERM_MAX ? term : null
+}
+
+function withDrive<T extends MeetingOverview>(entry: T, status: DriveMeetingStatus): T {
+  const inDrive = inDriveAfter(entry.inDrive === true, status)
+  return inDrive === (entry.inDrive === true) ? entry : { ...entry, inDrive }
 }
 
 /** `null` até o main responder. */
@@ -49,10 +56,16 @@ export function useMeetingsOverview(): MeetingsOverviewView {
       if (!alive) return
       setList((current) => current?.map((entry) => (entry.meeting.id === meetingId ? withSummaryStatus(entry, status) : entry)) ?? current)
     })
+    // Contrato 11: a nuvem aparece quando a reunião termina de ir para o Drive.
+    const offDrive = api.on('scribe:drive-state', ({ meetingId, status }) => {
+      if (!alive) return
+      setList((current) => current?.map((entry) => (entry.meeting.id === meetingId ? withDrive(entry, status) : entry)) ?? current)
+    })
     return () => {
       alive = false
       reread?.()
       off()
+      offDrive()
     }
   }, [attempt])
 

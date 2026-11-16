@@ -92,10 +92,10 @@ describe('índice da busca (contrato 18, devolução)', () => {
     expect(pasta?.when).toContain('ligado')
   })
 
-  it('toda aba com linhas, menos Contas; nomes únicos por aba', () => {
+  it('toda aba com linhas (Contas desde o contrato 11); nomes únicos por aba', () => {
     for (const tab of SETTINGS_TABS) {
       const names = index.filter((entry) => entry.tab === tab).map((entry) => entry.name)
-      expect(names.length > 0).toBe(tab !== 'contas')
+      expect(names.length > 0).toBe(true)
       expect(new Set(names).size).toBe(names.length)
     }
   })

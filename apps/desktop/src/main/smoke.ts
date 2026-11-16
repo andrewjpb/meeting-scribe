@@ -36,10 +36,16 @@
 // camada fosca pelo botão, por ⌘⇧L, pelo menu e pelo "Mac bloqueou a tela" (`powerMonitor` substituto),
 // todo canal de conteúdo recusado, a espera depois de 5 erros (relógio do bloqueio adiantado), o Touch ID
 // substituto e uma gravação que continua com o app bloqueado. O Touch ID de verdade nunca é pedido.
+//
+// Contrato 11: antes do bloqueio, a conta Google e o Drive com o Google falso em memória (`googleChecks`): o
+// cadastro do cliente, o login (o smoke faz o papel do navegador no servidor local do app), uma gravação que vai
+// inteira para o Drive falso, "Gerar de novo" substituindo o resumo e "Sair". Nada sai da máquina.
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { request as httpRequest } from 'node:http'
 import { tmpdir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
 import { app, ipcMain, Menu, nativeTheme, session, type BrowserWindow, type MenuItem, type WebContents } from 'electron'
+import { DRIVE_ROOT_FOLDER_NAME } from '../shared/accounts'
 import { ASSEMBLYAI_DASHBOARD_URL } from '../shared/assemblyai'
 import { INVOKE_CHANNELS, WHEN_LOCKED, type CspViolation } from '../shared/ipc'
 import { LOCK_DISABLED_HINT, LOCKED_ERROR, lockedWindowTitle, TOUCH_ID_FAILED_TEXT } from '../shared/lock'
@@ -57,6 +63,7 @@ import { transcriptMarkdown } from '../shared/transcript-markdown'
 import { REPOSITORY_URL, UPDATE_HASH_MISMATCH_MESSAGE, UPDATE_INSTALL_INSTRUCTION, UPDATE_QUIT_BLOCKED_MESSAGE, updateAssetName } from '../shared/updates'
 import { TRANSCRIPT_VERSION, type RuntimeSegment, type TranscriptDocument } from '../shared/transcription'
 import { applyMessage, emptyTranscriptState, persistableSegments, type StreamEnvelope } from '../renderer/src/transcription/reducer'
+import { CALLBACK_DONE_TEXT } from './accounts/oauth'
 import { DEFAULT_FOLDER_NAME } from './audio-files/service'
 import { SUMMARY_FILE_SUFFIX, summaryFileTarget } from './audio-files/summary-file'
 import { BRANDING_DIR } from './branding/service'
@@ -64,6 +71,7 @@ import { summaryInput, summaryLines } from './claude-cli/summary'
 import { MENU_IDS } from './menu'
 import { CHAT_CORPUS_DIR, CHAT_INDEX_FILE, CHAT_SCOPE_DIR, corpusFileSuffix } from './chat/corpus'
 import { CHATS_DIR } from './chat/store'
+import type { FakeDriveFile } from './google/fake-google'
 import { RECORDING_LEAVE_MESSAGE } from './lock/recording-session'
 import { createLockService } from './lock/service'
 import { createFileLockStore, LOCK_FILE } from './lock/store'
@@ -77,6 +85,8 @@ import { CLAUDE_DISALLOWED_TOOLS, CLAUDE_READ_TOOLS } from './acp/profiles/claud
 import { LATEST_RELEASE_URL, RELEASE_DOWNLOAD_PREFIX, RELEASE_REDIRECT_HOSTS } from './updates/release'
 import {
   SMOKE_FAKE_KEY,
+  SMOKE_GOOGLE_CLIENT_ID,
+  SMOKE_GOOGLE_CLIENT_SECRET,
   SMOKE_NOT_ALLOWED_MODEL,
   SMOKE_OFFLINE_KEY,
   SMOKE_OFFLINE_MODEL,
@@ -84,8 +94,8 @@ import {
   type SmokeFixtures,
 } from './smoke-fixtures'
 
-// Contrato 22: o bloqueio, no fim, soma uns 25 s ao roteiro.
-const TIMEOUT_MS = 240_000
+// Contrato 22: o bloqueio, no fim, soma uns 25 s ao roteiro; o contrato 11 (conta Google e Drive), uns 20 s.
+const TIMEOUT_MS = 300_000
 const THEMES = ['light', 'dark'] as const
 /** Telas fotografadas em cada tema, na ordem do roteiro de `runSmoke`. */
 const SCREENS = [
@@ -3511,7 +3521,7 @@ async function settingsTabsChecks(contents: WebContents, ctx: SmokeContext, shot
   // Contas.
   const contasOpen = await openSettingsTab(contents, 'contas')
   const contas = await visibleText('[data-settings-panel="contas"]')
-  const contasButtons = await evaluate<number>(contents, `document.querySelectorAll('[data-settings-panel="contas"] button').length`)
+  const contasButtons = await evaluate<string[]>(contents, `[...document.querySelectorAll('[data-settings-panel="contas"] button')].map((el) => el.textContent ?? '')`)
   await shot('configuracoes-contas-light')
 
   // Sobre.
@@ -3605,8 +3615,12 @@ async function settingsTabsChecks(contents: WebContents, ctx: SmokeContext, shot
 
   const ok =
     contasOpen &&
-    contas.trim() === 'Em breve: Google Drive e agendas Google e Microsoft.' &&
-    contasButtons === 0 &&
+    // Contrato 11: o bloco "Google" sem cadastro, só com "Configurar…", e nenhum pedido ao Google.
+    contas.includes('Conta Google') &&
+    contas.includes('Para guardar as reuniões no seu Google Drive.') &&
+    !contas.includes('Em breve') &&
+    JSON.stringify(contasButtons) === JSON.stringify(['Configurar…']) &&
+    ctx.fixtures.google.calls.length === 0 &&
     sobreOpen &&
     sobre.includes(app.getVersion()) &&
     sobre.includes(process.versions.electron) &&
@@ -3640,7 +3654,7 @@ async function settingsTabsChecks(contents: WebContents, ctx: SmokeContext, shot
     missing.length === 0
   return {
     ok,
-    detail: `Contas "${contas.trim()}" (${contasButtons} botões); Sobre "${sobre.replace(/\s+/g, ' ').slice(0, 160)}", repositório -> ${opened || 'nada'}, "Procurar atualização" -> Geral=${toUpdates}, bloco visível=${updatesVisible}; aba lembrada=${remembered}; ⌘2=${cmd2}, ⌘6=${cmd6}, seta=${arrow}; ⌘F foca=${focused}; "TRADUCAO" -> grupos ${JSON.stringify(groups)}, itens ${JSON.stringify(items)}, painéis escondidos=${panelsHidden}; clique em "Modelo do chat" -> aba Claude e destaque=${jumped}, à vista=${inView}, busca limpa=${cleared}, destaque some em 2 s=${unhighlighted}; Esc limpa=${escaped}; foco: ⌘2 -> aba ${cmd2Focus || 'nenhuma'}, resultado -> ${resultFocus || 'fora da linha'}, Esc -> aba ${escFocus || 'nenhuma'}; durante a busca nenhuma aba marcada=${noneSelected}, região viva "${live}"; "haiku" acha "Modelo" escondido=${hiddenFound}, aviso=${hintShown}; "pasta"=${pastaFound}; ${rows.length} linhas na tela, fora do índice: ${JSON.stringify(missing)}`,
+    detail: `Contas "${contas.replace(/\s+/g, ' ').trim()}" (botões ${JSON.stringify(contasButtons)}, ${ctx.fixtures.google.calls.length} pedidos ao Google); Sobre "${sobre.replace(/\s+/g, ' ').slice(0, 160)}", repositório -> ${opened || 'nada'}, "Procurar atualização" -> Geral=${toUpdates}, bloco visível=${updatesVisible}; aba lembrada=${remembered}; ⌘2=${cmd2}, ⌘6=${cmd6}, seta=${arrow}; ⌘F foca=${focused}; "TRADUCAO" -> grupos ${JSON.stringify(groups)}, itens ${JSON.stringify(items)}, painéis escondidos=${panelsHidden}; clique em "Modelo do chat" -> aba Claude e destaque=${jumped}, à vista=${inView}, busca limpa=${cleared}, destaque some em 2 s=${unhighlighted}; Esc limpa=${escaped}; foco: ⌘2 -> aba ${cmd2Focus || 'nenhuma'}, resultado -> ${resultFocus || 'fora da linha'}, Esc -> aba ${escFocus || 'nenhuma'}; durante a busca nenhuma aba marcada=${noneSelected}, região viva "${live}"; "haiku" acha "Modelo" escondido=${hiddenFound}, aviso=${hintShown}; "pasta"=${pastaFound}; ${rows.length} linhas na tela, fora do índice: ${JSON.stringify(missing)}`,
   }
 }
 
@@ -3651,6 +3665,240 @@ function layoutCheck(screen: LayoutScreen, metrics: Record<string, number>): Che
     return !target || value < target.min - 0.5 || value > target.max + 0.5
   })
   return { ok: off.length === 0, detail: `${JSON.stringify(metrics)}${off.length ? `; fora do mockup: ${off.map(([n]) => n).join(', ')}` : ''}` }
+}
+
+// ---------------------------------------------------------------------------------------------------------
+// Contrato 11: conta Google e envio ao Google Drive, com o Google falso em memória (`google/fake-google.ts`).
+
+/** O "navegador" do smoke: um GET no endereço de volta ao app (só 127.0.0.1), fora da sessão do Electron. */
+function loopbackGet(url: string): Promise<{ status: number; body: string }> {
+  if (!url.startsWith('http://127.0.0.1:')) return Promise.reject(new Error(`endereço de volta inesperado: ${url}`))
+  return new Promise((resolve, reject) => {
+    const req = httpRequest(url, (res) => {
+      const chunks: Buffer[] = []
+      res.on('data', (chunk: Buffer) => chunks.push(chunk))
+      res.on('end', () => resolve({ status: res.statusCode ?? 0, body: Buffer.concat(chunks).toString('utf8') }))
+    })
+    req.on('error', reject)
+    req.end()
+  })
+}
+
+const GOOGLE_STATE = `(document.querySelector('[data-google-state]')?.dataset.googleState ?? '')`
+const DRIVE_SWITCH = `document.querySelector('[aria-labelledby="settings-save-drive"]')`
+
+/** Os arquivos de uma pasta do Drive falso, fora da lixeira. */
+function driveChildren(ctx: SmokeContext, parent: string | undefined): FakeDriveFile[] {
+  return parent ? ctx.fixtures.google.childrenOf(parent).filter((file) => !file.trashed) : []
+}
+
+function driveRoot(ctx: SmokeContext): FakeDriveFile | undefined {
+  return [...ctx.fixtures.google.files.values()].find((file) => file.name === DRIVE_ROOT_FOLDER_NAME && file.parents.includes('root') && !file.trashed)
+}
+
+/**
+ * Contrato 11 (CA8), numa janela clara e depois numa escura: nenhum pedido ao Google antes do login; cadastro em
+ * Configurações › Contas (o segredo nunca volta ao renderer); "Entrar com Google" abre só a página do Google e o
+ * smoke faz o papel do navegador no servidor local; a conta aparece com foto, nome e e-mail e o interruptor
+ * ligado; uma gravação da fixture vai inteira para o Drive falso (subpasta com o nome base, áudio, `.md` e
+ * `- resumo.md` iguais aos da pasta); "No Drive", "Abrir no Drive" e a nuvem da lista; "Gerar de novo" substitui o
+ * resumo (o mesmo id); no escuro, "Sair" revoga e apaga a sessão.
+ */
+async function googleChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => void, checks: Record<string, Check>, shots: Screenshot[]): Promise<void> {
+  const fake = ctx.fixtures.google
+  const callsBeforeLogin = fake.calls.length
+  const win = ctx.openWindow({ theme: 'light' })
+  watch(win)
+  await loadAndWait(win)
+  const contents = win.webContents
+
+  // Cadastro do cliente.
+  await openSettingsTab(contents, 'contas')
+  const unconfigured = await waitFor(contents, `${GOOGLE_STATE} === 'unconfigured'`)
+  await clickSelector(contents, '[data-action="google-configure"]')
+  const panel = await waitFor(contents, `document.querySelector('[data-google-client-panel]')`)
+  const panelText = await evaluate<string>(contents, `document.querySelector('[data-google-client-panel]')?.innerText ?? ''`)
+  const secretIsPassword = await evaluate<boolean>(contents, `document.querySelector('#google-client-secret')?.type === 'password'`)
+  await setValue(contents, '#google-client-id', SMOKE_GOOGLE_CLIENT_ID)
+  await setValue(contents, '#google-client-secret', SMOKE_GOOGLE_CLIENT_SECRET)
+  await clickSelector(contents, '[data-action="google-client-save"]')
+  const saved = await waitFor(contents, `${GOOGLE_STATE} === 'signed-out' && !document.querySelector('[data-google-client-panel]')`)
+  const line = await text(contents, '[data-google-line]')
+  const statusJson = JSON.stringify(await evaluate<unknown>(contents, "window.__scribeApi.invoke('scribe:google-status')"))
+  const clientFile = join(ctx.userDataDir, 'accounts', 'google-client.bin')
+  checks['client'] = {
+    ok:
+      unconfigured &&
+      panel &&
+      panelText.includes('ID do cliente') &&
+      panelText.includes('Chave secreta do cliente') &&
+      panelText.includes('Crie em console.cloud.google.com → Clientes → App para computador.') &&
+      secretIsPassword &&
+      saved &&
+      line.includes('•••') &&
+      !line.includes(SMOKE_GOOGLE_CLIENT_ID) &&
+      !statusJson.includes(SMOKE_GOOGLE_CLIENT_SECRET) &&
+      !statusJson.includes(SMOKE_GOOGLE_CLIENT_ID) &&
+      mode(clientFile) === '600' &&
+      callsBeforeLogin === 0 &&
+      fake.calls.length === 0,
+    detail: `sem cadastro=${unconfigured}; painel=${panel} "${panelText.replace(/\s+/g, ' ').slice(0, 160)}", chave em campo de senha=${secretIsPassword}; salvo=${saved}, linha "${line}"; estado sem o segredo=${!statusJson.includes(SMOKE_GOOGLE_CLIENT_SECRET)}; google-client.bin ${mode(clientFile)}; pedidos ao Google antes do login: ${callsBeforeLogin}, depois do cadastro: ${fake.calls.length}`,
+  }
+
+  // Login: o app abre a página do Google e o smoke volta pelo servidor local.
+  const openedBefore = ctx.fixtures.openedUrls.length
+  await clickSelector(contents, '[data-action="google-sign-in"]')
+  let authUrl = ''
+  for (let attempt = 0; attempt < 100 && !authUrl; attempt++) {
+    authUrl = ctx.fixtures.openedUrls.slice(openedBefore).find((url) => url.startsWith('https://accounts.google.com/')) ?? ''
+    if (!authUrl) await wait(50)
+  }
+  const waiting = await waitFor(contents, `${GOOGLE_STATE} === 'signing-in' && document.querySelector('[data-action="google-sign-in-cancel"]')`)
+  const waitingLine = await text(contents, '[data-google-line]')
+  const params = authUrl ? new URL(authUrl).searchParams : new URLSearchParams()
+  const redirect = params.get('redirect_uri') ?? ''
+  const page = authUrl ? await loopbackGet(fake.approve(authUrl)) : { status: 0, body: '' }
+  const signedIn = await waitFor(contents, `${GOOGLE_STATE} === 'signed-in' && document.querySelector('img[data-google-photo]')?.naturalWidth > 0`, 8000)
+  const name = await text(contents, '[data-google-name]')
+  const email = await text(contents, '[data-google-line]')
+  const photo = await evaluate<{ src: string; width: number }>(contents, `(() => { const img = document.querySelector('img[data-google-photo]'); return { src: (img?.getAttribute('src') ?? '').slice(0, 22), width: img?.naturalWidth ?? 0 } })()`)
+  const switchOn = await evaluate<string | null>(contents, `${DRIVE_SWITCH}?.getAttribute('aria-checked') ?? null`)
+  const driveRow = await evaluate<string>(contents, `${DRIVE_SWITCH}?.closest('[data-setting-row]')?.textContent ?? ''`)
+  const sessionFile = join(ctx.userDataDir, 'accounts', 'google.bin')
+  await settle(contents)
+  shots.push(await capture(win, ctx.outDir, 'configuracoes-contas-logado-light'))
+  checks['signIn'] = {
+    ok:
+      authUrl.startsWith('https://accounts.google.com/o/oauth2/v2/auth?') &&
+      ctx.fixtures.openedUrls.slice(openedBefore).length === 1 &&
+      params.get('client_id') === SMOKE_GOOGLE_CLIENT_ID &&
+      params.get('scope') === 'openid email profile https://www.googleapis.com/auth/drive.file' &&
+      params.get('code_challenge_method') === 'S256' &&
+      (params.get('code_challenge') ?? '').length === 43 &&
+      (params.get('state') ?? '').length >= 32 &&
+      params.get('access_type') === 'offline' &&
+      params.get('prompt') === 'consent' &&
+      !authUrl.includes(SMOKE_GOOGLE_CLIENT_SECRET) &&
+      /^http:\/\/127\.0\.0\.1:\d+\/callback$/.test(redirect) &&
+      waiting &&
+      waitingLine === 'Continue no navegador…' &&
+      page.status === 200 &&
+      page.body.includes(CALLBACK_DONE_TEXT) &&
+      signedIn &&
+      name === 'Andrea Teste' &&
+      email === 'andrea.teste@example.com' &&
+      photo.src === 'data:image/png;base64,' &&
+      photo.width > 0 &&
+      photo.width <= 256 &&
+      switchOn === 'true' &&
+      driveRow.includes('Depois de cada reunião, o áudio, a transcrição e o resumo vão para a pasta "LAP Reuniões" do seu Drive.') &&
+      mode(sessionFile) === '600',
+    detail: `URL ${authUrl.split('?')[0] ?? ''} (parâmetros ${[...params.keys()].join(', ')}), redirect ${redirect}; esperando=${waiting} "${waitingLine}"; página de volta ${page.status} "${page.body.includes(CALLBACK_DONE_TEXT) ? CALLBACK_DONE_TEXT : page.body.slice(0, 80)}"; logado=${signedIn}: "${name}" <${email}>, foto ${photo.src}… ${photo.width} px; interruptor ${switchOn}; google.bin ${mode(sessionFile)}`,
+  }
+
+  // Uma gravação da fixture vai para o Drive.
+  const segments = fixtureSegments(liveFixtureLines(readSessionFixture()))
+  const idsBefore = new Set(readMeetings(ctx.userDataDir).map((meeting) => meeting.id))
+  await clickSelector(contents, '[data-nav="reunioes"]')
+  await waitFor(contents, `${routeIs('reunioes')} && document.querySelector('[data-action="new-recording"]')`)
+  await clickSelector(contents, '[data-action="new-recording"]')
+  await waitFor(contents, `${probeJs('state()?.mic')} === 'live' && ${probeJs('state()?.system')} === 'live'`)
+  await evaluate(contents, `window.__smokeProbe.replay(${JSON.stringify(segments)})`)
+  await waitFor(contents, `document.querySelectorAll('[data-transcript-list] li').length === ${segments.length}`)
+  await wait(1500)
+  await clickSelector(contents, '[data-action="end-recording"]')
+  await waitFor(contents, routeIs('detalhe'), 15000)
+  let recorded: Meeting | undefined
+  for (let attempt = 0; attempt < 200 && !recorded; attempt++) {
+    recorded = readMeetings(ctx.userDataDir).find((meeting) => !idsBefore.has(meeting.id) && meeting.audioPath !== null && meeting.transcriptPath !== null)
+    if (!recorded) await wait(50)
+  }
+  const summaryFile = recorded ? summaryFileTarget(recorded) : null
+  const summaryPath = summaryFile ? join(summaryFile.folder, summaryFile.name) : ''
+  // "Resumir ao encerrar" desligado por um passo anterior: o resumo é pedido pela tela.
+  if (!(await waitFor(contents, `document.querySelector('[data-action="regenerate-summary"]')`, 12000))) {
+    await clickSelector(contents, '[data-action="generate-summary"]')
+    await waitFor(contents, `document.querySelector('[data-action="regenerate-summary"]')`, 12000)
+  }
+  const base = recorded?.audioPath ? basename(recorded.audioPath).replace(/\.(m4a|webm)$/, '') : ''
+  let folder: FakeDriveFile | undefined
+  let files: FakeDriveFile[] = []
+  for (let attempt = 0; attempt < 300 && files.length < 3; attempt++) {
+    folder = driveChildren(ctx, driveRoot(ctx)?.id).find((file) => file.name === base)
+    files = driveChildren(ctx, folder?.id)
+    if (files.length < 3) await wait(50)
+  }
+  const named = (name: string): FakeDriveFile | undefined => files.find((file) => file.name === name)
+  const audioExt = recorded?.audioPath?.split('.').pop() ?? ''
+  const same = (file: FakeDriveFile | undefined, path: string): boolean => Boolean(file && path && existsSync(path) && file.content.equals(readFileSync(path)))
+  const audioSame = same(named(`${base}.${audioExt}`), recorded?.audioPath ?? '')
+  const transcriptSame = same(named(`${base}.md`), recorded?.transcriptPath ?? '')
+  const summarySame = same(named(`${base} - resumo.md`), summaryPath)
+  // Aba "Áudio": "No Drive" e "Abrir no Drive".
+  await clickSelector(contents, '[role="tab"][data-tab="audio"]')
+  const doneShown = await waitFor(contents, `document.querySelector('[data-drive-status="done"] [data-drive-text]')?.textContent === 'No Drive'`, 8000)
+  const openedBeforeDrive = ctx.fixtures.openedUrls.length
+  await clickSelector(contents, '[data-action="drive-open"]')
+  await wait(150)
+  const openedDrive = ctx.fixtures.openedUrls.slice(openedBeforeDrive)
+  await settle(contents)
+  shots.push(await capture(win, ctx.outDir, 'detalhe-drive-light'))
+  checks['upload'] = {
+    ok:
+      recorded !== undefined &&
+      driveRoot(ctx)?.mimeType === 'application/vnd.google-apps.folder' &&
+      folder?.mimeType === 'application/vnd.google-apps.folder' &&
+      /^\d{4}-\d{2}-\d{2} \d{2}h\d{2} - /.test(base) &&
+      files.length === 3 &&
+      audioSame &&
+      transcriptSame &&
+      summarySame &&
+      doneShown &&
+      openedDrive.length === 1 &&
+      openedDrive[0] === `https://drive.google.com/drive/folders/${folder?.id ?? ''}`,
+    detail: `reunião ${recorded?.id ?? 'não salva'}; "LAP Reuniões"=${Boolean(driveRoot(ctx))}, subpasta "${folder?.name ?? '?'}"; arquivos ${JSON.stringify(files.map((file) => `${file.name} (${file.content.byteLength} B, ${file.mimeType})`))}; iguais aos da pasta: áudio=${audioSame}, transcrição=${transcriptSame}, resumo=${summarySame}; "No Drive"=${doneShown}; "Abrir no Drive" -> ${openedDrive.join(', ') || 'nada'}`,
+  }
+
+  // "Gerar de novo": o resumo novo substitui o do Drive (o mesmo id).
+  const summaryBefore = named(`${base} - resumo.md`)
+  const uploadsBefore = summaryBefore?.uploads ?? 0
+  await clickSelector(contents, '[role="tab"][data-tab="resumo"]')
+  await waitFor(contents, `document.querySelector('[data-action="regenerate-summary"]')`)
+  await clickSelector(contents, '[data-action="regenerate-summary"]')
+  let replaced = false
+  for (let attempt = 0; attempt < 300 && !replaced; attempt++) {
+    replaced = (summaryBefore?.uploads ?? 0) > uploadsBefore
+    if (!replaced) await wait(50)
+  }
+  const summaries = driveChildren(ctx, folder?.id).filter((file) => file.name.endsWith(' - resumo.md'))
+  // Lista: a nuvem discreta na linha da reunião.
+  await clickSelector(contents, '[data-nav="reunioes"]')
+  const cloud = await waitFor(contents, `document.querySelector('main a[data-meeting="${recorded?.id ?? ''}"] [data-in-drive]')`)
+  const cloudLabel = await evaluate<string>(contents, `document.querySelector('main a[data-meeting="${recorded?.id ?? ''}"] [data-in-drive]')?.getAttribute('aria-label') ?? ''`)
+  checks['replaceSummary'] = {
+    ok: replaced && summaries.length === 1 && summaries[0]?.id === summaryBefore?.id && same(summaries[0], summaryPath) && cloud && cloudLabel === 'No Google Drive',
+    detail: `envios do resumo ${uploadsBefore} -> ${summaryBefore?.uploads ?? 0}; ${summaries.length} resumo(s) na subpasta, mesmo id=${summaries[0]?.id === summaryBefore?.id}, igual ao da pasta=${same(summaries[0], summaryPath)}; nuvem na lista=${cloud} "${cloudLabel}"`,
+  }
+  win.destroy()
+
+  // Escuro: logado e, depois de "Sair", deslogado.
+  const dark = ctx.openWindow({ theme: 'dark' })
+  watch(dark)
+  await loadAndWait(dark)
+  const darkContents = dark.webContents
+  await openSettingsTab(darkContents, 'contas')
+  const darkSignedIn = await waitFor(darkContents, `${GOOGLE_STATE} === 'signed-in' && document.querySelector('img[data-google-photo]')?.naturalWidth > 0`)
+  await settle(darkContents)
+  shots.push(await capture(dark, ctx.outDir, 'configuracoes-contas-logado-dark'))
+  await clickSelector(darkContents, '[data-action="google-sign-out"]')
+  const signedOut = await waitFor(darkContents, `${GOOGLE_STATE} === 'signed-out' && !${DRIVE_SWITCH} && document.querySelector('[data-action="google-sign-in"]')`)
+  await settle(darkContents)
+  shots.push(await capture(dark, ctx.outDir, 'configuracoes-contas-dark'))
+  checks['signOut'] = {
+    ok: darkSignedIn && signedOut && fake.revoked === 1 && fake.refreshTokens().length === 0 && !existsSync(sessionFile) && existsSync(clientFile),
+    detail: `escuro logado=${darkSignedIn}; "Sair" -> deslogado=${signedOut}, ${fake.revoked} token(s) revogado(s), google.bin apagado=${!existsSync(sessionFile)}, cadastro mantido=${existsSync(clientFile)}`,
+  }
+  dark.destroy()
 }
 
 // ---------------------------------------------------------------------------------------------------------
@@ -4212,6 +4460,8 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
   let acpMeasured: AcpMeasured | null = null
   /** Contrato 22: bloqueio do app. */
   const lock: Record<string, Check> = {}
+  /** Contrato 11: conta Google e Drive. */
+  const google: Record<string, Check> = {}
   let analysisMeasured: AnalysisMeasured | null = null
 
   // A fixture da sessão real, reduzida pelo mesmo redutor do app: a mesma dos testes (CA4) e do smoke.
@@ -4539,6 +4789,9 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
     screenshots.push(updates.shot)
     updatesWin.destroy()
 
+    // Contrato 11: conta Google e Drive falsos, antes do bloqueio (que termina com a conta já fora).
+    await googleChecks(ctx, watch, google, screenshots)
+
     // Contrato 22: bloqueio do app, por último (a senha criada vale para o userData inteiro).
     await lockChecks(ctx, watch, lock, screenshots)
   } catch (error) {
@@ -4583,6 +4836,8 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
   for (const name of ['captureWorklet', 'tapeFps', 'endSavesAndOpensDetail', 'pause', 'spaceResumes', 'systemSilenceNotice', 'endFromHeader', 'deleteWithConfirmation', 'noKeyState', 'copyTranscript', 'deleteTranscript', 'echoRemoved', 'echoNotSaved', 'recorderFormat', 'audioWhileRecording', 'audioSaved', 'audioDetail', 'deleteKeepsFiles', 'summary', 'summaryDark', 'summaryDownload', 'notesRecording', 'notesRecordingDark', 'notesDetail', 'notesDetailDark', 'analysisRecording', 'analysisRecordingDark', 'analysisDetail']) {
     if (!recording[name]) failures.push(`gravação ${name}: não executado`)
   }
+  for (const [name, check] of Object.entries(google)) if (!check.ok) failures.push(`google ${name}: ${check.detail}`)
+  for (const name of ['client', 'signIn', 'upload', 'replaceSummary', 'signOut']) if (!google[name]) failures.push(`google ${name}: não executado`)
   for (const [name, check] of Object.entries(lock)) if (!check.ok) failures.push(`bloqueio ${name}: ${check.detail}`)
   for (const name of ['password', 'layer', 'channels', 'unlock', 'shortcutAndTouchId', 'recordingContinues', 'leaveDialog', 'endWhileLocked', 'reopen', 'reopenFromDisk', 'dark']) if (!lock[name]) failures.push(`bloqueio ${name}: não executado`)
   if (!theme.ok) failures.push(`tema: ${theme.detail}`)
@@ -4592,8 +4847,9 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
   // (só no claro), a conversa vazia e o painel "Contexto" do "Perguntar" v2 e a conversa pelo agente ACP
   // (contrato 17), as abas "Contas" e "Sobre" e a busca das Configurações (contrato 18), só no claro; a aba
   // "Análise" da gravação nos dois temas e a seção "Perguntas em aberto" do detalhe, no claro (contrato 19); a
-  // camada de bloqueio nos dois temas, bloqueada na gravação e o bloco "Bloqueio" (contrato 22).
-  const expectedShots = SCREENS.length * THEMES.length + 21
+  // camada de bloqueio nos dois temas, bloqueada na gravação e o bloco "Bloqueio" (contrato 22); a aba "Contas"
+  // logada nos dois temas, deslogada no escuro e a aba "Áudio" com "No Drive" (contrato 11).
+  const expectedShots = SCREENS.length * THEMES.length + 25
   if (screenshots.length !== expectedShots) failures.push(`${screenshots.length} PNGs em vez de ${expectedShots}`)
   for (const shot of screenshots) {
     if (shot.width < 1120 || shot.height < 740) failures.push(`${shot.name}: ${shot.width}x${shot.height} abaixo de 1120x740`)
@@ -4631,6 +4887,10 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
     analysis: analysisMeasured,
     lock,
     lockTouchIdPrompts: ctx.fixtures.lock.touchIdPrompts,
+    // Contrato 11: só método, servidor e caminho dos pedidos ao Google falso; nenhum token, nenhum corpo.
+    google,
+    googleFakeCalls: ctx.fixtures.google.calls,
+    googleFakeDrive: [...ctx.fixtures.google.files.values()].map((file) => ({ name: file.name, mimeType: file.mimeType, bytes: file.content.byteLength, uploads: file.uploads, trashed: file.trashed })),
     meetingFolder: folderFiles(defaultMeetingFolder(ctx)),
     openedFiles: ctx.fixtures.openedFiles.map((item) => ({ action: item.action, file: basename(item.path) })),
     claudeFakeSpawns: ctx.fixtures.claudeSpawns.map((spawn) => ({ ...spawn, args: spawn.args.filter((arg) => arg.startsWith('--')) })),
@@ -4645,6 +4905,10 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
     screenshots: screenshots.map((shot) => ({ ...shot, file: shot.file.replace(`${ctx.outDir}/`, '') })),
     failures,
   }
+  // Contrato 11: nenhum segredo (chave secreta do cliente, tokens do Google falso) no relatório.
+  const secrets = [SMOKE_GOOGLE_CLIENT_SECRET, ...ctx.fixtures.google.accessTokens(), ...ctx.fixtures.google.refreshTokens(), 'token-acesso-falso-', 'token-renovacao-falso-']
+  const leaked = secrets.filter((secret) => JSON.stringify(report).includes(secret))
+  if (leaked.length) failures.push(`${leaked.length} segredo(s) do Google no relatório`)
   writeFileSync(join(ctx.outDir, 'report.json'), `${JSON.stringify(report, null, 2)}\n`)
 
   clearTimeout(timer)

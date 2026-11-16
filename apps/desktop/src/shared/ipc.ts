@@ -1,6 +1,7 @@
 // Contrato das mensagens entre main e renderer. Canal novo entra aqui primeiro: no mapa do
 // sentido certo e na lista de canais permitidos logo abaixo (o preload recusa o que não estiver nela).
 import type { AcpAgentStatus } from './acp'
+import type { DriveMeetingStatus, GoogleAccountStatus, GoogleClientSaveResult } from './accounts'
 import type { BrandingInfo, BrandLogoChoice } from './branding'
 import type { LockResponse, LockStatus } from './lock'
 import type { KeySaveResult, KeyStatus, MicAccess, ModelCheck, ModelsResult } from './assemblyai'
@@ -186,6 +187,21 @@ export interface InvokeChannels {
    */
   'scribe:recording-session-open': { request: undefined; response: string }
   'scribe:recording-session-close': { request: { token: string }; response: boolean }
+  /** Conta Google (contrato 11): se há cadastro, o ID mascarado, o estado e o perfil. Nenhum segredo volta. */
+  'scribe:google-status': { request: undefined; response: GoogleAccountStatus }
+  /** "Salvar" do painel "Configurar…": o main confere o formato e guarda os dois cifrados. */
+  'scribe:google-client-save': { request: { clientId: string; clientSecret: string }; response: GoogleClientSaveResult }
+  /** "Entrar com Google": abre o navegador e responde quando o login termina (até 5 min). */
+  'scribe:google-sign-in': { request: undefined; response: GoogleAccountStatus }
+  'scribe:google-sign-in-cancel': { request: undefined; response: boolean }
+  /** "Sair": revoga o token no Google e apaga a sessão do disco. */
+  'scribe:google-sign-out': { request: undefined; response: GoogleAccountStatus }
+  /** Estado da reunião no Google Drive (aba "Áudio" do detalhe). */
+  'scribe:drive-status': { request: { meetingId: string }; response: DriveMeetingStatus }
+  /** "Tentar de novo". */
+  'scribe:drive-retry': { request: { meetingId: string }; response: DriveMeetingStatus }
+  /** "Abrir no Drive": o main monta o endereço da pasta e abre no navegador. */
+  'scribe:drive-open': { request: { meetingId: string }; response: boolean }
 }
 
 /** renderer -> main, sem resposta (`__scribeApi.send` / `ipcMain.on`). */
@@ -227,6 +243,10 @@ export interface MainEvents {
   'scribe:lock-state': LockStatus
   /** "Encerrar e sair" no diálogo de fechar com gravação em andamento: o renderer encerra e o main sai depois. */
   'scribe:recording-end-and-quit': undefined
+  /** A conta Google mudou (entrando, entrou, expirou, saiu) (contrato 11). */
+  'scribe:google-state': GoogleAccountStatus
+  /** Uma reunião mudou de estado no Drive (enviando com a porcentagem, no Drive, erro). */
+  'scribe:drive-state': { meetingId: string; status: DriveMeetingStatus }
 }
 
 export type InvokeChannel = keyof InvokeChannels
@@ -314,6 +334,14 @@ const INVOKE: Record<InvokeChannel, true> = {
   'scribe:lock-password-remove': true,
   'scribe:recording-session-open': true,
   'scribe:recording-session-close': true,
+  'scribe:google-status': true,
+  'scribe:google-client-save': true,
+  'scribe:google-sign-in': true,
+  'scribe:google-sign-in-cancel': true,
+  'scribe:google-sign-out': true,
+  'scribe:drive-status': true,
+  'scribe:drive-retry': true,
+  'scribe:drive-open': true,
 }
 const RENDERER_EVENTS: Record<RendererEvent, true> = {
   'scribe:csp-violation': true,
@@ -336,6 +364,8 @@ const MAIN_EVENTS: Record<MainEvent, true> = {
   'scribe:chat-event': true,
   'scribe:lock-state': true,
   'scribe:recording-end-and-quit': true,
+  'scribe:google-state': true,
+  'scribe:drive-state': true,
 }
 
 /**
@@ -451,6 +481,16 @@ export const WHEN_LOCKED: Readonly<Record<InvokeChannel, LockedPolicy>> = Object
   'scribe:chat-update': 'refused',
   'scribe:chat-redo': 'refused',
   'scribe:chat-copy': 'refused',
+  // Conta Google e Drive (contrato 11): tudo é de Configurações e do detalhe, recusado bloqueado. A fila de envio
+  // não depende de canal: roda no main e continua com o app bloqueado.
+  'scribe:google-status': 'refused',
+  'scribe:google-client-save': 'refused',
+  'scribe:google-sign-in': 'refused',
+  'scribe:google-sign-in-cancel': 'refused',
+  'scribe:google-sign-out': 'refused',
+  'scribe:drive-status': 'refused',
+  'scribe:drive-retry': 'refused',
+  'scribe:drive-open': 'refused',
 })
 
 /**

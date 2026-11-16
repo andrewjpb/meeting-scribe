@@ -78,6 +78,12 @@ export interface AppSettings {
   lockOnSystemLock: boolean
   /** Abre o app já bloqueado. */
   lockOnLaunch: boolean
+  /**
+   * "Guardar no Google Drive" (contrato 11): depois de cada reunião, o áudio, a transcrição e o resumo vão para a
+   * pasta "LAP Reuniões" do Drive. Só vale com a conta Google conectada; por isso o padrão é ligado (o
+   * interruptor aparece ligado depois do primeiro login).
+   */
+  saveToDrive: boolean
 }
 
 /**
@@ -115,6 +121,7 @@ export const DEFAULT_SETTINGS: Readonly<AppSettings> = Object.freeze({
   lockAfterMinutes: 0,
   lockOnSystemLock: true,
   lockOnLaunch: false,
+  saveToDrive: true,
 })
 
 /** Prefixo do modelo gravado na reunião quando a tradução veio do Claude CLI (`claude-cli:haiku`). */

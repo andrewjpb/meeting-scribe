@@ -71,6 +71,8 @@ export interface MeetingFilesService {
   finish(input: unknown): Promise<AudioFinishResult>
   /** Abertura do app: `.part` deixado por um app fechado no meio vira `<nome> (incompleto).<ext>`. */
   recover(): Promise<string[]>
+  /** Contrato 11: há uma gravação com arquivos na pasta ainda sem o `finish` (o Drive espera por ele). */
+  hasOpenSession(): boolean
   info(meetingId: unknown): Promise<MeetingFilesInfo | null>
   open(input: unknown): Promise<boolean>
   reveal(input: unknown): Promise<boolean>
@@ -255,6 +257,8 @@ export function createMeetingFilesService(deps: MeetingFilesDeps): MeetingFilesS
       }
       return { ok, audioPath, transcriptPath }
     },
+
+    hasOpenSession: () => sessions.size > 0,
 
     async recover() {
       const current = await settings.get()
