@@ -2,6 +2,7 @@
 // sentido certo e na lista de canais permitidos logo abaixo (o preload recusa o que não estiver nela).
 import type { BrandingInfo, BrandLogoChoice } from './branding'
 import type { KeySaveResult, KeyStatus, MicAccess, ModelCheck, ModelsResult } from './assemblyai'
+import type { Chat, ChatEvent, ChatListItem, ChatSendResult } from './chat'
 import type { ClaudeLocateResult, ClaudeRunState, ClaudeStartResult, ClaudeTranslateRequest, ClaudeTranslateResult } from './claude-cli'
 import type { AudioBeginResult, AudioExtension, AudioFinishResult, AudioFolderInfo, MeetingDownloadKind, MeetingDownloadResult, MeetingFileKind, MeetingFilesInfo } from './meeting-files'
 import type { MeetingNote } from './meeting-notes'
@@ -131,6 +132,17 @@ export interface InvokeChannels {
   'scribe:update-download': { request: undefined; response: UpdateState }
   /** "Fechar o app agora", depois de abrir o `.dmg`. O renderer só oferece fora de uma gravação. */
   'scribe:update-quit': { request: undefined; response: boolean }
+  /** Chat "Perguntar" (contrato 15): conversas da tela (`meetingId: null`) ou da aba de uma reunião. */
+  'scribe:chat-list': { request: { meetingId: string | null }; response: ChatListItem[] }
+  'scribe:chat-get': { request: { id: string }; response: Chat | null }
+  /**
+   * Uma pergunta (`chatId: null` abre uma conversa nova). Responde com a pergunta gravada; a resposta chega
+   * por `scribe:chat-event`. Sem o `claude`, nada é gravado nem enviado.
+   */
+  'scribe:chat-send': { request: { chatId: string | null; meetingId: string | null; text: string }; response: ChatSendResult }
+  /** "Parar": mata o processo; a resposta parcial é gravada como interrompida. */
+  'scribe:chat-stop': { request: { id: string }; response: boolean }
+  'scribe:chat-delete': { request: { id: string }; response: boolean }
 }
 
 /** renderer -> main, sem resposta (`__scribeApi.send` / `ipcMain.on`). */
@@ -139,6 +151,12 @@ export interface RendererEvents {
   'scribe:open-privacy-settings': PrivacyPane
   /** "Criar chave": o main abre o painel da AssemblyAI no navegador padrão. */
   'scribe:open-key-dashboard': undefined
+  /** Conversa fechada (outra escolhida, "Nova conversa"): o processo dela morre. */
+  'scribe:chat-close': { id: string }
+  /** Saiu da tela da conversa: o processo morre em 5 min, se ela não for aberta de novo. */
+  'scribe:chat-leave': { id: string }
+  /** Link `https://` de uma resposta, depois da confirmação na tela: o main confere e abre no navegador. */
+  'scribe:open-link': string
 }
 
 /** main -> renderer (`webContents.send` / `__scribeApi.on`). */
@@ -154,6 +172,8 @@ export interface MainEvents {
   'scribe:summary-state': { meetingId: string; status: SummaryStatus }
   /** Consulta ou download da atualização mudou de estado. */
   'scribe:update-state': UpdateState
+  /** Resposta do chat crescendo ou terminada (contrato 15). */
+  'scribe:chat-event': ChatEvent
 }
 
 export type InvokeChannel = keyof InvokeChannels
@@ -217,11 +237,19 @@ const INVOKE: Record<InvokeChannel, true> = {
   'scribe:update-check': true,
   'scribe:update-download': true,
   'scribe:update-quit': true,
+  'scribe:chat-list': true,
+  'scribe:chat-get': true,
+  'scribe:chat-send': true,
+  'scribe:chat-stop': true,
+  'scribe:chat-delete': true,
 }
 const RENDERER_EVENTS: Record<RendererEvent, true> = {
   'scribe:csp-violation': true,
   'scribe:open-privacy-settings': true,
   'scribe:open-key-dashboard': true,
+  'scribe:chat-close': true,
+  'scribe:chat-leave': true,
+  'scribe:open-link': true,
 }
 const MAIN_EVENTS: Record<MainEvent, true> = {
   'scribe:navigate': true,
@@ -230,6 +258,7 @@ const MAIN_EVENTS: Record<MainEvent, true> = {
   'scribe:claude-state': true,
   'scribe:summary-state': true,
   'scribe:update-state': true,
+  'scribe:chat-event': true,
 }
 
 export const INVOKE_CHANNELS = Object.keys(INVOKE) as InvokeChannel[]

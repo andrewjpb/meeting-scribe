@@ -8,7 +8,7 @@
 import { z } from 'zod'
 import { isAbsolute } from 'node:path'
 import { BRAND_LOGO_PATTERN, BRAND_TEXT_MAX } from '../../shared/branding'
-import { CLAUDE_MODELS, DEFAULT_SETTINGS, LANGUAGE_CODES, THEME_SETTINGS, TRANSLATION_ENGINES, type AppSettings, type SettingsPatch } from '../../shared/settings-defaults'
+import { CHAT_MODELS, CLAUDE_MODELS, DEFAULT_SETTINGS, LANGUAGE_CODES, THEME_SETTINGS, TRANSLATION_ENGINES, type AppSettings, type SettingsPatch } from '../../shared/settings-defaults'
 
 export const SETTINGS_VERSION = 1
 
@@ -50,6 +50,7 @@ const lenientSchema = z.object({
   micDeviceId: deviceId.catch(D.micDeviceId),
   translationEngine: z.enum(TRANSLATION_ENGINES).catch(D.translationEngine),
   claudeModel: z.enum(CLAUDE_MODELS).catch(D.claudeModel),
+  chatModel: z.enum(CHAT_MODELS).catch(D.chatModel),
   claudePath: claudePathSchema.nullable().catch(D.claudePath),
   saveToFolder: z.boolean().catch(D.saveToFolder),
   audioFolder: audioFolderSchema.nullable().catch(D.audioFolder),
@@ -72,6 +73,7 @@ const patchSchema = z
     micDeviceId: deviceId,
     translationEngine: z.enum(TRANSLATION_ENGINES),
     claudeModel: z.enum(CLAUDE_MODELS),
+    chatModel: z.enum(CHAT_MODELS),
     saveToFolder: z.boolean(),
     summarizeOnStop: z.boolean(),
     identifySpeakers: z.boolean(),

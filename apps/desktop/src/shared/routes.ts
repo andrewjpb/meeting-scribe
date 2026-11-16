@@ -1,8 +1,10 @@
 // Rotas do renderer. O main só conhece o id; o caminho é detalhe do roteador em memória.
-export type RouteId = 'reunioes' | 'gravacao' | 'detalhe' | 'configuracoes'
+export type RouteId = 'reunioes' | 'perguntar' | 'gravacao' | 'detalhe' | 'configuracoes'
 
 export const ROUTE_PATHS: Record<RouteId, string> = {
   reunioes: '/',
+  /** Chat sobre as reuniões (contrato 15). */
+  perguntar: '/perguntar',
   gravacao: '/gravacao',
   /** Padrão do roteador; o caminho concreto sai de `meetingPath(id)`. */
   detalhe: '/reunioes/:id',

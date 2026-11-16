@@ -1,4 +1,4 @@
-import { LANGUAGE_CODES, type ClaudeModel, type LanguageCode, type ThemeSetting, type TranslationEngine } from '@shared/settings-defaults'
+import { LANGUAGE_CODES, type ChatModel, type ClaudeModel, type LanguageCode, type ThemeSetting, type TranslationEngine } from '@shared/settings-defaults'
 import { useSettings } from '../../app/settingsStore'
 import { Select } from '../../design/Field'
 import { PageHeader } from '../../design/PageHeader'
@@ -40,6 +40,12 @@ const ENGINES: { value: TranslationEngine; label: string }[] = [
 const CLAUDE_MODELS: { value: ClaudeModel; label: string }[] = [
   { value: 'haiku', label: 'Haiku (mais rápido)' },
   { value: 'sonnet', label: 'Sonnet' },
+]
+
+const CHAT_MODELS: { value: ChatModel; label: string }[] = [
+  { value: 'haiku', label: 'Haiku' },
+  { value: 'sonnet', label: 'Sonnet' },
+  { value: 'opus', label: 'Opus' },
 ]
 
 /**
@@ -118,7 +124,6 @@ export function SettingsScreen() {
             </SettingRow>
             {settings.translationEngine === 'claude-cli' ? (
               <>
-                <ClaudeCliField />
                 <SettingRow name="Modelo" nameId="settings-claude-model">
                   <Segmented
                     value={settings.claudeModel}
@@ -137,8 +142,17 @@ export function SettingsScreen() {
             <SettingRow name="Resumir ao encerrar" nameId="settings-summarize" description="Ao encerrar, o Claude lê a transcrição e escreve o resumo, as decisões e as tarefas.">
               <Switch checked={settings.summarizeOnStop} labelledBy="settings-summarize" onChange={(summarizeOnStop) => void update({ summarizeOnStop })} />
             </SettingRow>
-            {/* O resumo usa o `claude` mesmo com a tradução pela AssemblyAI: o estado e o caminho dele ficam à mão. */}
-            {settings.translationEngine !== 'claude-cli' && settings.summarizeOnStop && <ClaudeCliField />}
+          </Section>
+
+          {/*
+           * Tradução, resumo e o chat "Perguntar" (contrato 15) usam o mesmo `claude`: o estado e o caminho
+           * dele ficam sempre à mão, junto do modelo do chat.
+           */}
+          <Section title="Claude CLI">
+            <ClaudeCliField />
+            <SettingRow name="Modelo do chat" nameId="settings-chat-model" description="Usado em Perguntar. O Opus responde melhor e demora mais.">
+              <Segmented value={settings.chatModel} options={CHAT_MODELS} labelledBy="settings-chat-model" dataName="chat-model-option" onChange={(chatModel) => void update({ chatModel })} />
+            </SettingRow>
           </Section>
 
           <Section title="Aparência">

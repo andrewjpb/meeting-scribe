@@ -27,11 +27,13 @@ export function ClaudeCliField() {
   const busy = useClaudeCli((state) => state.busy)
   const pathRejected = useClaudeCli((state) => state.pathRejected)
   const configuredPath = useSettings((state) => state.settings.claudePath)
+  const engine = useSettings((state) => state.settings.translationEngine)
   const [draft, setDraft] = useState('')
 
+  // O campo fica sempre na tela (o chat usa o `claude`); trocar o motor da tradução procura de novo.
   useEffect(() => {
     void useClaudeCli.getState().load()
-  }, [])
+  }, [engine])
 
   const choose = (): void => {
     const path = draft.trim()
@@ -62,7 +64,7 @@ export function ClaudeCliField() {
 
       {check.phase === 'found' && (
         <p className="text-12 text-text-muted">
-          Traduz com a sua conta do Claude, neste Mac. Só o texto de cada fala vai para ele. <span className="font-mono text-11 text-text-faint select-text">{check.path}</span>
+          Traduz, resume e responde em Perguntar com a sua conta do Claude, neste Mac. <span className="font-mono text-11 text-text-faint select-text">{check.path}</span>
           {configuredPath && (
             <>
               {' '}

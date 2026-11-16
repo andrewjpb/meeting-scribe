@@ -13,6 +13,7 @@ import { AUDIO_FOLDER_FAILED_TEXT, RetryNotice } from '../live/Notices'
 import { useRecording } from '../live/recordingStore'
 import { TranscriptList, type TranscriptItem } from '../live/TranscriptList'
 import { durationLabel, longDateLabel, timeLabel } from './format'
+import { MeetingChatTab } from '../chat/MeetingChatTab'
 import { closestSegmentId } from '../notes/noteList'
 import { MeetingFiles } from './MeetingFiles'
 import { useMeetingNotes } from './notesStore'
@@ -21,11 +22,12 @@ import { SourceDots } from './SourceDots'
 import { SummaryTab } from './SummaryTab'
 import { useSummary, type SummaryView } from './useSummary'
 
-type DetailTab = 'resumo' | 'anotacoes' | 'transcricao' | 'audio'
+type DetailTab = 'resumo' | 'anotacoes' | 'perguntar' | 'transcricao' | 'audio'
 
 const TABS: { value: DetailTab; label: string }[] = [
   { value: 'resumo', label: 'Resumo' },
   { value: 'anotacoes', label: 'Anotações' },
+  { value: 'perguntar', label: 'Perguntar' },
   { value: 'transcricao', label: 'Transcrição' },
   { value: 'audio', label: 'Áudio' },
 ]
@@ -55,9 +57,9 @@ const itemsOf = (transcript: TranscriptDocument | null): TranscriptItem[] =>
   }))
 
 /**
- * Detalhe da reunião: mesmo esqueleto da gravação, sem a fita ao vivo, com quatro abas (contratos 08 e 13):
- * "Resumo", "Anotações" (os cards da reunião), "Transcrição" (a transcrição salva) e "Áudio" (os arquivos e
- * o que dá para baixar).
+ * Detalhe da reunião: mesmo esqueleto da gravação, sem a fita ao vivo, com cinco abas (contratos 08, 13 e
+ * 15): "Resumo", "Anotações" (os cards da reunião), "Perguntar" (o chat só sobre esta reunião),
+ * "Transcrição" (a transcrição salva) e "Áudio" (os arquivos e o que dá para baixar).
  */
 export function MeetingDetailScreen() {
   const { id = '' } = useParams()
@@ -180,6 +182,7 @@ export function MeetingDetailScreen() {
         <div role="tabpanel" id={tabPanelId(TABS_ID, tab)} aria-labelledby={tabId(TABS_ID, tab)} data-tab-panel={tab} className="flex min-h-0 flex-1 flex-col">
           {tab === 'resumo' && <SummaryTab meetingId={ready.meeting.id} view={summary.view} onGenerate={summary.generate} />}
           {tab === 'anotacoes' && <NotesTab meetingId={ready.meeting.id} onJump={jumpTo} />}
+          {tab === 'perguntar' && <MeetingChatTab meetingId={ready.meeting.id} />}
           {tab === 'transcricao' &&
             (items.length > 0 ? (
               <TranscriptList items={items} jumpTo={jump?.meetingId === id ? jump : null} />

@@ -15,6 +15,9 @@ import { writeSummaryFile } from './audio-files/summary-file'
 import { applyBrandName, applyDockIcon, type DockIconTarget } from './branding/apply'
 import { createBrandingService, type BrandingService, type ImageDialog } from './branding/service'
 import { registerDisplayMediaHandler } from './capture/display-media'
+import { createChatCorpus, type ChatCorpus } from './chat/corpus'
+import { createChatService, type ChatService } from './chat/service'
+import { createFileChatStore } from './chat/store'
 import { nodeExecFile } from './claude-cli/locate'
 import { createClaudeService, type ClaudeService } from './claude-cli/service'
 import { nodeSpawnSummary } from './claude-cli/summary'
@@ -64,6 +67,8 @@ const appUrl = isDev ? devUrl : `${APP_ORIGIN}/index.html`
 const rendererRoot = join(__dirname, '../renderer')
 
 let mainWindow: BrowserWindow | null = null
+/** Chat "Perguntar" (contrato 15), para a janela fechada avisar as conversas abertas. */
+let chatService: ChatService | null = null
 /** Nome da marca em uso (título da janela, "Sobre", `scribe:app-info`). */
 let brandName = DEFAULT_BRAND_NAME
 /** Último logo aplicado ao Dock; `undefined` antes da primeira vez. */
@@ -73,6 +78,8 @@ function openMainWindow(query?: Record<string, string>, invisible = false): Brow
   const win = createMainWindow({ url: appUrl, appOrigin, title: brandName, ...(query ? { query } : {}), invisible })
   win.on('closed', () => {
     if (mainWindow === win) mainWindow = null
+    // No macOS o app segue aberto sem janela: as conversas do chat morrem em 5 min, como ao sair da tela.
+    chatService?.leaveAll()
   })
   mainWindow = win
   return win
@@ -135,6 +142,9 @@ interface AppServices {
   download: ReturnType<typeof createMeetingDownload>
   branding: BrandingService
   updates: UpdateService
+  /** Chat "Perguntar" (contrato 15) e o acervo em Markdown que o `claude` dele lê. */
+  chat: ChatService
+  corpus: ChatCorpus
 }
 
 function fetchImpl(url: string, init: FetchInit): Promise<FetchResponse> {
@@ -175,6 +185,21 @@ function createAppServices(userData: string): AppServices {
     // Custo nominal e trocas de processo só nos logs de desenvolvimento.
     ...(app.isPackaged ? {} : { log: (message: string) => console.log(message) }),
   })
+  // Acervo do chat (contrato 15): um `.md` por reunião e o índice, reescritos a cada mudança da reunião.
+  const corpus = createChatCorpus({ dir: userData, meetings, transcripts, summaries, notes })
+  // Chat "Perguntar": o mesmo `claude` e o mesmo caminho configurado, um processo por conversa, só leitura.
+  const chat = createChatService({
+    store: createFileChatStore({ dir: userData }),
+    corpus,
+    settings,
+    meetings,
+    locate: () => claude.locate(),
+    spawn: smokeClaude?.spawn ?? nodeSpawnClaude,
+    baseEnv: process.env,
+    onEvent: (event) => broadcast(BrowserWindow.getAllWindows(), 'scribe:chat-event', event),
+    // Custo nominal e ferramentas negadas só nos logs de desenvolvimento; nunca o texto das reuniões.
+    ...(app.isPackaged ? {} : { log: (message: string) => console.log(message) }),
+  })
   // Resumo da reunião (contrato 08): o mesmo `claude` e o mesmo caminho configurado, numa execução curta.
   const summary = createSummaryService({
     settings,
@@ -188,11 +213,16 @@ function createAppServices(userData: string): AppServices {
     baseEnv: process.env,
     clipboard: appClipboard,
     writeToFolder: (meeting, result) => writeSummaryFile(meeting, result, true),
-    onStatus: (meetingId, status) => broadcast(BrowserWindow.getAllWindows(), 'scribe:summary-state', { meetingId, status }),
+    onStatus: (meetingId, status) => {
+      // Resumo novo entra no acervo do chat.
+      if (status.state === 'ready') void corpus.sync(meetingId).catch(() => undefined)
+      broadcast(BrowserWindow.getAllWindows(), 'scribe:summary-state', { meetingId, status })
+    },
     ...(app.isPackaged ? {} : { log: (message: string) => console.log(message) }),
   })
-  // Excluir a reunião apaga a transcrição, o resumo e as anotações internos; os arquivos da pasta ficam.
-  const meetingsService = createMeetingsService({ meetings, transcripts, summaries: summary, notes, clipboard: appClipboard })
+  // Excluir a reunião apaga a transcrição, o resumo, as anotações e as conversas do chat internos; os
+  // arquivos da pasta ficam.
+  const meetingsService = createMeetingsService({ meetings, transcripts, summaries: summary, notes, chats: chat, clipboard: appClipboard })
   // Lista e busca da tela de Reuniões (contrato 10): lê só o disco local; o estado "gerando" vem do resumo.
   const meetingsIndex = createMeetingsIndex({ dir: userData, meetings, transcripts, summaries, notes, activity: (id) => summary.activity(id) })
   // Arquivos da reunião (contrato 07). No smoke, a "pasta pessoal" fica dentro do userData temporário
@@ -270,6 +300,8 @@ function createAppServices(userData: string): AppServices {
     download,
     branding,
     updates,
+    chat,
+    corpus,
   }
 }
 
@@ -310,13 +342,24 @@ const nativeOpener: FileOpener = {
   showItemInFolder: (path) => shell.showItemInFolder(path),
 }
 
+function isHttpsUrl(value: unknown): value is string {
+  if (typeof value !== 'string' || value.length > 2048) return false
+  try {
+    return new URL(value).protocol === 'https:'
+  } catch {
+    return false
+  }
+}
+
 function openExternal(url: string): void {
   if (smokeFixtures) smokeFixtures.openedUrls.push(url)
   else void shell.openExternal(url)
 }
 
 function registerIpc(services: AppServices): void {
-  const { settings, meetings, meetingsService, meetingsIndex, tokenClient, translation, claude, files, summary, download, branding, updates } = services
+  const { settings, meetings, meetingsService, meetingsIndex, tokenClient, translation, claude, files, summary, download, branding, updates, chat, corpus } = services
+  /** Reunião salva, renomeada ou com anotações novas: o `.md` dela no acervo do chat é reescrito. */
+  const touched = (meetingId: string): void => void corpus.sync(meetingId).catch(() => undefined)
   handle('scribe:app-info', appOrigin, () => ({
     name: brandName,
     version: app.getVersion(),
@@ -327,8 +370,16 @@ function registerIpc(services: AppServices): void {
   handle('scribe:capture-mode', appOrigin, () => (smoke ? 'synthetic' : 'real'))
   handle('scribe:meetings-list', appOrigin, () => meetings.list())
   handle('scribe:meetings-get', appOrigin, (_event, { id }) => meetings.get(id))
-  handle('scribe:meetings-create', appOrigin, (_event, input) => meetings.create(input))
-  handle('scribe:meetings-rename', appOrigin, (_event, { id, title }) => meetings.rename(id, title))
+  handle('scribe:meetings-create', appOrigin, async (_event, input) => {
+    const meeting = await meetings.create(input)
+    touched(meeting.id)
+    return meeting
+  })
+  handle('scribe:meetings-rename', appOrigin, async (_event, { id, title }) => {
+    const meeting = await meetings.rename(id, title)
+    if (meeting) touched(meeting.id)
+    return meeting
+  })
   // Excluir a reunião apaga também a transcrição, o resumo e as anotações internos dela; os arquivos da pasta ficam.
   handle('scribe:meetings-delete', appOrigin, (_event, { id }) => meetingsService.deleteMeeting(id))
   handle('scribe:meetings-overview', appOrigin, () => meetingsIndex.overview())
@@ -346,12 +397,17 @@ function registerIpc(services: AppServices): void {
   handle('scribe:transcription-token', appOrigin, () => requestToken(tokenClient))
   handle('scribe:transcript-save', appOrigin, async (_event, { document }) => {
     await meetingsService.saveTranscript(document as TranscriptDocument)
+    touched((document as TranscriptDocument).meetingId)
     return true
   })
   handle('scribe:transcript-get', appOrigin, (_event, { meetingId }) => meetingsService.getTranscript(meetingId))
   handle('scribe:transcript-copy', appOrigin, (_event, { meetingId }) => meetingsService.copyTranscript(meetingId))
   handle('scribe:notes-get', appOrigin, (_event, request) => meetingsService.getNotes((request as { meetingId?: unknown } | undefined)?.meetingId))
-  handle('scribe:notes-save', appOrigin, (_event, request) => meetingsService.saveNotes(request))
+  handle('scribe:notes-save', appOrigin, async (_event, request) => {
+    const saved = await meetingsService.saveNotes(request)
+    if (saved) touched((request as { meetingId: string }).meetingId)
+    return saved
+  })
   handle('scribe:notes-copy', appOrigin, (_event, request) => meetingsService.copyNotes((request as { meetingId?: unknown } | undefined)?.meetingId))
   handle('scribe:translate-turn', appOrigin, (_event, request) => translation.translate(request))
   handle('scribe:claude-locate', appOrigin, () => claude.locate())
@@ -381,6 +437,17 @@ function registerIpc(services: AppServices): void {
   handle('scribe:update-check', appOrigin, () => updates.check())
   handle('scribe:update-download', appOrigin, () => updates.download())
   handle('scribe:update-quit', appOrigin, () => updates.quit())
+  handle('scribe:chat-list', appOrigin, (_event, request) => chat.list(request))
+  handle('scribe:chat-get', appOrigin, (_event, request) => chat.get((request as { id?: unknown } | undefined)?.id))
+  handle('scribe:chat-send', appOrigin, (_event, request) => chat.send(request))
+  handle('scribe:chat-stop', appOrigin, (_event, request) => chat.stop((request as { id?: unknown } | undefined)?.id))
+  handle('scribe:chat-delete', appOrigin, (_event, request) => chat.remove((request as { id?: unknown } | undefined)?.id))
+  onEvent('scribe:chat-close', appOrigin, (_event, request) => chat.close((request as { id?: unknown } | undefined)?.id))
+  onEvent('scribe:chat-leave', appOrigin, (_event, request) => chat.leave((request as { id?: unknown } | undefined)?.id))
+  // Só `https://`, e só depois da confirmação na tela; qualquer outra coisa é ignorada.
+  onEvent('scribe:open-link', appOrigin, (_event, url) => {
+    if (isHttpsUrl(url)) openExternal(url)
+  })
   onEvent('scribe:csp-violation', appOrigin, (_event, report) => {
     console.warn(`[csp] ${report.directive} bloqueou ${report.blockedUri} (${report.sourceFile})`)
   })
@@ -439,15 +506,22 @@ void app.whenReady().then(async () => {
   if (!isDev) handleAppScheme(ses, rendererRoot)
   const userData = app.getPath('userData')
   const services = createAppServices(userData)
+  chatService = services.chat
   registerIpc(services)
   // Marca gravada: título da primeira janela, "Sobre" e ícone do Dock antes de abrir.
   applyBrand(await services.settings.getSettings())
   // `.part` deixado por um app fechado ou travado no meio da gravação vira "(incompleto)" (CA7).
   void services.files.recover().catch(() => undefined)
-  // Sair do app mata os processos do `claude` (tradução e resumo) que estiverem vivos: nenhum fica órfão.
+  // Acervo do chat: pastas temporárias de conversas de uma reunião que sobraram, e o acervo refeito se faltar.
+  void services.corpus
+    .clearScopes()
+    .then(() => services.corpus.ensure())
+    .catch(() => undefined)
+  // Sair do app mata os processos do `claude` (tradução, resumo e chat) que estiverem vivos: nenhum fica órfão.
   app.on('will-quit', () => {
     services.claude.dispose()
     services.summary.dispose()
+    services.chat.dispose()
     services.updates.dispose()
   })
   installMenu()
@@ -463,6 +537,7 @@ void app.whenReady().then(async () => {
     // `app.exit` não passa por `will-quit`.
     services.claude.dispose()
     services.summary.dispose()
+    services.chat.dispose()
     services.updates.dispose()
     app.exit(code)
     return

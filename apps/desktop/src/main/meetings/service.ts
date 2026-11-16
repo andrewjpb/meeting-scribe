@@ -21,6 +21,8 @@ export interface MeetingsServiceDeps {
   summaries: Pick<SummaryStore, 'remove'>
   /** Anotações da reunião (contrato 13); excluir a reunião apaga junto. */
   notes?: NotesStore
+  /** Conversas do chat ligadas à reunião e o `.md` dela no acervo (contrato 15); excluir a reunião apaga junto. */
+  chats?: { removeMeeting(meetingId: string): Promise<void> }
   clipboard: ClipboardWriter
 }
 
@@ -39,8 +41,8 @@ export interface MeetingsService {
   /** "Copiar anotações": o mesmo Markdown do `.md` da pasta. */
   copyNotes(meetingId: unknown): Promise<TranscriptCopyResult>
   /**
-   * Exclui a reunião e apaga a transcrição, o resumo e as anotações internos dela. Os arquivos da pasta
-   * ficam (contratos 07 e 08).
+   * Exclui a reunião e apaga a transcrição, o resumo, as anotações e as conversas do chat internos dela.
+   * Os arquivos da pasta ficam (contratos 07 e 08).
    */
   deleteMeeting(id: string): Promise<boolean>
 }
@@ -48,7 +50,7 @@ export interface MeetingsService {
 const meetingIdSchema = z.string().min(1).max(200)
 const saveNotesSchema = z.object({ meetingId: meetingIdSchema, notes: z.array(z.unknown()) })
 
-export function createMeetingsService({ meetings, transcripts, summaries, notes, clipboard }: MeetingsServiceDeps): MeetingsService {
+export function createMeetingsService({ meetings, transcripts, summaries, notes, chats, clipboard }: MeetingsServiceDeps): MeetingsService {
   return {
     saveTranscript: (document) => transcripts.save(document),
     getTranscript: (meetingId) => transcripts.get(meetingId),
@@ -95,7 +97,7 @@ export function createMeetingsService({ meetings, transcripts, summaries, notes,
 
     async deleteMeeting(id) {
       const removed = await meetings.remove(id)
-      if (removed) await Promise.all([transcripts.remove(id), summaries.remove(id), notes?.remove(id)])
+      if (removed) await Promise.all([transcripts.remove(id), summaries.remove(id), notes?.remove(id), chats?.removeMeeting(id)])
       return removed
     },
   }

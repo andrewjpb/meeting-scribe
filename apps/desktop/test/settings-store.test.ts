@@ -19,6 +19,7 @@ describe('esquema de configurações (CA1)', () => {
       micDeviceId: null,
       translationEngine: 'assemblyai',
       claudeModel: 'haiku',
+      chatModel: 'sonnet',
       claudePath: null,
       saveToFolder: true,
       audioFolder: null,
@@ -57,6 +58,7 @@ describe('esquema de configurações (CA1)', () => {
       micDeviceId: 'usb-1',
       translationEngine: 'claude-cli',
       claudeModel: 'sonnet',
+      chatModel: 'opus',
       claudePath: '/opt/claude/bin/claude',
       saveToFolder: false,
       audioFolder: '/Users/teste/Reuniões',
@@ -100,7 +102,7 @@ describe('esquema de configurações (CA1)', () => {
   it('Claude CLI (contrato 05, CA1): motor, modelo e caminho com padrão próprio cada um', () => {
     // `settings.json` do contrato 04, sem os campos novos: carrega com os padrões deles e mantém o resto.
     const old = { translationEnabled: false, translationModel: 'gpt-oss-120b', sourceLanguage: 'es', targetLanguage: 'ja', echoCancellation: true, theme: 'dark', micDeviceId: null }
-    expect(parseSettings(old)).toEqual({ ...old, removeEcho: true, translationEngine: 'assemblyai', claudeModel: 'haiku', claudePath: null, saveToFolder: true, audioFolder: null, summarizeOnStop: true, identifySpeakers: false, brandName: null, brandSubtitle: null, brandLogo: null, autoCheckUpdates: true })
+    expect(parseSettings(old)).toEqual({ ...old, removeEcho: true, translationEngine: 'assemblyai', claudeModel: 'haiku', chatModel: 'sonnet', claudePath: null, saveToFolder: true, audioFolder: null, summarizeOnStop: true, identifySpeakers: false, brandName: null, brandSubtitle: null, brandLogo: null, autoCheckUpdates: true })
     expect(parseSettings({ translationEngine: 'claude-cli', claudeModel: 'sonnet' })).toMatchObject({ translationEngine: 'claude-cli', claudeModel: 'sonnet' })
     // Fora da lista cai no padrão: só `haiku` e `sonnet`, só os dois motores.
     expect(parseSettings({ translationEngine: 'openai' }).translationEngine).toBe('assemblyai')
@@ -211,6 +213,14 @@ describe('esquema de configurações (CA1)', () => {
     expect(() => parseSettingsPatch({ brandSubtitle: 'y'.repeat(41) })).toThrow()
     expect(() => parseSettingsPatch({ brandLogo: 'logo-deadbeef.png' })).toThrow()
     expect(() => parseSettingsPatch({ brandLogo: null })).toThrow()
+  })
+
+  it('Modelo do chat (contrato 15, CA2): haiku, sonnet ou opus, padrão sonnet', () => {
+    expect(parseSettings({}).chatModel).toBe('sonnet')
+    for (const model of ['haiku', 'sonnet', 'opus']) expect(parseSettings({ chatModel: model }).chatModel).toBe(model)
+    expect(parseSettings({ chatModel: 'claude-opus-5-5' }).chatModel).toBe('sonnet')
+    expect(parseSettingsPatch({ chatModel: 'opus' })).toEqual({ chatModel: 'opus' })
+    expect(() => parseSettingsPatch({ chatModel: 'gpt' })).toThrow()
   })
 
   it('Atualizações (contrato 14): "Procurar automaticamente" ligado por padrão, só booleano', () => {

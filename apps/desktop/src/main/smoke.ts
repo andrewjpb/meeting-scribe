@@ -11,7 +11,9 @@
 // GitHub (contrato 14) usa API e download falsos; o `.dmg` falso vai para o userData temporário. A lista
 // de reuniões (contrato 10) é conferida com seis reuniões semeadas, duas com resumo, e uma busca. As
 // anotações (contrato 13) são criadas no painel da gravação e conferidas no arquivo, no `.md`, na aba
-// "Anotações" do detalhe e na lista.
+// "Anotações" do detalhe e na lista. O chat "Perguntar" (contrato 15) usa o `claude` falso em modo chat: o
+// acervo das fixtures é refeito, uma pergunta responde em pedaços, o link `meeting:` abre o detalhe, "Parar"
+// mata o processo e a aba "Perguntar" do detalhe roda numa pasta só com o `.md` da reunião.
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
@@ -34,6 +36,9 @@ import { SUMMARY_FILE_SUFFIX, summaryFileTarget } from './audio-files/summary-fi
 import { BRANDING_DIR } from './branding/service'
 import { summaryInput, summaryLines } from './claude-cli/summary'
 import { MENU_IDS } from './menu'
+import { CHAT_CORPUS_DIR, CHAT_INDEX_FILE, CHAT_SCOPE_DIR, corpusFileSuffix } from './chat/corpus'
+import { CHATS_DIR } from './chat/store'
+import { CHAT_ALLOWED_TOOLS, CHAT_DISALLOWED_TOOLS } from './claude-cli/chat'
 import { MEETINGS_FILE } from './meetings/store'
 import { originOf } from './security'
 import { SETTINGS_FILE } from './settings/store'
@@ -60,6 +65,7 @@ const SCREENS = [
   'detalhe',
   'detalhe-resumo',
   'detalhe-anotacoes',
+  'perguntar',
   'configuracoes',
   'configuracoes-seletor',
   'configuracoes-claude',
@@ -265,6 +271,163 @@ function transcriptDocument(meetingId: string, lines: readonly FixtureLine[]): T
     targetLanguage: DEFAULT_SETTINGS.targetLanguage,
     translationModel: DEFAULT_SETTINGS.translationModel,
     segments: persistableSegments({ segments: fixtureSegments(lines), pendingTranslations: {} }),
+  }
+}
+
+/** Processos do `claude` falso abertos pelo chat (os únicos com `--include-partial-messages`). */
+const chatSpawns = (fixtures: SmokeFixtures): SmokeFixtures['claudeSpawns'] => fixtures.claudeSpawns.filter((spawn) => spawn.args.includes('--include-partial-messages'))
+
+const CHAT_DONE = `document.querySelector('[data-chat-message="assistant"]:not([data-chat-streaming])') && !document.querySelector('[data-chat-streaming]')`
+const LAST_ANSWER = `[...document.querySelectorAll('[data-chat-message="assistant"]:not([data-chat-streaming])')].at(-1)?.textContent ?? ''`
+
+/** Uma pergunta pelo campo (Enter envia) e a espera da resposta: viu texto aparecer antes do fim? */
+async function askChat(contents: WebContents, question: string): Promise<{ streamed: boolean; done: boolean; answer: string }> {
+  const answersBefore = await evaluate<number>(contents, `document.querySelectorAll('[data-chat-message="assistant"]:not([data-chat-streaming])').length`)
+  await setValue(contents, '[data-chat-input]', question)
+  await pressEnterIn(contents, '[data-chat-input]')
+  const streamed = await waitFor(contents, `(document.querySelector('[data-chat-streaming] [data-chat-markdown]')?.textContent ?? '').length > 0`, 8000)
+  const done = await waitFor(contents, `${CHAT_DONE} && document.querySelectorAll('[data-chat-message="assistant"]:not([data-chat-streaming])').length > ${answersBefore}`, 8000)
+  return { streamed, done, answer: await evaluate<string>(contents, LAST_ANSWER) }
+}
+
+function readChatFiles(userDataDir: string): { id: string; meetingId: string | null; messages: { role: string; text: string; error?: string }[] }[] {
+  const dir = join(userDataDir, CHATS_DIR)
+  if (!existsSync(dir)) return []
+  return readdirSync(dir)
+    .filter((name) => name.endsWith('.json'))
+    .map((name) => JSON.parse(readFileSync(join(dir, name), 'utf8')) as { id: string; meetingId: string | null; messages: { role: string; text: string; error?: string }[] })
+}
+
+const mode = (path: string): string => (existsSync(path) ? (statSync(path).mode & 0o777).toString(8) : 'ausente')
+
+/** Argumentos de isolamento do chat (CA2): ferramentas liberadas e negadas, nada pergunta, ambiente filtrado. */
+function chatArgsCheck(spawn: SmokeFixtures['claudeSpawns'][number] | undefined): boolean {
+  if (!spawn) return false
+  const value = (flag: string): string | undefined => spawn.args[spawn.args.indexOf(flag) + 1]
+  return (
+    value('--allowedTools') === CHAT_ALLOWED_TOOLS.join(' ') &&
+    value('--disallowedTools') === CHAT_DISALLOWED_TOOLS.join(' ') &&
+    value('--tools') === CHAT_ALLOWED_TOOLS.join(',') &&
+    value('--permission-mode') === 'dontAsk' &&
+    value('--setting-sources') === '' &&
+    spawn.args.includes('--restricted') &&
+    spawn.args.includes('--disable-slash-commands') &&
+    spawn.args.includes('--strict-mcp-config') &&
+    spawn.args.includes('--no-session-persistence') &&
+    spawn.envNames.every((name) => ['HOME', 'USER', 'LOGNAME', 'SHELL', 'LANG', 'LC_ALL', 'LC_CTYPE', 'TMPDIR', 'PATH'].includes(name))
+  )
+}
+
+/**
+ * Contrato 15 (CA1, CA2, CA3, CA4 e CA9) nos dois temas: o acervo apagado é refeito a partir das reuniões
+ * semeadas; uma pergunta pela tela "Perguntar" responde em pedaços, com o link `meeting:`; a conversa fica
+ * gravada e o processo roda no acervo só com as ferramentas de leitura. A foto sai com a conversa.
+ */
+async function chatScreenCheck(contents: WebContents, ctx: SmokeContext, shoot: () => Promise<void>): Promise<Check> {
+  const corpus = join(ctx.userDataDir, CHAT_CORPUS_DIR)
+  rmSync(corpus, { recursive: true, force: true })
+  const meetings = readMeetings(ctx.userDataDir)
+  const chatsBefore = readChatFiles(ctx.userDataDir).length
+  const spawnsBefore = chatSpawns(ctx.fixtures).length
+  await clickSelector(contents, '[data-nav="perguntar"]')
+  const opened = await waitFor(contents, `${routeIs('perguntar')} && document.querySelectorAll('[data-chat-suggestion]').length === 3 && document.querySelector('[data-chat-input]')`, 8000)
+  const suggestions = await evaluate<string[]>(contents, `[...document.querySelectorAll('[data-chat-suggestion]')].map((b) => b.textContent)`)
+  const asked = await askChat(contents, 'O que ficou decidido esta semana?')
+  const link = await evaluate<string>(contents, `[...document.querySelectorAll('[data-chat-message="assistant"] [data-meeting-link]')].at(-1)?.dataset.meetingLink ?? ''`)
+  const userRight = await evaluate<string>(contents, `getComputedStyle(document.querySelector('[data-chat-message="user"]')).justifyContent`)
+  const index = existsSync(join(corpus, CHAT_INDEX_FILE)) ? readFileSync(join(corpus, CHAT_INDEX_FILE), 'utf8') : ''
+  const indexLines = index.split('\n').filter((line) => line.startsWith('- ')).length
+  const sample = meetings.find((meeting) => meeting.id === 'smoke-2')
+  const sampleFile = existsSync(corpus) ? readdirSync(corpus).find((name) => sample && name.endsWith(corpusFileSuffix(sample.id))) : undefined
+  const sampleText = sampleFile ? readFileSync(join(corpus, sampleFile), 'utf8') : ''
+  const spawn = chatSpawns(ctx.fixtures).at(-1)
+  const chats = readChatFiles(ctx.userDataDir)
+  const saved = chats.find((chat) => chat.meetingId === null && chat.messages.length === 2 && chat.messages[0]?.text === 'O que ficou decidido esta semana?')
+  await shoot()
+  return {
+    ok:
+      opened &&
+      asked.streamed &&
+      asked.done &&
+      asked.answer.includes(`${meetings.length} reuniões`) &&
+      meetings.some((meeting) => meeting.id === link) &&
+      userRight === 'flex-end' &&
+      indexLines === meetings.length &&
+      sampleText.includes(`- Id: ${sample?.id ?? '?'}`) &&
+      sampleText.includes('## Resumo') &&
+      sampleText.includes(LIST_SUMMARIES['smoke-2']?.decisions[0] ?? '?') &&
+      sampleText.includes('## Transcrição') &&
+      mode(corpus) === '700' &&
+      mode(join(corpus, CHAT_INDEX_FILE)) === '600' &&
+      chatSpawns(ctx.fixtures).length === spawnsBefore + 1 &&
+      spawn?.cwd === corpus &&
+      chatArgsCheck(spawn) &&
+      chats.length === chatsBefore + 1 &&
+      saved?.messages[1]?.role === 'assistant' &&
+      saved.messages[1].error === undefined,
+    detail: `tela=${opened}, sugestões ${JSON.stringify(suggestions)}; em pedaços=${asked.streamed}, terminou=${asked.done}, resposta "${asked.answer.slice(0, 120)}"; link meeting:${link}; pessoa à direita=${userRight}; INDICE.md ${indexLines} linhas para ${meetings.length} reuniões, ${sampleFile ?? 'sem .md da smoke-2'}; permissões pasta ${mode(corpus)}, índice ${mode(join(corpus, CHAT_INDEX_FILE))}; processo ${JSON.stringify(spawn ? { cwd: spawn.cwd.replace(ctx.userDataDir, '<userData>'), args: spawn.args.filter((arg, i) => arg.startsWith('--') || spawn.args[i - 1]?.endsWith('Tools') || spawn.args[i - 1] === '--permission-mode'), env: spawn.envNames } : null)}; conversas ${chatsBefore} -> ${chats.length}`,
+  }
+}
+
+/** Contrato 15, CA3 (tema claro): "Parar" mata o processo e grava o parcial; a próxima pergunta abre outro, com o histórico. */
+async function chatStopCheck(contents: WebContents, ctx: SmokeContext): Promise<Check> {
+  const before = chatSpawns(ctx.fixtures).length
+  await setValue(contents, '[data-chat-input]', 'Responda devagar, por favor.')
+  await pressEnterIn(contents, '[data-chat-input]')
+  const streaming = await waitFor(contents, `(document.querySelector('[data-chat-streaming] [data-chat-markdown]')?.textContent ?? '').length > 0 && document.querySelector('[data-action="chat-stop"]')`, 8000)
+  await clickSelector(contents, '[data-action="chat-stop"]')
+  const stopped = await waitFor(contents, `document.querySelector('[data-chat-error="stopped"]') && document.querySelector('[data-action="chat-send"]')`, 5000)
+  const slow = chatSpawns(ctx.fixtures).at(-1)
+  for (let attempt = 0; attempt < 60 && slow && !slow.exited; attempt++) await wait(50)
+  const stoppedText = await text(contents, '[data-chat-error="stopped"]')
+  const saved = readChatFiles(ctx.userDataDir).find((chat) => chat.messages.some((message) => message.error === 'stopped'))
+  const next = await askChat(contents, 'E agora, o que ficou?')
+  const after = chatSpawns(ctx.fixtures)
+  return {
+    ok:
+      streaming &&
+      stopped &&
+      slow?.exited === true &&
+      stoppedText.includes('Resposta interrompida.') &&
+      saved !== undefined &&
+      next.done &&
+      next.answer.includes('Histórico: sim') &&
+      after.length === before + 1 &&
+      after.at(-1) !== slow,
+    detail: `resposta lenta em pedaços=${streaming}; "Parar" -> erro na tela=${stopped} ("${stoppedText.slice(-60)}"), processo saiu=${slow?.exited ?? '?'}, parcial gravado=${saved !== undefined}; próxima pergunta terminou=${next.done}, histórico reenviado=${next.answer.includes('Histórico: sim')}; processos do chat ${before} -> ${after.length}`,
+  }
+}
+
+/**
+ * Contrato 15, CA4, CA5 e CA9 (tema claro): o link `meeting:` da resposta abre o detalhe daquela reunião; a
+ * aba "Perguntar" do detalhe responde com o `claude` rodando numa pasta só com o `.md` dela.
+ */
+async function chatMeetingCheck(contents: WebContents, ctx: SmokeContext): Promise<Check> {
+  const link = await evaluate<string>(contents, `[...document.querySelectorAll('[data-chat-message="assistant"] [data-meeting-link]')].at(-1)?.dataset.meetingLink ?? ''`)
+  await clickSelector(contents, `[data-meeting-link="${link}"]`)
+  const opened = await waitFor(contents, `${routeIs('detalhe')} && ${DETAIL_ID} === ${JSON.stringify(link)}`, 5000)
+  await clickSelector(contents, '[data-tab="perguntar"]')
+  const tab = await waitFor(contents, `document.querySelector('[data-meeting-chat] [data-chat-input]') && document.querySelectorAll('[data-chat-suggestion]').length > 0`, 8000)
+  const before = chatSpawns(ctx.fixtures).length
+  const asked = await askChat(contents, 'O que ficou decidido?')
+  const spawn = chatSpawns(ctx.fixtures).at(-1)
+  const scopeRoot = join(ctx.userDataDir, CHAT_SCOPE_DIR)
+  const scopeFiles = spawn && existsSync(spawn.cwd) ? readdirSync(spawn.cwd) : []
+  const saved = readChatFiles(ctx.userDataDir).find((chat) => chat.meetingId === link)
+  return {
+    ok:
+      link !== '' &&
+      opened &&
+      tab &&
+      asked.done &&
+      asked.answer.includes('Esta conversa é só sobre') &&
+      chatSpawns(ctx.fixtures).length === before + 1 &&
+      spawn?.cwd.startsWith(`${scopeRoot}/`) === true &&
+      scopeFiles.length === 1 &&
+      (scopeFiles[0] ?? '').endsWith(corpusFileSuffix(link)) &&
+      chatArgsCheck(spawn) &&
+      saved?.messages.length === 2,
+    detail: `link meeting:${link} -> detalhe=${opened}; aba Perguntar=${tab}; resposta "${asked.answer.slice(0, 100)}"; pasta do processo ${spawn ? spawn.cwd.replace(ctx.userDataDir, '<userData>') : '?'} com ${JSON.stringify(scopeFiles)}; conversa ligada à reunião=${saved !== undefined}`,
   }
 }
 
@@ -703,7 +866,7 @@ async function summaryAfterEnd(win: BrowserWindow, ctx: SmokeContext, record: Me
       summary.meetingId === record?.id &&
       summary.model === 'claude-cli:haiku' &&
       summary.tasks.length === 2 &&
-      JSON.stringify(screen.tabs) === JSON.stringify(['Resumo', 'Anotações', 'Transcrição', 'Áudio']) &&
+      JSON.stringify(screen.tabs) === JSON.stringify(['Resumo', 'Anotações', 'Perguntar', 'Transcrição', 'Áudio']) &&
       JSON.stringify(screen.sections) === JSON.stringify(['O que aconteceu', 'Decisões', 'Tarefas']) &&
       screen.decisions === summary.decisions.length &&
       JSON.stringify(screen.rows[0]) === JSON.stringify(['Tarefa', 'Quem', 'Prazo']) &&
@@ -862,7 +1025,7 @@ async function notesAfterEnd(contents: WebContents, ctx: SmokeContext, record: M
       JSON.stringify(notes.map((note) => [note.text, note.color])) === JSON.stringify(expectedFile) &&
       notes.every((note) => typeof note.atMs === 'number') &&
       shown &&
-      JSON.stringify(screen.tabs) === JSON.stringify(['Resumo', 'Anotações', 'Transcrição', 'Áudio']) &&
+      JSON.stringify(screen.tabs) === JSON.stringify(['Resumo', 'Anotações', 'Perguntar', 'Transcrição', 'Áudio']) &&
       screen.buttons.includes('Nova anotação') &&
       screen.buttons.includes('Copiar anotações') &&
       screen.columns >= 2 &&
@@ -2447,6 +2610,8 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
   let summaryMeasured: SummaryMeasured | null = null
   /** Contrato 10: lista com prévia do resumo (nos dois temas) e busca (no claro). */
   const meetingsList: Record<string, Check> = {}
+  /** Contrato 15: chat "Perguntar" (nos dois temas), "Parar" e a aba do detalhe (no claro). */
+  const chat: Record<string, Check> = {}
 
   // A fixture da sessão real, reduzida pelo mesmo redutor do app: a mesma dos testes (CA4) e do smoke.
   const sessionFixture = readSessionFixture()
@@ -2641,6 +2806,14 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
         }
       }
 
+      // Contrato 15: a tela "Perguntar" com o `claude` falso em modo chat (acervo refeito a partir das reuniões
+      // semeadas); no claro também "Parar", o link `meeting:` e a aba "Perguntar" do detalhe.
+      chat[themeName === 'light' ? 'screen' : 'screenDark'] = await chatScreenCheck(contents, ctx, () => shoot('perguntar', 'perguntar'))
+      if (themeName === 'light') {
+        chat['stop'] = await chatStopCheck(contents, ctx)
+        chat['meeting'] = await chatMeetingCheck(contents, ctx)
+      }
+
       // 7. Configurações (chave conferida, catálogo das fixtures) e o seletor com um modelo não liberado.
       await clickSelector(contents, '[data-nav="configuracoes"]')
       if (!(await settingsReady(contents))) failures.push(`configuracoes/${themeName}: chave ou catálogo não carregou`)
@@ -2752,6 +2925,8 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
   for (const [name, check] of Object.entries(settings)) if (!check.ok) failures.push(`configurações ${name}: ${check.detail}`)
   for (const [name, check] of Object.entries(meetingsList)) if (!check.ok) failures.push(`lista de reuniões ${name}: ${check.detail}`)
   for (const name of ['list', 'listDark', 'search']) if (!meetingsList[name]) failures.push(`lista de reuniões ${name}: não executado`)
+  for (const [name, check] of Object.entries(chat)) if (!check.ok) failures.push(`chat ${name}: ${check.detail}`)
+  for (const name of ['screen', 'screenDark', 'stop', 'meeting']) if (!chat[name]) failures.push(`chat ${name}: não executado`)
   for (const name of ['configuracoes', 'gravacao', 'detalhe']) {
     const check = layout[name]
     if (!check) failures.push(`medidas ${name}: não executado`)
@@ -2807,6 +2982,7 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
     recorderFormat: recorderMeasured,
     summary: summaryMeasured,
     meetingsList,
+    chat,
     meetingFolder: folderFiles(defaultMeetingFolder(ctx)),
     openedFiles: ctx.fixtures.openedFiles.map((item) => ({ action: item.action, file: basename(item.path) })),
     claudeFakeSpawns: ctx.fixtures.claudeSpawns.map((spawn) => ({ ...spawn, args: spawn.args.filter((arg) => arg.startsWith('--')) })),

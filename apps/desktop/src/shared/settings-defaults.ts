@@ -7,11 +7,14 @@ export const THEME_SETTINGS = ['system', 'light', 'dark'] as const
 export const TRANSLATION_ENGINES = ['assemblyai', 'claude-cli'] as const
 /** Modelos do Claude CLI que o app oferece (aliases do próprio `claude --model`). */
 export const CLAUDE_MODELS = ['haiku', 'sonnet'] as const
+/** Modelos do chat sobre as reuniões (contrato 15): também aliases do `claude --model`. */
+export const CHAT_MODELS = ['haiku', 'sonnet', 'opus'] as const
 
 export type LanguageCode = (typeof LANGUAGE_CODES)[number]
 export type ThemeSetting = (typeof THEME_SETTINGS)[number]
 export type TranslationEngine = (typeof TRANSLATION_ENGINES)[number]
 export type ClaudeModel = (typeof CLAUDE_MODELS)[number]
+export type ChatModel = (typeof CHAT_MODELS)[number]
 
 export interface AppSettings {
   translationEnabled: boolean
@@ -26,6 +29,8 @@ export interface AppSettings {
   micDeviceId: string | null
   translationEngine: TranslationEngine
   claudeModel: ClaudeModel
+  /** Modelo do chat "Perguntar" (contrato 15); o caminho do `claude` é o mesmo da tradução. */
+  chatModel: ChatModel
   /** Caminho do `claude` escolhido pelo usuário; `null` procura sozinho. */
   claudePath: string | null
   /** Grava o áudio e a transcrição de cada reunião numa pasta do Mac (contrato 07). */
@@ -68,6 +73,7 @@ export const DEFAULT_SETTINGS: Readonly<AppSettings> = Object.freeze({
   micDeviceId: null,
   translationEngine: 'assemblyai',
   claudeModel: 'haiku',
+  chatModel: 'sonnet',
   claudePath: null,
   saveToFolder: true,
   audioFolder: null,
