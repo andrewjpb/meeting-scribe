@@ -7,21 +7,24 @@
 //
 // Contrato 17: com a "Conexão com o Claude" no agente (padrão), o resumo sai de uma sessão ACP curta
 // (`acp/summary.ts`), com a mesma validação; com "Linha de comando", nada muda.
-import { mkdir } from 'node:fs/promises'
-import { join } from 'node:path'
+//
+// Contrato 19, CA6: as perguntas em aberto da última análise vão no pedido como material, e o Markdown do
+// resumo ("Copiar resumo", `- resumo.md`) ganha a seção "## Perguntas em aberto".
 import { z } from 'zod'
 import type { ClaudeLocateResult } from '../../shared/claude-cli'
 import type { Meeting } from '../../shared/meetings'
 import { summaryMarkdown, SUMMARY_VERSION, type MeetingSummary, type SummaryError, type SummaryStatus } from '../../shared/meeting-summary'
+import type { MeetingAnalysis } from '../../shared/meeting-analysis'
 import { CLAUDE_MODEL_PREFIX } from '../../shared/settings-defaults'
 import type { TranscriptCopyResult } from '../../shared/transcription'
-import { claudeEnv } from '../claude-cli/locate'
 import type { AcpOpenResult, AcpSessionRequest } from '../acp/agent'
-import { runAcpSummary } from '../acp/summary'
-import { ACP_SUMMARY_DIR, CLAUDE_CWD_DIR } from '../claude-cli/service'
-import { runSummary, summaryInput, summaryLines, summaryNoteLines, type SpawnSummary } from '../claude-cli/summary'
+import { openQuestionLines } from '../claude-cli/analysis'
+import { ACP_SUMMARY_DIR } from '../claude-cli/service'
+import { parseSummaryResult, summaryInput, summaryLines, summaryNoteLines, summarySystemPrompt, type SpawnSummary } from '../claude-cli/summary'
 import type { Timers } from '../claude-cli/translator'
 import type { SettingsStore } from '../settings/store'
+import type { AnalysesStore } from './analyses'
+import { runClaudeOneShot } from './claude-one-shot'
 import type { NotesStore } from './notes'
 import type { ClipboardWriter } from './service'
 import type { MeetingsStore } from './store'
@@ -35,6 +38,8 @@ export interface SummaryServiceDeps {
   summaries: SummaryStore
   /** Anotações da reunião (contrato 13): entram no pedido num bloco à parte, lidas a cada geração. */
   notes?: Pick<NotesStore, 'get'>
+  /** Análises da reunião (contrato 19): as perguntas em aberto da última vão no pedido e no Markdown. */
+  analyses?: Pick<AnalysesStore, 'get'>
   /** O mesmo `locate` do tradutor: caminho configurado, lista fixa e shell de login. */
   locate: () => Promise<ClaudeLocateResult>
   spawn: SpawnSummary
@@ -46,7 +51,7 @@ export interface SummaryServiceDeps {
   baseEnv: NodeJS.ProcessEnv
   clipboard: ClipboardWriter
   /** Resumo pronto: cópia em `<nome> - resumo.md` na pasta da reunião, quando houver (CA8). */
-  writeToFolder: (meeting: Meeting, summary: MeetingSummary) => Promise<unknown>
+  writeToFolder: (meeting: Meeting, summary: MeetingSummary, analyses: readonly MeetingAnalysis[]) => Promise<unknown>
   /** Estado novo de uma reunião, para todas as janelas. */
   onStatus: (meetingId: string, status: SummaryStatus) => void
   log?: (message: string) => void
@@ -107,6 +112,8 @@ export function createSummaryService(deps: SummaryServiceDeps): SummaryService {
     return (await lines(meetingId)).length ? { state: 'none' } : { state: 'empty' }
   }
 
+  const analysesOf = async (meetingId: string): Promise<MeetingAnalysis[]> => (await deps.analyses?.get(meetingId).catch(() => [])) ?? []
+
   const announce = async (meetingId: string): Promise<void> => {
     deps.onStatus(meetingId, await status(meetingId))
   }
@@ -119,6 +126,7 @@ export function createSummaryService(deps: SummaryServiceDeps): SummaryService {
   async function run(meetingId: string, input: readonly string[], job: Job): Promise<void> {
     // As anotações de agora: "Gerar de novo" depois de editar uma usa o texto novo.
     const noteLines = summaryNoteLines((await deps.notes?.get(meetingId).catch(() => [])) ?? [])
+    const openLines = openQuestionLines(await analysesOf(meetingId))
     const found = await deps.locate().catch((): ClaudeLocateResult => ({ ok: false, error: 'not-found' }))
     if (job.cancelled) return
     if (!found.ok) {
@@ -131,25 +139,17 @@ export function createSummaryService(deps: SummaryServiceDeps): SummaryService {
       errors.delete(meetingId)
       deps.onStatus(meetingId, { state: 'generating' })
     }
-    const { claudeModel, claudeTransport } = await deps.settings.get()
-    const common = {
-      model: claudeModel,
-      input: summaryInput(input, noteLines),
-      ...(deps.timers ? { timers: deps.timers } : {}),
-      ...(deps.timeoutMs !== undefined ? { timeoutMs: deps.timeoutMs } : {}),
-      ...(deps.log ? { log: deps.log } : {}),
+    const { result, model: claudeModel } = await runClaudeOneShot(deps, {
+      claudePath: found.path,
+      purpose: 'summary',
+      acpDir: ACP_SUMMARY_DIR,
+      systemPrompt: summarySystemPrompt(),
+      parse: parseSummaryResult,
+      input: summaryInput(input, noteLines, openLines),
+      label: 'resumo',
+      timeoutMs: deps.timeoutMs,
       signal: job.abort.signal,
-    }
-    let result
-    if (claudeTransport === 'acp' && deps.openAcp && ((await deps.acpAvailable?.()) ?? true)) {
-      const cwd = join(deps.userData, CLAUDE_CWD_DIR, ACP_SUMMARY_DIR)
-      await mkdir(cwd, { recursive: true, mode: 0o700 })
-      result = await runAcpSummary({ ...common, open: deps.openAcp(found.path), cwd })
-    } else {
-      const cwd = join(deps.userData, CLAUDE_CWD_DIR)
-      await mkdir(cwd, { recursive: true, mode: 0o700 })
-      result = await runSummary({ ...common, binaryPath: found.path, cwd, env: claudeEnv(deps.baseEnv, found.path), spawn: deps.spawn })
-    }
+    })
     if (job.cancelled) return
     if (!result.ok) {
       errors.set(meetingId, result.error)
@@ -174,7 +174,7 @@ export function createSummaryService(deps: SummaryServiceDeps): SummaryService {
     errors.delete(meetingId)
     const settings = await deps.settings.get()
     if (!settings.saveToFolder || job.cancelled || !(await deps.meetings.get(meetingId))) return
-    await deps.writeToFolder(meeting, summary).catch(() => undefined)
+    await deps.writeToFolder(meeting, summary, await analysesOf(meetingId)).catch(() => undefined)
   }
 
   return {
@@ -219,7 +219,7 @@ export function createSummaryService(deps: SummaryServiceDeps): SummaryService {
       const summary = meeting ? await deps.summaries.get(meetingId) : null
       if (!meeting || !summary) return 'missing'
       try {
-        deps.clipboard.writeText(summaryMarkdown(meeting, summary))
+        deps.clipboard.writeText(summaryMarkdown(meeting, summary, await analysesOf(meetingId)))
         return 'copied'
       } catch {
         return 'failed'

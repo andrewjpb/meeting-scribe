@@ -15,6 +15,8 @@ import { LevelTape } from './LevelTape'
 import { Notices, RetryNotice } from './Notices'
 import { NotesPanel } from './NotesPanel'
 import { noticesFor } from './noticeRules'
+import { ANALYSES_MAX } from '@shared/meeting-analysis'
+import { useTranscription } from '../../transcription/store'
 import { useRecording } from './recordingStore'
 import { TranscriptArea } from './TranscriptArea'
 import { TranscriptionNotices } from './TranscriptionNotices'
@@ -25,8 +27,8 @@ const absent = (capture: CaptureState, source: 'mic' | 'system'): boolean =>
   capture[source] === 'failed' || capture[source] === 'ended' || capture.silence[source] !== 'ok'
 
 /**
- * Gravação ao vivo: cabeçalho com estado e cronômetro, fita, avisos, transcrição, o painel de anotações à
- * direita (contrato 13) e os controles.
+ * Gravação ao vivo: cabeçalho com estado e cronômetro, fita, avisos, transcrição, o painel à direita com as
+ * anotações (contrato 13) e a análise (contrato 19) e os controles.
  */
 export function LiveScreen() {
   const navigate = useNavigate()
@@ -41,7 +43,13 @@ export function LiveScreen() {
   const setTitle = useRecording((state) => state.setTitle)
   const togglePause = useRecording((state) => state.togglePause)
   const notesOpen = useRecording((state) => state.notesOpen)
+  const panelTab = useRecording((state) => state.panelTab)
   const toggleNotes = useRecording((state) => state.toggleNotes)
+  const analyze = useRecording((state) => state.analyze)
+  const analyzing = useRecording((state) => state.analyzing)
+  const analysisLimit = useRecording((state) => state.analyses.length >= ANALYSES_MAX)
+  // "Analisar até agora" pede pelo menos um trecho final (sem eco, com texto).
+  const canAnalyze = useTranscription((state) => state.segments.some((segment) => !segment.partial && !segment.echo && segment.text.trim() !== ''))
   const phase = capture?.phase ?? 'idle'
   const elapsed = useElapsed(session?.clock ?? null, phase === 'recording')
 
@@ -80,6 +88,18 @@ export function LiveScreen() {
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [phase, toggleNotes])
 
+  // ⌘⇧A: "Analisar até agora", inclusive com o foco no texto de um card.
+  useEffect(() => {
+    if (phase !== 'recording' && phase !== 'paused') return
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (event.code !== 'KeyA' || !event.metaKey || !event.shiftKey || event.altKey || event.ctrlKey || event.repeat) return
+      event.preventDefault()
+      analyze()
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [phase, analyze])
+
   if (!session || !capture || !tape) return <NoRecording />
 
   return (
@@ -103,9 +123,13 @@ export function LiveScreen() {
         paused={phase === 'paused'}
         busy={saving}
         savingAudio={audio === 'recording'}
-        notesOpen={notesOpen}
+        notesOpen={notesOpen && panelTab === 'anotacoes'}
+        analyzing={analyzing}
+        canAnalyze={canAnalyze}
+        analysisLimit={analysisLimit}
         onTogglePause={togglePause}
         onToggleNotes={toggleNotes}
+        onAnalyze={analyze}
         onEnd={end}
       />
     </div>

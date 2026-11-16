@@ -20,6 +20,7 @@ import { useMeetingNotes } from './notesStore'
 import { NotesTab } from './NotesTab'
 import { SourceDots } from './SourceDots'
 import { SummaryTab } from './SummaryTab'
+import { useAnalyses } from './useAnalyses'
 import { useSummary, type SummaryView } from './useSummary'
 
 type DetailTab = 'resumo' | 'anotacoes' | 'perguntar' | 'transcricao' | 'audio'
@@ -67,6 +68,8 @@ export function MeetingDetailScreen() {
   const [loaded, setLoaded] = useState<Loaded>({ status: 'loading' })
   const [attempt, setAttempt] = useState(0)
   const summary = useSummary(id)
+  /** Análises da reunião (contrato 19): aqui para a análise em curso não se perder ao trocar de aba. */
+  const analyses = useAnalyses(id)
   /** Aba escolhida pela pessoa; até ela escolher, vale a aba automática. Ambas guardam de qual reunião são. */
   const [chosenTab, setChosenTab] = useState<{ id: string; tab: DetailTab } | null>(null)
   const [autoTab, setAutoTab] = useState<{ id: string; tab: DetailTab } | null>(null)
@@ -106,6 +109,8 @@ export function MeetingDetailScreen() {
   const filesFailed = useRecording((state) => state.filesFailedMeetingId === id)
   /** As anotações desta reunião não foram salvas depois da nova tentativa (contrato 13): aviso em qualquer aba. */
   const notesSaveFailed = useMeetingNotes((state) => state.meetings[id]?.saveFailed === true)
+  /** Uma análise da gravação terminou depois do "Encerrar" e não entrou nesta reunião (contrato 19). */
+  const analysisUnsaved = useRecording((state) => state.unsavedAnalyses.some((entry) => entry.meetingId === id))
 
   const rename = (title: string): void => {
     setFailure(null)
@@ -173,6 +178,9 @@ export function MeetingDetailScreen() {
       {ready && notesSaveFailed && (
         <RetryNotice id="notes-save-failed" text="Não foi possível salvar as anotações." onRetry={() => void useMeetingNotes.getState().flush(id)} className="mx-10 mt-4" />
       )}
+      {ready && analysisUnsaved && (
+        <RetryNotice id="analysis-unsaved" text="Uma análise não foi salva." onRetry={() => void useRecording.getState().retryUnsavedAnalyses(id)} className="mx-10 mt-4" />
+      )}
       {ready && filesFailed && (
         <Note id="audio-folder-failed" icon={TriangleAlert} className="mx-10 mt-4">
           {AUDIO_FOLDER_FAILED_TEXT}
@@ -180,7 +188,7 @@ export function MeetingDetailScreen() {
       )}
       {ready && (
         <div role="tabpanel" id={tabPanelId(TABS_ID, tab)} aria-labelledby={tabId(TABS_ID, tab)} data-tab-panel={tab} className="flex min-h-0 flex-1 flex-col">
-          {tab === 'resumo' && <SummaryTab meetingId={ready.meeting.id} view={summary.view} onGenerate={summary.generate} />}
+          {tab === 'resumo' && <SummaryTab meetingId={ready.meeting.id} view={summary.view} onGenerate={summary.generate} analyses={analyses} onJump={jumpTo} />}
           {tab === 'anotacoes' && <NotesTab meetingId={ready.meeting.id} onJump={jumpTo} />}
           {tab === 'perguntar' && <MeetingChatTab meetingId={ready.meeting.id} />}
           {tab === 'transcricao' &&

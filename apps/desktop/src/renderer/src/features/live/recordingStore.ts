@@ -5,7 +5,10 @@
 // "Salvar áudio e transcrição numa pasta" (contrato 07), um gravador à parte mistura as duas fontes e
 // manda o áudio ao main em pedaços; ao encerrar, o main renomeia o arquivo e escreve a transcrição ao lado.
 // As anotações da gravação (contrato 13) ficam aqui até a reunião existir e são salvas nela ao encerrar.
+// "Analisar até agora" (contrato 19) também: cada análise volta do main para cá e é salva com a reunião ao
+// encerrar. A análise roda à parte, sem pausar nem esperar a captura, a transcrição ou a tradução.
 import { create } from 'zustand'
+import { analyzedUntil, ANALYSES_MAX, recentAnalyses, type AnalysisError, type AnalysisRunResult, type LiveAnalysisSegment, type MeetingAnalysis } from '@shared/meeting-analysis'
 import type { MeetingNote, NoteColor } from '@shared/meeting-notes'
 import { audioExtension } from '@shared/meeting-files'
 import { defaultMeetingTitle, MEETING_TITLE_MAX, type Meeting } from '@shared/meetings'
@@ -19,7 +22,7 @@ import { AudioFileRecorder, type MeetingAudioRecorder } from '../../audio/record
 import { TranscriptionSession } from '../../transcription/session'
 import type { StreamingSocket } from '../../transcription/sink'
 import { persistableTranscript, useTranscription, type TranscriptionSegment } from '../../transcription/store'
-import { addNote, createNote, editNote, NOTE_UNDO_MS, removeNote, restoreNote, type RemovedNote } from '../notes/noteList'
+import { addNote, closestSegmentId, createNote, editNote, NOTE_UNDO_MS, noteWithText, removeNote, restoreNote, type RemovedNote } from '../notes/noteList'
 import { TapeHistory } from './tapeHistory'
 import { tapeStats } from './tapeStats'
 
@@ -54,6 +57,25 @@ interface RecordingState {
   newNoteId: string | null
   /** Última anotação excluída, por 5 s, mesmo com o painel fechado. */
   noteUndo: RemovedNote | null
+  /** Id desta gravação (contrato 19): a análise de uma gravação nunca entra em outra. */
+  recordingId: string | null
+  /**
+   * Análises que terminaram depois do "Encerrar" e não entraram na reunião nem na segunda tentativa: o
+   * detalhe dela mostra "Uma análise não foi salva" com "Tentar de novo".
+   */
+  unsavedAnalyses: { meetingId: string; analysis: MeetingAnalysis }[]
+  /** "Tentar de novo" do aviso do detalhe. */
+  retryUnsavedAnalyses: (meetingId: string) => Promise<void>
+  /** Aba do painel lateral (contrato 19): "Anotações" ou "Análise". */
+  panelTab: SidePanelTab
+  /** Análises da gravação em curso (contrato 19), da mais antiga para a mais nova. */
+  analyses: MeetingAnalysis[]
+  /** Uma análise está sendo gerada: o botão mostra "Analisando…" e não aceita outro clique. */
+  analyzing: boolean
+  /** A última tentativa falhou (até a próxima). */
+  analysisError: AnalysisError | null
+  /** Trecho da transcrição para onde rolar (clique no tempo de um item da análise). */
+  jump: { id: string; seq: number } | null
   /** Inicia a captura. Chamar direto do gesto (clique, tecla ou menu); devolve falso se já havia uma. */
   start: () => boolean
   /** "Tentar de novo" do aviso de início: recarrega o ambiente e começa (o clique é o gesto). */
@@ -69,9 +91,18 @@ interface RecordingState {
   /** "Desfazer": a última excluída volta para o mesmo lugar. */
   undoDeleteNote: () => void
   noteFocused: () => void
+  setPanelTab: (tab: SidePanelTab) => void
+  /** "Analisar até agora" (⌘⇧A): abre a aba "Análise" e pede a análise da transcrição até este momento. */
+  analyze: () => void
+  /** "Virar anotação": um card amarelo com o texto e o tempo do item (ou da análise). */
+  noteFromAnalysis: (text: string, atMs: number) => void
+  /** Clique no tempo de um item: a transcrição rola até o trecho mais próximo. */
+  jumpToTime: (atMs: number) => void
   /** Encerra, salva o registro, a transcrição e as anotações, e devolve a reunião salva (ou `null` se não salvou). */
   end: () => Promise<Meeting | null>
 }
+
+export type SidePanelTab = 'anotacoes' | 'analise'
 
 /** Contagem de quadros da gravação (o smoke confere que a captura continua entregando quadros). */
 const frameCounts: Record<AudioSource, number> = { mic: 0, system: 0 }
@@ -122,6 +153,33 @@ interface AudioRun {
 }
 
 let audioRun: AudioRun | null = null
+
+/**
+ * Gravação cujas análises já foram salvas na reunião criada: a que terminar depois disso entra direto nela
+ * (`scribe:analyses-add`), em vez de ficar na memória de uma gravação que já acabou.
+ */
+const analysesSavedFor = new WeakMap<CaptureSession, string>()
+
+/** Trechos que a análise lê: só os finais, sem eco, com texto, na ordem do tempo (CA2). */
+export function analysisSegments(segments: readonly TranscriptionSegment[]): LiveAnalysisSegment[] {
+  return segments
+    .filter((segment) => !segment.partial && !segment.echo && segment.text.trim() !== '')
+    .map(({ source, speaker, startMs, endMs, text }) => ({ source, speaker, startMs, endMs, text }))
+}
+
+const newRecordingId = (): string => (typeof crypto !== 'undefined' && 'randomUUID' in crypto ? crypto.randomUUID() : `g-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`)
+
+/** Uma análise atrasada na reunião já criada, com uma segunda tentativa. Falso se as duas falharam. */
+async function addLateAnalysis(meetingId: string, analysis: MeetingAnalysis): Promise<boolean> {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      if ((await window.__scribeApi.invoke('scribe:analyses-add', { meetingId, analysis: { ...analysis, meetingId } })) === true) return true
+    } catch {
+      // tenta de novo
+    }
+  }
+  return false
+}
 
 /** Prazo do "Desfazer" da última anotação excluída. */
 let noteUndoTimer: ReturnType<typeof setTimeout> | null = null
@@ -228,6 +286,13 @@ export const useRecording = create<RecordingState>()((set, get) => ({
   notesOpen: false,
   newNoteId: null,
   noteUndo: null,
+  recordingId: null,
+  unsavedAnalyses: [],
+  panelTab: 'anotacoes',
+  analyses: [],
+  analyzing: false,
+  analysisError: null,
+  jump: null,
 
   start: () => {
     if (get().session) return false
@@ -310,6 +375,12 @@ export const useRecording = create<RecordingState>()((set, get) => ({
       notesOpen: false,
       newNoteId: null,
       noteUndo: null,
+      recordingId: newRecordingId(),
+      panelTab: 'anotacoes',
+      analyses: [],
+      analyzing: false,
+      analysisError: null,
+      jump: null,
       // Sem formato aceito ou gravador que nem começou: o aviso já aparece aqui.
       audio: audioRun?.session === session ? (audioRun.file?.ok ? 'recording' : 'failed') : 'off',
     })
@@ -359,8 +430,10 @@ export const useRecording = create<RecordingState>()((set, get) => ({
     if (value) set({ title: value })
   },
 
+  // Com o painel aberto na "Análise", "Anotações" (⌘⇧N) troca de aba em vez de fechar.
   toggleNotes: () => {
-    if (get().session) set((state) => ({ notesOpen: !state.notesOpen }))
+    if (!get().session) return
+    set((state) => (state.notesOpen && state.panelTab !== 'anotacoes' ? { panelTab: 'anotacoes' } : { notesOpen: !state.notesOpen, panelTab: 'anotacoes' }))
   },
 
   addNote: () => {
@@ -369,7 +442,7 @@ export const useRecording = create<RecordingState>()((set, get) => ({
     // O mesmo relógio dos trechos da transcrição (sem as pausas): o tempo do card bate com o da coluna.
     const note = createNote(session.clock.elapsedMs, Date.now())
     const next = addNote(notes, note)
-    if (next.length !== notes.length) set({ notes: next, notesOpen: true, newNoteId: note.id })
+    if (next.length !== notes.length) set({ notes: next, notesOpen: true, panelTab: 'anotacoes', newNoteId: note.id })
   },
 
   editNote: (id, patch) => {
@@ -400,6 +473,73 @@ export const useRecording = create<RecordingState>()((set, get) => ({
     if (get().newNoteId) set({ newNoteId: null })
   },
 
+  setPanelTab: (tab) => {
+    if (get().session) set({ panelTab: tab, notesOpen: true })
+  },
+
+  analyze: () => {
+    const { session, saving, analyzing, notes, analyses, recordingId } = get()
+    if (!session || saving || !recordingId) return
+    // O clique sempre mostra a aba; com uma análise em curso ou no limite, não pede outra.
+    set({ notesOpen: true, panelTab: 'analise' })
+    if (analyzing || analyses.length >= ANALYSES_MAX) return
+    const segments = analysisSegments(useTranscription.getState().segments)
+    if (!segments.length) return
+    set({ analyzing: true, analysisError: null })
+    const request = {
+      live: {
+        recordingId,
+        // "Até" é o fim do último trecho lido: o que a análise cita nunca passa dele.
+        atMs: Math.round(analyzedUntil(segments)),
+        segments,
+        notes: notes.map(({ text, atMs, createdAt }) => ({ text, atMs, createdAt })),
+        // Só as mais recentes: o pedido não cresce sem fim.
+        previous: recentAnalyses(analyses),
+      },
+    }
+    const failed: AnalysisRunResult = { ok: false, error: 'failed' }
+    void Promise.resolve(window.__scribeApi.invoke('scribe:analysis-run', request))
+      .catch(() => failed)
+      .then(async (result) => {
+        // Resultado de outra gravação nunca entra nesta: só vale para a gravação que pediu.
+        const current = get().session === session && get().recordingId === recordingId
+        if (current) set({ analyzing: false })
+        if (!result?.ok) {
+          if (current) set({ analysisError: result?.error ?? 'failed' })
+          return
+        }
+        // Ainda na tela (inclusive enquanto "Encerrar" salva): entra na lista, que um "Tentar de novo" salva de novo.
+        if (current) set((state) => ({ analyses: [...state.analyses, result.analysis] }))
+        // A reunião já foi criada e as análises dela salvas: esta entra direto nela.
+        const meetingId = analysesSavedFor.get(session)
+        if (meetingId && !(await addLateAnalysis(meetingId, result.analysis))) {
+          set((state) => ({ unsavedAnalyses: [...state.unsavedAnalyses, { meetingId, analysis: result.analysis }] }))
+        }
+      })
+  },
+
+  retryUnsavedAnalyses: async (meetingId) => {
+    const mine = get().unsavedAnalyses.filter((entry) => entry.meetingId === meetingId)
+    if (!mine.length) return
+    set((state) => ({ unsavedAnalyses: state.unsavedAnalyses.filter((entry) => entry.meetingId !== meetingId) }))
+    for (const entry of mine) {
+      if (!(await addLateAnalysis(meetingId, entry.analysis))) set((state) => ({ unsavedAnalyses: [...state.unsavedAnalyses, entry] }))
+    }
+  },
+
+  noteFromAnalysis: (text, atMs) => {
+    const { session, saving, notes } = get()
+    if (!session || saving || !text.trim()) return
+    const next = addNote(notes, noteWithText(text, atMs, Date.now()))
+    if (next.length !== notes.length) set({ notes: next })
+  },
+
+  jumpToTime: (atMs) => {
+    const items = useTranscription.getState().segments.filter((segment) => !segment.echo)
+    const id = closestSegmentId(items, atMs)
+    if (id) set((state) => ({ jump: { id, seq: (state.jump?.seq ?? 0) + 1 } }))
+  },
+
   end: async () => {
     const { session, transcription, startedAt } = get()
     if (!session || !startedAt || get().saving) return null
@@ -422,6 +562,9 @@ export const useRecording = create<RecordingState>()((set, get) => ({
       const hasTranscript = await saveTranscript(meeting.id, useTranscription.getState().segments, settings)
       // Anotações (contrato 13, CA4): antes do `.md` da pasta, que as leva no fim. Falhou: "Tentar de novo".
       await saveNotes(meeting.id, get().notes)
+      // Análises (contrato 19, CA5): também antes do `.md`. A que ainda estiver gerando não é esperada: quando
+      // terminar, entra direto na reunião.
+      await saveAnalyses(session, meeting.id, () => get().analyses)
       // Depois da transcrição interna salva: o main renomeia o áudio e escreve o `.md` (CA6, CA6b).
       if (audio) {
         const filesOk = await finishAudioFile(audio, meeting.id)
@@ -447,6 +590,12 @@ export const useRecording = create<RecordingState>()((set, get) => ({
         notesOpen: false,
         newNoteId: null,
         noteUndo: null,
+        recordingId: null,
+        panelTab: 'anotacoes',
+        analyses: [],
+        analyzing: false,
+        analysisError: null,
+        jump: null,
       })
       clearNoteUndoTimer()
       return meeting
@@ -501,6 +650,22 @@ async function saveNotes(meetingId: string, notes: readonly MeetingNote[]): Prom
   if (!notes.length) return
   const saved = await window.__scribeApi.invoke('scribe:notes-save', { meetingId, notes: [...notes] })
   if (!saved) throw new Error('anotações não salvas')
+}
+
+/**
+ * Grava as análises da gravação na reunião criada (sem análise, nada é escrito) e marca a gravação como
+ * salva. Uma que chegou enquanto o pedido ia ao main também entra, uma a uma.
+ */
+async function saveAnalyses(session: CaptureSession, meetingId: string, current: () => readonly MeetingAnalysis[]): Promise<void> {
+  const list = current()
+  if (list.length) {
+    const saved = await window.__scribeApi.invoke('scribe:analyses-save', { meetingId, analyses: [...list] })
+    if (!saved) throw new Error('análises não salvas')
+  }
+  analysesSavedFor.set(session, meetingId)
+  for (const late of current().filter((analysis) => !list.includes(analysis))) {
+    if (!(await addLateAnalysis(meetingId, late))) throw new Error('análise não salva')
+  }
 }
 
 /** Smoke: estado da captura, quadros contados, quadros desenhados pela fita e a fixture na tela. */

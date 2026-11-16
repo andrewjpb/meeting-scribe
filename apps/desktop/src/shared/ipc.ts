@@ -6,6 +6,7 @@ import type { KeySaveResult, KeyStatus, MicAccess, ModelCheck, ModelsResult } fr
 import type { Chat, ChatEvent, ChatListItem, ChatRedoRequest, ChatSendRequest, ChatSendResult, ChatUpdateRequest } from './chat'
 import type { ClaudeLocateResult, ClaudeRunState, ClaudeStartResult, ClaudeTranslateRequest, ClaudeTranslateResult } from './claude-cli'
 import type { AudioBeginResult, AudioExtension, AudioFinishResult, AudioFolderInfo, MeetingDownloadKind, MeetingDownloadResult, MeetingFileKind, MeetingFilesInfo } from './meeting-files'
+import type { AnalysisRunRequest, AnalysisRunResult, MeetingAnalysis } from './meeting-analysis'
 import type { MeetingNote } from './meeting-notes'
 import type { SummaryStatus } from './meeting-summary'
 import type { Meeting, NewMeeting } from './meetings'
@@ -123,6 +124,19 @@ export interface InvokeChannels {
   'scribe:summary-generate': { request: { meetingId: string; auto?: boolean }; response: SummaryStatus }
   /** "Copiar resumo": o main monta o Markdown e escreve na área de transferência. */
   'scribe:summary-copy': { request: { meetingId: string }; response: TranscriptCopyResult }
+  /**
+   * "Analisar até agora" na gravação (`live`, nada é gravado) ou "Analisar a reunião inteira" no detalhe
+   * (`meetingId`, salva junto). Responde quando a análise acaba (até 90 s); só com o clique da pessoa.
+   */
+  'scribe:analysis-run': { request: AnalysisRunRequest; response: AnalysisRunResult }
+  /** Análises salvas da reunião (contrato 19), de `meetings/<id>.analyses.json`; arquivo inválido = lista vazia. */
+  'scribe:analyses-get': { request: { meetingId: string }; response: MeetingAnalysis[] }
+  /** Encerrar a gravação: as análises da memória vão para a reunião criada; falso quando ela não existe. */
+  'scribe:analyses-save': { request: { meetingId: string; analyses: MeetingAnalysis[] }; response: boolean }
+  /** Análise da gravação que terminou depois do "Encerrar": entra na reunião já criada. */
+  'scribe:analyses-add': { request: { meetingId: string; analysis: MeetingAnalysis }; response: boolean }
+  /** "Copiar" de um item da análise: o main escreve o texto na área de transferência. */
+  'scribe:analysis-copy': { request: { text: string }; response: boolean }
   /** Marca do app (contrato 09): nome, subtítulo e o logo como data URL PNG, nunca um caminho. */
   'scribe:branding-get': { request: undefined; response: BrandingInfo }
   /** "Escolher imagem…": diálogo nativo no main; só ele confere, copia e grava `brandLogo`. */
@@ -183,6 +197,8 @@ export interface MainEvents {
   'scribe:acp-state': AcpAgentStatus
   /** Resumo de uma reunião começou, terminou ou falhou. */
   'scribe:summary-state': { meetingId: string; status: SummaryStatus }
+  /** As análises gravadas de uma reunião mudaram (contrato 19): o detalhe aberto relê. */
+  'scribe:analyses-changed': { meetingId: string }
   /** Consulta ou download da atualização mudou de estado. */
   'scribe:update-state': UpdateState
   /** Resposta do chat crescendo ou terminada (contrato 15), com o raciocínio, os passos e os detalhes (16). */
@@ -246,6 +262,11 @@ const INVOKE: Record<InvokeChannel, true> = {
   'scribe:summary-get': true,
   'scribe:summary-generate': true,
   'scribe:summary-copy': true,
+  'scribe:analysis-run': true,
+  'scribe:analyses-get': true,
+  'scribe:analyses-save': true,
+  'scribe:analyses-add': true,
+  'scribe:analysis-copy': true,
   'scribe:branding-get': true,
   'scribe:brand-logo-choose': true,
   'scribe:brand-logo-reset': true,
@@ -277,6 +298,7 @@ const MAIN_EVENTS: Record<MainEvent, true> = {
   'scribe:claude-state': true,
   'scribe:acp-state': true,
   'scribe:summary-state': true,
+  'scribe:analyses-changed': true,
   'scribe:update-state': true,
   'scribe:chat-event': true,
 }

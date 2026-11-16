@@ -24,7 +24,8 @@ import {
   type LaunchAcp,
 } from '../src/main/acp/agent'
 import { AcpChat, acpStepOf } from '../src/main/acp/chat'
-import { runAcpSummary } from '../src/main/acp/summary'
+import { runAcpOneShot, runAcpSummary } from '../src/main/acp/summary'
+import { analysisInput, analysisParser, analysisSystemPrompt } from '../src/main/claude-cli/analysis'
 import { AcpTranslator } from '../src/main/acp/translator'
 import { CLAUDE_DISALLOWED_TOOLS, claudeProfile } from '../src/main/acp/profiles/claude'
 import { summaryInput } from '../src/main/claude-cli/summary'
@@ -454,6 +455,41 @@ describe('resumo pelo ACP (CA4c)', () => {
     expect(await pending).toEqual({ ok: false, error: 'failed' })
     await new Promise((resolve) => setTimeout(resolve, 5))
     expect(cancelled.links[0]?.killed).toBe(true)
+  })
+})
+
+describe('análise pelo ACP (contrato 19, CA2)', () => {
+  const input = analysisInput(['[00:01] Você: Quando migramos?', '[00:05] Participante A: Talvez no fim do mês.'])
+  const run = (open: ReturnType<typeof opener>, extra: { timeoutMs?: number } = {}) =>
+    runAcpOneShot({ open, model: 'haiku', cwd: corpus, input, purpose: 'analysis', systemPrompt: analysisSystemPrompt(), parse: analysisParser(new Map()), label: 'análise', ...extra })
+
+  it('sessão curta sem ferramentas; JSON entre cercas validado; custo do usage_update', async () => {
+    const log: LogEntry[] = []
+    const { launch, links } = memory(fake(log))
+    const result = await run(opener(launch))
+    expect(result).toMatchObject({ ok: true, costUsd: 0.0042, content: { openQuestions: [{ text: 'Quando migramos?', atMs: 1000 }], toConfirm: [{ owner: 'Participante A' }] } })
+    expect(log.find((entry) => entry.method === 'session/new')).toMatchObject({ purpose: 'analysis', options: { tools: [], settingSources: [], systemPrompt: analysisSystemPrompt().split('\n')[0] } })
+    expect(links[0]?.killed).toBe(true)
+  })
+
+  it('JSON inválido é `format`; sem fim no prazo é `timeout` com o processo encerrado', async () => {
+    const answering = (text: string) =>
+      memory(() =>
+        acp
+          .agent()
+          .onRequest('initialize', () => ({ protocolVersion: 1, agentCapabilities: {}, authMethods: [] }))
+          .onRequest('session/new', () => ({ sessionId: 's', configOptions: MODE_DEFAULT }))
+          .onRequest('session/prompt', async (ctx) => {
+            if (!text) return new Promise<never>(() => undefined)
+            await ctx.client.notify('session/update', { sessionId: 's', update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text } } })
+            return { stopReason: 'end_turn' as const }
+          }),
+      )
+    expect(await run(opener(answering('{"openQuestions": 3}').launch))).toEqual({ ok: false, error: 'format' })
+    expect(await run(opener(answering('```json\n{"openQuestions": [{"text": "Ok?"}]}\n```').launch))).toMatchObject({ ok: true, content: { openQuestions: [{ text: 'Ok?' }], unclearTopics: [] } })
+    const hang = answering('')
+    expect(await run(opener(hang.launch), { timeoutMs: 30 })).toEqual({ ok: false, error: 'timeout' })
+    expect(hang.links[0]?.killed).toBe(true)
   })
 })
 

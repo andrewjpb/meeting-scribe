@@ -9,6 +9,8 @@ import { Button } from '../../design/Button'
 import { Icon } from '../../design/Icon'
 import { Note, NOTE_ACTION_CLASS } from '../../design/Note'
 import { RetryNotice } from '../live/Notices'
+import { OpenQuestionsSection } from './OpenQuestionsSection'
+import type { AnalysesView } from './useAnalyses'
 import type { SummaryView } from './useSummary'
 
 /** Motivo curto do erro, depois de "Não foi possível gerar o resumo." */
@@ -59,13 +61,22 @@ function UseCommandLine() {
   )
 }
 
+/** "Perguntas em aberto" (contrato 19, CA6) no fim da aba, em qualquer estado do resumo. */
+interface OpenQuestionsProps {
+  meetingId: string
+  view: AnalysesView
+  onAnalyze: () => void
+  onJump?: ((atMs: number) => void) | undefined
+}
+
 /** Coluna da aba: mesma largura e margens da transcrição, rolando sozinha. */
-function Column({ children, state }: { children: ReactNode; state: string }) {
+function Column({ children, state, questions, empty = false }: { children: ReactNode; state: string; questions?: OpenQuestionsProps | undefined; empty?: boolean }) {
   return (
     <div data-summary-scroll className="min-h-0 flex-1 overflow-y-auto px-10 pb-10">
       <div data-summary={state} aria-live="polite" className="mx-auto flex w-full max-w-[680px] flex-col gap-8 pt-7">
         <AcpFallbackNote />
         {children}
+        {questions && <OpenQuestionsSection {...questions} disabled={empty} />}
       </div>
     </div>
   )
@@ -76,13 +87,27 @@ function Column({ children, state }: { children: ReactNode; state: string }) {
  * esqueleto parado (nada gira, com ou sem movimento reduzido) que vira o resumo sozinho quando o main
  * avisa. Sem resumo, "Gerar resumo"; reunião sem trecho, o botão fica desligado.
  */
-export function SummaryTab({ meetingId, view, onGenerate }: { meetingId: string; view: SummaryView; onGenerate: () => void }) {
+export function SummaryTab({
+  meetingId,
+  view,
+  onGenerate,
+  analyses,
+  onJump,
+}: {
+  meetingId: string
+  view: SummaryView
+  onGenerate: () => void
+  /** Análises da reunião (contrato 19); sem isto a seção "Perguntas em aberto" não aparece. */
+  analyses?: { view: AnalysesView; analyze: () => void } | undefined
+  onJump?: ((atMs: number) => void) | undefined
+}) {
   const agentLabel = useAgentLabel()
   if (view.state === 'loading') return <div className="flex-1" aria-busy="true" />
+  const questions: OpenQuestionsProps | undefined = analyses ? { meetingId, view: analyses.view, onAnalyze: analyses.analyze, onJump } : undefined
 
   if (view.state === 'generating') {
     return (
-      <Column state="generating">
+      <Column state="generating" questions={questions}>
         <div role="status" className="flex items-center gap-2 text-13 text-text-muted">
           <Icon icon={Sparkles} className="shrink-0" />
           Gerando o resumo…
@@ -99,7 +124,7 @@ export function SummaryTab({ meetingId, view, onGenerate }: { meetingId: string;
   if (view.state === 'none' || view.state === 'empty') {
     const empty = view.state === 'empty'
     return (
-      <Column state={view.state}>
+      <Column state={view.state} questions={questions} empty={empty}>
         <div className="flex flex-col items-start gap-4">
           <p className="text-13 text-pretty text-text-muted">{empty ? 'Sem transcrição para resumir.' : 'Esta reunião ainda não tem resumo.'}</p>
           <Button action="generate-summary" icon={Sparkles} onClick={onGenerate} disabled={empty}>
@@ -112,7 +137,7 @@ export function SummaryTab({ meetingId, view, onGenerate }: { meetingId: string;
 
   const summary = view.summary
   return (
-    <Column state={view.state}>
+    <Column state={view.state} questions={questions}>
       {view.state === 'error' && (
         <RetryNotice id="summary-failed" text={`Não foi possível gerar o resumo. ${summaryErrorReason(view.error, agentLabel)}`} onRetry={onGenerate} />
       )}

@@ -23,6 +23,8 @@ import { createClaudeService, type ClaudeService } from './claude-cli/service'
 import { nodeSpawnSummary } from './claude-cli/summary'
 import { nodeSpawnClaude } from './claude-cli/translator'
 import { broadcast, handle, onEvent, sendTo } from './ipc'
+import { createFileAnalysesStore } from './meetings/analyses'
+import { createAnalysisService, type AnalysisService } from './meetings/analysis-service'
 import { createMeetingsIndex, type MeetingsIndex } from './meetings/overview'
 import { createFileNotesStore } from './meetings/notes'
 import { createMeetingsService } from './meetings/service'
@@ -143,6 +145,8 @@ interface AppServices {
   claude: ClaudeService
   files: MeetingFilesService
   summary: SummaryService
+  /** "Analisar até agora" (contrato 19). */
+  analysis: AnalysisService
   download: ReturnType<typeof createMeetingDownload>
   branding: BrandingService
   updates: UpdateService
@@ -174,6 +178,8 @@ function createAppServices(userData: string): AppServices {
   const summaries = createFileSummaryStore({ dir: userData })
   // Anotações em cards (contrato 13), ao lado da transcrição e do resumo.
   const notes = createFileNotesStore({ dir: userData })
+  // Análises "Analisar até agora" (contrato 19), salvas com a reunião.
+  const analyses = createFileAnalysesStore({ dir: userData })
   // No smoke a área de transferência fica só na memória: o clipboard do Mac não é tocado.
   const appClipboard = smokeFixtures ? { writeText: (text: string): void => void smokeFixtures.copiedTexts.push(text) } : clipboard
   // Tradução pelo `claude` local. No smoke, só o binário falso (test/fixtures/fake-claude.mjs): o
@@ -262,6 +268,7 @@ function createAppServices(userData: string): AppServices {
     transcripts,
     summaries,
     notes,
+    analyses,
     locate: () => claude.locate(),
     spawn: smokeClaude?.spawnSummary ?? nodeSpawnSummary,
     openAcp,
@@ -269,7 +276,7 @@ function createAppServices(userData: string): AppServices {
     userData,
     baseEnv: process.env,
     clipboard: appClipboard,
-    writeToFolder: (meeting, result) => writeSummaryFile(meeting, result, true),
+    writeToFolder: (meeting, result, meetingAnalyses) => writeSummaryFile(meeting, result, true, meetingAnalyses),
     onStatus: (meetingId, status) => {
       // Resumo novo entra no acervo do chat.
       if (status.state === 'ready') void corpus.sync(meetingId).catch(() => undefined)
@@ -277,9 +284,26 @@ function createAppServices(userData: string): AppServices {
     },
     ...(app.isPackaged ? {} : { log: (message: string) => console.log(message) }),
   })
-  // Excluir a reunião apaga a transcrição, o resumo, as anotações e as conversas do chat internos; os
-  // arquivos da pasta ficam.
-  const meetingsService = createMeetingsService({ meetings, transcripts, summaries: summary, notes, chats: chat, clipboard: appClipboard })
+  // Análise da reunião (contrato 19): o mesmo motor do resumo, numa execução curta, só com o clique.
+  const analysis = createAnalysisService({
+    settings,
+    meetings,
+    transcripts,
+    notes,
+    analyses,
+    locate: () => claude.locate(),
+    spawn: smokeClaude?.spawnSummary ?? nodeSpawnSummary,
+    openAcp,
+    acpAvailable: async () => (await acpAgent.current()).available(),
+    userData,
+    baseEnv: process.env,
+    clipboard: appClipboard,
+    onChange: (meetingId) => broadcast(BrowserWindow.getAllWindows(), 'scribe:analyses-changed', { meetingId }),
+    ...(app.isPackaged ? {} : { log: (message: string) => console.log(message) }),
+  })
+  // Excluir a reunião apaga a transcrição, o resumo, as anotações, as análises e as conversas do chat
+  // internos; os arquivos da pasta ficam.
+  const meetingsService = createMeetingsService({ meetings, transcripts, summaries: summary, notes, analyses: analysis, chats: chat, clipboard: appClipboard })
   // Lista e busca da tela de Reuniões (contrato 10): lê só o disco local; o estado "gerando" vem do resumo.
   const meetingsIndex = createMeetingsIndex({ dir: userData, meetings, transcripts, summaries, notes, activity: (id) => summary.activity(id) })
   // Arquivos da reunião (contrato 07). No smoke, a "pasta pessoal" fica dentro do userData temporário
@@ -290,6 +314,7 @@ function createAppServices(userData: string): AppServices {
     meetings,
     transcripts,
     notes,
+    analyses,
     home,
     documents: smokeUserData ? join(home, 'Documents') : app.getPath('documents'),
     dialog: smokeFixtures ? { chooseFolder: () => Promise.resolve(smokeFixtures.chosenFolder) } : nativeFolderDialog,
@@ -308,6 +333,7 @@ function createAppServices(userData: string): AppServices {
     transcripts,
     summaries,
     notes,
+    analyses,
     dialog: smokeFixtures
       ? {
           chooseSavePath: (defaultPath) => {
@@ -354,6 +380,7 @@ function createAppServices(userData: string): AppServices {
     claude,
     files,
     summary,
+    analysis,
     download,
     branding,
     updates,
@@ -415,7 +442,7 @@ function openExternal(url: string): void {
 }
 
 function registerIpc(services: AppServices): void {
-  const { settings, meetings, meetingsService, meetingsIndex, tokenClient, translation, claude, files, summary, download, branding, updates, chat, corpus, acp } = services
+  const { settings, meetings, meetingsService, meetingsIndex, tokenClient, translation, claude, files, summary, analysis, download, branding, updates, chat, corpus, acp } = services
   /** Reunião salva, renomeada ou com anotações novas: o `.md` dela no acervo do chat é reescrito. */
   const touched = (meetingId: string): void => void corpus.sync(meetingId).catch(() => undefined)
   handle('scribe:app-info', appOrigin, () => ({
@@ -492,6 +519,11 @@ function registerIpc(services: AppServices): void {
   handle('scribe:summary-get', appOrigin, (_event, request) => summary.status((request as { meetingId?: unknown } | undefined)?.meetingId))
   handle('scribe:summary-generate', appOrigin, (_event, request) => summary.generate(request))
   handle('scribe:summary-copy', appOrigin, (_event, request) => summary.copy((request as { meetingId?: unknown } | undefined)?.meetingId))
+  handle('scribe:analysis-run', appOrigin, (_event, request) => analysis.run(request))
+  handle('scribe:analyses-get', appOrigin, (_event, request) => analysis.list((request as { meetingId?: unknown } | undefined)?.meetingId))
+  handle('scribe:analyses-save', appOrigin, (_event, request) => analysis.save(request))
+  handle('scribe:analyses-add', appOrigin, (_event, request) => analysis.add(request))
+  handle('scribe:analysis-copy', appOrigin, (_event, request) => analysis.copy(request))
   handle('scribe:branding-get', appOrigin, () => branding.get())
   handle('scribe:brand-logo-choose', appOrigin, () => branding.chooseLogo())
   handle('scribe:brand-logo-reset', appOrigin, () => branding.resetLogo())
@@ -582,10 +614,11 @@ void app.whenReady().then(async () => {
     .clearScopes()
     .then(() => services.corpus.ensure())
     .catch(() => undefined)
-  // Sair do app mata os processos do `claude` (tradução, resumo e chat) que estiverem vivos: nenhum fica órfão.
+  // Sair do app mata os processos do `claude` (tradução, resumo, análise e chat) que estiverem vivos: nenhum fica órfão.
   app.on('will-quit', () => {
     services.claude.dispose()
     services.summary.dispose()
+    services.analysis.dispose()
     services.chat.dispose()
     services.updates.dispose()
   })
@@ -602,6 +635,7 @@ void app.whenReady().then(async () => {
     // `app.exit` não passa por `will-quit`.
     services.claude.dispose()
     services.summary.dispose()
+    services.analysis.dispose()
     services.chat.dispose()
     services.updates.dispose()
     app.exit(code)

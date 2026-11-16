@@ -7,7 +7,7 @@ import type * as acp from '@agentclientprotocol/sdk/unstable'
 import type { AgentProfileId } from '../../../shared/settings-defaults'
 import type { AcpPackage } from '../install'
 
-export type AcpPurpose = 'chat' | 'translate' | 'summary'
+export type AcpPurpose = 'chat' | 'translate' | 'summary' | 'analysis'
 
 /** O que a fábrica de sessões recebe (CA4d), sem nada do agente. */
 export interface AcpSessionRequest {
@@ -17,7 +17,7 @@ export interface AcpSessionRequest {
   /** Modelo do app (`haiku`, `sonnet`, `opus`); o perfil traduz para o valor do agente. */
   model: string
   systemPrompt: string
-  /** `read`: só as ferramentas de leitura e busca do agente (chat); `none`: nenhuma (tradução e resumo). */
+  /** `read`: só as ferramentas de leitura e busca do agente (chat); `none`: nenhuma (tradução, resumo e análise). */
   tools: 'read' | 'none'
   /** "Pensar mais" (CA5), se o perfil tiver. */
   thinkMore?: boolean

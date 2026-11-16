@@ -8,6 +8,7 @@ import { useNavigate } from 'react-router'
 import { settingsPath, TRANSCRIPTION_ANCHOR } from '@shared/routes'
 import { Note, NOTE_ACTION_CLASS } from '../../design/Note'
 import { useTranscription } from '../../transcription/store'
+import { useRecording } from './recordingStore'
 import { EXAMPLE_TRANSCRIPT } from './exampleTranscript'
 import { TranscriptList, type TranscriptItem } from './TranscriptList'
 
@@ -16,6 +17,8 @@ export function TranscriptArea() {
   const segments = useTranscription((state) => state.segments)
   const retryTranslation = useTranscription((state) => state.retryTranslation)
   const claude = useTranscription((state) => state.claude)
+  /** Clique no tempo de um item da análise (contrato 19): rola até o trecho. */
+  const jump = useRecording((state) => state.jump)
   const navigate = useNavigate()
   const [showExample, setShowExample] = useState(false)
 
@@ -94,7 +97,7 @@ export function TranscriptArea() {
           Claude CLI não encontrado. Ajuste em Configurações.
         </Note>
       )}
-      <TranscriptList autoScroll bottomInset items={items} onRetryTranslation={retryTranslation} />
+      <TranscriptList autoScroll bottomInset items={items} onRetryTranslation={retryTranslation} jumpTo={jump} />
     </>
   )
 }

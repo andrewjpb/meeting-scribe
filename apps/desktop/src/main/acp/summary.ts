@@ -4,10 +4,13 @@
 // (o `agent_message_chunk` juntado) passa pela mesma validação do resumo da linha de comando. Passou de 3
 // min: `session/cancel` e o processo morre (`timeout`). Cancelado (reunião excluída, app saindo): o mesmo,
 // com `failed`. A sessão sempre fecha no fim.
-import { parseSummaryResult, SUMMARY_TIMEOUT_MS, summarySystemPrompt, type SummaryRunResult } from '../claude-cli/summary'
+//
+// Contrato 19: a análise ("Analisar até agora") é outra execução curta do mesmo jeito (`runAcpOneShot`),
+// com a instrução e a leitura dela, e o custo do `usage_update` vai para o rodapé.
+import { parseSummaryResult, SUMMARY_TIMEOUT_MS, summarySystemPrompt, type OneShotParse, type OneShotResult, type SummaryRunResult } from '../claude-cli/summary'
 import type { Timers } from '../claude-cli/translator'
 import type { ClaudeModel } from '../../shared/settings-defaults'
-import { contentText, type AcpOpenResult, type AcpSessionRequest } from './agent'
+import { contentText, type AcpOpenResult, type AcpPurpose, type AcpSessionRequest } from './agent'
 
 export interface RunAcpSummaryOptions {
   open: (request: AcpSessionRequest) => Promise<AcpOpenResult>
@@ -23,36 +26,50 @@ export interface RunAcpSummaryOptions {
   now?: () => number
 }
 
+/** Uma execução curta qualquer pelo agente (resumo, análise), sempre sem ferramentas. */
+export interface RunAcpOneShotOptions<T> extends RunAcpSummaryOptions {
+  purpose: Exclude<AcpPurpose, 'chat' | 'translate'>
+  systemPrompt: string
+  parse: OneShotParse<T>
+  /** "resumo", "análise": só para o log. */
+  label: string
+}
+
 const defaultTimers: Timers = {
   setTimeout: (handler, ms) => setTimeout(handler, ms),
   clearTimeout: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
 }
 
 /** Um resumo pelo agente. Nunca rejeita: falha vira `failed`, `format` ou `timeout`. */
-export async function runAcpSummary(options: RunAcpSummaryOptions): Promise<SummaryRunResult> {
+export function runAcpSummary(options: RunAcpSummaryOptions): Promise<SummaryRunResult> {
+  return runAcpOneShot({ ...options, purpose: 'summary', systemPrompt: summarySystemPrompt(), parse: parseSummaryResult, label: 'resumo' })
+}
+
+/** Uma sessão curta pelo agente que devolve um JSON. Nunca rejeita. */
+export async function runAcpOneShot<T>(options: RunAcpOneShotOptions<T>): Promise<OneShotResult<T>> {
   const timers = options.timers ?? defaultTimers
   const timeoutMs = options.timeoutMs ?? SUMMARY_TIMEOUT_MS
   const now = options.now ?? Date.now
   if (options.signal?.aborted) return { ok: false, error: 'failed' }
   const startedAt = now()
   let finished = false
-  let settle: (result: SummaryRunResult) => void = () => undefined
-  const outcome = new Promise<SummaryRunResult>((resolve) => {
+  let settle: (result: OneShotResult<T>) => void = () => undefined
+  const outcome = new Promise<OneShotResult<T>>((resolve) => {
     settle = (result) => {
       if (finished) return
       finished = true
       resolve(result)
     }
   })
-  // O tempo conta desde a abertura: um agente que não abre também estoura os 3 min.
+  // O tempo conta desde a abertura: um agente que não abre também estoura o prazo.
   const timer = timers.setTimeout(() => settle({ ok: false, error: 'timeout' }), timeoutMs)
   const onAbort = (): void => settle({ ok: false, error: 'failed' })
   options.signal?.addEventListener('abort', onAbort, { once: true })
 
   void (async () => {
-    const opened = await options.open({ purpose: 'summary', cwd: options.cwd, model: options.model, systemPrompt: summarySystemPrompt(), tools: 'none' })
+    const opened = await options.open({ purpose: options.purpose, cwd: options.cwd, model: options.model, systemPrompt: options.systemPrompt, tools: 'none' })
     if (!opened.ok) {
-      options.log?.(`[acp] resumo: a sessão não abriu (${opened.reason.slice(0, 200)})`)
+      options.log?.(`[acp] ${options.label}: a sessão não abriu (${opened.reason.slice(0, 200)})`)
       settle({ ok: false, error: opened.error === 'failed' ? 'failed' : 'agent' })
       return
     }
@@ -64,23 +81,25 @@ export async function runAcpSummary(options: RunAcpSummaryOptions): Promise<Summ
     })
     if (finished) return
     let text = ''
+    let costUsd: number | null = null
     const result = await session.prompt(options.input, {
       onUpdate: (update) => {
         if (update.sessionUpdate === 'agent_message_chunk') text += contentText(update.content)
+        else if (update.sessionUpdate === 'usage_update') costUsd = session.profile.usage(update).costUsd ?? costUsd
       },
     })
     if (!result.ok || result.stopReason !== 'end_turn') {
       settle({ ok: false, error: 'failed' })
       return
     }
-    const parsed = parseSummaryResult(text, null, now() - startedAt)
-    if (parsed.ok) options.log?.(`[acp] resumo: ${options.input.length} caracteres na entrada, ${parsed.durationMs ?? '?'} ms`)
+    const parsed = options.parse(text, costUsd, now() - startedAt)
+    if (parsed.ok) options.log?.(`[acp] ${options.label}: ${options.input.length} caracteres na entrada, ${parsed.durationMs ?? '?'} ms`)
     settle(parsed)
   })()
 
   const result = await outcome
   timers.clearTimeout(timer)
   options.signal?.removeEventListener('abort', onAbort)
-  if (!result.ok && result.error === 'timeout') options.log?.(`[acp] resumo sem resposta em ${timeoutMs} ms; processo encerrado`)
+  if (!result.ok && result.error === 'timeout') options.log?.(`[acp] ${options.label} sem resposta em ${timeoutMs} ms; processo encerrado`)
   return result
 }

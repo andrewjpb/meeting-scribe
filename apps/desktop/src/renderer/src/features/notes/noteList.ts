@@ -23,6 +23,14 @@ export function createNote(atMs: number | null, now: number, id = newId()): Meet
   return { id, text: '', color: 'yellow', atMs: atMs === null ? null : Math.max(0, Math.round(atMs)), createdAt: at, updatedAt: at }
 }
 
+/**
+ * "Virar anotação" de um item da análise (contrato 19, CA4): um card amarelo já com o texto (cortado em
+ * 2 000 caracteres) e o tempo do item ou da análise.
+ */
+export function noteWithText(text: string, atMs: number | null, now: number, id = newId()): MeetingNote {
+  return { ...createNote(atMs, now, id), text: text.slice(0, NOTE_TEXT_MAX) }
+}
+
 /** A nova entra em cima. Com a lista cheia (200), nada muda. */
 export function addNote(list: readonly MeetingNote[], note: MeetingNote): MeetingNote[] {
   return list.length >= NOTES_MAX ? [...list] : [note, ...list]

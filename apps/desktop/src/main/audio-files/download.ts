@@ -9,6 +9,7 @@ import { z } from 'zod'
 import { MEETING_DOWNLOAD_KINDS, type MeetingDownloadKind, type MeetingDownloadResult } from '../../shared/meeting-files'
 import { summaryMarkdown } from '../../shared/meeting-summary'
 import { transcriptMarkdown } from '../../shared/transcript-markdown'
+import type { AnalysesStore } from '../meetings/analyses'
 import type { NotesStore } from '../meetings/notes'
 import type { MeetingsStore } from '../meetings/store'
 import type { SummaryStore } from '../meetings/summaries'
@@ -28,6 +29,8 @@ export interface MeetingDownloadDeps {
   summaries: Pick<SummaryStore, 'get'>
   /** Anotações (contrato 13): entram no fim da transcrição gerada na hora. */
   notes?: Pick<NotesStore, 'get'>
+  /** Análises (contrato 19): a seção "## Perguntas em aberto" no fim da transcrição e do resumo. */
+  analyses?: Pick<AnalysesStore, 'get'>
   dialog: SaveDialog
   /** Pasta em que o diálogo abre (Downloads). */
   downloads: string
@@ -62,6 +65,7 @@ export function createMeetingDownload(deps: MeetingDownloadDeps): (input: unknow
     const meeting = await deps.meetings.get(meetingId)
     if (!meeting) return null
     const base = meetingFileBase(new Date(meeting.startedAt), meeting.title)
+    const analyses = async () => (await deps.analyses?.get(meetingId).catch(() => [])) ?? []
     if (kind === 'audio') {
       const path = meetingFilePath(meeting, 'audio')
       return path ? { name: basename(path), copyFrom: path } : null
@@ -72,11 +76,11 @@ export function createMeetingDownload(deps: MeetingDownloadDeps): (input: unknow
       const document = await deps.transcripts.get(meetingId).catch(() => null)
       if (!document?.segments.some((segment) => segment.text.trim())) return null
       const notes = (await deps.notes?.get(meetingId).catch(() => [])) ?? []
-      return { name: `${base}.md`, text: transcriptMarkdown(meeting, document, notes) }
+      return { name: `${base}.md`, text: transcriptMarkdown(meeting, document, notes, await analyses()) }
     }
     const summary = await deps.summaries.get(meetingId).catch(() => null)
     if (!summary) return null
-    return { name: summaryFileTarget(meeting)?.name ?? `${base}${SUMMARY_FILE_SUFFIX}`, text: summaryMarkdown(meeting, summary) }
+    return { name: summaryFileTarget(meeting)?.name ?? `${base}${SUMMARY_FILE_SUFFIX}`, text: summaryMarkdown(meeting, summary, await analyses()) }
   }
 
   return async (input) => {

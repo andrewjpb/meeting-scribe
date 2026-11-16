@@ -5,7 +5,7 @@
 // em qualquer aba) com "Tentar de novo".
 import { create } from 'zustand'
 import type { MeetingNote, NoteColor } from '@shared/meeting-notes'
-import { addNote, createNote, editNote, NOTE_SAVE_DELAY_MS, NOTE_UNDO_MS, removeNote, restoreNote, type RemovedNote } from '../notes/noteList'
+import { addNote, createNote, editNote, NOTE_SAVE_DELAY_MS, NOTE_UNDO_MS, noteWithText, removeNote, restoreNote, type RemovedNote } from '../notes/noteList'
 
 export interface MeetingNotesEntry {
   status: 'loading' | 'ready' | 'failed'
@@ -26,6 +26,8 @@ interface MeetingNotesState {
   /** Lê do main ao abrir a aba. Com edição ainda não salva, fica a da memória. */
   load: (meetingId: string) => Promise<void>
   create: (meetingId: string) => void
+  /** "Virar anotação" de um item da análise (contrato 19): card amarelo com o texto e o tempo, salvo já. */
+  createWithText: (meetingId: string, text: string, atMs: number | null) => Promise<void>
   change: (meetingId: string, id: string, patch: { text?: string; color?: NoteColor }) => void
   remove: (meetingId: string, id: string) => void
   undo: (meetingId: string) => void
@@ -112,6 +114,14 @@ export const useMeetingNotes = create<MeetingNotesState>()((set, get) => {
       const note = createNote(null, Date.now())
       const notes = addNote(entry.notes, note)
       if (notes.length !== entry.notes.length) update(meetingId, notes, 'now', { focusId: note.id })
+    },
+
+    async createWithText(meetingId, text, atMs) {
+      if (get().meetings[meetingId]?.status !== 'ready') await get().load(meetingId)
+      const entry = get().meetings[meetingId]
+      if (entry?.status !== 'ready' || !text.trim()) return
+      const notes = addNote(entry.notes, noteWithText(text, atMs, Date.now()))
+      if (notes.length !== entry.notes.length) update(meetingId, notes, 'now')
     },
 
     change(meetingId, id, patch) {

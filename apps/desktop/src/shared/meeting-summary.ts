@@ -2,6 +2,7 @@
 // gera com o `claude` local, valida com `meeting-summary-schema.ts` e guarda em `meetings/<id>.summary.json`;
 // o renderer só recebe o resultado (e este arquivo não leva o zod para ele). O Markdown é o mesmo no
 // "Copiar resumo", no "Baixar resumo…" e na pasta da reunião.
+import { analysisMarkdown, type MeetingAnalysis } from './meeting-analysis'
 import { durationLabel, type MarkdownMeeting } from './transcript-markdown'
 
 export const SUMMARY_VERSION = 1
@@ -82,9 +83,10 @@ const dateLabel = new Intl.DateTimeFormat('pt-BR', { day: 'numeric', month: 'lon
 
 /**
  * Markdown do resumo: título, data, "O que aconteceu", "Decisões" (some se vazia, como na tela),
- * "Tarefas" e o rodapé com data e modelo.
+ * "Tarefas", "Perguntas em aberto" da última análise (contrato 19, quando houver) e o rodapé com data e
+ * modelo.
  */
-export function summaryMarkdown(meeting: MarkdownMeeting, summary: MeetingSummary): string {
+export function summaryMarkdown(meeting: MarkdownMeeting, summary: MeetingSummary, analyses: readonly MeetingAnalysis[] = []): string {
   const started = new Date(meeting.startedAt)
   const lines: string[] = [
     `# ${meeting.title}`,
@@ -99,6 +101,8 @@ export function summaryMarkdown(meeting: MarkdownMeeting, summary: MeetingSummar
   lines.push('', '## Tarefas', '')
   if (summary.tasks.length) lines.push(...summary.tasks.map(taskLine))
   else lines.push('Nenhuma tarefa combinada.')
+  const open = analysisMarkdown(analyses)
+  if (open) lines.push('', open.trimEnd())
   lines.push('', `_${summaryFooter(summary)}_`)
   return `${lines.join('\n')}\n`
 }

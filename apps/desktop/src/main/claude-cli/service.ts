@@ -22,6 +22,8 @@ export const CLAUDE_CWD_DIR = 'claude-cwd'
 /** Pastas vazias próprias da tradução e do resumo pelo ACP, dentro de `claude-cwd` (contrato 17). */
 export const ACP_TRANSLATE_DIR = 'translate'
 export const ACP_SUMMARY_DIR = 'summary'
+/** Pasta vazia da análise pelo ACP (contrato 19). */
+export const ACP_ANALYSIS_DIR = 'analysis'
 
 /** O que a gravação usa de um tradutor, pela linha de comando ou pelo ACP. */
 type Translator = Pick<ClaudeTranslator, 'start' | 'translate' | 'stop' | 'kill'>

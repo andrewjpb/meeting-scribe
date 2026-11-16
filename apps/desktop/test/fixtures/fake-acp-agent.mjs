@@ -9,6 +9,8 @@
 // - tradução (instrução "You translate…", sem ferramentas): cada prompt `<turn>texto</turn>` responde
 //   `[EN] texto` em dois pedaços e manda o contexto em uso crescendo;
 // - resumo (instrução "Você resume…"): o JSON do resumo entre cercas, montado só com as linhas da transcrição;
+// - análise (instrução "Você analisa…", contrato 19): espera (5 × `pause`) e devolve a análise falsa
+//   (`fake-analysis.mjs`) entre cercas, com o custo no `usage_update`;
 // - chat: pensa em pedaços, monta o "Plano", lê o `INDICE.md` e a reunião mais recente e procura um termo,
 //   cada leitura pedindo permissão; tenta escrever um arquivo (permissão pedida e negada), ler um arquivo
 //   fora da pasta pelo cliente (`fs/read_text_file`, recusado) e abrir um terminal (recusado); responde em
@@ -23,6 +25,7 @@ import { Readable, Writable } from 'node:stream'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { pathToFileURL } from 'node:url'
 import * as acp from '@agentclientprotocol/sdk/unstable'
+import { fakeAnalysis } from './fake-analysis.mjs'
 
 export const FAKE_ACP_VERSION = '0.107.0-falso'
 const MODEL_IDS = { haiku: 'claude-haiku-5-5', sonnet: 'claude-sonnet-5-5', opus: 'claude-opus-5-5', default: 'claude-sonnet-5-5' }
@@ -92,6 +95,7 @@ export function fakeAcpAgent({ log = () => undefined, pause = 300 } = {}) {
     const prompt = typeof options?.systemPrompt === 'string' ? options.systemPrompt : ''
     if (prompt.startsWith('You translate')) return 'translate'
     if (prompt.startsWith('Você resume')) return 'summary'
+    if (prompt.startsWith('Você analisa')) return 'analysis'
     return 'chat'
   }
 
@@ -174,6 +178,14 @@ export function fakeAcpAgent({ log = () => undefined, pause = 300 } = {}) {
         const text = `\`\`\`json\n${JSON.stringify(summary, null, 2)}\n\`\`\``
         for (let at = 0; at < text.length; at += 80) await say(text.slice(at, at + 80))
         return { stopReason: 'end_turn', usage: { totalTokens: Math.ceil(content.length / 4) + 120, inputTokens: Math.ceil(content.length / 4), outputTokens: 120 } }
+      }
+
+      if (state.purpose === 'analysis') {
+        await sleep(pause * 5)
+        const text = `\`\`\`json\n${JSON.stringify(fakeAnalysis(content), null, 2)}\n\`\`\``
+        for (let at = 0; at < text.length; at += 80) await say(text.slice(at, at + 80))
+        await update({ sessionUpdate: 'usage_update', used: 900, size: 200000, cost: { amount: 0.0042, currency: 'USD' }, _meta: { '_claude/model': modelId } })
+        return { stopReason: 'end_turn', usage: { totalTokens: Math.ceil(content.length / 4) + 90, inputTokens: Math.ceil(content.length / 4), outputTokens: 90 } }
       }
 
       // Chat.

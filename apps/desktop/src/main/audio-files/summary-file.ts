@@ -5,6 +5,7 @@
 import { rename, rm, writeFile } from 'node:fs/promises'
 import { basename, dirname } from 'node:path'
 import type { Meeting } from '../../shared/meetings'
+import type { MeetingAnalysis } from '../../shared/meeting-analysis'
 import { summaryMarkdown, type MeetingSummary } from '../../shared/meeting-summary'
 import { insideFolder, PART_SUFFIX } from './names'
 
@@ -26,7 +27,7 @@ export function summaryFileTarget(meeting: Pick<Meeting, 'audioPath' | 'transcri
  * Escreve o resumo na pasta da reunião. Devolve o caminho escrito, ou `null` quando não há pasta (opção
  * desligada ou reunião sem arquivo) ou a escrita falhou; nunca rejeita.
  */
-export async function writeSummaryFile(meeting: Meeting, summary: MeetingSummary, saveToFolder: boolean): Promise<string | null> {
+export async function writeSummaryFile(meeting: Meeting, summary: MeetingSummary, saveToFolder: boolean, analyses: readonly MeetingAnalysis[] = []): Promise<string | null> {
   if (!saveToFolder) return null
   const target = summaryFileTarget(meeting)
   if (!target) return null
@@ -36,7 +37,7 @@ export async function writeSummaryFile(meeting: Meeting, summary: MeetingSummary
     temp = insideFolder(target.folder, `${target.name}${PART_SUFFIX}`)
     // Um `.part` velho (app fechado no meio de uma escrita) impediria o `wx`.
     await rm(temp, { force: true })
-    await writeFile(temp, summaryMarkdown(meeting, summary), { encoding: 'utf8', flag: 'wx' })
+    await writeFile(temp, summaryMarkdown(meeting, summary, analyses), { encoding: 'utf8', flag: 'wx' })
     await rename(temp, path)
     return path
   } catch {

@@ -25,12 +25,19 @@
 // (`session/cancel`, a sessão segue viva); troca de modelo e "Pensar mais" na mesma sessão; uma gravação
 // traduzida (com a latência medida) e um resumo pelo agente; e o adaptador que não sobe, com o botão "Usar
 // a linha de comando". O `claude` de verdade nunca roda.
+//
+// Contrato 19: no meio da gravação da fixture, "Analisar até agora" (o `claude` falso espera 1,5 s antes de
+// responder) com a captura, o cronômetro e uma tradução seguindo enquanto ele gera; a aba "Análise" com as
+// quatro seções, "Virar anotação", "Copiar", o tempo que rola a transcrição e uma segunda análise que risca o
+// item respondido da anterior; "Encerrar" salva `analyses.json`; a seção "Perguntas em aberto" no detalhe, no
+// `.md` da pasta e no "Copiar resumo", e "Analisar a reunião inteira".
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
 import { app, ipcMain, Menu, nativeTheme, session, type BrowserWindow, type WebContents } from 'electron'
 import { ASSEMBLYAI_DASHBOARD_URL } from '../shared/assemblyai'
 import type { CspViolation } from '../shared/ipc'
+import { analyzedUntil, type MeetingAnalysesFile, type MeetingAnalysis } from '../shared/meeting-analysis'
 import { notesMarkdown, type MeetingNote, type MeetingNotesFile } from '../shared/meeting-notes'
 import type { Meeting } from '../shared/meetings'
 import { summaryMarkdown, type MeetingSummary } from '../shared/meeting-summary'
@@ -1068,7 +1075,9 @@ async function audioAfterEnd(win: BrowserWindow, ctx: SmokeContext, record: Meet
   const mdText = md ? readFileSync(join(folder, md.name), 'utf8') : ''
   // Contrato 13, CA7: as anotações da gravação fecham o `.md`.
   const notes = readNotesFile(ctx.userDataDir, record?.id)?.notes ?? []
-  const expected = record && document ? transcriptMarkdown(record, document, notes) : null
+  // Contrato 19: e a seção "## Perguntas em aberto" da última análise da gravação.
+  const analyses = readAnalyses(ctx.userDataDir, record?.id)
+  const expected = record && document ? transcriptMarkdown(record, document, notes, analyses) : null
   const saved: Check = {
     ok:
       files.length === 2 &&
@@ -1081,6 +1090,7 @@ async function audioAfterEnd(win: BrowserWindow, ctx: SmokeContext, record: Meet
       mdText.includes(ECHO_PHRASE) &&
       mdText.includes(`\n## Anotações\n\n- [`) &&
       mdText.includes(SMOKE_NOTE_EDITED) &&
+      mdText.includes('\n## Perguntas em aberto\n') &&
       record?.audioPath === join(folder, audio.name) &&
       record.transcriptPath === join(folder, md.name),
     detail: `pasta ${JSON.stringify(files)}; gravador ${JSON.stringify(probe)}; .md igual ao "Exportar"=${mdText === expected} (${mdText.split('\n').length} linhas, ${notes.length} anotações, seção "## Anotações"=${mdText.includes('\n## Anotações\n')}); reunião audioPath=${record?.audioPath ? basename(record.audioPath) : null}, transcriptPath=${record?.transcriptPath ? basename(record.transcriptPath) : null}`,
@@ -1152,7 +1162,9 @@ async function summaryAfterEnd(win: BrowserWindow, ctx: SmokeContext, record: Me
   // A cópia na pasta é escrita logo depois do `summary.json`.
   for (let attempt = 0; attempt < 40 && folderPath && !existsSync(folderPath); attempt++) await wait(50)
   const folderText = folderPath && existsSync(folderPath) ? readFileSync(folderPath, 'utf8') : ''
-  const expected = record && summary ? summaryMarkdown(record, summary) : null
+  // Contrato 19: com análise da gravação, o Markdown do resumo ganha "## Perguntas em aberto".
+  const analyses = readAnalyses(ctx.userDataDir, record?.id)
+  const expected = record && summary ? summaryMarkdown(record, summary, analyses) : null
   const screen = await evaluate<{ tabs: string[]; sections: string[]; decisions: number; rows: string[][]; footer: string; buttons: string[] }>(
     contents,
     `({
@@ -1194,6 +1206,8 @@ async function summaryAfterEnd(win: BrowserWindow, ctx: SmokeContext, record: Me
       screen.buttons.includes('Gerar de novo') &&
       folderText !== '' &&
       folderText === expected &&
+      analyses.length > 0 &&
+      folderText.includes('\n## Perguntas em aberto\n') &&
       (!copy || copied === expected) &&
       spawn !== undefined &&
       spawn.cwd === join(ctx.userDataDir, 'claude-cwd') &&
@@ -1291,6 +1305,207 @@ async function notesWhileRecording(contents: WebContents, byShortcut: boolean): 
       JSON.stringify(after.map((note) => note.id)) === JSON.stringify(created.map((note) => note.id)) &&
       JSON.stringify(swatches) === JSON.stringify(['Amarelo', 'Rosa', 'Verde', 'Azul*', 'Roxo', 'Laranja']),
     detail: `painel aberto=${opened} (${byShortcut ? '⌘⇧N' : 'botão'}), ${Math.round(layout.panel)} px, transcrição ${Math.round(layout.transcript)} px com ${layout.segments} trechos; ao nascer ${JSON.stringify(born)}; cards ${JSON.stringify(created.map((note) => [note.text, note.color, note.time]))}; excluir=${deleted} (foco no seguinte=${focusNext}), desfazer=${restored} na mesma ordem=${JSON.stringify(after.map((note) => note.id)) === JSON.stringify(created.map((note) => note.id))}; cores ${JSON.stringify(swatches)}; barra ${Math.round(clearance)} px abaixo do último card; rótulos ${JSON.stringify(labels)}`,
+  }
+}
+
+/** Análises gravadas em `meetings/<id>.analyses.json` (contrato 19), ou lista vazia. */
+function readAnalyses(userDataDir: string, meetingId: string | undefined): MeetingAnalysis[] {
+  const file = meetingId ? join(userDataDir, 'meetings', `${meetingId}.analyses.json`) : ''
+  return file && existsSync(file) ? (JSON.parse(readFileSync(file, 'utf8')) as MeetingAnalysesFile).analyses : []
+}
+
+const ANALYSIS_SECTIONS = ['Perguntas em aberto', 'Não ficou claro', 'Para confirmar', 'Perguntas para fazer agora']
+const ANALYZE_BUTTON = `document.querySelector('[data-action="analyze-now"]')`
+const ANALYSIS_BLOCK = (index: number): string => `document.querySelectorAll('[data-notes-panel] [data-analysis]')[${index}]`
+
+/** Seções, cabeçalho e rodapé de um bloco de análise do painel. */
+async function analysisBlockView(contents: WebContents, index: number): Promise<{ sections: string[]; until: string; footer: string; expanded: string; answered: number }> {
+  return evaluate(
+    contents,
+    `(() => {
+      const block = ${ANALYSIS_BLOCK(index)}
+      return {
+        sections: [...(block?.querySelectorAll('[data-analysis-section] h3') ?? [])].map((h) => h.textContent),
+        until: block?.querySelector('[data-analysis-until]')?.textContent ?? '',
+        footer: block?.querySelector('[data-analysis-footer]')?.textContent ?? '',
+        expanded: block?.dataset.expanded ?? '',
+        answered: block?.querySelectorAll('[data-analysis-item][data-answered]').length ?? 0,
+      }
+    })()`,
+  )
+}
+
+/** Medidas da análise para o `report.json`. */
+interface AnalysisMeasured {
+  /** Do clique ao bloco na tela (o `claude` falso espera 1,5 s). */
+  elapsedMs: number
+  /** Tradução pedida enquanto a análise gerava: quanto levou (ms). */
+  translationMs: number
+  /** Quadros da captura contados enquanto a análise gerava. */
+  framesWhileAnalyzing: number
+}
+
+/**
+ * Contrato 19, CA3, CA4, CA7 e CA8, na gravação: "Analisar até agora" (clique no claro, ⌘⇧A no escuro) abre
+ * a aba "Análise" com "Analisando…" e o botão travado; enquanto o `claude` falso gera, a captura conta
+ * quadros, o cronômetro anda e uma tradução vai e volta; o bloco chega com as quatro seções, "Até mm:ss" e o
+ * rodapé com modelo, tempo e custo. No claro também: "Virar anotação" cria o card amarelo com o texto e o
+ * tempo (e o card é excluído para o resto do smoke seguir com as três anotações dele), "Copiar", o tempo que
+ * rola a transcrição e uma segunda análise que leva a anterior no pedido e risca o item respondido. Fotografa
+ * `gravacao-analise-<tema>` e volta à aba "Anotações".
+ */
+async function analysisWhileRecording(win: BrowserWindow, ctx: SmokeContext, themeName: string, full: boolean): Promise<{ check: Check; shot: Screenshot; measured: AnalysisMeasured }> {
+  const contents = win.webContents
+  const enabled = await evaluate<boolean>(contents, `${ANALYZE_BUTTON}?.disabled === false && ${ANALYZE_BUTTON}?.getAttribute('aria-keyshortcuts') === 'Meta+Shift+A'`)
+  const spawnsBefore = ctx.fixtures.claudeSpawns.length
+  const framesBefore = await frameCounts(contents)
+  const timerBefore = await evaluate<string>(contents, TIMER)
+  const clickedAt = Date.now()
+  if (full) await clickSelector(contents, '[data-action="analyze-now"]')
+  else {
+    await evaluate(contents, 'document.activeElement instanceof HTMLElement && document.activeElement.blur(), true')
+    contents.sendInputEvent({ type: 'keyDown', keyCode: 'A', modifiers: ['meta', 'shift'] })
+    contents.sendInputEvent({ type: 'keyUp', keyCode: 'A', modifiers: ['meta', 'shift'] })
+  }
+  const busy = await waitFor(
+    contents,
+    `document.querySelector('[data-notes-panel]')?.dataset.panelTab === 'analise' && document.querySelector('[data-analysis-busy]') && ${ANALYZE_BUTTON}?.textContent.includes('Analisando…') && ${ANALYZE_BUTTON}?.disabled`,
+  )
+  // A tradução não espera a análise: um trecho vai e volta pelo mesmo canal da gravação enquanto ela gera.
+  const during = await evaluate<{ ok: boolean; ms: number; stillBusy: boolean }>(
+    contents,
+    `(async () => {
+      const t0 = performance.now()
+      const result = await window.__scribeApi.invoke('scribe:translate-turn', { text: 'Vamos fechar a janela no sábado.', source: 'pt', target: 'en', model: ${JSON.stringify(DEFAULT_SETTINGS.translationModel)} })
+      return { ok: result?.ok === true, ms: Math.round(performance.now() - t0), stillBusy: Boolean(document.querySelector('[data-analysis-busy]')) }
+    })()`,
+  )
+  // O cronômetro anda (vira o segundo) enquanto a análise gera.
+  await waitFor(contents, `(${TIMER}) !== ${JSON.stringify(timerBefore)}`, 1100)
+  const framesDuring = await frameCounts(contents)
+  const phaseDuring = (await captureState(contents))?.phase
+  const timerDuring = await evaluate<string>(contents, TIMER)
+  const stillBusy = await evaluate<boolean>(contents, `Boolean(document.querySelector('[data-analysis-busy]'))`)
+  const done = await waitFor(contents, `document.querySelectorAll('[data-notes-panel] [data-analysis]').length === 1 && !document.querySelector('[data-analysis-busy]')`, 15_000)
+  const elapsedMs = Date.now() - clickedAt
+  const first = await analysisBlockView(contents, 0)
+  const spawn = ctx.fixtures.claudeSpawns.slice(spawnsBefore).find((item) => (item.args[item.args.indexOf('--system-prompt') + 1] ?? '').startsWith('Você analisa'))
+  const spawnArgs = spawn?.args ?? []
+  const firstOk =
+    enabled &&
+    busy &&
+    during.ok &&
+    during.stillBusy &&
+    stillBusy &&
+    phaseDuring === 'recording' &&
+    (framesDuring?.mic ?? 0) > (framesBefore?.mic ?? 0) &&
+    timerDuring !== timerBefore &&
+    done &&
+    JSON.stringify(first.sections) === JSON.stringify(ANALYSIS_SECTIONS) &&
+    /^Até \d{2}:\d{2}$/.test(first.until) &&
+    first.footer.includes('Haiku') &&
+    first.footer.includes('US$') &&
+    spawn !== undefined &&
+    spawn.cwd === join(ctx.userDataDir, 'claude-cwd') &&
+    spawnArgs[spawnArgs.indexOf('--output-format') + 1] === 'json' &&
+    spawnArgs[spawnArgs.indexOf('--tools') + 1] === '' &&
+    spawnArgs.includes('--strict-mcp-config')
+  let detail = `botão pronto=${enabled}; ${full ? 'clique' : '⌘⇧A'} -> aba Análise com "Analisando…" e travado=${busy}; tradução durante=${during.ok} em ${during.ms} ms com a análise ainda gerando=${during.stillBusy}; captura ${phaseDuring}, quadros ${framesBefore?.mic ?? '?'} -> ${framesDuring?.mic ?? '?'}, cronômetro ${timerBefore} -> ${timerDuring}; bloco em ${elapsedMs} ms=${done}: "${first.until}", seções ${JSON.stringify(first.sections)}, rodapé "${first.footer}"; processo ${JSON.stringify(spawn ? { cwd: basename(spawn.cwd), args: spawnArgs.filter((arg) => arg.startsWith('--')) } : null)}`
+  let fullOk = true
+
+  if (full) {
+    // "Virar anotação" do primeiro item: card amarelo com o texto e o tempo dele.
+    const item = await evaluate<{ text: string; time: string }>(
+      contents,
+      `(() => { const li = ${ANALYSIS_BLOCK(0)}?.querySelector('[data-analysis-section="openQuestions"] [data-analysis-item]'); return { text: li?.querySelector('p')?.lastChild?.textContent ?? '', time: li?.querySelector('[data-action="analysis-jump"]')?.textContent ?? '' } })()`,
+    )
+    await clickSelector(contents, `[data-notes-panel] [data-analysis-section="openQuestions"] [data-action="analysis-to-note"]`)
+    const marked = await waitFor(contents, `${ANALYSIS_BLOCK(0)}?.querySelector('[data-action="analysis-to-note"]')?.textContent.includes('Virou anotação')`)
+    await clickSelector(contents, '[data-notes-panel] [data-tab="anotacoes"]')
+    await waitFor(contents, `document.querySelectorAll('[data-notes-panel] [data-note]').length === 4`)
+    const card = (await evaluate<NoteCard[]>(contents, NOTE_CARDS))[0]
+    const noted = card !== undefined && card.text === item.text && card.color === 'yellow' && card.time === item.time
+    // O card sai: o resto do smoke confere as três anotações dele.
+    await clickSelector(contents, '[data-notes-panel] li:first-child [data-action="delete-note"]')
+    const removed = await waitFor(contents, `document.querySelectorAll('[data-notes-panel] [data-note]').length === 3`)
+    await clickSelector(contents, '[data-notes-panel] [data-tab="analise"]')
+    await waitFor(contents, `document.querySelector('[data-notes-panel] [data-analysis]')`)
+    // "Copiar" e o tempo que rola a transcrição.
+    const copiedBefore = ctx.fixtures.copiedTexts.length
+    await clickSelector(contents, '[data-notes-panel] [data-analysis-section="openQuestions"] [data-action="analysis-copy"]')
+    for (let attempt = 0; attempt < 40 && ctx.fixtures.copiedTexts.length === copiedBefore; attempt++) await wait(50)
+    const copied = ctx.fixtures.copiedTexts.at(-1) === item.text
+    await clickSelector(contents, '[data-notes-panel] [data-action="analysis-jump"]')
+    const jumped = await waitFor(contents, `document.querySelector('[data-transcript-list] [data-jump-target]')`)
+    // Segunda análise: a anterior vai no pedido e o item respondido aparece riscado nela.
+    await clickSelector(contents, '[data-action="analyze-now"]')
+    const second = await waitFor(contents, `document.querySelectorAll('[data-notes-panel] [data-analysis]').length === 2 && !document.querySelector('[data-analysis-busy]')`, 15_000)
+    const collapsed = await analysisBlockView(contents, 1)
+    await evaluate(contents, `${ANALYSIS_BLOCK(1)}?.querySelector('[data-action="toggle-analysis"]')?.click() ?? true`)
+    await waitFor(contents, `${ANALYSIS_BLOCK(1)}?.dataset.expanded === 'true'`)
+    const older = await analysisBlockView(contents, 1)
+    const newest = await analysisBlockView(contents, 0)
+    fullOk = marked && noted && removed && copied && jumped && second && newest.expanded === 'true' && collapsed.expanded === 'false' && older.answered === 1 && newest.answered === 0
+    detail += `; "Virar anotação" -> marcado=${marked}, card ${JSON.stringify(card)} igual ao item ${JSON.stringify(item)}=${noted}, excluído=${removed}; "Copiar"=${copied}; tempo -> transcrição=${jumped}; segunda análise=${second}, mais nova aberta=${newest.expanded}, anterior recolhida=${collapsed.expanded} e com ${older.answered} item riscado`
+  }
+  await settle(contents)
+  const shot = await capture(win, ctx.outDir, `gravacao-analise-${themeName}`)
+  // De volta às anotações: o passo seguinte edita um card.
+  await clickSelector(contents, '[data-notes-panel] [data-tab="anotacoes"]')
+  await waitFor(contents, `document.querySelectorAll('[data-notes-panel] [data-note]').length === 3`)
+  return { check: { ok: firstOk && fullOk, detail }, shot, measured: { elapsedMs, translationMs: during.ms, framesWhileAnalyzing: (framesDuring?.mic ?? 0) - (framesBefore?.mic ?? 0) } }
+}
+
+/**
+ * Contrato 19, CA5, CA6 e CA8, depois de "Encerrar" (tema claro): `analyses.json` com as duas análises da
+ * gravação, a seção "Perguntas em aberto" na aba "Resumo" com a última, o "Copiar resumo" com a seção e
+ * "Analisar a reunião inteira" gerando e salvando uma terceira. Fotografa `detalhe-perguntas-abertas-light`.
+ */
+async function analysisDetailCheck(win: BrowserWindow, ctx: SmokeContext, record: Meeting | undefined): Promise<{ check: Check; shot: Screenshot }> {
+  const contents = win.webContents
+  const saved = readAnalyses(ctx.userDataDir, record?.id)
+  await clickSelector(contents, '[data-tab="resumo"]')
+  const shown = await waitFor(contents, `document.querySelector('[data-open-questions]')?.dataset.openQuestions === ${JSON.stringify(saved.at(-1)?.id ?? '-')}`)
+  const sections = await evaluate<string[]>(contents, `[...document.querySelectorAll('[data-open-questions] [data-analysis-section] h3')].map((h) => h.textContent)`)
+  // Só a coluna da aba rola (o `scrollIntoView` arrastaria a janela inteira).
+  await evaluate(
+    contents,
+    `(() => { const scroll = document.querySelector('[data-summary-scroll]'); const section = document.querySelector('[data-open-questions]'); if (scroll && section) scroll.scrollTop += section.getBoundingClientRect().top - scroll.getBoundingClientRect().top - 24; return true })()`,
+  )
+  await settle(contents)
+  const shot = await capture(win, ctx.outDir, 'detalhe-perguntas-abertas-light')
+  const copiedBefore = ctx.fixtures.copiedTexts.length
+  await clickSelector(contents, '[data-action="copy-summary"]')
+  for (let attempt = 0; attempt < 40 && ctx.fixtures.copiedTexts.length === copiedBefore; attempt++) await wait(50)
+  const copied = ctx.fixtures.copiedTexts.at(-1) ?? ''
+  await clickSelector(contents, '[data-action="analyze-meeting"]')
+  const busy = await waitFor(contents, `document.querySelector('[data-action="analyze-meeting"]')?.textContent.includes('Analisando…')`)
+  const done = await waitFor(contents, `!document.querySelector('[data-action="analyze-meeting"]')?.textContent.includes('Analisando…') && document.querySelector('[data-open-questions]')?.dataset.openQuestions !== ${JSON.stringify(saved.at(-1)?.id ?? '-')}`, 15_000)
+  const after = readAnalyses(ctx.userDataDir, record?.id)
+  const whole = after.at(-1)
+  // "Até mm:ss" é o fim do último trecho lido: nenhum item cita um tempo depois dele.
+  const transcriptFile = record ? join(ctx.userDataDir, 'meetings', `${record.id}.json`) : ''
+  const segments = transcriptFile && existsSync(transcriptFile) ? (JSON.parse(readFileSync(transcriptFile, 'utf8')) as TranscriptDocument).segments : []
+  const itemsInside = after.every((analysis) => [...analysis.openQuestions, ...analysis.unclearTopics].every((item) => item.atMs === undefined || item.atMs <= analysis.atMs))
+  return {
+    check: {
+      ok:
+        saved.length === 2 &&
+        saved.every((analysis) => analysis.meetingId === record?.id) &&
+        (saved[1]?.answered.length ?? 0) === 1 &&
+        shown &&
+        JSON.stringify(sections) === JSON.stringify(ANALYSIS_SECTIONS) &&
+        copied.includes('\n## Perguntas em aberto\n') &&
+        busy &&
+        done &&
+        after.length === 3 &&
+        whole !== undefined &&
+        whole.meetingId === record?.id &&
+        whole.atMs === analyzedUntil(segments) &&
+        itemsInside,
+      detail: `analyses.json ${JSON.stringify(saved.map((analysis) => ({ id: analysis.id, atMs: analysis.atMs, respondidos: analysis.answered.length })))}; seção na aba Resumo=${shown} com ${JSON.stringify(sections)}; "Copiar resumo" com a seção=${copied.includes('## Perguntas em aberto')}; "Analisar a reunião inteira" -> gerando=${busy}, pronta=${done}, ${after.length} no arquivo, a nova até ${whole?.atMs ?? '?'} ms (fim do último trecho ${analyzedUntil(segments)}); itens dentro do "Até"=${itemsInside}`,
+    },
+    shot,
   }
 }
 
@@ -1439,8 +1654,8 @@ async function downloadsCheck(win: BrowserWindow, ctx: SmokeContext, record: Mee
         audioCopy === audioSize &&
         summary !== null &&
         record !== undefined &&
-        summaryText === summaryMarkdown(record, summary),
-      detail: `diálogos ${JSON.stringify(dialogs.map((path) => basename(path)))}; áudio copiado ${audioCopy} de ${audioSize} bytes; resumo baixado igual ao Markdown=${summary && record ? summaryText === summaryMarkdown(record, summary) : false}`,
+        summaryText === summaryMarkdown(record, summary, readAnalyses(ctx.userDataDir, record.id)),
+      detail: `diálogos ${JSON.stringify(dialogs.map((path) => basename(path)))}; áudio copiado ${audioCopy} de ${audioSize} bytes; resumo baixado igual ao Markdown=${summary && record ? summaryText === summaryMarkdown(record, summary, readAnalyses(ctx.userDataDir, record.id)) : false}`,
     },
     shot,
   }
@@ -3475,6 +3690,7 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
   /** Contratos 15 e 16: chat "Perguntar" e os detalhes da resposta (nos dois temas); "Parar", o painel "Contexto" e a aba do detalhe (no claro). */
   const chat: Record<string, Check> = {}
   let acpMeasured: AcpMeasured | null = null
+  let analysisMeasured: AnalysisMeasured | null = null
 
   // A fixture da sessão real, reduzida pelo mesmo redutor do app: a mesma dos testes (CA4) e do smoke.
   const sessionFixture = readSessionFixture()
@@ -3572,6 +3788,12 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
       recording[themeName === 'light' ? 'notesRecording' : 'notesRecordingDark'] = await notesWhileRecording(contents, themeName === 'light')
       await shoot('gravacao-anotacoes', 'gravacao')
 
+      // Contrato 19: "Analisar até agora" no meio da gravação, com a captura e a tradução seguindo.
+      const analysisLive = await analysisWhileRecording(win, ctx, themeName, themeName === 'light')
+      recording[themeName === 'light' ? 'analysisRecording' : 'analysisRecordingDark'] = analysisLive.check
+      screenshots.push(analysisLive.shot)
+      if (themeName === 'light') analysisMeasured = analysisLive.measured
+
       // 4. Encerrar salva o registro e abre o detalhe. A anotação mais antiga é editada logo antes do
       // clique, sem esperar nada: o texto novo tem que chegar ao `notes.json` (contrato 13, CA4).
       await setValue(contents, '[data-notes-panel] li:last-child [data-note-text]', SMOKE_NOTE_EDITED)
@@ -3618,6 +3840,12 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
       }
       // Contrato 13: as anotações no arquivo e na aba "Anotações", e o salto para a transcrição.
       recording[themeName === 'light' ? 'notesDetail' : 'notesDetailDark'] = await notesAfterEnd(contents, ctx, record, () => shoot('detalhe-anotacoes', 'detalhe'), themeName === 'light')
+      // Contrato 19: as análises salvas, a seção "Perguntas em aberto" e "Analisar a reunião inteira".
+      if (themeName === 'light') {
+        const analysisDetail = await analysisDetailCheck(win, ctx, record)
+        recording['analysisDetail'] = analysisDetail.check
+        screenshots.push(analysisDetail.shot)
+      }
 
       // 5. Lista com três reuniões semeadas.
       seedMeetings(ctx.userDataDir)
@@ -3827,7 +4055,7 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
   for (const name of ['emptyStateButton', 'headerNewRecording', 'menuNovaGravacao', 'sidebarReunioes', 'keyboard', 'detailLoadFailure']) {
     if (!navigation[name]) failures.push(`navegação ${name}: não executado`)
   }
-  for (const name of ['captureWorklet', 'tapeFps', 'endSavesAndOpensDetail', 'pause', 'spaceResumes', 'systemSilenceNotice', 'endFromHeader', 'deleteWithConfirmation', 'noKeyState', 'copyTranscript', 'deleteTranscript', 'echoRemoved', 'echoNotSaved', 'recorderFormat', 'audioWhileRecording', 'audioSaved', 'audioDetail', 'deleteKeepsFiles', 'summary', 'summaryDark', 'summaryDownload', 'notesRecording', 'notesRecordingDark', 'notesDetail', 'notesDetailDark']) {
+  for (const name of ['captureWorklet', 'tapeFps', 'endSavesAndOpensDetail', 'pause', 'spaceResumes', 'systemSilenceNotice', 'endFromHeader', 'deleteWithConfirmation', 'noKeyState', 'copyTranscript', 'deleteTranscript', 'echoRemoved', 'echoNotSaved', 'recorderFormat', 'audioWhileRecording', 'audioSaved', 'audioDetail', 'deleteKeepsFiles', 'summary', 'summaryDark', 'summaryDownload', 'notesRecording', 'notesRecordingDark', 'notesDetail', 'notesDetailDark', 'analysisRecording', 'analysisRecordingDark', 'analysisDetail']) {
     if (!recording[name]) failures.push(`gravação ${name}: não executado`)
   }
   if (!theme.ok) failures.push(`tema: ${theme.detail}`)
@@ -3835,8 +4063,9 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
   // Mais o aviso de sistema sem som, nos dois temas, o eco removido, os arquivos no detalhe, a aba
   // "Áudio" depois de baixar, a barra com a marca própria, o bloco "Atualizações" e a busca na lista
   // (só no claro), a conversa vazia e o painel "Contexto" do "Perguntar" v2 e a conversa pelo agente ACP
-  // (contrato 17), as abas "Contas" e "Sobre" e a busca das Configurações (contrato 18), só no claro.
-  const expectedShots = SCREENS.length * THEMES.length + 14
+  // (contrato 17), as abas "Contas" e "Sobre" e a busca das Configurações (contrato 18), só no claro; a aba
+  // "Análise" da gravação nos dois temas e a seção "Perguntas em aberto" do detalhe, no claro (contrato 19).
+  const expectedShots = SCREENS.length * THEMES.length + 17
   if (screenshots.length !== expectedShots) failures.push(`${screenshots.length} PNGs em vez de ${expectedShots}`)
   for (const shot of screenshots) {
     if (shot.width < 1120 || shot.height < 740) failures.push(`${shot.name}: ${shot.width}x${shot.height} abaixo de 1120x740`)
@@ -3871,6 +4100,7 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
     meetingsList,
     chat,
     acp: acpMeasured,
+    analysis: analysisMeasured,
     meetingFolder: folderFiles(defaultMeetingFolder(ctx)),
     openedFiles: ctx.fixtures.openedFiles.map((item) => ({ action: item.action, file: basename(item.path) })),
     claudeFakeSpawns: ctx.fixtures.claudeSpawns.map((spawn) => ({ ...spawn, args: spawn.args.filter((arg) => arg.startsWith('--')) })),

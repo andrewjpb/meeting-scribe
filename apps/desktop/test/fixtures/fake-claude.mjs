@@ -4,7 +4,9 @@
 // é o texto do trecho com o prefixo `[EN]`. Sai quando o stdin fecha.
 //
 // Com `--output-format json` (resumo da reunião, contrato 08): lê o stdin inteiro e devolve um único
-// `result` com o JSON do resumo entre cercas ```json, montado só a partir das linhas da transcrição.
+// `result` com o JSON do resumo entre cercas ```json, montado só a partir das linhas da transcrição. Com a
+// instrução da análise ("Você analisa…", contrato 19), espera 1,5 s e devolve a análise falsa
+// (`fake-analysis.mjs`) entre cercas, com custo nominal.
 //
 // Com `--include-partial-messages` (chat "Perguntar", contrato 15): para cada pergunta, lê a pasta atual (o
 // `INDICE.md` do acervo ou o único `.md` de uma reunião), escreve a resposta em pedaços (`stream_event`),
@@ -24,6 +26,7 @@ import { join } from 'node:path'
 import process from 'node:process'
 import { createInterface } from 'node:readline'
 import { setTimeout as sleep } from 'node:timers/promises'
+import { FAKE_ANALYSIS_DELAY_MS, fakeAnalysis } from './fake-analysis.mjs'
 
 const args = process.argv.slice(2)
 
@@ -139,7 +142,24 @@ if (args.includes('--include-partial-messages')) {
   process.stdin.on('data', (chunk) => {
     input += chunk
   })
-  process.stdin.on('end', () => {
+  process.stdin.on('end', async () => {
+    const systemPrompt = args[args.indexOf('--system-prompt') + 1] ?? ''
+    if (systemPrompt.startsWith('Você analisa')) {
+      await sleep(FAKE_ANALYSIS_DELAY_MS)
+      process.stdout.write(
+        `${JSON.stringify({
+          type: 'result',
+          subtype: 'success',
+          is_error: false,
+          duration_ms: Date.now() - started,
+          result: `\`\`\`json\n${JSON.stringify(fakeAnalysis(input), null, 2)}\n\`\`\``,
+          usage: { input_tokens: Math.ceil(input.length / 4), output_tokens: 90 },
+          total_cost_usd: 0.0042,
+        })}\n`,
+        () => process.exit(0),
+      )
+      return
+    }
     const body = /<transcricao>\n([\s\S]*)\n<\/transcricao>/.exec(input)?.[1] ?? ''
     const lines = body.split('\n').filter((line) => /^\[[\d:]+\] [^:]+: /.test(line))
     const speakers = [...new Set(lines.map((line) => /^\[[\d:]+\] ([^:]+): /.exec(line)?.[1] ?? ''))]

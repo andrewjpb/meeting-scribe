@@ -4,11 +4,17 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { MeetingNote } from '@shared/meeting-notes'
 import type { MediaApi, StreamLike, TrackLike } from '../../src/renderer/src/audio/capture'
 import type { CaptureEnvironment } from '../../src/renderer/src/audio/environment'
-import { addNote, closestSegmentId, createNote, editNote, removeNote, restoreNote } from '../../src/renderer/src/features/notes/noteList'
+import { addNote, closestSegmentId, createNote, editNote, noteWithText, removeNote, restoreNote } from '../../src/renderer/src/features/notes/noteList'
 
 const NOW = Date.parse('2026-11-15T20:00:00.000Z')
 
 describe('lista de anotações', () => {
+  it('"Virar anotação" (contrato 19): amarela, com o texto cortado em 2 000 e o tempo do item', () => {
+    const note = noteWithText('x'.repeat(2100), 61_400.6, Date.parse('2026-11-16T15:00:00.000Z'), 'n1')
+    expect(note).toMatchObject({ id: 'n1', color: 'yellow', atMs: 61_401 })
+    expect(note.text).toHaveLength(2000)
+  })
+
   it('nova anotação: amarela, vazia, com o tempo da gravação ou null, em cima da lista', () => {
     const a = createNote(754_321.4, NOW, 'a')
     expect(a).toEqual({ id: 'a', text: '', color: 'yellow', atMs: 754_321, createdAt: '2026-11-15T20:00:00.000Z', updatedAt: '2026-11-15T20:00:00.000Z' })
