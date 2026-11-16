@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { MeetingOverview } from '@shared/meetings-overview'
 import { frequentWord } from './format'
+import { rereadWhenUnlocked } from '../../app/lockStore'
 
 export interface ChatMeetings {
   /** `null` até o main responder (ou se falhar). */
@@ -28,14 +29,22 @@ export function useChatMeetings(meetingId: string | null = null): ChatMeetings {
 
   useEffect(() => {
     let alive = true
-    window.__scribeApi.invoke('scribe:meetings-overview').then(
-      (entries) => {
-        if (alive) setList(entries)
-      },
-      () => undefined,
-    )
+    let reread: (() => void) | null = null
+    const read = (): void => {
+      window.__scribeApi.invoke('scribe:meetings-overview').then(
+        (entries) => {
+          if (alive) setList(entries)
+        },
+        // Recusada com o app bloqueado (contrato 22): relê no desbloqueio.
+        (error: unknown) => {
+          if (alive) reread = rereadWhenUnlocked(error, read)
+        },
+      )
+    }
+    read()
     return () => {
       alive = false
+      reread?.()
     }
   }, [])
 

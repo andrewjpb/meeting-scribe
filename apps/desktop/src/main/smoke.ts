@@ -31,12 +31,18 @@
 // quatro seções, "Virar anotação", "Copiar", o tempo que rola a transcrição e uma segunda análise que risca o
 // item respondido da anterior; "Encerrar" salva `analyses.json`; a seção "Perguntas em aberto" no detalhe, no
 // `.md` da pasta e no "Copiar resumo", e "Analisar a reunião inteira".
+//
+// Contrato 22: no fim, o bloqueio do app numa janela à parte (`lockChecks`): senha criada em Configurações, a
+// camada fosca pelo botão, por ⌘⇧L, pelo menu e pelo "Mac bloqueou a tela" (`powerMonitor` substituto),
+// todo canal de conteúdo recusado, a espera depois de 5 erros (relógio do bloqueio adiantado), o Touch ID
+// substituto e uma gravação que continua com o app bloqueado. O Touch ID de verdade nunca é pedido.
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { basename, join } from 'node:path'
-import { app, ipcMain, Menu, nativeTheme, session, type BrowserWindow, type WebContents } from 'electron'
+import { basename, dirname, join } from 'node:path'
+import { app, ipcMain, Menu, nativeTheme, session, type BrowserWindow, type MenuItem, type WebContents } from 'electron'
 import { ASSEMBLYAI_DASHBOARD_URL } from '../shared/assemblyai'
-import type { CspViolation } from '../shared/ipc'
+import { INVOKE_CHANNELS, WHEN_LOCKED, type CspViolation } from '../shared/ipc'
+import { LOCK_DISABLED_HINT, LOCKED_ERROR, lockedWindowTitle, TOUCH_ID_FAILED_TEXT } from '../shared/lock'
 import { analyzedUntil, type MeetingAnalysesFile, type MeetingAnalysis } from '../shared/meeting-analysis'
 import { notesMarkdown, type MeetingNote, type MeetingNotesFile } from '../shared/meeting-notes'
 import type { Meeting } from '../shared/meetings'
@@ -58,11 +64,15 @@ import { summaryInput, summaryLines } from './claude-cli/summary'
 import { MENU_IDS } from './menu'
 import { CHAT_CORPUS_DIR, CHAT_INDEX_FILE, CHAT_SCOPE_DIR, corpusFileSuffix } from './chat/corpus'
 import { CHATS_DIR } from './chat/store'
+import { RECORDING_LEAVE_MESSAGE } from './lock/recording-session'
+import { createLockService } from './lock/service'
+import { createFileLockStore, LOCK_FILE } from './lock/store'
+import { SUMMARY_SUFFIX } from './meetings/summaries'
+import { createFileSettingsStore, SETTINGS_FILE } from './settings/store'
 import { CHAT_ALLOWED_TOOLS, CHAT_DISALLOWED_TOOLS } from './claude-cli/chat'
 import { MEETINGS_FILE } from './meetings/store'
 import { originOf } from './security'
 import { SETTINGS_VERSION } from './settings/schema'
-import { SETTINGS_FILE } from './settings/store'
 import { CLAUDE_DISALLOWED_TOOLS, CLAUDE_READ_TOOLS } from './acp/profiles/claude'
 import { LATEST_RELEASE_URL, RELEASE_DOWNLOAD_PREFIX, RELEASE_REDIRECT_HOSTS } from './updates/release'
 import {
@@ -74,7 +84,8 @@ import {
   type SmokeFixtures,
 } from './smoke-fixtures'
 
-const TIMEOUT_MS = 180_000
+// Contrato 22: o bloqueio, no fim, soma uns 25 s ao roteiro.
+const TIMEOUT_MS = 240_000
 const THEMES = ['light', 'dark'] as const
 /** Telas fotografadas em cada tema, na ordem do roteiro de `runSmoke`. */
 const SCREENS = [
@@ -3642,6 +3653,515 @@ function layoutCheck(screen: LayoutScreen, metrics: Record<string, number>): Che
   return { ok: off.length === 0, detail: `${JSON.stringify(metrics)}${off.length ? `; fora do mockup: ${off.map(([n]) => n).join(', ')}` : ''}` }
 }
 
+// ---------------------------------------------------------------------------------------------------------
+// Contrato 22: bloqueio do app.
+
+const LOCK_PASSWORD = 'smoke-senha-1'
+const LOCK_LAYER = `document.querySelector('[data-lock-screen]')`
+const LOCK_CARD_RECT = `(() => { const r = document.querySelector('[data-lock-card]')?.getBoundingClientRect(); return r ? { x: r.left, y: r.top, width: r.width, height: r.height } : null })()`
+
+interface LockFileView {
+  mode: string
+  raw: string
+  data: { locked?: boolean; failures?: number; retryAt?: number | null; password?: { algorithm?: string; N?: number; r?: number; p?: number } | null }
+}
+
+function readLockFile(userDataDir: string): LockFileView {
+  const path = join(userDataDir, LOCK_FILE)
+  if (!existsSync(path)) return { mode: 'ausente', raw: '', data: {} }
+  const raw = readFileSync(path, 'utf8')
+  return { mode: mode(path), raw, data: JSON.parse(raw) as LockFileView['data'] }
+}
+
+/**
+ * Bordas nítidas (diferença de luminância > 64 entre pixels vizinhos, na horizontal e na vertical) fora do
+ * cartão da camada: com o texto de trás legível há milhares; desfocado em 24 px e coberto pelo véu, quase nenhuma.
+ */
+function sharpEdges(bitmap: Buffer, width: number, height: number, exclude: { x: number; y: number; width: number; height: number } | null, scale: number): number {
+  const lum = (index: number): number => 0.0722 * (bitmap[index] ?? 0) + 0.7152 * (bitmap[index + 1] ?? 0) + 0.2126 * (bitmap[index + 2] ?? 0)
+  const margin = 8 * scale
+  const skip = exclude
+    ? { left: exclude.x * scale - margin, top: exclude.y * scale - margin, right: (exclude.x + exclude.width) * scale + margin, bottom: (exclude.y + exclude.height) * scale + margin }
+    : null
+  let edges = 0
+  for (let y = 0; y < height - 1; y++) {
+    for (let x = 0; x < width - 1; x++) {
+      if (skip && x >= skip.left && x <= skip.right && y >= skip.top && y <= skip.bottom) continue
+      const here = (y * width + x) * 4
+      const value = lum(here)
+      if (Math.abs(value - lum(here + 4)) > 64 || Math.abs(value - lum(here + width * 4)) > 64) edges++
+    }
+  }
+  return edges
+}
+
+async function edgesOutsideCard(win: BrowserWindow): Promise<number> {
+  const image = await win.webContents.capturePage()
+  const size = image.getSize()
+  const scale = await evaluate<number>(win.webContents, 'window.devicePixelRatio')
+  const card = await evaluate<{ x: number; y: number; width: number; height: number } | null>(win.webContents, LOCK_CARD_RECT)
+  return sharpEdges(image.toBitmap(), size.width, size.height, card, scale)
+}
+
+/** A camada como o smoke a confere: desfoque, véu, `inert`, título e foco. */
+async function lockLayerView(win: BrowserWindow): Promise<{ shown: boolean; blur: string; veil: string; inert: boolean; focus: string; title: string; text: string }> {
+  const view = await evaluate<{ shown: boolean; blur: string; veil: string; inert: boolean; focus: string; text: string }>(
+    win.webContents,
+    `(() => {
+      const layer = ${LOCK_LAYER}
+      const style = layer ? getComputedStyle(layer) : null
+      return {
+        shown: Boolean(layer),
+        blur: style?.backdropFilter ?? '',
+        veil: style?.backgroundColor ?? '',
+        inert: document.querySelector('[data-app-content]')?.inert === true,
+        focus: layer && layer.contains(document.activeElement) ? (document.activeElement.id || document.activeElement.dataset.action || document.activeElement.tagName) : 'fora: ' + (document.activeElement?.tagName ?? ''),
+        text: layer?.innerText ?? '',
+      }
+    })()`,
+  )
+  return { ...view, title: win.getTitle() }
+}
+
+const typeLockPassword = async (contents: WebContents, password: string): Promise<void> => {
+  await setValue(contents, '#lock-password', password)
+  await pressEnterIn(contents, '#lock-password')
+}
+
+const pressKeys = (contents: WebContents, keyCode: string, modifiers: ('meta' | 'shift')[] = []): void => {
+  contents.sendInputEvent({ type: 'keyDown', keyCode, modifiers })
+  contents.sendInputEvent({ type: 'keyUp', keyCode, modifiers })
+}
+
+/** Todos os canais recusados com o app bloqueado, chamados de verdade pelo renderer: a mensagem de cada um. */
+async function refusedChannels(contents: WebContents): Promise<{ total: number; locked: number; others: string[]; allowedOk: boolean }> {
+  const channels = INVOKE_CHANNELS.filter((channel) => WHEN_LOCKED[channel] === 'refused')
+  return evaluate(
+    contents,
+    `(async () => {
+      const channels = ${JSON.stringify(channels)}
+      let locked = 0
+      const others = []
+      for (const channel of channels) {
+        try {
+          await window.__scribeApi.invoke(channel, {})
+          others.push(channel + ': respondeu')
+        } catch (error) {
+          if (String(error?.message ?? error).endsWith('Error: ${LOCKED_ERROR}')) locked++
+          else others.push(channel + ': ' + String(error?.message ?? error).slice(0, 80))
+        }
+      }
+      const info = await window.__scribeApi.invoke('scribe:app-info').catch(() => null)
+      return { total: channels.length, locked, others, allowedOk: Boolean(info?.version) }
+    })()`,
+  )
+}
+
+/**
+ * Contrato 22 (CA7), numa janela clara à parte e depois numa escura: o botão desabilitado sem senha; criar a
+ * senha em Configurações › Geral › "Bloqueio" (`lock.json` 0600, só o hash); bloquear pelo botão da barra
+ * lateral e por ⌘⇧L; a camada (desfoque de 24 px medido no print, `inert`, foco preso, clique e atalhos
+ * barrados, título); todo canal de conteúdo devolvendo `locked`; 5 senhas erradas (a espera aparece; o relógio
+ * do bloqueio é adiantado em vez de esperar 30 s); a senha certa volta à mesma tela, rolagem, rascunho e
+ * foco; Touch ID substituto; uma gravação da fixture bloqueada pelo botão da barra e pelo "Mac bloqueou a
+ * tela", contando quadros e transcrevendo; e o app reaberto bloqueado.
+ */
+async function lockChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => void, checks: Record<string, Check>, shots: Screenshot[]): Promise<void> {
+  const lockFixture = ctx.fixtures.lock
+  const lockedTitle = lockedWindowTitle(DEFAULT_BRAND_NAME)
+
+  const win = ctx.openWindow({ theme: 'light' })
+  watch(win)
+  await loadAndWait(win)
+  const contents = win.webContents
+  const menuItem = (): MenuItem | null => Menu.getApplicationMenu()?.getMenuItemById(MENU_IDS.lock) ?? null
+
+  // CA1: sem senha e sem Touch ID ligado, "Bloquear" desabilitado com a dica; o menu também.
+  const disabled = await evaluate<{ disabled: boolean; hint: string }>(
+    contents,
+    `(() => { const b = document.querySelector('[data-action="lock-app"]'); return { disabled: b?.disabled === true, hint: b?.parentElement?.title ?? '' } })()`,
+  )
+  const menuDisabled = menuItem()?.enabled === false
+  const menuLabel = menuItem()?.label ?? ''
+  await clickSelector(contents, '[data-action="lock-app"]')
+  await wait(150)
+  const stayedOpen = !(await evaluate<boolean>(contents, `Boolean(${LOCK_LAYER})`))
+
+  // CA1: criar a senha no bloco "Bloqueio" (curta e diferente na confirmação são recusadas na tela).
+  await openSettingsTab(contents, 'geral')
+  await scrollToSection(contents, 'Bloqueio')
+  await clickSelector(contents, '[data-action="lock-password-create"]')
+  await waitFor(contents, `document.querySelector('[data-lock-password-form="create"]')`)
+  await setValue(contents, '#lock-next', 'abc')
+  await setValue(contents, '#lock-confirm', 'abc')
+  await clickSelector(contents, '[data-action="lock-password-save"]')
+  const tooShort = await waitFor(contents, `document.querySelector('[data-lock-form-error]')?.textContent.includes('de 4 a 64')`)
+  await setValue(contents, '#lock-next', LOCK_PASSWORD)
+  await setValue(contents, '#lock-confirm', `${LOCK_PASSWORD}x`)
+  await clickSelector(contents, '[data-action="lock-password-save"]')
+  const mismatch = await waitFor(contents, `document.querySelector('[data-lock-form-error]')?.textContent.includes('não são iguais')`)
+  await setValue(contents, '#lock-confirm', LOCK_PASSWORD)
+  await clickSelector(contents, '[data-action="lock-password-save"]')
+  const created = await waitFor(contents, `document.querySelector('[data-action="lock-password-change"]') && document.querySelector('[data-lock-password-done]')`)
+  const file = readLockFile(ctx.userDataDir)
+  const touchIdRow = await evaluate<boolean>(contents, `Boolean(document.querySelector('[data-setting-name="Usar Touch ID"]'))`)
+  await scrollToSection(contents, 'Bloqueio')
+  await settle(contents)
+  shots.push(await capture(win, ctx.outDir, 'configuracoes-bloqueio-light'))
+  const canLockNow = await waitFor(contents, `document.querySelector('[data-action="lock-app"]')?.disabled === false`)
+  const passwordInDom = await evaluate<boolean>(contents, `document.documentElement.outerHTML.includes(${JSON.stringify(LOCK_PASSWORD)}) || [...document.querySelectorAll('input')].some((i) => i.value.includes(${JSON.stringify(LOCK_PASSWORD)}))`)
+  checks['password'] = {
+    ok:
+      disabled.disabled &&
+      disabled.hint === LOCK_DISABLED_HINT &&
+      menuDisabled &&
+      menuLabel === `Bloquear ${DEFAULT_BRAND_NAME}` &&
+      stayedOpen &&
+      tooShort &&
+      mismatch &&
+      created &&
+      canLockNow &&
+      file.mode === '600' &&
+      !file.raw.includes(LOCK_PASSWORD) &&
+      file.data.password?.algorithm === 'scrypt' &&
+      (file.data.password.N ?? 0) >= 2 ** 16 &&
+      touchIdRow &&
+      !passwordInDom &&
+      menuItem()?.enabled === true,
+    detail: `sem senha: botão desabilitado=${disabled.disabled} com a dica "${disabled.hint}", menu "${menuLabel}" desabilitado=${menuDisabled}, clique não bloqueou=${stayedOpen}; curta recusada=${tooShort}, confirmação diferente=${mismatch}, criada=${created}; lock.json ${file.mode}, senha em texto=${file.raw.includes(LOCK_PASSWORD)}, ${file.data.password?.algorithm ?? '?'} N=${file.data.password?.N ?? '?'} r=${file.data.password?.r ?? '?'} p=${file.data.password?.p ?? '?'}; linha Touch ID=${touchIdRow}; senha no DOM=${passwordInDom}; botão e menu liberados=${canLockNow}/${menuItem()?.enabled}`,
+  }
+
+  // Touch ID ligado (substituto) para o desbloqueio do passo seguinte.
+  await clickSelector(contents, '[data-setting-name="Usar Touch ID"] [role="switch"]')
+  await waitFor(contents, `document.querySelector('[data-setting-name="Usar Touch ID"] [role="switch"]')?.getAttribute('aria-checked') === 'true'`)
+
+  // Tela de trás: Configurações › Geral rolada até "Bloqueio", com "Trocar senha" aberto e um rascunho no campo.
+  await clickSelector(contents, '[data-action="lock-password-change"]')
+  await waitFor(contents, `document.querySelector('[data-lock-password-form="change"]')`)
+  await setValue(contents, '#lock-next', 'rascunho-nao-enviado')
+  await evaluate(contents, `document.querySelector('#lock-next').focus(), true`)
+  const before = await evaluate<{ scroll: number; route: string }>(contents, `({ scroll: document.querySelector('[data-settings-scroll]').scrollTop, route: location.hash })`)
+  const sharpBefore = await edgesOutsideCard(win)
+  const scrolls: number[] = []
+  const readScroll = async (): Promise<void> => void scrolls.push(await evaluate<number>(contents, `document.querySelector('[data-settings-scroll]').scrollTop`))
+
+  // CA2 e CA3: bloquear pelo botão da barra lateral.
+  await clickSelector(contents, '[data-action="lock-app"]')
+  const lockedByButton = await waitFor(contents, LOCK_LAYER)
+  await settle(contents)
+  await readScroll()
+  const layer = await lockLayerView(win)
+  const sharpAfter = await edgesOutsideCard(win)
+  shots.push(await capture(win, ctx.outDir, 'bloqueado-light'))
+  // Foco preso: Tab e Shift+Tab nunca saem da camada.
+  const tabStops: string[] = []
+  for (let i = 0; i < 6; i++) {
+    pressKeys(contents, 'Tab', i % 2 ? ['shift'] : [])
+    await wait(40)
+    tabStops.push((await lockLayerView(win)).focus)
+  }
+  // Clique na barra lateral e atalho de aba (⌘2) não chegam à tela de trás.
+  const navPoint = await evaluate<{ x: number; y: number; hit: boolean } | null>(
+    contents,
+    `(() => { const r = document.querySelector('[data-nav="reunioes"]')?.getBoundingClientRect(); if (!r) return null; const x = Math.round(r.left + r.width / 2), y = Math.round(r.top + r.height / 2); return { x, y, hit: ${LOCK_LAYER}.contains(document.elementFromPoint(x, y)) } })()`,
+  )
+  if (navPoint) {
+    contents.sendInputEvent({ type: 'mouseDown', x: navPoint.x, y: navPoint.y, button: 'left', clickCount: 1 })
+    contents.sendInputEvent({ type: 'mouseUp', x: navPoint.x, y: navPoint.y, button: 'left', clickCount: 1 })
+  }
+  await readScroll()
+  pressKeys(contents, '2', ['meta'])
+  await wait(200)
+  await readScroll()
+  const stillGeral = (await currentRoute(contents)) === 'configuracoes' && (await evaluate<boolean>(contents, settingsTabIs('geral')))
+  checks['layer'] = {
+    ok:
+      lockedByButton &&
+      layer.blur === 'blur(24px)' &&
+      layer.veil !== 'rgba(0, 0, 0, 0)' &&
+      layer.inert &&
+      layer.title === lockedTitle &&
+      layer.focus === 'lock-password' &&
+      layer.text.includes(`${DEFAULT_BRAND_NAME} está bloqueado`) &&
+      layer.text.includes('Usar Touch ID') &&
+      !layer.text.includes('rascunho') &&
+      sharpBefore > 2000 &&
+      sharpAfter <= Math.max(50, sharpBefore * 0.01) &&
+      tabStops.every((stop) => !stop.startsWith('fora')) &&
+      navPoint?.hit === true &&
+      stillGeral &&
+      menuItem()?.enabled === false,
+    detail: `pelo botão=${lockedByButton}; backdrop-filter=${layer.blur}, véu ${layer.veil}, resto inert=${layer.inert}; título "${layer.title}"; foco em ${layer.focus}; Tab: ${tabStops.join(' > ')}; bordas nítidas fora do cartão ${sharpBefore} -> ${sharpAfter}; clique em Reuniões caiu na camada=${navPoint?.hit}, ⌘2 e o clique não mudaram a tela=${stillGeral}; menu "Bloquear" desabilitado=${menuItem()?.enabled === false}`,
+  }
+
+  // CA4: todos os canais de conteúdo devolvem `locked`; os da base respondem.
+  const channels = await refusedChannels(contents)
+  await readScroll()
+  checks['channels'] = {
+    ok: channels.total > 40 && channels.locked === channels.total && channels.others.length === 0 && channels.allowedOk,
+    detail: `${channels.locked}/${channels.total} canais recusados com "${LOCKED_ERROR}"${channels.others.length ? `; fora da regra: ${channels.others.join(' | ')}` : ''}; scribe:app-info respondeu=${channels.allowedOk}`,
+  }
+
+  // CA5: cinco senhas erradas abrem a espera (contagem na tela, guardada em lock.json).
+  const wrongSeen: boolean[] = []
+  for (let i = 1; i <= 5; i++) {
+    await typeLockPassword(contents, `errada-${i}`)
+    wrongSeen.push(await waitFor(contents, `document.querySelector('[data-lock-error]')?.textContent === 'Senha incorreta'`))
+    if (i < 5) await setValue(contents, '#lock-password', '')
+  }
+  const waitShown = await waitFor(contents, `/Tente de novo em 0:(30|29)/.test(document.querySelector('[data-lock-wait]')?.textContent ?? '') && document.querySelector('#lock-password')?.disabled === true`)
+  await readScroll()
+  const waitText = await text(contents, '[data-lock-wait]')
+  const waitFile = readLockFile(ctx.userDataDir).data
+  // O relógio do bloqueio anda 31 s (no main) e o estado é reavisado: a espera some.
+  lockFixture.skewMs += 31_000
+  lockFixture.refresh()
+  const waitGone = await waitFor(contents, `!document.querySelector('[data-lock-wait]') && document.querySelector('#lock-password')?.disabled === false`)
+  await setValue(contents, '#lock-password', LOCK_PASSWORD)
+  await clickSelector(contents, '[data-action="unlock"]')
+  await readScroll()
+  const unlocked = await waitFor(contents, `!${LOCK_LAYER} && document.querySelector('[data-app-content]')?.inert === false`)
+  await readScroll()
+  await wait(150)
+  const after = await evaluate<{ scroll: number; route: string; draft: string; focus: string; form: boolean }>(
+    contents,
+    `({ scroll: document.querySelector('[data-settings-scroll]').scrollTop, route: location.hash, draft: document.querySelector('#lock-next')?.value ?? '', focus: document.activeElement?.id ?? '', form: Boolean(document.querySelector('[data-lock-password-form="change"]')) })`,
+  )
+  const unlockedFile = readLockFile(ctx.userDataDir).data
+  checks['unlock'] = {
+    ok:
+      wrongSeen.every(Boolean) &&
+      waitShown &&
+      waitFile.failures === 5 &&
+      typeof waitFile.retryAt === 'number' &&
+      waitGone &&
+      unlocked &&
+      win.getTitle() === DEFAULT_BRAND_NAME &&
+      (await currentRoute(contents)) === 'configuracoes' &&
+      (await evaluate<boolean>(contents, settingsTabIs('geral'))) &&
+      Math.abs(after.scroll - before.scroll) < 1 &&
+      before.scroll > 0 &&
+      after.draft === 'rascunho-nao-enviado' &&
+      after.form &&
+      after.focus === 'lock-next' &&
+      unlockedFile.failures === 0 &&
+      unlockedFile.locked === false,
+    detail: `"Senha incorreta" ${wrongSeen.filter(Boolean).length}/5; espera "${waitText}" (campo travado=${waitShown}), lock.json failures=${waitFile.failures} retryAt=${typeof waitFile.retryAt}; relógio +31 s, espera sumiu=${waitGone}; senha certa desbloqueou=${unlocked}, título "${win.getTitle()}"; rolagem ${before.scroll} -> ${after.scroll} (no caminho: ${scrolls.join(', ')}), rascunho "${after.draft}", formulário aberto=${after.form}, foco em #${after.focus}; lock.json depois failures=${unlockedFile.failures} locked=${unlockedFile.locked}`,
+  }
+
+  // CA2: ⌘⇧L bloqueia; Touch ID (substituto) recusado não desbloqueia, aprovado desbloqueia.
+  await setValue(contents, '#lock-next', '')
+  await clickSelector(contents, '[data-action="lock-password-cancel"]')
+  pressKeys(contents, 'L', ['meta', 'shift'])
+  const lockedByShortcut = await waitFor(contents, LOCK_LAYER)
+  lockFixture.touchIdApproves = false
+  await clickSelector(contents, '[data-action="unlock-touch-id"]')
+  const touchRefused = await waitFor(contents, `document.querySelector('[data-lock-error]')?.textContent === ${JSON.stringify(TOUCH_ID_FAILED_TEXT)}`)
+  const stillLocked = await evaluate<boolean>(contents, `Boolean(${LOCK_LAYER})`)
+  lockFixture.touchIdApproves = true
+  await clickSelector(contents, '[data-action="unlock-touch-id"]')
+  const touchUnlocked = await waitFor(contents, `!${LOCK_LAYER}`)
+  // Menu "Bloquear LAP Reuniões" (o mesmo ⌘⇧L no app de verdade).
+  menuItem()?.click()
+  const lockedByMenu = await waitFor(contents, LOCK_LAYER)
+  await typeLockPassword(contents, LOCK_PASSWORD)
+  const menuUnlocked = await waitFor(contents, `!${LOCK_LAYER}`)
+  checks['shortcutAndTouchId'] = {
+    ok: lockedByShortcut && touchRefused && stillLocked && touchUnlocked && lockFixture.touchIdPrompts === 2 && lockedByMenu && menuUnlocked,
+    detail: `⌘⇧L bloqueou=${lockedByShortcut}; Touch ID recusado: aviso=${touchRefused}, seguiu bloqueado=${stillLocked}; aprovado desbloqueou=${touchUnlocked}; ${lockFixture.touchIdPrompts} pedidos ao Touch ID substituto; menu bloqueou=${lockedByMenu}, senha desbloqueou=${menuUnlocked}`,
+  }
+
+  // Bloquear nunca para a gravação: a fixture segue contando quadros e transcrevendo com o app bloqueado.
+  const sessionFixture = readSessionFixture()
+  const segments = fixtureSegments(liveFixtureLines(sessionFixture))
+  await clickSelector(contents, '[data-nav="reunioes"]')
+  await waitFor(contents, routeIs('reunioes'))
+  await waitFor(contents, `document.querySelector('[data-action="new-recording"]')`)
+  await clickSelector(contents, '[data-action="new-recording"]')
+  const live = await waitFor(contents, `${probeJs('state()?.mic')} === 'live' && ${probeJs('state()?.system')} === 'live'`)
+  await evaluate(contents, `window.__smokeProbe.replay(${JSON.stringify(segments.slice(0, 1))})`)
+  await waitFor(contents, "document.querySelectorAll('[data-transcript-list] li').length === 1")
+  await wait(1200)
+  await clickSelector(contents, '[data-action="lock-app-recording"]')
+  const lockedRecording = await waitFor(contents, LOCK_LAYER)
+  const framesAtLock = await frameCounts(contents)
+  const timerAtLock = await evaluate<string>(contents, TIMER)
+  await wait(1500)
+  // Trechos novos chegam com o app bloqueado.
+  await evaluate(contents, `window.__smokeProbe.replay(${JSON.stringify(segments)})`)
+  const transcribing = await waitFor(contents, `document.querySelectorAll('[data-transcript-list] li').length === ${segments.length}`)
+  const framesLater = await frameCounts(contents)
+  const phaseLocked = (await captureState(contents))?.phase ?? ''
+  await settle(contents)
+  const recordingLine = await text(contents, '[data-lock-recording]')
+  const layerText = await evaluate<string>(contents, `${LOCK_LAYER}?.innerText ?? ''`)
+  const leaked = segments.filter((segment) => segment.text.length > 8 && layerText.includes(segment.text.slice(0, 20))).length
+  shots.push(await capture(win, ctx.outDir, 'bloqueado-gravando-light'))
+  // ⌘W com a gravação em andamento e o app bloqueado: o diálogo só oferece "Cancelar" e a janela fica.
+  const dialogsBefore = ctx.fixtures.leaveDialogs.length
+  win.close()
+  await wait(200)
+  const lockedDialog = ctx.fixtures.leaveDialogs.slice(dialogsBefore)
+  const stayedLocked = !win.isDestroyed() && (await evaluate<boolean>(contents, `Boolean(${LOCK_LAYER})`))
+  await typeLockPassword(contents, LOCK_PASSWORD)
+  const backToRecording = (await waitFor(contents, `!${LOCK_LAYER}`)) && (await currentRoute(contents)) === 'gravacao'
+  // Desbloqueado, o mesmo diálogo oferece também "Encerrar e sair" (o substituto responde "Cancelar").
+  win.close()
+  await wait(200)
+  const unlockedDialog = ctx.fixtures.leaveDialogs.slice(dialogsBefore + lockedDialog.length)
+  checks['leaveDialog'] = {
+    ok:
+      lockedDialog.length === 1 &&
+      lockedDialog[0]?.message === RECORDING_LEAVE_MESSAGE &&
+      JSON.stringify(lockedDialog[0]?.buttons) === JSON.stringify(['Cancelar']) &&
+      stayedLocked &&
+      unlockedDialog.length === 1 &&
+      JSON.stringify(unlockedDialog[0]?.buttons) === JSON.stringify(['Cancelar', 'Encerrar e sair']) &&
+      !win.isDestroyed() &&
+      (await captureState(contents))?.phase === 'recording',
+    detail: `bloqueado: ${JSON.stringify(lockedDialog)}, janela e camada ficaram=${stayedLocked}; desbloqueado: ${JSON.stringify(unlockedDialog)}; janela aberta=${!win.isDestroyed()}, gravação segue=${(await captureState(contents))?.phase}`,
+  }
+  const timerAfter = await evaluate<string>(contents, TIMER)
+  // "Mac bloqueou a tela" (powerMonitor substituto) com a opção ligada (padrão): bloqueia também.
+  lockFixture.power.emit('lock-screen')
+  const lockedBySystem = await waitFor(contents, LOCK_LAYER)
+  await clickSelector(contents, '[data-action="unlock-touch-id"]')
+  const systemUnlocked = await waitFor(contents, `!${LOCK_LAYER}`)
+  const phaseAfter = (await captureState(contents))?.phase ?? ''
+  checks['recordingContinues'] = {
+    ok:
+      live &&
+      lockedRecording &&
+      framesAtLock !== null &&
+      framesLater !== null &&
+      framesLater.mic > framesAtLock.mic &&
+      framesLater.system > framesAtLock.system &&
+      transcribing &&
+      phaseLocked === 'recording' &&
+      /^Gravando · \d{2}:\d{2}$/.test(recordingLine) &&
+      leaked === 0 &&
+      backToRecording &&
+      timerAfter !== timerAtLock &&
+      lockedBySystem &&
+      systemUnlocked &&
+      phaseAfter === 'recording',
+    detail: `gravando=${live}; bloqueado pela barra=${lockedRecording}; quadros ${JSON.stringify(framesAtLock)} -> ${JSON.stringify(framesLater)} bloqueado, fase ${phaseLocked}; trechos novos na transcrição=${transcribing}; linha "${recordingLine}", trechos da reunião na camada=${leaked}; desbloqueado de volta na gravação=${backToRecording}, cronômetro ${timerAtLock} -> ${timerAfter}; "Mac bloqueou a tela" bloqueou=${lockedBySystem}, Touch ID desbloqueou=${systemUnlocked}, fase ${phaseAfter}`,
+  }
+
+  // Bloquear logo depois de clicar "Encerrar": a reunião, a transcrição, o `.md` e o áudio ficam completos (os
+  // canais de fim de gravação passam com o token da sessão), o resumo automático roda e o detalhe só abre
+  // depois do desbloqueio.
+  const idsBefore = new Set(readMeetings(ctx.userDataDir).map((meeting) => meeting.id))
+  await evaluate(contents, `(() => { document.querySelector('[data-action="end-recording"]').click(); void window.__scribeApi.invoke('scribe:lock-now'); return true })()`)
+  const lockedDuringEnd = await waitFor(contents, LOCK_LAYER)
+  let ending: Meeting | undefined
+  for (let attempt = 0; attempt < 300 && !ending; attempt++) {
+    ending = readMeetings(ctx.userDataDir).find((meeting) => !idsBefore.has(meeting.id) && meeting.audioPath !== null && meeting.transcriptPath !== null)
+    if (!ending) await wait(50)
+  }
+  const audioPath = ending?.audioPath ?? ''
+  const transcriptPath = ending?.transcriptPath ?? ''
+  const folder = audioPath ? dirname(audioPath) : ''
+  const parts = folder && existsSync(folder) ? readdirSync(folder).filter((name) => name.endsWith('.part')) : ['pasta ausente']
+  const internalTranscript = ending ? existsSync(join(ctx.userDataDir, 'meetings', `${ending.id}.json`)) : false
+  const wantsSummary = readSettings(ctx.userDataDir).summarizeOnStop !== false
+  let summaryReady = !wantsSummary
+  for (let attempt = 0; attempt < 200 && !summaryReady && ending; attempt++) {
+    summaryReady = existsSync(join(ctx.userDataDir, 'meetings', `${ending.id}${SUMMARY_SUFFIX}`))
+    if (!summaryReady) await wait(50)
+  }
+  const stillLockedAfterSave = await evaluate<boolean>(contents, `Boolean(${LOCK_LAYER})`)
+  const routeWhileLocked = await currentRoute(contents)
+  await typeLockPassword(contents, LOCK_PASSWORD)
+  const detailAfterUnlock = await waitFor(contents, `!${LOCK_LAYER} && ${routeIs('detalhe')}`, 5000)
+  checks['endWhileLocked'] = {
+    ok:
+      lockedDuringEnd &&
+      ending !== undefined &&
+      existsSync(audioPath) &&
+      !audioPath.endsWith('.part') &&
+      existsSync(transcriptPath) &&
+      parts.length === 0 &&
+      internalTranscript &&
+      summaryReady &&
+      stillLockedAfterSave &&
+      routeWhileLocked === 'gravacao' &&
+      detailAfterUnlock,
+    detail: `bloqueou logo depois do "Encerrar"=${lockedDuringEnd}; reunião ${ending?.id ?? 'não salva'}, áudio ${basename(audioPath) || '?'} (existe=${existsSync(audioPath)}), .md ${basename(transcriptPath) || '?'} (existe=${existsSync(transcriptPath)}), .part na pasta: ${parts.length ? parts.join(', ') : 'nenhum'}, transcrição interna=${internalTranscript}; resumo automático ${wantsSummary ? `pronto=${summaryReady}` : 'desligado nas configurações'}; seguiu bloqueado=${stillLockedAfterSave} na rota ${routeWhileLocked}; detalhe abriu depois do desbloqueio=${detailAfterUnlock}`,
+  }
+
+  const fromDisk = async (lockOnLaunch: boolean | null): Promise<{ locked: boolean; hasPassword: boolean }> => {
+    const dir = mkdtempSync(join(ctx.userDataDir, 'reabrir-'))
+    for (const name of [LOCK_FILE, SETTINGS_FILE]) if (existsSync(join(ctx.userDataDir, name))) writeFileSync(join(dir, name), readFileSync(join(ctx.userDataDir, name)))
+    if (lockOnLaunch !== null) {
+      const raw = JSON.parse(readFileSync(join(dir, SETTINGS_FILE), 'utf8')) as { version: number; settings: Record<string, unknown> }
+      writeFileSync(join(dir, SETTINGS_FILE), JSON.stringify({ ...raw, settings: { ...raw.settings, lockOnLaunch } }))
+    }
+    const service = createLockService({
+      store: createFileLockStore({ dir }),
+      settings: createFileSettingsStore({ dir }),
+      touchId: { available: () => false, prompt: () => Promise.reject(new Error('smoke: sem Touch ID')) },
+      onStatus: () => undefined,
+    })
+    const status = await service.init()
+    rmSync(dir, { recursive: true, force: true })
+    return { locked: status.locked, hasPassword: status.hasPassword }
+  }
+  // CA6: fechado bloqueado, abre bloqueado (a camada é o primeiro quadro; as telas só montam depois). O
+  // `lock.json` e o `settings.json` também são relidos do disco por um serviço novo, como na próxima abertura do
+  // app; numa cópia, para o serviço em uso não ser afetado.
+  pressKeys(contents, 'L', ['meta', 'shift'])
+  await waitFor(contents, LOCK_LAYER)
+  win.destroy()
+  const diskLocked = await fromDisk(null)
+  const reopened = ctx.openWindow({ theme: 'light' })
+  watch(reopened)
+  const reopenedContents = reopened.webContents
+  if (reopenedContents.isLoading()) await new Promise<void>((resolve) => reopenedContents.once('did-finish-load', () => resolve()))
+  const openedLocked = await waitFor(reopenedContents, LOCK_LAYER, 10_000)
+  const noScreens = await evaluate<boolean>(reopenedContents, `!document.querySelector('main')`)
+  const reopenedTitle = reopened.getTitle()
+  await typeLockPassword(reopenedContents, LOCK_PASSWORD)
+  const reopenedUnlocked = await waitFor(reopenedContents, `!${LOCK_LAYER} && document.querySelector('main[data-route]')`, 10_000)
+  checks['reopen'] = {
+    ok: openedLocked && noScreens && reopenedTitle === lockedTitle && reopenedUnlocked && (await currentRoute(reopenedContents)) === 'reunioes',
+    detail: `reaberto bloqueado=${openedLocked}, telas montadas antes do desbloqueio=${!noScreens}, título "${reopenedTitle}"; desbloqueado em ${await currentRoute(reopenedContents)}`,
+  }
+  // Agora desbloqueado no disco: abre livre; com "Pedir senha ao abrir" ligado, abre bloqueado.
+  const diskUnlocked = await fromDisk(false)
+  const diskOnLaunch = await fromDisk(true)
+  // "Pedir senha ao abrir" pela tela grava a opção.
+  await openSettingsTab(reopenedContents, 'geral')
+  await clickSelector(reopenedContents, '[data-setting-name="Pedir senha ao abrir"] [role="switch"]')
+  const onLaunchSaved = await waitFor(reopenedContents, `document.querySelector('[data-setting-name="Pedir senha ao abrir"] [role="switch"]')?.getAttribute('aria-checked') === 'true'`)
+  const settingSaved = readSettings(ctx.userDataDir).lockOnLaunch === true
+  const diskWithSetting = await fromDisk(null)
+  await clickSelector(reopenedContents, '[data-setting-name="Pedir senha ao abrir"] [role="switch"]')
+  await waitFor(reopenedContents, `document.querySelector('[data-setting-name="Pedir senha ao abrir"] [role="switch"]')?.getAttribute('aria-checked') === 'false'`)
+  checks['reopenFromDisk'] = {
+    ok: diskLocked.locked && diskLocked.hasPassword && !diskUnlocked.locked && diskOnLaunch.locked && onLaunchSaved && settingSaved && diskWithSetting.locked,
+    detail: `serviço novo do disco: fechado bloqueado -> ${JSON.stringify(diskLocked)}; desbloqueado -> ${JSON.stringify(diskUnlocked)}; com "Pedir senha ao abrir" -> ${JSON.stringify(diskOnLaunch)}; ligado pela tela: switch=${onLaunchSaved}, settings.json=${settingSaved}, reaberto -> ${JSON.stringify(diskWithSetting)}`,
+  }
+  reopened.destroy()
+
+  // Tema escuro: a mesma camada.
+  const dark = ctx.openWindow({ theme: 'dark' })
+  watch(dark)
+  await loadAndWait(dark)
+  pressKeys(dark.webContents, 'L', ['meta', 'shift'])
+  const darkLocked = await waitFor(dark.webContents, LOCK_LAYER)
+  await settle(dark.webContents)
+  const darkLayer = await lockLayerView(dark)
+  shots.push(await capture(dark, ctx.outDir, 'bloqueado-dark'))
+  await typeLockPassword(dark.webContents, LOCK_PASSWORD)
+  const darkUnlocked = await waitFor(dark.webContents, `!${LOCK_LAYER}`)
+  checks['dark'] = {
+    ok: darkLocked && darkLayer.blur === 'blur(24px)' && darkLayer.inert && darkUnlocked,
+    detail: `bloqueado=${darkLocked}, backdrop-filter=${darkLayer.blur}, véu ${darkLayer.veil}, inert=${darkLayer.inert}; desbloqueado=${darkUnlocked}`,
+  }
+  dark.destroy()
+}
+
 export async function runSmoke(ctx: SmokeContext): Promise<number> {
   const timer = setTimeout(() => {
     console.error(`[smoke] tempo esgotado (${TIMEOUT_MS} ms)`)
@@ -3690,6 +4210,8 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
   /** Contratos 15 e 16: chat "Perguntar" e os detalhes da resposta (nos dois temas); "Parar", o painel "Contexto" e a aba do detalhe (no claro). */
   const chat: Record<string, Check> = {}
   let acpMeasured: AcpMeasured | null = null
+  /** Contrato 22: bloqueio do app. */
+  const lock: Record<string, Check> = {}
   let analysisMeasured: AnalysisMeasured | null = null
 
   // A fixture da sessão real, reduzida pelo mesmo redutor do app: a mesma dos testes (CA4) e do smoke.
@@ -4016,6 +4538,9 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
     settings['updates'] = updates.check
     screenshots.push(updates.shot)
     updatesWin.destroy()
+
+    // Contrato 22: bloqueio do app, por último (a senha criada vale para o userData inteiro).
+    await lockChecks(ctx, watch, lock, screenshots)
   } catch (error) {
     failures.push(`erro: ${error instanceof Error ? (error.stack ?? error.message) : String(error)}`)
   }
@@ -4058,14 +4583,17 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
   for (const name of ['captureWorklet', 'tapeFps', 'endSavesAndOpensDetail', 'pause', 'spaceResumes', 'systemSilenceNotice', 'endFromHeader', 'deleteWithConfirmation', 'noKeyState', 'copyTranscript', 'deleteTranscript', 'echoRemoved', 'echoNotSaved', 'recorderFormat', 'audioWhileRecording', 'audioSaved', 'audioDetail', 'deleteKeepsFiles', 'summary', 'summaryDark', 'summaryDownload', 'notesRecording', 'notesRecordingDark', 'notesDetail', 'notesDetailDark', 'analysisRecording', 'analysisRecordingDark', 'analysisDetail']) {
     if (!recording[name]) failures.push(`gravação ${name}: não executado`)
   }
+  for (const [name, check] of Object.entries(lock)) if (!check.ok) failures.push(`bloqueio ${name}: ${check.detail}`)
+  for (const name of ['password', 'layer', 'channels', 'unlock', 'shortcutAndTouchId', 'recordingContinues', 'leaveDialog', 'endWhileLocked', 'reopen', 'reopenFromDisk', 'dark']) if (!lock[name]) failures.push(`bloqueio ${name}: não executado`)
   if (!theme.ok) failures.push(`tema: ${theme.detail}`)
   if (!motion.ok) failures.push(`movimento reduzido: ${motion.detail}`)
   // Mais o aviso de sistema sem som, nos dois temas, o eco removido, os arquivos no detalhe, a aba
   // "Áudio" depois de baixar, a barra com a marca própria, o bloco "Atualizações" e a busca na lista
   // (só no claro), a conversa vazia e o painel "Contexto" do "Perguntar" v2 e a conversa pelo agente ACP
   // (contrato 17), as abas "Contas" e "Sobre" e a busca das Configurações (contrato 18), só no claro; a aba
-  // "Análise" da gravação nos dois temas e a seção "Perguntas em aberto" do detalhe, no claro (contrato 19).
-  const expectedShots = SCREENS.length * THEMES.length + 17
+  // "Análise" da gravação nos dois temas e a seção "Perguntas em aberto" do detalhe, no claro (contrato 19); a
+  // camada de bloqueio nos dois temas, bloqueada na gravação e o bloco "Bloqueio" (contrato 22).
+  const expectedShots = SCREENS.length * THEMES.length + 21
   if (screenshots.length !== expectedShots) failures.push(`${screenshots.length} PNGs em vez de ${expectedShots}`)
   for (const shot of screenshots) {
     if (shot.width < 1120 || shot.height < 740) failures.push(`${shot.name}: ${shot.width}x${shot.height} abaixo de 1120x740`)
@@ -4101,6 +4629,8 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
     chat,
     acp: acpMeasured,
     analysis: analysisMeasured,
+    lock,
+    lockTouchIdPrompts: ctx.fixtures.lock.touchIdPrompts,
     meetingFolder: folderFiles(defaultMeetingFolder(ctx)),
     openedFiles: ctx.fixtures.openedFiles.map((item) => ({ action: item.action, file: basename(item.path) })),
     claudeFakeSpawns: ctx.fixtures.claudeSpawns.map((spawn) => ({ ...spawn, args: spawn.args.filter((arg) => arg.startsWith('--')) })),

@@ -22,6 +22,7 @@ import { SourceDots } from './SourceDots'
 import { SummaryTab } from './SummaryTab'
 import { useAnalyses } from './useAnalyses'
 import { useSummary, type SummaryView } from './useSummary'
+import { rereadWhenUnlocked } from '../../app/lockStore'
 
 type DetailTab = 'resumo' | 'anotacoes' | 'perguntar' | 'transcricao' | 'audio'
 
@@ -85,16 +86,24 @@ export function MeetingDetailScreen() {
   // Leitura que falha vira aviso com "Tentar de novo", nunca tela em branco.
   useEffect(() => {
     let alive = true
-    Promise.all([window.__scribeApi.invoke('scribe:meetings-get', { id }), window.__scribeApi.invoke('scribe:transcript-get', { meetingId: id })]).then(
-      ([meeting, transcript]) => {
-        if (alive) setLoaded(meeting ? { status: 'ready', meeting, transcript } : { status: 'missing' })
-      },
-      () => {
-        if (alive) setLoaded({ status: 'failed' })
-      },
-    )
+    // Recusada com o app bloqueado (contrato 22): relê no desbloqueio em vez de mostrar a falha.
+    let reread: (() => void) | null = null
+    const read = (): void => {
+      Promise.all([window.__scribeApi.invoke('scribe:meetings-get', { id }), window.__scribeApi.invoke('scribe:transcript-get', { meetingId: id })]).then(
+        ([meeting, transcript]) => {
+          if (alive) setLoaded(meeting ? { status: 'ready', meeting, transcript } : { status: 'missing' })
+        },
+        (error: unknown) => {
+          if (!alive) return
+          reread = rereadWhenUnlocked(error, read)
+          if (!reread) setLoaded({ status: 'failed' })
+        },
+      )
+    }
+    read()
     return () => {
       alive = false
+      reread?.()
     }
   }, [id, attempt])
 

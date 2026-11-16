@@ -179,6 +179,27 @@
   .route-enter {
     animation: route-enter var(--duration-base) var(--ease-out);
   }
+
+  /*
+   * Camada de bloqueio (contrato 22, CA3): o conteúdo de trás desfocado e escurecido pelo véu dos tokens. O
+   * desfoque de 24 px é o valor fixo que o smoke confere (nenhum texto de trás fica legível). Com transparência
+   * ou movimento reduzidos, fundo opaco e nenhuma animação.
+   */
+  .lock-layer {
+    background: var(--lock-veil);
+    -webkit-backdrop-filter: blur(24px);
+    backdrop-filter: blur(24px);
+    animation: route-enter var(--duration-base) var(--ease-out);
+  }
+
+  @media (prefers-reduced-transparency: reduce), (prefers-reduced-motion: reduce) {
+    .lock-layer {
+      background: var(--bg-sunken);
+      -webkit-backdrop-filter: none;
+      backdrop-filter: none;
+      animation: none;
+    }
+  }
 }
 
 @keyframes rec-pulse {

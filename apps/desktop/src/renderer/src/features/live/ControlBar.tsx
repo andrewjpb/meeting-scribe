@@ -1,5 +1,7 @@
-import { HardDrive, Pause, Play, ScanSearch, StickyNote } from 'lucide-react'
+import { HardDrive, Lock, Pause, Play, ScanSearch, StickyNote } from 'lucide-react'
 import type { ReactNode } from 'react'
+import { LOCK_DISABLED_HINT } from '@shared/lock'
+import { useLock } from '../../app/lockStore'
 import { useSettings } from '../../app/settingsStore'
 import { Icon } from '../../design/Icon'
 import { languagePairLabel, modelLabel } from './labels'
@@ -24,12 +26,15 @@ interface ControlBarProps {
 
 /**
  * Barra de controles: bloco azul (--side-bg, raio 6, sem sombra) a 24 px do rodapé com pausa, anotações
- * (contrato 13), "Analisar até agora" (contrato 19), idiomas, modelo e "Encerrar".
+ * (contrato 13), "Analisar até agora" (contrato 19), idiomas, modelo, "Bloquear" (contrato 22, a gravação
+ * continua) e "Encerrar".
  */
 export function ControlBar({ paused, busy, savingAudio = false, notesOpen = false, analyzing = false, canAnalyze = false, analysisLimit = false, onTogglePause, onToggleNotes, onAnalyze, onEnd }: ControlBarProps) {
   // Idiomas e modelo como estão em Configurações (mudam na hora se alguém trocar durante a gravação).
   const settings = useSettings((state) => state.settings)
   const model = modelLabel(settings)
+  const canLock = useLock((state) => state.status.canLock)
+  const lock = useLock((state) => state.lock)
 
   return (
     <div className="pointer-events-none absolute inset-x-0 bottom-6 flex justify-center px-4">
@@ -87,6 +92,13 @@ export function ControlBar({ paused, busy, savingAudio = false, notesOpen = fals
         )}
         <span aria-hidden="true" className="w-1" />
         <Divider />
+        {/* Bloquear não para nem pausa a gravação. Desabilitado, o `title` fica no contêiner (botão desabilitado não mostra dica). */}
+        <span title={canLock ? 'Bloquear o app; a gravação continua (⌘⇧L)' : LOCK_DISABLED_HINT} className="flex">
+          <BarButton action="lock-app-recording" label="Bloquear" iconOnly onClick={() => void lock()} disabled={!canLock} ariaShortcut="Meta+Shift+L">
+            <Icon icon={Lock} />
+          </BarButton>
+        </span>
+        <Divider />
         <BarButton action="end-recording" label="Encerrar" onClick={onEnd} disabled={busy}>
           <span aria-hidden="true" className="size-2 bg-side-rec" />
         </BarButton>
@@ -112,9 +124,11 @@ interface BarButtonProps {
   /** Trabalhando ("Analisando…"): `aria-busy`. */
   busy?: boolean
   title?: string
+  /** Só o ícone na barra (o rótulo fica para o leitor de tela): "Bloquear", para a barra caber em 1120 px. */
+  iconOnly?: boolean
 }
 
-function BarButton({ action, label, children, onClick, disabled, ariaShortcut, pressed, busy, title }: BarButtonProps) {
+function BarButton({ action, label, children, onClick, disabled, ariaShortcut, pressed, busy, title, iconOnly = false }: BarButtonProps) {
   return (
     <button
       type="button"
@@ -125,10 +139,10 @@ function BarButton({ action, label, children, onClick, disabled, ariaShortcut, p
       aria-pressed={pressed}
       aria-busy={busy || undefined}
       title={title}
-      className={`no-drag inline-flex h-10 items-center gap-2 rounded-[var(--radius-control)] px-3.5 text-13 font-medium text-side-text transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-side-active disabled:opacity-50 ${pressed ? 'bg-side-active' : ''}`}
+      className={`no-drag inline-flex h-10 items-center gap-2 rounded-[var(--radius-control)] ${iconOnly ? 'px-3' : 'px-3.5'} text-13 font-medium text-side-text transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-side-active disabled:opacity-50 ${pressed ? 'bg-side-active' : ''}`}
     >
       {children}
-      <span className="whitespace-nowrap">{label}</span>
+      <span className={iconOnly ? 'sr-only' : 'whitespace-nowrap'}>{label}</span>
     </button>
   )
 }

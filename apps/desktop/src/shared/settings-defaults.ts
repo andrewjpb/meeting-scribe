@@ -16,6 +16,8 @@ export const CHAT_MODELS = ['haiku', 'sonnet', 'opus'] as const
 export const CLAUDE_TRANSPORTS = ['acp', 'cli'] as const
 /** Perfil do agente ACP (contrato 17, CA11): só o Claude por enquanto. */
 export const AGENT_PROFILES = ['claude'] as const
+/** "Bloquear sozinho depois de … min sem uso" (contrato 22); 0 é nunca. */
+export const LOCK_AFTER_MINUTES = [0, 1, 5, 15, 30] as const
 
 export type LanguageCode = (typeof LANGUAGE_CODES)[number]
 export type ThemeSetting = (typeof THEME_SETTINGS)[number]
@@ -24,6 +26,7 @@ export type ClaudeModel = (typeof CLAUDE_MODELS)[number]
 export type ChatModel = (typeof CHAT_MODELS)[number]
 export type ClaudeTransport = (typeof CLAUDE_TRANSPORTS)[number]
 export type AgentProfileId = (typeof AGENT_PROFILES)[number]
+export type LockAfterMinutes = (typeof LOCK_AFTER_MINUTES)[number]
 /** Nome de cada agente na tela ("Conexão com o Claude"); o perfil do main usa o mesmo. */
 export const AGENT_PROFILE_LABELS: Readonly<Record<AgentProfileId, string>> = { claude: 'Claude' }
 
@@ -67,6 +70,14 @@ export interface AppSettings {
   brandLogo: string | null
   /** Procura versão nova no GitHub ao abrir o app e a cada 6 h (contrato 14). */
   autoCheckUpdates: boolean
+  /** Bloqueio (contrato 22): desbloquear também pelo Touch ID, quando o Mac tem. */
+  lockUseTouchId: boolean
+  /** Bloqueia sozinho depois destes minutos sem uso do app; 0 é nunca. */
+  lockAfterMinutes: LockAfterMinutes
+  /** Bloqueia quando o Mac bloqueia a tela ou dorme. */
+  lockOnSystemLock: boolean
+  /** Abre o app já bloqueado. */
+  lockOnLaunch: boolean
 }
 
 /**
@@ -100,6 +111,10 @@ export const DEFAULT_SETTINGS: Readonly<AppSettings> = Object.freeze({
   brandSubtitle: null,
   brandLogo: null,
   autoCheckUpdates: true,
+  lockUseTouchId: false,
+  lockAfterMinutes: 0,
+  lockOnSystemLock: true,
+  lockOnLaunch: false,
 })
 
 /** Prefixo do modelo gravado na reunião quando a tradução veio do Claude CLI (`claude-cli:haiku`). */

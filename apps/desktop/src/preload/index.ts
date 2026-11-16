@@ -4,7 +4,9 @@ import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron'
 import {
   INVOKE_CHANNELS,
   MAIN_EVENT_CHANNELS,
+  RECORDING_SESSION_CHANNELS,
   RENDERER_EVENT_CHANNELS,
+  type RecordingSessionTag,
   type CspViolation,
   type ScribeApi,
 } from '../shared/ipc'
@@ -17,6 +19,11 @@ const api: ScribeApi = {
   invoke(channel, ...args) {
     assertChannel(INVOKE_CHANNELS, channel)
     return ipcRenderer.invoke(channel, ...args)
+  },
+  invokeInSession(token, channel, request) {
+    assertChannel(RECORDING_SESSION_CHANNELS, channel)
+    const tag: RecordingSessionTag = { recordingSession: token }
+    return ipcRenderer.invoke(channel, request, tag)
   },
   send(channel, payload) {
     assertChannel(RENDERER_EVENT_CHANNELS, channel)

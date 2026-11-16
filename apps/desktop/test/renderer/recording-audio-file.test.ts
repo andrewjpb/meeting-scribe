@@ -151,7 +151,7 @@ describe('recordingStore e o arquivo da reunião (contrato 07)', () => {
     useTranscription.getState().replay([SEGMENT])
     expect(await useRecording.getState().end()).toMatchObject({ id: 'm1' })
     // O último pedaço vai antes de qualquer coisa; o arquivo final só depois da transcrição interna salva.
-    const order = events.filter((event) => !['scribe:key-status', 'scribe:audio-begin', 'recorder:start', 'recorder:pause', 'recorder:resume'].includes(event))
+    const order = events.filter((event) => !['scribe:key-status', 'scribe:recording-session-open', 'scribe:audio-begin', 'recorder:start', 'recorder:pause', 'recorder:resume'].includes(event))
     // O resumo (contrato 08, CA4) é pedido por último, depois dos arquivos, e só com algum trecho.
     expect(order).toEqual(['recorder:stop', 'scribe:audio-append', 'mixer:close', 'scribe:meetings-create', 'scribe:transcript-save', 'scribe:audio-finish', 'scribe:summary-generate'])
     expect(calls('scribe:summary-generate')).toEqual([{ meetingId: 'm1', auto: true }])

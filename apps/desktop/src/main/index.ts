@@ -1,8 +1,9 @@
 // Processo principal: esquema do app, segurança da sessão, IPC, menu e janela.
 import { join } from 'node:path'
-import { app, BrowserWindow, clipboard, dialog, Menu, nativeImage, net, safeStorage, session, shell, systemPreferences, type OpenDialogOptions, type SaveDialogOptions } from 'electron'
+import { app, BrowserWindow, clipboard, dialog, Menu, nativeImage, net, powerMonitor, safeStorage, session, shell, systemPreferences, type OpenDialogOptions, type SaveDialogOptions } from 'electron'
 import { ASSEMBLYAI_DASHBOARD_URL } from '../shared/assemblyai'
 import { brandTexts, DEFAULT_BRAND_NAME } from '../shared/branding'
+import { lockedWindowTitle, type LockStatus } from '../shared/lock'
 import { privacyPaneUrl } from '../shared/privacy'
 import type { AgentProfileId, AppSettings } from '../shared/settings-defaults'
 import type { TranscriptDocument } from '../shared/transcription'
@@ -22,7 +23,10 @@ import { nodeExecFile } from './claude-cli/locate'
 import { createClaudeService, type ClaudeService } from './claude-cli/service'
 import { nodeSpawnSummary } from './claude-cli/summary'
 import { nodeSpawnClaude } from './claude-cli/translator'
-import { broadcast, handle, onEvent, sendTo } from './ipc'
+import { broadcast, handle, onEvent, sendTo, setLockGate } from './ipc'
+import { createRecordingSessions, leaveButtons, RECORDING_LEAVE_MESSAGE } from './lock/recording-session'
+import { createLockService, type LockService, type TouchIdAccess } from './lock/service'
+import { createFileLockStore } from './lock/store'
 import { createFileAnalysesStore } from './meetings/analyses'
 import { createAnalysisService, type AnalysisService } from './meetings/analysis-service'
 import { createMeetingsIndex, type MeetingsIndex } from './meetings/overview'
@@ -32,7 +36,7 @@ import { createFileMeetingsStore, type MeetingsStore } from './meetings/store'
 import { createFileSummaryStore } from './meetings/summaries'
 import { createSummaryService, type SummaryService } from './meetings/summary-service'
 import { createFileTranscriptStore, type TranscriptStore } from './meetings/transcripts'
-import { aboutPanelOptions, buildMenuTemplate } from './menu'
+import { aboutPanelOptions, buildMenuTemplate, MENU_IDS } from './menu'
 import { createMicPermissions } from './permissions'
 import { handleAppScheme, registerAppScheme } from './protocol'
 import { createSecretStore, memorySafeStorage } from './secrets'
@@ -79,9 +83,76 @@ let chatService: ChatService | null = null
 let brandName = DEFAULT_BRAND_NAME
 /** Último logo aplicado ao Dock; `undefined` antes da primeira vez. */
 let dockLogo: string | null | undefined
+/** Bloqueio do app (contrato 22): o estado fica no serviço; aqui, só o título e o menu acompanham. */
+let lockService: LockService | null = null
+/** "Encerrar e sair" escolhido: o app sai quando a gravação terminar de salvar. */
+let quitAfterRecording = false
+/** Gravação em curso (contrato 22): token dos canais de fim de gravação e confirmação ao fechar ou sair. */
+const recordingSessions = createRecordingSessions(() => {
+  if (!quitAfterRecording) return
+  quitAfterRecording = false
+  app.quit()
+})
+/** Um diálogo de "gravação em andamento" por vez. */
+let leaveAsked = false
+
+/**
+ * ⌘W ou ⌘Q com gravação em andamento: diálogo nativo. Bloqueado, só "Cancelar"; desbloqueado, também
+ * "Encerrar e sair", que pede ao renderer para encerrar e sai depois de salvar. No smoke, o substituto responde.
+ */
+async function confirmLeave(win: BrowserWindow | null): Promise<void> {
+  if (leaveAsked) return
+  leaveAsked = true
+  const locked = lockService?.isLocked() ?? false
+  const buttons = leaveButtons(locked)
+  try {
+    let choice: number
+    if (smokeFixtures) {
+      smokeFixtures.leaveDialogs.push({ message: RECORDING_LEAVE_MESSAGE, buttons })
+      choice = smokeFixtures.leaveChoice
+    } else {
+      const options = { type: 'warning' as const, message: RECORDING_LEAVE_MESSAGE, buttons, defaultId: 0, cancelId: 0 }
+      choice = (win && !win.isDestroyed() ? await dialog.showMessageBox(win, options) : await dialog.showMessageBox(options)).response
+    }
+    if (choice === 1 && !locked && recordingSessions.active()) {
+      quitAfterRecording = true
+      broadcast(BrowserWindow.getAllWindows(), 'scribe:recording-end-and-quit', undefined)
+    }
+  } finally {
+    leaveAsked = false
+  }
+}
+
+/** Intervalo em que o bloqueio por falta de uso é conferido. */
+const LOCK_TICK_MS = 15_000
+
+/** Título da janela: o nome da marca, com "— bloqueado" enquanto o app está bloqueado (CA4). */
+function windowTitle(): string {
+  return lockService?.isLocked() ? lockedWindowTitle(brandName) : brandName
+}
+
+/** Cada mudança do bloqueio: título das janelas, item "Bloquear" do menu e o aviso às janelas. */
+function applyLockStatus(status: LockStatus): void {
+  const title = windowTitle()
+  for (const win of BrowserWindow.getAllWindows()) win.setTitle(title)
+  const item = Menu.getApplicationMenu()?.getMenuItemById(MENU_IDS.lock)
+  if (item) item.enabled = status.canLock && !status.locked
+  broadcast(BrowserWindow.getAllWindows(), 'scribe:lock-state', status)
+}
+
+/** "Bloquear" pelo menu ou ⌘⇧L, pelo `powerMonitor` ou por falta de uso; só bloqueia com senha ou Touch ID. */
+function lockApp(reason: Parameters<LockService['lock']>[0]): void {
+  void lockService?.lock(reason).catch(() => undefined)
+}
 
 function openMainWindow(query?: Record<string, string>, invisible = false): BrowserWindow {
-  const win = createMainWindow({ url: appUrl, appOrigin, title: brandName, ...(query ? { query } : {}), invisible })
+  const win = createMainWindow({ url: appUrl, appOrigin, title: windowTitle(), ...(query ? { query } : {}), invisible })
+  // Fechar a janela no meio de uma gravação perderia a reunião: pede confirmação.
+  win.on('close', (event) => {
+    if (!recordingSessions.active()) return
+    event.preventDefault()
+    void confirmLeave(win)
+  })
   win.on('closed', () => {
     if (mainWindow === win) mainWindow = null
     // No macOS o app segue aberto sem janela: as conversas do chat morrem em 5 min, como ao sair da tela.
@@ -95,6 +166,8 @@ function openMainWindow(query?: Record<string, string>, invisible = false): Brow
 function broadcastSettings(settings: AppSettings): void {
   broadcast(BrowserWindow.getAllWindows(), 'scribe:settings-changed', settings)
   applyBrand(settings)
+  // "Usar Touch ID" muda o que o botão "Bloquear" pode.
+  void lockService?.refresh().catch(() => undefined)
 }
 
 /** Ícone do Dock. No smoke nada toca o Dock de verdade: só o resultado fica registrado. */
@@ -110,6 +183,8 @@ function applyBrand(settings: AppSettings): void {
   if (name !== brandName) {
     brandName = name
     applyBrandName({ setAboutPanelOptions: (options) => app.setAboutPanelOptions(options), windows: BrowserWindow.getAllWindows(), version: app.getVersion() }, name)
+    // Bloqueado, o título segue com "— bloqueado".
+    if (lockService?.isLocked()) for (const win of BrowserWindow.getAllWindows()) win.setTitle(windowTitle())
   }
   updateDockIcon(settings.brandLogo)
 }
@@ -155,6 +230,8 @@ interface AppServices {
   /** Agente do ACP do perfil escolhido (contrato 17): instalar, remover e o estado. */
   acp: { current: () => Promise<AcpAgentService> }
   corpus: ChatCorpus
+  /** Bloqueio do app (contrato 22): senha, Touch ID, espera e estado. */
+  lock: LockService
 }
 
 function fetchImpl(url: string, init: FetchInit): Promise<FetchResponse> {
@@ -369,6 +446,30 @@ function createAppServices(userData: string): AppServices {
     onState: (state) => broadcast(BrowserWindow.getAllWindows(), 'scribe:update-state', state),
     ...(app.isPackaged ? {} : { log: (message: string) => console.log(message) }),
   })
+  // Bloqueio do app (contrato 22). No smoke, Touch ID substituto e relógio que o smoke adianta (a espera de
+  // 30 s passa sem esperar); o Touch ID de verdade nunca é pedido.
+  const smokeLock = smokeFixtures?.lock
+  const touchId: TouchIdAccess = smokeLock
+    ? {
+        available: () => smokeLock.touchIdAvailable,
+        prompt: () => {
+          smokeLock.touchIdPrompts++
+          return smokeLock.touchIdApproves ? Promise.resolve() : Promise.reject(new Error('smoke: Touch ID recusado'))
+        },
+      }
+    : {
+        available: () => process.platform === 'darwin' && systemPreferences.canPromptTouchID(),
+        prompt: (reason) => systemPreferences.promptTouchID(reason),
+      }
+  const lock = createLockService({
+    store: createFileLockStore({ dir: userData }),
+    settings,
+    touchId,
+    onStatus: applyLockStatus,
+    ...(smokeLock ? { now: () => Date.now() + smokeLock.skewMs } : {}),
+    ...(app.isPackaged ? {} : { log: (message: string) => console.log(message) }),
+  })
+  if (smokeLock) smokeLock.refresh = () => void lock.refresh().catch(() => undefined)
   return {
     settings: createSettingsService({ settings, secrets, gateway, mic }),
     meetings,
@@ -387,6 +488,7 @@ function createAppServices(userData: string): AppServices {
     chat,
     corpus,
     acp: acpAgent,
+    lock,
   }
 }
 
@@ -442,7 +544,7 @@ function openExternal(url: string): void {
 }
 
 function registerIpc(services: AppServices): void {
-  const { settings, meetings, meetingsService, meetingsIndex, tokenClient, translation, claude, files, summary, analysis, download, branding, updates, chat, corpus, acp } = services
+  const { settings, meetings, meetingsService, meetingsIndex, tokenClient, translation, claude, files, summary, analysis, download, branding, updates, chat, corpus, acp, lock } = services
   /** Reunião salva, renomeada ou com anotações novas: o `.md` dela no acervo do chat é reescrito. */
   const touched = (meetingId: string): void => void corpus.sync(meetingId).catch(() => undefined)
   handle('scribe:app-info', appOrigin, () => ({
@@ -539,6 +641,17 @@ function registerIpc(services: AppServices): void {
   handle('scribe:chat-update', appOrigin, (_event, request) => chat.update(request))
   handle('scribe:chat-redo', appOrigin, (_event, request) => chat.redo(request))
   handle('scribe:chat-copy', appOrigin, (_event, request) => chat.copy(request))
+  // Bloqueio (contrato 22): a senha só passa por aqui até o serviço, que confere com o hash.
+  handle('scribe:lock-status', appOrigin, () => lock.status())
+  handle('scribe:lock-now', appOrigin, () => lock.lock('button'))
+  handle('scribe:lock-unlock', appOrigin, (_event, request) => lock.unlock((request as { password?: unknown } | undefined)?.password))
+  handle('scribe:lock-touch-id', appOrigin, () => lock.unlockWithTouchId())
+  handle('scribe:lock-password-set', appOrigin, (_event, request) => lock.setPassword(request))
+  handle('scribe:lock-password-remove', appOrigin, (_event, request) => lock.removePassword(request))
+  onEvent('scribe:lock-activity', appOrigin, () => lock.activity())
+  // Gravação em curso: o token vale até o fim do "Encerrar" ou até a janela que a abriu sumir.
+  handle('scribe:recording-session-open', appOrigin, (event) => recordingSessions.open(event.sender))
+  handle('scribe:recording-session-close', appOrigin, (_event, request) => recordingSessions.close((request as { token?: unknown } | undefined)?.token))
   onEvent('scribe:chat-close', appOrigin, (_event, request) => chat.close((request as { id?: unknown } | undefined)?.id))
   onEvent('scribe:chat-leave', appOrigin, (_event, request) => chat.leave((request as { id?: unknown } | undefined)?.id))
   // Só `https://`, e só depois da confirmação na tela; qualquer outra coisa é ignorada.
@@ -575,13 +688,17 @@ function installMenu(): void {
     appName: PACKAGE_DISPLAY_NAME,
     isDev,
     onNavigate: (route) => {
+      // Bloqueado, o menu não leva a lugar nenhum (o renderer também ignora).
+      if (lockService?.isLocked()) return
       const win = mainWindow ?? openMainWindow()
       sendTo(win.webContents, 'scribe:navigate', route)
       if (!smoke) win.show()
     },
     onNewRecording: () => {
+      if (lockService?.isLocked()) return
       startRecordingFromMenu().catch((error: unknown) => console.error('[menu] nova gravação:', error))
     },
+    onLock: () => lockApp('menu'),
   })
   Menu.setApplicationMenu(Menu.buildFromTemplate(template))
 }
@@ -604,6 +721,13 @@ void app.whenReady().then(async () => {
   const userData = app.getPath('userData')
   const services = createAppServices(userData)
   chatService = services.chat
+  lockService = services.lock
+  // Antes da primeira janela: o IPC já recusa o conteúdo se o app abrir bloqueado (CA6).
+  setLockGate(
+    () => services.lock.isLocked(),
+    () => recordingSessions.active(),
+  )
+  const lockAtLaunch = await services.lock.init()
   registerIpc(services)
   // Marca gravada: título da primeira janela, "Sobre" e ícone do Dock antes de abrir.
   applyBrand(await services.settings.getSettings())
@@ -615,6 +739,12 @@ void app.whenReady().then(async () => {
     .then(() => services.corpus.ensure())
     .catch(() => undefined)
   // Sair do app mata os processos do `claude` (tradução, resumo, análise e chat) que estiverem vivos: nenhum fica órfão.
+  // ⌘Q no meio de uma gravação: mesma confirmação de fechar a janela.
+  app.on('before-quit', (event) => {
+    if (!recordingSessions.active()) return
+    event.preventDefault()
+    void confirmLeave(mainWindow)
+  })
   app.on('will-quit', () => {
     services.claude.dispose()
     services.summary.dispose()
@@ -623,6 +753,22 @@ void app.whenReady().then(async () => {
     services.updates.dispose()
   })
   installMenu()
+  applyLockStatus(lockAtLaunch)
+  // Falta de uso (CA2): conferida a cada 15 s; o uso chega do renderer por `scribe:lock-activity`.
+  setInterval(() => void services.lock.tick().catch(() => undefined), LOCK_TICK_MS).unref()
+  // Mac bloqueou a tela ou dormiu (CA2, padrão ligado). No smoke, os eventos vêm do substituto: o Mac de
+  // verdade bloquear a tela no meio do smoke não pode bloquear o app.
+  const power: { on(event: 'lock-screen' | 'suspend', listener: () => void): unknown } = smokeFixtures ? smokeFixtures.lock.power : powerMonitor
+  for (const event of ['lock-screen', 'suspend'] as const) {
+    power.on(event, () => {
+      void services.settings
+        .getSettings()
+        .then((current) => {
+          if (current.lockOnSystemLock) lockApp('system')
+        })
+        .catch(() => undefined)
+    })
+  }
 
   if (smokeUserData && smokeFixtures) {
     const code = await runSmoke({

@@ -28,6 +28,7 @@ import { ApiKeyField } from './ApiKeyField'
 import { BrandSection } from './BrandSection'
 import { useAudioInputs } from './audioInputs'
 import { ClaudeCliField } from './ClaudeCliField'
+import { LockSection } from './LockSection'
 import { MeetingFilesSection } from './MeetingFilesSection'
 import { micOptions, SYSTEM_DEFAULT } from './micOptions'
 import { ModelPicker } from './ModelPicker'
@@ -272,6 +273,7 @@ function SettingsTabs({ tab }: { tab: SettingsTab }) {
                   <Segmented value={settings.theme} options={THEMES} labelledBy="settings-theme" dataName="theme-option" onChange={(theme) => void update({ theme })} />
                 </SettingRow>
               </Section>
+              <LockSection />
               <UpdatesSection />
             </>,
           )}

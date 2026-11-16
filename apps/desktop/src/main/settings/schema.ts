@@ -8,7 +8,7 @@
 import { z } from 'zod'
 import { isAbsolute } from 'node:path'
 import { BRAND_LOGO_PATTERN, BRAND_TEXT_MAX } from '../../shared/branding'
-import { AGENT_PROFILES, CHAT_MODELS, CLAUDE_MODELS, CLAUDE_TRANSPORTS, DEFAULT_SETTINGS, LANGUAGE_CODES, THEME_SETTINGS, TRANSLATION_ENGINES, type AppSettings, type SettingsPatch } from '../../shared/settings-defaults'
+import { AGENT_PROFILES, CHAT_MODELS, CLAUDE_MODELS, CLAUDE_TRANSPORTS, DEFAULT_SETTINGS, LANGUAGE_CODES, LOCK_AFTER_MINUTES, THEME_SETTINGS, TRANSLATION_ENGINES, type AppSettings, type SettingsPatch } from '../../shared/settings-defaults'
 
 export const SETTINGS_VERSION = 1
 
@@ -37,6 +37,9 @@ export const brandSubtitleSchema = z.string().trim().max(BRAND_TEXT_MAX).refine(
 /** Só o nome do arquivo em `userData/branding/`, gerado pelo main. */
 export const brandLogoSchema = z.string().regex(BRAND_LOGO_PATTERN)
 
+/** Minutos do bloqueio automático: só os do seletor (contrato 22). */
+const lockAfterMinutesSchema = z.literal(LOCK_AFTER_MINUTES)
+
 const D = DEFAULT_SETTINGS
 
 const lenientSchema = z.object({
@@ -62,6 +65,10 @@ const lenientSchema = z.object({
   brandSubtitle: brandSubtitleSchema.nullable().catch(D.brandSubtitle),
   brandLogo: brandLogoSchema.nullable().catch(D.brandLogo),
   autoCheckUpdates: z.boolean().catch(D.autoCheckUpdates),
+  lockUseTouchId: z.boolean().catch(D.lockUseTouchId),
+  lockAfterMinutes: lockAfterMinutesSchema.catch(D.lockAfterMinutes),
+  lockOnSystemLock: z.boolean().catch(D.lockOnSystemLock),
+  lockOnLaunch: z.boolean().catch(D.lockOnLaunch),
 })
 
 const patchSchema = z
@@ -84,6 +91,10 @@ const patchSchema = z
     brandName: brandNameSchema.nullable(),
     brandSubtitle: brandSubtitleSchema.nullable(),
     autoCheckUpdates: z.boolean(),
+    lockUseTouchId: z.boolean(),
+    lockAfterMinutes: lockAfterMinutesSchema,
+    lockOnSystemLock: z.boolean(),
+    lockOnLaunch: z.boolean(),
   })
   .partial()
   .strict()

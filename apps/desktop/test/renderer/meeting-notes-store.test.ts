@@ -3,6 +3,8 @@
 // "Desfazer" por 5 s. Canal e relógio falsos.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { MeetingNote } from '@shared/meeting-notes'
+import { LOCK_STATUS_INITIAL } from '@shared/lock'
+import { useLock } from '../../src/renderer/src/app/lockStore'
 import { isDirty, useMeetingNotes } from '../../src/renderer/src/features/meetings/notesStore'
 
 const AT = '2026-11-15T20:00:00.000Z'
@@ -136,5 +138,21 @@ describe('anotações do detalhe (notesStore)', () => {
     store().remove('m1', 'a')
     await vi.advanceTimersByTimeAsync(5_000)
     expect(entry()?.undo).toBeNull()
+  })
+
+  it('leitura recusada com o app bloqueado (contrato 22): fica carregando, sem falha, e relê no desbloqueio', async () => {
+    store().forget('m2')
+    useLock.setState({ status: { ...LOCK_STATUS_INITIAL, locked: true, hasPassword: true, canLock: true } })
+    invoke.mockImplementation((channel: string) =>
+      channel === 'scribe:notes-get' && useLock.getState().status.locked
+        ? Promise.reject(new Error("Error invoking remote method 'scribe:notes-get': Error: locked"))
+        : Promise.resolve(channel === 'scribe:notes-get' ? [NOTE] : true),
+    )
+    await store().load('m2')
+    expect(useMeetingNotes.getState().meetings['m2']?.status).toBe('loading')
+    useLock.setState({ status: { ...LOCK_STATUS_INITIAL, hasPassword: true, canLock: true } })
+    await vi.waitFor(() => expect(useMeetingNotes.getState().meetings['m2']).toMatchObject({ status: 'ready', notes: [NOTE] }))
+    expect(invoke.mock.calls.filter(([channel]) => channel === 'scribe:notes-get' ).length).toBeGreaterThanOrEqual(3)
+    store().forget('m2')
   })
 })

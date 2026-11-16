@@ -4,6 +4,7 @@ import { Icon } from '../design/Icon'
 import { PermissionsBlock } from '../features/permissions/PermissionsBlock'
 import { UpdateNotice } from '../features/settings/UpdateNotice'
 import { useBranding } from './brandingStore'
+import { LockButton } from './LockButton'
 import { ROUTE_PATHS } from '@shared/routes'
 import { APP_ROUTES } from './routes'
 
@@ -12,7 +13,7 @@ const NAV_ITEMS = APP_ROUTES.flatMap((route) => (route.nav ? [{ ...route.nav, id
 
 /**
  * Barra lateral opaca em azul profundo: espaço dos botões da janela, marca (a escolhida em Configurações
- * ou a da LAP), navegação e, no rodapé, o aviso de versão nova e as permissões.
+ * ou a da LAP), navegação e, no rodapé, "Bloquear", o aviso de versão nova e as permissões.
  */
 export function Sidebar() {
   const branding = useBranding((state) => state.branding)
@@ -51,8 +52,9 @@ export function Sidebar() {
           </NavLink>
         ))}
       </nav>
-      {/* Rodapé: o aviso de versão nova (quando há) logo acima das permissões. */}
+      {/* Rodapé: "Bloquear" (contrato 22) e o aviso de versão nova (quando há) logo acima das permissões. */}
       <div className="mt-auto flex flex-col">
+        <LockButton />
         <UpdateNotice />
         <PermissionsBlock />
       </div>

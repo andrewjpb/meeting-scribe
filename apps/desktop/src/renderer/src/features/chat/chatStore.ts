@@ -22,6 +22,7 @@ import {
   type ChatStep,
 } from '@shared/chat'
 import type { ChatModel } from '@shared/settings-defaults'
+import { rereadWhenUnlocked } from '../../app/lockStore'
 
 /** Chave da lista: `all` na tela "Perguntar", o id da reunião na aba do detalhe. */
 export const listKey = (meetingId: string | null): string => meetingId ?? 'all'
@@ -200,7 +201,9 @@ export const useChat = create<ChatState>()((set, get) => {
       try {
         const list = await window.__scribeApi.invoke('scribe:chat-list', { meetingId })
         set((state) => ({ lists: { ...state.lists, [key]: list }, failures: without(state.failures, `list:${key}`) }))
-      } catch {
+      } catch (error) {
+        // Recusada com o app bloqueado (contrato 22): relê no desbloqueio, sem aviso.
+        if (rereadWhenUnlocked(error, () => void get().loadList(meetingId))) return
         set((state) => ({ lists: { ...state.lists, [key]: state.lists[key] ?? [] }, failures: { ...state.failures, [`list:${key}`]: 'Não foi possível abrir as conversas.' } }))
       }
     },
@@ -211,7 +214,8 @@ export const useChat = create<ChatState>()((set, get) => {
         const chat = await window.__scribeApi.invoke('scribe:chat-get', { id })
         if (chat) set((state) => ({ chats: { ...state.chats, [id]: chat }, failures: without(state.failures, id) }))
         else set((state) => ({ failures: { ...state.failures, [id]: 'Esta conversa não existe mais.' } }))
-      } catch {
+      } catch (error) {
+        if (rereadWhenUnlocked(error, () => void get().open(id))) return
         set((state) => ({ failures: { ...state.failures, [id]: 'Não foi possível abrir a conversa.' } }))
       }
     },

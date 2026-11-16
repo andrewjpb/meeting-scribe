@@ -31,6 +31,10 @@ describe('esquema de configurações (CA1)', () => {
       brandSubtitle: null,
       brandLogo: null,
       autoCheckUpdates: true,
+      lockUseTouchId: false,
+      lockAfterMinutes: 0,
+      lockOnSystemLock: true,
+      lockOnLaunch: false,
     })
     expect(parseSettings(undefined)).toEqual(DEFAULT_SETTINGS)
     expect(parseSettings({})).toEqual(DEFAULT_SETTINGS)
@@ -72,6 +76,10 @@ describe('esquema de configurações (CA1)', () => {
       brandSubtitle: '',
       brandLogo: 'logo-0123456789ab.png',
       autoCheckUpdates: false,
+      lockUseTouchId: true,
+      lockAfterMinutes: 15,
+      lockOnSystemLock: false,
+      lockOnLaunch: true,
     }
     expect(parseSettings(saved)).toEqual(saved)
     expect(parseSettings({ ...saved, theme: 'sepia' })).toEqual({ ...saved, theme: 'system' })
@@ -108,7 +116,7 @@ describe('esquema de configurações (CA1)', () => {
   it('Claude CLI (contrato 05, CA1): motor, modelo e caminho com padrão próprio cada um', () => {
     // `settings.json` do contrato 04, sem os campos novos: carrega com os padrões deles e mantém o resto.
     const old = { translationEnabled: false, translationModel: 'gpt-oss-120b', sourceLanguage: 'es', targetLanguage: 'ja', echoCancellation: true, theme: 'dark', micDeviceId: null }
-    expect(parseSettings(old)).toEqual({ ...old, removeEcho: true, translationEngine: 'assemblyai', claudeModel: 'haiku', chatModel: 'sonnet', claudePath: null, claudeTransport: 'acp', agentProfile: 'claude', saveToFolder: true, audioFolder: null, summarizeOnStop: true, identifySpeakers: false, brandName: null, brandSubtitle: null, brandLogo: null, autoCheckUpdates: true })
+    expect(parseSettings(old)).toEqual({ ...old, removeEcho: true, translationEngine: 'assemblyai', claudeModel: 'haiku', chatModel: 'sonnet', claudePath: null, claudeTransport: 'acp', agentProfile: 'claude', saveToFolder: true, audioFolder: null, summarizeOnStop: true, identifySpeakers: false, brandName: null, brandSubtitle: null, brandLogo: null, autoCheckUpdates: true, lockUseTouchId: false, lockAfterMinutes: 0, lockOnSystemLock: true, lockOnLaunch: false })
     expect(parseSettings({ translationEngine: 'claude-cli', claudeModel: 'sonnet' })).toMatchObject({ translationEngine: 'claude-cli', claudeModel: 'sonnet' })
     // Fora da lista cai no padrão: só `haiku` e `sonnet`, só os dois motores.
     expect(parseSettings({ translationEngine: 'openai' }).translationEngine).toBe('assemblyai')
@@ -235,6 +243,17 @@ describe('esquema de configurações (CA1)', () => {
     expect(parseSettings({ autoCheckUpdates: 'não' }).autoCheckUpdates).toBe(true)
     expect(parseSettingsPatch({ autoCheckUpdates: false })).toEqual({ autoCheckUpdates: false })
     expect(() => parseSettingsPatch({ autoCheckUpdates: 'sim' })).toThrow()
+  })
+
+  it('Bloqueio (contrato 22): padrões, minutos só do seletor e booleanos estritos no renderer', () => {
+    expect(parseSettings({})).toMatchObject({ lockUseTouchId: false, lockAfterMinutes: 0, lockOnSystemLock: true, lockOnLaunch: false })
+    for (const minutes of [0, 1, 5, 15, 30]) expect(parseSettings({ lockAfterMinutes: minutes }).lockAfterMinutes).toBe(minutes)
+    expect(parseSettings({ lockAfterMinutes: 2 }).lockAfterMinutes).toBe(0)
+    expect(parseSettings({ lockAfterMinutes: '5' }).lockAfterMinutes).toBe(0)
+    expect(parseSettings({ lockOnSystemLock: 'não' }).lockOnSystemLock).toBe(true)
+    expect(parseSettingsPatch({ lockAfterMinutes: 30, lockOnLaunch: true })).toEqual({ lockAfterMinutes: 30, lockOnLaunch: true })
+    expect(() => parseSettingsPatch({ lockAfterMinutes: 10 })).toThrow()
+    expect(() => parseSettingsPatch({ lockUseTouchId: 'sim' })).toThrow()
   })
 
   it('Claude CLI pelo renderer: motor e modelo validados; o caminho não passa por aqui', () => {

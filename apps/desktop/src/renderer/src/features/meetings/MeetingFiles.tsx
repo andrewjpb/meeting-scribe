@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import type { MeetingDownloadKind, MeetingFileInfo, MeetingFileKind, MeetingFilesInfo } from '@shared/meeting-files'
+import { rereadWhenUnlocked } from '../../app/lockStore'
 
 const LABELS: Record<MeetingFileKind, { name: string; missing: string }> = {
   audio: { name: 'Áudio', missing: 'Áudio não encontrado em' },
@@ -30,14 +31,22 @@ export function MeetingFiles({ meetingId, hasFiles, hasTranscript, hasSummary }:
   useEffect(() => {
     if (!hasFiles) return
     let alive = true
-    window.__scribeApi.invoke('scribe:meeting-files', { meetingId }).then(
-      (result) => {
-        if (alive) setInfo(result)
-      },
-      () => undefined,
-    )
+    let reread: (() => void) | null = null
+    const read = (): void => {
+      window.__scribeApi.invoke('scribe:meeting-files', { meetingId }).then(
+        (result) => {
+          if (alive) setInfo(result)
+        },
+        // Recusada com o app bloqueado (contrato 22): relê no desbloqueio.
+        (error: unknown) => {
+          if (alive) reread = rereadWhenUnlocked(error, read)
+        },
+      )
+    }
+    read()
     return () => {
       alive = false
+      reread?.()
     }
   }, [meetingId, hasFiles])
 

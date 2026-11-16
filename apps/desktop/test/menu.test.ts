@@ -16,7 +16,8 @@ function findItem(items: MenuItemConstructorOptions[], id: string): MenuItemCons
 describe('menu do app', () => {
   const onNavigate = vi.fn()
   const onNewRecording = vi.fn()
-  const template = buildMenuTemplate({ appName: 'Meeting Scribe', onNavigate, onNewRecording, isDev: false })
+  const onLock = vi.fn()
+  const template = buildMenuTemplate({ appName: 'Meeting Scribe', onNavigate, onNewRecording, onLock, isDev: false })
 
   it('tem "Configurações…" com ⌘, levando à rota de configurações', () => {
     const item = findItem(template, MENU_IDS.settings)
@@ -35,11 +36,22 @@ describe('menu do app', () => {
     expect(onNavigate).not.toHaveBeenCalled()
   })
 
+  it('tem "Bloquear <app>" com ⌘⇧L, desabilitado até haver senha ou Touch ID (contrato 22)', () => {
+    const item = findItem(template, MENU_IDS.lock)
+    expect(item?.label).toBe('Bloquear Meeting Scribe')
+    expect(item?.accelerator).toBe('CmdOrCtrl+Shift+L')
+    expect(item?.enabled).toBe(false)
+    onNavigate.mockClear()
+    ;(item?.click as () => void)()
+    expect(onLock).toHaveBeenCalledTimes(1)
+    expect(onNavigate).not.toHaveBeenCalled()
+  })
+
   it('só mostra recarregar e ferramentas do desenvolvedor em desenvolvimento', () => {
     const roles = (t: MenuItemConstructorOptions[]): string[] =>
       t.flatMap((i) => [i.role ?? '', ...(Array.isArray(i.submenu) ? roles(i.submenu) : [])])
     expect(roles(template)).not.toContain('toggleDevTools')
-    expect(roles(buildMenuTemplate({ appName: 'x', onNavigate, onNewRecording, isDev: true }))).toContain('toggleDevTools')
+    expect(roles(buildMenuTemplate({ appName: 'x', onNavigate, onNewRecording, onLock, isDev: true }))).toContain('toggleDevTools')
   })
 
   it('o painel Sobre mostra o nome do app e a LAP como dona', () => {

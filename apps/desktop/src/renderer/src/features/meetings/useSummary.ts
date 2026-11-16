@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import type { SummaryStatus } from '@shared/meeting-summary'
+import { rereadWhenUnlocked } from '../../app/lockStore'
 
 /** `loading` até o main responder. */
 export type SummaryView = SummaryStatus | { state: 'loading' }
@@ -23,9 +24,18 @@ export function useSummary(meetingId: string): { view: SummaryView; generate: ()
     const fill = (status: SummaryStatus): void => {
       if (alive) setEntry((current) => (current?.meetingId === meetingId ? current : { meetingId, view: status }))
     }
-    api.invoke('scribe:summary-get', { meetingId }).then(fill, () => fill({ state: 'none' }))
+    // Recusada com o app bloqueado (contrato 22): relê no desbloqueio.
+    let reread: (() => void) | null = null
+    const read = (): void => {
+      api.invoke('scribe:summary-get', { meetingId }).then(fill, (error: unknown) => {
+        reread = alive ? rereadWhenUnlocked(error, read) : null
+        if (!reread) fill({ state: 'none' })
+      })
+    }
+    read()
     return () => {
       alive = false
+      reread?.()
       off()
     }
   }, [meetingId])

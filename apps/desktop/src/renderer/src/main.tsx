@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client'
 import './design/base.css'
 import { App } from './app/App'
 import { loadBranding } from './app/brandingStore'
+import { loadLockStatus } from './app/lockStore'
 import { loadSettings } from './app/settingsStore'
 import { applyInitialAppearance } from './app/themeStore'
 import { loadCaptureEnvironment } from './audio/environment'
@@ -21,7 +22,8 @@ const container = root
 const capture = loadCaptureEnvironment()
   .then(exposeRecordingProbe)
   .catch(() => undefined)
-void Promise.all([capture, loadSettings(), loadBranding()])
+// O estado do bloqueio também: aberto bloqueado, a camada é o primeiro quadro (contrato 22, CA6).
+void Promise.all([capture, loadSettings(), loadBranding(), loadLockStatus()])
   .then(applyInitialAppearance)
   .finally(() => {
     createRoot(container).render(

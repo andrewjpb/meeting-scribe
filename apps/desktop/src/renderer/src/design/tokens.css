@@ -39,6 +39,8 @@
   --side-ok: #3b82f6;
   /* Contorno de botão pequeno sobre o azul ("Permitir" das permissões). */
   --side-outline: rgba(255, 255, 255, 0.4);
+  /* Véu da tela de bloqueio (contrato 22) sobre o conteúdo desfocado: o azul quase preto da LAP. */
+  --lock-veil: rgba(6, 26, 61, 0.45);
 
   /*
    * Cards de anotação (contrato 13): fundo, borda de 1 px e texto de cada cor. Fora da paleta da LAP, como o
@@ -96,6 +98,7 @@
   --side-edge: rgba(201, 212, 229, 0.28);
   --side-ok: #3b82f6;
   --side-outline: rgba(255, 255, 255, 0.4);
+  --lock-veil: rgba(4, 18, 43, 0.6);
 
   /* Cards de anotação no escuro: fundo escuro da mesma cor, texto claro. */
   --note-yellow: #463c12;

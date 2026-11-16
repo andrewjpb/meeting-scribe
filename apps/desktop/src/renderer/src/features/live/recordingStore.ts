@@ -12,6 +12,7 @@ import { analyzedUntil, ANALYSES_MAX, recentAnalyses, type AnalysisError, type A
 import type { MeetingNote, NoteColor } from '@shared/meeting-notes'
 import { audioExtension } from '@shared/meeting-files'
 import { defaultMeetingTitle, MEETING_TITLE_MAX, type Meeting } from '@shared/meetings'
+import type { InvokeChannels, RecordingSessionChannel } from '@shared/ipc'
 import { TRANSCRIPT_VERSION, type TranscriptDocument, type TranscriptionTokenResult } from '@shared/transcription'
 import { effectiveTranslationModel, type AppSettings } from '@shared/settings-defaults'
 import { useSettings } from '../../app/settingsStore'
@@ -169,11 +170,30 @@ export function analysisSegments(segments: readonly TranscriptionSegment[]): Liv
 
 const newRecordingId = (): string => (typeof crypto !== 'undefined' && 'randomUUID' in crypto ? crypto.randomUUID() : `g-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`)
 
+/**
+ * Canal de fim de gravação (contrato 22): com o token da sessão aberta no main, passa mesmo com o app bloqueado
+ * no meio do "Encerrar"; sem token (sessão que não abriu), o `invoke` de sempre.
+ */
+type FinishCall = <C extends RecordingSessionChannel>(channel: C, request: InvokeChannels[C]['request']) => Promise<InvokeChannels[C]['response']>
+
+function finishCall(token: string | null): FinishCall {
+  return (channel, request) => {
+    const api = window.__scribeApi
+    if (token) return api.invokeInSession(token, channel, request)
+    return (api.invoke as (name: typeof channel, body: typeof request) => Promise<InvokeChannels[typeof channel]['response']>)(channel, request)
+  }
+}
+
+const plainCall = finishCall(null)
+
+/** Token da sessão de cada gravação no main (contrato 22); `null` se o main não respondeu. */
+const recordingTokens = new WeakMap<CaptureSession, Promise<string | null>>()
+
 /** Uma análise atrasada na reunião já criada, com uma segunda tentativa. Falso se as duas falharam. */
-async function addLateAnalysis(meetingId: string, analysis: MeetingAnalysis): Promise<boolean> {
+async function addLateAnalysis(meetingId: string, analysis: MeetingAnalysis, call: FinishCall = plainCall): Promise<boolean> {
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
-      if ((await window.__scribeApi.invoke('scribe:analyses-add', { meetingId, analysis: { ...analysis, meetingId } })) === true) return true
+      if ((await call('scribe:analyses-add', { meetingId, analysis: { ...analysis, meetingId } })) === true) return true
     } catch {
       // tenta de novo
     }
@@ -247,11 +267,11 @@ async function stopAudioFile(run: AudioRun | null): Promise<void> {
 }
 
 /** Encerrar, segunda parte: o main renomeia o `.part`, escreve o `.md` e grava os caminhos. Falso se algo falhou. */
-async function finishAudioFile(run: AudioRun, meetingId: string): Promise<boolean> {
+async function finishAudioFile(run: AudioRun, meetingId: string, call: FinishCall): Promise<boolean> {
   const id = await run.begin
   if (id === null) return run.file === null || run.file.ok
   try {
-    const result = await window.__scribeApi.invoke('scribe:audio-finish', { id, meetingId })
+    const result = await call('scribe:audio-finish', { id, meetingId })
     return result.ok
   } catch {
     return false
@@ -320,6 +340,11 @@ export const useRecording = create<RecordingState>()((set, get) => ({
     }
     const startedAt = new Date()
     const title = defaultMeetingTitle(startedAt)
+    // Sessão no main (contrato 22): fechar a janela pede confirmação e o "Encerrar" salva mesmo bloqueado.
+    const recordingToken = Promise.resolve(window.__scribeApi.invoke('scribe:recording-session-open')).then(
+      (token: unknown) => (typeof token === 'string' ? token : null),
+      () => null,
+    )
     // Arquivo da reunião, se a opção está ligada: o gravador lê as mesmas trilhas que a captura abrir.
     let audio: Omit<AudioRun, 'session'> | null = null
     const session = new CaptureSession({
@@ -335,6 +360,7 @@ export const useRecording = create<RecordingState>()((set, get) => ({
       })
       audioRun = { session, ...audio }
     }
+    recordingTokens.set(session, recordingToken)
     const real = env.mode === 'real'
     transcription = real
       ? new TranscriptionSession({
@@ -546,6 +572,8 @@ export const useRecording = create<RecordingState>()((set, get) => ({
     set({ saving: true, saveFailed: false })
     const settings = useSettings.getState().settings
     const audio = audioRun?.session === session ? audioRun : null
+    const token = (await recordingTokens.get(session)) ?? null
+    const call = finishCall(token)
     try {
       await stopAudioFile(audio)
       const result = lastResult.get(session) ?? (await stopOnce(session))
@@ -557,24 +585,26 @@ export const useRecording = create<RecordingState>()((set, get) => ({
       await Promise.all([useTranscription.getState().settleTranslations(), stopClaude(session)])
       const meeting =
         get().savedMeeting ??
-        (await window.__scribeApi.invoke('scribe:meetings-create', { title: get().title, startedAt, durationMs: result.durationMs, sources: result.sources }))
+        (await call('scribe:meetings-create', { title: get().title, startedAt, durationMs: result.durationMs, sources: result.sources }))
       set({ savedMeeting: meeting })
-      const hasTranscript = await saveTranscript(meeting.id, useTranscription.getState().segments, settings)
+      const hasTranscript = await saveTranscript(meeting.id, useTranscription.getState().segments, settings, call)
       // Anotações (contrato 13, CA4): antes do `.md` da pasta, que as leva no fim. Falhou: "Tentar de novo".
-      await saveNotes(meeting.id, get().notes)
+      await saveNotes(meeting.id, get().notes, call)
       // Análises (contrato 19, CA5): também antes do `.md`. A que ainda estiver gerando não é esperada: quando
       // terminar, entra direto na reunião.
-      await saveAnalyses(session, meeting.id, () => get().analyses)
+      await saveAnalyses(session, meeting.id, () => get().analyses, call)
       // Depois da transcrição interna salva: o main renomeia o áudio e escreve o `.md` (CA6, CA6b).
       if (audio) {
-        const filesOk = await finishAudioFile(audio, meeting.id)
+        const filesOk = await finishAudioFile(audio, meeting.id, call)
         if (audioRun === audio) audioRun = null
         set({ filesFailedMeetingId: filesOk && get().audio !== 'failed' ? null : meeting.id })
       }
       // Resumo (contrato 08, CA4): com algum trecho, o main resume em segundo plano, depois dos arquivos
       // (o `- resumo.md` vai ao lado deles). Só com "Resumir ao encerrar" ligado e o `claude` encontrado;
       // quem decide é o main. A tela não espera.
-      if (hasTranscript) void Promise.resolve(window.__scribeApi.invoke('scribe:summary-generate', { meetingId: meeting.id, auto: true })).catch(() => undefined)
+      if (hasTranscript) void Promise.resolve(call('scribe:summary-generate', { meetingId: meeting.id, auto: true })).catch(() => undefined)
+      // Tudo salvo: a sessão fecha (depois do pedido do resumo, que já passou) e o bloqueio volta a recusar.
+      if (token) void Promise.resolve(window.__scribeApi.invoke('scribe:recording-session-close', { token })).catch(() => undefined)
       useTranscription.getState().reset()
       set({
         session: null,
@@ -629,7 +659,7 @@ async function stopOnce(session: CaptureSession): Promise<StopResult> {
 }
 
 /** Grava a transcrição em `meetings/<id>.json` (CA12). Sem trechos (sem chave), nada é escrito e devolve falso. */
-async function saveTranscript(meetingId: string, segments: readonly TranscriptionSegment[], settings: AppSettings): Promise<boolean> {
+async function saveTranscript(meetingId: string, segments: readonly TranscriptionSegment[], settings: AppSettings, call: FinishCall): Promise<boolean> {
   const persisted = persistableTranscript(segments)
   if (!persisted.length) return false
   const document: TranscriptDocument = {
@@ -641,14 +671,14 @@ async function saveTranscript(meetingId: string, segments: readonly Transcriptio
     translationModel: settings.translationEnabled ? effectiveTranslationModel(settings) : null,
     segments: persisted,
   }
-  await window.__scribeApi.invoke('scribe:transcript-save', { document })
+  await call('scribe:transcript-save', { document })
   return persisted.some((segment) => segment.text.trim() !== '')
 }
 
 /** Grava as anotações da gravação na reunião criada. Sem anotação, nada é escrito. */
-async function saveNotes(meetingId: string, notes: readonly MeetingNote[]): Promise<void> {
+async function saveNotes(meetingId: string, notes: readonly MeetingNote[], call: FinishCall): Promise<void> {
   if (!notes.length) return
-  const saved = await window.__scribeApi.invoke('scribe:notes-save', { meetingId, notes: [...notes] })
+  const saved = await call('scribe:notes-save', { meetingId, notes: [...notes] })
   if (!saved) throw new Error('anotações não salvas')
 }
 
@@ -656,15 +686,15 @@ async function saveNotes(meetingId: string, notes: readonly MeetingNote[]): Prom
  * Grava as análises da gravação na reunião criada (sem análise, nada é escrito) e marca a gravação como
  * salva. Uma que chegou enquanto o pedido ia ao main também entra, uma a uma.
  */
-async function saveAnalyses(session: CaptureSession, meetingId: string, current: () => readonly MeetingAnalysis[]): Promise<void> {
+async function saveAnalyses(session: CaptureSession, meetingId: string, current: () => readonly MeetingAnalysis[], call: FinishCall): Promise<void> {
   const list = current()
   if (list.length) {
-    const saved = await window.__scribeApi.invoke('scribe:analyses-save', { meetingId, analyses: [...list] })
+    const saved = await call('scribe:analyses-save', { meetingId, analyses: [...list] })
     if (!saved) throw new Error('análises não salvas')
   }
   analysesSavedFor.set(session, meetingId)
   for (const late of current().filter((analysis) => !list.includes(analysis))) {
-    if (!(await addLateAnalysis(meetingId, late))) throw new Error('análise não salva')
+    if (!(await addLateAnalysis(meetingId, late, call))) throw new Error('análise não salva')
   }
 }
 

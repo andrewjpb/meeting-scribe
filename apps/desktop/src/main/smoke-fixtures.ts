@@ -4,6 +4,7 @@
 // A chave é fictícia: só os quatro últimos caracteres aparecem na tela (••••4f2a, como no mockup).
 import { execFile, spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
+import { EventEmitter } from 'node:events'
 import { createServer } from 'node:http'
 import { gzipSync } from 'node:zlib'
 import { updateAssetName } from '../shared/updates'
@@ -157,6 +158,25 @@ export interface SmokeFixtures {
   dockIcons: ('custom' | 'default' | 'skipped')[]
   /** API do GitHub e download do release falsos (contrato 14). */
   updates: SmokeUpdates
+  /** Bloqueio do app (contrato 22): Touch ID, relógio e `powerMonitor` substitutos. */
+  lock: SmokeLock
+  /** Diálogos de "gravação em andamento" ao fechar ou sair (o nativo nunca abre no smoke). */
+  leaveDialogs: { message: string; buttons: string[] }[]
+  /** Botão que o substituto "clica" (0 é "Cancelar"). */
+  leaveChoice: number
+}
+
+export interface SmokeLock {
+  /** Quanto o relógio do bloqueio está adiantado: a espera depois dos erros passa sem esperar de verdade. */
+  skewMs: number
+  touchIdAvailable: boolean
+  /** O que o Touch ID substituto responde (o de verdade nunca é pedido no smoke). */
+  touchIdApproves: boolean
+  touchIdPrompts: number
+  /** `powerMonitor` substituto: o smoke emite `lock-screen` e `suspend`. */
+  power: EventEmitter
+  /** Reavisa o estado do bloqueio às janelas (ligado pelo main), depois de adiantar o relógio. */
+  refresh: () => void
 }
 
 export interface SmokeUpdates {
@@ -264,6 +284,9 @@ export function createSmokeFixtures(currentVersion: string): SmokeFixtures {
     savePath: null,
     chosenImage: null,
     dockIcons: [],
+    leaveDialogs: [],
+    leaveChoice: 0,
+    lock: { skewMs: 0, touchIdAvailable: true, touchIdApproves: true, touchIdPrompts: 0, power: new EventEmitter(), refresh: () => undefined },
     fetch: (url: string, init: FetchInit) => {
       const path = new URL(url).pathname
       const auth = init.headers['authorization'] ?? ''

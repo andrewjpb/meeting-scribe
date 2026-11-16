@@ -6,6 +6,7 @@
 import { create } from 'zustand'
 import type { MeetingNote, NoteColor } from '@shared/meeting-notes'
 import { addNote, createNote, editNote, NOTE_SAVE_DELAY_MS, NOTE_UNDO_MS, noteWithText, removeNote, restoreNote, type RemovedNote } from '../notes/noteList'
+import { rereadWhenUnlocked } from '../../app/lockStore'
 
 export interface MeetingNotesEntry {
   status: 'loading' | 'ready' | 'failed'
@@ -103,7 +104,9 @@ export const useMeetingNotes = create<MeetingNotesState>()((set, get) => {
         const now = get().meetings[meetingId]
         // Editou enquanto a leitura voltava: vale a edição.
         if (now && !isDirty(now)) patchEntry(meetingId, { status: 'ready', notes })
-      } catch {
+      } catch (error) {
+        // Recusada com o app bloqueado (contrato 22): fica carregando e relê no desbloqueio.
+        if (rereadWhenUnlocked(error, () => void get().load(meetingId))) return
         if (get().meetings[meetingId]?.status === 'loading') patchEntry(meetingId, { status: 'failed' })
       }
     },

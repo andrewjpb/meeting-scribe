@@ -4,6 +4,7 @@ import { useNavigate } from 'react-router'
 import { MEETING_TITLE_MAX } from '@shared/meetings'
 import { meetingPath } from '@shared/routes'
 import { useBranding } from '../../app/brandingStore'
+import { whenUnlocked } from '../../app/lockStore'
 import type { CapturePhase, CaptureState } from '../../audio/capture'
 import { formatElapsed } from '../../audio/clock'
 import { Button } from '../../design/Button'
@@ -58,7 +59,8 @@ export function LiveScreen() {
       .getState()
       .end()
       .then((meeting) => {
-        if (meeting) void navigate(meetingPath(meeting.id), { replace: true })
+        // Bloqueado no meio do "Encerrar" (contrato 22): o detalhe só abre depois do desbloqueio.
+        if (meeting) whenUnlocked(() => void navigate(meetingPath(meeting.id), { replace: true }))
       })
   }
 

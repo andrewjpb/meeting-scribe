@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { AnalysisError, MeetingAnalysis } from '@shared/meeting-analysis'
+import { rereadWhenUnlocked } from '../../app/lockStore'
 
 export interface AnalysesView {
   /** `null` até o main responder. */
@@ -23,7 +24,15 @@ export function useAnalyses(meetingId: string): { view: AnalysesView; analyze: (
     const fill = (analyses: MeetingAnalysis[]): void => {
       if (alive) setEntry((current) => (current?.meetingId === meetingId && current.view.analyses ? current : { meetingId, view: { analyses, analyzing: current?.meetingId === meetingId && current.view.analyzing, error: null } }))
     }
-    window.__scribeApi.invoke('scribe:analyses-get', { meetingId }).then(fill, () => fill([]))
+    // Recusada com o app bloqueado (contrato 22): relê no desbloqueio.
+    let reread: (() => void) | null = null
+    const read = (): void => {
+      window.__scribeApi.invoke('scribe:analyses-get', { meetingId }).then(fill, (error: unknown) => {
+        reread = alive ? rereadWhenUnlocked(error, read) : null
+        if (!reread) fill([])
+      })
+    }
+    read()
     // Mudou no main (uma análise da gravação que chegou depois do "Encerrar", outra janela): relê.
     const off = window.__scribeApi.on('scribe:analyses-changed', (payload) => {
       if (payload.meetingId !== meetingId) return
@@ -31,11 +40,14 @@ export function useAnalyses(meetingId: string): { view: AnalysesView; analyze: (
         (analyses) => {
           if (alive) setEntry((current) => ({ meetingId, view: { ...(current?.meetingId === meetingId ? current.view : { analyzing: false, error: null }), analyses } }))
         },
-        () => undefined,
+        (error: unknown) => {
+          if (alive) reread = rereadWhenUnlocked(error, read) ?? reread
+        },
       )
     })
     return () => {
       alive = false
+      reread?.()
       off()
     }
   }, [meetingId])

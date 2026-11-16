@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { SEARCH_TERM_MAX, SEARCH_TERM_MIN, withSummaryStatus, type MeetingOverview, type MeetingSearchResult } from '@shared/meetings-overview'
+import { rereadWhenUnlocked } from '../../app/lockStore'
 
 /** Espera depois da última tecla antes de pedir a busca ao main. */
 export const SEARCH_DELAY_MS = 200
@@ -29,20 +30,28 @@ export function useMeetingsOverview(): MeetingsOverviewView {
   useEffect(() => {
     let alive = true
     const api = window.__scribeApi
-    api.invoke('scribe:meetings-overview').then(
-      (entries) => {
-        if (alive) setList(entries)
-      },
-      () => {
-        if (alive) setFailed(true)
-      },
-    )
+    // Recusada com o app bloqueado (contrato 22): relê no desbloqueio em vez de mostrar a falha.
+    let reread: (() => void) | null = null
+    const read = (): void => {
+      api.invoke('scribe:meetings-overview').then(
+        (entries) => {
+          if (alive) setList(entries)
+        },
+        (error: unknown) => {
+          if (!alive) return
+          reread = rereadWhenUnlocked(error, read)
+          if (!reread) setFailed(true)
+        },
+      )
+    }
+    read()
     const off = api.on('scribe:summary-state', ({ meetingId, status }) => {
       if (!alive) return
       setList((current) => current?.map((entry) => (entry.meeting.id === meetingId ? withSummaryStatus(entry, status) : entry)) ?? current)
     })
     return () => {
       alive = false
+      reread?.()
       off()
     }
   }, [attempt])

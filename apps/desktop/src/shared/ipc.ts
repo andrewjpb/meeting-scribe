@@ -2,6 +2,7 @@
 // sentido certo e na lista de canais permitidos logo abaixo (o preload recusa o que não estiver nela).
 import type { AcpAgentStatus } from './acp'
 import type { BrandingInfo, BrandLogoChoice } from './branding'
+import type { LockResponse, LockStatus } from './lock'
 import type { KeySaveResult, KeyStatus, MicAccess, ModelCheck, ModelsResult } from './assemblyai'
 import type { Chat, ChatEvent, ChatListItem, ChatRedoRequest, ChatSendRequest, ChatSendResult, ChatUpdateRequest } from './chat'
 import type { ClaudeLocateResult, ClaudeRunState, ClaudeStartResult, ClaudeTranslateRequest, ClaudeTranslateResult } from './claude-cli'
@@ -168,6 +169,23 @@ export interface InvokeChannels {
   'scribe:chat-redo': { request: ChatRedoRequest; response: ChatSendResult }
   /** "Copiar" uma resposta: o main escreve o texto dela na área de transferência. */
   'scribe:chat-copy': { request: { id: string; index: number }; response: boolean }
+  /** Bloqueio do app (contrato 22): estado, sem nada da senha. */
+  'scribe:lock-status': { request: undefined; response: LockStatus }
+  /** "Bloquear" (barra lateral, barra da gravação, ⌘⇧L): só bloqueia se houver senha ou Touch ID. */
+  'scribe:lock-now': { request: undefined; response: LockStatus }
+  /** A senha vai ao main, que confere com o hash; ela nunca volta. */
+  'scribe:lock-unlock': { request: { password: string }; response: LockResponse }
+  'scribe:lock-touch-id': { request: undefined; response: LockResponse }
+  /** "Criar senha" (`current: null`) e "Trocar senha" (pede a atual). A confirmação é conferida na tela. */
+  'scribe:lock-password-set': { request: { current: string | null; next: string }; response: LockResponse }
+  /** "Remover senha" (pede a atual). */
+  'scribe:lock-password-remove': { request: { current: string }; response: LockResponse }
+  /**
+   * Gravação em curso (contrato 22): aberta no começo da gravação e fechada no fim do "Encerrar". O token é o
+   * que deixa os canais de fim de gravação passarem com o app bloqueado, e o main sabe que há gravação (⌘W, ⌘Q).
+   */
+  'scribe:recording-session-open': { request: undefined; response: string }
+  'scribe:recording-session-close': { request: { token: string }; response: boolean }
 }
 
 /** renderer -> main, sem resposta (`__scribeApi.send` / `ipcMain.on`). */
@@ -182,6 +200,8 @@ export interface RendererEvents {
   'scribe:chat-leave': { id: string }
   /** Link `https://` de uma resposta, depois da confirmação na tela: o main confere e abre no navegador. */
   'scribe:open-link': string
+  /** Uso do app (tecla, clique, movimento), no máximo um a cada 15 s: "Bloquear sozinho depois de …" (contrato 22). */
+  'scribe:lock-activity': undefined
 }
 
 /** main -> renderer (`webContents.send` / `__scribeApi.on`). */
@@ -203,6 +223,10 @@ export interface MainEvents {
   'scribe:update-state': UpdateState
   /** Resposta do chat crescendo ou terminada (contrato 15), com o raciocínio, os passos e os detalhes (16). */
   'scribe:chat-event': ChatEvent
+  /** O app bloqueou ou desbloqueou, ou a senha, o Touch ID ou a espera mudaram (contrato 22). */
+  'scribe:lock-state': LockStatus
+  /** "Encerrar e sair" no diálogo de fechar com gravação em andamento: o renderer encerra e o main sai depois. */
+  'scribe:recording-end-and-quit': undefined
 }
 
 export type InvokeChannel = keyof InvokeChannels
@@ -282,6 +306,14 @@ const INVOKE: Record<InvokeChannel, true> = {
   'scribe:chat-update': true,
   'scribe:chat-redo': true,
   'scribe:chat-copy': true,
+  'scribe:lock-status': true,
+  'scribe:lock-now': true,
+  'scribe:lock-unlock': true,
+  'scribe:lock-touch-id': true,
+  'scribe:lock-password-set': true,
+  'scribe:lock-password-remove': true,
+  'scribe:recording-session-open': true,
+  'scribe:recording-session-close': true,
 }
 const RENDERER_EVENTS: Record<RendererEvent, true> = {
   'scribe:csp-violation': true,
@@ -290,6 +322,7 @@ const RENDERER_EVENTS: Record<RendererEvent, true> = {
   'scribe:chat-close': true,
   'scribe:chat-leave': true,
   'scribe:open-link': true,
+  'scribe:lock-activity': true,
 }
 const MAIN_EVENTS: Record<MainEvent, true> = {
   'scribe:navigate': true,
@@ -301,7 +334,138 @@ const MAIN_EVENTS: Record<MainEvent, true> = {
   'scribe:analyses-changed': true,
   'scribe:update-state': true,
   'scribe:chat-event': true,
+  'scribe:lock-state': true,
+  'scribe:recording-end-and-quit': true,
 }
+
+/**
+ * O que cada canal faz com o app bloqueado (contrato 22, CA4). O registro do main (`main/ipc.ts`) é o ponto
+ * único que aplica, e é uma lista de permitidos: só passa o canal marcado `allowed`, e `session` só com o token
+ * da gravação em curso; qualquer outro valor, ou um canal fora deste mapa, devolve o erro `locked` sem chamar o
+ * handler. Passam o próprio bloqueio, o que a janela precisa para abrir e pintar a camada sem conteúdo nenhum
+ * (versão, tema, marca, permissões, aviso de versão) e o que a gravação em curso usa enquanto grava. Os canais
+ * de fim de gravação (`session`) passam só com o token da sessão aberta: bloquear no meio do "Encerrar" não
+ * perde a reunião. Todo o resto é recusado: leitura de reuniões, transcrição, resumo, notas, análises, chat,
+ * arquivos, busca, cópia para a área de transferência e qualquer ação ou mudança de configuração.
+ * `Record<..., …>` obriga a classificar todo canal novo.
+ */
+export type LockedPolicy = 'allowed' | 'session' | 'refused'
+
+/** Canais de fim de gravação: passam bloqueado só com o token da sessão (`ScribeApi.invokeInSession`). */
+export const RECORDING_SESSION_CHANNELS = [
+  'scribe:meetings-create',
+  'scribe:transcript-save',
+  'scribe:notes-save',
+  'scribe:analyses-save',
+  'scribe:analyses-add',
+  'scribe:audio-finish',
+  // Só o resumo automático (`auto: true`).
+  'scribe:summary-generate',
+] as const satisfies readonly InvokeChannel[]
+export type RecordingSessionChannel = (typeof RECORDING_SESSION_CHANNELS)[number]
+
+/** Segundo argumento do `invoke` de um canal de fim de gravação. */
+export interface RecordingSessionTag {
+  recordingSession: string
+}
+
+export const WHEN_LOCKED: Readonly<Record<InvokeChannel, LockedPolicy>> = Object.freeze({
+  // O próprio bloqueio.
+  'scribe:lock-status': 'allowed',
+  'scribe:lock-now': 'allowed',
+  'scribe:lock-unlock': 'allowed',
+  'scribe:lock-touch-id': 'allowed',
+  // Criar, trocar e remover a senha são de Configurações: só com o app desbloqueado.
+  'scribe:lock-password-set': 'refused',
+  'scribe:lock-password-remove': 'refused',
+  // A janela abre e pinta a camada sem conteúdo nenhum.
+  'scribe:app-info': 'allowed',
+  'scribe:capture-mode': 'allowed',
+  'scribe:settings-get': 'allowed',
+  'scribe:branding-get': 'allowed',
+  'scribe:mic-access': 'allowed',
+  'scribe:update-get': 'allowed',
+  // A gravação em curso continua: token de reconexão, tradução de cada trecho, o processo do `claude` e o
+  // áudio que vai para a pasta, e o fim da sessão.
+  'scribe:transcription-token': 'allowed',
+  'scribe:translate-turn': 'allowed',
+  'scribe:claude-start': 'allowed',
+  'scribe:claude-translate': 'allowed',
+  'scribe:claude-stop': 'allowed',
+  'scribe:audio-append': 'allowed',
+  'scribe:recording-session-close': 'allowed',
+  // Uma gravação só começa pela tela, que está bloqueada.
+  'scribe:recording-session-open': 'refused',
+  'scribe:meetings-list': 'refused',
+  'scribe:meetings-get': 'refused',
+  'scribe:meetings-create': 'session',
+  'scribe:meetings-rename': 'refused',
+  'scribe:meetings-delete': 'refused',
+  'scribe:meetings-overview': 'refused',
+  'scribe:meetings-search': 'refused',
+  'scribe:settings-update': 'refused',
+  'scribe:key-status': 'refused',
+  'scribe:key-save': 'refused',
+  'scribe:key-verify': 'refused',
+  'scribe:key-remove': 'refused',
+  'scribe:models-list': 'refused',
+  'scribe:model-select': 'refused',
+  'scribe:mic-access-request': 'refused',
+  'scribe:transcript-save': 'session',
+  'scribe:transcript-get': 'refused',
+  'scribe:transcript-copy': 'refused',
+  'scribe:notes-get': 'refused',
+  'scribe:notes-save': 'session',
+  'scribe:notes-copy': 'refused',
+  'scribe:claude-locate': 'refused',
+  'scribe:acp-status': 'refused',
+  'scribe:acp-install': 'refused',
+  'scribe:acp-remove': 'refused',
+  'scribe:claude-path-set': 'refused',
+  'scribe:audio-folder': 'refused',
+  'scribe:audio-folder-choose': 'refused',
+  'scribe:audio-begin': 'refused',
+  'scribe:audio-finish': 'session',
+  'scribe:meeting-files': 'refused',
+  'scribe:meeting-file-open': 'refused',
+  'scribe:meeting-file-reveal': 'refused',
+  'scribe:meeting-file-download': 'refused',
+  'scribe:summary-get': 'refused',
+  'scribe:summary-generate': 'session',
+  'scribe:summary-copy': 'refused',
+  'scribe:analysis-run': 'refused',
+  'scribe:analyses-get': 'refused',
+  'scribe:analyses-save': 'session',
+  'scribe:analyses-add': 'session',
+  'scribe:analysis-copy': 'refused',
+  'scribe:brand-logo-choose': 'refused',
+  'scribe:brand-logo-reset': 'refused',
+  'scribe:update-check': 'refused',
+  'scribe:update-download': 'refused',
+  'scribe:update-quit': 'refused',
+  'scribe:chat-list': 'refused',
+  'scribe:chat-get': 'refused',
+  'scribe:chat-send': 'refused',
+  'scribe:chat-stop': 'refused',
+  'scribe:chat-delete': 'refused',
+  'scribe:chat-update': 'refused',
+  'scribe:chat-redo': 'refused',
+  'scribe:chat-copy': 'refused',
+})
+
+/**
+ * Mensagens sem resposta com o app bloqueado: abrir link, os Ajustes ou o painel da AssemblyAI é ignorado;
+ * a violação de CSP, o fechamento das conversas e o uso do app passam.
+ */
+export const RENDERER_EVENTS_WHEN_LOCKED: Readonly<Record<RendererEvent, 'pass' | 'ignored'>> = Object.freeze({
+  'scribe:csp-violation': 'pass',
+  'scribe:chat-close': 'pass',
+  'scribe:chat-leave': 'pass',
+  'scribe:lock-activity': 'pass',
+  'scribe:open-privacy-settings': 'ignored',
+  'scribe:open-key-dashboard': 'ignored',
+  'scribe:open-link': 'ignored',
+})
 
 export const INVOKE_CHANNELS = Object.keys(INVOKE) as InvokeChannel[]
 export const RENDERER_EVENT_CHANNELS = Object.keys(RENDERER_EVENTS) as RendererEvent[]
@@ -310,6 +474,8 @@ export const MAIN_EVENT_CHANNELS = Object.keys(MAIN_EVENTS) as MainEvent[]
 /** API exposta pelo preload em `window.__scribeApi`. */
 export interface ScribeApi {
   invoke<C extends InvokeChannel>(channel: C, ...args: InvokeArgs<C>): Promise<InvokeChannels[C]['response']>
+  /** O mesmo `invoke` com o token da gravação em curso: só os canais de fim de gravação (contrato 22). */
+  invokeInSession<C extends RecordingSessionChannel>(token: string, channel: C, request: InvokeChannels[C]['request']): Promise<InvokeChannels[C]['response']>
   send<C extends RendererEvent>(channel: C, payload: RendererEvents[C]): void
   on<C extends MainEvent>(channel: C, listener: (payload: MainEvents[C]) => void): () => void
 }
