@@ -2,6 +2,7 @@ import { NavLink } from 'react-router'
 import { BrandLogo } from '../design/BrandLogo'
 import { Icon } from '../design/Icon'
 import { PermissionsBlock } from '../features/permissions/PermissionsBlock'
+import { UpdateNotice } from '../features/settings/UpdateNotice'
 import { useBranding } from './brandingStore'
 import { APP_ROUTES } from './routes'
 
@@ -9,7 +10,7 @@ const NAV_ITEMS = APP_ROUTES.flatMap((route) => (route.nav ? [{ ...route.nav, id
 
 /**
  * Barra lateral opaca em azul profundo: espaço dos botões da janela, marca (a escolhida em Configurações
- * ou a da LAP), navegação e, no rodapé, as permissões.
+ * ou a da LAP), navegação e, no rodapé, o aviso de versão nova e as permissões.
  */
 export function Sidebar() {
   const branding = useBranding((state) => state.branding)
@@ -48,7 +49,11 @@ export function Sidebar() {
           </NavLink>
         ))}
       </nav>
-      <PermissionsBlock />
+      {/* Rodapé: o aviso de versão nova (quando há) logo acima das permissões. */}
+      <div className="mt-auto flex flex-col">
+        <UpdateNotice />
+        <PermissionsBlock />
+      </div>
     </aside>
   )
 }

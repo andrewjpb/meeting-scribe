@@ -13,6 +13,7 @@ import { ClaudeCliField } from './ClaudeCliField'
 import { MeetingFilesSection } from './MeetingFilesSection'
 import { micOptions, SYSTEM_DEFAULT } from './micOptions'
 import { ModelPicker } from './ModelPicker'
+import { UpdatesSection } from './UpdatesSection'
 
 export const LANGUAGE_NAMES: Record<LanguageCode, string> = {
   pt: 'Português',
@@ -145,6 +146,8 @@ export function SettingsScreen() {
               <Segmented value={settings.theme} options={THEMES} labelledBy="settings-theme" dataName="theme-option" onChange={(theme) => void update({ theme })} />
             </SettingRow>
           </Section>
+
+          <UpdatesSection />
         </div>
       </div>
     </div>

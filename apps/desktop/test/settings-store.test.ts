@@ -27,6 +27,7 @@ describe('esquema de configurações (CA1)', () => {
       brandName: null,
       brandSubtitle: null,
       brandLogo: null,
+      autoCheckUpdates: true,
     })
     expect(parseSettings(undefined)).toEqual(DEFAULT_SETTINGS)
     expect(parseSettings({})).toEqual(DEFAULT_SETTINGS)
@@ -64,6 +65,7 @@ describe('esquema de configurações (CA1)', () => {
       brandName: 'Atas da Diretoria',
       brandSubtitle: '',
       brandLogo: 'logo-0123456789ab.png',
+      autoCheckUpdates: false,
     }
     expect(parseSettings(saved)).toEqual(saved)
     expect(parseSettings({ ...saved, theme: 'sepia' })).toEqual({ ...saved, theme: 'system' })
@@ -98,7 +100,7 @@ describe('esquema de configurações (CA1)', () => {
   it('Claude CLI (contrato 05, CA1): motor, modelo e caminho com padrão próprio cada um', () => {
     // `settings.json` do contrato 04, sem os campos novos: carrega com os padrões deles e mantém o resto.
     const old = { translationEnabled: false, translationModel: 'gpt-oss-120b', sourceLanguage: 'es', targetLanguage: 'ja', echoCancellation: true, theme: 'dark', micDeviceId: null }
-    expect(parseSettings(old)).toEqual({ ...old, removeEcho: true, translationEngine: 'assemblyai', claudeModel: 'haiku', claudePath: null, saveToFolder: true, audioFolder: null, summarizeOnStop: true, identifySpeakers: false, brandName: null, brandSubtitle: null, brandLogo: null })
+    expect(parseSettings(old)).toEqual({ ...old, removeEcho: true, translationEngine: 'assemblyai', claudeModel: 'haiku', claudePath: null, saveToFolder: true, audioFolder: null, summarizeOnStop: true, identifySpeakers: false, brandName: null, brandSubtitle: null, brandLogo: null, autoCheckUpdates: true })
     expect(parseSettings({ translationEngine: 'claude-cli', claudeModel: 'sonnet' })).toMatchObject({ translationEngine: 'claude-cli', claudeModel: 'sonnet' })
     // Fora da lista cai no padrão: só `haiku` e `sonnet`, só os dois motores.
     expect(parseSettings({ translationEngine: 'openai' }).translationEngine).toBe('assemblyai')
@@ -209,6 +211,14 @@ describe('esquema de configurações (CA1)', () => {
     expect(() => parseSettingsPatch({ brandSubtitle: 'y'.repeat(41) })).toThrow()
     expect(() => parseSettingsPatch({ brandLogo: 'logo-deadbeef.png' })).toThrow()
     expect(() => parseSettingsPatch({ brandLogo: null })).toThrow()
+  })
+
+  it('Atualizações (contrato 14): "Procurar automaticamente" ligado por padrão, só booleano', () => {
+    expect(parseSettings({}).autoCheckUpdates).toBe(true)
+    expect(parseSettings({ autoCheckUpdates: false }).autoCheckUpdates).toBe(false)
+    expect(parseSettings({ autoCheckUpdates: 'não' }).autoCheckUpdates).toBe(true)
+    expect(parseSettingsPatch({ autoCheckUpdates: false })).toEqual({ autoCheckUpdates: false })
+    expect(() => parseSettingsPatch({ autoCheckUpdates: 'sim' })).toThrow()
   })
 
   it('Claude CLI pelo renderer: motor e modelo validados; o caminho não passa por aqui', () => {

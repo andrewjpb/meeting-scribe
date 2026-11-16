@@ -3,11 +3,15 @@
 // (a resposta inteira fica em test/fixtures/assemblyai/models.json); os corpos de erro também são reais.
 // A chave é fictícia: só os quatro últimos caracteres aparecem na tela (••••4f2a, como no mockup).
 import { execFile, spawn } from 'node:child_process'
+import { createHash } from 'node:crypto'
+import { updateAssetName } from '../shared/updates'
 import type { FetchInit, FetchLike, FetchResponse } from './assemblyai/gateway'
 import type { ExecFile } from './claude-cli/locate'
 import type { SpawnSummary } from './claude-cli/summary'
 import type { SpawnClaude } from './claude-cli/translator'
 import { fakeMediaAccess } from './permissions'
+import type { DownloadRequest } from './updates/download'
+import { LATEST_RELEASE_URL, RELEASE_DOWNLOAD_PREFIX } from './updates/release'
 
 /** Chave inventada do smoke. As chaves digitadas pelo smoke dizem o que o gateway falso responde. */
 export const SMOKE_FAKE_KEY = 'smoke-chave-ficticia-0000-4f2a'
@@ -138,12 +142,99 @@ export interface SmokeFixtures {
   chosenImage: string | null
   /** Cada troca do ícone do Dock (`app.dock` nunca é tocado no smoke). */
   dockIcons: ('custom' | 'default' | 'skipped')[]
+  /** API do GitHub e download do release falsos (contrato 14). */
+  updates: SmokeUpdates
+}
+
+export interface SmokeUpdates {
+  fetch: FetchLike
+  request: DownloadRequest
+  /** Versão do release falso: a atual com o `minor` + 1. */
+  version: string
+  notes: string
+  /** Conteúdo do `.dmg` falso e o SHA-256 dele. */
+  dmg: Buffer
+  sha256: string
+  /** O `.sha256` do release falso traz outro hash (o download não confere). */
+  wrongHash: boolean
+  /** Pedidos à API e ao download: URL, `User-Agent` e os nomes dos cabeçalhos (nunca mais que isso). */
+  calls: { url: string; userAgent: string; headerNames: string[] }[]
+  /** Redirecionamentos que o app aceitou seguir. */
+  redirects: string[]
+  /** Vezes que "Fechar o app agora" pediu para sair (o smoke nunca sai por ele). */
+  quitRequests: number
+}
+
+const SMOKE_DMG_CHUNKS = 8
+const SMOKE_DMG_CHUNK_DELAY_MS = 120
+
+/**
+ * Release falso para a versão atual + 1 no `minor`: API, `.dmg` de 8 pedaços entregues devagar (o
+ * "Baixando… N%" aparece) e o `.sha256`. O download passa pelo redirecionamento para o armazenamento de
+ * assets, como no GitHub; nenhum pedido sai da máquina.
+ */
+export function createSmokeUpdates(currentVersion: string): SmokeUpdates {
+  const [major = 0, minor = 0] = currentVersion.split('.').map(Number)
+  const version = `${major}.${minor + 1}.0`
+  const name = updateAssetName(version)
+  const dmg = Buffer.alloc(SMOKE_DMG_CHUNKS * 4096, 'LAP Reuniões smoke dmg ')
+  const sha256 = createHash('sha256').update(dmg).digest('hex')
+  const base = `${RELEASE_DOWNLOAD_PREFIX}v${version}/`
+  const updates: SmokeUpdates = {
+    version,
+    notes: 'Novidades desta versão:\n- Aviso de versão nova na barra lateral.\n- Atualização pelo GitHub com o arquivo conferido.',
+    dmg,
+    sha256,
+    wrongHash: false,
+    calls: [],
+    redirects: [],
+    quitRequests: 0,
+    fetch: (url, init) => {
+      updates.calls.push({ url, userAgent: init.headers['user-agent'] ?? '', headerNames: Object.keys(init.headers).sort() })
+      if (url !== LATEST_RELEASE_URL) return Promise.resolve(reply(404, { message: 'Not Found' }))
+      return Promise.resolve(
+        reply(200, {
+          tag_name: `v${version}`,
+          draft: false,
+          prerelease: false,
+          body: updates.notes,
+          assets: [
+            { name, browser_download_url: `${base}${name}`, size: dmg.length },
+            { name: `${name}.sha256`, browser_download_url: `${base}${name}.sha256`, size: 100 },
+          ],
+        }),
+      )
+    },
+    request: (url, { headers, allowRedirect, signal }) => {
+      updates.calls.push({ url, userAgent: headers['user-agent'] ?? '', headerNames: Object.keys(headers).sort() })
+      const file = url.slice(base.length)
+      const storage = `https://release-assets.githubusercontent.com/github-production-release-asset/smoke/${encodeURIComponent(file)}`
+      if (!url.startsWith(base) || (file !== name && file !== `${name}.sha256`)) return Promise.resolve({ status: 404, chunks: (async function* () {})() })
+      if (!allowRedirect(storage)) return Promise.reject(new Error(`redirecionamento recusado: ${storage}`))
+      updates.redirects.push(storage)
+      if (file !== name) {
+        const hash = updates.wrongHash ? createHash('sha256').update('outro arquivo').digest('hex') : sha256
+        return Promise.resolve({ status: 200, chunks: (async function* () { yield Buffer.from(`${hash}  ${name}\n`) })() })
+      }
+      return Promise.resolve({
+        status: 200,
+        chunks: (async function* () {
+          for (let i = 0; i < SMOKE_DMG_CHUNKS && !signal.aborted; i++) {
+            await new Promise((resolve) => setTimeout(resolve, SMOKE_DMG_CHUNK_DELAY_MS))
+            yield dmg.subarray(i * 4096, (i + 1) * 4096)
+          }
+        })(),
+      })
+    },
+  }
+  return updates
 }
 
 const reply = (status: number, body: unknown): FetchResponse => ({ status, text: () => Promise.resolve(JSON.stringify(body)) })
 
-export function createSmokeFixtures(): SmokeFixtures {
+export function createSmokeFixtures(currentVersion: string): SmokeFixtures {
   const fixtures: SmokeFixtures = {
+    updates: createSmokeUpdates(currentVersion),
     media: fakeMediaAccess('not-determined'),
     openedUrls: [],
     copiedTexts: [],

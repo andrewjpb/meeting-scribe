@@ -9,6 +9,7 @@ import type { Meeting, NewMeeting } from './meetings'
 import type { RouteId } from './routes'
 import type { AppSettings, SettingsPatch } from './settings-defaults'
 import type { TranscriptCopyResult, TranscriptDocument, TranslateTurnResult, TranscriptionTokenResult } from './transcription'
+import type { UpdateState } from './updates'
 
 export interface AppInfo {
   name: string
@@ -110,6 +111,14 @@ export interface InvokeChannels {
   'scribe:brand-logo-choose': { request: undefined; response: { result: BrandLogoChoice; branding: BrandingInfo; settings: AppSettings } }
   /** "Usar o logo da LAP": apaga o logo próprio. */
   'scribe:brand-logo-reset': { request: undefined; response: { branding: BrandingInfo; settings: AppSettings } }
+  /** Atualização pelo GitHub (contrato 14): versão atual, última verificação e versão nova, se houver. */
+  'scribe:update-get': { request: undefined; response: UpdateState }
+  /** "Procurar atualização": responde depois da consulta; erro e falta de internet não mudam nada. */
+  'scribe:update-check': { request: undefined; response: UpdateState }
+  /** "Atualizar" / "Baixar e instalar": o main baixa, confere e abre o `.dmg`; o andamento chega por `scribe:update-state`. */
+  'scribe:update-download': { request: undefined; response: UpdateState }
+  /** "Fechar o app agora", depois de abrir o `.dmg`. O renderer só oferece fora de uma gravação. */
+  'scribe:update-quit': { request: undefined; response: boolean }
 }
 
 /** renderer -> main, sem resposta (`__scribeApi.send` / `ipcMain.on`). */
@@ -131,6 +140,8 @@ export interface MainEvents {
   'scribe:claude-state': ClaudeRunState
   /** Resumo de uma reunião começou, terminou ou falhou. */
   'scribe:summary-state': { meetingId: string; status: SummaryStatus }
+  /** Consulta ou download da atualização mudou de estado. */
+  'scribe:update-state': UpdateState
 }
 
 export type InvokeChannel = keyof InvokeChannels
@@ -185,6 +196,10 @@ const INVOKE: Record<InvokeChannel, true> = {
   'scribe:branding-get': true,
   'scribe:brand-logo-choose': true,
   'scribe:brand-logo-reset': true,
+  'scribe:update-get': true,
+  'scribe:update-check': true,
+  'scribe:update-download': true,
+  'scribe:update-quit': true,
 }
 const RENDERER_EVENTS: Record<RendererEvent, true> = {
   'scribe:csp-violation': true,
@@ -197,6 +212,7 @@ const MAIN_EVENTS: Record<MainEvent, true> = {
   'scribe:settings-changed': true,
   'scribe:claude-state': true,
   'scribe:summary-state': true,
+  'scribe:update-state': true,
 }
 
 export const INVOKE_CHANNELS = Object.keys(INVOKE) as InvokeChannel[]

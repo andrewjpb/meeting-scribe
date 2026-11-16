@@ -7,7 +7,8 @@
 // gateway de fixtures, Chaveiro em memória com chave fictícia e permissão de microfone substituta. O
 // Claude CLI é o binário falso (test/fixtures/fake-claude.mjs); o `claude` de verdade nunca roda, nem
 // para o resumo da reunião (contrato 08). A marca própria (contrato 09) usa o logo de
-// test/fixtures/brand/ pelo diálogo substituto, e o Dock de verdade nunca é tocado.
+// test/fixtures/brand/ pelo diálogo substituto, e o Dock de verdade nunca é tocado. A atualização pelo
+// GitHub (contrato 14) usa API e download falsos; o `.dmg` falso vai para o userData temporário.
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
@@ -20,6 +21,7 @@ import { PRIVACY_PANE_URLS } from '../shared/privacy'
 import { BRAND_LOGO_INVALID_MESSAGE, BRAND_LOGO_PATTERN, DEFAULT_BRAND_NAME, DEFAULT_BRAND_SUBTITLE } from '../shared/branding'
 import { DEFAULT_SETTINGS, type AppSettings } from '../shared/settings-defaults'
 import { transcriptMarkdown } from '../shared/transcript-markdown'
+import { UPDATE_HASH_MISMATCH_MESSAGE, UPDATE_INSTALL_INSTRUCTION, UPDATE_QUIT_BLOCKED_MESSAGE, updateAssetName } from '../shared/updates'
 import { TRANSCRIPT_VERSION, type RuntimeSegment, type TranscriptDocument } from '../shared/transcription'
 import { applyMessage, emptyTranscriptState, persistableSegments, type StreamEnvelope } from '../renderer/src/transcription/reducer'
 import { DEFAULT_FOLDER_NAME } from './audio-files/service'
@@ -30,6 +32,7 @@ import { MENU_IDS } from './menu'
 import { MEETINGS_FILE } from './meetings/store'
 import { originOf } from './security'
 import { SETTINGS_FILE } from './settings/store'
+import { LATEST_RELEASE_URL, RELEASE_DOWNLOAD_PREFIX, RELEASE_REDIRECT_HOSTS } from './updates/release'
 import {
   SMOKE_FAKE_KEY,
   SMOKE_NOT_ALLOWED_MODEL,
@@ -821,6 +824,165 @@ async function brandingChecks(win: BrowserWindow, ctx: SmokeContext): Promise<{ 
         `SVG -> mensagem=${invalidShown}, logo igual=${afterInvalid === savedLogo}; ` +
         `padrão -> barra="${back.name}"/"${back.subtitle}", símbolo=${back.symbol}, gravado=${JSON.stringify([backSettings.brandName, backSettings.brandSubtitle, backSettings.brandLogo])}, sobras=${leftFiles.length}, título="${backTitle}"; ` +
         `Dock=[${dock.join(', ')}]; userData igual=${userDataSame}, app.getName()="${packageName}"`,
+    },
+    shot,
+  }
+}
+
+/**
+ * Contrato 14, CA2, CA3 e CA6, numa janela clara própria (o aviso de versão nova não entra nas outras
+ * fotos): o smoke não agenda consulta, então nada aparece antes do botão. "Procurar atualização" consulta a
+ * API falsa (versão atual + 1 no `minor`); o aviso aparece na barra e as notas em Configurações. Com o
+ * `.sha256` errado, a mensagem de arquivo que não confere e nada fica em Downloads. "Atualizar" da barra
+ * baixa (passando pelo redirecionamento), mostra "Baixando… N%", confere, chama o `openPath` substituto e
+ * mostra a instrução. Durante uma gravação, "Fechar o app agora" fica travado; depois, só conta o pedido.
+ */
+async function updatesChecks(win: BrowserWindow, ctx: SmokeContext): Promise<{ check: Check; shot: Screenshot }> {
+  const contents = win.webContents
+  const updates = ctx.fixtures.updates
+  const section = 'section[aria-label="Atualizações"]'
+  const dmgName = updateAssetName(updates.version)
+  const downloads = join(smokeHome(ctx), 'Downloads')
+  const downloadFiles = (): string[] => (existsSync(downloads) ? readdirSync(downloads).sort() : [])
+  const notice = `document.querySelector('aside [data-update-notice-text]')?.textContent ?? ''`
+  const version = app.getVersion()
+
+  await clickSelector(contents, '[data-nav="configuracoes"]')
+  await waitFor(contents, `${routeIs('configuracoes')} && document.querySelector('${section}')`)
+  await scrollToSection(contents, 'Atualizações')
+  const before = await evaluate<{ text: string; notice: boolean }>(
+    contents,
+    `({ text: document.querySelector('${section}')?.innerText ?? '', notice: Boolean(document.querySelector('[data-update-notice]')) })`,
+  )
+  const callsBefore = updates.calls.length
+
+  // "Procurar atualizações automaticamente": padrão ligado, desliga e liga de novo.
+  const autoSwitch = '[aria-labelledby="settings-auto-updates"]'
+  const autoDefault = await evaluate<string>(contents, `document.querySelector('${autoSwitch}')?.getAttribute('aria-checked') ?? ''`)
+  await clickSelector(contents, autoSwitch)
+  const autoOff = await waitFor(contents, `document.querySelector('${autoSwitch}')?.getAttribute('aria-checked') === 'false'`)
+  const savedOff = readSettings(ctx.userDataDir).autoCheckUpdates
+  await clickSelector(contents, autoSwitch)
+  await waitFor(contents, `document.querySelector('${autoSwitch}')?.getAttribute('aria-checked') === 'true'`)
+  const savedOn = readSettings(ctx.userDataDir).autoCheckUpdates
+
+  // "Procurar atualização": a versão nova na barra e as notas em Configurações.
+  await clickSelector(contents, '[data-action="update-check"]')
+  const shown = await waitFor(contents, `(${notice}) === ${JSON.stringify(`Nova versão ${updates.version}`)} && document.querySelector('[data-update-notes]')?.textContent === ${JSON.stringify(updates.notes)}`)
+  const afterCheck = await evaluate<string>(contents, `document.querySelector('${section}')?.innerText ?? ''`)
+  const apiCall = updates.calls[callsBefore]
+  await scrollToSection(contents, 'Atualizações')
+  await settle(contents)
+  const shot = await capture(win, ctx.outDir, 'configuracoes-atualizacoes-light')
+
+  // `.sha256` que não confere: mensagem e nada em Downloads.
+  const openedBefore = ctx.fixtures.openedFiles.length
+  updates.wrongHash = true
+  await clickSelector(contents, '[data-action="update-download"]')
+  const hashError = await waitFor(contents, `document.querySelector('[data-update-error]')?.textContent === ${JSON.stringify(UPDATE_HASH_MISMATCH_MESSAGE)}`, 10_000)
+  const filesAfterError = downloadFiles()
+  const openedAfterError = ctx.fixtures.openedFiles.length - openedBefore
+  updates.wrongHash = false
+
+  // "Atualizar" da barra lateral, a partir de Reuniões: abre Configurações no bloco e baixa.
+  await clickSelector(contents, '[data-nav="reunioes"]')
+  await waitFor(contents, routeIs('reunioes'))
+  await clickSelector(contents, 'aside [data-action="update-now"]')
+  const toSettings = await waitFor(contents, routeIs('configuracoes'))
+  const progressSeen = await waitFor(
+    contents,
+    `/^Baixando… \\d+%$/.test(document.querySelector('[data-update-progress]')?.textContent ?? '') && /^Baixando… \\d+%$/.test(${notice})`,
+    5000,
+  )
+  const ready = await waitFor(contents, `document.querySelector('[data-update-ready]')?.innerText.includes(${JSON.stringify(UPDATE_INSTALL_INSTRUCTION)})`, 10_000)
+  const sectionVisible = await evaluate<boolean>(
+    contents,
+    `(() => {
+      const scroller = document.querySelector('[data-settings-scroll]').getBoundingClientRect()
+      const box = document.querySelector('${section}').getBoundingClientRect()
+      return box.top >= scroller.top - 1 && box.top < scroller.bottom
+    })()`,
+  )
+  const dmgPath = join(downloads, dmgName)
+  const filesReady = downloadFiles()
+  const dmgOk = existsSync(dmgPath) && readFileSync(dmgPath).equals(updates.dmg)
+  const opened = ctx.fixtures.openedFiles.slice(openedBefore)
+  const quitEnabled = await evaluate<boolean>(contents, `document.querySelector('[data-action="update-quit"]')?.disabled === false`)
+
+  // Gravando: "Fechar o app agora" travado, com o aviso. Encerrar destrava.
+  ctx.fixtures.media.set('granted')
+  Menu.getApplicationMenu()?.getMenuItemById(MENU_IDS.newRecording)?.click()
+  const live = await waitFor(contents, `${routeIs('gravacao')} && ${probeJs('state()?.mic')} === 'live'`)
+  contents.send('scribe:navigate', 'configuracoes')
+  await waitFor(contents, `${routeIs('configuracoes')} && document.querySelector('[data-action="update-quit"]')`)
+  const blocked = await evaluate<{ disabled: boolean; text: string }>(
+    contents,
+    `({ disabled: document.querySelector('[data-action="update-quit"]')?.disabled === true, text: document.querySelector('[data-update-quit-blocked]')?.textContent ?? '' })`,
+  )
+  const quitsWhileRecording = updates.quitRequests
+  contents.send('scribe:navigate', 'gravacao')
+  await waitFor(contents, `${routeIs('gravacao')} && document.querySelector('[data-action="end-recording"]')`)
+  await clickSelector(contents, '[data-action="end-recording"]')
+  await waitFor(contents, routeIs('detalhe'), 10_000)
+  await clickSelector(contents, '[data-nav="configuracoes"]')
+  const unblocked = await waitFor(contents, `document.querySelector('[data-action="update-quit"]')?.disabled === false && !document.querySelector('[data-update-quit-blocked]')`)
+  await clickSelector(contents, '[data-action="update-quit"]')
+  for (let attempt = 0; attempt < 40 && updates.quitRequests === 0; attempt++) await wait(50)
+
+  const calls = updates.calls.slice(callsBefore)
+  const destinations = calls.every((call) => call.url === LATEST_RELEASE_URL || call.url.startsWith(RELEASE_DOWNLOAD_PREFIX))
+  const redirects = updates.redirects.every((url) => RELEASE_REDIRECT_HOSTS.includes(new URL(url).hostname))
+  const headersOk = calls.every((call) => call.userAgent === `LAP-Reunioes/${version}`)
+
+  return {
+    check: {
+      ok:
+        before.text.includes(`Versão ${version}`) &&
+        before.text.includes('Procurar atualização') &&
+        before.text.includes('Procurar atualizações automaticamente') &&
+        before.text.includes('Ainda não verificado.') &&
+        !before.notice &&
+        callsBefore === 0 &&
+        autoDefault === 'true' &&
+        autoOff &&
+        savedOff === false &&
+        savedOn === true &&
+        shown &&
+        afterCheck.includes('Última verificação: hoje às') &&
+        afterCheck.includes('Baixar e instalar') &&
+        apiCall?.url === LATEST_RELEASE_URL &&
+        apiCall.headerNames.join(',') === 'accept,user-agent' &&
+        hashError &&
+        filesAfterError.length === 0 &&
+        openedAfterError === 0 &&
+        toSettings &&
+        progressSeen &&
+        ready &&
+        sectionVisible &&
+        filesReady.join(',') === dmgName &&
+        dmgOk &&
+        opened.length === 1 &&
+        opened[0]?.action === 'open' &&
+        opened[0].path === dmgPath &&
+        quitEnabled &&
+        live &&
+        blocked.disabled &&
+        blocked.text === UPDATE_QUIT_BLOCKED_MESSAGE &&
+        quitsWhileRecording === 0 &&
+        unblocked &&
+        updates.quitRequests === 1 &&
+        destinations &&
+        redirects &&
+        updates.redirects.length > 0 &&
+        headersOk,
+      detail:
+        `antes: versão ${version} no bloco=${before.text.includes(`Versão ${version}`)}, aviso na barra=${before.notice}, consultas=${callsBefore}; ` +
+        `automático padrão=${autoDefault}, desligado gravou ${String(savedOff)}, ligado gravou ${String(savedOn)}; ` +
+        `"Procurar atualização" -> barra "${await evaluate<string>(contents, notice)}", notas=${shown}, cabeçalhos=[${apiCall?.headerNames.join(', ') ?? ''}] UA "${apiCall?.userAgent ?? ''}"; ` +
+        `hash errado -> mensagem=${hashError}, Downloads=[${filesAfterError.join(', ')}], abertos=${openedAfterError}; ` +
+        `"Atualizar" -> Configurações=${toSettings}, bloco visível=${sectionVisible}, andamento=${progressSeen}, instrução=${ready}, Downloads=[${filesReady.join(', ')}], conteúdo igual=${dmgOk}, openPath=${JSON.stringify(opened.map((item) => basename(item.path)))}; ` +
+        `gravando -> botão travado=${blocked.disabled}, "${blocked.text}"; depois -> destravado=${unblocked}, pedidos de sair=${updates.quitRequests}; ` +
+        `${calls.length} pedidos, destinos ok=${destinations}, redirecionamentos=[${updates.redirects.map((url) => new URL(url).hostname).join(', ')}]`,
     },
     shot,
   }
@@ -2132,6 +2294,15 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
     settings['appearance'] = await appearanceCheck(win.webContents, ctx.userDataDir)
     theme = await themeLiveSwitch(win.webContents)
     win.destroy()
+
+    // Contrato 14: atualização pelo GitHub (API e download falsos), numa janela clara à parte.
+    const updatesWin = ctx.openWindow({ theme: 'light' })
+    watch(updatesWin)
+    await loadAndWait(updatesWin)
+    const updates = await updatesChecks(updatesWin, ctx)
+    settings['updates'] = updates.check
+    screenshots.push(updates.shot)
+    updatesWin.destroy()
   } catch (error) {
     failures.push(`erro: ${error instanceof Error ? (error.stack ?? error.message) : String(error)}`)
   }
@@ -2158,7 +2329,7 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
     if (!check) failures.push(`medidas ${name}: não executado`)
     else if (!check.ok) failures.push(`medidas ${name}: ${check.detail}`)
   }
-  for (const name of ['permissions', 'reachable', 'keyField', 'keySave', 'modelSearch', 'modelSelect', 'keyRemoveAndInvite', 'catalogOffline', 'languages', 'audio', 'recordingUsesSettings', 'appearance', 'claudeCli', 'meetingFiles', 'summarizeOnStop', 'branding']) {
+  for (const name of ['permissions', 'reachable', 'keyField', 'keySave', 'modelSearch', 'modelSelect', 'keyRemoveAndInvite', 'catalogOffline', 'languages', 'audio', 'recordingUsesSettings', 'appearance', 'claudeCli', 'meetingFiles', 'summarizeOnStop', 'branding', 'updates']) {
     if (!settings[name]) failures.push(`configurações ${name}: não executado`)
   }
   // Nenhuma chamada saiu para a AssemblyAI: todas passaram pelo gateway de fixtures.
@@ -2173,8 +2344,8 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
   if (!theme.ok) failures.push(`tema: ${theme.detail}`)
   if (!motion.ok) failures.push(`movimento reduzido: ${motion.detail}`)
   // Mais o aviso de sistema sem som, nos dois temas, o eco removido, os arquivos no detalhe, a aba
-  // "Áudio" depois de baixar e a barra com a marca própria (só no claro).
-  const expectedShots = SCREENS.length * THEMES.length + 6
+  // "Áudio" depois de baixar, a barra com a marca própria e o bloco "Atualizações" (só no claro).
+  const expectedShots = SCREENS.length * THEMES.length + 7
   if (screenshots.length !== expectedShots) failures.push(`${screenshots.length} PNGs em vez de ${expectedShots}`)
   for (const shot of screenshots) {
     if (shot.width < 1120 || shot.height < 740) failures.push(`${shot.name}: ${shot.width}x${shot.height} abaixo de 1120x740`)
@@ -2210,6 +2381,8 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
     openedFiles: ctx.fixtures.openedFiles.map((item) => ({ action: item.action, file: basename(item.path) })),
     claudeFakeSpawns: ctx.fixtures.claudeSpawns.map((spawn) => ({ ...spawn, args: spawn.args.filter((arg) => arg.startsWith('--')) })),
     openedExternally: ctx.fixtures.openedUrls,
+    updateFixtureCalls: ctx.fixtures.updates.calls,
+    updateRedirects: ctx.fixtures.updates.redirects,
     dockIcons: ctx.fixtures.dockIcons,
     keychain: 'substituto em memória (safeStorage real nunca chamado no smoke)',
     brand,

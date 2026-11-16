@@ -34,6 +34,8 @@ import { createSettingsService, type SettingsService } from './settings/service'
 import { createFileSettingsStore } from './settings/store'
 import { isSmokeRun, prepareSmokeEnvironment, runSmoke } from './smoke'
 import { createSmokeClaude, createSmokeFixtures, SMOKE_FAKE_KEY, type SmokeFixtures } from './smoke-fixtures'
+import { createUpdateService, type UpdateService } from './updates/service'
+import { netDownload, netFetch } from './updates/transport'
 import { createMainWindow } from './window'
 
 // `app.setName` fixa o `userData` (~/Library/Application Support/Meeting Scribe) e o item do Chaveiro:
@@ -46,7 +48,7 @@ const smoke = isSmokeRun(process.argv)
 // O smoke troca o userData por uma pasta temporária; precisa acontecer antes de `ready`.
 const smokeUserData = smoke ? prepareSmokeEnvironment(process.argv) : null
 // Smoke: catálogo e respostas do gateway de fixtures, Chaveiro e permissão de microfone substitutos.
-const smokeFixtures: SmokeFixtures | null = smoke ? createSmokeFixtures() : null
+const smokeFixtures: SmokeFixtures | null = smoke ? createSmokeFixtures(app.getVersion()) : null
 
 registerAppScheme()
 app.setName(APP_NAME)
@@ -129,6 +131,7 @@ interface AppServices {
   summary: SummaryService
   download: ReturnType<typeof createMeetingDownload>
   branding: BrandingService
+  updates: UpdateService
 }
 
 function fetchImpl(url: string, init: FetchInit): Promise<FetchResponse> {
@@ -225,6 +228,24 @@ function createAppServices(userData: string): AppServices {
     dialog: smokeFixtures ? { chooseImage: () => Promise.resolve(smokeFixtures.chosenImage) } : nativeImageDialog,
     images: { fromPath: (path) => nativeImage.createFromPath(path) },
   })
+  // Atualização pelo GitHub (contrato 14). No smoke, API e download falsos, o `.dmg` vai para o
+  // "Downloads" dentro do userData temporário, nada abre no Finder e "Fechar o app agora" só é contado.
+  const updates = createUpdateService({
+    currentVersion: app.getVersion(),
+    fetch: smokeFixtures ? smokeFixtures.updates.fetch : netFetch,
+    request: smokeFixtures ? smokeFixtures.updates.request : netDownload,
+    downloadsDir: smokeUserData ? join(home, 'Downloads') : app.getPath('downloads'),
+    openPath: smokeFixtures
+      ? (path) => {
+          smokeFixtures.openedFiles.push({ action: 'open', path })
+          return Promise.resolve('')
+        }
+      : (path) => shell.openPath(path),
+    quit: smokeFixtures ? () => void smokeFixtures.updates.quitRequests++ : () => app.quit(),
+    autoCheck: async () => (await settings.get()).autoCheckUpdates,
+    onState: (state) => broadcast(BrowserWindow.getAllWindows(), 'scribe:update-state', state),
+    ...(app.isPackaged ? {} : { log: (message: string) => console.log(message) }),
+  })
   return {
     settings: createSettingsService({ settings, secrets, gateway, mic }),
     meetings,
@@ -237,6 +258,7 @@ function createAppServices(userData: string): AppServices {
     summary,
     download,
     branding,
+    updates,
   }
 }
 
@@ -283,7 +305,7 @@ function openExternal(url: string): void {
 }
 
 function registerIpc(services: AppServices): void {
-  const { settings, meetings, meetingsService, tokenClient, translation, claude, files, summary, download, branding } = services
+  const { settings, meetings, meetingsService, tokenClient, translation, claude, files, summary, download, branding, updates } = services
   handle('scribe:app-info', appOrigin, () => ({
     name: brandName,
     version: app.getVersion(),
@@ -339,6 +361,10 @@ function registerIpc(services: AppServices): void {
   handle('scribe:branding-get', appOrigin, () => branding.get())
   handle('scribe:brand-logo-choose', appOrigin, () => branding.chooseLogo())
   handle('scribe:brand-logo-reset', appOrigin, () => branding.resetLogo())
+  handle('scribe:update-get', appOrigin, () => updates.state())
+  handle('scribe:update-check', appOrigin, () => updates.check())
+  handle('scribe:update-download', appOrigin, () => updates.download())
+  handle('scribe:update-quit', appOrigin, () => updates.quit())
   onEvent('scribe:csp-violation', appOrigin, (_event, report) => {
     console.warn(`[csp] ${report.directive} bloqueou ${report.blockedUri} (${report.sourceFile})`)
   })
@@ -406,6 +432,7 @@ void app.whenReady().then(async () => {
   app.on('will-quit', () => {
     services.claude.dispose()
     services.summary.dispose()
+    services.updates.dispose()
   })
   installMenu()
 
@@ -420,11 +447,14 @@ void app.whenReady().then(async () => {
     // `app.exit` não passa por `will-quit`.
     services.claude.dispose()
     services.summary.dispose()
+    services.updates.dispose()
     app.exit(code)
     return
   }
 
   openMainWindow()
+  // Primeira consulta 30 s depois de abrir e a cada 6 h. O smoke não agenda: só o botão consulta.
+  services.updates.start()
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) openMainWindow()
   })

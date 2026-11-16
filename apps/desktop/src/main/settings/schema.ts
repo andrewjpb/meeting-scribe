@@ -58,6 +58,7 @@ const lenientSchema = z.object({
   brandName: brandNameSchema.nullable().catch(D.brandName),
   brandSubtitle: brandSubtitleSchema.nullable().catch(D.brandSubtitle),
   brandLogo: brandLogoSchema.nullable().catch(D.brandLogo),
+  autoCheckUpdates: z.boolean().catch(D.autoCheckUpdates),
 })
 
 const patchSchema = z
@@ -76,6 +77,7 @@ const patchSchema = z
     identifySpeakers: z.boolean(),
     brandName: brandNameSchema.nullable(),
     brandSubtitle: brandSubtitleSchema.nullable(),
+    autoCheckUpdates: z.boolean(),
   })
   .partial()
   .strict()

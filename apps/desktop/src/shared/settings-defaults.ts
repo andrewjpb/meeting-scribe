@@ -45,6 +45,8 @@ export interface AppSettings {
   brandSubtitle: string | null
   /** Arquivo do logo próprio em `userData/branding/` (só o nome); `null` é o símbolo da LAP. */
   brandLogo: string | null
+  /** Procura versão nova no GitHub ao abrir o app e a cada 6 h (contrato 14). */
+  autoCheckUpdates: boolean
 }
 
 /**
@@ -74,6 +76,7 @@ export const DEFAULT_SETTINGS: Readonly<AppSettings> = Object.freeze({
   brandName: null,
   brandSubtitle: null,
   brandLogo: null,
+  autoCheckUpdates: true,
 })
 
 /** Prefixo do modelo gravado na reunião quando a tradução veio do Claude CLI (`claude-cli:haiku`). */
