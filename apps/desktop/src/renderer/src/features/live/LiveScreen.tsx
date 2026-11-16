@@ -13,6 +13,7 @@ import { SilentTapeIllustration } from '../../design/TapeIllustration'
 import { ControlBar } from './ControlBar'
 import { LevelTape } from './LevelTape'
 import { Notices, RetryNotice } from './Notices'
+import { NotesPanel } from './NotesPanel'
 import { noticesFor } from './noticeRules'
 import { useRecording } from './recordingStore'
 import { TranscriptArea } from './TranscriptArea'
@@ -23,7 +24,10 @@ import { useStartRecording } from './useStartRecording'
 const absent = (capture: CaptureState, source: 'mic' | 'system'): boolean =>
   capture[source] === 'failed' || capture[source] === 'ended' || capture.silence[source] !== 'ok'
 
-/** Gravação ao vivo: cabeçalho com estado e cronômetro, fita, avisos, transcrição e controles. */
+/**
+ * Gravação ao vivo: cabeçalho com estado e cronômetro, fita, avisos, transcrição, o painel de anotações à
+ * direita (contrato 13) e os controles.
+ */
 export function LiveScreen() {
   const navigate = useNavigate()
   const session = useRecording((state) => state.session)
@@ -36,6 +40,8 @@ export function LiveScreen() {
   const audio = useRecording((state) => state.audio)
   const setTitle = useRecording((state) => state.setTitle)
   const togglePause = useRecording((state) => state.togglePause)
+  const notesOpen = useRecording((state) => state.notesOpen)
+  const toggleNotes = useRecording((state) => state.toggleNotes)
   const phase = capture?.phase ?? 'idle'
   const elapsed = useElapsed(session?.clock ?? null, phase === 'recording')
 
@@ -62,6 +68,18 @@ export function LiveScreen() {
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [phase, togglePause])
 
+  // ⌘⇧N abre e fecha o painel de anotações, inclusive com o foco no texto de um card.
+  useEffect(() => {
+    if (phase !== 'recording' && phase !== 'paused') return
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (event.code !== 'KeyN' || !event.metaKey || !event.shiftKey || event.altKey || event.ctrlKey || event.repeat) return
+      event.preventDefault()
+      toggleNotes()
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [phase, toggleNotes])
+
   if (!session || !capture || !tape) return <NoRecording />
 
   return (
@@ -74,9 +92,22 @@ export function LiveScreen() {
       </header>
       <LevelTape session={session} tape={tape} phase={phase} micAbsent={absent(capture, 'mic')} systemAbsent={absent(capture, 'system')} />
       <Notices notices={noticesFor(capture, appName)} saveFailed={saveFailed} onRetrySave={end} audioFailed={audio === 'failed'} />
-      <TranscriptionNotices />
-      <TranscriptArea />
-      <ControlBar paused={phase === 'paused'} busy={saving} savingAudio={audio === 'recording'} onTogglePause={togglePause} onEnd={end} />
+      <div className="flex min-h-0 flex-1">
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+          <TranscriptionNotices />
+          <TranscriptArea />
+        </div>
+        {notesOpen && <NotesPanel />}
+      </div>
+      <ControlBar
+        paused={phase === 'paused'}
+        busy={saving}
+        savingAudio={audio === 'recording'}
+        notesOpen={notesOpen}
+        onTogglePause={togglePause}
+        onToggleNotes={toggleNotes}
+        onEnd={end}
+      />
     </div>
   )
 }

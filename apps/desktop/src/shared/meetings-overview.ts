@@ -28,9 +28,11 @@ export interface MeetingOverview {
   /** Último resumo salvo; continua aqui enquanto um novo é gerado ou se a nova tentativa falhou. */
   summary: SummaryPreview | null
   summaryState: ListSummaryState
+  /** Anotações com texto (contrato 13); a lista mostra "N anotações" quando passa de zero. */
+  notes: number
 }
 
-export type SearchField = 'title' | 'transcript' | 'summary'
+export type SearchField = 'title' | 'transcript' | 'summary' | 'notes'
 
 /** Pedaço do trecho achado: `mark` nas palavras do termo. O renderer marca sem montar HTML. */
 export interface SnippetPart {
@@ -39,7 +41,7 @@ export interface SnippetPart {
 }
 
 export interface MeetingSearchResult extends MeetingOverview {
-  /** Onde está a ocorrência mostrada no trecho, na ordem título, transcrição, resumo. */
+  /** Onde está a ocorrência mostrada no trecho, na ordem título, transcrição, resumo, anotações. */
   field: SearchField
   snippet: SnippetPart[]
 }

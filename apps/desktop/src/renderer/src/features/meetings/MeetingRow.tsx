@@ -1,4 +1,5 @@
 import { Link } from 'react-router'
+import { notesCountLabel } from '@shared/meeting-notes'
 import type { MeetingOverview, SearchField, SnippetPart } from '@shared/meetings-overview'
 import { meetingPath } from '@shared/routes'
 import { attendeesLabel, countLabel, durationLabel, timeLabel } from './format'
@@ -8,6 +9,7 @@ const FIELD_LABEL: Record<SearchField, string> = {
   title: 'no título',
   transcript: 'na transcrição',
   summary: 'no resumo',
+  notes: 'nas anotações',
 }
 
 interface MeetingRowProps {
@@ -18,17 +20,19 @@ interface MeetingRowProps {
 
 /**
  * Linha da lista (contrato 10, CA3): título; hora, duração e participantes da agenda; a primeira frase do
- * resumo em até duas linhas; "N tarefas" e "N decisões"; "Gerando resumo…" enquanto gera. A linha inteira
+ * resumo em até duas linhas; "N tarefas", "N decisões" e "N anotações" (contrato 13); "Gerando resumo…"
+ * enquanto gera. A linha inteira
  * é o link para o detalhe, inclusive pelo teclado.
  */
 export function MeetingRow({ entry, found }: MeetingRowProps) {
-  const { meeting, summary, summaryState } = entry
+  const { meeting, summary, summaryState, notes } = entry
   const attendees = meeting.calendar?.attendees ?? []
   const names = attendees.length ? attendeesLabel(attendees.map((person) => person.name || person.email)) : ''
   const markers = [
     found ? FIELD_LABEL[found.field] : null,
     summary?.tasks ? countLabel(summary.tasks, 'tarefa', 'tarefas') : null,
     summary?.decisions ? countLabel(summary.decisions, 'decisão', 'decisões') : null,
+    notes ? notesCountLabel(notes) : null,
     summaryState === 'generating' ? 'Gerando resumo…' : null,
   ].filter((marker): marker is string => marker !== null)
 

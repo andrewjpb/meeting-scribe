@@ -14,9 +14,10 @@ import { CLAUDE_MODEL_PREFIX } from '../../shared/settings-defaults'
 import type { TranscriptCopyResult } from '../../shared/transcription'
 import { claudeEnv } from '../claude-cli/locate'
 import { CLAUDE_CWD_DIR } from '../claude-cli/service'
-import { runSummary, summaryInput, summaryLines, type SpawnSummary } from '../claude-cli/summary'
+import { runSummary, summaryInput, summaryLines, summaryNoteLines, type SpawnSummary } from '../claude-cli/summary'
 import type { Timers } from '../claude-cli/translator'
 import type { SettingsStore } from '../settings/store'
+import type { NotesStore } from './notes'
 import type { ClipboardWriter } from './service'
 import type { MeetingsStore } from './store'
 import type { SummaryStore } from './summaries'
@@ -27,6 +28,8 @@ export interface SummaryServiceDeps {
   meetings: Pick<MeetingsStore, 'get'>
   transcripts: Pick<TranscriptStore, 'get'>
   summaries: SummaryStore
+  /** Anotações da reunião (contrato 13): entram no pedido num bloco à parte, lidas a cada geração. */
+  notes?: Pick<NotesStore, 'get'>
   /** O mesmo `locate` do tradutor: caminho configurado, lista fixa e shell de login. */
   locate: () => Promise<ClaudeLocateResult>
   spawn: SpawnSummary
@@ -105,6 +108,8 @@ export function createSummaryService(deps: SummaryServiceDeps): SummaryService {
   }
 
   async function run(meetingId: string, input: readonly string[], job: Job): Promise<void> {
+    // As anotações de agora: "Gerar de novo" depois de editar uma usa o texto novo.
+    const noteLines = summaryNoteLines((await deps.notes?.get(meetingId).catch(() => [])) ?? [])
     const found = await deps.locate().catch((): ClaudeLocateResult => ({ ok: false, error: 'not-found' }))
     if (job.cancelled) return
     if (!found.ok) {
@@ -126,7 +131,7 @@ export function createSummaryService(deps: SummaryServiceDeps): SummaryService {
       cwd,
       env: claudeEnv(deps.baseEnv, found.path),
       spawn: deps.spawn,
-      input: summaryInput(input),
+      input: summaryInput(input, noteLines),
       ...(deps.timers ? { timers: deps.timers } : {}),
       ...(deps.timeoutMs !== undefined ? { timeoutMs: deps.timeoutMs } : {}),
       ...(deps.log ? { log: deps.log } : {}),

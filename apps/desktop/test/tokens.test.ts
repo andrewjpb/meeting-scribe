@@ -127,6 +127,17 @@ describe('tokens.css', () => {
     expect(ratio, `${fg} sobre ${bg} = ${ratio.toFixed(2)}:1`).toBeGreaterThanOrEqual(min)
   })
 
+  // Contrato 13, CA2: cada cor de anotação tem fundo, borda e texto nos dois temas, e o texto passa AA.
+  const NOTE_COLORS = ['yellow', 'pink', 'green', 'blue', 'purple', 'orange'] as const
+  const notePairs = (['light', 'dark'] as const).flatMap((theme) => NOTE_COLORS.map((color) => ({ theme, color })))
+
+  it.each(notePairs)('$theme: anotação $color com fundo, borda e texto ≥ 4,5:1', ({ theme, color }) => {
+    const vars = THEMES[theme]
+    for (const suffix of ['', '-border', '-text']) expect(vars.get(`--note-${color}${suffix}`), `--note-${color}${suffix}`).toMatch(/^#[0-9a-f]{6}$/i)
+    const ratio = contrast(vars.get(`--note-${color}-text`) ?? '', vars.get(`--note-${color}`) ?? '')
+    expect(ratio, `--note-${color}-text sobre --note-${color} = ${ratio.toFixed(2)}:1`).toBeGreaterThanOrEqual(4.5)
+  })
+
   it('desliga animação e transição com prefers-reduced-motion: reduce', () => {
     const media = /@media\s*\(prefers-reduced-motion:\s*reduce\)\s*\{([\s\S]*?)\n\}/.exec(TOKENS)?.[1] ?? ''
     expect(media).toMatch(/animation:\s*none\s*!important/)

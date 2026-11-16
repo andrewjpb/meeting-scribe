@@ -9,13 +9,16 @@
 // para o resumo da reunião (contrato 08). A marca própria (contrato 09) usa o logo de
 // test/fixtures/brand/ pelo diálogo substituto, e o Dock de verdade nunca é tocado. A atualização pelo
 // GitHub (contrato 14) usa API e download falsos; o `.dmg` falso vai para o userData temporário. A lista
-// de reuniões (contrato 10) é conferida com seis reuniões semeadas, duas com resumo, e uma busca.
+// de reuniões (contrato 10) é conferida com seis reuniões semeadas, duas com resumo, e uma busca. As
+// anotações (contrato 13) são criadas no painel da gravação e conferidas no arquivo, no `.md`, na aba
+// "Anotações" do detalhe e na lista.
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
 import { app, ipcMain, Menu, nativeTheme, session, type BrowserWindow, type WebContents } from 'electron'
 import { ASSEMBLYAI_DASHBOARD_URL } from '../shared/assemblyai'
 import type { CspViolation } from '../shared/ipc'
+import { notesMarkdown, type MeetingNote, type MeetingNotesFile } from '../shared/meeting-notes'
 import type { Meeting } from '../shared/meetings'
 import { summaryMarkdown, type MeetingSummary } from '../shared/meeting-summary'
 import { summaryPreview } from '../shared/meetings-overview'
@@ -51,10 +54,12 @@ const SCREENS = [
   'reunioes',
   'gravacao',
   'gravacao-ao-vivo',
+  'gravacao-anotacoes',
   'reunioes-com-dados',
   'reunioes-lista',
   'detalhe',
   'detalhe-resumo',
+  'detalhe-anotacoes',
   'configuracoes',
   'configuracoes-seletor',
   'configuracoes-claude',
@@ -334,7 +339,23 @@ function seedListMeetings(userDataDir: string): void {
   for (const summary of Object.values(LIST_SUMMARIES)) {
     writeFileSync(join(userDataDir, 'meetings', `${summary.meetingId}.summary.json`), `${JSON.stringify(summary, null, 2)}\n`)
   }
+  // Contrato 13, CA8: duas anotações (e uma em branco, que não conta) numa reunião sem resumo.
+  const now = new Date().toISOString()
+  const notes: MeetingNotesFile = {
+    version: 1,
+    meetingId: 'smoke-5',
+    notes: [
+      { id: 'n1', text: NOTES_ONLY_TEXT, color: 'green', atMs: 95_000, createdAt: now, updatedAt: now },
+      { id: 'n2', text: 'Comparar o suporte em português', color: 'purple', atMs: null, createdAt: now, updatedAt: now },
+      { id: 'n3', text: '  ', color: 'yellow', atMs: null, createdAt: now, updatedAt: now },
+    ],
+  }
+  writeFileSync(join(userDataDir, 'meetings', 'smoke-5.notes.json'), `${JSON.stringify(notes, null, 2)}\n`)
 }
+
+/** Texto que só as anotações da `smoke-5` têm; a busca o procura sem acento e em outra caixa. */
+const NOTES_ONLY_TEXT = 'Pedir a tabela de preços por região'
+const NOTES_ONLY_TERM = 'TABELA de precos'
 
 /** Rótulo esperado do grupo, calculado aqui sem o código do renderer (contrato 10, CA2). */
 function expectedDayLabel(iso: string): string {
@@ -377,7 +398,8 @@ async function meetingsListCheck(contents: WebContents, userDataDir: string): Pr
   const rows = await evaluate<ListRow[]>(contents, LIST_ROWS)
   const first = rows.find((row) => row.id === 'smoke-4')
   const second = rows.find((row) => row.id === 'smoke-2')
-  const plain = rows.filter((row) => row.id !== 'smoke-4' && row.id !== 'smoke-2')
+  const withNotes = rows.find((row) => row.id === 'smoke-5')
+  const plain = rows.filter((row) => row.id !== 'smoke-4' && row.id !== 'smoke-2' && row.id !== 'smoke-5')
   const expectedOverview = summaryPreview(LIST_SUMMARIES['smoke-4'] as MeetingSummary).overview
   const ok =
     rows.length === 6 &&
@@ -392,10 +414,11 @@ async function meetingsListCheck(contents: WebContents, userDataDir: string): Pr
     second?.overview.endsWith('…') === true &&
     second.overview.length <= 200 &&
     JSON.stringify(second.markers) === JSON.stringify(['1 tarefa', '2 decisões']) &&
+    JSON.stringify(withNotes?.markers) === JSON.stringify(['2 anotações']) &&
     plain.every((row) => row.overview === '' && row.markers.length === 0)
   return {
     ok,
-    detail: `grupos ${JSON.stringify(groups)} (esperado ${JSON.stringify(expectedLabels)}); smoke-4 "${first?.overview ?? ''}" ${JSON.stringify(first?.markers ?? [])}; smoke-2 ${second?.overview.length ?? 0} caracteres ${JSON.stringify(second?.markers ?? [])}; sem resumo: ${plain.map((row) => row.id).join(', ')}`,
+    detail: `grupos ${JSON.stringify(groups)} (esperado ${JSON.stringify(expectedLabels)}); smoke-4 "${first?.overview ?? ''}" ${JSON.stringify(first?.markers ?? [])}; smoke-2 ${second?.overview.length ?? 0} caracteres ${JSON.stringify(second?.markers ?? [])}; smoke-5 ${JSON.stringify(withNotes?.markers ?? [])}; sem resumo: ${plain.map((row) => row.id).join(', ')}`,
   }
 }
 
@@ -417,6 +440,10 @@ async function meetingsSearchCheck(win: BrowserWindow, outDir: string): Promise<
   await settle(contents)
   const rows = await evaluate<ListRow[]>(contents, LIST_ROWS)
   const shot = await capture(win, outDir, 'reunioes-busca-light')
+  // Contrato 13, CA8: palavras que só as anotações têm.
+  await setValue(contents, 'main [data-search]', NOTES_ONLY_TERM)
+  await waitFor(contents, `[...document.querySelectorAll('main a[data-meeting]')].length === 1 && document.querySelector('main a[data-meeting="smoke-5"] [data-search-snippet]')`)
+  const inNotes = await evaluate<ListRow[]>(contents, LIST_ROWS)
   await setValue(contents, 'main [data-search]', 'zzqq')
   const empty = await waitFor(contents, `document.querySelector('[data-search-empty]')?.textContent === 'Nada encontrado para "zzqq".'`)
   await evaluate(contents, `document.querySelector('main [data-search]').focus(), true`)
@@ -444,10 +471,14 @@ async function meetingsSearchCheck(win: BrowserWindow, outDir: string): Promise<
         row.snippet.toLowerCase().includes('transcrição em tempo real') &&
         row.snippet.length <= 120 &&
         JSON.stringify(row.markers) === JSON.stringify(['na transcrição']) &&
+        inNotes.length === 1 &&
+        inNotes[0]?.id === 'smoke-5' &&
+        JSON.stringify(inNotes[0].markers) === JSON.stringify(['nas anotações', '2 anotações']) &&
+        ['tabela', 'preços'].every((word) => inNotes[0]?.marks.includes(word)) &&
         empty &&
         cleared &&
         clearedOutside,
-      detail: `⌘F focou=${focused}; "${TRANSCRIPT_ONLY_TERM}" -> ${rows.length} linha(s) em ${answeredMs} ms: ${JSON.stringify(rows)}; sem resultado=${empty}; Esc limpou no campo=${cleared}, fora do campo=${clearedOutside}`,
+      detail: `⌘F focou=${focused}; "${TRANSCRIPT_ONLY_TERM}" -> ${rows.length} linha(s) em ${answeredMs} ms: ${JSON.stringify(rows)}; "${NOTES_ONLY_TERM}" -> ${JSON.stringify(inNotes)}; sem resultado=${empty}; Esc limpou no campo=${cleared}, fora do campo=${clearedOutside}`,
     },
     shot,
   }
@@ -556,7 +587,9 @@ async function audioAfterEnd(win: BrowserWindow, ctx: SmokeContext, record: Meet
   const transcriptFile = record ? join(ctx.userDataDir, 'meetings', `${record.id}.json`) : ''
   const document = transcriptFile && existsSync(transcriptFile) ? (JSON.parse(readFileSync(transcriptFile, 'utf8')) as TranscriptDocument) : null
   const mdText = md ? readFileSync(join(folder, md.name), 'utf8') : ''
-  const expected = record && document ? transcriptMarkdown(record, document) : null
+  // Contrato 13, CA7: as anotações da gravação fecham o `.md`.
+  const notes = readNotesFile(ctx.userDataDir, record?.id)?.notes ?? []
+  const expected = record && document ? transcriptMarkdown(record, document, notes) : null
   const saved: Check = {
     ok:
       files.length === 2 &&
@@ -567,9 +600,11 @@ async function audioAfterEnd(win: BrowserWindow, ctx: SmokeContext, record: Meet
       md.name === audio.name.replace(/\.(m4a|webm)$/, '.md') &&
       mdText === expected &&
       mdText.includes(ECHO_PHRASE) &&
+      mdText.includes(`\n## Anotações\n\n- [`) &&
+      mdText.includes(SMOKE_NOTE_EDITED) &&
       record?.audioPath === join(folder, audio.name) &&
       record.transcriptPath === join(folder, md.name),
-    detail: `pasta ${JSON.stringify(files)}; gravador ${JSON.stringify(probe)}; .md igual ao "Exportar"=${mdText === expected} (${mdText.split('\n').length} linhas); reunião audioPath=${record?.audioPath ? basename(record.audioPath) : null}, transcriptPath=${record?.transcriptPath ? basename(record.transcriptPath) : null}`,
+    detail: `pasta ${JSON.stringify(files)}; gravador ${JSON.stringify(probe)}; .md igual ao "Exportar"=${mdText === expected} (${mdText.split('\n').length} linhas, ${notes.length} anotações, seção "## Anotações"=${mdText.includes('\n## Anotações\n')}); reunião audioPath=${record?.audioPath ? basename(record.audioPath) : null}, transcriptPath=${record?.transcriptPath ? basename(record.transcriptPath) : null}`,
   }
 
   // Os arquivos ficam na aba "Áudio" (contrato 08).
@@ -668,7 +703,7 @@ async function summaryAfterEnd(win: BrowserWindow, ctx: SmokeContext, record: Me
       summary.meetingId === record?.id &&
       summary.model === 'claude-cli:haiku' &&
       summary.tasks.length === 2 &&
-      JSON.stringify(screen.tabs) === JSON.stringify(['Resumo', 'Transcrição', 'Áudio']) &&
+      JSON.stringify(screen.tabs) === JSON.stringify(['Resumo', 'Anotações', 'Transcrição', 'Áudio']) &&
       JSON.stringify(screen.sections) === JSON.stringify(['O que aconteceu', 'Decisões', 'Tarefas']) &&
       screen.decisions === summary.decisions.length &&
       JSON.stringify(screen.rows[0]) === JSON.stringify(['Tarefa', 'Quem', 'Prazo']) &&
@@ -691,6 +726,200 @@ async function summaryAfterEnd(win: BrowserWindow, ctx: SmokeContext, record: Me
     detail: `pronto=${ready} em ${elapsedMs} ms; summary.json ${summary ? `${summary.decisions.length} decisões, ${summary.tasks.length} tarefas, ${summary.model}` : 'ausente'}; abas ${JSON.stringify(screen.tabs)}; seções ${JSON.stringify(screen.sections)}; tarefas ${JSON.stringify(screen.rows)}; rodapé "${screen.footer}"; pasta ${target ? target.name : 'sem arquivo'} igual ao Markdown=${folderText === expected}${copy ? `; "Copiar resumo" igual=${copied === expected}` : ''}; processo ${JSON.stringify(spawn ? { cwd: basename(spawn.cwd), args: spawnArgs.filter((arg) => arg.startsWith('--')), env: spawn.envNames } : null)}; transcrição nos argumentos=${leaked}`,
   }
   return { check, measured: { elapsedMs, promptChars: summaryInput(lines).length, segments: lines.length, costUsdNominal: 0 } }
+}
+
+/** Anotações que o smoke cria na gravação (contrato 13, CA9), da primeira para a última. */
+const SMOKE_NOTES = [
+  { text: 'Confirmar a janela de manutenção com o cliente', color: 'yellow' },
+  { text: 'Pedir o plano de volta por escrito', color: 'pink' },
+  { text: 'Revisar o custo da réplica', color: 'blue' },
+] as const
+/** Texto da primeira anotação editado logo antes de "Encerrar", sem esperar nada (CA4). */
+const SMOKE_NOTE_EDITED = `${SMOKE_NOTES[0].text} até sexta`
+const NOTE_CARDS = `[...document.querySelectorAll('[data-notes-panel] [data-note]')].map((card) => ({ id: card.dataset.note, color: card.dataset.color, text: card.querySelector('[data-note-text]')?.value ?? '', time: card.querySelector('[data-note-time]')?.textContent ?? '' }))`
+
+interface NoteCard {
+  id: string
+  color: string
+  text: string
+  time: string
+}
+
+/**
+ * Contrato 13, CA3 e CA9, na gravação: o painel abre por ⌘⇧N (claro) ou pelo botão "Anotações" (escuro) à
+ * direita da transcrição, que continua na tela; três anotações novas nascem amarelas, em edição e com o
+ * tempo da gravação; cada uma ganha texto e uma cor; excluir mostra "Desfazer", que a traz de volta no
+ * mesmo lugar. Fotografa `gravacao-anotacoes-<tema>` (pela `shoot`, depois de voltar).
+ */
+async function notesWhileRecording(contents: WebContents, byShortcut: boolean): Promise<Check> {
+  if (byShortcut) {
+    await evaluate(contents, 'document.activeElement instanceof HTMLElement && document.activeElement.blur(), true')
+    contents.sendInputEvent({ type: 'keyDown', keyCode: 'N', modifiers: ['meta', 'shift'] })
+    contents.sendInputEvent({ type: 'keyUp', keyCode: 'N', modifiers: ['meta', 'shift'] })
+  } else {
+    await clickSelector(contents, '[data-action="toggle-notes"]')
+  }
+  const opened = await waitFor(contents, `document.querySelector('[data-notes-panel]') && document.querySelector('[data-action="toggle-notes"]')?.getAttribute('aria-pressed') === 'true'`)
+  const layout = await evaluate<{ panel: number; transcript: number; segments: number }>(
+    contents,
+    `({ panel: document.querySelector('[data-notes-panel]')?.getBoundingClientRect().width ?? 0, transcript: document.querySelector('[data-transcript-scroll]')?.getBoundingClientRect().width ?? 0, segments: document.querySelectorAll('[data-transcript-list] li').length })`,
+  )
+  const born: { color: string; focused: boolean; time: string }[] = []
+  for (const [index, wanted] of SMOKE_NOTES.entries()) {
+    await clickSelector(contents, '[data-notes-panel] [data-action="new-note"]')
+    await waitFor(contents, `document.querySelectorAll('[data-notes-panel] [data-note]').length === ${index + 1} && document.activeElement?.matches('[data-notes-panel] li:first-child [data-note-text]')`)
+    const first = await evaluate<NoteCard[]>(contents, NOTE_CARDS)
+    born.push({
+      color: first[0]?.color ?? '',
+      focused: await evaluate<boolean>(contents, `document.activeElement?.matches('[data-notes-panel] li:first-child [data-note-text]') === true`),
+      time: first[0]?.time ?? '',
+    })
+    await setValue(contents, '[data-notes-panel] li:first-child [data-note-text]', wanted.text)
+    if (wanted.color !== 'yellow') await clickSelector(contents, `[data-notes-panel] li:first-child [data-note-color="${wanted.color}"]`)
+  }
+  const created = await evaluate<NoteCard[]>(contents, NOTE_CARDS)
+  // Exclui a do meio e desfaz.
+  await clickSelector(contents, '[data-notes-panel] li:nth-child(2) [data-action="delete-note"]')
+  const deleted = await waitFor(contents, `document.querySelectorAll('[data-notes-panel] [data-note]').length === 2 && document.querySelector('[data-notes-panel] [data-action="undo-delete-note"]')`)
+  // O foco vai para o card seguinte (o que era o terceiro).
+  const focusNext = await waitFor(contents, `document.activeElement?.closest('[data-note]')?.dataset.note === ${JSON.stringify(created[2]?.id ?? '-')}`, 1000)
+  await clickSelector(contents, '[data-notes-panel] [data-action="undo-delete-note"]')
+  const restored = await waitFor(contents, `document.querySelectorAll('[data-notes-panel] [data-note]').length === 3 && !document.querySelector('[data-notes-panel] [data-action="undo-delete-note"]')`)
+  const after = await evaluate<NoteCard[]>(contents, NOTE_CARDS)
+  // A barra de controles não cobre nenhum card: rolado até o fim, o último termina acima dela.
+  const clearance = await evaluate<number>(
+    contents,
+    `(() => { const scroll = document.querySelector('[data-notes-panel] .overflow-y-auto'); if (scroll) scroll.scrollTop = scroll.scrollHeight; const last = [...document.querySelectorAll('[data-notes-panel] [data-note]')].at(-1)?.getBoundingClientRect(); const bar = document.querySelector('[role="toolbar"]')?.getBoundingClientRect(); return last && bar ? bar.top - last.bottom : -1 })()`,
+  )
+  await evaluate(contents, `(() => { const scroll = document.querySelector('[data-notes-panel] .overflow-y-auto'); if (scroll) scroll.scrollTop = 0; return true })()`)
+  const labels = await evaluate<string[]>(contents, `[...document.querySelectorAll('[data-notes-panel] [data-action="delete-note"]')].map((b) => b.getAttribute('aria-label'))`)
+  const swatches = await evaluate<string[]>(contents, `[...document.querySelectorAll('[data-notes-panel] li:first-child [data-note-color]')].map((b) => b.getAttribute('aria-label') + (b.getAttribute('aria-pressed') === 'true' ? '*' : ''))`)
+  const expectedOrder = [...SMOKE_NOTES].reverse()
+  return {
+    ok:
+      opened &&
+      layout.panel >= 300 &&
+      layout.panel <= 340 &&
+      layout.transcript > 0 &&
+      layout.segments > 0 &&
+      born.every((note) => note.color === 'yellow' && note.focused && /^\d{2}:\d{2}$/.test(note.time)) &&
+      JSON.stringify(created.map((note) => [note.text, note.color])) === JSON.stringify(expectedOrder.map((note) => [note.text, note.color])) &&
+      deleted &&
+      focusNext &&
+      restored &&
+      clearance >= 0 &&
+      JSON.stringify(labels) === JSON.stringify(['Excluir anotação 1', 'Excluir anotação 2', 'Excluir anotação 3']) &&
+      JSON.stringify(after.map((note) => note.id)) === JSON.stringify(created.map((note) => note.id)) &&
+      JSON.stringify(swatches) === JSON.stringify(['Amarelo', 'Rosa', 'Verde', 'Azul*', 'Roxo', 'Laranja']),
+    detail: `painel aberto=${opened} (${byShortcut ? '⌘⇧N' : 'botão'}), ${Math.round(layout.panel)} px, transcrição ${Math.round(layout.transcript)} px com ${layout.segments} trechos; ao nascer ${JSON.stringify(born)}; cards ${JSON.stringify(created.map((note) => [note.text, note.color, note.time]))}; excluir=${deleted} (foco no seguinte=${focusNext}), desfazer=${restored} na mesma ordem=${JSON.stringify(after.map((note) => note.id)) === JSON.stringify(created.map((note) => note.id))}; cores ${JSON.stringify(swatches)}; barra ${Math.round(clearance)} px abaixo do último card; rótulos ${JSON.stringify(labels)}`,
+  }
+}
+
+/** Notas gravadas em `meetings/<id>.notes.json`, ou `null` se o arquivo não existe. */
+function readNotesFile(userDataDir: string, meetingId: string | undefined): MeetingNotesFile | null {
+  const file = meetingId ? join(userDataDir, 'meetings', `${meetingId}.notes.json`) : ''
+  return file && existsSync(file) ? (JSON.parse(readFileSync(file, 'utf8')) as MeetingNotesFile) : null
+}
+
+/**
+ * Contrato 13, CA4, CA5 e CA9, depois de "Encerrar": `notes.json` com as três anotações (a editada na hora
+ * do clique, com o texto novo), tempos da gravação e cores; a aba "Anotações" entre "Resumo" e
+ * "Transcrição", em grade, com "Copiar anotações"; clicar no tempo de um card abre a "Transcrição" no
+ * trecho mais próximo. Fotografa `detalhe-anotacoes-<tema>` (pela `shoot`).
+ */
+async function notesAfterEnd(contents: WebContents, ctx: SmokeContext, record: Meeting | undefined, shoot: () => Promise<void>, edit: boolean): Promise<Check> {
+  const saved = readNotesFile(ctx.userDataDir, record?.id)
+  const notes = saved?.notes ?? []
+  const expectedFile = [...SMOKE_NOTES].reverse().map((note, i) => [i === 2 ? SMOKE_NOTE_EDITED : note.text, note.color])
+  await clickSelector(contents, '[data-tab="anotacoes"]')
+  const shown = await waitFor(contents, `document.querySelectorAll('[data-notes="grid"] [data-note]').length === 3`)
+  const screen = await evaluate<{ tabs: string[]; buttons: string[]; columns: number; times: string[] }>(
+    contents,
+    `({
+      tabs: [...document.querySelectorAll('[role="tab"]')].map((tab) => tab.textContent),
+      buttons: [...document.querySelectorAll('[data-notes-tab] > div button')].map((button) => button.textContent),
+      columns: getComputedStyle(document.querySelector('[data-notes="grid"]')).gridTemplateColumns.split(' ').length,
+      times: [...document.querySelectorAll('[data-notes="grid"] [data-action="note-time"]')].map((b) => b.textContent),
+    })`,
+  )
+  await shoot()
+  const edited = edit ? await notesDetailEdits(contents, ctx, record) : { ok: true, detail: 'só no tema claro' }
+  // O tempo da anotação mais antiga leva ao trecho mais próximo da transcrição.
+  const oldest = notes.at(-1)
+  const transcriptFile = record ? join(ctx.userDataDir, 'meetings', `${record.id}.json`) : ''
+  const segments = transcriptFile && existsSync(transcriptFile) ? (JSON.parse(readFileSync(transcriptFile, 'utf8')) as TranscriptDocument).segments : []
+  const closest = oldest?.atMs != null ? [...segments].sort((a, b) => Math.abs(a.startMs - (oldest.atMs ?? 0)) - Math.abs(b.startMs - (oldest.atMs ?? 0)))[0]?.id : undefined
+  await clickSelector(contents, '[data-notes="grid"] li:last-child [data-action="note-time"]')
+  const jumped = await waitFor(contents, `document.querySelector('[data-tab="transcricao"]')?.getAttribute('aria-selected') === 'true' && document.querySelector('[data-jump-target]')`)
+  const target = await evaluate<{ id: string; visible: boolean }>(
+    contents,
+    `(() => { const li = document.querySelector('[data-jump-target]'); const box = li?.getBoundingClientRect(); const scroll = document.querySelector('[data-transcript-scroll]')?.getBoundingClientRect(); return { id: li?.dataset.segment ?? '', visible: Boolean(box && scroll && box.top >= scroll.top && box.bottom <= scroll.bottom) } })()`,
+  )
+  return {
+    ok:
+      saved?.version === 1 &&
+      saved.meetingId === record?.id &&
+      JSON.stringify(notes.map((note) => [note.text, note.color])) === JSON.stringify(expectedFile) &&
+      notes.every((note) => typeof note.atMs === 'number') &&
+      shown &&
+      JSON.stringify(screen.tabs) === JSON.stringify(['Resumo', 'Anotações', 'Transcrição', 'Áudio']) &&
+      screen.buttons.includes('Nova anotação') &&
+      screen.buttons.includes('Copiar anotações') &&
+      screen.columns >= 2 &&
+      screen.columns <= 4 &&
+      screen.times.length === 3 &&
+      edited.ok &&
+      jumped &&
+      closest !== undefined &&
+      target.id === closest &&
+      target.visible,
+    detail: `notes.json ${JSON.stringify(notes.map((note) => [note.text, note.color, note.atMs]))}; abas ${JSON.stringify(screen.tabs)}; botões ${JSON.stringify(screen.buttons)}; ${screen.columns} colunas; tempos ${JSON.stringify(screen.times)}; tempo ${oldest?.atMs ?? '?'} ms -> aba Transcrição=${jumped}, trecho ${target.id} (mais próximo ${closest ?? '?'}), visível=${target.visible}; edição no detalhe: ${edited.detail}`,
+  }
+}
+
+/** Texto da anotação criada no detalhe (contrato 13, CA5). */
+const DETAIL_NOTE_TEXT = 'Mandar a ata para o time'
+
+/**
+ * Contrato 13, CA5, no tema claro: na aba "Anotações", "+ Nova anotação" cria um card sem tempo com o
+ * cursor no texto; o texto vai para o `notes.json` 500 ms depois de parar de digitar; a cor muda; excluir
+ * leva o foco ao card seguinte e "Desfazer" o traz de volta; "Copiar anotações" copia o mesmo Markdown do
+ * arquivo.
+ */
+async function notesDetailEdits(contents: WebContents, ctx: SmokeContext, record: Meeting | undefined): Promise<Check> {
+  const fileNotes = (): MeetingNote[] => readNotesFile(ctx.userDataDir, record?.id)?.notes ?? []
+  const waitFile = async (predicate: (notes: MeetingNote[]) => boolean): Promise<boolean> => {
+    for (let attempt = 0; attempt < 60; attempt++) {
+      if (predicate(fileNotes())) return true
+      await wait(50)
+    }
+    return false
+  }
+  await clickSelector(contents, '[data-notes-tab] [data-action="new-note"]')
+  const created = await waitFor(contents, `document.querySelectorAll('[data-notes="grid"] [data-note]').length === 4 && document.activeElement?.matches('[data-notes="grid"] li:first-child [data-note-text]')`)
+  const createdSaved = await waitFile((notes) => notes.length === 4 && notes[0]?.atMs === null)
+  await setValue(contents, '[data-notes="grid"] li:first-child [data-note-text]', DETAIL_NOTE_TEXT)
+  const typedAt = Date.now()
+  const textSaved = await waitFile((notes) => notes[0]?.text === DETAIL_NOTE_TEXT)
+  const savedAfterMs = Date.now() - typedAt
+  await clickSelector(contents, '[data-notes="grid"] li:first-child [data-note-color="orange"]')
+  const colorSaved = await waitFile((notes) => notes[0]?.color === 'orange')
+  const newId = fileNotes()[0]?.id ?? ''
+  const nextId = fileNotes()[1]?.id ?? ''
+  await clickSelector(contents, '[data-notes="grid"] li:first-child [data-action="delete-note"]')
+  const deleted = await waitFile((notes) => notes.length === 3 && !notes.some((note) => note.id === newId))
+  const focusNext = await waitFor(contents, `document.activeElement?.closest('[data-note]')?.dataset.note === ${JSON.stringify(nextId)}`, 1000)
+  await clickSelector(contents, '[data-notes-tab] [data-action="undo-delete-note"]')
+  const restored = await waitFile((notes) => notes.length === 4 && notes[0]?.id === newId && notes[0].text === DETAIL_NOTE_TEXT)
+  const copiedBefore = ctx.fixtures.copiedTexts.length
+  await clickSelector(contents, '[data-action="copy-notes"]')
+  for (let attempt = 0; attempt < 40 && ctx.fixtures.copiedTexts.length === copiedBefore; attempt++) await wait(50)
+  const copied = ctx.fixtures.copiedTexts.at(-1) ?? ''
+  const expected = notesMarkdown(fileNotes())
+  return {
+    ok: created && createdSaved && textSaved && savedAfterMs >= 400 && colorSaved && deleted && focusNext && restored && copied === expected && copied.endsWith(`- ${DETAIL_NOTE_TEXT}\n`),
+    detail: `nova=${created} salva=${createdSaved}; texto salvo em ~${savedAfterMs} ms=${textSaved}; cor=${colorSaved}; excluir=${deleted} (foco no seguinte=${focusNext}); desfazer=${restored}; "Copiar anotações" igual ao arquivo=${copied === expected} (${copied.split('\n').length} linhas)`,
+  }
 }
 
 /**
@@ -2311,7 +2540,13 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
         if (!notice.shown || !notice.gone) failures.push(`gravacao-aviso-dark: aviso=${notice.shown}, sumiu=${notice.gone}`)
       }
 
-      // 4. Encerrar salva o registro e abre o detalhe.
+      // Contrato 13: painel de anotações com três cards (⌘⇧N no claro, o botão "Anotações" no escuro).
+      recording[themeName === 'light' ? 'notesRecording' : 'notesRecordingDark'] = await notesWhileRecording(contents, themeName === 'light')
+      await shoot('gravacao-anotacoes', 'gravacao')
+
+      // 4. Encerrar salva o registro e abre o detalhe. A anotação mais antiga é editada logo antes do
+      // clique, sem esperar nada: o texto novo tem que chegar ao `notes.json` (contrato 13, CA4).
+      await setValue(contents, '[data-notes-panel] li:last-child [data-note-text]', SMOKE_NOTE_EDITED)
       const recordedMs = Date.now() - recordingFrom
       const endedAt = Date.now()
       await clickSelector(contents, '[data-action="end-recording"]')
@@ -2353,6 +2588,8 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
         recording['summaryDownload'] = downloads.check
         screenshots.push(downloads.shot)
       }
+      // Contrato 13: as anotações no arquivo e na aba "Anotações", e o salto para a transcrição.
+      recording[themeName === 'light' ? 'notesDetail' : 'notesDetailDark'] = await notesAfterEnd(contents, ctx, record, () => shoot('detalhe-anotacoes', 'detalhe'), themeName === 'light')
 
       // 5. Lista com três reuniões semeadas.
       seedMeetings(ctx.userDataDir)
@@ -2529,7 +2766,7 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
   for (const name of ['emptyStateButton', 'headerNewRecording', 'menuNovaGravacao', 'sidebarReunioes', 'keyboard', 'detailLoadFailure']) {
     if (!navigation[name]) failures.push(`navegação ${name}: não executado`)
   }
-  for (const name of ['captureWorklet', 'tapeFps', 'endSavesAndOpensDetail', 'pause', 'spaceResumes', 'systemSilenceNotice', 'endFromHeader', 'deleteWithConfirmation', 'noKeyState', 'copyTranscript', 'deleteTranscript', 'echoRemoved', 'echoNotSaved', 'recorderFormat', 'audioWhileRecording', 'audioSaved', 'audioDetail', 'deleteKeepsFiles', 'summary', 'summaryDark', 'summaryDownload']) {
+  for (const name of ['captureWorklet', 'tapeFps', 'endSavesAndOpensDetail', 'pause', 'spaceResumes', 'systemSilenceNotice', 'endFromHeader', 'deleteWithConfirmation', 'noKeyState', 'copyTranscript', 'deleteTranscript', 'echoRemoved', 'echoNotSaved', 'recorderFormat', 'audioWhileRecording', 'audioSaved', 'audioDetail', 'deleteKeepsFiles', 'summary', 'summaryDark', 'summaryDownload', 'notesRecording', 'notesRecordingDark', 'notesDetail', 'notesDetailDark']) {
     if (!recording[name]) failures.push(`gravação ${name}: não executado`)
   }
   if (!theme.ok) failures.push(`tema: ${theme.detail}`)

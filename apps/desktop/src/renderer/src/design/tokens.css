@@ -39,6 +39,30 @@
   --side-ok: #3b82f6;
   /* Contorno de botão pequeno sobre o azul ("Permitir" das permissões). */
   --side-outline: rgba(255, 255, 255, 0.4);
+
+  /*
+   * Cards de anotação (contrato 13): fundo, borda de 1 px e texto de cada cor. Fora da paleta da LAP, como o
+   * vermelho de gravação, porque a pessoa escolhe a cor do post-it. Texto com contraste AA (4,5:1) sobre
+   * o fundo, conferido por test/tokens.test.ts.
+   */
+  --note-yellow: #fff4c2;
+  --note-yellow-border: #e3c95a;
+  --note-yellow-text: #4a3b00;
+  --note-pink: #fce1ec;
+  --note-pink-border: #e2a3bd;
+  --note-pink-text: #5c1a35;
+  --note-green: #ddf3e1;
+  --note-green-border: #95caa1;
+  --note-green-text: #173f22;
+  --note-blue: #dceafb;
+  --note-blue-border: #98bbe8;
+  --note-blue-text: #0e2f5c;
+  --note-purple: #eae1f8;
+  --note-purple-border: #b7a1de;
+  --note-purple-text: #33205a;
+  --note-orange: #ffe6d1;
+  --note-orange-border: #eeb083;
+  --note-orange-text: #5a2a06;
 }
 
 [data-theme='dark'] {
@@ -72,6 +96,26 @@
   --side-edge: rgba(201, 212, 229, 0.28);
   --side-ok: #3b82f6;
   --side-outline: rgba(255, 255, 255, 0.4);
+
+  /* Cards de anotação no escuro: fundo escuro da mesma cor, texto claro. */
+  --note-yellow: #463c12;
+  --note-yellow-border: #7a6a2a;
+  --note-yellow-text: #fff3c4;
+  --note-pink: #4a2133;
+  --note-pink-border: #80405c;
+  --note-pink-text: #ffe0ec;
+  --note-green: #1d3b26;
+  --note-green-border: #3e6b4a;
+  --note-green-text: #ddf6e2;
+  --note-blue: #163357;
+  --note-blue-border: #3a5f8f;
+  --note-blue-text: #dcebff;
+  --note-purple: #32264e;
+  --note-purple-border: #5e4a85;
+  --note-purple-text: #ede4ff;
+  --note-orange: #4a2b14;
+  --note-orange-border: #85532e;
+  --note-orange-text: #ffe7d4;
 }
 
 :root {

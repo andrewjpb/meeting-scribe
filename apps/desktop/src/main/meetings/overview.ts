@@ -1,11 +1,12 @@
-// Índice leve da tela de Reuniões (contrato 10): a lista com a prévia do resumo numa chamada só e a busca
-// em título, transcrição e resumo, sem diferenciar maiúsculas nem acentos. A busca é por palavras: a
+// Índice leve da tela de Reuniões (contrato 10): a lista com a prévia do resumo e o número de anotações
+// (contrato 13) numa chamada só e a busca em título, transcrição, resumo e anotações, sem diferenciar maiúsculas nem acentos. A busca é por palavras: a
 // reunião entra quando todas aparecem, mesmo em campos diferentes. Tudo no main e no disco local:
 // nenhum texto sai do Mac. O texto de cada reunião fica em memória, já normalizado, e só é relido quando
 // o arquivo dela muda (inode, data e tamanho); a lista aquece o índice em segundo plano para a primeira
 // busca não esperar a leitura das transcrições.
 import { stat } from 'node:fs/promises'
 import { z } from 'zod'
+import { notesInOrder } from '../../shared/meeting-notes'
 import type { MeetingSummary } from '../../shared/meeting-summary'
 import type { Meeting } from '../../shared/meetings'
 import {
@@ -19,6 +20,7 @@ import {
   type SearchField,
   type SnippetPart,
 } from '../../shared/meetings-overview'
+import { notesPath, type NotesStore } from './notes'
 import type { MeetingsStore } from './store'
 import { summaryPath, type SummaryStore } from './summaries'
 import { transcriptPath, type TranscriptStore } from './transcripts'
@@ -32,6 +34,8 @@ export interface MeetingsIndexDeps {
   meetings: Pick<MeetingsStore, 'list'>
   transcripts: Pick<TranscriptStore, 'get'>
   summaries: Pick<SummaryStore, 'get'>
+  /** Anotações (contrato 13): "N anotações" na lista e a busca "nas anotações". */
+  notes?: Pick<NotesStore, 'get'>
   activity: (meetingId: string) => SummaryActivity
 }
 
@@ -187,6 +191,11 @@ interface IndexedSummary extends Indexed {
   summary: MeetingSummary | null
 }
 
+interface IndexedNotes extends Indexed {
+  /** Anotações com texto. */
+  count: number
+}
+
 /** NFC antes de normalizar: "Café" gravado decomposto (NFD) vira o mesmo texto que o digitado. */
 const indexed = (raw: string): Pick<Indexed, 'text' | 'folded'> => {
   const text = raw.normalize('NFC')
@@ -216,6 +225,7 @@ function summaryText(summary: MeetingSummary | null): string {
 export function createMeetingsIndex(deps: MeetingsIndexDeps): MeetingsIndex {
   const summaries = new Map<string, IndexedSummary>()
   const transcripts = new Map<string, Indexed>()
+  const notes = new Map<string, IndexedNotes>()
   let warming: Promise<void> = Promise.resolve()
 
   async function summaryOf(meetingId: string): Promise<IndexedSummary> {
@@ -244,27 +254,40 @@ export function createMeetingsIndex(deps: MeetingsIndexDeps): MeetingsIndex {
     return entry
   }
 
+  async function notesOf(meetingId: string): Promise<IndexedNotes> {
+    const stamp = deps.notes ? await stampOf(notesPath(deps.dir, meetingId)) : 'none'
+    const cached = notes.get(meetingId)
+    if (cached?.stamp === stamp) return cached
+    const list = stamp === 'none' ? [] : notesInOrder((await deps.notes?.get(meetingId).catch(() => [])) ?? [])
+    const entry = { stamp, count: list.length, ...indexed(list.map((note) => note.text.trim()).join('\n')) }
+    notes.set(meetingId, entry)
+    return entry
+  }
+
   /** Reunião excluída sai do índice. */
   function prune(meetings: readonly Meeting[]): void {
     const ids = new Set(meetings.map((meeting) => meeting.id))
-    for (const cache of [summaries, transcripts]) for (const id of cache.keys()) if (!ids.has(id)) cache.delete(id)
+    for (const cache of [summaries, transcripts, notes]) for (const id of cache.keys()) if (!ids.has(id)) cache.delete(id)
   }
 
-  function entryOf(meeting: Meeting, summary: MeetingSummary | null): MeetingOverview {
+  function entryOf(meeting: Meeting, summary: MeetingSummary | null, notesCount: number): MeetingOverview {
     const activity = deps.activity(meeting.id)
     const summaryState: ListSummaryState = activity ?? (summary ? 'ready' : 'none')
-    return { meeting, summary: summary ? summaryPreview(summary) : null, summaryState }
+    return { meeting, summary: summary ? summaryPreview(summary) : null, summaryState, notes: notesCount }
   }
 
   async function overview(): Promise<MeetingOverview[]> {
     const meetings = await deps.meetings.list()
     prune(meetings)
-    const found = await Promise.all(meetings.map((meeting) => summaryOf(meeting.id)))
+    const [found, counted] = await Promise.all([
+      Promise.all(meetings.map((meeting) => summaryOf(meeting.id))),
+      Promise.all(meetings.map((meeting) => notesOf(meeting.id))),
+    ])
     // A primeira busca já encontra as transcrições em memória.
     warming = warming.then(async () => {
       for (const meeting of meetings) await transcriptOf(meeting.id).catch(() => undefined)
     })
-    return meetings.map((meeting, i) => entryOf(meeting, found[i]?.summary ?? null))
+    return meetings.map((meeting, i) => entryOf(meeting, found[i]?.summary ?? null, counted[i]?.count ?? 0))
   }
 
   async function search(input: unknown): Promise<MeetingSearchResult[]> {
@@ -275,10 +298,12 @@ export function createMeetingsIndex(deps: MeetingsIndexDeps): MeetingsIndex {
     // Uma reunião por vez: a leitura de um arquivo que mudou não atrasa as que já estão em memória.
     for (const meeting of meetings) {
       const summary = await summaryOf(meeting.id)
+      const meetingNotes = await notesOf(meeting.id)
       const fields: [SearchField, Pick<Indexed, 'text' | 'folded'>][] = [
         ['title', indexed(meeting.title)],
         ['transcript', await transcriptOf(meeting.id)],
         ['summary', summary],
+        ['notes', meetingNotes],
       ]
       // Todas as palavras em algum campo; a do trecho é a mais rara (empate: a que veio antes no termo).
       let anchor: { word: string; count: number } | null = null
@@ -298,7 +323,7 @@ export function createMeetingsIndex(deps: MeetingsIndexDeps): MeetingsIndex {
         if (at === -1) continue
         // A ocorrência que escolheu o trecho fica sempre marcada, mesmo no meio de uma palavra.
         const snippet = snippetAround(text, at, word.length, (from, to) => [[at, at + word.length], ...wordRanges(folded, words, from, to)])
-        results.push({ ...entryOf(meeting, summary.summary), field, snippet })
+        results.push({ ...entryOf(meeting, summary.summary, meetingNotes.count), field, snippet })
         break
       }
     }

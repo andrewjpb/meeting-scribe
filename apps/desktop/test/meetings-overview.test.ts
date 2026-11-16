@@ -69,7 +69,7 @@ describe('prévia do resumo (CA1)', () => {
   })
 
   it('o evento do resumo atualiza a linha (CA5)', () => {
-    const entry: MeetingOverview = { meeting: meeting('m', 'T', '2026-11-15T10:00:00.000Z'), summary: { overview: 'Antes.', tasks: 0, decisions: 0 }, summaryState: 'ready' }
+    const entry: MeetingOverview = { meeting: meeting('m', 'T', '2026-11-15T10:00:00.000Z'), summary: { overview: 'Antes.', tasks: 0, decisions: 0 }, summaryState: 'ready', notes: 0 }
     const ready: SummaryStatus = { state: 'ready', summary: summary('m', 'Depois. Mais.', { tasks: [{ task: 'x', owner: 'Ana', due: null }] }) }
     expect(withSummaryStatus(entry, { state: 'generating' })).toEqual({ ...entry, summaryState: 'generating' })
     expect(withSummaryStatus(entry, ready)).toEqual({ ...entry, summary: { overview: 'Depois.', tasks: 1, decisions: 0 }, summaryState: 'ready' })

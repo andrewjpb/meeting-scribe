@@ -32,6 +32,24 @@
   --color-logo-tile: var(--logo-tile);
   --color-logo-mark: var(--logo-mark);
   --color-logo-dot: var(--logo-dot);
+  --color-note-yellow: var(--note-yellow);
+  --color-note-yellow-border: var(--note-yellow-border);
+  --color-note-yellow-text: var(--note-yellow-text);
+  --color-note-pink: var(--note-pink);
+  --color-note-pink-border: var(--note-pink-border);
+  --color-note-pink-text: var(--note-pink-text);
+  --color-note-green: var(--note-green);
+  --color-note-green-border: var(--note-green-border);
+  --color-note-green-text: var(--note-green-text);
+  --color-note-blue: var(--note-blue);
+  --color-note-blue-border: var(--note-blue-border);
+  --color-note-blue-text: var(--note-blue-text);
+  --color-note-purple: var(--note-purple);
+  --color-note-purple-border: var(--note-purple-border);
+  --color-note-purple-text: var(--note-purple-text);
+  --color-note-orange: var(--note-orange);
+  --color-note-orange-border: var(--note-orange-border);
+  --color-note-orange-text: var(--note-orange-text);
   --color-transparent: transparent;
 
   /*

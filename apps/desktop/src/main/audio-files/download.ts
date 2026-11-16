@@ -1,7 +1,7 @@
 // "Baixar…" na aba "Áudio" (contrato 08, CA7): o diálogo de salvar do macOS e uma cópia para onde a
 // pessoa escolher. O renderer manda só a reunião e o tipo; a origem sai sempre de `meetings.json`, com a
 // mesma checagem de extensão do "Abrir" (contrato 07). Áudio e transcrição salvos na pasta são copiados;
-// a transcrição sem arquivo e o resumo viram `.md` na hora. Quem confirma a troca de um arquivo que já
+// a transcrição sem arquivo (com as anotações no fim, contrato 13) e o resumo viram `.md` na hora. Quem confirma a troca de um arquivo que já
 // existe é o próprio diálogo do macOS.
 import { copyFile, realpath, stat, writeFile } from 'node:fs/promises'
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path'
@@ -9,6 +9,7 @@ import { z } from 'zod'
 import { MEETING_DOWNLOAD_KINDS, type MeetingDownloadKind, type MeetingDownloadResult } from '../../shared/meeting-files'
 import { summaryMarkdown } from '../../shared/meeting-summary'
 import { transcriptMarkdown } from '../../shared/transcript-markdown'
+import type { NotesStore } from '../meetings/notes'
 import type { MeetingsStore } from '../meetings/store'
 import type { SummaryStore } from '../meetings/summaries'
 import type { TranscriptStore } from '../meetings/transcripts'
@@ -25,6 +26,8 @@ export interface MeetingDownloadDeps {
   meetings: Pick<MeetingsStore, 'get'>
   transcripts: Pick<TranscriptStore, 'get'>
   summaries: Pick<SummaryStore, 'get'>
+  /** Anotações (contrato 13): entram no fim da transcrição gerada na hora. */
+  notes?: Pick<NotesStore, 'get'>
   dialog: SaveDialog
   /** Pasta em que o diálogo abre (Downloads). */
   downloads: string
@@ -68,7 +71,8 @@ export function createMeetingDownload(deps: MeetingDownloadDeps): (input: unknow
       if (path) return { name: basename(path), copyFrom: path }
       const document = await deps.transcripts.get(meetingId).catch(() => null)
       if (!document?.segments.some((segment) => segment.text.trim())) return null
-      return { name: `${base}.md`, text: transcriptMarkdown(meeting, document) }
+      const notes = (await deps.notes?.get(meetingId).catch(() => [])) ?? []
+      return { name: `${base}.md`, text: transcriptMarkdown(meeting, document, notes) }
     }
     const summary = await deps.summaries.get(meetingId).catch(() => null)
     if (!summary) return null

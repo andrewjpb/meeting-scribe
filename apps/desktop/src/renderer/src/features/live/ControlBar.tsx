@@ -1,4 +1,4 @@
-import { HardDrive, Pause, Play } from 'lucide-react'
+import { HardDrive, Pause, Play, StickyNote } from 'lucide-react'
 import type { ReactNode } from 'react'
 import { useSettings } from '../../app/settingsStore'
 import { Icon } from '../../design/Icon'
@@ -9,12 +9,18 @@ interface ControlBarProps {
   busy: boolean
   /** O áudio da reunião está indo para a pasta (contrato 07): mostra o marcador "Gravando áudio". */
   savingAudio?: boolean
+  /** Painel de anotações aberto (contrato 13). */
+  notesOpen?: boolean
   onTogglePause: () => void
+  onToggleNotes?: () => void
   onEnd: () => void
 }
 
-/** Barra de controles: bloco azul (--side-bg, raio 6, sem sombra) a 24 px do rodapé com pausa, idiomas, modelo e "Encerrar". */
-export function ControlBar({ paused, busy, savingAudio = false, onTogglePause, onEnd }: ControlBarProps) {
+/**
+ * Barra de controles: bloco azul (--side-bg, raio 6, sem sombra) a 24 px do rodapé com pausa, anotações
+ * (contrato 13), idiomas, modelo e "Encerrar".
+ */
+export function ControlBar({ paused, busy, savingAudio = false, notesOpen = false, onTogglePause, onToggleNotes, onEnd }: ControlBarProps) {
   // Idiomas e modelo como estão em Configurações (mudam na hora se alguém trocar durante a gravação).
   const settings = useSettings((state) => state.settings)
   const model = modelLabel(settings)
@@ -30,6 +36,11 @@ export function ControlBar({ paused, busy, savingAudio = false, onTogglePause, o
           {/* Cheio, como nos mockups: o contorno de 1,5 px some no azul. */}
           <Icon icon={paused ? Play : Pause} className="fill-current" />
         </BarButton>
+        {onToggleNotes && (
+          <BarButton action="toggle-notes" label="Anotações" onClick={onToggleNotes} disabled={busy} ariaShortcut="Meta+Shift+N" pressed={notesOpen} title="Anotações (⌘⇧N)">
+            <Icon icon={StickyNote} />
+          </BarButton>
+        )}
         <Divider />
         <span
           className="ml-2 flex h-7 items-center rounded-[var(--radius-control)] bg-side-active px-2.5 text-12 font-medium"
@@ -77,9 +88,12 @@ interface BarButtonProps {
   onClick: () => void
   disabled: boolean
   ariaShortcut?: string
+  /** Botão que liga e desliga (painel de anotações): marcado com o fundo do item ativo. */
+  pressed?: boolean
+  title?: string
 }
 
-function BarButton({ action, label, children, onClick, disabled, ariaShortcut }: BarButtonProps) {
+function BarButton({ action, label, children, onClick, disabled, ariaShortcut, pressed, title }: BarButtonProps) {
   return (
     <button
       type="button"
@@ -87,7 +101,9 @@ function BarButton({ action, label, children, onClick, disabled, ariaShortcut }:
       onClick={onClick}
       disabled={disabled}
       aria-keyshortcuts={ariaShortcut}
-      className="no-drag inline-flex h-10 items-center gap-2 rounded-[var(--radius-control)] px-3.5 text-13 font-medium text-side-text transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-side-active disabled:opacity-50"
+      aria-pressed={pressed}
+      title={title}
+      className={`no-drag inline-flex h-10 items-center gap-2 rounded-[var(--radius-control)] px-3.5 text-13 font-medium text-side-text transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-side-active disabled:opacity-50 ${pressed ? 'bg-side-active' : ''}`}
     >
       {children}
       <span>{label}</span>

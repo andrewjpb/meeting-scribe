@@ -4,7 +4,9 @@
 // `claude` abre no main junto com a gravação, continua aberto na pausa e fecha ao encerrar. Com
 // "Salvar áudio e transcrição numa pasta" (contrato 07), um gravador à parte mistura as duas fontes e
 // manda o áudio ao main em pedaços; ao encerrar, o main renomeia o arquivo e escreve a transcrição ao lado.
+// As anotações da gravação (contrato 13) ficam aqui até a reunião existir e são salvas nela ao encerrar.
 import { create } from 'zustand'
+import type { MeetingNote, NoteColor } from '@shared/meeting-notes'
 import { audioExtension } from '@shared/meeting-files'
 import { defaultMeetingTitle, MEETING_TITLE_MAX, type Meeting } from '@shared/meetings'
 import { TRANSCRIPT_VERSION, type TranscriptDocument, type TranscriptionTokenResult } from '@shared/transcription'
@@ -17,6 +19,7 @@ import { AudioFileRecorder, type MeetingAudioRecorder } from '../../audio/record
 import { TranscriptionSession } from '../../transcription/session'
 import type { StreamingSocket } from '../../transcription/sink'
 import { persistableTranscript, useTranscription, type TranscriptionSegment } from '../../transcription/store'
+import { addNote, createNote, editNote, NOTE_UNDO_MS, removeNote, restoreNote, type RemovedNote } from '../notes/noteList'
 import { TapeHistory } from './tapeHistory'
 import { tapeStats } from './tapeStats'
 
@@ -40,13 +43,33 @@ interface RecordingState {
   audio: 'off' | 'recording' | 'failed'
   /** Reunião encerrada cujo arquivo não foi escrito na pasta: o detalhe mostra o mesmo aviso. */
   filesFailedMeetingId: string | null
+  /**
+   * Anotações da gravação em curso (contrato 13), da mais nova para a mais antiga. Cada tecla já chega aqui:
+   * "Encerrar" salva tudo, inclusive a que está sendo digitada.
+   */
+  notes: MeetingNote[]
+  /** Painel de anotações aberto; lembrado enquanto a gravação durar. */
+  notesOpen: boolean
+  /** Card criado agora, que abre com o cursor no texto (limpo depois do foco). */
+  newNoteId: string | null
+  /** Última anotação excluída, por 5 s, mesmo com o painel fechado. */
+  noteUndo: RemovedNote | null
   /** Inicia a captura. Chamar direto do gesto (clique, tecla ou menu); devolve falso se já havia uma. */
   start: () => boolean
   /** "Tentar de novo" do aviso de início: recarrega o ambiente e começa (o clique é o gesto). */
   retryStart: () => Promise<void>
   togglePause: () => void
   setTitle: (title: string) => void
-  /** Encerra, salva o registro e a transcrição, e devolve a reunião salva (ou `null` se não salvou). */
+  toggleNotes: () => void
+  /** "+ Nova anotação": amarela, vazia, com o tempo da gravação agora. */
+  addNote: () => void
+  editNote: (id: string, patch: { text?: string; color?: NoteColor }) => void
+  /** Exclui e guarda para o "Desfazer" por 5 s. */
+  deleteNote: (id: string) => void
+  /** "Desfazer": a última excluída volta para o mesmo lugar. */
+  undoDeleteNote: () => void
+  noteFocused: () => void
+  /** Encerra, salva o registro, a transcrição e as anotações, e devolve a reunião salva (ou `null` se não salvou). */
   end: () => Promise<Meeting | null>
 }
 
@@ -99,6 +122,13 @@ interface AudioRun {
 }
 
 let audioRun: AudioRun | null = null
+
+/** Prazo do "Desfazer" da última anotação excluída. */
+let noteUndoTimer: ReturnType<typeof setTimeout> | null = null
+function clearNoteUndoTimer(): void {
+  if (noteUndoTimer) clearTimeout(noteUndoTimer)
+  noteUndoTimer = null
+}
 /** Último gravador de arquivo, para o smoke comparar bytes com o arquivo depois de encerrar. */
 let lastAudioFile: AudioFileRecorder | null = null
 
@@ -194,6 +224,10 @@ export const useRecording = create<RecordingState>()((set, get) => ({
   startFailed: false,
   audio: 'off',
   filesFailedMeetingId: null,
+  notes: [],
+  notesOpen: false,
+  newNoteId: null,
+  noteUndo: null,
 
   start: () => {
     if (get().session) return false
@@ -272,6 +306,10 @@ export const useRecording = create<RecordingState>()((set, get) => ({
       saveFailed: false,
       savedMeeting: null,
       startFailed: false,
+      notes: [],
+      notesOpen: false,
+      newNoteId: null,
+      noteUndo: null,
       // Sem formato aceito ou gravador que nem começou: o aviso já aparece aqui.
       audio: audioRun?.session === session ? (audioRun.file?.ok ? 'recording' : 'failed') : 'off',
     })
@@ -321,6 +359,47 @@ export const useRecording = create<RecordingState>()((set, get) => ({
     if (value) set({ title: value })
   },
 
+  toggleNotes: () => {
+    if (get().session) set((state) => ({ notesOpen: !state.notesOpen }))
+  },
+
+  addNote: () => {
+    const { session, saving, notes } = get()
+    if (!session || saving) return
+    // O mesmo relógio dos trechos da transcrição (sem as pausas): o tempo do card bate com o da coluna.
+    const note = createNote(session.clock.elapsedMs, Date.now())
+    const next = addNote(notes, note)
+    if (next.length !== notes.length) set({ notes: next, notesOpen: true, newNoteId: note.id })
+  },
+
+  editNote: (id, patch) => {
+    if (get().saving) return
+    set((state) => ({ notes: editNote(state.notes, id, patch, Date.now()) }))
+  },
+
+  deleteNote: (id) => {
+    if (get().saving) return
+    const { list, removed } = removeNote(get().notes, id)
+    if (!removed) return
+    clearNoteUndoTimer()
+    noteUndoTimer = setTimeout(() => {
+      noteUndoTimer = null
+      if (get().noteUndo === removed) set({ noteUndo: null })
+    }, NOTE_UNDO_MS)
+    set({ notes: list, noteUndo: removed })
+  },
+
+  undoDeleteNote: () => {
+    const { session, saving, noteUndo } = get()
+    if (!session || saving || !noteUndo) return
+    clearNoteUndoTimer()
+    set((state) => ({ notes: restoreNote(state.notes, noteUndo), noteUndo: null }))
+  },
+
+  noteFocused: () => {
+    if (get().newNoteId) set({ newNoteId: null })
+  },
+
   end: async () => {
     const { session, transcription, startedAt } = get()
     if (!session || !startedAt || get().saving) return null
@@ -341,6 +420,8 @@ export const useRecording = create<RecordingState>()((set, get) => ({
         (await window.__scribeApi.invoke('scribe:meetings-create', { title: get().title, startedAt, durationMs: result.durationMs, sources: result.sources }))
       set({ savedMeeting: meeting })
       const hasTranscript = await saveTranscript(meeting.id, useTranscription.getState().segments, settings)
+      // Anotações (contrato 13, CA4): antes do `.md` da pasta, que as leva no fim. Falhou: "Tentar de novo".
+      await saveNotes(meeting.id, get().notes)
       // Depois da transcrição interna salva: o main renomeia o áudio e escreve o `.md` (CA6, CA6b).
       if (audio) {
         const filesOk = await finishAudioFile(audio, meeting.id)
@@ -362,7 +443,12 @@ export const useRecording = create<RecordingState>()((set, get) => ({
         saving: false,
         savedMeeting: null,
         audio: 'off',
+        notes: [],
+        notesOpen: false,
+        newNoteId: null,
+        noteUndo: null,
       })
+      clearNoteUndoTimer()
       return meeting
     } catch {
       set({ saving: false, saveFailed: true })
@@ -408,6 +494,13 @@ async function saveTranscript(meetingId: string, segments: readonly Transcriptio
   }
   await window.__scribeApi.invoke('scribe:transcript-save', { document })
   return persisted.some((segment) => segment.text.trim() !== '')
+}
+
+/** Grava as anotações da gravação na reunião criada. Sem anotação, nada é escrito. */
+async function saveNotes(meetingId: string, notes: readonly MeetingNote[]): Promise<void> {
+  if (!notes.length) return
+  const saved = await window.__scribeApi.invoke('scribe:notes-save', { meetingId, notes: [...notes] })
+  if (!saved) throw new Error('anotações não salvas')
 }
 
 /** Smoke: estado da captura, quadros contados, quadros desenhados pela fita e a fixture na tela. */

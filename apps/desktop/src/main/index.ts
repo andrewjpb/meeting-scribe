@@ -21,6 +21,7 @@ import { nodeSpawnSummary } from './claude-cli/summary'
 import { nodeSpawnClaude } from './claude-cli/translator'
 import { broadcast, handle, onEvent, sendTo } from './ipc'
 import { createMeetingsIndex, type MeetingsIndex } from './meetings/overview'
+import { createFileNotesStore } from './meetings/notes'
 import { createMeetingsService } from './meetings/service'
 import { createFileMeetingsStore, type MeetingsStore } from './meetings/store'
 import { createFileSummaryStore } from './meetings/summaries'
@@ -155,6 +156,8 @@ function createAppServices(userData: string): AppServices {
   const meetings = createFileMeetingsStore({ dir: userData })
   const transcripts = createFileTranscriptStore({ dir: userData })
   const summaries = createFileSummaryStore({ dir: userData })
+  // Anotações em cards (contrato 13), ao lado da transcrição e do resumo.
+  const notes = createFileNotesStore({ dir: userData })
   // No smoke a área de transferência fica só na memória: o clipboard do Mac não é tocado.
   const appClipboard = smokeFixtures ? { writeText: (text: string): void => void smokeFixtures.copiedTexts.push(text) } : clipboard
   // Tradução pelo `claude` local. No smoke, só o binário falso (test/fixtures/fake-claude.mjs): o
@@ -178,6 +181,7 @@ function createAppServices(userData: string): AppServices {
     meetings,
     transcripts,
     summaries,
+    notes,
     locate: () => claude.locate(),
     spawn: smokeClaude?.spawnSummary ?? nodeSpawnSummary,
     userData,
@@ -187,10 +191,10 @@ function createAppServices(userData: string): AppServices {
     onStatus: (meetingId, status) => broadcast(BrowserWindow.getAllWindows(), 'scribe:summary-state', { meetingId, status }),
     ...(app.isPackaged ? {} : { log: (message: string) => console.log(message) }),
   })
-  // Excluir a reunião apaga a transcrição e o resumo internos; os arquivos da pasta ficam.
-  const meetingsService = createMeetingsService({ meetings, transcripts, summaries: summary, clipboard: appClipboard })
+  // Excluir a reunião apaga a transcrição, o resumo e as anotações internos; os arquivos da pasta ficam.
+  const meetingsService = createMeetingsService({ meetings, transcripts, summaries: summary, notes, clipboard: appClipboard })
   // Lista e busca da tela de Reuniões (contrato 10): lê só o disco local; o estado "gerando" vem do resumo.
-  const meetingsIndex = createMeetingsIndex({ dir: userData, meetings, transcripts, summaries, activity: (id) => summary.activity(id) })
+  const meetingsIndex = createMeetingsIndex({ dir: userData, meetings, transcripts, summaries, notes, activity: (id) => summary.activity(id) })
   // Arquivos da reunião (contrato 07). No smoke, a "pasta pessoal" fica dentro do userData temporário
   // (nada vai para ~/Documents), o diálogo responde o que o smoke mandar e nada abre no Finder.
   const home = smokeUserData ? join(smokeUserData, 'home') : app.getPath('home')
@@ -198,6 +202,7 @@ function createAppServices(userData: string): AppServices {
     settings,
     meetings,
     transcripts,
+    notes,
     home,
     documents: smokeUserData ? join(home, 'Documents') : app.getPath('documents'),
     dialog: smokeFixtures ? { chooseFolder: () => Promise.resolve(smokeFixtures.chosenFolder) } : nativeFolderDialog,
@@ -215,6 +220,7 @@ function createAppServices(userData: string): AppServices {
     meetings,
     transcripts,
     summaries,
+    notes,
     dialog: smokeFixtures
       ? {
           chooseSavePath: (defaultPath) => {
@@ -323,7 +329,7 @@ function registerIpc(services: AppServices): void {
   handle('scribe:meetings-get', appOrigin, (_event, { id }) => meetings.get(id))
   handle('scribe:meetings-create', appOrigin, (_event, input) => meetings.create(input))
   handle('scribe:meetings-rename', appOrigin, (_event, { id, title }) => meetings.rename(id, title))
-  // Excluir a reunião apaga também a transcrição e o resumo internos dela; os arquivos da pasta ficam.
+  // Excluir a reunião apaga também a transcrição, o resumo e as anotações internos dela; os arquivos da pasta ficam.
   handle('scribe:meetings-delete', appOrigin, (_event, { id }) => meetingsService.deleteMeeting(id))
   handle('scribe:meetings-overview', appOrigin, () => meetingsIndex.overview())
   handle('scribe:meetings-search', appOrigin, (_event, request) => meetingsIndex.search((request as { term?: unknown } | undefined)?.term))
@@ -344,6 +350,9 @@ function registerIpc(services: AppServices): void {
   })
   handle('scribe:transcript-get', appOrigin, (_event, { meetingId }) => meetingsService.getTranscript(meetingId))
   handle('scribe:transcript-copy', appOrigin, (_event, { meetingId }) => meetingsService.copyTranscript(meetingId))
+  handle('scribe:notes-get', appOrigin, (_event, request) => meetingsService.getNotes((request as { meetingId?: unknown } | undefined)?.meetingId))
+  handle('scribe:notes-save', appOrigin, (_event, request) => meetingsService.saveNotes(request))
+  handle('scribe:notes-copy', appOrigin, (_event, request) => meetingsService.copyNotes((request as { meetingId?: unknown } | undefined)?.meetingId))
   handle('scribe:translate-turn', appOrigin, (_event, request) => translation.translate(request))
   handle('scribe:claude-locate', appOrigin, () => claude.locate())
   handle('scribe:claude-path-set', appOrigin, (_event, request) => claude.setPath((request as { path?: unknown } | undefined)?.path))

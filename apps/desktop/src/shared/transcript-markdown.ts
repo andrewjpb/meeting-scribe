@@ -1,5 +1,7 @@
 // Markdown da transcrição para a área de transferência (CA12). Sem DOM nem Electron: o main gera e
-// escreve no clipboard, e o teste confere o texto exato.
+// escreve no clipboard, e o teste confere o texto exato. O `.md` da pasta e o "Baixar transcrição…"
+// levam as anotações no fim (contrato 13); o "Copiar transcrição" não.
+import { notesMarkdown, type MeetingNote } from './meeting-notes'
 import { formatClock, speakerLabel, type TranscriptDocument } from './transcription'
 
 export interface MarkdownMeeting {
@@ -20,8 +22,11 @@ export function durationLabel(ms: number): string {
   return `${Math.floor(minutes / 60)} h ${two(minutes % 60)} min`
 }
 
-/** Cabeçalho com título, data, hora e duração; cada trecho com falante, horário, texto e tradução. */
-export function transcriptMarkdown(meeting: MarkdownMeeting, document: TranscriptDocument): string {
+/**
+ * Cabeçalho com título, data, hora e duração; cada trecho com falante, horário, texto e tradução. Com
+ * anotações, a seção "## Anotações" de `notesMarkdown` fecha o texto.
+ */
+export function transcriptMarkdown(meeting: MarkdownMeeting, document: TranscriptDocument, notes: readonly MeetingNote[] = []): string {
   const started = new Date(meeting.startedAt)
   const lines: string[] = [
     `# ${meeting.title}`,
@@ -34,5 +39,6 @@ export function transcriptMarkdown(meeting: MarkdownMeeting, document: Transcrip
     // Citação linha a linha: uma tradução com quebra de linha não escapa do bloco no meio.
     if (segment.translation) lines.push('', ...segment.translation.split(/\r?\n/).map((line) => (line.trim() ? `> ${line}` : '>')))
   }
-  return `${lines.join('\n')}\n`
+  const section = notesMarkdown(notes)
+  return `${lines.join('\n')}\n${section ? `\n${section}` : ''}`
 }

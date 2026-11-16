@@ -22,6 +22,7 @@ import {
 import { MEETING_TITLE_MAX, type Meeting } from '../../shared/meetings'
 import type { AppSettings } from '../../shared/settings-defaults'
 import { transcriptMarkdown } from '../../shared/transcript-markdown'
+import type { NotesStore } from '../meetings/notes'
 import type { MeetingsStore } from '../meetings/store'
 import type { TranscriptStore } from '../meetings/transcripts'
 import type { SettingsStore } from '../settings/store'
@@ -45,6 +46,8 @@ export interface MeetingFilesDeps {
   settings: Pick<SettingsStore, 'get' | 'setAudioFolder'>
   meetings: Pick<MeetingsStore, 'get' | 'setFiles'>
   transcripts: Pick<TranscriptStore, 'get'>
+  /** Anotações da reunião (contrato 13): entram no fim do `.md` escrito ao encerrar. */
+  notes?: Pick<NotesStore, 'get'>
   /** Pasta pessoal, para encurtar caminhos com `~`. */
   home: string
   /** Pasta Documentos; a padrão é `<documents>/Meeting Scribe`. */
@@ -114,7 +117,7 @@ export function meetingFilePath(meeting: Pick<Meeting, 'audioPath' | 'transcript
 }
 
 export function createMeetingFilesService(deps: MeetingFilesDeps): MeetingFilesService {
-  const { settings, meetings, transcripts, home, documents, dialog, opener, newId = randomUUID } = deps
+  const { settings, meetings, transcripts, notes, home, documents, dialog, opener, newId = randomUUID } = deps
   const sessions = new Map<string, FileSession>()
   const defaultFolder = join(documents, DEFAULT_FOLDER_NAME)
 
@@ -218,16 +221,18 @@ export function createMeetingFilesService(deps: MeetingFilesDeps): MeetingFilesS
         }
       }
 
-      // A cópia legível da transcrição: o mesmo texto do "Copiar transcrição", escrito uma vez só.
+      // A cópia legível da transcrição: o mesmo texto do "Copiar transcrição", escrito uma vez só, com as
+      // anotações no fim (contrato 13). O renderer grava as anotações antes de pedir o `finish`.
       let transcriptPath: string | null = null
       const document = await transcripts.get(meetingId).catch(() => null)
       if (document?.segments.some((segment) => segment.text.trim())) {
+        const meetingNotes = (await notes?.get(meetingId).catch(() => [])) ?? []
         let temp: string | null = null
         try {
           const target = insideFolder(folder, `${base}.md`)
           temp = insideFolder(folder, `${base}.md${PART_SUFFIX}`)
           // `wx`, como o `.part` do áudio: não segue um link simbólico já plantado com esse nome.
-          await writeFile(temp, transcriptMarkdown(meeting, document), { encoding: 'utf8', flag: 'wx' })
+          await writeFile(temp, transcriptMarkdown(meeting, document, meetingNotes), { encoding: 'utf8', flag: 'wx' })
           await rename(temp, target)
           transcriptPath = target
         } catch {

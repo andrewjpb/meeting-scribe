@@ -13,15 +13,19 @@ import { AUDIO_FOLDER_FAILED_TEXT, RetryNotice } from '../live/Notices'
 import { useRecording } from '../live/recordingStore'
 import { TranscriptList, type TranscriptItem } from '../live/TranscriptList'
 import { durationLabel, longDateLabel, timeLabel } from './format'
+import { closestSegmentId } from '../notes/noteList'
 import { MeetingFiles } from './MeetingFiles'
+import { useMeetingNotes } from './notesStore'
+import { NotesTab } from './NotesTab'
 import { SourceDots } from './SourceDots'
 import { SummaryTab } from './SummaryTab'
 import { useSummary, type SummaryView } from './useSummary'
 
-type DetailTab = 'resumo' | 'transcricao' | 'audio'
+type DetailTab = 'resumo' | 'anotacoes' | 'transcricao' | 'audio'
 
 const TABS: { value: DetailTab; label: string }[] = [
   { value: 'resumo', label: 'Resumo' },
+  { value: 'anotacoes', label: 'Anotações' },
   { value: 'transcricao', label: 'Transcrição' },
   { value: 'audio', label: 'Áudio' },
 ]
@@ -51,8 +55,9 @@ const itemsOf = (transcript: TranscriptDocument | null): TranscriptItem[] =>
   }))
 
 /**
- * Detalhe da reunião: mesmo esqueleto da gravação, sem a fita ao vivo, com três abas (contrato 08):
- * "Resumo", "Transcrição" (a transcrição salva) e "Áudio" (os arquivos e o que dá para baixar).
+ * Detalhe da reunião: mesmo esqueleto da gravação, sem a fita ao vivo, com quatro abas (contratos 08 e 13):
+ * "Resumo", "Anotações" (os cards da reunião), "Transcrição" (a transcrição salva) e "Áudio" (os arquivos e
+ * o que dá para baixar).
  */
 export function MeetingDetailScreen() {
   const { id = '' } = useParams()
@@ -69,6 +74,8 @@ export function MeetingDetailScreen() {
     setAutoTab({ id, tab: initialDetailTab(summary.view) })
   }
   const tab: DetailTab = (chosenTab?.id === id ? chosenTab.tab : null) ?? (autoTab?.id === id ? autoTab.tab : null) ?? 'transcricao'
+  /** Trecho para onde a transcrição rola depois do clique no tempo de uma anotação. */
+  const [jump, setJump] = useState<{ meetingId: string; id: string; seq: number } | null>(null)
 
   // Leitura que falha vira aviso com "Tentar de novo", nunca tela em branco.
   useEffect(() => {
@@ -95,6 +102,8 @@ export function MeetingDetailScreen() {
   const [failure, setFailure] = useState<{ text: string; retry: () => void } | null>(null)
   /** Esta reunião acabou de ser encerrada e o arquivo dela não foi escrito na pasta (contrato 07). */
   const filesFailed = useRecording((state) => state.filesFailedMeetingId === id)
+  /** As anotações desta reunião não foram salvas depois da nova tentativa (contrato 13): aviso em qualquer aba. */
+  const notesSaveFailed = useMeetingNotes((state) => state.meetings[id]?.saveFailed === true)
 
   const rename = (title: string): void => {
     setFailure(null)
@@ -108,10 +117,13 @@ export function MeetingDetailScreen() {
 
   const remove = async (): Promise<void> => {
     setFailure(null)
+    // Edição de anotação esperando para salvar não grava numa reunião que está saindo.
+    useMeetingNotes.getState().forget(id)
     try {
       await window.__scribeApi.invoke('scribe:meetings-delete', { id })
     } catch {
       setFailure({ text: 'Não foi possível excluir a reunião.', retry: () => void remove() })
+      void useMeetingNotes.getState().load(id)
       return
     }
     void navigate(ROUTE_PATHS.reunioes, { replace: true })
@@ -121,6 +133,12 @@ export function MeetingDetailScreen() {
 
   const ready = loaded.status === 'ready' ? loaded : null
   const items = itemsOf(ready?.transcript ?? null)
+
+  const jumpTo = (atMs: number): void => {
+    const target = closestSegmentId(items, atMs)
+    setChosenTab({ id, tab: 'transcricao' })
+    if (target) setJump((current) => ({ meetingId: id, id: target, seq: (current?.seq ?? 0) + 1 }))
+  }
   return (
     <div className="flex min-h-0 flex-1 flex-col" data-meeting={ready ? ready.meeting.id : ''}>
       <header className={`border-b border-line px-10 pt-6 ${ready ? '' : 'pb-5'}`}>
@@ -150,6 +168,9 @@ export function MeetingDetailScreen() {
         <RetryNotice id="detail-load-failed" text="Não foi possível abrir a reunião." onRetry={retryLoad} className="mx-10 mt-4" />
       )}
       {failure && <RetryNotice id="detail-failed" text={failure.text} onRetry={failure.retry} className="mx-10 mt-4" />}
+      {ready && notesSaveFailed && (
+        <RetryNotice id="notes-save-failed" text="Não foi possível salvar as anotações." onRetry={() => void useMeetingNotes.getState().flush(id)} className="mx-10 mt-4" />
+      )}
       {ready && filesFailed && (
         <Note id="audio-folder-failed" icon={TriangleAlert} className="mx-10 mt-4">
           {AUDIO_FOLDER_FAILED_TEXT}
@@ -158,9 +179,10 @@ export function MeetingDetailScreen() {
       {ready && (
         <div role="tabpanel" id={tabPanelId(TABS_ID, tab)} aria-labelledby={tabId(TABS_ID, tab)} data-tab-panel={tab} className="flex min-h-0 flex-1 flex-col">
           {tab === 'resumo' && <SummaryTab meetingId={ready.meeting.id} view={summary.view} onGenerate={summary.generate} />}
+          {tab === 'anotacoes' && <NotesTab meetingId={ready.meeting.id} onJump={jumpTo} />}
           {tab === 'transcricao' &&
             (items.length > 0 ? (
-              <TranscriptList items={items} />
+              <TranscriptList items={items} jumpTo={jump?.meetingId === id ? jump : null} />
             ) : (
               <div className="min-h-0 flex-1 px-10 pb-10">
                 <div className="mx-auto w-full max-w-[680px] pt-7">

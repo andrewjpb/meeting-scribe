@@ -4,6 +4,7 @@ import type { BrandingInfo, BrandLogoChoice } from './branding'
 import type { KeySaveResult, KeyStatus, MicAccess, ModelCheck, ModelsResult } from './assemblyai'
 import type { ClaudeLocateResult, ClaudeRunState, ClaudeStartResult, ClaudeTranslateRequest, ClaudeTranslateResult } from './claude-cli'
 import type { AudioBeginResult, AudioExtension, AudioFinishResult, AudioFolderInfo, MeetingDownloadKind, MeetingDownloadResult, MeetingFileKind, MeetingFilesInfo } from './meeting-files'
+import type { MeetingNote } from './meeting-notes'
 import type { SummaryStatus } from './meeting-summary'
 import type { Meeting, NewMeeting } from './meetings'
 import type { MeetingOverview, MeetingSearchResult } from './meetings-overview'
@@ -68,6 +69,12 @@ export interface InvokeChannels {
   'scribe:transcript-get': { request: { meetingId: string }; response: TranscriptDocument | null }
   /** "Copiar transcrição": o main monta o Markdown e escreve na área de transferência (CA12). */
   'scribe:transcript-copy': { request: { meetingId: string }; response: TranscriptCopyResult }
+  /** Anotações da reunião (contrato 13), de `meetings/<id>.notes.json`; arquivo inválido = lista vazia. */
+  'scribe:notes-get': { request: { meetingId: string }; response: MeetingNote[] }
+  /** Grava a lista inteira de anotações; falso quando a reunião não existe. */
+  'scribe:notes-save': { request: { meetingId: string; notes: MeetingNote[] }; response: boolean }
+  /** "Copiar anotações": o main monta o Markdown e escreve na área de transferência. */
+  'scribe:notes-copy': { request: { meetingId: string }; response: TranscriptCopyResult }
   /** Tradução avulsa de um trecho quando o gateway não respondeu na conexão (CA9). */
   'scribe:translate-turn': {
     request: { text: string; source: AppSettings['sourceLanguage']; target: AppSettings['targetLanguage']; model: string }
@@ -182,6 +189,9 @@ const INVOKE: Record<InvokeChannel, true> = {
   'scribe:transcript-save': true,
   'scribe:transcript-get': true,
   'scribe:transcript-copy': true,
+  'scribe:notes-get': true,
+  'scribe:notes-save': true,
+  'scribe:notes-copy': true,
   'scribe:translate-turn': true,
   'scribe:claude-locate': true,
   'scribe:claude-path-set': true,

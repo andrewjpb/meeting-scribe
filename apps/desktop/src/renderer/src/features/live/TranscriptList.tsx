@@ -24,11 +24,22 @@ interface TranscriptListProps {
   onRetryTranslation?: (id: string) => void
   /** Aviso antes da lista (estado sem chave, exemplo etc.). */
   header?: ReactNode
+  /**
+   * Trecho para onde rolar (o tempo de uma anotação, contrato 13). `seq` muda a cada clique, para o mesmo
+   * trecho rolar de novo.
+   */
+  jumpTo?: { id: string; seq: number } | null
 }
 
-export function TranscriptList({ items, bottomInset = false, autoScroll = false, onRetryTranslation, header }: TranscriptListProps) {
+export function TranscriptList({ items, bottomInset = false, autoScroll = false, onRetryTranslation, header, jumpTo = null }: TranscriptListProps) {
   const scrollRef = useRef<HTMLDivElement>(null)
   const [atBottom, setAtBottom] = useState(true)
+
+  useEffect(() => {
+    if (!jumpTo) return
+    const target = scrollRef.current?.querySelector(`[data-segment="${CSS.escape(jumpTo.id)}"]`)
+    target?.scrollIntoView({ block: 'center' })
+  }, [jumpTo])
 
   // Rolar sempre que o texto muda, enquanto o usuário não tiver subido.
   useEffect(() => {
@@ -58,7 +69,7 @@ export function TranscriptList({ items, bottomInset = false, autoScroll = false,
         {items.length > 0 && (
           <ol data-transcript-list className="flex flex-col gap-[22px] pt-7 pb-1">
             {items.map((item) => (
-              <Segment key={item.id} item={item} onRetryTranslation={onRetryTranslation} />
+              <Segment key={item.id} item={item} onRetryTranslation={onRetryTranslation} target={jumpTo?.id === item.id} />
             ))}
           </ol>
         )}
@@ -79,11 +90,11 @@ export function TranscriptList({ items, bottomInset = false, autoScroll = false,
   )
 }
 
-function Segment({ item, onRetryTranslation }: { item: TranscriptItem; onRetryTranslation?: ((id: string) => void) | undefined }) {
+function Segment({ item, onRetryTranslation, target }: { item: TranscriptItem; onRetryTranslation?: ((id: string) => void) | undefined; target: boolean }) {
   const showUnavailable = !item.partial && item.translationState === 'unavailable' && !item.translation
   return (
-    <li className="grid grid-cols-[64px_minmax(0,1fr)]">
-      <time className="pt-0.5 text-12 text-text-faint tabular">{formatClock(item.startMs)}</time>
+    <li data-segment={item.id} data-jump-target={target || undefined} className="grid grid-cols-[64px_minmax(0,1fr)]">
+      <time className={`pt-0.5 text-12 tabular ${target ? 'font-bold text-title' : 'text-text-faint'}`}>{formatClock(item.startMs)}</time>
       <div className="flex min-w-0 flex-col gap-1">
         <p className={`caps ${item.source === 'mic' ? 'text-mic' : 'text-sys'}`}>{speakerLabel(item.source, item.speaker)}</p>
         <p data-transcript-text className={`text-16 select-text ${item.partial ? 'text-text-muted italic' : 'text-text'}`}>{item.text}</p>
