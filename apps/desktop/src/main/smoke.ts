@@ -8,7 +8,8 @@
 // Claude CLI é o binário falso (test/fixtures/fake-claude.mjs); o `claude` de verdade nunca roda, nem
 // para o resumo da reunião (contrato 08). A marca própria (contrato 09) usa o logo de
 // test/fixtures/brand/ pelo diálogo substituto, e o Dock de verdade nunca é tocado. A atualização pelo
-// GitHub (contrato 14) usa API e download falsos; o `.dmg` falso vai para o userData temporário.
+// GitHub (contrato 14) usa API e download falsos; o `.dmg` falso vai para o userData temporário. A lista
+// de reuniões (contrato 10) é conferida com seis reuniões semeadas, duas com resumo, e uma busca.
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
@@ -17,6 +18,7 @@ import { ASSEMBLYAI_DASHBOARD_URL } from '../shared/assemblyai'
 import type { CspViolation } from '../shared/ipc'
 import type { Meeting } from '../shared/meetings'
 import { summaryMarkdown, type MeetingSummary } from '../shared/meeting-summary'
+import { summaryPreview } from '../shared/meetings-overview'
 import { PRIVACY_PANE_URLS } from '../shared/privacy'
 import { BRAND_LOGO_INVALID_MESSAGE, BRAND_LOGO_PATTERN, DEFAULT_BRAND_NAME, DEFAULT_BRAND_SUBTITLE } from '../shared/branding'
 import { DEFAULT_SETTINGS, type AppSettings } from '../shared/settings-defaults'
@@ -50,6 +52,7 @@ const SCREENS = [
   'gravacao',
   'gravacao-ao-vivo',
   'reunioes-com-dados',
+  'reunioes-lista',
   'detalhe',
   'detalhe-resumo',
   'configuracoes',
@@ -278,6 +281,176 @@ function seedMeetings(userDataDir: string): void {
   const transcripts = join(userDataDir, 'meetings')
   mkdirSync(transcripts, { recursive: true })
   writeFileSync(join(transcripts, 'smoke-1.json'), `${JSON.stringify(transcriptDocument('smoke-1', readSessionFixture()), null, 2)}\n`)
+}
+
+/**
+ * Resumos das duas reuniões com resumo na lista (contrato 10). A `smoke-1` fica sem: com resumo, o detalhe
+ * abriria na aba "Resumo" e o passo do detalhe fotografa e copia a transcrição.
+ */
+const LIST_SUMMARIES: Record<string, MeetingSummary> = {
+  'smoke-4': {
+    version: 1,
+    meetingId: 'smoke-4',
+    createdAt: new Date().toISOString(),
+    model: 'claude-cli:haiku',
+    overview: 'A equipe definiu a ordem da migração do banco e o plano de volta caso algo falhe. Depois revisou os riscos do fim de semana.',
+    decisions: ['Migrar no sábado de manhã.'],
+    tasks: [
+      { task: 'Preparar o roteiro da migração', owner: 'Você', due: 'sexta-feira' },
+      { task: 'Avisar o cliente da janela de manutenção', owner: null, due: null },
+    ],
+  },
+  'smoke-2': {
+    version: 1,
+    meetingId: 'smoke-2',
+    createdAt: new Date().toISOString(),
+    model: 'claude-cli:haiku',
+    overview: 'A agência aceitou rever o prazo de entrega do material da campanha, desde que o escopo da segunda fase seja fechado até o fim do mês, as peças de vídeo saiam da proposta e a aprovação de cada etapa seja feita por uma pessoa só do nosso lado. Depois as duas partes repassaram a lista de pendências.',
+    decisions: ['Prazo novo em 15 de dezembro.', 'Vídeos ficam para a fase 3.'],
+    tasks: [{ task: 'Enviar o escopo revisado', owner: 'Agência', due: null }],
+  },
+}
+
+/** Palavras que só a transcrição da fixture tem (nem título nem resumo), em outra caixa e sem acento. */
+const TRANSCRIPT_ONLY_TERM = 'Transcricao em TEMPO real'
+
+/**
+ * Contrato 10: mais três reuniões (5, 12 e 400 dias atrás) e o resumo de duas delas. Com as três de
+ * `seedMeetings`, são seis em dias diferentes.
+ */
+function seedListMeetings(userDataDir: string): void {
+  const at = (daysAgo: number, hours: number, minutes: number): string => {
+    const date = new Date()
+    date.setDate(date.getDate() - daysAgo)
+    date.setHours(hours, minutes, 0, 0)
+    return date.toISOString()
+  }
+  const more: Meeting[] = [
+    { id: 'smoke-4', title: 'Alinhamento semanal do time', startedAt: at(5, 10, 0), durationMs: 25 * 60_000, sources: { mic: true, system: true }, audioPath: null, transcriptPath: null },
+    { id: 'smoke-5', title: 'Entrevista com o fornecedor de nuvem', startedAt: at(12, 15, 30), durationMs: 58 * 60_000, sources: { mic: true, system: true }, audioPath: null, transcriptPath: null },
+    { id: 'smoke-6', title: 'Retrospectiva do ano', startedAt: at(400, 17, 0), durationMs: 15 * 60_000, sources: { mic: false, system: true }, audioPath: null, transcriptPath: null },
+  ]
+  writeFileSync(join(userDataDir, MEETINGS_FILE), `${JSON.stringify({ version: 1, meetings: [...readMeetings(userDataDir), ...more] }, null, 2)}\n`)
+  for (const summary of Object.values(LIST_SUMMARIES)) {
+    writeFileSync(join(userDataDir, 'meetings', `${summary.meetingId}.summary.json`), `${JSON.stringify(summary, null, 2)}\n`)
+  }
+}
+
+/** Rótulo esperado do grupo, calculado aqui sem o código do renderer (contrato 10, CA2). */
+function expectedDayLabel(iso: string): string {
+  const date = new Date(iso)
+  const now = new Date()
+  const start = (value: Date): number => Date.UTC(value.getFullYear(), value.getMonth(), value.getDate())
+  const days = Math.round((start(now) - start(date)) / 86_400_000)
+  if (days === 0) return 'Hoje'
+  if (days === 1) return 'Ontem'
+  if (days >= 2 && days <= 6) {
+    const weekday = new Intl.DateTimeFormat('pt-BR', { weekday: 'long' }).format(date)
+    return weekday.charAt(0).toUpperCase() + weekday.slice(1)
+  }
+  const options: Intl.DateTimeFormatOptions = { day: 'numeric', month: 'long', ...(date.getFullYear() === now.getFullYear() ? {} : { year: 'numeric' }) }
+  return new Intl.DateTimeFormat('pt-BR', options).format(date)
+}
+
+interface ListRow {
+  id: string
+  overview: string
+  markers: string[]
+  snippet: string
+  marks: string[]
+}
+
+const LIST_ROWS = `[...document.querySelectorAll('main a[data-meeting]')].map((a) => ({
+  id: a.dataset.meeting,
+  overview: a.querySelector('[data-summary-overview]')?.textContent ?? '',
+  markers: [...a.querySelectorAll('[data-summary-markers] span')].map((s) => s.textContent),
+  snippet: a.querySelector('[data-search-snippet]')?.textContent ?? '',
+  marks: [...a.querySelectorAll('[data-search-snippet] mark')].map((m) => m.textContent.toLowerCase()),
+}))`
+const LIST_GROUPS = `[...document.querySelectorAll('main section[data-day]')].map((s) => ({ label: s.querySelector('h2')?.textContent ?? '', total: s.querySelector('[data-day-total]')?.textContent ?? '' }))`
+
+/** Lista com seis reuniões (contrato 10): rótulos dos dias, totais, prévia do resumo e "N tarefas". */
+async function meetingsListCheck(contents: WebContents, userDataDir: string): Promise<Check> {
+  const meetings = readMeetings(userDataDir).sort((a, b) => Date.parse(b.startedAt) - Date.parse(a.startedAt))
+  const expectedLabels = [...new Set(meetings.map((meeting) => expectedDayLabel(meeting.startedAt)))]
+  const groups = await evaluate<{ label: string; total: string }[]>(contents, LIST_GROUPS)
+  const rows = await evaluate<ListRow[]>(contents, LIST_ROWS)
+  const first = rows.find((row) => row.id === 'smoke-4')
+  const second = rows.find((row) => row.id === 'smoke-2')
+  const plain = rows.filter((row) => row.id !== 'smoke-4' && row.id !== 'smoke-2')
+  const expectedOverview = summaryPreview(LIST_SUMMARIES['smoke-4'] as MeetingSummary).overview
+  const ok =
+    rows.length === 6 &&
+    JSON.stringify(groups.map((group) => group.label)) === JSON.stringify(expectedLabels) &&
+    groups[0]?.label === 'Hoje' &&
+    groups[1]?.label === 'Ontem' &&
+    /-feira$|^Sábado$|^Domingo$/.test(groups[2]?.label ?? '') &&
+    /\d{4}$/.test(groups.at(-1)?.label ?? '') &&
+    groups[0]?.total === '1 reunião · 32 min' &&
+    first?.overview === expectedOverview &&
+    JSON.stringify(first.markers) === JSON.stringify(['2 tarefas', '1 decisão']) &&
+    second?.overview.endsWith('…') === true &&
+    second.overview.length <= 200 &&
+    JSON.stringify(second.markers) === JSON.stringify(['1 tarefa', '2 decisões']) &&
+    plain.every((row) => row.overview === '' && row.markers.length === 0)
+  return {
+    ok,
+    detail: `grupos ${JSON.stringify(groups)} (esperado ${JSON.stringify(expectedLabels)}); smoke-4 "${first?.overview ?? ''}" ${JSON.stringify(first?.markers ?? [])}; smoke-2 ${second?.overview.length ?? 0} caracteres ${JSON.stringify(second?.markers ?? [])}; sem resumo: ${plain.map((row) => row.id).join(', ')}`,
+  }
+}
+
+/**
+ * Busca (contrato 10, CA4): ⌘F foca o campo; palavras que só existem na transcrição acham a reunião com o
+ * trecho marcado e "na transcrição" (fotografa `reunioes-busca-light`); termo sem resultado mostra o aviso;
+ * Esc limpa e a lista volta, com o foco no campo e com o foco fora dele.
+ */
+async function meetingsSearchCheck(win: BrowserWindow, outDir: string): Promise<{ check: Check; shot: Screenshot }> {
+  const contents = win.webContents
+  await evaluate(contents, 'document.activeElement instanceof HTMLElement && document.activeElement.blur(), true')
+  contents.sendInputEvent({ type: 'keyDown', keyCode: 'F', modifiers: ['meta'] })
+  contents.sendInputEvent({ type: 'keyUp', keyCode: 'F', modifiers: ['meta'] })
+  const focused = await waitFor(contents, `document.activeElement?.matches('main [data-search]')`, 2000)
+  const typedAt = Date.now()
+  await setValue(contents, 'main [data-search]', TRANSCRIPT_ONLY_TERM)
+  const found = await waitFor(contents, `document.querySelectorAll('main [data-search-snippet]').length > 0`)
+  const answeredMs = Date.now() - typedAt
+  await settle(contents)
+  const rows = await evaluate<ListRow[]>(contents, LIST_ROWS)
+  const shot = await capture(win, outDir, 'reunioes-busca-light')
+  await setValue(contents, 'main [data-search]', 'zzqq')
+  const empty = await waitFor(contents, `document.querySelector('[data-search-empty]')?.textContent === 'Nada encontrado para "zzqq".'`)
+  await evaluate(contents, `document.querySelector('main [data-search]').focus(), true`)
+  contents.sendInputEvent({ type: 'keyDown', keyCode: 'Escape' })
+  contents.sendInputEvent({ type: 'keyUp', keyCode: 'Escape' })
+  const listBack = `document.querySelector('main [data-search]').value === '' && document.querySelectorAll('main a[data-meeting]').length === 6 && !document.querySelector('[data-search-snippet]')`
+  const cleared = await waitFor(contents, listBack)
+  // Esc com o foco fora do campo também limpa.
+  await setValue(contents, 'main [data-search]', 'zzqq')
+  await waitFor(contents, `document.querySelector('[data-search-empty]')`)
+  await evaluate(contents, 'document.activeElement instanceof HTMLElement && document.activeElement.blur(), true')
+  contents.sendInputEvent({ type: 'keyDown', keyCode: 'Escape' })
+  contents.sendInputEvent({ type: 'keyUp', keyCode: 'Escape' })
+  const clearedOutside = await waitFor(contents, `${listBack} && document.activeElement !== document.querySelector('main [data-search]')`)
+  const row = rows[0]
+  return {
+    check: {
+      ok:
+        focused &&
+        found &&
+        answeredMs >= 200 &&
+        rows.length === 1 &&
+        row?.id === 'smoke-1' &&
+        ['transcrição', 'tempo', 'real'].every((word) => row.marks.includes(word)) &&
+        row.snippet.toLowerCase().includes('transcrição em tempo real') &&
+        row.snippet.length <= 120 &&
+        JSON.stringify(row.markers) === JSON.stringify(['na transcrição']) &&
+        empty &&
+        cleared &&
+        clearedOutside,
+      detail: `⌘F focou=${focused}; "${TRANSCRIPT_ONLY_TERM}" -> ${rows.length} linha(s) em ${answeredMs} ms: ${JSON.stringify(rows)}; sem resultado=${empty}; Esc limpou no campo=${cleared}, fora do campo=${clearedOutside}`,
+    },
+    shot,
+  }
 }
 
 /** Pasta pessoal do smoke, dentro do `userData` temporário: o smoke nunca escreve em ~/Documents. */
@@ -2043,6 +2216,8 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
   const brand: Record<string, Check> = {}
   let recorderMeasured: Record<string, unknown> = {}
   let summaryMeasured: SummaryMeasured | null = null
+  /** Contrato 10: lista com prévia do resumo (nos dois temas) e busca (no claro). */
+  const meetingsList: Record<string, Check> = {}
 
   // A fixture da sessão real, reduzida pelo mesmo redutor do app: a mesma dos testes (CA4) e do smoke.
   const sessionFixture = readSessionFixture()
@@ -2185,6 +2360,20 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
       await waitFor(contents, "document.querySelectorAll('main a[data-meeting]').length === 3")
       await shoot('reunioes-com-dados', 'reunioes')
 
+      // Contrato 10: seis reuniões em dias diferentes, duas com resumo, e a busca.
+      seedListMeetings(ctx.userDataDir)
+      await clickSelector(contents, '[data-nav="configuracoes"]')
+      await waitFor(contents, routeIs('configuracoes'))
+      await clickSelector(contents, '[data-nav="reunioes"]')
+      await waitFor(contents, "document.querySelectorAll('main a[data-meeting]').length === 6 && document.querySelectorAll('main [data-summary-overview]').length === 2")
+      meetingsList[themeName === 'light' ? 'list' : 'listDark'] = await meetingsListCheck(contents, ctx.userDataDir)
+      await shoot('reunioes-lista', 'reunioes')
+      if (themeName === 'light') {
+        const search = await meetingsSearchCheck(win, ctx.outDir)
+        meetingsList['search'] = search.check
+        screenshots.push(search.shot)
+      }
+
       // 6. Clique na primeira linha abre o detalhe.
       await clickSelector(contents, 'main a[data-meeting]')
       await waitFor(contents, "document.querySelector('main [data-meeting]:not(a)') && document.querySelectorAll('[data-transcript-list] li').length === 3")
@@ -2210,7 +2399,7 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
         const back = await waitFor(contents, routeIs('reunioes'))
         const transcriptGone = !existsSync(join(ctx.userDataDir, 'meetings', 'smoke-1.json'))
         recording['deleteTranscript'] = {
-          ok: back && transcriptGone && readMeetings(ctx.userDataDir).length === 2,
+          ok: back && transcriptGone && readMeetings(ctx.userDataDir).length === 5,
           detail: `"Excluir" -> rota ${await currentRoute(contents)}, transcrição apagada=${transcriptGone}, ${readMeetings(ctx.userDataDir).length} reuniões`,
         }
       }
@@ -2324,6 +2513,8 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
   for (const [name, check] of Object.entries(recording)) if (!check.ok) failures.push(`gravação ${name}: ${check.detail}`)
   for (const [name, check] of Object.entries(brand)) if (!check.ok) failures.push(`marca ${name}: ${check.detail}`)
   for (const [name, check] of Object.entries(settings)) if (!check.ok) failures.push(`configurações ${name}: ${check.detail}`)
+  for (const [name, check] of Object.entries(meetingsList)) if (!check.ok) failures.push(`lista de reuniões ${name}: ${check.detail}`)
+  for (const name of ['list', 'listDark', 'search']) if (!meetingsList[name]) failures.push(`lista de reuniões ${name}: não executado`)
   for (const name of ['configuracoes', 'gravacao', 'detalhe']) {
     const check = layout[name]
     if (!check) failures.push(`medidas ${name}: não executado`)
@@ -2344,8 +2535,9 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
   if (!theme.ok) failures.push(`tema: ${theme.detail}`)
   if (!motion.ok) failures.push(`movimento reduzido: ${motion.detail}`)
   // Mais o aviso de sistema sem som, nos dois temas, o eco removido, os arquivos no detalhe, a aba
-  // "Áudio" depois de baixar, a barra com a marca própria e o bloco "Atualizações" (só no claro).
-  const expectedShots = SCREENS.length * THEMES.length + 7
+  // "Áudio" depois de baixar, a barra com a marca própria, o bloco "Atualizações" e a busca na lista
+  // (só no claro).
+  const expectedShots = SCREENS.length * THEMES.length + 8
   if (screenshots.length !== expectedShots) failures.push(`${screenshots.length} PNGs em vez de ${expectedShots}`)
   for (const shot of screenshots) {
     if (shot.width < 1120 || shot.height < 740) failures.push(`${shot.name}: ${shot.width}x${shot.height} abaixo de 1120x740`)
@@ -2377,6 +2569,7 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
     gatewayFixtureCalls: ctx.fixtures.calls,
     recorderFormat: recorderMeasured,
     summary: summaryMeasured,
+    meetingsList,
     meetingFolder: folderFiles(defaultMeetingFolder(ctx)),
     openedFiles: ctx.fixtures.openedFiles.map((item) => ({ action: item.action, file: basename(item.path) })),
     claudeFakeSpawns: ctx.fixtures.claudeSpawns.map((spawn) => ({ ...spawn, args: spawn.args.filter((arg) => arg.startsWith('--')) })),

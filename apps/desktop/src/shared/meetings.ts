@@ -5,6 +5,20 @@ export interface MeetingSources {
   system: boolean
 }
 
+/** Participante do evento da agenda. */
+export interface MeetingAttendee {
+  name: string
+  email: string
+}
+
+/**
+ * Dados do evento da agenda de onde a reunião veio. Só os participantes por enquanto: a lista (contrato
+ * 10) já mostra os nomes; o contrato 12 completa o tipo e passa a gravar o campo.
+ */
+export interface MeetingCalendar {
+  attendees: MeetingAttendee[]
+}
+
 export interface Meeting {
   id: string
   title: string
@@ -18,10 +32,12 @@ export interface Meeting {
   audioPath: string | null
   /** Transcrição em Markdown salva na mesma pasta; `null` sem arquivo. Só o main grava. */
   transcriptPath: string | null
+  /** Evento da agenda (contrato 12); ausente ou `null` quando a reunião não veio de um. */
+  calendar?: MeetingCalendar | null | undefined
 }
 
 /** O que o renderer manda ao criar: os caminhos dos arquivos ficam com o main. */
-export type NewMeeting = Omit<Meeting, 'id' | 'audioPath' | 'transcriptPath'>
+export type NewMeeting = Omit<Meeting, 'id' | 'audioPath' | 'transcriptPath' | 'calendar'>
 
 /** Caminhos dos arquivos da reunião, gravados pelo main ao encerrar. */
 export type MeetingFilePaths = Pick<Meeting, 'audioPath' | 'transcriptPath'>

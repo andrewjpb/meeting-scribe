@@ -48,6 +48,11 @@ export interface SummaryService {
   /** Começa a gerar (ou ignora, se já está gerando) e devolve o estado na hora. */
   generate(request: unknown): Promise<SummaryStatus>
   copy(meetingId: unknown): Promise<TranscriptCopyResult>
+  /**
+   * Para a lista (contrato 10), sem ler o disco: `generating` enquanto gera, `error` se a última tentativa
+   * nesta execução falhou, `null` no resto.
+   */
+  activity(meetingId: string): 'generating' | 'error' | null
   /** Excluir a reunião: apaga o `summary.json` interno e esquece o estado dela. */
   remove(meetingId: string): Promise<void>
   /** Teste: termina quando a geração em curso daquela reunião acabar e o estado novo for anunciado. */
@@ -202,6 +207,8 @@ export function createSummaryService(deps: SummaryServiceDeps): SummaryService {
         return 'failed'
       }
     },
+
+    activity: (meetingId) => (jobs.get(meetingId)?.visible ? 'generating' : errors.has(meetingId) ? 'error' : null),
 
     async remove(meetingId) {
       // Geração em curso: o processo morre e nada mais é gravado; o arquivo só é apagado depois que ela parou.

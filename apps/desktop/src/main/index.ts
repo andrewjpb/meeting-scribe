@@ -20,6 +20,7 @@ import { createClaudeService, type ClaudeService } from './claude-cli/service'
 import { nodeSpawnSummary } from './claude-cli/summary'
 import { nodeSpawnClaude } from './claude-cli/translator'
 import { broadcast, handle, onEvent, sendTo } from './ipc'
+import { createMeetingsIndex, type MeetingsIndex } from './meetings/overview'
 import { createMeetingsService } from './meetings/service'
 import { createFileMeetingsStore, type MeetingsStore } from './meetings/store'
 import { createFileSummaryStore } from './meetings/summaries'
@@ -124,6 +125,7 @@ interface AppServices {
   meetings: MeetingsStore
   transcripts: TranscriptStore
   meetingsService: ReturnType<typeof createMeetingsService>
+  meetingsIndex: MeetingsIndex
   tokenClient: ReturnType<typeof createTokenClient>
   translation: ReturnType<typeof createTranslationService>
   claude: ClaudeService
@@ -187,6 +189,8 @@ function createAppServices(userData: string): AppServices {
   })
   // Excluir a reunião apaga a transcrição e o resumo internos; os arquivos da pasta ficam.
   const meetingsService = createMeetingsService({ meetings, transcripts, summaries: summary, clipboard: appClipboard })
+  // Lista e busca da tela de Reuniões (contrato 10): lê só o disco local; o estado "gerando" vem do resumo.
+  const meetingsIndex = createMeetingsIndex({ dir: userData, meetings, transcripts, summaries, activity: (id) => summary.activity(id) })
   // Arquivos da reunião (contrato 07). No smoke, a "pasta pessoal" fica dentro do userData temporário
   // (nada vai para ~/Documents), o diálogo responde o que o smoke mandar e nada abre no Finder.
   const home = smokeUserData ? join(smokeUserData, 'home') : app.getPath('home')
@@ -251,6 +255,7 @@ function createAppServices(userData: string): AppServices {
     meetings,
     transcripts,
     meetingsService,
+    meetingsIndex,
     tokenClient: createTokenClient({ fetch: fetchImpl, getApiKey: () => secrets.getApiKey() }),
     translation: createTranslationService(gateway),
     claude,
@@ -305,7 +310,7 @@ function openExternal(url: string): void {
 }
 
 function registerIpc(services: AppServices): void {
-  const { settings, meetings, meetingsService, tokenClient, translation, claude, files, summary, download, branding, updates } = services
+  const { settings, meetings, meetingsService, meetingsIndex, tokenClient, translation, claude, files, summary, download, branding, updates } = services
   handle('scribe:app-info', appOrigin, () => ({
     name: brandName,
     version: app.getVersion(),
@@ -320,6 +325,8 @@ function registerIpc(services: AppServices): void {
   handle('scribe:meetings-rename', appOrigin, (_event, { id, title }) => meetings.rename(id, title))
   // Excluir a reunião apaga também a transcrição e o resumo internos dela; os arquivos da pasta ficam.
   handle('scribe:meetings-delete', appOrigin, (_event, { id }) => meetingsService.deleteMeeting(id))
+  handle('scribe:meetings-overview', appOrigin, () => meetingsIndex.overview())
+  handle('scribe:meetings-search', appOrigin, (_event, request) => meetingsIndex.search((request as { term?: unknown } | undefined)?.term))
   handle('scribe:settings-get', appOrigin, () => settings.getSettings())
   handle('scribe:settings-update', appOrigin, (_event, patch) => settings.updateSettings(patch))
   handle('scribe:key-status', appOrigin, () => settings.keyStatus())

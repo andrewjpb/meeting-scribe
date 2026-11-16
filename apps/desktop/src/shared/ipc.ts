@@ -6,6 +6,7 @@ import type { ClaudeLocateResult, ClaudeRunState, ClaudeStartResult, ClaudeTrans
 import type { AudioBeginResult, AudioExtension, AudioFinishResult, AudioFolderInfo, MeetingDownloadKind, MeetingDownloadResult, MeetingFileKind, MeetingFilesInfo } from './meeting-files'
 import type { SummaryStatus } from './meeting-summary'
 import type { Meeting, NewMeeting } from './meetings'
+import type { MeetingOverview, MeetingSearchResult } from './meetings-overview'
 import type { RouteId } from './routes'
 import type { AppSettings, SettingsPatch } from './settings-defaults'
 import type { TranscriptCopyResult, TranscriptDocument, TranslateTurnResult, TranscriptionTokenResult } from './transcription'
@@ -42,6 +43,10 @@ export interface InvokeChannels {
   'scribe:meetings-create': { request: NewMeeting; response: Meeting }
   'scribe:meetings-rename': { request: { id: string; title: string }; response: Meeting | null }
   'scribe:meetings-delete': { request: { id: string }; response: boolean }
+  /** Tela de Reuniões (contrato 10): cada reunião com a prévia e o estado do resumo, numa chamada só. */
+  'scribe:meetings-overview': { request: undefined; response: MeetingOverview[] }
+  /** Busca no main, em título, transcrição e resumo; termo de 2 a 100 caracteres. Nada sai do Mac. */
+  'scribe:meetings-search': { request: { term: string }; response: MeetingSearchResult[] }
   'scribe:settings-get': { request: undefined; response: AppSettings }
   'scribe:settings-update': { request: SettingsPatch; response: AppSettings }
   /** Só o estado da chave; nenhum canal devolve a chave. */
@@ -161,6 +166,8 @@ const INVOKE: Record<InvokeChannel, true> = {
   'scribe:meetings-create': true,
   'scribe:meetings-rename': true,
   'scribe:meetings-delete': true,
+  'scribe:meetings-overview': true,
+  'scribe:meetings-search': true,
   'scribe:settings-get': true,
   'scribe:settings-update': true,
   'scribe:key-status': true,

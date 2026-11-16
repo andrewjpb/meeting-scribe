@@ -51,6 +51,26 @@ describe('store de reuniões', () => {
     expect(await store.get(a.id)).toBeNull()
   })
 
+  it('evento da agenda (contrato 10/12): renomear não apaga; registro antigo vem sem o campo; acima do limite é inválido', async () => {
+    const base = { startedAt: '2026-11-12T09:00:00.000Z', durationMs: 60_000, sources: { mic: true, system: true }, audioPath: null, transcriptPath: null }
+    const calendar = { attendees: [{ name: 'Ana Lima', email: 'ana@exemplo.com' }, { name: '', email: 'bruno@exemplo.com' }] }
+    writeFileSync(
+      join(dir, MEETINGS_FILE),
+      JSON.stringify({ version: 1, meetings: [{ id: 'com', title: 'Com agenda', ...base, calendar }, { id: 'sem', title: 'Antiga', ...base }, { id: 'nula', title: 'Nula', ...base, calendar: null }] }),
+    )
+    expect((await store.rename('com', 'Com agenda, renomeada'))?.calendar).toEqual(calendar)
+    const disk = JSON.parse(readFileSync(join(dir, MEETINGS_FILE), 'utf8')) as { meetings: Record<string, unknown>[] }
+    expect(disk.meetings[0]?.['calendar']).toEqual(calendar)
+    expect('calendar' in (disk.meetings[1] ?? {})).toBe(false)
+    expect(disk.meetings[2]?.['calendar']).toBeNull()
+
+    const many = { attendees: Array.from({ length: 51 }, (_, i) => ({ name: `P${i}`, email: `p${i}@exemplo.com` })) }
+    writeFileSync(join(dir, MEETINGS_FILE), JSON.stringify({ version: 1, meetings: [{ id: 'x', title: 'Muitos', ...base, calendar: many }] }))
+    expect(await store.list()).toEqual([])
+    writeFileSync(join(dir, MEETINGS_FILE), JSON.stringify({ version: 1, meetings: [{ id: 'x', title: 'Longo', ...base, calendar: { attendees: [{ name: 'n'.repeat(201), email: '' }] } }] }))
+    expect(await store.list()).toEqual([])
+  })
+
   it('escreve de forma atômica: nenhum temporário fica para trás', async () => {
     await Promise.all([store.create(input('2026-11-14T10:00:00.000Z')), store.create(input('2026-11-14T11:00:00.000Z'))])
     expect(readdirSync(dir)).toEqual([MEETINGS_FILE])

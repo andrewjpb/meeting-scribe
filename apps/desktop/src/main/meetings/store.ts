@@ -15,6 +15,13 @@ const title = z.string().trim().min(1).max(MEETING_TITLE_MAX)
 /** Caminho de arquivo gravado pelo main. Registro antigo, sem o campo, carrega com `null`. */
 const filePath = z.string().min(1).max(4096).nullable().default(null)
 
+/** Participantes do evento da agenda (contrato 12 grava; o 10 mostra). Registro antigo vem sem o campo. */
+export const CALENDAR_ATTENDEES_MAX = 50
+const calendarText = z.string().max(200)
+const calendarSchema = z.object({
+  attendees: z.array(z.object({ name: calendarText, email: calendarText })).max(CALENDAR_ATTENDEES_MAX),
+})
+
 const meetingSchema = z.object({
   id: z.string().min(1),
   title,
@@ -23,6 +30,8 @@ const meetingSchema = z.object({
   sources: z.object({ mic: z.boolean(), system: z.boolean() }),
   audioPath: filePath,
   transcriptPath: filePath,
+  // Opcional e `null`: um `rename` relê e regrava o registro sem perder o evento.
+  calendar: calendarSchema.nullable().optional(),
 })
 
 const fileSchema = z.object({ version: z.literal(1), meetings: z.array(meetingSchema) })

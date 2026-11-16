@@ -1,43 +1,26 @@
 import { Plus } from 'lucide-react'
-import { useEffect, useState } from 'react'
-import { Link } from 'react-router'
-import type { Meeting } from '@shared/meetings'
-import { meetingPath } from '@shared/routes'
+import { useState } from 'react'
+import type { MeetingOverview, MeetingSearchResult } from '@shared/meetings-overview'
 import { Button } from '../../design/Button'
 import { EmptyState } from '../../design/EmptyState'
 import { PageHeader } from '../../design/PageHeader'
 import { TapeIllustration } from '../../design/TapeIllustration'
 import { RetryNotice } from '../live/Notices'
 import { useStartRecording } from '../live/useStartRecording'
-import { durationLabel, groupByDay, timeLabel } from './format'
-import { SourceDots } from './SourceDots'
+import { groupByDay, type MeetingGroup } from './format'
+import { MeetingRow } from './MeetingRow'
+import { SearchField } from './SearchField'
+import { useMeetingsOverview, useMeetingsSearch } from './useMeetingsOverview'
 
-/** Reuniões gravadas neste Mac, da mais recente para a mais antiga, agrupadas por dia. */
+/**
+ * Reuniões gravadas neste Mac, da mais recente para a mais antiga, agrupadas por dia, com a prévia do
+ * resumo e a busca no topo (contrato 10).
+ */
 export function MeetingsScreen() {
-  const [meetings, setMeetings] = useState<Meeting[] | null>(null)
-  const [failed, setFailed] = useState(false)
-  const [attempt, setAttempt] = useState(0)
+  const { list, failed, retry } = useMeetingsOverview()
+  const [query, setQuery] = useState('')
+  const search = useMeetingsSearch(query)
   const startRecording = useStartRecording()
-
-  useEffect(() => {
-    let alive = true
-    window.__scribeApi.invoke('scribe:meetings-list').then(
-      (list) => {
-        if (alive) setMeetings(list)
-      },
-      () => {
-        if (alive) setFailed(true)
-      },
-    )
-    return () => {
-      alive = false
-    }
-  }, [attempt])
-
-  const retry = (): void => {
-    setFailed(false)
-    setAttempt((n) => n + 1)
-  }
 
   const newRecording = (
     <Button action="new-recording" onClick={startRecording} icon={Plus} shortcut="⌘N" ariaShortcut="Meta+N">
@@ -47,7 +30,7 @@ export function MeetingsScreen() {
 
   // A leitura do arquivo local leva poucos milissegundos: nada aparece até ela voltar, para o estado
   // vazio não piscar antes da lista.
-  if (meetings === null && failed) {
+  if (list === null && failed) {
     return (
       <div className="flex flex-1 flex-col px-10 pt-7">
         <PageHeader title="Reuniões" actions={newRecording} />
@@ -55,9 +38,9 @@ export function MeetingsScreen() {
       </div>
     )
   }
-  if (meetings === null) return <div className="flex-1" aria-busy="true" />
+  if (list === null) return <div className="flex-1" aria-busy="true" />
 
-  if (!meetings.length) {
+  if (!list.length) {
     return (
       <div className="flex flex-1 flex-col px-10 pt-7 pb-10">
         <PageHeader title="Reuniões" />
@@ -70,46 +53,60 @@ export function MeetingsScreen() {
     )
   }
 
-  const groups = groupByDay(meetings, new Date())
+  const now = new Date()
+  let body
+  const shown = search.active ? search.shown : null
+  if (shown === null) {
+    // Sem termo, ou até a primeira resposta dele: a lista inteira.
+    body = <DayGroups groups={groupByDay(list, now, (entry) => entry.meeting)} />
+  } else if (shown.results === null) {
+    body = <RetryNotice id="search-failed" text="Não foi possível buscar nas reuniões deste Mac." onRetry={search.retry} className="max-w-[820px]" />
+  } else if (!shown.results.length) {
+    body = (
+      <p data-search-empty className="max-w-[820px] text-13 text-text-muted">
+        Nada encontrado para "{shown.term}".
+      </p>
+    )
+  } else {
+    body = <DayGroups groups={groupByDay(shown.results, now, (entry) => entry.meeting)} />
+  }
+
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="px-10 pt-7">
-        <PageHeader title="Reuniões" actions={newRecording} />
+        <PageHeader
+          title="Reuniões"
+          actions={
+            <>
+              <SearchField value={query} onChange={setQuery} />
+              {newRecording}
+            </>
+          }
+        />
       </div>
-      <div className="min-h-0 flex-1 overflow-y-auto px-10 pt-7 pb-10">
-        {groups.map((group) => (
-          <section key={group.key} aria-label={group.label} className="max-w-[820px] pt-7 first:pt-0">
-            <h2 className="border-b border-line-strong pb-2 text-12 font-bold text-text-muted">{group.label}</h2>
-            <ul>
-              {group.meetings.map((meeting) => (
-                <li key={meeting.id} className="border-b border-line">
-                  <MeetingRow meeting={meeting} />
-                </li>
-              ))}
-            </ul>
-          </section>
-        ))}
+      <div className="min-h-0 flex-1 overflow-y-auto px-10 pt-7 pb-10" aria-busy={search.pending}>
+        {body}
       </div>
     </div>
   )
 }
 
-function MeetingRow({ meeting }: { meeting: Meeting }) {
-  const started = new Date(meeting.startedAt)
-  return (
-    <Link
-      to={meetingPath(meeting.id)}
-      data-meeting={meeting.id}
-      draggable={false}
-      className="flex min-h-16 items-center gap-4 px-2 transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-bg-sunken"
-    >
-      <div className="flex min-w-0 flex-1 flex-col gap-[3px]">
-        <p className="truncate text-15 font-medium text-text">{meeting.title}</p>
-        <p className="text-12 text-text-muted tabular">
-          {timeLabel(started)} · {durationLabel(meeting.durationMs)}
-        </p>
+function DayGroups({ groups }: { groups: MeetingGroup<MeetingOverview | MeetingSearchResult>[] }) {
+  return groups.map((group) => (
+    <section key={group.key} aria-label={group.label} data-day={group.key} className="max-w-[820px] pt-7 first:pt-0">
+      <div className="flex items-baseline justify-between gap-4 border-b border-line-strong pb-2">
+        <h2 className="text-12 font-bold text-text-muted">{group.label}</h2>
+        <span data-day-total className="text-12 text-text-muted tabular">
+          {group.total}
+        </span>
       </div>
-      <SourceDots sources={meeting.sources} />
-    </Link>
-  )
+      <ul>
+        {group.items.map((entry) => (
+          <li key={entry.meeting.id} className="border-b border-line">
+            <MeetingRow entry={entry} found={'field' in entry ? { field: entry.field, snippet: entry.snippet } : undefined} />
+          </li>
+        ))}
+      </ul>
+    </section>
+  ))
 }
