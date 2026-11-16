@@ -12,6 +12,12 @@
 // `meeting:<id>` e diz quantos arquivos a pasta tem e se o histórico veio. Pergunta com "devagar" sai em 40
 // pedaços espaçados (dá tempo de clicar em "Parar"); com "ferramenta", tenta o Bash e recebe a negação.
 //
+// Contrato 16: toda resposta do chat anuncia o modelo no `system/init`, pensa antes (`thinking` em pedaços
+// e o bloco inteiro na mensagem `assistant`, com um `<b>` que tem de aparecer como texto), lê com três
+// ferramentas (Read do `INDICE.md` quando há, Read do `.md` da reunião mais recente e um Grep), tenta o
+// Bash e recebe a negação, e fecha com o `result` com tokens, custo nominal e número de turnos. Cada passo
+// espera um pouco: dá tempo de a tela mostrar "Pensando…" e depois o passo.
+//
 // Uso: node fake-claude.mjs --version | node fake-claude.mjs -p --model haiku --input-format stream-json ...
 import { readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -26,7 +32,8 @@ if (args.includes('--version')) {
   process.exit(0)
 }
 
-const model = args[args.indexOf('--model') + 1] === 'sonnet' ? 'claude-sonnet-5-5' : 'claude-haiku-5-5'
+const MODEL_IDS = { haiku: 'claude-haiku-5-5', sonnet: 'claude-sonnet-5-5', opus: 'claude-opus-5-5' }
+const model = MODEL_IDS[args[args.indexOf('--model') + 1]] ?? MODEL_IDS.haiku
 
 if (args.includes('--include-partial-messages')) {
   const emit = (message) => process.stdout.write(`${JSON.stringify(message)}\n`)
@@ -40,13 +47,14 @@ if (args.includes('--include-partial-messages')) {
         .map((line) => /^- (\d{2})\/(\d{2})\/\d{4} \d{2}:\d{2} · (.+?) · .* · meeting:([\w-]+)$/.exec(line))
         .filter(Boolean)
         .map((match) => ({ day: `${match[1]}/${match[2]}`, title: match[3], id: match[4] }))
-      return { files, index: true, first: entries[0] ?? null, count: entries.length }
+      const file = entries[0] ? files.find((name) => name.endsWith(` - ${entries[0].id}.md`)) : undefined
+      return { files, index: true, first: entries[0] ?? null, count: entries.length, file }
     }
     const text = files[0] ? readFileSync(join(process.cwd(), files[0]), 'utf8') : ''
     const id = /^- Id: ([\w-]+)$/m.exec(text)?.[1]
     const title = /^# (.+)$/m.exec(text)?.[1]
     const day = /\((\d{2}\/\d{2})\)$/m.exec(text)?.[1]
-    return { files, index: false, first: id && title && day ? { id, title, day } : null, count: files.length }
+    return { files, index: false, first: id && title && day ? { id, title, day } : null, count: files.length, file: files[0] }
   }
 
   let queue = Promise.resolve()
@@ -57,11 +65,33 @@ if (args.includes('--include-partial-messages')) {
     const folder = readFolder()
     emit({ type: 'system', subtype: 'init', model, cwd: process.cwd(), tools: ['Read', 'Grep', 'Glob'], mcp_servers: [] })
     const denials = []
-    if (/ferramenta/i.test(question)) {
-      emit({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'tool_use', id: 'toolu_1', name: 'Bash', input: { command: 'ls ~' } }] } })
-      emit({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_1', is_error: true, content: 'Permission to use Bash has been denied.' }] } })
-      denials.push({ tool_name: 'Bash', tool_use_id: 'toolu_1', tool_input: { command: 'ls ~' } })
+    const pause = () => sleep(/devagar/i.test(question) ? 100 : 350)
+    // Raciocínio em pedaços e, depois, o bloco inteiro (que não pode repetir na tela).
+    const thinking = `A pessoa perguntou: ${question.slice(0, 60)}. Vou ler o índice e abrir a reunião mais recente. <b>sem HTML</b>`
+    emit({ type: 'stream_event', event: { type: 'message_start', message: { role: 'assistant' } } })
+    emit({ type: 'stream_event', event: { type: 'content_block_start', index: 0, content_block: { type: 'thinking', thinking: '' } } })
+    for (let at = 0; at < thinking.length; at += 24) {
+      await sleep(40)
+      emit({ type: 'stream_event', event: { type: 'content_block_delta', index: 0, delta: { type: 'thinking_delta', thinking: thinking.slice(at, at + 24) } } })
     }
+    emit({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'thinking', thinking, signature: 'x' }] } })
+    await pause()
+    let tool = 0
+    const use = async (name, input, denied = false) => {
+      tool += 1
+      const id = `toolu_${tool}`
+      emit({ type: 'stream_event', event: { type: 'message_start', message: { role: 'assistant' } } })
+      emit({ type: 'stream_event', event: { type: 'content_block_start', index: 0, content_block: { type: 'tool_use', id, name, input: {} } } })
+      emit({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'tool_use', id, name, input }] } })
+      await pause()
+      const content = denied ? `Permission to use ${name} has been denied.` : 'ok'
+      emit({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, is_error: denied, content }] } })
+      if (denied) denials.push({ tool_name: name, tool_use_id: id, tool_input: input })
+    }
+    if (folder.index) await use('Read', { file_path: join(process.cwd(), 'INDICE.md') })
+    if (folder.file) await use('Read', { file_path: join(process.cwd(), folder.file) })
+    await use('Grep', { pattern: 'decid', path: process.cwd() })
+    await use('Bash', { command: /ferramenta/i.test(question) ? 'ls ~' : 'cat ~/.ssh/config' }, true)
     const cite = folder.first ? `[${folder.first.title} · ${folder.first.day}](meeting:${folder.first.id})` : 'Não encontrei nas reuniões.'
     const text = folder.index
       ? `Li o **INDICE.md**: ${folder.count} reuniões. A mais recente é ${cite}.\n\n- Arquivos na pasta: ${folder.files.length}\n- Histórico: ${history ? 'sim' : 'não'}`
@@ -77,7 +107,17 @@ if (args.includes('--include-partial-messages')) {
     }
     emit({ type: 'stream_event', event: { type: 'message_stop' } })
     emit({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text }] } })
-    emit({ type: 'result', subtype: 'success', is_error: false, duration_ms: Date.now() - started, result: text, permission_denials: denials, total_cost_usd: 0 })
+    emit({
+      type: 'result',
+      subtype: 'success',
+      is_error: false,
+      duration_ms: Date.now() - started,
+      num_turns: tool + 1,
+      result: text,
+      permission_denials: denials,
+      usage: { input_tokens: 12, cache_creation_input_tokens: 2100, cache_read_input_tokens: 1000, output_tokens: 420 },
+      total_cost_usd: 0.0213,
+    })
   }
 
   const lines = createInterface({ input: process.stdin })

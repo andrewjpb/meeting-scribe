@@ -197,6 +197,7 @@ function createAppServices(userData: string): AppServices {
     spawn: smokeClaude?.spawn ?? nodeSpawnClaude,
     baseEnv: process.env,
     onEvent: (event) => broadcast(BrowserWindow.getAllWindows(), 'scribe:chat-event', event),
+    clipboard: appClipboard,
     // Custo nominal e ferramentas negadas só nos logs de desenvolvimento; nunca o texto das reuniões.
     ...(app.isPackaged ? {} : { log: (message: string) => console.log(message) }),
   })
@@ -442,6 +443,9 @@ function registerIpc(services: AppServices): void {
   handle('scribe:chat-send', appOrigin, (_event, request) => chat.send(request))
   handle('scribe:chat-stop', appOrigin, (_event, request) => chat.stop((request as { id?: unknown } | undefined)?.id))
   handle('scribe:chat-delete', appOrigin, (_event, request) => chat.remove((request as { id?: unknown } | undefined)?.id))
+  handle('scribe:chat-update', appOrigin, (_event, request) => chat.update(request))
+  handle('scribe:chat-redo', appOrigin, (_event, request) => chat.redo(request))
+  handle('scribe:chat-copy', appOrigin, (_event, request) => chat.copy(request))
   onEvent('scribe:chat-close', appOrigin, (_event, request) => chat.close((request as { id?: unknown } | undefined)?.id))
   onEvent('scribe:chat-leave', appOrigin, (_event, request) => chat.leave((request as { id?: unknown } | undefined)?.id))
   // Só `https://`, e só depois da confirmação na tela; qualquer outra coisa é ignorada.

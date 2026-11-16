@@ -2,7 +2,7 @@
 // sentido certo e na lista de canais permitidos logo abaixo (o preload recusa o que não estiver nela).
 import type { BrandingInfo, BrandLogoChoice } from './branding'
 import type { KeySaveResult, KeyStatus, MicAccess, ModelCheck, ModelsResult } from './assemblyai'
-import type { Chat, ChatEvent, ChatListItem, ChatSendResult } from './chat'
+import type { Chat, ChatEvent, ChatListItem, ChatRedoRequest, ChatSendRequest, ChatSendResult, ChatUpdateRequest } from './chat'
 import type { ClaudeLocateResult, ClaudeRunState, ClaudeStartResult, ClaudeTranslateRequest, ClaudeTranslateResult } from './claude-cli'
 import type { AudioBeginResult, AudioExtension, AudioFinishResult, AudioFolderInfo, MeetingDownloadKind, MeetingDownloadResult, MeetingFileKind, MeetingFilesInfo } from './meeting-files'
 import type { MeetingNote } from './meeting-notes'
@@ -139,10 +139,16 @@ export interface InvokeChannels {
    * Uma pergunta (`chatId: null` abre uma conversa nova). Responde com a pergunta gravada; a resposta chega
    * por `scribe:chat-event`. Sem o `claude`, nada é gravado nem enviado.
    */
-  'scribe:chat-send': { request: { chatId: string | null; meetingId: string | null; text: string }; response: ChatSendResult }
+  'scribe:chat-send': { request: ChatSendRequest; response: ChatSendResult }
   /** "Parar": mata o processo; a resposta parcial é gravada como interrompida. */
   'scribe:chat-stop': { request: { id: string }; response: boolean }
   'scribe:chat-delete': { request: { id: string }; response: boolean }
+  /** Renomear, trocar o escopo ou o modelo (contrato 16); a troca vale para a próxima pergunta. */
+  'scribe:chat-update': { request: ChatUpdateRequest; response: Chat | null }
+  /** "Refazer", "Tentar de novo" e ↑ para editar a última pergunta: a resposta chega por `scribe:chat-event`. */
+  'scribe:chat-redo': { request: ChatRedoRequest; response: ChatSendResult }
+  /** "Copiar" uma resposta: o main escreve o texto dela na área de transferência. */
+  'scribe:chat-copy': { request: { id: string; index: number }; response: boolean }
 }
 
 /** renderer -> main, sem resposta (`__scribeApi.send` / `ipcMain.on`). */
@@ -172,7 +178,7 @@ export interface MainEvents {
   'scribe:summary-state': { meetingId: string; status: SummaryStatus }
   /** Consulta ou download da atualização mudou de estado. */
   'scribe:update-state': UpdateState
-  /** Resposta do chat crescendo ou terminada (contrato 15). */
+  /** Resposta do chat crescendo ou terminada (contrato 15), com o raciocínio, os passos e os detalhes (16). */
   'scribe:chat-event': ChatEvent
 }
 
@@ -242,6 +248,9 @@ const INVOKE: Record<InvokeChannel, true> = {
   'scribe:chat-send': true,
   'scribe:chat-stop': true,
   'scribe:chat-delete': true,
+  'scribe:chat-update': true,
+  'scribe:chat-redo': true,
+  'scribe:chat-copy': true,
 }
 const RENDERER_EVENTS: Record<RendererEvent, true> = {
   'scribe:csp-violation': true,

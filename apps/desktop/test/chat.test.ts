@@ -1,4 +1,4 @@
-// Contrato 15: acervo em Markdown (CA1), processo do chat com os sinalizadores e a instrução (CA2), resposta
+// Contratos 15 e 16: acervo em Markdown (CA1), processo do chat com os sinalizadores e a instrução (CA2), resposta
 // em pedaços, "Parar", tempo limite e fim de vida (CA3), conversas salvas (CA6), sem `claude` (CA7) e
 // ambiente filtrado (CA8). Processo e relógio falsos; o último bloco roda o `claude` falso de verdade
 // (test/fixtures/fake-claude.mjs, modo chat).
@@ -7,16 +7,16 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, 
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { CHAT_MESSAGES_MAX, CHAT_TEXT_MAX, chatTitle, meetingIdOfLink, type Chat, type ChatEvent } from '../src/shared/chat'
+import { CHAT_MESSAGES_MAX, CHAT_TEXT_MAX, CHAT_THINKING_MAX, chatTitle, meetingIdOfLink, type Chat, type ChatDetail, type ChatEvent, type ChatMeta, type ChatStep } from '../src/shared/chat'
 import type { MeetingNote } from '../src/shared/meeting-notes'
 import type { MeetingSummary } from '../src/shared/meeting-summary'
 import type { Meeting } from '../src/shared/meetings'
 import { DEFAULT_SETTINGS, type AppSettings } from '../src/shared/settings-defaults'
 import { TRANSCRIPT_VERSION, type TranscriptDocument } from '../src/shared/transcription'
-import { CHAT_ALLOWED_TOOLS, CHAT_DISALLOWED_TOOLS, chatArgs, chatQuestionContent, chatSystemPrompt, ClaudeChat, type ChatAnswer } from '../src/main/claude-cli/chat'
+import { CHAT_ALLOWED_TOOLS, CHAT_DISALLOWED_TOOLS, chatArgs, chatQuestionContent, chatStepOf, chatSystemPrompt, ClaudeChat, meetingIdOfCorpusFile, type ChatAnswer } from '../src/main/claude-cli/chat'
 import { claudeEnv } from '../src/main/claude-cli/locate'
 import type { ClaudeChild, SpawnClaude, SpawnOptions } from '../src/main/claude-cli/translator'
-import { CHAT_CORPUS_DIR, CHAT_INDEX_FILE, CHAT_SCOPE_DIR, corpusFileName, createChatCorpus, meetingCorpusMarkdown } from '../src/main/chat/corpus'
+import { CHAT_CORPUS_DIR, CHAT_INDEX_FILE, CHAT_SCOPE_DIR, corpusFileName, createChatCorpus, meetingCorpusMarkdown, scopeMeetingIds } from '../src/main/chat/corpus'
 import { CHAT_LEAVE_MS, createChatService } from '../src/main/chat/service'
 import { CHATS_DIR, createFileChatStore } from '../src/main/chat/store'
 import { createFileNotesStore } from '../src/main/meetings/notes'
@@ -481,6 +481,8 @@ describe('conversas salvas (CA6)', () => {
     title: 'Pergunta',
     createdAt: at('2026-11-15T10:00:00'),
     messages: Array.from({ length: count }, (_, i) => ({ role: i % 2 ? 'assistant' : 'user', text: `m${i}`, at: new Date(Date.parse('2026-11-15T10:00:00') + i * 1000).toISOString() })),
+    scope: { kind: 'all' },
+    model: null,
   })
 
   it('grava em chats/<id>.json, lista da mais recente, corta em 200 mensagens e 20 000 caracteres', async () => {
@@ -729,6 +731,392 @@ describe('chat com o claude falso de verdade (CA9)', () => {
       chat.kill()
       for (let i = 0; i < 100 && exits.length === 0; i++) await new Promise((resolve) => setTimeout(resolve, 20))
       expect(exits).toHaveLength(1)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+})
+
+// Contrato 16: eventos novos (CA1), escopo (CA4), persistência (CA6), Refazer, renomear, copiar e troca de
+// modelo, e a privacidade dos passos (CA7).
+describe('raciocínio, passos e detalhes da resposta (contrato 16, CA1)', () => {
+  beforeEach(() => vi.useFakeTimers())
+  afterEach(() => vi.useRealTimers())
+
+  const FILE = '2026-11-14 14h05 - Planejamento- migração - m-planejamento.md'
+
+  it('passos em português, com o id da reunião do nome do arquivo e nenhum caminho', () => {
+    const titleOf = (id: string): string | null => (id === 'm-planejamento' ? 'Planejamento: migração' : null)
+    expect(chatStepOf('Read', { file_path: `/Users/x/Library/chat-corpus/${CHAT_INDEX_FILE}` }, titleOf)).toEqual({ tool: 'Read', label: 'Lendo o índice das reuniões', meetingId: null })
+    expect(chatStepOf('Read', { file_path: `/Users/x/Library/chat-corpus/${FILE}` }, titleOf)).toEqual({ tool: 'Read', label: 'Abrindo «Planejamento: migração»', meetingId: 'm-planejamento' })
+    // Sem o título no app, vale o do nome do arquivo.
+    expect(chatStepOf('Read', { file_path: `/tmp/${FILE}` })).toEqual({ tool: 'Read', label: 'Abrindo «Planejamento- migração»', meetingId: 'm-planejamento' })
+    expect(chatStepOf('Read', { file_path: '/etc/passwd' })).toEqual({ tool: 'Read', label: 'Abrindo um arquivo', meetingId: null })
+    expect(chatStepOf('Grep', { pattern: 'prazo\nfinal', path: '/Users/x/chat-corpus' })).toEqual({ tool: 'Grep', label: 'Procurando "prazo final"', meetingId: null })
+    expect(chatStepOf('Grep', { pattern: 'x', path: `/a/${FILE}` })?.meetingId).toBe('m-planejamento')
+    expect(chatStepOf('Grep', { pattern: 'a'.repeat(300) })?.label.length).toBeLessThanOrEqual(80)
+    expect(chatStepOf('Glob', { pattern: '**/*.md', path: '/Users/x' })).toEqual({ tool: 'Glob', label: 'Listando arquivos', meetingId: null })
+    expect(chatStepOf('Bash', { command: 'ls' })).toBeNull()
+    expect(meetingIdOfCorpusFile(CHAT_INDEX_FILE)).toBeNull()
+  })
+
+  it('init, raciocínio em pedaços (sem repetir o bloco inteiro), 3 passos, negação e meta', async () => {
+    const { spawn: spawnFake, children } = fakeSpawn()
+    const chat = new ClaudeChat({ binaryPath: BINARY, model: 'opus', scope: 'all', cwd: '/tmp/acervo', env: {}, spawn: spawnFake, titleOf: () => 'Planejamento' })
+    const details: ChatDetail[] = []
+    const answer = chat.ask('O que foi decidido?', [], () => undefined, (detail) => details.push(detail))
+    const child = children[0] as FakeChild
+    child.emit({ type: 'system', subtype: 'init', model: 'claude-opus-5-5', cwd: '/tmp/acervo' })
+    child.emit({ type: 'stream_event', event: { type: 'message_start' } })
+    child.emit({ type: 'stream_event', event: { type: 'content_block_delta', delta: { type: 'thinking_delta', thinking: 'Vou ler ' } } })
+    child.emit({ type: 'stream_event', event: { type: 'content_block_delta', delta: { type: 'thinking_delta', thinking: 'o índice.' } } })
+    child.emit({ type: 'assistant', message: { content: [{ type: 'thinking', thinking: 'Vou ler o índice.' }] } })
+    const read = (id: string, path: string): void => child.emit({ type: 'assistant', message: { content: [{ type: 'tool_use', id, name: 'Read', input: { file_path: path } }] } })
+    read('t1', `/tmp/acervo/${CHAT_INDEX_FILE}`)
+    read('t2', `/tmp/acervo/${FILE}`)
+    // O mesmo tool_use repetido não vira outro passo.
+    read('t2', `/tmp/acervo/${FILE}`)
+    child.emit({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 't3', name: 'Grep', input: { pattern: 'decid' } }] } })
+    child.emit({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 't4', name: 'Bash', input: { command: 'ls ~' } }] } })
+    child.emit({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 't4', is_error: true, content: 'Permission to use Bash has been denied.' }] } })
+    child.emit({ type: 'stream_event', event: { type: 'message_start' } })
+    child.delta('Migrar.')
+    child.result('Migrar.', {
+      duration_ms: 12_300,
+      num_turns: 5,
+      total_cost_usd: 0.0213,
+      usage: { input_tokens: 12, cache_creation_input_tokens: 2100, cache_read_input_tokens: 1000, output_tokens: 420 },
+      permission_denials: [{ tool_name: 'Bash' }],
+    })
+    expect(await answer).toEqual({ ok: true, text: 'Migrar.' })
+    expect(details.filter((detail) => detail.type === 'thinking').map((detail) => (detail as { delta: string }).delta)).toEqual(['Vou ler ', 'o índice.'])
+    expect(details.filter((detail) => detail.type === 'step').map((detail) => (detail as { step: ChatStep }).step)).toEqual([
+      { tool: 'Read', label: 'Lendo o índice das reuniões', meetingId: null },
+      { tool: 'Read', label: 'Abrindo «Planejamento»', meetingId: 'm-planejamento' },
+      { tool: 'Grep', label: 'Procurando "decid"', meetingId: null },
+    ])
+    expect(details.filter((detail) => detail.type === 'denied')).toEqual([{ type: 'denied', count: 1 }])
+    expect(details.at(-1)).toEqual({
+      type: 'meta',
+      meta: { model: 'claude-opus-5-5', durationMs: 12_300, inputTokens: 2112, outputTokens: 420, cacheReadTokens: 1000, costUsd: 0.0213, turns: 5, consulted: ['m-planejamento'] },
+    })
+    // Nenhum caminho nos detalhes.
+    expect(JSON.stringify(details)).not.toContain('/tmp/')
+  })
+
+  it('raciocínio de duas mensagens: o pedaço da segunda começa com uma linha em branco; juntos, formam o texto', async () => {
+    const { spawn: spawnFake, children } = fakeSpawn()
+    const chat = new ClaudeChat({ binaryPath: BINARY, model: 'haiku', scope: 'all', cwd: '/tmp/acervo', env: {}, spawn: spawnFake })
+    const deltas: string[] = []
+    const answer = chat.ask('Oi?', [], () => undefined, (detail) => detail.type === 'thinking' && deltas.push(detail.delta))
+    const child = children[0] as FakeChild
+    const think = (text: string): void => child.emit({ type: 'stream_event', event: { type: 'content_block_delta', delta: { type: 'thinking_delta', thinking: text } } })
+    child.emit({ type: 'stream_event', event: { type: 'message_start' } })
+    think('Primeiro.')
+    child.emit({ type: 'stream_event', event: { type: 'message_start' } })
+    child.emit({ type: 'stream_event', event: { type: 'message_start' } })
+    think('Segundo.')
+    child.result('Ok.')
+    await answer
+    expect(deltas).toEqual(['Primeiro.', '\n\nSegundo.'])
+  })
+
+  it('sem os pedaços, o bloco thinking inteiro vale; raciocínio acima de 20 000 caracteres é cortado', async () => {
+    const { spawn: spawnFake, children } = fakeSpawn()
+    const chat = new ClaudeChat({ binaryPath: BINARY, model: 'haiku', scope: 'all', cwd: '/tmp/acervo', env: {}, spawn: spawnFake })
+    const details: ChatDetail[] = []
+    const answer = chat.ask('Oi?', [], () => undefined, (detail) => details.push(detail))
+    const child = children[0] as FakeChild
+    child.emit({ type: 'assistant', message: { content: [{ type: 'thinking', thinking: 'a'.repeat(CHAT_THINKING_MAX + 10) }] } })
+    child.result('Olá.', { permission_denials: [{ tool_name: 'Bash' }, { tool_name: 'Edit' }] })
+    await answer
+    expect((details[0] as { delta: string }).delta).toHaveLength(CHAT_THINKING_MAX)
+    expect(details.filter((detail) => detail.type === 'denied')).toEqual([{ type: 'denied', count: 2 }])
+    expect((details.at(-1) as { meta: ChatMeta }).meta).toMatchObject({ model: '', inputTokens: 0, costUsd: 0.01, consulted: [] })
+  })
+})
+
+describe('escopo, modelo, Refazer, renomear e copiar (contrato 16, CA3, CA4, CA6)', () => {
+  let dir: string
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'chat-v2-'))
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+  })
+  afterEach(() => {
+    vi.useRealTimers()
+    rmSync(dir, { recursive: true, force: true })
+  })
+
+  const NOW = Date.parse('2026-11-15T12:00:00')
+
+  const setup = async () => {
+    let n = 0
+    const meetings = createFileMeetingsStore({ dir, newId: () => ['m-hoje', 'm-10dias', 'm-60dias'][n++] ?? `m-${n}` })
+    const transcripts = createFileTranscriptStore({ dir })
+    const summaries = createFileSummaryStore({ dir })
+    const corpus = createChatCorpus({ dir, meetings, transcripts, summaries })
+    const store = createFileChatStore({ dir })
+    const { spawn: spawnFake, children } = fakeSpawn()
+    const events: ChatEvent[] = []
+    const copied: string[] = []
+    let c = 0
+    const service = createChatService({
+      store,
+      corpus,
+      settings: { get: () => Promise.resolve({ ...DEFAULT_SETTINGS, chatModel: 'sonnet' }) },
+      meetings,
+      locate: () => Promise.resolve({ ok: true, path: BINARY, version: '2.1.325' }),
+      spawn: spawnFake,
+      baseEnv: APP_ENV,
+      onEvent: (event) => events.push(event),
+      clipboard: { writeText: (text) => void copied.push(text) },
+      now: () => NOW,
+      newId: () => `c${++c}`,
+    })
+    const day = (days: number): string => new Date(NOW - days * 86_400_000).toISOString()
+    const today = await meetings.create({ title: 'Hoje', startedAt: day(0.1), durationMs: 1000, sources: { mic: true, system: false } })
+    const tenDays = await meetings.create({ title: 'Dez dias', startedAt: day(10), durationMs: 1000, sources: { mic: true, system: false } })
+    const sixtyDays = await meetings.create({ title: 'Sessenta dias', startedAt: day(60), durationMs: 1000, sources: { mic: true, system: false } })
+    return { service, store, children, events, copied, today, tenDays, sixtyDays }
+  }
+
+  const waitChild = async (children: FakeChild[], count: number): Promise<FakeChild> => {
+    for (let i = 0; i < 200 && children.length < count; i++) await new Promise((resolve) => setImmediate(resolve))
+    return children[count - 1] as FakeChild
+  }
+  const mds = (folder: string): string[] => readdirSync(folder).filter((name) => name !== CHAT_INDEX_FILE).sort()
+
+  it('escolha das reuniões por escopo', () => {
+    const list = [
+      { id: 'a', startedAt: new Date(NOW - 86_400_000).toISOString() },
+      { id: 'b', startedAt: new Date(NOW - 20 * 86_400_000).toISOString() },
+      { id: 'c', startedAt: new Date(NOW - 40 * 86_400_000).toISOString() },
+    ]
+    expect(scopeMeetingIds({ kind: 'all' }, list, NOW)).toEqual(['a', 'b', 'c'])
+    expect(scopeMeetingIds({ kind: '7d' }, list, NOW)).toEqual(['a'])
+    expect(scopeMeetingIds({ kind: '30d' }, list, NOW)).toEqual(['a', 'b'])
+    expect(scopeMeetingIds({ kind: 'meetings', meetingIds: ['c', 'sumiu'] }, list, NOW)).toEqual(['c'])
+  })
+
+  it('cada escopo monta a pasta da conversa só com os .md dele e um INDICE.md próprio; "todas" usa o acervo', async () => {
+    const { service, children, today, tenDays, sixtyDays } = await setup()
+    const ask = async (scope: Parameters<typeof scopeMeetingIds>[0], count: number): Promise<FakeChild> => {
+      const sent = (await service.send({ chatId: null, meetingId: null, text: 'Oi?', scope })) as { chat: Chat }
+      expect(sent.chat.scope).toEqual(scope)
+      const child = await waitChild(children, count)
+      child.result('Ok.')
+      await service.settled(sent.chat.id)
+      return child
+    }
+    const all = await ask({ kind: 'all' }, 1)
+    expect(all.options.cwd).toBe(join(dir, CHAT_CORPUS_DIR))
+    const week = await ask({ kind: '7d' }, 2)
+    expect(week.options.cwd).toBe(join(dir, CHAT_SCOPE_DIR, 'c2'))
+    expect(mds(week.options.cwd)).toEqual([corpusFileName(today)])
+    const index = readFileSync(join(week.options.cwd, CHAT_INDEX_FILE), 'utf8')
+    expect(index).toContain('meeting:m-hoje')
+    expect(index).not.toContain('meeting:m-10dias')
+    expect(statSync(week.options.cwd).mode & 0o777).toBe(0o700)
+    expect(statSync(join(week.options.cwd, CHAT_INDEX_FILE)).mode & 0o777).toBe(0o600)
+    expect(week.args).toEqual(chatArgs('sonnet', chatSystemPrompt('subset')))
+    const month = await ask({ kind: '30d' }, 3)
+    expect(mds(month.options.cwd)).toEqual([corpusFileName(tenDays), corpusFileName(today)].sort())
+    const chosen = await ask({ kind: 'meetings', meetingIds: [sixtyDays.id] }, 4)
+    expect(mds(chosen.options.cwd)).toEqual([corpusFileName(sixtyDays)])
+    // Mais de 50 escolhidas: recusado.
+    await expect(service.send({ chatId: null, meetingId: null, text: 'Oi?', scope: { kind: 'meetings', meetingIds: Array.from({ length: 51 }, (_, i) => `m${i}`) } })).rejects.toThrow()
+    // Fechar a conversa apaga a pasta dela.
+    service.close('c4')
+    for (let i = 0; i < 200 && existsSync(chosen.options.cwd); i++) await new Promise((resolve) => setImmediate(resolve))
+    expect(existsSync(chosen.options.cwd)).toBe(false)
+  })
+
+  it('detalhes vão à tela e ficam gravados; arquivo do contrato 15 carrega com os padrões', async () => {
+    const { service, store, children, events } = await setup()
+    const chat = ((await service.send({ chatId: null, meetingId: null, text: 'Oi?' })) as { chat: Chat }).chat
+    expect(chat.model).toBe('sonnet')
+    const child = await waitChild(children, 1)
+    child.emit({ type: 'system', subtype: 'init', model: 'claude-sonnet-5-5' })
+    child.emit({ type: 'stream_event', event: { type: 'content_block_delta', delta: { type: 'thinking_delta', thinking: 'Pensando <b>.' } } })
+    child.emit({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 't1', name: 'Read', input: { file_path: join(dir, CHAT_CORPUS_DIR, corpusFileName({ id: 'm-hoje', title: 'Hoje', startedAt: new Date(NOW - 8_640_000).toISOString() })) } }] } })
+    child.result('Ok.', { usage: { input_tokens: 10, output_tokens: 5 }, total_cost_usd: 0.01, duration_ms: 900, num_turns: 2 })
+    await service.settled(chat.id)
+    expect(events.map((event) => event.type)).toEqual(['thinking', 'step', 'answer', 'meta', 'done'])
+    expect(events.find((event) => event.type === 'step')).toEqual({ type: 'step', chatId: chat.id, step: { tool: 'Read', label: 'Abrindo «Hoje»', meetingId: 'm-hoje' } })
+    const saved = (await store.get(chat.id)) as Chat
+    expect(saved.messages[1]).toMatchObject({
+      role: 'assistant',
+      text: 'Ok.',
+      thinking: 'Pensando <b>.',
+      steps: [{ tool: 'Read', label: 'Abrindo «Hoje»', meetingId: 'm-hoje' }],
+      model: 'sonnet',
+      meta: { model: 'claude-sonnet-5-5', durationMs: 900, inputTokens: 10, outputTokens: 5, cacheReadTokens: 0, costUsd: 0.01, turns: 2, consulted: ['m-hoje'] },
+    })
+    // Nenhum caminho absoluto no que foi para a tela.
+    expect(JSON.stringify(events.filter((event) => event.type !== 'done'))).not.toContain(dir)
+    // Conversa do contrato 15: sem escopo, sem modelo e sem detalhes.
+    const old = { id: 'velha', meetingId: null, title: 'Antiga', createdAt: NOW_ISO, messages: [{ role: 'user', text: 'Oi', at: NOW_ISO }, { role: 'assistant', text: 'Olá', at: NOW_ISO }] }
+    writeFileSync(join(dir, CHATS_DIR, 'velha.json'), JSON.stringify(old))
+    expect(await store.get('velha')).toEqual({ ...old, scope: { kind: 'all' }, model: null })
+    // Ao abrir, o modelo é o das Configurações.
+    expect((await service.get('velha'))?.model).toBe('sonnet')
+    // Campo inválido nos detalhes: o arquivo é ignorado.
+    writeFileSync(join(dir, CHATS_DIR, 'ruim.json'), JSON.stringify({ ...old, id: 'ruim', scope: { kind: 'semana' } }))
+    expect(await store.get('ruim')).toBeNull()
+  })
+
+  it('trocar o modelo ou o escopo fecha o processo e a próxima pergunta abre outro com --model e o histórico', async () => {
+    const { service, children, tenDays } = await setup()
+    const chat = ((await service.send({ chatId: null, meetingId: null, text: 'Um' })) as { chat: Chat }).chat
+    const first = await waitChild(children, 1)
+    first.result('Resposta um.')
+    await service.settled(chat.id)
+    const updated = await service.update({ id: chat.id, model: 'haiku' })
+    expect(updated?.model).toBe('haiku')
+    expect(first.signals).toContain('SIGTERM')
+    await service.send({ chatId: chat.id, meetingId: null, text: 'Dois' })
+    const second = await waitChild(children, 2)
+    expect(second.args[second.args.indexOf('--model') + 1]).toBe('haiku')
+    expect(second.questions[0]).toBe('<historico>\nPessoa: Um\nClaude: Resposta um.\n</historico>\n\nPergunta: Dois')
+    second.result('Resposta dois.')
+    await service.settled(chat.id)
+    // O mesmo modelo de novo não mexe no processo.
+    await service.update({ id: chat.id, model: 'haiku' })
+    expect(second.signals).toEqual([])
+    await service.update({ id: chat.id, scope: { kind: 'meetings', meetingIds: [tenDays.id] } })
+    expect(second.signals).toContain('SIGTERM')
+    await service.send({ chatId: chat.id, meetingId: null, text: 'Três' })
+    const third = await waitChild(children, 3)
+    expect(third.options.cwd).toBe(join(dir, CHAT_SCOPE_DIR, chat.id))
+    expect(third.questions[0]).toContain('<historico>')
+    // Pela barra do campo (na própria pergunta) também vale.
+    third.result('Ok.')
+    await service.settled(chat.id)
+    await service.send({ chatId: chat.id, meetingId: null, text: 'Quatro', model: 'opus' })
+    const fourth = await waitChild(children, 4)
+    expect(third.signals).toContain('SIGTERM')
+    expect(fourth.args[fourth.args.indexOf('--model') + 1]).toBe('opus')
+  })
+
+  it('Refazer: a última resposta sai e a mesma pergunta vai num processo novo; com texto, a pergunta muda; copiar e renomear', async () => {
+    const { service, store, children, copied } = await setup()
+    const chat = ((await service.send({ chatId: null, meetingId: null, text: 'Um' })) as { chat: Chat }).chat
+    const first = await waitChild(children, 1)
+    first.result('Resposta um.')
+    await service.settled(chat.id)
+    await service.send({ chatId: chat.id, meetingId: null, text: 'Dois' })
+    first.result('Resposta dois.')
+    await service.settled(chat.id)
+    expect(await service.copy({ id: chat.id, index: 3 })).toBe(true)
+    expect(copied).toEqual(['Resposta dois.'])
+    expect(await service.copy({ id: chat.id, index: 9 })).toBe(false)
+
+    const redo = await service.redo({ id: chat.id })
+    expect(redo.ok).toBe(true)
+    expect(first.signals).toContain('SIGTERM')
+    const second = await waitChild(children, 2)
+    // Processo novo, com o histórico até antes da pergunta refeita.
+    expect(second.questions[0]).toBe('<historico>\nPessoa: Um\nClaude: Resposta um.\n</historico>\n\nPergunta: Dois')
+    expect(await service.redo({ id: chat.id })).toEqual({ ok: false, error: 'busy' })
+    second.result('Resposta dois, refeita.')
+    await service.settled(chat.id)
+    expect((await store.get(chat.id))?.messages.map((m) => m.text)).toEqual(['Um', 'Resposta um.', 'Dois', 'Resposta dois, refeita.'])
+
+    // ↑ editou a última pergunta.
+    await service.redo({ id: chat.id, text: 'Dois, de outro jeito' })
+    const third = await waitChild(children, 3)
+    expect(third.questions[0]).toContain('Pergunta: Dois, de outro jeito')
+    third.emit({ type: 'result', is_error: true, result: 'erro' })
+    await service.settled(chat.id)
+    expect((await store.get(chat.id))?.messages.at(-1)).toMatchObject({ role: 'assistant', error: 'failed' })
+    // "Tentar de novo" na resposta com erro.
+    await service.redo({ id: chat.id })
+    const fourth = await waitChild(children, 4)
+    fourth.result('Agora foi.')
+    await service.settled(chat.id)
+    expect((await store.get(chat.id))?.messages.map((m) => m.text)).toEqual(['Um', 'Resposta um.', 'Dois, de outro jeito', 'Agora foi.'])
+
+    const renamed = await service.update({ id: chat.id, title: '  Meu   título  ' })
+    expect(renamed?.title).toBe('Meu título')
+    expect(fourth.signals).toEqual([])
+    expect((await service.list({ meetingId: null })).find((item) => item.id === chat.id)?.title).toBe('Meu título')
+    expect(await service.update({ id: 'nao-existe', title: 'x' })).toBeNull()
+    await expect(service.update({ id: chat.id, title: '   ' })).rejects.toThrow()
+    expect(await service.redo({ id: 'nao-existe' })).toEqual({ ok: false, error: 'missing' })
+  })
+
+  it('a resposta que termina no meio de um "Renomear": nada se perde e o título fica (mutate na fila)', async () => {
+    const { service, store, children } = await setup()
+    const chat = ((await service.send({ chatId: null, meetingId: null, text: 'Um' })) as { chat: Chat }).chat
+    const child = await waitChild(children, 1)
+    // As duas gravações disputam a conversa ao mesmo tempo, nas duas ordens.
+    const renaming = service.update({ id: chat.id, title: 'Título novo' })
+    child.result('Resposta.')
+    await Promise.all([renaming, service.settled(chat.id)])
+    let saved = (await store.get(chat.id)) as Chat
+    expect(saved.title).toBe('Título novo')
+    expect(saved.messages.map((m) => m.text)).toEqual(['Um', 'Resposta.'])
+    await service.send({ chatId: chat.id, meetingId: null, text: 'Dois' })
+    child.result('Resposta dois.')
+    const again = service.update({ id: chat.id, title: 'Outro título' })
+    await Promise.all([again, service.settled(chat.id)])
+    saved = (await store.get(chat.id)) as Chat
+    expect(saved.title).toBe('Outro título')
+    expect(saved.messages.map((m) => m.text)).toEqual(['Um', 'Resposta.', 'Dois', 'Resposta dois.'])
+    // Direto no store: duas mudanças simultâneas valem as duas.
+    await Promise.all([
+      store.mutate(chat.id, (current) => (current ? { ...current, title: 'A' } : null)),
+      store.mutate(chat.id, (current) => (current ? { ...current, messages: current.messages.slice(0, 2) } : null)),
+    ])
+    saved = (await store.get(chat.id)) as Chat
+    expect([saved.title, saved.messages.length]).toEqual(['A', 2])
+    expect(await store.mutate('nao-existe', (current) => current)).toBeNull()
+  })
+
+  it('a conversa de uma reunião ignora o escopo pedido', async () => {
+    const { service, children, today } = await setup()
+    const chat = ((await service.send({ chatId: null, meetingId: today.id, text: 'Oi?', scope: { kind: '7d' } })) as { chat: Chat }).chat
+    expect(chat.scope).toEqual({ kind: 'all' })
+    const child = await waitChild(children, 1)
+    expect(readdirSync(child.options.cwd)).toEqual([corpusFileName(today)])
+  })
+})
+
+const NOW_ISO = new Date('2026-11-15T12:00:00').toISOString()
+
+describe('claude falso de verdade com raciocínio, passos e detalhes (contrato 16, CA1 e CA8)', () => {
+  it('emite init, thinking, 3 leituras, 1 negação e o result com uso e custo', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'chat-real-v2-'))
+    try {
+      const file = '2026-11-14 14h05 - Planejamento - m-1.md'
+      writeFileSync(join(dir, CHAT_INDEX_FILE), `# Índice\n\n- 14/11/2026 14:05 · Planejamento · A equipe decidiu. · arquivo: ${file} · meeting:m-1\n`)
+      writeFileSync(join(dir, file), '# Planejamento\n')
+      const script = join(import.meta.dirname, 'fixtures', 'fake-claude.mjs')
+      const chat = new ClaudeChat({
+        binaryPath: '/falso/claude',
+        model: 'opus',
+        scope: 'all',
+        cwd: dir,
+        env: claudeEnv(process.env),
+        spawn: (_file, args, options) => spawn(process.execPath, [script, ...args], options),
+        titleOf: (id) => (id === 'm-1' ? 'Planejamento' : null),
+      })
+      const details: ChatDetail[] = []
+      const answer = await chat.ask('O que foi decidido?', [], () => undefined, (detail) => details.push(detail))
+      chat.kill()
+      expect(answer.ok).toBe(true)
+      const thinking = { text: details.flatMap((detail) => (detail.type === 'thinking' ? [detail.delta] : [])).join('') }
+      expect(thinking.text).toContain('<b>sem HTML</b>')
+      expect(thinking.text.match(/Vou ler/g)).toHaveLength(1)
+      expect(details.filter((detail) => detail.type === 'step').map((detail) => (detail as { step: ChatStep }).step.label)).toEqual([
+        'Lendo o índice das reuniões',
+        'Abrindo «Planejamento»',
+        'Procurando "decid"',
+      ])
+      expect(details.filter((detail) => detail.type === 'denied').at(-1)).toEqual({ type: 'denied', count: 1 })
+      const meta = (details.at(-1) as { meta: ChatMeta }).meta
+      expect(meta).toMatchObject({ model: 'claude-opus-5-5', inputTokens: 2112, outputTokens: 420, cacheReadTokens: 1000, costUsd: 0.0213, turns: 5, consulted: ['m-1'] })
+      expect(JSON.stringify(details)).not.toContain(dir)
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }

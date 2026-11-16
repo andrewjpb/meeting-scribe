@@ -4,12 +4,14 @@ interface EditableTitleProps {
   value: string
   onCommit: (value: string) => void
   maxLength: number
+  /** Nome do campo para o leitor de tela. */
+  label?: string
 }
 
 const TITLE_CLASS = 'text-20 font-bold tracking-[-0.3px] text-title'
 
 /** Título da reunião (20/26, negrito azul) que vira campo ao clicar. Enter confirma, Esc cancela. */
-export function EditableTitle({ value, onCommit, maxLength }: EditableTitleProps) {
+export function EditableTitle({ value, onCommit, maxLength, label = 'Título da reunião' }: EditableTitleProps) {
   const [draft, setDraft] = useState<string | null>(null)
 
   const commit = (): void => {
@@ -34,7 +36,7 @@ export function EditableTitle({ value, onCommit, maxLength }: EditableTitleProps
       <input
         // Campo aberto pelo próprio clique do usuário: o foco vai para ele.
         autoFocus
-        aria-label="Título da reunião"
+        aria-label={label}
         value={draft}
         maxLength={maxLength}
         onChange={(event) => setDraft(event.target.value)}

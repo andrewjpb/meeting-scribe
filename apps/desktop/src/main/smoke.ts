@@ -13,7 +13,10 @@
 // anotações (contrato 13) são criadas no painel da gravação e conferidas no arquivo, no `.md`, na aba
 // "Anotações" do detalhe e na lista. O chat "Perguntar" (contrato 15) usa o `claude` falso em modo chat: o
 // acervo das fixtures é refeito, uma pergunta responde em pedaços, o link `meeting:` abre o detalhe, "Parar"
-// mata o processo e a aba "Perguntar" do detalhe roda numa pasta só com o `.md` da reunião.
+// mata o processo e a aba "Perguntar" do detalhe roda numa pasta só com o `.md` da reunião. O "Perguntar"
+// v2 (contrato 16) confere a linha "Pensando…"/"Abrindo «…»", o bloco "Raciocínio e passos", o rodapé, o
+// painel "Contexto" com a troca de escopo (e a pasta do processo), a troca de modelo, "Refazer", renomear e
+// ↑ para editar a última pergunta.
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
@@ -66,6 +69,7 @@ const SCREENS = [
   'detalhe-resumo',
   'detalhe-anotacoes',
   'perguntar',
+  'perguntar-v2',
   'configuracoes',
   'configuracoes-seletor',
   'configuracoes-claude',
@@ -290,13 +294,55 @@ async function askChat(contents: WebContents, question: string): Promise<{ strea
   return { streamed, done, answer: await evaluate<string>(contents, LAST_ANSWER) }
 }
 
-function readChatFiles(userDataDir: string): { id: string; meetingId: string | null; messages: { role: string; text: string; error?: string }[] }[] {
+interface SmokeChatFile {
+  id: string
+  meetingId: string | null
+  title: string
+  scope?: { kind: string; meetingIds?: string[] }
+  model?: string | null
+  messages: { role: string; text: string; error?: string; steps?: unknown[]; thinking?: string; meta?: { model: string; consulted: string[] }; model?: string }[]
+}
+
+function readChatFiles(userDataDir: string): SmokeChatFile[] {
   const dir = join(userDataDir, CHATS_DIR)
   if (!existsSync(dir)) return []
   return readdirSync(dir)
     .filter((name) => name.endsWith('.json'))
-    .map((name) => JSON.parse(readFileSync(join(dir, name), 'utf8')) as { id: string; meetingId: string | null; messages: { role: string; text: string; error?: string }[] })
+    .map((name) => JSON.parse(readFileSync(join(dir, name), 'utf8')) as SmokeChatFile)
 }
+
+const chatFile = (userDataDir: string, id: string): SmokeChatFile | undefined => readChatFiles(userDataDir).find((chat) => chat.id === id)
+
+/**
+ * Contrato 16, CA2 e CA8: uma pergunta pelo campo, olhando a resposta em curso a cada 30 ms: as linhas de
+ * estado vistas ("Pensando…", depois o último passo) e se o bloco "Raciocínio e passos" estava aberto.
+ */
+async function askWatching(contents: WebContents, question: string): Promise<{ statuses: string[]; liveOpen: boolean; streamed: boolean; done: boolean; answer: string }> {
+  const answersBefore = await evaluate<number>(contents, `document.querySelectorAll('[data-chat-message="assistant"]:not([data-chat-streaming])').length`)
+  await setValue(contents, '[data-chat-input]', question)
+  await pressEnterIn(contents, '[data-chat-input]')
+  const statuses: string[] = []
+  let liveOpen = false
+  let streamed = false
+  const deadline = Date.now() + 10_000
+  while (Date.now() < deadline) {
+    const seen = await evaluate<{ status: string; open: boolean; text: boolean }>(
+      contents,
+      `({ status: document.querySelector('[data-chat-streaming] [data-chat-status]')?.textContent ?? '', open: Boolean(document.querySelector('[data-chat-streaming] [data-chat-reasoning="open"]')), text: (document.querySelector('[data-chat-streaming] [data-chat-markdown]')?.textContent ?? '').length > 0 })`,
+    )
+    if (seen.status && statuses.at(-1) !== seen.status) statuses.push(seen.status)
+    liveOpen ||= seen.open
+    if (seen.text) {
+      streamed = true
+      break
+    }
+    await wait(30)
+  }
+  const done = await waitFor(contents, `${CHAT_DONE} && document.querySelectorAll('[data-chat-message="assistant"]:not([data-chat-streaming])').length > ${answersBefore}`, 10_000)
+  return { statuses, liveOpen, streamed, done, answer: await evaluate<string>(contents, LAST_ANSWER) }
+}
+
+const LAST_ASSISTANT = `[...document.querySelectorAll('[data-chat-message="assistant"]:not([data-chat-streaming])')].at(-1)`
 
 const mode = (path: string): string => (existsSync(path) ? (statSync(path).mode & 0o777).toString(8) : 'ausente')
 
@@ -323,16 +369,28 @@ function chatArgsCheck(spawn: SmokeFixtures['claudeSpawns'][number] | undefined)
  * semeadas; uma pergunta pela tela "Perguntar" responde em pedaços, com o link `meeting:`; a conversa fica
  * gravada e o processo roda no acervo só com as ferramentas de leitura. A foto sai com a conversa.
  */
-async function chatScreenCheck(contents: WebContents, ctx: SmokeContext, shoot: () => Promise<void>): Promise<Check> {
+async function chatScreenCheck(
+  contents: WebContents,
+  ctx: SmokeContext,
+  shoot: () => Promise<void>,
+  shootV2: () => Promise<void>,
+  shootEmpty: (() => Promise<void>) | null,
+): Promise<{ check: Check; v2: Check }> {
   const corpus = join(ctx.userDataDir, CHAT_CORPUS_DIR)
   rmSync(corpus, { recursive: true, force: true })
   const meetings = readMeetings(ctx.userDataDir)
   const chatsBefore = readChatFiles(ctx.userDataDir).length
   const spawnsBefore = chatSpawns(ctx.fixtures).length
   await clickSelector(contents, '[data-nav="perguntar"]')
-  const opened = await waitFor(contents, `${routeIs('perguntar')} && document.querySelectorAll('[data-chat-suggestion]').length === 3 && document.querySelector('[data-chat-input]')`, 8000)
+  // Contrato 16: 6 sugestões em cartões, em 3 grupos.
+  const opened = await waitFor(
+    contents,
+    `${routeIs('perguntar')} && document.querySelectorAll('[data-chat-suggestion]').length === 6 && document.querySelectorAll('[data-chat-empty] section').length === 3 && document.querySelector('[data-chat-input]')`,
+    8000,
+  )
   const suggestions = await evaluate<string[]>(contents, `[...document.querySelectorAll('[data-chat-suggestion]')].map((b) => b.textContent)`)
-  const asked = await askChat(contents, 'O que ficou decidido esta semana?')
+  if (shootEmpty) await shootEmpty()
+  const asked = await askWatching(contents, 'O que ficou decidido esta semana?')
   const link = await evaluate<string>(contents, `[...document.querySelectorAll('[data-chat-message="assistant"] [data-meeting-link]')].at(-1)?.dataset.meetingLink ?? ''`)
   const userRight = await evaluate<string>(contents, `getComputedStyle(document.querySelector('[data-chat-message="user"]')).justifyContent`)
   const index = existsSync(join(corpus, CHAT_INDEX_FILE)) ? readFileSync(join(corpus, CHAT_INDEX_FILE), 'utf8') : ''
@@ -344,7 +402,8 @@ async function chatScreenCheck(contents: WebContents, ctx: SmokeContext, shoot: 
   const chats = readChatFiles(ctx.userDataDir)
   const saved = chats.find((chat) => chat.meetingId === null && chat.messages.length === 2 && chat.messages[0]?.text === 'O que ficou decidido esta semana?')
   await shoot()
-  return {
+  const v2 = await chatAnswerDetailsCheck(contents, ctx, asked, saved, shootV2)
+  const check = {
     ok:
       opened &&
       asked.streamed &&
@@ -365,7 +424,224 @@ async function chatScreenCheck(contents: WebContents, ctx: SmokeContext, shoot: 
       chats.length === chatsBefore + 1 &&
       saved?.messages[1]?.role === 'assistant' &&
       saved.messages[1].error === undefined,
-    detail: `tela=${opened}, sugestões ${JSON.stringify(suggestions)}; em pedaços=${asked.streamed}, terminou=${asked.done}, resposta "${asked.answer.slice(0, 120)}"; link meeting:${link}; pessoa à direita=${userRight}; INDICE.md ${indexLines} linhas para ${meetings.length} reuniões, ${sampleFile ?? 'sem .md da smoke-2'}; permissões pasta ${mode(corpus)}, índice ${mode(join(corpus, CHAT_INDEX_FILE))}; processo ${JSON.stringify(spawn ? { cwd: spawn.cwd.replace(ctx.userDataDir, '<userData>'), args: spawn.args.filter((arg, i) => arg.startsWith('--') || spawn.args[i - 1]?.endsWith('Tools') || spawn.args[i - 1] === '--permission-mode'), env: spawn.envNames } : null)}; conversas ${chatsBefore} -> ${chats.length}`,
+    detail: `tela=${opened}, sugestões ${JSON.stringify(suggestions)}; estados=${JSON.stringify(asked.statuses)}, terminou=${asked.done}, resposta "${asked.answer.slice(0, 120)}"; link meeting:${link}; pessoa à direita=${userRight}; INDICE.md ${indexLines} linhas para ${meetings.length} reuniões, ${sampleFile ?? 'sem .md da smoke-2'}; permissões pasta ${mode(corpus)}, índice ${mode(join(corpus, CHAT_INDEX_FILE))}; processo ${JSON.stringify(spawn ? { cwd: spawn.cwd.replace(ctx.userDataDir, '<userData>'), args: spawn.args.filter((arg, i) => arg.startsWith('--') || spawn.args[i - 1]?.endsWith('Tools') || spawn.args[i - 1] === '--permission-mode'), env: spawn.envNames } : null)}; conversas ${chatsBefore} -> ${chats.length}`,
+  }
+  return { check, v2 }
+}
+
+/**
+ * Contrato 16, CA1, CA2, CA3, CA7 e CA8 (nos dois temas): "Pensando…" e depois "Abrindo «…»" enquanto a
+ * resposta não começa, com "Raciocínio e passos" aberto; depois de pronta, o bloco fechado e o rodapé com
+ * modelo, tempo, tokens, custo nominal (com a dica) e a reunião consultada. Aberto, o bloco mostra os 3
+ * passos, a ferramenta negada e o raciocínio em texto puro; nenhum caminho de arquivo chega à tela. Tudo
+ * gravado com a resposta. A foto `perguntar-v2` sai com o bloco e a lista de consultadas abertos.
+ */
+async function chatAnswerDetailsCheck(
+  contents: WebContents,
+  ctx: SmokeContext,
+  asked: { statuses: string[]; liveOpen: boolean; done: boolean },
+  saved: SmokeChatFile | undefined,
+  shoot: () => Promise<void>,
+): Promise<Check> {
+  const closedAfter = await evaluate<boolean>(contents, `Boolean(${LAST_ASSISTANT}?.querySelector('[data-chat-reasoning="closed"]'))`)
+  const footer = await evaluate<string>(contents, `${LAST_ASSISTANT}?.querySelector('[data-chat-footer]')?.textContent ?? ''`)
+  const costHint = await evaluate<string>(contents, `${LAST_ASSISTANT}?.querySelector('[data-chat-cost]')?.getAttribute('title') ?? ''`)
+  await evaluate(contents, `${LAST_ASSISTANT}?.querySelector('[data-action="toggle-reasoning"]')?.click()`)
+  await evaluate(contents, `${LAST_ASSISTANT}?.querySelector('[data-action="toggle-consulted"]')?.click()`)
+  await waitFor(contents, `${LAST_ASSISTANT}?.querySelector('[data-chat-steps]') && ${LAST_ASSISTANT}?.querySelector('[data-chat-consulted]')`)
+  const steps = await evaluate<string[]>(contents, `[...(${LAST_ASSISTANT}?.querySelectorAll('[data-chat-step]') ?? [])].map((li) => li.textContent)`)
+  const denied = await evaluate<string>(contents, `${LAST_ASSISTANT}?.querySelector('[data-chat-denied]')?.textContent ?? ''`)
+  const thinking = await evaluate<{ text: string; elements: number }>(
+    contents,
+    `(() => { const p = ${LAST_ASSISTANT}?.querySelector('[data-chat-thinking]'); return { text: p?.textContent ?? '', elements: p?.children.length ?? -1 } })()`,
+  )
+  const consulted = await evaluate<string[]>(contents, `[...(${LAST_ASSISTANT}?.querySelectorAll('[data-chat-consulted] [data-meeting-link]') ?? [])].map((b) => b.dataset.meetingLink)`)
+  const pathsOnScreen = await evaluate<boolean>(contents, `document.body.innerText.includes(${JSON.stringify(ctx.userDataDir)}) || document.body.innerText.includes('/chat-corpus') || document.body.innerText.includes('/chat-scope')`)
+  const stored = saved ? chatFile(ctx.userDataDir, saved.id)?.messages[1] : undefined
+  await shoot()
+  return {
+    ok:
+      asked.done &&
+      asked.statuses[0] === 'Pensando…' &&
+      asked.statuses.some((status) => status.startsWith('Abrindo «')) &&
+      asked.liveOpen &&
+      closedAfter &&
+      footer.includes('Sonnet') &&
+      footer.includes('3,1 mil entrada · 420 saída') &&
+      footer.includes('US$ 0,02') &&
+      footer.includes('1 reunião consultada') &&
+      costHint.includes('sai do seu plano do Claude') &&
+      steps.length === 3 &&
+      steps[0] === 'Lendo o índice das reuniões' &&
+      (steps[1] ?? '').startsWith('Abrindo «') &&
+      (steps[2] ?? '').startsWith('Procurando "') &&
+      denied.startsWith('1 ferramenta negada') &&
+      thinking.text.includes('<b>sem HTML</b>') &&
+      thinking.elements === 0 &&
+      consulted.length === 1 &&
+      !pathsOnScreen &&
+      stored?.steps?.length === 3 &&
+      (stored.thinking ?? '').includes('<b>sem HTML</b>') &&
+      stored.meta?.model === 'claude-sonnet-5-5' &&
+      stored.model === 'sonnet',
+    detail: `estados ${JSON.stringify(asked.statuses)}, bloco aberto enquanto pensa=${asked.liveOpen}, fechado depois=${closedAfter}; rodapé "${footer}" (dica "${costHint}"); passos ${JSON.stringify(steps)}; "${denied}"; raciocínio texto puro=${thinking.elements === 0} ("${thinking.text.slice(0, 60)}"); consultadas ${JSON.stringify(consulted)}; caminho na tela=${pathsOnScreen}; gravado: ${stored?.steps?.length ?? 0} passos, meta ${stored?.meta?.model ?? '?'}, modelo ${stored?.model ?? '?'}`,
+  }
+}
+
+/**
+ * Contrato 16, CA3, CA4, CA5 e CA8 (tema claro), na conversa da tela "Perguntar": o painel "Contexto" com as
+ * consultadas e os totais; "Reuniões escolhidas" com duas reuniões monta `chat-scope/<id>/` só com os `.md`
+ * delas e o `INDICE.md` (foto `perguntar-contexto-light`); o modelo trocado na barra do campo abre outro
+ * processo com `--model opus`; "Refazer" troca a última resposta num processo novo; renomear pelo menu "…"
+ * da lista; ↑ no campo vazio edita a última pergunta.
+ */
+async function chatContextCheck(contents: WebContents, ctx: SmokeContext, shootContext: () => Promise<void>): Promise<Check> {
+  const chatId = await evaluate<string>(contents, `document.querySelector('[data-chat-conversation]')?.getAttribute('data-chat-conversation') ?? ''`)
+  const spawns = (): SmokeFixtures['claudeSpawns'] => chatSpawns(ctx.fixtures)
+  // Painel "Contexto".
+  await clickSelector(contents, '[data-action="toggle-context"]')
+  const panel = await waitFor(contents, `document.querySelector('[data-chat-context]')`)
+  const panelConsulted = await evaluate<number>(contents, `document.querySelectorAll('[data-chat-context-consulted] [data-meeting-link]').length`)
+  const totals = await evaluate<string>(contents, `document.querySelector('[data-chat-totals]')?.textContent ?? ''`)
+  // Teclado no grupo do escopo (tabindex móvel): ↓ marca "Últimos 7 dias" com o foco nele; End vai a
+  // "Reuniões escolhidas".
+  const radioKey = (key: string): Promise<unknown> =>
+    evaluate(contents, `document.activeElement?.dispatchEvent(new KeyboardEvent('keydown', { key: ${JSON.stringify(key)}, bubbles: true }))`)
+  await evaluate(contents, `document.querySelector('[data-scope-option][aria-checked="true"]')?.focus()`)
+  const tabStops = await evaluate<number>(contents, `document.querySelectorAll('[data-scope-option][tabindex="0"]').length`)
+  await radioKey('ArrowDown')
+  const arrowed = await waitFor(contents, `document.querySelector('[data-scope-option="7d"]')?.getAttribute('aria-checked') === 'true' && document.activeElement?.dataset.scopeOption === '7d'`)
+  await radioKey('End')
+  // Escopo "Reuniões escolhidas" sem nenhuma: envio bloqueado com o aviso; depois, duas reuniões.
+  const ended = await waitFor(contents, `document.activeElement?.dataset.scopeOption === 'meetings'`)
+  const blocked = await waitFor(contents, `document.querySelector('[data-chat-scope-empty]')?.textContent === 'Escolha ao menos uma reunião'`)
+  await setValue(contents, '[data-chat-input]', 'Isto não pode sair')
+  const sendDisabled = await evaluate<boolean>(contents, `document.querySelector('[data-action="chat-send"]')?.disabled === true`)
+  const spawnsBlocked = spawns().length
+  await pressEnterIn(contents, '[data-chat-input]')
+  await wait(300)
+  const nothingSent = spawns().length === spawnsBlocked && (await evaluate<string>(contents, `document.querySelector('[data-chat-input]')?.value ?? ''`)) === 'Isto não pode sair'
+  await setValue(contents, '[data-chat-input]', '')
+  await waitFor(contents, `document.querySelector('[data-scope-meeting="smoke-2"]') && document.querySelector('[data-scope-meeting="smoke-4"]')`)
+  await clickSelector(contents, '[data-scope-meeting="smoke-2"]')
+  await waitFor(contents, `document.querySelector('[data-scope-meeting="smoke-2"]')?.checked`)
+  await clickSelector(contents, '[data-scope-meeting="smoke-4"]')
+  const scoped = await waitFor(contents, `document.querySelector('[data-action="chat-scope-label"]')?.textContent === 'Reuniões escolhidas (2)'`)
+  for (let i = 0; i < 40 && (chatFile(ctx.userDataDir, chatId)?.scope?.meetingIds?.length ?? 0) < 2; i++) await wait(50)
+  const savedScope = chatFile(ctx.userDataDir, chatId)?.scope
+  await shootContext()
+  const before = spawns().length
+  const previous = spawns().at(-1)
+  const scopedAnswer = await askChat(contents, 'Quais tarefas são minhas?')
+  const scopedSpawn = spawns().at(-1)
+  const scopeFiles = scopedSpawn && existsSync(scopedSpawn.cwd) ? readdirSync(scopedSpawn.cwd).sort() : []
+  const scopeIndex = scopedSpawn && existsSync(join(scopedSpawn.cwd, CHAT_INDEX_FILE)) ? readFileSync(join(scopedSpawn.cwd, CHAT_INDEX_FILE), 'utf8') : ''
+  await clickSelector(contents, '[data-action="close-context"]')
+  await waitFor(contents, `!document.querySelector('[data-chat-context]')`)
+
+  // Modelo trocado na barra do campo: o processo é refeito com --model opus.
+  await setValue(contents, '[data-chat-model-select]', 'opus', 'change')
+  const modelLabel = await waitFor(contents, `document.querySelector('[data-action="chat-model-label"]')?.textContent === 'Opus'`)
+  const beforeModel = spawns().length
+  const opusAnswer = await askChat(contents, 'E o que ficou decidido?')
+  const opusSpawn = spawns().at(-1)
+  const opusSpawnCount = spawns().length
+  const opusFooter = await evaluate<string>(contents, `${LAST_ASSISTANT}?.querySelector('[data-chat-footer]')?.textContent ?? ''`)
+
+  // "Refazer": mesma pergunta, processo novo, a resposta trocada.
+  const lengthBefore = chatFile(ctx.userDataDir, chatId)?.messages.length ?? 0
+  const beforeRedo = spawns().length
+  await evaluate(contents, `${LAST_ASSISTANT}?.querySelector('[data-action="chat-redo"]')?.click()`)
+  for (let i = 0; i < 100 && spawns().length === beforeRedo; i++) await wait(50)
+  const redoSpawn = spawns().at(-1)
+  for (let i = 0; i < 200 && chatFile(ctx.userDataDir, chatId)?.messages.at(-1)?.role !== 'assistant'; i++) await wait(50)
+  await waitFor(contents, CHAT_DONE, 10_000)
+  const afterRedo = chatFile(ctx.userDataDir, chatId)
+
+  // Menu "…" pelo teclado: abre com o foco no primeiro item; ↓, End, Home andam; Esc fecha e volta ao "…".
+  const focusedAction = (): Promise<string> => evaluate<string>(contents, `document.activeElement?.dataset.action ?? ''`)
+  const menuKey = (key: string): Promise<unknown> =>
+    evaluate(contents, `document.activeElement?.dispatchEvent(new KeyboardEvent('keydown', { key: ${JSON.stringify(key)}, bubbles: true }))`)
+  await clickSelector(contents, `[data-chat-item="${chatId}"] [data-action="chat-row-menu"]`)
+  await waitFor(contents, `document.activeElement?.dataset.action === 'rename-chat'`)
+  const menuKeys: string[] = [await focusedAction()]
+  for (const key of ['ArrowDown', 'ArrowDown', 'End', 'Home']) {
+    await menuKey(key)
+    menuKeys.push(await focusedAction())
+  }
+  await menuKey('Escape')
+  const menuClosed = await waitFor(contents, `!document.querySelector('[role="menu"]') && document.activeElement?.dataset.action === 'chat-row-menu'`)
+  const menuOk = JSON.stringify(menuKeys) === JSON.stringify(['rename-chat', 'delete-chat', 'rename-chat', 'delete-chat', 'rename-chat']) && menuClosed
+
+  // Renomear pelo menu "…" da linha.
+  await clickSelector(contents, `[data-chat-item="${chatId}"] [data-action="chat-row-menu"]`)
+  await clickSelector(contents, '[data-action="rename-chat"]')
+  await waitFor(contents, `document.querySelector('[data-chat-rename-input]')`)
+  await setValue(contents, '[data-chat-rename-input]', 'Conversa renomeada')
+  await pressEnterIn(contents, '[data-chat-rename-input]')
+  const renamedRow = await waitFor(contents, `document.querySelector('[data-chat-item="${chatId}"]')?.textContent?.includes('Conversa renomeada')`)
+  for (let i = 0; i < 40 && chatFile(ctx.userDataDir, chatId)?.title !== 'Conversa renomeada'; i++) await wait(50)
+  const renamedFile = chatFile(ctx.userDataDir, chatId)?.title
+
+  // ↑ no campo vazio: a última pergunta volta ao campo; enviada, troca a última pergunta e a resposta.
+  await setValue(contents, '[data-chat-input]', '')
+  await evaluate(contents, `document.querySelector('[data-chat-input]')?.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp', bubbles: true }))`)
+  const editing = await waitFor(contents, `document.querySelector('[data-chat-editing]') && document.querySelector('[data-chat-input]')?.value === 'E o que ficou decidido?'`)
+  const lengthBeforeEdit = chatFile(ctx.userDataDir, chatId)?.messages.length ?? 0
+  const beforeEdit = spawns().length
+  await setValue(contents, '[data-chat-input]', 'E quais decisões ficaram?')
+  await pressEnterIn(contents, '[data-chat-input]')
+  for (let i = 0; i < 100 && spawns().length === beforeEdit; i++) await wait(50)
+  for (let i = 0; i < 200 && chatFile(ctx.userDataDir, chatId)?.messages.at(-1)?.role !== 'assistant'; i++) await wait(50)
+  const edited = { done: await waitFor(contents, CHAT_DONE, 10_000) }
+  const afterEdit = chatFile(ctx.userDataDir, chatId)
+  const lastQuestion = afterEdit?.messages.at(-2)?.text
+
+  return {
+    ok:
+      chatId !== '' &&
+      tabStops === 1 &&
+      arrowed &&
+      ended &&
+      blocked &&
+      sendDisabled &&
+      nothingSent &&
+      menuOk &&
+      panel &&
+      panelConsulted >= 1 &&
+      totals.includes('Mensagens') &&
+      scoped &&
+      savedScope?.kind === 'meetings' &&
+      JSON.stringify(savedScope.meetingIds) === JSON.stringify(['smoke-2', 'smoke-4']) &&
+      scopedAnswer.done &&
+      scopedAnswer.answer.includes('2 reuniões') &&
+      spawns().length >= before + 1 &&
+      previous?.exited === true &&
+      scopedSpawn?.cwd === join(ctx.userDataDir, CHAT_SCOPE_DIR, chatId) &&
+      scopeFiles.length === 3 &&
+      scopeFiles.includes(CHAT_INDEX_FILE) &&
+      scopeFiles.some((name) => name.endsWith(corpusFileSuffix('smoke-2'))) &&
+      scopeFiles.some((name) => name.endsWith(corpusFileSuffix('smoke-4'))) &&
+      scopeIndex.includes('meeting:smoke-2') &&
+      !scopeIndex.includes('meeting:smoke-3') &&
+      chatArgsCheck(scopedSpawn) &&
+      modelLabel &&
+      opusAnswer.done &&
+      opusSpawn !== scopedSpawn &&
+      opusSpawnCount === beforeModel + 1 &&
+      opusSpawn?.args[opusSpawn.args.indexOf('--model') + 1] === 'opus' &&
+      opusFooter.includes('Opus') &&
+      redoSpawn !== opusSpawn &&
+      redoSpawn?.args[redoSpawn.args.indexOf('--model') + 1] === 'opus' &&
+      afterRedo?.messages.length === lengthBefore &&
+      afterRedo.messages.at(-2)?.text === 'E o que ficou decidido?' &&
+      renamedRow &&
+      renamedFile === 'Conversa renomeada' &&
+      editing &&
+      edited.done &&
+      afterEdit?.messages.length === lengthBeforeEdit &&
+      lastQuestion === 'E quais decisões ficaram?',
+    detail: `conversa ${chatId}; teclado do escopo: 1 parada de Tab=${tabStops === 1}, ↓=${arrowed}, End=${ended}; escolhidas vazio: aviso=${blocked}, Enviar desligado=${sendDisabled}, nada enviado=${nothingSent}; menu "…" pelo teclado ${JSON.stringify(menuKeys)}, Esc fechou=${menuClosed}; painel=${panel}, consultadas no painel=${panelConsulted}, totais "${totals}"; escopo salvo ${JSON.stringify(savedScope)}, rótulo=${scoped}; processo do escopo em ${scopedSpawn ? scopedSpawn.cwd.replace(ctx.userDataDir, '<userData>') : '?'} com ${JSON.stringify(scopeFiles)}, anterior saiu=${previous?.exited ?? '?'}, resposta "${scopedAnswer.answer.slice(0, 80)}"; modelo -> ${opusSpawn?.args[opusSpawn.args.indexOf('--model') + 1] ?? '?'}, rodapé "${opusFooter.slice(0, 40)}"; Refazer: processo novo=${redoSpawn !== opusSpawn}, mensagens ${lengthBefore} -> ${afterRedo?.messages.length ?? '?'}; renomear: linha=${renamedRow}, arquivo "${renamedFile ?? '?'}"; ↑: editando=${editing}, mensagens ${lengthBeforeEdit} -> ${afterEdit?.messages.length ?? '?'}, última pergunta "${lastQuestion ?? '?'}"`,
   }
 }
 
@@ -2610,7 +2886,7 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
   let summaryMeasured: SummaryMeasured | null = null
   /** Contrato 10: lista com prévia do resumo (nos dois temas) e busca (no claro). */
   const meetingsList: Record<string, Check> = {}
-  /** Contrato 15: chat "Perguntar" (nos dois temas), "Parar" e a aba do detalhe (no claro). */
+  /** Contratos 15 e 16: chat "Perguntar" e os detalhes da resposta (nos dois temas); "Parar", o painel "Contexto" e a aba do detalhe (no claro). */
   const chat: Record<string, Check> = {}
 
   // A fixture da sessão real, reduzida pelo mesmo redutor do app: a mesma dos testes (CA4) e do smoke.
@@ -2808,9 +3084,24 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
 
       // Contrato 15: a tela "Perguntar" com o `claude` falso em modo chat (acervo refeito a partir das reuniões
       // semeadas); no claro também "Parar", o link `meeting:` e a aba "Perguntar" do detalhe.
-      chat[themeName === 'light' ? 'screen' : 'screenDark'] = await chatScreenCheck(contents, ctx, () => shoot('perguntar', 'perguntar'))
+      // Contrato 16: a resposta com "Pensando…", passos, raciocínio e rodapé nos dois temas; no claro também a
+      // conversa vazia, o painel "Contexto" com o escopo, o modelo, "Refazer", renomear e ↑.
+      const extraShot = async (name: string): Promise<void> => {
+        await settle(contents)
+        screenshots.push(await capture(win, ctx.outDir, name))
+      }
+      const chatScreen = await chatScreenCheck(
+        contents,
+        ctx,
+        () => shoot('perguntar', 'perguntar'),
+        () => shoot('perguntar-v2', 'perguntar'),
+        themeName === 'light' ? () => extraShot('perguntar-vazio-light') : null,
+      )
+      chat[themeName === 'light' ? 'screen' : 'screenDark'] = chatScreen.check
+      chat[themeName === 'light' ? 'details' : 'detailsDark'] = chatScreen.v2
       if (themeName === 'light') {
         chat['stop'] = await chatStopCheck(contents, ctx)
+        chat['context'] = await chatContextCheck(contents, ctx, () => extraShot('perguntar-contexto-light'))
         chat['meeting'] = await chatMeetingCheck(contents, ctx)
       }
 
@@ -2926,7 +3217,7 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
   for (const [name, check] of Object.entries(meetingsList)) if (!check.ok) failures.push(`lista de reuniões ${name}: ${check.detail}`)
   for (const name of ['list', 'listDark', 'search']) if (!meetingsList[name]) failures.push(`lista de reuniões ${name}: não executado`)
   for (const [name, check] of Object.entries(chat)) if (!check.ok) failures.push(`chat ${name}: ${check.detail}`)
-  for (const name of ['screen', 'screenDark', 'stop', 'meeting']) if (!chat[name]) failures.push(`chat ${name}: não executado`)
+  for (const name of ['screen', 'screenDark', 'details', 'detailsDark', 'stop', 'context', 'meeting']) if (!chat[name]) failures.push(`chat ${name}: não executado`)
   for (const name of ['configuracoes', 'gravacao', 'detalhe']) {
     const check = layout[name]
     if (!check) failures.push(`medidas ${name}: não executado`)
@@ -2948,8 +3239,8 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
   if (!motion.ok) failures.push(`movimento reduzido: ${motion.detail}`)
   // Mais o aviso de sistema sem som, nos dois temas, o eco removido, os arquivos no detalhe, a aba
   // "Áudio" depois de baixar, a barra com a marca própria, o bloco "Atualizações" e a busca na lista
-  // (só no claro).
-  const expectedShots = SCREENS.length * THEMES.length + 8
+  // (só no claro), e a conversa vazia e o painel "Contexto" do "Perguntar" v2 (só no claro).
+  const expectedShots = SCREENS.length * THEMES.length + 10
   if (screenshots.length !== expectedShots) failures.push(`${screenshots.length} PNGs em vez de ${expectedShots}`)
   for (const shot of screenshots) {
     if (shot.width < 1120 || shot.height < 740) failures.push(`${shot.name}: ${shot.width}x${shot.height} abaixo de 1120x740`)

@@ -3,10 +3,14 @@
 // ele lê o índice e abre o que precisa. Atualizado ao salvar, renomear ou excluir a reunião e ao mudar o
 // resumo ou as anotações; reconstruído inteiro quando a pasta ou o índice somem. Pasta 0700, arquivos 0600,
 // gravação atômica (temporário + `rename`) numa fila, como os outros stores. Nada daqui vai para log.
+//
+// Contrato 16: a conversa da tela "Perguntar" com escopo menor que "Todas as reuniões" (últimos 7 ou 30 dias,
+// ou as reuniões escolhidas) roda em `userData/chat-scope/<id da conversa>/`, só com os `.md` do escopo e um
+// `INDICE.md` deles, com as mesmas permissões e a mesma limpeza das pastas da conversa de uma reunião.
 import { randomUUID } from 'node:crypto'
 import { chmod, copyFile, mkdir, readdir, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { MEETING_LINK_SCHEME } from '../../shared/chat'
+import { CHAT_SCOPE_MEETINGS_MAX, MEETING_LINK_SCHEME, type ChatScope } from '../../shared/chat'
 import { notesInOrder, type MeetingNote } from '../../shared/meeting-notes'
 import { escapeHeadings, taskLine, type MeetingSummary } from '../../shared/meeting-summary'
 import type { Meeting } from '../../shared/meetings'
@@ -113,6 +117,22 @@ export function corpusIndexMarkdown(entries: readonly { meeting: Meeting; summar
   return `${lines.join('\n')}\n`
 }
 
+const DAY_MS = 86_400_000
+
+/**
+ * Reuniões de um escopo (contrato 16, CA4): `7d` e `30d` contam do início da reunião até agora; `meetings`
+ * fica com as escolhidas que ainda existem (até 50), na ordem da lista; `all` são todas.
+ */
+export function scopeMeetingIds(scope: ChatScope, meetings: readonly Pick<Meeting, 'id' | 'startedAt'>[], now: number): string[] {
+  if (scope.kind === 'all') return meetings.map((meeting) => meeting.id)
+  if (scope.kind === 'meetings') {
+    const chosen = new Set((scope.meetingIds ?? []).slice(0, CHAT_SCOPE_MEETINGS_MAX))
+    return meetings.filter((meeting) => chosen.has(meeting.id)).map((meeting) => meeting.id)
+  }
+  const since = now - (scope.kind === '7d' ? 7 : 30) * DAY_MS
+  return meetings.filter((meeting) => Date.parse(meeting.startedAt) >= since).map((meeting) => meeting.id)
+}
+
 export interface ChatCorpusDeps {
   /** `userData`. */
   dir: string
@@ -141,6 +161,11 @@ export interface ChatCorpus {
    * reunião não existe.
    */
   scope(meetingId: string, key: string): Promise<string | null>
+  /**
+   * Pasta temporária `userData/chat-scope/<chave>/` com os `.md` das reuniões dadas e um `INDICE.md` só
+   * delas (contrato 16). Reunião que não existe fica de fora.
+   */
+  scopeMany(meetingIds: readonly string[], key: string): Promise<string | null>
   /** Apaga a pasta temporária de uma conversa. */
   dropScope(key: string): Promise<void>
   /** Ao abrir o app: apaga as pastas temporárias que sobraram. */
@@ -195,16 +220,36 @@ export function createChatCorpus(deps: ChatCorpusDeps): ChatCorpus {
     for (const name of await files()) if (name.endsWith(suffix) && name !== keep) await rm(join(dir, name), { force: true })
   }
 
-  /** Pastas de conversa abertas desta reunião: a cópia do `.md` é trocada pela atual. */
-  async function refreshScopes(meeting: Meeting): Promise<void> {
+  /** Índice de uma pasta de escopo: as reuniões cujos `.md` estão nela. */
+  async function writeScopeIndex(target: string, ids: readonly string[]): Promise<void> {
+    const wanted = new Set(ids)
+    const meetings = (await deps.meetings.list()).filter((meeting) => wanted.has(meeting.id))
+    const entries = await Promise.all(meetings.map(async (meeting) => ({ meeting, summary: await deps.summaries.get(meeting.id).catch(() => null) })))
+    const file = join(target, CHAT_INDEX_FILE)
+    await writeAtomic(file, corpusIndexMarkdown(entries))
+    await chmod(file, 0o600)
+  }
+
+  /** Ids das reuniões cujos `.md` estão numa pasta. */
+  const idsIn = (names: readonly string[]): string[] =>
+    names.flatMap((file) => {
+      const id = file !== CHAT_INDEX_FILE ? /^.* - ([\w-]{1,200})\.md$/.exec(file)?.[1] : undefined
+      return id ? [id] : []
+    })
+
+  /**
+   * Pastas de conversa abertas com esta reunião: a cópia do `.md` é trocada pela atual (ou apagada, com
+   * `meeting` nulo) e o `INDICE.md` delas, quando há, é reescrito.
+   */
+  async function refreshScopes(meetingId: string, meeting: Meeting | null): Promise<void> {
     let folders: string[]
     try {
       folders = await readdir(scopes)
     } catch {
       return
     }
-    const suffix = corpusFileSuffix(meeting.id)
-    const name = corpusFileName(meeting)
+    const suffix = corpusFileSuffix(meetingId)
+    const name = meeting ? corpusFileName(meeting) : null
     for (const folder of folders) {
       const target = join(scopes, folder)
       let names: string[]
@@ -214,9 +259,12 @@ export function createChatCorpus(deps: ChatCorpusDeps): ChatCorpus {
         continue
       }
       if (!names.some((file) => file.endsWith(suffix))) continue
-      await copyFile(join(dir, name), join(target, name))
-      await chmod(join(target, name), 0o600)
+      if (name) {
+        await copyFile(join(dir, name), join(target, name))
+        await chmod(join(target, name), 0o600)
+      }
       for (const file of names) if (file.endsWith(suffix) && file !== name) await rm(join(target, file), { force: true })
+      if (names.includes(CHAT_INDEX_FILE)) await writeScopeIndex(target, idsIn(await readdir(target)))
     }
   }
 
@@ -264,11 +312,12 @@ export function createChatCorpus(deps: ChatCorpusDeps): ChatCorpus {
           else await dropOld(meetingId, null)
           await writeIndex()
         }
-        if (meeting) await refreshScopes(meeting)
+        await refreshScopes(meetingId, meeting)
       }),
 
     remove: (meetingId) =>
       serial(async () => {
+        await refreshScopes(meetingId, null)
         if (!(await exists(dir))) return
         await dropOld(meetingId, null)
         await writeIndex()
@@ -299,10 +348,34 @@ export function createChatCorpus(deps: ChatCorpusDeps): ChatCorpus {
         return target
       }),
 
-    dropScope: async (key) => {
-      const folder = safeKey(key)
-      if (folder) await rm(join(scopes, folder), { recursive: true, force: true })
-    },
+    scopeMany: (meetingIds, key) =>
+      serial(async () => {
+        const folder = safeKey(key)
+        if (!folder) return null
+        const wanted = new Set(meetingIds)
+        const meetings = (await deps.meetings.list()).filter((meeting) => wanted.has(meeting.id))
+        await ensureDir(dir)
+        const target = join(scopes, folder)
+        await ensureDir(scopes)
+        await rm(target, { recursive: true, force: true })
+        await ensureDir(target)
+        for (const meeting of meetings) {
+          const name = corpusFileName(meeting)
+          // O `.md` do acervo é a fonte; faltando (acervo antigo), é escrito agora.
+          if (!(await exists(join(dir, name)))) await writeMeeting(meeting)
+          await copyFile(join(dir, name), join(target, name))
+          await chmod(join(target, name), 0o600)
+        }
+        await writeScopeIndex(target, meetings.map((meeting) => meeting.id))
+        return target
+      }),
+
+    // Na fila: a pasta apagada ao fechar uma conversa nunca some depois de a próxima pergunta montá-la de novo.
+    dropScope: (key) =>
+      serial(async () => {
+        const folder = safeKey(key)
+        if (folder) await rm(join(scopes, folder), { recursive: true, force: true })
+      }),
 
     clearScopes: () => rm(scopes, { recursive: true, force: true }),
   }
