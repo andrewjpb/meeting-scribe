@@ -33,3 +33,55 @@ export const netDownload: DownloadRequest = (url, { headers, allowRedirect, sign
     request.on('error', reject)
     request.end()
   })
+
+/** Tarball maior que isto não é um pacote do agente (os fixos têm até ~1,6 MB). */
+const TARBALL_MAX_BYTES = 50 * 1024 * 1024
+
+/**
+ * Download dos pacotes do agente ACP (contrato 17): só `https://registry.npmjs.org/`, sem redirecionamento,
+ * sem cookie, até 50 MB e 60 s.
+ */
+export function netDownloadTarball(url: string, onBytes: (count: number) => void): Promise<Uint8Array> {
+  if (!url.startsWith('https://registry.npmjs.org/')) return Promise.reject(new Error('endereço fora do registro do npm'))
+  return new Promise((resolve, reject) => {
+    const request = net.request({ url, method: 'GET', redirect: 'error', credentials: 'omit', useSessionCookies: false })
+    const timer = setTimeout(() => {
+      request.abort()
+      reject(new Error('o registro do npm não respondeu'))
+    }, 60_000)
+    request.on('response', (response) => {
+      if (response.statusCode !== 200) {
+        clearTimeout(timer)
+        request.abort()
+        reject(new Error(`o registro respondeu ${response.statusCode}`))
+        return
+      }
+      const chunks: Buffer[] = []
+      let total = 0
+      response.on('data', (chunk: Buffer) => {
+        total += chunk.length
+        if (total > TARBALL_MAX_BYTES) {
+          clearTimeout(timer)
+          request.abort()
+          reject(new Error('arquivo grande demais'))
+          return
+        }
+        chunks.push(chunk)
+        onBytes(chunk.length)
+      })
+      response.on('end', () => {
+        clearTimeout(timer)
+        resolve(Buffer.concat(chunks))
+      })
+      response.on('error', (error: Error) => {
+        clearTimeout(timer)
+        reject(error)
+      })
+    })
+    request.on('error', (error) => {
+      clearTimeout(timer)
+      reject(error)
+    })
+    request.end()
+  })
+}

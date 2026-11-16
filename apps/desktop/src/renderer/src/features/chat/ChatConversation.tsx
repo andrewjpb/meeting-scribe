@@ -1,9 +1,10 @@
-import { ArrowDown, ArrowUp, MessageCircle, PanelRight, Settings, Square } from 'lucide-react'
+import { ArrowDown, ArrowUp, Brain, MessageCircle, PanelRight, Settings, Square } from 'lucide-react'
 import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent } from 'react'
 import { useNavigate } from 'react-router'
 import { CHAT_COUNTER_FROM, CHAT_TEXT_MAX, CHAT_TITLE_MAX, DEFAULT_CHAT_SCOPE, type ChatMessage, type ChatScope, type ChatScopeKind } from '@shared/chat'
 import { ROUTE_PATHS } from '@shared/routes'
 import type { ChatModel } from '@shared/settings-defaults'
+import { useSettings } from '../../app/settingsStore'
 import { Button } from '../../design/Button'
 import { EditableTitle } from '../../design/EditableTitle'
 import { Icon } from '../../design/Icon'
@@ -86,6 +87,9 @@ export function ChatConversation({ chatId, meetingId, meetings, contextOpen, onC
   /** "Reuniões escolhidas" sem nenhuma (que ainda exista): nada é enviado. */
   const noneChosen = !meetingId && scope.kind === 'meetings' && chosenMeetings(scope, exists).length === 0
   const model: ChatModel = chat?.model ?? draft.model ?? defaultModel
+  // "Pensar mais" (contrato 17, CA5): só pelo agente do ACP, que expõe o esforço como opção da sessão.
+  const thinkMore = chat ? chat.thinkMore : draft.thinkMore
+  const viaAgent = useSettings((state) => state.settings.claudeTransport) === 'acp'
   const lastUser = messages.findLastIndex((message) => message.role === 'user')
   const lastAssistant = messages.findLastIndex((message) => message.role === 'assistant')
 
@@ -228,6 +232,10 @@ export function ChatConversation({ chatId, meetingId, meetings, contextOpen, onC
   const changeModel = (next: ChatModel): void => {
     if (chatId) void useChat.getState().update(chatId, { model: next })
     else useChat.getState().setDraft(meetingId, { model: next })
+  }
+  const toggleThinkMore = (): void => {
+    if (chatId) void useChat.getState().update(chatId, { thinkMore: !thinkMore })
+    else useChat.getState().setDraft(meetingId, { thinkMore: !thinkMore })
   }
   const pickScope = (kind: ChatScopeKind): void => {
     changeScope(kind === 'meetings' ? { kind, meetingIds: scope.meetingIds ?? [] } : { kind })
@@ -401,6 +409,19 @@ export function ChatConversation({ chatId, meetingId, meetings, contextOpen, onC
                   </option>
                 ))}
               </select>
+              {viaAgent && (
+                <button
+                  type="button"
+                  data-action="chat-think-more"
+                  aria-pressed={thinkMore}
+                  title="Esforço alto: o Claude pensa mais antes de responder (mais lento)."
+                  onClick={toggleThinkMore}
+                  className={`${BAR_SELECT} inline-flex items-center gap-1.5 ${thinkMore ? 'border-title bg-title font-medium text-bg hover:bg-title' : ''}`}
+                >
+                  <Icon icon={Brain} size={14} />
+                  Pensar mais
+                </button>
+              )}
               {!meetingId && (
                 <>
                   <label className="sr-only" htmlFor={`chat-scope-${key}`}>

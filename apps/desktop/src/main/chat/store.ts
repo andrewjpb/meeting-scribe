@@ -5,15 +5,22 @@
 // os detalhes (modelo, tempo, tokens, custo, consultadas) e o modelo pedido; a conversa guarda o escopo e o
 // modelo. Arquivo do contrato 15, sem esses campos, carrega com os padrões (escopo "Todas", modelo das
 // Configurações).
+// Contrato 17: cada passo pode ter o id e o estado da chamada de ferramenta do ACP; a resposta guarda o
+// "Plano" do agente; a conversa guarda "Pensar mais" (padrão desligado).
 import { randomUUID } from 'node:crypto'
 import { chmod, mkdir, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { z } from 'zod'
 import {
+  CHAT_ERRORS,
   CHAT_MESSAGES_MAX,
+  CHAT_PLAN_MAX,
+  CHAT_PLAN_STATUSES,
+  CHAT_PLAN_TEXT_MAX,
   CHAT_SCOPE_KINDS,
   CHAT_SCOPE_MEETINGS_MAX,
   CHAT_STEP_LABEL_MAX,
+  CHAT_STEP_STATUSES,
   CHAT_STEP_TOOLS,
   CHAT_STEPS_MAX,
   CHAT_TEXT_MAX,
@@ -36,6 +43,13 @@ export const chatStepSchema = z.object({
   tool: z.enum(CHAT_STEP_TOOLS),
   label: z.string().max(CHAT_STEP_LABEL_MAX),
   meetingId: meetingIdSchema.nullable(),
+  id: z.string().max(200).optional(),
+  status: z.enum(CHAT_STEP_STATUSES).optional(),
+})
+
+export const chatPlanEntrySchema = z.object({
+  content: z.string().max(CHAT_PLAN_TEXT_MAX),
+  status: z.enum(CHAT_PLAN_STATUSES),
 })
 
 export const chatMetaSchema = z.object({
@@ -62,10 +76,11 @@ const messageSchema = z.object({
   role: z.enum(['user', 'assistant']),
   text: z.string().max(CHAT_TEXT_MAX),
   at: isoDate,
-  error: z.enum(['stopped', 'timeout', 'failed', 'not-found']).optional(),
+  error: z.enum(CHAT_ERRORS).optional(),
   steps: z.array(chatStepSchema).max(CHAT_STEPS_MAX).optional(),
   thinking: z.string().max(CHAT_THINKING_MAX).optional(),
   denied: z.number().int().min(0).max(1e6).optional(),
+  plan: z.array(chatPlanEntrySchema).max(CHAT_PLAN_MAX).optional(),
   meta: chatMetaSchema.optional(),
   model: z.enum(CHAT_MODELS).optional(),
 })
@@ -79,6 +94,8 @@ export const chatSchema = z.object({
   // Contrato 15 não tinha escopo nem modelo: "Todas as reuniões" e o modelo das Configurações.
   scope: chatScopeSchema.default({ kind: 'all' }),
   model: z.enum(CHAT_MODELS).nullable().default(null),
+  // Contrato 17: "Pensar mais" desligado nas conversas que não tinham o campo.
+  thinkMore: z.boolean().default(false),
 })
 
 export interface ChatStore {

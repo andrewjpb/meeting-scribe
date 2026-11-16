@@ -1,6 +1,9 @@
 // O que os canais do Claude CLI pedem ao main, sem Electron: localizar, escolher o caminho, abrir o
 // processo da gravação, traduzir um trecho e encerrar. Um tradutor por vez (uma gravação por vez); abrir
 // outro mata o anterior. Pedidos do renderer são validados aqui antes de qualquer processo.
+//
+// Contrato 17: com a "Conexão com o Claude" no agente (padrão), a gravação traduz por uma sessão ACP
+// (`acp/translator.ts`), com as mesmas regras e os mesmos canais; com "Linha de comando", nada muda.
 import { mkdir } from 'node:fs/promises'
 import { join } from 'node:path'
 import { z } from 'zod'
@@ -9,11 +12,19 @@ import type { AppSettings } from '../../shared/settings-defaults'
 import { TRANSLATE_TEXT_MAX } from '../assemblyai/translation'
 import { claudePathSchema } from '../settings/schema'
 import type { SettingsStore } from '../settings/store'
+import type { AcpOpenResult, AcpSessionRequest } from '../acp/agent'
+import { AcpTranslator } from '../acp/translator'
 import { claudeEnv, locateClaude, type ExecFile } from './locate'
 import { ClaudeTranslator, type SpawnClaude, type Timers } from './translator'
 
 /** Pasta vazia onde o `claude` roda: nada do projeto nem do usuário fica ao alcance dele. */
 export const CLAUDE_CWD_DIR = 'claude-cwd'
+/** Pastas vazias próprias da tradução e do resumo pelo ACP, dentro de `claude-cwd` (contrato 17). */
+export const ACP_TRANSLATE_DIR = 'translate'
+export const ACP_SUMMARY_DIR = 'summary'
+
+/** O que a gravação usa de um tradutor, pela linha de comando ou pelo ACP. */
+type Translator = Pick<ClaudeTranslator, 'start' | 'translate' | 'stop' | 'kill'>
 
 const translateSchema = z
   .object({
@@ -34,6 +45,10 @@ export interface ClaudeServiceDeps {
   baseEnv: NodeJS.ProcessEnv
   exec: ExecFile
   spawn: SpawnClaude
+  /** Fábrica de sessões do ACP para o `claude` encontrado (contrato 17). Sem ela, sempre a linha de comando. */
+  openAcp?: (claudePath: string) => (request: AcpSessionRequest) => Promise<AcpOpenResult>
+  /** O agente está instalado? Sem ele, a gravação traduz pela linha de comando (e a tela avisa). */
+  acpAvailable?: () => boolean | Promise<boolean>
   /** Smoke: lista fixa trocada pelo binário falso e sem shell de login. */
   candidates?: readonly string[]
   loginShell?: boolean
@@ -54,7 +69,7 @@ export interface ClaudeService {
 }
 
 export function createClaudeService(deps: ClaudeServiceDeps): ClaudeService {
-  let translator: ClaudeTranslator | null = null
+  let translator: Translator | null = null
   /** Abertura em andamento: um trecho que chega antes de o processo abrir espera por ela. */
   let starting: Promise<unknown> | null = null
 
@@ -125,9 +140,26 @@ export function createClaudeService(deps: ClaudeServiceDeps): ClaudeService {
     if (!settings.translationEnabled || settings.translationEngine !== 'claude-cli') return { ok: false, error: 'disabled' }
     const found = await locateWith(settings.claudePath)
     if (!found.ok) return found
+    if (settings.claudeTransport === 'acp' && deps.openAcp && ((await deps.acpAvailable?.()) ?? true)) {
+      const cwd = join(deps.userData, CLAUDE_CWD_DIR, ACP_TRANSLATE_DIR)
+      await mkdir(cwd, { recursive: true, mode: 0o700 })
+      const acpTranslator = new AcpTranslator({
+        open: deps.openAcp(found.path),
+        model: settings.claudeModel,
+        sourceLanguage: settings.sourceLanguage,
+        targetLanguage: settings.targetLanguage,
+        cwd,
+        ...(deps.onState ? { onState: deps.onState } : {}),
+        ...(deps.log ? { log: deps.log } : {}),
+        ...(deps.timers ? { timers: deps.timers } : {}),
+      })
+      translator = acpTranslator
+      acpTranslator.start()
+      return { ok: true, version: found.version }
+    }
     const cwd = join(deps.userData, CLAUDE_CWD_DIR)
     await mkdir(cwd, { recursive: true, mode: 0o700 })
-    translator = new ClaudeTranslator({
+    const cliTranslator = new ClaudeTranslator({
       binaryPath: found.path,
       model: settings.claudeModel,
       sourceLanguage: settings.sourceLanguage,
@@ -139,7 +171,8 @@ export function createClaudeService(deps: ClaudeServiceDeps): ClaudeService {
       ...(deps.log ? { log: deps.log } : {}),
       ...(deps.timers ? { timers: deps.timers } : {}),
     })
-    translator.start()
+    translator = cliTranslator
+    cliTranslator.start()
     return { ok: true, version: found.version }
   }
 }

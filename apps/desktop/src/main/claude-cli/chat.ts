@@ -338,10 +338,12 @@ export class ClaudeChat {
     })
   }
 
-  /** "Parar": a resposta em curso termina como `stopped` e o processo morre. */
-  stop(): void {
+  /** "Parar": a resposta em curso termina como `stopped` e o processo morre; `true` se havia resposta. */
+  stop(): boolean {
+    const answering = this.asking !== null
     this.finish({ ok: false, error: 'stopped' })
     this.retire()
+    return answering
   }
 
   /** Fechar a conversa ou sair do app: mata o processo; nada mais abre. */

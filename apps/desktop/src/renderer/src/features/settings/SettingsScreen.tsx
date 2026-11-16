@@ -1,4 +1,5 @@
-import { LANGUAGE_CODES, type ChatModel, type ClaudeModel, type LanguageCode, type ThemeSetting, type TranslationEngine } from '@shared/settings-defaults'
+import { LANGUAGE_CODES, type ChatModel, type ClaudeModel, type ClaudeTransport, type LanguageCode, type ThemeSetting, type TranslationEngine } from '@shared/settings-defaults'
+import { useAgentLabel } from '../../app/agentLabel'
 import { useSettings } from '../../app/settingsStore'
 import { Select } from '../../design/Field'
 import { PageHeader } from '../../design/PageHeader'
@@ -6,6 +7,7 @@ import { Section } from '../../design/Section'
 import { Segmented } from '../../design/Segmented'
 import { SettingRow } from '../../design/SettingRow'
 import { Switch } from '../../design/Switch'
+import { AcpAgentField } from './AcpAgentField'
 import { ApiKeyField } from './ApiKeyField'
 import { BrandSection } from './BrandSection'
 import { useAudioInputs } from './audioInputs'
@@ -42,6 +44,12 @@ const CLAUDE_MODELS: { value: ClaudeModel; label: string }[] = [
   { value: 'sonnet', label: 'Sonnet' },
 ]
 
+/** "Conexão com o Claude" (contrato 17, CA7): vale para tradução, resumo e chat. */
+const TRANSPORTS: { value: ClaudeTransport; label: string }[] = [
+  { value: 'acp', label: 'Agente (ACP, recomendado)' },
+  { value: 'cli', label: 'Linha de comando' },
+]
+
 const CHAT_MODELS: { value: ChatModel; label: string }[] = [
   { value: 'haiku', label: 'Haiku' },
   { value: 'sonnet', label: 'Sonnet' },
@@ -56,6 +64,8 @@ export function SettingsScreen() {
   const settings = useSettings((state) => state.settings)
   const update = useSettings((state) => state.update)
   const devices = useAudioInputs()
+  // Nome do agente do perfil (contrato 17, CA11).
+  const agentLabel = useAgentLabel()
   const mics = micOptions(devices, settings.micDeviceId)
 
   return (
@@ -146,10 +156,20 @@ export function SettingsScreen() {
 
           {/*
            * Tradução, resumo e o chat "Perguntar" (contrato 15) usam o mesmo `claude`: o estado e o caminho
-           * dele ficam sempre à mão, junto do modelo do chat.
+           * dele ficam sempre à mão, junto da conexão (contrato 17) e do modelo do chat.
            */}
-          <Section title="Claude CLI">
+          <Section title="Claude">
             <ClaudeCliField />
+            <SettingRow name={`Conexão com o ${agentLabel}`} nameId="settings-claude-transport" description={`O agente mostra o raciocínio e os passos do ${agentLabel} direto do protocolo.`}>
+              <Segmented
+                value={settings.claudeTransport}
+                options={TRANSPORTS}
+                labelledBy="settings-claude-transport"
+                dataName="claude-transport-option"
+                onChange={(claudeTransport) => void update({ claudeTransport })}
+              />
+            </SettingRow>
+            <AcpAgentField />
             <SettingRow name="Modelo do chat" nameId="settings-chat-model" description="Usado em Perguntar. O Opus responde melhor e demora mais.">
               <Segmented value={settings.chatModel} options={CHAT_MODELS} labelledBy="settings-chat-model" dataName="chat-model-option" onChange={(chatModel) => void update({ chatModel })} />
             </SettingRow>

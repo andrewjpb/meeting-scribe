@@ -6,8 +6,21 @@
 // Contrato 16: a resposta em curso traz também o raciocínio, os passos, as negações e os detalhes; a
 // conversa nova guarda o escopo e o modelo escolhidos na barra do campo até a primeira pergunta; "Refazer",
 // renomear, trocar escopo ou modelo e "Copiar" passam pelo main.
+//
+// Contrato 17: pelo ACP o mesmo passo volta com estado novo (troca no lugar, pelo id), o "Plano" chega
+// inteiro a cada mudança e a conversa guarda "Pensar mais".
 import { create } from 'zustand'
-import { DEFAULT_CHAT_SCOPE, type Chat, type ChatListItem, type ChatMeta, type ChatProgress, type ChatScope, type ChatSendResult, type ChatStep } from '@shared/chat'
+import {
+  DEFAULT_CHAT_SCOPE,
+  type Chat,
+  type ChatListItem,
+  type ChatMeta,
+  type ChatPlanEntry,
+  type ChatProgress,
+  type ChatScope,
+  type ChatSendResult,
+  type ChatStep,
+} from '@shared/chat'
 import type { ChatModel } from '@shared/settings-defaults'
 
 /** Chave da lista: `all` na tela "Perguntar", o id da reunião na aba do detalhe. */
@@ -22,15 +35,24 @@ export interface LiveAnswer extends ChatProgress {
   thinking: string
   steps: ChatStep[]
   denied: number
+  /** "Plano" do agente (ACP). */
+  plan: ChatPlanEntry[]
   meta: ChatMeta | null
 }
 
-export const emptyAnswer = (): LiveAnswer => ({ text: '', reading: false, thinking: '', steps: [], denied: 0, meta: null })
+export const emptyAnswer = (): LiveAnswer => ({ text: '', reading: false, thinking: '', steps: [], denied: 0, plan: [], meta: null })
 
-/** Escopo e modelo de uma conversa que ainda não existe. */
+/** Passo novo no fim; o mesmo passo (mesmo id, pelo ACP) troca no lugar. */
+export function upsertStep(steps: readonly ChatStep[], step: ChatStep): ChatStep[] {
+  const at = step.id ? steps.findIndex((entry) => entry.id === step.id) : -1
+  return at === -1 ? [...steps, step] : steps.map((entry, index) => (index === at ? step : entry))
+}
+
+/** Escopo, modelo e "Pensar mais" de uma conversa que ainda não existe. */
 export interface ChatDraft {
   scope: ChatScope
   model: ChatModel | null
+  thinkMore: boolean
 }
 
 interface ChatState {
@@ -62,7 +84,7 @@ interface ChatState {
   /** Escopo ou modelo da conversa nova (antes da primeira pergunta). */
   setDraft: (meetingId: string | null, patch: Partial<ChatDraft>) => void
   /** Renomear, trocar escopo ou modelo; devolve se gravou. */
-  update: (id: string, patch: { title?: string; scope?: ChatScope; model?: ChatModel }) => Promise<boolean>
+  update: (id: string, patch: { title?: string; scope?: ChatScope; model?: ChatModel; thinkMore?: boolean }) => Promise<boolean>
   /** "Refazer", "Tentar de novo" e ↑ (com o texto novo). */
   redo: (id: string, text?: string) => Promise<boolean>
   /** "Copiar" a mensagem `index` da conversa. */
@@ -77,7 +99,7 @@ const itemOf = (chat: Chat): ChatListItem => ({ id: chat.id, meetingId: chat.mee
 
 /** O rascunho de uma lista, com os padrões. */
 export function draftOf(state: Pick<ChatState, 'drafts'>, meetingId: string | null): ChatDraft {
-  return state.drafts[listKey(meetingId)] ?? { scope: DEFAULT_CHAT_SCOPE, model: null }
+  return state.drafts[listKey(meetingId)] ?? { scope: DEFAULT_CHAT_SCOPE, model: null, thinkMore: false }
 }
 
 /** Uma vez só: as respostas chegam a qualquer tela. */
@@ -91,7 +113,8 @@ function listen(): void {
         let next: LiveAnswer
         if (event.type === 'answer') next = { ...current, text: event.text, reading: event.reading }
         else if (event.type === 'thinking') next = { ...current, thinking: current.thinking + event.delta }
-        else if (event.type === 'step') next = { ...current, steps: [...current.steps, event.step] }
+        else if (event.type === 'step') next = { ...current, steps: upsertStep(current.steps, event.step) }
+        else if (event.type === 'plan') next = { ...current, plan: event.entries }
         else if (event.type === 'denied') next = { ...current, denied: event.count }
         else next = { ...current, meta: event.meta }
         return { answers: { ...state.answers, [event.chatId]: next } }
@@ -205,7 +228,9 @@ export const useChat = create<ChatState>()((set, get) => {
       try {
         // A conversa nova leva o escopo e o modelo da barra do campo.
         const draft = draftOf(get(), meetingId)
-        const extra = chatId ? {} : { ...(meetingId ? {} : { scope: draft.scope }), ...(draft.model ? { model: draft.model } : {}) }
+        const extra = chatId
+          ? {}
+          : { ...(meetingId ? {} : { scope: draft.scope }), ...(draft.model ? { model: draft.model } : {}), ...(draft.thinkMore ? { thinkMore: true } : {}) }
         const result = await window.__scribeApi.invoke('scribe:chat-send', { chatId, meetingId, text, ...extra })
         return accept(result, key, meetingId, chatId ? chatId : selectedBefore)
       } catch {

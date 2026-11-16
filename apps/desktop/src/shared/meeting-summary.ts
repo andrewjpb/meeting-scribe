@@ -34,9 +34,9 @@ export interface MeetingSummary extends SummaryContent {
 
 /**
  * `not-found`: sem `claude`; `timeout`: passou de 3 min; `format`: a resposta não era o JSON pedido;
- * `failed`: o processo falhou ou respondeu com erro.
+ * `failed`: o processo falhou ou respondeu com erro; `agent`: o agente do ACP não abriu (contrato 17).
  */
-export type SummaryError = 'not-found' | 'timeout' | 'format' | 'failed'
+export type SummaryError = 'not-found' | 'timeout' | 'format' | 'failed' | 'agent'
 
 /**
  * Estado do resumo de uma reunião para a aba "Resumo". `empty`: a reunião não tem trecho para resumir.

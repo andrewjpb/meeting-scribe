@@ -1,16 +1,62 @@
-import { Copy, RefreshCw, Sparkles } from 'lucide-react'
+import { Copy, Download, RefreshCw, Sparkles, Terminal } from 'lucide-react'
 import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { acpReady } from '@shared/acp'
 import { summaryDateLabel, type MeetingSummary, type SummaryError } from '@shared/meeting-summary'
+import { useAcp } from '../../app/acpStore'
+import { useAgentLabel } from '../../app/agentLabel'
+import { useSettings } from '../../app/settingsStore'
 import { Button } from '../../design/Button'
 import { Icon } from '../../design/Icon'
+import { Note, NOTE_ACTION_CLASS } from '../../design/Note'
 import { RetryNotice } from '../live/Notices'
 import type { SummaryView } from './useSummary'
 
 /** Motivo curto do erro, depois de "Não foi possível gerar o resumo." */
-export function summaryErrorReason(error: SummaryError): string {
+export function summaryErrorReason(error: SummaryError, agentLabel = 'Claude'): string {
   if (error === 'not-found') return 'Configure o Claude CLI em Configurações.'
   if (error === 'timeout') return 'O Claude demorou demais.'
+  if (error === 'agent') return `O agente do ${agentLabel} não abriu.`
   return 'Tente de novo.'
+}
+
+/**
+ * Contrato 17: com a conexão no agente e ele não instalado, o resumo sai pela linha de comando; um aviso
+ * discreto oferece instalar (nunca baixa sem o clique).
+ */
+function AcpFallbackNote() {
+  const transport = useSettings((state) => state.settings.claudeTransport)
+  const acp = useAcp((state) => state.status)
+  useEffect(() => {
+    if (transport === 'acp') void useAcp.getState().load()
+  }, [transport])
+  if (transport !== 'acp' || !acp || acpReady(acp)) return null
+  return (
+    <Note
+      id="summary-acp-missing"
+      icon={Download}
+      action={
+        acp.state === 'installing' ? undefined : (
+          <button type="button" data-action="acp-install-from-summary" className={NOTE_ACTION_CLASS} onClick={() => void useAcp.getState().install()}>
+            Instalar
+          </button>
+        )
+      }
+    >
+      {acp.state === 'installing' ? `Instalando o agente do ${acp.label}… ${acp.progress}%` : `O resumo usa a linha de comando: o agente do ${acp.label} não está instalado.`}
+    </Note>
+  )
+}
+
+/** O agente não abriu (contrato 17, CA8): troca a conexão para a linha de comando. */
+function UseCommandLine() {
+  const update = useSettings((state) => state.update)
+  const transport = useSettings((state) => state.settings.claudeTransport)
+  if (transport === 'cli') return null
+  return (
+    <Button action="use-command-line" variant="secondary" icon={Terminal} onClick={() => void update({ claudeTransport: 'cli' })}>
+      Usar a linha de comando
+    </Button>
+  )
 }
 
 /** Coluna da aba: mesma largura e margens da transcrição, rolando sozinha. */
@@ -18,6 +64,7 @@ function Column({ children, state }: { children: ReactNode; state: string }) {
   return (
     <div data-summary-scroll className="min-h-0 flex-1 overflow-y-auto px-10 pb-10">
       <div data-summary={state} aria-live="polite" className="mx-auto flex w-full max-w-[680px] flex-col gap-8 pt-7">
+        <AcpFallbackNote />
         {children}
       </div>
     </div>
@@ -30,6 +77,7 @@ function Column({ children, state }: { children: ReactNode; state: string }) {
  * avisa. Sem resumo, "Gerar resumo"; reunião sem trecho, o botão fica desligado.
  */
 export function SummaryTab({ meetingId, view, onGenerate }: { meetingId: string; view: SummaryView; onGenerate: () => void }) {
+  const agentLabel = useAgentLabel()
   if (view.state === 'loading') return <div className="flex-1" aria-busy="true" />
 
   if (view.state === 'generating') {
@@ -66,7 +114,12 @@ export function SummaryTab({ meetingId, view, onGenerate }: { meetingId: string;
   return (
     <Column state={view.state}>
       {view.state === 'error' && (
-        <RetryNotice id="summary-failed" text={`Não foi possível gerar o resumo. ${summaryErrorReason(view.error)}`} onRetry={onGenerate} />
+        <RetryNotice id="summary-failed" text={`Não foi possível gerar o resumo. ${summaryErrorReason(view.error, agentLabel)}`} onRetry={onGenerate} />
+      )}
+      {view.state === 'error' && view.error === 'agent' && (
+        <div className="-mt-4">
+          <UseCommandLine />
+        </div>
       )}
       {summary && <SummaryContent meetingId={meetingId} summary={summary} onGenerate={onGenerate} />}
     </Column>

@@ -9,12 +9,23 @@ export const TRANSLATION_ENGINES = ['assemblyai', 'claude-cli'] as const
 export const CLAUDE_MODELS = ['haiku', 'sonnet'] as const
 /** Modelos do chat sobre as reuniões (contrato 15): também aliases do `claude --model`. */
 export const CHAT_MODELS = ['haiku', 'sonnet', 'opus'] as const
+/**
+ * Como o app fala com o Claude na tradução, no resumo e no chat (contrato 17): o agente oficial pelo ACP
+ * (padrão) ou a linha de comando `claude -p` dos contratos 05, 08 e 16, que fica de reserva.
+ */
+export const CLAUDE_TRANSPORTS = ['acp', 'cli'] as const
+/** Perfil do agente ACP (contrato 17, CA11): só o Claude por enquanto. */
+export const AGENT_PROFILES = ['claude'] as const
 
 export type LanguageCode = (typeof LANGUAGE_CODES)[number]
 export type ThemeSetting = (typeof THEME_SETTINGS)[number]
 export type TranslationEngine = (typeof TRANSLATION_ENGINES)[number]
 export type ClaudeModel = (typeof CLAUDE_MODELS)[number]
 export type ChatModel = (typeof CHAT_MODELS)[number]
+export type ClaudeTransport = (typeof CLAUDE_TRANSPORTS)[number]
+export type AgentProfileId = (typeof AGENT_PROFILES)[number]
+/** Nome de cada agente na tela ("Conexão com o Claude"); o perfil do main usa o mesmo. */
+export const AGENT_PROFILE_LABELS: Readonly<Record<AgentProfileId, string>> = { claude: 'Claude' }
 
 export interface AppSettings {
   translationEnabled: boolean
@@ -33,6 +44,10 @@ export interface AppSettings {
   chatModel: ChatModel
   /** Caminho do `claude` escolhido pelo usuário; `null` procura sozinho. */
   claudePath: string | null
+  /** "Conexão com o Claude" (contrato 17): vale para tradução, resumo e chat. */
+  claudeTransport: ClaudeTransport
+  /** Qual agente o ACP sobe (contrato 17, CA11). */
+  agentProfile: AgentProfileId
   /** Grava o áudio e a transcrição de cada reunião numa pasta do Mac (contrato 07). */
   saveToFolder: boolean
   /** Pasta escolhida pelo diálogo do main; `null` é `~/Documents/Meeting Scribe`. */
@@ -75,6 +90,8 @@ export const DEFAULT_SETTINGS: Readonly<AppSettings> = Object.freeze({
   claudeModel: 'haiku',
   chatModel: 'sonnet',
   claudePath: null,
+  claudeTransport: 'acp',
+  agentProfile: 'claude',
   saveToFolder: true,
   audioFolder: null,
   summarizeOnStop: true,

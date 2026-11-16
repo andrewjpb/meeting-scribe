@@ -25,6 +25,11 @@ export const CHAT_COUNTER_FROM = 2_000
 
 export type ChatRole = 'user' | 'assistant'
 
+/** Itens do "Plano" que o agente manda pelo ACP (contrato 17), guardados com cada resposta. */
+export const CHAT_PLAN_MAX = 50
+/** Texto de cada item do plano. */
+export const CHAT_PLAN_TEXT_MAX = 500
+
 /** Ferramentas de leitura que viram passo na tela. */
 export const CHAT_STEP_TOOLS = ['Read', 'Grep', 'Glob'] as const
 export type ChatStepTool = (typeof CHAT_STEP_TOOLS)[number]
@@ -38,6 +43,23 @@ export interface ChatStep {
   tool: ChatStepTool
   label: string
   meetingId: string | null
+  /**
+   * Pelo ACP (contrato 17): o id da chamada de ferramenta, para o mesmo passo mudar de estado (a tela troca o
+   * passo de mesmo id em vez de acrescentar outro), e o estado dela.
+   */
+  id?: string | undefined
+  status?: ChatStepStatus | undefined
+}
+
+/** Estado de um passo, como o protocolo manda: pendente, em andamento, feito ou falhou. */
+export const CHAT_STEP_STATUSES = ['pending', 'in_progress', 'completed', 'failed'] as const
+export type ChatStepStatus = (typeof CHAT_STEP_STATUSES)[number]
+
+/** Um item do "Plano" do agente (`plan` do ACP), com o estado dele. */
+export const CHAT_PLAN_STATUSES = ['pending', 'in_progress', 'completed'] as const
+export interface ChatPlanEntry {
+  content: string
+  status: (typeof CHAT_PLAN_STATUSES)[number]
 }
 
 /** Detalhes da resposta, do `system/init` e do `result` do `claude` (contrato 16, CA1). */
@@ -71,9 +93,12 @@ export const DEFAULT_CHAT_SCOPE: ChatScope = { kind: 'all' }
 
 /**
  * `stopped`: a pessoa clicou em "Parar"; `timeout`: 3 min sem nenhum dado do processo; `failed`: o processo
- * morreu ou respondeu com erro; `not-found`: o `claude` não foi encontrado.
+ * morreu ou respondeu com erro; `not-found`: o `claude` não foi encontrado; `agent`: o agente do ACP não
+ * abriu (pacote corrompido, versão incompatível; contrato 17, CA8) e a tela oferece a linha de comando;
+ * `agent-missing`: o agente ainda não foi instalado (a tela oferece instalar ou a linha de comando).
  */
-export type ChatError = 'stopped' | 'timeout' | 'failed' | 'not-found'
+export const CHAT_ERRORS = ['stopped', 'timeout', 'failed', 'not-found', 'agent', 'agent-missing'] as const
+export type ChatError = (typeof CHAT_ERRORS)[number]
 
 export interface ChatMessage {
   role: ChatRole
@@ -87,6 +112,8 @@ export interface ChatMessage {
   thinking?: string | undefined
   /** Resposta: ferramentas negadas. */
   denied?: number | undefined
+  /** Resposta pelo ACP: o "Plano" do agente, como ficou no fim (contrato 17). */
+  plan?: ChatPlanEntry[] | undefined
   /** Resposta: modelo, tempo, tokens, custo e reuniões consultadas. */
   meta?: ChatMeta | undefined
   /** Modelo pedido (`--model`) quando a mensagem foi feita. */
@@ -105,6 +132,8 @@ export interface Chat {
   scope: ChatScope
   /** Modelo da conversa; `null` (conversa do contrato 15) segue o "Modelo do chat" das Configurações. */
   model: ChatModel | null
+  /** "Pensar mais" (contrato 17, CA5): esforço alto no agente do ACP; a linha de comando ignora. */
+  thinkMore: boolean
 }
 
 /** Linha da lista de conversas. */
@@ -126,14 +155,16 @@ export interface ChatSendRequest {
   text: string
   scope?: ChatScope | undefined
   model?: ChatModel | undefined
+  thinkMore?: boolean | undefined
 }
 
-/** Renomear, trocar o escopo ou o modelo (vale para a próxima pergunta). */
+/** Renomear, trocar o escopo, o modelo ou "Pensar mais" (vale para a próxima pergunta). */
 export interface ChatUpdateRequest {
   id: string
   title?: string | undefined
   scope?: ChatScope | undefined
   model?: ChatModel | undefined
+  thinkMore?: boolean | undefined
 }
 
 /**
@@ -155,7 +186,10 @@ export interface ChatProgress {
 export type ChatDetail =
   /** Pedaço novo do raciocínio; quem recebe junta os pedaços na ordem. */
   | { type: 'thinking'; delta: string }
+  /** Passo novo, ou (pelo ACP) o mesmo passo, de mesmo `id`, com rótulo ou estado novo. */
   | { type: 'step'; step: ChatStep }
+  /** O "Plano" inteiro do agente, a cada mudança (ACP). */
+  | { type: 'plan'; entries: ChatPlanEntry[] }
   /** Ferramentas negadas até agora nesta resposta. */
   | { type: 'denied'; count: number }
   | { type: 'meta'; meta: ChatMeta }
@@ -172,6 +206,15 @@ export const CHAT_ERROR_TEXT: Readonly<Record<ChatError, string>> = {
   timeout: 'O Claude demorou demais.',
   failed: 'Não foi possível responder. Tente de novo.',
   'not-found': 'Configure o Claude CLI em Configurações.',
+  agent: 'O agente do Claude não abriu.',
+  'agent-missing': 'O agente do Claude não está instalado.',
+}
+
+/** Frase do erro com o nome do agente do perfil (contrato 17, CA11): "O agente do <label> não abriu." */
+export function chatErrorText(error: ChatError, label: string): string {
+  if (error === 'agent') return `O agente do ${label} não abriu.`
+  if (error === 'agent-missing') return `O agente do ${label} não está instalado.`
+  return CHAT_ERROR_TEXT[error]
 }
 
 /** Título da conversa a partir da primeira pergunta: uma linha só, cortada em 80 caracteres. */

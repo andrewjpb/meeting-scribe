@@ -145,10 +145,21 @@ export function extractJsonObject(text: string): unknown {
 
 export type SummaryRunResult =
   | { ok: true; content: SummaryContent; costUsd: number | null; durationMs: number | null }
-  | { ok: false; error: 'timeout' | 'format' | 'failed' }
+  /** `agent`: só pelo ACP, o adaptador não abriu (contrato 17). */
+  | { ok: false; error: 'timeout' | 'format' | 'failed' | 'agent' }
 
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value)
 const numberOrNull = (value: unknown): number | null => (typeof value === 'number' && Number.isFinite(value) ? value : null)
+
+/**
+ * O texto da resposta do Claude: o primeiro objeto JSON (tolera cercas ```json), validado com o esquema do
+ * resumo; qualquer outra coisa é `format`. A linha de comando e o agente do ACP (contrato 17) passam por aqui.
+ */
+export function parseSummaryResult(text: string, costUsd: number | null, durationMs: number | null): SummaryRunResult {
+  const parsed = summaryContentSchema.safeParse(extractJsonObject(text))
+  if (!parsed.success) return { ok: false, error: 'format' }
+  return { ok: true, content: parsed.data, costUsd, durationMs }
+}
 
 /** Saída de `--output-format json`: um objeto `{type: 'result', is_error, result, total_cost_usd…}`. */
 export function parseSummaryOutput(stdout: string): SummaryRunResult {
@@ -159,9 +170,7 @@ export function parseSummaryOutput(stdout: string): SummaryRunResult {
     return { ok: false, error: 'failed' }
   }
   if (!isRecord(message) || message['is_error'] === true || typeof message['result'] !== 'string') return { ok: false, error: 'failed' }
-  const parsed = summaryContentSchema.safeParse(extractJsonObject(message['result']))
-  if (!parsed.success) return { ok: false, error: 'format' }
-  return { ok: true, content: parsed.data, costUsd: numberOrNull(message['total_cost_usd']), durationMs: numberOrNull(message['duration_ms']) }
+  return parseSummaryResult(message['result'], numberOrNull(message['total_cost_usd']), numberOrNull(message['duration_ms']))
 }
 
 export interface RunSummaryOptions {

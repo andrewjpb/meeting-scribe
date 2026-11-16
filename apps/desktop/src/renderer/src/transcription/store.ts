@@ -92,7 +92,7 @@ const translateWithClaude = async (segmentId: string, text: string): Promise<Tra
 const usesClaude = (value: AppSettings | null): boolean => value !== null && value.translationEnabled && value.translationEngine === 'claude-cli'
 
 /** O `claude` não está disponível nesta gravação: os trechos novos ficam sem tradução, sem pedir nada. */
-const claudeUnavailable = (claude: ClaudeStatus): boolean => claude === 'not-found' || claude === 'stopped'
+const claudeUnavailable = (claude: ClaudeStatus): boolean => claude === 'not-found' || claude === 'stopped' || claude === 'agent-failed'
 
 const idleState = (): Pick<TranscriptionState, 'status' | 'segments' | 'pendingTranslations' | 'sources' | 'claude' | 'removeEcho'> => ({
   status: 'idle',

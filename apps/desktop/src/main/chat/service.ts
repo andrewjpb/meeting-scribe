@@ -10,6 +10,11 @@
 // últimas rodam numa pasta só com aquelas reuniões) e modelo; trocar um ou outro fecha o processo (depois da
 // resposta em curso) e a próxima pergunta abre outro com o histórico. "Refazer" tira a última resposta e
 // pergunta de novo num processo novo, só desta conversa.
+//
+// Contrato 17: com a "Conexão com o Claude" no agente (padrão), a conversa fala ACP com o adaptador oficial
+// (`acp/chat.ts`), uma sessão por conversa no mesmo ciclo de vida; trocar o modelo ou "Pensar mais" vale na
+// mesma sessão, pelo protocolo. Com "Linha de comando", nada muda. Uma conversa aberta num transporte e
+// perguntada depois da troca nas Configurações recomeça no outro, com o histórico.
 import { randomUUID } from 'node:crypto'
 import { z } from 'zod'
 import {
@@ -22,12 +27,15 @@ import {
   type ChatListItem,
   type ChatMessage,
   type ChatMeta,
+  type ChatPlanEntry,
   type ChatScope,
   type ChatSendResult,
   type ChatStep,
 } from '../../shared/chat'
 import type { ClaudeLocateResult } from '../../shared/claude-cli'
-import { CHAT_MODELS, type ChatModel } from '../../shared/settings-defaults'
+import { CHAT_MODELS, type ChatModel, type ClaudeTransport } from '../../shared/settings-defaults'
+import type { AcpOpenResult, AcpSessionRequest } from '../acp/agent'
+import { AcpChat, type ChatEngine } from '../acp/chat'
 import { ClaudeChat, type ChatAnswer } from '../claude-cli/chat'
 import { claudeEnv } from '../claude-cli/locate'
 import type { SpawnClaude, Timers } from '../claude-cli/translator'
@@ -50,6 +58,11 @@ export interface ChatServiceDeps {
   locate: () => Promise<ClaudeLocateResult>
   spawn: SpawnClaude
   baseEnv: NodeJS.ProcessEnv
+  /**
+   * Fábrica de sessões do ACP (contrato 17) para o `claude` encontrado. Sem ela, a conversa usa sempre a
+   * linha de comando.
+   */
+  openAcp?: (claudePath: string) => (request: AcpSessionRequest) => Promise<AcpOpenResult>
   /** Resposta crescendo ou terminada, para todas as janelas. */
   onEvent: (event: ChatEvent) => void
   log?: (message: string) => void
@@ -105,6 +118,7 @@ const sendSchema = z
     text: questionSchema,
     scope: chatScopeSchema.optional(),
     model: z.enum(CHAT_MODELS).optional(),
+    thinkMore: z.boolean().optional(),
   })
   .strict()
 const updateSchema = z
@@ -117,6 +131,7 @@ const updateSchema = z
       .optional(),
     scope: chatScopeSchema.optional(),
     model: z.enum(CHAT_MODELS).optional(),
+    thinkMore: z.boolean().optional(),
   })
   .strict()
 const redoSchema = z.object({ id: chatIdSchema, text: questionSchema.optional() }).strict()
@@ -125,7 +140,9 @@ const copySchema = z.object({ id: chatIdSchema, index: z.number().int().min(0).m
 const sameScope = (a: ChatScope, b: ChatScope): boolean => a.kind === b.kind && (a.meetingIds ?? []).join(',') === (b.meetingIds ?? []).join(',')
 
 interface Session {
-  claude: ClaudeChat
+  claude: ChatEngine
+  /** Transporte em que a conversa abriu: trocado nas Configurações, a próxima pergunta recomeça no outro. */
+  transport: ClaudeTransport
   /** Pasta temporária da conversa de uma reunião, apagada quando o processo sai de uso. */
   scope: string | null
   leaveTimer: unknown
@@ -135,8 +152,10 @@ interface Session {
   closeAfter: boolean
   /** Conversa excluída: nada mais é gravado. */
   cancelled: boolean
-  /** Modelo pedido ao processo (`--model`). */
+  /** Modelo pedido ao processo (`--model`) ou à sessão ACP. */
   model: ChatModel
+  /** "Pensar mais" pedido à sessão ACP. */
+  thinkMore: boolean
   /** Títulos das reuniões, para o rótulo "Abrindo «<título>»"; relidos a cada pergunta. */
   titles: Map<string, string>
 }
@@ -194,14 +213,37 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
     else end(id, session)
   }
 
+  /**
+   * Modelo ou "Pensar mais" trocados: pelo ACP, a mesma sessão aplica na próxima pergunta (contrato 17, CA2 e
+   * CA5); pela linha de comando, o processo é refeito.
+   */
+  function reconfigure(id: string, model: ChatModel, thinkMore: boolean): void {
+    const session = sessions.get(id)
+    if (!session) return
+    if (session.model === model && session.thinkMore === thinkMore) return
+    if (session.claude.configure?.(model, thinkMore)) {
+      session.model = model
+      session.thinkMore = thinkMore
+      return
+    }
+    restart(id)
+  }
+
   /** O modelo da conversa; a do contrato 15 (`null`) segue as Configurações. */
   async function modelOf(chat: Chat): Promise<ChatModel> {
     return chat.model ?? (await deps.settings.get()).chatModel
   }
 
   async function openSession(chat: Chat, binaryPath: string): Promise<Session | null> {
+    const { claudeTransport } = await deps.settings.get()
+    const transport: ClaudeTransport = claudeTransport === 'acp' && deps.openAcp ? 'acp' : 'cli'
     const existing = sessions.get(chat.id)
-    if (existing) return existing
+    if (existing && existing.transport === transport) return existing
+    // Conexão trocada nas Configurações: a conversa recomeça no outro transporte, com o histórico.
+    if (existing) {
+      if (existing.answering) return null
+      end(chat.id, existing)
+    }
     let cwd: string
     let scope: string | null = null
     let folder: 'all' | 'subset' | 'meeting' = 'all'
@@ -223,25 +265,43 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
     }
     const model = await modelOf(chat)
     const titles = new Map<string, string>()
+    const titleOf = (meetingId: string): string | null => titles.get(meetingId) ?? null
+    const claude: ChatEngine =
+      transport === 'acp' && deps.openAcp
+        ? new AcpChat({
+            open: deps.openAcp(binaryPath),
+            model,
+            thinkMore: chat.thinkMore,
+            scope: folder,
+            cwd,
+            titleOf,
+            now,
+            ...(deps.timers ? { timers: deps.timers } : {}),
+            ...(deps.idleTimeoutMs !== undefined ? { idleTimeoutMs: deps.idleTimeoutMs } : {}),
+            ...(deps.log ? { log: deps.log } : {}),
+          })
+        : new ClaudeChat({
+            binaryPath,
+            model,
+            scope: folder,
+            cwd,
+            titleOf,
+            env: claudeEnv(deps.baseEnv, binaryPath),
+            spawn: deps.spawn,
+            ...(deps.timers ? { timers: deps.timers } : {}),
+            ...(deps.idleTimeoutMs !== undefined ? { idleTimeoutMs: deps.idleTimeoutMs } : {}),
+            ...(deps.log ? { log: deps.log } : {}),
+          })
     const session: Session = {
-      claude: new ClaudeChat({
-        binaryPath,
-        model,
-        scope: folder,
-        cwd,
-        titleOf: (meetingId) => titles.get(meetingId) ?? null,
-        env: claudeEnv(deps.baseEnv, binaryPath),
-        spawn: deps.spawn,
-        ...(deps.timers ? { timers: deps.timers } : {}),
-        ...(deps.idleTimeoutMs !== undefined ? { idleTimeoutMs: deps.idleTimeoutMs } : {}),
-        ...(deps.log ? { log: deps.log } : {}),
-      }),
+      claude,
+      transport,
       scope,
       leaveTimer: null,
       answering: null,
       closeAfter: false,
       cancelled: false,
       model,
+      thinkMore: chat.thinkMore,
       titles,
     }
     sessions.set(chat.id, session)
@@ -263,8 +323,14 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
     let thinking = ''
     let denied = 0
     let meta: ChatMeta | null = null
+    let plan: ChatPlanEntry[] = []
     const onDetail = (detail: ChatDetail): void => {
-      if (detail.type === 'step') steps.push(detail.step)
+      if (detail.type === 'step') {
+        // Pelo ACP o mesmo passo volta com estado novo: troca no lugar.
+        const at = detail.step.id ? steps.findIndex((step) => step.id === detail.step.id) : -1
+        if (at === -1) steps.push(detail.step)
+        else steps[at] = detail.step
+      } else if (detail.type === 'plan') plan = detail.entries
       else if (detail.type === 'thinking') thinking += detail.delta
       else if (detail.type === 'denied') denied = detail.count
       else meta = detail.meta
@@ -287,6 +353,7 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
       ...(steps.length ? { steps } : {}),
       ...(thinking ? { thinking } : {}),
       ...(denied ? { denied } : {}),
+      ...(plan.length ? { plan } : {}),
       ...(meta ? { meta } : {}),
       model: session.model,
     }
@@ -331,7 +398,7 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
     },
 
     async send(request) {
-      const { chatId, meetingId, text, scope, model } = sendSchema.parse(request)
+      const { chatId, meetingId, text, scope, model, thinkMore } = sendSchema.parse(request)
       const question = text.trim()
       // Marcada antes do primeiro `await`: duas perguntas seguidas na mesma conversa nunca correm juntas.
       const id = chatId ?? newId()
@@ -345,15 +412,17 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
           chat = found
         } else {
           // A conversa de uma reunião é sempre só dela: o escopo não vale ali.
-          chat = { id, meetingId, title: chatTitle(question), createdAt: stamp(), messages: [], scope: { kind: 'all' }, model: null }
+          chat = { id, meetingId, title: chatTitle(question), createdAt: stamp(), messages: [], scope: { kind: 'all' }, model: null, thinkMore: false }
         }
         // Escopo e modelo da barra do campo; trocados, o processo da conversa é refeito.
         const nextScope = scope && !chat.meetingId ? scope : chat.scope
         const currentModel = await modelOf(chat)
         const nextModel = model ?? currentModel
-        const changed = !sameScope(nextScope, chat.scope) || nextModel !== currentModel
-        chat = { ...chat, scope: nextScope, model: nextModel }
-        if (changed) restart(chat.id)
+        const nextThinkMore = thinkMore ?? chat.thinkMore
+        const scopeChanged = !sameScope(nextScope, chat.scope)
+        chat = { ...chat, scope: nextScope, model: nextModel, thinkMore: nextThinkMore }
+        if (scopeChanged) restart(chat.id)
+        else reconfigure(chat.id, nextModel, nextThinkMore)
         // Sem o `claude`, nada é gravado nem enviado (CA7).
         const found = await deps.locate().catch((): ClaudeLocateResult => ({ ok: false, error: 'not-found' }))
         if (!found.ok) return { ok: false, error: 'not-found' }
@@ -366,7 +435,7 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
         // Relida na fila: um título trocado entre a leitura de cima e aqui não se perde.
         const saved = await deps.store.mutate(id, (current) => {
           if (!current) return chatId ? null : { ...prepared, messages: [asked] }
-          return { ...current, scope: prepared.scope, model: prepared.model, messages: [...current.messages, asked] }
+          return { ...current, scope: prepared.scope, model: prepared.model, thinkMore: prepared.thinkMore, messages: [...current.messages, asked] }
         })
         if (!saved) {
           end(id, session)
@@ -380,19 +449,27 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
     },
 
     async update(request) {
-      const { id, title, scope, model } = updateSchema.parse(request)
+      const { id, title, scope, model, thinkMore } = updateSchema.parse(request)
       if (starting.has(id)) return null
       const fallback = (await deps.settings.get()).chatModel
-      let restartNeeded = false
+      let scopeChanged = false
       // Leitura, mudança e gravação na mesma vez da fila (a resposta que termina no meio fica).
       const saved = await deps.store.mutate(id, (chat) => {
         if (!chat) return null
         const nextScope = scope && !chat.meetingId ? scope : chat.scope
-        restartNeeded = !sameScope(nextScope, chat.scope) || (model !== undefined && model !== (chat.model ?? fallback))
-        return { ...chat, ...(title !== undefined ? { title: chatTitle(title) } : {}), scope: nextScope, model: model ?? chat.model }
+        scopeChanged = !sameScope(nextScope, chat.scope)
+        return {
+          ...chat,
+          ...(title !== undefined ? { title: chatTitle(title) } : {}),
+          scope: nextScope,
+          model: model ?? chat.model,
+          thinkMore: thinkMore ?? chat.thinkMore,
+        }
       })
       if (!saved) return null
-      if (restartNeeded) restart(id)
+      // O escopo muda a pasta: processo novo. Modelo e "Pensar mais" seguem na mesma sessão pelo ACP.
+      if (scopeChanged) restart(id)
+      else reconfigure(id, saved.model ?? fallback, saved.thinkMore)
       return { ...saved, model: saved.model ?? fallback }
     },
 
@@ -445,8 +522,8 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
       const id = idOf(input)
       const session = id ? sessions.get(id) : undefined
       if (!session?.answering) return false
-      session.claude.stop()
-      return true
+      // Só `true` se o motor de fato tinha o que parar (contrato 17).
+      return session.claude.stop()
     },
 
     close(input) {

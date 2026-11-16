@@ -6,6 +6,9 @@ import tailwindcss from '@tailwindcss/vite'
 export default defineConfig({
   main: {
     build: {
+      // O cliente ACP (contrato 17) vai embutido no main: o pacote só leva o `zod` em `node_modules`. O
+      // adaptador não é importado (roda como processo, de `Resources/acp`).
+      externalizeDeps: { exclude: ['@agentclientprotocol/sdk'] },
       rollupOptions: {
         input: { index: resolve(__dirname, 'src/main/index.ts') },
       },

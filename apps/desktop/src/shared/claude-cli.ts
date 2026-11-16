@@ -24,5 +24,8 @@ export type ClaudeTranslateResult =
   | { ok: true; translation: string; model: string }
   | { ok: false; error: 'timeout' | 'error' | 'stopped' | 'not-running' }
 
-/** Estado do processo durante a gravação. `stopped` mostra o aviso de que o Claude CLI parou. */
-export type ClaudeRunState = 'running' | 'restarting' | 'stopped'
+/**
+ * Estado do processo durante a gravação. `stopped` mostra o aviso de que o Claude CLI parou; `agent-failed`
+ * (contrato 17), que o agente do ACP não abriu, com "Usar a linha de comando".
+ */
+export type ClaudeRunState = 'running' | 'restarting' | 'stopped' | 'agent-failed'

@@ -4,7 +4,7 @@ import { app, BrowserWindow, clipboard, dialog, Menu, nativeImage, net, safeStor
 import { ASSEMBLYAI_DASHBOARD_URL } from '../shared/assemblyai'
 import { brandTexts, DEFAULT_BRAND_NAME } from '../shared/branding'
 import { privacyPaneUrl } from '../shared/privacy'
-import type { AppSettings } from '../shared/settings-defaults'
+import type { AgentProfileId, AppSettings } from '../shared/settings-defaults'
 import type { TranscriptDocument } from '../shared/transcription'
 import { createGatewayClient, type FetchInit, type FetchResponse } from './assemblyai/gateway'
 import { createTokenClient, requestToken } from './assemblyai/token'
@@ -38,9 +38,13 @@ import { APP_ORIGIN, applySessionSecurity, originOf } from './security'
 import { createSettingsService, type SettingsService } from './settings/service'
 import { createFileSettingsStore } from './settings/store'
 import { isSmokeRun, prepareSmokeEnvironment, runSmoke } from './smoke'
-import { createSmokeClaude, createSmokeFixtures, SMOKE_FAKE_KEY, type SmokeFixtures } from './smoke-fixtures'
+import { createSmokeAcp, createSmokeClaude, createSmokeFixtures, SMOKE_FAKE_KEY, type SmokeFixtures } from './smoke-fixtures'
+import { acpOpener, processLauncher } from './acp/agent'
+import { bundledAdapterEntry, bundledAgent, installedAgent, type AcpAgentService } from './acp/entry'
+import { createAcpInstaller } from './acp/install'
+import { agentProfile, type AgentProfile } from './acp/profiles'
 import { createUpdateService, type UpdateService } from './updates/service'
-import { netDownload, netFetch } from './updates/transport'
+import { netDownload, netDownloadTarball, netFetch } from './updates/transport'
 import { createMainWindow } from './window'
 
 // `app.setName` fixa o `userData` (~/Library/Application Support/Meeting Scribe) e o item do Chaveiro:
@@ -144,6 +148,8 @@ interface AppServices {
   updates: UpdateService
   /** Chat "Perguntar" (contrato 15) e o acervo em Markdown que o `claude` dele lê. */
   chat: ChatService
+  /** Agente do ACP do perfil escolhido (contrato 17): instalar, remover e o estado. */
+  acp: { current: () => Promise<AcpAgentService> }
   corpus: ChatCorpus
 }
 
@@ -173,6 +179,51 @@ function createAppServices(userData: string): AppServices {
   // Tradução pelo `claude` local. No smoke, só o binário falso (test/fixtures/fake-claude.mjs): o
   // `claude` de verdade nunca roda, nem pelo shell de login.
   const smokeClaude = smokeFixtures ? createSmokeClaude(join(app.getAppPath(), 'test', 'fixtures', 'fake-claude.mjs'), smokeFixtures) : null
+  // Agente do ACP (contrato 17): o adaptador oficial, com o Node do próprio Electron, um processo por sessão.
+  // No smoke, o agente falso (test/fixtures/fake-acp-agent.mjs), que registra o que recebeu.
+  const smokeAcp = smokeFixtures
+    ? createSmokeAcp(join(app.getAppPath(), 'test', 'fixtures', 'fake-acp-agent.mjs'), join(userData, 'acp-fake.jsonl'), smokeFixtures)
+    : null
+  // O pacote não leva o agente: no app instalado (e no smoke, com o registro falso) ele é baixado com o
+  // clique da pessoa para `userData/acp/<perfil>/<versão>`; em desenvolvimento, o do `node_modules`. Um
+  // serviço por perfil (contrato 17, CA11); o perfil vem das Configurações a cada uso.
+  const devLog = app.isPackaged ? {} : { log: (message: string) => console.log(message) }
+  const acpAgents = new Map<AgentProfileId, AcpAgentService>()
+  const agentFor = (profile: AgentProfile): AcpAgentService => {
+    const known = acpAgents.get(profile.id)
+    if (known) return known
+    const created: AcpAgentService =
+      app.isPackaged || smokeAcp
+        ? installedAgent(
+            createAcpInstaller({
+              root: join(userData, 'acp', profile.id),
+              download: smokeAcp?.download ?? netDownloadTarball,
+              packages: smokeAcp ? smokeAcp.packagesFor(profile.install.packages) : profile.install.packages,
+              version: profile.install.version,
+              entry: profile.install.entry,
+              label: profile.label,
+              onStatus: (status) => broadcast(BrowserWindow.getAllWindows(), 'scribe:acp-state', status),
+              ...devLog,
+            }),
+            smokeAcp ? () => smokeAcp.entry : undefined,
+          )
+        : bundledAgent(profile, bundledAdapterEntry(profile, app.getAppPath()))
+    acpAgents.set(profile.id, created)
+    return created
+  }
+  const currentProfile = async (): Promise<AgentProfile> => agentProfile((await settings.get()).agentProfile)
+  const acpAgent = { current: async (): Promise<AcpAgentService> => agentFor(await currentProfile()) }
+  const openAcp = acpOpener({
+    profile: currentProfile,
+    launch: processLauncher({
+      execPath: process.execPath,
+      entry: (profile) => agentFor(profile).entry(),
+      ...(smokeAcp ? { args: smokeAcp.args, spawn: smokeAcp.spawn } : {}),
+      ...devLog,
+    }),
+    baseEnv: process.env,
+    ...devLog,
+  })
   const claude = createClaudeService({
     settings,
     userData,
@@ -180,6 +231,8 @@ function createAppServices(userData: string): AppServices {
     baseEnv: process.env,
     exec: smokeClaude?.exec ?? nodeExecFile,
     spawn: smokeClaude?.spawn ?? nodeSpawnClaude,
+    openAcp,
+    acpAvailable: async () => (await acpAgent.current()).available(),
     ...(smokeClaude ? { candidates: smokeClaude.candidates, loginShell: false } : {}),
     onState: (state) => broadcast(BrowserWindow.getAllWindows(), 'scribe:claude-state', state),
     // Custo nominal e trocas de processo só nos logs de desenvolvimento.
@@ -195,6 +248,7 @@ function createAppServices(userData: string): AppServices {
     meetings,
     locate: () => claude.locate(),
     spawn: smokeClaude?.spawn ?? nodeSpawnClaude,
+    openAcp,
     baseEnv: process.env,
     onEvent: (event) => broadcast(BrowserWindow.getAllWindows(), 'scribe:chat-event', event),
     clipboard: appClipboard,
@@ -210,6 +264,8 @@ function createAppServices(userData: string): AppServices {
     notes,
     locate: () => claude.locate(),
     spawn: smokeClaude?.spawnSummary ?? nodeSpawnSummary,
+    openAcp,
+    acpAvailable: async () => (await acpAgent.current()).available(),
     userData,
     baseEnv: process.env,
     clipboard: appClipboard,
@@ -303,6 +359,7 @@ function createAppServices(userData: string): AppServices {
     updates,
     chat,
     corpus,
+    acp: acpAgent,
   }
 }
 
@@ -358,7 +415,7 @@ function openExternal(url: string): void {
 }
 
 function registerIpc(services: AppServices): void {
-  const { settings, meetings, meetingsService, meetingsIndex, tokenClient, translation, claude, files, summary, download, branding, updates, chat, corpus } = services
+  const { settings, meetings, meetingsService, meetingsIndex, tokenClient, translation, claude, files, summary, download, branding, updates, chat, corpus, acp } = services
   /** Reunião salva, renomeada ou com anotações novas: o `.md` dela no acervo do chat é reescrito. */
   const touched = (meetingId: string): void => void corpus.sync(meetingId).catch(() => undefined)
   handle('scribe:app-info', appOrigin, () => ({
@@ -412,6 +469,10 @@ function registerIpc(services: AppServices): void {
   handle('scribe:notes-copy', appOrigin, (_event, request) => meetingsService.copyNotes((request as { meetingId?: unknown } | undefined)?.meetingId))
   handle('scribe:translate-turn', appOrigin, (_event, request) => translation.translate(request))
   handle('scribe:claude-locate', appOrigin, () => claude.locate())
+  // Contrato 17: o agente só é baixado com o clique da pessoa (este canal).
+  handle('scribe:acp-status', appOrigin, async () => (await acp.current()).status())
+  handle('scribe:acp-install', appOrigin, async () => (await acp.current()).install())
+  handle('scribe:acp-remove', appOrigin, async () => (await acp.current()).remove())
   handle('scribe:claude-path-set', appOrigin, (_event, request) => claude.setPath((request as { path?: unknown } | undefined)?.path))
   handle('scribe:claude-start', appOrigin, () => claude.start())
   handle('scribe:claude-translate', appOrigin, (_event, request) => claude.translate(request))

@@ -1,5 +1,6 @@
 // Contrato das mensagens entre main e renderer. Canal novo entra aqui primeiro: no mapa do
 // sentido certo e na lista de canais permitidos logo abaixo (o preload recusa o que não estiver nela).
+import type { AcpAgentStatus } from './acp'
 import type { BrandingInfo, BrandLogoChoice } from './branding'
 import type { KeySaveResult, KeyStatus, MicAccess, ModelCheck, ModelsResult } from './assemblyai'
 import type { Chat, ChatEvent, ChatListItem, ChatRedoRequest, ChatSendRequest, ChatSendResult, ChatUpdateRequest } from './chat'
@@ -83,6 +84,10 @@ export interface InvokeChannels {
   }
   /** Onde está o `claude` e qual versão respondeu (contrato 05). */
   'scribe:claude-locate': { request: undefined; response: ClaudeLocateResult }
+  /** Agente do Claude pelo ACP (contrato 17): estado, instalar (só com o clique) e remover. */
+  'scribe:acp-status': { request: undefined; response: AcpAgentStatus }
+  'scribe:acp-install': { request: undefined; response: AcpAgentStatus }
+  'scribe:acp-remove': { request: undefined; response: AcpAgentStatus }
   /** Caminho escolhido em Configurações; só grava se o `claude` responder ali. `null` volta a procurar sozinho. */
   'scribe:claude-path-set': { request: { path: string | null }; response: { result: ClaudeLocateResult; settings: AppSettings } }
   /** Início da gravação com o motor Claude CLI: abre (aquece) o processo. */
@@ -174,6 +179,8 @@ export interface MainEvents {
   'scribe:settings-changed': AppSettings
   /** Processo do Claude CLI da gravação: reaberto ou parado de vez. */
   'scribe:claude-state': ClaudeRunState
+  /** Estado do agente do ACP: instalando (com o progresso), instalado, removido, erro. */
+  'scribe:acp-state': AcpAgentStatus
   /** Resumo de uma reunião começou, terminou ou falhou. */
   'scribe:summary-state': { meetingId: string; status: SummaryStatus }
   /** Consulta ou download da atualização mudou de estado. */
@@ -220,6 +227,9 @@ const INVOKE: Record<InvokeChannel, true> = {
   'scribe:notes-copy': true,
   'scribe:translate-turn': true,
   'scribe:claude-locate': true,
+  'scribe:acp-status': true,
+  'scribe:acp-install': true,
+  'scribe:acp-remove': true,
   'scribe:claude-path-set': true,
   'scribe:claude-start': true,
   'scribe:claude-translate': true,
@@ -265,6 +275,7 @@ const MAIN_EVENTS: Record<MainEvent, true> = {
   'scribe:new-recording': true,
   'scribe:settings-changed': true,
   'scribe:claude-state': true,
+  'scribe:acp-state': true,
   'scribe:summary-state': true,
   'scribe:update-state': true,
   'scribe:chat-event': true,

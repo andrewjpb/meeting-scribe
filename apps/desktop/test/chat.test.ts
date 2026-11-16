@@ -483,6 +483,7 @@ describe('conversas salvas (CA6)', () => {
     messages: Array.from({ length: count }, (_, i) => ({ role: i % 2 ? 'assistant' : 'user', text: `m${i}`, at: new Date(Date.parse('2026-11-15T10:00:00') + i * 1000).toISOString() })),
     scope: { kind: 'all' },
     model: null,
+    thinkMore: false,
   })
 
   it('grava em chats/<id>.json, lista da mais recente, corta em 200 mensagens e 20 000 caracteres', async () => {
@@ -957,7 +958,7 @@ describe('escopo, modelo, Refazer, renomear e copiar (contrato 16, CA3, CA4, CA6
     // Conversa do contrato 15: sem escopo, sem modelo e sem detalhes.
     const old = { id: 'velha', meetingId: null, title: 'Antiga', createdAt: NOW_ISO, messages: [{ role: 'user', text: 'Oi', at: NOW_ISO }, { role: 'assistant', text: 'Olá', at: NOW_ISO }] }
     writeFileSync(join(dir, CHATS_DIR, 'velha.json'), JSON.stringify(old))
-    expect(await store.get('velha')).toEqual({ ...old, scope: { kind: 'all' }, model: null })
+    expect(await store.get('velha')).toEqual({ ...old, scope: { kind: 'all' }, model: null, thinkMore: false })
     // Ao abrir, o modelo é o das Configurações.
     expect((await service.get('velha'))?.model).toBe('sonnet')
     // Campo inválido nos detalhes: o arquivo é ignorado.

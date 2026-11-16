@@ -4,11 +4,15 @@
 // A chave é fictícia: só os quatro últimos caracteres aparecem na tela (••••4f2a, como no mockup).
 import { execFile, spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
+import { createServer } from 'node:http'
+import { gzipSync } from 'node:zlib'
 import { updateAssetName } from '../shared/updates'
 import type { FetchInit, FetchLike, FetchResponse } from './assemblyai/gateway'
 import type { ExecFile } from './claude-cli/locate'
 import type { SpawnSummary } from './claude-cli/summary'
 import type { SpawnClaude } from './claude-cli/translator'
+import type { SpawnAcp } from './acp/agent'
+import { NPM_REGISTRY, type AcpPackage, type DownloadTarball } from './acp/install'
 import { fakeMediaAccess } from './permissions'
 import type { DownloadRequest } from './updates/download'
 import { LATEST_RELEASE_URL, RELEASE_DOWNLOAD_PREFIX } from './updates/release'
@@ -130,6 +134,15 @@ export interface SmokeFixtures {
   claudeMissing: boolean
   /** Processos do `claude` falso abertos pelo app: argumentos, pasta e nomes das variáveis de ambiente. */
   claudeSpawns: { args: string[]; cwd: string; envNames: string[]; exited: boolean }[]
+  /**
+   * Processos do agente ACP falso (contrato 17): o script, os nomes das variáveis de ambiente, o `claude` que
+   * o adaptador rodaria e se o processo já saiu.
+   */
+  acpSpawns: { entry: string; envNames: string[]; claudeExecutable: string | null; exited: boolean }[]
+  /** Smoke: o "adaptador" não abre (pacote corrompido), para conferir o botão "Usar a linha de comando". */
+  acpBroken: boolean
+  /** Pedidos ao registro falso do npm (caminhos dos tarballs). */
+  registryCalls: string[]
   /** O que o diálogo de escolher pasta "responde" (o diálogo nativo nunca abre no smoke); `null` cancela. */
   chosenFolder: string | null
   /** Arquivos que o app pediu para abrir ou mostrar no Finder (nada abre de verdade). */
@@ -242,6 +255,9 @@ export function createSmokeFixtures(currentVersion: string): SmokeFixtures {
     failCatalog: false,
     claudeMissing: false,
     claudeSpawns: [],
+    acpSpawns: [],
+    acpBroken: false,
+    registryCalls: [],
     chosenFolder: null,
     openedFiles: [],
     saveDialogs: [],
@@ -304,4 +320,88 @@ export function createSmokeClaude(scriptPath: string, fixtures: SmokeFixtures): 
     return child
   }
   return { exec, spawn: spawnFake, spawnSummary: spawnFake, candidates: [scriptPath] }
+}
+
+/** Tarball `.tgz` mínimo (ustar), com os arquivos sob `package/`: os pacotes do registro falso do smoke. */
+export function smokeTarball(files: Record<string, string>): Buffer {
+  const blocks: Buffer[] = []
+  for (const [name, content] of Object.entries(files)) {
+    const data = Buffer.from(content, 'utf8')
+    const header = Buffer.alloc(512)
+    header.write(`package/${name}`, 0, 100, 'utf8')
+    header.write('0000644\0', 100, 8, 'ascii')
+    header.write('0000000\0', 108, 8, 'ascii')
+    header.write('0000000\0', 116, 8, 'ascii')
+    header.write(`${data.length.toString(8).padStart(11, '0')}\0`, 124, 12, 'ascii')
+    header.write('00000000000\0', 136, 12, 'ascii')
+    header.write('        ', 148, 8, 'ascii')
+    header.write('0', 156, 1, 'ascii')
+    header.write('ustar\0', 257, 6, 'ascii')
+    header.write('00', 263, 2, 'ascii')
+    let sum = 0
+    for (const byte of header) sum += byte
+    header.write(`${sum.toString(8).padStart(6, '0')}\0 `, 148, 8, 'ascii')
+    blocks.push(header, data, Buffer.alloc((512 - (data.length % 512)) % 512))
+  }
+  blocks.push(Buffer.alloc(1024))
+  return gzipSync(Buffer.concat(blocks))
+}
+
+/**
+ * Agente ACP falso do smoke (contrato 17, CA10). A instalação baixa de um registro falso local (servidor
+ * HTTP em 127.0.0.1, pelo `fetch` do Node: nada passa pela sessão do Chromium) pacotes pequenos com o
+ * `integrity` calculado aqui; instalado, quem roda é `test/fixtures/fake-acp-agent.mjs`, com o mesmo Node do
+ * Electron e o mesmo ambiente; o agente registra em `logPath` o que recebeu e o que o cliente respondeu. Com
+ * `acpBroken`, o processo sai na hora (o adaptador que não sobe).
+ */
+export function createSmokeAcp(
+  scriptPath: string,
+  logPath: string,
+  fixtures: SmokeFixtures,
+): { entry: string; args: string[]; spawn: SpawnAcp; packagesFor: (pinned: readonly AcpPackage[]) => AcpPackage[]; download: DownloadTarball; close: () => void } {
+  const spawnAcp: SpawnAcp = (file, args, options) => {
+    const record = { entry: args[2] ?? '', envNames: Object.keys(options.env).sort(), claudeExecutable: options.env['CLAUDE_CODE_EXECUTABLE'] ?? null, exited: false }
+    fixtures.acpSpawns.push(record)
+    const child = spawn(file, fixtures.acpBroken ? ['-e', 'process.exit(3)'] : [...args], options)
+    child.on('exit', () => {
+      record.exited = true
+    })
+    return child
+  }
+  const tarballs = new Map<string, Buffer>()
+  // Os mesmos nomes e caminhos dos pacotes pinados do perfil, com conteúdo pequeno e o hash calculado aqui.
+  const packagesFor = (pinned: readonly AcpPackage[]): AcpPackage[] =>
+    pinned.map((pkg, index) => {
+      const files: Record<string, string> = { 'package.json': JSON.stringify({ name: pkg.name, version: pkg.version, license: 'falso' }) }
+      // O primeiro pacote é o do agente: o script que o perfil roda.
+      if (index === 0) files['dist/index.js'] = '// adaptador falso do smoke: quem roda é test/fixtures/fake-acp-agent.mjs\n'
+      const data = smokeTarball(files)
+      tarballs.set(pkg.path, data)
+      return { ...pkg, integrity: `sha512-${createHash('sha512').update(data).digest('base64')}`, bytes: data.length }
+    })
+  const server = createServer((request, response) => {
+    fixtures.registryCalls.push(request.url ?? '')
+    const data = tarballs.get((request.url ?? '').slice(1))
+    if (!data) {
+      response.writeHead(404).end()
+      return
+    }
+    response.writeHead(200, { 'content-type': 'application/octet-stream', 'content-length': data.length }).end(data)
+  })
+  const registry = new Promise<string>((resolve) => {
+    server.listen(0, '127.0.0.1', () => {
+      const address = server.address()
+      resolve(`http://127.0.0.1:${typeof address === 'object' && address ? address.port : 0}/`)
+    })
+  })
+  // O instalador pede os endereços de verdade do npm; o smoke responde pelo servidor local.
+  const download: DownloadTarball = async (url, onBytes) => {
+    if (!url.startsWith(NPM_REGISTRY)) throw new Error('fora do registro do npm')
+    const response = await fetch(`${await registry}${url.slice(NPM_REGISTRY.length)}`)
+    if (!response.ok) throw new Error(`registro falso respondeu ${response.status}`)
+    const data = new Uint8Array(await response.arrayBuffer())
+    onBytes(data.length)
+    return data
+  }
+  return { entry: scriptPath, args: ['--log', logPath], spawn: spawnAcp, packagesFor, download, close: () => server.close() }
 }

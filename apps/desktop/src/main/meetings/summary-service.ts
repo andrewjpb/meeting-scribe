@@ -4,6 +4,9 @@
 // gera com "Resumir ao encerrar" ligado e o `claude` encontrado; senão nada acontece, nem aviso. Pedido
 // pela tela, a falta do `claude` vira o erro `not-found`. Sem Electron: `claude`, clipboard e pasta
 // chegam injetados.
+//
+// Contrato 17: com a "Conexão com o Claude" no agente (padrão), o resumo sai de uma sessão ACP curta
+// (`acp/summary.ts`), com a mesma validação; com "Linha de comando", nada muda.
 import { mkdir } from 'node:fs/promises'
 import { join } from 'node:path'
 import { z } from 'zod'
@@ -13,7 +16,9 @@ import { summaryMarkdown, SUMMARY_VERSION, type MeetingSummary, type SummaryErro
 import { CLAUDE_MODEL_PREFIX } from '../../shared/settings-defaults'
 import type { TranscriptCopyResult } from '../../shared/transcription'
 import { claudeEnv } from '../claude-cli/locate'
-import { CLAUDE_CWD_DIR } from '../claude-cli/service'
+import type { AcpOpenResult, AcpSessionRequest } from '../acp/agent'
+import { runAcpSummary } from '../acp/summary'
+import { ACP_SUMMARY_DIR, CLAUDE_CWD_DIR } from '../claude-cli/service'
 import { runSummary, summaryInput, summaryLines, summaryNoteLines, type SpawnSummary } from '../claude-cli/summary'
 import type { Timers } from '../claude-cli/translator'
 import type { SettingsStore } from '../settings/store'
@@ -33,6 +38,10 @@ export interface SummaryServiceDeps {
   /** O mesmo `locate` do tradutor: caminho configurado, lista fixa e shell de login. */
   locate: () => Promise<ClaudeLocateResult>
   spawn: SpawnSummary
+  /** Fábrica de sessões do ACP para o `claude` encontrado (contrato 17). Sem ela, sempre a linha de comando. */
+  openAcp?: (claudePath: string) => (request: AcpSessionRequest) => Promise<AcpOpenResult>
+  /** O agente está instalado? Sem ele, o resumo vai pela linha de comando (e a tela avisa). */
+  acpAvailable?: () => boolean | Promise<boolean>
   userData: string
   baseEnv: NodeJS.ProcessEnv
   clipboard: ClipboardWriter
@@ -122,21 +131,25 @@ export function createSummaryService(deps: SummaryServiceDeps): SummaryService {
       errors.delete(meetingId)
       deps.onStatus(meetingId, { state: 'generating' })
     }
-    const { claudeModel } = await deps.settings.get()
-    const cwd = join(deps.userData, CLAUDE_CWD_DIR)
-    await mkdir(cwd, { recursive: true, mode: 0o700 })
-    const result = await runSummary({
-      binaryPath: found.path,
+    const { claudeModel, claudeTransport } = await deps.settings.get()
+    const common = {
       model: claudeModel,
-      cwd,
-      env: claudeEnv(deps.baseEnv, found.path),
-      spawn: deps.spawn,
       input: summaryInput(input, noteLines),
       ...(deps.timers ? { timers: deps.timers } : {}),
       ...(deps.timeoutMs !== undefined ? { timeoutMs: deps.timeoutMs } : {}),
       ...(deps.log ? { log: deps.log } : {}),
       signal: job.abort.signal,
-    })
+    }
+    let result
+    if (claudeTransport === 'acp' && deps.openAcp && ((await deps.acpAvailable?.()) ?? true)) {
+      const cwd = join(deps.userData, CLAUDE_CWD_DIR, ACP_SUMMARY_DIR)
+      await mkdir(cwd, { recursive: true, mode: 0o700 })
+      result = await runAcpSummary({ ...common, open: deps.openAcp(found.path), cwd })
+    } else {
+      const cwd = join(deps.userData, CLAUDE_CWD_DIR)
+      await mkdir(cwd, { recursive: true, mode: 0o700 })
+      result = await runSummary({ ...common, binaryPath: found.path, cwd, env: claudeEnv(deps.baseEnv, found.path), spawn: deps.spawn })
+    }
     if (job.cancelled) return
     if (!result.ok) {
       errors.set(meetingId, result.error)

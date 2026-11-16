@@ -153,7 +153,7 @@ describe('textos da tela "Perguntar" v2 (contrato 16)', () => {
 describe('store do chat (CA3)', () => {
   const invoke = vi.fn()
   let emit: ((event: ChatEvent) => void) | null = null
-  const chat: Chat = { id: 'c1', meetingId: null, title: 'Oi?', createdAt: AT, messages: [{ role: 'user', text: 'Oi?', at: AT }], scope: { kind: 'all' }, model: 'sonnet' }
+  const chat: Chat = { id: 'c1', meetingId: null, title: 'Oi?', createdAt: AT, messages: [{ role: 'user', text: 'Oi?', at: AT }], scope: { kind: 'all' }, model: 'sonnet', thinkMore: false }
 
   beforeEach(() => {
     invoke.mockReset()
@@ -206,6 +206,27 @@ describe('store do chat (CA3)', () => {
     expect(useChat.getState().chats).toEqual({})
   })
 
+  it('pelo ACP o mesmo passo troca de estado no lugar e o plano chega inteiro (contrato 17)', async () => {
+    await useChat.getState().send(null, null, 'Oi?')
+    emit?.({ type: 'step', chatId: 'c1', step: { tool: 'Read', label: 'Abrindo um arquivo', meetingId: null, id: 't1', status: 'pending' } })
+    emit?.({ type: 'step', chatId: 'c1', step: { tool: 'Grep', label: 'Procurando "x"', meetingId: null, id: 't2', status: 'pending' } })
+    emit?.({ type: 'step', chatId: 'c1', step: { tool: 'Read', label: 'Lendo o índice das reuniões', meetingId: null, id: 't1', status: 'completed' } })
+    emit?.({ type: 'plan', chatId: 'c1', entries: [{ content: 'Ler o índice', status: 'in_progress' }] })
+    emit?.({ type: 'plan', chatId: 'c1', entries: [{ content: 'Ler o índice', status: 'completed' }, { content: 'Responder', status: 'pending' }] })
+    const answer = useChat.getState().answers['c1']
+    expect(answer?.steps.map((step) => `${step.id}:${step.label}:${step.status}`)).toEqual(['t1:Lendo o índice das reuniões:completed', 't2:Procurando "x":pending'])
+    expect(answer?.plan).toEqual([
+      { content: 'Ler o índice', status: 'completed' },
+      { content: 'Responder', status: 'pending' },
+    ])
+  })
+
+  it('"Pensar mais" da conversa nova vai junto na primeira pergunta (contrato 17, CA5)', async () => {
+    useChat.getState().setDraft(null, { thinkMore: true })
+    await useChat.getState().send(null, null, 'Oi?')
+    expect(invoke).toHaveBeenCalledWith('scribe:chat-send', { chatId: null, meetingId: null, text: 'Oi?', scope: { kind: 'all' }, thinkMore: true })
+  })
+
   it('raciocínio, passos, negação e detalhes chegam pelo evento e somem no fim (contrato 16)', async () => {
     await useChat.getState().send(null, null, 'Oi?')
     emit?.({ type: 'thinking', chatId: 'c1', delta: 'Vou ' })
@@ -215,7 +236,7 @@ describe('store do chat (CA3)', () => {
     emit?.({ type: 'denied', chatId: 'c1', count: 1 })
     const meta = { model: 'claude-sonnet-5-5', durationMs: 1, inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, costUsd: 0, turns: 1, consulted: [] }
     emit?.({ type: 'meta', chatId: 'c1', meta })
-    expect(useChat.getState().answers['c1']).toEqual({ text: '', reading: false, thinking: 'Vou ler', steps: [{ tool: 'Read', label: 'Lendo o índice das reuniões', meetingId: null }, { tool: 'Grep', label: 'Procurando "x"', meetingId: null }], denied: 1, meta })
+    expect(useChat.getState().answers['c1']).toEqual({ text: '', reading: false, thinking: 'Vou ler', steps: [{ tool: 'Read', label: 'Lendo o índice das reuniões', meetingId: null }, { tool: 'Grep', label: 'Procurando "x"', meetingId: null }], denied: 1, plan: [], meta })
     emit?.({ type: 'done', chatId: 'c1', chat: { ...chat, messages: [...chat.messages, { role: 'assistant', text: 'Olá.', at: AT, meta }] } })
     expect(useChat.getState().answers['c1']).toBeUndefined()
   })

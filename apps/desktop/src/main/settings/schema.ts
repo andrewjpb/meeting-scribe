@@ -8,7 +8,7 @@
 import { z } from 'zod'
 import { isAbsolute } from 'node:path'
 import { BRAND_LOGO_PATTERN, BRAND_TEXT_MAX } from '../../shared/branding'
-import { CHAT_MODELS, CLAUDE_MODELS, DEFAULT_SETTINGS, LANGUAGE_CODES, THEME_SETTINGS, TRANSLATION_ENGINES, type AppSettings, type SettingsPatch } from '../../shared/settings-defaults'
+import { AGENT_PROFILES, CHAT_MODELS, CLAUDE_MODELS, CLAUDE_TRANSPORTS, DEFAULT_SETTINGS, LANGUAGE_CODES, THEME_SETTINGS, TRANSLATION_ENGINES, type AppSettings, type SettingsPatch } from '../../shared/settings-defaults'
 
 export const SETTINGS_VERSION = 1
 
@@ -52,6 +52,8 @@ const lenientSchema = z.object({
   claudeModel: z.enum(CLAUDE_MODELS).catch(D.claudeModel),
   chatModel: z.enum(CHAT_MODELS).catch(D.chatModel),
   claudePath: claudePathSchema.nullable().catch(D.claudePath),
+  claudeTransport: z.enum(CLAUDE_TRANSPORTS).catch(D.claudeTransport),
+  agentProfile: z.enum(AGENT_PROFILES).catch(D.agentProfile),
   saveToFolder: z.boolean().catch(D.saveToFolder),
   audioFolder: audioFolderSchema.nullable().catch(D.audioFolder),
   summarizeOnStop: z.boolean().catch(D.summarizeOnStop),
@@ -74,6 +76,8 @@ const patchSchema = z
     translationEngine: z.enum(TRANSLATION_ENGINES),
     claudeModel: z.enum(CLAUDE_MODELS),
     chatModel: z.enum(CHAT_MODELS),
+    claudeTransport: z.enum(CLAUDE_TRANSPORTS),
+    agentProfile: z.enum(AGENT_PROFILES),
     saveToFolder: z.boolean(),
     summarizeOnStop: z.boolean(),
     identifySpeakers: z.boolean(),

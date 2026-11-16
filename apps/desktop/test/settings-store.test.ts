@@ -21,6 +21,8 @@ describe('esquema de configurações (CA1)', () => {
       claudeModel: 'haiku',
       chatModel: 'sonnet',
       claudePath: null,
+      claudeTransport: 'acp',
+      agentProfile: 'claude',
       saveToFolder: true,
       audioFolder: null,
       summarizeOnStop: true,
@@ -60,6 +62,8 @@ describe('esquema de configurações (CA1)', () => {
       claudeModel: 'sonnet',
       chatModel: 'opus',
       claudePath: '/opt/claude/bin/claude',
+      claudeTransport: 'cli',
+      agentProfile: 'claude',
       saveToFolder: false,
       audioFolder: '/Users/teste/Reuniões',
       summarizeOnStop: false,
@@ -73,6 +77,8 @@ describe('esquema de configurações (CA1)', () => {
     expect(parseSettings({ ...saved, theme: 'sepia' })).toEqual({ ...saved, theme: 'system' })
     expect(parseSettings({ ...saved, sourceLanguage: 'fr' })).toEqual({ ...saved, sourceLanguage: 'pt' })
     expect(parseSettings({ ...saved, translationEnabled: 'sim' })).toEqual({ ...saved, translationEnabled: true })
+    // Contrato 17: conexão desconhecida volta ao agente (padrão).
+    expect(parseSettings({ ...saved, claudeTransport: 'grpc' })).toEqual({ ...saved, claudeTransport: 'acp' })
     expect(parseSettings({ ...saved, translationModel: '' })).toEqual({ ...saved, translationModel: 'qwen3.5-4b-32k-fast' })
     expect(parseSettings({ ...saved, echoCancellation: 1 })).toEqual({ ...saved, echoCancellation: false })
     expect(parseSettings({ ...saved, micDeviceId: 42 })).toEqual({ ...saved, micDeviceId: null })
@@ -102,7 +108,7 @@ describe('esquema de configurações (CA1)', () => {
   it('Claude CLI (contrato 05, CA1): motor, modelo e caminho com padrão próprio cada um', () => {
     // `settings.json` do contrato 04, sem os campos novos: carrega com os padrões deles e mantém o resto.
     const old = { translationEnabled: false, translationModel: 'gpt-oss-120b', sourceLanguage: 'es', targetLanguage: 'ja', echoCancellation: true, theme: 'dark', micDeviceId: null }
-    expect(parseSettings(old)).toEqual({ ...old, removeEcho: true, translationEngine: 'assemblyai', claudeModel: 'haiku', chatModel: 'sonnet', claudePath: null, saveToFolder: true, audioFolder: null, summarizeOnStop: true, identifySpeakers: false, brandName: null, brandSubtitle: null, brandLogo: null, autoCheckUpdates: true })
+    expect(parseSettings(old)).toEqual({ ...old, removeEcho: true, translationEngine: 'assemblyai', claudeModel: 'haiku', chatModel: 'sonnet', claudePath: null, claudeTransport: 'acp', agentProfile: 'claude', saveToFolder: true, audioFolder: null, summarizeOnStop: true, identifySpeakers: false, brandName: null, brandSubtitle: null, brandLogo: null, autoCheckUpdates: true })
     expect(parseSettings({ translationEngine: 'claude-cli', claudeModel: 'sonnet' })).toMatchObject({ translationEngine: 'claude-cli', claudeModel: 'sonnet' })
     // Fora da lista cai no padrão: só `haiku` e `sonnet`, só os dois motores.
     expect(parseSettings({ translationEngine: 'openai' }).translationEngine).toBe('assemblyai')

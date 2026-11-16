@@ -58,6 +58,19 @@ cp -R "$APP" "$DMGSRC/"
 ln -s /Applications "$DMGSRC/Applications"
 hdiutil create -volname "$NOME" -srcfolder "$DMGSRC" -ov -format UDZO "$DMG" >/dev/null
 rm -rf "$DMGSRC"
+# Contrato 17 (decisão do Andrew): o Claude Agent SDK é proprietário e não vai no .dmg; o agente é baixado
+# pelo app, com o clique da pessoa. Confere o .dmg montado e o app.asar.
+MOUNT=$(mktemp -d)
+hdiutil attach -nobrowse -readonly -mountpoint "$MOUNT" "$DMG" >/dev/null
+FOUND=$( (find "$MOUNT" -iname '*claude-agent*'; npx -y @electron/asar list "$MOUNT/$NOME.app/Contents/Resources/app.asar" | grep -i 'claude-agent' || true) | head -5)
+hdiutil detach "$MOUNT" >/dev/null
+rmdir "$MOUNT"
+if [[ -n "$FOUND" ]]; then
+  echo "pack.sh: o .dmg leva o agente, que não pode ir no pacote:" >&2
+  echo "$FOUND" >&2
+  exit 1
+fi
+echo "dmg sem claude-agent-sdk nem claude-agent-acp"
 (cd dist && shasum -a 256 "$DMG_NOME" > "$DMG_NOME.sha256")
 SHA=$(cut -d' ' -f1 "$DMG.sha256")
 cat > dist/latest.json <<JSON

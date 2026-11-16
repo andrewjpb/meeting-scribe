@@ -17,6 +17,14 @@
 // v2 (contrato 16) confere a linha "Pensando…"/"Abrindo «…»", o bloco "Raciocínio e passos", o rodapé, o
 // painel "Contexto" com a troca de escopo (e a pasta do processo), a troca de modelo, "Refazer", renomear e
 // ↑ para editar a última pergunta.
+//
+// Contrato 17: todo o smoke acima roda com a "Conexão com o Claude" em "Linha de comando" (a reserva, que
+// não muda). No fim do tema claro, a conexão vai para o agente e o agente ACP falso
+// (test/fixtures/fake-acp-agent.mjs) responde no lugar do adaptador: uma pergunta com raciocínio, plano,
+// passos com estado, permissões concedidas e negadas, a leitura fora da pasta recusada e o rodapé; "Parar"
+// (`session/cancel`, a sessão segue viva); troca de modelo e "Pensar mais" na mesma sessão; uma gravação
+// traduzida (com a latência medida) e um resumo pelo agente; e o adaptador que não sobe, com o botão "Usar
+// a linha de comando". O `claude` de verdade nunca roda.
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
@@ -44,7 +52,9 @@ import { CHATS_DIR } from './chat/store'
 import { CHAT_ALLOWED_TOOLS, CHAT_DISALLOWED_TOOLS } from './claude-cli/chat'
 import { MEETINGS_FILE } from './meetings/store'
 import { originOf } from './security'
+import { SETTINGS_VERSION } from './settings/schema'
 import { SETTINGS_FILE } from './settings/store'
+import { CLAUDE_DISALLOWED_TOOLS, CLAUDE_READ_TOOLS } from './acp/profiles/claude'
 import { LATEST_RELEASE_URL, RELEASE_DOWNLOAD_PREFIX, RELEASE_REDIRECT_HOSTS } from './updates/release'
 import {
   SMOKE_FAKE_KEY,
@@ -121,6 +131,10 @@ export function prepareSmokeEnvironment(argv: readonly string[]): string {
   if (!dir.startsWith(`${temp}/`)) throw new Error(`smoke: userData fora da pasta temporária (${dir})`)
   app.setPath('userData', dir)
   app.setPath('sessionData', dir)
+  // Contrato 17: o smoke dos contratos anteriores confere a linha de comando (a reserva); o agente ACP falso
+  // entra só no bloco dele, no fim do tema claro.
+  const settingsFile = join(dir, SETTINGS_FILE)
+  if (!existsSync(settingsFile)) writeFileSync(settingsFile, `${JSON.stringify({ version: SETTINGS_VERSION, settings: { claudeTransport: 'cli' } })}\n`, { mode: 0o600 })
   if (process.platform === 'darwin') app.setActivationPolicy('accessory')
   return dir
 }
@@ -300,7 +314,8 @@ interface SmokeChatFile {
   title: string
   scope?: { kind: string; meetingIds?: string[] }
   model?: string | null
-  messages: { role: string; text: string; error?: string; steps?: unknown[]; thinking?: string; meta?: { model: string; consulted: string[] }; model?: string }[]
+  thinkMore?: boolean
+  messages: { role: string; text: string; error?: string; steps?: unknown[]; thinking?: string; plan?: unknown[]; meta?: { model: string; consulted: string[] }; model?: string }[]
 }
 
 function readChatFiles(userDataDir: string): SmokeChatFile[] {
@@ -1829,6 +1844,307 @@ async function updatesChecks(win: BrowserWindow, ctx: SmokeContext): Promise<{ c
   }
 }
 
+type AcpLogEntry = Record<string, unknown> & { method?: string; event?: string; purpose?: string; sessionId?: string }
+
+/** O que o agente ACP falso registrou (`--log`), na ordem. */
+function readAcpLog(userDataDir: string): AcpLogEntry[] {
+  const file = join(userDataDir, 'acp-fake.jsonl')
+  if (!existsSync(file)) return []
+  return readFileSync(file, 'utf8')
+    .split('\n')
+    .filter(Boolean)
+    .map((line) => JSON.parse(line) as AcpLogEntry)
+}
+
+/** Medidas do bloco do ACP para o `report.json`. */
+interface AcpMeasured {
+  /** Tempo de cada trecho traduzido pelo agente falso, do pedido do renderer à tradução (ms). */
+  translationLatencyMs: number[]
+  /** Tempo do resumo pelo agente falso, do pedido ao "pronto" (ms). */
+  summaryMs: number | null
+}
+
+/**
+ * Contrato 17 (CA1 a CA10) no tema claro, com o agente ACP falso no lugar do adaptador: "Perguntar" pelo
+ * agente (raciocínio, plano, passos com estado, permissões, leitura fora recusada, rodapé), "Parar" com
+ * `session/cancel`, modelo e "Pensar mais" na mesma sessão, uma gravação traduzida e um resumo pelo agente, e
+ * o adaptador que não sobe. Termina com a conexão de volta na linha de comando.
+ */
+async function acpChecks(win: BrowserWindow, ctx: SmokeContext, shot: () => Promise<void>): Promise<{ check: Check; measured: AcpMeasured }> {
+  const contents = win.webContents
+  const { fixtures, userDataDir } = ctx
+  const measured: AcpMeasured = { translationLatencyMs: [], summaryMs: null }
+  await evaluate(contents, "window.__scribeApi.invoke('scribe:settings-update', { claudeTransport: 'acp' }).then(() => true)")
+  const transportSaved = readSettings(userDataDir).claudeTransport
+  // CA7: a linha "Conexão com o Claude" nas Configurações, no agente.
+  await clickSelector(contents, '[data-nav="configuracoes"]')
+  await waitFor(contents, routeIs('configuracoes'))
+  const settingsRow = await waitFor(contents, `document.querySelector('[data-claude-transport-option="acp"]')?.getAttribute('aria-pressed') === 'true' && document.querySelector('section[aria-label="Claude"]')`)
+  const settingsLabels = await evaluate<string[]>(contents, "[...document.querySelectorAll('[data-claude-transport-option]')].map((el) => el.textContent)")
+  // Devolução A: o agente não vem no pacote: "Não instalado" com "Instalar (≈… MB)".
+  const missingRow = await waitFor(contents, `document.querySelector('[data-acp-state="missing"] [data-action="acp-install"]')?.textContent.startsWith('Instalar (≈')`)
+  const missingText = await text(contents, '[data-acp-status]')
+
+  // Sem o agente, a tradução vai pela linha de comando (nada é baixado sem clique).
+  await evaluate(contents, "window.__scribeApi.invoke('scribe:settings-update', { translationEngine: 'claude-cli' }).then(() => true)")
+  const cliBefore = fixtures.claudeSpawns.length
+  const acpBefore = fixtures.acpSpawns.length
+  const fallback = await evaluate<{ ok: boolean }>(contents, "window.__scribeApi.invoke('scribe:claude-start').then(async (started) => { await window.__scribeApi.invoke('scribe:claude-stop'); return started })")
+  await evaluate(contents, "window.__scribeApi.invoke('scribe:settings-update', { translationEngine: 'assemblyai' }).then(() => true)")
+  const fallbackOk = fallback.ok && fixtures.claudeSpawns.length === cliBefore + 1 && fixtures.acpSpawns.length === acpBefore && fixtures.registryCalls.length === 0
+
+  // O chat sem o agente: "Instalar o agente do Claude" e "Usar a linha de comando"; o clique instala.
+  await clickSelector(contents, '[data-nav="perguntar"]')
+  await waitFor(contents, routeIs('perguntar'))
+  await clickSelector(contents, '[data-action="chat-new"]')
+  await waitFor(contents, `document.querySelector('[data-chat-input]') && !document.querySelector('[data-chat-message]')`)
+  await setValue(contents, '[data-chat-input]', 'Oi, agente?')
+  await pressEnterIn(contents, '[data-chat-input]')
+  const missingShown = await waitFor(
+    contents,
+    `document.querySelector('[data-chat-error="agent-missing"] [data-action="acp-install-from-chat"]') && document.querySelector('[data-chat-error="agent-missing"] [data-action="use-command-line"]')`,
+    10_000,
+  )
+  const missingChatText = await text(contents, '[data-chat-error="agent-missing"]')
+  await clickSelector(contents, '[data-action="acp-install-from-chat"]')
+  let installed: { state: string; version?: string } = { state: 'installing' }
+  for (let attempt = 0; attempt < 100 && installed.state !== 'installed' && installed.state !== 'error'; attempt++) {
+    await wait(50)
+    installed = await evaluate(contents, "window.__scribeApi.invoke('scribe:acp-status')")
+  }
+  const installRoot = join(userDataDir, 'acp', 'claude')
+  const installOk =
+    installed.state === 'installed' &&
+    installed.version === '0.107.0' &&
+    fixtures.registryCalls.length === 5 &&
+    existsSync(join(installRoot, '0.107.0', 'node_modules', '@agentclientprotocol', 'claude-agent-acp', 'dist', 'index.js')) &&
+    existsSync(join(installRoot, '0.107.0', 'node_modules', '@anthropic-ai', 'claude-agent-sdk', 'package.json')) &&
+    JSON.stringify(readdirSync(installRoot)) === '["0.107.0"]'
+  const afterInstall = await waitFor(contents, `document.querySelector('[data-chat-error="agent-missing"]')?.textContent.includes('Agente instalado')`)
+
+  // CA2 a CA4 e CA10: uma pergunta pelo agente, numa conversa nova.
+  await clickSelector(contents, '[data-action="chat-new"]')
+  await waitFor(contents, `document.querySelector('[data-chat-input]') && !document.querySelector('[data-chat-message]')`)
+  const thinkMoreShown = await waitFor(contents, `document.querySelector('[data-action="chat-think-more"]')`)
+  const spawnsBefore = fixtures.acpSpawns.length
+  const asked = await askWatching(contents, 'O que ficou decidido? Pergunta pelo agente.')
+  // O bloco "Raciocínio e passos" da resposta gravada, aberto para a foto e para conferir.
+  await evaluate(contents, `${LAST_ASSISTANT}?.querySelector('[data-action="toggle-reasoning"]')?.click() ?? true`)
+  await waitFor(contents, `${LAST_ASSISTANT}?.querySelector('[data-chat-plan]')`)
+  const block = await evaluate<{ plan: string[]; steps: string[]; denied: string; thinking: string; footer: string }>(
+    contents,
+    `(() => {
+      const last = ${LAST_ASSISTANT}
+      return {
+        plan: [...last.querySelectorAll('[data-chat-plan-entry]')].map((el) => el.dataset.chatPlanEntry + ':' + el.textContent),
+        steps: [...last.querySelectorAll('[data-chat-step]')].map((el) => el.dataset.chatStepStatus + ':' + el.textContent),
+        denied: last.querySelector('[data-chat-denied]')?.dataset.chatDenied ?? '',
+        thinking: last.querySelector('[data-chat-thinking]')?.textContent ?? '',
+        footer: last.querySelector('[data-chat-footer]')?.textContent ?? '',
+      }
+    })()`,
+  )
+  await shot()
+  const chatId = await evaluate<string>(contents, `document.querySelector('[data-chat-conversation]')?.getAttribute('data-chat-conversation') ?? ''`)
+  const chatSpawn = fixtures.acpSpawns[spawnsBefore]
+
+  // "Parar": `session/cancel`; o processo segue vivo e a próxima pergunta vai na mesma sessão.
+  await setValue(contents, '[data-chat-input]', 'Responda devagar, por favor.')
+  await pressEnterIn(contents, '[data-chat-input]')
+  const streaming = await waitFor(contents, `(document.querySelector('[data-chat-streaming] [data-chat-markdown]')?.textContent ?? '').length > 0 && document.querySelector('[data-action="chat-stop"]')`, 10_000)
+  await clickSelector(contents, '[data-action="chat-stop"]')
+  const stopped = await waitFor(contents, `document.querySelector('[data-chat-error="stopped"]') && document.querySelector('[data-action="chat-send"]')`, 8000)
+  const aliveAfterStop = chatSpawn !== undefined && !chatSpawn.exited
+
+  // Modelo e "Pensar mais": `session/set_config_option` na mesma sessão.
+  await setValue(contents, '[data-chat-model-select]', 'opus', 'change')
+  await clickSelector(contents, '[data-action="chat-think-more"]')
+  await waitFor(contents, `document.querySelector('[data-action="chat-think-more"]')?.getAttribute('aria-pressed') === 'true'`)
+  const switched = await askChat(contents, 'E com o Opus?')
+  const chatSpawnsAfter = fixtures.acpSpawns.length - spawnsBefore
+  const savedChat = chatFile(userDataDir, chatId)
+
+  const log = readAcpLog(userDataDir)
+  const chatNew = log.find((entry) => entry.method === 'session/new' && entry.purpose === 'chat') as
+    | (AcpLogEntry & { cwd?: string; mcpServers?: unknown[]; configOptions?: { configId: string; value: string }[]; options?: Record<string, unknown> })
+    | undefined
+  const chatSession = chatNew?.sessionId
+  const ofChat = log.filter((entry) => entry.sessionId === chatSession)
+  const init = log.find((entry) => entry.method === 'initialize') as (AcpLogEntry & { clientCapabilities?: Record<string, unknown> }) | undefined
+  const permissions = ofChat.filter((entry) => entry.event === 'permission').slice(0, 4).map((entry) => `${String(entry.tool)}:${String(entry.outcome)}`)
+  const options = chatNew?.options ?? {}
+  const allowedEnv = ['CLAUDE_CODE_EXECUTABLE', 'ELECTRON_RUN_AS_NODE', 'HOME', 'LANG', 'LC_ALL', 'LC_CTYPE', 'LOGNAME', 'PATH', 'SHELL', 'TMPDIR', 'USER']
+  const capabilities = init?.clientCapabilities as { fs?: { readTextFile?: boolean; writeTextFile?: boolean }; terminal?: boolean } | undefined
+  // O SDK reordena as chaves ao validar: compara campo a campo.
+  const pairs = (list: { configId: string; value: string }[] | undefined): string[] => (list ?? []).map((entry) => `${entry.configId}=${entry.value}`)
+  const sessionOk =
+    capabilities?.fs?.readTextFile === true &&
+    capabilities.fs.writeTextFile === false &&
+    capabilities.terminal === false &&
+    chatNew?.cwd === join(userDataDir, CHAT_CORPUS_DIR) &&
+    JSON.stringify(chatNew?.mcpServers) === '[]' &&
+    JSON.stringify(options['settingSources']) === '[]' &&
+    JSON.stringify(options['tools']) === JSON.stringify([...CLAUDE_READ_TOOLS]) &&
+    JSON.stringify(options['disallowedTools']) === JSON.stringify([...CLAUDE_DISALLOWED_TOOLS]) &&
+    options['model'] === 'sonnet' &&
+    String(options['systemPrompt']).startsWith('Você responde perguntas sobre as reuniões') &&
+    JSON.stringify(pairs(chatNew?.configOptions)) === JSON.stringify(['mode=default', 'model=sonnet'])
+  const securityOk =
+    JSON.stringify(permissions) === JSON.stringify(['Read:allow', 'Read:allow', 'Grep:allow', 'Write:reject']) &&
+    ofChat.some((entry) => entry.event === 'read-outside' && entry.refused === true) &&
+    ofChat.some((entry) => entry.event === 'terminal' && entry.refused === true)
+  const protocolOk =
+    ofChat.some((entry) => entry.method === 'session/cancel') &&
+    ofChat.filter((entry) => entry.method === 'session/new').length === 1 &&
+    ofChat.filter((entry) => entry.method === 'session/prompt').length === 3 &&
+    JSON.stringify(ofChat.filter((entry) => entry.method === 'session/set_config_option').map((entry) => `${String(entry.configId)}=${String(entry.value)}`)) ===
+      JSON.stringify(['model=opus', 'effort=high']) &&
+    log.filter((entry) => entry.method === 'session/new' && entry.purpose === 'chat').length === 1
+  const processOk =
+    chatSpawnsAfter === 1 &&
+    chatSpawn !== undefined &&
+    chatSpawn.claudeExecutable === join(app.getAppPath(), 'test', 'fixtures', 'fake-claude.mjs') &&
+    chatSpawn.envNames.every((name) => allowedEnv.includes(name)) &&
+    chatSpawn.envNames.includes('CLAUDE_CODE_EXECUTABLE') &&
+    chatSpawn.envNames.includes('ELECTRON_RUN_AS_NODE')
+  const uiOk =
+    asked.done &&
+    asked.streamed &&
+    asked.liveOpen &&
+    asked.statuses[0] === 'Pensando…' &&
+    asked.statuses.some((status) => status.startsWith('Abrindo «')) &&
+    asked.answer.includes('pelo agente') &&
+    JSON.stringify(block.plan.map((entry) => entry.split(':')[0])) === JSON.stringify(['completed', 'completed', 'completed']) &&
+    block.steps.length === 3 &&
+    block.steps.every((step) => step.startsWith('completed:') && step.endsWith('· feito')) &&
+    block.denied === '2' &&
+    block.thinking.includes('<b>sem HTML</b>') &&
+    block.footer.includes('Sonnet') &&
+    block.footer.includes('US$') &&
+    !JSON.stringify(block).includes(userDataDir)
+  const savedOk =
+    savedChat?.thinkMore === true &&
+    savedChat.model === 'opus' &&
+    savedChat.messages.some((message) => message.error === 'stopped') &&
+    (savedChat.messages.find((message) => message.role === 'assistant')?.plan?.length ?? 0) === 3
+
+  // CA4b: uma gravação traduzida pelo agente, pelos mesmos canais da gravação, com a latência medida.
+  await evaluate(contents, "window.__scribeApi.invoke('scribe:settings-update', { translationEngine: 'claude-cli' }).then(() => true)")
+  const translate = await evaluate<{ started: { ok: boolean }; results: { ok: boolean; translation?: string; model?: string }[]; ms: number[] }>(
+    contents,
+    `(async () => {
+      const started = await window.__scribeApi.invoke('scribe:claude-start')
+      const results = []
+      const ms = []
+      const texts = ['Bom dia a todos.', 'Alguma dúvida <até> aqui?', 'Vamos fechar o orçamento hoje.']
+      for (let i = 0; i < texts.length; i++) {
+        const t0 = performance.now()
+        results.push(await window.__scribeApi.invoke('scribe:claude-translate', { segmentId: 'mic-acp-' + i, source: 'mic', turnOrder: i, text: texts[i] }))
+        ms.push(Math.round(performance.now() - t0))
+      }
+      await window.__scribeApi.invoke('scribe:claude-stop')
+      return { started, results, ms }
+    })()`,
+  )
+  measured.translationLatencyMs = translate.ms
+  await evaluate(contents, "window.__scribeApi.invoke('scribe:settings-update', { translationEngine: 'assemblyai' }).then(() => true)")
+  const translateNew = readAcpLog(userDataDir).find((entry) => entry.method === 'session/new' && entry.purpose === 'translate') as (AcpLogEntry & { cwd?: string; options?: Record<string, unknown> }) | undefined
+  const translateOk =
+    translate.started.ok &&
+    JSON.stringify(translate.results.map((result) => result.translation)) === JSON.stringify(['[EN] Bom dia a todos.', '[EN] Alguma dúvida <até> aqui?', '[EN] Vamos fechar o orçamento hoje.']) &&
+    translate.results.every((result) => result.model === 'claude-cli:haiku') &&
+    translateNew?.cwd === join(userDataDir, 'claude-cwd', 'translate') &&
+    JSON.stringify(translateNew.options?.['tools']) === '[]' &&
+    JSON.stringify(translateNew.options?.['settingSources']) === '[]'
+
+  // CA4c: um resumo pelo agente, de uma reunião com a transcrição da fixture (o resumo sai do arquivo depois).
+  const summaryMeeting = readMeetings(userDataDir)[0]?.id ?? 'smoke-1'
+  const transcriptFile = join(userDataDir, 'meetings', `${summaryMeeting}.json`)
+  const hadTranscript = existsSync(transcriptFile)
+  if (!hadTranscript) writeFileSync(transcriptFile, `${JSON.stringify(transcriptDocument(summaryMeeting, readSessionFixture()), null, 2)}\n`)
+  const summaryStarted = Date.now()
+  await evaluate(contents, `window.__scribeApi.invoke('scribe:summary-generate', { meetingId: ${JSON.stringify(summaryMeeting)} })`)
+  let summary: { state: string; summary?: { overview?: string } } = { state: 'generating' }
+  for (let attempt = 0; attempt < 100 && summary.state === 'generating'; attempt++) {
+    await wait(100)
+    summary = await evaluate(contents, `window.__scribeApi.invoke('scribe:summary-get', { meetingId: ${JSON.stringify(summaryMeeting)} })`)
+  }
+  measured.summaryMs = summary.state === 'ready' ? Date.now() - summaryStarted : null
+  const summaryNew = readAcpLog(userDataDir).find((entry) => entry.method === 'session/new' && entry.purpose === 'summary') as (AcpLogEntry & { cwd?: string; options?: Record<string, unknown> }) | undefined
+  const summaryOk =
+    summary.state === 'ready' &&
+    (summary.summary?.overview ?? '').includes('resumida pelo agente') &&
+    summaryNew?.cwd === join(userDataDir, 'claude-cwd', 'summary') &&
+    JSON.stringify(summaryNew.options?.['tools']) === '[]'
+  rmSync(join(userDataDir, 'meetings', `${summaryMeeting}.summary.json`), { force: true })
+  if (!hadTranscript) rmSync(transcriptFile, { force: true })
+
+  // CA8: o adaptador que não sobe: o erro na tela e o botão que troca para a linha de comando.
+  fixtures.acpBroken = true
+  await clickSelector(contents, '[data-action="chat-new"]')
+  await waitFor(contents, `document.querySelector('[data-chat-input]') && !document.querySelector('[data-chat-message]')`)
+  await setValue(contents, '[data-chat-input]', 'Oi, agente?')
+  await pressEnterIn(contents, '[data-chat-input]')
+  const brokenShown = await waitFor(contents, `document.querySelector('[data-chat-error="agent"] [data-action="use-command-line"]')`, 10_000)
+  const brokenText = await text(contents, '[data-chat-error="agent"]')
+  await clickSelector(contents, '[data-action="use-command-line"]')
+  const switchedBack = await waitFor(contents, `!document.querySelector('[data-action="use-command-line"]')`)
+  fixtures.acpBroken = false
+  const back = readSettings(userDataDir).claudeTransport
+  // Nenhum processo do agente fica vivo depois de cada uso (o do chat morre ao sair do app).
+  for (let attempt = 0; attempt < 60 && fixtures.acpSpawns.slice(spawnsBefore + 1).some((spawn) => !spawn.exited); attempt++) await wait(50)
+  const othersExited = fixtures.acpSpawns.slice(spawnsBefore + 1).every((spawn) => spawn.exited)
+
+  // "Remover" nas Configurações: volta a "Não instalado" e a pasta some.
+  await clickSelector(contents, '[data-nav="configuracoes"]')
+  await waitFor(contents, routeIs('configuracoes'))
+  await evaluate(contents, "window.__scribeApi.invoke('scribe:settings-update', { claudeTransport: 'acp' }).then(() => true)")
+  await waitFor(contents, `document.querySelector('[data-acp-state="installed"] [data-action="acp-remove"]')`)
+  const installedText = await text(contents, '[data-acp-status]')
+  await clickSelector(contents, '[data-action="acp-remove"]')
+  const removed = (await waitFor(contents, `document.querySelector('[data-acp-state="missing"]')`)) && !existsSync(join(installRoot, '0.107.0'))
+  await evaluate(contents, "window.__scribeApi.invoke('scribe:settings-update', { claudeTransport: 'cli' }).then(() => true)")
+
+  return {
+    check: {
+      ok:
+        missingRow &&
+        missingText === 'Não instalado' &&
+        fallbackOk &&
+        missingShown &&
+        missingChatText.includes('O agente do Claude não está instalado.') &&
+        installOk &&
+        afterInstall &&
+        installedText === 'Instalado 0.107.0' &&
+        removed &&
+        transportSaved === 'acp' &&
+        settingsRow &&
+        JSON.stringify(settingsLabels) === JSON.stringify(['Agente (ACP, recomendado)', 'Linha de comando']) &&
+        thinkMoreShown &&
+        uiOk &&
+        sessionOk &&
+        securityOk &&
+        streaming &&
+        stopped &&
+        aliveAfterStop &&
+        switched.done &&
+        switched.answer.includes('Modelo: opus') &&
+        protocolOk &&
+        processOk &&
+        savedOk &&
+        translateOk &&
+        summaryOk &&
+        brokenShown &&
+        brokenText.includes('O agente do Claude não abriu.') &&
+        switchedBack &&
+        back === 'cli' &&
+        othersExited,
+      detail: `sem agente: linha "${missingText}"=${missingRow}, tradução pela linha de comando=${fallbackOk}, chat "${missingChatText.slice(0, 80)}" com os botões=${missingShown}; instalação ${JSON.stringify(installed)}, ${fixtures.registryCalls.length} pacotes do registro falso, ok=${installOk}, aviso depois=${afterInstall}; "${installedText}", Remover=${removed}; conexão ${transportSaved}, linha nas Configurações=${settingsRow} ${JSON.stringify(settingsLabels)}; pergunta: estados ${JSON.stringify(asked.statuses)}, bloco aberto=${asked.liveOpen}, em pedaços=${asked.streamed}, fim=${asked.done}, resposta "${asked.answer.slice(0, 80)}"; plano ${JSON.stringify(block.plan)}, passos ${JSON.stringify(block.steps)}, negadas ${block.denied}, rodapé "${block.footer}"; session/new ok=${sessionOk}, permissões ${JSON.stringify(permissions)}, segurança=${securityOk}; Parar: em pedaços=${streaming}, parada=${stopped}, processo vivo=${aliveAfterStop}; Opus + Pensar mais -> "${switched.answer.slice(-40)}", protocolo=${protocolOk}; processo=${processOk} (${fixtures.acpSpawns.length - spawnsBefore} abertos); gravado=${savedOk}; tradução ${JSON.stringify(translate.results)} em ${JSON.stringify(translate.ms)} ms, ok=${translateOk}; resumo ${summary.state} em ${measured.summaryMs ?? '?'} ms, ok=${summaryOk}; adaptador quebrado -> "${brokenText.slice(-60)}", botão=${brokenShown}, conexão de volta ${back}; processos encerrados=${othersExited}`,
+    },
+    measured,
+  }
+}
+
 async function scrollToSection(contents: WebContents, label: string): Promise<void> {
   await evaluate(
     contents,
@@ -2543,6 +2859,8 @@ async function settingsChecks(win: BrowserWindow, ctx: SmokeContext, checks: Rec
   await evaluate(contents, `window.__scribeApi.invoke('scribe:settings-update', ${JSON.stringify(resettable)}).then(() => true)`)
   const reset = readSettings(userDataDir)
   if (JSON.stringify(reset) !== JSON.stringify(DEFAULT_SETTINGS)) checks['reset'] = { ok: false, detail: `padrões não voltaram: ${JSON.stringify(reset)}` }
+  // Contrato 17: o padrão é o agente; o resto do smoke segue na linha de comando até o bloco do ACP.
+  await evaluate(contents, "window.__scribeApi.invoke('scribe:settings-update', { claudeTransport: 'cli' }).then(() => true)")
 }
 
 /** Contrato 05, CA10: "Traduzir com" em Claude CLI, com o binário falso encontrado. */
@@ -2888,6 +3206,7 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
   const meetingsList: Record<string, Check> = {}
   /** Contratos 15 e 16: chat "Perguntar" e os detalhes da resposta (nos dois temas); "Parar", o painel "Contexto" e a aba do detalhe (no claro). */
   const chat: Record<string, Check> = {}
+  let acpMeasured: AcpMeasured | null = null
 
   // A fixture da sessão real, reduzida pelo mesmo redutor do app: a mesma dos testes (CA4) e do smoke.
   const sessionFixture = readSessionFixture()
@@ -3172,6 +3491,11 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
         navigation['keyboard'] = await keyboardNavigation(contents)
 
         motion = await reducedMotion(contents)
+
+        // Contrato 17: o motor pelo agente ACP falso (chat, tradução, resumo e o adaptador que não sobe).
+        const acpResult = await acpChecks(win, ctx, () => extraShot('perguntar-acp-light'))
+        chat['acp'] = acpResult.check
+        acpMeasured = acpResult.measured
       }
       rmSync(join(ctx.userDataDir, MEETINGS_FILE), { force: true })
       win.destroy()
@@ -3217,7 +3541,7 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
   for (const [name, check] of Object.entries(meetingsList)) if (!check.ok) failures.push(`lista de reuniões ${name}: ${check.detail}`)
   for (const name of ['list', 'listDark', 'search']) if (!meetingsList[name]) failures.push(`lista de reuniões ${name}: não executado`)
   for (const [name, check] of Object.entries(chat)) if (!check.ok) failures.push(`chat ${name}: ${check.detail}`)
-  for (const name of ['screen', 'screenDark', 'details', 'detailsDark', 'stop', 'context', 'meeting']) if (!chat[name]) failures.push(`chat ${name}: não executado`)
+  for (const name of ['screen', 'screenDark', 'details', 'detailsDark', 'stop', 'context', 'meeting', 'acp']) if (!chat[name]) failures.push(`chat ${name}: não executado`)
   for (const name of ['configuracoes', 'gravacao', 'detalhe']) {
     const check = layout[name]
     if (!check) failures.push(`medidas ${name}: não executado`)
@@ -3239,8 +3563,9 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
   if (!motion.ok) failures.push(`movimento reduzido: ${motion.detail}`)
   // Mais o aviso de sistema sem som, nos dois temas, o eco removido, os arquivos no detalhe, a aba
   // "Áudio" depois de baixar, a barra com a marca própria, o bloco "Atualizações" e a busca na lista
-  // (só no claro), e a conversa vazia e o painel "Contexto" do "Perguntar" v2 (só no claro).
-  const expectedShots = SCREENS.length * THEMES.length + 10
+  // (só no claro), a conversa vazia e o painel "Contexto" do "Perguntar" v2 e a conversa pelo agente ACP
+  // (contrato 17), só no claro.
+  const expectedShots = SCREENS.length * THEMES.length + 11
   if (screenshots.length !== expectedShots) failures.push(`${screenshots.length} PNGs em vez de ${expectedShots}`)
   for (const shot of screenshots) {
     if (shot.width < 1120 || shot.height < 740) failures.push(`${shot.name}: ${shot.width}x${shot.height} abaixo de 1120x740`)
@@ -3274,6 +3599,7 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
     summary: summaryMeasured,
     meetingsList,
     chat,
+    acp: acpMeasured,
     meetingFolder: folderFiles(defaultMeetingFolder(ctx)),
     openedFiles: ctx.fixtures.openedFiles.map((item) => ({ action: item.action, file: basename(item.path) })),
     claudeFakeSpawns: ctx.fixtures.claudeSpawns.map((spawn) => ({ ...spawn, args: spawn.args.filter((arg) => arg.startsWith('--')) })),
