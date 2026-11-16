@@ -87,6 +87,8 @@ export interface WhatsAppServiceDeps {
   meeting: (meetingId: string) => Promise<{ meeting: Meeting; summary: MeetingSummary | null } | null>
   onStatus: (status: WhatsAppStatus) => void
   onMessage: (message: WhatsAppMessage, chatName: string) => void
+  /** Várias conversas mudaram de uma vez: o renderer relê a lista (no máximo uma vez por segundo). */
+  onChatsChanged?: () => void
   log?: (message: string) => void
   now?: () => number
 }
@@ -217,12 +219,22 @@ export function createWhatsAppService(deps: WhatsAppServiceDeps): WhatsAppServic
     }
   }
 
+  let chatsTimer: ReturnType<typeof setTimeout> | null = null
+  function chatsChanged(): void {
+    if (chatsTimer) return
+    chatsTimer = setTimeout(() => {
+      chatsTimer = null
+      if (!disposed) deps.onChatsChanged?.()
+    }, 1000)
+  }
+
   function subscribe(current: BridgeClient): void {
     closeEvents?.()
     closeEvents = current.events(
       (event) => {
         if (client !== current) return
         if (event.type === 'state') onHealth(event.health)
+        else if (event.type === 'chats') chatsChanged()
         else {
           const chatName = event.chatName ?? chatNames.get(event.message.chatId) ?? event.message.chatId.split('@')[0] ?? ''
           deps.onMessage(event.message, chatName)

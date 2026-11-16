@@ -86,32 +86,67 @@ class Store:
 
     def add_message(self, message, count_unread=True):
         """Grava a mensagem (repetida é ignorada). Devolve `True` quando ela é nova."""
-        kind = message.get('type') if message.get('type') in MESSAGE_KINDS else 'other'
-        media = message.get('media') or {}
         with self.lock:
-            self._upsert_chat(message['chatId'], message.get('chatName'), message.get('chatKind'))
-            cursor = self.db.execute(
-                'INSERT OR IGNORE INTO messages (id, chat_id, author, from_me, at, kind, text, media_mime, media_size, media_name) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-                (
-                    _clip(message['id'], 200),
-                    message['chatId'],
-                    _clip(message.get('author'), NAME_MAX),
-                    1 if message.get('fromMe') else 0,
-                    int(message['at']),
-                    kind,
-                    _clip(message.get('text'), TEXT_MAX),
-                    _clip(media.get('mime'), 100) or None,
-                    int(media['size']) if isinstance(media.get('size'), int) else None,
-                    _clip(media.get('name'), NAME_MAX) or None,
-                ),
-            )
-            created = cursor.rowcount == 1
-            if created:
-                self.db.execute('UPDATE chats SET last_at = MAX(last_at, ?) WHERE id = ?', (int(message['at']), message['chatId']))
-                if count_unread and not message.get('fromMe'):
-                    self.db.execute('UPDATE chats SET unread = unread + 1 WHERE id = ?', (message['chatId'],))
+            created = self._add_message(message, count_unread)
             self.db.commit()
             return created
+
+    def add_messages(self, messages):
+        """O histórico que o celular manda depois do pareamento: tudo numa transação só (milhares de mensagens),
+        sem contar como não lidas. Devolve quantas eram novas."""
+        created = 0
+        with self.lock:
+            for message in messages:
+                created += 1 if self._add_message(message, False) else 0
+            self.db.commit()
+        return created
+
+    def _add_message(self, message, count_unread):
+        kind = message.get('type') if message.get('type') in MESSAGE_KINDS else 'other'
+        media = message.get('media') or {}
+        self._upsert_chat(message['chatId'], message.get('chatName'), message.get('chatKind'))
+        cursor = self.db.execute(
+            'INSERT OR IGNORE INTO messages (id, chat_id, author, from_me, at, kind, text, media_mime, media_size, media_name) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+            (
+                _clip(message['id'], 200),
+                message['chatId'],
+                _clip(message.get('author'), NAME_MAX),
+                1 if message.get('fromMe') else 0,
+                int(message['at']),
+                kind,
+                _clip(message.get('text'), TEXT_MAX),
+                _clip(media.get('mime'), 100) or None,
+                int(media['size']) if isinstance(media.get('size'), int) else None,
+                _clip(media.get('name'), NAME_MAX) or None,
+            ),
+        )
+        created = cursor.rowcount == 1
+        if created:
+            self.db.execute('UPDATE chats SET last_at = MAX(last_at, ?) WHERE id = ?', (int(message['at']), message['chatId']))
+            if count_unread and not message.get('fromMe'):
+                self.db.execute('UPDATE chats SET unread = unread + 1 WHERE id = ?', (message['chatId'],))
+        return created
+
+    def unnamed_chats(self, limit=500):
+        """Conversas sem nome de verdade (vazio ou só o número): `(id, tipo)`, as mais recentes primeiro."""
+        with self.lock:
+            rows = self.db.execute(
+                "SELECT id, kind FROM chats WHERE name = '' OR name = substr(id, 1, instr(id, '@') - 1) ORDER BY last_at DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+        return [(row[0], row[1]) for row in rows]
+
+    def set_names(self, names):
+        """Grava os nomes achados depois (agenda de contatos, grupos). Devolve quantos mudaram."""
+        changed = 0
+        with self.lock:
+            for chat_id, name in names.items():
+                if not name:
+                    continue
+                cursor = self.db.execute('UPDATE chats SET name = ? WHERE id = ? AND name != ?', (_clip(name, NAME_MAX), chat_id, _clip(name, NAME_MAX)))
+                changed += cursor.rowcount
+            self.db.commit()
+        return changed
 
     def set_unread(self, chat_id, unread):
         with self.lock:

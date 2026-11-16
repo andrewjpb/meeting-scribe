@@ -61,7 +61,11 @@ export class WhatsAppServiceError extends Error {
   }
 }
 
-export type BridgeEvent = { type: 'state'; health: WhatsAppHealth } | { type: 'message'; message: WhatsAppMessage; chatName: string | null }
+export type BridgeEvent =
+  | { type: 'state'; health: WhatsAppHealth }
+  | { type: 'message'; message: WhatsAppMessage; chatName: string | null }
+  /** As conversas mudaram de uma vez (histórico do celular, nomes achados depois): relê a lista. */
+  | { type: 'chats' }
 
 export interface BridgeClient {
   readonly port: number
@@ -249,6 +253,7 @@ export function parseSseBlock(block: string): BridgeEvent | null {
     const health = healthSchema.safeParse(payload)
     return health.success ? { type: 'state', health: health.data } : null
   }
+  if (event === 'chats') return { type: 'chats' }
   if (event === 'message') {
     const message = eventMessageSchema.safeParse(payload)
     if (!message.success) return null

@@ -76,6 +76,19 @@ class Bridge:
         if self.store.add_message(message, count_unread):
             self.publish('message', dict(message, chatName=(self.store.chat(message['chatId']) or {}).get('name')))
 
+    def on_history(self, messages):
+        """Histórico do celular: grava tudo de uma vez e avisa só "as conversas mudaram" (uma vez), em vez de uma
+        mensagem por evento, que travava a tela com milhares de avisos logo depois do pareamento."""
+        if self.store.add_messages(messages):
+            self.publish('chats', {})
+
+    def unnamed_chats(self):
+        return self.store.unnamed_chats()
+
+    def on_names(self, names):
+        if self.store.set_names(names):
+            self.publish('chats', {})
+
     def on_chat(self, chat_id, name=None, kind=None):
         self.store.upsert_chat(chat_id, name, kind)
 
@@ -87,7 +100,11 @@ class Bridge:
         with self.lock:
             listeners = list(self.listeners)
         for listener in listeners:
-            listener.put((event, data))
+            # Fila cheia (o app não leu a tempo): descarta o aviso em vez de travar o cliente do WhatsApp.
+            try:
+                listener.put_nowait((event, data))
+            except queue.Full:
+                pass
 
     def subscribe(self):
         listener = queue.Queue(maxsize=1000)

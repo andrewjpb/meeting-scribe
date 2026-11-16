@@ -201,3 +201,16 @@ def test_process_prints_ready_logs_no_message_text_and_dies_with_stdin(tmp_path)
     assert 'segredo-do-texto' not in rest
     assert '127.0.0.1' in rest
     assert oct(os.stat(data).st_mode & 0o777) == '0o700'
+
+
+def test_store_batch_and_late_names(tmp_path):
+    from bridge_store import Store
+
+    store = Store(str(tmp_path / 'm.db'))
+    batch = [{'id': f'X{i}', 'chatId': '5511944440000@s.whatsapp.net', 'chatName': None, 'chatKind': 'person', 'author': 'Bia', 'fromMe': False, 'at': 1000 + i, 'type': 'text', 'text': 'oi', 'media': None} for i in range(50)]
+    assert store.add_messages(batch) == 50 and store.add_messages(batch) == 0
+    assert store.chat('5511944440000@s.whatsapp.net')['unread'] == 0
+    assert store.unnamed_chats() == [('5511944440000@s.whatsapp.net', 'person')]
+    assert store.set_names({'5511944440000@s.whatsapp.net': 'Bia'}) == 1
+    assert store.unnamed_chats() == [] and store.chat('5511944440000@s.whatsapp.net')['name'] == 'Bia'
+    store.close()

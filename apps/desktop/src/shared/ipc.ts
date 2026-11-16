@@ -284,6 +284,8 @@ export interface MainEvents {
   'scribe:whatsapp-state': WhatsAppStatus
   /** Mensagem nova pelo `/events` do serviço. Não chega com o app bloqueado. */
   'scribe:whatsapp-message': { message: WhatsAppMessage; chatName: string }
+  /** Várias conversas mudaram de uma vez (histórico, nomes): relê a lista. Não chega com o app bloqueado. */
+  'scribe:whatsapp-chats-changed': undefined
 }
 
 export type InvokeChannel = keyof InvokeChannels
@@ -422,6 +424,7 @@ const MAIN_EVENTS: Record<MainEvent, true> = {
   'scribe:drive-state': true,
   'scribe:whatsapp-state': true,
   'scribe:whatsapp-message': true,
+  'scribe:whatsapp-chats-changed': true,
 }
 
 /**

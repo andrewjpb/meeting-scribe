@@ -15,9 +15,11 @@ interface WhatsAppState {
   exhausted: Record<string, boolean>
   load: () => Promise<void>
   loadChats: () => Promise<void>
-  open: (chatId: string) => Promise<void>
+  open: (chatId: string, attempt?: number) => Promise<void>
   loadOlder: (chatId: string) => Promise<void>
   receive: (message: WhatsAppMessage, chatName: string) => void
+  /** Várias mensagens novas de uma vez: uma só atualização da tela. */
+  receiveMany: (items: readonly { message: WhatsAppMessage; chatName: string }[]) => void
 }
 
 const byTime = (a: WhatsAppMessage, b: WhatsAppMessage): number => a.at - b.at || a.id.localeCompare(b.id)
@@ -51,7 +53,7 @@ export const useWhatsApp = create<WhatsAppState>()((set, get) => ({
     }
   },
 
-  open: async (chatId) => {
+  open: async (chatId, attempt = 0) => {
     try {
       const messages = await window.__scribeApi.invoke('scribe:whatsapp-messages', { chatId })
       set((state) => ({
@@ -61,7 +63,10 @@ export const useWhatsApp = create<WhatsAppState>()((set, get) => ({
         chats: state.chats?.map((chat) => (chat.id === chatId ? { ...chat, unread: 0 } : chat)) ?? null,
       }))
     } catch {
-      // Nada a fazer.
+      // O serviço estava ocupado (histórico chegando): tenta de novo algumas vezes; depois mostra a conversa vazia
+      // em vez de ficar carregando para sempre.
+      if (attempt < 3) setTimeout(() => void get().open(chatId, attempt + 1), 2000 * (attempt + 1))
+      else set((state) => (state.messages[chatId] ? {} : { messages: { ...state.messages, [chatId]: [] } }))
     }
   },
 
@@ -80,27 +85,55 @@ export const useWhatsApp = create<WhatsAppState>()((set, get) => ({
     }
   },
 
-  receive: (message, chatName) =>
+  receive: (message, chatName) => get().receiveMany([{ message, chatName }]),
+
+  receiveMany: (items) =>
     set((state) => {
-      const known = state.chats?.some((chat) => chat.id === message.chatId) ?? false
-      const chats = state.chats
-        ? (known
-            ? state.chats.map((chat) => (chat.id === message.chatId ? { ...chat, lastMessage: message, unread: message.fromMe ? chat.unread : chat.unread + 1 } : chat))
-            : [{ id: message.chatId, name: chatName, kind: message.chatId.endsWith('@g.us') ? ('group' as const) : ('person' as const), unread: message.fromMe ? 0 : 1, lastMessage: message }, ...state.chats]
-          ).sort((a, b) => (b.lastMessage?.at ?? 0) - (a.lastMessage?.at ?? 0))
-        : null
-      const loaded = state.messages[message.chatId]
-      return { chats, messages: loaded ? { ...state.messages, [message.chatId]: merge(loaded, [message]) } : state.messages }
+      let chats = state.chats ? [...state.chats] : null
+      const messages = { ...state.messages }
+      const byChat = new Map<string, WhatsAppMessage[]>()
+      for (const { message, chatName } of items) {
+        if (chats) {
+          const index = chats.findIndex((chat) => chat.id === message.chatId)
+          const chat = chats[index]
+          if (chat) {
+            chats[index] = { ...chat, name: chat.name === chat.id.split('@')[0] && chatName ? chatName : chat.name, lastMessage: message, unread: message.fromMe ? chat.unread : chat.unread + 1 }
+          } else chats.push({ id: message.chatId, name: chatName, kind: message.chatId.endsWith('@g.us') ? 'group' : 'person', unread: message.fromMe ? 0 : 1, lastMessage: message })
+        }
+        if (messages[message.chatId]) byChat.set(message.chatId, [...(byChat.get(message.chatId) ?? []), message])
+      }
+      for (const [chatId, incoming] of byChat) messages[chatId] = merge(messages[chatId] ?? [], incoming)
+      if (chats) chats = chats.sort((a, b) => (b.lastMessage?.at ?? 0) - (a.lastMessage?.at ?? 0))
+      return { chats, messages }
     }),
 }))
 
 /** O main avisa cada mudança do serviço e cada mensagem nova; nada chega com o app bloqueado. */
 export function watchWhatsApp(): () => void {
   const offState = window.__scribeApi.on('scribe:whatsapp-state', (status) => useWhatsApp.setState({ status }))
-  const offMessage = window.__scribeApi.on('scribe:whatsapp-message', ({ message, chatName }) => useWhatsApp.getState().receive(message, chatName))
+  // Mensagens chegam em rajadas (o celular manda muitas de uma vez): junta e atualiza a tela no máximo a cada 250 ms,
+  // para a barra lateral e os cliques nunca ficarem presos atrás de milhares de atualizações.
+  let pending: { message: WhatsAppMessage; chatName: string }[] = []
+  let timer: ReturnType<typeof setTimeout> | null = null
+  const flush = (): void => {
+    timer = null
+    const items = pending
+    pending = []
+    if (items.length) useWhatsApp.getState().receiveMany(items)
+  }
+  const offMessage = window.__scribeApi.on('scribe:whatsapp-message', (item) => {
+    pending.push(item)
+    timer ??= setTimeout(flush, 250)
+  })
+  const offChats = window.__scribeApi.on('scribe:whatsapp-chats-changed', () => {
+    const state = useWhatsApp.getState()
+    if (state.chats) void state.loadChats()
+  })
   return () => {
+    if (timer) clearTimeout(timer)
     offState()
     offMessage()
+    offChats()
   }
 }
 

@@ -426,6 +426,9 @@ function createAppServices(userData: string): AppServices {
     onMessage: (message, chatName) => {
       if (!lockService?.isLocked()) broadcast(BrowserWindow.getAllWindows(), 'scribe:whatsapp-message', { message, chatName })
     },
+    onChatsChanged: () => {
+      if (!lockService?.isLocked()) broadcast(BrowserWindow.getAllWindows(), 'scribe:whatsapp-chats-changed', undefined)
+    },
     // Só estados, nunca texto de mensagem.
     ...(app.isPackaged ? {} : { log: (message: string) => console.log(message) }),
   })

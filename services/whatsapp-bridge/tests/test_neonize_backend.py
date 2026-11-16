@@ -190,3 +190,55 @@ def test_media_of_document_and_unknown():
     assert media_of(Obj(conversation=''))[0] == 'other'
     assert media_of(Obj(conversation='', extendedTextMessage=Obj(text='com link'))) == ('text', 'com link', None)
     assert backend_neonize.TEMP_BANNED == 402
+
+
+class BatchBridge(RecordingBridge):
+    """Bridge com o caminho em lote do histórico e os nomes achados depois."""
+
+    def __init__(self):
+        super().__init__()
+        self.batches = []
+        self.names = {}
+        self.unnamed = []
+
+    def on_history(self, messages):
+        self.batches.append(messages)
+
+    def unnamed_chats(self):
+        return self.unnamed
+
+    def on_names(self, names):
+        self.names.update(names)
+
+
+def test_history_goes_in_one_batch_not_one_event_per_message(fake_neonize, tmp_path):
+    bridge = BatchBridge()
+    backend = NeonizeBackend(str(tmp_path))
+    backend.start(bridge)
+    client = FakeClient.instances[-1]
+    webs = [Obj(message=Obj(key=Obj(ID=f'H{i}', fromMe=False, participant=''), message=Obj(conversation='oi'), messageTimestamp=1_763_000_000 + i, pushName='Ana', participant='')) for i in range(300)]
+    conversation = Obj(ID='5511911110000@s.whatsapp.net', name='', displayName='', messages=webs)
+    client.handlers['HistorySyncEv'](client, Obj(Data=Obj(conversations=[conversation])))
+    assert len(bridge.batches) == 1 and len(bridge.batches[0]) == 300 and bridge.messages == []
+    backend.stop()
+
+
+def test_my_own_message_never_names_the_chat_after_me(fake_neonize, tmp_path):
+    backend, bridge, client = started(tmp_path)
+    backend.lookup_name = lambda *args, **kwargs: ''
+    source = Obj(Chat=jid('5511922220000', 's.whatsapp.net'), Sender=jid('5511900000000', 's.whatsapp.net'), IsFromMe=True, IsGroup=False)
+    info = Obj(MessageSource=source, ID='M1', Pushname='Andrea', Timestamp=1_763_300_000)
+    client.handlers['MessageEv'](client, Obj(Info=info, Message=Obj(conversation='oi')))
+    assert bridge.messages[0][0]['chatName'] is None
+    # Sem nome ainda, nada fica guardado: o nome achado depois vale.
+    assert '5511922220000@s.whatsapp.net' not in backend.names
+
+
+def test_refresh_names_uses_the_address_book_and_groups(fake_neonize, tmp_path):
+    bridge = BatchBridge()
+    backend = NeonizeBackend(str(tmp_path))
+    backend.start(bridge)
+    bridge.unnamed = [('5511933330000@s.whatsapp.net', 'person'), ('120363000000000001@g.us', 'group')]
+    backend.refresh_names()
+    assert bridge.names == {'5511933330000@s.whatsapp.net': 'Ana Souza', '120363000000000001@g.us': 'Grupo do projeto'}
+    backend.stop()
