@@ -14,6 +14,7 @@ type Save = { meetingId: string; notes: MeetingNote[] }
 
 describe('anotações do detalhe (notesStore)', () => {
   const invoke = vi.fn()
+  const listeners = new Map<string, (payload: unknown) => void>()
   const saves = (): Save[] => invoke.mock.calls.filter(([channel]) => channel === 'scribe:notes-save').map(([, request]) => request as Save)
   const entry = () => useMeetingNotes.getState().meetings['m1']
   const store = () => useMeetingNotes.getState()
@@ -27,7 +28,8 @@ describe('anotações do detalhe (notesStore)', () => {
     vi.useFakeTimers()
     invoke.mockReset()
     invoke.mockImplementation((channel: string) => Promise.resolve(channel === 'scribe:notes-get' ? [NOTE] : true))
-    vi.stubGlobal('window', { __scribeApi: { invoke } })
+    // Contrato 23: o store ouve `scribe:notes-changed` (um agente acrescentou um post-it).
+    vi.stubGlobal('window', { __scribeApi: { invoke, on: (channel: string, listener: (payload: unknown) => void) => void listeners.set(channel, listener) } })
     useMeetingNotes.setState({ meetings: {} })
     await store().load('m1')
   })
@@ -35,6 +37,13 @@ describe('anotações do detalhe (notesStore)', () => {
     store().forget('m1')
     vi.useRealTimers()
     vi.unstubAllGlobals()
+  })
+
+  it('contrato 23: um post-it novo do agente (`scribe:notes-changed`) faz a reunião aberta reler', async () => {
+    const agentNote = { ...NOTE, id: 'do-agente', text: 'Tarefa: Pendências' }
+    invoke.mockImplementation((channel: string) => Promise.resolve(channel === 'scribe:notes-get' ? [NOTE, agentNote] : true))
+    listeners.get('scribe:notes-changed')?.({ meetingId: 'm1' })
+    await vi.waitFor(() => expect(entry()?.notes.map((note) => note.id)).toEqual([NOTE.id, 'do-agente']))
   })
 
   it('lê do main; digitar salva 500 ms depois da última tecla, uma vez, com o texto mais novo', async () => {

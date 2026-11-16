@@ -1,6 +1,7 @@
 // Contrato das mensagens entre main e renderer. Canal novo entra aqui primeiro: no mapa do
 // sentido certo e na lista de canais permitidos logo abaixo (o preload recusa o que não estiver nela).
 import type { AcpAgentStatus } from './acp'
+import type { AgentDeleteResult, AgentInput, AgentSaveResult, AgentsList, AutomationEvent, AutomationRun, AutomationRunListItem, AutomationsStatus, RunStartResult, RunStatus, ScheduledTask, TaskInput, TaskSaveResult } from './automations'
 import type { DriveMeetingStatus, GoogleAccountStatus, GoogleClientSaveResult } from './accounts'
 import type { BrandingInfo, BrandLogoChoice } from './branding'
 import type { LockResponse, LockStatus } from './lock'
@@ -231,6 +232,31 @@ export interface InvokeChannels {
   /** "Ligar conversa do WhatsApp" no detalhe da reunião. */
   'scribe:whatsapp-link-get': { request: { meetingId: string }; response: WhatsAppMeetingLink | null }
   'scribe:whatsapp-link-set': { request: { meetingId: string; link: WhatsAppMeetingLink | null }; response: WhatsAppMeetingLink | null }
+  /** Automações (contrato 23): os agentes, quantas tarefas usam cada um e os modelos que o perfil oferece. */
+  'scribe:agents-list': { request: undefined; response: AgentsList }
+  /** Criar (`id: null`) ou trocar um agente. */
+  'scribe:agents-save': { request: AgentInput; response: AgentSaveResult }
+  /** Recusado se uma tarefa usa o agente (com a lista das tarefas). */
+  'scribe:agents-delete': { request: { id: string }; response: AgentDeleteResult }
+  /** "Testar agora": o agente do formulário com uma mensagem; a resposta chega por `scribe:automation-event`. */
+  'scribe:agents-test': { request: { agent: AgentInput; text: string }; response: RunStartResult }
+  'scribe:tasks-list': { request: undefined; response: ScheduledTask[] }
+  'scribe:tasks-save': { request: TaskInput; response: TaskSaveResult }
+  'scribe:tasks-delete': { request: { id: string }; response: boolean }
+  /** Interruptor ligado/desligado; ligar tira a pausa automática. */
+  'scribe:tasks-toggle': { request: { id: string; enabled: boolean }; response: ScheduledTask | null }
+  /** "Rodar agora"; se a tarefa já roda, a vez vira `skipped`. */
+  'scribe:tasks-run-now': { request: { id: string }; response: RunStartResult }
+  /** "Pedir agora": um agente e um pedido, na hora; entra em "Execuções". */
+  'scribe:automations-ask': { request: { agentId: string; text: string }; response: RunStartResult }
+  /** "Execuções": as últimas 500, com os filtros por tarefa e estado. */
+  'scribe:runs-list': { request: { taskId?: string | undefined; status?: RunStatus | undefined }; response: AutomationRunListItem[] }
+  'scribe:runs-get': { request: { id: string }; response: AutomationRun | null }
+  'scribe:runs-rerun': { request: { id: string }; response: RunStartResult }
+  /** Pausa, limite diário, o que roda e as próximas tarefas. */
+  'scribe:automations-status': { request: undefined; response: AutomationsStatus }
+  /** "Pausar todas as tarefas" / "Retomar". */
+  'scribe:automations-pause': { request: { paused: boolean }; response: AutomationsStatus }
 }
 
 /** renderer -> main, sem resposta (`__scribeApi.send` / `ipcMain.on`). */
@@ -286,6 +312,16 @@ export interface MainEvents {
   'scribe:whatsapp-message': { message: WhatsAppMessage; chatName: string }
   /** Várias conversas mudaram de uma vez (histórico, nomes): relê a lista. Não chega com o app bloqueado. */
   'scribe:whatsapp-chats-changed': undefined
+  /** Automações (contrato 23): a resposta de uma execução crescendo ou terminada. Não chega com o app bloqueado. */
+  'scribe:automation-event': AutomationEvent
+  /** Tarefas, fila ou pausa mudaram: a tela relê. */
+  'scribe:automations-changed': AutomationsStatus
+  /** "Abrir" de uma notificação: a tela "Automações" com a execução aberta (`null`: só a tela). */
+  'scribe:open-run': { runId: string | null }
+  /** "Encerrar" no menu do ícone da barra de menus: o renderer encerra a gravação em curso. */
+  'scribe:recording-end': undefined
+  /** Um agente acrescentou um post-it à reunião (contrato 23): o detalhe aberto relê as anotações. */
+  'scribe:notes-changed': { meetingId: string }
 }
 
 export type InvokeChannel = keyof InvokeChannels
@@ -396,6 +432,21 @@ const INVOKE: Record<InvokeChannel, true> = {
   'scribe:whatsapp-draft': true,
   'scribe:whatsapp-link-get': true,
   'scribe:whatsapp-link-set': true,
+  'scribe:agents-list': true,
+  'scribe:agents-save': true,
+  'scribe:agents-delete': true,
+  'scribe:agents-test': true,
+  'scribe:tasks-list': true,
+  'scribe:tasks-save': true,
+  'scribe:tasks-delete': true,
+  'scribe:tasks-toggle': true,
+  'scribe:tasks-run-now': true,
+  'scribe:automations-ask': true,
+  'scribe:runs-list': true,
+  'scribe:runs-get': true,
+  'scribe:runs-rerun': true,
+  'scribe:automations-status': true,
+  'scribe:automations-pause': true,
 }
 const RENDERER_EVENTS: Record<RendererEvent, true> = {
   'scribe:csp-violation': true,
@@ -425,6 +476,11 @@ const MAIN_EVENTS: Record<MainEvent, true> = {
   'scribe:whatsapp-state': true,
   'scribe:whatsapp-message': true,
   'scribe:whatsapp-chats-changed': true,
+  'scribe:automation-event': true,
+  'scribe:automations-changed': true,
+  'scribe:open-run': true,
+  'scribe:recording-end': true,
+  'scribe:notes-changed': true,
 }
 
 /**
@@ -567,6 +623,23 @@ export const WHEN_LOCKED: Readonly<Record<InvokeChannel, LockedPolicy>> = Object
   'scribe:whatsapp-draft': 'refused',
   'scribe:whatsapp-link-get': 'refused',
   'scribe:whatsapp-link-set': 'refused',
+  // Automações (contrato 23, CA10): gerenciar agentes e tarefas, testar, pedir e ver o histórico, tudo recusado com
+  // o app bloqueado. O agendador não depende de canal: roda no main e as tarefas continuam rodando bloqueado.
+  'scribe:agents-list': 'refused',
+  'scribe:agents-save': 'refused',
+  'scribe:agents-delete': 'refused',
+  'scribe:agents-test': 'refused',
+  'scribe:tasks-list': 'refused',
+  'scribe:tasks-save': 'refused',
+  'scribe:tasks-delete': 'refused',
+  'scribe:tasks-toggle': 'refused',
+  'scribe:tasks-run-now': 'refused',
+  'scribe:automations-ask': 'refused',
+  'scribe:runs-list': 'refused',
+  'scribe:runs-get': 'refused',
+  'scribe:runs-rerun': 'refused',
+  'scribe:automations-status': 'refused',
+  'scribe:automations-pause': 'refused',
 })
 
 /**

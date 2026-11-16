@@ -8,7 +8,7 @@
 import { z } from 'zod'
 import { isAbsolute } from 'node:path'
 import { BRAND_LOGO_PATTERN, BRAND_TEXT_MAX } from '../../shared/branding'
-import { AGENT_PROFILES, CHAT_MODELS, CLAUDE_MODELS, CLAUDE_TRANSPORTS, DEFAULT_SETTINGS, LANGUAGE_CODES, LOCK_AFTER_MINUTES, THEME_SETTINGS, TRANSLATION_ENGINES, type AppSettings, type SettingsPatch } from '../../shared/settings-defaults'
+import { AGENT_PROFILES, CHAT_MODELS, CLAUDE_MODELS, CLAUDE_TRANSPORTS, CLOSE_BEHAVIORS, DAILY_RUN_LIMIT_OPTIONS, DEFAULT_SETTINGS, LANGUAGE_CODES, LOCK_AFTER_MINUTES, THEME_SETTINGS, TRANSLATION_ENGINES, type AppSettings, type SettingsPatch } from '../../shared/settings-defaults'
 
 export const SETTINGS_VERSION = 1
 
@@ -70,6 +70,9 @@ const lenientSchema = z.object({
   lockOnSystemLock: z.boolean().catch(D.lockOnSystemLock),
   lockOnLaunch: z.boolean().catch(D.lockOnLaunch),
   saveToDrive: z.boolean().catch(D.saveToDrive),
+  closeBehavior: z.enum(CLOSE_BEHAVIORS).catch(D.closeBehavior),
+  openAtLogin: z.boolean().catch(D.openAtLogin),
+  scheduledRunsDailyLimit: z.literal(DAILY_RUN_LIMIT_OPTIONS).catch(D.scheduledRunsDailyLimit),
 })
 
 const patchSchema = z
@@ -97,6 +100,9 @@ const patchSchema = z
     lockOnSystemLock: z.boolean(),
     lockOnLaunch: z.boolean(),
     saveToDrive: z.boolean(),
+    closeBehavior: z.enum(CLOSE_BEHAVIORS),
+    openAtLogin: z.boolean(),
+    scheduledRunsDailyLimit: z.literal(DAILY_RUN_LIMIT_OPTIONS),
   })
   .partial()
   .strict()

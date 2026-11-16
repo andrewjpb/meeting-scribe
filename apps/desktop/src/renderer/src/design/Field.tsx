@@ -1,6 +1,6 @@
 // Campo de texto e seletor no padrão dos controles: 40 px de altura, raio 4, contorno --line-strong.
 
-const CONTROL_CLASS =
+export const CONTROL_CLASS =
   'no-drag h-10 rounded-[var(--radius-control)] border border-line-strong bg-bg-raised text-13 text-text transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)]'
 
 interface TextFieldProps {

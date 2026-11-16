@@ -10,7 +10,7 @@ import {
   type SettingsNavigationState,
   type SettingsTab,
 } from '@shared/routes'
-import { LANGUAGE_CODES, type ChatModel, type ClaudeModel, type ClaudeTransport, type LanguageCode, type ThemeSetting, type TranslationEngine } from '@shared/settings-defaults'
+import { DAILY_RUN_LIMIT_OPTIONS, LANGUAGE_CODES, type ChatModel, type ClaudeModel, type ClaudeTransport, type CloseBehavior, type DailyRunLimitOption, type LanguageCode, type ThemeSetting, type TranslationEngine } from '@shared/settings-defaults'
 import { useAgentLabel } from '../../app/agentLabel'
 import { useSettings } from '../../app/settingsStore'
 import { Select } from '../../design/Field'
@@ -87,6 +87,15 @@ const CHAT_MODELS: { value: ChatModel; label: string }[] = [
   { value: 'sonnet', label: 'Sonnet' },
   { value: 'opus', label: 'Opus' },
 ]
+
+/** "Ao fechar a janela" (contrato 23, CA9). */
+const CLOSE_BEHAVIORS: { value: CloseBehavior; label: string }[] = [
+  { value: 'tray', label: 'Continuar na barra de menus' },
+  { value: 'quit', label: 'Sair do app' },
+]
+
+/** "Limite diário de execuções agendadas" (contrato 23, CA10). */
+const DAILY_LIMITS = DAILY_RUN_LIMIT_OPTIONS.map((value) => ({ value: String(value) as `${DailyRunLimitOption}`, label: `${value} por dia` }))
 
 const TABS = SETTINGS_TABS.map((value) => ({ value, label: SETTINGS_TAB_LABELS[value] }))
 const TABS_ID = 'settings'
@@ -275,6 +284,15 @@ function SettingsTabs({ tab }: { tab: SettingsTab }) {
                   <Segmented value={settings.theme} options={THEMES} labelledBy="settings-theme" dataName="theme-option" onChange={(theme) => void update({ theme })} />
                 </SettingRow>
               </Section>
+              {/* Contrato 23: o app continua na barra de menus, com as tarefas agendadas rodando. */}
+              <Section title="Janela">
+                <SettingRow name="Ao fechar a janela" nameId="settings-close-behavior" description="Na barra de menus, as tarefas agendadas continuam rodando.">
+                  <Segmented value={settings.closeBehavior} options={CLOSE_BEHAVIORS} labelledBy="settings-close-behavior" dataName="close-behavior-option" onChange={(closeBehavior) => void update({ closeBehavior })} />
+                </SettingRow>
+                <SettingRow name="Abrir ao entrar no Mac" nameId="settings-open-at-login" description="Abre direto na barra de menus, sem janela.">
+                  <Switch checked={settings.openAtLogin} labelledBy="settings-open-at-login" onChange={(openAtLogin) => void update({ openAtLogin })} />
+                </SettingRow>
+              </Section>
               <LockSection />
               <UpdatesSection />
             </>,
@@ -382,6 +400,18 @@ function SettingsTabs({ tab }: { tab: SettingsTab }) {
                 </SettingRow>
                 <SettingRow name="Resumir ao encerrar" nameId="settings-summarize" description="Ao encerrar, o Claude lê a transcrição e escreve o resumo, as decisões e as tarefas.">
                   <Switch checked={settings.summarizeOnStop} labelledBy="settings-summarize" onChange={(summarizeOnStop) => void update({ summarizeOnStop })} />
+                </SettingRow>
+              </Section>
+
+              {/* Contrato 23 (CA10): ao passar do limite, todas as tarefas pausam e o app avisa. */}
+              <Section title="Automações">
+                <SettingRow name="Limite diário de execuções agendadas" description="Ao passar, todas as tarefas pausam e o app avisa." htmlFor="settings-daily-limit">
+                  <Select
+                    id="settings-daily-limit"
+                    value={String(settings.scheduledRunsDailyLimit) as `${DailyRunLimitOption}`}
+                    options={DAILY_LIMITS}
+                    onChange={(value) => void update({ scheduledRunsDailyLimit: Number(value) as DailyRunLimitOption })}
+                  />
                 </SettingRow>
               </Section>
             </>,

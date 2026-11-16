@@ -54,7 +54,18 @@ const clearTimer = (timers: Map<string, ReturnType<typeof setTimeout>>, meetingI
 
 const empty = (): MeetingNotesEntry => ({ status: 'loading', notes: [], version: 0, savedVersion: 0, saving: false, saveFailed: false, focusId: null, undo: null })
 
+let listening = false
+
 export const useMeetingNotes = create<MeetingNotesState>()((set, get) => {
+  /** Contrato 23: um agente acrescentou um post-it; a reunião aberta relê (com edição pendente, o main guarda o dele). */
+  const listen = (): void => {
+    if (listening) return
+    listening = true
+    window.__scribeApi.on('scribe:notes-changed', ({ meetingId }) => {
+      if (get().meetings[meetingId]) void get().load(meetingId)
+    })
+  }
+
   const patchEntry = (meetingId: string, patch: Partial<MeetingNotesEntry> | ((entry: MeetingNotesEntry) => Partial<MeetingNotesEntry>)): void =>
     set((state) => {
       const entry = state.meetings[meetingId]
@@ -96,6 +107,7 @@ export const useMeetingNotes = create<MeetingNotesState>()((set, get) => {
     meetings: {},
 
     async load(meetingId) {
+      listen()
       const current = get().meetings[meetingId]
       if (current && (isDirty(current) || current.saving)) return
       if (!current) set((state) => ({ meetings: { ...state.meetings, [meetingId]: empty() } }))

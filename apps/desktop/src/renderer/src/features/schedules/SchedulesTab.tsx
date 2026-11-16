@@ -1,0 +1,158 @@
+// Aba "Tarefas agendadas" (contrato 23, CA4): tabela com nome, agente, quando ("Toda sexta às 17:00 · próxima:
+// sex 21/11 17:00"), última execução (estado, tempo e "há 2 h") e o interruptor; ações "Rodar agora", "Editar",
+// "Duplicar" e "Excluir" (confirma). O formulário abre no lugar da tabela.
+import { Copy, Pencil, Play, Plus, Trash2 } from 'lucide-react'
+import { useState } from 'react'
+import { agoLabel, durationLabel, RUN_STATUS_LABELS, scheduleLine, TASK_NAME_MAX, type ScheduledTask, type TaskInput } from '@shared/automations'
+import { Button } from '../../design/Button'
+import { Icon } from '../../design/Icon'
+import { Switch } from '../../design/Switch'
+import { QUIET_BUTTON } from '../chat/ChatMessages'
+import type { ChatMeetings } from '../chat/useChatMeetings'
+import { useAutomations } from '../agents/automationsStore'
+import { blankTask, TaskForm } from './TaskForm'
+
+const inputOf = (task: ScheduledTask): TaskInput => ({
+  id: task.id,
+  name: task.name,
+  agentId: task.agentId,
+  message: task.message,
+  schedule: task.schedule,
+  timezone: task.timezone,
+  enabled: task.enabled,
+  runOnce: task.runOnce,
+  runOnceAction: task.runOnceAction,
+  timeoutS: task.timeoutS,
+  notify: task.notify,
+  output: task.output,
+})
+
+export function SchedulesTab({ meetings }: { meetings: ChatMeetings }) {
+  const tasks = useAutomations((state) => state.tasks)
+  const agents = useAutomations((state) => state.agents)
+  const [editing, setEditing] = useState<TaskInput | null>(null)
+
+  if (editing) return <TaskForm key={editing.id ?? 'nova'} initial={editing} meetings={meetings} onClose={() => setEditing(null)} />
+
+  return (
+    <div className="flex flex-col gap-5" data-tasks-tab>
+      <div className="flex items-center justify-between gap-4">
+        <p className="text-13 text-text-muted">As tarefas rodam com o app aberto, com a janela aberta ou só o ícone na barra de menus.</p>
+        <Button action="task-new" icon={Plus} onClick={() => setEditing(blankTask(agents))} disabled={!agents.length}>
+          Nova tarefa
+        </Button>
+      </div>
+      {tasks.length === 0 ? (
+        <p data-tasks-empty className="text-13 text-text-muted">
+          Nenhuma tarefa agendada. Crie uma com "Nova tarefa": as sugestões prontas aparecem no formulário.
+        </p>
+      ) : (
+        <table className="w-full border-collapse text-left">
+          <thead>
+            <tr className="border-b border-line-strong text-12 text-text-muted">
+              <th className="py-2 pr-4 font-bold">Nome</th>
+              <th className="py-2 pr-4 font-bold">Agente</th>
+              <th className="py-2 pr-4 font-bold">Quando</th>
+              <th className="py-2 pr-4 font-bold">Última execução</th>
+              <th className="py-2 pr-4 font-bold">Ligada</th>
+              <th className="py-2 font-bold">
+                <span className="sr-only">Ações</span>
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            {tasks.map((task) => (
+              <TaskRow
+                key={task.id}
+                task={task}
+                agentName={agents.find((agent) => agent.id === task.agentId)?.name ?? 'Agente excluído'}
+                onEdit={() => setEditing(inputOf(task))}
+                onDuplicate={() => setEditing({ ...inputOf(task), id: null, name: `${task.name.slice(0, TASK_NAME_MAX - 8).trimEnd()} (cópia)` })}
+              />
+            ))}
+          </tbody>
+        </table>
+      )}
+    </div>
+  )
+}
+
+function TaskRow({ task, agentName, onEdit, onDuplicate }: { task: ScheduledTask; agentName: string; onEdit: () => void; onDuplicate: () => void }) {
+  const lastRun = useAutomations((state) => state.runs.find((run) => run.taskId === task.id && run.status !== 'skipped') ?? null)
+  const [confirming, setConfirming] = useState(false)
+  const [notice, setNotice] = useState<string | null>(null)
+  const switchId = `task-switch-${task.id}`
+  const toggle = async (enabled: boolean): Promise<void> => {
+    await window.__scribeApi.invoke('scribe:tasks-toggle', { id: task.id, enabled })
+    await useAutomations.getState().load()
+  }
+  const runNow = async (): Promise<void> => {
+    const result = await window.__scribeApi.invoke('scribe:tasks-run-now', { id: task.id })
+    setNotice(result.ok ? null : result.error === 'busy' ? 'Já está rodando: esta vez ficou como pulada.' : 'Não foi possível rodar.')
+    await useAutomations.getState().load()
+  }
+  const remove = async (): Promise<void> => {
+    await window.__scribeApi.invoke('scribe:tasks-delete', { id: task.id })
+    setConfirming(false)
+    await useAutomations.getState().load()
+  }
+  const last = (() => {
+    if (task.autoPaused) return 'Pausada depois de 3 falhas'
+    if (!task.lastStatus) return 'Ainda não rodou'
+    const parts = [RUN_STATUS_LABELS[task.lastStatus]]
+    if (lastRun && lastRun.status !== 'running') parts.push(durationLabel(lastRun.durationMs))
+    if (task.lastRunAt) parts.push(agoLabel(Date.parse(task.lastRunAt), new Date().getTime()))
+    return parts.join(' · ')
+  })()
+  return (
+    <tr data-task-row={task.id} data-task-name={task.name} data-task-status={task.lastStatus ?? ''} data-task-paused={task.autoPaused ? 'auto' : undefined} className="border-b border-line align-top text-13">
+      <td className="py-3 pr-4">
+        <span id={switchId} className="font-medium text-text">
+          {task.name}
+        </span>
+        {notice && <p className="mt-1 text-12 text-text-muted">{notice}</p>}
+      </td>
+      <td className="py-3 pr-4 text-text-muted">{agentName}</td>
+      <td data-task-when className="py-3 pr-4 text-text tabular">
+        {scheduleLine(task)}
+      </td>
+      <td data-task-last className={`py-3 pr-4 tabular ${task.autoPaused || task.lastStatus === 'error' || task.lastStatus === 'timeout' ? 'text-rec' : 'text-text-muted'}`}>
+        {last}
+      </td>
+      <td className="py-3 pr-4">
+        <Switch checked={task.enabled && !task.autoPaused} labelledBy={switchId} onChange={(enabled) => void toggle(enabled)} />
+      </td>
+      <td className="py-2">
+        <div className="-mr-2 flex flex-wrap justify-end gap-1">
+          <button type="button" data-action="task-run-now" onClick={() => void runNow()} className={QUIET_BUTTON}>
+            <Icon icon={Play} size={14} />
+            Rodar agora
+          </button>
+          <button type="button" data-action="task-edit" onClick={onEdit} className={QUIET_BUTTON}>
+            <Icon icon={Pencil} size={14} />
+            Editar
+          </button>
+          <button type="button" data-action="task-duplicate" onClick={onDuplicate} className={QUIET_BUTTON}>
+            <Icon icon={Copy} size={14} />
+            Duplicar
+          </button>
+          {confirming ? (
+            <>
+              <button type="button" data-action="task-delete-confirm" onClick={() => void remove()} className={`${QUIET_BUTTON} text-rec`}>
+                Excluir
+              </button>
+              <button type="button" data-action="task-delete-cancel" onClick={() => setConfirming(false)} className={QUIET_BUTTON}>
+                Cancelar
+              </button>
+            </>
+          ) : (
+            <button type="button" data-action="task-delete" onClick={() => setConfirming(true)} className={QUIET_BUTTON}>
+              <Icon icon={Trash2} size={14} />
+              Excluir
+            </button>
+          )}
+        </div>
+      </td>
+    </tr>
+  )
+}

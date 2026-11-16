@@ -1,15 +1,18 @@
 // Processo principal: esquema do app, segurança da sessão, IPC, menu e janela.
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { app, BrowserWindow, clipboard, dialog, Menu, nativeImage, net, powerMonitor, safeStorage, session, shell, systemPreferences, type OpenDialogOptions, type SaveDialogOptions } from 'electron'
+import { app, BrowserWindow, clipboard, dialog, Menu, nativeImage, net, Notification, powerMonitor, safeStorage, session, shell, systemPreferences, Tray, type NativeImage, type OpenDialogOptions, type SaveDialogOptions } from 'electron'
 import { DRIVE_FOLDER_URL_PREFIX } from '../shared/accounts'
 import { ASSEMBLYAI_DASHBOARD_URL } from '../shared/assemblyai'
+import { formatRunShort } from '../shared/automations'
 import { brandTexts, DEFAULT_BRAND_NAME } from '../shared/branding'
 import { lockedWindowTitle, type LockStatus } from '../shared/lock'
 import { privacyPaneUrl } from '../shared/privacy'
+import type { RouteId } from '../shared/routes'
 import type { AgentProfileId, AppSettings } from '../shared/settings-defaults'
 import type { TranscriptDocument } from '../shared/transcription'
 import { isBrowserUrl } from './accounts/oauth'
+import { createFileAgentsStore } from './agents/store'
 import { netHttp } from './accounts/transport'
 import { createGatewayClient, type FetchInit, type FetchResponse } from './assemblyai/gateway'
 import { createTokenClient, requestToken } from './assemblyai/token'
@@ -55,6 +58,11 @@ import { acpOpener, processLauncher } from './acp/agent'
 import { bundledAdapterEntry, bundledAgent, installedAgent, type AcpAgentService } from './acp/entry'
 import { createAcpInstaller } from './acp/install'
 import { agentProfile, type AgentProfile } from './acp/profiles'
+import { applyOutput } from './schedules/outputs'
+import { createAgentRunner } from './schedules/runner'
+import { createAutomationsService, type AutomationNotice, type AutomationsService } from './schedules/service'
+import { createFileRunsStore, createFileSchedulesStore } from './schedules/store'
+import { createTrayController, createWindowLifecycle, type TrayController, type TrayIcon, type TrayLike } from './tray/menu'
 import { createUpdateService, type UpdateService } from './updates/service'
 import { netDownload, netDownloadTarball, netFetch } from './updates/transport'
 import { createMainWindow } from './window'
@@ -102,16 +110,33 @@ let lockService: LockService | null = null
 let quitAfterRecording = false
 /** Gravação em curso (contrato 22): token dos canais de fim de gravação e confirmação ao fechar ou sair. */
 const recordingSessions = createRecordingSessions(() => {
+  // Contrato 23: a gravação terminou de salvar (ou a janela que gravava sumiu).
+  onRecordingFinished?.()
   if (!quitAfterRecording) return
   quitAfterRecording = false
   app.quit()
 })
+/** Fim da sessão de gravação: as reuniões dela seguem para as tarefas "depois de cada reunião" (contrato 23). */
+let onRecordingFinished: (() => void) | null = null
 /** Um diálogo de "gravação em andamento" por vez. */
 let leaveAsked = false
 /** Envio ao Google Drive (contrato 11), para "Guardar no Google Drive" desligado esvaziar a fila. */
 let driveService: DriveSyncService | null = null
 /** WhatsApp (contrato 24): ao desbloquear, o estado volta às janelas; janela fechada esquece os cliques dela. */
 let whatsappService: WhatsAppService | null = null
+/** Ícone da barra de menus (contrato 23, CA8): aparece sempre que o app está aberto. */
+let trayController: TrayController | null = null
+/** Último estado do bloqueio, para o menu do ícone ("Bloquear" só com senha ou Touch ID). */
+let lastLockStatus: LockStatus | null = null
+/** Começo da gravação em curso (o menu do ícone mostra "Gravando · 12:34"). */
+let recordingStartedAt: number | null = null
+/** Fechar a última janela e reabrir (contrato 23, CA9). */
+let windowLifecycle: ReturnType<typeof createWindowLifecycle> | null = null
+/** Post-its que os agentes acrescentaram e a tela ainda não leu, por reunião (contrato 23). */
+const agentNotes = new Map<string, Set<string>>()
+const NO_NOTES: ReadonlySet<string> = new Set()
+/** "Abrir ao entrar no Mac": o último valor aplicado (só muda o item de login quando a pessoa troca). */
+let loginItemApplied: boolean | null = null
 
 /**
  * ⌘W ou ⌘Q com gravação em andamento: diálogo nativo. Bloqueado, só "Cancelar"; desbloqueado, também
@@ -150,6 +175,8 @@ function windowTitle(): string {
 
 /** Cada mudança do bloqueio: título das janelas, item "Bloquear" do menu e o aviso às janelas. */
 function applyLockStatus(status: LockStatus): void {
+  lastLockStatus = status
+  trayController?.refresh()
   const title = windowTitle()
   for (const win of BrowserWindow.getAllWindows()) win.setTitle(title)
   const item = Menu.getApplicationMenu()?.getMenuItemById(MENU_IDS.lock)
@@ -178,15 +205,140 @@ function openMainWindow(query?: Record<string, string>, invisible = false): Brow
     if (mainWindow === win) mainWindow = null
     // No macOS o app segue aberto sem janela: as conversas do chat morrem em 5 min, como ao sair da tela.
     chatService?.leaveAll()
+    // Contrato 23 (CA9): sem janela, o app fica só no ícone da barra de menus (sem Dock) ou sai, como a pessoa escolheu.
+    if (!BrowserWindow.getAllWindows().some((other) => other !== win && !other.isDestroyed())) void windowLifecycle?.lastWindowClosed()
   })
   mainWindow = win
   return win
+}
+
+/**
+ * A janela de volta (pelo ícone da barra de menus, pela notificação ou abrindo o app de novo): o Dock aparece e a
+ * janela vem para a frente; sem janela, abre uma. No smoke, a janela nova também fica invisível.
+ */
+function showMainWindow(): BrowserWindow {
+  windowLifecycle?.reopened()
+  const win = mainWindow ?? openMainWindow(undefined, smoke)
+  if (!smoke) {
+    if (win.isMinimized()) win.restore()
+    win.show()
+    win.focus()
+  }
+  return win
+}
+
+/** Manda ao renderer depois que a página carregou (janela recém-aberta). */
+function sendWhenLoaded<C extends 'scribe:navigate' | 'scribe:open-run'>(win: BrowserWindow, channel: C, payload: C extends 'scribe:navigate' ? RouteId : { runId: string | null }): void {
+  const contents = win.webContents
+  const send = (): void => sendTo(contents, channel, payload as never)
+  if (contents.isLoading()) contents.once('did-finish-load', send)
+  else send()
+}
+
+/** Notificações vivas: sem a referência, o "Abrir" de uma notificação antiga pode não chegar. */
+const liveNotices = new Set<Notification>()
+
+/**
+ * Notificação de uma execução (contrato 23, CA6 e CA9), com "Abrir", que leva à execução. Bloqueado, sem
+ * conteúdo nenhum: só que uma tarefa terminou. No smoke, o substituto registra e nada aparece.
+ */
+function showAutomationNotice(notice: AutomationNotice): void {
+  const locked = lockService?.isLocked() ?? false
+  const shown = locked ? { title: brandName, body: 'Uma tarefa agendada terminou.', runId: notice.runId } : notice
+  if (smokeFixtures) {
+    smokeFixtures.automations.notifications.push(shown)
+    return
+  }
+  if (!Notification.isSupported()) return
+  const item = new Notification({ title: shown.title, body: shown.body, actions: [{ type: 'button', text: 'Abrir' }] })
+  const open = (): void => {
+    liveNotices.delete(item)
+    sendWhenLoaded(showMainWindow(), 'scribe:open-run', { runId: notice.runId })
+  }
+  item.on('click', open)
+  item.on('action', open)
+  item.on('close', () => liveNotices.delete(item))
+  liveNotices.add(item)
+  item.show()
+}
+
+/** "Abrir ao entrar no Mac" (CA9): abre direto na barra de menus, sem janela. No smoke, só registra. */
+function applyLoginItem(openAtLogin: boolean): void {
+  if (loginItemApplied === openAtLogin) return
+  const first = loginItemApplied === null
+  loginItemApplied = openAtLogin
+  // Ao abrir o app, nada muda nos itens de login: só quando a pessoa troca a opção.
+  if (first) return
+  const options = { openAtLogin, openAsHidden: true }
+  if (smokeFixtures) smokeFixtures.automations.loginItems.push(options)
+  else if (process.platform === 'darwin') app.setLoginItemSettings(options)
+}
+
+/** Imagem "template" do ícone da barra de menus (o macOS pinta no tom da barra); `@2x` ao lado. */
+function trayImage(icon: TrayIcon): NativeImage {
+  const image = nativeImage.createFromPath(join(app.getAppPath(), 'resources', 'brand', icon === 'running' ? 'trayRunningTemplate.png' : 'trayTemplate.png'))
+  image.setTemplateImage(true)
+  return image
+}
+
+/** Ícone da barra de menus. No smoke, um substituto que registra as imagens; o `Tray` de verdade nunca é criado. */
+function installTray(automations: AutomationsService): void {
+  const fixtures = smokeFixtures
+  const smokeTray = (image: unknown): TrayLike => {
+    fixtures?.automations.trayImages.push(String(image))
+    return {
+      setImage: (next) => void fixtures?.automations.trayImages.push(String(next)),
+      setToolTip: () => undefined,
+      on: () => undefined,
+      popUpContextMenu: () => undefined,
+      destroy: () => undefined,
+    }
+  }
+  const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone
+  trayController = createTrayController({
+    create: (image) => (fixtures ? smokeTray(image) : new Tray(image as NativeImage)),
+    image: (icon) => (fixtures ? icon : trayImage(icon)),
+    buildMenu: (template) => (fixtures ? template : Menu.buildFromTemplate(template)),
+    running: () => automations.snapshot().running.length > 0,
+    state: () => {
+      const status = automations.snapshot()
+      return {
+        brandName,
+        locked: lockService?.isLocked() ?? false,
+        canLock: lastLockStatus?.canLock ?? false,
+        recording: recordingSessions.active() !== null && recordingStartedAt !== null ? { elapsedMs: Date.now() - recordingStartedAt } : null,
+        paused: status.paused,
+        next: status.next.slice(0, 3).map((task) => ({ name: task.name, when: formatRunShort(Date.parse(task.at), timeZone) })),
+      }
+    },
+    handlers: {
+      open: () => void showMainWindow(),
+      newRecording: () => {
+        if (lockService?.isLocked()) return
+        windowLifecycle?.reopened()
+        startRecordingFromMenu().catch((error: unknown) => console.error('[barra de menus] nova gravação:', error))
+      },
+      stopRecording: () => broadcast(BrowserWindow.getAllWindows(), 'scribe:recording-end', undefined),
+      lock: () => lockApp('menu'),
+      automations: () => {
+        if (lockService?.isLocked()) return
+        sendWhenLoaded(showMainWindow(), 'scribe:navigate', 'automacoes')
+      },
+      togglePause: () => void automations.setPaused({ paused: !automations.snapshot().paused }).catch(() => undefined),
+      quit: () => {
+        if (fixtures) fixtures.automations.quitRequests++
+        else app.quit()
+      },
+    },
+  })
 }
 
 /** Mudança de configuração vai para todas as janelas abertas; a marca vai para o título, o "Sobre" e o Dock. */
 function broadcastSettings(settings: AppSettings): void {
   broadcast(BrowserWindow.getAllWindows(), 'scribe:settings-changed', settings)
   applyBrand(settings)
+  applyLoginItem(settings.openAtLogin)
+  trayController?.refresh()
   // "Usar Touch ID" muda o que o botão "Bloquear" pode.
   void lockService?.refresh().catch(() => undefined)
   // "Guardar no Google Drive" desligado: a fila esvazia; ligado, ela volta a andar.
@@ -261,6 +413,8 @@ interface AppServices {
   drive: DriveSyncService
   /** WhatsApp pessoal pelo serviço local (contrato 24). */
   whatsapp: WhatsAppService
+  /** Agentes, tarefas agendadas e execuções (contrato 23). */
+  automations: AutomationsService
 }
 
 /**
@@ -292,7 +446,8 @@ function createAppServices(userData: string): AppServices {
   const transcripts = createFileTranscriptStore({ dir: userData })
   const summaries = createFileSummaryStore({ dir: userData })
   // Anotações em cards (contrato 13), ao lado da transcrição e do resumo.
-  const notes = createFileNotesStore({ dir: userData })
+  // Contrato 23: o post-it que um agente acrescenta fica protegido do próximo `save` da tela até ela o ler.
+  const notes = createFileNotesStore({ dir: userData, keep: (meetingId) => agentNotes.get(meetingId) ?? NO_NOTES })
   // Análises "Analisar até agora" (contrato 19), salvas com a reunião.
   const analyses = createFileAnalysesStore({ dir: userData })
   // Conta Google e fila do Drive (contrato 11). Rede só pelo `net.fetch` do main; no smoke, o Google falso em
@@ -436,8 +591,10 @@ function createAppServices(userData: string): AppServices {
   // Acervo do chat (contrato 15): um `.md` por reunião e o índice, reescritos a cada mudança da reunião.
   const corpus = createChatCorpus({ dir: userData, meetings, transcripts, summaries, notes })
   // Chat "Perguntar": o mesmo `claude` e o mesmo caminho configurado, um processo por conversa, só leitura.
+  // Conversas do chat: a mesma fila para o "Perguntar" e para a saída `chat` das automações (contrato 23).
+  const chatStore = createFileChatStore({ dir: userData })
   const chat = createChatService({
-    store: createFileChatStore({ dir: userData }),
+    store: chatStore,
     corpus,
     // Contrato 24: só a exportação das conversas para a pasta de escopo; o envio não chega aqui.
     whatsapp: { exportChats: (folder, chatIds, days) => whatsapp.exportChats(folder, chatIds, days) },
@@ -589,6 +746,48 @@ function createAppServices(userData: string): AppServices {
     ...(app.isPackaged ? {} : { log: (message: string) => console.log(message) }),
   })
   if (smokeLock) smokeLock.refresh = () => void lock.refresh().catch(() => undefined)
+  // Automações (contrato 23): cada execução é uma sessão ACP própria, com a política do chat (só leitura dentro
+  // da pasta); as saídas ficam neste Mac. O WhatsApp não entra aqui: nenhum agente alcança o envio. No smoke, o
+  // relógio do agendador é o que o smoke adianta.
+  const smokeAutomations = smokeFixtures?.automations
+  const automations = createAutomationsService({
+    agents: createFileAgentsStore({ dir: userData }),
+    schedules: createFileSchedulesStore({ dir: userData }),
+    runs: createFileRunsStore({ dir: userData }),
+    runner: createAgentRunner({ locate: () => claude.locate(), openAcp, corpus, meetings, emptyDir: join(userData, 'automations-empty'), ...devLog }),
+    applyOutput: (request) =>
+      applyOutput(
+        {
+          chats: chatStore,
+          notes,
+          meetings,
+          meetingsFolder: async () => (await files.folder()).path,
+          onNoteSaved: (meetingId, noteId) => {
+            const pending = agentNotes.get(meetingId) ?? new Set<string>()
+            pending.add(noteId)
+            agentNotes.set(meetingId, pending)
+            void corpus.sync(meetingId).catch(() => undefined)
+            if (!lockService?.isLocked()) broadcast(BrowserWindow.getAllWindows(), 'scribe:notes-changed', { meetingId })
+          },
+          ...(smokeAutomations ? { now: () => Date.now() + smokeAutomations.skewMs } : {}),
+        },
+        request,
+      ),
+    notify: showAutomationNotice,
+    dailyLimit: async () => (await settings.get()).scheduledRunsDailyLimit,
+    timeZone: () => Intl.DateTimeFormat().resolvedOptions().timeZone,
+    onChange: (status) => {
+      trayController?.refresh()
+      if (!lockService?.isLocked()) broadcast(BrowserWindow.getAllWindows(), 'scribe:automations-changed', status)
+    },
+    // Bloqueado, nada da resposta vai às janelas; a execução continua e fica no histórico.
+    onEvent: (event) => {
+      if (event.type === 'done') trayController?.refresh()
+      if (!lockService?.isLocked()) broadcast(BrowserWindow.getAllWindows(), 'scribe:automation-event', event)
+    },
+    ...(smokeAutomations ? { now: () => Date.now() + smokeAutomations.skewMs } : {}),
+    ...devLog,
+  })
   return {
     settings: createSettingsService({ settings, secrets, gateway, mic }),
     meetings,
@@ -611,6 +810,7 @@ function createAppServices(userData: string): AppServices {
     google,
     drive,
     whatsapp,
+    automations,
   }
 }
 
@@ -698,9 +898,27 @@ async function confirmWhatsAppSend(win: BrowserWindow | null, question: SendQues
 }
 
 function registerIpc(services: AppServices): void {
-  const { settings, meetings, meetingsService, meetingsIndex, tokenClient, translation, claude, files, summary, analysis, download, branding, updates, chat, corpus, acp, lock, google, drive, whatsapp } = services
+  const { settings, meetings, meetingsService, meetingsIndex, tokenClient, translation, claude, files, summary, analysis, download, branding, updates, chat, corpus, acp, lock, google, drive, whatsapp, automations } = services
   /** Reunião salva, renomeada ou com anotações novas: o `.md` dela no acervo do chat é reescrito. */
   const touched = (meetingId: string): void => void corpus.sync(meetingId).catch(() => undefined)
+  /**
+   * Contrato 23: "depois de cada reunião" só quando a reunião está completa. As reuniões salvas na gravação em curso
+   * esperam o fim da sessão (transcrição, anotações, análises e `.md` gravados) e o resumo automático, pronto ou com
+   * erro. O serviço das automações guarda cada par (tarefa, reunião): um "Tentar de novo" não roda de novo.
+   */
+  const endingMeetings = new Set<string>()
+  const summaryRequests = new Map<string, Promise<unknown>>()
+  onRecordingFinished = () => {
+    for (const meetingId of [...endingMeetings]) {
+      endingMeetings.delete(meetingId)
+      void (async () => {
+        await summaryRequests.get(meetingId)
+        summaryRequests.delete(meetingId)
+        await summary.settled(meetingId).catch(() => undefined)
+        automations.meetingEnded(meetingId)
+      })()
+    }
+  }
   /** Contrato 11: quando a reunião que acabou de ser gravada entra na fila do Drive. */
   const driveEnd = createEndOfRecordingHooks({ enqueue: (meetingId, kinds) => drive.enqueue(meetingId, kinds), filesPending: () => files.hasOpenSession() })
   handle('scribe:app-info', appOrigin, () => ({
@@ -748,11 +966,23 @@ function registerIpc(services: AppServices): void {
     touched((document as TranscriptDocument).meetingId)
     // Contrato 11: sem pasta, a transcrição vai para o Drive montada na hora; com pasta, espera o `audio-finish`.
     driveEnd.transcriptSaved((document as TranscriptDocument).meetingId)
+    // Contrato 23: a reunião da gravação em curso; as tarefas "depois de cada reunião" esperam ela terminar por inteiro.
+    if (recordingSessions.active()) endingMeetings.add((document as TranscriptDocument).meetingId)
     return true
   })
   handle('scribe:transcript-get', appOrigin, (_event, { meetingId }) => meetingsService.getTranscript(meetingId))
   handle('scribe:transcript-copy', appOrigin, (_event, { meetingId }) => meetingsService.copyTranscript(meetingId))
-  handle('scribe:notes-get', appOrigin, (_event, request) => meetingsService.getNotes((request as { meetingId?: unknown } | undefined)?.meetingId))
+  handle('scribe:notes-get', appOrigin, async (_event, request) => {
+    const meetingId = (request as { meetingId?: unknown } | undefined)?.meetingId
+    const list = await meetingsService.getNotes(meetingId)
+    // Contrato 23: a tela já viu estes post-its dos agentes; dali em diante, apagar um deles vale.
+    const pending = typeof meetingId === 'string' ? agentNotes.get(meetingId) : undefined
+    if (pending) {
+      for (const note of list) pending.delete(note.id)
+      if (!pending.size) agentNotes.delete(meetingId as string)
+    }
+    return list
+  })
   handle('scribe:notes-save', appOrigin, async (_event, request) => {
     const saved = await meetingsService.saveNotes(request)
     if (saved) touched((request as { meetingId: string }).meetingId)
@@ -787,7 +1017,13 @@ function registerIpc(services: AppServices): void {
   handle('scribe:meeting-file-reveal', appOrigin, (_event, request) => files.reveal(request))
   handle('scribe:meeting-file-download', appOrigin, (_event, request) => download(request))
   handle('scribe:summary-get', appOrigin, (_event, request) => summary.status((request as { meetingId?: unknown } | undefined)?.meetingId))
-  handle('scribe:summary-generate', appOrigin, (_event, request) => summary.generate(request))
+  handle('scribe:summary-generate', appOrigin, (_event, request) => {
+    const work = summary.generate(request)
+    // O resumo automático do fim da gravação: "depois de cada reunião" espera por ele.
+    const asked = request as { meetingId?: unknown; auto?: unknown } | undefined
+    if (asked?.auto === true && typeof asked.meetingId === 'string') summaryRequests.set(asked.meetingId, work.catch(() => undefined))
+    return work
+  })
   handle('scribe:summary-copy', appOrigin, (_event, request) => summary.copy((request as { meetingId?: unknown } | undefined)?.meetingId))
   handle('scribe:analysis-run', appOrigin, (_event, request) => analysis.run(request))
   handle('scribe:analyses-get', appOrigin, (_event, request) => analysis.list((request as { meetingId?: unknown } | undefined)?.meetingId))
@@ -850,8 +1086,27 @@ function registerIpc(services: AppServices): void {
   onEvent('scribe:whatsapp-click', appOrigin, (event, token) => whatsapp.registerClick(event.sender.id, token))
   onEvent('scribe:whatsapp-pair-cancel', appOrigin, () => whatsapp.cancelPair())
   // Gravação em curso: o token vale até o fim do "Encerrar" ou até a janela que a abriu sumir.
-  handle('scribe:recording-session-open', appOrigin, (event) => recordingSessions.open(event.sender))
+  handle('scribe:recording-session-open', appOrigin, (event) => {
+    recordingStartedAt = Date.now()
+    return recordingSessions.open(event.sender)
+  })
   handle('scribe:recording-session-close', appOrigin, (_event, request) => recordingSessions.close((request as { token?: unknown } | undefined)?.token))
+  // Automações (contrato 23): tudo recusado com o app bloqueado (`WHEN_LOCKED`); o agendador não depende daqui.
+  handle('scribe:agents-list', appOrigin, () => automations.listAgents())
+  handle('scribe:agents-save', appOrigin, (_event, request) => automations.saveAgent(request))
+  handle('scribe:agents-delete', appOrigin, (_event, request) => automations.deleteAgent(request))
+  handle('scribe:agents-test', appOrigin, (_event, request) => automations.testAgent(request))
+  handle('scribe:tasks-list', appOrigin, () => automations.listTasks())
+  handle('scribe:tasks-save', appOrigin, (_event, request) => automations.saveTask(request))
+  handle('scribe:tasks-delete', appOrigin, (_event, request) => automations.deleteTask(request))
+  handle('scribe:tasks-toggle', appOrigin, (_event, request) => automations.toggleTask(request))
+  handle('scribe:tasks-run-now', appOrigin, (_event, request) => automations.runNow(request))
+  handle('scribe:automations-ask', appOrigin, (_event, request) => automations.ask(request))
+  handle('scribe:runs-list', appOrigin, (_event, request) => automations.listRuns(request))
+  handle('scribe:runs-get', appOrigin, (_event, request) => automations.getRun(request))
+  handle('scribe:runs-rerun', appOrigin, (_event, request) => automations.rerun(request))
+  handle('scribe:automations-status', appOrigin, () => automations.status())
+  handle('scribe:automations-pause', appOrigin, (_event, request) => automations.setPaused(request))
   onEvent('scribe:chat-close', appOrigin, (_event, request) => chat.close((request as { id?: unknown } | undefined)?.id))
   onEvent('scribe:chat-leave', appOrigin, (_event, request) => chat.leave((request as { id?: unknown } | undefined)?.id))
   // Só `https://`, e só depois da confirmação na tela; qualquer outra coisa é ignorada.
@@ -908,7 +1163,11 @@ function installMenu(): void {
 if (!whatsappInstallTest && !app.requestSingleInstanceLock()) app.quit()
 app.on('second-instance', () => {
   const window = BrowserWindow.getAllWindows()[0]
-  if (!window) return
+  // Contrato 23: só no ícone da barra de menus (sem janela), abrir o app de novo traz a janela.
+  if (!window) {
+    if (app.isReady() && !smoke) showMainWindow()
+    return
+  }
   if (window.isMinimized()) window.restore()
   window.focus()
 })
@@ -954,6 +1213,8 @@ void app.whenReady().then(async () => {
     void confirmLeave(mainWindow)
   })
   app.on('will-quit', () => {
+    services.automations.dispose()
+    trayController?.dispose()
     services.claude.dispose()
     services.summary.dispose()
     services.analysis.dispose()
@@ -963,12 +1224,30 @@ void app.whenReady().then(async () => {
     void services.whatsapp.dispose()
   })
   installMenu()
+  // Contrato 23: fechar a última janela deixa o app na barra de menus (sem Dock) ou sai; o ícone aparece já.
+  const smokeAutomations = smokeFixtures?.automations
+  windowLifecycle = createWindowLifecycle({
+    dock: smokeAutomations
+      ? { hide: () => void smokeAutomations.dock.hides++, show: () => void smokeAutomations.dock.shows++ }
+      : process.platform === 'darwin'
+        ? app.dock
+        : undefined,
+    quit: smokeAutomations ? () => void smokeAutomations.quitRequests++ : () => app.quit(),
+    behavior: async () => (await services.settings.getSettings()).closeBehavior,
+  })
+  applyLoginItem((await services.settings.getSettings()).openAtLogin)
+  installTray(services.automations)
   applyLockStatus(lockAtLaunch)
+  // Agendador (CA5): confere já (horários perdidos com o app fechado) e a cada 30 s.
+  services.automations.start()
   // Falta de uso (CA2): conferida a cada 15 s; o uso chega do renderer por `scribe:lock-activity`.
   setInterval(() => void services.lock.tick().catch(() => undefined), LOCK_TICK_MS).unref()
   // Mac bloqueou a tela ou dormiu (CA2, padrão ligado). No smoke, os eventos vêm do substituto: o Mac de
   // verdade bloquear a tela no meio do smoke não pode bloquear o app.
   const power: { on(event: 'lock-screen' | 'suspend', listener: () => void): unknown } = smokeFixtures ? smokeFixtures.lock.power : powerMonitor
+  // Mac acordou: o agendador confere de novo (CA5).
+  const wake: { on(event: 'resume', listener: () => void): unknown } = smokeFixtures ? smokeFixtures.lock.power : powerMonitor
+  wake.on('resume', () => void services.automations.resume())
   for (const event of ['lock-screen', 'suspend'] as const) {
     power.on(event, () => {
       void services.settings
@@ -988,8 +1267,12 @@ void app.whenReady().then(async () => {
       fixtures: smokeFixtures,
       whatsapp: services.whatsapp,
       openWindow: (query) => openMainWindow(query, true),
+      automations: services.automations,
+      tray: () => trayController,
     })
     // `app.exit` não passa por `will-quit`.
+    services.automations.dispose()
+    trayController?.dispose()
     services.claude.dispose()
     services.summary.dispose()
     services.analysis.dispose()
@@ -1001,11 +1284,14 @@ void app.whenReady().then(async () => {
     return
   }
 
-  openMainWindow()
+  // "Abrir ao entrar no Mac" (CA9): aberto pelo login, o app fica só na barra de menus, sem janela nem Dock.
+  const login = process.platform === 'darwin' ? app.getLoginItemSettings() : null
+  if (login?.wasOpenedAtLogin) app.dock?.hide()
+  else openMainWindow()
   // Primeira consulta 30 s depois de abrir e a cada 6 h. O smoke não agenda: só o botão consulta.
   services.updates.start()
   app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) openMainWindow()
+    if (BrowserWindow.getAllWindows().length === 0) showMainWindow()
   })
 })
 

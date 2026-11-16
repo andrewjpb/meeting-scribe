@@ -18,6 +18,10 @@ export const CLAUDE_TRANSPORTS = ['acp', 'cli'] as const
 export const AGENT_PROFILES = ['claude'] as const
 /** "Bloquear sozinho depois de … min sem uso" (contrato 22); 0 é nunca. */
 export const LOCK_AFTER_MINUTES = [0, 1, 5, 15, 30] as const
+/** "Ao fechar a janela" (contrato 23): continua na barra de menus (padrão) ou sai do app. */
+export const CLOSE_BEHAVIORS = ['tray', 'quit'] as const
+/** "Limite diário de execuções agendadas" (contrato 23, CA10). */
+export const DAILY_RUN_LIMIT_OPTIONS = [10, 25, 50, 100, 200] as const
 
 export type LanguageCode = (typeof LANGUAGE_CODES)[number]
 export type ThemeSetting = (typeof THEME_SETTINGS)[number]
@@ -27,6 +31,8 @@ export type ChatModel = (typeof CHAT_MODELS)[number]
 export type ClaudeTransport = (typeof CLAUDE_TRANSPORTS)[number]
 export type AgentProfileId = (typeof AGENT_PROFILES)[number]
 export type LockAfterMinutes = (typeof LOCK_AFTER_MINUTES)[number]
+export type CloseBehavior = (typeof CLOSE_BEHAVIORS)[number]
+export type DailyRunLimitOption = (typeof DAILY_RUN_LIMIT_OPTIONS)[number]
 /** Nome de cada agente na tela ("Conexão com o Claude"); o perfil do main usa o mesmo. */
 export const AGENT_PROFILE_LABELS: Readonly<Record<AgentProfileId, string>> = { claude: 'Claude' }
 
@@ -84,6 +90,15 @@ export interface AppSettings {
    * interruptor aparece ligado depois do primeiro login).
    */
   saveToDrive: boolean
+  /**
+   * Contrato 23: fechar a janela deixa o app só no ícone da barra de menus (sem Dock), com as tarefas agendadas
+   * rodando; ou sai do app.
+   */
+  closeBehavior: CloseBehavior
+  /** Abre ao entrar no Mac, direto na barra de menus, sem janela. */
+  openAtLogin: boolean
+  /** Execuções agendadas por dia; ao passar, tudo pausa e o app avisa. */
+  scheduledRunsDailyLimit: DailyRunLimitOption
 }
 
 /**
@@ -122,6 +137,9 @@ export const DEFAULT_SETTINGS: Readonly<AppSettings> = Object.freeze({
   lockOnSystemLock: true,
   lockOnLaunch: false,
   saveToDrive: true,
+  closeBehavior: 'tray',
+  openAtLogin: false,
+  scheduledRunsDailyLimit: 50,
 })
 
 /** Prefixo do modelo gravado na reunião quando a tradução veio do Claude CLI (`claude-cli:haiku`). */

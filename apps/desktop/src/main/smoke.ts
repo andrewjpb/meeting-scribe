@@ -46,11 +46,18 @@
 // do QR, o pareamento, a tela, o SSE, o rascunho pelo agente ACP falso, o envio só com o clique e o "Perguntar" com
 // uma conversa; depois do bloqueio, os canais recusados com o app bloqueado (`whatsappLockCheck`). Nenhum número
 // de verdade é pareado.
+//
+// Contrato 23: antes do bloqueio, as Automações (`automationsChecks`) com o agente ACP falso e o relógio do agendador
+// adiantado pelo smoke: os agentes de exemplo, um agente criado pelo formulário com "Testar agora", uma tarefa diária e
+// uma "depois de cada reunião" (saídas `chat`, `file` e a notificação substituta), `skipped` com a anterior rodando,
+// `autoPaused` depois de 3 falhas, um horário perdido rodando uma vez só, "Pedir agora", o histórico com o detalhe, o
+// menu do ícone da barra de menus (substituto que registra os itens) e fechar a janela mantendo o app (Dock escondido,
+// substituto) e reabrir pelo ícone. Não há ferramenta MCP para negar: o contrato 21 ainda não existe.
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { request as httpRequest } from 'node:http'
 import { tmpdir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
-import { app, ipcMain, Menu, nativeTheme, session, type BrowserWindow, type MenuItem, type WebContents } from 'electron'
+import { app, BrowserWindow, ipcMain, Menu, nativeTheme, session, type MenuItem, type WebContents } from 'electron'
 import { DRIVE_ROOT_FOLDER_NAME } from '../shared/accounts'
 import { WHATSAPP_EXPORT_PREFIX, WHATSAPP_FIXED_WARNING, WHATSAPP_PAIR_HINT, WHATSAPP_RISK_CHECKBOX, WHATSAPP_RISK_TEXT, WHATSAPP_RISK_TITLE } from '../shared/whatsapp'
 import { ASSEMBLYAI_DASHBOARD_URL } from '../shared/assemblyai'
@@ -89,6 +96,10 @@ import { CHAT_ALLOWED_TOOLS, CHAT_DISALLOWED_TOOLS } from './claude-cli/chat'
 import { MEETINGS_FILE } from './meetings/store'
 import { originOf } from './security'
 import type { WhatsAppService } from './whatsapp/service'
+import type { AutomationsService } from './schedules/service'
+import { SCHEDULE_RUNS_DIR, SCHEDULES_FILE } from './schedules/store'
+import { AGENTS_FILE } from './agents/store'
+import type { TrayController } from './tray/menu'
 import { SETTINGS_VERSION } from './settings/schema'
 import { CLAUDE_DISALLOWED_TOOLS, CLAUDE_READ_TOOLS } from './acp/profiles/claude'
 import { LATEST_RELEASE_URL, RELEASE_DOWNLOAD_PREFIX, RELEASE_REDIRECT_HOSTS } from './updates/release'
@@ -104,8 +115,9 @@ import {
 } from './smoke-fixtures'
 
 // Contrato 22: o bloqueio, no fim, soma uns 25 s ao roteiro; o contrato 11 (conta Google e Drive), uns 20 s; o
-// contrato 24 (WhatsApp, com o `venv` e o `pip` de verdade do índice local), uns 40 s.
-const TIMEOUT_MS = 420_000
+// contrato 24 (WhatsApp, com o `venv` e o `pip` de verdade do índice local), uns 40 s; o contrato 23 (Automações), uns
+// 60 s.
+const TIMEOUT_MS = 540_000
 const THEMES = ['light', 'dark'] as const
 /** Telas fotografadas em cada tema, na ordem do roteiro de `runSmoke`. */
 const SCREENS = [
@@ -140,6 +152,9 @@ export interface SmokeContext {
   /** Contrato 24: o serviço do WhatsApp do app, para o smoke fazer o papel do celular no serviço falso. */
   whatsapp: Pick<WhatsAppService, 'fake' | 'status'>
   openWindow: (query: Record<string, string>) => BrowserWindow
+  /** Contrato 23: o agendador (o smoke "avança o relógio" e confere) e o ícone da barra de menus substituto. */
+  automations: Pick<AutomationsService, 'tick' | 'meetingEnded' | 'settled' | 'snapshot' | 'resume'>
+  tray: () => TrayController | null
 }
 
 interface Check {
@@ -4782,6 +4797,385 @@ async function whatsappLockCheck(ctx: SmokeContext, watch: (win: BrowserWindow) 
   win.destroy()
 }
 
+// ---------------------------------------------------------------------------------------------------------
+// Contrato 23: Automações (agentes, tarefas agendadas, execuções) com o agente ACP falso e o relógio do
+// agendador adiantado pelo smoke; o ícone da barra de menus, as notificações, o Dock e o "abrir ao entrar" são
+// substitutos que só registram. Nada sai da máquina e nenhum agente alcança o WhatsApp.
+
+interface SmokeRunFile {
+  id: string
+  taskId: string | null
+  taskName: string | null
+  trigger: string
+  status: string
+  error: string | null
+  outputResult: string | null
+  costUsd: number
+  answer: { text: string; steps?: unknown[]; meta?: unknown } | null
+}
+
+function readRunFiles(userDataDir: string): SmokeRunFile[] {
+  const dir = join(userDataDir, SCHEDULE_RUNS_DIR)
+  if (!existsSync(dir)) return []
+  return readdirSync(dir)
+    .filter((name) => name.endsWith('.json'))
+    .map((name) => JSON.parse(readFileSync(join(dir, name), 'utf8')) as SmokeRunFile)
+}
+
+interface SmokeTaskFile {
+  id: string
+  name: string
+  nextRunAt: string | null
+  lastStatus: string | null
+  autoPaused: boolean
+  consecutiveFailures: number
+}
+
+function readTaskFiles(userDataDir: string): SmokeTaskFile[] {
+  const file = join(userDataDir, SCHEDULES_FILE)
+  if (!existsSync(file)) return []
+  return (JSON.parse(readFileSync(file, 'utf8')) as { tasks: SmokeTaskFile[] }).tasks
+}
+
+/** Espera o agendador terminar o que está na fila e rodando. */
+async function automationsIdle(ctx: SmokeContext): Promise<void> {
+  await wait(100)
+  await ctx.automations.settled()
+  await wait(100)
+}
+
+const trayLabels = (ctx: SmokeContext): string[] => (ctx.tray()?.template() ?? []).map((item) => (item.type === 'separator' ? '—' : String(item.label ?? '')))
+
+function trayClick(ctx: SmokeContext, id: string): boolean {
+  const item = ctx.tray()?.template().find((entry) => entry.id === id)
+  if (!item?.click) return false
+  ;(item.click as () => void)()
+  return true
+}
+
+async function automationsChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => void, checks: Record<string, Check>, shots: Screenshot[]): Promise<void> {
+  const auto = ctx.fixtures.automations
+  const win = ctx.openWindow({ theme: 'light' })
+  watch(win)
+  await loadAndWait(win)
+  const contents = win.webContents
+  const invoke = <T>(script: string): Promise<T> => evaluate<T>(contents, script)
+  // O agente ACP falso instalado (o bloco do WhatsApp já instalou; se não, instala aqui).
+  const acpStatus = await invoke<{ state?: string }>("window.__scribeApi.invoke('scribe:acp-status')")
+  if (acpStatus.state !== 'installed') await invoke("window.__scribeApi.invoke('scribe:acp-install').then(() => true)")
+
+  // A tela, logo abaixo de "Perguntar", com "Pedir agora", as três abas e os agentes de exemplo.
+  await clickSelector(contents, '[data-nav="automacoes"]')
+  const cards = await waitFor(contents, `document.querySelectorAll('[data-agent-card]').length === 3`, 8000)
+  const seeded = await invoke<string[]>(`[...document.querySelectorAll('[data-agent-card]')].map((card) => card.dataset.agentName)`)
+  const tabs = await invoke<string[]>(`[...document.querySelectorAll('[data-automations] [role="tab"]')].map((tab) => tab.textContent)`)
+  const nav = await invoke<string[]>(`[...document.querySelectorAll('[data-nav]')].map((item) => item.dataset.nav)`)
+  const askNowShown = await invoke<boolean>(`Boolean(document.querySelector('[data-ask-now] #ask-now-text'))`)
+  const title = await text(contents, 'main h1')
+  await settle(contents)
+  shots.push(await capture(win, ctx.outDir, 'agentes-light'))
+  checks['screen'] = {
+    ok:
+      cards &&
+      JSON.stringify(seeded) === JSON.stringify(['Resumo da semana', 'Minhas tarefas', 'Pendências da reunião']) &&
+      JSON.stringify(tabs) === JSON.stringify(['Agentes', 'Tarefas agendadas', 'Execuções']) &&
+      nav.indexOf('automacoes') === nav.indexOf('perguntar') + 1 &&
+      askNowShown &&
+      title === 'Automações' &&
+      existsSync(join(ctx.userDataDir, AGENTS_FILE)),
+    detail: `título "${title}"; agentes ${JSON.stringify(seeded)}; abas ${JSON.stringify(tabs)}; barra lateral ${JSON.stringify(nav)}; Pedir agora=${askNowShown}`,
+  }
+
+  // Novo agente pelo formulário e "Testar agora" (não entra no histórico).
+  await clickSelector(contents, '[data-action="agent-new"]')
+  await waitFor(contents, `document.querySelector('[data-agent-form]')`)
+  await setValue(contents, '#agent-name', 'Agente do smoke')
+  await setValue(contents, '#agent-description', 'Criado pelo formulário no smoke.')
+  await clickSelector(contents, '[data-agent-icon="sparkles"]')
+  await clickSelector(contents, '[data-agent-color="purple"]')
+  await setValue(contents, '#agent-instructions', 'Liste as decisões das reuniões, uma por linha, com a reunião citada.')
+  await clickSelector(contents, '[data-agent-model-option="haiku"]')
+  await setValue(contents, '#agent-output', 'chat', 'change')
+  await settle(contents)
+  shots.push(await capture(win, ctx.outDir, 'agente-editar-light'))
+  const logBefore = readAcpLog(ctx.userDataDir).length
+  await setValue(contents, '#agent-test-text', 'O que ficou decidido?')
+  await clickSelector(contents, '[data-action="agent-test"]')
+  const testDone = await waitFor(contents, `document.querySelector('[data-agent-test] [data-run-state="ok"] [data-chat-message="assistant"]:not([data-chat-streaming])')`, 30_000)
+  const testView = await invoke<{ reasoning: boolean; footer: string; answer: string; asked: string }>(
+    `(() => { const box = document.querySelector('[data-agent-test]'); return { reasoning: Boolean(box?.querySelector('[data-chat-reasoning]')), footer: box?.querySelector('[data-chat-footer]')?.textContent ?? '', answer: box?.querySelector('[data-chat-message="assistant"] [data-chat-markdown]')?.textContent ?? '', asked: box?.querySelector('[data-chat-message="user"]')?.textContent ?? '' } })()`,
+  )
+  const testSessions = readAcpLog(ctx.userDataDir)
+    .slice(logBefore)
+    .filter((entry) => entry.method === 'session/new') as (AcpLogEntry & { options?: { tools?: string[]; settingSources?: unknown[]; disallowedTools?: string[]; systemPrompt?: string }; mcpServers?: unknown[]; cwd?: string; configOptions?: { configId: string; value: string }[] })[]
+  const testSession = testSessions[0]
+  const sessionSafe =
+    testSessions.length === 1 &&
+    JSON.stringify(testSession?.options?.tools) === JSON.stringify([...CLAUDE_READ_TOOLS]) &&
+    JSON.stringify(testSession?.options?.settingSources) === '[]' &&
+    JSON.stringify(testSession?.mcpServers) === '[]' &&
+    CLAUDE_DISALLOWED_TOOLS.every((tool) => testSession?.options?.disallowedTools?.includes(tool)) &&
+    testSession?.cwd === join(ctx.userDataDir, CHAT_CORPUS_DIR) &&
+    testSession?.configOptions?.some((option) => option.configId === 'model' && option.value === 'haiku') === true
+  const runsAfterTest = readRunFiles(ctx.userDataDir).length
+  checks['testNow'] = {
+    ok: testDone && testView.reasoning && testView.footer.includes('US$') && testView.answer.includes('INDICE.md') && testView.asked === 'O que ficou decidido?' && sessionSafe && runsAfterTest === 0,
+    detail: `resposta=${testDone} "${testView.answer.slice(0, 60)}"; raciocínio=${testView.reasoning}; rodapé "${testView.footer}"; session/new só leitura, sem configurações pessoais, sem MCP, no acervo, Haiku=${sessionSafe}; execuções gravadas=${runsAfterTest}`,
+  }
+  await clickSelector(contents, '[data-action="agent-save"]')
+  const savedCard = await waitFor(contents, `document.querySelectorAll('[data-agent-card]').length === 4 && document.querySelector('[data-agent-card][data-agent-name="Agente do smoke"]')`)
+  const agentsFile = JSON.parse(readFileSync(join(ctx.userDataDir, AGENTS_FILE), 'utf8')) as { agents: { id: string; name: string; icon: string; color: string; model: string; output: { kind: string } }[] }
+  const smokeAgent = agentsFile.agents.find((agent) => agent.name === 'Agente do smoke')
+  checks['agentForm'] = {
+    ok: savedCard && smokeAgent?.icon === 'sparkles' && smokeAgent.color === 'purple' && smokeAgent.model === 'haiku' && smokeAgent.output.kind === 'chat' && mode(join(ctx.userDataDir, AGENTS_FILE)) === '600',
+    detail: `cartão=${savedCard}; agents.json ${mode(join(ctx.userDataDir, AGENTS_FILE))} ${JSON.stringify(smokeAgent)}`,
+  }
+  const agentId = smokeAgent?.id ?? ''
+  const pendenciasId = agentsFile.agents.find((agent) => agent.name === 'Pendências da reunião')?.id ?? ''
+
+  // Tarefa diária pelo formulário (com a prévia) e uma "depois de cada reunião" pela sugestão pronta.
+  await clickSelector(contents, '#automations-tab-tarefas')
+  await waitFor(contents, `document.querySelector('[data-tasks-tab]')`)
+  await clickSelector(contents, '[data-action="task-new"]')
+  await waitFor(contents, `document.querySelector('[data-task-form]')`)
+  const suggestions = await invoke<number>(`document.querySelectorAll('[data-task-suggestion]').length`)
+  await setValue(contents, '#task-name', 'Resumo diário do smoke')
+  await setValue(contents, '#task-agent', agentId, 'change')
+  await setValue(contents, '#task-message', 'Resuma as reuniões de hoje.')
+  await setValue(contents, '#task-frequency', 'daily', 'change')
+  await waitFor(contents, `document.querySelector('[data-task-frequency="daily"] [data-task-time]')`)
+  await setValue(contents, '[data-task-time]', '08:00')
+  await setValue(contents, '#task-output', 'chat', 'change')
+  await setValue(contents, '#task-notify', 'always', 'change')
+  const preview = await waitFor(contents, `document.querySelectorAll('[data-task-preview-item]').length === 5`)
+  const hint = await text(contents, '[data-form-field="Frequência"] p.text-12')
+  await settle(contents)
+  shots.push(await capture(win, ctx.outDir, 'tarefa-editar-light'))
+  await clickSelector(contents, '[data-action="task-save"]')
+  const dailyRow = await waitFor(contents, `document.querySelector('[data-task-row][data-task-name="Resumo diário do smoke"]')`)
+  await clickSelector(contents, '[data-action="task-new"]')
+  await waitFor(contents, `document.querySelector('[data-task-form]')`)
+  await clickSelector(contents, '[data-task-suggestion="Pendências da reunião"]')
+  await waitFor(contents, `document.querySelector('[data-task-frequency="after-meeting"]')`)
+  await setValue(contents, '#task-output', 'file', 'change')
+  await clickSelector(contents, '[data-action="task-save"]')
+  const meetingRow = await waitFor(contents, `document.querySelector('[data-task-row][data-task-name="Pendências da reunião"]')`)
+  const when = await text(contents, '[data-task-row][data-task-name="Resumo diário do smoke"] [data-task-when]')
+  await settle(contents)
+  shots.push(await capture(win, ctx.outDir, 'tarefas-light'))
+  const tasksFile = readTaskFiles(ctx.userDataDir)
+  const daily = tasksFile.find((task) => task.name === 'Resumo diário do smoke')
+  checks['tasks'] = {
+    ok: suggestions === 3 && preview && hint === 'Todo dia às 08:00' && dailyRow && meetingRow && when.startsWith('Todo dia às 08:00 · próxima: ') && daily?.nextRunAt !== null && tasksFile.length === 2 && mode(join(ctx.userDataDir, SCHEDULES_FILE)) === '600',
+    detail: `sugestões=${suggestions}; prévia de 5=${preview}; frase "${hint}"; linhas=${dailyRow}/${meetingRow} "${when}"; schedules.json ${mode(join(ctx.userDataDir, SCHEDULES_FILE))} com ${tasksFile.length} tarefas`,
+  }
+
+  // O relógio do agendador avança até o horário da diária: roda, grava, cria a conversa e notifica.
+  const imagesBefore = auto.trayImages.length
+  auto.skewMs = Date.parse(daily?.nextRunAt ?? '') - Date.now() + 1_000
+  await ctx.automations.tick()
+  await automationsIdle(ctx)
+  const dailyRuns = readRunFiles(ctx.userDataDir).filter((run) => run.taskId === daily?.id)
+  const chatOut = readChatFiles(ctx.userDataDir).find((chat) => chat.title === 'Tarefa: Resumo diário do smoke')
+  const dailyNotice = auto.notifications.find((notice) => notice.title === 'Tarefa: Resumo diário do smoke')
+  const trayDot = auto.trayImages.slice(imagesBefore).includes('running') && auto.trayImages.at(-1) === 'idle'
+  checks['scheduled'] = {
+    ok:
+      dailyRuns.length === 1 &&
+      dailyRuns[0]?.status === 'ok' &&
+      dailyRuns[0].trigger === 'schedule' &&
+      dailyRuns[0].outputResult === 'Conversa criada em Perguntar' &&
+      chatOut?.messages.length === 2 &&
+      chatOut.messages[0]?.text.startsWith('Agora: ') === true &&
+      dailyNotice !== undefined &&
+      dailyNotice.runId === dailyRuns[0].id &&
+      trayDot,
+    detail: `execuções ${JSON.stringify(dailyRuns.map((run) => `${run.trigger}:${run.status}`))}; saída "${dailyRuns[0]?.outputResult}"; conversa ${chatOut ? `"${chatOut.title}" com ${chatOut.messages.length} mensagens` : 'ausente'}; notificação=${Boolean(dailyNotice)}; ícone com o ponto e de volta=${trayDot} ${JSON.stringify(auto.trayImages.slice(imagesBefore))}`,
+  }
+
+  // Depois de cada reunião: o fim de uma reunião dispara a tarefa, com a pasta só dela, e a saída vira um `.md`.
+  const meeting = readMeetings(ctx.userDataDir)[0]
+  const folder = (await invoke<{ path: string }>("window.__scribeApi.invoke('scribe:audio-folder')")).path
+  const logBeforeMeeting = readAcpLog(ctx.userDataDir).length
+  ctx.automations.meetingEnded(meeting?.id ?? '')
+  await wait(300)
+  await automationsIdle(ctx)
+  const meetingTask = readTaskFiles(ctx.userDataDir).find((task) => task.name === 'Pendências da reunião')
+  const meetingRuns = readRunFiles(ctx.userDataDir).filter((run) => run.taskId === meetingTask?.id)
+  const agentDir = join(folder, 'Agentes', 'Pendências da reunião')
+  const mdFiles = existsSync(agentDir) ? readdirSync(agentDir).filter((name) => /^\d{4}-\d{2}-\d{2} \d{2}h\d{2}( \(\d+\))?\.md$/.test(name)) : []
+  const meetingSession = readAcpLog(ctx.userDataDir)
+    .slice(logBeforeMeeting)
+    .find((entry) => entry.method === 'session/new') as (AcpLogEntry & { cwd?: string }) | undefined
+  // O mesmo fim de reunião de novo ("Tentar de novo"): não roda outra vez.
+  ctx.automations.meetingEnded(meeting?.id ?? '')
+  await wait(300)
+  await ctx.automations.tick()
+  await automationsIdle(ctx)
+  const meetingRunsAgain = readRunFiles(ctx.userDataDir).filter((run) => run.taskId === meetingTask?.id).length
+  const meetingFolderOnly = typeof meetingSession?.cwd === 'string' && meetingSession.cwd.startsWith(join(ctx.userDataDir, CHAT_SCOPE_DIR)) && !existsSync(meetingSession.cwd)
+  checks['afterMeeting'] = {
+    ok: Boolean(meeting) && meetingRuns.length === 1 && meetingRunsAgain === 1 && meetingRuns[0]?.trigger === 'meeting' && meetingRuns[0].status === 'ok' && mdFiles.length === 1 && meetingFolderOnly && pendenciasId !== '',
+    detail: `reunião ${meeting?.id ?? 'nenhuma'}; execuções ${JSON.stringify(meetingRuns.map((run) => `${run.trigger}:${run.status}:${run.outputResult}`))}; arquivos ${JSON.stringify(mdFiles)} em Agentes/Pendências da reunião; pasta só da reunião, apagada no fim=${meetingFolderOnly}; repetido sem rodar de novo=${meetingRunsAgain === 1}`,
+  }
+
+  // Uma por tarefa: "Rodar agora" de novo com a anterior rodando vira `skipped`. O menu do ícone, enquanto roda.
+  const created = async (name: string, message: string): Promise<string> => {
+    const result = await invoke<{ ok: boolean; task?: { id: string } }>(
+      `window.__scribeApi.invoke('scribe:tasks-save', ${JSON.stringify({ id: null, name, agentId, message, schedule: { kind: 'daily', time: '23:00' }, timezone: Intl.DateTimeFormat().resolvedOptions().timeZone, enabled: false, runOnce: false, runOnceAction: 'disable', timeoutS: 120, notify: 'on-error', output: null })})`,
+    )
+    return result.task?.id ?? ''
+  }
+  const slowId = await created('Lenta', 'Responda devagar, por favor.')
+  const first = await invoke<{ ok: boolean }>(`window.__scribeApi.invoke('scribe:tasks-run-now', { id: ${JSON.stringify(slowId)} })`)
+  await wait(300)
+  const second = await invoke<{ ok: boolean; error?: string }>(`window.__scribeApi.invoke('scribe:tasks-run-now', { id: ${JSON.stringify(slowId)} })`)
+  const runningIcon = ctx.tray()?.icon()
+  const menu = trayLabels(ctx)
+  const nextLine = menu.find((label) => label.startsWith('Resumo diário do smoke · '))
+  const pauseClicked = trayClick(ctx, 'tray-pause')
+  await wait(200)
+  const pausedMenu = trayLabels(ctx)
+  trayClick(ctx, 'tray-pause')
+  await wait(200)
+  await automationsIdle(ctx)
+  const slowRuns = readRunFiles(ctx.userDataDir).filter((run) => run.taskId === slowId)
+  checks['skipped'] = {
+    ok: first.ok && !second.ok && second.error === 'busy' && slowRuns.filter((run) => run.status === 'ok').length === 1 && slowRuns.filter((run) => run.status === 'skipped').length === 1,
+    detail: `primeira=${first.ok}; segunda ${JSON.stringify(second)}; execuções ${JSON.stringify(slowRuns.map((run) => `${run.status}:${run.error ?? ''}`))}`,
+  }
+  checks['tray'] = {
+    ok:
+      runningIcon === 'running' &&
+      (menu[0] ?? '').startsWith('Abrir ') &&
+      ['Nova gravação', 'Bloquear', 'Automações', 'Pausar todas as tarefas', 'Sair'].every((label) => menu.includes(label)) &&
+      nextLine !== undefined &&
+      pauseClicked &&
+      pausedMenu.includes('Retomar') &&
+      trayLabels(ctx).includes('Pausar todas as tarefas'),
+    detail: `ícone rodando=${runningIcon}; menu ${JSON.stringify(menu)}; próxima "${nextLine ?? ''}"; pausado ${JSON.stringify(pausedMenu)}`,
+  }
+
+  // 3 falhas seguidas: a tarefa pausa sozinha e avisa.
+  const failId = await created('Falha', 'Por favor, falhe agora.')
+  for (let i = 0; i < 3; i++) {
+    await invoke(`window.__scribeApi.invoke('scribe:tasks-run-now', { id: ${JSON.stringify(failId)} })`)
+    await automationsIdle(ctx)
+  }
+  const failTask = readTaskFiles(ctx.userDataDir).find((task) => task.id === failId)
+  const failRuns = readRunFiles(ctx.userDataDir).filter((run) => run.taskId === failId)
+  const pauseNotice = auto.notifications.find((notice) => notice.title === 'Tarefa pausada: Falha')
+  checks['autoPaused'] = {
+    ok: failTask?.autoPaused === true && failTask.consecutiveFailures === 3 && failRuns.length === 3 && failRuns.every((run) => run.status === 'error') && pauseNotice !== undefined,
+    detail: `tarefa ${JSON.stringify(failTask)}; execuções ${JSON.stringify(failRuns.map((run) => run.status))}; aviso=${Boolean(pauseNotice)}`,
+  }
+
+  // Horário perdido (Mac dormindo 3 h): uma tarefa a cada 5 min roda uma vez só; os outros horários viram um registro.
+  const missedSave = await invoke<{ ok: boolean; task?: { id: string } }>(
+    `window.__scribeApi.invoke('scribe:tasks-save', ${JSON.stringify({ id: null, name: 'Perdida', agentId, message: 'O que mudou?', schedule: { kind: 'every', minutes: 5 }, timezone: Intl.DateTimeFormat().resolvedOptions().timeZone, enabled: true, runOnce: false, runOnceAction: 'disable', timeoutS: 120, notify: 'never', output: null })})`,
+  )
+  const missedId = missedSave.task?.id ?? ''
+  auto.skewMs += 3 * 60 * 60_000
+  ctx.fixtures.lock.power.emit('resume')
+  await wait(300)
+  await automationsIdle(ctx)
+  await ctx.automations.tick()
+  await automationsIdle(ctx)
+  const missedRuns = readRunFiles(ctx.userDataDir).filter((run) => run.taskId === missedId)
+  const missedOk = missedRuns.filter((run) => run.status !== 'skipped')
+  const missedSkipped = missedRuns.filter((run) => run.status === 'skipped')
+  checks['missed'] = {
+    ok: missedSave.ok && missedOk.length === 1 && missedOk[0]?.trigger === 'missed' && missedOk[0].status === 'ok' && missedSkipped.length === 1 && /horários perdidos/.test(missedSkipped[0]?.error ?? ''),
+    detail: `rodaram ${JSON.stringify(missedOk.map((run) => `${run.trigger}:${run.status}`))}; pulados ${JSON.stringify(missedSkipped.map((run) => run.error))}`,
+  }
+  await invoke(`window.__scribeApi.invoke('scribe:tasks-toggle', { id: ${JSON.stringify(missedId)}, enabled: false })`)
+
+  // "Pedir agora": um agente e um pedido, na hora; a execução entra em "Execuções".
+  await setValue(contents, '#ask-now-agent', agentId, 'change')
+  await setValue(contents, '#ask-now-text', 'Quais decisões tomamos?')
+  await clickSelector(contents, '[data-action="ask-now"]')
+  const asked = await waitFor(contents, `document.querySelector('[data-ask-now] [data-run-state="ok"] [data-chat-footer]')`, 30_000)
+  const askRuns = readRunFiles(ctx.userDataDir).filter((run) => run.trigger === 'ask')
+  checks['askNow'] = {
+    ok: asked && askRuns.length === 1 && askRuns[0]?.status === 'ok' && (askRuns[0].answer?.text ?? '').length > 0,
+    detail: `resposta na tela=${asked}; execuções "Pedir agora" ${JSON.stringify(askRuns.map((run) => run.status))}`,
+  }
+
+  await clickSelector(contents, '[data-action="ask-now-close"]')
+  const askClosed = await waitFor(contents, `!document.querySelector('[data-ask-now] [data-run-answer]')`)
+
+  // Execuções: a lista, os filtros e o detalhe com o pedido, o raciocínio, os passos e o rodapé.
+  await clickSelector(contents, '#automations-tab-execucoes')
+  const listed = await waitFor(contents, `document.querySelectorAll('[data-run-row]').length >= 8`)
+  const rows = await invoke<number>(`document.querySelectorAll('[data-run-row]').length`)
+  await setValue(contents, '#runs-status-filter', 'skipped', 'change')
+  const filtered = await waitFor(contents, `[...document.querySelectorAll('[data-run-row]')].every((row) => row.dataset.runStatus === 'skipped') && document.querySelectorAll('[data-run-row]').length >= 2`)
+  await setValue(contents, '#runs-status-filter', '', 'change')
+  await waitFor(contents, `document.querySelectorAll('[data-run-row]').length === ${rows}`)
+  await settle(contents)
+  shots.push(await capture(win, ctx.outDir, 'execucoes-light'))
+  await clickSelector(contents, `[data-run-row][data-run-trigger="schedule"] [data-action="run-open"]`)
+  const detail = await waitFor(contents, `document.querySelector('[data-run-detail] [data-run-state="ok"] [data-chat-footer]')`, 8000)
+  const detailView = await invoke<{ prompt: string; steps: number; cost: string; output: string }>(
+    `(() => { const box = document.querySelector('[data-run-detail]'); return { prompt: box?.querySelector('[data-chat-message="user"]')?.textContent ?? '', steps: box?.querySelector('[data-chat-reasoning]') ? 1 : 0, cost: box?.querySelector('[data-chat-cost]')?.textContent ?? '', output: box?.querySelector('[data-run-output]')?.textContent ?? '' } })()`,
+  )
+  await settle(contents)
+  shots.push(await capture(win, ctx.outDir, 'execucao-detalhe-light'))
+  checks['runs'] = {
+    ok: askClosed && listed && filtered && detail && detailView.prompt.startsWith('Agora: ') && detailView.prompt.includes('Resuma as reuniões de hoje.') && detailView.steps === 1 && detailView.cost.includes('US$') && detailView.output === 'Conversa criada em Perguntar',
+    detail: `"Pedir agora" fechado=${askClosed}; ${rows} linhas; filtro "Pulada"=${filtered}; detalhe=${detail} ${JSON.stringify(detailView)}`,
+  }
+
+  // Configurações › Geral: "Ao fechar a janela" e "Abrir ao entrar no Mac" (só registrado); › Claude: o limite diário.
+  await clickSelector(contents, '[data-nav="configuracoes"]')
+  await openSettingsTab(contents, 'geral')
+  const closeRow = await waitFor(contents, `document.querySelector('[data-setting-name="Ao fechar a janela"] [data-close-behavior-option="tray"][aria-pressed="true"]')`)
+  const loginBefore = auto.loginItems.length
+  await clickSelector(contents, '[aria-labelledby="settings-open-at-login"]')
+  await waitFor(contents, `document.querySelector('[aria-labelledby="settings-open-at-login"]')?.getAttribute('aria-checked') === 'true'`)
+  await wait(200)
+  await clickSelector(contents, '[aria-labelledby="settings-open-at-login"]')
+  await wait(300)
+  await openSettingsTab(contents, 'claude')
+  const limitRow = await waitFor(contents, `document.querySelector('#settings-daily-limit')?.value === '50'`)
+  const logins = auto.loginItems.slice(loginBefore)
+  checks['settings'] = {
+    ok: closeRow && limitRow && JSON.stringify(logins) === JSON.stringify([{ openAtLogin: true, openAsHidden: true }, { openAtLogin: false, openAsHidden: true }]) && readSettings(ctx.userDataDir).openAtLogin === false,
+    detail: `"Ao fechar a janela" na barra de menus=${closeRow}; limite diário 50=${limitRow}; itens de login ${JSON.stringify(logins)}`,
+  }
+
+  // Fechar a janela mantém o app (Dock escondido) e o ícone reabre (Dock de volta).
+  const dockBefore = { ...auto.dock }
+  const closed = new Promise<void>((resolve) => win.once('closed', () => resolve()))
+  win.close()
+  await closed
+  await wait(200)
+  const hidden = auto.dock.hides === dockBefore.hides + 1 && BrowserWindow.getAllWindows().length === 0 && auto.quitRequests === 0
+  const reopened = trayClick(ctx, 'tray-open')
+  const reopenedWin = BrowserWindow.getAllWindows()[0]
+  if (reopenedWin) {
+    watch(reopenedWin)
+    await loadAndWait(reopenedWin)
+  }
+  checks['closeKeepsApp'] = {
+    ok: hidden && reopened && reopenedWin !== undefined && auto.dock.shows === dockBefore.shows + 1,
+    detail: `fechada: Dock escondido=${hidden} (${dockBefore.hides}→${auto.dock.hides}), saídas pedidas=${auto.quitRequests}; reaberta pelo ícone=${reopened && reopenedWin !== undefined}, Dock ${dockBefore.shows}→${auto.dock.shows}`,
+  }
+  reopenedWin?.destroy()
+
+  // Tema escuro.
+  const dark = ctx.openWindow({ theme: 'dark' })
+  watch(dark)
+  await loadAndWait(dark)
+  await clickSelector(dark.webContents, '[data-nav="automacoes"]')
+  const darkCards = await waitFor(dark.webContents, `document.querySelectorAll('[data-agent-card]').length === 4`, 8000)
+  await settle(dark.webContents)
+  shots.push(await capture(dark, ctx.outDir, 'agentes-dark'))
+  checks['dark'] = { ok: darkCards, detail: `cartões no escuro=${darkCards}` }
+  dark.destroy()
+  auto.skewMs = 0
+}
+
 export async function runSmoke(ctx: SmokeContext): Promise<number> {
   const timer = setTimeout(() => {
     console.error(`[smoke] tempo esgotado (${TIMEOUT_MS} ms)`)
@@ -4836,6 +5230,7 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
   const google: Record<string, Check> = {}
   /** Contrato 24: WhatsApp pelo serviço falso. */
   const whatsapp: Record<string, Check> = {}
+  const automations: Record<string, Check> = {}
   let analysisMeasured: AnalysisMeasured | null = null
 
   // A fixture da sessão real, reduzida pelo mesmo redutor do app: a mesma dos testes (CA4) e do smoke.
@@ -5169,6 +5564,9 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
     // Contrato 24: WhatsApp com o serviço falso, antes do bloqueio (que também recusa os canais dele).
     await whatsappChecks(ctx, watch, whatsapp, screenshots)
 
+    // Contrato 23: Automações, com o agente ACP falso e o relógio do agendador adiantado; antes do bloqueio.
+    await automationsChecks(ctx, watch, automations, screenshots)
+
     // Contrato 22: bloqueio do app, por último (a senha criada vale para o userData inteiro).
     await lockChecks(ctx, watch, lock, screenshots)
 
@@ -5220,6 +5618,8 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
   for (const name of ['client', 'signIn', 'upload', 'replaceSummary', 'signOut']) if (!google[name]) failures.push(`google ${name}: não executado`)
   for (const [name, check] of Object.entries(whatsapp)) if (!check.ok) failures.push(`whatsapp ${name}: ${check.detail}`)
   for (const name of ['detect', 'install', 'risk', 'paired', 'screen', 'draft', 'send', 'ask', 'dark', 'locked']) if (!whatsapp[name]) failures.push(`whatsapp ${name}: não executado`)
+  for (const [name, check] of Object.entries(automations)) if (!check.ok) failures.push(`automações ${name}: ${check.detail}`)
+  for (const name of ['screen', 'testNow', 'agentForm', 'tasks', 'scheduled', 'afterMeeting', 'skipped', 'tray', 'autoPaused', 'missed', 'askNow', 'runs', 'settings', 'closeKeepsApp', 'dark']) if (!automations[name]) failures.push(`automações ${name}: não executado`)
   for (const [name, check] of Object.entries(lock)) if (!check.ok) failures.push(`bloqueio ${name}: ${check.detail}`)
   for (const name of ['password', 'layer', 'channels', 'unlock', 'shortcutAndTouchId', 'recordingContinues', 'leaveDialog', 'endWhileLocked', 'reopen', 'reopenFromDisk', 'dark']) if (!lock[name]) failures.push(`bloqueio ${name}: não executado`)
   if (!theme.ok) failures.push(`tema: ${theme.detail}`)
@@ -5231,8 +5631,10 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
   // "Análise" da gravação nos dois temas e a seção "Perguntas em aberto" do detalhe, no claro (contrato 19); a
   // camada de bloqueio nos dois temas, bloqueada na gravação e o bloco "Bloqueio" (contrato 22); a aba "Contas"
   // logada nos dois temas, deslogada no escuro e a aba "Áudio" com "No Drive" (contrato 11); a tela "WhatsApp" nos
-  // dois temas, o bloco em Configurações, a tela de risco, o pareamento e o rascunho, no claro (contrato 24).
-  const expectedShots = SCREENS.length * THEMES.length + 31
+  // dois temas, o bloco em Configurações, a tela de risco, o pareamento e o rascunho, no claro (contrato 24); a tela
+  // "Automações" nos dois temas, o formulário do agente, as tarefas, o formulário da tarefa, as execuções e o detalhe
+  // de uma, no claro (contrato 23).
+  const expectedShots = SCREENS.length * THEMES.length + 38
   if (screenshots.length !== expectedShots) failures.push(`${screenshots.length} PNGs em vez de ${expectedShots}`)
   for (const shot of screenshots) {
     if (shot.width < 1120 || shot.height < 740) failures.push(`${shot.name}: ${shot.width}x${shot.height} abaixo de 1120x740`)
@@ -5276,6 +5678,9 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
     googleFakeDrive: [...ctx.fixtures.google.files.values()].map((file) => ({ name: file.name, mimeType: file.mimeType, bytes: file.content.byteLength, uploads: file.uploads, trashed: file.trashed })),
     // Contrato 24: só os resultados; nenhum texto de mensagem além dos fixos do serviço falso.
     whatsapp,
+    // Contrato 23: os resultados, as notificações, o Dock e os itens de login substitutos; nenhum texto de reunião.
+    automations,
+    automationsFixtures: { notifications: ctx.fixtures.automations.notifications.map((notice) => notice.title), trayImages: ctx.fixtures.automations.trayImages, dock: ctx.fixtures.automations.dock, loginItems: ctx.fixtures.automations.loginItems, quitRequests: ctx.fixtures.automations.quitRequests },
     meetingFolder: folderFiles(defaultMeetingFolder(ctx)),
     openedFiles: ctx.fixtures.openedFiles.map((item) => ({ action: item.action, file: basename(item.path) })),
     claudeFakeSpawns: ctx.fixtures.claudeSpawns.map((spawn) => ({ ...spawn, args: spawn.args.filter((arg) => arg.startsWith('--')) })),

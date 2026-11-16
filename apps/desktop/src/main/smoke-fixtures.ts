@@ -177,6 +177,23 @@ export interface SmokeFixtures {
   /** Diálogos nativos de "Enviar para …?" (o de verdade nunca abre no smoke) e o botão que o substituto "clica" (1 é "Enviar"). */
   whatsappSendDialogs: { message: string; detail: string; buttons: string[] }[]
   whatsappSendChoice: number
+  /** Automações (contrato 23): relógio, notificações, ícone da barra de menus, Dock e "abrir ao entrar" substitutos. */
+  automations: SmokeAutomations
+}
+
+export interface SmokeAutomations {
+  /** Quanto o relógio do agendador está adiantado: o smoke "avança o relógio" por aqui. */
+  skewMs: number
+  /** Notificações do macOS que o app mostraria (a de verdade nunca aparece no smoke). */
+  notifications: { title: string; body: string; runId: string | null }[]
+  /** Cada troca da imagem do ícone da barra de menus (o `Tray` de verdade nunca é criado no smoke). */
+  trayImages: string[]
+  /** `app.dock.hide()` / `show()` pedidos ao fechar a última janela e ao reabrir (o Dock de verdade fica intacto). */
+  dock: { hides: number; shows: number }
+  /** `app.setLoginItemSettings` pedidos (nada entra nos itens de login do Mac). */
+  loginItems: { openAtLogin: boolean; openAsHidden: boolean }[]
+  /** "Sair" pedido pelo ícone ou por "Ao fechar a janela: Sair do app" (o smoke nunca sai por eles). */
+  quitRequests: number
 }
 
 export interface SmokeLock {
@@ -303,6 +320,7 @@ export function createSmokeFixtures(currentVersion: string, userDataDir: string)
     whatsapp: writeFakeIndex(join(userDataDir, 'whatsapp-indice-falso')),
     whatsappSendDialogs: [],
     whatsappSendChoice: 0,
+    automations: { skewMs: 0, notifications: [], trayImages: [], dock: { hides: 0, shows: 0 }, loginItems: [], quitRequests: 0 },
     lock: { skewMs: 0, touchIdAvailable: true, touchIdApproves: true, touchIdPrompts: 0, power: new EventEmitter(), refresh: () => undefined },
     fetch: (url: string, init: FetchInit) => {
       const path = new URL(url).pathname

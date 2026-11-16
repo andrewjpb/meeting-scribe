@@ -15,7 +15,7 @@
 //   cada leitura pedindo permissão; tenta escrever um arquivo (permissão pedida e negada), ler um arquivo
 //   fora da pasta pelo cliente (`fs/read_text_file`, recusado) e abrir um terminal (recusado); responde em
 //   pedaços com a citação `meeting:` e fecha com uso e custo. Pergunta com "devagar" sai em 40 pedaços
-//   espaçados e para no `session/cancel`.
+//   espaçados e para no `session/cancel`; com "falhe" (contrato 23), recusa na hora.
 //
 // Uso: node fake-acp-agent.mjs [--log <arquivo.jsonl>] | node fake-acp-agent.mjs --version
 import { appendFileSync, readdirSync, readFileSync } from 'node:fs'
@@ -199,6 +199,11 @@ export function fakeAcpAgent({ log = () => undefined, pause = 300 } = {}) {
       // Chat.
       const history = content.startsWith('<historico>')
       const question = history ? (/\nPergunta: ([\s\S]*)$/.exec(content)?.[1] ?? content) : content
+      // Contrato 23: pedido com "falhe" recusa na hora (o smoke confere a pausa depois de 3 falhas seguidas).
+      if (/falhe/i.test(question)) {
+        log({ event: 'refused', sessionId })
+        return { stopReason: 'refusal', usage: { totalTokens: 10, inputTokens: 10, outputTokens: 0 } }
+      }
       const slow = /devagar/i.test(question)
       const wait = () => sleep(slow ? Math.min(pause, 100) : pause)
       const folder = readFolder(state.cwd)

@@ -1,6 +1,7 @@
 import { useEffect } from 'react'
 import { useNavigate } from 'react-router'
 import { ROUTE_PATHS } from '@shared/routes'
+import { useAutomations } from '../features/agents/automationsStore'
 import { useRecording } from '../features/live/recordingStore'
 import { useStartRecording } from '../features/live/useStartRecording'
 import { useLock } from './lockStore'
@@ -25,6 +26,20 @@ export function useMainNavigation(): void {
 
   // "Encerrar e sair" no diálogo de fechar com gravação (contrato 22): encerra; o main sai depois de salvar.
   useEffect(() => window.__scribeApi.on('scribe:recording-end-and-quit', () => void useRecording.getState().end()), [])
+
+  // Contrato 23: "Encerrar" no menu do ícone da barra de menus.
+  useEffect(() => window.__scribeApi.on('scribe:recording-end', () => void useRecording.getState().end()), [])
+
+  // "Abrir" de uma notificação de tarefa: a tela "Automações" com a execução aberta.
+  useEffect(
+    () =>
+      window.__scribeApi.on('scribe:open-run', ({ runId }) => {
+        if (useLock.getState().status.locked) return
+        useAutomations.getState().openRun(runId)
+        void navigate(ROUTE_PATHS.automacoes)
+      }),
+    [navigate],
+  )
 
   useEffect(
     () =>

@@ -1,10 +1,12 @@
 // Rotas do renderer. O main só conhece o id; o caminho é detalhe do roteador em memória.
-export type RouteId = 'reunioes' | 'perguntar' | 'whatsapp' | 'gravacao' | 'detalhe' | 'configuracoes'
+export type RouteId = 'reunioes' | 'perguntar' | 'automacoes' | 'whatsapp' | 'gravacao' | 'detalhe' | 'configuracoes'
 
 export const ROUTE_PATHS: Record<RouteId, string> = {
   reunioes: '/',
   /** Chat sobre as reuniões (contrato 15). */
   perguntar: '/perguntar',
+  /** Agentes, tarefas agendadas e execuções (contrato 23). */
+  automacoes: '/automacoes',
   /** WhatsApp pessoal (contrato 24): só aparece na barra lateral com o serviço instalado. */
   whatsapp: '/whatsapp',
   gravacao: '/gravacao',

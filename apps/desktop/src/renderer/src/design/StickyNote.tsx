@@ -5,7 +5,7 @@ import { formatClock } from '@shared/transcription'
 import { Icon } from './Icon'
 
 /** Fundo, borda e texto de cada cor (tokens `--note-*`), em classes inteiras para o Tailwind achar. */
-const COLOR_CLASS: Record<NoteColor, { card: string; swatch: string; edge: string }> = {
+export const COLOR_CLASS: Record<NoteColor, { card: string; swatch: string; edge: string }> = {
   yellow: { card: 'bg-note-yellow border-note-yellow-border text-note-yellow-text', swatch: 'bg-note-yellow', edge: 'border-note-yellow-border' },
   pink: { card: 'bg-note-pink border-note-pink-border text-note-pink-text', swatch: 'bg-note-pink', edge: 'border-note-pink-border' },
   green: { card: 'bg-note-green border-note-green-border text-note-green-text', swatch: 'bg-note-green', edge: 'border-note-green-border' },
