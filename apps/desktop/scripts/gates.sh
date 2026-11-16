@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Gates do app desktop (docs/specs/desktop-shell/plan.md). Para no primeiro erro.
+# Em shell que não deixa o Chromium montar o sandbox: SMOKE_NO_SANDBOX=1 bash apps/desktop/scripts/gates.sh
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"

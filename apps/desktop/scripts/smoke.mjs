@@ -13,7 +13,10 @@ const electron = require('electron')
 const appDir = join(dirname(fileURLToPath(import.meta.url)), '..')
 const userData = realpathSync(mkdtempSync(join(tmpdir(), 'meeting-scribe-smoke-')))
 
-const child = spawn(electron, [appDir, '--smoke', `--smoke-user-data=${userData}`], { stdio: 'inherit' })
+// SMOKE_NO_SANDBOX=1: para shells que não deixam o Chromium montar o próprio sandbox (ex.: terminal de
+// agentes de IA). Só o smoke usa; o app instalado sempre roda com o sandbox.
+const sandboxArgs = process.env['SMOKE_NO_SANDBOX'] === '1' ? ['--no-sandbox'] : []
+const child = spawn(electron, [appDir, ...sandboxArgs, '--smoke', `--smoke-user-data=${userData}`], { stdio: 'inherit' })
 child.on('exit', (code, signal) => {
   rmSync(userData, { recursive: true, force: true })
   process.exit(signal ? 1 : (code ?? 1))
