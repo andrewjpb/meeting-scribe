@@ -1,12 +1,12 @@
 import { useNavigate } from 'react-router'
-import { ROUTE_PATHS } from '@shared/routes'
+import { settingsPath } from '@shared/routes'
 import { downloadProgressLabel } from './updatesFormat'
-import { UPDATES_SECTION, useUpdates } from './updatesStore'
+import { UPDATES_ANCHOR, useUpdates } from './updatesStore'
 
 /**
  * Aviso discreto de versão nova na barra lateral, acima das permissões (contrato 14, CA2): quadrado de
  * 6 px no azul vibrante, "Nova versão 0.2.0" e "Atualizar", que começa o download e abre o bloco
- * "Atualizações" em Configurações, onde ficam o andamento, a instrução e "Fechar o app agora".
+ * "Atualizações" (aba "Geral") em Configurações, onde ficam o andamento, a instrução e "Fechar o app agora".
  */
 export function UpdateNotice() {
   const available = useUpdates((store) => store.state.available)
@@ -18,7 +18,7 @@ export function UpdateNotice() {
   const progress = downloadProgressLabel(download)
   const update = (): void => {
     void start()
-    void navigate(ROUTE_PATHS.configuracoes, { state: { section: UPDATES_SECTION } })
+    void navigate(settingsPath('geral', UPDATES_ANCHOR))
   }
 
   return (

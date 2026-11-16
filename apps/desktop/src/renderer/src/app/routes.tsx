@@ -3,7 +3,7 @@ import type { LucideIcon } from 'lucide-react'
 import { MessageCircle, NotebookText, Settings } from 'lucide-react'
 import type { ReactElement } from 'react'
 import { matchPath } from 'react-router'
-import { ROUTE_PATHS, type RouteId } from '@shared/routes'
+import { ROUTE_PATHS, SETTINGS_ROUTE_PATTERN, type RouteId } from '@shared/routes'
 import { ChatScreen } from '../features/chat/ChatScreen'
 import { LiveScreen } from '../features/live/LiveScreen'
 import { MeetingDetailScreen } from '../features/meetings/MeetingDetailScreen'
@@ -24,7 +24,8 @@ export const APP_ROUTES: AppRoute[] = [
   { id: 'detalhe', path: ROUTE_PATHS.detalhe, element: <MeetingDetailScreen /> },
   {
     id: 'configuracoes',
-    path: ROUTE_PATHS.configuracoes,
+    // Contrato 18: a aba aberta fica na URL (`/configuracoes/claude`).
+    path: SETTINGS_ROUTE_PATTERN,
     element: <SettingsScreen />,
     nav: { label: 'Configurações', icon: Settings },
   },

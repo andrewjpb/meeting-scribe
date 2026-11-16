@@ -141,6 +141,9 @@
 
   --sidebar-width: 224px;
   --titlebar-height: 52px;
+  /* Configurações (contrato 18): largura de leitura e a coluna dos controles, igual em toda linha. */
+  --settings-width: 760px;
+  --settings-control-width: 340px;
 
   --duration-fast: 120ms;
   --duration-base: 160ms;

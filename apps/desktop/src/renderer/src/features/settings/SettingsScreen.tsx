@@ -1,3 +1,15 @@
+import { Info } from 'lucide-react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { Navigate, useLocation, useNavigate, useParams } from 'react-router'
+import {
+  DEFAULT_SETTINGS_TAB,
+  isSettingsTab,
+  settingsPath,
+  SETTINGS_TABS,
+  TRANSCRIPTION_ANCHOR,
+  type SettingsNavigationState,
+  type SettingsTab,
+} from '@shared/routes'
 import { LANGUAGE_CODES, type ChatModel, type ClaudeModel, type ClaudeTransport, type LanguageCode, type ThemeSetting, type TranslationEngine } from '@shared/settings-defaults'
 import { useAgentLabel } from '../../app/agentLabel'
 import { useSettings } from '../../app/settingsStore'
@@ -6,7 +18,11 @@ import { PageHeader } from '../../design/PageHeader'
 import { Section } from '../../design/Section'
 import { Segmented } from '../../design/Segmented'
 import { SettingRow } from '../../design/SettingRow'
+import { Note } from '../../design/Note'
 import { Switch } from '../../design/Switch'
+import { tabId, tabPanelId, Tabs } from '../../design/Tabs'
+import { SearchField } from '../meetings/SearchField'
+import { AboutSection } from './AboutSection'
 import { AcpAgentField } from './AcpAgentField'
 import { ApiKeyField } from './ApiKeyField'
 import { BrandSection } from './BrandSection'
@@ -15,6 +31,19 @@ import { ClaudeCliField } from './ClaudeCliField'
 import { MeetingFilesSection } from './MeetingFilesSection'
 import { micOptions, SYSTEM_DEFAULT } from './micOptions'
 import { ModelPicker } from './ModelPicker'
+import {
+  HIGHLIGHT_MS,
+  lastSettingsTab,
+  matchesRow,
+  rememberSettingsTab,
+  resultsLabel,
+  searchSettings,
+  settingsIndex,
+  SETTINGS_TAB_LABELS,
+  tabForShortcut,
+  type SettingsEntry,
+  type SettingsResultGroup,
+} from './settingsTabs'
 import { UpdatesSection } from './UpdatesSection'
 
 export const LANGUAGE_NAMES: Record<LanguageCode, string> = {
@@ -56,11 +85,32 @@ const CHAT_MODELS: { value: ChatModel; label: string }[] = [
   { value: 'opus', label: 'Opus' },
 ]
 
+const TABS = SETTINGS_TABS.map((value) => ({ value, label: SETTINGS_TAB_LABELS[value] }))
+const TABS_ID = 'settings'
+
+/** Primeiro controle de uma linha (campo, seletor, botão ou link), para o foco depois da busca. */
+const CONTROL = 'input, select, textarea, button, a[href], [tabindex]:not([tabindex="-1"])'
+
 /**
- * Configurações: coluna única de até 680 px. O título fica fora da área que rola, então a rolagem começa
- * abaixo da faixa arrastável de 52 px e nenhum controle passa por baixo dela. Cada mudança grava na hora.
+ * Configurações (contrato 18): título e busca no topo, as seis abas logo abaixo (fixas; só o conteúdo rola) e
+ * a coluna de leitura de até 760 px, centralizada. A aba aberta fica na URL; sem ela, abre a última aberta
+ * nesta sessão. Cada mudança grava na hora, como antes.
  */
 export function SettingsScreen() {
+  const { aba } = useParams()
+  const location = useLocation()
+  if (!isSettingsTab(aba)) {
+    const tab = aba === undefined ? lastSettingsTab() : DEFAULT_SETTINGS_TAB
+    return <Navigate replace to={{ pathname: settingsPath(tab), hash: location.hash }} state={location.state as unknown} />
+  }
+  return <SettingsTabs tab={aba} />
+}
+
+/**
+ * As abas ficam todas montadas e só a aberta aparece (`hidden` nas outras): cada bloco carrega o que precisa
+ * ao abrir Configurações, como na página única, e a busca lê as linhas de todas.
+ */
+function SettingsTabs({ tab }: { tab: SettingsTab }) {
   const settings = useSettings((state) => state.settings)
   const update = useSettings((state) => state.update)
   const devices = useAudioInputs()
@@ -68,122 +118,337 @@ export function SettingsScreen() {
   const agentLabel = useAgentLabel()
   const mics = micOptions(devices, settings.micDeviceId)
 
+  const navigate = useNavigate()
+  const location = useLocation()
+  const rootRef = useRef<HTMLDivElement>(null)
+  const scrollRef = useRef<HTMLDivElement>(null)
+  // Depois da próxima navegação: a linha achada pela busca (com o bloco dela, se a linha não aparece) ou a aba
+  // que deve receber o foco (⌘1…⌘6 e Esc).
+  const pendingRef = useRef<{ row: HTMLElement | null; block: Element | null } | null>(null)
+  const focusTabRef = useRef(false)
+  const queryRef = useRef('')
+  const [query, setQuery] = useState('')
+  // Linha achada que só aparece em certa condição: "Esta opção aparece quando …".
+  const [hint, setHint] = useState<SettingsEntry | null>(null)
+  const entries = settingsIndex(agentLabel)
+  const groups = searchSettings(entries, query)
+  const resultCount = groups.reduce((total, group) => total + group.indexes.length, 0)
+
+  useEffect(() => {
+    queryRef.current = query
+  })
+
+  useEffect(() => rememberSettingsTab(tab), [tab])
+
+  // ⌘1…⌘6 abrem a aba N enquanto Configurações está aberta.
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent): void => {
+      // Esc que limpou a busca (o campo já tratou o evento): o foco volta para a aba aberta.
+      if (event.key === 'Escape') {
+        if (event.defaultPrevented && queryRef.current) document.getElementById(tabId(TABS_ID, tab))?.focus()
+        return
+      }
+      const next = tabForShortcut(event)
+      if (!next || event.repeat) return
+      event.preventDefault()
+      setQuery('')
+      setHint(null)
+      focusTabRef.current = true
+      void navigate(settingsPath(next))
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [navigate, tab])
+
+  // A cada navegação: a linha escolhida na busca (rola e destaca por 2 s), a âncora da URL (rola até o
+  // bloco e foca o campo pedido) ou, sem nada disso, o topo da aba.
+  useEffect(() => {
+    const scroller = scrollRef.current
+    const pending = pendingRef.current
+    pendingRef.current = null
+    if (focusTabRef.current) {
+      focusTabRef.current = false
+      document.getElementById(tabId(TABS_ID, tab))?.focus()
+    }
+    const target = pending?.row
+    if (target) {
+      target.scrollIntoView({ block: 'center' })
+      target.querySelector<HTMLElement>(CONTROL)?.focus({ preventScroll: true })
+      target.setAttribute('data-highlighted', '')
+      const timer = window.setTimeout(() => target.removeAttribute('data-highlighted'), HIGHLIGHT_MS)
+      return () => {
+        window.clearTimeout(timer)
+        target.removeAttribute('data-highlighted')
+      }
+    }
+    if (pending?.block) {
+      pending.block.scrollIntoView({ block: 'start' })
+      return undefined
+    }
+    const anchor = location.hash.slice(1)
+    const block = anchor ? document.getElementById(tabPanelId(TABS_ID, tab))?.querySelector(`[data-settings-anchor="${CSS.escape(anchor)}"]`) : null
+    if (block) block.scrollIntoView({ block: 'start' })
+    else if (scroller) scroller.scrollTop = 0
+    const focus = (location.state as SettingsNavigationState | null)?.focus
+    if (focus) document.getElementById(focus)?.focus()
+    return undefined
+  }, [location, tab])
+
+  const selectTab = (next: SettingsTab): void => {
+    setQuery('')
+    setHint(null)
+    void navigate(settingsPath(next))
+  }
+
+  const search = (value: string): void => {
+    setQuery(value)
+    setHint(null)
+  }
+
+  // A linha está montada (no painel da aba, mesmo escondido) ou não aparece agora: então leva ao bloco dela
+  // e explica quando ela aparece.
+  const open = (index: number): void => {
+    const entry = entries[index]
+    if (!entry) return
+    const panelEl = rootRef.current?.querySelector(`[data-settings-panel="${entry.tab}"]`)
+    const row = [...(panelEl?.querySelectorAll<HTMLElement>('[data-setting-row]') ?? [])].find((el) => matchesRow(entry, el.dataset.settingName ?? '')) ?? null
+    const block = panelEl?.querySelector(`section[aria-label="${CSS.escape(entry.section)}"]`) ?? null
+    pendingRef.current = { row, block }
+    setHint(row ? null : entry)
+    setQuery('')
+    void navigate(settingsPath(entry.tab))
+  }
+
+  const searching = query.trim() !== ''
+  const panel = (value: SettingsTab, children: ReactNode) => (
+    <div
+      key={value}
+      role="tabpanel"
+      id={tabPanelId(TABS_ID, value)}
+      aria-labelledby={tabId(TABS_ID, value)}
+      data-settings-panel={value}
+      hidden={searching || value !== tab}
+      className="flex flex-col gap-8"
+    >
+      {children}
+    </div>
+  )
+
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div className="px-10 pt-7">
-        <PageHeader title="Configurações" />
-      </div>
-      <div data-settings-scroll className="min-h-0 flex-1 overflow-y-auto px-10 pt-10 pb-12">
-        <div className="flex w-full max-w-[680px] flex-col gap-10">
-          <BrandSection />
-
-          <Section title="Transcrição">
-            <ApiKeyField />
-          </Section>
-
-          <Section title="Áudio">
-            <SettingRow name="Microfone" description="Usado para a sua voz." htmlFor="settings-mic">
-              <Select id="settings-mic" value={settings.micDeviceId ?? SYSTEM_DEFAULT} options={mics} onChange={(value) => void update({ micDeviceId: value === SYSTEM_DEFAULT ? null : value })} />
-            </SettingRow>
-            <SettingRow
-              name="Cancelamento de eco"
-              nameId="settings-echo"
-              description="Ligue se usar alto-falante em vez de fone, para a fala dos participantes não entrar pelo seu microfone."
-            >
-              <Switch checked={settings.echoCancellation} labelledBy="settings-echo" onChange={(echoCancellation) => void update({ echoCancellation })} />
-            </SettingRow>
-            <SettingRow
-              name="Remover eco do alto-falante"
-              nameId="settings-remove-echo"
-              description="Some com a fala dos participantes que vaza para o seu microfone quando você não usa fone."
-            >
-              <Switch checked={settings.removeEcho} labelledBy="settings-remove-echo" onChange={(removeEcho) => void update({ removeEcho })} />
-            </SettingRow>
-            <SettingRow
-              name="Identificar quem fala"
-              nameId="settings-identify-speakers"
-              description="Separa os participantes por voz. Mais lento; desligado, as falas se dividem pelas pausas."
-            >
-              <Switch checked={settings.identifySpeakers} labelledBy="settings-identify-speakers" onChange={(identifySpeakers) => void update({ identifySpeakers })} />
-            </SettingRow>
-          </Section>
-
-          <MeetingFilesSection />
-
-          <Section title="Idiomas">
-            <SettingRow name="Idioma falado" description="O idioma da reunião." htmlFor="settings-source">
-              <Select id="settings-source" value={settings.sourceLanguage} options={LANGUAGE_OPTIONS} onChange={(sourceLanguage) => void update({ sourceLanguage })} />
-            </SettingRow>
-            <SettingRow name="Traduzir ao vivo" nameId="settings-translate" description="A tradução aparece abaixo de cada fala.">
-              <Switch checked={settings.translationEnabled} labelledBy="settings-translate" onChange={(translationEnabled) => void update({ translationEnabled })} />
-            </SettingRow>
-            <SettingRow name="Traduzir para" htmlFor="settings-target">
-              <Select id="settings-target" value={settings.targetLanguage} options={LANGUAGE_OPTIONS} onChange={(targetLanguage) => void update({ targetLanguage })} />
-            </SettingRow>
-          </Section>
-
-          <Section title="Modelo de tradução">
-            <SettingRow name="Traduzir com" nameId="settings-engine" description="O Claude CLI usa o claude instalado neste Mac, com a sua conta.">
-              <Segmented
-                value={settings.translationEngine}
-                options={ENGINES}
-                labelledBy="settings-engine"
-                dataName="engine-option"
-                onChange={(translationEngine) => void update({ translationEngine })}
-              />
-            </SettingRow>
-            {settings.translationEngine === 'claude-cli' ? (
-              <>
-                <SettingRow name="Modelo" nameId="settings-claude-model">
-                  <Segmented
-                    value={settings.claudeModel}
-                    options={CLAUDE_MODELS}
-                    labelledBy="settings-claude-model"
-                    dataName="claude-model-option"
-                    onChange={(claudeModel) => void update({ claudeModel })}
-                  />
-                </SettingRow>
-              </>
-            ) : (
-              <div className="mt-4">
-                <ModelPicker />
+      {/*
+       * O cabeçalho reserva o mesmo espaço da barra de rolagem que a área de baixo (dos dois lados, para a coluna
+       * seguir centralizada): título, busca, abas e coluna ficam no mesmo `x` com e sem barra.
+       */}
+      <div className="overflow-hidden px-10 pt-7 [scrollbar-gutter:stable_both-edges]">
+        <div className="mx-auto w-full max-w-[var(--settings-width)]">
+          <PageHeader
+            title="Configurações"
+            actions={
+              // O campo (40 px) não empurra o título (32 px) para baixo: o título fica a 28 px do topo.
+              <div data-settings-search className="-my-1">
+                <SearchField value={query} onChange={search} label="Buscar configuração" />
               </div>
-            )}
-            <SettingRow name="Resumir ao encerrar" nameId="settings-summarize" description="Ao encerrar, o Claude lê a transcrição e escreve o resumo, as decisões e as tarefas.">
-              <Switch checked={settings.summarizeOnStop} labelledBy="settings-summarize" onChange={(summarizeOnStop) => void update({ summarizeOnStop })} />
-            </SettingRow>
-          </Section>
-
-          {/*
-           * Tradução, resumo e o chat "Perguntar" (contrato 15) usam o mesmo `claude`: o estado e o caminho
-           * dele ficam sempre à mão, junto da conexão (contrato 17) e do modelo do chat.
-           */}
-          <Section title="Claude">
-            <ClaudeCliField />
-            <SettingRow name={`Conexão com o ${agentLabel}`} nameId="settings-claude-transport" description={`O agente mostra o raciocínio e os passos do ${agentLabel} direto do protocolo.`}>
-              <Segmented
-                value={settings.claudeTransport}
-                options={TRANSPORTS}
-                labelledBy="settings-claude-transport"
-                dataName="claude-transport-option"
-                onChange={(claudeTransport) => void update({ claudeTransport })}
-              />
-            </SettingRow>
-            <AcpAgentField />
-            <SettingRow name="Modelo do chat" nameId="settings-chat-model" description="Usado em Perguntar. O Opus responde melhor e demora mais.">
-              <Segmented value={settings.chatModel} options={CHAT_MODELS} labelledBy="settings-chat-model" dataName="chat-model-option" onChange={(chatModel) => void update({ chatModel })} />
-            </SettingRow>
-          </Section>
-
-          <Section title="Aparência">
-            <SettingRow name="Tema" nameId="settings-theme">
-              <Segmented value={settings.theme} options={THEMES} labelledBy="settings-theme" dataName="theme-option" onChange={(theme) => void update({ theme })} />
-            </SettingRow>
-          </Section>
-
-          <UpdatesSection />
+            }
+          />
+          <div className="mt-5 border-b border-line">
+            <Tabs value={searching ? null : tab} tabs={TABS} onChange={selectTab} label="Seções das configurações" id={TABS_ID} />
+          </div>
         </div>
       </div>
+      <div ref={scrollRef} data-settings-scroll className="min-h-0 flex-1 overflow-y-auto px-10 pt-8 pb-12 [scrollbar-gutter:stable_both-edges]">
+        <div ref={rootRef} data-settings-column className="mx-auto flex w-full max-w-[var(--settings-width)] flex-col">
+          {hint && !searching && (
+            <Note id="settings-hint" icon={Info} role="status" className="mb-6">
+              {`Esta opção aparece quando ${hint.when ?? 'a condição dela vale'}.`}
+            </Note>
+          )}
+          {panel(
+            'geral',
+            <>
+              <BrandSection />
+              <Section title="Aparência">
+                <SettingRow name="Tema" nameId="settings-theme">
+                  <Segmented value={settings.theme} options={THEMES} labelledBy="settings-theme" dataName="theme-option" onChange={(theme) => void update({ theme })} />
+                </SettingRow>
+              </Section>
+              <UpdatesSection />
+            </>,
+          )}
+
+          {panel(
+            'gravacao',
+            <>
+              <Section title="Áudio">
+                <SettingRow name="Microfone" description="Usado para a sua voz." htmlFor="settings-mic">
+                  <Select id="settings-mic" value={settings.micDeviceId ?? SYSTEM_DEFAULT} options={mics} onChange={(value) => void update({ micDeviceId: value === SYSTEM_DEFAULT ? null : value })} />
+                </SettingRow>
+                <SettingRow
+                  name="Cancelamento de eco"
+                  nameId="settings-echo"
+                  description="Ligue se usar alto-falante em vez de fone, para a fala dos participantes não entrar pelo seu microfone."
+                >
+                  <Switch checked={settings.echoCancellation} labelledBy="settings-echo" onChange={(echoCancellation) => void update({ echoCancellation })} />
+                </SettingRow>
+              </Section>
+
+              <Section title="Transcrição" anchor={TRANSCRIPTION_ANCHOR}>
+                <ApiKeyField />
+                <SettingRow
+                  name="Remover eco do alto-falante"
+                  nameId="settings-remove-echo"
+                  description="Some com a fala dos participantes que vaza para o seu microfone quando você não usa fone."
+                >
+                  <Switch checked={settings.removeEcho} labelledBy="settings-remove-echo" onChange={(removeEcho) => void update({ removeEcho })} />
+                </SettingRow>
+                <SettingRow
+                  name="Identificar quem fala"
+                  nameId="settings-identify-speakers"
+                  description="Separa os participantes por voz. Mais lento; desligado, as falas se dividem pelas pausas."
+                >
+                  <Switch checked={settings.identifySpeakers} labelledBy="settings-identify-speakers" onChange={(identifySpeakers) => void update({ identifySpeakers })} />
+                </SettingRow>
+              </Section>
+
+              <Section title="Idiomas">
+                <SettingRow name="Idioma falado" description="O idioma da reunião." htmlFor="settings-source">
+                  <Select id="settings-source" value={settings.sourceLanguage} options={LANGUAGE_OPTIONS} onChange={(sourceLanguage) => void update({ sourceLanguage })} />
+                </SettingRow>
+                <SettingRow name="Traduzir ao vivo" nameId="settings-translate" description="A tradução aparece abaixo de cada fala.">
+                  <Switch checked={settings.translationEnabled} labelledBy="settings-translate" onChange={(translationEnabled) => void update({ translationEnabled })} />
+                </SettingRow>
+                <SettingRow name="Traduzir para" htmlFor="settings-target">
+                  <Select id="settings-target" value={settings.targetLanguage} options={LANGUAGE_OPTIONS} onChange={(targetLanguage) => void update({ targetLanguage })} />
+                </SettingRow>
+              </Section>
+            </>,
+          )}
+
+          {panel(
+            'claude',
+            <>
+              {/*
+               * Tradução, resumo e o chat "Perguntar" (contrato 15) usam o mesmo `claude`: a conexão (contrato 17),
+               * o agente e o caminho do `claude` ficam juntos, seguidos dos modelos.
+               */}
+              <Section title="Claude">
+                <SettingRow name={`Conexão com o ${agentLabel}`} nameId="settings-claude-transport" description={`O agente mostra o raciocínio e os passos do ${agentLabel} direto do protocolo.`}>
+                  <Segmented
+                    value={settings.claudeTransport}
+                    options={TRANSPORTS}
+                    labelledBy="settings-claude-transport"
+                    dataName="claude-transport-option"
+                    onChange={(claudeTransport) => void update({ claudeTransport })}
+                  />
+                </SettingRow>
+                <AcpAgentField />
+                <ClaudeCliField />
+              </Section>
+
+              <Section title="Modelo de tradução">
+                <SettingRow name="Traduzir com" nameId="settings-engine" description="O Claude CLI usa o claude instalado neste Mac, com a sua conta.">
+                  <Segmented
+                    value={settings.translationEngine}
+                    options={ENGINES}
+                    labelledBy="settings-engine"
+                    dataName="engine-option"
+                    onChange={(translationEngine) => void update({ translationEngine })}
+                  />
+                </SettingRow>
+                {settings.translationEngine === 'claude-cli' ? (
+                  <SettingRow name="Modelo" nameId="settings-claude-model">
+                    <Segmented
+                      value={settings.claudeModel}
+                      options={CLAUDE_MODELS}
+                      labelledBy="settings-claude-model"
+                      dataName="claude-model-option"
+                      onChange={(claudeModel) => void update({ claudeModel })}
+                    />
+                  </SettingRow>
+                ) : (
+                  <div className="py-4" data-setting-row data-setting-name="Modelo da AssemblyAI" data-setting-description="Lista de modelos de tradução com preço e contexto.">
+                    <ModelPicker />
+                  </div>
+                )}
+              </Section>
+
+              <Section title="Chat e resumo">
+                <SettingRow name="Modelo do chat" nameId="settings-chat-model" description="Usado em Perguntar. O Opus responde melhor e demora mais.">
+                  <Segmented value={settings.chatModel} options={CHAT_MODELS} labelledBy="settings-chat-model" dataName="chat-model-option" onChange={(chatModel) => void update({ chatModel })} />
+                </SettingRow>
+                <SettingRow name="Resumir ao encerrar" nameId="settings-summarize" description="Ao encerrar, o Claude lê a transcrição e escreve o resumo, as decisões e as tarefas.">
+                  <Switch checked={settings.summarizeOnStop} labelledBy="settings-summarize" onChange={(summarizeOnStop) => void update({ summarizeOnStop })} />
+                </SettingRow>
+              </Section>
+            </>,
+          )}
+
+          {panel('arquivos', <MeetingFilesSection />)}
+
+          {panel(
+            'contas',
+            // Reservada para os contratos 11 e 12 (Google Drive e agendas).
+            <section aria-label="Contas" data-settings-empty className="rounded-[var(--radius-panel)] border border-line-strong bg-bg-raised px-6 py-10 text-center">
+              <p className="text-13 text-text-muted">Em breve: Google Drive e agendas Google e Microsoft.</p>
+            </section>,
+          )}
+
+          {panel('sobre', <AboutSection />)}
+
+          {searching && <SearchResults query={query} entries={entries} groups={groups} onOpen={open} />}
+          <p aria-live="polite" data-settings-results-count className="sr-only">
+            {searching ? resultsLabel(resultCount) : ''}
+          </p>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+interface SearchResultsProps {
+  query: string
+  entries: readonly SettingsEntry[]
+  groups: readonly SettingsResultGroup[]
+  onOpen: (index: number) => void
+}
+
+/** Resultado da busca, agrupado por aba ("Claude › Modelo do chat"); o clique leva à aba e destaca a linha. */
+function SearchResults({ query, entries, groups, onOpen }: SearchResultsProps) {
+  if (!groups.length) {
+    return (
+      <p data-settings-results="empty" className="text-13 text-text-muted">
+        Nenhuma configuração com “{query.trim()}”.
+      </p>
+    )
+  }
+  return (
+    <div data-settings-results className="flex flex-col gap-8">
+      {groups.map((group) => (
+        <div key={group.tab} role="group" aria-label={group.label} className="flex flex-col">
+          <h2 className="caps text-text-muted">{group.label}</h2>
+          <ul className="mt-3 flex flex-col overflow-hidden rounded-[var(--radius-panel)] border border-line-strong bg-bg-raised">
+            {group.indexes.map((index) => {
+              const entry = entries[index]
+              if (!entry) return null
+              return (
+                <li key={index} className="border-b border-line last:border-b-0">
+                  <button
+                    type="button"
+                    data-settings-result={entry.tab}
+                    onClick={() => onOpen(index)}
+                    className="no-drag flex w-full flex-col items-start gap-0.5 px-4 py-3 text-left transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-bg-sunken focus-visible:outline-offset-[-2px]"
+                  >
+                    <span className="text-13 font-medium text-text">
+                      {group.label} › {entry.name}
+                    </span>
+                    {entry.description && <span className="text-12 text-text-muted">{entry.description}</span>}
+                  </button>
+                </li>
+              )
+            })}
+          </ul>
+        </div>
+      ))}
     </div>
   )
 }

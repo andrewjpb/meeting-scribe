@@ -1,7 +1,8 @@
 import { useRef, type KeyboardEvent } from 'react'
 
 interface TabsProps<T extends string> {
-  value: T
+  /** Aba atual; `null` deixa nenhuma marcada (ex.: durante uma busca), com a primeira na ordem do Tab. */
+  value: T | null
   tabs: readonly { value: T; label: string }[]
   onChange: (value: T) => void
   /** Nome da lista de abas para leitores de tela. */
@@ -36,6 +37,7 @@ export function Tabs<T extends string>({ value, tabs, onChange, label, id }: Tab
     <div role="tablist" aria-label={label} onKeyDown={onKeyDown} className="-mb-px flex gap-6">
       {tabs.map((tab, index) => {
         const active = tab.value === value
+        const reachable = active || (value === null && index === 0)
         return (
           <button
             key={tab.value}
@@ -48,7 +50,7 @@ export function Tabs<T extends string>({ value, tabs, onChange, label, id }: Tab
             data-tab={tab.value}
             aria-selected={active}
             aria-controls={tabPanelId(id, tab.value)}
-            tabIndex={active ? 0 : -1}
+            tabIndex={reachable ? 0 : -1}
             onClick={() => onChange(tab.value)}
             className={`no-drag h-10 border-b-2 text-13 font-medium transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] focus-visible:outline-offset-[-2px] ${
               active ? 'border-accent text-title' : 'border-transparent text-text-muted hover:text-title'

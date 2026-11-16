@@ -7,6 +7,8 @@ import { Shortcut } from '../../design/Shortcut'
 interface SearchFieldProps {
   value: string
   onChange: (value: string) => void
+  /** Texto de exemplo e nome do campo (padrão: "Buscar reuniões"; Configurações usa "Buscar configuração"). */
+  label?: string
 }
 
 /** Diálogo aberto na tela: o Esc é dele, não da busca. */
@@ -16,7 +18,7 @@ const DIALOG_OPEN = 'dialog[open], [role="dialog"], [role="alertdialog"]'
  * "Buscar reuniões" no topo da lista (contrato 10, CA4): ⌘F foca o campo e Esc limpa a busca, com o foco
  * no campo ou fora dele (o campo só existe com a tela de Reuniões aberta), a não ser com um diálogo aberto.
  */
-export function SearchField({ value, onChange }: SearchFieldProps) {
+export function SearchField({ value, onChange, label = 'Buscar reuniões' }: SearchFieldProps) {
   const input = useRef<HTMLInputElement>(null)
   const latest = useRef({ value, onChange })
   useEffect(() => {
@@ -51,8 +53,8 @@ export function SearchField({ value, onChange }: SearchFieldProps) {
         type="text"
         data-search
         value={value}
-        placeholder="Buscar reuniões"
-        aria-label="Buscar reuniões"
+        placeholder={label}
+        aria-label={label}
         aria-keyshortcuts="Meta+F"
         autoComplete="off"
         spellCheck={false}

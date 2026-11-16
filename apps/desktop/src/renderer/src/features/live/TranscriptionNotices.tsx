@@ -5,7 +5,7 @@ import { Download, TriangleAlert } from 'lucide-react'
 import { useEffect } from 'react'
 import { useNavigate } from 'react-router'
 import { acpReady } from '@shared/acp'
-import { ROUTE_PATHS } from '@shared/routes'
+import { settingsPath, TRANSCRIPTION_ANCHOR } from '@shared/routes'
 import { useAcp } from '../../app/acpStore'
 import { useAgentLabel } from '../../app/agentLabel'
 import { useSettings } from '../../app/settingsStore'
@@ -57,7 +57,7 @@ export function TranscriptionNotices() {
           icon={TriangleAlert}
           action={
             value.error === 'key-rejected' ? (
-              <button type="button" className={NOTE_ACTION_CLASS} onClick={() => void navigate(ROUTE_PATHS.configuracoes)}>
+              <button type="button" className={NOTE_ACTION_CLASS} onClick={() => void navigate(settingsPath('gravacao', TRANSCRIPTION_ANCHOR))}>
                 Abrir Configurações
               </button>
             ) : (

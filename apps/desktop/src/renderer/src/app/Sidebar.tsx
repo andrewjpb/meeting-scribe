@@ -4,9 +4,11 @@ import { Icon } from '../design/Icon'
 import { PermissionsBlock } from '../features/permissions/PermissionsBlock'
 import { UpdateNotice } from '../features/settings/UpdateNotice'
 import { useBranding } from './brandingStore'
+import { ROUTE_PATHS } from '@shared/routes'
 import { APP_ROUTES } from './routes'
 
-const NAV_ITEMS = APP_ROUTES.flatMap((route) => (route.nav ? [{ ...route.nav, id: route.id, path: route.path }] : []))
+// O item leva ao caminho da rota (Configurações sem a aba abre a última aberta) e fica ativo nas sub-rotas dela.
+const NAV_ITEMS = APP_ROUTES.flatMap((route) => (route.nav ? [{ ...route.nav, id: route.id, path: ROUTE_PATHS[route.id] }] : []))
 
 /**
  * Barra lateral opaca em azul profundo: espaço dos botões da janela, marca (a escolhida em Configurações
@@ -35,7 +37,7 @@ export function Sidebar() {
           <NavLink
             key={item.id}
             to={item.path}
-            end
+            end={item.path === ROUTE_PATHS.reunioes}
             data-nav={item.id}
             draggable={false}
             className={({ isActive }) =>

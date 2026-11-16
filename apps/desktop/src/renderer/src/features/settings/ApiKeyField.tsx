@@ -65,7 +65,13 @@ export function ApiKeyField() {
   const removable = status?.source === 'saved'
 
   return (
-    <div className="flex flex-col gap-3 border-b border-line py-4" data-key-state={check ?? (status?.configured ? 'saved' : 'none')}>
+    <div
+      className="flex flex-col gap-3 py-4"
+      data-key-state={check ?? (status?.configured ? 'saved' : 'none')}
+      data-setting-row
+      data-setting-name="Chave da AssemblyAI"
+      data-setting-description="Guardada cifrada neste Mac, protegida pelo Chaveiro do macOS."
+    >
       <div className="flex flex-wrap items-baseline justify-between gap-2">
         <label htmlFor={API_KEY_INPUT_ID} className="text-13 font-medium text-text">
           Chave da AssemblyAI

@@ -5,8 +5,10 @@ import { useEffect } from 'react'
 import { create } from 'zustand'
 import type { UpdateState } from '@shared/updates'
 
-/** `aria-label` do bloco em Configurações e o `state.section` com que o aviso da barra lateral navega até ele. */
+/** `aria-label` do bloco em Configurações. */
 export const UPDATES_SECTION = 'Atualizações'
+/** Âncora do bloco na aba "Geral" (contrato 18, CA2). */
+export const UPDATES_ANCHOR = 'atualizacoes'
 
 interface UpdatesStore {
   state: UpdateState

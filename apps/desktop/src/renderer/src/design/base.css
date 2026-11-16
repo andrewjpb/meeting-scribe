@@ -163,6 +163,18 @@
     animation: rec-pulse 1.6s ease-in-out infinite;
   }
 
+  /* Linha achada pela busca das Configurações: fundo e fio por 2 s (sem transição com movimento reduzido). */
+  [data-setting-row] {
+    transition: background-color var(--duration-base) var(--ease-out), outline-color var(--duration-base) var(--ease-out);
+    outline: 1px solid transparent;
+    outline-offset: -1px;
+  }
+
+  [data-setting-row][data-highlighted] {
+    background: var(--bg-sunken);
+    outline-color: var(--accent);
+  }
+
   /* Troca de rota: só opacidade, sem mola. */
   .route-enter {
     animation: route-enter var(--duration-base) var(--ease-out);

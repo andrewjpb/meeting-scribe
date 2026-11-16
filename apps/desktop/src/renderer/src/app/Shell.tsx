@@ -11,13 +11,16 @@ import { useMainNavigation } from './useMainNavigation'
 export function Shell() {
   const location = useLocation()
   useMainNavigation()
+  const routeId = routeIdOf(location.pathname)
+  // Trocar de aba em Configurações não remonta a tela (nem refaz a transição de rota).
+  const routeKey = routeId === 'configuracoes' ? routeId : location.pathname
 
   return (
     <div className="flex h-full">
       <Sidebar />
-      <main data-route={routeIdOf(location.pathname) ?? ''} className="relative flex min-w-0 flex-1 flex-col bg-bg">
+      <main data-route={routeId ?? ''} className="relative flex min-w-0 flex-1 flex-col bg-bg">
         <div className="drag absolute inset-x-0 top-0 h-[var(--titlebar-height)]" />
-        <div key={location.pathname} className="route-enter relative flex min-h-0 flex-1 flex-col">
+        <div key={routeKey} className="route-enter relative flex min-h-0 flex-1 flex-col">
           <Routes location={location}>
             {APP_ROUTES.map((route) => (
               <Route key={route.id} path={route.path} element={route.element} />

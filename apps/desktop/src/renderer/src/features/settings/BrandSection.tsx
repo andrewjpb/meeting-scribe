@@ -93,8 +93,7 @@ export function BrandSection() {
   }
 
   return (
-    <Section title="Marca">
-      <p className="text-12 text-text-muted">Aparece na barra lateral, no título da janela e no ícone do Dock. O nome no Finder e na pasta Aplicativos não muda.</p>
+    <Section title="Marca" description="Aparece na barra lateral, no título da janela e no ícone do Dock. O nome no Finder e na pasta Aplicativos não muda.">
       <BrandTextRow
         key={`nome:${brandName ?? ''}:${brandName === null}`}
         id="brand-name"

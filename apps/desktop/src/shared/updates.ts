@@ -6,6 +6,9 @@ export function updateAssetName(version: string): string {
   return `LAP-Reunioes-${version}-arm64.dmg`
 }
 
+/** Repositório do app, aberto no navegador pela aba "Sobre" (contrato 18); o main só abre `https://`. */
+export const REPOSITORY_URL = 'https://github.com/andrewjpb/meeting-scribe'
+
 /** Notas do release mostradas em Configurações: texto simples, até 2 000 caracteres. */
 export const UPDATE_NOTES_MAX = 2000
 

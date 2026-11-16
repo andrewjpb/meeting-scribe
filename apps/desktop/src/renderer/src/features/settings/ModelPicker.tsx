@@ -1,6 +1,8 @@
 import { Check, KeyRound, Search } from 'lucide-react'
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
+import { useNavigate } from 'react-router'
 import type { CatalogError, CatalogModel, ModelCheck } from '@shared/assemblyai'
+import { settingsPath, TRANSCRIPTION_ANCHOR, type SettingsNavigationState } from '@shared/routes'
 import { useSettings } from '../../app/settingsStore'
 import { Icon } from '../../design/Icon'
 import { Note, NOTE_ACTION_CLASS } from '../../design/Note'
@@ -66,13 +68,19 @@ function CurrentModel({ current }: { current: string }) {
 
 function NoKey() {
   const current = useSettings((state) => state.settings.translationModel)
+  const navigate = useNavigate()
+  // A chave fica na aba "Gravação" (contrato 18): a tela troca de aba, rola até o bloco e foca o campo.
+  const addKey = (): void => {
+    const state: SettingsNavigationState = { focus: API_KEY_INPUT_ID }
+    void navigate(settingsPath('gravacao', TRANSCRIPTION_ANCHOR), { state })
+  }
   return (
     <div>
       <Note
         id="model-no-key"
         icon={KeyRound}
         action={
-          <button type="button" className={NOTE_ACTION_CLASS} onClick={() => document.getElementById(API_KEY_INPUT_ID)?.focus()}>
+          <button type="button" className={NOTE_ACTION_CLASS} onClick={addKey}>
             Adicionar chave
           </button>
         }

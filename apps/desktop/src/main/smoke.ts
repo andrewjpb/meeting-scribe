@@ -36,10 +36,12 @@ import type { Meeting } from '../shared/meetings'
 import { summaryMarkdown, type MeetingSummary } from '../shared/meeting-summary'
 import { summaryPreview } from '../shared/meetings-overview'
 import { PRIVACY_PANE_URLS } from '../shared/privacy'
+import { SETTINGS_TABS, type SettingsTab } from '../shared/routes'
+import { matchesRow, settingsIndex } from '../shared/settings-index'
 import { BRAND_LOGO_INVALID_MESSAGE, BRAND_LOGO_PATTERN, DEFAULT_BRAND_NAME, DEFAULT_BRAND_SUBTITLE } from '../shared/branding'
 import { DEFAULT_SETTINGS, type AppSettings } from '../shared/settings-defaults'
 import { transcriptMarkdown } from '../shared/transcript-markdown'
-import { UPDATE_HASH_MISMATCH_MESSAGE, UPDATE_INSTALL_INSTRUCTION, UPDATE_QUIT_BLOCKED_MESSAGE, updateAssetName } from '../shared/updates'
+import { REPOSITORY_URL, UPDATE_HASH_MISMATCH_MESSAGE, UPDATE_INSTALL_INSTRUCTION, UPDATE_QUIT_BLOCKED_MESSAGE, updateAssetName } from '../shared/updates'
 import { TRANSCRIPT_VERSION, type RuntimeSegment, type TranscriptDocument } from '../shared/transcription'
 import { applyMessage, emptyTranscriptState, persistableSegments, type StreamEnvelope } from '../renderer/src/transcription/reducer'
 import { DEFAULT_FOLDER_NAME } from './audio-files/service'
@@ -80,11 +82,12 @@ const SCREENS = [
   'detalhe-anotacoes',
   'perguntar',
   'perguntar-v2',
-  'configuracoes',
+  // Contrato 18: Configurações por aba ("Geral" abre com a "Marca").
+  'configuracoes-geral',
+  'configuracoes-gravacao',
   'configuracoes-seletor',
   'configuracoes-claude',
   'configuracoes-arquivos',
-  'configuracoes-marca',
 ] as const
 /** Tempo de gravação até a fita encher a largura da janela (uma coluna a cada 50 ms). */
 const TAPE_FILL_MS = 12_500
@@ -183,6 +186,28 @@ async function clickSelector(contents: WebContents, selector: string): Promise<v
 }
 
 const routeIs = (route: string): string => `document.querySelector('main')?.dataset.route === '${route}'`
+
+/** Contrato 18: a aba marcada e o painel dela à mostra (os outros ficam montados, com `hidden`). */
+const settingsTabIs = (tab: SettingsTab): string =>
+  `document.querySelector('[role="tab"][data-tab="${tab}"]')?.getAttribute('aria-selected') === 'true' && document.querySelector('[data-settings-panel="${tab}"]')?.hidden === false`
+
+/** Contrato 18: troca de aba pelo clique, já em Configurações. */
+async function selectSettingsTab(contents: WebContents, tab: SettingsTab): Promise<boolean> {
+  await waitFor(contents, `document.querySelector('[role="tab"][data-tab="${tab}"]')`)
+  await clickSelector(contents, `[role="tab"][data-tab="${tab}"]`)
+  return waitFor(contents, settingsTabIs(tab))
+}
+
+/** Contrato 18: a âncora rolou a aba até o bloco (rolagem fora do topo e o bloco à vista). */
+const anchoredAt = (label: string): string =>
+  `(() => { const s = document.querySelector('[data-settings-scroll]'); const b = document.querySelector('section[aria-label=${JSON.stringify(label)}]')?.getBoundingClientRect(); const r = s.getBoundingClientRect(); return s.scrollTop > 0 && b && b.top >= r.top - 1 && b.top < r.top + 40 })()`
+
+/** Contrato 18: Configurações pela barra lateral e a aba pelo clique. */
+async function openSettingsTab(contents: WebContents, tab: SettingsTab): Promise<boolean> {
+  await clickSelector(contents, '[data-nav="configuracoes"]')
+  await waitFor(contents, routeIs('configuracoes'))
+  return selectSettingsTab(contents, tab)
+}
 const probeJs = (expression: string): string => `window.__smokeProbe?.${expression}`
 
 async function captureState(contents: WebContents): Promise<{ phase?: string; mic?: string; system?: string } | null> {
@@ -1423,7 +1448,7 @@ async function downloadsCheck(win: BrowserWindow, ctx: SmokeContext, record: Mee
 
 /** Contrato 08, CA3: "Resumir ao encerrar", ligado por padrão, com a ajuda; desligar e religar grava. */
 async function summarizeSetting(contents: WebContents, userDataDir: string): Promise<Check> {
-  await clickSelector(contents, '[data-nav="configuracoes"]')
+  await openSettingsTab(contents, 'claude')
   await waitFor(contents, `document.querySelector('[aria-labelledby="settings-summarize"]')`)
   const row = await evaluate<string>(contents, `document.querySelector('#settings-summarize')?.parentElement?.textContent ?? ''`)
   const on = await evaluate<string | null>(contents, `document.querySelector('[aria-labelledby="settings-summarize"]')?.getAttribute('aria-checked') ?? null`)
@@ -1452,8 +1477,8 @@ async function summarizeSetting(contents: WebContents, userDataDir: string): Pro
 async function meetingFilesSettings(win: BrowserWindow, ctx: SmokeContext): Promise<Check> {
   const contents = win.webContents
   const section = `section[aria-label="Arquivos da reunião"]`
-  await clickSelector(contents, '[data-nav="configuracoes"]')
-  await waitFor(contents, `${routeIs('configuracoes')} && document.querySelector('${section}')`)
+  await openSettingsTab(contents, 'arquivos')
+  await waitFor(contents, `document.querySelector('${section}')`)
   await scrollToSection(contents, 'Arquivos da reunião')
   const before = await evaluate<{ text: string; on: string }>(
     contents,
@@ -1485,7 +1510,7 @@ async function meetingFilesSettings(win: BrowserWindow, ctx: SmokeContext): Prom
   const detailFiles = await evaluate<boolean>(contents, `Boolean(document.querySelector('[data-meeting-files]'))`)
   const filesAfter = snapshot()
 
-  await clickSelector(contents, '[data-nav="configuracoes"]')
+  await openSettingsTab(contents, 'arquivos')
   await waitFor(contents, `document.querySelector('[aria-labelledby="settings-save-folder"]')`)
   await clickSelector(contents, '[aria-labelledby="settings-save-folder"]')
   const backOn = await waitFor(contents, `document.querySelector('[data-action="choose-folder"]')`)
@@ -1559,8 +1584,8 @@ async function brandingChecks(win: BrowserWindow, ctx: SmokeContext): Promise<{ 
   const section = 'section[aria-label="Marca"]'
   const userDataBefore = app.getPath('userData')
   const dockFrom = ctx.fixtures.dockIcons.length
-  await clickSelector(contents, '[data-nav="configuracoes"]')
-  await waitFor(contents, `${routeIs('configuracoes')} && document.querySelector('${section}')`)
+  await openSettingsTab(contents, 'geral')
+  await waitFor(contents, `document.querySelector('${section}')`)
   await scrollToSection(contents, 'Marca')
   const block = await evaluate<{ first: string; text: string; namePlaceholder: string; subtitlePlaceholder: string; resetShown: boolean; preview: number }>(
     contents,
@@ -1703,8 +1728,8 @@ async function updatesChecks(win: BrowserWindow, ctx: SmokeContext): Promise<{ c
   const notice = `document.querySelector('aside [data-update-notice-text]')?.textContent ?? ''`
   const version = app.getVersion()
 
-  await clickSelector(contents, '[data-nav="configuracoes"]')
-  await waitFor(contents, `${routeIs('configuracoes')} && document.querySelector('${section}')`)
+  await openSettingsTab(contents, 'geral')
+  await waitFor(contents, `document.querySelector('${section}')`)
   await scrollToSection(contents, 'Atualizações')
   const before = await evaluate<{ text: string; notice: boolean }>(
     contents,
@@ -1744,7 +1769,8 @@ async function updatesChecks(win: BrowserWindow, ctx: SmokeContext): Promise<{ c
   await clickSelector(contents, '[data-nav="reunioes"]')
   await waitFor(contents, routeIs('reunioes'))
   await clickSelector(contents, 'aside [data-action="update-now"]')
-  const toSettings = await waitFor(contents, routeIs('configuracoes'))
+  // Contrato 18, CA2: abre a aba "Geral" e rola até o bloco.
+  const toSettings = await waitFor(contents, `${routeIs('configuracoes')} && ${settingsTabIs('geral')}`)
   const progressSeen = await waitFor(
     contents,
     `/^Baixando… \\d+%$/.test(document.querySelector('[data-update-progress]')?.textContent ?? '') && /^Baixando… \\d+%$/.test(${notice})`,
@@ -1877,8 +1903,7 @@ async function acpChecks(win: BrowserWindow, ctx: SmokeContext, shot: () => Prom
   await evaluate(contents, "window.__scribeApi.invoke('scribe:settings-update', { claudeTransport: 'acp' }).then(() => true)")
   const transportSaved = readSettings(userDataDir).claudeTransport
   // CA7: a linha "Conexão com o Claude" nas Configurações, no agente.
-  await clickSelector(contents, '[data-nav="configuracoes"]')
-  await waitFor(contents, routeIs('configuracoes'))
+  await openSettingsTab(contents, 'claude')
   const settingsRow = await waitFor(contents, `document.querySelector('[data-claude-transport-option="acp"]')?.getAttribute('aria-pressed') === 'true' && document.querySelector('section[aria-label="Claude"]')`)
   const settingsLabels = await evaluate<string[]>(contents, "[...document.querySelectorAll('[data-claude-transport-option]')].map((el) => el.textContent)")
   // Devolução A: o agente não vem no pacote: "Não instalado" com "Instalar (≈… MB)".
@@ -2096,8 +2121,7 @@ async function acpChecks(win: BrowserWindow, ctx: SmokeContext, shot: () => Prom
   const othersExited = fixtures.acpSpawns.slice(spawnsBefore + 1).every((spawn) => spawn.exited)
 
   // "Remover" nas Configurações: volta a "Não instalado" e a pasta some.
-  await clickSelector(contents, '[data-nav="configuracoes"]')
-  await waitFor(contents, routeIs('configuracoes'))
+  await openSettingsTab(contents, 'claude')
   await evaluate(contents, "window.__scribeApi.invoke('scribe:settings-update', { claudeTransport: 'acp' }).then(() => true)")
   await waitFor(contents, `document.querySelector('[data-acp-state="installed"] [data-action="acp-remove"]')`)
   const installedText = await text(contents, '[data-acp-status]')
@@ -2542,8 +2566,9 @@ async function settingsReady(contents: WebContents): Promise<boolean> {
   return waitFor(contents, `${routeIs('configuracoes')} && document.querySelector('[data-key-state="valid"]') && document.querySelector('[data-model-picker="ready"]')`, 8000)
 }
 
-/** Rola até o "Modelo de tradução" e marca um modelo não liberado. */
+/** Abre a aba "Claude", rola até o "Modelo de tradução" e marca um modelo não liberado. */
 async function openModelPicker(contents: WebContents): Promise<boolean> {
+  await selectSettingsTab(contents, 'claude')
   await evaluate(
     contents,
     `(() => {
@@ -2566,7 +2591,7 @@ async function openModelPicker(contents: WebContents): Promise<boolean> {
 /**
  * CA16: nenhum controle de Configurações fica sob a faixa arrastável de 52 px (ou, se ficar, tem
  * `no-drag`) em nenhuma posição da rolagem; depois de rolar até o fim e voltar, um clique de verdade no
- * primeiro controle (o campo da chave) dá foco a ele.
+ * primeiro controle à mostra (desde o contrato 18, o nome do app, na aba "Geral") dá foco a ele.
  */
 async function settingsReachable(contents: WebContents): Promise<Check> {
   const result = await evaluate<{ scrollerTop: number; positions: number; blocked: string[]; first: { x: number; y: number; id: string } | null }>(
@@ -2597,7 +2622,7 @@ async function settingsReachable(contents: WebContents): Promise<Check> {
       check()
       scroller.scrollTop = 0
       check()
-      const first = controls().find((el) => scroller.contains(el))
+      const first = controls().find((el) => scroller.contains(el) && el.getBoundingClientRect().width > 0)
       const r = first?.getBoundingClientRect()
       const scrollerTop = Math.round(scroller.getBoundingClientRect().top)
       return { scrollerTop, positions, blocked: [...blocked], first: r ? { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2), id: first.id } : null }
@@ -2675,9 +2700,11 @@ async function settingsChecks(win: BrowserWindow, ctx: SmokeContext, checks: Rec
     await wait(100)
   }
 
-  await clickSelector(contents, '[data-nav="configuracoes"]')
+  await openSettingsTab(contents, 'geral')
   if (!(await settingsReady(contents))) throw new Error('Configurações não ficaram prontas')
   checks['reachable'] = await settingsReachable(contents)
+  // Contrato 18: a chave fica no bloco "Transcrição" da aba "Gravação"; o seletor de modelo, na aba "Claude".
+  await selectSettingsTab(contents, 'gravacao')
 
   // CA5: campo de senha, só os quatro últimos, frase do Chaveiro e "Criar chave".
   const field = await evaluate<{ type: string; value: string; help: string; link: string }>(
@@ -2725,6 +2752,7 @@ async function settingsChecks(win: BrowserWindow, ctx: SmokeContext, checks: Rec
   }
 
   // CA8: busca por nome ou id, sem maiúsculas nem acentos.
+  await selectSettingsTab(contents, 'claude')
   await waitFor(contents, "document.querySelector('[data-model-picker=\"ready\"]')")
   const search = async (query: string): Promise<{ ids: string[]; count: string }> => {
     await setValue(contents, '[data-model-search]', query)
@@ -2766,10 +2794,12 @@ async function settingsChecks(win: BrowserWindow, ctx: SmokeContext, checks: Rec
   }
 
   // CA5 e CA8: remover pede confirmação; sem chave o seletor convida a adicionar.
+  await selectSettingsTab(contents, 'gravacao')
   await clickSelector(contents, '[data-action="remove-key"]')
   const asked = await waitFor(contents, "document.querySelector('[data-action=\"confirm-remove-key\"]')")
   const keptWhileAsking = (await keyStatus()).configured
   await clickSelector(contents, '[data-action="confirm-remove-key"]')
+  await selectSettingsTab(contents, 'claude')
   const invite = await waitFor(contents, `document.querySelector('[data-model-picker="no-key"] [data-notice="model-no-key"]')`)
   const removed = await keyStatus()
   const current = await evaluate<string>(contents, "document.querySelector('[data-current-model]')?.dataset.currentModel ?? ''")
@@ -2778,9 +2808,19 @@ async function settingsChecks(win: BrowserWindow, ctx: SmokeContext, checks: Rec
     detail: `"Remover" pediu confirmação=${asked}, manteve até confirmar=${keptWhileAsking}; depois configured=${removed.configured}; seletor sem chave mostra o convite=${invite} e o modelo atual ${current}`,
   }
 
+  // Contrato 18, CA2: "Adicionar chave" do seletor leva à aba "Gravação", ao bloco "Transcrição" e ao campo da chave.
+  await clickSelector(contents, '[data-notice="model-no-key"] button')
+  const addKeyTab = await waitFor(contents, settingsTabIs('gravacao'))
+  const addKeyFocus = await waitFor(contents, `document.activeElement?.id === 'assemblyai-key'`)
+  checks['addKeyLink'] = {
+    ok: addKeyTab && addKeyFocus,
+    detail: `"Adicionar chave" na aba Claude -> aba Gravação=${addKeyTab}, foco no campo da chave=${addKeyFocus}`,
+  }
+
   // CA8: catálogo sem rede mostra o erro com "Tentar de novo" e o modelo atual pelo id.
   fixtures.failCatalog = true
   await saveKey(SMOKE_FAKE_KEY)
+  await selectSettingsTab(contents, 'claude')
   const offlineCatalog = await waitFor(contents, `document.querySelector('[data-notice="models-load-failed"]')`)
   const offlineText = await text(contents, '[data-notice="models-load-failed"]')
   const offlineCurrent = await evaluate<string>(contents, "document.querySelector('[data-current-model]')?.dataset.currentModel ?? ''")
@@ -2793,6 +2833,7 @@ async function settingsChecks(win: BrowserWindow, ctx: SmokeContext, checks: Rec
   }
 
   // CA10: origem e destino nunca iguais.
+  await selectSettingsTab(contents, 'gravacao')
   // Os seletores são controlados: só mostram o valor novo quando o main devolve o que gravou.
   const languagesAre = (source: string, target: string): string =>
     `document.querySelector('#settings-source')?.value === '${source}' && document.querySelector('#settings-target')?.value === '${target}'`
@@ -2865,6 +2906,7 @@ async function settingsChecks(win: BrowserWindow, ctx: SmokeContext, checks: Rec
 
 /** Contrato 05, CA10: "Traduzir com" em Claude CLI, com o binário falso encontrado. */
 async function showClaudeSettings(contents: WebContents): Promise<boolean> {
+  await selectSettingsTab(contents, 'claude')
   await clickSelector(contents, '[data-engine-option="claude-cli"]')
   const found = await waitFor(contents, `document.querySelector('[data-claude-state="found"]') && !document.querySelector('[data-model-picker]')`, 8000)
   await evaluate(
@@ -2941,7 +2983,8 @@ async function claudeChecks(win: BrowserWindow, ctx: SmokeContext): Promise<Chec
   const noticeText = await text(contents, '[data-notice="claude-not-found"]')
   const spawnsWhileMissing = fixtures.claudeSpawns.length
   await clickSelector(contents, '[data-action="open-settings-from-claude"]')
-  const toSettings = await waitFor(contents, routeIs('configuracoes'))
+  // Contrato 18, CA2: abre a aba "Claude".
+  const toSettings = await waitFor(contents, `${routeIs('configuracoes')} && ${settingsTabIs('claude')}`)
   await clickSelector(contents, '[data-nav="reunioes"]')
   await waitFor(contents, "document.querySelector('main header [data-action=\"new-recording\"]')")
   await clickSelector(contents, 'main header [data-action="new-recording"]')
@@ -2996,7 +3039,8 @@ async function transcriptionChecks(win: BrowserWindow, recording: Record<string,
   await clickSelector(contents, '[data-action="hide-example"]')
   await waitFor(contents, `document.querySelector('[data-transcript-state="no-key"]')`)
   await clickSelector(contents, '[data-action="open-settings-from-transcript"]')
-  const wentToSettings = await waitFor(contents, routeIs('configuracoes'))
+  // Contrato 18, CA2: `/configuracoes/gravacao#transcricao` (aba "Gravação", rolada até "Transcrição").
+  const wentToSettings = await waitFor(contents, `${routeIs('configuracoes')} && ${settingsTabIs('gravacao')} && ${anchoredAt('Transcrição')}`)
   // Devolve a chave fictícia (o gateway de fixtures aceita) e encerra a gravação sem chave.
   const started = await captureState(contents)
   await evaluate(contents, `window.__scribeApi.invoke('scribe:key-save', { key: ${JSON.stringify(SMOKE_FAKE_KEY)} }).then(() => true)`)
@@ -3092,8 +3136,7 @@ async function layoutMetrics(contents: WebContents, screen: LayoutScreen): Promi
           inputHeight: round(box('#assemblyai-key').height),
           selectHeight: round(box('#settings-mic').height),
           buttonHeight: round(box('[data-action="save-key"]').height),
-          settingRowHeight: round(document.querySelector('#settings-source').closest('div.border-b').getBoundingClientRect().height),
-          modelRowHeight: round(box('[data-model]').height),
+          settingRowHeight: round(document.querySelector('#settings-source').closest('[data-setting-row]').getBoundingClientRect().height),
         })
       } else {
         const style = getComputedStyle(header)
@@ -3131,6 +3174,17 @@ const COMMON_LAYOUT: Record<string, Expectation> = {
 const SCREEN_LAYOUT: Record<LayoutScreen, Record<string, Expectation>> = {
   configuracoes: {
     contentTop: { min: 28, max: 28 },
+    // Contrato 18: coluna de leitura de até 760 px, centralizada (na janela de 1120, a 68 px da lateral, mais a
+    // reserva da barra de rolagem quando ela não é sobreposta).
+    contentLeft: { min: 40, max: 100 },
+    columnWidth: { min: 600, max: 760 },
+    columnCentered: { min: 0, max: 0.5 },
+    headerAlign: { min: 0, max: 0.5 },
+    // Só registra a largura reservada para a barra (0 com a barra sobreposta do macOS).
+    scrollbarGutter: { min: 0, max: 40 },
+    tabsShiftOnScroll: { min: 0, max: 0 },
+    // Coluna dos controles: o mesmo `x` em todas as linhas de cada aba, com 1 px de tolerância.
+    ...Object.fromEntries(SETTINGS_TABS.map((tab) => [`controlSpread_${tab}`, { min: 0, max: 0.5 }])),
     inputHeight: { min: 40, max: 40 },
     selectHeight: { min: 40, max: 40 },
     buttonHeight: { min: 40, max: 40 },
@@ -3148,6 +3202,220 @@ const SCREEN_LAYOUT: Record<LayoutScreen, Record<string, Expectation>> = {
     transcriptTranslationLineHeight: { min: 22, max: 22 },
     copyButtonHeight: { min: 40, max: 40 },
   },
+}
+
+/**
+ * Contrato 18: as medidas de Configurações na aba "Gravação" (campo, seletor, botão e linha), a linha de
+ * modelo na aba "Claude" e, em cada aba, o alinhamento da coluna dos controles (o `x` do primeiro elemento
+ * de cada `[data-setting-control]`), a largura e a centralização da coluna e as abas paradas ao rolar.
+ */
+async function settingsLayoutMetrics(contents: WebContents): Promise<Record<string, number>> {
+  const round = (n: number): number => Math.round(n * 10) / 10
+  await selectSettingsTab(contents, 'gravacao')
+  const metrics = await layoutMetrics(contents, 'configuracoes')
+  const column = await evaluate<{ width: number; tabsShift: number }>(
+    contents,
+    `(() => {
+      const scroller = document.querySelector('[data-settings-scroll]')
+      const tablist = document.querySelector('[role="tablist"]')
+      const before = tablist.getBoundingClientRect().top
+      scroller.scrollTop = scroller.scrollHeight
+      const after = tablist.getBoundingClientRect().top
+      scroller.scrollTop = 0
+      return { width: document.querySelector('[data-settings-column]').getBoundingClientRect().width, tabsShift: Math.abs(after - before) }
+    })()`,
+  )
+  metrics['columnWidth'] = round(column.width)
+  metrics['tabsShiftOnScroll'] = round(column.tabsShift)
+  // Em cada aba, no topo e rolada até o fim: a coluna centralizada na área principal (sem descontar a barra de
+  // rolagem) e o título, as abas e a busca no mesmo `x` da coluna.
+  let centered = 0
+  let headerAlign = 0
+  let scrollbar = 0
+  await selectSettingsTab(contents, 'claude')
+  await waitFor(contents, "document.querySelector('[data-model]')?.getBoundingClientRect().height > 0")
+  metrics['modelRowHeight'] = round(await evaluate<number>(contents, "document.querySelector('[data-model]')?.getBoundingClientRect().height ?? 0"))
+  for (const tab of SETTINGS_TABS) {
+    await selectSettingsTab(contents, tab)
+    const xs = await evaluate<number[]>(
+      contents,
+      `[...document.querySelectorAll('[data-settings-panel="${tab}"] [data-setting-control]')].map((el) => (el.firstElementChild ?? el).getBoundingClientRect().left)`,
+    )
+    if (xs.length > 1) metrics[`controlSpread_${tab}`] = round(Math.max(...xs) - Math.min(...xs))
+    const aligned = await evaluate<{ centered: number; header: number; scrollbar: number }>(
+      contents,
+      `(() => {
+        const scroller = document.querySelector('[data-settings-scroll]')
+        const measure = () => {
+          const main = document.querySelector('main').getBoundingClientRect()
+          const col = document.querySelector('[data-settings-column]').getBoundingClientRect()
+          const title = document.querySelector('main h1').getBoundingClientRect()
+          const tabs = document.querySelector('[role="tablist"]').getBoundingClientRect()
+          const search = document.querySelector('[data-settings-search]').getBoundingClientRect()
+          return {
+            centered: Math.abs((col.left - main.left) - (main.right - col.right)),
+            header: Math.max(Math.abs(title.left - col.left), Math.abs(tabs.left - col.left), Math.abs(search.right - col.right)),
+          }
+        }
+        const top = measure()
+        scroller.scrollTop = scroller.scrollHeight
+        const bottom = measure()
+        scroller.scrollTop = 0
+        return { centered: Math.max(top.centered, bottom.centered), header: Math.max(top.header, bottom.header), scrollbar: scroller.offsetWidth - scroller.clientWidth }
+      })()`,
+    )
+    centered = Math.max(centered, aligned.centered)
+    headerAlign = Math.max(headerAlign, aligned.header)
+    scrollbar = Math.max(scrollbar, aligned.scrollbar)
+  }
+  metrics['columnCentered'] = round(centered)
+  metrics['headerAlign'] = round(headerAlign)
+  metrics['scrollbarGutter'] = round(scrollbar)
+  return metrics
+}
+
+/**
+ * Contrato 18, no claro: "Contas" vazia e sem botões; "Sobre" com versão, Electron e Chrome, o repositório
+ * aberto no navegador e o atalho para "Atualizações"; a aba lembrada ao voltar; ⌘2/⌘6 e as setas; ⌘F e a
+ * busca sem acento nem maiúscula, agrupada por aba, com o clique que leva à linha e a destaca por 2 s; Esc limpa.
+ */
+async function settingsTabsChecks(contents: WebContents, ctx: SmokeContext, shot: (name: string) => Promise<void>): Promise<Check> {
+  const visibleText = (selector: string): Promise<string> => evaluate<string>(contents, `document.querySelector(${JSON.stringify(selector)})?.innerText ?? ''`)
+
+  // Contas.
+  const contasOpen = await openSettingsTab(contents, 'contas')
+  const contas = await visibleText('[data-settings-panel="contas"]')
+  const contasButtons = await evaluate<number>(contents, `document.querySelectorAll('[data-settings-panel="contas"] button').length`)
+  await shot('configuracoes-contas-light')
+
+  // Sobre.
+  const sobreOpen = await selectSettingsTab(contents, 'sobre')
+  await waitFor(contents, `document.querySelector('[data-settings-panel="sobre"]')?.innerText.includes(${JSON.stringify(process.versions.electron)})`)
+  const sobre = await visibleText('[data-settings-panel="sobre"]')
+  const openedBefore = ctx.fixtures.openedUrls.length
+  await clickSelector(contents, '[data-action="open-repository"]')
+  await wait(100)
+  const opened = ctx.fixtures.openedUrls.slice(openedBefore).join()
+  await shot('configuracoes-sobre-light')
+  await clickSelector(contents, '[data-action="about-update-check"]')
+  const toUpdates = await waitFor(contents, settingsTabIs('geral'))
+  await wait(100)
+  const updatesVisible = await evaluate<boolean>(
+    contents,
+    `(() => {
+      const scroller = document.querySelector('[data-settings-scroll]').getBoundingClientRect()
+      const box = document.querySelector('section[aria-label="Atualizações"]').getBoundingClientRect()
+      return box.top >= scroller.top - 1 && box.top < scroller.bottom
+    })()`,
+  )
+
+  // Aba lembrada na sessão.
+  await selectSettingsTab(contents, 'claude')
+  await clickSelector(contents, '[data-nav="reunioes"]')
+  await waitFor(contents, routeIs('reunioes'))
+  await clickSelector(contents, '[data-nav="configuracoes"]')
+  const remembered = await waitFor(contents, `${routeIs('configuracoes')} && ${settingsTabIs('claude')}`)
+
+  // Teclado: ⌘2, ⌘6 e a seta para a direita na lista de abas (da última, volta à primeira).
+  const press = (key: string, meta: boolean): Promise<unknown> =>
+    evaluate(contents, `window.dispatchEvent(new KeyboardEvent('keydown', { key: ${JSON.stringify(key)}, metaKey: ${meta}, bubbles: true, cancelable: true })), true`)
+  await press('2', true)
+  const cmd2 = await waitFor(contents, settingsTabIs('gravacao'))
+  const activeTab = `document.activeElement?.getAttribute('role') === 'tab' ? document.activeElement.dataset.tab : ''`
+  const cmd2Focus = await evaluate<string>(contents, activeTab)
+  await press('6', true)
+  const cmd6 = await waitFor(contents, settingsTabIs('sobre'))
+  await evaluate(contents, `document.querySelector('[role="tab"][data-tab="geral"]').dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true })), true`)
+  const arrow = await waitFor(contents, settingsTabIs('geral'))
+
+  // ⌘F e a busca.
+  const input = '[data-settings-search] input'
+  await press('f', true)
+  const focused = await waitFor(contents, `document.activeElement === document.querySelector('${input}')`)
+  await setValue(contents, input, 'TRADUCAO')
+  await waitFor(contents, "document.querySelector('[data-settings-results]')")
+  const groups = await evaluate<string[]>(contents, "[...document.querySelectorAll('[data-settings-results] [role=\"group\"]')].map((el) => el.getAttribute('aria-label'))")
+  const items = await evaluate<string[]>(contents, "[...document.querySelectorAll('[data-settings-result]')].map((el) => el.innerText)")
+  const panelsHidden = await evaluate<boolean>(contents, "[...document.querySelectorAll('[data-settings-panel]')].every((el) => el.hidden)")
+  const noneSelected = await evaluate<boolean>(contents, `!document.querySelector('[role="tab"][aria-selected="true"]')`)
+  const live = await evaluate<string>(contents, `(document.querySelector('[data-settings-results-count]')?.getAttribute('aria-live') ?? '') + ':' + (document.querySelector('[data-settings-results-count]')?.textContent ?? '')`)
+  await shot('configuracoes-busca-light')
+  await setValue(contents, input, 'modelo do chat')
+  await waitFor(contents, "[...document.querySelectorAll('[data-settings-result]')].some((el) => el.innerText.includes('Claude › Modelo do chat'))")
+  await evaluate(contents, "[...document.querySelectorAll('[data-settings-result]')].find((el) => el.innerText.includes('Claude › Modelo do chat'))?.click(), true")
+  const row = `document.querySelector('[data-setting-row][data-setting-name="Modelo do chat"]')`
+  const jumped = await waitFor(contents, `${settingsTabIs('claude')} && ${row}?.hasAttribute('data-highlighted')`)
+  const inView = await evaluate<boolean>(
+    contents,
+    `(() => { const s = document.querySelector('[data-settings-scroll]').getBoundingClientRect(); const r = ${row}.getBoundingClientRect(); return r.top >= s.top && r.bottom <= s.bottom })()`,
+  )
+  const cleared = (await evaluate<string>(contents, `document.querySelector('${input}').value`)) === ''
+  const resultFocus = await evaluate<string>(contents, `${row}.contains(document.activeElement) ? document.activeElement.tagName + ':' + (document.activeElement.dataset.chatModelOption ?? '') : ''`)
+  await wait(2300)
+  const unhighlighted = await evaluate<boolean>(contents, `!${row}.hasAttribute('data-highlighted')`)
+  await setValue(contents, input, 'tema')
+  await waitFor(contents, "document.querySelector('[data-settings-results]')")
+  await press('Escape', false)
+  const escaped = await waitFor(contents, `document.querySelector('${input}').value === '' && !document.querySelector('[data-settings-results]') && ${settingsTabIs('claude')}`)
+  const escFocus = await evaluate<string>(contents, activeTab)
+
+  // Linha que só aparece em certa condição ("Modelo" do Claude, com a tradução na AssemblyAI): a busca acha
+  // pelo índice, o clique leva à aba e ao bloco e explica quando ela aparece.
+  await setValue(contents, input, 'haiku')
+  const hiddenFound = await waitFor(contents, "[...document.querySelectorAll('[data-settings-result]')].some((el) => el.innerText.startsWith('Claude › Modelo\\n'))")
+  await evaluate(contents, "[...document.querySelectorAll('[data-settings-result]')].find((el) => el.innerText.startsWith('Claude › Modelo\\n'))?.click(), true")
+  const hintShown = await waitFor(contents, `${settingsTabIs('claude')} && document.querySelector('[data-notice="settings-hint"]')?.textContent === 'Esta opção aparece quando "Traduzir com" está em Claude CLI.'`)
+  await setValue(contents, input, 'pasta')
+  const pastaFound = await waitFor(contents, "[...document.querySelectorAll('[data-settings-result]')].some((el) => el.innerText.startsWith('Arquivos › Pasta\\n'))")
+  await press('Escape', false)
+
+  // O índice da busca cobre toda linha da tela (todas as abas estão montadas).
+  const rows = await evaluate<{ tab: string; name: string }[]>(
+    contents,
+    `[...document.querySelectorAll('[data-settings-panel] [data-setting-row]')].map((el) => ({ tab: el.closest('[data-settings-panel]').dataset.settingsPanel, name: el.dataset.settingName ?? '' }))`,
+  )
+  const index = settingsIndex('Claude')
+  const missing = rows.filter((row) => !index.some((entry) => entry.tab === row.tab && matchesRow(entry, row.name)))
+
+  const ok =
+    contasOpen &&
+    contas.trim() === 'Em breve: Google Drive e agendas Google e Microsoft.' &&
+    contasButtons === 0 &&
+    sobreOpen &&
+    sobre.includes(app.getVersion()) &&
+    sobre.includes(process.versions.electron) &&
+    sobre.includes(process.versions.chrome) &&
+    sobre.includes('MIT') &&
+    opened === REPOSITORY_URL &&
+    toUpdates &&
+    updatesVisible &&
+    remembered &&
+    cmd2 &&
+    cmd2Focus === 'gravacao' &&
+    cmd6 &&
+    arrow &&
+    focused &&
+    JSON.stringify(groups) === JSON.stringify(['Gravação', 'Claude']) &&
+    items.every((item) => item.normalize('NFD').replace(/\p{Diacritic}/gu, '').toLowerCase().includes('traduc')) &&
+    panelsHidden &&
+    noneSelected &&
+    live === `polite:${items.length} resultados` &&
+    jumped &&
+    resultFocus === 'BUTTON:haiku' &&
+    inView &&
+    cleared &&
+    unhighlighted &&
+    escaped &&
+    escFocus === 'claude' &&
+    hiddenFound &&
+    hintShown &&
+    pastaFound &&
+    rows.length > 20 &&
+    missing.length === 0
+  return {
+    ok,
+    detail: `Contas "${contas.trim()}" (${contasButtons} botões); Sobre "${sobre.replace(/\s+/g, ' ').slice(0, 160)}", repositório -> ${opened || 'nada'}, "Procurar atualização" -> Geral=${toUpdates}, bloco visível=${updatesVisible}; aba lembrada=${remembered}; ⌘2=${cmd2}, ⌘6=${cmd6}, seta=${arrow}; ⌘F foca=${focused}; "TRADUCAO" -> grupos ${JSON.stringify(groups)}, itens ${JSON.stringify(items)}, painéis escondidos=${panelsHidden}; clique em "Modelo do chat" -> aba Claude e destaque=${jumped}, à vista=${inView}, busca limpa=${cleared}, destaque some em 2 s=${unhighlighted}; Esc limpa=${escaped}; foco: ⌘2 -> aba ${cmd2Focus || 'nenhuma'}, resultado -> ${resultFocus || 'fora da linha'}, Esc -> aba ${escFocus || 'nenhuma'}; durante a busca nenhuma aba marcada=${noneSelected}, região viva "${live}"; "haiku" acha "Modelo" escondido=${hiddenFound}, aviso=${hintShown}; "pasta"=${pastaFound}; ${rows.length} linhas na tela, fora do índice: ${JSON.stringify(missing)}`,
+  }
 }
 
 function layoutCheck(screen: LayoutScreen, metrics: Record<string, number>): Check {
@@ -3425,25 +3693,28 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
       }
 
       // 7. Configurações (chave conferida, catálogo das fixtures) e o seletor com um modelo não liberado.
-      await clickSelector(contents, '[data-nav="configuracoes"]')
+      // Contrato 18: cada aba pelo clique. "Geral" abre com o bloco "Marca" e o símbolo da LAP (contrato 09, CA2).
+      await openSettingsTab(contents, 'geral')
       if (!(await settingsReady(contents))) failures.push(`configuracoes/${themeName}: chave ou catálogo não carregou`)
-      await shoot('configuracoes', 'configuracoes')
-      if (themeName === 'light') layout['configuracoes'] = layoutCheck('configuracoes', await layoutMetrics(contents, 'configuracoes'))
+      await shoot('configuracoes-geral', 'configuracoes')
+      if (!(await selectSettingsTab(contents, 'gravacao'))) failures.push(`configuracoes-gravacao/${themeName}: aba não abriu`)
+      await shoot('configuracoes-gravacao', 'configuracoes')
+      if (themeName === 'light') layout['configuracoes'] = layoutCheck('configuracoes', await settingsLayoutMetrics(contents))
       brand[themeName] = await brandCheck(win)
       if (!(await openModelPicker(contents))) failures.push(`configuracoes-seletor/${themeName}: modelo não liberado não foi marcado`)
       await shoot('configuracoes-seletor', 'configuracoes')
       // Contrato 05: Claude CLI encontrado (binário falso), sem o seletor do gateway.
       if (!(await showClaudeSettings(contents))) failures.push(`configuracoes-claude/${themeName}: Claude CLI falso não foi encontrado`)
+      await evaluate(contents, "document.querySelector('[data-settings-scroll]').scrollTop = 0, true")
       await shoot('configuracoes-claude', 'configuracoes')
       await clickSelector(contents, '[data-engine-option="assemblyai"]')
       await waitFor(contents, "document.querySelector('[data-model-picker]')")
-      // Contrato 07, CA2: o bloco "Arquivos da reunião", ligado, com a pasta padrão.
-      await scrollToSection(contents, 'Arquivos da reunião')
+      // Contrato 07, CA2: o bloco "Arquivos da reunião", ligado, com a pasta padrão (aba "Arquivos").
+      if (!(await selectSettingsTab(contents, 'arquivos'))) failures.push(`configuracoes-arquivos/${themeName}: aba não abriu`)
       await waitFor(contents, `document.querySelector('section[aria-label="Arquivos da reunião"]')?.innerText.includes('~/')`)
       await shoot('configuracoes-arquivos', 'configuracoes')
-      // Contrato 09, CA2: o bloco "Marca", primeiro da tela, com o símbolo da LAP.
-      await scrollToSection(contents, 'Marca')
-      await shoot('configuracoes-marca', 'configuracoes')
+      // Contrato 18: "Contas", "Sobre", a aba lembrada, os atalhos e a busca, no claro.
+      if (themeName === 'light') settings['tabs'] = await settingsTabsChecks(contents, ctx, extraShot)
 
       if (themeName === 'light') navigation['detailLoadFailure'] = await detailLoadFailure(contents, ctx.userDataDir)
 
@@ -3547,7 +3818,7 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
     if (!check) failures.push(`medidas ${name}: não executado`)
     else if (!check.ok) failures.push(`medidas ${name}: ${check.detail}`)
   }
-  for (const name of ['permissions', 'reachable', 'keyField', 'keySave', 'modelSearch', 'modelSelect', 'keyRemoveAndInvite', 'catalogOffline', 'languages', 'audio', 'recordingUsesSettings', 'appearance', 'claudeCli', 'meetingFiles', 'summarizeOnStop', 'branding', 'updates']) {
+  for (const name of ['permissions', 'reachable', 'keyField', 'keySave', 'modelSearch', 'modelSelect', 'keyRemoveAndInvite', 'catalogOffline', 'languages', 'audio', 'recordingUsesSettings', 'appearance', 'claudeCli', 'meetingFiles', 'summarizeOnStop', 'branding', 'updates', 'addKeyLink', 'tabs']) {
     if (!settings[name]) failures.push(`configurações ${name}: não executado`)
   }
   // Nenhuma chamada saiu para a AssemblyAI: todas passaram pelo gateway de fixtures.
@@ -3564,8 +3835,8 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
   // Mais o aviso de sistema sem som, nos dois temas, o eco removido, os arquivos no detalhe, a aba
   // "Áudio" depois de baixar, a barra com a marca própria, o bloco "Atualizações" e a busca na lista
   // (só no claro), a conversa vazia e o painel "Contexto" do "Perguntar" v2 e a conversa pelo agente ACP
-  // (contrato 17), só no claro.
-  const expectedShots = SCREENS.length * THEMES.length + 11
+  // (contrato 17), as abas "Contas" e "Sobre" e a busca das Configurações (contrato 18), só no claro.
+  const expectedShots = SCREENS.length * THEMES.length + 14
   if (screenshots.length !== expectedShots) failures.push(`${screenshots.length} PNGs em vez de ${expectedShots}`)
   for (const shot of screenshots) {
     if (shot.width < 1120 || shot.height < 740) failures.push(`${shot.name}: ${shot.width}x${shot.height} abaixo de 1120x740`)

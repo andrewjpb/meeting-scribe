@@ -53,7 +53,13 @@ export function ClaudeCliField() {
   const line = claudeStatusLine(check)
 
   return (
-    <div className="flex flex-col gap-3 border-b border-line py-4" data-claude-state={check.phase}>
+    <div
+      className="flex flex-col gap-3 py-4"
+      data-claude-state={check.phase}
+      data-setting-row
+      data-setting-name="Claude CLI"
+      data-setting-description="Caminho do claude instalado neste Mac, usado na tradução, no resumo e em Perguntar."
+    >
       <div className="flex flex-wrap items-baseline justify-between gap-2">
         <p className="text-13 font-medium text-text">Claude CLI</p>
         <p data-claude-status className={`flex items-center gap-1.5 text-12 font-medium ${TONE_TEXT[line.tone]}`} aria-live="polite">

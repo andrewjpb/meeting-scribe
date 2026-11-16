@@ -5,7 +5,7 @@
 import { CloudOff, Languages } from 'lucide-react'
 import { useState } from 'react'
 import { useNavigate } from 'react-router'
-import { ROUTE_PATHS } from '@shared/routes'
+import { settingsPath, TRANSCRIPTION_ANCHOR } from '@shared/routes'
 import { Note, NOTE_ACTION_CLASS } from '../../design/Note'
 import { useTranscription } from '../../transcription/store'
 import { EXAMPLE_TRANSCRIPT } from './exampleTranscript'
@@ -57,7 +57,7 @@ export function TranscriptArea() {
               <button
                 type="button"
                 data-action="open-settings-from-transcript"
-                onClick={() => void navigate(ROUTE_PATHS.configuracoes)}
+                onClick={() => void navigate(settingsPath('gravacao', TRANSCRIPTION_ANCHOR))}
                 className="no-drag inline-flex h-10 items-center rounded-[var(--radius-control)] bg-accent px-4 text-13 font-medium text-on-accent transition-opacity duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:opacity-90"
               >
                 Abrir Configurações
@@ -86,7 +86,7 @@ export function TranscriptArea() {
           icon={Languages}
           className="mx-10 mt-4"
           action={
-            <button type="button" data-action="open-settings-from-claude" className={NOTE_ACTION_CLASS} onClick={() => void navigate(ROUTE_PATHS.configuracoes)}>
+            <button type="button" data-action="open-settings-from-claude" className={NOTE_ACTION_CLASS} onClick={() => void navigate(settingsPath('claude'))}>
               Abrir Configurações
             </button>
           }

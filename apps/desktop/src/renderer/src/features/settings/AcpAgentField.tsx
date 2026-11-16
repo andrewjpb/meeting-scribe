@@ -29,7 +29,7 @@ export function AcpAgentField() {
 
   return (
     <SettingRow name={`Agente do ${label}`} nameId="settings-acp-agent" description="Baixado do registro do npm só quando você pede; fica neste Mac.">
-      <div className="flex flex-wrap items-center justify-end gap-3" data-acp-state={state}>
+      <div className="flex flex-wrap items-center gap-3" data-acp-state={state}>
         <span data-acp-status aria-live="polite" className="text-12 font-medium text-text-muted tabular">
           {line}
         </span>

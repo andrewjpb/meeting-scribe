@@ -2,7 +2,7 @@ import { ArrowDown, ArrowUp, Brain, MessageCircle, PanelRight, Settings, Square 
 import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent } from 'react'
 import { useNavigate } from 'react-router'
 import { CHAT_COUNTER_FROM, CHAT_TEXT_MAX, CHAT_TITLE_MAX, DEFAULT_CHAT_SCOPE, type ChatMessage, type ChatScope, type ChatScopeKind } from '@shared/chat'
-import { ROUTE_PATHS } from '@shared/routes'
+import { settingsPath } from '@shared/routes'
 import type { ChatModel } from '@shared/settings-defaults'
 import { useSettings } from '../../app/settingsStore'
 import { Button } from '../../design/Button'
@@ -251,7 +251,7 @@ export function ChatConversation({ chatId, meetingId, meetings, contextOpen, onC
             id="chat-no-claude"
             icon={Settings}
             action={
-              <Button action="open-claude-settings" variant="secondary" onClick={() => void navigate(ROUTE_PATHS.configuracoes)}>
+              <Button action="open-claude-settings" variant="secondary" onClick={() => void navigate(settingsPath('claude'))}>
                 Abrir Configurações
               </Button>
             }
