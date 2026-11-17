@@ -10,6 +10,10 @@
 // e só no chat; o resto é negado e contado. `fs/read_text_file` lê só dentro da pasta, até 2 MB; escrita e
 // terminal não existem (as capacidades vão falsas e o SDK responde "método não encontrado"). Sessão que não
 // confirma o modo seguro do perfil é fechada.
+//
+// Contrato 26: a sessão do chat com `web` também libera `WebSearch` (consulta curta, até 10 por execução) e
+// `WebFetch` (só endereço visto num resultado de busca desta execução ou digitado pela pessoa, até 15 por execução);
+// a regra está em `web.ts`. Uma página que termina sem ter passado por esta política cancela a resposta.
 import { spawn as nodeSpawn } from 'node:child_process'
 import { readFile, realpath, stat } from 'node:fs/promises'
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path'
@@ -17,6 +21,7 @@ import { Readable, Writable } from 'node:stream'
 import * as acp from '@agentclientprotocol/sdk/unstable'
 import type { Timers } from '../claude-cli/translator'
 import type { AcpPurpose, AcpSessionRequest, AgentProfile, KnownToolCall } from './profiles/types'
+import { AcpWebState, searchResultUrls, WEB_SEARCH_MAX, webDecision, webToolOf } from './web'
 
 export type { AcpPurpose, AcpSessionRequest, AgentProfile, KnownToolCall } from './profiles/types'
 
@@ -190,6 +195,11 @@ export function mergeToolCall(known: KnownToolCall | undefined, update: Partial<
   if (typeof update.status === 'string') next.status = update.status
   if (Array.isArray(update.locations)) next.locations = update.locations.map((location) => location.path).filter((path): path is string => typeof path === 'string')
   if (update.rawInput !== undefined && update.rawInput !== null) next.rawInput = update.rawInput
+  // O adaptador repete o nome da ferramenta em `_meta.claudeCode.toolName` (contrato 26: a busca e a página).
+  if (next.name === undefined) {
+    const meta = isRecord(update._meta) && isRecord(update._meta['claudeCode']) ? update._meta['claudeCode']['toolName'] : undefined
+    if (typeof meta === 'string') next.name = meta
+  }
   return next
 }
 
@@ -242,6 +252,9 @@ export function patternLeaves(pattern: unknown): boolean {
  * Política de permissão (CA3): só no chat, só leitura e busca, e todos os caminhos dentro da pasta da
  * sessão. Pedido sem caminho nenhum é negado (dentro da pasta o `claude` não pergunta: o que chega aqui sem
  * caminho não tem como ser conferido); padrão de busca que sai da pasta também.
+ *
+ * Contrato 26: com `web` (a sessão com internet), `WebSearch` e `WebFetch` seguem `webDecision`, e a liberação
+ * conta na execução. Sem `web`, as duas são negadas como qualquer outra.
  */
 export async function permissionAllowed(
   purpose: AcpPurpose,
@@ -249,8 +262,16 @@ export async function permissionAllowed(
   cwd: string,
   cwdReal: string,
   readTools: AgentProfile['readTools'],
+  web: AcpWebState | null = null,
 ): Promise<boolean> {
   if (purpose !== 'chat') return false
+  const tool = webToolOf(call)
+  if (tool) {
+    if (!web || webDecision(tool, call, web) !== 'allow') return false
+    if (tool === 'WebSearch') web.searches += 1
+    else web.pages += 1
+    return true
+  }
   const kind = call.kind ?? (call.name ? readTools[call.name] : undefined)
   if (!kind || !READ_KINDS.has(kind)) return false
   // Ferramenta com nome que não é uma das de leitura do perfil: negada, qualquer que seja o `kind`.
@@ -293,11 +314,17 @@ export type AcpPromptOutcome =
   /** `exited`: o processo saiu no meio; `failed`: o agente respondeu com erro. */
   | { ok: false; error: 'exited' | 'failed' }
 
+/** Por que uma chamada foi negada, quando importa para a tela: a página fora da busca (contrato 26). */
+export interface AcpDenial {
+  toolCallId: string
+  reason: 'web-blocked'
+}
+
 /** Quem acompanha um `session/prompt`. */
 export interface AcpPromptHandlers {
   onUpdate?: (update: acp.SessionUpdate) => void
-  /** Um pedido de permissão ou uma leitura negada nesta resposta. */
-  onDenied?: () => void
+  /** Um pedido de permissão ou uma leitura negada nesta resposta (com o motivo, se a tela mostra). */
+  onDenied?: (denial?: AcpDenial) => void
 }
 
 /**
@@ -399,6 +426,8 @@ export class AcpSession {
   private closed = false
   private exitListeners: (() => void)[] = []
   private gone = false
+  /** Contrato 26: a internet da sessão (só o chat com `web`); `null` nega busca e página. */
+  readonly web: AcpWebState | null
 
   constructor(
     readonly profile: AgentProfile,
@@ -406,6 +435,7 @@ export class AcpSession {
     private readonly link: AcpLink,
     private readonly cwdReal: string,
   ) {
+    this.web = request.web === true && request.purpose === 'chat' && request.tools === 'read' ? new AcpWebState() : null
     const app = acp
       .client({ name: 'meeting-scribe' })
       .onNotification('session/update', (ctx) => this.onUpdate(ctx.params))
@@ -474,11 +504,15 @@ export class AcpSession {
     }
   }
 
-  /** Um `session/prompt` com o texto. Nunca rejeita. */
-  async prompt(text: string, handlers: AcpPromptHandlers = {}): Promise<AcpPromptOutcome> {
+  /**
+   * Um `session/prompt` com o texto. Nunca rejeita. `typedText` (contrato 26): o que a pessoa escreveu, sem escape,
+   * de onde saem os endereços que ela deixou abrir; as contas da internet recomeçam aqui.
+   */
+  async prompt(text: string, handlers: AcpPromptHandlers = {}, typedText = ''): Promise<AcpPromptOutcome> {
     if (!this.alive) return { ok: false, error: 'exited' }
     if (this.prompting) return { ok: false, error: 'failed' }
     this.prompting = { handlers }
+    this.web?.begin(typedText)
     const exited = new Promise<'exited'>((resolvePromise) => this.onExit(() => resolvePromise('exited')))
     try {
       const response = await Promise.race([this.connection.agent.request('session/prompt', { sessionId: this.sessionId, prompt: [{ type: 'text', text }] }), exited])
@@ -509,17 +543,49 @@ export class AcpSession {
     if (notification.sessionId !== this.sessionId && this.sessionId !== '') return
     const update = notification.update
     if (update.sessionUpdate === 'tool_call' || update.sessionUpdate === 'tool_call_update') {
-      this.tools.set(update.toolCallId, mergeToolCall(this.tools.get(update.toolCallId), update))
+      const call = mergeToolCall(this.tools.get(update.toolCallId), update)
+      this.tools.set(update.toolCallId, call)
+      this.onWebUpdate(update.toolCallId, call, update)
     } else if (update.sessionUpdate === 'config_option_update') {
       this.configOptions = update.configOptions
     }
     this.prompting?.handlers.onUpdate?.(update)
   }
 
+  /**
+   * Contrato 26: o resultado de uma busca traz os endereços que podem abrir depois. Uma busca que termina sem ter
+   * pedido permissão (o `claude` não perguntou) conta igual e, passado o limite, a resposta é cancelada; uma página que
+   * termina sem a política ter liberado (o `claude` tem endereços que abre sem perguntar) também cancela.
+   */
+  private onWebUpdate(toolCallId: string, call: KnownToolCall, update: acp.ToolCallUpdate | acp.ToolCall): void {
+    const tool = webToolOf(call)
+    if (!tool) return
+    const web = this.web
+    const done = update.status === 'completed' || update.status === 'in_progress'
+    if (tool === 'WebSearch' && web) {
+      web.addQuery(isRecord(call.rawInput) ? call.rawInput['query'] : undefined)
+      if (update.status !== 'failed') for (const url of searchResultUrls(update, web.queries)) web.seen.add(url)
+    }
+    if (!done || web?.allowed.has(toolCallId)) return
+    if (tool === 'WebSearch' && web) {
+      web.allowed.add(toolCallId)
+      web.searches += 1
+      if (web.searches <= WEB_SEARCH_MAX) return
+    }
+    this.prompting?.handlers.onDenied?.()
+    this.cancel()
+  }
+
   private async onPermission(params: acp.RequestPermissionRequest): Promise<acp.RequestPermissionResponse> {
     const call = mergeToolCall(this.tools.get(params.toolCall.toolCallId), params.toolCall)
-    const allow = await permissionAllowed(this.request.purpose, call, this.request.cwd, this.cwdReal, this.profile.readTools).catch(() => false)
-    if (!allow) this.prompting?.handlers.onDenied?.()
+    if (webToolOf(call) === 'WebSearch' && isRecord(call.rawInput)) this.web?.addQuery(call.rawInput['query'])
+    const allow = await permissionAllowed(this.request.purpose, call, this.request.cwd, this.cwdReal, this.profile.readTools, this.web).catch(() => false)
+    const tool = webToolOf(call)
+    if (allow && tool) this.web?.allowed.add(params.toolCall.toolCallId)
+    if (!allow) {
+      const blocked = tool === 'WebFetch' && this.web !== null && webDecision('WebFetch', call, this.web) === 'blocked'
+      this.prompting?.handlers.onDenied?.(blocked ? { toolCallId: params.toolCall.toolCallId, reason: 'web-blocked' } : undefined)
+    }
     return permissionOutcome(params.options, allow)
   }
 

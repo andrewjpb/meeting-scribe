@@ -53,6 +53,11 @@
 // `autoPaused` depois de 3 falhas, um horário perdido rodando uma vez só, "Pedir agora", o histórico com o detalhe, o
 // menu do ícone da barra de menus (substituto que registra os itens) e fechar a janela mantendo o app (Dock escondido,
 // substituto) e reabrir pelo ícone. Não há ferramenta MCP para negar: o contrato 21 ainda não existe.
+//
+// Contrato 26: depois do Assistente e antes do bloqueio, a internet (`internetChecks`) com o agente ACP falso, que
+// devolve resultados de busca inventados (domínios `.example`, sem rede): o agente com "Pode pesquisar na internet",
+// "Pedir agora" com a busca, a página aberta e a página montada negada, o agente sem internet e o Assistente com a
+// fonte "Internet".
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { request as httpRequest } from 'node:http'
 import { tmpdir } from 'node:os'
@@ -102,7 +107,7 @@ import { SCHEDULE_RUNS_DIR, SCHEDULES_FILE } from './schedules/store'
 import { AGENTS_FILE } from './agents/store'
 import type { TrayController } from './tray/menu'
 import { SETTINGS_VERSION } from './settings/schema'
-import { CLAUDE_DISALLOWED_TOOLS, CLAUDE_READ_TOOLS } from './acp/profiles/claude'
+import { CLAUDE_DISALLOWED_TOOLS, CLAUDE_READ_TOOLS, CLAUDE_WEB_TOOLS } from './acp/profiles/claude'
 import { LATEST_RELEASE_URL, RELEASE_DOWNLOAD_PREFIX, RELEASE_REDIRECT_HOSTS } from './updates/release'
 import {
   SMOKE_FAKE_KEY,
@@ -2277,8 +2282,11 @@ async function acpChecks(win: BrowserWindow, ctx: SmokeContext, shot: () => Prom
     chatNew?.cwd === join(userDataDir, CHAT_SCOPE_DIR, chatId) &&
     JSON.stringify(chatNew?.mcpServers) === '[]' &&
     JSON.stringify(options['settingSources']) === '[]' &&
-    JSON.stringify(options['tools']) === JSON.stringify([...CLAUDE_READ_TOOLS]) &&
-    JSON.stringify(options['disallowedTools']) === JSON.stringify([...CLAUDE_DISALLOWED_TOOLS]) &&
+    // Contrato 26: esta conversa é do Assistente, com a fonte "Internet" ligada por padrão: a busca e a página entram
+    // em `tools`, saem das negadas e pedem permissão sempre. O resto das negadas (escrita, shell, subagente) fica.
+    JSON.stringify(options['tools']) === JSON.stringify([...CLAUDE_READ_TOOLS, ...CLAUDE_WEB_TOOLS]) &&
+    JSON.stringify(options['disallowedTools']) === JSON.stringify(CLAUDE_DISALLOWED_TOOLS.filter((tool) => !(CLAUDE_WEB_TOOLS as readonly string[]).includes(tool))) &&
+    JSON.stringify(options['settings']) === JSON.stringify({ permissions: { ask: [...CLAUDE_WEB_TOOLS] } }) &&
     options['model'] === 'sonnet' &&
     String(options['systemPrompt']).startsWith('Você é o Assistente') &&
     JSON.stringify(pairs(chatNew?.configOptions)) === JSON.stringify(['mode=default', 'model=sonnet'])
@@ -4991,6 +4999,158 @@ async function assistantChecks(ctx: SmokeContext, watch: (win: BrowserWindow) =>
 }
 
 // ---------------------------------------------------------------------------------------------------------
+// Contrato 26: agentes, tarefas e Assistente pesquisando na internet, com o agente ACP falso (os resultados da busca
+// são inventados, em domínios `.example`; nenhuma rede de verdade).
+
+/**
+ * Contrato 26 (CA1 a CA6, CA8), numa janela clara: o agente novo com "Pode pesquisar na internet" (o cartão mostra
+ * "Internet"; "Minhas tarefas" continua desligado); "Pedir agora" com ele mostra "Pesquisando: …", "Abrindo …", o
+ * endereço montado com o título da reunião negado ("Endereço bloqueado: não veio da busca"), a resposta com o link e
+ * "Usou a internet"; "Minhas tarefas" (sem internet) tem a busca negada e a resposta sugere ligar o interruptor; o
+ * Assistente com a fonte "Internet" ligada por padrão responde com o link, que abre fora do app, e o cartão de ação
+ * dessa resposta avisa para conferir antes.
+ */
+async function internetChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => void, checks: Record<string, Check>, shots: Screenshot[]): Promise<void> {
+  const win = ctx.openWindow({ theme: 'light' })
+  watch(win)
+  await loadAndWait(win)
+  const contents = win.webContents
+  const invoke = <T>(script: string): Promise<T> => evaluate<T>(contents, script)
+  const transportBefore = readSettings(ctx.userDataDir).claudeTransport
+  await invoke("window.__scribeApi.invoke('scribe:settings-update', { claudeTransport: 'acp' }).then(() => true)")
+  const NAME = 'Pesquisa na internet'
+  const QUESTION = 'Pesquise o que está em alta sobre finanças no Instagram'
+
+  // CA1: o formulário com o interruptor (desligado no agente novo) e o cartão com "Internet".
+  await clickSelector(contents, '[data-nav="automacoes"]')
+  await waitFor(contents, `document.querySelectorAll('[data-agent-card]').length >= 3`, 8000)
+  await clickSelector(contents, '[data-action="agent-new"]')
+  await waitFor(contents, `document.querySelector('[data-agent-form] #agent-name')`)
+  const field = await invoke<string>(`document.querySelector('[data-form-field="Pode pesquisar na internet"]')?.textContent ?? ''`)
+  const offByDefault = await invoke<string | null>(`document.querySelector('[data-agent-web] [role="switch"]')?.getAttribute('aria-checked') ?? null`)
+  await setValue(contents, '#agent-name', NAME)
+  await setValue(contents, '#agent-instructions', 'Pesquise na internet e traga ideias de conteúdo para o Instagram, com as fontes.')
+  await clickSelector(contents, '[data-agent-web] [role="switch"]')
+  const switched = await waitFor(contents, `document.querySelector('[data-agent-web] [role="switch"]')?.getAttribute('aria-checked') === 'true'`)
+  await clickSelector(contents, '[data-action="agent-save"]')
+  const card = `document.querySelector('[data-agent-name="${NAME}"]')`
+  const badge = await waitFor(contents, `${card}?.querySelector('[data-agent-web-badge]')?.textContent === 'Internet'`, 8000)
+  const otherBadges = await invoke<string[]>(`[...document.querySelectorAll('[data-agent-card]')].filter((el) => el.querySelector('[data-agent-web-badge]')).map((el) => el.dataset.agentName)`)
+  const agentsFile = JSON.parse(readFileSync(join(ctx.userDataDir, AGENTS_FILE), 'utf8')) as { agents: { id: string; name: string; web?: boolean }[] }
+  const webAgent = agentsFile.agents.find((agent) => agent.name === NAME)
+  const tasksAgent = agentsFile.agents.find((agent) => agent.name === 'Minhas tarefas')
+  const description = await invoke<string>(`document.querySelector('main h1')?.parentElement?.textContent ?? ''`)
+  checks['agent'] = {
+    ok:
+      field.includes('Busca na web e abre as páginas que encontrar. Não abre endereços inventados.') &&
+      offByDefault === 'false' &&
+      switched &&
+      badge &&
+      JSON.stringify(otherBadges) === JSON.stringify([NAME]) &&
+      webAgent?.web === true &&
+      tasksAgent?.web === false &&
+      description.includes('Agentes que leem as suas reuniões e, se você deixar, a internet, e respondem na hora ou no horário que você escolher.'),
+    detail: `campo "${field.slice(0, 120)}"; desligado no novo=${offByDefault}; ligado=${switched}; cartão "Internet"=${badge} ${JSON.stringify(otherBadges)}; agents.json web=${String(webAgent?.web)}, "Minhas tarefas" web=${String(tasksAgent?.web)}; descrição "${description.slice(0, 160)}"`,
+  }
+
+  // CA3, CA4 e CA8: "Pedir agora" com o agente com internet.
+  const runsBefore = readRunFiles(ctx.userDataDir).filter((run) => run.trigger === 'ask').length
+  // A execução nova é a que não existia antes (o id é aleatório e o relógio do agendador foi adiantado mais acima).
+  const askIds = (): Set<string> => new Set(readRunFiles(ctx.userDataDir).map((run) => run.id))
+  const newAsk = (before: Set<string>): SmokeRunFile | undefined => readRunFiles(ctx.userDataDir).find((run) => run.trigger === 'ask' && !before.has(run.id))
+  const webBefore = askIds()
+  await setValue(contents, '#ask-now-agent', webAgent?.id ?? '', 'change')
+  await setValue(contents, '#ask-now-text', QUESTION)
+  await clickSelector(contents, '[data-action="ask-now"]')
+  const box = `document.querySelector('[data-ask-now] [data-run-state="ok"]')`
+  const asked = await waitFor(contents, `${box}?.querySelector('[data-chat-footer] [data-chat-web]')`, 30_000)
+  await invoke(`${box}?.querySelector('[data-action="toggle-reasoning"]')?.click()`)
+  await waitFor(contents, `${box}?.querySelector('[data-chat-steps]')`)
+  const steps = await invoke<{ tool: string; label: string; status: string }[]>(
+    `[...(${box}?.querySelectorAll('[data-chat-step]') ?? [])].map((el) => ({ tool: el.dataset.chatStep, label: el.textContent, status: el.dataset.chatStepStatus }))`,
+  )
+  const link = await invoke<string | null>(`${box}?.querySelector('[data-external-link]')?.getAttribute('data-external-link') ?? null`)
+  const footer = await invoke<string>(`${box}?.querySelector('[data-chat-web]')?.textContent ?? ''`)
+  await settle(contents)
+  shots.push(await capture(win, ctx.outDir, 'automacoes-internet-light'))
+  const webRun = newAsk(webBefore)
+  const label = (tool: string, start: string): boolean => steps.some((step) => step.tool === tool && step.label.startsWith(start))
+  checks['askNow'] = {
+    ok:
+      asked &&
+      label('WebSearch', 'Pesquisando: finanças em alta no Instagram') &&
+      label('WebFetch', 'Abrindo financas.example') &&
+      steps.some((step) => step.tool === 'WebFetch' && step.status === 'failed' && step.label.startsWith('Endereço bloqueado: não veio da busca')) &&
+      link === 'https://www.financas.example/tendencias-2026?utm_source=busca' &&
+      footer === 'Usou a internet · 1 busca · 1 página' &&
+      readRunFiles(ctx.userDataDir).filter((run) => run.trigger === 'ask').length === runsBefore + 1 &&
+      webRun?.status === 'ok' &&
+      (webRun.answer?.text ?? '').includes('[Web · financas.example · Tendências 2026]('),
+    detail: `resposta=${asked}; passos ${JSON.stringify(steps)}; link ${String(link)}; rodapé "${footer}"; execução ${String(webRun?.status)} "${(webRun?.answer?.text ?? '').slice(0, 160)}"`,
+  }
+  await clickSelector(contents, '[data-action="ask-now-close"]')
+  await waitFor(contents, `!document.querySelector('[data-ask-now] [data-run-answer]')`)
+
+  // CA5 e CA8: o agente sem internet ("Minhas tarefas"): a busca é negada e a resposta diz onde ligar.
+  const offBefore = askIds()
+  await setValue(contents, '#ask-now-agent', tasksAgent?.id ?? '', 'change')
+  await setValue(contents, '#ask-now-text', QUESTION)
+  await clickSelector(contents, '[data-action="ask-now"]')
+  const offAnswered = await waitFor(contents, `${box}?.querySelector('[data-chat-footer]')`, 30_000)
+  const offText = await invoke<string>(`${box}?.querySelector('[data-chat-markdown]')?.textContent ?? ''`)
+  const offWeb = await invoke<boolean>(`Boolean(${box}?.querySelector('[data-chat-web]'))`)
+  const offRun = newAsk(offBefore)
+  const offSteps = (offRun?.answer?.steps ?? []) as { tool?: string; status?: string }[]
+  checks['noInternet'] = {
+    ok: offAnswered && offText === "Para isso, ligue 'Pode pesquisar na internet' neste agente." && !offWeb && offSteps.some((step) => step.tool === 'WebSearch' && step.status === 'failed') && !offSteps.some((step) => step.tool === 'WebFetch'),
+    detail: `resposta=${offAnswered} "${offText.slice(0, 120)}"; rodapé com internet=${offWeb}; passos ${JSON.stringify(offSteps)}`,
+  }
+  await clickSelector(contents, '[data-action="ask-now-close"]')
+  await waitFor(contents, `!document.querySelector('[data-ask-now] [data-run-answer]')`)
+
+  // CA2 e CA4: o Assistente, com a fonte "Internet" ligada por padrão; o link abre no navegador do sistema.
+  await clickSelector(contents, '[data-nav="assistente"]')
+  await waitFor(contents, routeIs('assistente'))
+  await clickSelector(contents, '[data-action="chat-new"]')
+  await waitFor(contents, `document.querySelector('[data-chat-input]') && !document.querySelector('[data-chat-message]')`)
+  await clickSelector(contents, '[data-action="toggle-context"]')
+  const sourceOn = await waitFor(contents, `document.querySelector('[data-chat-source="internet"] [role="switch"]')?.getAttribute('aria-checked') === 'true'`)
+  const sourceText = await invoke<string>(`document.querySelector('[data-chat-source="internet"]')?.textContent ?? ''`)
+  await clickSelector(contents, '[data-action="close-context"]')
+  const reply = await askChat(contents, `${QUESTION} e me lembre amanhã de postar`)
+  // CA6: o cartão de ação de uma resposta que usou a internet avisa para conferir antes.
+  const cardWarned = await waitFor(contents, `(${LAST_ASSISTANT}?.querySelector('[data-chat-action-web]')?.textContent ?? '') === 'Esta resposta usou páginas da internet: confira antes.' && ${LAST_ASSISTANT}?.querySelector('[data-chat-action="lembrete"]')`)
+  await invoke(`${LAST_ASSISTANT}?.querySelector('[data-action="toggle-reasoning"]')?.click()`)
+  await waitFor(contents, `${LAST_ASSISTANT}?.querySelector('[data-chat-steps]')`)
+  const chatSteps = await invoke<string[]>(`[...(${LAST_ASSISTANT}?.querySelectorAll('[data-chat-step]') ?? [])].map((el) => el.textContent)`)
+  const chatFooter = await invoke<string>(`${LAST_ASSISTANT}?.querySelector('[data-chat-web]')?.textContent ?? ''`)
+  const opensBefore = ctx.fixtures.openedUrls.length
+  await invoke(`${LAST_ASSISTANT}?.querySelector('[data-external-link^="https://www.financas.example/"]')?.click()`)
+  await waitFor(contents, `document.querySelector('[data-action="open-external-link"]')`)
+  await settle(contents)
+  shots.push(await capture(win, ctx.outDir, 'assistente-internet-light'))
+  await clickSelector(contents, '[data-action="open-external-link"]')
+  for (let attempt = 0; attempt < 30 && ctx.fixtures.openedUrls.length === opensBefore; attempt++) await wait(100)
+  const opened = ctx.fixtures.openedUrls.slice(opensBefore)
+  checks['assistant'] = {
+    ok:
+      sourceOn &&
+      sourceText.includes('Busca na web quando a pergunta pedir. Os links aparecem na resposta.') &&
+      reply.done &&
+      reply.answer.includes('Web · financas.example · Tendências 2026') &&
+      chatSteps.some((step) => step.startsWith('Pesquisando: ')) &&
+      chatSteps.some((step) => step.startsWith('Endereço bloqueado: não veio da busca')) &&
+      chatFooter === 'Usou a internet · 1 busca · 1 página' &&
+      cardWarned &&
+      JSON.stringify(opened) === JSON.stringify(['https://www.financas.example/tendencias-2026?utm_source=busca']),
+    detail: `fonte ligada=${sourceOn} "${sourceText.slice(0, 120)}"; resposta=${reply.done} "${reply.answer.slice(0, 200)}"; passos ${JSON.stringify(chatSteps)}; rodapé "${chatFooter}"; aviso no cartão=${cardWarned}; aberto fora do app ${JSON.stringify(opened)}`,
+  }
+
+  await invoke(`window.__scribeApi.invoke('scribe:settings-update', { claudeTransport: '${transportBefore === 'acp' ? 'acp' : 'cli'}' }).then(() => true)`)
+  win.destroy()
+}
+
+// ---------------------------------------------------------------------------------------------------------
 // Contrato 23: Automações (agentes, tarefas agendadas, execuções) com o agente ACP falso e o relógio do
 // agendador adiantado pelo smoke; o ícone da barra de menus, as notificações, o Dock e o "abrir ao entrar" são
 // substitutos que só registram. Nada sai da máquina e nenhum agente alcança o WhatsApp.
@@ -5425,6 +5585,7 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
   const whatsapp: Record<string, Check> = {}
   const assistant: Record<string, Check> = {}
   const automations: Record<string, Check> = {}
+  const internet: Record<string, Check> = {}
   let analysisMeasured: AnalysisMeasured | null = null
 
   // A fixture da sessão real, reduzida pelo mesmo redutor do app: a mesma dos testes (CA4) e do smoke.
@@ -5765,6 +5926,9 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
     // bloqueio (que recusa os canais novos junto com os outros).
     await assistantChecks(ctx, watch, assistant, screenshots)
 
+    // Contrato 26: a internet nos agentes, no "Pedir agora" e no Assistente, com o agente ACP falso (sem rede).
+    await internetChecks(ctx, watch, internet, screenshots)
+
     // Contrato 22: bloqueio do app, por último (a senha criada vale para o userData inteiro).
     await lockChecks(ctx, watch, lock, screenshots)
 
@@ -5820,6 +5984,8 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
   for (const [name, check] of Object.entries(assistant)) if (!check.ok) failures.push(`assistente ${name}: ${check.detail}`)
   for (const name of ['name', 'pending', 'sources', 'reminder', 'whatsapp', 'invalid']) if (!assistant[name]) failures.push(`assistente ${name}: não executado`)
   for (const name of ['screen', 'testNow', 'agentForm', 'tasks', 'scheduled', 'afterMeeting', 'skipped', 'tray', 'autoPaused', 'missed', 'askNow', 'runs', 'settings', 'closeKeepsApp', 'dark']) if (!automations[name]) failures.push(`automações ${name}: não executado`)
+  for (const [name, check] of Object.entries(internet)) if (!check.ok) failures.push(`internet ${name}: ${check.detail}`)
+  for (const name of ['agent', 'askNow', 'noInternet', 'assistant']) if (!internet[name]) failures.push(`internet ${name}: não executado`)
   for (const [name, check] of Object.entries(lock)) if (!check.ok) failures.push(`bloqueio ${name}: ${check.detail}`)
   for (const name of ['password', 'layer', 'channels', 'unlock', 'shortcutAndTouchId', 'recordingContinues', 'leaveDialog', 'endWhileLocked', 'reopen', 'reopenFromDisk', 'dark']) if (!lock[name]) failures.push(`bloqueio ${name}: não executado`)
   if (!theme.ok) failures.push(`tema: ${theme.detail}`)
@@ -5834,8 +6000,9 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
   // dois temas, o bloco em Configurações, a tela de risco, o pareamento e o rascunho, no claro (contrato 24); a tela
   // "Automações" nos dois temas, o formulário do agente, as tarefas, o formulário da tarefa, as execuções e o detalhe
   // de uma, no claro (contrato 23); o painel "Contexto" com as fontes, o cartão do lembrete e o da resposta no
-  // WhatsApp do Assistente, no claro (contrato 25).
-  const expectedShots = SCREENS.length * THEMES.length + 41
+  // WhatsApp do Assistente, no claro (contrato 25); "Pedir agora" com o agente com internet e a resposta do Assistente
+  // com o link, no claro (contrato 26).
+  const expectedShots = SCREENS.length * THEMES.length + 43
   if (screenshots.length !== expectedShots) failures.push(`${screenshots.length} PNGs em vez de ${expectedShots}`)
   for (const shot of screenshots) {
     if (shot.width < 1120 || shot.height < 740) failures.push(`${shot.name}: ${shot.width}x${shot.height} abaixo de 1120x740`)
@@ -5880,6 +6047,8 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
     // Contrato 24: só os resultados; nenhum texto de mensagem além dos fixos do serviço falso.
     whatsapp,
     assistant,
+    // Contrato 26: só os resultados (os endereços são os inventados do agente falso).
+    internet,
     // Contrato 23: os resultados, as notificações, o Dock e os itens de login substitutos; nenhum texto de reunião.
     automations,
     automationsFixtures: { notifications: ctx.fixtures.automations.notifications.map((notice) => notice.title), trayImages: ctx.fixtures.automations.trayImages, dock: ctx.fixtures.automations.dock, loginItems: ctx.fixtures.automations.loginItems, quitRequests: ctx.fixtures.automations.quitRequests },

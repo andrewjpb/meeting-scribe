@@ -339,7 +339,7 @@ describe('fontes do app (CA2)', () => {
     expect(guideMarkdown('Versão: {{versao}}.', '0.7.0')).toBe('Versão: 0.7.0.')
     const automations = automationsMarkdown(
       {
-        agents: [{ id: 'ag-1', name: 'Resumo da semana', description: '', icon: 'bot', color: 'blue', instructions: '', profile: 'claude', model: 'sonnet', thinkMore: false, scope: { kind: '7d' }, mcpServers: [], output: { kind: 'chat' }, createdAt: '', updatedAt: '' }],
+        agents: [{ id: 'ag-1', name: 'Resumo da semana', description: '', icon: 'bot', color: 'blue', instructions: '', profile: 'claude', model: 'sonnet', thinkMore: false, scope: { kind: '7d' }, web: false, mcpServers: [], output: { kind: 'chat' }, createdAt: '', updatedAt: '' }],
         tasks: [],
         runs: [
           {
@@ -523,7 +523,10 @@ describe('a conversa do Assistente (CA2, CA3, CA5)', () => {
     const chat = ((await service.send({ chatId: null, meetingId: null, text: 'responda o Bruno dizendo sim' })) as { chat: Chat }).chat
     const child = await waitChild(children, 1)
     expect(child.options.cwd).toBe(join(dir, CHAT_SCOPE_DIR, chat.id))
-    expect(child.args[child.args.indexOf('--system-prompt') + 1]).toBe(assistantSystemPrompt('all'))
+    // Contrato 26: pela linha de comando, a instrução diz que a internet só existe com o motor ACP.
+    expect(child.args[child.args.indexOf('--system-prompt') + 1]).toBe(assistantSystemPrompt('all', 'cli'))
+    expect(assistantSystemPrompt('all', 'cli')).toContain('A internet só funciona com o motor ACP (Configurações › Claude).')
+    expect(assistantSystemPrompt('all', 'cli')).not.toContain('ligue a fonte Internet')
     for (let i = 0; i < 400 && !existsSync(join(child.options.cwd, STATE_FILE)); i++) await new Promise((resolve) => setImmediate(resolve))
     // As fontes chegam antes da pergunta, e o índice diz quais estão ali.
     for (let i = 0; i < 400 && child.written.length === 0; i++) await new Promise((resolve) => setImmediate(resolve))

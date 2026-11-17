@@ -35,7 +35,7 @@ const corpus = (): Parameters<typeof createAgentRunner>[0]['corpus'] & { dropped
 
 const request = (patch: Partial<AgentRunRequest> = {}): AgentRunRequest => ({
   runId: 'run-1',
-  agent: { name: 'Resumo', instructions: 'Liste as decisões.', profile: 'claude', model: 'sonnet', thinkMore: false, scope: { kind: 'all' } },
+  agent: { name: 'Resumo', instructions: 'Liste as decisões.', profile: 'claude', model: 'sonnet', thinkMore: false, scope: { kind: 'all' }, web: false },
   prompt: 'Agora: segunda, 16/11/2026 08:00 (America/Sao_Paulo).\n\nResuma.',
   meetingId: null,
   timeoutS: 30,
@@ -71,6 +71,27 @@ describe('execução de um agente (contrato 23, CA5 e CA10)', () => {
     expect(options['tools']).toEqual(['Read', 'Grep', 'Glob'])
     expect(options['disallowedTools']).toEqual(expect.arrayContaining(['Bash', 'Edit', 'Write', 'WebFetch', 'WebSearch', 'Task']))
     expect(options['strictMcpConfig']).toBe(true)
+  })
+
+  it('contrato 26: o agente com "Pode pesquisar na internet" abre a sessão com a internet; sem, a de sempre', async () => {
+    const opened: AcpSessionRequest[] = []
+    const runner = createAgentRunner({
+      locate: () => Promise.resolve({ ok: true, path: '/bin/claude', version: '2.0.0' }),
+      openAcp: () => (req) => {
+        opened.push(req)
+        return Promise.resolve<AcpOpenResult>({ ok: false, error: 'failed', reason: 'teste' })
+      },
+      corpus: corpus(),
+      meetings: { list: () => Promise.resolve([]) },
+      emptyDir: join(dir, 'vazia'),
+    })
+    await runner.run(request({ agent: { ...request().agent, web: true } }), () => undefined)
+    await runner.run(request({ runId: 'run-2' }), () => undefined)
+    expect(opened.map((session) => session.web === true)).toEqual([true, false])
+    expect(opened[0]?.systemPrompt).toContain('[Web · <domínio> · <título curto>](<endereço>)')
+    expect(opened[1]?.systemPrompt).toContain("Para isso, ligue 'Pode pesquisar na internet' neste agente.")
+    const options = (claudeProfile.newSession(opened[0] as AcpSessionRequest)._meta as { claudeCode: { options: Record<string, unknown> } }).claudeCode.options
+    expect(options['tools']).toEqual(['Read', 'Grep', 'Glob', 'WebSearch', 'WebFetch'])
   })
 
   it('o escopo vira a pasta: só a reunião que acabou, as do escopo numa pasta própria (apagada no fim) ou uma pasta vazia', async () => {

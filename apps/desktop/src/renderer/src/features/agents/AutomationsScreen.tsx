@@ -40,7 +40,7 @@ export function AutomationsScreen() {
       <div className="px-10 pt-7">
         <PageHeader
           title="Automações"
-          description={pauseText ?? 'Agentes que leem as suas reuniões e respondem na hora ou no horário que você escolher.'}
+          description={pauseText ?? 'Agentes que leem as suas reuniões e, se você deixar, a internet, e respondem na hora ou no horário que você escolher.'}
           actions={
             <Button
               action={status.paused ? 'automations-resume' : 'automations-pause'}

@@ -2,8 +2,9 @@
 // pelo main. Nenhum cartão faz nada sozinho: "Criar lembrete" pede ao main a tarefa "uma vez" das Automações;
 // "Enviar" usa só `window.__scribeApi.whatsappSend` (o token de clique do preload e o diálogo nativo "Enviar para
 // <nome>?" do contrato 24); "Criar tarefa" abre o formulário das Automações preenchido para revisar; "Abrir" leva à
-// tela. Depois do clique, o cartão mostra o estado, que fica gravado na conversa.
-import { Bell, Check, ExternalLink, ListChecks, MessageSquare, Pencil, Send, X } from 'lucide-react'
+// tela. Depois do clique, o cartão mostra o estado, que fica gravado na conversa. Contrato 26: numa resposta que usou a
+// internet, cada cartão vem com o aviso de conferir antes.
+import { Bell, Check, ExternalLink, Globe, ListChecks, MessageSquare, Pencil, Send, X } from 'lucide-react'
 import { useState } from 'react'
 import { useNavigate } from 'react-router'
 import { reminderTitle, REMINDER_TEXT_MAX, sentText, type ChatAction, type ChatActionRef, type OpenAction, type ReminderAction, type TaskAction, type WhatsAppReplyAction } from '@shared/assistant'
@@ -321,18 +322,35 @@ function OpenCard({ action }: { action: OpenAction }) {
   )
 }
 
-/** Os cartões de uma resposta, na ordem; várias respostas no WhatsApp viram as escolhas "É esta conversa?". */
-export function ActionCards({ chatId, index, actions }: { chatId: string; index: number; actions: readonly ChatAction[] }) {
+/** O cartão de uma ação, pelo tipo. */
+function ActionCard({ action, actionRef, choice }: { action: ChatAction; actionRef: ChatActionRef; choice: boolean }) {
+  if (action.kind === 'lembrete') return <ReminderCard action={action} actionRef={actionRef} />
+  if (action.kind === 'whatsapp-resposta') return <WhatsAppCard action={action} actionRef={actionRef} choice={choice} />
+  if (action.kind === 'tarefa') return <TaskCard action={action} actionRef={actionRef} />
+  return <OpenCard action={action} />
+}
+
+/**
+ * Os cartões de uma resposta, na ordem; várias respostas no WhatsApp viram as escolhas "É esta conversa?". `web`: a
+ * resposta usou páginas da internet (contrato 26, CA6), e cada cartão vem com o aviso.
+ */
+export function ActionCards({ chatId, index, actions, web = false }: { chatId: string; index: number; actions: readonly ChatAction[]; web?: boolean }) {
   const replies = actions.filter((action) => action.kind === 'whatsapp-resposta').length
   return (
     <div data-chat-actions-cards className="flex flex-col gap-2">
       {replies > 1 && <p className="text-12 text-text-muted">Não tenho certeza de qual conversa é: escolha a certa.</p>}
       {actions.map((action) => {
         const actionRef: ChatActionRef = { chatId, index, actionId: action.id }
-        if (action.kind === 'lembrete') return <ReminderCard key={action.id} action={action} actionRef={actionRef} />
-        if (action.kind === 'whatsapp-resposta') return <WhatsAppCard key={action.id} action={action} actionRef={actionRef} choice={replies > 1} />
-        if (action.kind === 'tarefa') return <TaskCard key={action.id} action={action} actionRef={actionRef} />
-        return <OpenCard key={action.id} action={action} />
+        if (!web) return <ActionCard key={action.id} action={action} actionRef={actionRef} choice={replies > 1} />
+        return (
+          <div key={action.id} className="flex flex-col gap-1">
+            <p data-chat-action-web className="flex items-center gap-1.5 text-12 text-text-muted">
+              <Icon icon={Globe} size={14} className="shrink-0 text-text-faint" />
+              Esta resposta usou páginas da internet: confira antes.
+            </p>
+            <ActionCard action={action} actionRef={actionRef} choice={replies > 1} />
+          </div>
+        )
       })}
     </div>
   )

@@ -80,6 +80,12 @@ function AgentCard({ agent, tasks, onEdit, onDuplicate }: { agent: Agent; tasks:
         <span>{SCOPE_LABELS[agent.scope.kind]}</span>
         <span aria-hidden="true">·</span>
         <span data-agent-tasks={tasks.length}>{used}</span>
+        {agent.web && (
+          <>
+            <span aria-hidden="true">·</span>
+            <span data-agent-web-badge>Internet</span>
+          </>
+        )}
       </p>
       {blocked && (
         <Note id="agent-in-use" icon={TriangleAlert} role="alert">

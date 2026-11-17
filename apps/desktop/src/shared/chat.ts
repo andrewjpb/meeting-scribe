@@ -33,8 +33,8 @@ export const CHAT_PLAN_MAX = 50
 /** Texto de cada item do plano. */
 export const CHAT_PLAN_TEXT_MAX = 500
 
-/** Ferramentas de leitura que viram passo na tela. */
-export const CHAT_STEP_TOOLS = ['Read', 'Grep', 'Glob'] as const
+/** Ferramentas que viram passo na tela: as de leitura e (contrato 26) a busca na web e a página aberta. */
+export const CHAT_STEP_TOOLS = ['Read', 'Grep', 'Glob', 'WebSearch', 'WebFetch'] as const
 export type ChatStepTool = (typeof CHAT_STEP_TOOLS)[number]
 
 /**
@@ -107,14 +107,19 @@ export interface ChatScope {
 export const CHAT_WHATSAPP_MODES = ['recent', 'chosen'] as const
 export type ChatWhatsAppMode = (typeof CHAT_WHATSAPP_MODES)[number]
 
-/** Fontes do Assistente com interruptor (o estado atual vai sempre). */
-export const CHAT_SOURCE_KINDS = ['whatsapp', 'automations', 'guide'] as const
+/** Fontes do Assistente com interruptor (o estado atual vai sempre). `internet`: contrato 26. */
+export const CHAT_SOURCE_KINDS = ['whatsapp', 'automations', 'guide', 'internet'] as const
 export type ChatSourceKind = (typeof CHAT_SOURCE_KINDS)[number]
 export type ChatSources = Record<ChatSourceKind, boolean>
 
 /** As fontes de um escopo, com o padrão (todas ligadas). */
 export function chatSourcesOf(scope: Pick<ChatScope, 'sources'>): ChatSources {
-  return { whatsapp: scope.sources?.whatsapp !== false, automations: scope.sources?.automations !== false, guide: scope.sources?.guide !== false }
+  return {
+    whatsapp: scope.sources?.whatsapp !== false,
+    automations: scope.sources?.automations !== false,
+    guide: scope.sources?.guide !== false,
+    internet: scope.sources?.internet !== false,
+  }
 }
 
 /** Como o WhatsApp entra no escopo: o escolhido, ou `chosen` quando há conversas escolhidas. */
@@ -260,6 +265,31 @@ export function chatTitle(question: string): string {
   const line = question.replace(/\s+/g, ' ').trim()
   if (line.length <= CHAT_TITLE_MAX) return line
   return `${line.slice(0, CHAT_TITLE_MAX - 1).trimEnd()}…`
+}
+
+/** Rótulo do passo de uma página da internet que a política do app recusou (contrato 26, CA3). */
+export const WEB_BLOCKED_LABEL = 'Endereço bloqueado: não veio da busca'
+
+/**
+ * Quanto a resposta usou a internet (contrato 26, CA4), pelos passos gravados com ela: as buscas e as páginas que não
+ * foram negadas. `used` liga o rodapé "Usou a internet" e o aviso dos cartões de ação.
+ */
+export function chatWebUsage(steps: readonly Pick<ChatStep, 'tool' | 'status'>[] | undefined): { used: boolean; searches: number; pages: number } {
+  let searches = 0
+  let pages = 0
+  for (const step of steps ?? []) {
+    if (step.status === 'failed') continue
+    if (step.tool === 'WebSearch') searches++
+    else if (step.tool === 'WebFetch') pages++
+  }
+  return { used: searches + pages > 0, searches, pages }
+}
+
+/** "Usou a internet · 2 buscas · 1 página". */
+export function chatWebUsageLabel(usage: { searches: number; pages: number }): string {
+  const searches = usage.searches === 1 ? '1 busca' : `${usage.searches} buscas`
+  const pages = usage.pages === 1 ? '1 página' : `${usage.pages} páginas`
+  return `Usou a internet · ${searches} · ${pages}`
 }
 
 /** Id da reunião de um link `meeting:<id>`; `null` se não for um. */

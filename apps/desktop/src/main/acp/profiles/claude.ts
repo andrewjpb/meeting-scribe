@@ -13,9 +13,17 @@
 //   e a sessão só vale se o modo confirmado for "default";
 // - o esforço é a opção `effort` (categoria `thought_level`, níveis por modelo);
 // - o `usage_update` traz o custo acumulado e o modelo em `_meta["_claude/model"]`.
+//
+// Contrato 26 (internet), conferido no adaptador 0.107.0 e no `claude` 2.1.325: `WebSearch` e `WebFetch` chegam
+// como `tool_call` com `name`, `kind: "fetch"`, título `Search "<consulta>"` / `Fetch <url>` e `rawInput` com
+// `query` / `url`; o resultado da busca volta no `tool_call_update` como uma linha "Título (url)" por resultado. Os
+// dois passam pelo `session/request_permission`, a não ser o `WebFetch` de uns sites de documentação que o `claude`
+// abre sem perguntar ("preapproved hosts"); uma regra `ask` em `settings.permissions` é conferida antes dessa lista e
+// faz ele perguntar sempre.
 import { AGENT_PROFILE_LABELS } from '../../../shared/settings-defaults'
 import { claudeEnv } from '../../claude-cli/locate'
 import type { AcpPackage } from '../install'
+import { webToolOf } from '../web'
 import type { AgentProfile, KnownToolCall, StepTool } from './types'
 
 /** Versão do adaptador: a pasta em `userData/acp/claude/`. */
@@ -68,6 +76,8 @@ export const CLAUDE_PACKAGES: readonly AcpPackage[] = [
 export const CLAUDE_READ_TOOLS = ['Read', 'Grep', 'Glob'] as const
 /** Negadas por nome em toda sessão, além de nunca entrarem em `tools`: escrita, shell, rede e subagente. */
 export const CLAUDE_DISALLOWED_TOOLS = ['Bash', 'Edit', 'Write', 'NotebookEdit', 'WebFetch', 'WebSearch', 'Task'] as const
+/** Contrato 26: a busca e a página, que saem da lista de negadas só na sessão com internet. */
+export const CLAUDE_WEB_TOOLS = ['WebSearch', 'WebFetch'] as const
 /** Nível de esforço de "Pensar mais"; "default" volta ao do modelo. */
 export const CLAUDE_THINK_MORE_EFFORT = 'high'
 
@@ -75,6 +85,8 @@ const isRecord = (value: unknown): value is Record<string, unknown> => typeof va
 
 /** Nome da ferramenta a partir do que o ACP manda (`name`, ou `kind` e o título). */
 function toolName(call: KnownToolCall): StepTool | null {
+  const web = webToolOf(call)
+  if (web) return web
   const name = call.name ?? (call.kind === 'read' ? 'Read' : call.kind === 'search' ? (call.title?.startsWith('Find') ? 'Glob' : 'Grep') : null)
   return name === 'Read' || name === 'Grep' || name === 'Glob' ? name : null
 }
@@ -86,34 +98,40 @@ export const claudeProfile: AgentProfile = {
   bundledPackage: '@agentclientprotocol/claude-agent-acp',
   // `claudeEnv` (sem nada do app) e o `claude` que o adaptador deve rodar.
   env: (baseEnv, cliPath) => ({ ...claudeEnv(baseEnv, cliPath), CLAUDE_CODE_EXECUTABLE: cliPath }),
-  newSession: (request) => ({
-    cwd: request.cwd,
-    mcpServers: [],
-    // Aplicadas na criação, em ordem; valor que o adaptador não oferece é ignorado por ele.
-    configOptions: [
-      { configId: 'mode', value: 'default' },
-      { configId: 'model', value: request.model },
-      ...(request.thinkMore ? [{ configId: 'effort', value: CLAUDE_THINK_MORE_EFFORT }] : []),
-    ],
-    _meta: {
-      claudeCode: {
-        options: {
-          settingSources: [],
-          tools: request.tools === 'read' ? [...CLAUDE_READ_TOOLS] : [],
-          disallowedTools: [...CLAUDE_DISALLOWED_TOOLS],
-          model: request.model,
-          systemPrompt: request.systemPrompt,
-          strictMcpConfig: true,
-          // Sem transcrição da conversa em `~/.claude/projects` (a linha de comando usa `--no-session-persistence`).
-          persistSession: false,
-          // Sem a próxima pergunta prevista a cada resposta (custa tokens e o app não mostra).
-          promptSuggestions: false,
-          allowDangerouslySkipPermissions: false,
-          extraArgs: { restricted: null },
+  newSession: (request) => {
+    // Contrato 26: só o chat com as ferramentas de leitura recebe a internet.
+    const web = request.web === true && request.purpose === 'chat' && request.tools === 'read'
+    return {
+      cwd: request.cwd,
+      mcpServers: [],
+      // Aplicadas na criação, em ordem; valor que o adaptador não oferece é ignorado por ele.
+      configOptions: [
+        { configId: 'mode', value: 'default' },
+        { configId: 'model', value: request.model },
+        ...(request.thinkMore ? [{ configId: 'effort', value: CLAUDE_THINK_MORE_EFFORT }] : []),
+      ],
+      _meta: {
+        claudeCode: {
+          options: {
+            settingSources: [],
+            tools: request.tools === 'read' ? [...CLAUDE_READ_TOOLS, ...(web ? CLAUDE_WEB_TOOLS : [])] : [],
+            disallowedTools: web ? CLAUDE_DISALLOWED_TOOLS.filter((tool) => !(CLAUDE_WEB_TOOLS as readonly string[]).includes(tool)) : [...CLAUDE_DISALLOWED_TOOLS],
+            // Toda busca e toda página pedem permissão ao app, inclusive as que o `claude` abriria sozinho.
+            ...(web ? { settings: { permissions: { ask: [...CLAUDE_WEB_TOOLS] } } } : {}),
+            model: request.model,
+            systemPrompt: request.systemPrompt,
+            strictMcpConfig: true,
+            // Sem transcrição da conversa em `~/.claude/projects` (a linha de comando usa `--no-session-persistence`).
+            persistSession: false,
+            // Sem a próxima pergunta prevista a cada resposta (custa tokens e o app não mostra).
+            promptSuggestions: false,
+            allowDangerouslySkipPermissions: false,
+            extraArgs: { restricted: null },
+          },
         },
       },
-    },
-  }),
+    }
+  },
   unsafeMode: (session) => (session.option('mode') === 'default' ? null : `o agente não confirmou o modo de permissão "default" (${String(session.option('mode'))})`),
   readTools: { Read: 'read', Grep: 'search', Glob: 'search' },
   stepOf: (call) => {

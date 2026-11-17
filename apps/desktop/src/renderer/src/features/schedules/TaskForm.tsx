@@ -25,6 +25,7 @@ import {
   type ScheduleKind,
   type TaskInput,
 } from '@shared/automations'
+import { urlsIn } from '@shared/web-urls'
 import { Button } from '../../design/Button'
 import { Select, TextField } from '../../design/Field'
 import { Icon } from '../../design/Icon'
@@ -106,6 +107,7 @@ export function TaskForm({ initial, meetings, onClose, onSaved }: { initial: Tas
   const schedule = 'schedule' in built ? built.schedule : null
   const preview = schedule && timeZoneOk ? nextRuns(schedule, task.timezone, now, 5) : []
   const agent = agents.find((candidate) => candidate.id === task.agentId)
+  const webUrls = urlsIn(task.message)
   const valid = schedule !== null && task.name.trim() !== '' && task.message.trim() !== '' && agent !== undefined && task.timeoutS >= TASK_TIMEOUT_MIN_S && task.timeoutS <= TASK_TIMEOUT_MAX_S
 
   const save = async (): Promise<void> => {
@@ -165,6 +167,13 @@ export function TaskForm({ initial, meetings, onClose, onSaved }: { initial: Tas
       </FormField>
       <FormField label="Mensagem" htmlFor="task-message" hint="O que pedir ao agente a cada vez. A data, a hora e o fuso vão junto, no começo.">
         <textarea id="task-message" rows={4} value={task.message} maxLength={TASK_MESSAGE_MAX} onChange={(event) => patch({ message: event.target.value })} className={AREA_CLASS} />
+        {/* Contrato 26: os endereços da mensagem contam como digitados (o agente com internet pode abri-los). A mensagem
+            pode ter vindo de um cartão do Assistente: a pessoa vê a lista antes de salvar. */}
+        {agent?.web && webUrls.length > 0 && (
+          <p data-task-web-urls className="text-12 break-all text-text-muted">
+            O agente poderá abrir: {webUrls.join(', ')}
+          </p>
+        )}
       </FormField>
 
       <FormField label="Frequência" htmlFor="task-frequency" hint={schedule ? describeSchedule(schedule, task.timezone) : 'error' in built ? built.error : ''}>

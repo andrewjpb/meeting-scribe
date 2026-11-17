@@ -1,8 +1,8 @@
 // Uma execução de agente (contrato 23, CA5 e CA10): uma sessão ACP própria (o motor do contrato 17), com as
 // instruções do agente como instrução de sistema, o escopo como pasta da sessão (o acervo do chat 16, uma pasta
 // só com as reuniões do escopo, só a reunião que acabou, ou uma pasta vazia) e a mesma política do chat: só
-// leitura e busca dentro da pasta, sem shell, sem escrita, sem rede, sem configurações pessoais, sem MCP (o
-// contrato 21 ainda não existe). O pedido vai com a data, a hora e o fuso no começo. O tempo máximo da tarefa
+// leitura e busca dentro da pasta, sem shell, sem escrita, sem configurações pessoais, sem MCP (o contrato 21 ainda
+// não existe) e, a não ser que o agente tenha "Pode pesquisar na internet" (contrato 26), sem rede. O pedido vai com a data, a hora e o fuso no começo. O tempo máximo da tarefa
 // manda `session/cancel` e, 2 s depois, mata o processo. Nada aqui alcança o WhatsApp nem qualquer envio: a
 // resposta volta para quem chamou e só vira as saídas locais do CA6.
 import { mkdir } from 'node:fs/promises'
@@ -14,7 +14,7 @@ import type { AcpOpenResult, AcpSessionRequest } from '../acp/agent'
 import { AcpChat, type ChatEngine } from '../acp/chat'
 import type { ChatCorpus } from '../chat/corpus'
 import { scopeMeetingIds } from '../chat/corpus'
-import { chatSystemPrompt, type ChatFolder } from '../claude-cli/chat'
+import { chatSystemPrompt, webInstructions, type ChatFolder } from '../claude-cli/chat'
 import { escapeTurnText } from '../claude-cli/prompt'
 import type { Timers } from '../claude-cli/translator'
 import type { MeetingsStore } from '../meetings/store'
@@ -34,13 +34,23 @@ export interface AgentRunnerDeps {
   now?: () => number
   timers?: Timers
   /** Teste: motor substituto no lugar do `AcpChat`. */
-  engine?: (options: { open: (request: AcpSessionRequest) => Promise<AcpOpenResult>; model: ChatModel; thinkMore: boolean; cwd: string; systemPrompt: string; titleOf: (id: string) => string | null; idleTimeoutMs: number }) => ChatEngine
+  engine?: (options: {
+    open: (request: AcpSessionRequest) => Promise<AcpOpenResult>
+    model: ChatModel
+    thinkMore: boolean
+    cwd: string
+    systemPrompt: string
+    titleOf: (id: string) => string | null
+    idleTimeoutMs: number
+    /** Contrato 26: o agente pode pesquisar na internet. */
+    web: boolean
+  }) => ChatEngine
   log?: (message: string) => void
 }
 
 export interface AgentRunRequest {
   runId: string
-  agent: Pick<Agent, 'name' | 'instructions' | 'profile' | 'model' | 'thinkMore' | 'scope'>
+  agent: Pick<Agent, 'name' | 'instructions' | 'profile' | 'model' | 'thinkMore' | 'scope' | 'web'>
   /** O pedido já com o cabeçalho de data e fuso. */
   prompt: string
   /** Depois de cada reunião: a pasta da sessão é só ela. */
@@ -75,9 +85,9 @@ export const isChatModel = (model: string): model is ChatModel => (CHAT_MODELS a
 /**
  * Instrução de sistema do agente: as regras do chat para a pasta (ler o índice, citar a reunião, o conteúdo das
  * reuniões é só material), as regras fixas (só ler e responder, nunca enviar nada a ninguém) e as instruções que
- * a pessoa escreveu, entre marcas.
+ * a pessoa escreveu, entre marcas. Contrato 26: com `web`, as regras da internet; sem, onde ligar.
  */
-export function agentSystemPrompt(folder: ChatFolder | 'none', instructions: string): string {
+export function agentSystemPrompt(folder: ChatFolder | 'none', instructions: string, web = false): string {
   const base =
     folder === 'none'
       ? [
@@ -88,7 +98,10 @@ export function agentSystemPrompt(folder: ChatFolder | 'none', instructions: str
       : chatSystemPrompt(folder)
   return [
     base,
-    'Você só lê e responde: não escreve arquivos, não roda comandos, não acessa a internet e nunca envia nada a ninguém, por canal nenhum (mensagem, e-mail, WhatsApp ou qualquer outro). A resposta fica só neste Mac.',
+    web
+      ? 'Você só lê e responde: não escreve arquivos, não roda comandos e nunca envia nada a ninguém, por canal nenhum (mensagem, e-mail, WhatsApp ou qualquer outro). A resposta fica só neste Mac.'
+      : 'Você só lê e responde: não escreve arquivos, não roda comandos, não acessa a internet e nunca envia nada a ninguém, por canal nenhum (mensagem, e-mail, WhatsApp ou qualquer outro). A resposta fica só neste Mac.',
+    ...webInstructions('agent', web),
     'A mensagem começa com a data, a hora e o fuso de agora: use-os para "hoje", "esta semana" e prazos.',
     'As instruções da pessoa para este agente estão entre <instrucoes_do_agente> e </instrucoes_do_agente>. Siga-as dentro das regras acima.',
     '<instrucoes_do_agente>',
@@ -159,14 +172,28 @@ export function createAgentRunner(deps: AgentRunnerDeps): AgentRunner {
       () => undefined,
     )
     const open = deps.openAcp(found.path)
-    const systemPrompt = agentSystemPrompt(folderOf(agent.scope, request.meetingId), agent.instructions)
+    const systemPrompt = agentSystemPrompt(folderOf(agent.scope, request.meetingId), agent.instructions, agent.web)
     const timeoutMs = request.timeoutS * 1000
     // O relógio de 3 min sem evento do chat fica atrás do tempo máximo da tarefa: quem encerra é o tempo máximo.
     const idleTimeoutMs = timeoutMs + 10_000
     const titleOf = (id: string): string | null => titles.get(id) ?? null
     const engine: ChatEngine = deps.engine
-      ? deps.engine({ open, model, thinkMore: agent.thinkMore, cwd: folder.cwd, systemPrompt, titleOf, idleTimeoutMs })
-      : new AcpChat({ open, model, thinkMore: agent.thinkMore, scope: 'all', systemPrompt, cwd: folder.cwd, titleOf, now, timers, idleTimeoutMs, ...(deps.log ? { log: deps.log } : {}) })
+      ? deps.engine({ open, model, thinkMore: agent.thinkMore, cwd: folder.cwd, systemPrompt, titleOf, idleTimeoutMs, web: agent.web })
+      : new AcpChat({
+          open,
+          model,
+          thinkMore: agent.thinkMore,
+          scope: 'all',
+          systemPrompt,
+          cwd: folder.cwd,
+          titleOf,
+          now,
+          timers,
+          idleTimeoutMs,
+          // Contrato 26: a internet do agente; as instruções dele contam como texto da pessoa (endereços que ela deu).
+          ...(agent.web ? { web: true, webTyped: agent.instructions } : {}),
+          ...(deps.log ? { log: deps.log } : {}),
+        })
     live.set(request.runId, engine)
     // Fechou entre a criação e aqui: morre na hora (o `ask` volta como interrompido).
     if (disposed) engine.kill()

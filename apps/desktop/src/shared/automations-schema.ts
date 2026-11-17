@@ -68,6 +68,8 @@ const agentFields = {
   model: z.enum(AGENT_MODELS),
   thinkMore: z.boolean(),
   scope: agentScopeSchema,
+  // Contrato 26: agente salvo antes (sem o campo) lê como desligado.
+  web: z.boolean().default(false),
   // Contrato 21 (MCP) ainda não existe: nenhuma conexão é aceita.
   mcpServers: z.array(z.string()).max(0),
   output: agentOutputSchema,

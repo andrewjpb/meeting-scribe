@@ -1,6 +1,7 @@
 import { useEffect } from 'react'
 import { chatSourcesOf, chatWhatsAppModeOf, type ChatScope, type ChatSourceKind } from '@shared/chat'
 import { WHATSAPP_RECENT_CHATS_MAX, WHATSAPP_RECENT_DAYS } from '@shared/whatsapp'
+import { useSettings } from '../../app/settingsStore'
 import { Switch } from '../../design/Switch'
 import { useWhatsApp } from '../whatsapp/whatsappStore'
 import { WhatsAppScopeSection } from './WhatsAppScopeSection'
@@ -9,31 +10,35 @@ const SOURCE_TEXT: Readonly<Record<ChatSourceKind, { name: string; description: 
   whatsapp: { name: 'WhatsApp', description: `As conversas com mensagem nos últimos ${WHATSAPP_RECENT_DAYS} dias (até ${WHATSAPP_RECENT_CHATS_MAX}), com o que está pendente de resposta.` },
   automations: { name: 'Automações', description: 'Agentes, tarefas agendadas e as últimas 20 execuções.' },
   guide: { name: 'Guia do app', description: 'Cada tela, cada aba de Configurações, os atalhos e o que cada recurso faz.' },
+  internet: { name: 'Internet', description: 'Busca na web quando a pergunta pedir. Os links aparecem na resposta.' },
 }
 
-function SourceRow({ kind, checked, onChange }: { kind: ChatSourceKind; checked: boolean; onChange: (checked: boolean) => void }) {
+function SourceRow({ kind, checked, onChange, unavailable }: { kind: ChatSourceKind; checked: boolean; onChange: (checked: boolean) => void; unavailable?: string | undefined }) {
   const id = `chat-source-${kind}`
   return (
-    <div data-chat-source={kind} className="flex items-start justify-between gap-3">
+    <div data-chat-source={kind} data-chat-source-unavailable={unavailable ? '' : undefined} className="flex items-start justify-between gap-3">
       <div className="flex min-w-0 flex-col gap-0.5">
         <span id={id} className="text-13 text-text">
           {SOURCE_TEXT[kind].name}
         </span>
-        <span className="text-12 text-text-faint">{SOURCE_TEXT[kind].description}</span>
+        <span className="text-12 text-text-faint">{unavailable ?? SOURCE_TEXT[kind].description}</span>
       </div>
-      <Switch checked={checked} onChange={onChange} labelledBy={id} />
+      <Switch checked={unavailable ? false : checked} onChange={onChange} labelledBy={id} disabled={unavailable !== undefined} />
     </div>
   )
 }
 
 /**
  * "Fontes" do painel "Contexto" do Assistente (contrato 25, CA2): além das reuniões, o WhatsApp (só com ele conectado
- * ou com conversas já escolhidas), as Automações e o Guia do app, cada um com interruptor, todos ligados por padrão.
+ * ou com conversas já escolhidas), as Automações, o Guia do app e (contrato 26) a Internet, cada um com interruptor,
+ * todos ligados por padrão.
  * No WhatsApp, "Conversas recentes" (o padrão) ou "Só estas conversas" (a escolha manual do contrato 24). O estado
  * atual (data, hora, fuso e conexões) vai sempre. A troca vale a partir da próxima pergunta.
  */
 export function SourcesSection({ scope, onScope }: { scope: ChatScope; onScope: (scope: ChatScope) => void }) {
   const connected = useWhatsApp((state) => state.status?.state === 'connected')
+  // Contrato 26: pela linha de comando a internet não existe (o app não teria como conferir cada página).
+  const cli = useSettings((state) => state.settings.claudeTransport) === 'cli'
   const sources = chatSourcesOf(scope)
   const mode = chatWhatsAppModeOf(scope)
   const showWhatsApp = connected || (scope.whatsappChats?.length ?? 0) > 0
@@ -87,6 +92,7 @@ export function SourcesSection({ scope, onScope }: { scope: ChatScope; onScope: 
       )}
       <SourceRow kind="automations" checked={sources.automations} onChange={(on) => toggle('automations', on)} />
       <SourceRow kind="guide" checked={sources.guide} onChange={(on) => toggle('guide', on)} />
+      <SourceRow kind="internet" checked={sources.internet} onChange={(on) => toggle('internet', on)} unavailable={cli ? 'Só com o motor ACP (Configurações › Claude)' : undefined} />
       <p className="text-12 text-text-faint">O estado do app (data, hora, fuso e conexões) vai sempre. Vale a partir da próxima pergunta.</p>
     </section>
   )

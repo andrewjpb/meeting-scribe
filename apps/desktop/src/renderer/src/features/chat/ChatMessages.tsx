@@ -1,8 +1,8 @@
-import { Check, ChevronDown, ChevronRight, Copy, Download, FileText, FolderSearch, ListTree, RotateCcw, Search, ShieldOff, Square, SquareCheck, SquareDot, Terminal, type LucideIcon } from 'lucide-react'
+import { Check, ChevronDown, ChevronRight, Copy, Download, FileText, FolderSearch, Globe, ListTree, RotateCcw, Search, ShieldOff, Square, SquareCheck, SquareDot, Terminal, type LucideIcon } from 'lucide-react'
 import { useState } from 'react'
 import { useNavigate } from 'react-router'
 import { withoutPendingActions } from '@shared/assistant'
-import { chatErrorText, type ChatMessage, type ChatMeta, type ChatPlanEntry, type ChatStep, type ChatStepStatus } from '@shared/chat'
+import { chatErrorText, chatWebUsage, chatWebUsageLabel, type ChatMessage, type ChatMeta, type ChatPlanEntry, type ChatStep, type ChatStepStatus } from '@shared/chat'
 import { acpReady } from '@shared/acp'
 import { useAcp } from '../../app/acpStore'
 import { useAgentLabel } from '../../app/agentLabel'
@@ -20,8 +20,10 @@ import type { ChatMeetings } from './useChatMeetings'
 export const QUIET_BUTTON =
   'no-drag inline-flex h-7 items-center gap-1.5 rounded-[var(--radius-control)] px-2 text-12 text-text-muted transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-bg-sunken hover:text-title disabled:pointer-events-none disabled:opacity-50'
 
-/** Ícone de cada passo: o índice, uma reunião, uma busca, a lista de arquivos. */
+/** Ícone de cada passo: o índice, uma reunião, uma busca, a lista de arquivos, a internet (contrato 26). */
 function stepIcon(step: ChatStep): LucideIcon {
+  if (step.tool === 'WebFetch' && step.status === 'failed') return ShieldOff
+  if (step.tool === 'WebSearch' || step.tool === 'WebFetch') return Globe
   if (step.tool === 'Grep') return Search
   if (step.tool === 'Glob') return FolderSearch
   return step.meetingId ? FileText : ListTree
@@ -124,17 +126,27 @@ function Reasoning({ steps, thinking, denied, plan, live }: { steps: readonly Ch
   )
 }
 
-/** Modelo, tempo, tokens, custo nominal e as reuniões consultadas (clicável: abre a lista). */
-function AnswerFooter({ meta, model, meetings }: { meta: ChatMeta | undefined; model: string | undefined; meetings: ChatMeetings }) {
+/**
+ * Modelo, tempo, tokens, custo nominal e as reuniões consultadas (clicável: abre a lista). Contrato 26: "Usou a
+ * internet · N buscas · M páginas" quando a resposta buscou ou abriu páginas.
+ */
+function AnswerFooter({ meta, model, meetings, steps }: { meta: ChatMeta | undefined; model: string | undefined; meetings: ChatMeetings; steps?: readonly ChatStep[] | undefined }) {
   const navigate = useNavigate()
   const [showConsulted, setShowConsulted] = useState(false)
   const name = modelLabel(meta?.model || model)
-  if (!meta && !name) return null
+  const web = chatWebUsage(steps)
+  if (!meta && !name && !web.used) return null
   const tokens = meta ? answerTokens(meta) : null
   const now = new Date()
   const parts = [name, meta ? answerTimeLabel(meta.durationMs) : '', tokens ? `${tokensLabel(tokens.input)} entrada · ${tokensLabel(tokens.output)} saída` : ''].filter(Boolean)
   return (
     <div data-chat-footer className="flex flex-col gap-1">
+      {web.used && (
+        <p data-chat-web={`${web.searches}/${web.pages}`} className="flex items-center gap-1.5 text-12 text-text-muted">
+          <Icon icon={Globe} size={14} className="shrink-0 text-text-faint" />
+          {chatWebUsageLabel(web)}
+        </p>
+      )}
       <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-12 text-text-faint tabular">
         <span>{parts.join(' · ')}</span>
         {meta && (
@@ -260,10 +272,10 @@ export function AssistantMessage({ message, meetings, onCopy, onRedo, chatId = n
           <ChatMarkdown text={message.text} />
         </div>
       )}
-      {message.actions && message.actions.length > 0 && chatId && index !== undefined && <ActionCards chatId={chatId} index={index} actions={message.actions} />}
+      {message.actions && message.actions.length > 0 && chatId && index !== undefined && <ActionCards chatId={chatId} index={index} actions={message.actions} web={chatWebUsage(message.steps).used} />}
       {message.error && <p className="text-13 text-text-muted">{chatErrorText(message.error, agentLabel)}</p>}
       {(message.error === 'agent' || message.error === 'agent-missing') && <AgentActions missing={message.error === 'agent-missing'} />}
-      <AnswerFooter meta={message.meta} model={message.model} meetings={meetings} />
+      <AnswerFooter meta={message.meta} model={message.model} meetings={meetings} steps={message.steps} />
       <div data-chat-actions className="-ml-2 flex flex-wrap items-center gap-1">
         {message.text && (
           <button type="button" data-action="chat-copy" onClick={copy} className={QUIET_BUTTON}>

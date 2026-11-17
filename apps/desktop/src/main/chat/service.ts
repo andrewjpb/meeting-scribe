@@ -311,7 +311,10 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
     const model = await modelOf(chat)
     const titles = new Map<string, string>()
     const titleOf = (meetingId: string): string | null => titles.get(meetingId) ?? null
-    const systemPrompt = assistant && folder !== 'meeting' ? { systemPrompt: assistantSystemPrompt(folder) } : {}
+    // Contrato 26: a fonte "Internet" do Assistente (ligada por padrão) só vale pelo ACP, onde o app confere cada
+    // página; pela linha de comando a busca e a página continuam negadas, e a instrução diz isso.
+    const web = assistant && transport === 'acp' && chatSourcesOf(chat.scope).internet
+    const systemPrompt = assistant && folder !== 'meeting' ? { systemPrompt: assistantSystemPrompt(folder, transport === 'acp' ? web : 'cli') } : {}
     const claude: ChatEngine =
       transport === 'acp' && deps.openAcp
         ? new AcpChat({
@@ -321,6 +324,7 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
             scope: folder,
             whatsapp,
             ...systemPrompt,
+            ...(web ? { web: true } : {}),
             cwd,
             titleOf,
             now,

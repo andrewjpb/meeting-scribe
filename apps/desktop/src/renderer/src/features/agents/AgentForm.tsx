@@ -1,5 +1,5 @@
 // Formulário de agente (contrato 23, CA2): nome, descrição, ícone e cor, instruções (campo grande, com contador),
-// modelo, "Pensar mais", escopo, saída padrão e "Testar agora", que roda o agente do formulário (salvo ou não)
+// modelo, "Pensar mais", escopo, saída padrão, "Pode pesquisar na internet" (contrato 26) e "Testar agora", que roda o agente do formulário (salvo ou não)
 // com uma mensagem e mostra a resposta aqui mesmo, com raciocínio, passos e rodapé (componentes do chat 16).
 // Conexões MCP só aparecem quando o contrato 21 existir.
 import { ArrowLeft, Play } from 'lucide-react'
@@ -48,6 +48,7 @@ export function blankAgent(): AgentInput {
     model: 'sonnet',
     thinkMore: false,
     scope: { kind: 'all' },
+    web: false,
     mcpServers: [],
     output: { kind: 'chat' },
   }
@@ -189,6 +190,12 @@ export function AgentForm({ initial, meetings, onClose }: { initial: AgentInput;
           <Select id="agent-output" value={agent.output.kind} options={outputOptions} onChange={(kind: AgentOutputKind) => patch({ output: kind === 'note' ? { kind, meetingId: agent.output.meetingId ?? null } : { kind } })} />
         </FormField>
       </div>
+
+      <FormField label="Pode pesquisar na internet" labelId="agent-web" hint="Busca na web e abre as páginas que encontrar. Não abre endereços inventados.">
+        <div data-agent-web>
+          <Switch checked={agent.web} labelledBy="agent-web" onChange={(web) => patch({ web })} />
+        </div>
+      </FormField>
 
       {agent.scope.kind === 'meetings' && (
         <fieldset data-agent-scope-meetings className="flex max-h-56 flex-col gap-1 overflow-y-auto rounded-[var(--radius-panel)] border border-line-strong p-3">

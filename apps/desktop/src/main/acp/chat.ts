@@ -7,14 +7,18 @@
 // "Pensar mais" usa `session/set_config_option` na mesma sessão; se o agente recusar, a próxima pergunta
 // abre outra sessão com o histórico. Nenhum caminho absoluto sai daqui: o passo leva só o rótulo e o id da
 // reunião.
+//
+// Contrato 26: com `web`, a sessão abre com a busca e a página (a política fica no `AcpSession`); os passos mostram
+// "Pesquisando: <consulta>", "Abrindo <domínio>" e, para a página recusada, "Endereço bloqueado: não veio da busca".
 import type { ChatDetail, ChatError, ChatMeta, ChatPlanEntry, ChatProgress, ChatStep, ChatStepStatus } from '../../shared/chat'
-import { CHAT_PLAN_MAX, CHAT_PLAN_TEXT_MAX, CHAT_STEP_STATUSES, CHAT_TEXT_MAX, CHAT_THINKING_MAX } from '../../shared/chat'
+import { CHAT_PLAN_MAX, CHAT_PLAN_TEXT_MAX, CHAT_STEP_LABEL_MAX, CHAT_STEP_STATUSES, CHAT_TEXT_MAX, CHAT_THINKING_MAX, WEB_BLOCKED_LABEL } from '../../shared/chat'
 import type { ChatModel } from '../../shared/settings-defaults'
 import { CHAT_IDLE_TIMEOUT_MS, chatQuestionContent, chatStepOf, chatSystemPrompt, type ChatAnswer, type ChatFolder, type ChatTurn } from '../claude-cli/chat'
 import { escapeTurnText } from '../claude-cli/prompt'
 import type { Timers } from '../claude-cli/translator'
 import { contentText, type AcpOpenResult, type AcpSession, type AcpSessionRequest, type KnownToolCall, type SessionUpdate, type Usage } from './agent'
 import type { AgentProfile } from './profiles/types'
+import { webDomain } from './web'
 
 /** Depois de "Parar", quanto o agente tem para fechar a resposta antes de o processo morrer. */
 export const ACP_CANCEL_GRACE_MS = 5_000
@@ -44,6 +48,10 @@ export interface AcpChatOptions {
   whatsapp?: boolean
   /** Contrato 23: a instrução de sistema de um agente (as dele, sobre as regras do chat) no lugar da do chat. */
   systemPrompt?: string
+  /** Contrato 26: a sessão abre com a busca na web e as páginas (agente com internet, Assistente com a fonte ligada). */
+  web?: boolean
+  /** Contrato 26: mais texto escrito pela pessoa (as instruções do agente), de onde saem endereços que ela deixou abrir. */
+  webTyped?: string
   cwd: string
   titleOf?: (meetingId: string) => string | null
   timers?: Timers
@@ -62,16 +70,34 @@ const defaultTimers: Timers = {
 const clip = (text: string): string => (text.length > CHAT_TEXT_MAX ? text.slice(0, CHAT_TEXT_MAX) : text)
 const count = (value: unknown): number => (typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : 0)
 
+const oneLine = (text: string): string => text.replace(/\s+/g, ' ').trim()
+
+/**
+ * Passo da internet (contrato 26, CA4): "Pesquisando: <consulta>", "Abrindo <domínio>" e, para a página que a
+ * política recusou, "Endereço bloqueado: não veio da busca". O endereço inteiro não vai para a tela, só o domínio.
+ */
+export function webStepOf(tool: 'WebSearch' | 'WebFetch', input: Record<string, unknown>, blocked = false): Omit<ChatStep, 'id' | 'status'> {
+  if (tool === 'WebSearch') {
+    const query = typeof input['query'] === 'string' ? oneLine(input['query']) : ''
+    const label = query ? `Pesquisando: ${query}` : 'Pesquisando na internet'
+    return { tool, label: label.length > CHAT_STEP_LABEL_MAX ? `${label.slice(0, CHAT_STEP_LABEL_MAX - 1)}…` : label, meetingId: null }
+  }
+  if (blocked) return { tool, label: WEB_BLOCKED_LABEL, meetingId: null }
+  const domain = webDomain(input['url'])
+  return { tool, label: domain ? `Abrindo ${domain.slice(0, 120)}` : 'Abrindo uma página', meetingId: null }
+}
+
 /**
  * Passo em português a partir de uma chamada de ferramenta do ACP (CA4): "Lendo o índice das reuniões",
  * "Abrindo «<título>»", "Procurando "<termo>"", "Listando arquivos", com o id da chamada e o estado. Outra
- * ferramenta (escrita, shell) não vira passo: a negação aparece na contagem.
+ * ferramenta (escrita, shell) não vira passo: a negação aparece na contagem. `blocked`: a página que a política
+ * recusou (contrato 26).
  */
-export function acpStepOf(profile: AgentProfile, id: string, call: KnownToolCall, titleOf: (meetingId: string) => string | null = () => null): ChatStep | null {
+export function acpStepOf(profile: AgentProfile, id: string, call: KnownToolCall, titleOf: (meetingId: string) => string | null = () => null, blocked = false): ChatStep | null {
   // O perfil diz que passo é (pelo nome da ferramenta dele) e normaliza a entrada.
   const mapped = profile.stepOf(call)
   if (!mapped) return null
-  const step = chatStepOf(mapped.tool, mapped.input, titleOf)
+  const step = mapped.tool === 'WebSearch' || mapped.tool === 'WebFetch' ? webStepOf(mapped.tool, mapped.input, blocked) : chatStepOf(mapped.tool, mapped.input, titleOf)
   if (!step) return null
   const status = (CHAT_STEP_STATUSES as readonly string[]).includes(call.status ?? '') ? (call.status as ChatStepStatus) : 'pending'
   return { ...step, id, status }
@@ -108,6 +134,8 @@ interface Asking {
   tools: Map<string, KnownToolCall>
   consulted: string[]
   denied: number
+  /** Contrato 26: chamadas de página que a política recusou (o passo vira "Endereço bloqueado"). */
+  blocked: Set<string>
   /** Custo acumulado da sessão quando a pergunta saiu (o `usage_update` manda o total). */
   costBefore: number
   startedAt: number
@@ -196,6 +224,7 @@ export class AcpChat implements ChatEngine {
           systemPrompt: this.options.systemPrompt ?? chatSystemPrompt(this.options.scope, this.options.whatsapp ?? false),
           tools: 'read',
           thinkMore: this.thinkMore,
+          ...(this.options.web ? { web: true } : {}),
         })
         if (!opened.ok) {
           this.options.log?.(`[acp] chat: a sessão não abriu (${opened.reason.slice(0, 200)})`)
@@ -221,7 +250,9 @@ export class AcpChat implements ChatEngine {
     }
     const session = this.session
     if (this.closed || !session) return { ok: false, error: 'stopped', text: '' }
-    return this.run(session, content, onUpdate, onDetail)
+    // Contrato 26: o texto que a pessoa escreveu (a pergunta, as anteriores e as instruções do agente), sem escape.
+    const typed = [question, ...history.filter((turn) => turn.role === 'user').map((turn) => turn.text), this.options.webTyped ?? ''].join('\n')
+    return this.run(session, content, onUpdate, onDetail, typed)
   }
 
   /** "Parar": `session/cancel`; se o agente não fechar a resposta em 5 s, o processo morre. */
@@ -269,7 +300,7 @@ export class AcpChat implements ChatEngine {
     return true
   }
 
-  private run(session: AcpSession, content: string, onUpdate: (progress: ChatProgress) => void, onDetail: (detail: ChatDetail) => void): Promise<ChatAnswer> {
+  private run(session: AcpSession, content: string, onUpdate: (progress: ChatProgress) => void, onDetail: (detail: ChatDetail) => void, typed: string): Promise<ChatAnswer> {
     return new Promise((resolve) => {
       const asking: Asking = {
         session,
@@ -279,6 +310,7 @@ export class AcpChat implements ChatEngine {
         tools: new Map(),
         consulted: [],
         denied: 0,
+        blocked: new Set(),
         costBefore: this.cost,
         startedAt: this.now(),
         timer: null,
@@ -296,12 +328,18 @@ export class AcpChat implements ChatEngine {
             this.arm(asking)
             this.onUpdate(asking, update)
           },
-          onDenied: () => {
+          onDenied: (denial) => {
             if (this.asking !== asking) return
             asking.denied += 1
             asking.onDetail({ type: 'denied', count: asking.denied })
+            if (denial?.reason !== 'web-blocked') return
+            // A página recusada: o passo dela troca de rótulo na hora, com o estado de negado.
+            asking.blocked.add(denial.toolCallId)
+            const call = asking.tools.get(denial.toolCallId)
+            const step = call ? acpStepOf(asking.session.profile, denial.toolCallId, { ...call, status: 'failed' }, this.options.titleOf, true) : null
+            if (step) asking.onDetail({ type: 'step', step })
           },
-        })
+        }, typed)
         .then((outcome) => {
           if (this.asking !== asking) return
           if (!outcome.ok) {
@@ -379,14 +417,15 @@ export class AcpChat implements ChatEngine {
           ...(update.rawInput !== undefined && update.rawInput !== null ? { rawInput: update.rawInput } : {}),
         }
         asking.tools.set(update.toolCallId, call)
-        const step = acpStepOf(asking.session.profile, update.toolCallId, call, this.options.titleOf)
+        const blocked = asking.blocked.has(update.toolCallId)
+        const step = acpStepOf(asking.session.profile, update.toolCallId, blocked ? { ...call, status: 'failed' } : call, this.options.titleOf, blocked)
         if (update.sessionUpdate === 'tool_call' && !asking.text) {
           asking.reading = true
           progress()
         }
         if (!step) return
         if (step.meetingId && !asking.consulted.includes(step.meetingId)) asking.consulted.push(step.meetingId)
-        const previous = before ? acpStepOf(asking.session.profile, update.toolCallId, before, this.options.titleOf) : null
+        const previous = before ? acpStepOf(asking.session.profile, update.toolCallId, blocked ? { ...before, status: 'failed' } : before, this.options.titleOf, blocked) : null
         // O mesmo passo só volta à tela quando o rótulo ou o estado mudaram.
         if (previous && previous.label === step.label && previous.status === step.status && previous.meetingId === step.meetingId) return
         asking.onDetail({ type: 'step', step })

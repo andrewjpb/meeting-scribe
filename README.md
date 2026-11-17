@@ -50,10 +50,11 @@ Você usa a **sua** conta e o **seu** `claude` instalado. O app não tem servido
 ### Assistente: pergunte ou peça qualquer coisa
 A tela que antes se chamava "Perguntar".
 - Pergunte "O que ficou decidido esta semana?", "Quais tarefas são minhas?", "Tenho algo pendente para responder no WhatsApp?", "Como ligo o resumo automático?".
-- Além das reuniões, ele lê o **WhatsApp** (as conversas dos últimos 14 dias, com o que está pendente de resposta, ou só as que você escolher), as **Automações** (agentes, tarefas e as últimas execuções), o **guia do próprio app** e o estado atual (data, hora, contas). Cada fonte tem um interruptor no painel **Contexto**.
+- Além das reuniões, ele lê o **WhatsApp** (as conversas dos últimos 14 dias, com o que está pendente de resposta, ou só as que você escolher), as **Automações** (agentes, tarefas e as últimas execuções), o **guia do próprio app**, a **internet** (busca na web quando a pergunta pedir, com os links na resposta) e o estado atual (data, hora, contas). Cada fonte tem um interruptor no painel **Contexto**.
 - Peça ações na mesma tela: "me lembre amanhã de responder a Ana", "responda a Bia dizendo sim", "toda segunda, me mande o resumo da semana". O Assistente **propõe** um cartão (lembrete, resposta no WhatsApp com o texto editável, tarefa agendada ou um botão para abrir uma tela) e **nada acontece sem o seu clique**. Todo envio pelo WhatsApp ainda pede a confirmação do macOS. Os lembretes aparecem em Automações › Tarefas agendadas e chegam como notificação do macOS.
 - Você **vê o Claude pensar**: os passos ("Lendo o índice das reuniões", "Abrindo «Planejamento»", "Lendo as conversas do WhatsApp") e o raciocínio aparecem enquanto ele trabalha.
-- Cada resposta cita de onde veio cada coisa (a reunião com link, "[WhatsApp · Ana · 16/11 14:46]", "[Automações · Resumo da semana]", "[Guia]") e mostra **modelo, tempo, tokens e custo**.
+- Cada resposta cita de onde veio cada coisa (a reunião com link, "[WhatsApp · Ana · 16/11 14:46]", "[Automações · Resumo da semana]", "[Guia]", "[Web · site · título]" com o link, que abre no navegador) e mostra **modelo, tempo, tokens e custo** e, quando buscou na web, "Usou a internet · N buscas · M páginas".
+- **Agentes e tarefas com internet**: em Automações, cada agente tem o interruptor "Pode pesquisar na internet" (desligado por padrão). "Pedir agora" e as tarefas agendadas usam o que está no agente.
 - Painel **Contexto**: todas as reuniões, últimos 7 ou 30 dias, ou só as que você escolher; as fontes; modelo por conversa; "Pensar mais".
 
 ![Assistente: pendências do WhatsApp e painel Contexto com as fontes](docs/images/assistente-contexto-light.png)
@@ -100,7 +101,7 @@ Reuniões em Markdown no seu Mac ─> agente de IA via ACP ─> resumo · análi
 | Arquivos (áudio, transcrição, resumo, anotações) | ficam no seu Mac |
 | Chaves e tokens | cifrados pelo Chaveiro do macOS |
 
-O agente **não escreve arquivos, não roda comandos, não acessa a internet e não usa MCP**. Ele roda sem as suas configurações pessoais do Claude (hooks, `CLAUDE.md`, permissões globais) e só lê dentro da pasta das reuniões — o app confere cada pedido e o próprio `claude` recebe `--restricted`. O agente oficial do Claude (que tem licença proprietária da Anthropic) **não vem dentro do instalador**: o app baixa do registro do npm na primeira vez, só com o seu clique, conferindo o hash de cada pacote.
+O agente **não escreve arquivos, não roda comandos e não usa MCP**. A internet só entra onde você liga (a fonte "Internet" do Assistente e o "Pode pesquisar na internet" de cada agente): a busca é livre (até 10 por pedido), mas o app só deixa abrir uma página cujo endereço veio de um resultado dessa busca ou foi escrito por você (até 15 por pedido). Um endereço montado pelo agente, que poderia levar trechos das suas reuniões para fora, é recusado. Tradução, resumo e análise nunca acessam a internet. Ele roda sem as suas configurações pessoais do Claude (hooks, `CLAUDE.md`, permissões globais) e só lê dentro da pasta das reuniões — o app confere cada pedido e o próprio `claude` recebe `--restricted`. O agente oficial do Claude (que tem licença proprietária da Anthropic) **não vem dentro do instalador**: o app baixa do registro do npm na primeira vez, só com o seu clique, conferindo o hash de cada pacote.
 
 Avise as pessoas antes de gravar uma reunião.
 

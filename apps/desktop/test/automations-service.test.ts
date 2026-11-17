@@ -152,7 +152,7 @@ describe('agentes (contrato 23, CA1 e CA2)', () => {
 
   it('nome único, modelo do perfil e excluir recusado com a lista das tarefas que usam o agente', async () => {
     const agentId = await firstAgentId()
-    const base: AgentInput = { id: null, name: 'resumo da SEMANA', description: '', icon: 'bot', color: 'blue', instructions: 'x', profile: 'claude', model: 'haiku', thinkMore: false, scope: { kind: 'all' }, mcpServers: [], output: { kind: 'chat' } }
+    const base: AgentInput = { id: null, name: 'resumo da SEMANA', description: '', icon: 'bot', color: 'blue', instructions: 'x', profile: 'claude', model: 'haiku', thinkMore: false, scope: { kind: 'all' }, web: false, mcpServers: [], output: { kind: 'chat' } }
     expect(await service.saveAgent(base)).toEqual({ ok: false, error: 'duplicate' })
     expect(await service.saveAgent({ ...base, name: 'Novo', model: 'fable-5-2' })).toEqual({ ok: false, error: 'model' })
     const saved = await service.saveAgent({ ...base, name: 'Novo' })
@@ -163,7 +163,7 @@ describe('agentes (contrato 23, CA1 e CA2)', () => {
   })
 
   it('"Testar agora" roda o agente do formulário sem gravar nada no histórico nem aplicar a saída', async () => {
-    const input: AgentInput = { id: null, name: 'Rascunho', description: '', icon: 'bot', color: 'pink', instructions: 'Seja breve.', profile: 'claude', model: 'haiku', thinkMore: false, scope: { kind: 'none' }, mcpServers: [], output: { kind: 'file' } }
+    const input: AgentInput = { id: null, name: 'Rascunho', description: '', icon: 'bot', color: 'pink', instructions: 'Seja breve.', profile: 'claude', model: 'haiku', thinkMore: false, scope: { kind: 'none' }, web: false, mcpServers: [], output: { kind: 'file' } }
     const started = await service.testAgent({ agent: input, text: 'Olá?' })
     expect(started.ok).toBe(true)
     await waitPending(1)

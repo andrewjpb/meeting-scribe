@@ -92,6 +92,11 @@ export interface Agent {
   model: AgentModel
   thinkMore: boolean
   scope: AgentScope
+  /**
+   * Contrato 26: "Pode pesquisar na internet". Busca na web e abre só as páginas que a busca encontrou (ou que a pessoa
+   * escreveu no pedido). Agente salvo antes do 26 lê como `false`.
+   */
+  web: boolean
   /** Conexões MCP (contrato 21). O 21 ainda não existe: fica sempre vazio e escondido. */
   mcpServers: string[]
   output: AgentOutput
@@ -659,6 +664,7 @@ export const EXAMPLE_AGENTS: readonly Omit<AgentInput, 'id'>[] = [
     model: 'sonnet',
     thinkMore: false,
     scope: { kind: '7d' },
+    web: false,
     mcpServers: [],
     output: { kind: 'chat' },
   },
@@ -676,6 +682,7 @@ export const EXAMPLE_AGENTS: readonly Omit<AgentInput, 'id'>[] = [
     model: 'haiku',
     thinkMore: false,
     scope: { kind: 'all' },
+    web: false,
     mcpServers: [],
     output: { kind: 'chat' },
   },
@@ -694,6 +701,7 @@ export const EXAMPLE_AGENTS: readonly Omit<AgentInput, 'id'>[] = [
     model: 'haiku',
     thinkMore: false,
     scope: { kind: 'all' },
+    web: false,
     mcpServers: [],
     output: { kind: 'note' },
   },
