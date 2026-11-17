@@ -203,7 +203,16 @@ def make_handler(bridge, token, instance_id=''):
                 health = bridge.health()
                 return self.send_json(200, {'state': health['state'], 'qr': bridge.qr, 'code': None})
             if path == '/chats':
-                return self.send_json(200, {'chats': bridge.store.chats()})
+                chats = bridge.store.chats()
+                # Contrato 25: o número das conversas `@lid`, quando o cliente sabe (o neonize pelo `get_pn_from_lid`).
+                phone_for = getattr(bridge.backend, 'phone_for', None)
+                if phone_for is not None:
+                    for chat in chats:
+                        if chat['id'].endswith('@lid'):
+                            phone = phone_for(chat['id'])
+                            if phone:
+                                chat['phone'] = phone
+                return self.send_json(200, {'chats': chats})
             match = re.fullmatch(r'/chats/([^/]+)/messages', path)
             if match:
                 chat_id = unquote(match.group(1))

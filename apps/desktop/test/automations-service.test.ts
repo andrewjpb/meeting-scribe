@@ -57,7 +57,7 @@ function setup(): void {
     },
     applyOutput: (request) => {
       outputs.push(request)
-      return Promise.resolve('Conversa criada em Perguntar')
+      return Promise.resolve('Conversa criada no Assistente')
     },
     notify: (notice) => notices.push(notice),
     dailyLimit: () => Promise.resolve(limit),

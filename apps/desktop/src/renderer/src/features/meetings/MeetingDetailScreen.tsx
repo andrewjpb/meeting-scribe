@@ -30,7 +30,8 @@ type DetailTab = 'resumo' | 'anotacoes' | 'perguntar' | 'transcricao' | 'audio'
 const TABS: { value: DetailTab; label: string }[] = [
   { value: 'resumo', label: 'Resumo' },
   { value: 'anotacoes', label: 'Anotações' },
-  { value: 'perguntar', label: 'Perguntar' },
+  // Contrato 25: a aba do chat da reunião tem o nome da tela, "Assistente" (o valor interno fica).
+  { value: 'perguntar', label: 'Assistente' },
   { value: 'transcricao', label: 'Transcrição' },
   { value: 'audio', label: 'Áudio' },
 ]
@@ -61,7 +62,7 @@ const itemsOf = (transcript: TranscriptDocument | null): TranscriptItem[] =>
 
 /**
  * Detalhe da reunião: mesmo esqueleto da gravação, sem a fita ao vivo, com cinco abas (contratos 08, 13 e
- * 15): "Resumo", "Anotações" (os cards da reunião), "Perguntar" (o chat só sobre esta reunião),
+ * 15): "Resumo", "Anotações" (os cards da reunião), "Assistente" (o chat só sobre esta reunião),
  * "Transcrição" (a transcrição salva) e "Áudio" (os arquivos e o que dá para baixar).
  */
 export function MeetingDetailScreen() {

@@ -85,6 +85,7 @@ import { BRANDING_DIR } from './branding/service'
 import { summaryInput, summaryLines } from './claude-cli/summary'
 import { MENU_IDS } from './menu'
 import { CHAT_CORPUS_DIR, CHAT_INDEX_FILE, CHAT_SCOPE_DIR, corpusFileSuffix } from './chat/corpus'
+import { AUTOMATIONS_FILE, GUIDE_FILE, isSourceFile, STATE_FILE } from './chat/sources'
 import { CHATS_DIR } from './chat/store'
 import type { FakeDriveFile } from './google/fake-google'
 import { RECORDING_LEAVE_MESSAGE } from './lock/recording-session'
@@ -130,7 +131,8 @@ const SCREENS = [
   'detalhe',
   'detalhe-resumo',
   'detalhe-anotacoes',
-  'perguntar',
+  // Contrato 25: a tela "Perguntar" virou "Assistente".
+  'assistente',
   'perguntar-v2',
   // Contrato 18: Configurações por aba ("Geral" abre com a "Marca").
   'configuracoes-geral',
@@ -153,7 +155,7 @@ export interface SmokeContext {
   whatsapp: Pick<WhatsAppService, 'fake' | 'status'>
   openWindow: (query: Record<string, string>) => BrowserWindow
   /** Contrato 23: o agendador (o smoke "avança o relógio" e confere) e o ícone da barra de menus substituto. */
-  automations: Pick<AutomationsService, 'tick' | 'meetingEnded' | 'settled' | 'snapshot' | 'resume'>
+  automations: Pick<AutomationsService, 'tick' | 'meetingEnded' | 'settled' | 'snapshot' | 'resume' | 'listTasks'>
   tray: () => TrayController | null
 }
 
@@ -395,7 +397,7 @@ interface SmokeChatFile {
   scope?: { kind: string; meetingIds?: string[] }
   model?: string | null
   thinkMore?: boolean
-  messages: { role: string; text: string; error?: string; steps?: unknown[]; thinking?: string; plan?: unknown[]; meta?: { model: string; consulted: string[] }; model?: string }[]
+  messages: { role: string; text: string; error?: string; steps?: unknown[]; thinking?: string; plan?: unknown[]; meta?: { model: string; consulted: string[] }; model?: string; actions?: SmokeActionFile[] }[]
 }
 
 function readChatFiles(userDataDir: string): SmokeChatFile[] {
@@ -476,11 +478,11 @@ async function chatScreenCheck(
   const meetings = readMeetings(ctx.userDataDir)
   const chatsBefore = readChatFiles(ctx.userDataDir).length
   const spawnsBefore = chatSpawns(ctx.fixtures).length
-  await clickSelector(contents, '[data-nav="perguntar"]')
+  await clickSelector(contents, '[data-nav="assistente"]')
   // Contrato 16: 6 sugestões em cartões, em 3 grupos.
   const opened = await waitFor(
     contents,
-    `${routeIs('perguntar')} && document.querySelectorAll('[data-chat-suggestion]').length === 6 && document.querySelectorAll('[data-chat-empty] section').length === 3 && document.querySelector('[data-chat-input]')`,
+    `${routeIs('assistente')} && document.querySelectorAll('[data-chat-suggestion]').length === 6 && document.querySelectorAll('[data-chat-empty] section').length === 3 && document.querySelector('[data-chat-input]')`,
     8000,
   )
   const suggestions = await evaluate<string[]>(contents, `[...document.querySelectorAll('[data-chat-suggestion]')].map((b) => b.textContent)`)
@@ -514,7 +516,8 @@ async function chatScreenCheck(
       mode(corpus) === '700' &&
       mode(join(corpus, CHAT_INDEX_FILE)) === '600' &&
       chatSpawns(ctx.fixtures).length === spawnsBefore + 1 &&
-      spawn?.cwd === corpus &&
+      // Contrato 25: o Assistente roda na pasta da conversa (as reuniões do escopo e as fontes do app).
+      spawn?.cwd === join(ctx.userDataDir, CHAT_SCOPE_DIR, saved?.id ?? '?') &&
       chatArgsCheck(spawn) &&
       chats.length === chatsBefore + 1 &&
       saved?.messages[1]?.role === 'assistant' &&
@@ -713,7 +716,9 @@ async function chatContextCheck(contents: WebContents, ctx: SmokeContext, shootC
       spawns().length >= before + 1 &&
       previous?.exited === true &&
       scopedSpawn?.cwd === join(ctx.userDataDir, CHAT_SCOPE_DIR, chatId) &&
-      scopeFiles.length === 3 &&
+      // As reuniões escolhidas e o índice; mais as fontes do app (contrato 25), com o estado sempre.
+      scopeFiles.filter((name) => !isSourceFile(name)).length === 3 &&
+      scopeFiles.includes(STATE_FILE) &&
       scopeFiles.includes(CHAT_INDEX_FILE) &&
       scopeFiles.some((name) => name.endsWith(corpusFileSuffix('smoke-2'))) &&
       scopeFiles.some((name) => name.endsWith(corpusFileSuffix('smoke-4'))) &&
@@ -1242,7 +1247,7 @@ async function summaryAfterEnd(win: BrowserWindow, ctx: SmokeContext, record: Me
       summary.meetingId === record?.id &&
       summary.model === 'claude-cli:haiku' &&
       summary.tasks.length === 2 &&
-      JSON.stringify(screen.tabs) === JSON.stringify(['Resumo', 'Anotações', 'Perguntar', 'Transcrição', 'Áudio']) &&
+      JSON.stringify(screen.tabs) === JSON.stringify(['Resumo', 'Anotações', 'Assistente', 'Transcrição', 'Áudio']) &&
       JSON.stringify(screen.sections) === JSON.stringify(['O que aconteceu', 'Decisões', 'Tarefas']) &&
       screen.decisions === summary.decisions.length &&
       JSON.stringify(screen.rows[0]) === JSON.stringify(['Tarefa', 'Quem', 'Prazo']) &&
@@ -1604,7 +1609,7 @@ async function notesAfterEnd(contents: WebContents, ctx: SmokeContext, record: M
       JSON.stringify(notes.map((note) => [note.text, note.color])) === JSON.stringify(expectedFile) &&
       notes.every((note) => typeof note.atMs === 'number') &&
       shown &&
-      JSON.stringify(screen.tabs) === JSON.stringify(['Resumo', 'Anotações', 'Perguntar', 'Transcrição', 'Áudio']) &&
+      JSON.stringify(screen.tabs) === JSON.stringify(['Resumo', 'Anotações', 'Assistente', 'Transcrição', 'Áudio']) &&
       screen.buttons.includes('Nova anotação') &&
       screen.buttons.includes('Copiar anotações') &&
       screen.columns >= 2 &&
@@ -2182,8 +2187,8 @@ async function acpChecks(win: BrowserWindow, ctx: SmokeContext, shot: () => Prom
   const fallbackOk = fallback.ok && fixtures.claudeSpawns.length === cliBefore + 1 && fixtures.acpSpawns.length === acpBefore && fixtures.registryCalls.length === 0
 
   // O chat sem o agente: "Instalar o agente do Claude" e "Usar a linha de comando"; o clique instala.
-  await clickSelector(contents, '[data-nav="perguntar"]')
-  await waitFor(contents, routeIs('perguntar'))
+  await clickSelector(contents, '[data-nav="assistente"]')
+  await waitFor(contents, routeIs('assistente'))
   await clickSelector(contents, '[data-action="chat-new"]')
   await waitFor(contents, `document.querySelector('[data-chat-input]') && !document.querySelector('[data-chat-message]')`)
   await setValue(contents, '[data-chat-input]', 'Oi, agente?')
@@ -2269,13 +2274,13 @@ async function acpChecks(win: BrowserWindow, ctx: SmokeContext, shot: () => Prom
     capabilities?.fs?.readTextFile === true &&
     capabilities.fs.writeTextFile === false &&
     capabilities.terminal === false &&
-    chatNew?.cwd === join(userDataDir, CHAT_CORPUS_DIR) &&
+    chatNew?.cwd === join(userDataDir, CHAT_SCOPE_DIR, chatId) &&
     JSON.stringify(chatNew?.mcpServers) === '[]' &&
     JSON.stringify(options['settingSources']) === '[]' &&
     JSON.stringify(options['tools']) === JSON.stringify([...CLAUDE_READ_TOOLS]) &&
     JSON.stringify(options['disallowedTools']) === JSON.stringify([...CLAUDE_DISALLOWED_TOOLS]) &&
     options['model'] === 'sonnet' &&
-    String(options['systemPrompt']).startsWith('Você responde perguntas sobre as reuniões') &&
+    String(options['systemPrompt']).startsWith('Você é o Assistente') &&
     JSON.stringify(pairs(chatNew?.configOptions)) === JSON.stringify(['mode=default', 'model=sonnet'])
   const securityOk =
     JSON.stringify(permissions) === JSON.stringify(['Read:allow', 'Read:allow', 'Grep:allow', 'Write:reject']) &&
@@ -4696,12 +4701,15 @@ async function whatsappChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => 
     detail: `token inventado=${JSON.stringify(forged)}; sem token=${noToken}; clique pelo send genérico="${genericClick.slice(0, 60)}"; whatsappSend sem ativação=${JSON.stringify(withoutGesture)}; enviadas sem clique=${sentWithoutClick.length}; diálogo nativo "${cancelDialog?.message ?? ''}" com o texto=${cancelDialog?.detail === draftText} botões ${JSON.stringify(cancelDialog?.buttons ?? [])}, "Cancelar" -> enviadas=${sentAfterCancel}, texto mantido=${keptText === draftText}; "Enviar" -> enviada=${sent.length} (igual ao rascunho=${sent[0]?.text === draftText}); campo limpo=${cleared}; Enter não enviou=${afterEnter === 1}; ⌘↵ com diálogo de novo=${ourDialogs.length === 3}, enviada=${second.length === 2}; na conversa=${shownSent}`,
   }
 
-  // "Perguntar" com a conversa da Ana no escopo: o `.md` dela na pasta da conversa e no índice.
-  await clickSelector(contents, '[data-nav="perguntar"]')
-  await waitFor(contents, routeIs('perguntar'))
+  // "Só estas conversas" do Assistente (contrato 25; o "Perguntar" do 24) com a conversa da Ana: o `.md` dela na
+  // pasta da conversa e no índice.
+  await clickSelector(contents, '[data-nav="assistente"]')
+  await waitFor(contents, routeIs('assistente'))
   await clickSelector(contents, '[data-action="chat-new"]')
   await waitFor(contents, `document.querySelector('[data-chat-input]') && !document.querySelector('[data-chat-message]')`)
   await clickSelector(contents, '[data-action="chat-scope-label"]')
+  await waitFor(contents, `document.querySelector('[data-chat-whatsapp-mode="chosen"]')`, 8000)
+  await clickSelector(contents, '[data-chat-whatsapp-mode="chosen"]')
   const section = await waitFor(contents, `document.querySelector('[data-chat-whatsapp] [data-scope-whatsapp="${WA_ANA}"]')`, 8000)
   await clickSelector(contents, `[data-scope-whatsapp="${WA_ANA}"]`)
   const label = await waitFor(contents, `(document.querySelector('[data-action="chat-scope-label"]')?.textContent ?? '').includes('+ 1 conversa')`)
@@ -4719,7 +4727,7 @@ async function whatsappChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => 
       label &&
       asked.done &&
       waFile.startsWith('WhatsApp - Ana Souza - ') &&
-      waText.includes('- Citar como: [Ana Souza · dd/mm hh:mm]') &&
+      waText.includes('- Citar como: [WhatsApp · Ana Souza · dd/mm hh:mm]') &&
       waText.includes('Chegou agora pelo SSE') &&
       waText.includes('Segunda mensagem') &&
       index.includes(`- arquivo: ${waFile}`) &&
@@ -4794,6 +4802,191 @@ async function whatsappLockCheck(ctx: SmokeContext, watch: (win: BrowserWindow) 
     ok: locked && refused.locked === channels.length && refused.others.length === 0 && inert && stillConnected && notDelivered && sent.every((item) => item.text !== 'bloqueado') && unlocked && kept,
     detail: `bloqueado=${locked}; ${refused.locked}/${channels.length} canais recusados ${JSON.stringify(refused.others)}; tela inerte=${inert}; serviço conectado=${stillConnected}; mensagem não chegou à janela=${notDelivered}, guardada pelo serviço=${kept}; desbloqueado=${unlocked}`,
   }
+  win.destroy()
+}
+
+// ---------------------------------------------------------------------------------------------------------
+// Contrato 25: o Assistente, com o agente ACP falso e o serviço do WhatsApp falso (as três conversas semeadas).
+
+interface SmokeActionFile {
+  id: string
+  kind: string
+  status: string
+  result: string | null
+  chatId?: string
+  chatName?: string
+  phone?: string | null
+  whatsappChatId?: string | null
+}
+
+/**
+ * Contrato 25 (CA1 a CA6), numa janela clara: "Assistente" na barra lateral, com o título, a descrição e o campo
+ * novos; "tenho algo pendente no WhatsApp?" responde citando as conversas pendentes; o painel "Contexto" com as
+ * fontes; "me lembre amanhã de responder a Ana" vira cartão (data absoluta, "amanhã", 09:00 sem hora no pedido), e
+ * "Criar lembrete" cria a tarefa "uma vez" sem agente, que aparece em Automações › Tarefas agendadas; clicar de
+ * novo não repete; "responda ao Bruno dizendo sim" vira cartão com o nome e o número lidos do app, e "Enviar" passa
+ * pelo diálogo nativo substituto do contrato 24 até o serviço falso; um bloco inválido vira texto. O bloqueio dos
+ * canais novos (`chat-action-*`) fica com `lockChecks`, que chama todo canal recusado.
+ */
+async function assistantChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => void, checks: Record<string, Check>, shots: Screenshot[]): Promise<void> {
+  const win = ctx.openWindow({ theme: 'light' })
+  watch(win)
+  await loadAndWait(win)
+  const contents = win.webContents
+  const transportBefore = readSettings(ctx.userDataDir).claudeTransport
+  await evaluate(contents, "window.__scribeApi.invoke('scribe:settings-update', { claudeTransport: 'acp' }).then(() => true)")
+  const shot = async (name: string): Promise<void> => {
+    await settle(contents)
+    shots.push(await capture(win, ctx.outDir, name))
+  }
+  const lastActions = (): SmokeActionFile[] => {
+    return chatFile(ctx.userDataDir, chatIdNow)?.messages.at(-1)?.actions ?? []
+  }
+  let chatIdNow = ''
+
+  // CA1: o nome em toda a tela.
+  const navLabel = await evaluate<string>(contents, `document.querySelector('[data-nav="assistente"]')?.textContent ?? ''`)
+  const noOldName = await evaluate<boolean>(contents, `![...document.querySelectorAll('[data-nav]')].some((el) => el.textContent.includes('Perguntar'))`)
+  await clickSelector(contents, '[data-nav="assistente"]')
+  await waitFor(contents, routeIs('assistente'))
+  await clickSelector(contents, '[data-action="chat-new"]')
+  await waitFor(contents, `document.querySelector('[data-chat-input]') && !document.querySelector('[data-chat-message]')`)
+  const header = await evaluate<string>(contents, `document.querySelector('main h1')?.parentElement?.textContent ?? ''`)
+  const placeholder = await evaluate<string>(contents, `document.querySelector('[data-chat-input]')?.placeholder ?? ''`)
+  checks['name'] = {
+    ok: navLabel === 'Assistente' && noOldName && header.includes('Assistente') && header.includes('Pergunte ou peça qualquer coisa: reuniões, WhatsApp, automações e o próprio app.') && placeholder === 'Pergunte ou peça algo…',
+    detail: `barra lateral "${navLabel}", sem "Perguntar"=${noOldName}; cabeçalho "${header.slice(0, 120)}"; campo "${placeholder}"`,
+  }
+
+  // CA2: o que está pendente no WhatsApp, com a citação de cada conversa.
+  const pending = await askChat(contents, 'Tenho algo pendente no WhatsApp?')
+  chatIdNow = await evaluate<string>(contents, `document.querySelector('[data-chat-conversation]')?.getAttribute('data-chat-conversation') ?? ''`)
+  const scopeDir = join(ctx.userDataDir, CHAT_SCOPE_DIR, chatIdNow)
+  const files = existsSync(scopeDir) ? readdirSync(scopeDir) : []
+  const overview = existsSync(join(scopeDir, 'CONVERSAS-WHATSAPP.md')) ? readFileSync(join(scopeDir, 'CONVERSAS-WHATSAPP.md'), 'utf8') : ''
+  const stateText = existsSync(join(scopeDir, STATE_FILE)) ? readFileSync(join(scopeDir, STATE_FILE), 'utf8') : ''
+  const guideText = existsSync(join(scopeDir, GUIDE_FILE)) ? readFileSync(join(scopeDir, GUIDE_FILE), 'utf8') : ''
+  // As conversas com a última mensagem do outro lado (a da Ana já foi respondida no contrato 24) e só elas.
+  const pendingNames = overview.split('\n').flatMap((line) => (line.includes(' · pendente de resposta: sim · ') ? [/^- (.+?) · /.exec(line)?.[1] ?? '?'] : []))
+  const answeredNames = overview.split('\n').flatMap((line) => (line.includes(' · pendente de resposta: não · ') ? [/^- (.+?) · /.exec(line)?.[1] ?? '?'] : []))
+  checks['pending'] = {
+    ok:
+      pending.done &&
+      pendingNames.length > 0 &&
+      pendingNames.every((name) => pending.answer.includes(`[WhatsApp · ${name} · `)) &&
+      answeredNames.includes('Ana Souza') &&
+      !pending.answer.includes('[WhatsApp · Ana Souza · ') &&
+      files.includes(AUTOMATIONS_FILE) &&
+      files.some((name) => name.startsWith(WHATSAPP_EXPORT_PREFIX)) &&
+      stateText.includes(`Versão instalada: ${app.getVersion()}`) &&
+      guideText.includes(`Versão instalada: ${app.getVersion()}`) &&
+      !guideText.includes('{{versao}}') &&
+      mode(join(scopeDir, STATE_FILE)) === '600',
+    detail: `resposta=${pending.done} "${pending.answer.slice(0, 240)}"; pendentes ${JSON.stringify(pendingNames)}, respondidas ${JSON.stringify(answeredNames)}; pasta ${JSON.stringify(files.filter((name) => isSourceFile(name)).sort())}; estado com a versão=${stateText.includes('Versão instalada')}`,
+  }
+
+  // CA2: o painel "Contexto" com as fontes, todas ligadas.
+  await clickSelector(contents, '[data-action="toggle-context"]')
+  const sources = await waitFor(
+    contents,
+    `['whatsapp', 'automations', 'guide'].every((kind) => document.querySelector('[data-chat-source="' + kind + '"] [role="switch"]')?.getAttribute('aria-checked') === 'true') && document.querySelector('[data-chat-whatsapp-mode="recent"]')?.getAttribute('aria-checked') === 'true'`,
+  )
+  await shot('assistente-contexto-light')
+  await clickSelector(contents, '[data-action="close-context"]')
+  checks['sources'] = { ok: sources, detail: `WhatsApp, Automações e Guia ligados, conversas recentes=${sources}` }
+
+  // CA3 e CA4: o lembrete, do cartão até a tarefa.
+  const tasksBefore = (await ctx.automations.listTasks()).length
+  const reminder = await askChat(contents, 'Me lembre amanhã de responder a Ana')
+  const card = `[...document.querySelectorAll('[data-chat-action="lembrete"]')].at(-1)`
+  const proposed = await waitFor(contents, `${card}?.dataset.chatActionStatus === 'proposed'`)
+  const title = await evaluate<string>(contents, `${card}?.querySelector('[data-chat-action-title]')?.textContent ?? ''`)
+  const defaultTime = await evaluate<boolean>(contents, `Boolean(${card}?.querySelector('[data-chat-action-default-time]'))`)
+  const rawHidden = !(await evaluate<string>(contents, LAST_ANSWER)).includes('lap-acao')
+  const createdBeforeClick = (await ctx.automations.listTasks()).length
+  await shot('assistente-lembrete-light')
+  await evaluate(contents, `${card}?.querySelector('[data-action="chat-action-reminder-create"]')?.click()`)
+  const created = await waitFor(contents, `${card}?.dataset.chatActionStatus === 'done' && (${card}?.querySelector('[data-chat-action-result]')?.textContent ?? '').startsWith('Lembrete criado · ')`)
+  const tasks = await ctx.automations.listTasks()
+  const task = tasks.find((item) => item.reminder?.whatsappChatId === WA_ANA)
+  const savedReminder = lastActions()[0]
+  // Recarregar a conversa não repete: o mesmo cartão pelo canal devolve `done` e nada é criado.
+  const again = await evaluate<{ ok: boolean; error?: string }>(contents, `window.__scribeApi.invoke('scribe:chat-action-reminder', { chatId: '${chatIdNow}', index: ${(chatFile(ctx.userDataDir, chatIdNow)?.messages.length ?? 1) - 1}, actionId: '${savedReminder?.id ?? 'x'}' })`)
+  const tasksAfter = (await ctx.automations.listTasks()).length
+  await evaluate(contents, `${card}?.querySelector('[data-action="chat-action-open-tasks"]')?.click()`)
+  const listed = await waitFor(contents, `${routeIs('automacoes')} && document.querySelector('[data-automations-tab="tarefas"] [data-task-reminder][data-task-name="${task?.name ?? '?'}"]')`, 8000)
+  const when = await evaluate<string>(contents, `document.querySelector('[data-task-reminder] [data-task-when]')?.textContent ?? ''`)
+  checks['reminder'] = {
+    ok:
+      reminder.done &&
+      proposed &&
+      rawHidden &&
+      createdBeforeClick === tasksBefore &&
+      title.startsWith('Lembrete · ') &&
+      title.includes(' 09:00 (amanhã) · Responder Ana Souza') &&
+      defaultTime &&
+      created &&
+      task !== undefined &&
+      task.agentId === '' &&
+      task.schedule.kind === 'once' &&
+      tasksAfter === tasksBefore + 1 &&
+      savedReminder?.status === 'done' &&
+      again.ok === false &&
+      again.error === 'done' &&
+      listed &&
+      when.startsWith('Uma vez em '),
+    detail: `cartão=${proposed} "${title}", 09:00 avisado=${defaultTime}, bloco escondido=${rawHidden}; nada antes do clique=${createdBeforeClick === tasksBefore}; criado=${created}, tarefa ${task ? `${task.name} (${task.schedule.kind}, agente "${task.agentId}")` : 'ausente'}; de novo -> ${JSON.stringify(again)}, tarefas ${tasksBefore} -> ${tasksAfter}; em Automações=${listed} "${when}"`,
+  }
+  await clickSelector(contents, '[data-nav="assistente"]')
+  await waitFor(contents, `${routeIs('assistente')} && document.querySelector('[data-chat-conversation="${chatIdNow}"]')`, 8000)
+
+  // CA3 e CA5: a resposta no WhatsApp, com o nome e o número do app; "Enviar" pelo caminho do contrato 24.
+  const reply = await askChat(contents, 'Responda ao Bruno dizendo sim')
+  const replyCard = `[...document.querySelectorAll('[data-chat-action="whatsapp-resposta"]')].at(-1)`
+  const replyShown = await waitFor(contents, `${replyCard}?.dataset.chatActionStatus === 'proposed'`)
+  const name = await evaluate<string>(contents, `${replyCard}?.querySelector('[data-chat-action-name]')?.textContent ?? ''`)
+  const phone = await evaluate<string>(contents, `${replyCard}?.querySelector('[data-chat-action-phone]')?.textContent ?? ''`)
+  const sentBefore = (await waSent(ctx)).length
+  await shot('assistente-whatsapp-light')
+  const dialogs = ctx.fixtures.whatsappSendDialogs
+  const dialogsBefore = dialogs.length
+  ctx.fixtures.whatsappSendChoice = 1
+  await evaluate(contents, `${replyCard}?.querySelector('[data-action="chat-action-send"]')?.click()`)
+  let sent = await waSent(ctx)
+  for (let attempt = 0; attempt < 50 && sent.length <= sentBefore; attempt++) {
+    await wait(100)
+    sent = await waSent(ctx)
+  }
+  ctx.fixtures.whatsappSendChoice = 0
+  const sentDone = await waitFor(contents, `${replyCard}?.dataset.chatActionStatus === 'done' && (${replyCard}?.querySelector('[data-chat-action-result]')?.textContent ?? '').startsWith('Enviada às ')`)
+  const dialog = dialogs[dialogsBefore]
+  const last = sent.at(-1)
+  checks['whatsapp'] = {
+    ok:
+      reply.done &&
+      replyShown &&
+      name === 'Bruno Lima' &&
+      phone === '+55 11 92222-0000' &&
+      dialogs.length === dialogsBefore + 1 &&
+      dialog?.message === 'Enviar para Bruno Lima?' &&
+      last?.chatId === '5511922220000@s.whatsapp.net' &&
+      last.text === 'Sim' &&
+      sent.length === sentBefore + 1 &&
+      sentDone &&
+      lastActions()[0]?.status === 'done',
+    detail: `cartão=${replyShown} "${name}" "${phone}"; diálogo "${dialog?.message ?? ''}"; enviada ${sentBefore} -> ${sent.length} (${JSON.stringify(last ?? null)}); cartão "Enviada"=${sentDone}`,
+  }
+
+  // CA3: o bloco inválido vira texto comum, sem cartão.
+  const invalid = await askChat(contents, 'Mande um bloco inválido')
+  const invalidCards = await evaluate<number>(contents, `${LAST_ASSISTANT}?.querySelectorAll('[data-chat-action]').length ?? -1`)
+  const invalidText = await evaluate<string>(contents, LAST_ANSWER)
+  checks['invalid'] = {
+    ok: invalid.done && invalidCards === 0 && invalidText.includes('"tipo": "lembrete"') && lastActions().length === 0,
+    detail: `resposta=${invalid.done}; cartões=${invalidCards}; texto "${invalidText.slice(0, 120)}"`,
+  }
+
+  await evaluate(contents, `window.__scribeApi.invoke('scribe:settings-update', { claudeTransport: '${transportBefore === 'acp' ? 'acp' : 'cli'}' }).then(() => true)`)
   win.destroy()
 }
 
@@ -4879,7 +5072,7 @@ async function automationsChecks(ctx: SmokeContext, watch: (win: BrowserWindow) 
       cards &&
       JSON.stringify(seeded) === JSON.stringify(['Resumo da semana', 'Minhas tarefas', 'Pendências da reunião']) &&
       JSON.stringify(tabs) === JSON.stringify(['Agentes', 'Tarefas agendadas', 'Execuções']) &&
-      nav.indexOf('automacoes') === nav.indexOf('perguntar') + 1 &&
+      nav.indexOf('automacoes') === nav.indexOf('assistente') + 1 &&
       askNowShown &&
       title === 'Automações' &&
       existsSync(join(ctx.userDataDir, AGENTS_FILE)),
@@ -4984,7 +5177,7 @@ async function automationsChecks(ctx: SmokeContext, watch: (win: BrowserWindow) 
       dailyRuns.length === 1 &&
       dailyRuns[0]?.status === 'ok' &&
       dailyRuns[0].trigger === 'schedule' &&
-      dailyRuns[0].outputResult === 'Conversa criada em Perguntar' &&
+      dailyRuns[0].outputResult === 'Conversa criada no Assistente' &&
       chatOut?.messages.length === 2 &&
       chatOut.messages[0]?.text.startsWith('Agora: ') === true &&
       dailyNotice !== undefined &&
@@ -5122,7 +5315,7 @@ async function automationsChecks(ctx: SmokeContext, watch: (win: BrowserWindow) 
   await settle(contents)
   shots.push(await capture(win, ctx.outDir, 'execucao-detalhe-light'))
   checks['runs'] = {
-    ok: askClosed && listed && filtered && detail && detailView.prompt.startsWith('Agora: ') && detailView.prompt.includes('Resuma as reuniões de hoje.') && detailView.steps === 1 && detailView.cost.includes('US$') && detailView.output === 'Conversa criada em Perguntar',
+    ok: askClosed && listed && filtered && detail && detailView.prompt.startsWith('Agora: ') && detailView.prompt.includes('Resuma as reuniões de hoje.') && detailView.steps === 1 && detailView.cost.includes('US$') && detailView.output === 'Conversa criada no Assistente',
     detail: `"Pedir agora" fechado=${askClosed}; ${rows} linhas; filtro "Pulada"=${filtered}; detalhe=${detail} ${JSON.stringify(detailView)}`,
   }
 
@@ -5230,6 +5423,7 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
   const google: Record<string, Check> = {}
   /** Contrato 24: WhatsApp pelo serviço falso. */
   const whatsapp: Record<string, Check> = {}
+  const assistant: Record<string, Check> = {}
   const automations: Record<string, Check> = {}
   let analysisMeasured: AnalysisMeasured | null = null
 
@@ -5449,8 +5643,8 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
       const chatScreen = await chatScreenCheck(
         contents,
         ctx,
-        () => shoot('perguntar', 'perguntar'),
-        () => shoot('perguntar-v2', 'perguntar'),
+        () => shoot('assistente', 'assistente'),
+        () => shoot('perguntar-v2', 'assistente'),
         themeName === 'light' ? () => extraShot('perguntar-vazio-light') : null,
       )
       chat[themeName === 'light' ? 'screen' : 'screenDark'] = chatScreen.check
@@ -5567,6 +5761,10 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
     // Contrato 23: Automações, com o agente ACP falso e o relógio do agendador adiantado; antes do bloqueio.
     await automationsChecks(ctx, watch, automations, screenshots)
 
+    // Contrato 25: o Assistente, com o WhatsApp falso ainda conectado e o relógio do agendador de volta; antes do
+    // bloqueio (que recusa os canais novos junto com os outros).
+    await assistantChecks(ctx, watch, assistant, screenshots)
+
     // Contrato 22: bloqueio do app, por último (a senha criada vale para o userData inteiro).
     await lockChecks(ctx, watch, lock, screenshots)
 
@@ -5619,6 +5817,8 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
   for (const [name, check] of Object.entries(whatsapp)) if (!check.ok) failures.push(`whatsapp ${name}: ${check.detail}`)
   for (const name of ['detect', 'install', 'risk', 'paired', 'screen', 'draft', 'send', 'ask', 'dark', 'locked']) if (!whatsapp[name]) failures.push(`whatsapp ${name}: não executado`)
   for (const [name, check] of Object.entries(automations)) if (!check.ok) failures.push(`automações ${name}: ${check.detail}`)
+  for (const [name, check] of Object.entries(assistant)) if (!check.ok) failures.push(`assistente ${name}: ${check.detail}`)
+  for (const name of ['name', 'pending', 'sources', 'reminder', 'whatsapp', 'invalid']) if (!assistant[name]) failures.push(`assistente ${name}: não executado`)
   for (const name of ['screen', 'testNow', 'agentForm', 'tasks', 'scheduled', 'afterMeeting', 'skipped', 'tray', 'autoPaused', 'missed', 'askNow', 'runs', 'settings', 'closeKeepsApp', 'dark']) if (!automations[name]) failures.push(`automações ${name}: não executado`)
   for (const [name, check] of Object.entries(lock)) if (!check.ok) failures.push(`bloqueio ${name}: ${check.detail}`)
   for (const name of ['password', 'layer', 'channels', 'unlock', 'shortcutAndTouchId', 'recordingContinues', 'leaveDialog', 'endWhileLocked', 'reopen', 'reopenFromDisk', 'dark']) if (!lock[name]) failures.push(`bloqueio ${name}: não executado`)
@@ -5633,8 +5833,9 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
   // logada nos dois temas, deslogada no escuro e a aba "Áudio" com "No Drive" (contrato 11); a tela "WhatsApp" nos
   // dois temas, o bloco em Configurações, a tela de risco, o pareamento e o rascunho, no claro (contrato 24); a tela
   // "Automações" nos dois temas, o formulário do agente, as tarefas, o formulário da tarefa, as execuções e o detalhe
-  // de uma, no claro (contrato 23).
-  const expectedShots = SCREENS.length * THEMES.length + 38
+  // de uma, no claro (contrato 23); o painel "Contexto" com as fontes, o cartão do lembrete e o da resposta no
+  // WhatsApp do Assistente, no claro (contrato 25).
+  const expectedShots = SCREENS.length * THEMES.length + 41
   if (screenshots.length !== expectedShots) failures.push(`${screenshots.length} PNGs em vez de ${expectedShots}`)
   for (const shot of screenshots) {
     if (shot.width < 1120 || shot.height < 740) failures.push(`${shot.name}: ${shot.width}x${shot.height} abaixo de 1120x740`)
@@ -5678,6 +5879,7 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
     googleFakeDrive: [...ctx.fixtures.google.files.values()].map((file) => ({ name: file.name, mimeType: file.mimeType, bytes: file.content.byteLength, uploads: file.uploads, trashed: file.trashed })),
     // Contrato 24: só os resultados; nenhum texto de mensagem além dos fixos do serviço falso.
     whatsapp,
+    assistant,
     // Contrato 23: os resultados, as notificações, o Dock e os itens de login substitutos; nenhum texto de reunião.
     automations,
     automationsFixtures: { notifications: ctx.fixtures.automations.notifications.map((notice) => notice.title), trayImages: ctx.fixtures.automations.trayImages, dock: ctx.fixtures.automations.dock, loginItems: ctx.fixtures.automations.loginItems, quitRequests: ctx.fixtures.automations.quitRequests },

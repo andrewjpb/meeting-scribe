@@ -42,6 +42,11 @@ const chatSchema = z.object({
   kind: z.enum(['person', 'group']),
   unread: z.number().int().nonnegative(),
   lastMessage: messageSchema.nullable(),
+  // Contrato 25: o número de uma conversa `@lid`, quando o serviço sabe.
+  phone: z
+    .string()
+    .regex(/^\+\d{6,15}$/)
+    .optional(),
 })
 const pairSchema = z.object({ state: z.enum(WHATSAPP_SERVICE_STATES), qr: z.string().max(4000).nullable(), code: z.string().max(40).nullable() })
 const chatsSchema = z.object({ chats: z.array(chatSchema).max(5000) })

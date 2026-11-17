@@ -24,7 +24,7 @@ export interface OutputDeps {
   meetingsFolder: () => Promise<string>
   /** Post-it novo: o acervo do chat e o detalhe aberto acompanham (o id protege o post-it do próximo `save` da tela). */
   onNoteSaved?: (meetingId: string, noteId: string) => void
-  /** Conversa nova: a lista do "Perguntar" acompanha. */
+  /** Conversa nova: a lista do "Assistente" acompanha. */
   onChatSaved?: (chat: Chat) => void
   now?: () => number
   newId?: () => string
@@ -70,7 +70,7 @@ export async function applyOutput(deps: OutputDeps, request: OutputRequest): Pro
     }
     const saved = await deps.chats.save(chat)
     deps.onChatSaved?.(saved)
-    return 'Conversa criada em Perguntar'
+    return 'Conversa criada no Assistente'
   }
 
   if (output.kind === 'note') {

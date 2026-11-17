@@ -350,9 +350,10 @@ describe('nenhum caminho fora do clique alcança o envio (CA4)', () => {
     expect(all.filter(({ text }) => text.includes('confirmWhatsAppSend(')).map(({ file }) => file)).toEqual(['main/index.ts'])
     // O smoke só chama para conferir que o envio sem clique é recusado.
     expect(users.sort()).toEqual(['main/index.ts', 'main/smoke.ts', 'preload/index.ts', 'shared/ipc.ts'].sort())
-    // A tela só envia pelo `whatsappSend` do preload, e só na conversa aberta.
+    // A tela só envia pelo `whatsappSend` do preload, e só na conversa aberta; o cartão do Assistente (contrato 25)
+    // usa o mesmo caminho, com o mesmo token de clique e o mesmo diálogo nativo.
     const screens = all.filter(({ file, text }) => file.startsWith('renderer/') && text.includes('whatsappSend(')).map(({ file }) => file)
-    expect(screens).toEqual(['renderer/src/features/whatsapp/WhatsAppScreen.tsx'])
+    expect(screens.sort()).toEqual(['renderer/src/features/chat/ActionCards.tsx', 'renderer/src/features/whatsapp/WhatsAppScreen.tsx'])
   })
 
   it('o guarda do clique e o envio do cliente só existem no serviço do WhatsApp', () => {
@@ -397,7 +398,9 @@ describe('"Perguntar" com conversas do WhatsApp (CA5)', () => {
     expect(messageLine(message('b', at, { text: '', type: 'image', media: { kind: 'image', mime: 'image/jpeg', size: 122_880, name: null } }))).toBe('[16/11 14:05] Ana Souza: [anexo: imagem · 120 KB]')
     const md = chatMarkdown({ id: GRUPO, name: 'Projeto Atlas', kind: 'group' }, [message('c', at)], 30)
     expect(md).toContain('# WhatsApp: Projeto Atlas')
-    expect(md).toContain('- Citar como: [Projeto Atlas · dd/mm hh:mm]')
+    // Contrato 25: a citação com a fonte, e o id da conversa (para o cartão de resposta).
+    expect(md).toContain('- Citar como: [WhatsApp · Projeto Atlas · dd/mm hh:mm]')
+    expect(md).toContain(`- Id da conversa: ${GRUPO}`)
     expect(exportFileName({ id: GRUPO, name: 'Projeto/Atlas:\u0007' })).toBe('WhatsApp - Projeto Atlas - 120363000000000001_g_us.md')
     expect(chatSystemPrompt('all', true)).toContain('[<conversa> · dd/mm hh:mm]')
     expect(chatSystemPrompt('all')).not.toContain('WhatsApp')

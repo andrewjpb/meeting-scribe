@@ -69,7 +69,7 @@ export interface AgentScope {
 }
 
 /**
- * Saídas (CA6): conversa nova no "Perguntar", post-it na reunião, arquivo `.md` na pasta das reuniões ou
+ * Saídas (CA6): conversa nova no "Assistente", post-it na reunião, arquivo `.md` na pasta das reuniões ou
  * notificação do macOS. Nada vai para fora do Mac.
  */
 export const AGENT_OUTPUT_KINDS = ['chat', 'note', 'file', 'notification'] as const
@@ -146,8 +146,19 @@ export interface ScheduledTask {
   consecutiveFailures: number
   /** Pausada sozinha depois de 3 falhas seguidas; ligar de novo tira a pausa. */
   autoPaused: boolean
+  /**
+   * Contrato 25: lembrete criado pelo Assistente. Tarefa "uma vez" sem agente (`agentId` vazio): no horário, só a
+   * notificação do macOS com o texto, e o "Abrir" leva à conversa do WhatsApp quando há. Nenhum Claude roda.
+   */
+  reminder: TaskReminder | null
   createdAt: string
   updatedAt: string
+}
+
+export interface TaskReminder {
+  text: string
+  whatsappChatId: string | null
+  whatsappChatName: string | null
 }
 
 /** O que o formulário manda: sem o estado das execuções. */
@@ -243,7 +254,7 @@ export const RUN_TRIGGER_LABELS: Readonly<Record<RunTrigger, string>> = {
   rerun: 'Rodar de novo',
   test: 'Testar agora',
 }
-export const OUTPUT_LABELS: Readonly<Record<AgentOutputKind, string>> = { chat: 'Conversa em Perguntar', note: 'Post-it na reunião', file: 'Arquivo .md na pasta', notification: 'Notificação do macOS' }
+export const OUTPUT_LABELS: Readonly<Record<AgentOutputKind, string>> = { chat: 'Conversa no Assistente', note: 'Post-it na reunião', file: 'Arquivo .md na pasta', notification: 'Notificação do macOS' }
 export const SCOPE_LABELS: Readonly<Record<AgentScopeKind, string>> = { all: 'Todas as reuniões', '7d': 'Últimos 7 dias', '30d': 'Últimos 30 dias', meetings: 'Reuniões escolhidas', none: 'Nenhuma reunião' }
 export const NOTIFY_LABELS: Readonly<Record<NotifyPolicy, string>> = { always: 'Sempre', 'on-error': 'Só com erro', never: 'Nunca' }
 

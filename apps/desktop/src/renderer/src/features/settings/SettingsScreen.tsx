@@ -350,7 +350,7 @@ function SettingsTabs({ tab }: { tab: SettingsTab }) {
             'claude',
             <>
               {/*
-               * Tradução, resumo e o chat "Perguntar" (contrato 15) usam o mesmo `claude`: a conexão (contrato 17),
+               * Tradução, resumo e o chat do "Assistente" (contratos 15 e 25) usam o mesmo `claude`: a conexão (contrato 17),
                * o agente e o caminho do `claude` ficam juntos, seguidos dos modelos.
                */}
               <Section title="Claude">
@@ -395,7 +395,7 @@ function SettingsTabs({ tab }: { tab: SettingsTab }) {
               </Section>
 
               <Section title="Chat e resumo">
-                <SettingRow name="Modelo do chat" nameId="settings-chat-model" description="Usado em Perguntar. O Opus responde melhor e demora mais.">
+                <SettingRow name="Modelo do chat" nameId="settings-chat-model" description="Usado no Assistente. O Opus responde melhor e demora mais.">
                   <Segmented value={settings.chatModel} options={CHAT_MODELS} labelledBy="settings-chat-model" dataName="chat-model-option" onChange={(chatModel) => void update({ chatModel })} />
                 </SettingRow>
                 <SettingRow name="Resumir ao encerrar" nameId="settings-summarize" description="Ao encerrar, o Claude lê a transcrição e escreve o resumo, as decisões e as tarefas.">

@@ -16,7 +16,7 @@ function closeChat(id: string | null): void {
 }
 
 /**
- * Tela "Perguntar" (contratos 15 e 16): conversas à esquerda (busca por título, agrupadas por dia, "Nova
+ * Tela "Assistente" (contratos 15, 16 e 25; antes "Perguntar"): conversas à esquerda (busca por título, agrupadas por dia, "Nova
  * conversa", e renomear e excluir no menu "…" da linha) e a conversa aberta à direita, com o painel
  * "Contexto". Em janela estreita, o painel aberto esconde a lista para a conversa caber.
  */
@@ -45,7 +45,7 @@ export function ChatScreen() {
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="px-10 pt-7 pb-6">
-        <PageHeader title="Perguntar" description="O Claude responde com base nas suas reuniões, lidas neste Mac." />
+        <PageHeader title="Assistente" description="Pergunte ou peça qualquer coisa: reuniões, WhatsApp, automações e o próprio app." />
       </div>
       <div className="flex min-h-0 flex-1 border-t border-line">
         <aside aria-label="Conversas" className={`flex w-[248px] shrink-0 flex-col border-r border-line ${contextOpen ? 'max-[1279px]:hidden' : ''}`}>

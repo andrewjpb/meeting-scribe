@@ -2,10 +2,25 @@
 // no "Perguntar" (na pasta de escopo da conversa, com as mesmas permissões e a mesma limpeza do contrato 16) e as
 // linhas do dia da reunião para o resumo e a análise, quando a pessoa liga a opção. Só leitura: nada daqui envia.
 // A leitura nunca zera as não lidas (pede sempre com `before`).
-import { chmod, rename, writeFile } from 'node:fs/promises'
+//
+// Contrato 25 (CA2): o Assistente lê sozinho as conversas com mensagem nos últimos 14 dias (até 40 conversas e
+// 3 000 mensagens, as mais recentes primeiro), no mesmo formato e na mesma pasta, com o id da conversa, as não lidas,
+// quem mandou a última e se você respondeu depois da última mensagem do outro lado ("pendente de resposta"), e um
+// `CONVERSAS-WHATSAPP.md` com uma linha por conversa.
+import { chmod, readdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
-import { mediaLabel, WHATSAPP_EXPORT_MESSAGES_MAX, WHATSAPP_EXPORT_PREFIX, type WhatsAppChat, type WhatsAppMessage } from '../../shared/whatsapp'
+import {
+  mediaLabel,
+  WHATSAPP_EXPORT_MESSAGES_MAX,
+  WHATSAPP_EXPORT_PREFIX,
+  WHATSAPP_OVERVIEW_FILE,
+  WHATSAPP_RECENT_CHATS_MAX,
+  WHATSAPP_RECENT_DAYS,
+  WHATSAPP_RECENT_MESSAGES_MAX,
+  type WhatsAppChat,
+  type WhatsAppMessage,
+} from '../../shared/whatsapp'
 import type { BridgeClient } from './client'
 
 const DAY_MS = 86_400_000
@@ -16,6 +31,12 @@ const two = (value: number): string => String(value).padStart(2, '0')
 export function stampLabel(at: number): string {
   const date = new Date(at)
   return `${two(date.getDate())}/${two(date.getMonth() + 1)} ${two(date.getHours())}:${two(date.getMinutes())}`
+}
+
+/** "2026-11-16 14:05", na hora local. */
+export function fullStamp(at: number): string {
+  const date = new Date(at)
+  return `${date.getFullYear()}-${two(date.getMonth() + 1)}-${two(date.getDate())} ${two(date.getHours())}:${two(date.getMinutes())}`
 }
 
 /** Texto numa linha, sem abrir seção falsa nem marca de fala. */
@@ -37,14 +58,37 @@ export function exportFileName(chat: Pick<WhatsAppChat, 'id' | 'name'>): string 
   return `${WHATSAPP_EXPORT_PREFIX}${name} - ${id}.md`
 }
 
-export function chatMarkdown(chat: Pick<WhatsAppChat, 'id' | 'name' | 'kind'>, messages: readonly WhatsAppMessage[], days: number): string {
+/** Quem mandou a última mensagem e se ela espera a sua resposta (a última é do outro lado). */
+export interface ChatReplyState {
+  lastFrom: string | null
+  lastAt: number | null
+  pending: boolean
+}
+
+/** A última mensagem da conversa (da lista ou das mensagens lidas): se é do outro lado, a resposta está pendente. */
+export function replyState(chat: Pick<WhatsAppChat, 'lastMessage'>, messages: readonly WhatsAppMessage[] = []): ChatReplyState {
+  const fromList = chat.lastMessage
+  const fromRead = messages.at(-1) ?? null
+  const last = fromRead && (!fromList || fromRead.at >= fromList.at) ? fromRead : fromList
+  if (!last) return { lastFrom: null, lastAt: null, pending: false }
+  return { lastFrom: last.fromMe ? 'Você' : oneLine(last.author) || 'Contato', lastAt: last.at, pending: !last.fromMe }
+}
+
+export function chatMarkdown(chat: Pick<WhatsAppChat, 'id' | 'name' | 'kind'> & Partial<Pick<WhatsAppChat, 'unread' | 'lastMessage'>>, messages: readonly WhatsAppMessage[], days: number): string {
+  const reply = replyState({ lastMessage: chat.lastMessage ?? null }, messages)
   const lines = [
     `# WhatsApp: ${oneLine(chat.name)}`,
     '',
     `- Conversa: ${chat.kind === 'group' ? 'grupo' : 'pessoa'}`,
+    `- Id da conversa: ${chat.id}`,
     `- Período: últimos ${days} dias`,
     `- Mensagens: ${messages.length}`,
-    `- Citar como: [${oneLine(chat.name)} · dd/mm hh:mm]`,
+    ...(chat.unread !== undefined ? [`- Não lidas: ${chat.unread}`] : []),
+    `- Última mensagem de: ${reply.lastFrom ?? 'ninguém'}${reply.lastAt !== null ? ` (${stampLabel(reply.lastAt)})` : ''}`,
+    // Contrato 25: a data inteira, para o `INDICE.md` pôr a conversa mais recente primeiro.
+    ...(reply.lastAt !== null ? [`- Data da última mensagem: ${fullStamp(reply.lastAt)}`] : []),
+    `- Pendente de resposta: ${reply.pending ? 'sim' : 'não'}`,
+    `- Citar como: [WhatsApp · ${oneLine(chat.name)} · dd/mm hh:mm]`,
     '',
     '## Mensagens',
     '',
@@ -69,32 +113,142 @@ export async function recentMessages(client: Pick<BridgeClient, 'messages'>, cha
   return collected.slice(-max)
 }
 
+/** Conversas lidas ao mesmo tempo do serviço (o `messages()` de cada uma). */
+export const EXPORT_PARALLEL = 4
+
+/**
+ * O que já foi exportado em cada pasta: por arquivo, a chave (a última mensagem, as não lidas, o período e o dia), a
+ * parte das mensagens pedida e quantas vieram. Mesma chave, o arquivo lá e o mesmo resultado com a parte de agora (a
+ * mesma parte, ou a conversa coube inteira e ainda cabe): a conversa não é lida de novo.
+ */
+export type ExportCache = Map<string, Map<string, { key: string; share: number; count: number }>>
+
+/** O que a exportação leu: os arquivos (os de agora, mantidos ou reescritos) e a lista das conversas. */
+export interface ExportResult {
+  files: string[]
+  chats: WhatsAppChat[]
+  /** Conversas lidas de novo (as outras ficaram como estavam). */
+  read: number
+}
+
+async function writeFileAtomic(file: string, content: string): Promise<void> {
+  const temp = `${file}.tmp-${process.pid}-${randomUUID()}`
+  await writeFile(temp, content, { encoding: 'utf8', mode: 0o600 })
+  await rename(temp, file)
+  await chmod(file, 0o600)
+}
+
+/** Grava só se o conteúdo mudou; `true` se gravou. */
+export async function writeIfChanged(file: string, content: string): Promise<boolean> {
+  const current = await readFile(file, 'utf8').catch(() => null)
+  if (current === content) return false
+  await writeFileAtomic(file, content)
+  return true
+}
+
+/** Roda `work` em cada item, no máximo `limit` ao mesmo tempo, na ordem dos resultados. */
+async function inParallel<T, R>(items: readonly T[], limit: number, work: (item: T) => Promise<R>): Promise<R[]> {
+  const results: R[] = new Array<R>(items.length)
+  let next = 0
+  const lanes = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (next < items.length) {
+      const at = next++
+      results[at] = await work(items[at] as T)
+    }
+  })
+  await Promise.all(lanes)
+  return results
+}
+
+const dayKey = (at: number): string => fullStamp(at).slice(0, 10)
+
+/**
+ * Um `.md` por conversa, as mensagens de `days` dias com até `share` cada, lidas `EXPORT_PARALLEL` por vez. Com o
+ * cache, a conversa sem mensagem nova desde o último export (o mesmo `lastMessage` da lista), no mesmo dia, fica
+ * como está; as que saíram da lista não são apagadas aqui (quem chama remove o que sobrou).
+ */
+async function exportSet(client: Pick<BridgeClient, 'messages'>, folder: string, chats: readonly WhatsAppChat[], days: number, share: number, now: number, cache?: ExportCache): Promise<{ files: string[]; read: number }> {
+  const known = cache ? (cache.get(folder) ?? new Map<string, { key: string; share: number; count: number }>()) : null
+  if (cache && known) cache.set(folder, known)
+  const present = new Set(await readdir(folder).catch(() => [] as string[]))
+  let read = 0
+  const files = await inParallel(chats, EXPORT_PARALLEL, async (chat) => {
+    const name = exportFileName(chat)
+    const key = `${chat.lastMessage?.at ?? 0}:${chat.lastMessage?.id ?? ''}:${chat.unread}:${days}:${dayKey(now)}`
+    const before = known?.get(name)
+    const same = before !== undefined && before.key === key && (before.share === share || (before.count < before.share && before.count <= share))
+    if (same && present.has(name)) return name
+    const messages = await recentMessages(client, chat.id, now - days * DAY_MS, share, now + 1)
+    read++
+    await writeFileAtomic(join(folder, name), chatMarkdown(chat, messages, days))
+    known?.set(name, { key, share, count: messages.length })
+    return name
+  })
+  return { files, read }
+}
+
 /**
  * Escreve na pasta de escopo um `.md` por conversa escolhida (até 10), dos últimos `days` dias, com no máximo
  * 2 000 mensagens no total (divididas entre as conversas). Devolve os nomes escritos.
  */
-export async function exportChats(client: Pick<BridgeClient, 'messages' | 'chats'>, folder: string, chatIds: readonly string[], days: number, now = Date.now()): Promise<string[]> {
+export async function exportChats(client: Pick<BridgeClient, 'messages' | 'chats'>, folder: string, chatIds: readonly string[], days: number, now = Date.now(), cache?: ExportCache, list?: readonly WhatsAppChat[]): Promise<string[]> {
   if (!chatIds.length) return []
-  const known = new Map((await client.chats()).map((chat) => [chat.id, chat]))
+  const known = new Map((list ?? (await client.chats())).map((chat) => [chat.id, chat]))
   const chosen = chatIds.flatMap((id) => {
     const chat = known.get(id)
     return chat ? [chat] : []
   })
   if (!chosen.length) return []
-  const share = Math.floor(WHATSAPP_EXPORT_MESSAGES_MAX / chosen.length)
-  const since = now - days * DAY_MS
-  const written: string[] = []
-  for (const chat of chosen) {
-    const messages = await recentMessages(client, chat.id, since, share, now + 1)
-    const name = exportFileName(chat)
-    const file = join(folder, name)
-    const temp = `${file}.tmp-${process.pid}-${randomUUID()}`
-    await writeFile(temp, chatMarkdown(chat, messages, days), { encoding: 'utf8', mode: 0o600 })
-    await rename(temp, file)
-    await chmod(file, 0o600)
-    written.push(name)
-  }
-  return written
+  return (await exportSet(client, folder, chosen, days, Math.floor(WHATSAPP_EXPORT_MESSAGES_MAX / chosen.length), now, cache)).files
+}
+
+/** Uma linha do `CONVERSAS-WHATSAPP.md`. */
+export function overviewLine(chat: WhatsAppChat, reply: ChatReplyState, file: string): string {
+  const last = chat.lastMessage ? oneLine(chat.lastMessage.text || (chat.lastMessage.media ? `[anexo: ${mediaLabel(chat.lastMessage.media)}]` : '')) : ''
+  const preview = last.length > 120 ? `${last.slice(0, 119)}…` : last
+  return [
+    `- ${oneLine(chat.name)}`,
+    chat.kind === 'group' ? 'grupo' : 'pessoa',
+    `id: ${chat.id}`,
+    `não lidas: ${chat.unread}`,
+    `última de: ${reply.lastFrom ?? 'ninguém'}${reply.lastAt !== null ? ` em ${stampLabel(reply.lastAt)}` : ''}`,
+    `pendente de resposta: ${reply.pending ? 'sim' : 'não'}`,
+    `última mensagem: "${preview.replace(/"/g, "'")}"`,
+    `arquivo: ${file}`,
+  ].join(' · ')
+}
+
+/**
+ * As conversas com mensagem nos últimos 14 dias (até 40, as mais recentes primeiro), com até 3 000 mensagens no total
+ * divididas entre elas, e o `CONVERSAS-WHATSAPP.md`. Uma leitura só da lista (`chats()`, devolvida para os cartões);
+ * com o cache, só as conversas com mensagem nova são lidas e reescritas. Devolve os nomes (o resumo por último).
+ */
+export async function exportRecentWith(client: Pick<BridgeClient, 'messages' | 'chats'>, folder: string, now = Date.now(), cache?: ExportCache): Promise<ExportResult> {
+  const since = now - WHATSAPP_RECENT_DAYS * DAY_MS
+  const all = await client.chats()
+  const chosen = all
+    .filter((chat) => chat.lastMessage !== null && chat.lastMessage.at >= since)
+    .sort((a, b) => (b.lastMessage?.at ?? 0) - (a.lastMessage?.at ?? 0))
+    .slice(0, WHATSAPP_RECENT_CHATS_MAX)
+  if (!chosen.length) return { files: [], chats: all, read: 0 }
+  const share = Math.max(1, Math.floor(WHATSAPP_RECENT_MESSAGES_MAX / chosen.length))
+  const { files, read } = await exportSet(client, folder, chosen, WHATSAPP_RECENT_DAYS, share, now, cache)
+  const lines = chosen.map((chat, at) => overviewLine(chat, replyState(chat), files[at] ?? exportFileName(chat)))
+  const pending = lines.filter((line) => line.includes(' · pendente de resposta: sim · ')).length
+  const overview = [
+    `# Conversas do WhatsApp (últimos ${WHATSAPP_RECENT_DAYS} dias)`,
+    '',
+    `Uma linha por conversa, da mais recente para a mais antiga: nome · tipo · id · não lidas · quem mandou a última · pendente de resposta · a última mensagem · arquivo. "Pendente de resposta: sim" quer dizer que a última mensagem é do outro lado (você não respondeu depois dela). ${pending} de ${lines.length} pendentes.`,
+    '',
+    ...lines,
+  ]
+  await writeIfChanged(join(folder, WHATSAPP_OVERVIEW_FILE), `${overview.join('\n')}\n`)
+  return { files: [...files, WHATSAPP_OVERVIEW_FILE], chats: all, read }
+}
+
+/** `exportRecentWith`, só os nomes (o contrato 25 sem cache). */
+export async function exportRecent(client: Pick<BridgeClient, 'messages' | 'chats'>, folder: string, now = Date.now(), cache?: ExportCache): Promise<string[]> {
+  return (await exportRecentWith(client, folder, now, cache)).files
 }
 
 /** As mensagens do dia (local) de `startedAt` numa conversa, até 500, como linhas para o resumo e a análise. */

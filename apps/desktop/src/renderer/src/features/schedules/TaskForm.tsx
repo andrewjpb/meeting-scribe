@@ -91,7 +91,7 @@ const TASK_ERRORS: Record<string, string> = {
   invalid: 'Confira os campos da tarefa.',
 }
 
-export function TaskForm({ initial, meetings, onClose }: { initial: TaskInput; meetings: ChatMeetings; onClose: () => void }) {
+export function TaskForm({ initial, meetings, onClose, onSaved }: { initial: TaskInput; meetings: ChatMeetings; onClose: () => void; onSaved?: (() => void) | undefined }) {
   const agents = useAutomations((state) => state.agents)
   const [task, setTask] = useState<TaskInput>(initial)
   const [frequency, setFrequency] = useState<FrequencyDraft>(() => draftOf(initial.schedule, Date.now(), initial.timezone))
@@ -119,6 +119,7 @@ export function TaskForm({ initial, meetings, onClose }: { initial: TaskInput; m
       return
     }
     await useAutomations.getState().load()
+    onSaved?.()
     onClose()
   }
 

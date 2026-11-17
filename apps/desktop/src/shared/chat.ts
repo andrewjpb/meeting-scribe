@@ -1,6 +1,9 @@
-// Chat "Perguntar" sobre as reuniões (contratos 15 e 16): o que o renderer e o main trocam. O `claude` roda
-// só no main, numa pasta só de leitura com as reuniões em Markdown; o renderer manda a pergunta e recebe a
-// resposta enquanto ela é escrita, com o raciocínio, os passos de leitura e os detalhes da resposta.
+// Chat sobre as reuniões (contratos 15 e 16), hoje a tela "Assistente" (contrato 25): o que o renderer e o main
+// trocam. O `claude` roda só no main, numa pasta só de leitura com as reuniões em Markdown; o renderer manda a
+// pergunta e recebe a resposta enquanto ela é escrita, com o raciocínio, os passos de leitura e os detalhes da
+// resposta. Contrato 25: a pasta da conversa do Assistente leva também o WhatsApp, as automações, o guia do app e o
+// estado atual, e a resposta pode trazer ações propostas (`ChatAction`), que só rodam com o clique da pessoa.
+import type { ChatAction } from './assistant'
 import type { ChatModel } from './settings-defaults'
 
 /** Até 200 mensagens por conversa; acima disso as mais antigas saem. */
@@ -79,7 +82,7 @@ export interface ChatMeta {
   consulted: string[]
 }
 
-/** Escopo da conversa da tela "Perguntar": todas, últimos 7 ou 30 dias, ou as reuniões escolhidas. */
+/** Escopo da conversa da tela "Assistente": todas, últimos 7 ou 30 dias, ou as reuniões escolhidas. */
 export const CHAT_SCOPE_KINDS = ['all', '7d', '30d', 'meetings'] as const
 export type ChatScopeKind = (typeof CHAT_SCOPE_KINDS)[number]
 
@@ -91,6 +94,32 @@ export interface ChatScope {
   whatsappChats?: string[] | undefined
   /** Últimos N dias dessas conversas (7, 30 ou 90; padrão 30). */
   whatsappDays?: number | undefined
+  /**
+   * Contrato 25 (CA2): como o WhatsApp entra. `recent` (padrão sem conversas escolhidas): as conversas com mensagem
+   * nos últimos 14 dias; `chosen` ("Só estas conversas"): só as de `whatsappChats`. Com conversas escolhidas e sem o
+   * campo (conversa do contrato 24), vale `chosen`.
+   */
+  whatsappMode?: ChatWhatsAppMode | undefined
+  /** Contrato 25 (CA2): fontes desligadas no painel "Contexto". Ausente = ligada. */
+  sources?: Partial<ChatSources> | undefined
+}
+
+export const CHAT_WHATSAPP_MODES = ['recent', 'chosen'] as const
+export type ChatWhatsAppMode = (typeof CHAT_WHATSAPP_MODES)[number]
+
+/** Fontes do Assistente com interruptor (o estado atual vai sempre). */
+export const CHAT_SOURCE_KINDS = ['whatsapp', 'automations', 'guide'] as const
+export type ChatSourceKind = (typeof CHAT_SOURCE_KINDS)[number]
+export type ChatSources = Record<ChatSourceKind, boolean>
+
+/** As fontes de um escopo, com o padrão (todas ligadas). */
+export function chatSourcesOf(scope: Pick<ChatScope, 'sources'>): ChatSources {
+  return { whatsapp: scope.sources?.whatsapp !== false, automations: scope.sources?.automations !== false, guide: scope.sources?.guide !== false }
+}
+
+/** Como o WhatsApp entra no escopo: o escolhido, ou `chosen` quando há conversas escolhidas. */
+export function chatWhatsAppModeOf(scope: Pick<ChatScope, 'whatsappMode' | 'whatsappChats'>): ChatWhatsAppMode {
+  return scope.whatsappMode ?? (scope.whatsappChats?.length ? 'chosen' : 'recent')
 }
 
 export const DEFAULT_CHAT_SCOPE: ChatScope = { kind: 'all' }
@@ -122,11 +151,16 @@ export interface ChatMessage {
   meta?: ChatMeta | undefined
   /** Modelo pedido (`--model`) quando a mensagem foi feita. */
   model?: ChatModel | undefined
+  /**
+   * Contrato 25 (CA3): ações propostas pelo Assistente no fim da resposta, já validadas no main, com o estado de
+   * cada cartão. Só as respostas do Assistente têm; as conversas criadas por uma automação nunca têm.
+   */
+  actions?: ChatAction[] | undefined
 }
 
 export interface Chat {
   id: string
-  /** Conversa da aba "Perguntar" de uma reunião; `null` na tela "Perguntar" (todas as reuniões). */
+  /** Conversa da aba "Assistente" de uma reunião; `null` na tela "Assistente" (todas as reuniões). */
   meetingId: string | null
   title: string
   /** ISO 8601. */

@@ -1,4 +1,4 @@
-// Chat "Perguntar" no renderer (contrato 15): as conversas abertas, as listas e a resposta que está sendo
+// Chat do "Assistente" no renderer (contratos 15 e 25): as conversas abertas, as listas e a resposta que está sendo
 // escrita. A conversa mora no main; aqui fica a cópia do que ele devolveu e o que chega por
 // `scribe:chat-event`. O store continua vivo fora da tela: a resposta que termina enquanto a pessoa está em
 // outra tela já aparece pronta quando ela volta.
@@ -9,7 +9,11 @@
 //
 // Contrato 17: pelo ACP o mesmo passo volta com estado novo (troca no lugar, pelo id), o "Plano" chega
 // inteiro a cada mudança e a conversa guarda "Pensar mais".
+//
+// Contrato 25: os cartões de ação da resposta ("Criar lembrete", "Descartar", "Enviada") passam pelo main, que
+// devolve a conversa gravada com o estado novo do cartão.
 import { create } from 'zustand'
+import type { ChatActionRef, ChatActionResult, ChatActionStateRequest } from '@shared/assistant'
 import {
   DEFAULT_CHAT_SCOPE,
   type Chat,
@@ -24,7 +28,7 @@ import {
 import type { ChatModel } from '@shared/settings-defaults'
 import { rereadWhenUnlocked } from '../../app/lockStore'
 
-/** Chave da lista: `all` na tela "Perguntar", o id da reunião na aba do detalhe. */
+/** Chave da lista: `all` na tela "Assistente", o id da reunião na aba do detalhe. */
 export const listKey = (meetingId: string | null): string => meetingId ?? 'all'
 /** Chave da conversa na tela: o id, ou `new:<lista>` antes de ela existir. */
 export const viewKey = (chatId: string | null, meetingId: string | null): string => chatId ?? `new:${listKey(meetingId)}`
@@ -70,7 +74,7 @@ interface ChatState {
   sending: Record<string, string>
   /** "Refazer" indo ao main: a tela tira a resposta antiga até a conversa nova voltar. */
   redoing: Record<string, true>
-  /** Conversa escolhida na tela "Perguntar" e em cada aba de reunião (`null` = nova conversa). */
+  /** Conversa escolhida na tela "Assistente" e em cada aba de reunião (`null` = nova conversa). */
   selected: Record<string, string | null>
   /** Falha de envio ou de leitura, por `viewKey`. */
   failures: Record<string, string>
@@ -90,6 +94,10 @@ interface ChatState {
   redo: (id: string, text?: string) => Promise<boolean>
   /** "Copiar" a mensagem `index` da conversa. */
   copy: (id: string, index: number) => Promise<boolean>
+  /** Contrato 25: "Criar lembrete" num cartão (com a data e o texto do "Editar", quando mudaram). */
+  createReminder: (ref: ChatActionRef, edit?: { at?: string; text?: string }) => Promise<ChatActionResult>
+  /** Contrato 25: "Descartar", "Enviada" (depois do envio do WhatsApp) e "Tarefa criada". */
+  setActionState: (ref: ChatActionRef, state: ChatActionStateRequest['state'], text?: string) => Promise<ChatActionResult>
 }
 
 let listening = false
@@ -166,6 +174,9 @@ export const useChat = create<ChatState>()((set, get) => {
     })
     return chat.id
   }
+
+  /** A conversa que o main gravou com o estado novo de um cartão. */
+  const keepChat = (chat: Chat): void => set((state) => ({ chats: { ...state.chats, [chat.id]: chat } }))
 
   return {
     claude: 'checking',
@@ -318,6 +329,26 @@ export const useChat = create<ChatState>()((set, get) => {
         return await window.__scribeApi.invoke('scribe:chat-copy', { id, index })
       } catch {
         return false
+      }
+    },
+
+    createReminder: async (ref, edit = {}) => {
+      try {
+        const result = await window.__scribeApi.invoke('scribe:chat-action-reminder', { ...ref, ...(edit.at ? { at: edit.at } : {}), ...(edit.text !== undefined ? { text: edit.text } : {}) })
+        if (result.ok) keepChat(result.chat)
+        return result
+      } catch {
+        return { ok: false, error: 'invalid' }
+      }
+    },
+
+    setActionState: async (ref, state, text) => {
+      try {
+        const result = await window.__scribeApi.invoke('scribe:chat-action-state', { ...ref, state, ...(text !== undefined ? { text } : {}) })
+        if (result.ok) keepChat(result.chat)
+        return result
+      } catch {
+        return { ok: false, error: 'invalid' }
       }
     },
   }

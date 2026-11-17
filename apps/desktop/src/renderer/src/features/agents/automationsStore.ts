@@ -3,6 +3,7 @@
 // `scribe:automation-event`). O agendador mora no main: aqui só fica a cópia para a tela. O store continua vivo
 // fora da tela: uma execução que termina com a pessoa em outra tela aparece pronta quando ela volta.
 import { create } from 'zustand'
+import type { ChatActionRef } from '@shared/assistant'
 import {
   EMPTY_AUTOMATIONS_STATUS,
   type Agent,
@@ -13,6 +14,7 @@ import {
   type AutomationsStatus,
   type RunStartResult,
   type ScheduledTask,
+  type TaskInput,
 } from '@shared/automations'
 import { rereadWhenUnlocked } from '../../app/lockStore'
 import { emptyAnswer, upsertStep, type LiveAnswer } from '../chat/chatStore'
@@ -38,6 +40,14 @@ interface AutomationsState {
   tab: AutomationsTab
   /** Execução aberta na aba "Execuções" (`null`: a lista). */
   openRunId: string | null
+  /**
+   * Contrato 25: "Criar tarefa" num cartão do Assistente. A aba "Tarefas agendadas" abre o formulário com isto
+   * preenchido; salvar marca o cartão (`origin`) como "Tarefa criada".
+   */
+  taskDraft: { input: TaskInput; origin: ChatActionRef } | null
+  openTaskDraft: (input: TaskInput, origin: ChatActionRef) => void
+  /** O formulário pegou o rascunho (uma vez só). */
+  takeTaskDraft: () => { input: TaskInput; origin: ChatActionRef } | null
   load: () => Promise<void>
   setTab: (tab: AutomationsTab) => void
   openRun: (id: string | null) => void
@@ -98,7 +108,7 @@ function listen(): void {
 let loading: Promise<void> | null = null
 let again = false
 
-export const useAutomations = create<AutomationsState>()((set) => ({
+export const useAutomations = create<AutomationsState>()((set, get) => ({
   loaded: false,
   failure: null,
   agents: [],
@@ -112,6 +122,7 @@ export const useAutomations = create<AutomationsState>()((set) => ({
   finished: {},
   tab: 'agentes',
   openRunId: null,
+  taskDraft: null,
 
   load: async () => {
     listen()
@@ -143,6 +154,14 @@ export const useAutomations = create<AutomationsState>()((set) => ({
   setTab: (tab) => set({ tab }),
 
   openRun: (id) => set({ openRunId: id, ...(id ? { tab: 'execucoes' as const } : {}) }),
+
+  openTaskDraft: (input, origin) => set({ taskDraft: { input, origin }, tab: 'tarefas' }),
+
+  takeTaskDraft: () => {
+    const draft = get().taskDraft
+    if (draft) set({ taskDraft: null })
+    return draft
+  },
 
   saveAgent: async (input) => {
     const result = await window.__scribeApi.invoke('scribe:agents-save', input)

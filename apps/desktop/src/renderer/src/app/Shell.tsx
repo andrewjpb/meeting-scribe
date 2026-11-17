@@ -1,5 +1,5 @@
 import { Route, Routes, useLocation } from 'react-router'
-import { APP_ROUTES, routeIdOf } from './routes'
+import { APP_ROUTES, redirectElement, REDIRECTS, routeIdOf } from './routes'
 import { Sidebar } from './Sidebar'
 import { useMainNavigation } from './useMainNavigation'
 import { useWhatsAppSync } from '../features/whatsapp/whatsappStore'
@@ -26,6 +26,9 @@ export function Shell() {
           <Routes location={location}>
             {APP_ROUTES.map((route) => (
               <Route key={route.id} path={route.path} element={route.element} />
+            ))}
+            {REDIRECTS.map((redirect) => (
+              <Route key={redirect.from} path={redirect.from} element={redirectElement(redirect.to)} />
             ))}
           </Routes>
         </div>

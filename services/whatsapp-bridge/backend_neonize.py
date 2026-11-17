@@ -62,6 +62,8 @@ class NeonizeBackend:
         self.names = {}
         self.thread = None
         self.contacts = {}
+        # Contrato 25: o número das conversas `@lid` (o cartão do Assistente mostra o número, não só o nome).
+        self.phones = {}
         self.timers = []
 
     def start(self, bridge):
@@ -211,6 +213,26 @@ class NeonizeBackend:
         except Exception:  # noqa: BLE001
             return ''
         return ''
+
+    def phone_for(self, chat_id):
+        """Número de uma conversa `@lid` (`+5511…`), pelo `get_pn_from_lid`; vazio quando o WhatsApp não diz."""
+        if chat_id in self.phones:
+            return self.phones[chat_id]
+        user, _, server = chat_id.partition('@')
+        if server != 'lid' or self.client is None:
+            return ''
+        phone = ''
+        try:
+            from neonize.utils import build_jid
+
+            found = self.client.get_pn_from_lid(build_jid(user, server))
+            digits = getattr(found, 'User', '') or ''
+            phone = f'+{digits}' if digits.isdigit() else ''
+        except Exception:  # noqa: BLE001
+            phone = ''
+        if phone:
+            self.phones[chat_id] = phone
+        return phone
 
     def chat_name(self, chat_id, chat_jid, group, fallback):
         """Nome da conversa para a mensagem: o achado (guardado) ou o que veio na mensagem; `None` se nenhum."""

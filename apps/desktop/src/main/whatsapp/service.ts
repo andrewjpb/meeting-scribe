@@ -35,7 +35,7 @@ import {
   type WhatsAppStatus,
 } from '../../shared/whatsapp'
 import { createBridgeClient, probeInstance, WhatsAppServiceError, type BridgeClient, type WhatsAppHealth } from './client'
-import { dayLines, exportChats } from './export'
+import { dayLines, exportChats, exportRecentWith, type ExportCache } from './export'
 import { draftInput } from './draft'
 import { copyBridge, installBridge, isInstalled, removeBridge, WHATSAPP_PATHS, type Exec, type PackageIndex } from './install'
 import { killBridgePid, startBridge, type BridgeBackend, type BridgeProcess, type SpawnBridge } from './process'
@@ -135,6 +135,13 @@ export interface WhatsAppService {
   setLink(request: unknown): Promise<WhatsAppMeetingLink | null>
   /** "Perguntar" (CA5): escreve os `.md` das conversas na pasta de escopo. Só leitura do serviço. */
   exportChats(folder: string, chatIds: readonly string[], days: number): Promise<string[]>
+  /**
+   * Assistente (contrato 25, CA2): as conversas dos últimos 14 dias e o resumo delas, relendo só as que têm mensagem
+   * nova desde o último export daquela pasta. Só leitura; conectado.
+   */
+  exportRecent(folder: string): Promise<string[]>
+  /** A lista de conversas lida pela última exportação (até 2 min), ou lida agora: o nome nos cartões do Assistente. */
+  knownChats(): Promise<WhatsAppChat[]>
   /** Resumo e análise: as mensagens do dia da conversa ligada, se a opção estiver ligada. */
   meetingMaterial(meetingId: string): Promise<string[]>
   /** Excluir a reunião: a ligação sai. */
@@ -144,6 +151,9 @@ export interface WhatsAppService {
   /** Sair do app: para o processo filho. */
   dispose(): Promise<void>
 }
+
+/** A lista lida na exportação vale para os cartões por 2 min. */
+const KNOWN_CHATS_MS = 2 * 60_000
 
 async function writeAtomic(file: string, content: string): Promise<void> {
   const temp = `${file}.tmp-${process.pid}-${randomUUID()}`
@@ -165,6 +175,9 @@ export function createWhatsAppService(deps: WhatsAppServiceDeps): WhatsAppServic
   let client: BridgeClient | null = null
   let closeEvents: (() => void) | null = null
   let health: WhatsAppHealth | null = null
+  /** Contrato 25: o que cada pasta do Assistente já tem exportado, e a última lista de conversas lida. */
+  const exportCache: ExportCache = new Map()
+  let listRead: { at: number; chats: WhatsAppChat[] } | null = null
   let busy: WhatsAppStatus['busy'] = null
   let error: WhatsAppError | null = null
   let progress: string | null = null
@@ -582,7 +595,21 @@ export function createWhatsAppService(deps: WhatsAppServiceDeps): WhatsAppServic
     async exportChats(folder, chatIds, days) {
       if (!client) return []
       const ids = chatIds.filter((id) => chatIdSchema.safeParse(id).success).slice(0, WHATSAPP_SCOPE_CHATS_MAX)
-      return exportChats(client, folder, ids, days, now())
+      const list = await client.chats()
+      listRead = { at: now(), chats: list }
+      return exportChats(client, folder, ids, days, now(), exportCache, list)
+    },
+
+    async exportRecent(folder) {
+      if (!client || health?.state !== 'connected') return []
+      const result = await exportRecentWith(client, folder, now(), exportCache)
+      listRead = { at: now(), chats: result.chats }
+      return result.files
+    },
+
+    async knownChats() {
+      if (listRead && now() - listRead.at < KNOWN_CHATS_MS) return listRead.chats
+      return this.chats()
     },
 
     async meetingMaterial(meetingId) {

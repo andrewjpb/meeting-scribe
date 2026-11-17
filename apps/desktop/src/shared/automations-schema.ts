@@ -33,6 +33,7 @@ import {
   type ScheduledTask,
   type TaskInput,
 } from './automations'
+import { REMINDER_TEXT_MAX } from './assistant'
 import { CHAT_SCOPE_MEETINGS_MAX, CHAT_TEXT_MAX } from './chat'
 import { AGENT_PROFILES } from './settings-defaults'
 
@@ -122,11 +123,29 @@ const taskFields = {
   output: agentOutputSchema.nullable(),
 }
 
+/**
+ * Id da conversa do lembrete, no formato de `WHATSAPP_CHAT_ID_PATTERN` (repetido aqui: as automações não importam
+ * nada do WhatsApp; o teste do contrato 25 confere que os dois são o mesmo).
+ */
+export const REMINDER_CHAT_ID_PATTERN = /^[\w.+:-]{1,120}@[\w.-]{1,60}$/
+
+/** Contrato 25: o lembrete do Assistente (tarefa sem agente). Só guarda o id e o nome da conversa para o "Abrir". */
+export const taskReminderSchema = z
+  .object({
+    text: z.string().trim().min(1).max(REMINDER_TEXT_MAX),
+    whatsappChatId: z.string().regex(REMINDER_CHAT_ID_PATTERN).nullable(),
+    whatsappChatName: z.string().max(200).nullable(),
+  })
+  .strict()
+
 export const taskInputSchema = z.object({ id: automationIdSchema.nullable(), ...taskFields }).strict()
 export const taskSchema = z
   .object({
     id: automationIdSchema,
     ...taskFields,
+    // O lembrete (contrato 25) não tem agente: `agentId` vazio.
+    agentId: z.union([automationIdSchema, z.literal('')]),
+    reminder: taskReminderSchema.nullable().default(null),
     lastRunAt: isoDate.nullable(),
     nextRunAt: isoDate.nullable(),
     lastStatus: z.enum(RUN_STATUSES).nullable(),

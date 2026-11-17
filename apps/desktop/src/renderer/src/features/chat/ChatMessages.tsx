@@ -1,6 +1,7 @@
 import { Check, ChevronDown, ChevronRight, Copy, Download, FileText, FolderSearch, ListTree, RotateCcw, Search, ShieldOff, Square, SquareCheck, SquareDot, Terminal, type LucideIcon } from 'lucide-react'
 import { useState } from 'react'
 import { useNavigate } from 'react-router'
+import { withoutPendingActions } from '@shared/assistant'
 import { chatErrorText, type ChatMessage, type ChatMeta, type ChatPlanEntry, type ChatStep, type ChatStepStatus } from '@shared/chat'
 import { acpReady } from '@shared/acp'
 import { useAcp } from '../../app/acpStore'
@@ -9,6 +10,7 @@ import { useSettings } from '../../app/settingsStore'
 import { meetingPath } from '@shared/routes'
 import { Icon } from '../../design/Icon'
 import { dayLabel, timeLabel } from '../meetings/format'
+import { ActionCards } from './ActionCards'
 import type { LiveAnswer } from './chatStore'
 import { ChatMarkdown } from './ChatMarkdown'
 import { answerTimeLabel, answerTokens, consultedLabel, COST_HINT, costLabel, modelLabel, tokensLabel } from './format'
@@ -233,10 +235,13 @@ interface AssistantMessageProps {
   /** "Copiar" (sempre) e "Refazer"/"Tentar de novo" (só na última resposta, fora de uma resposta em curso). */
   onCopy: () => Promise<boolean>
   onRedo: (() => void) | null
+  /** Contrato 25: a conversa e a posição desta resposta, para os cartões de ação. */
+  chatId?: string | null | undefined
+  index?: number | undefined
 }
 
 /** Resposta gravada: cabeçalho, raciocínio e passos (fechado), o texto, o erro, o rodapé e as ações. */
-export function AssistantMessage({ message, meetings, onCopy, onRedo }: AssistantMessageProps) {
+export function AssistantMessage({ message, meetings, onCopy, onRedo, chatId = null, index }: AssistantMessageProps) {
   const agentLabel = useAgentLabel()
   const [copied, setCopied] = useState(false)
   const copy = (): void => {
@@ -255,6 +260,7 @@ export function AssistantMessage({ message, meetings, onCopy, onRedo }: Assistan
           <ChatMarkdown text={message.text} />
         </div>
       )}
+      {message.actions && message.actions.length > 0 && chatId && index !== undefined && <ActionCards chatId={chatId} index={index} actions={message.actions} />}
       {message.error && <p className="text-13 text-text-muted">{chatErrorText(message.error, agentLabel)}</p>}
       {(message.error === 'agent' || message.error === 'agent-missing') && <AgentActions missing={message.error === 'agent-missing'} />}
       <AnswerFooter meta={message.meta} model={message.model} meetings={meetings} />
@@ -282,13 +288,15 @@ export function AssistantMessage({ message, meetings, onCopy, onRedo }: Assistan
  */
 export function LiveAssistantMessage({ answer }: { answer: LiveAnswer }) {
   const status = answer.steps.at(-1)?.label ?? 'Pensando…'
+  // Contrato 25: o bloco de ação ainda sendo escrito não aparece; vira cartão quando a resposta termina.
+  const text = withoutPendingActions(answer.text)
   return (
     <li data-chat-message="assistant" data-chat-streaming="" className="flex flex-col gap-2">
       <AssistantHeader at="" />
       <Reasoning steps={answer.steps} thinking={answer.thinking} denied={answer.denied} plan={answer.plan} live />
-      {answer.text ? (
+      {text ? (
         <div className="max-w-[72ch] text-15 text-text">
-          <ChatMarkdown text={answer.text} />
+          <ChatMarkdown text={text} />
         </div>
       ) : (
         <p role="status" data-chat-status className="flex items-center gap-2 text-13 text-text-muted">

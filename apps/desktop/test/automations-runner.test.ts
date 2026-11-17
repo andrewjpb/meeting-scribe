@@ -208,10 +208,10 @@ describe('saídas (contrato 23, CA6)', () => {
     }
   }
 
-  it('chat: conversa nova no "Perguntar" com o pedido e a resposta, marcada "Tarefa: <nome>"', async () => {
+  it('chat: conversa nova no "Assistente" com o pedido e a resposta, marcada "Tarefa: <nome>"', async () => {
     const saved: Chat[] = []
     const text = await applyOutput(deps(saved, new Map()), { output: { kind: 'chat' }, title: 'Tarefa: Sexta', folderName: 'Sexta', agent, prompt: 'Agora…\n\nResuma.', answer, meetingId: null })
-    expect(text).toBe('Conversa criada em Perguntar')
+    expect(text).toBe('Conversa criada no Assistente')
     expect(saved[0]).toMatchObject({ title: 'Tarefa: Sexta', meetingId: null, scope: { kind: '7d' }, model: 'sonnet', messages: [{ role: 'user', text: 'Agora…\n\nResuma.' }, answer] })
   })
 

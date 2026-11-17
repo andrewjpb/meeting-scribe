@@ -7,6 +7,8 @@
 // Configurações).
 // Contrato 17: cada passo pode ter o id e o estado da chamada de ferramenta do ACP; a resposta guarda o
 // "Plano" do agente; a conversa guarda "Pensar mais" (padrão desligado).
+// Contrato 25: o escopo guarda as fontes desligadas e o modo do WhatsApp; a resposta guarda as ações propostas
+// com o estado de cada cartão. Arquivo sem esses campos carrega com tudo ligado e sem cartões.
 import { randomUUID } from 'node:crypto'
 import { chmod, mkdir, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -19,6 +21,7 @@ import {
   CHAT_PLAN_TEXT_MAX,
   CHAT_SCOPE_KINDS,
   CHAT_SCOPE_MEETINGS_MAX,
+  CHAT_SOURCE_KINDS,
   CHAT_STEP_LABEL_MAX,
   CHAT_STEP_STATUSES,
   CHAT_STEP_TOOLS,
@@ -26,12 +29,16 @@ import {
   CHAT_TEXT_MAX,
   CHAT_THINKING_MAX,
   CHAT_TITLE_MAX,
+  CHAT_WHATSAPP_MODES,
+  chatWhatsAppModeOf,
   type Chat,
   type ChatListItem,
   type ChatScope,
 } from '../../shared/chat'
+import { ACTIONS_PER_MESSAGE_MAX, CHAT_ACTION_STATUSES, OPEN_SCREENS, REMINDER_TEXT_MAX } from '../../shared/assistant'
+import { scheduleSchema } from '../../shared/automations-schema'
 import { CHAT_MODELS } from '../../shared/settings-defaults'
-import { WHATSAPP_CHAT_ID_PATTERN, WHATSAPP_DEFAULT_SCOPE_DAYS, WHATSAPP_SCOPE_CHATS_MAX, WHATSAPP_SCOPE_DAYS } from '../../shared/whatsapp'
+import { WHATSAPP_CHAT_ID_PATTERN, WHATSAPP_DEFAULT_SCOPE_DAYS, WHATSAPP_SCOPE_CHATS_MAX, WHATSAPP_SCOPE_DAYS, WHATSAPP_SEND_TEXT_MAX } from '../../shared/whatsapp'
 
 export const CHATS_DIR = 'chats'
 
@@ -76,14 +83,76 @@ export const chatScopeSchema = z
       .int()
       .refine((days) => (WHATSAPP_SCOPE_DAYS as readonly number[]).includes(days))
       .optional(),
+    // Contrato 25: o modo do WhatsApp e as fontes desligadas.
+    whatsappMode: z.enum(CHAT_WHATSAPP_MODES).optional(),
+    sources: z.partialRecord(z.enum(CHAT_SOURCE_KINDS), z.boolean()).optional(),
   })
   .strict()
-  // Só "Reuniões escolhidas" leva a lista; as conversas do WhatsApp vão em qualquer escopo.
+  // Só "Reuniões escolhidas" leva a lista; as conversas do WhatsApp vão em qualquer escopo. "Só estas conversas"
+  // sem nenhuma escolhida guarda o modo; com conversas, o modo fica implícito (como no contrato 24). Das fontes,
+  // só as desligadas ficam.
   .transform((scope): ChatScope => {
     const base: ChatScope = scope.kind === 'meetings' ? { kind: scope.kind, meetingIds: [...new Set(scope.meetingIds ?? [])] } : { kind: scope.kind }
     const chats = [...new Set(scope.whatsappChats ?? [])]
-    return chats.length ? { ...base, whatsappChats: chats, whatsappDays: scope.whatsappDays ?? WHATSAPP_DEFAULT_SCOPE_DAYS } : base
+    const mode = chatWhatsAppModeOf({ whatsappMode: scope.whatsappMode, whatsappChats: chats })
+    const days = scope.whatsappDays ?? WHATSAPP_DEFAULT_SCOPE_DAYS
+    const whatsapp: Partial<ChatScope> = mode === 'recent' ? {} : chats.length ? { whatsappChats: chats, whatsappDays: days } : { whatsappMode: 'chosen', whatsappDays: days }
+    const off = CHAT_SOURCE_KINDS.filter((kind) => scope.sources?.[kind] === false)
+    return { ...base, ...whatsapp, ...(off.length ? { sources: Object.fromEntries(off.map((kind) => [kind, false])) } : {}) }
   })
+
+const actionBase = {
+  id: z.string().regex(/^[\w-]{1,40}$/),
+  status: z.enum(CHAT_ACTION_STATUSES),
+  result: z.string().max(200).nullable(),
+}
+const chatIdOfWhatsApp = z.string().regex(WHATSAPP_CHAT_ID_PATTERN)
+
+/** Ação proposta gravada com a resposta (contrato 25), já validada e com o que o app leu (nomes, número). */
+export const chatActionSchema = z.discriminatedUnion('kind', [
+  z
+    .object({
+      kind: z.literal('lembrete'),
+      ...actionBase,
+      at: isoDate,
+      text: z.string().max(REMINDER_TEXT_MAX),
+      whatsappChatId: chatIdOfWhatsApp.nullable(),
+      whatsappChatName: z.string().max(200).nullable(),
+      defaultTime: z.boolean(),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal('whatsapp-resposta'),
+      ...actionBase,
+      chatId: chatIdOfWhatsApp,
+      chatName: z.string().max(200),
+      phone: z.string().max(40).nullable(),
+      group: z.boolean(),
+      text: z.string().max(WHATSAPP_SEND_TEXT_MAX),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal('tarefa'),
+      ...actionBase,
+      name: z.string().max(200),
+      agentId: z.string().regex(/^[\w-]{1,100}$/),
+      agentName: z.string().max(200),
+      message: z.string().max(CHAT_TEXT_MAX),
+      schedule: scheduleSchema,
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal('abrir'),
+      ...actionBase,
+      screen: z.enum(OPEN_SCREENS),
+      target: z.string().max(200).nullable(),
+      label: z.string().max(300),
+    })
+    .strict(),
+])
 
 const messageSchema = z.object({
   role: z.enum(['user', 'assistant']),
@@ -96,6 +165,7 @@ const messageSchema = z.object({
   plan: z.array(chatPlanEntrySchema).max(CHAT_PLAN_MAX).optional(),
   meta: chatMetaSchema.optional(),
   model: z.enum(CHAT_MODELS).optional(),
+  actions: z.array(chatActionSchema).max(ACTIONS_PER_MESSAGE_MAX).optional(),
 })
 
 export const chatSchema = z.object({

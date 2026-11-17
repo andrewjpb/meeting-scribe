@@ -1,9 +1,9 @@
 // Tabela de rotas. Rota nova: id em shared/routes.ts, linha aqui; com `nav`, aparece na barra lateral.
 import type { LucideIcon } from 'lucide-react'
-import { Bot, MessageCircle, NotebookText, Settings, Smartphone } from 'lucide-react'
+import { Bot, NotebookText, Settings, Smartphone, Sparkles } from 'lucide-react'
 import type { ReactElement } from 'react'
-import { matchPath } from 'react-router'
-import { ROUTE_PATHS, SETTINGS_ROUTE_PATTERN, type RouteId } from '@shared/routes'
+import { matchPath, Navigate } from 'react-router'
+import { ROUTE_PATHS, ROUTE_REDIRECTS, SETTINGS_ROUTE_PATTERN, type RouteId } from '@shared/routes'
 import { AutomationsScreen } from '../features/agents/AutomationsScreen'
 import { ChatScreen } from '../features/chat/ChatScreen'
 import { LiveScreen } from '../features/live/LiveScreen'
@@ -21,8 +21,9 @@ export interface AppRoute {
 
 export const APP_ROUTES: AppRoute[] = [
   { id: 'reunioes', path: ROUTE_PATHS.reunioes, element: <MeetingsScreen />, nav: { label: 'Reuniões', icon: NotebookText } },
-  { id: 'perguntar', path: ROUTE_PATHS.perguntar, element: <ChatScreen />, nav: { label: 'Perguntar', icon: MessageCircle } },
-  // Contrato 23: agentes, tarefas agendadas e execuções, logo abaixo de "Perguntar".
+  // Contrato 25: "Perguntar" virou "Assistente".
+  { id: 'assistente', path: ROUTE_PATHS.assistente, element: <ChatScreen />, nav: { label: 'Assistente', icon: Sparkles } },
+  // Contrato 23: agentes, tarefas agendadas e execuções, logo abaixo do "Assistente".
   { id: 'automacoes', path: ROUTE_PATHS.automacoes, element: <AutomationsScreen />, nav: { label: 'Automações', icon: Bot } },
   // Contrato 24: só aparece na barra lateral com o serviço do WhatsApp instalado (`Sidebar`).
   { id: 'whatsapp', path: ROUTE_PATHS.whatsapp, element: <WhatsAppScreen />, nav: { label: 'WhatsApp', icon: Smartphone } },
@@ -36,6 +37,10 @@ export const APP_ROUTES: AppRoute[] = [
     nav: { label: 'Configurações', icon: Settings },
   },
 ]
+
+/** Caminhos antigos que levam a uma rota de hoje: `/perguntar` abre o Assistente (contrato 25). */
+export const REDIRECTS = ROUTE_REDIRECTS
+export const redirectElement = (to: string): ReactElement => <Navigate to={to} replace />
 
 export function routeIdOf(pathname: string): RouteId | null {
   return APP_ROUTES.find((route) => matchPath(route.path, pathname))?.id ?? null

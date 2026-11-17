@@ -2,7 +2,7 @@
 
 **Suas reuniões, transcritas, traduzidas e entendidas — com a IA que você escolher, rodando no seu Mac.**
 
-LAP Reuniões é um app de desktop para macOS que escuta a reunião (o seu microfone e o som do Zoom, Meet, Teams ou qualquer outro app), mostra a transcrição ao vivo, traduz enquanto as pessoas falam e, no fim, entrega resumo, decisões, tarefas com responsável e um chat para perguntar qualquer coisa sobre o que foi dito. Sem bot entrando na chamada, sem driver de áudio virtual, sem mexer no app da reunião.
+LAP Reuniões é um app de desktop para macOS que escuta a reunião (o seu microfone e o som do Zoom, Meet, Teams ou qualquer outro app), mostra a transcrição ao vivo, traduz enquanto as pessoas falam e, no fim, entrega resumo, decisões, tarefas com responsável e um **Assistente** para perguntar qualquer coisa sobre o que foi dito (e pedir lembretes e respostas, que só saem com o seu clique). Sem bot entrando na chamada, sem driver de áudio virtual, sem mexer no app da reunião.
 
 ![Gravação ao vivo com a análise "Perguntas em aberto"](docs/images/gravacao-analise-light.png)
 
@@ -16,7 +16,7 @@ O app não prende você a um fornecedor. Cada parte do trabalho usa um motor que
 |---|---|---|
 | Transcrição ao vivo | AssemblyAI (streaming v3) | sua própria chave da AssemblyAI |
 | Tradução ao vivo | 60+ modelos do LLM Gateway da AssemblyAI **ou** o Claude | Configurações › Claude › "Traduzir com" e o seletor de modelo |
-| Resumo, análise e chat | Claude — Haiku, Sonnet ou Opus | Configurações › Claude, e por conversa no "Perguntar" |
+| Resumo, análise e Assistente | Claude — Haiku, Sonnet ou Opus | Configurações › Claude, e por conversa no "Assistente" |
 | Como o app fala com a IA | **Agente via ACP** (recomendado) ou linha de comando | Configurações › Claude › "Conexão com o Claude" |
 
 **ACP (Agent Client Protocol)** é um protocolo aberto para apps conversarem com agentes de IA. O LAP Reuniões é um cliente ACP: ele abre o agente, entrega a pasta das reuniões e recebe de volta a resposta, o raciocínio, os passos e o plano — tudo pelo protocolo. Como o protocolo é o mesmo para vários agentes, o app foi feito com **perfis de agente**: hoje existe o do **Claude**; **Gemini CLI** e **Codex** entram como novos perfis, sem mudar o resto do app *(em breve)*.
@@ -40,22 +40,27 @@ Você usa a **sua** conta e o **seu** `claude` instalado. O app não tem servido
 
 ### Depois da reunião
 - **Resumo automático**: o que aconteceu, decisões, tarefas com quem faz e prazo, e as perguntas que ficaram em aberto.
-- Abas **Resumo · Anotações · Transcrição · Áudio · Perguntar** em cada reunião.
+- Abas **Resumo · Anotações · Assistente · Transcrição · Áudio** em cada reunião.
 - Lista de reuniões **por dia**, com prévia do resumo, contagem de tarefas e **busca** sem acento nem maiúscula em títulos, transcrições, resumos e anotações.
 
 ![Resumo com decisões e tarefas](docs/images/detalhe-resumo-light.png)
 
 ![Lista de reuniões agrupada por dia, com resumo e busca](docs/images/reunioes-lista-light.png)
 
-### Perguntar: um chat sobre todas as suas reuniões
-- Pergunte "O que ficou decidido esta semana?", "Quais tarefas são minhas?", "O que a Ana pediu?".
-- Você **vê o Claude pensar**: os passos ("Lendo o índice das reuniões", "Abrindo «Planejamento»", "Procurando "orçamento"") e o raciocínio aparecem enquanto ele trabalha.
-- Cada resposta cita a reunião de onde veio, com link, e mostra **modelo, tempo, tokens e custo**.
-- Painel **Contexto**: todas as reuniões, últimos 7 ou 30 dias, ou só as que você escolher; modelo por conversa; "Pensar mais".
+### Assistente: pergunte ou peça qualquer coisa
+A tela que antes se chamava "Perguntar".
+- Pergunte "O que ficou decidido esta semana?", "Quais tarefas são minhas?", "Tenho algo pendente para responder no WhatsApp?", "Como ligo o resumo automático?".
+- Além das reuniões, ele lê o **WhatsApp** (as conversas dos últimos 14 dias, com o que está pendente de resposta, ou só as que você escolher), as **Automações** (agentes, tarefas e as últimas execuções), o **guia do próprio app** e o estado atual (data, hora, contas). Cada fonte tem um interruptor no painel **Contexto**.
+- Peça ações na mesma tela: "me lembre amanhã de responder a Ana", "responda a Bia dizendo sim", "toda segunda, me mande o resumo da semana". O Assistente **propõe** um cartão (lembrete, resposta no WhatsApp com o texto editável, tarefa agendada ou um botão para abrir uma tela) e **nada acontece sem o seu clique**. Todo envio pelo WhatsApp ainda pede a confirmação do macOS. Os lembretes aparecem em Automações › Tarefas agendadas e chegam como notificação do macOS.
+- Você **vê o Claude pensar**: os passos ("Lendo o índice das reuniões", "Abrindo «Planejamento»", "Lendo as conversas do WhatsApp") e o raciocínio aparecem enquanto ele trabalha.
+- Cada resposta cita de onde veio cada coisa (a reunião com link, "[WhatsApp · Ana · 16/11 14:46]", "[Automações · Resumo da semana]", "[Guia]") e mostra **modelo, tempo, tokens e custo**.
+- Painel **Contexto**: todas as reuniões, últimos 7 ou 30 dias, ou só as que você escolher; as fontes; modelo por conversa; "Pensar mais".
 
-![Perguntar: raciocínio, passos e reuniões consultadas](docs/images/perguntar-v2-dark.png)
+![Assistente: pendências do WhatsApp e painel Contexto com as fontes](docs/images/assistente-contexto-light.png)
 
-![Painel de contexto com escopo e modelo](docs/images/perguntar-contexto-light.png)
+![Assistente propondo um lembrete: só cria com o seu clique](docs/images/assistente-lembrete-light.png)
+
+![Assistente propondo uma resposta no WhatsApp: o macOS pergunta antes de enviar](docs/images/assistente-whatsapp-light.png)
 
 ### Do seu jeito
 - **Configurações em abas** (Geral, Gravação, Claude, Arquivos, Contas, Sobre) com busca (⌘F).
@@ -74,7 +79,7 @@ Microfone ─┐                                   ┌─> transcrição ao vivo
            ├─> AssemblyAI (streaming) ─> texto ┤
 Som do Mac ┘   (Core Audio Tap, sem driver)    └─> tradução ao vivo (AssemblyAI ou Claude)
 
-Reuniões em Markdown no seu Mac ─> agente de IA via ACP ─> resumo · análise · chat
+Reuniões em Markdown no seu Mac ─> agente de IA via ACP ─> resumo · análise · Assistente
           (só leitura, presa à pasta)       (Claude hoje; Gemini/Codex em breve)
 ```
 
@@ -122,7 +127,7 @@ Depois disso, as versões novas chegam pelo próprio app.
 
 > Este recurso usa um cliente não oficial do WhatsApp (neonize/whatsmeow). O WhatsApp pode suspender ou bloquear o seu número, de forma temporária ou definitiva, sem aviso. A LAP não tem como desfazer um bloqueio. Use por sua conta e risco.
 
-Desligado por padrão. Em Configurações › Contas › WhatsApp, depois de aceitar o aviso, o app instala um serviço pequeno em Python neste Mac (precisa do Python 3.10 ou mais novo e da `libmagic`: `brew install python libmagic`), liga, mostra o aviso de novo e o QR code para conectar como um aparelho. A tela **WhatsApp** lista as conversas e mensagens; o **Perguntar** pode ler até 10 conversas junto com as reuniões; e o **Rascunho com o Claude** escreve uma resposta no campo. **Nenhuma mensagem sai sem o seu clique em "Enviar"**: o Claude e os agentes só leem e escrevem rascunhos. A sessão e as mensagens ficam só no Mac. Detalhes em [`services/whatsapp-bridge/`](services/whatsapp-bridge/README.md).
+Desligado por padrão. Em Configurações › Contas › WhatsApp, depois de aceitar o aviso, o app instala um serviço pequeno em Python neste Mac (precisa do Python 3.10 ou mais novo e da `libmagic`: `brew install python libmagic`), liga, mostra o aviso de novo e o QR code para conectar como um aparelho. A tela **WhatsApp** lista as conversas e mensagens; o **Assistente** lê as conversas recentes (ou só as que você escolher) junto com as reuniões e pode propor uma resposta num cartão; e o **Rascunho com o Claude** escreve uma resposta no campo. **Nenhuma mensagem sai sem o seu clique em "Enviar"** e a confirmação do macOS: o Claude e os agentes só leem, escrevem rascunhos e propõem. A sessão e as mensagens ficam só no Mac. Detalhes em [`services/whatsapp-bridge/`](services/whatsapp-bridge/README.md).
 
 ---
 

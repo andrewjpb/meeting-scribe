@@ -1,7 +1,7 @@
 import { Paperclip, Search, Sparkles, TriangleAlert, Users } from 'lucide-react'
 import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type UIEvent } from 'react'
-import { Link } from 'react-router'
-import { settingsPath } from '@shared/routes'
+import { Link, useLocation } from 'react-router'
+import { settingsPath, type WhatsAppNavigationState } from '@shared/routes'
 import type { Meeting } from '@shared/meetings'
 import { mediaLabel, WHATSAPP_DRAFT_INSTRUCTION_MAX, WHATSAPP_FIXED_WARNING, WHATSAPP_SEND_TEXT_MAX, type WhatsAppChat, type WhatsAppMessage, type WhatsAppSearchHit } from '@shared/whatsapp'
 import { Button } from '../../design/Button'
@@ -82,12 +82,14 @@ function MessageItem({ message }: { message: WhatsAppMessage }) {
 
 interface ConversationProps {
   chat: WhatsAppChat
+  /** Contrato 25: "Abrir no WhatsApp" do cartão do Assistente traz o texto para o campo (nada é enviado). */
+  initialText?: string | undefined
 }
 
 /** A conversa aberta: mensagens (mais antigas ao rolar para cima), o campo, "Enviar" e "Rascunho com o Claude". */
-function Conversation({ chat }: ConversationProps) {
+function Conversation({ chat, initialText }: ConversationProps) {
   const messages = useWhatsApp((state) => state.messages[chat.id])
-  const [text, setText] = useState('')
+  const [text, setText] = useState(initialText ?? '')
   const [sending, setSending] = useState(false)
   const [sendError, setSendError] = useState<string | null>(null)
   const [draftOpen, setDraftOpen] = useState(false)
@@ -316,7 +318,16 @@ function Conversation({ chat }: ConversationProps) {
 export function WhatsAppScreen() {
   const status = useWhatsApp((state) => state.status)
   const chats = useWhatsApp((state) => state.chats)
-  const [selected, setSelected] = useState<string | null>(null)
+  // Contrato 25: o cartão do Assistente e a notificação de um lembrete abrem uma conversa (com o texto no campo).
+  const location = useLocation()
+  const asked = (location.state ?? null) as WhatsAppNavigationState | null
+  const [selected, setSelected] = useState<string | null>(asked?.chatId ?? null)
+  // Já na tela, um pedido novo (outra navegação) troca a conversa aberta.
+  const [seenKey, setSeenKey] = useState(location.key)
+  if (seenKey !== location.key) {
+    setSeenKey(location.key)
+    if (asked?.chatId) setSelected(asked.chatId)
+  }
   const [query, setQuery] = useState('')
   const [hits, setHits] = useState<{ term: string; found: WhatsAppSearchHit[] } | null>(null)
   const connected = status?.state === 'connected'
@@ -431,7 +442,7 @@ export function WhatsAppScreen() {
             </div>
           </aside>
           {open ? (
-            <Conversation key={open.id} chat={open} />
+            <Conversation key={`${open.id}:${location.key}`} chat={open} initialText={asked?.chatId === open.id ? asked.text : undefined} />
           ) : (
             <div className="flex flex-1 items-center justify-center p-8">
               <p className="text-13 text-text-muted">Escolha uma conversa.</p>

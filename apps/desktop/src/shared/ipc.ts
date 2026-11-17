@@ -1,6 +1,7 @@
 // Contrato das mensagens entre main e renderer. Canal novo entra aqui primeiro: no mapa do
 // sentido certo e na lista de canais permitidos logo abaixo (o preload recusa o que não estiver nela).
 import type { AcpAgentStatus } from './acp'
+import type { ChatActionReminderRequest, ChatActionResult, ChatActionStateRequest } from './assistant'
 import type { AgentDeleteResult, AgentInput, AgentSaveResult, AgentsList, AutomationEvent, AutomationRun, AutomationRunListItem, AutomationsStatus, RunStartResult, RunStatus, ScheduledTask, TaskInput, TaskSaveResult } from './automations'
 import type { DriveMeetingStatus, GoogleAccountStatus, GoogleClientSaveResult } from './accounts'
 import type { BrandingInfo, BrandLogoChoice } from './branding'
@@ -155,7 +156,7 @@ export interface InvokeChannels {
   'scribe:update-download': { request: undefined; response: UpdateState }
   /** "Fechar o app agora", depois de abrir o `.dmg`. O renderer só oferece fora de uma gravação. */
   'scribe:update-quit': { request: undefined; response: boolean }
-  /** Chat "Perguntar" (contrato 15): conversas da tela (`meetingId: null`) ou da aba de uma reunião. */
+  /** Chat do "Assistente" (contratos 15 e 25): conversas da tela (`meetingId: null`) ou da aba de uma reunião. */
   'scribe:chat-list': { request: { meetingId: string | null }; response: ChatListItem[] }
   'scribe:chat-get': { request: { id: string }; response: Chat | null }
   /**
@@ -172,6 +173,16 @@ export interface InvokeChannels {
   'scribe:chat-redo': { request: ChatRedoRequest; response: ChatSendResult }
   /** "Copiar" uma resposta: o main escreve o texto dela na área de transferência. */
   'scribe:chat-copy': { request: { id: string; index: number }; response: boolean }
+  /**
+   * Assistente (contrato 25, CA3): "Criar lembrete" num cartão, com a data e o texto do "Editar". Cria a tarefa "uma
+   * vez" das Automações e grava o cartão como feito; cartão já usado devolve `done` (nada se repete).
+   */
+  'scribe:chat-action-reminder': { request: ChatActionReminderRequest; response: ChatActionResult }
+  /**
+   * O estado de um cartão depois do clique que não cria nada aqui: "Descartar"; "Enviar", depois que o envio passou
+   * pelo `scribe:whatsapp-send` (o único caminho de envio); e a tarefa salva no formulário das Automações.
+   */
+  'scribe:chat-action-state': { request: ChatActionStateRequest; response: ChatActionResult }
   /** Bloqueio do app (contrato 22): estado, sem nada da senha. */
   'scribe:lock-status': { request: undefined; response: LockStatus }
   /** "Bloquear" (barra lateral, barra da gravação, ⌘⇧L): só bloqueia se houver senha ou Touch ID. */
@@ -318,6 +329,8 @@ export interface MainEvents {
   'scribe:automations-changed': AutomationsStatus
   /** "Abrir" de uma notificação: a tela "Automações" com a execução aberta (`null`: só a tela). */
   'scribe:open-run': { runId: string | null }
+  /** "Abrir" da notificação de um lembrete do Assistente (contrato 25): a conversa do WhatsApp dele. */
+  'scribe:open-whatsapp': { chatId: string }
   /** "Encerrar" no menu do ícone da barra de menus: o renderer encerra a gravação em curso. */
   'scribe:recording-end': undefined
   /** Um agente acrescentou um post-it à reunião (contrato 23): o detalhe aberto relê as anotações. */
@@ -401,6 +414,8 @@ const INVOKE: Record<InvokeChannel, true> = {
   'scribe:chat-update': true,
   'scribe:chat-redo': true,
   'scribe:chat-copy': true,
+  'scribe:chat-action-reminder': true,
+  'scribe:chat-action-state': true,
   'scribe:lock-status': true,
   'scribe:lock-now': true,
   'scribe:lock-unlock': true,
@@ -479,6 +494,7 @@ const MAIN_EVENTS: Record<MainEvent, true> = {
   'scribe:automation-event': true,
   'scribe:automations-changed': true,
   'scribe:open-run': true,
+  'scribe:open-whatsapp': true,
   'scribe:recording-end': true,
   'scribe:notes-changed': true,
 }
@@ -596,6 +612,9 @@ export const WHEN_LOCKED: Readonly<Record<InvokeChannel, LockedPolicy>> = Object
   'scribe:chat-update': 'refused',
   'scribe:chat-redo': 'refused',
   'scribe:chat-copy': 'refused',
+  // Assistente (contrato 25, CA5): os cartões de ação, recusados com o app bloqueado.
+  'scribe:chat-action-reminder': 'refused',
+  'scribe:chat-action-state': 'refused',
   // Conta Google e Drive (contrato 11): tudo é de Configurações e do detalhe, recusado bloqueado. A fila de envio
   // não depende de canal: roda no main e continua com o app bloqueado.
   'scribe:google-status': 'refused',

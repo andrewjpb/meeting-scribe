@@ -81,6 +81,8 @@ export interface WhatsAppChat {
   kind: WhatsAppChatKind
   unread: number
   lastMessage: WhatsAppMessage | null
+  /** Contrato 25: o número de uma conversa `@lid`, quando o serviço sabe (a de `@s.whatsapp.net` sai do id). */
+  phone?: string | undefined
 }
 
 /** Resultado da busca: a mensagem e o nome da conversa. */
@@ -131,13 +133,19 @@ export interface WhatsAppMeetingLink {
   useInSummary: boolean
 }
 
-/** "Perguntar": até 10 conversas no escopo, últimos N dias, até 2 000 mensagens no total. */
+/** "Assistente" › "Só estas conversas": até 10 conversas no escopo, últimos N dias, até 2 000 mensagens no total. */
 export const WHATSAPP_SCOPE_CHATS_MAX = 10
 export const WHATSAPP_EXPORT_MESSAGES_MAX = 2000
 export const WHATSAPP_SCOPE_DAYS = [7, 30, 90] as const
 export const WHATSAPP_DEFAULT_SCOPE_DAYS = 30
 /** Prefixo dos arquivos das conversas na pasta de escopo do chat. */
 export const WHATSAPP_EXPORT_PREFIX = 'WhatsApp - '
+/** Contrato 25 (CA2): o Assistente lê as conversas com mensagem nos últimos 14 dias, até 40 conversas e 3 000 mensagens. */
+export const WHATSAPP_RECENT_DAYS = 14
+export const WHATSAPP_RECENT_CHATS_MAX = 40
+export const WHATSAPP_RECENT_MESSAGES_MAX = 3000
+/** Uma linha por conversa recente, com "pendente de resposta". */
+export const WHATSAPP_OVERVIEW_FILE = 'CONVERSAS-WHATSAPP.md'
 
 /** Mudança vinda do serviço: estado, mensagem nova (com o nome da conversa). */
 export type WhatsAppEvent = { type: 'status'; status: WhatsAppStatus } | { type: 'message'; message: WhatsAppMessage; chatName: string }

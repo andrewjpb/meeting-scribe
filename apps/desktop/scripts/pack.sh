@@ -27,6 +27,8 @@ cp -R out "$STAGE/out"
 rm -rf "$STAGE/out/smoke"
 mkdir -p "$STAGE/resources" "$STAGE/node_modules"
 cp -R resources/brand "$STAGE/resources/brand"
+# Contrato 25: o guia do app que o Assistente lê.
+cp -R resources/assistente "$STAGE/resources/assistente"
 # Contrato 24: os arquivos do serviço local do WhatsApp (o app copia para o userData ao ligar). O cliente falso
 # do smoke e os testes ficam de fora; o neonize nunca vai no pacote (é instalado com o clique da pessoa).
 mkdir -p "$STAGE/resources/whatsapp-bridge"
@@ -56,6 +58,8 @@ npx -y @electron/asar list "$APP/Contents/Resources/app.asar" | grep -q "^/node_
 ASAR_LIST=$(npx -y @electron/asar list "$APP/Contents/Resources/app.asar")
 grep -q "^/resources/whatsapp-bridge/server.py$" <<<"$ASAR_LIST" || { echo "pack.sh: o pacote não leva o serviço do WhatsApp" >&2; exit 1; }
 echo "serviço do WhatsApp ok"
+grep -q "^/resources/assistente/guia-do-app.md$" <<<"$ASAR_LIST" || { echo "pack.sh: o pacote não leva o guia do Assistente" >&2; exit 1; }
+echo "guia do Assistente ok"
 if grep -qiE "backend_fake|neonize-|\.dylib$" <<<"$ASAR_LIST"; then
   echo "pack.sh: o pacote leva o cliente falso do WhatsApp ou o neonize" >&2
   exit 1

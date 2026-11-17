@@ -1,10 +1,10 @@
 // Rotas do renderer. O main só conhece o id; o caminho é detalhe do roteador em memória.
-export type RouteId = 'reunioes' | 'perguntar' | 'automacoes' | 'whatsapp' | 'gravacao' | 'detalhe' | 'configuracoes'
+export type RouteId = 'reunioes' | 'assistente' | 'automacoes' | 'whatsapp' | 'gravacao' | 'detalhe' | 'configuracoes'
 
 export const ROUTE_PATHS: Record<RouteId, string> = {
   reunioes: '/',
-  /** Chat sobre as reuniões (contrato 15). */
-  perguntar: '/perguntar',
+  /** Assistente (contratos 15 e 25): pergunta sobre o app inteiro e propõe ações. */
+  assistente: '/assistente',
   /** Agentes, tarefas agendadas e execuções (contrato 23). */
   automacoes: '/automacoes',
   /** WhatsApp pessoal (contrato 24): só aparece na barra lateral com o serviço instalado. */
@@ -13,6 +13,18 @@ export const ROUTE_PATHS: Record<RouteId, string> = {
   /** Padrão do roteador; o caminho concreto sai de `meetingPath(id)`. */
   detalhe: '/reunioes/:id',
   configuracoes: '/configuracoes',
+}
+
+/** Caminho antigo da tela "Perguntar" (antes do contrato 25): redireciona para o Assistente. */
+export const LEGACY_CHAT_PATH = '/perguntar'
+
+/** Caminhos antigos que levam a uma rota de hoje. */
+export const ROUTE_REDIRECTS: readonly { from: string; to: string }[] = [{ from: LEGACY_CHAT_PATH, to: ROUTE_PATHS.assistente }]
+
+/** `state` da navegação para "WhatsApp" que abre uma conversa (com o texto no campo, do cartão do Assistente). */
+export interface WhatsAppNavigationState {
+  chatId?: string
+  text?: string
 }
 
 export function meetingPath(id: string): string {

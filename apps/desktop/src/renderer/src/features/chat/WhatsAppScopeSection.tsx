@@ -6,9 +6,9 @@ import { Icon } from '../../design/Icon'
 import { useWhatsApp } from '../whatsapp/whatsappStore'
 
 /**
- * "Conversas do WhatsApp" no painel "Contexto" (contrato 24, CA5): até 10 conversas, dos últimos 7, 30 ou 90 dias.
- * O app exporta as mensagens para a pasta da conversa e o Claude lê como lê as reuniões, citando
- * "[<conversa> · dd/mm hh:mm]". Só aparece com o WhatsApp conectado (ou com conversas já escolhidas).
+ * "Só estas conversas" no painel "Contexto" (contrato 24, CA5; no 25, a escolha manual dentro da fonte WhatsApp): até
+ * 10 conversas, dos últimos 7, 30 ou 90 dias. O app exporta as mensagens para a pasta da conversa e o Claude lê como
+ * lê as reuniões, citando "[WhatsApp · <conversa> · dd/mm hh:mm]".
  */
 export function WhatsAppScopeSection({ scope, onScope }: { scope: ChatScope; onScope: (scope: ChatScope) => void }) {
   const connected = useWhatsApp((state) => state.status?.state === 'connected')
@@ -20,17 +20,16 @@ export function WhatsAppScopeSection({ scope, onScope }: { scope: ChatScope; onS
     if (connected) void useWhatsApp.getState().loadChats()
   }, [connected])
 
-  if (!connected && !chosen.length) return null
   const full = chosen.length >= WHATSAPP_SCOPE_CHATS_MAX
+  // "Só estas conversas" sem nenhuma marcada continua no modo (nada do WhatsApp entra até marcar).
   const set = (ids: string[], nextDays = days): void => {
-    const { whatsappChats: _chats, whatsappDays: _days, ...rest } = scope
-    onScope(ids.length ? { ...rest, whatsappChats: ids, whatsappDays: nextDays } : rest)
+    const { whatsappChats: _chats, whatsappDays: _days, whatsappMode: _mode, ...rest } = scope
+    onScope(ids.length ? { ...rest, whatsappChats: ids, whatsappDays: nextDays } : { ...rest, whatsappMode: 'chosen', whatsappDays: nextDays })
   }
   const toggle = (id: string): void => set(chosen.includes(id) ? chosen.filter((item) => item !== id) : [...chosen, id])
 
   return (
-    <section aria-label="Conversas do WhatsApp" data-chat-whatsapp className="flex flex-col gap-2 border-b border-line px-4 py-4">
-      <h3 className="text-12 font-bold text-text-muted">Conversas do WhatsApp</h3>
+    <div aria-label="Só estas conversas" data-chat-whatsapp className="flex flex-col gap-2 pl-6">
       <div className="flex items-center gap-2">
         <label htmlFor="chat-whatsapp-days" className="text-12 text-text-muted">
           Mensagens dos últimos
@@ -74,6 +73,6 @@ export function WhatsAppScopeSection({ scope, onScope }: { scope: ChatScope; onS
           )
         })}
       </ul>
-    </section>
+    </div>
   )
 }

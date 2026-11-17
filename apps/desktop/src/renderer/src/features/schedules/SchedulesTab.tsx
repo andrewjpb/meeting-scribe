@@ -1,7 +1,10 @@
 // Aba "Tarefas agendadas" (contrato 23, CA4): tabela com nome, agente, quando ("Toda sexta às 17:00 · próxima:
 // sex 21/11 17:00"), última execução (estado, tempo e "há 2 h") e o interruptor; ações "Rodar agora", "Editar",
 // "Duplicar" e "Excluir" (confirma). O formulário abre no lugar da tabela.
-import { Copy, Pencil, Play, Plus, Trash2 } from 'lucide-react'
+//
+// Contrato 25: o lembrete criado pelo Assistente aparece aqui como "Lembrete" (sem agente): só liga, desliga, roda
+// agora (a notificação) e exclui. "Criar tarefa" num cartão do Assistente abre o formulário já preenchido.
+import { Bell, Copy, Pencil, Play, Plus, Trash2 } from 'lucide-react'
 import { useState } from 'react'
 import { agoLabel, durationLabel, RUN_STATUS_LABELS, scheduleLine, TASK_NAME_MAX, type ScheduledTask, type TaskInput } from '@shared/automations'
 import { Button } from '../../design/Button'
@@ -10,6 +13,7 @@ import { Switch } from '../../design/Switch'
 import { QUIET_BUTTON } from '../chat/ChatMessages'
 import type { ChatMeetings } from '../chat/useChatMeetings'
 import { useAutomations } from '../agents/automationsStore'
+import { useChat } from '../chat/chatStore'
 import { blankTask, TaskForm } from './TaskForm'
 
 const inputOf = (task: ScheduledTask): TaskInput => ({
@@ -30,9 +34,24 @@ const inputOf = (task: ScheduledTask): TaskInput => ({
 export function SchedulesTab({ meetings }: { meetings: ChatMeetings }) {
   const tasks = useAutomations((state) => state.tasks)
   const agents = useAutomations((state) => state.agents)
-  const [editing, setEditing] = useState<TaskInput | null>(null)
+  // O rascunho do cartão do Assistente, se houver, abre o formulário de cara.
+  const [fromChat] = useState(() => useAutomations.getState().takeTaskDraft())
+  const [editing, setEditing] = useState<TaskInput | null>(fromChat?.input ?? null)
+  const [origin, setOrigin] = useState(fromChat?.origin ?? null)
 
-  if (editing) return <TaskForm key={editing.id ?? 'nova'} initial={editing} meetings={meetings} onClose={() => setEditing(null)} />
+  if (editing)
+    return (
+      <TaskForm
+        key={editing.id ?? 'nova'}
+        initial={editing}
+        meetings={meetings}
+        onClose={() => {
+          setEditing(null)
+          setOrigin(null)
+        }}
+        onSaved={origin ? () => void useChat.getState().setActionState(origin, 'task-created') : undefined}
+      />
+    )
 
   return (
     <div className="flex flex-col gap-5" data-tasks-tab>
@@ -65,7 +84,7 @@ export function SchedulesTab({ meetings }: { meetings: ChatMeetings }) {
               <TaskRow
                 key={task.id}
                 task={task}
-                agentName={agents.find((agent) => agent.id === task.agentId)?.name ?? 'Agente excluído'}
+                agentName={task.reminder ? 'Lembrete' : (agents.find((agent) => agent.id === task.agentId)?.name ?? 'Agente excluído')}
                 onEdit={() => setEditing(inputOf(task))}
                 onDuplicate={() => setEditing({ ...inputOf(task), id: null, name: `${task.name.slice(0, TASK_NAME_MAX - 8).trimEnd()} (cópia)` })}
               />
@@ -105,11 +124,13 @@ function TaskRow({ task, agentName, onEdit, onDuplicate }: { task: ScheduledTask
     return parts.join(' · ')
   })()
   return (
-    <tr data-task-row={task.id} data-task-name={task.name} data-task-status={task.lastStatus ?? ''} data-task-paused={task.autoPaused ? 'auto' : undefined} className="border-b border-line align-top text-13">
+    <tr data-task-row={task.id} data-task-name={task.name} data-task-reminder={task.reminder ? '' : undefined} data-task-status={task.lastStatus ?? ''} data-task-paused={task.autoPaused ? 'auto' : undefined} className="border-b border-line align-top text-13">
       <td className="py-3 pr-4">
-        <span id={switchId} className="font-medium text-text">
+        <span id={switchId} className="inline-flex items-center gap-1.5 font-medium text-text">
+          {task.reminder && <Icon icon={Bell} size={14} className="shrink-0 text-text-muted" />}
           {task.name}
         </span>
+        {task.reminder?.whatsappChatName && <p className="mt-1 text-12 text-text-muted">Conversa do WhatsApp: {task.reminder.whatsappChatName}</p>}
         {notice && <p className="mt-1 text-12 text-text-muted">{notice}</p>}
       </td>
       <td className="py-3 pr-4 text-text-muted">{agentName}</td>
@@ -128,14 +149,19 @@ function TaskRow({ task, agentName, onEdit, onDuplicate }: { task: ScheduledTask
             <Icon icon={Play} size={14} />
             Rodar agora
           </button>
-          <button type="button" data-action="task-edit" onClick={onEdit} className={QUIET_BUTTON}>
-            <Icon icon={Pencil} size={14} />
-            Editar
-          </button>
-          <button type="button" data-action="task-duplicate" onClick={onDuplicate} className={QUIET_BUTTON}>
-            <Icon icon={Copy} size={14} />
-            Duplicar
-          </button>
+          {/* O lembrete do Assistente não tem agente nem formulário. */}
+          {!task.reminder && (
+            <>
+              <button type="button" data-action="task-edit" onClick={onEdit} className={QUIET_BUTTON}>
+                <Icon icon={Pencil} size={14} />
+                Editar
+              </button>
+              <button type="button" data-action="task-duplicate" onClick={onDuplicate} className={QUIET_BUTTON}>
+                <Icon icon={Copy} size={14} />
+                Duplicar
+              </button>
+            </>
+          )}
           {confirming ? (
             <>
               <button type="button" data-action="task-delete-confirm" onClick={() => void remove()} className={`${QUIET_BUTTON} text-rec`}>

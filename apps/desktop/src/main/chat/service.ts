@@ -15,12 +15,21 @@
 // (`acp/chat.ts`), uma sessão por conversa no mesmo ciclo de vida; trocar o modelo ou "Pensar mais" vale na
 // mesma sessão, pelo protocolo. Com "Linha de comando", nada muda. Uma conversa aberta num transporte e
 // perguntada depois da troca nas Configurações recomeça no outro, com o histórico.
+//
+// Contrato 25: com `assistant`, a conversa da tela "Assistente" roda sempre numa pasta própria (as reuniões do
+// escopo), que a cada pergunta recebe de novo as fontes do app (estado, guia, automações, WhatsApp), com a
+// instrução do Assistente. Os blocos `lap-acao` do fim da resposta viram ações propostas, gravadas com ela; nenhuma
+// roda aqui. A conversa de uma reunião e as conversas criadas pelas automações não passam por isso.
 import { randomUUID } from 'node:crypto'
 import { z } from 'zod'
+import { withoutActionBlocks, type ChatAction } from '../../shared/assistant'
 import {
+  CHAT_SOURCE_KINDS,
   CHAT_TEXT_MAX,
   CHAT_TITLE_MAX,
+  chatSourcesOf,
   chatTitle,
+  chatWhatsAppModeOf,
   type Chat,
   type ChatDetail,
   type ChatEvent,
@@ -37,11 +46,12 @@ import { CHAT_MODELS, type ChatModel, type ClaudeTransport } from '../../shared/
 import { WHATSAPP_DEFAULT_SCOPE_DAYS } from '../../shared/whatsapp'
 import type { AcpOpenResult, AcpSessionRequest } from '../acp/agent'
 import { AcpChat, type ChatEngine } from '../acp/chat'
-import { ClaudeChat, type ChatAnswer } from '../claude-cli/chat'
+import { assistantSystemPrompt, ClaudeChat, type ChatAnswer } from '../claude-cli/chat'
 import { claudeEnv } from '../claude-cli/locate'
 import type { SpawnClaude, Timers } from '../claude-cli/translator'
 import type { MeetingsStore } from '../meetings/store'
 import type { SettingsStore } from '../settings/store'
+import { actionsHistory } from './actions'
 import { scopeMeetingIds, type ChatCorpus } from './corpus'
 import { chatIdSchema, chatScopeSchema, type ChatStore } from './store'
 
@@ -50,12 +60,21 @@ export const CHAT_LEAVE_MS = 5 * 60_000
 
 export interface ChatServiceDeps {
   store: ChatStore
-  corpus: Pick<ChatCorpus, 'dir' | 'ensure' | 'scope' | 'scopeMany' | 'dropScope' | 'remove'> & Partial<Pick<ChatCorpus, 'reindexScope'>>
+  corpus: Pick<ChatCorpus, 'dir' | 'ensure' | 'scope' | 'scopeMany' | 'dropScope' | 'remove'> & Partial<Pick<ChatCorpus, 'reindexScope' | 'refreshScope'>>
   /**
    * Contrato 24 (CA5): as conversas do WhatsApp escolhidas vão como `.md` para a pasta de escopo da conversa. Só
    * leitura: o chat não tem acesso ao envio.
    */
   whatsapp?: { exportChats(folder: string, chatIds: readonly string[], days: number): Promise<string[]> }
+  /**
+   * Contrato 25: o Assistente. `prepare` escreve as fontes do app na pasta da conversa antes de cada pergunta;
+   * `extract` tira os blocos de ação do fim da resposta e devolve as ações validadas. Sem ele, a tela segue o chat
+   * dos contratos 15 a 24.
+   */
+  assistant?: {
+    prepare(folder: string, scope: ChatScope): Promise<unknown>
+    extract(text: string): Promise<{ text: string; actions: ChatAction[] }>
+  }
   settings: Pick<SettingsStore, 'get'>
   meetings: Pick<MeetingsStore, 'get' | 'list'>
   /** "Copiar" de uma resposta (a área de transferência do main). */
@@ -147,7 +166,9 @@ const sameScope = (a: ChatScope, b: ChatScope): boolean =>
   a.kind === b.kind &&
   (a.meetingIds ?? []).join(',') === (b.meetingIds ?? []).join(',') &&
   (a.whatsappChats ?? []).join(',') === (b.whatsappChats ?? []).join(',') &&
-  (a.whatsappDays ?? null) === (b.whatsappDays ?? null)
+  (a.whatsappDays ?? null) === (b.whatsappDays ?? null) &&
+  chatWhatsAppModeOf(a) === chatWhatsAppModeOf(b) &&
+  CHAT_SOURCE_KINDS.every((kind) => chatSourcesOf(a)[kind] === chatSourcesOf(b)[kind])
 
 interface Session {
   claude: ChatEngine
@@ -168,6 +189,8 @@ interface Session {
   thinkMore: boolean
   /** Títulos das reuniões, para o rótulo "Abrindo «<título>»"; relidos a cada pergunta. */
   titles: Map<string, string>
+  /** Contrato 25: conversa do Assistente (fontes antes de cada pergunta, ações no fim da resposta). */
+  assistant: boolean
 }
 
 const defaultTimers: Timers = {
@@ -257,16 +280,20 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
     let cwd: string
     let scope: string | null = null
     let folder: 'all' | 'subset' | 'meeting' = 'all'
-    // Contrato 24: conversas do WhatsApp só na tela "Perguntar", e só com o serviço ligado.
-    const whatsappChats = chat.meetingId || !deps.whatsapp ? [] : (chat.scope.whatsappChats ?? [])
+    // Contrato 25: o Assistente monta as fontes (o WhatsApp inclusive) a cada pergunta, em `answer`.
+    const assistant = !chat.meetingId && deps.assistant !== undefined
+    // Contrato 24: conversas do WhatsApp só na tela do chat, e só com o serviço ligado.
+    const whatsappChats = chat.meetingId || assistant || !deps.whatsapp ? [] : (chat.scope.whatsappChats ?? [])
     let whatsapp = false
     if (chat.meetingId) {
       scope = await deps.corpus.scope(chat.meetingId, chat.id)
       if (!scope) return null
       cwd = scope
       folder = 'meeting'
-    } else if (chat.scope.kind !== 'all' || whatsappChats.length) {
-      // Só as reuniões do escopo (e as conversas do WhatsApp), numa pasta da conversa com o índice delas.
+    } else if (assistant || chat.scope.kind !== 'all' || whatsappChats.length) {
+      // Só as reuniões do escopo (e as conversas do WhatsApp), numa pasta da conversa com o índice delas. O
+      // Assistente usa o acervo como fonte das cópias: refeito se faltar, como no "Todas as reuniões" de antes.
+      if (assistant) await deps.corpus.ensure()
       const ids = scopeMeetingIds(chat.scope, await deps.meetings.list(), now())
       scope = await deps.corpus.scopeMany(ids, chat.id)
       if (!scope) return null
@@ -284,6 +311,7 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
     const model = await modelOf(chat)
     const titles = new Map<string, string>()
     const titleOf = (meetingId: string): string | null => titles.get(meetingId) ?? null
+    const systemPrompt = assistant && folder !== 'meeting' ? { systemPrompt: assistantSystemPrompt(folder) } : {}
     const claude: ChatEngine =
       transport === 'acp' && deps.openAcp
         ? new AcpChat({
@@ -292,6 +320,7 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
             thinkMore: chat.thinkMore,
             scope: folder,
             whatsapp,
+            ...systemPrompt,
             cwd,
             titleOf,
             now,
@@ -304,6 +333,7 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
             model,
             scope: folder,
             whatsapp,
+            ...systemPrompt,
             cwd,
             titleOf,
             env: claudeEnv(deps.baseEnv, binaryPath),
@@ -323,13 +353,23 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
       model,
       thinkMore: chat.thinkMore,
       titles,
+      assistant,
     }
     sessions.set(chat.id, session)
     return session
   }
 
   async function answer(chat: Chat, question: string, session: Session): Promise<void> {
-    const history = chat.messages.slice(0, -1).map(({ role, text }) => ({ role, text }))
+    // Contrato 25: os cartões propostos vão no histórico (o Claude sabe o que já foi criado ou enviado).
+    const history = chat.messages.slice(0, -1).map(({ role, text, actions }) => ({ role, text: actions?.length ? `${text}\n\n${actionsHistory(actions)}`.trim() : text }))
+    // Contrato 25: as fontes do app de agora na pasta da conversa, antes de a pergunta sair. Fonte que falha fica de fora.
+    if (session.assistant && session.scope && deps.assistant) {
+      await deps.assistant.prepare(session.scope, chat.scope).catch((error: unknown) => deps.log?.(`[assistente] fontes: ${error instanceof Error ? error.message : String(error)}`))
+      // As reuniões do escopo de agora (a gravada depois de a conversa abrir entra) e o índice com as fontes.
+      const ids = scopeMeetingIds(chat.scope, await deps.meetings.list().catch(() => []), now())
+      if (deps.corpus.refreshScope) await deps.corpus.refreshScope(ids, chat.id).catch(() => undefined)
+      else await deps.corpus.reindexScope?.(chat.id).catch(() => undefined)
+    }
     // Títulos de agora (a reunião renomeada aparece com o nome novo no passo), sem atrasar a pergunta: até
     // chegarem, vale o título do nome do arquivo.
     void deps.meetings.list().then(
@@ -365,9 +405,18 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
       onDetail,
     )
     if (session.cancelled) return
+    // Contrato 25: os blocos `lap-acao` da resposta inteira viram ações propostas (nunca executadas aqui).
+    let text = result.text
+    let actions: ChatAction[] = []
+    if (session.assistant && result.ok && deps.assistant) {
+      const extracted = await deps.assistant.extract(result.text).catch(() => ({ text: result.text, actions: [] as ChatAction[] }))
+      text = extracted.text
+      actions = extracted.actions
+    } else if (session.assistant) text = withoutActionBlocks(result.text)
+    if (session.cancelled) return
     const message: ChatMessage = {
       role: 'assistant',
-      text: result.text,
+      text,
       at: stamp(),
       ...(result.ok ? {} : { error: result.error }),
       ...(steps.length ? { steps } : {}),
@@ -376,6 +425,7 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
       ...(plan.length ? { plan } : {}),
       ...(meta ? { meta } : {}),
       model: session.model,
+      ...(actions.length ? { actions } : {}),
     }
     // Lida e gravada na mesma vez da fila: o que outra janela ou um "Renomear" gravou no meio fica.
     const saved = await deps.store.mutate(chat.id, (current) => {

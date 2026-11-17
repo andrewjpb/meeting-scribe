@@ -11,7 +11,7 @@ import { dayLabel, timeLabel } from '../meetings/format'
 import { useMeetingsSearch } from '../meetings/useMeetingsOverview'
 import { answerTimeLabel, CHAT_MODEL_LABELS, chatTotals, chosenMeetings, consultedIn, COST_HINT, costLabel, scopeLabel, tokensLabel, withWhatsApp } from './format'
 import type { ChatMeetings } from './useChatMeetings'
-import { WhatsAppScopeSection } from './WhatsAppScopeSection'
+import { SourcesSection } from './SourcesSection'
 
 const SCOPE_OPTIONS: readonly { kind: ChatScopeKind; label: (total: number | null) => string }[] = [
   { kind: 'all', label: (total) => scopeLabel({ kind: 'all' }, total) },
@@ -123,7 +123,7 @@ interface ContextPanelProps {
 }
 
 /**
- * Painel "Contexto" da conversa (contrato 16, CA4): escopo (só na tela "Perguntar"), reuniões consultadas
+ * Painel "Contexto" da conversa (contrato 16, CA4): escopo e fontes (só na tela "Assistente", contrato 25), reuniões consultadas
  * nesta conversa, totais e modelo. Trocar o escopo ou o modelo vale para a próxima pergunta.
  */
 export function ContextPanel({ meetingId, scope, model, messages, meetings, onScope, onModel, onClose, notice = null }: ContextPanelProps) {
@@ -203,7 +203,7 @@ export function ContextPanel({ meetingId, scope, model, messages, meetings, onSc
           </>
         )}
       </PanelSection>
-      {!meetingId && <WhatsAppScopeSection scope={scope} onScope={onScope} />}
+      {!meetingId && <SourcesSection scope={scope} onScope={onScope} />}
       <PanelSection title="Consultadas nesta conversa">
         {consulted.length ? (
           <ul data-chat-context-consulted className="-mx-1 flex flex-col">

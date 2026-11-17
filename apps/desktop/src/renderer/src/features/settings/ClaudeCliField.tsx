@@ -58,7 +58,7 @@ export function ClaudeCliField() {
       data-claude-state={check.phase}
       data-setting-row
       data-setting-name="Claude CLI"
-      data-setting-description="Caminho do claude instalado neste Mac, usado na tradução, no resumo e em Perguntar."
+      data-setting-description="Caminho do claude instalado neste Mac, usado na tradução, no resumo e no Assistente."
     >
       <div className="flex flex-wrap items-baseline justify-between gap-2">
         <p className="text-13 font-medium text-text">Claude CLI</p>
@@ -70,7 +70,7 @@ export function ClaudeCliField() {
 
       {check.phase === 'found' && (
         <p className="text-12 text-text-muted">
-          Traduz, resume e responde em Perguntar com a sua conta do Claude, neste Mac. <span className="font-mono text-11 text-text-faint select-text">{check.path}</span>
+          Traduz, resume e responde no Assistente com a sua conta do Claude, neste Mac. <span className="font-mono text-11 text-text-faint select-text">{check.path}</span>
           {configuredPath && (
             <>
               {' '}

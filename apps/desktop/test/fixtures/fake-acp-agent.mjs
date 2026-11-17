@@ -16,6 +16,11 @@
 //   fora da pasta pelo cliente (`fs/read_text_file`, recusado) e abrir um terminal (recusado); responde em
 //   pedaços com a citação `meeting:` e fecha com uso e custo. Pergunta com "devagar" sai em 40 pedaços
 //   espaçados e para no `session/cancel`; com "falhe" (contrato 23), recusa na hora.
+// - Assistente (contrato 25: a pasta tem o `ESTADO.md`): "pendente" lê o `CONVERSAS-WHATSAPP.md` e lista as conversas
+//   com "pendente de resposta: sim", citando "[WhatsApp · <nome> · dd/mm hh:mm]"; "me lembre … <nome>" lê o estado e
+//   propõe um bloco `lap-acao` de lembrete para amanhã às 09:00 (sem hora no pedido) ligado à conversa; "responda
+//   <nome> dizendo <texto>" propõe o bloco de resposta no WhatsApp com o id da conversa do arquivo; "bloco inválido"
+//   devolve um bloco quebrado. O agente nunca executa nada: só escreve o bloco.
 //
 // Uso: node fake-acp-agent.mjs [--log <arquivo.jsonl>] | node fake-acp-agent.mjs --version
 import { appendFileSync, readdirSync, readFileSync } from 'node:fs'
@@ -82,6 +87,54 @@ function readFolder(cwd) {
   const title = /^# (.+)$/m.exec(text)?.[1]
   const day = /\((\d{2}\/\d{2})\)$/m.exec(text)?.[1]
   return { files, index: false, first: id && title && day ? { id, title, day } : null, count: files.length, file: files[0] }
+}
+
+/**
+ * Contrato 25: o Assistente falso. Lê os arquivos das fontes pela ferramenta (`read` pede a permissão como o
+ * adaptador) e devolve o texto da resposta, ou `null` para seguir o chat de sempre.
+ */
+async function assistantAnswer(question, cwd, read) {
+  const overviewFile = 'CONVERSAS-WHATSAPP.md'
+  const has = (name) => readdirSync(cwd).includes(name)
+  const conversations = () =>
+    has(overviewFile)
+      ? readFileSync(join(cwd, overviewFile), 'utf8')
+          .split('\n')
+          .map((line) => /^- (.+?) · (pessoa|grupo) · id: (\S+) · .*?última de: (.+?) em (\d{2}\/\d{2} \d{2}:\d{2}) · pendente de resposta: (sim|não) · última mensagem: "(.*)" · arquivo: (.+)$/.exec(line))
+          .filter(Boolean)
+          .map((match) => ({ name: match[1], id: match[3], lastFrom: match[4], at: match[5], pending: match[6] === 'sim', last: match[7] }))
+      : []
+  const byName = (text) => conversations().find((chat) => text.toLowerCase().includes(chat.name.split(' ')[0].toLowerCase()))
+  const fence = (json) => `\n\n\`\`\`lap-acao\n${typeof json === 'string' ? json : JSON.stringify(json)}\n\`\`\``
+  if (/bloco inv[aá]lido/i.test(question)) return `Aqui vai um bloco quebrado.${fence('{"tipo": "lembrete", "quando": ')}`
+  if (/pendente/i.test(question)) {
+    if (!has(overviewFile)) return 'O WhatsApp não está na pasta desta conversa.'
+    await read(overviewFile)
+    const pending = conversations().filter((chat) => chat.pending)
+    if (!pending.length) return 'Nada pendente no WhatsApp.'
+    return ['Conversas com mensagem esperando a sua resposta:', '', ...pending.map((chat) => `- **${chat.name}**: "${chat.last}" [WhatsApp · ${chat.name} · ${chat.at}]`)].join('\n')
+  }
+  if (/me lembre|lembre-me/i.test(question)) {
+    await read('ESTADO.md')
+    if (has(overviewFile)) await read(overviewFile)
+    const chat = byName(question.replace(/me lembre|lembre-me|amanhã|de responder/gi, ''))
+    const now = new Date()
+    const when = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, 9, 0)
+    const offset = -when.getTimezoneOffset()
+    const two = (value) => String(Math.abs(value)).padStart(2, '0')
+    const iso = `${when.getFullYear()}-${two(when.getMonth() + 1)}-${two(when.getDate())}T09:00:00${offset >= 0 ? '+' : '-'}${two(Math.trunc(offset / 60))}:${two(offset % 60)}`
+    const text = chat ? `Responder ${chat.name}` : 'Lembrete'
+    return `Proponho o lembrete para amanhã às 09:00 (o pedido não disse a hora).${fence({ tipo: 'lembrete', quando: iso, texto: text, ...(chat ? { conversaWhatsApp: chat.id } : {}), horaPadrao: true })}`
+  }
+  const reply = /responda (?:a |ao |à )?(.+?) dizendo (.+)$/i.exec(question)
+  if (reply) {
+    if (has(overviewFile)) await read(overviewFile)
+    const chat = byName(reply[1])
+    if (!chat) return `Não achei a conversa de ${reply[1]}.`
+    const text = reply[2].replace(/[.!?]+$/, '').trim()
+    return `Proponho esta resposta para ${chat.name}.${fence({ tipo: 'whatsapp-resposta', chatId: chat.id, texto: text.charAt(0).toUpperCase() + text.slice(1) })}`
+  }
+  return null
 }
 
 /**
@@ -241,6 +294,16 @@ export function fakeAcpAgent({ log = () => undefined, pause = 300 } = {}) {
         await wait()
         await update({ sessionUpdate: 'tool_call_update', toolCallId, status: allowed ? 'completed' : 'failed' })
         return allowed
+      }
+      // Contrato 25: os pedidos do Assistente.
+      if (state.purpose === 'chat' && readdirSync(state.cwd).includes('ESTADO.md')) {
+        const answer = await assistantAnswer(question, state.cwd, (name) => use('Read', 'read', `Read ${name}`, { file_path: join(state.cwd, name) }, [{ path: join(state.cwd, name), line: 1 }]))
+        if (answer !== null) {
+          for (let at = 0; at < answer.length; at += 60) await say(answer.slice(at, at + 60))
+          state.cost += 0.01
+          await update({ sessionUpdate: 'usage_update', used: 2000, size: 200000, cost: { amount: state.cost, currency: 'USD' }, _meta: { '_claude/model': modelId } })
+          return { stopReason: 'end_turn', usage: { totalTokens: 900, inputTokens: 800, outputTokens: 100 } }
+        }
       }
       if (folder.index) await use('Read', 'read', 'Read INDICE.md', { file_path: join(state.cwd, 'INDICE.md') }, [{ path: join(state.cwd, 'INDICE.md'), line: 1 }])
       plan[0].status = 'completed'

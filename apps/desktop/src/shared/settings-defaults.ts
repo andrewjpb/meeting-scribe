@@ -49,7 +49,7 @@ export interface AppSettings {
   micDeviceId: string | null
   translationEngine: TranslationEngine
   claudeModel: ClaudeModel
-  /** Modelo do chat "Perguntar" (contrato 15); o caminho do `claude` é o mesmo da tradução. */
+  /** Modelo do chat do "Assistente" (contratos 15 e 25); o caminho do `claude` é o mesmo da tradução. */
   chatModel: ChatModel
   /** Caminho do `claude` escolhido pelo usuário; `null` procura sozinho. */
   claudePath: string | null

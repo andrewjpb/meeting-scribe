@@ -12,6 +12,12 @@
 // Cada execução é uma sessão ACP própria (`runner.ts`); o resultado vai para o histórico de qualquer jeito e para
 // a saída escolhida (`outputs.ts`). Nada aqui envia coisa alguma para fora do Mac. Sem Electron: relógio,
 // intervalos, notificação e eventos chegam injetados.
+//
+// Contrato 25: o lembrete do Assistente é uma tarefa "uma vez" sem agente (`reminder`): no horário, só a
+// notificação do macOS com o texto (o "Abrir" leva à conversa do WhatsApp, quando há); nenhum Claude roda, nada
+// entra no histórico de execuções nem conta no limite diário. Só nasce do clique em "Criar lembrete". O lembrete roda
+// também com as tarefas pausadas (pela pessoa ou pelo limite); perdido (app fechado, Mac dormindo, religado depois da
+// data), avisa atrasado assim que o app confere, com qualquer atraso, e desliga.
 import { randomUUID } from 'node:crypto'
 import { z } from 'zod'
 import {
@@ -28,8 +34,11 @@ import {
   SCHEDULER_TICK_MS,
   TASK_ERROR_MAX,
   TASK_MESSAGE_MAX,
+  TASK_NAME_MAX,
+  TASK_TIMEOUT_MIN_S,
   TASKS_MAX,
   wallTime,
+  formatRunAt,
   taskOutput,
   type Agent,
   type AgentDeleteResult,
@@ -47,7 +56,7 @@ import {
   type ScheduledTask,
   type TaskSaveResult,
 } from '../../shared/automations'
-import { agentInputSchema, automationIdSchema, taskInputSchema } from '../../shared/automations-schema'
+import { agentInputSchema, automationIdSchema, taskInputSchema, taskReminderSchema } from '../../shared/automations-schema'
 import type { AgentsStore } from '../agents/store'
 import type { OutputRequest } from './outputs'
 import type { AgentRunner } from './runner'
@@ -61,6 +70,10 @@ export interface AutomationNotice {
   body: string
   /** "Abrir" leva a esta execução; `null` abre a tela. */
   runId: string | null
+  /** Contrato 25: o lembrete ligado a uma conversa do WhatsApp; "Abrir" leva a ela. */
+  whatsappChatId?: string | null | undefined
+  /** Contrato 25: é um lembrete (bloqueado, a notificação diz só "Você tem um lembrete."). */
+  reminder?: boolean | undefined
 }
 
 export interface IntervalTimers {
@@ -109,6 +122,8 @@ export interface AutomationsService {
   saveTask(input: unknown): Promise<TaskSaveResult>
   deleteTask(input: unknown): Promise<boolean>
   toggleTask(input: unknown): Promise<ScheduledTask | null>
+  /** Contrato 25: "Criar lembrete" no cartão do Assistente; só com o clique da pessoa. */
+  createReminder(input: unknown): Promise<TaskSaveResult>
   /** "Rodar agora": com a pessoa olhando, fora da pausa e do limite. */
   runNow(input: unknown): Promise<RunStartResult>
   /** "Pedir agora": um agente e um pedido, na hora; entra em "Execuções". */
@@ -156,6 +171,13 @@ const messageSchema = z
   .max(TASK_MESSAGE_MAX)
   .refine((value) => value.trim() !== '')
 const askSchema = z.object({ agentId: automationIdSchema, text: messageSchema }).strict()
+/** Horário com o fuso explícito (`…-03:00` ou `…Z`). */
+const zonedIso = z
+  .string()
+  .max(40)
+  .regex(/(Z|[+-]\d{2}:\d{2})$/)
+  .refine((value) => !Number.isNaN(Date.parse(value)), 'data inválida')
+const reminderInputSchema = z.object({ at: zonedIso, reminder: taskReminderSchema }).strict()
 const testSchema = z.object({ agent: agentInputSchema, text: messageSchema }).strict()
 const runsFilterSchema = z
   .object({ taskId: automationIdSchema.optional(), status: z.enum(RUN_STATUSES).optional() })
@@ -268,7 +290,7 @@ export function createAutomationsService(deps: AutomationsDeps): AutomationsServ
       taskId: task.id,
       taskName: task.name,
       agentId: task.agentId,
-      agentName: agent?.name ?? '',
+      agentName: agent?.name ?? (task.reminder ? 'Lembrete' : ''),
       trigger,
       status: 'skipped',
       startedAt: iso(at),
@@ -422,6 +444,50 @@ export function createAutomationsService(deps: AutomationsDeps): AutomationsServ
     }
   }
 
+  /**
+   * Lembrete no horário (ou "Rodar agora"): a notificação com o texto e a tarefa marcada como feita. Sem Claude, sem
+   * execução no histórico e fora do limite diário.
+   */
+  async function fireReminder(task: ScheduledTask, late = false): Promise<void> {
+    const reminder = task.reminder
+    if (!reminder) return
+    const at = now()
+    const scheduled = task.schedule.kind === 'once' ? Date.parse(task.schedule.at) : Number.NaN
+    const was = Number.isNaN(scheduled) ? '' : formatRunAt(scheduled, task.timezone)
+    const text = previewOf(reminder.text, 200)
+    deps.notify(
+      late
+        ? { title: 'Lembrete atrasado', body: `Era ${was} · ${text}`, runId: null, whatsappChatId: reminder.whatsappChatId, reminder: true }
+        : { title: 'Lembrete', body: text, runId: null, whatsappChatId: reminder.whatsappChatId, reminder: true },
+    )
+    await updateTask(task.id, (current) =>
+      current.runOnce && current.runOnceAction === 'delete'
+        ? null
+        : {
+            ...current,
+            enabled: false,
+            nextRunAt: null,
+            lastRunAt: iso(at),
+            lastStatus: 'ok',
+            lastResultPreview: previewOf(late ? `Avisado atrasado (era ${was}): ${reminder.text}` : reminder.text),
+            lastError: null,
+            consecutiveFailures: 0,
+            updatedAt: iso(at),
+          },
+    )
+    changed()
+  }
+
+  /** Lembretes vencidos: na hora (até 1 min de atraso) ou atrasados, com qualquer atraso. Rodam com tudo pausado. */
+  async function dueReminders(tasks: readonly ScheduledTask[], at: number): Promise<void> {
+    for (const task of tasks) {
+      if (!task.reminder || !task.enabled || task.autoPaused) continue
+      const due = task.nextRunAt ? Date.parse(task.nextRunAt) : task.schedule.kind === 'once' ? Date.parse(task.schedule.at) : Number.NaN
+      if (Number.isNaN(due) || due > at) continue
+      await fireReminder(task, at - due > LATE_AFTER_MS)
+    }
+  }
+
   /** Execução sem clique: confere a pausa e o limite diário antes. */
   async function enqueueAutomatic(task: ScheduledTask, trigger: RunTrigger, meetingId: string | null = null): Promise<void> {
     const agent = await deps.agents.get(task.agentId)
@@ -445,6 +511,8 @@ export function createAutomationsService(deps: AutomationsDeps): AutomationsServ
   async function doTick(): Promise<void> {
     const at = now()
     const state = await deps.schedules.read()
+    // Contrato 25: os lembretes não dependem da pausa nem do limite diário.
+    await dueReminders(state.tasks, at)
     if (state.paused) {
       // Pausado: a vez das tarefas "depois de cada reunião" se perde (sem registro: nada rodaria).
       pendingMeetings.length = 0
@@ -453,7 +521,7 @@ export function createAutomationsService(deps: AutomationsDeps): AutomationsServ
     const due: { task: ScheduledTask; trigger: RunTrigger; run: boolean; extra: number }[] = []
     const nextRuns = new Map<string, string | null>()
     for (const task of state.tasks) {
-      if (!task.enabled || task.autoPaused || task.schedule.kind === 'after-meeting') continue
+      if (!task.enabled || task.autoPaused || task.schedule.kind === 'after-meeting' || task.reminder) continue
       if (task.nextRunAt === null) {
         const next = nextFor(task, at)
         if (next !== null) nextRuns.set(task.id, next)
@@ -513,6 +581,11 @@ export function createAutomationsService(deps: AutomationsDeps): AutomationsServ
   async function startTask(id: string, trigger: RunTrigger): Promise<RunStartResult> {
     const task = (await deps.schedules.read()).tasks.find((candidate) => candidate.id === id)
     if (!task) return { ok: false, error: 'missing' }
+    // Contrato 25: "Rodar agora" num lembrete mostra a notificação agora.
+    if (task.reminder) {
+      await fireReminder(task)
+      return { ok: true, runId: task.id }
+    }
     const agent = await deps.agents.get(task.agentId)
     if (!agent) return { ok: false, error: 'missing' }
     return enqueue(jobFor(task, agent, trigger))
@@ -558,7 +631,7 @@ export function createAutomationsService(deps: AutomationsDeps): AutomationsServ
     async listAgents() {
       const [agents, state] = await Promise.all([deps.agents.list(), deps.schedules.read()])
       const usage: Record<string, string[]> = {}
-      for (const task of state.tasks) (usage[task.agentId] ??= []).push(task.name)
+      for (const task of state.tasks) if (!task.reminder) (usage[task.agentId] ??= []).push(task.name)
       return { agents, usage, models: [...AGENT_PROFILE_MODELS.claude], mcp: false }
     },
 
@@ -617,6 +690,7 @@ export function createAutomationsService(deps: AutomationsDeps): AutomationsServ
           const task: ScheduledTask = {
             ...fields,
             id: newId(),
+            reminder: null,
             lastRunAt: null,
             nextRunAt: fields.enabled ? nextFor(fields, at) : null,
             lastStatus: null,
@@ -631,7 +705,8 @@ export function createAutomationsService(deps: AutomationsDeps): AutomationsServ
           return { ...state, tasks: [...state.tasks, task] }
         }
         const current = state.tasks.find((task) => task.id === id)
-        if (!current) {
+        // O lembrete do Assistente (contrato 25) não tem agente nem formulário: não vira tarefa de agente.
+        if (!current || current.reminder) {
           missing = true
           return state
         }
@@ -674,6 +749,11 @@ export function createAutomationsService(deps: AutomationsDeps): AutomationsServ
       let saved: ScheduledTask | null = null
       const at = now()
       const current = (await deps.schedules.read()).tasks.find((task) => task.id === id)
+      // Contrato 25: o lembrete religado depois da data avisa atrasado agora (fora do histórico) e desliga.
+      if (enabled && current?.reminder && current.schedule.kind === 'once' && Date.parse(current.schedule.at) <= at) {
+        await fireReminder(current, true)
+        return (await deps.schedules.read()).tasks.find((task) => task.id === id) ?? null
+      }
       // "Uma vez em" cuja data passou com a tarefa desligada: a vez fica registrada como pulada e o "uma vez só" vale
       // (excluída ou desligada); sem ele, a tarefa continua desligada, porque nunca mais rodaria.
       if (enabled && current?.schedule.kind === 'once' && Date.parse(current.schedule.at) <= at) {
@@ -693,6 +773,56 @@ export function createAutomationsService(deps: AutomationsDeps): AutomationsServ
       })
       if (saved) changed()
       return saved
+    },
+
+    async createReminder(input) {
+      const parsed = reminderInputSchema.safeParse(input)
+      if (!parsed.success) return { ok: false, error: 'invalid' }
+      const at = now()
+      const { reminder } = parsed.data
+      const when = Date.parse(parsed.data.at)
+      if (when <= at) return { ok: false, error: 'past' }
+      const line = reminder.text.replace(/\s+/g, ' ').trim()
+      const label = `Lembrete: ${line}`
+      const name = label.length <= TASK_NAME_MAX ? label : `${label.slice(0, TASK_NAME_MAX - 1).trimEnd()}…`
+      let saved: ScheduledTask | null = null
+      let full = false
+      await deps.schedules.mutate((state) => {
+        if (state.tasks.length >= TASKS_MAX) {
+          full = true
+          return state
+        }
+        const task: ScheduledTask = {
+          id: newId(),
+          name,
+          agentId: '',
+          message: line,
+          schedule: { kind: 'once', at: new Date(when).toISOString() },
+          timezone: deps.timeZone(),
+          enabled: true,
+          runOnce: true,
+          runOnceAction: 'disable',
+          timeoutS: TASK_TIMEOUT_MIN_S,
+          notify: 'always',
+          output: null,
+          reminder: { ...reminder, text: reminder.text.trim() },
+          lastRunAt: null,
+          nextRunAt: new Date(when).toISOString(),
+          lastStatus: null,
+          lastResultPreview: null,
+          lastError: null,
+          consecutiveFailures: 0,
+          autoPaused: false,
+          createdAt: iso(at),
+          updatedAt: iso(at),
+        }
+        saved = task
+        return { ...state, tasks: [...state.tasks, task] }
+      })
+      if (full) return { ok: false, error: 'full' }
+      if (!saved) return { ok: false, error: 'invalid' }
+      changed()
+      return { ok: true, task: saved }
     },
 
     async runNow(input) {
@@ -742,7 +872,7 @@ export function createAutomationsService(deps: AutomationsDeps): AutomationsServ
             ? { ...state, paused: true, pauseReason: 'person' }
             : // Retomar: o que passou durante a pausa não roda atrasado; cada tarefa segue do próximo horário. Pausado pelo
               // limite diário, "Retomar" libera o resto do dia (fica registrado em `limitReleasedOn`).
-              { ...state, paused: false, pauseReason: null, limitReleasedOn: state.pauseReason === 'limit' ? dayOf(at) : state.limitReleasedOn, tasks: state.tasks.map((task) => (task.enabled && !task.autoPaused && task.schedule.kind !== 'after-meeting' ? { ...task, nextRunAt: nextFor(task, at) } : task)) },
+              { ...state, paused: false, pauseReason: null, limitReleasedOn: state.pauseReason === 'limit' ? dayOf(at) : state.limitReleasedOn, tasks: state.tasks.map((task) => (task.enabled && !task.autoPaused && task.schedule.kind !== 'after-meeting' && !task.reminder ? { ...task, nextRunAt: nextFor(task, at) } : task)) },
         )
       }
       const status = await computeStatus()

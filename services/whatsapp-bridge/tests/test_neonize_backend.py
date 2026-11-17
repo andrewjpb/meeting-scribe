@@ -242,3 +242,13 @@ def test_refresh_names_uses_the_address_book_and_groups(fake_neonize, tmp_path):
     backend.refresh_names()
     assert bridge.names == {'5511933330000@s.whatsapp.net': 'Ana Souza', '120363000000000001@g.us': 'Grupo do projeto'}
     backend.stop()
+
+
+def test_phone_of_a_lid_chat_comes_from_get_pn_from_lid(fake_neonize, tmp_path):
+    # Contrato 25: o cartão do Assistente mostra o número da conversa `@lid` quando o WhatsApp o dá.
+    backend, _bridge, client = started(tmp_path)
+    client.get_pn_from_lid = lambda lid: jid('5511944440000', 's.whatsapp.net') if lid.User == '123' else jid('', '')
+    assert backend.phone_for('123@lid') == '+5511944440000'
+    assert backend.phone_for('999@lid') == ''
+    assert backend.phone_for('5511911110000@s.whatsapp.net') == ''
+    backend.stop()

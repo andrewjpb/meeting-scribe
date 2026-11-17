@@ -1,16 +1,18 @@
 // Processo principal: esquema do app, segurança da sessão, IPC, menu e janela.
 import { readFileSync } from 'node:fs'
+import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { app, BrowserWindow, clipboard, dialog, Menu, nativeImage, net, Notification, powerMonitor, safeStorage, session, shell, systemPreferences, Tray, type NativeImage, type OpenDialogOptions, type SaveDialogOptions } from 'electron'
 import { DRIVE_FOLDER_URL_PREFIX } from '../shared/accounts'
 import { ASSEMBLYAI_DASHBOARD_URL } from '../shared/assemblyai'
-import { formatRunShort } from '../shared/automations'
+import { formatRunShort, type AutomationRun } from '../shared/automations'
 import { brandTexts, DEFAULT_BRAND_NAME } from '../shared/branding'
 import { lockedWindowTitle, type LockStatus } from '../shared/lock'
 import { privacyPaneUrl } from '../shared/privacy'
 import type { RouteId } from '../shared/routes'
 import type { AgentProfileId, AppSettings } from '../shared/settings-defaults'
 import type { TranscriptDocument } from '../shared/transcription'
+import { whatsappStateLabel } from '../shared/whatsapp'
 import { isBrowserUrl } from './accounts/oauth'
 import { createFileAgentsStore } from './agents/store'
 import { netHttp } from './accounts/transport'
@@ -24,7 +26,9 @@ import { applyBrandName, applyDockIcon, type DockIconTarget } from './branding/a
 import { createBrandingService, type BrandingService, type ImageDialog } from './branding/service'
 import { registerDisplayMediaHandler } from './capture/display-media'
 import { createChatCorpus, type ChatCorpus } from './chat/corpus'
+import { createChatActions, extractActions, type ChatActions } from './chat/actions'
 import { createChatService, type ChatService } from './chat/service'
+import { AUTOMATION_RUNS_IN_SOURCE, writeSources, type AssistantState } from './chat/sources'
 import { createFileChatStore } from './chat/store'
 import { createGoogleAccount, type GoogleAccountService } from './google/account'
 import { createDriveSync, createEndOfRecordingHooks, type DriveSyncService } from './google/drive-sync'
@@ -98,7 +102,7 @@ const appUrl = isDev ? devUrl : `${APP_ORIGIN}/index.html`
 const rendererRoot = join(__dirname, '../renderer')
 
 let mainWindow: BrowserWindow | null = null
-/** Chat "Perguntar" (contrato 15), para a janela fechada avisar as conversas abertas. */
+/** Chat do "Assistente" (contratos 15 e 25), para a janela fechada avisar as conversas abertas. */
 let chatService: ChatService | null = null
 /** Nome da marca em uso (título da janela, "Sobre", `scribe:app-info`). */
 let brandName = DEFAULT_BRAND_NAME
@@ -228,7 +232,11 @@ function showMainWindow(): BrowserWindow {
 }
 
 /** Manda ao renderer depois que a página carregou (janela recém-aberta). */
-function sendWhenLoaded<C extends 'scribe:navigate' | 'scribe:open-run'>(win: BrowserWindow, channel: C, payload: C extends 'scribe:navigate' ? RouteId : { runId: string | null }): void {
+function sendWhenLoaded<C extends 'scribe:navigate' | 'scribe:open-run' | 'scribe:open-whatsapp'>(
+  win: BrowserWindow,
+  channel: C,
+  payload: C extends 'scribe:navigate' ? RouteId : C extends 'scribe:open-run' ? { runId: string | null } : { chatId: string },
+): void {
   const contents = win.webContents
   const send = (): void => sendTo(contents, channel, payload as never)
   if (contents.isLoading()) contents.once('did-finish-load', send)
@@ -244,7 +252,8 @@ const liveNotices = new Set<Notification>()
  */
 function showAutomationNotice(notice: AutomationNotice): void {
   const locked = lockService?.isLocked() ?? false
-  const shown = locked ? { title: brandName, body: 'Uma tarefa agendada terminou.', runId: notice.runId } : notice
+  // Contrato 25: o lembrete bloqueado também não mostra o texto.
+  const shown = locked ? { title: brandName, body: notice.reminder ? 'Você tem um lembrete.' : 'Uma tarefa agendada terminou.', runId: notice.runId } : notice
   if (smokeFixtures) {
     smokeFixtures.automations.notifications.push(shown)
     return
@@ -253,7 +262,9 @@ function showAutomationNotice(notice: AutomationNotice): void {
   const item = new Notification({ title: shown.title, body: shown.body, actions: [{ type: 'button', text: 'Abrir' }] })
   const open = (): void => {
     liveNotices.delete(item)
-    sendWhenLoaded(showMainWindow(), 'scribe:open-run', { runId: notice.runId })
+    // Contrato 25: o lembrete de uma conversa do WhatsApp abre a conversa.
+    if (notice.whatsappChatId) sendWhenLoaded(showMainWindow(), 'scribe:open-whatsapp', { chatId: notice.whatsappChatId })
+    else sendWhenLoaded(showMainWindow(), 'scribe:open-run', { runId: notice.runId })
   }
   item.on('click', open)
   item.on('action', open)
@@ -401,8 +412,10 @@ interface AppServices {
   download: ReturnType<typeof createMeetingDownload>
   branding: BrandingService
   updates: UpdateService
-  /** Chat "Perguntar" (contrato 15) e o acervo em Markdown que o `claude` dele lê. */
+  /** Chat do "Assistente" (contratos 15 e 25) e o acervo em Markdown que o `claude` dele lê. */
   chat: ChatService
+  /** Os cartões de ação do Assistente (contrato 25): só com o clique da pessoa. */
+  chatActions: ChatActions
   /** Agente do ACP do perfil escolhido (contrato 17): instalar, remover e o estado. */
   acp: { current: () => Promise<AcpAgentService> }
   corpus: ChatCorpus
@@ -590,14 +603,59 @@ function createAppServices(userData: string): AppServices {
   whatsappService = whatsapp
   // Acervo do chat (contrato 15): um `.md` por reunião e o índice, reescritos a cada mudança da reunião.
   const corpus = createChatCorpus({ dir: userData, meetings, transcripts, summaries, notes })
-  // Chat "Perguntar": o mesmo `claude` e o mesmo caminho configurado, um processo por conversa, só leitura.
-  // Conversas do chat: a mesma fila para o "Perguntar" e para a saída `chat` das automações (contrato 23).
+  // Chat do "Assistente": o mesmo `claude` e o mesmo caminho configurado, um processo por conversa, só leitura.
+  // Conversas do chat: a mesma fila para o "Assistente" e para a saída `chat` das automações (contrato 23).
   const chatStore = createFileChatStore({ dir: userData })
+  const timeZone = (): string => Intl.DateTimeFormat().resolvedOptions().timeZone
+  // Contrato 25: as fontes do Assistente, relidas a cada pergunta. Do WhatsApp, só a exportação e a lista das
+  // conversas (para o nome no cartão); o envio não chega aqui. As automações chegam pela função, depois de criadas.
+  const guidePath = join(app.getAppPath(), 'resources', 'assistente', 'guia-do-app.md')
+  const assistantState = async (): Promise<AssistantState> => {
+    const [status, agents, tasks] = await Promise.all([automations.status(), automations.listAgents(), automations.listTasks()])
+    const account = google.status()
+    return {
+      now: Date.now(),
+      timeZone: timeZone(),
+      version: app.getVersion(),
+      recording: recordingSessions.active() && recordingStartedAt !== null ? { startedAt: recordingStartedAt } : null,
+      google: account.state === 'signed-in' && account.profile ? `conectada como ${account.profile.email}` : account.state === 'expired' ? 'sessão expirada (entrar de novo em Configurações › Contas)' : 'não conectada',
+      whatsapp: whatsappStateLabel(whatsapp.status()),
+      automationsPaused: status.paused ? (status.pauseReason === 'limit' ? 'pausadas pelo limite diário' : 'pausadas pela pessoa') : null,
+      agents: agents.agents,
+      tasks,
+    }
+  }
+  const assistantSources = {
+    state: assistantState,
+    guide: () => readFile(guidePath, 'utf8'),
+    automations: async () => {
+      const [agents, tasks, items] = await Promise.all([automations.listAgents(), automations.listTasks(), automations.listRuns({})])
+      const runs = await Promise.all(items.slice(0, AUTOMATION_RUNS_IN_SOURCE).map((item) => automations.getRun({ id: item.id })))
+      return { agents: agents.agents, tasks, runs: runs.filter((run): run is AutomationRun => run !== null) }
+    },
+    whatsapp: { exportRecent: (folder: string) => whatsapp.exportRecent(folder), exportChats: (folder: string, chatIds: readonly string[], days: number) => whatsapp.exportChats(folder, chatIds, days) },
+    ...devLog,
+  }
+  const actionResolver = {
+    whatsappChat: async (chatId: string) => {
+      // A lista que a pergunta acabou de ler (uma chamada só ao serviço).
+      const found = (await whatsapp.knownChats().catch(() => [])).find((item) => item.id === chatId)
+      return found ? { name: found.name, kind: found.kind, ...(found.phone ? { phone: found.phone } : {}) } : null
+    },
+    agents: async () => (await automations.listAgents()).agents,
+    meeting: async (meetingId: string) => meetings.get(meetingId),
+    now: Date.now,
+    timeZone,
+  }
   const chat = createChatService({
     store: chatStore,
     corpus,
     // Contrato 24: só a exportação das conversas para a pasta de escopo; o envio não chega aqui.
     whatsapp: { exportChats: (folder, chatIds, days) => whatsapp.exportChats(folder, chatIds, days) },
+    assistant: {
+      prepare: (folder, scope) => writeSources(assistantSources, folder, scope),
+      extract: (text) => extractActions(text, actionResolver),
+    },
     settings,
     meetings,
     locate: () => claude.locate(),
@@ -775,7 +833,7 @@ function createAppServices(userData: string): AppServices {
       ),
     notify: showAutomationNotice,
     dailyLimit: async () => (await settings.get()).scheduledRunsDailyLimit,
-    timeZone: () => Intl.DateTimeFormat().resolvedOptions().timeZone,
+    timeZone,
     onChange: (status) => {
       trayController?.refresh()
       if (!lockService?.isLocked()) broadcast(BrowserWindow.getAllWindows(), 'scribe:automations-changed', status)
@@ -788,6 +846,8 @@ function createAppServices(userData: string): AppServices {
     ...(smokeAutomations ? { now: () => Date.now() + smokeAutomations.skewMs } : {}),
     ...devLog,
   })
+  // Contrato 25: o clique nos cartões do Assistente. O lembrete é a tarefa "uma vez" sem agente das Automações.
+  const chatActions = createChatActions({ store: chatStore, createReminder: (input) => automations.createReminder(input), timeZone })
   return {
     settings: createSettingsService({ settings, secrets, gateway, mic }),
     meetings,
@@ -804,6 +864,7 @@ function createAppServices(userData: string): AppServices {
     branding,
     updates,
     chat,
+    chatActions,
     corpus,
     acp: acpAgent,
     lock,
@@ -898,7 +959,7 @@ async function confirmWhatsAppSend(win: BrowserWindow | null, question: SendQues
 }
 
 function registerIpc(services: AppServices): void {
-  const { settings, meetings, meetingsService, meetingsIndex, tokenClient, translation, claude, files, summary, analysis, download, branding, updates, chat, corpus, acp, lock, google, drive, whatsapp, automations } = services
+  const { settings, meetings, meetingsService, meetingsIndex, tokenClient, translation, claude, files, summary, analysis, download, branding, updates, chat, chatActions, corpus, acp, lock, google, drive, whatsapp, automations } = services
   /** Reunião salva, renomeada ou com anotações novas: o `.md` dela no acervo do chat é reescrito. */
   const touched = (meetingId: string): void => void corpus.sync(meetingId).catch(() => undefined)
   /**
@@ -1045,6 +1106,9 @@ function registerIpc(services: AppServices): void {
   handle('scribe:chat-update', appOrigin, (_event, request) => chat.update(request))
   handle('scribe:chat-redo', appOrigin, (_event, request) => chat.redo(request))
   handle('scribe:chat-copy', appOrigin, (_event, request) => chat.copy(request))
+  // Assistente (contrato 25): o cartão só grava o clique; o envio segue só por `scribe:whatsapp-send`.
+  handle('scribe:chat-action-reminder', appOrigin, (_event, request) => chatActions.reminder(request))
+  handle('scribe:chat-action-state', appOrigin, (_event, request) => chatActions.setState(request))
   // Bloqueio (contrato 22): a senha só passa por aqui até o serviço, que confere com o hash.
   handle('scribe:lock-status', appOrigin, () => lock.status())
   handle('scribe:lock-now', appOrigin, () => lock.lock('button'))

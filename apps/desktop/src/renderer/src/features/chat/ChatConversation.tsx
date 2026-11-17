@@ -18,7 +18,7 @@ import type { ChatMeetings } from './useChatMeetings'
 interface ChatConversationProps {
   /** Conversa aberta; `null` = nova, criada na primeira pergunta. */
   chatId: string | null
-  /** Conversa da aba de uma reunião (só o `.md` dela); `null` na tela "Perguntar". */
+  /** Conversa da aba de uma reunião (só o `.md` dela); `null` na tela "Assistente". */
   meetingId: string | null
   meetings: ChatMeetings
   /** Painel "Contexto" aberto (o estado fica com a tela, que encolhe a lista quando falta largura). */
@@ -308,7 +308,7 @@ export function ChatConversation({ chatId, meetingId, meetings, contextOpen, onC
                 <div data-chat-empty className="flex flex-col gap-5">
                   <div className="flex items-center gap-2 text-13 text-text-muted">
                     <Icon icon={MessageCircle} className="shrink-0" />
-                    {meetingId ? 'Pergunte sobre esta reunião.' : 'Pergunte sobre as suas reuniões.'}
+                    {meetingId ? 'Pergunte sobre esta reunião.' : 'Pergunte ou peça algo. Nada é criado nem enviado sem o seu clique.'}
                   </div>
                   <div className="grid grid-cols-2 gap-x-4 gap-y-5" aria-label="Sugestões">
                     {groups.map((group) => (
@@ -347,6 +347,8 @@ export function ChatConversation({ chatId, meetingId, meetings, contextOpen, onC
                         meetings={meetings}
                         onCopy={() => (chatId ? useChat.getState().copy(chatId, index) : Promise.resolve(false))}
                         onRedo={index === lastAssistant && lastAssistant > lastUser && !busy ? redo : null}
+                        chatId={chatId}
+                        index={index}
                       />
                     )
                   })}
@@ -391,7 +393,7 @@ export function ChatConversation({ chatId, meetingId, meetings, contextOpen, onC
               value={text}
               rows={2}
               maxLength={CHAT_TEXT_MAX}
-              placeholder={meetingId ? 'Pergunte sobre esta reunião' : 'Pergunte sobre as reuniões'}
+              placeholder={meetingId ? 'Pergunte sobre esta reunião' : 'Pergunte ou peça algo…'}
               aria-label="Pergunta"
               aria-keyshortcuts="Enter Meta+Enter"
               onChange={(event) => setText(event.target.value)}

@@ -1,6 +1,6 @@
 import { useEffect } from 'react'
 import { useNavigate } from 'react-router'
-import { ROUTE_PATHS } from '@shared/routes'
+import { ROUTE_PATHS, type WhatsAppNavigationState } from '@shared/routes'
 import { useAutomations } from '../features/agents/automationsStore'
 import { useRecording } from '../features/live/recordingStore'
 import { useStartRecording } from '../features/live/useStartRecording'
@@ -37,6 +37,17 @@ export function useMainNavigation(): void {
         if (useLock.getState().status.locked) return
         useAutomations.getState().openRun(runId)
         void navigate(ROUTE_PATHS.automacoes)
+      }),
+    [navigate],
+  )
+
+  // Contrato 25: "Abrir" da notificação de um lembrete ligado a uma conversa do WhatsApp.
+  useEffect(
+    () =>
+      window.__scribeApi.on('scribe:open-whatsapp', ({ chatId }) => {
+        if (useLock.getState().status.locked) return
+        const state: WhatsAppNavigationState = { chatId }
+        void navigate(ROUTE_PATHS.whatsapp, { state })
       }),
     [navigate],
   )

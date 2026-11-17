@@ -1,4 +1,4 @@
-// Textos da tela "Perguntar" v2 (contrato 16): modelo, tempo, tokens, custo, escopo, totais da conversa,
+// Textos da tela "Assistente" (antes "Perguntar" v2, contrato 16): modelo, tempo, tokens, custo, escopo, totais da conversa,
 // sugestões e a lista de conversas agrupada por dia. Sem DOM: testado em test/renderer/chat.test.ts.
 import type { ChatListItem, ChatMessage, ChatScope } from '@shared/chat'
 import { WHATSAPP_DEFAULT_SCOPE_DAYS } from '@shared/whatsapp'
@@ -53,9 +53,18 @@ export function chosenMeetings(scope: ChatScope, exists: ((id: string) => boolea
   return exists ? ids.filter(exists) : [...ids]
 }
 
-/** Contrato 24: o escopo novo leva junto as conversas do WhatsApp escolhidas no anterior. */
+/**
+ * Contrato 24: o escopo novo leva junto as conversas do WhatsApp escolhidas no anterior. Contrato 25: e o modo do
+ * WhatsApp e as fontes desligadas.
+ */
 export function withWhatsApp(next: ChatScope, from: ChatScope): ChatScope {
-  return from.whatsappChats?.length ? { ...next, whatsappChats: [...from.whatsappChats], whatsappDays: from.whatsappDays ?? WHATSAPP_DEFAULT_SCOPE_DAYS } : next
+  const chats = from.whatsappChats?.length ? { whatsappChats: [...from.whatsappChats], whatsappDays: from.whatsappDays ?? WHATSAPP_DEFAULT_SCOPE_DAYS } : {}
+  return {
+    ...next,
+    ...chats,
+    ...(from.whatsappMode ? { whatsappMode: from.whatsappMode } : {}),
+    ...(from.sources ? { sources: { ...from.sources } } : {}),
+  }
 }
 
 /** Rótulo do escopo: "Todas as reuniões (6)", "Últimos 7 dias", "Reuniões escolhidas (2)"; com " + 2 conversas" do WhatsApp. */

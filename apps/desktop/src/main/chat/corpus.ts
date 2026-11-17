@@ -7,15 +7,21 @@
 // Contrato 16: a conversa da tela "Perguntar" com escopo menor que "Todas as reuniões" (últimos 7 ou 30 dias,
 // ou as reuniões escolhidas) roda em `userData/chat-scope/<id da conversa>/`, só com os `.md` do escopo e um
 // `INDICE.md` deles, com as mesmas permissões e a mesma limpeza das pastas da conversa de uma reunião.
+//
+// Contrato 25: a pasta da conversa do Assistente leva também as fontes do app (`sources.ts`); o `INDICE.md` dela
+// diz quais estão ali e o que cada uma tem. Os `.md` das reuniões nas pastas de escopo são links físicos (hardlinks)
+// do acervo, não cópias: nada é copiado por conversa. O acervo grava por `rename`, então a reunião que muda ganha um
+// arquivo novo e o link é refeito (`refreshScopes` e `refreshScope`, que compara o inode). Link simbólico não serve:
+// o alvo fica fora da pasta da conversa, que é tudo o que o agente pode ler. Sem link físico (outro volume), copia.
 import { randomUUID } from 'node:crypto'
-import { chmod, copyFile, mkdir, readdir, rename, rm, stat, writeFile } from 'node:fs/promises'
+import { chmod, copyFile, link, mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { CHAT_SCOPE_MEETINGS_MAX, MEETING_LINK_SCHEME, type ChatScope } from '../../shared/chat'
 import { notesInOrder, type MeetingNote } from '../../shared/meeting-notes'
 import { escapeHeadings, taskLine, type MeetingSummary } from '../../shared/meeting-summary'
 import type { Meeting } from '../../shared/meetings'
 import { firstSentence } from '../../shared/meetings-overview'
-import { WHATSAPP_EXPORT_PREFIX } from '../../shared/whatsapp'
+import { WHATSAPP_EXPORT_PREFIX, WHATSAPP_OVERVIEW_FILE, WHATSAPP_RECENT_DAYS } from '../../shared/whatsapp'
 import { durationLabel } from '../../shared/transcript-markdown'
 import { formatClock, type TranscriptDocument } from '../../shared/transcription'
 import { cleanFileTitle } from '../audio-files/names'
@@ -24,6 +30,7 @@ import type { NotesStore } from '../meetings/notes'
 import type { MeetingsStore } from '../meetings/store'
 import type { SummaryStore } from '../meetings/summaries'
 import type { TranscriptStore } from '../meetings/transcripts'
+import { AUTOMATIONS_FILE, GUIDE_FILE, isSourceFile, STATE_FILE } from './sources'
 
 export const CHAT_CORPUS_DIR = 'chat-corpus'
 export const CHAT_INDEX_FILE = 'INDICE.md'
@@ -105,19 +112,44 @@ export function corpusIndexLine(meeting: Meeting, summary: MeetingSummary | null
   return `- ${date} · ${oneLine(meeting.title)} · ${overview} · arquivo: ${corpusFileName(meeting)} · ${MEETING_LINK_SCHEME}${meeting.id}`
 }
 
-/** `INDICE.md`: uma linha por reunião, da mais recente para a mais antiga; no fim, as conversas do WhatsApp da pasta (contrato 24). */
-export function corpusIndexMarkdown(entries: readonly { meeting: Meeting; summary: MeetingSummary | null }[], whatsappFiles: readonly string[] = []): string {
+/** O que cada fonte do app tem (contrato 25), para o `INDICE.md` da conversa do Assistente. */
+const SOURCE_DESCRIPTIONS: Readonly<Record<string, string>> = {
+  [STATE_FILE]: 'o estado do app agora: a data, a hora e o fuso, a gravação em andamento, a conta Google, o WhatsApp, a versão e as automações ligadas.',
+  [GUIDE_FILE]: 'o guia do app: cada tela, cada aba de Configurações, os atalhos e o que cada recurso faz e não faz.',
+  [AUTOMATIONS_FILE]: 'os agentes, as tarefas agendadas (próxima e última execução) e as últimas 20 execuções.',
+  [WHATSAPP_OVERVIEW_FILE]: `uma linha por conversa do WhatsApp com mensagem nos últimos ${WHATSAPP_RECENT_DAYS} dias, com as não lidas, quem mandou a última e "pendente de resposta".`,
+}
+
+/**
+ * `INDICE.md`: uma linha por reunião, da mais recente para a mais antiga; depois, as fontes do app (contrato 25) e as
+ * conversas do WhatsApp da pasta (contrato 24).
+ */
+export function corpusIndexMarkdown(entries: readonly { meeting: Meeting; summary: MeetingSummary | null }[], whatsappFiles: readonly string[] = [], sourceFiles: readonly string[] = []): string {
   const sorted = [...entries].sort((a, b) => Date.parse(b.meeting.startedAt) - Date.parse(a.meeting.startedAt))
+  const recent = sourceFiles.includes(WHATSAPP_OVERVIEW_FILE)
   const lines = [
     '# Índice das reuniões',
     '',
     'Uma linha por reunião, da mais recente para a mais antiga: data e hora · título · primeira frase do resumo · arquivo · link para citar.',
     '',
     ...(sorted.length ? sorted.map(({ meeting, summary }) => corpusIndexLine(meeting, summary)) : ['Nenhuma reunião gravada.']),
-    ...(whatsappFiles.length ? ['', '## Conversas do WhatsApp', '', 'Um arquivo por conversa escolhida, com as mensagens dos últimos dias.', '', ...whatsappFiles.map((file) => `- arquivo: ${file}`)] : []),
+    ...(sourceFiles.length ? ['', '## Fontes do app', '', ...sourceFiles.map((file) => `- arquivo: ${file}: ${SOURCE_DESCRIPTIONS[file] ?? ''}`.trimEnd())] : []),
+    ...(whatsappFiles.length
+      ? [
+          '',
+          '## Conversas do WhatsApp',
+          '',
+          recent ? `Um arquivo por conversa com mensagem nos últimos ${WHATSAPP_RECENT_DAYS} dias, a mais recente primeiro.` : 'Um arquivo por conversa escolhida, com as mensagens dos últimos dias.',
+          '',
+          ...whatsappFiles.map((file) => `- arquivo: ${file}`),
+        ]
+      : []),
   ]
   return `${lines.join('\n')}\n`
 }
+
+/** Fontes do app numa pasta de escopo, na ordem do índice. */
+const SOURCE_ORDER = Object.keys(SOURCE_DESCRIPTIONS)
 
 const DAY_MS = 86_400_000
 
@@ -170,10 +202,39 @@ export interface ChatCorpus {
   scopeMany(meetingIds: readonly string[], key: string): Promise<string | null>
   /** Reescreve o `INDICE.md` de uma pasta de escopo (as conversas do WhatsApp entraram nela; contrato 24). */
   reindexScope(key: string): Promise<void>
+  /**
+   * Contrato 25: a pasta de escopo que já existe passa a ter exatamente as reuniões dadas (a reunião gravada depois
+   * de a conversa abrir entra; a que saiu do período sai), sem mexer nas fontes do app, e o `INDICE.md` é reescrito.
+   */
+  refreshScope(meetingIds: readonly string[], key: string): Promise<void>
   /** Apaga a pasta temporária de uma conversa. */
   dropScope(key: string): Promise<void>
   /** Ao abrir o app: apaga as pastas temporárias que sobraram. */
   clearScopes(): Promise<void>
+}
+
+/**
+ * O `.md` do acervo dentro de uma pasta de escopo: link físico (mesmo arquivo, nenhum byte copiado, 0600 como o
+ * acervo); se o sistema não deixar, cópia 0600.
+ */
+async function placeFile(source: string, target: string): Promise<void> {
+  await rm(target, { force: true })
+  try {
+    await link(source, target)
+  } catch {
+    await copyFile(source, target)
+    await chmod(target, 0o600)
+  }
+}
+
+/** O arquivo da pasta de escopo ainda é o mesmo do acervo (o link não ficou para trás depois de um `rename`)? */
+async function sameFile(a: string, b: string): Promise<boolean> {
+  try {
+    const [x, y] = await Promise.all([stat(a), stat(b)])
+    return x.ino === y.ino && x.dev === y.dev
+  } catch {
+    return false
+  }
 }
 
 const safeKey = (key: string): string | null => (/^[\w-]{1,100}$/.test(key) ? key : null)
@@ -230,8 +291,17 @@ export function createChatCorpus(deps: ChatCorpusDeps): ChatCorpus {
     const meetings = (await deps.meetings.list()).filter((meeting) => wanted.has(meeting.id))
     const entries = await Promise.all(meetings.map(async (meeting) => ({ meeting, summary: await deps.summaries.get(meeting.id).catch(() => null) })))
     const file = join(target, CHAT_INDEX_FILE)
-    const whatsappFiles = (await readdir(target).catch(() => [] as string[])).filter((name) => name.startsWith(WHATSAPP_EXPORT_PREFIX) && name.endsWith('.md')).sort()
-    await writeAtomic(file, corpusIndexMarkdown(entries, whatsappFiles))
+    const names = await readdir(target).catch(() => [] as string[])
+    // Contrato 25: as conversas do WhatsApp da mais recente para a mais antiga (pela data da última mensagem do arquivo).
+    const whatsappNames = names.filter((name) => name.startsWith(WHATSAPP_EXPORT_PREFIX) && name.endsWith('.md'))
+    const lastOf = async (name: string): Promise<string> => /^- Data da última mensagem: (.+)$/m.exec(await readFile(join(target, name), 'utf8').catch(() => ''))?.[1] ?? ''
+    const dated = await Promise.all(whatsappNames.map(async (name) => ({ name, last: await lastOf(name) })))
+    const whatsappFiles = dated.sort((a, b) => b.last.localeCompare(a.last) || a.name.localeCompare(b.name)).map((entry) => entry.name)
+    const sourceFiles = SOURCE_ORDER.filter((name) => names.includes(name))
+    const content = corpusIndexMarkdown(entries, whatsappFiles, sourceFiles)
+    // Igual ao que está lá: nada é regravado.
+    if ((await readFile(file, 'utf8').catch(() => null)) === content) return
+    await writeAtomic(file, content)
     await chmod(file, 0o600)
   }
 
@@ -265,8 +335,7 @@ export function createChatCorpus(deps: ChatCorpusDeps): ChatCorpus {
       }
       if (!names.some((file) => file.endsWith(suffix))) continue
       if (name) {
-        await copyFile(join(dir, name), join(target, name))
-        await chmod(join(target, name), 0o600)
+        await placeFile(join(dir, name), join(target, name))
       }
       for (const file of names) if (file.endsWith(suffix) && file !== name) await rm(join(target, file), { force: true })
       if (names.includes(CHAT_INDEX_FILE)) await writeScopeIndex(target, idsIn(await readdir(target)))
@@ -348,8 +417,7 @@ export function createChatCorpus(deps: ChatCorpusDeps): ChatCorpus {
         await rm(target, { recursive: true, force: true })
         await ensureDir(target)
         const name = corpusFileName(meeting)
-        await copyFile(join(dir, name), join(target, name))
-        await chmod(join(target, name), 0o600)
+        await placeFile(join(dir, name), join(target, name))
         return target
       }),
 
@@ -368,11 +436,31 @@ export function createChatCorpus(deps: ChatCorpusDeps): ChatCorpus {
           const name = corpusFileName(meeting)
           // O `.md` do acervo é a fonte; faltando (acervo antigo), é escrito agora.
           if (!(await exists(join(dir, name)))) await writeMeeting(meeting)
-          await copyFile(join(dir, name), join(target, name))
-          await chmod(join(target, name), 0o600)
+          await placeFile(join(dir, name), join(target, name))
         }
         await writeScopeIndex(target, meetings.map((meeting) => meeting.id))
         return target
+      }),
+
+    refreshScope: (meetingIds, key) =>
+      serial(async () => {
+        const folder = safeKey(key)
+        if (!folder) return
+        const target = join(scopes, folder)
+        if (!(await exists(target))) return
+        const wanted = new Set(meetingIds)
+        const meetings = (await deps.meetings.list()).filter((meeting) => wanted.has(meeting.id))
+        const names = await readdir(target)
+        const keep = new Set(meetings.map(corpusFileName))
+        for (const name of names) if (name !== CHAT_INDEX_FILE && !isSourceFile(name) && name.endsWith('.md') && !keep.has(name)) await rm(join(target, name), { force: true })
+        await ensureDir(dir)
+        for (const meeting of meetings) {
+          const name = corpusFileName(meeting)
+          if (!(await exists(join(dir, name)))) await writeMeeting(meeting)
+          if (names.includes(name) && (await sameFile(join(dir, name), join(target, name)))) continue
+          await placeFile(join(dir, name), join(target, name))
+        }
+        await writeScopeIndex(target, meetings.map((meeting) => meeting.id))
       }),
 
     reindexScope: (key) =>
