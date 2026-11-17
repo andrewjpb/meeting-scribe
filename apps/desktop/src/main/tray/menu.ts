@@ -94,6 +94,8 @@ export interface TrayLike {
   on(event: 'click' | 'right-click', listener: () => void): unknown
   popUpContextMenu(menu: unknown): void
   destroy(): void
+  /** Onde o ícone está na barra. Largura ou altura 0 = o macOS escondeu (barra cheia, atrás da câmera). */
+  getBounds?(): { width: number; height: number }
 }
 
 export type TrayIcon = 'idle' | 'running'
@@ -117,6 +119,8 @@ export interface TrayController {
   /** O menu como seria aberto agora (o clique usa o mesmo). */
   template(): MenuItemConstructorOptions[]
   icon(): TrayIcon
+  /** O ícone aparece de fato na barra de menus? */
+  visible(): boolean
   dispose(): void
 }
 
@@ -144,6 +148,10 @@ export function createTrayController(deps: TrayControllerDeps): TrayController {
     },
     template,
     icon: () => icon,
+    visible: () => {
+      const bounds = tray.getBounds?.()
+      return !bounds || (bounds.width > 0 && bounds.height > 0)
+    },
     dispose: () => tray.destroy(),
   }
 }
@@ -156,6 +164,10 @@ export interface WindowLifecycleDeps {
   dock: { hide(): void; show(): unknown } | undefined
   quit: () => void
   behavior: () => Promise<'tray' | 'quit'>
+  /** O ícone da barra de menus está visível? Sem ele, o app fica no Dock para a pessoa conseguir voltar. */
+  trayVisible?: () => boolean
+  /** Avisa (uma vez) que o macOS escondeu o ícone da barra de menus. */
+  trayHidden?: () => void
 }
 
 export function createWindowLifecycle(deps: WindowLifecycleDeps): { lastWindowClosed(): Promise<void>; reopened(): void } {
@@ -163,6 +175,7 @@ export function createWindowLifecycle(deps: WindowLifecycleDeps): { lastWindowCl
     async lastWindowClosed() {
       const behavior = await deps.behavior().catch(() => 'tray' as const)
       if (behavior === 'quit') deps.quit()
+      else if (deps.trayVisible && !deps.trayVisible()) deps.trayHidden?.()
       else deps.dock?.hide()
     },
     reopened() {

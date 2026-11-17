@@ -96,6 +96,31 @@ describe('ícone na barra de menus (contrato 23, CA8 e CA9)', () => {
     await lifecycle.lastWindowClosed()
     expect(calls).toEqual(['hide', 'show', 'quit'])
   })
+
+  it('o macOS escondeu o ícone (barra cheia): o app fica no Dock e avisa', async () => {
+    const calls: string[] = []
+    let visible = false
+    const lifecycle = createWindowLifecycle({
+      dock: { hide: () => calls.push('hide'), show: () => calls.push('show') },
+      quit: () => calls.push('quit'),
+      behavior: () => Promise.resolve('tray'),
+      trayVisible: () => visible,
+      trayHidden: () => calls.push('hidden'),
+    })
+    await lifecycle.lastWindowClosed()
+    visible = true
+    await lifecycle.lastWindowClosed()
+    expect(calls).toEqual(['hidden', 'hide'])
+  })
+
+  it('visible() lê o tamanho do ícone na barra', () => {
+    let bounds = { width: 0, height: 0 }
+    const tray: TrayLike = { setImage: () => undefined, setToolTip: () => undefined, on: () => undefined, popUpContextMenu: () => undefined, destroy: () => undefined, getBounds: () => bounds }
+    const controller = createTrayController({ create: () => tray, image: (icon) => icon, buildMenu: (t) => t, state: () => state(), running: () => false, handlers: handlers([]) })
+    expect(controller.visible()).toBe(false)
+    bounds = { width: 34, height: 24 }
+    expect(controller.visible()).toBe(true)
+  })
 })
 
 describe('segurança das automações (contrato 23, CA10)', () => {

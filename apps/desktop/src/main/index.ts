@@ -136,6 +136,7 @@ let lastLockStatus: LockStatus | null = null
 let recordingStartedAt: number | null = null
 /** Fechar a última janela e reabrir (contrato 23, CA9). */
 let windowLifecycle: ReturnType<typeof createWindowLifecycle> | null = null
+let trayHiddenNoticeShown = false
 /** Post-its que os agentes acrescentaram e a tela ainda não leu, por reunião (contrato 23). */
 const agentNotes = new Map<string, Set<string>>()
 const NO_NOTES: ReadonlySet<string> = new Set()
@@ -1298,6 +1299,17 @@ void app.whenReady().then(async () => {
         : undefined,
     quit: smokeAutomations ? () => void smokeAutomations.quitRequests++ : () => app.quit(),
     behavior: async () => (await services.settings.getSettings()).closeBehavior,
+    // O macOS esconde ícones quando a barra de menus está cheia (atrás da câmera dos MacBooks). Aí o app fica
+    // no Dock, senão a pessoa não teria como voltar a ele.
+    trayVisible: () => trayController?.visible() ?? false,
+    trayHidden: () => {
+      if (trayHiddenNoticeShown || smokeAutomations) return
+      trayHiddenNoticeShown = true
+      new Notification({
+        title: brandName,
+        body: 'O app continua aberto no Dock. O macOS escondeu o ícone da barra de menus porque ela está cheia.',
+      }).show()
+    },
   })
   applyLoginItem((await services.settings.getSettings()).openAtLogin)
   installTray(services.automations)
