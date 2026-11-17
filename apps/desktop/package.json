@@ -14,7 +14,8 @@
     "smoke": "node scripts/smoke.mjs",
     "test:aai": "node scripts/aai-live-test.mjs",
     "test:claude": "node scripts/claude-live-test.mjs",
-    "pack": "bash scripts/pack.sh"
+    "pack": "bash scripts/pack.sh",
+    "pack:linux": "bash scripts/pack-linux.sh"
   },
   "dependencies": {
     "@agentclientprotocol/claude-agent-acp": "0.107.0",
