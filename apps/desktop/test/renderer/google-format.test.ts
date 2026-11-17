@@ -3,7 +3,7 @@ import { OAUTH_ERRORS, type GoogleAccountStatus } from '../../src/shared/account
 import { driveStatusLine, inDriveAfter } from '../../src/renderer/src/features/meetings/driveFormat'
 import { accountLine, clientSaveErrorText, signInErrorText } from '../../src/renderer/src/features/settings/googleFormat'
 
-const status = (patch: Partial<GoogleAccountStatus>): GoogleAccountStatus => ({ client: { configured: true, clientId: '123456•••rcontent.com' }, state: 'signed-out', profile: null, error: null, ...patch })
+const status = (patch: Partial<GoogleAccountStatus>): GoogleAccountStatus => ({ client: { configured: true, clientId: '123456•••rcontent.com' }, state: 'signed-out', profile: null, error: null, calendar: false, ...patch })
 
 describe('linha "Google Drive" do detalhe (CA6)', () => {
   it('cada estado com o texto e a ação', () => {

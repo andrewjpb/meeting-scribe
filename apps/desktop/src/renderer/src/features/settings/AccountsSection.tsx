@@ -16,8 +16,9 @@ export const GOOGLE_CLIENT_SECRET_INPUT = 'google-client-secret'
 /**
  * Configurações › Contas (contrato 11): o bloco "Google". Sem cadastro, "Configurar…" abre o painel com o ID e a
  * chave secreta do cliente (que vão ao main e nunca voltam); com cadastro, "Entrar com Google" abre o navegador;
- * logado, a foto, o nome, o e-mail, "Sair" e o interruptor "Guardar no Google Drive". A linha da Microsoft vem
- * no contrato 12.
+ * logado, a foto, o nome, o e-mail, "Sair" e o interruptor "Guardar no Google Drive". Contrato 12: quem entrou antes
+ * da agenda vê "Permitir acesso à agenda" (o consentimento só com o escopo que falta). A Microsoft fica no bloco
+ * seguinte (`MicrosoftSection`).
  */
 export function AccountsSection() {
   const status = useGoogle((state) => state.status)
@@ -71,7 +72,7 @@ export function AccountsSection() {
   const state = status?.state ?? 'signed-out'
   const connected = state === 'signed-in' || state === 'expired'
   const configured = status?.client.configured ?? false
-  const errorText = signInErrorText(status?.error ?? null)
+  const errorText = signInErrorText(status?.error ?? null, status?.profile?.email ?? null)
   const profile = connected ? status?.profile : null
 
   return (
@@ -119,6 +120,11 @@ export function AccountsSection() {
             {state === 'expired' && (
               <Button action="google-sign-in" onClick={() => void useGoogle.getState().signIn()}>
                 Entrar com Google
+              </Button>
+            )}
+            {state === 'signed-in' && !status?.calendar && (
+              <Button action="google-calendar-grant" variant="secondary" onClick={() => void useGoogle.getState().grantCalendar()}>
+                Permitir acesso à agenda
               </Button>
             )}
             {connected && (

@@ -16,6 +16,8 @@ import type { SpawnClaude } from './claude-cli/translator'
 import type { SpawnAcp } from './acp/agent'
 import { NPM_REGISTRY, type AcpPackage, type DownloadTarball } from './acp/install'
 import { createFakeGoogle, type FakeGoogle } from './google/fake-google'
+import { createFakeMicrosoft, type FakeMicrosoft } from './microsoft/fake-microsoft'
+import type { CalendarNoticeKind } from '../shared/calendar'
 import { fakeMediaAccess } from './permissions'
 import { writeFakeIndex } from './whatsapp/fake-index'
 import type { DownloadRequest } from './updates/download'
@@ -36,6 +38,8 @@ export const SMOKE_OFFLINE_MODEL = 'deepseek-v4.1-flash'
 /** Cadastro OAuth inventado do Google falso (contrato 11): o smoke cola os dois em Configurações › Contas. */
 export const SMOKE_GOOGLE_CLIENT_ID = '000000000000-smokefalso.apps.googleusercontent.com'
 export const SMOKE_GOOGLE_CLIENT_SECRET = 'smoke-segredo-falso-0000'
+/** ID de aplicativo inventado da Microsoft falsa (contrato 12): o smoke cola em Configurações › Contas. */
+export const SMOKE_MICROSOFT_CLIENT_ID = '00000000-0000-4000-8000-00000000abcd'
 
 const CATALOG = {
   data: [
@@ -179,6 +183,15 @@ export interface SmokeFixtures {
   whatsappSendChoice: number
   /** Automações (contrato 23): relógio, notificações, ícone da barra de menus, Dock e "abrir ao entrar" substitutos. */
   automations: SmokeAutomations
+  /** Microsoft falsa (contrato 12): token, perfil, foto e agendas em memória; nada sai da máquina. */
+  microsoft: FakeMicrosoft
+  /** Agendas (contrato 12): as notificações substitutas. */
+  calendar: SmokeCalendar
+}
+
+export interface SmokeCalendar {
+  /** Notificações que o app mostraria (a de verdade nunca aparece no smoke); `act` faz o clique em "Gravar". */
+  notifications: { kind: CalendarNoticeKind; title: string; body: string; actions: string[]; act: () => void }[]
 }
 
 export interface SmokeAutomations {
@@ -321,6 +334,8 @@ export function createSmokeFixtures(currentVersion: string, userDataDir: string)
     whatsappSendDialogs: [],
     whatsappSendChoice: 0,
     automations: { skewMs: 0, notifications: [], trayImages: [], dock: { hides: 0, shows: 0 }, loginItems: [], quitRequests: 0 },
+    microsoft: createFakeMicrosoft({ clientId: SMOKE_MICROSOFT_CLIENT_ID, profile: { name: 'Bruno Teste', email: 'bruno.teste@example.com' } }),
+    calendar: { notifications: [] },
     lock: { skewMs: 0, touchIdAvailable: true, touchIdApproves: true, touchIdPrompts: 0, power: new EventEmitter(), refresh: () => undefined },
     fetch: (url: string, init: FetchInit) => {
       const path = new URL(url).pathname

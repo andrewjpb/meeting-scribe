@@ -20,7 +20,7 @@ import type { TranscriptCopyResult } from '../../shared/transcription'
 import type { AcpOpenResult, AcpSessionRequest } from '../acp/agent'
 import { openQuestionLines } from '../claude-cli/analysis'
 import { ACP_SUMMARY_DIR } from '../claude-cli/service'
-import { parseSummaryResult, summaryInput, summaryLines, summaryNoteLines, summarySystemPrompt, type SpawnSummary } from '../claude-cli/summary'
+import { parseSummaryResult, summaryInput, summaryLines, summaryNoteLines, summaryParticipantLines, summarySystemPrompt, type SpawnSummary } from '../claude-cli/summary'
 import type { Timers } from '../claude-cli/translator'
 import type { SettingsStore } from '../settings/store'
 import type { AnalysesStore } from './analyses'
@@ -130,6 +130,8 @@ export function createSummaryService(deps: SummaryServiceDeps): SummaryService {
     const noteLines = summaryNoteLines((await deps.notes?.get(meetingId).catch(() => [])) ?? [])
     const openLines = openQuestionLines(await analysesOf(meetingId))
     const whatsappLines = (await deps.whatsappMaterial?.(meetingId).catch(() => [])) ?? []
+    // Contrato 12 (CA9): os nomes dos convidados do evento da agenda, para o "Quem" (sem inventar).
+    const participantLines = summaryParticipantLines((await deps.meetings.get(meetingId).catch(() => null))?.calendar?.attendees ?? [])
     const found = await deps.locate().catch((): ClaudeLocateResult => ({ ok: false, error: 'not-found' }))
     if (job.cancelled) return
     if (!found.ok) {
@@ -148,7 +150,7 @@ export function createSummaryService(deps: SummaryServiceDeps): SummaryService {
       acpDir: ACP_SUMMARY_DIR,
       systemPrompt: summarySystemPrompt(),
       parse: parseSummaryResult,
-      input: summaryInput(input, noteLines, openLines, whatsappLines),
+      input: summaryInput(input, noteLines, openLines, whatsappLines, participantLines),
       label: 'resumo',
       timeoutMs: deps.timeoutMs,
       signal: job.abort.signal,

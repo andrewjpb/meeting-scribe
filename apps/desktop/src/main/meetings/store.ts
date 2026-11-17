@@ -6,7 +6,7 @@ import { randomUUID } from 'node:crypto'
 import { readFile, rename, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { z } from 'zod'
-import { defaultMeetingTitle, MEETING_TITLE_MAX, type Meeting, type MeetingFilePaths, type NewMeeting } from '../../shared/meetings'
+import { defaultMeetingTitle, MEETING_TITLE_MAX, type Meeting, type MeetingCalendar, type MeetingFilePaths, type NewMeeting } from '../../shared/meetings'
 
 export const MEETINGS_FILE = 'meetings.json'
 
@@ -15,11 +15,20 @@ const title = z.string().trim().min(1).max(MEETING_TITLE_MAX)
 /** Caminho de arquivo gravado pelo main. Registro antigo, sem o campo, carrega com `null`. */
 const filePath = z.string().min(1).max(4096).nullable().default(null)
 
-/** Participantes do evento da agenda (contrato 12 grava; o 10 mostra). Registro antigo vem sem o campo. */
+/**
+ * Evento da agenda (contrato 12 grava; o 10 mostra os participantes). Registro antigo vem sem o campo; os do
+ * contrato 10, só com os participantes.
+ */
 export const CALENDAR_ATTENDEES_MAX = 50
 const calendarText = z.string().max(200)
 const calendarSchema = z.object({
+  provider: z.enum(['google', 'microsoft']).optional(),
+  eventId: z.string().min(1).max(1024).optional(),
+  title: calendarText.optional(),
+  start: isoDate.optional(),
+  end: isoDate.optional(),
   attendees: z.array(z.object({ name: calendarText, email: calendarText })).max(CALENDAR_ATTENDEES_MAX),
+  joinUrl: z.string().max(2048).nullable().optional(),
 })
 
 const meetingSchema = z.object({
@@ -50,7 +59,8 @@ const idSchema = z.string().min(1)
 export interface MeetingsStore {
   list(): Promise<Meeting[]>
   get(id: string): Promise<Meeting | null>
-  create(input: NewMeeting): Promise<Meeting>
+  /** `calendar`: o evento da agenda da gravação (contrato 12), decidido no main; o renderer não manda. */
+  create(input: NewMeeting, extra?: { calendar?: MeetingCalendar | null }): Promise<Meeting>
   rename(id: string, title: string): Promise<Meeting | null>
   remove(id: string): Promise<boolean>
   /** Só para o main, ao encerrar com "Salvar áudio e transcrição numa pasta" ligado (contrato 07). */
@@ -108,9 +118,10 @@ export function createFileMeetingsStore({ dir, now = Date.now, newId = randomUUI
 
     get: (id) => serial(async () => (await read()).find((meeting) => meeting.id === idSchema.parse(id)) ?? null),
 
-    create: (input) =>
+    create: (input, extra) =>
       serial(async () => {
         const data = newMeetingSchema.parse(input)
+        const calendar = extra?.calendar ? calendarSchema.parse(extra.calendar) : null
         const meeting: Meeting = {
           id: newId(),
           title: data.title || defaultMeetingTitle(new Date(data.startedAt)),
@@ -119,6 +130,7 @@ export function createFileMeetingsStore({ dir, now = Date.now, newId = randomUUI
           sources: { mic: data.sources.mic, system: data.sources.system },
           audioPath: null,
           transcriptPath: null,
+          ...(calendar ? { calendar } : {}),
         }
         await write([...(await read()), meeting])
         return meeting

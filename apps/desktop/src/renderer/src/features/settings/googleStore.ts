@@ -12,6 +12,8 @@ interface GoogleState {
   /** `null` quando guardou. */
   saveClient: (clientId: string, clientSecret: string) => Promise<GoogleClientSaveError | null>
   signIn: () => Promise<void>
+  /** Contrato 12 (CA2): "Permitir acesso à agenda". */
+  grantCalendar: () => Promise<void>
   cancel: () => Promise<void>
   signOut: () => Promise<void>
 }
@@ -45,6 +47,14 @@ export const useGoogle = create<GoogleState>()((set, get) => ({
   signIn: async () => {
     try {
       set({ status: await window.__scribeApi.invoke('scribe:google-sign-in') })
+    } catch {
+      // O estado chega por `scribe:google-state`.
+    }
+  },
+
+  grantCalendar: async () => {
+    try {
+      set({ status: await window.__scribeApi.invoke('scribe:google-calendar-grant') })
     } catch {
       // O estado chega por `scribe:google-state`.
     }

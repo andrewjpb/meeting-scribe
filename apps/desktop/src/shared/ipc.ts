@@ -3,7 +3,8 @@
 import type { AcpAgentStatus } from './acp'
 import type { ChatActionReminderRequest, ChatActionResult, ChatActionStateRequest } from './assistant'
 import type { AgentDeleteResult, AgentInput, AgentSaveResult, AgentsList, AutomationEvent, AutomationRun, AutomationRunListItem, AutomationsStatus, RunStartResult, RunStatus, ScheduledTask, TaskInput, TaskSaveResult } from './automations'
-import type { DriveMeetingStatus, GoogleAccountStatus, GoogleClientSaveResult } from './accounts'
+import type { DriveMeetingStatus, GoogleAccountStatus, GoogleClientSaveResult, MicrosoftAccountStatus, MicrosoftClientSaveResult } from './accounts'
+import type { CalendarListResult, CalendarView } from './calendar'
 import type { BrandingInfo, BrandLogoChoice } from './branding'
 import type { LockResponse, LockStatus } from './lock'
 import type { KeySaveResult, KeyStatus, MicAccess, ModelCheck, ModelsResult } from './assemblyai'
@@ -209,6 +210,28 @@ export interface InvokeChannels {
   'scribe:google-sign-in-cancel': { request: undefined; response: boolean }
   /** "Sair": revoga o token no Google e apaga a sessão do disco. */
   'scribe:google-sign-out': { request: undefined; response: GoogleAccountStatus }
+  /** Contrato 12 (CA2): "Permitir acesso à agenda", o consentimento só com o escopo que falta. */
+  'scribe:google-calendar-grant': { request: undefined; response: GoogleAccountStatus }
+  /** Conta Microsoft (contrato 12, CA1): o mesmo que a do Google, com só o ID do aplicativo (sem segredo). */
+  'scribe:microsoft-status': { request: undefined; response: MicrosoftAccountStatus }
+  'scribe:microsoft-client-save': { request: { clientId: string }; response: MicrosoftClientSaveResult }
+  /** "Entrar com Microsoft": abre o navegador e responde quando o login termina (até 5 min). */
+  'scribe:microsoft-sign-in': { request: undefined; response: MicrosoftAccountStatus }
+  'scribe:microsoft-sign-in-cancel': { request: undefined; response: boolean }
+  /** "Sair": apaga a sessão deste Mac. */
+  'scribe:microsoft-sign-out': { request: undefined; response: MicrosoftAccountStatus }
+  /** Agendas (contrato 12): "Próximas" e a faixa "não está sendo gravada". Nenhum link de chamada volta. */
+  'scribe:calendar-get': { request: undefined; response: CalendarView }
+  /** As agendas de cada conta, para escolher em Configurações › Contas › Agenda. */
+  'scribe:calendar-list': { request: undefined; response: CalendarListResult }
+  /** "Gravar" da faixa ou de "Próximas": o evento da gravação que a tela começa em seguida. */
+  'scribe:calendar-record': { request: { key: string }; response: boolean }
+  /** "Ignorar" da faixa. */
+  'scribe:calendar-dismiss': { request: { key: string }; response: CalendarView }
+  /** "Entrar na chamada": o main abre o link do evento no navegador, só se for `https://`. */
+  'scribe:calendar-join': { request: { key: string }; response: boolean }
+  /** Título do evento da gravação que acabou de começar (CA9); `null` sem evento. */
+  'scribe:calendar-recording': { request: undefined; response: { title: string } | null }
   /** Estado da reunião no Google Drive (aba "Áudio" do detalhe). */
   'scribe:drive-status': { request: { meetingId: string }; response: DriveMeetingStatus }
   /** "Tentar de novo". */
@@ -315,6 +338,10 @@ export interface MainEvents {
   'scribe:recording-end-and-quit': undefined
   /** A conta Google mudou (entrando, entrou, expirou, saiu) (contrato 11). */
   'scribe:google-state': GoogleAccountStatus
+  /** A conta Microsoft mudou (contrato 12). */
+  'scribe:microsoft-state': MicrosoftAccountStatus
+  /** "Próximas" ou a faixa da agenda mudaram (contrato 12). Não chega com o app bloqueado. */
+  'scribe:calendar-state': CalendarView
   /** Uma reunião mudou de estado no Drive (enviando com a porcentagem, no Drive, erro). */
   'scribe:drive-state': { meetingId: string; status: DriveMeetingStatus }
   /** O serviço do WhatsApp mudou de estado (contrato 24). Não chega com o app bloqueado. */
@@ -429,6 +456,18 @@ const INVOKE: Record<InvokeChannel, true> = {
   'scribe:google-sign-in': true,
   'scribe:google-sign-in-cancel': true,
   'scribe:google-sign-out': true,
+  'scribe:google-calendar-grant': true,
+  'scribe:microsoft-status': true,
+  'scribe:microsoft-client-save': true,
+  'scribe:microsoft-sign-in': true,
+  'scribe:microsoft-sign-in-cancel': true,
+  'scribe:microsoft-sign-out': true,
+  'scribe:calendar-get': true,
+  'scribe:calendar-list': true,
+  'scribe:calendar-record': true,
+  'scribe:calendar-dismiss': true,
+  'scribe:calendar-join': true,
+  'scribe:calendar-recording': true,
   'scribe:drive-status': true,
   'scribe:drive-retry': true,
   'scribe:drive-open': true,
@@ -487,6 +526,8 @@ const MAIN_EVENTS: Record<MainEvent, true> = {
   'scribe:lock-state': true,
   'scribe:recording-end-and-quit': true,
   'scribe:google-state': true,
+  'scribe:microsoft-state': true,
+  'scribe:calendar-state': true,
   'scribe:drive-state': true,
   'scribe:whatsapp-state': true,
   'scribe:whatsapp-message': true,
@@ -622,6 +663,20 @@ export const WHEN_LOCKED: Readonly<Record<InvokeChannel, LockedPolicy>> = Object
   'scribe:google-sign-in': 'refused',
   'scribe:google-sign-in-cancel': 'refused',
   'scribe:google-sign-out': 'refused',
+  // Contrato 12: a conta Microsoft e as agendas, tudo de Configurações e das telas, recusado bloqueado. A leitura das
+  // agendas e os avisos rodam no main e continuam bloqueado (a notificação sai sem conteúdo).
+  'scribe:google-calendar-grant': 'refused',
+  'scribe:microsoft-status': 'refused',
+  'scribe:microsoft-client-save': 'refused',
+  'scribe:microsoft-sign-in': 'refused',
+  'scribe:microsoft-sign-in-cancel': 'refused',
+  'scribe:microsoft-sign-out': 'refused',
+  'scribe:calendar-get': 'refused',
+  'scribe:calendar-list': 'refused',
+  'scribe:calendar-record': 'refused',
+  'scribe:calendar-dismiss': 'refused',
+  'scribe:calendar-join': 'refused',
+  'scribe:calendar-recording': 'refused',
   'scribe:drive-status': 'refused',
   'scribe:drive-retry': 'refused',
   'scribe:drive-open': 'refused',

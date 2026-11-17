@@ -1,12 +1,14 @@
-// Contas (contrato 11): o que o renderer vê da conta Google e do envio ao Google Drive. Nenhum segredo passa
-// por aqui: a chave secreta do cliente e os tokens ficam cifrados no main; o renderer recebe só se o cadastro
-// existe, o ID do cliente com o meio mascarado, o nome, o e-mail e a foto (data URL).
+// Contas (contratos 11 e 12): o que o renderer vê das contas Google e Microsoft e do envio ao Google Drive. Nenhum
+// segredo passa por aqui: a chave secreta do cliente e os tokens ficam cifrados no main; o renderer recebe só se o
+// cadastro existe, o ID do cliente com o meio mascarado, o nome, o e-mail, a foto (data URL) e se a agenda foi
+// liberada.
 
 /** Erros do login (`accounts/oauth.ts`). */
-export const OAUTH_ERRORS = ['cancelled', 'timeout', 'state', 'denied', 'network', 'invalid-client'] as const
+/** `other-account` (contrato 12): "Permitir acesso à agenda" voltou com outra conta; nada mudou. */
+export const OAUTH_ERRORS = ['cancelled', 'timeout', 'state', 'denied', 'network', 'invalid-client', 'other-account'] as const
 export type OAuthErrorCode = (typeof OAUTH_ERRORS)[number]
 
-/** `expired`: o Google recusou a renovação (`invalid_grant`); nada local foi apagado, só falta entrar de novo. */
+/** `expired`: o provedor recusou a renovação (`invalid_grant`); nada local foi apagado, só falta entrar de novo. */
 export type AccountState = 'signed-out' | 'signing-in' | 'signed-in' | 'expired'
 
 export interface AccountProfile {
@@ -16,17 +18,26 @@ export interface AccountProfile {
   photo: string | null
 }
 
-export interface GoogleAccountStatus {
+/** Estado de uma conta (Google no contrato 11, Microsoft no 12). */
+export interface AccountStatus {
   /** Cadastro do cliente OAuth: só se existe e o ID com o meio mascarado. */
   client: { configured: boolean; clientId: string | null }
   state: AccountState
   profile: AccountProfile | null
   /** Por que o último login não deu certo nesta execução; `null` depois de um login bom. */
   error: OAuthErrorCode | null
+  /** Contrato 12: a sessão tem o acesso de leitura à agenda. */
+  calendar: boolean
 }
+
+export type GoogleAccountStatus = AccountStatus
+export type MicrosoftAccountStatus = AccountStatus
 
 export type GoogleClientSaveError = 'invalid-id' | 'invalid-secret' | 'unavailable' | 'failed'
 export type GoogleClientSaveResult = { ok: true; status: GoogleAccountStatus } | { ok: false; error: GoogleClientSaveError; status: GoogleAccountStatus }
+/** Microsoft: só o "ID do aplicativo (cliente)", sem segredo (cliente público). */
+export type MicrosoftClientSaveError = 'invalid-id' | 'unavailable' | 'failed'
+export type MicrosoftClientSaveResult = { ok: true; status: MicrosoftAccountStatus } | { ok: false; error: MicrosoftClientSaveError; status: MicrosoftAccountStatus }
 
 /** Pasta do app na raiz do Drive. */
 export const DRIVE_ROOT_FOLDER_NAME = 'LAP Reuniões'
@@ -66,7 +77,7 @@ export const DRIVE_FOLDER_URL_PREFIX = 'https://drive.google.com/drive/folders/'
 /** ID de pasta do Drive: letras, números, `-` e `_`. */
 export const DRIVE_ID_PATTERN = /^[\w-]{1,200}$/
 
-/** `123456789012-abc….apps.googleusercontent.com` vira `123456•••rcontent.com`. */
+/** `123456789012-abc….apps.googleusercontent.com` vira `123456•••rcontent.com`; um GUID, `1b2c3d•••9a8b7c6d5e4f`. */
 export function maskClientId(clientId: string): string {
   if (clientId.length <= 18) return `${clientId.slice(0, 3)}•••`
   return `${clientId.slice(0, 6)}•••${clientId.slice(-12)}`

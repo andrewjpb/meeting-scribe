@@ -31,6 +31,10 @@ export const ACCOUNT_HOSTS: readonly { host: string; path: string }[] = [
   { host: 'www.googleapis.com', path: '/drive/v3/' },
   { host: 'www.googleapis.com', path: '/upload/drive/v3/' },
   { host: 'lh3.googleusercontent.com', path: '/' },
+  // Contrato 12: as agendas e a conta Microsoft (o token, o perfil, a foto e o `calendarView`).
+  { host: 'www.googleapis.com', path: '/calendar/v3/' },
+  { host: 'login.microsoftonline.com', path: '/common/oauth2/v2.0/token' },
+  { host: 'graph.microsoft.com', path: '/v1.0/me' },
 ]
 
 /** Só `https://`, sem usuário nem porta, num destino da lista. */
@@ -45,7 +49,7 @@ export function allowedUrl(url: string, hosts: readonly { host: string; path: st
   return hosts.some((entry) => parsed.hostname === entry.host && parsed.pathname.startsWith(entry.path))
 }
 
-/** Falha de rede (sem internet, DNS, conexão caída): o envio tenta de novo mais tarde. */
+/** Falha de rede (sem internet, DNS, conexão caída): o envio (e a leitura da agenda) tenta de novo mais tarde. */
 export class NetworkError extends Error {
   readonly code = 'network'
   constructor(message = 'sem conexão') {

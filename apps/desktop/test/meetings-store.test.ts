@@ -71,6 +71,25 @@ describe('store de reuniões', () => {
     expect(await store.list()).toEqual([])
   })
 
+  it('contrato 12 (CA9): a reunião criada na gravação guarda o evento inteiro; sem evento, sem o campo', async () => {
+    const calendar = {
+      provider: 'google' as const,
+      eventId: 'g1',
+      title: 'Revisão do contrato',
+      start: '2026-11-12T09:00:00.000Z',
+      end: '2026-11-12T09:30:00.000Z',
+      attendees: [{ name: 'Ana Lima', email: 'ana@exemplo.com' }],
+      joinUrl: 'https://meet.google.com/abc-defg-hij',
+    }
+    const meeting = await store.create(input('2026-11-12T09:01:00.000Z', 'Revisão do contrato'), { calendar })
+    expect(meeting.calendar).toEqual(calendar)
+    expect(await store.get(meeting.id)).toEqual(meeting)
+    expect((await store.rename(meeting.id, 'Outro nome'))?.calendar).toEqual(calendar)
+    const plain = await store.create(input('2026-11-12T10:00:00.000Z'), { calendar: null })
+    expect('calendar' in plain).toBe(false)
+    await expect(store.create(input('2026-11-12T11:00:00.000Z'), { calendar: { ...calendar, start: 'ontem' } })).rejects.toThrow()
+  })
+
   it('escreve de forma atômica: nenhum temporário fica para trás', async () => {
     await Promise.all([store.create(input('2026-11-14T10:00:00.000Z')), store.create(input('2026-11-14T11:00:00.000Z'))])
     expect(readdirSync(dir)).toEqual([MEETINGS_FILE])

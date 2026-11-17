@@ -4,7 +4,7 @@
 // navegador" e o sorteio chegam injetados (o app usa `net.fetch` e `shell.openExternal`; os testes e o smoke,
 // um servidor falso). Os tokens só voltam a quem chamou, no main; nada é escrito em log.
 import { createHash, randomBytes as nodeRandomBytes } from 'node:crypto'
-import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
+import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import type { OAuthErrorCode } from '../../shared/accounts'
 import { formBody, jsonOf, NetworkError, type HttpFetch } from './http'
@@ -24,7 +24,7 @@ export const GOOGLE_OAUTH: OAuthProvider = {
   revokeUrl: 'https://oauth2.googleapis.com/revoke',
 }
 
-/** Contrato 12: a mesma troca, no endpoint comum da Microsoft. */
+/** Contrato 12: a mesma troca, no endpoint comum da Microsoft (cliente público, sem chave secreta). */
 export const MICROSOFT_OAUTH: OAuthProvider = {
   id: 'microsoft',
   authUrl: 'https://login.microsoftonline.com/common/oauth2/v2.0/authorize',
@@ -114,10 +114,24 @@ export interface Loopback {
   close(): void
 }
 
+/**
+ * Endereço de volta: o Google usa `http://127.0.0.1:<porta>/callback`; a Microsoft, `http://localhost:<porta>` (o
+ * cadastro no Entra é `http://localhost`, e a porta não conta para ela). O servidor escuta sempre em 127.0.0.1.
+ */
+export interface LoopbackAddress {
+  host: '127.0.0.1' | 'localhost'
+  /** Caminho que o navegador traz de volta; `/` some do endereço (`http://localhost:<porta>`). */
+  path: string
+}
+
+export const GOOGLE_LOOPBACK: LoopbackAddress = { host: '127.0.0.1', path: CALLBACK_PATH }
+export const MICROSOFT_LOOPBACK: LoopbackAddress = { host: 'localhost', path: '/' }
+
 export interface LoopbackOptions {
   state: string
   timeoutMs?: number
   signal?: AbortSignal
+  address?: LoopbackAddress
 }
 
 function page(text: string): string {
@@ -125,74 +139,117 @@ function page(text: string): string {
 }
 
 /**
- * Servidor em `127.0.0.1`, porta livre, que aceita um pedido `GET /callback`: confere o `state`, responde a
- * página "Pronto, pode voltar ao app." e fecha. Outro caminho recebe 404 e o servidor segue esperando. Fecha
- * também no prazo (5 min, `timeout`) e no cancelamento (`cancelled`).
+ * Servidor em `127.0.0.1`, porta livre, que aceita um pedido `GET` no caminho de volta com o `code` ou o `error`:
+ * confere o `state`, responde a página "Pronto, pode voltar ao app." e fecha. Outro caminho, ou o caminho sem
+ * `code`, `state` nem `error` (favicon, um `/` solto), recebe 404 e o servidor segue esperando. Para a Microsoft
+ * (`localhost`), escuta a mesma porta também em `::1`, porque o navegador pode resolver `localhost` para o IPv6;
+ * sem `::1` na máquina, segue só com o IPv4. Fecha também no prazo (5 min, `timeout`) e no cancelamento.
  */
-export function startLoopback({ state, timeoutMs = LOGIN_TIMEOUT_MS, signal }: LoopbackOptions): Promise<Loopback> {
-  return new Promise((resolveLoopback, rejectLoopback) => {
-    let settle: { resolve: (code: string) => void; reject: (error: OAuthError) => void } | null = null
-    const code = new Promise<string>((resolve, reject) => {
-      settle = { resolve, reject }
-    })
-    // Sem ninguém esperando ainda (o `close` antes do `await`), a rejeição não vira erro solto.
-    code.catch(() => undefined)
-    let done = false
-    let timer: ReturnType<typeof setTimeout> | null = null
-    const server = createServer((request: IncomingMessage, response: ServerResponse) => {
-      const url = new URL(request.url ?? '/', 'http://127.0.0.1')
-      if (done || request.method !== 'GET' || url.pathname !== CALLBACK_PATH) {
-        response.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' }).end('não encontrado')
-        return
-      }
-      const error = url.searchParams.get('error')
-      const returned = url.searchParams.get('state')
-      const value = url.searchParams.get('code')
-      let outcome: { ok: true; code: string } | { ok: false; error: OAuthError }
-      if (returned !== state) outcome = { ok: false, error: new OAuthError('state') }
-      else if (error) outcome = { ok: false, error: new OAuthError('denied', error.slice(0, 64)) }
-      else if (!value) outcome = { ok: false, error: new OAuthError('denied', 'sem código') }
-      else outcome = { ok: true, code: value }
-      response.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', connection: 'close' })
-      response.end(page(outcome.ok ? CALLBACK_DONE_TEXT : CALLBACK_FAILED_TEXT))
-      finish(outcome)
-    })
+export function startLoopback({ state, timeoutMs = LOGIN_TIMEOUT_MS, signal, address = GOOGLE_LOOPBACK }: LoopbackOptions): Promise<Loopback> {
+  let settle: { resolve: (code: string) => void; reject: (error: OAuthError) => void } | null = null
+  const code = new Promise<string>((resolve, reject) => {
+    settle = { resolve, reject }
+  })
+  // Sem ninguém esperando ainda (o `close` antes do `await`), a rejeição não vira erro solto.
+  code.catch(() => undefined)
+  let done = false
+  let timer: ReturnType<typeof setTimeout> | null = null
+  let servers: Server[] = []
 
-    function finish(outcome: { ok: true; code: string } | { ok: false; error: OAuthError }): void {
-      if (done) return
-      done = true
-      if (timer) clearTimeout(timer)
-      signal?.removeEventListener('abort', onAbort)
+  const handler = (request: IncomingMessage, response: ServerResponse): void => {
+    const url = new URL(request.url ?? '/', 'http://127.0.0.1')
+    const params = url.searchParams
+    if (done || request.method !== 'GET' || url.pathname !== address.path || (!params.has('code') && !params.has('state') && !params.has('error'))) {
+      response.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' }).end('não encontrado')
+      return
+    }
+    const error = params.get('error')
+    const returned = params.get('state')
+    const value = params.get('code')
+    let outcome: { ok: true; code: string } | { ok: false; error: OAuthError }
+    if (returned !== state) outcome = { ok: false, error: new OAuthError('state') }
+    else if (error) outcome = { ok: false, error: new OAuthError('denied', error.slice(0, 64)) }
+    else if (!value) outcome = { ok: false, error: new OAuthError('denied', 'sem código') }
+    else outcome = { ok: true, code: value }
+    response.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', connection: 'close' })
+    response.end(page(outcome.ok ? CALLBACK_DONE_TEXT : CALLBACK_FAILED_TEXT))
+    finish(outcome)
+  }
+
+  function closeAll(): void {
+    for (const server of servers) {
       server.close()
       server.closeAllConnections?.()
-      if (outcome.ok) settle?.resolve(outcome.code)
-      else settle?.reject(outcome.error)
     }
-    const onAbort = (): void => finish({ ok: false, error: new OAuthError('cancelled') })
+  }
 
-    server.on('error', () => {
-      if (!done) {
-        done = true
-        rejectLoopback(new OAuthError('network', 'servidor local'))
-      }
-    })
-    server.listen(0, '127.0.0.1', () => {
-      if (signal?.aborted) {
-        onAbort()
-        rejectLoopback(new OAuthError('cancelled'))
-        return
-      }
-      signal?.addEventListener('abort', onAbort)
-      timer = setTimeout(() => finish({ ok: false, error: new OAuthError('timeout') }), timeoutMs)
-      timer.unref?.()
-      const { port } = server.address() as AddressInfo
-      resolveLoopback({
-        redirectUri: `http://127.0.0.1:${port}${CALLBACK_PATH}`,
-        code,
-        close: () => finish({ ok: false, error: new OAuthError('cancelled') }),
-      })
+  function finish(outcome: { ok: true; code: string } | { ok: false; error: OAuthError }): void {
+    if (done) return
+    done = true
+    if (timer) clearTimeout(timer)
+    signal?.removeEventListener('abort', onAbort)
+    closeAll()
+    if (outcome.ok) settle?.resolve(outcome.code)
+    else settle?.reject(outcome.error)
+  }
+  const onAbort = (): void => finish({ ok: false, error: new OAuthError('cancelled') })
+
+  return (async () => {
+    servers = await listenLoopback(handler, address.host === 'localhost')
+    const { port } = servers[0]?.address() as AddressInfo
+    if (signal?.aborted) {
+      onAbort()
+      throw new OAuthError('cancelled')
+    }
+    signal?.addEventListener('abort', onAbort)
+    timer = setTimeout(() => finish({ ok: false, error: new OAuthError('timeout') }), timeoutMs)
+    timer.unref?.()
+    return {
+      redirectUri: `http://${address.host}:${port}${address.path === '/' ? '' : address.path}`,
+      code,
+      close: () => finish({ ok: false, error: new OAuthError('cancelled') }),
+    }
+  })()
+}
+
+/** Abre um servidor (`host`, porta) ou falha com o código do erro. */
+function listenOn(handler: (request: IncomingMessage, response: ServerResponse) => void, port: number, host: string): Promise<Server> {
+  return new Promise((resolve, reject) => {
+    const server = createServer(handler)
+    const onError = (error: NodeJS.ErrnoException): void => reject(error)
+    server.once('error', onError)
+    server.listen(port, host, () => {
+      server.off('error', onError)
+      // Erro depois de aberto (conexão quebrada) não derruba o app.
+      server.on('error', () => undefined)
+      resolve(server)
     })
   })
+}
+
+/**
+ * Porta livre em 127.0.0.1 e, com `dualStack`, a mesma porta em `::1`. Porta já ocupada no IPv6: tenta outra (até 5
+ * vezes). Sem IPv6 na máquina (`EADDRNOTAVAIL`, `EAFNOSUPPORT`, `EINVAL`): só o IPv4.
+ */
+async function listenLoopback(handler: (request: IncomingMessage, response: ServerResponse) => void, dualStack: boolean): Promise<Server[]> {
+  for (let attempt = 0; attempt < 5; attempt++) {
+    let v4: Server
+    try {
+      v4 = await listenOn(handler, 0, '127.0.0.1')
+    } catch {
+      throw new OAuthError('network', 'servidor local')
+    }
+    if (!dualStack) return [v4]
+    const { port } = v4.address() as AddressInfo
+    try {
+      return [v4, await listenOn(handler, port, '::1')]
+    } catch (error) {
+      const reason = (error as NodeJS.ErrnoException).code
+      if (reason !== 'EADDRINUSE') return [v4]
+      v4.close()
+    }
+  }
+  throw new OAuthError('network', 'servidor local')
 }
 
 const TOKEN_HEADERS = { 'content-type': 'application/x-www-form-urlencoded', accept: 'application/json' }
@@ -225,8 +282,11 @@ async function tokenRequest(fetch: HttpFetch, provider: OAuthProvider, fields: R
 
 export interface ClientCredentials {
   clientId: string
-  clientSecret: string
+  /** Só o Google; a Microsoft é cliente público e não manda chave secreta. */
+  clientSecret?: string | undefined
 }
+
+const credentialFields = (input: ClientCredentials): Record<string, string> => ({ client_id: input.clientId, ...(input.clientSecret ? { client_secret: input.clientSecret } : {}) })
 
 /** Troca o código pelos tokens (`authorization_code` + `code_verifier`). */
 export function exchangeCode(
@@ -244,17 +304,19 @@ export function exchangeCode(
       code: input.code,
       code_verifier: input.verifier,
       redirect_uri: input.redirectUri,
-      client_id: input.clientId,
-      client_secret: input.clientSecret,
+      ...credentialFields(input),
     },
     now,
     signal,
   )
 }
 
-/** Renovação do access token. `invalid_grant` chega como `denied`: a sessão expirou ou foi revogada. */
-export function refreshAccessToken(fetch: HttpFetch, provider: OAuthProvider, input: ClientCredentials & { refreshToken: string }, now: () => number = Date.now): Promise<TokenSet> {
-  return tokenRequest(fetch, provider, { grant_type: 'refresh_token', refresh_token: input.refreshToken, client_id: input.clientId, client_secret: input.clientSecret }, now)
+/**
+ * Renovação do access token. `invalid_grant` chega como `denied`: a sessão expirou ou foi revogada. `scope` vai
+ * junto quando o provedor pede (Microsoft).
+ */
+export function refreshAccessToken(fetch: HttpFetch, provider: OAuthProvider, input: ClientCredentials & { refreshToken: string; scope?: string | undefined }, now: () => number = Date.now): Promise<TokenSet> {
+  return tokenRequest(fetch, provider, { grant_type: 'refresh_token', refresh_token: input.refreshToken, ...credentialFields(input), ...(input.scope ? { scope: input.scope } : {}) }, now)
 }
 
 export interface AuthorizeOptions extends ClientCredentials {
@@ -266,6 +328,8 @@ export interface AuthorizeOptions extends ClientCredentials {
   openExternal: (url: string) => Promise<void> | void
   signal?: AbortSignal
   timeoutMs?: number
+  /** Endereço de volta; o padrão é o do Google. */
+  loopback?: LoopbackAddress
   now?: () => number
   randomBytes?: (size: number) => Uint8Array
 }
@@ -273,7 +337,7 @@ export interface AuthorizeOptions extends ClientCredentials {
 /** O login inteiro: servidor local, navegador, código conferido e troca pelos tokens. */
 export async function authorize(options: AuthorizeOptions): Promise<TokenSet> {
   const pkce = createPkce(options.randomBytes)
-  const loopback = await startLoopback({ state: pkce.state, ...(options.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}), ...(options.signal ? { signal: options.signal } : {}) })
+  const loopback = await startLoopback({ state: pkce.state, ...(options.loopback ? { address: options.loopback } : {}), ...(options.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}), ...(options.signal ? { signal: options.signal } : {}) })
   try {
     const url = authorizationUrl(options.provider, { clientId: options.clientId, redirectUri: loopback.redirectUri, scopes: options.scopes, pkce, ...(options.extra ? { extra: options.extra } : {}) })
     if (!isBrowserUrl(url)) throw new OAuthError('invalid-client', 'endereço de login')

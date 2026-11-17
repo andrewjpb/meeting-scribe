@@ -361,6 +361,16 @@ export const useRecording = create<RecordingState>()((set, get) => ({
       audioRun = { session, ...audio }
     }
     recordingTokens.set(session, recordingToken)
+    // Contrato 12 (CA9): começando com um evento da agenda, a gravação leva o título dele (se a pessoa ainda não
+    // trocou o título). O main decide o evento ao abrir a sessão.
+    void recordingToken
+      .then((token) => (token ? window.__scribeApi.invoke('scribe:calendar-recording') : null))
+      .then(
+        (event) => {
+          if (event?.title && get().session === session && get().title === title) set({ title: event.title.trim().slice(0, MEETING_TITLE_MAX) || title })
+        },
+        () => undefined,
+      )
     const real = env.mode === 'real'
     transcription = real
       ? new TranscriptionSession({

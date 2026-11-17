@@ -12,7 +12,8 @@ import { tabPanelId, Tabs, tabId } from '../../design/Tabs'
 import { AUDIO_FOLDER_FAILED_TEXT, RetryNotice } from '../live/Notices'
 import { useRecording } from '../live/recordingStore'
 import { TranscriptList, type TranscriptItem } from '../live/TranscriptList'
-import { durationLabel, longDateLabel, timeLabel } from './format'
+import { attendeesLabel, durationLabel, longDateLabel, timeLabel } from './format'
+import { calendarOriginLabel } from '../calendar/format'
 import { MeetingChatTab } from '../chat/MeetingChatTab'
 import { closestSegmentId } from '../notes/noteList'
 import { MeetingFiles } from './MeetingFiles'
@@ -244,6 +245,9 @@ function MeetingHeader({
   hasTranscript: boolean
 }) {
   const started = new Date(meeting.startedAt)
+  // Contrato 12 (CA9): de que evento da agenda a reunião veio e os participantes dele.
+  const origin = calendarOriginLabel(meeting.calendar)
+  const attendees = (meeting.calendar?.attendees ?? []).map((person) => person.name || person.email)
   const [copyState, setCopyState] = useState<'idle' | 'copied' | 'failed'>('idle')
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
   useEffect(() => () => {
@@ -279,6 +283,13 @@ function MeetingHeader({
             <span className="inline-flex h-[22px] items-center rounded-[var(--radius-control)] bg-bg-sunken px-2 font-mono text-11">{transcript.translationModel}</span>
           )}
         </div>
+        {(origin || attendees.length > 0) && (
+          <p className="text-12 text-text-muted" data-calendar-origin>
+            {origin}
+            {origin && attendees.length > 0 && ' · '}
+            {attendees.length > 0 && <span data-calendar-attendees>{attendeesLabel(attendees, 8)}</span>}
+          </p>
+        )}
       </div>
       <div className="flex shrink-0 items-center gap-2">
         {hasTranscript && (

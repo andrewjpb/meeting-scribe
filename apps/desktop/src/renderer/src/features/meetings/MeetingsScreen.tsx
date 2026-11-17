@@ -5,6 +5,7 @@ import { Button } from '../../design/Button'
 import { EmptyState } from '../../design/EmptyState'
 import { PageHeader } from '../../design/PageHeader'
 import { TapeIllustration } from '../../design/TapeIllustration'
+import { UpcomingSection } from '../calendar/UpcomingSection'
 import { RetryNotice } from '../live/Notices'
 import { useStartRecording } from '../live/useStartRecording'
 import { groupByDay, type MeetingGroup } from './format'
@@ -14,7 +15,7 @@ import { useMeetingsOverview, useMeetingsSearch } from './useMeetingsOverview'
 
 /**
  * Reuniões gravadas neste Mac, da mais recente para a mais antiga, agrupadas por dia, com a prévia do
- * resumo e a busca no topo (contrato 10).
+ * resumo e a busca no topo (contrato 10). Contrato 12: no topo, "Próximas", as reuniões da agenda.
  */
 export function MeetingsScreen() {
   const { list, failed, retry } = useMeetingsOverview()
@@ -44,6 +45,7 @@ export function MeetingsScreen() {
     return (
       <div className="flex flex-1 flex-col px-10 pt-7 pb-10">
         <PageHeader title="Reuniões" />
+        <UpcomingSection className="mt-7" />
         <div className="grow-[3]" />
         <EmptyState illustration={<TapeIllustration />} title="Nenhuma reunião ainda" action={newRecording}>
           As gravações ficam neste Mac e aparecem aqui, da mais recente para a mais antiga.
@@ -85,6 +87,7 @@ export function MeetingsScreen() {
         />
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto px-10 pt-7 pb-10" aria-busy={search.pending}>
+        {shown === null && <UpcomingSection className="pb-7" />}
         {body}
       </div>
     </div>

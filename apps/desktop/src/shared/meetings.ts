@@ -12,11 +12,18 @@ export interface MeetingAttendee {
 }
 
 /**
- * Dados do evento da agenda de onde a reunião veio. Só os participantes por enquanto: a lista (contrato
- * 10) já mostra os nomes; o contrato 12 completa o tipo e passa a gravar o campo.
+ * Dados do evento da agenda de onde a reunião veio (contrato 12, CA9). O app grava todos os campos; registros
+ * do contrato 10 só com os participantes continuam valendo, por isso os outros são opcionais.
  */
 export interface MeetingCalendar {
+  provider?: 'google' | 'microsoft' | undefined
+  eventId?: string | undefined
+  title?: string | undefined
+  /** ISO 8601. */
+  start?: string | undefined
+  end?: string | undefined
   attendees: MeetingAttendee[]
+  joinUrl?: string | null | undefined
 }
 
 export interface Meeting {

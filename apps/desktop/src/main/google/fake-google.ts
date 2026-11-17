@@ -1,5 +1,6 @@
 // Google falso, em memória, para os testes e o smoke (contrato 11, CA8): endpoint de token, revogação, perfil,
-// foto e a parte do Drive v3 que o app usa (pastas, busca por nome, upload em partes). Nada sai da máquina: o
+// foto, a parte do Drive v3 que o app usa (pastas, busca por nome, upload em partes) e, no contrato 12, a lista das
+// agendas e os eventos (só com o escopo da agenda concedido). Nada sai da máquina: o
 // `fetch` dele responde as URLs de verdade do Google sem rede. O "navegador" é `approve`, que confere a URL de
 // autorização e devolve o endereço de volta ao app com o código. Os tokens são inventados e nunca aparecem fora
 // daqui (o relatório do smoke só leva método e caminho).
@@ -47,6 +48,16 @@ export interface FakeGoogle {
   unavailable: number
   /** Pastas a que o app perdeu o acesso: ler responde 403 e elas não aparecem na busca. */
   forbidden: Set<string>
+  /** Contrato 12: as agendas da conta (a principal tem o e-mail como id). */
+  calendars: { id: string; summary: string; primary: boolean }[]
+  /** Eventos crus (formato da API) por id de agenda; `primary` é a principal. */
+  events: Map<string, unknown[]>
+  /** Escopos concedidos até agora (o login de cada vez soma, como `include_granted_scopes`). */
+  granted: Set<string>
+  /** Agendas lidas: id e a janela pedida (`timeMin`, `timeMax`). */
+  eventReads: { calendarId: string; timeMin: string; timeMax: string; showDeleted: string }[]
+  /** Eventos buscados pelo id (agenda e id). */
+  eventLookups: { calendarId: string; id: string }[]
   /** Manda a pasta (e o que está dentro) para a lixeira, como apagar no Drive. */
   trash(id: string): void
   childrenOf(parent: string): FakeDriveFile[]
@@ -73,7 +84,7 @@ const TINY_PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADU
 
 export function createFakeGoogle(options: FakeGoogleOptions): FakeGoogle {
   const profile = options.profile ?? { name: 'Pessoa de Teste', email: 'pessoa.teste@example.com' }
-  const codes = new Map<string, { challenge: string; redirectUri: string }>()
+  const codes = new Map<string, { challenge: string; redirectUri: string; scope: string }>()
   const access = new Set<string>()
   const refresh = new Set<string>()
   const sessions = new Map<string, { fileId: string | null; name: string; mimeType: string; parents: string[]; size: number; received: Buffer[] }>()
@@ -91,6 +102,11 @@ export function createFakeGoogle(options: FakeGoogleOptions): FakeGoogle {
     offline: 0,
     unavailable: 0,
     forbidden: new Set(),
+    calendars: [{ id: profile.email, summary: profile.name, primary: true }],
+    events: new Map(),
+    granted: new Set(),
+    eventReads: [],
+    eventLookups: [],
 
     approve(authUrl, { deny = false, state } = {}) {
       const url = new URL(authUrl)
@@ -106,7 +122,7 @@ export function createFakeGoogle(options: FakeGoogleOptions): FakeGoogle {
         return back.toString()
       }
       const code = next('codigo-falso-')
-      codes.set(code, { challenge: url.searchParams.get('code_challenge') ?? '', redirectUri })
+      codes.set(code, { challenge: url.searchParams.get('code_challenge') ?? '', redirectUri, scope: url.searchParams.get('scope') ?? '' })
       back.searchParams.set('code', code)
       return back.toString()
     },
@@ -141,13 +157,14 @@ export function createFakeGoogle(options: FakeGoogleOptions): FakeGoogle {
           const refreshToken = next('token-renovacao-falso-')
           access.add(accessToken)
           refresh.add(refreshToken)
-          return response(200, { access_token: accessToken, refresh_token: refreshToken, expires_in: 3599, scope: 'openid email profile https://www.googleapis.com/auth/drive.file', token_type: 'Bearer' })
+          for (const scope of issued.scope.split(' ').filter(Boolean)) fake.granted.add(scope)
+          return response(200, { access_token: accessToken, refresh_token: refreshToken, expires_in: 3599, scope: [...fake.granted].join(' '), token_type: 'Bearer' })
         }
         if (fields.get('grant_type') === 'refresh_token') {
           if (fake.refreshRevoked || !refresh.has(fields.get('refresh_token') ?? '')) return response(400, { error: 'invalid_grant', error_description: 'Token has been expired or revoked.' })
           const accessToken = next('token-acesso-falso-')
           access.add(accessToken)
-          return response(200, { access_token: accessToken, expires_in: 3599, scope: 'openid email profile https://www.googleapis.com/auth/drive.file', token_type: 'Bearer' })
+          return response(200, { access_token: accessToken, expires_in: 3599, scope: [...fake.granted].join(' '), token_type: 'Bearer' })
         }
         return response(400, { error: 'unsupported_grant_type' })
       }
@@ -178,6 +195,33 @@ export function createFakeGoogle(options: FakeGoogleOptions): FakeGoogle {
       if (fake.unauthorized > 0 || !access.has(bearer)) {
         if (fake.unauthorized > 0) fake.unauthorized--
         return response(401, { error: { code: 401, message: 'Invalid Credentials' } })
+      }
+
+      // Contrato 12: agendas, só com o escopo da agenda concedido.
+      if (url.pathname.startsWith('/calendar/v3/')) {
+        if (!fake.granted.has('https://www.googleapis.com/auth/calendar.readonly')) return response(403, { error: { code: 403, message: 'Request had insufficient authentication scopes.' } })
+        if (url.pathname === '/calendar/v3/users/me/calendarList' && init.method === 'GET') return response(200, { items: fake.calendars.map((item) => ({ id: item.id, summary: item.summary, primary: item.primary || undefined })) })
+        // Um evento pelo id (a confirmação do cancelamento): o da lista daquela agenda, ou 404.
+        const oneMatch = /^\/calendar\/v3\/calendars\/([^/]+)\/events\/([^/]+)$/.exec(url.pathname)
+        if (oneMatch && init.method === 'GET') {
+          const calendarId = decodeURIComponent(oneMatch[1] ?? '')
+          const id = decodeURIComponent(oneMatch[2] ?? '')
+          fake.eventLookups.push({ calendarId, id })
+          const primary = fake.calendars.find((item) => item.primary)?.id
+          const items = fake.events.get(calendarId) ?? (calendarId === 'primary' && primary ? fake.events.get(primary) : calendarId === primary ? fake.events.get('primary') : undefined) ?? []
+          const found = items.find((item) => (item as { id?: unknown }).id === id)
+          return found ? response(200, found) : response(404, { error: { code: 404, message: 'Not Found' } })
+        }
+        const eventsMatch = /^\/calendar\/v3\/calendars\/([^/]+)\/events$/.exec(url.pathname)
+        if (eventsMatch && init.method === 'GET') {
+          const calendarId = decodeURIComponent(eventsMatch[1] ?? '')
+          fake.eventReads.push({ calendarId, timeMin: url.searchParams.get('timeMin') ?? '', timeMax: url.searchParams.get('timeMax') ?? '', showDeleted: url.searchParams.get('showDeleted') ?? '' })
+          const primary = fake.calendars.find((item) => item.primary)?.id
+          const items = fake.events.get(calendarId) ?? (calendarId === primary ? fake.events.get('primary') : calendarId === 'primary' && primary ? fake.events.get(primary) : undefined)
+          if (!items && !fake.calendars.some((item) => item.id === calendarId) && calendarId !== 'primary') return response(404, { error: { code: 404, message: 'Not Found' } })
+          return response(200, { items: items ?? [] })
+        }
+        return response(404, { error: { code: 404, message: 'Not Found' } })
       }
 
       // Drive v3: metadados.

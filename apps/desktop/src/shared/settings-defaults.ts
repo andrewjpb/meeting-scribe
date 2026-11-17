@@ -22,6 +22,10 @@ export const LOCK_AFTER_MINUTES = [0, 1, 5, 15, 30] as const
 export const CLOSE_BEHAVIORS = ['tray', 'quit'] as const
 /** "Limite diário de execuções agendadas" (contrato 23, CA10). */
 export const DAILY_RUN_LIMIT_OPTIONS = [10, 25, 50, 100, 200] as const
+/** "Avisar antes" das reuniões da agenda (contrato 12, CA3), em minutos. */
+export const CALENDAR_LEAD_MINUTES = [1, 5, 10] as const
+/** Agendas escolhidas por conta; até isto por conta. */
+export const CALENDAR_IDS_MAX = 50
 
 export type LanguageCode = (typeof LANGUAGE_CODES)[number]
 export type ThemeSetting = (typeof THEME_SETTINGS)[number]
@@ -33,6 +37,12 @@ export type AgentProfileId = (typeof AGENT_PROFILES)[number]
 export type LockAfterMinutes = (typeof LOCK_AFTER_MINUTES)[number]
 export type CloseBehavior = (typeof CLOSE_BEHAVIORS)[number]
 export type DailyRunLimitOption = (typeof DAILY_RUN_LIMIT_OPTIONS)[number]
+export type CalendarLeadMinutes = (typeof CALENDAR_LEAD_MINUTES)[number]
+/** Agendas lidas de cada conta (contrato 12); `null` é só a principal. */
+export interface CalendarSelection {
+  google: string[] | null
+  microsoft: string[] | null
+}
 /** Nome de cada agente na tela ("Conexão com o Claude"); o perfil do main usa o mesmo. */
 export const AGENT_PROFILE_LABELS: Readonly<Record<AgentProfileId, string>> = { claude: 'Claude' }
 
@@ -99,6 +109,17 @@ export interface AppSettings {
   openAtLogin: boolean
   /** Execuções agendadas por dia; ao passar, tudo pausa e o app avisa. */
   scheduledRunsDailyLimit: DailyRunLimitOption
+  /**
+   * Contrato 12: notificação antes de cada reunião das agendas Google e Microsoft. Sem conta com a agenda, nada
+   * acontece; por isso o padrão é ligado (vale assim que alguma conta libera a agenda).
+   */
+  calendarAlerts: boolean
+  /** "Avisar antes": minutos antes do início. */
+  calendarLeadMinutes: CalendarLeadMinutes
+  /** "Avisar se a reunião não estiver sendo gravada": 2 min depois do início, e de novo aos 10 min. */
+  calendarNotRecordingAlert: boolean
+  /** Quais agendas de cada conta o app lê; `null` é a principal. */
+  calendarIds: CalendarSelection
 }
 
 /**
@@ -140,6 +161,10 @@ export const DEFAULT_SETTINGS: Readonly<AppSettings> = Object.freeze({
   closeBehavior: 'tray',
   openAtLogin: false,
   scheduledRunsDailyLimit: 50,
+  calendarAlerts: true,
+  calendarLeadMinutes: 5,
+  calendarNotRecordingAlert: true,
+  calendarIds: Object.freeze({ google: null, microsoft: null }) as CalendarSelection,
 })
 
 /** Prefixo do modelo gravado na reunião quando a tradução veio do Claude CLI (`claude-cli:haiku`). */

@@ -39,6 +39,10 @@ describe('esquema de configurações (CA1)', () => {
       closeBehavior: 'tray',
       openAtLogin: false,
       scheduledRunsDailyLimit: 50,
+      calendarAlerts: true,
+      calendarLeadMinutes: 5,
+      calendarNotRecordingAlert: true,
+      calendarIds: { google: null, microsoft: null },
     })
     expect(parseSettings(undefined)).toEqual(DEFAULT_SETTINGS)
     expect(parseSettings({})).toEqual(DEFAULT_SETTINGS)
@@ -88,8 +92,16 @@ describe('esquema de configurações (CA1)', () => {
       closeBehavior: 'quit',
       openAtLogin: true,
       scheduledRunsDailyLimit: 10,
+      calendarAlerts: false,
+      calendarLeadMinutes: 10,
+      calendarNotRecordingAlert: false,
+      calendarIds: { google: ['primary', 'equipe@group.calendar.google.com'], microsoft: null },
     }
     expect(parseSettings(saved)).toEqual(saved)
+    // Contrato 12: minutos fora da lista e uma lista de agendas inválida voltam ao padrão, sem perder a outra conta.
+    expect(parseSettings({ ...saved, calendarLeadMinutes: 3 })).toEqual({ ...saved, calendarLeadMinutes: 5 })
+    expect(parseSettings({ ...saved, calendarIds: { google: 'primary', microsoft: ['default'] } })).toEqual({ ...saved, calendarIds: { google: null, microsoft: ['default'] } })
+    expect(parseSettings({ ...saved, calendarIds: 'tudo' })).toEqual({ ...saved, calendarIds: { google: null, microsoft: null } })
     // Contrato 23: valores fora da lista voltam ao padrão de cada campo.
     expect(parseSettings({ ...saved, closeBehavior: 'minimize' })).toEqual({ ...saved, closeBehavior: 'tray' })
     expect(parseSettings({ ...saved, scheduledRunsDailyLimit: 7 })).toEqual({ ...saved, scheduledRunsDailyLimit: 50 })
@@ -127,7 +139,7 @@ describe('esquema de configurações (CA1)', () => {
   it('Claude CLI (contrato 05, CA1): motor, modelo e caminho com padrão próprio cada um', () => {
     // `settings.json` do contrato 04, sem os campos novos: carrega com os padrões deles e mantém o resto.
     const old = { translationEnabled: false, translationModel: 'gpt-oss-120b', sourceLanguage: 'es', targetLanguage: 'ja', echoCancellation: true, theme: 'dark', micDeviceId: null }
-    expect(parseSettings(old)).toEqual({ ...old, removeEcho: true, translationEngine: 'assemblyai', claudeModel: 'haiku', chatModel: 'sonnet', claudePath: null, claudeTransport: 'acp', agentProfile: 'claude', saveToFolder: true, audioFolder: null, summarizeOnStop: true, identifySpeakers: false, brandName: null, brandSubtitle: null, brandLogo: null, autoCheckUpdates: true, lockUseTouchId: false, lockAfterMinutes: 0, lockOnSystemLock: true, lockOnLaunch: false, saveToDrive: true, closeBehavior: 'tray', openAtLogin: false, scheduledRunsDailyLimit: 50 })
+    expect(parseSettings(old)).toEqual({ ...old, removeEcho: true, translationEngine: 'assemblyai', claudeModel: 'haiku', chatModel: 'sonnet', claudePath: null, claudeTransport: 'acp', agentProfile: 'claude', saveToFolder: true, audioFolder: null, summarizeOnStop: true, identifySpeakers: false, brandName: null, brandSubtitle: null, brandLogo: null, autoCheckUpdates: true, lockUseTouchId: false, lockAfterMinutes: 0, lockOnSystemLock: true, lockOnLaunch: false, saveToDrive: true, closeBehavior: 'tray', openAtLogin: false, scheduledRunsDailyLimit: 50, calendarAlerts: true, calendarLeadMinutes: 5, calendarNotRecordingAlert: true, calendarIds: { google: null, microsoft: null } })
     expect(parseSettings({ translationEngine: 'claude-cli', claudeModel: 'sonnet' })).toMatchObject({ translationEngine: 'claude-cli', claudeModel: 'sonnet' })
     // Fora da lista cai no padrão: só `haiku` e `sonnet`, só os dois motores.
     expect(parseSettings({ translationEngine: 'openai' }).translationEngine).toBe('assemblyai')
@@ -184,6 +196,17 @@ describe('esquema de configurações (CA1)', () => {
     expect(parseSettings({ summarizeOnStop: false }).summarizeOnStop).toBe(false)
     expect(parseSettings({ summarizeOnStop: 'sim' }).summarizeOnStop).toBe(true)
     expect(parseSettingsPatch({ summarizeOnStop: false })).toEqual({ summarizeOnStop: false })
+  })
+
+  it('Agenda (contrato 12, CA3): avisos ligados, 5 min, "não está gravando" ligado e a agenda principal; antigo carrega com os padrões', () => {
+    const added = ['calendarAlerts', 'calendarLeadMinutes', 'calendarNotRecordingAlert', 'calendarIds']
+    const old = Object.fromEntries(Object.entries({ ...DEFAULT_SETTINGS, theme: 'dark' }).filter(([name]) => !added.includes(name)))
+    expect(parseSettings(old)).toEqual({ ...DEFAULT_SETTINGS, theme: 'dark' })
+    expect(DEFAULT_SETTINGS).toMatchObject({ calendarAlerts: true, calendarLeadMinutes: 5, calendarNotRecordingAlert: true, calendarIds: { google: null, microsoft: null } })
+    expect(parseSettingsPatch({ calendarLeadMinutes: 1, calendarIds: { google: ['primary'], microsoft: [] } })).toEqual({ calendarLeadMinutes: 1, calendarIds: { google: ['primary'], microsoft: [] } })
+    expect(() => parseSettingsPatch({ calendarLeadMinutes: 15 })).toThrow()
+    expect(() => parseSettingsPatch({ calendarIds: { google: ['primary'] } })).toThrow()
+    expect(() => parseSettingsPatch({ calendarIds: { google: ['linha\nquebrada'], microsoft: null } })).toThrow()
   })
 
   it('identifySpeakers: desligado por padrão, antigo carrega desligado, inválido volta ao padrão', () => {

@@ -7,6 +7,7 @@ import { DRIVE_FOLDER_URL_PREFIX } from '../shared/accounts'
 import { ASSEMBLYAI_DASHBOARD_URL } from '../shared/assemblyai'
 import { formatRunShort, type AutomationRun } from '../shared/automations'
 import { brandTexts, DEFAULT_BRAND_NAME } from '../shared/branding'
+import { calendarNoticeText, safeJoinUrl, type CalendarNotice } from '../shared/calendar'
 import { lockedWindowTitle, type LockStatus } from '../shared/lock'
 import { privacyPaneUrl } from '../shared/privacy'
 import type { RouteId } from '../shared/routes'
@@ -31,6 +32,8 @@ import { createChatService, type ChatService } from './chat/service'
 import { AUTOMATION_RUNS_IN_SOURCE, writeSources, type AssistantState } from './chat/sources'
 import { createFileChatStore } from './chat/store'
 import { createGoogleAccount, type GoogleAccountService } from './google/account'
+import { createMicrosoftAccount, type MicrosoftAccountService } from './microsoft/account'
+import { createCalendarService, type CalendarService } from './calendar/service'
 import { createDriveSync, createEndOfRecordingHooks, type DriveSyncService } from './google/drive-sync'
 import { nodeExecFile } from './claude-cli/locate'
 import { createClaudeService, type ClaudeService } from './claude-cli/service'
@@ -114,6 +117,8 @@ let lockService: LockService | null = null
 let quitAfterRecording = false
 /** Gravação em curso (contrato 22): token dos canais de fim de gravação e confirmação ao fechar ou sair. */
 const recordingSessions = createRecordingSessions(() => {
+  // Contrato 12: a gravação acabou; os avisos de "não está gravando" voltam a valer para outras reuniões.
+  calendarService?.recordingEnded()
   // Contrato 23: a gravação terminou de salvar (ou a janela que gravava sumiu).
   onRecordingFinished?.()
   if (!quitAfterRecording) return
@@ -122,6 +127,8 @@ const recordingSessions = createRecordingSessions(() => {
 })
 /** Fim da sessão de gravação: as reuniões dela seguem para as tarefas "depois de cada reunião" (contrato 23). */
 let onRecordingFinished: (() => void) | null = null
+/** Agendas e avisos (contrato 12). */
+let calendarService: CalendarService | null = null
 /** Um diálogo de "gravação em andamento" por vez. */
 let leaveAsked = false
 /** Envio ao Google Drive (contrato 11), para "Guardar no Google Drive" desligado esvaziar a fila. */
@@ -189,6 +196,8 @@ function applyLockStatus(status: LockStatus): void {
   broadcast(BrowserWindow.getAllWindows(), 'scribe:lock-state', status)
   // Contrato 24: bloqueado, nada do WhatsApp chega às janelas; ao desbloquear, o estado de agora.
   if (!status.locked && whatsappService) broadcast(BrowserWindow.getAllWindows(), 'scribe:whatsapp-state', whatsappService.status())
+  // Contrato 12: o mesmo para as próximas reuniões e a faixa da agenda.
+  if (!status.locked && calendarService) broadcast(BrowserWindow.getAllWindows(), 'scribe:calendar-state', calendarService.view())
 }
 
 /** "Bloquear" pelo menu ou ⌘⇧L, pelo `powerMonitor` ou por falta de uso; só bloqueia com senha ou Touch ID. */
@@ -269,6 +278,46 @@ function showAutomationNotice(notice: AutomationNotice): void {
   }
   item.on('click', open)
   item.on('action', open)
+  item.on('close', () => liveNotices.delete(item))
+  liveNotices.add(item)
+  item.show()
+}
+
+/**
+ * "Gravar" de um aviso da agenda (contrato 12, CA6 e CA7), pela notificação ou pelo clique nela: o app vem para a
+ * frente e começa a gravação com o evento; já gravando, ou com o app bloqueado, só vem para a frente.
+ */
+function recordFromCalendar(key: string): void {
+  showMainWindow()
+  if (lockService?.isLocked() || recordingSessions.active()) return
+  calendarService?.pick(key)
+  startRecordingFromMenu().catch((error: unknown) => console.error('[agenda] gravar:', error))
+}
+
+/**
+ * Notificação da agenda (contrato 12): "Reunião em N min", "não está sendo gravada" (com "Gravar") e "cancelada".
+ * Bloqueado (contrato 22), sem nada da reunião: só o nome do app e uma frase. Com a assinatura ad-hoc o botão pode
+ * não aparecer; o clique na notificação faz o mesmo. No smoke, o substituto registra e o smoke "clica".
+ */
+function showCalendarNotice(notice: CalendarNotice): void {
+  const locked = lockService?.isLocked() ?? false
+  const shown = calendarNoticeText(notice, locked, brandName)
+  const act = (): void => {
+    if (notice.kind === 'cancelled' || !shown.record) void showMainWindow()
+    else recordFromCalendar(notice.key)
+  }
+  if (smokeFixtures) {
+    smokeFixtures.calendar.notifications.push({ kind: notice.kind, title: shown.title, body: shown.body, actions: shown.record ? ['Gravar'] : [], act })
+    return
+  }
+  if (!Notification.isSupported()) return
+  const item = new Notification({ title: shown.title, body: shown.body, actions: shown.record ? [{ type: 'button', text: 'Gravar' }] : [] })
+  const done = (): void => {
+    liveNotices.delete(item)
+    act()
+  }
+  item.on('click', done)
+  item.on('action', done)
   item.on('close', () => liveNotices.delete(item))
   liveNotices.add(item)
   item.show()
@@ -356,6 +405,8 @@ function broadcastSettings(settings: AppSettings): void {
   // "Guardar no Google Drive" desligado: a fila esvazia; ligado, ela volta a andar.
   if (settings.saveToDrive) driveService?.start()
   else driveService?.clear()
+  // Contrato 12: agendas escolhidas e avisos.
+  calendarService?.settingsChanged()
 }
 
 /** Ícone do Dock. No smoke nada toca o Dock de verdade: só o resultado fica registrado. */
@@ -425,6 +476,9 @@ interface AppServices {
   /** Conta Google e envio ao Drive (contrato 11). */
   google: GoogleAccountService
   drive: DriveSyncService
+  /** Conta Microsoft e as agendas com os avisos (contrato 12). */
+  microsoft: MicrosoftAccountService
+  calendar: CalendarService
   /** WhatsApp pessoal pelo serviço local (contrato 24). */
   whatsapp: WhatsAppService
   /** Agentes, tarefas agendadas e execuções (contrato 23). */
@@ -474,9 +528,24 @@ function createAppServices(userData: string): AppServices {
     fetch: googleFetch,
     openExternal: openBrowser,
     photoToDataUrl,
-    onStatus: (status) => broadcast(BrowserWindow.getAllWindows(), 'scribe:google-state', status),
+    onStatus: (status) => {
+      broadcast(BrowserWindow.getAllWindows(), 'scribe:google-state', status)
+      calendarService?.accountsChanged()
+    },
     onSignedIn: (email) => drive.signedIn(email),
     onSignedOut: () => drive.clear(),
+  })
+  // Conta Microsoft (contrato 12): no smoke, a Microsoft falsa em memória; o "navegador" é o próprio smoke.
+  const microsoft = createMicrosoftAccount({
+    dir: userData,
+    safeStorage: smokeFixtures ? memorySafeStorage() : safeStorage,
+    fetch: smokeFixtures ? smokeFixtures.microsoft.fetch : netHttp,
+    openExternal: openBrowser,
+    photoToDataUrl,
+    onStatus: (status) => {
+      broadcast(BrowserWindow.getAllWindows(), 'scribe:microsoft-state', status)
+      calendarService?.accountsChanged()
+    },
   })
   const drive = createDriveSync({
     dir: userData,
@@ -847,6 +916,21 @@ function createAppServices(userData: string): AppServices {
     ...(smokeAutomations ? { now: () => Date.now() + smokeAutomations.skewMs } : {}),
     ...devLog,
   })
+  // Agendas e avisos (contrato 12): só lê; rede só pelo `net.fetch` do main. No smoke, o Google e a Microsoft falsos.
+  const calendar = createCalendarService({
+    dir: userData,
+    accounts: { google, microsoft },
+    fetch: smokeFixtures ? (url, init) => (new URL(url).hostname === 'graph.microsoft.com' ? smokeFixtures.microsoft.fetch(url, init) : smokeFixtures.google.fetch(url, init)) : netHttp,
+    settings: () => settings.get(),
+    recording: () => recordingSessions.active() !== null,
+    notify: showCalendarNotice,
+    // Bloqueado (contrato 22), nada da agenda vai às janelas; ao desbloquear, o estado de agora.
+    onView: (view) => {
+      if (!lockService?.isLocked()) broadcast(BrowserWindow.getAllWindows(), 'scribe:calendar-state', view)
+    },
+    ...devLog,
+  })
+  calendarService = calendar
   // Contrato 25: o clique nos cartões do Assistente. O lembrete é a tarefa "uma vez" sem agente das Automações.
   const chatActions = createChatActions({ store: chatStore, createReminder: (input) => automations.createReminder(input), timeZone })
   return {
@@ -871,6 +955,8 @@ function createAppServices(userData: string): AppServices {
     lock,
     google,
     drive,
+    microsoft,
+    calendar,
     whatsapp,
     automations,
   }
@@ -960,7 +1046,7 @@ async function confirmWhatsAppSend(win: BrowserWindow | null, question: SendQues
 }
 
 function registerIpc(services: AppServices): void {
-  const { settings, meetings, meetingsService, meetingsIndex, tokenClient, translation, claude, files, summary, analysis, download, branding, updates, chat, chatActions, corpus, acp, lock, google, drive, whatsapp, automations } = services
+  const { settings, meetings, meetingsService, meetingsIndex, tokenClient, translation, claude, files, summary, analysis, download, branding, updates, chat, chatActions, corpus, acp, lock, google, drive, microsoft, calendar, whatsapp, automations } = services
   /** Reunião salva, renomeada ou com anotações novas: o `.md` dela no acervo do chat é reescrito. */
   const touched = (meetingId: string): void => void corpus.sync(meetingId).catch(() => undefined)
   /**
@@ -994,7 +1080,8 @@ function registerIpc(services: AppServices): void {
   handle('scribe:meetings-list', appOrigin, () => meetings.list())
   handle('scribe:meetings-get', appOrigin, (_event, { id }) => meetings.get(id))
   handle('scribe:meetings-create', appOrigin, async (_event, input) => {
-    const meeting = await meetings.create(input)
+    // Contrato 12 (CA9): a reunião da gravação em curso leva o evento da agenda, que o main decidiu ao começar.
+    const meeting = await meetings.create(input, { calendar: recordingSessions.active() ? calendar.recordingCalendar() : null })
     touched(meeting.id)
     return meeting
   })
@@ -1124,6 +1211,28 @@ function registerIpc(services: AppServices): void {
   handle('scribe:google-sign-in', appOrigin, () => google.signIn())
   handle('scribe:google-sign-in-cancel', appOrigin, () => google.cancelSignIn())
   handle('scribe:google-sign-out', appOrigin, () => google.signOut())
+  handle('scribe:google-calendar-grant', appOrigin, () => google.grantCalendar())
+  // Conta Microsoft (contrato 12): só o ID do aplicativo; os tokens nunca voltam por aqui.
+  handle('scribe:microsoft-status', appOrigin, () => microsoft.status())
+  handle('scribe:microsoft-client-save', appOrigin, (_event, request) => microsoft.saveClient(request))
+  handle('scribe:microsoft-sign-in', appOrigin, () => microsoft.signIn())
+  handle('scribe:microsoft-sign-in-cancel', appOrigin, () => microsoft.cancelSignIn())
+  handle('scribe:microsoft-sign-out', appOrigin, () => microsoft.signOut())
+  // Agendas (contrato 12): o link da chamada nunca vai ao renderer; o main abre, só `https://`.
+  handle('scribe:calendar-get', appOrigin, () => calendar.view())
+  handle('scribe:calendar-list', appOrigin, () => calendar.calendars())
+  handle('scribe:calendar-record', appOrigin, (_event, request) => calendar.pick((request as { key?: unknown } | undefined)?.key))
+  handle('scribe:calendar-dismiss', appOrigin, (_event, request) => calendar.dismiss((request as { key?: unknown } | undefined)?.key))
+  handle('scribe:calendar-join', appOrigin, (_event, request) => {
+    const url = safeJoinUrl(calendar.joinUrl((request as { key?: unknown } | undefined)?.key))
+    if (!url) return false
+    openExternal(url)
+    return true
+  })
+  handle('scribe:calendar-recording', appOrigin, () => {
+    const event = recordingSessions.active() ? calendar.recordingCalendar() : null
+    return event?.title ? { title: event.title } : null
+  })
   handle('scribe:drive-status', appOrigin, (_event, request) => drive.status((request as { meetingId?: unknown } | undefined)?.meetingId))
   handle('scribe:drive-retry', appOrigin, (_event, request) => drive.retry((request as { meetingId?: unknown } | undefined)?.meetingId))
   handle('scribe:drive-open', appOrigin, (_event, request) => {
@@ -1153,7 +1262,10 @@ function registerIpc(services: AppServices): void {
   // Gravação em curso: o token vale até o fim do "Encerrar" ou até a janela que a abriu sumir.
   handle('scribe:recording-session-open', appOrigin, (event) => {
     recordingStartedAt = Date.now()
-    return recordingSessions.open(event.sender)
+    const token = recordingSessions.open(event.sender)
+    // Contrato 12 (CA9): o evento da agenda desta gravação (o do "Gravar" ou o que está acontecendo).
+    calendar.recordingStarted()
+    return token
   })
   handle('scribe:recording-session-close', appOrigin, (_event, request) => recordingSessions.close((request as { token?: unknown } | undefined)?.token))
   // Automações (contrato 23): tudo recusado com o app bloqueado (`WHEN_LOCKED`); o agendador não depende daqui.
@@ -1278,6 +1390,7 @@ void app.whenReady().then(async () => {
     void confirmLeave(mainWindow)
   })
   app.on('will-quit', () => {
+    services.calendar.dispose()
     services.automations.dispose()
     trayController?.dispose()
     services.claude.dispose()
@@ -1321,9 +1434,14 @@ void app.whenReady().then(async () => {
   // Mac bloqueou a tela ou dormiu (CA2, padrão ligado). No smoke, os eventos vêm do substituto: o Mac de
   // verdade bloquear a tela no meio do smoke não pode bloquear o app.
   const power: { on(event: 'lock-screen' | 'suspend', listener: () => void): unknown } = smokeFixtures ? smokeFixtures.lock.power : powerMonitor
-  // Mac acordou: o agendador confere de novo (CA5).
+  // Mac acordou: o agendador confere de novo (CA5) e as agendas são relidas (contrato 12, CA4).
   const wake: { on(event: 'resume', listener: () => void): unknown } = smokeFixtures ? smokeFixtures.lock.power : powerMonitor
-  wake.on('resume', () => void services.automations.resume())
+  wake.on('resume', () => {
+    void services.automations.resume()
+    void services.calendar.refresh()
+  })
+  // Contrato 12: o cache das agendas, a primeira leitura (sem conta, nenhum pedido) e os relógios dos avisos.
+  services.calendar.start()
   for (const event of ['lock-screen', 'suspend'] as const) {
     power.on(event, () => {
       void services.settings
@@ -1345,8 +1463,10 @@ void app.whenReady().then(async () => {
       openWindow: (query) => openMainWindow(query, true),
       automations: services.automations,
       tray: () => trayController,
+      calendar: services.calendar,
     })
     // `app.exit` não passa por `will-quit`.
+    services.calendar.dispose()
     services.automations.dispose()
     trayController?.dispose()
     services.claude.dispose()

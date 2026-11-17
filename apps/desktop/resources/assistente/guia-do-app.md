@@ -15,6 +15,12 @@ A barra lateral tem, de cima para baixo: Reuniões, Assistente, Automações, Wh
 
 A tela inicial. Lista as reuniões gravadas, da mais recente para a mais antiga, com a prévia do resumo. A busca (⌘F) procura no título, na transcrição e no resumo. "Nova gravação" (⌘N) começa a gravar.
 
+Com a agenda Google ou Microsoft conectada (Configurações › Contas), o topo mostra "Próximas": até 3 reuniões da agenda das próximas 24 horas, com a hora, o título, os participantes, "Entrar na chamada" (abre o Meet, Teams ou Zoom no navegador) e "Gravar". A gravação que começa perto de uma reunião da agenda (até 10 minutos antes ou durante) leva o título do evento, e a reunião salva guarda os participantes: a lista e o detalhe mostram os nomes ("Da agenda: Google · 14:00"), e o resumo usa esses nomes para dizer quem é quem, sem inventar.
+
+### Avisos da agenda
+
+Com a agenda conectada, o app avisa por notificação do macOS: "Reunião em 5 min: <título>" (o tempo se escolhe em Configurações › Contas › Agenda: 1, 5 ou 10 minutos), com o botão "Gravar"; 2 minutos depois do início, se nada estiver gravando, "A reunião … começou e não está sendo gravada." (repete uma vez aos 10 minutos), também com uma faixa no topo do app com "Gravar" e "Ignorar"; e, se uma reunião já avisada for cancelada, "A reunião … foi cancelada." Nada grava sozinho: só com o seu clique. Com o app bloqueado, a notificação não mostra o título nem os participantes.
+
 <!-- tela: gravacao -->
 ## Gravação
 
@@ -84,7 +90,9 @@ A conexão com o Claude (pelo agente ou pela linha de comando), o caminho do cla
 <!-- aba: contas -->
 ### Contas
 
-A conta Google (para guardar o áudio, a transcrição e o resumo no Google Drive, na pasta "LAP Reuniões") e o WhatsApp (experimental).
+A conta Google (para guardar o áudio, a transcrição e o resumo no Google Drive, na pasta "LAP Reuniões", e para ler a agenda), a conta Microsoft (para ler a agenda do Outlook; pede só o "ID do aplicativo (cliente)" registrado no Microsoft Entra), o bloco "Agenda" e o WhatsApp (experimental). Quem conectou o Google antes da agenda vê "Permitir acesso à agenda".
+
+No bloco "Agenda": "Avisar reuniões da agenda" (ligado), "Avisar antes" (1, 5 ou 10 minutos; o padrão é 5), "Avisar se a reunião não estiver sendo gravada" (ligado) e quais agendas de cada conta o app lê (o padrão é a principal). O app só lê as agendas: não responde convites, não cria eventos e não manda nada a ninguém.
 
 <!-- aba: sobre -->
 ### Sobre
@@ -104,7 +112,7 @@ A versão instalada, a versão do Electron e do Chrome e a licença (código abe
 
 ## Privacidade
 
-As reuniões, as transcrições, as conversas do Assistente e as mensagens do WhatsApp ficam neste Mac. A transcrição usa a AssemblyAI; o resumo, a tradução e o Assistente usam o Claude da sua conta. Nada vai para o Google Drive sem a conta conectada e a opção ligada. Nenhuma IA envia mensagem a ninguém.
+As reuniões, as transcrições, as conversas do Assistente e as mensagens do WhatsApp ficam neste Mac. A transcrição usa a AssemblyAI; o resumo, a tradução e o Assistente usam o Claude da sua conta. Nada vai para o Google Drive sem a conta conectada e a opção ligada. As agendas Google e Microsoft são só lidas, pelo próprio app; a última leitura fica guardada neste Mac para funcionar sem internet. Nenhuma IA envia mensagem a ninguém.
 
 ## Bloqueio
 

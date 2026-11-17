@@ -54,6 +54,11 @@
 // menu do ícone da barra de menus (substituto que registra os itens) e fechar a janela mantendo o app (Dock escondido,
 // substituto) e reabrir pelo ícone. Não há ferramenta MCP para negar: o contrato 21 ainda não existe.
 //
+// Contrato 12: depois do Google e antes do WhatsApp, as agendas (`calendarChecks`) com o Google e a Microsoft falsos em
+// memória: o cadastro e o login da Microsoft, o Google com a agenda, o bloco "Agenda", as notificações substitutas
+// ("Reunião em 5 min", "não está sendo gravada", "cancelada"), a faixa, "Próximas", "Gravar" pela faixa e pela
+// notificação com o título do evento e o `calendar` salvo na reunião. Nenhum dado da agenda vai para o relatório.
+//
 // Contrato 26: depois do Assistente e antes do bloqueio, a internet (`internetChecks`) com o agente ACP falso, que
 // devolve resultados de busca inventados (domínios `.example`, sem rede): o agente com "Pode pesquisar na internet",
 // "Pedir agora" com a busca, a página aberta e a página montada negada, o agente sem internet e o Assistente com a
@@ -106,6 +111,7 @@ import type { AutomationsService } from './schedules/service'
 import { SCHEDULE_RUNS_DIR, SCHEDULES_FILE } from './schedules/store'
 import { AGENTS_FILE } from './agents/store'
 import type { TrayController } from './tray/menu'
+import type { CalendarService } from './calendar/service'
 import { SETTINGS_VERSION } from './settings/schema'
 import { CLAUDE_DISALLOWED_TOOLS, CLAUDE_READ_TOOLS, CLAUDE_WEB_TOOLS } from './acp/profiles/claude'
 import { LATEST_RELEASE_URL, RELEASE_DOWNLOAD_PREFIX, RELEASE_REDIRECT_HOSTS } from './updates/release'
@@ -113,6 +119,7 @@ import {
   SMOKE_FAKE_KEY,
   SMOKE_GOOGLE_CLIENT_ID,
   SMOKE_GOOGLE_CLIENT_SECRET,
+  SMOKE_MICROSOFT_CLIENT_ID,
   SMOKE_NOT_ALLOWED_MODEL,
   SMOKE_OFFLINE_KEY,
   SMOKE_OFFLINE_MODEL,
@@ -123,7 +130,8 @@ import {
 // Contrato 22: o bloqueio, no fim, soma uns 25 s ao roteiro; o contrato 11 (conta Google e Drive), uns 20 s; o
 // contrato 24 (WhatsApp, com o `venv` e o `pip` de verdade do índice local), uns 40 s; o contrato 23 (Automações), uns
 // 60 s.
-const TIMEOUT_MS = 540_000
+// Contrato 12 (agendas): uns 25 s.
+const TIMEOUT_MS = 570_000
 const THEMES = ['light', 'dark'] as const
 /** Telas fotografadas em cada tema, na ordem do roteiro de `runSmoke`. */
 const SCREENS = [
@@ -162,6 +170,8 @@ export interface SmokeContext {
   /** Contrato 23: o agendador (o smoke "avança o relógio" e confere) e o ícone da barra de menus substituto. */
   automations: Pick<AutomationsService, 'tick' | 'meetingEnded' | 'settled' | 'snapshot' | 'resume' | 'listTasks'>
   tray: () => TrayController | null
+  /** Contrato 12: as agendas (o smoke lê de novo depois de mudar os eventos falsos). */
+  calendar: Pick<CalendarService, 'refresh' | 'view'>
 }
 
 interface Check {
@@ -3660,9 +3670,13 @@ async function settingsTabsChecks(contents: WebContents, ctx: SmokeContext, shot
     contas.includes('Para guardar as reuniões no seu Google Drive.') &&
     !contas.includes('Em breve') &&
     // Contrato 24: o bloco "WhatsApp" (não instalado) com o "Instalar" e o aviso fixo.
-    JSON.stringify(contasButtons) === JSON.stringify(['Configurar…', 'Instalar']) &&
+    // Contrato 12: o bloco "Microsoft" sem cadastro e o bloco "Agenda" (dois interruptores e "Avisar antes").
+    JSON.stringify(contasButtons) === JSON.stringify(['Configurar…', 'Configurar…', '', '1 min', '5 min', '10 min', '', 'Instalar']) &&
+    contas.includes('Conta Microsoft') &&
+    contas.includes('Entre com a conta Google ou Microsoft acima para escolher as agendas.') &&
     contas.includes(WHATSAPP_FIXED_WARNING) &&
     ctx.fixtures.google.calls.length === 0 &&
+    ctx.fixtures.microsoft.calls.length === 0 &&
     sobreOpen &&
     sobre.includes(app.getVersion()) &&
     sobre.includes(process.versions.electron) &&
@@ -3712,9 +3726,12 @@ function layoutCheck(screen: LayoutScreen, metrics: Record<string, number>): Che
 // ---------------------------------------------------------------------------------------------------------
 // Contrato 11: conta Google e envio ao Google Drive, com o Google falso em memória (`google/fake-google.ts`).
 
-/** O "navegador" do smoke: um GET no endereço de volta ao app (só 127.0.0.1), fora da sessão do Electron. */
+/**
+ * O "navegador" do smoke: um GET no endereço de volta ao app (só 127.0.0.1 ou, para a Microsoft, `localhost`, como
+ * o navegador pede: o app escuta em 127.0.0.1 e em ::1), fora da sessão do Electron.
+ */
 function loopbackGet(url: string): Promise<{ status: number; body: string }> {
-  if (!url.startsWith('http://127.0.0.1:')) return Promise.reject(new Error(`endereço de volta inesperado: ${url}`))
+  if (!url.startsWith('http://127.0.0.1:') && !url.startsWith('http://localhost:')) return Promise.reject(new Error(`endereço de volta inesperado: ${url}`))
   return new Promise((resolve, reject) => {
     const req = httpRequest(url, (res) => {
       const chunks: Buffer[] = []
@@ -3814,7 +3831,9 @@ async function googleChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => vo
       authUrl.startsWith('https://accounts.google.com/o/oauth2/v2/auth?') &&
       ctx.fixtures.openedUrls.slice(openedBefore).length === 1 &&
       params.get('client_id') === SMOKE_GOOGLE_CLIENT_ID &&
-      params.get('scope') === 'openid email profile https://www.googleapis.com/auth/drive.file' &&
+      // Contrato 12 (CA2): o login pede também a agenda, somando ao que já foi liberado.
+      params.get('scope') === 'openid email profile https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/calendar.readonly' &&
+      params.get('include_granted_scopes') === 'true' &&
       params.get('code_challenge_method') === 'S256' &&
       (params.get('code_challenge') ?? '').length === 43 &&
       (params.get('state') ?? '').length >= 32 &&
@@ -3941,6 +3960,313 @@ async function googleChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => vo
     detail: `escuro logado=${darkSignedIn}; "Sair" -> deslogado=${signedOut}, ${fake.revoked} token(s) revogado(s), google.bin apagado=${!existsSync(sessionFile)}, cadastro mantido=${existsSync(clientFile)}`,
   }
   dark.destroy()
+}
+
+// ---------------------------------------------------------------------------------------------------------
+// Contrato 12: agendas Google e Microsoft, com as duas contas falsas em memória (nada sai da máquina).
+
+/**
+ * Contrato 12 (CA11): nada da agenda no relatório. Os títulos dos eventos viram nome de arquivo das reuniões
+ * gravadas (pasta e Drive) e o link da chamada vai para as URLs abertas: no relatório, só `<agenda>`.
+ */
+const SMOKE_CALENDAR_TEXTS = ['Alinhamento com o jurídico', 'Status da obra', 'Orçamento do trimestre', 'https://teams.microsoft.com/l/meetup-join/smoke', 'https://meet.google.com/smk-abcd-efg']
+function redactCalendar(value: string): string {
+  return SMOKE_CALENDAR_TEXTS.reduce((text, secret) => text.split(secret).join('<agenda>'), value.normalize('NFC'))
+}
+
+const MICROSOFT_STATE = `(document.querySelector('[data-microsoft-state]')?.dataset.microsoftState ?? '')`
+const UPCOMING_TITLES = `[...document.querySelectorAll('[data-upcoming-title]')].map((el) => el.textContent ?? '')`
+const LIVE_TITLE = `(document.querySelector('main h1')?.textContent ?? '')`
+
+/** Eventos crus inventados, no formato de cada API, em volta de agora. */
+function smokeCalendarEvents(now: number): { revisao: Record<string, unknown>; planejamento: Record<string, unknown>; status: Record<string, unknown> } {
+  const at = (minutes: number): string => new Date(now + minutes * 60_000).toISOString()
+  const graph = (minutes: number): { dateTime: string; timeZone: string } => ({ dateTime: at(minutes).replace('Z', ''), timeZone: 'UTC' })
+  return {
+    // Começa em 4,5 min: "Reunião em 5 min".
+    revisao: {
+      id: 'smoke-revisao',
+      status: 'confirmed',
+      summary: 'Alinhamento com o jurídico',
+      start: { dateTime: at(4.5) },
+      end: { dateTime: at(34.5) },
+      attendees: [
+        { email: 'andrea.teste@example.com', self: true, responseStatus: 'accepted' },
+        { email: 'ana.lima@example.com', displayName: 'Ana Lima', responseStatus: 'accepted' },
+        { email: 'bruno.souza@example.com', displayName: 'Bruno Souza', responseStatus: 'needsAction' },
+      ],
+      hangoutLink: 'https://meet.google.com/smk-abcd-efg',
+    },
+    planejamento: {
+      id: 'smoke-planejamento',
+      status: 'confirmed',
+      summary: 'Orçamento do trimestre',
+      start: { dateTime: at(120) },
+      end: { dateTime: at(150) },
+      attendees: [{ email: 'davi.reis@example.com', displayName: 'Davi Reis' }],
+      location: 'https://empresa.zoom.us/j/123456789',
+    },
+    // Começou há 3 min e ninguém grava.
+    status: {
+      id: 'smoke-status',
+      subject: 'Status da obra',
+      start: graph(-3),
+      end: graph(30),
+      isAllDay: false,
+      isCancelled: false,
+      responseStatus: { response: 'accepted' },
+      organizer: { emailAddress: { name: 'Carla Dias', address: 'carla.dias@example.com' } },
+      attendees: [{ type: 'required', emailAddress: { name: 'Bruno Teste', address: 'bruno.teste@example.com' } }],
+      onlineMeeting: { joinUrl: 'https://teams.microsoft.com/l/meetup-join/smoke' },
+    },
+  }
+}
+
+/** Espera a notificação substituta de um tipo (e com o texto, se dado). */
+async function calendarNotice(ctx: SmokeContext, kind: string, includes = ''): Promise<SmokeFixtures['calendar']['notifications'][number] | undefined> {
+  for (let attempt = 0; attempt < 100; attempt++) {
+    const found = ctx.fixtures.calendar.notifications.find((item) => item.kind === kind && `${item.title} ${item.body}`.includes(includes))
+    if (found) return found
+    await wait(50)
+  }
+  return undefined
+}
+
+/** Grava até a reunião ser salva e o detalhe abrir; devolve a reunião nova. */
+async function endCalendarRecording(contents: WebContents, ctx: SmokeContext, idsBefore: ReadonlySet<string>): Promise<Meeting | undefined> {
+  await wait(1200)
+  await clickSelector(contents, '[data-action="end-recording"]')
+  await waitFor(contents, routeIs('detalhe'), 15000)
+  let saved: Meeting | undefined
+  for (let attempt = 0; attempt < 200 && !saved; attempt++) {
+    saved = readMeetings(ctx.userDataDir).find((meeting) => !idsBefore.has(meeting.id))
+    if (!saved) await wait(50)
+  }
+  return saved
+}
+
+/**
+ * Contrato 12 (CA12), numa janela clara: sem contas, nenhum pedido às agendas e nenhum aviso; o cadastro e o login da
+ * Microsoft (o smoke faz o papel do navegador em `http://localhost:<porta>`); o Google de novo, agora com a agenda;
+ * o bloco "Agenda" com as agendas de cada conta; as notificações substitutas ("Reunião em 5 min" de um evento do
+ * Google e "não está sendo gravada" de um da Microsoft que começou há 3 min); a faixa e "Próximas" em Reuniões;
+ * "Entrar na chamada"; "Gravar" pela faixa (título do evento, `calendar` na reunião, "Da agenda" no detalhe);
+ * "Gravar" pela notificação e o evento cancelado no meio ("A gravação continua."); e "Sair" das duas contas.
+ */
+async function calendarChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => void, checks: Record<string, Check>, shots: Screenshot[]): Promise<void> {
+  const google = ctx.fixtures.google
+  const microsoft = ctx.fixtures.microsoft
+  const notices = ctx.fixtures.calendar.notifications
+  const events = smokeCalendarEvents(Date.now())
+  google.calendars.push({ id: 'equipe@group.calendar.google.com', summary: 'Equipe', primary: false })
+  google.events.set('primary', [events.revisao, events.planejamento])
+  microsoft.events.set('default', [events.status])
+  // Sem contas (o Google saiu no fim de `googleChecks`): uma leitura agora não pede nada nem avisa.
+  const googleReadsBefore = google.eventReads.length
+  await ctx.calendar.refresh()
+  const idle = microsoft.calls.length === 0 && google.eventReads.length === googleReadsBefore && notices.length === 0 && !ctx.calendar.view().connected
+
+  const win = ctx.openWindow({ theme: 'light' })
+  watch(win)
+  await loadAndWait(win)
+  const contents = win.webContents
+
+  // Microsoft: cadastro e login.
+  await openSettingsTab(contents, 'contas')
+  const unconfigured = await waitFor(contents, `${MICROSOFT_STATE} === 'unconfigured'`)
+  await clickSelector(contents, '[data-action="microsoft-configure"]')
+  const panel = await waitFor(contents, `document.querySelector('[data-microsoft-client-panel]')?.innerText.includes('ID do aplicativo (cliente)')`)
+  await setValue(contents, '#microsoft-client-id', SMOKE_MICROSOFT_CLIENT_ID)
+  await clickSelector(contents, '[data-action="microsoft-client-save"]')
+  const saved = await waitFor(contents, `${MICROSOFT_STATE} === 'signed-out' && !document.querySelector('[data-microsoft-client-panel]')`)
+  const line = await text(contents, '[data-microsoft-line]')
+  const clientFile = join(ctx.userDataDir, 'accounts', 'microsoft-client.bin')
+  const openedBefore = ctx.fixtures.openedUrls.length
+  await clickSelector(contents, '[data-action="microsoft-sign-in"]')
+  let authUrl = ''
+  for (let attempt = 0; attempt < 100 && !authUrl; attempt++) {
+    authUrl = ctx.fixtures.openedUrls.slice(openedBefore).find((url) => url.startsWith('https://login.microsoftonline.com/')) ?? ''
+    if (!authUrl) await wait(50)
+  }
+  const params = authUrl ? new URL(authUrl).searchParams : new URLSearchParams()
+  const redirect = params.get('redirect_uri') ?? ''
+  const page = authUrl ? await loopbackGet(microsoft.approve(authUrl)) : { status: 0, body: '' }
+  const signedIn = await waitFor(contents, `${MICROSOFT_STATE} === 'signed-in' && document.querySelector('img[data-microsoft-photo]')?.naturalWidth > 0`, 8000)
+  const name = await text(contents, '[data-microsoft-name]')
+  const email = await text(contents, '[data-microsoft-line]')
+  const sessionFile = join(ctx.userDataDir, 'accounts', 'microsoft.bin')
+  checks['microsoft'] = {
+    ok:
+      idle &&
+      unconfigured &&
+      panel &&
+      saved &&
+      line.includes('•••') &&
+      !line.includes(SMOKE_MICROSOFT_CLIENT_ID) &&
+      mode(clientFile) === '600' &&
+      authUrl.startsWith('https://login.microsoftonline.com/common/oauth2/v2.0/authorize?') &&
+      params.get('client_id') === SMOKE_MICROSOFT_CLIENT_ID &&
+      params.get('scope') === 'openid profile email offline_access User.Read Calendars.Read' &&
+      params.get('code_challenge_method') === 'S256' &&
+      (params.get('code_challenge') ?? '').length === 43 &&
+      /^http:\/\/localhost:\d+$/.test(redirect) &&
+      page.status === 200 &&
+      page.body.includes(CALLBACK_DONE_TEXT) &&
+      signedIn &&
+      name === 'Bruno Teste' &&
+      email === 'bruno.teste@example.com' &&
+      microsoft.tokenFields.length > 0 &&
+      microsoft.tokenFields.every((fields) => !fields.includes('client_secret')) &&
+      mode(sessionFile) === '600',
+    detail: `sem contas: nenhum pedido nem aviso=${idle}; sem cadastro=${unconfigured}, painel=${panel}, salvo=${saved} (linha mascarada=${line.includes('•••') && !line.includes(SMOKE_MICROSOFT_CLIENT_ID)}), microsoft-client.bin ${mode(clientFile)}; URL ${authUrl.split('?')[0] ?? ''} (parâmetros ${[...params.keys()].join(', ')}), volta ${redirect.replace(/\d+$/, '<porta>')}; página ${page.status}; logado=${signedIn}; pedidos de token sem chave secreta=${microsoft.tokenFields.every((fields) => !fields.includes('client_secret'))}; microsoft.bin ${mode(sessionFile)}`,
+  }
+
+  // Google de novo, agora com a agenda no mesmo login.
+  const googleOpened = ctx.fixtures.openedUrls.length
+  await clickSelector(contents, '[data-action="google-sign-in"]')
+  let googleUrl = ''
+  for (let attempt = 0; attempt < 100 && !googleUrl; attempt++) {
+    googleUrl = ctx.fixtures.openedUrls.slice(googleOpened).find((url) => url.startsWith('https://accounts.google.com/')) ?? ''
+    if (!googleUrl) await wait(50)
+  }
+  const googleParams = googleUrl ? new URL(googleUrl).searchParams : new URLSearchParams()
+  if (googleUrl) await loopbackGet(google.approve(googleUrl))
+  const googleIn = await waitFor(contents, `${GOOGLE_STATE} === 'signed-in' && !document.querySelector('[data-action="google-calendar-grant"]')`, 8000)
+  checks['googleCalendar'] = {
+    ok: googleIn && (googleParams.get('scope') ?? '').split(' ').includes('https://www.googleapis.com/auth/calendar.readonly') && googleParams.get('include_granted_scopes') === 'true' && google.granted.has('https://www.googleapis.com/auth/calendar.readonly'),
+    detail: `Google logado com a agenda=${googleIn}; escopos ${googleParams.get('scope') ?? '?'}; include_granted_scopes=${googleParams.get('include_granted_scopes') ?? '?'}`,
+  }
+
+  // As duas agendas lidas: as notificações e o bloco "Agenda".
+  await ctx.calendar.refresh()
+  const before = await calendarNotice(ctx, 'before', 'Alinhamento com o jurídico')
+  const late = await calendarNotice(ctx, 'not-recording', 'Status da obra')
+  const googleRead = google.eventReads.at(-1)
+  const microsoftRead = microsoft.eventReads.at(-1)
+  const windowOk = (from: string, to: string): boolean => Math.abs(Date.parse(to) - Date.parse(from) - 25 * 3_600_000) < 5_000 && Math.abs(Date.parse(from) - (Date.now() - 3_600_000)) < 60_000
+  checks['notices'] = {
+    ok:
+      before?.title === 'Reunião em 5 min: Alinhamento com o jurídico' &&
+      /^\d{2}:\d{2} · Ana Lima, Bruno Souza$/.test(before.body) &&
+      JSON.stringify(before.actions) === JSON.stringify(['Gravar']) &&
+      late?.body === 'A reunião "Status da obra" começou e não está sendo gravada.' &&
+      JSON.stringify(late.actions) === JSON.stringify(['Gravar']) &&
+      googleRead?.calendarId === 'primary' &&
+      googleRead.showDeleted === 'true' &&
+      windowOk(googleRead.timeMin, googleRead.timeMax) &&
+      microsoftRead?.calendarId === 'default' &&
+      microsoftRead.prefer === 'outlook.timezone="UTC"' &&
+      windowOk(microsoftRead.startDateTime, microsoftRead.endDateTime),
+    detail: `"Reunião em 5 min" com hora e participantes=${Boolean(before && /^\d{2}:\d{2} · /.test(before.body))}, "Gravar"=${JSON.stringify(before?.actions ?? [])}; "não está sendo gravada"=${Boolean(late)}; Google: agenda principal, cancelados=${googleRead?.showDeleted ?? '?'}, janela −1 h a +24 h=${googleRead ? windowOk(googleRead.timeMin, googleRead.timeMax) : false}; Microsoft: calendarView=${microsoftRead?.calendarId === 'default'}, Prefer UTC=${microsoftRead?.prefer === 'outlook.timezone="UTC"'}, janela=${microsoftRead ? windowOk(microsoftRead.startDateTime, microsoftRead.endDateTime) : false}; ${notices.length} notificação(ões)`,
+  }
+
+  const checksReady = await waitFor(contents, `document.querySelectorAll('[data-calendar-check]').length === 3`, 8000)
+  const checked = await evaluate<Record<string, boolean>>(contents, `Object.fromEntries([...document.querySelectorAll('[data-calendar-check]')].map((el) => [el.dataset.calendarCheck, el.checked]))`)
+  const lead = await evaluate<string>(contents, `document.querySelector('[data-calendar-lead-option][aria-pressed="true"]')?.dataset.calendarLeadOption ?? ''`)
+  const switches = await evaluate<string[]>(contents, `['settings-calendar-alerts', 'settings-calendar-not-recording'].map((id) => document.querySelector('[aria-labelledby="' + id + '"]')?.getAttribute('aria-checked') ?? '')`)
+  await scrollToSection(contents, 'Agenda')
+  await settle(contents)
+  shots.push(await capture(win, ctx.outDir, 'configuracoes-agenda-light'))
+  checks['settings'] = {
+    ok: checksReady && checked['google:primary'] === true && checked['google:equipe@group.calendar.google.com'] === false && checked['microsoft:default'] === true && lead === '5' && JSON.stringify(switches) === JSON.stringify(['true', 'true']),
+    detail: `agendas na tela=${checksReady} ${JSON.stringify(Object.values(checked))}; "Avisar antes"=${lead} min; interruptores ${JSON.stringify(switches)}`,
+  }
+
+  // Reuniões: a faixa e "Próximas".
+  await clickSelector(contents, '[data-nav="reunioes"]')
+  const shown = await waitFor(contents, `${routeIs('reunioes')} && document.querySelector('[data-calendar-banner]') && document.querySelectorAll('[data-upcoming-event]').length === 3`, 8000)
+  const titles = await evaluate<string[]>(contents, UPCOMING_TITLES)
+  const firstTime = await text(contents, '[data-upcoming-time]')
+  const bannerText = await text(contents, '[data-notice="calendar-not-recording"]')
+  const bannerButtons = await evaluate<string[]>(contents, `[...document.querySelectorAll('[data-calendar-banner] button')].map((el) => el.textContent ?? '')`)
+  const joinBefore = ctx.fixtures.openedUrls.length
+  await clickSelector(contents, '[data-upcoming-event="microsoft:default:smoke-status"] [data-action="calendar-join"]')
+  await wait(150)
+  const joined = ctx.fixtures.openedUrls.slice(joinBefore)
+  await settle(contents)
+  shots.push(await capture(win, ctx.outDir, 'gravacao-faixa-agenda-light'))
+  checks['banner'] = {
+    ok:
+      shown &&
+      JSON.stringify(titles) === JSON.stringify(['Status da obra', 'Alinhamento com o jurídico', 'Orçamento do trimestre']) &&
+      firstTime === 'Agora' &&
+      bannerText.includes('A reunião "Status da obra" começou e não está sendo gravada.') &&
+      JSON.stringify(bannerButtons) === JSON.stringify(['Gravar', 'Ignorar']) &&
+      joined.length === 1 &&
+      joined[0] === 'https://teams.microsoft.com/l/meetup-join/smoke',
+    detail: `faixa e "Próximas"=${shown}, ${titles.length} reunião(ões) na ordem certa=${JSON.stringify(titles) === JSON.stringify(['Status da obra', 'Alinhamento com o jurídico', 'Orçamento do trimestre'])}, a primeira "${firstTime}"; botões da faixa ${JSON.stringify(bannerButtons)}; "Entrar na chamada" abriu ${joined.length} link(s) https do Teams=${joined[0]?.startsWith('https://teams.microsoft.com/') ?? false}`,
+  }
+
+  // "Gravar" pela faixa: o título do evento e o `calendar` na reunião.
+  const idsBefore = new Set(readMeetings(ctx.userDataDir).map((meeting) => meeting.id))
+  await clickSelector(contents, '[data-action="calendar-banner-record"]')
+  const bannerRecording = await waitFor(contents, `${routeIs('gravacao')} && ${probeJs('state()?.mic')} === 'live' && ${LIVE_TITLE} === 'Status da obra' && !document.querySelector('[data-calendar-banner]')`, 8000)
+  const fromBanner = await endCalendarRecording(contents, ctx, idsBefore)
+  const origin = (await waitFor(contents, `/^Da agenda: Microsoft · \\d{2}:\\d{2} · Carla Dias$/.test(document.querySelector('[data-calendar-origin]')?.textContent ?? '')`, 5000)) as boolean
+  checks['recordFromBanner'] = {
+    ok:
+      bannerRecording &&
+      fromBanner?.title === 'Status da obra' &&
+      fromBanner.calendar?.provider === 'microsoft' &&
+      fromBanner.calendar.eventId === 'smoke-status' &&
+      fromBanner.calendar.title === 'Status da obra' &&
+      JSON.stringify(fromBanner.calendar.attendees) === JSON.stringify([{ name: 'Carla Dias', email: 'carla.dias@example.com' }]) &&
+      fromBanner.calendar.joinUrl === 'https://teams.microsoft.com/l/meetup-join/smoke' &&
+      origin,
+    detail: `"Gravar" da faixa gravou com o título do evento e a faixa sumiu=${bannerRecording}; reunião salva com o evento da Microsoft=${fromBanner?.calendar?.provider === 'microsoft' && fromBanner.calendar.eventId === 'smoke-status'}, participantes=${fromBanner?.calendar?.attendees.length ?? 0}, link=${Boolean(fromBanner?.calendar?.joinUrl)}; "Da agenda: Microsoft · hh:mm" no detalhe=${origin}`,
+  }
+
+  // "Gravar" pela notificação; o evento é cancelado no meio da gravação dele.
+  const idsMiddle = new Set(readMeetings(ctx.userDataDir).map((meeting) => meeting.id))
+  before?.act()
+  const noticeRecording = await waitFor(contents, `${routeIs('gravacao')} && ${probeJs('state()?.mic')} === 'live' && ${LIVE_TITLE} === 'Alinhamento com o jurídico'`, 8000)
+  google.events.set('primary', [{ ...events.revisao, status: 'cancelled' }, events.planejamento])
+  await ctx.calendar.refresh()
+  const cancelled = await calendarNotice(ctx, 'cancelled', 'Alinhamento com o jurídico')
+  const stillRecording = await evaluate<boolean>(contents, `${routeIs('gravacao')} && ${probeJs('state()?.mic')} === 'live'`)
+  const fromNotice = await endCalendarRecording(contents, ctx, idsMiddle)
+  checks['recordFromNotice'] = {
+    ok:
+      noticeRecording &&
+      /^A reunião "Alinhamento com o jurídico" das \d{2}:\d{2} foi cancelada\. A gravação continua\.$/.test(cancelled?.body ?? '') &&
+      JSON.stringify(cancelled?.actions ?? null) === '[]' &&
+      stillRecording &&
+      fromNotice?.title === 'Alinhamento com o jurídico' &&
+      fromNotice.calendar?.provider === 'google' &&
+      fromNotice.calendar.eventId === 'smoke-revisao' &&
+      fromNotice.calendar.attendees.length === 2,
+    detail: `"Gravar" da notificação gravou com o título do evento=${noticeRecording}; cancelada no meio: "…foi cancelada. A gravação continua."=${/A gravação continua\.$/.test(cancelled?.body ?? '')}, gravação seguiu=${stillRecording}; reunião salva com o evento do Google=${fromNotice?.calendar?.provider === 'google' && fromNotice.calendar.eventId === 'smoke-revisao'}`,
+  }
+
+  // Reuniões depois: a cancelada saiu de "Próximas", a gravada não tem mais faixa e a linha mostra os participantes.
+  await clickSelector(contents, '[data-nav="reunioes"]')
+  const after = await waitFor(
+    contents,
+    `${routeIs('reunioes')} && JSON.stringify(${UPCOMING_TITLES}) === ${JSON.stringify(JSON.stringify(['Status da obra', 'Orçamento do trimestre']))} && !document.querySelector('[data-calendar-banner]')`,
+    8000,
+  )
+  const rowNames = await evaluate<string>(contents, `document.querySelector('main a[data-meeting="${fromBanner?.id ?? ''}"] [data-attendees]')?.textContent ?? ''`)
+  await settle(contents)
+  shots.push(await capture(win, ctx.outDir, 'reunioes-proximas-light'))
+  checks['upcoming'] = {
+    ok: after && rowNames.includes('Carla Dias'),
+    detail: `"Próximas" sem a cancelada e sem faixa=${after}; participantes na linha da reunião=${rowNames.includes('Carla Dias')}`,
+  }
+
+  // "Sair" das duas contas: nada da agenda na tela e o cache apagado.
+  await openSettingsTab(contents, 'contas')
+  await clickSelector(contents, '[data-action="microsoft-sign-out"]')
+  await waitFor(contents, `${MICROSOFT_STATE} === 'signed-out'`)
+  await clickSelector(contents, '[data-action="google-sign-out"]')
+  const outBoth = await waitFor(contents, `${MICROSOFT_STATE} === 'signed-out' && ${GOOGLE_STATE} === 'signed-out'`)
+  await ctx.calendar.refresh()
+  await clickSelector(contents, '[data-nav="reunioes"]')
+  const gone = await waitFor(contents, `${routeIs('reunioes')} && !document.querySelector('[data-upcoming]') && !document.querySelector('[data-calendar-banner]')`)
+  checks['signOut'] = {
+    ok: outBoth && gone && !existsSync(sessionFile) && !existsSync(join(ctx.userDataDir, 'calendar-cache.json')) && !ctx.calendar.view().connected,
+    detail: `as duas contas saíram=${outBoth}; "Próximas" e faixa sumiram=${gone}; microsoft.bin apagado=${!existsSync(sessionFile)}; cache da agenda apagado=${!existsSync(join(ctx.userDataDir, 'calendar-cache.json'))}`,
+  }
+  win.destroy()
 }
 
 // ---------------------------------------------------------------------------------------------------------
@@ -5581,6 +5907,8 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
   const lock: Record<string, Check> = {}
   /** Contrato 11: conta Google e Drive. */
   const google: Record<string, Check> = {}
+  /** Contrato 12: agendas e avisos. */
+  const calendar: Record<string, Check> = {}
   /** Contrato 24: WhatsApp pelo serviço falso. */
   const whatsapp: Record<string, Check> = {}
   const assistant: Record<string, Check> = {}
@@ -5916,6 +6244,9 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
     // Contrato 11: conta Google e Drive falsos, antes do bloqueio (que termina com a conta já fora).
     await googleChecks(ctx, watch, google, screenshots)
 
+    // Contrato 12: agendas Google e Microsoft falsas, logo depois do Google (que termina com as duas contas fora).
+    await calendarChecks(ctx, watch, calendar, screenshots)
+
     // Contrato 24: WhatsApp com o serviço falso, antes do bloqueio (que também recusa os canais dele).
     await whatsappChecks(ctx, watch, whatsapp, screenshots)
 
@@ -5978,6 +6309,8 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
   }
   for (const [name, check] of Object.entries(google)) if (!check.ok) failures.push(`google ${name}: ${check.detail}`)
   for (const name of ['client', 'signIn', 'upload', 'replaceSummary', 'signOut']) if (!google[name]) failures.push(`google ${name}: não executado`)
+  for (const [name, check] of Object.entries(calendar)) if (!check.ok) failures.push(`agenda ${name}: ${check.detail}`)
+  for (const name of ['microsoft', 'googleCalendar', 'notices', 'settings', 'banner', 'recordFromBanner', 'recordFromNotice', 'upcoming', 'signOut']) if (!calendar[name]) failures.push(`agenda ${name}: não executado`)
   for (const [name, check] of Object.entries(whatsapp)) if (!check.ok) failures.push(`whatsapp ${name}: ${check.detail}`)
   for (const name of ['detect', 'install', 'risk', 'paired', 'screen', 'draft', 'send', 'ask', 'dark', 'locked']) if (!whatsapp[name]) failures.push(`whatsapp ${name}: não executado`)
   for (const [name, check] of Object.entries(automations)) if (!check.ok) failures.push(`automações ${name}: ${check.detail}`)
@@ -6001,8 +6334,9 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
   // "Automações" nos dois temas, o formulário do agente, as tarefas, o formulário da tarefa, as execuções e o detalhe
   // de uma, no claro (contrato 23); o painel "Contexto" com as fontes, o cartão do lembrete e o da resposta no
   // WhatsApp do Assistente, no claro (contrato 25); "Pedir agora" com o agente com internet e a resposta do Assistente
-  // com o link, no claro (contrato 26).
-  const expectedShots = SCREENS.length * THEMES.length + 43
+  // com o link, no claro (contrato 26); o bloco "Agenda", a faixa "não está sendo gravada" e "Próximas", no claro
+  // (contrato 12).
+  const expectedShots = SCREENS.length * THEMES.length + 46
   if (screenshots.length !== expectedShots) failures.push(`${screenshots.length} PNGs em vez de ${expectedShots}`)
   for (const shot of screenshots) {
     if (shot.width < 1120 || shot.height < 740) failures.push(`${shot.name}: ${shot.width}x${shot.height} abaixo de 1120x740`)
@@ -6043,7 +6377,12 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
     // Contrato 11: só método, servidor e caminho dos pedidos ao Google falso; nenhum token, nenhum corpo.
     google,
     googleFakeCalls: ctx.fixtures.google.calls,
-    googleFakeDrive: [...ctx.fixtures.google.files.values()].map((file) => ({ name: file.name, mimeType: file.mimeType, bytes: file.content.byteLength, uploads: file.uploads, trashed: file.trashed })),
+    googleFakeDrive: [...ctx.fixtures.google.files.values()].map((file) => ({ name: redactCalendar(file.name), mimeType: file.mimeType, bytes: file.content.byteLength, uploads: file.uploads, trashed: file.trashed })),
+    // Contrato 12: os resultados, os caminhos pedidos à Microsoft falsa e só o tipo das notificações; nenhum token,
+    // nenhum título, participante ou link da agenda.
+    calendar,
+    microsoftFakeCalls: ctx.fixtures.microsoft.calls.map((call) => ({ method: call.method, host: call.host, path: call.path.replace(/\/calendars\/[^/]+\//, '/calendars/<id>/') })),
+    calendarNotifications: ctx.fixtures.calendar.notifications.map((notice) => ({ kind: notice.kind, actions: notice.actions })),
     // Contrato 24: só os resultados; nenhum texto de mensagem além dos fixos do serviço falso.
     whatsapp,
     assistant,
@@ -6052,10 +6391,10 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
     // Contrato 23: os resultados, as notificações, o Dock e os itens de login substitutos; nenhum texto de reunião.
     automations,
     automationsFixtures: { notifications: ctx.fixtures.automations.notifications.map((notice) => notice.title), trayImages: ctx.fixtures.automations.trayImages, dock: ctx.fixtures.automations.dock, loginItems: ctx.fixtures.automations.loginItems, quitRequests: ctx.fixtures.automations.quitRequests },
-    meetingFolder: folderFiles(defaultMeetingFolder(ctx)),
-    openedFiles: ctx.fixtures.openedFiles.map((item) => ({ action: item.action, file: basename(item.path) })),
+    meetingFolder: folderFiles(defaultMeetingFolder(ctx)).map((file) => ({ ...file, name: redactCalendar(file.name) })),
+    openedFiles: ctx.fixtures.openedFiles.map((item) => ({ action: item.action, file: redactCalendar(basename(item.path)) })),
     claudeFakeSpawns: ctx.fixtures.claudeSpawns.map((spawn) => ({ ...spawn, args: spawn.args.filter((arg) => arg.startsWith('--')) })),
-    openedExternally: ctx.fixtures.openedUrls,
+    openedExternally: ctx.fixtures.openedUrls.map(redactCalendar),
     updateFixtureCalls: ctx.fixtures.updates.calls,
     updateRedirects: ctx.fixtures.updates.redirects,
     dockIcons: ctx.fixtures.dockIcons,
@@ -6070,6 +6409,10 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
   const secrets = [SMOKE_GOOGLE_CLIENT_SECRET, ...ctx.fixtures.google.accessTokens(), ...ctx.fixtures.google.refreshTokens(), 'token-acesso-falso-', 'token-renovacao-falso-']
   const leaked = secrets.filter((secret) => JSON.stringify(report).includes(secret))
   if (leaked.length) failures.push(`${leaked.length} segredo(s) do Google no relatório`)
+  // Contrato 12 (CA11): nenhum token da Microsoft e nenhum dado da agenda (título, participante, link) no relatório.
+  const calendarData = [...ctx.fixtures.microsoft.accessTokens(), ...ctx.fixtures.microsoft.refreshTokens(), 'token-ms-', 'Alinhamento com o jurídico', 'Status da obra', 'Orçamento do trimestre', 'Carla Dias', 'ana.lima@example.com', 'meet.google.com/smk', 'teams.microsoft.com/l/meetup-join/smoke']
+  const calendarLeaked = calendarData.filter((value) => JSON.stringify(report).includes(value))
+  if (calendarLeaked.length) failures.push(`${calendarLeaked.length} dado(s) da agenda ou token da Microsoft no relatório`)
   writeFileSync(join(ctx.outDir, 'report.json'), `${JSON.stringify(report, null, 2)}\n`)
 
   clearTimeout(timer)

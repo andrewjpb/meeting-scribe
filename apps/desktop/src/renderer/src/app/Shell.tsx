@@ -3,6 +3,8 @@ import { APP_ROUTES, redirectElement, REDIRECTS, routeIdOf } from './routes'
 import { Sidebar } from './Sidebar'
 import { useMainNavigation } from './useMainNavigation'
 import { useWhatsAppSync } from '../features/whatsapp/whatsappStore'
+import { CalendarBanner } from '../features/calendar/CalendarBanner'
+import { useCalendarSync } from '../features/calendar/calendarStore'
 
 /**
  * Esqueleto da janela: barra lateral azul à esquerda, área principal em `--bg`. A faixa arrastável de
@@ -13,6 +15,8 @@ export function Shell() {
   const location = useLocation()
   useMainNavigation()
   useWhatsAppSync()
+  // Contrato 12: "Próximas" e a faixa "não está sendo gravada" chegam do main.
+  useCalendarSync()
   const routeId = routeIdOf(location.pathname)
   // Trocar de aba em Configurações não remonta a tela (nem refaz a transição de rota).
   const routeKey = routeId === 'configuracoes' ? routeId : location.pathname
@@ -22,6 +26,7 @@ export function Shell() {
       <Sidebar />
       <main data-route={routeId ?? ''} className="relative flex min-w-0 flex-1 flex-col bg-bg">
         <div className="drag absolute inset-x-0 top-0 h-[var(--titlebar-height)]" />
+        <CalendarBanner />
         <div key={routeKey} className="route-enter relative flex min-h-0 flex-1 flex-col">
           <Routes location={location}>
             {APP_ROUTES.map((route) => (

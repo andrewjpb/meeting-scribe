@@ -8,7 +8,7 @@
 import { z } from 'zod'
 import { isAbsolute } from 'node:path'
 import { BRAND_LOGO_PATTERN, BRAND_TEXT_MAX } from '../../shared/branding'
-import { AGENT_PROFILES, CHAT_MODELS, CLAUDE_MODELS, CLAUDE_TRANSPORTS, CLOSE_BEHAVIORS, DAILY_RUN_LIMIT_OPTIONS, DEFAULT_SETTINGS, LANGUAGE_CODES, LOCK_AFTER_MINUTES, THEME_SETTINGS, TRANSLATION_ENGINES, type AppSettings, type SettingsPatch } from '../../shared/settings-defaults'
+import { AGENT_PROFILES, CALENDAR_IDS_MAX, CALENDAR_LEAD_MINUTES, CHAT_MODELS, CLAUDE_MODELS, CLAUDE_TRANSPORTS, CLOSE_BEHAVIORS, DAILY_RUN_LIMIT_OPTIONS, DEFAULT_SETTINGS, LANGUAGE_CODES, LOCK_AFTER_MINUTES, THEME_SETTINGS, TRANSLATION_ENGINES, type AppSettings, type SettingsPatch } from '../../shared/settings-defaults'
 
 export const SETTINGS_VERSION = 1
 
@@ -39,6 +39,10 @@ export const brandLogoSchema = z.string().regex(BRAND_LOGO_PATTERN)
 
 /** Minutos do bloqueio automático: só os do seletor (contrato 22). */
 const lockAfterMinutesSchema = z.literal(LOCK_AFTER_MINUTES)
+
+/** Agendas escolhidas (contrato 12): ids das APIs, sem caractere de controle; `null` é a principal. */
+const calendarIdList = z.array(z.string().min(1).max(1024).refine(hasNoControlChar)).max(CALENDAR_IDS_MAX)
+const calendarIdsSchema = z.object({ google: calendarIdList.nullable(), microsoft: calendarIdList.nullable() })
 
 const D = DEFAULT_SETTINGS
 
@@ -73,6 +77,13 @@ const lenientSchema = z.object({
   closeBehavior: z.enum(CLOSE_BEHAVIORS).catch(D.closeBehavior),
   openAtLogin: z.boolean().catch(D.openAtLogin),
   scheduledRunsDailyLimit: z.literal(DAILY_RUN_LIMIT_OPTIONS).catch(D.scheduledRunsDailyLimit),
+  calendarAlerts: z.boolean().catch(D.calendarAlerts),
+  calendarLeadMinutes: z.literal(CALENDAR_LEAD_MINUTES).catch(D.calendarLeadMinutes),
+  calendarNotRecordingAlert: z.boolean().catch(D.calendarNotRecordingAlert),
+  // Cada conta à parte: uma lista inválida volta à principal sem perder a da outra conta.
+  calendarIds: z
+    .object({ google: calendarIdList.nullable().catch(null), microsoft: calendarIdList.nullable().catch(null) })
+    .catch({ google: null, microsoft: null }),
 })
 
 const patchSchema = z
@@ -103,6 +114,10 @@ const patchSchema = z
     closeBehavior: z.enum(CLOSE_BEHAVIORS),
     openAtLogin: z.boolean(),
     scheduledRunsDailyLimit: z.literal(DAILY_RUN_LIMIT_OPTIONS),
+    calendarAlerts: z.boolean(),
+    calendarLeadMinutes: z.literal(CALENDAR_LEAD_MINUTES),
+    calendarNotRecordingAlert: z.boolean(),
+    calendarIds: calendarIdsSchema.strict(),
   })
   .partial()
   .strict()
