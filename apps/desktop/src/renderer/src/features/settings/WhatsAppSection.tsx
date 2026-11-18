@@ -1,10 +1,14 @@
 import { KeyRound, TriangleAlert } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
+import { WHATSAPP_NOTIFICATIONS_DESCRIPTION, WHATSAPP_ONLY_PEOPLE_DESCRIPTION } from '@shared/settings-index'
 import { WHATSAPP_FIXED_WARNING, WHATSAPP_PAIR_HINT, whatsappStateLabel, type WhatsAppPairing } from '@shared/whatsapp'
+import { useSettings } from '../../app/settingsStore'
 import { Button } from '../../design/Button'
 import { TextField } from '../../design/Field'
 import { Note } from '../../design/Note'
 import { Section } from '../../design/Section'
+import { SettingRow } from '../../design/SettingRow'
+import { Switch } from '../../design/Switch'
 import { whatsappErrorText } from '../whatsapp/format'
 import { QrCode } from '../whatsapp/QrCode'
 import { RiskPanel } from '../whatsapp/RiskPanel'
@@ -114,6 +118,9 @@ export function WhatsAppSection() {
   const status = useWhatsApp((state) => state.status)
   const loadFailed = useWhatsApp((state) => state.loadFailed)
   const [panel, setPanel] = useState<Panel>(null)
+  const notifications = useSettings((state) => state.settings.whatsappNotifications)
+  const notifyGroups = useSettings((state) => state.settings.whatsappNotifyGroups)
+  const update = useSettings((state) => state.update)
 
   const state = status?.state ?? 'not-installed'
   const busy = status?.busy ?? null
@@ -240,6 +247,15 @@ export function WhatsAppSection() {
           </Note>
         )}
       </div>
+      {/* Contrato 40: as notificações do macOS a cada mensagem recebida; "Só pessoas" deixa os grupos de fora. */}
+      <SettingRow name="Notificações do WhatsApp" nameId="settings-whatsapp-notifications" description={WHATSAPP_NOTIFICATIONS_DESCRIPTION}>
+        <Switch checked={notifications} labelledBy="settings-whatsapp-notifications" onChange={(whatsappNotifications) => void update({ whatsappNotifications })} />
+      </SettingRow>
+      {notifications && (
+        <SettingRow name="Só pessoas (sem grupos)" nameId="settings-whatsapp-only-people" description={WHATSAPP_ONLY_PEOPLE_DESCRIPTION}>
+          <Switch checked={!notifyGroups} labelledBy="settings-whatsapp-only-people" onChange={(onlyPeople) => void update({ whatsappNotifyGroups: !onlyPeople })} />
+        </SettingRow>
+      )}
     </Section>
   )
 }

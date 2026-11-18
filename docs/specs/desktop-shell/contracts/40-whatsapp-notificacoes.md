@@ -17,3 +17,11 @@ Feature: desktop-shell · Wave: 40 · Depende de: 32 · Pedido do Andrew (18/11/
 
 ## Telas de impacto no usuário
 - Notificações nativas do macOS com nome e mensagem; opções em Configurações.
+
+## Decisões registradas na implementação (18/11/2026)
+- Privacidade com o app bloqueado (CA2): a notificação sai com o título = nome do app e o corpo "Mensagem de Fulano" (no grupo, "Mensagem de Autor · Grupo"); nunca o texto, nunca a foto. A rajada bloqueada diz só "N mensagens de Fulano". Bloqueado, a conversa conta como não vista (a tela fica coberta), então notifica mesmo que estivesse aberta.
+- Rajada: as duas primeiras mensagens do chat em 5 s (contados da primeira) saem uma a uma; a partir da terceira, as anteriores são fechadas e fica uma só, atualizada a cada mensagem ("3 mensagens de Fulano", "4 mensagens…"; grupo: "N mensagens em Grupo").
+- Mídia com legenda: rótulo + " · " + legenda, no limite de 140. Figurinha = "Figurinha"; mensagem vazia = "Mensagem".
+- Conversa aberta: o renderer manda `scribe:whatsapp-viewing` (renderer→main, sem resposta, `ignored` bloqueado); o main cruza com `BrowserWindow.getFocusedWindow()`.
+- Opções em Configurações › Contas › WhatsApp (ao lado do bloco do WhatsApp, como os avisos da agenda ficam em Contas › Agenda). "Só pessoas (sem grupos)" é o inverso de `whatsappNotifyGroups` e só aparece com as notificações ligadas.
+- Badge do Dock (opcional): feito — `app.setBadgeCount` com a soma das não lidas (sem os grupos com "Só pessoas"), 0 com as notificações desligadas ou o WhatsApp fora do ar.

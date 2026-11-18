@@ -195,4 +195,8 @@ describe('canais com o app bloqueado (contrato 22, CA4)', () => {
     expect(RENDERER_EVENTS_WHEN_LOCKED['scribe:open-privacy-settings']).toBe('ignored')
     expect(RENDERER_EVENTS_WHEN_LOCKED['scribe:open-key-dashboard']).toBe('ignored')
   })
+
+  it('contrato 40: a conversa aberta no WhatsApp é ignorada bloqueado (o main não muda a regra da notificação)', () => {
+    expect(RENDERER_EVENTS_WHEN_LOCKED['scribe:whatsapp-viewing']).toBe('ignored')
+  })
 })

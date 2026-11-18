@@ -15,6 +15,10 @@ export const WHATSAPP_INSIGHTS_DESCRIPTION = 'Ao abrir uma conversa, o Claude lo
 /** Descrição de "Corrigir ao enviar no WhatsApp" (contrato 35), a mesma na tela e na busca. */
 export const WHATSAPP_AUTO_CORRECT_DESCRIPTION = 'Ao clicar em Enviar, o Claude (Haiku) corrige ortografia e pontuação e melhora a clareza da mensagem, e o texto corrigido é enviado sem nova confirmação. Se a correção falhar, a mensagem original é enviada.'
 
+/** Descrições das notificações do WhatsApp (contrato 40), as mesmas na tela e na busca. */
+export const WHATSAPP_NOTIFICATIONS_DESCRIPTION = 'Uma notificação do macOS a cada mensagem recebida, menos da conversa que está aberta na frente. Com o app bloqueado, sem o texto.'
+export const WHATSAPP_ONLY_PEOPLE_DESCRIPTION = 'Mensagens de grupo não geram notificação.'
+
 /** Uma linha de configuração no índice da busca. */
 export interface SettingsEntry {
   tab: SettingsTab
@@ -78,6 +82,8 @@ export function settingsIndex(agent: string): SettingsEntry[] {
     row('contas', 'Agenda', 'Avisar se a reunião não estiver sendo gravada', '2 minutos depois do início, e de novo aos 10, se nada estiver gravando.'),
     row('contas', 'Agenda', 'Agendas', 'Quais agendas de cada conta o app lê.'),
     row('contas', 'WhatsApp', 'WhatsApp', 'Ler as suas conversas e enviar mensagens só com o seu clique. Experimental.'),
+    row('contas', 'WhatsApp', 'Notificações do WhatsApp', WHATSAPP_NOTIFICATIONS_DESCRIPTION),
+    row('contas', 'WhatsApp', 'Só pessoas (sem grupos)', WHATSAPP_ONLY_PEOPLE_DESCRIPTION, '"Notificações do WhatsApp" está ligado'),
     row('contas', 'Google', 'Guardar no Google Drive', 'Depois de cada reunião, o áudio, a transcrição e o resumo vão para a pasta "LAP Reuniões" do seu Drive.', 'a conta Google está conectada'),
     // Contrato 31: um cartão por plugin, com o nome (e o estado), "Salvar plugin" e "Como instalar".
     ...APP_PLUGINS.flatMap((plugin) => [

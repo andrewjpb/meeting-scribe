@@ -190,6 +190,17 @@ export interface SmokeFixtures {
   microsoft: FakeMicrosoft
   /** Agendas (contrato 12): as notificações substitutas. */
   calendar: SmokeCalendar
+  /** Notificações do WhatsApp (contrato 40): as substitutas, o foco fingido e o número do Dock. */
+  whatsappNotify: SmokeWhatsAppNotify
+}
+
+export interface SmokeWhatsAppNotify {
+  /** Notificações que o app mostraria; `open` faz o clique; `closed` marca as que uma rajada trocou. */
+  notifications: { chatId: string; title: string; body: string; count: number; icon: boolean; closed: boolean; open: () => void }[]
+  /** Id do `webContents` da janela "em foco" (as janelas do smoke são invisíveis e nunca ganham foco de verdade). */
+  focusedContentsId: number | null
+  /** `app.setBadgeCount` pedidos (o Dock de verdade fica intacto). */
+  badges: number[]
 }
 
 export interface SmokeCalendar {
@@ -339,6 +350,7 @@ export function createSmokeFixtures(currentVersion: string, userDataDir: string)
     automations: { skewMs: 0, notifications: [], trayImages: [], dock: { hides: 0, shows: 0 }, loginItems: [], quitRequests: 0 },
     microsoft: createFakeMicrosoft({ clientId: SMOKE_MICROSOFT_CLIENT_ID, profile: { name: 'Bruno Teste', email: 'bruno.teste@example.com' } }),
     calendar: { notifications: [] },
+    whatsappNotify: { notifications: [], focusedContentsId: null, badges: [] },
     lock: { skewMs: 0, touchIdAvailable: true, touchIdApproves: true, touchIdPrompts: 0, power: new EventEmitter(), refresh: () => undefined },
     fetch: (url: string, init: FetchInit) => {
       const path = new URL(url).pathname

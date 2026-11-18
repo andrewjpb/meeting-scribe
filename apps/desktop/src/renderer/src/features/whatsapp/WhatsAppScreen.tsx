@@ -686,6 +686,11 @@ export function WhatsAppScreen() {
     })
   }, [selected])
 
+  // Contrato 40: o main sabe qual conversa está aberta aqui; com a janela em foco, ela não vira notificação.
+  const viewing = connected ? selected : null
+  useEffect(() => window.__scribeApi.send('scribe:whatsapp-viewing', { chatId: viewing }), [viewing])
+  useEffect(() => () => window.__scribeApi.send('scribe:whatsapp-viewing', { chatId: null }), [])
+
   const term = query.trim().toLocaleLowerCase('pt-BR')
   const shown = (chats ?? []).filter((chat) => !term || chat.name.toLocaleLowerCase('pt-BR').includes(term))
   const open = chats?.find((chat) => chat.id === selected) ?? null

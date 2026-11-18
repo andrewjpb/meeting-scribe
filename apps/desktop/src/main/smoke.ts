@@ -3910,7 +3910,8 @@ async function settingsTabsChecks(contents: WebContents, ctx: SmokeContext, shot
     !contas.includes('Em breve') &&
     // Contrato 24: o bloco "WhatsApp" (não instalado) com o "Instalar" e o aviso fixo.
     // Contrato 12: o bloco "Microsoft" sem cadastro e o bloco "Agenda" (dois interruptores e "Avisar antes").
-    JSON.stringify(contasButtons) === JSON.stringify(['Configurar…', 'Configurar…', '', '1 min', '5 min', '10 min', '', 'Instalar']) &&
+    // Contrato 40: os dois interruptores das notificações do WhatsApp, depois do "Instalar".
+    JSON.stringify(contasButtons) === JSON.stringify(['Configurar…', 'Configurar…', '', '1 min', '5 min', '10 min', '', 'Instalar', '', '']) &&
     contas.includes('Conta Microsoft') &&
     contas.includes('Entre com a conta Google ou Microsoft acima para escolher as agendas.') &&
     contas.includes(WHATSAPP_FIXED_WARNING) &&
@@ -5769,16 +5770,125 @@ async function whatsappLockCheck(ctx: SmokeContext, watch: (win: BrowserWindow) 
   )
   const inert = await evaluate<boolean>(contents, `document.querySelector('[data-app-content]')?.inert === true`)
   const stillConnected = ctx.whatsapp.status().state === 'connected'
+  const noticesBefore = ctx.fixtures.whatsappNotify.notifications.length
   await ctx.whatsapp.fake('incoming', { chatId: WA_ANA, text: 'Chegou com o app bloqueado' })
   await wait(600)
+  // Contrato 40 (CA2): bloqueado, a notificação sai sem o texto e sem a foto, só de quem é.
+  const lockedNotice = await waitNotice(ctx, noticesBefore, (item) => item.chatId === WA_ANA)
   const notDelivered = await evaluate<boolean>(contents, `![...document.querySelectorAll('[data-whatsapp-text]')].some((el) => el.textContent === 'Chegou com o app bloqueado')`)
   const sent = await waSent(ctx)
   await typeLockPassword(contents, LOCK_PASSWORD)
   const unlocked = await waitFor(contents, `!${LOCK_LAYER}`)
   const kept = await evaluate<boolean>(contents, `window.__scribeApi.invoke('scribe:whatsapp-messages', { chatId: '${WA_ANA}' }).then((list) => list.some((m) => m.text === 'Chegou com o app bloqueado'))`)
   checks['locked'] = {
-    ok: locked && refused.locked === channels.length && refused.others.length === 0 && inert && stillConnected && notDelivered && sent.every((item) => item.text !== 'bloqueado') && unlocked && kept,
-    detail: `bloqueado=${locked}; ${refused.locked}/${channels.length} canais recusados ${JSON.stringify(refused.others)}; tela inerte=${inert}; serviço conectado=${stillConnected}; mensagem não chegou à janela=${notDelivered}, guardada pelo serviço=${kept}; desbloqueado=${unlocked}`,
+    ok:
+      locked &&
+      refused.locked === channels.length &&
+      refused.others.length === 0 &&
+      inert &&
+      stillConnected &&
+      notDelivered &&
+      sent.every((item) => item.text !== 'bloqueado') &&
+      unlocked &&
+      kept &&
+      lockedNotice?.body === 'Mensagem de Ana Souza' &&
+      !`${lockedNotice.title} ${lockedNotice.body}`.includes('Chegou') &&
+      !lockedNotice.icon,
+    detail: `bloqueado=${locked}; ${refused.locked}/${channels.length} canais recusados ${JSON.stringify(refused.others)}; tela inerte=${inert}; serviço conectado=${stillConnected}; mensagem não chegou à janela=${notDelivered}, guardada pelo serviço=${kept}; desbloqueado=${unlocked}; notificação bloqueada ${lockedNotice ? `"${lockedNotice.title}" / "${lockedNotice.body}" foto=${lockedNotice.icon}` : 'nenhuma'}`,
+  }
+  win.destroy()
+}
+
+type WhatsAppNoticeRecord = SmokeFixtures['whatsappNotify']['notifications'][number]
+
+/** A primeira notificação do WhatsApp registrada depois de `from` que passa no filtro (até `ms`). */
+async function waitNotice(ctx: SmokeContext, from: number, match: (item: WhatsAppNoticeRecord) => boolean, ms = 5000): Promise<WhatsAppNoticeRecord | null> {
+  const until = Date.now() + ms
+  for (;;) {
+    const found = ctx.fixtures.whatsappNotify.notifications.slice(from).find(match)
+    if (found || Date.now() > until) return found ?? null
+    await wait(50)
+  }
+}
+
+/**
+ * Contrato 40: as notificações do WhatsApp com a `Notification` substituta. A conversa aberta na janela "em foco"
+ * (fingido) não notifica; outra conversa notifica com nome e texto; grupo com "Autor · Grupo" e o rótulo da mídia (e
+ * nada com "Só pessoas"); três do mesmo chat em 5 s viram uma; o clique abre a conversa; o número do Dock acompanha.
+ */
+async function whatsappNotifyCheck(ctx: SmokeContext, watch: (win: BrowserWindow) => void, checks: Record<string, Check>): Promise<void> {
+  const win = ctx.openWindow({ theme: 'light' })
+  watch(win)
+  await loadAndWait(win)
+  const contents = win.webContents
+  const notify = ctx.fixtures.whatsappNotify
+  await waitFor(contents, `document.querySelector('[data-nav="whatsapp"]')`)
+  await clickSelector(contents, '[data-nav="whatsapp"]')
+  await waitFor(contents, `document.querySelectorAll('[data-whatsapp-chat]').length === 3`, 8000)
+  await clickSelector(contents, `[data-whatsapp-chat="${WA_ANA}"]`)
+  await waitFor(contents, `document.querySelector('[data-whatsapp-conversation="${WA_ANA}"] [data-whatsapp-message]')`)
+  await wait(200)
+  notify.focusedContentsId = contents.id
+
+  // Em foco com a Ana aberta: a mensagem dela aparece na tela e não vira notificação.
+  const start = notify.notifications.length
+  await ctx.whatsapp.fake('incoming', { chatId: WA_ANA, text: 'Com a conversa aberta' })
+  const shownInScreen = await waitFor(contents, `[...document.querySelectorAll('[data-whatsapp-conversation="${WA_ANA}"] [data-whatsapp-text]')].some((el) => el.textContent === 'Com a conversa aberta')`, 5000)
+  await wait(800)
+  const viewingSilent = notify.notifications.length === start
+
+  // Outra conversa: título e corpo certos (o Bruno não tem foto no serviço falso).
+  await ctx.whatsapp.fake('incoming', { chatId: WA_BRUNO, author: 'Bruno Lima', text: 'Chegou para o Bruno' })
+  const bruno = await waitNotice(ctx, start, (item) => item.chatId === WA_BRUNO)
+  // Rajada: mais duas do Bruno em seguida viram "3 mensagens de Bruno Lima", e as anteriores saem.
+  await ctx.whatsapp.fake('incoming', { chatId: WA_BRUNO, author: 'Bruno Lima', text: 'Segunda do Bruno' })
+  await ctx.whatsapp.fake('incoming', { chatId: WA_BRUNO, author: 'Bruno Lima', text: 'Terceira do Bruno' })
+  const burst = await waitNotice(ctx, start, (item) => item.chatId === WA_BRUNO && item.count === 3)
+  const brunoOpen = notify.notifications.slice(start).filter((item) => item.chatId === WA_BRUNO && !item.closed)
+
+  // Grupo: "Autor · Grupo" e o rótulo da imagem com a foto do grupo; com "Só pessoas", nada.
+  await ctx.whatsapp.fake('incoming', { chatId: WA_ATLAS, author: 'Carla Dias', type: 'image' })
+  const group = await waitNotice(ctx, start, (item) => item.chatId === WA_ATLAS)
+  await evaluate(contents, "window.__scribeApi.invoke('scribe:settings-update', { whatsappNotifyGroups: false }).then(() => true)")
+  const groupFrom = notify.notifications.length
+  await ctx.whatsapp.fake('incoming', { chatId: WA_ATLAS, author: 'Carla Dias', text: 'Só pessoas ligado' })
+  const groupSilent = (await waitNotice(ctx, groupFrom, (item) => item.chatId === WA_ATLAS, 1200)) === null
+  await evaluate(contents, "window.__scribeApi.invoke('scribe:settings-update', { whatsappNotifyGroups: true }).then(() => true)")
+
+  // Notificações desligadas: nada sai.
+  await evaluate(contents, "window.__scribeApi.invoke('scribe:settings-update', { whatsappNotifications: false }).then(() => true)")
+  const offFrom = notify.notifications.length
+  await ctx.whatsapp.fake('incoming', { chatId: WA_BRUNO, author: 'Bruno Lima', text: 'Com as notificações desligadas' })
+  const offSilent = (await waitNotice(ctx, offFrom, () => true, 1200)) === null
+  await evaluate(contents, "window.__scribeApi.invoke('scribe:settings-update', { whatsappNotifications: true }).then(() => true)")
+
+  // Número do Dock: as não lidas do Bruno e do Atlas; o clique abre a conversa do Bruno e o número desce.
+  await wait(800)
+  const badgeBefore = notify.badges.at(-1) ?? 0
+  burst?.open()
+  const routed = await waitFor(contents, `${routeIs('whatsapp')} && document.querySelector('[data-whatsapp-conversation="${WA_BRUNO}"]')`, 5000)
+  await wait(1200)
+  const badgeAfter = notify.badges.at(-1) ?? 0
+  notify.focusedContentsId = null
+  // O título do grupo não vai ao relatório: "Carla Dias" também é participante da agenda falsa (contrato 12, CA11).
+  checks['notify'] = {
+    ok:
+      shownInScreen &&
+      viewingSilent &&
+      bruno?.title === 'Bruno Lima' &&
+      bruno.body === 'Chegou para o Bruno' &&
+      !bruno.icon &&
+      burst?.body === '3 mensagens de Bruno Lima' &&
+      brunoOpen.length === 1 &&
+      group?.title === 'Carla Dias · Projeto Atlas' &&
+      group.body === '🖼 Imagem' &&
+      group.icon &&
+      groupSilent &&
+      offSilent &&
+      routed &&
+      badgeBefore > 0 &&
+      badgeAfter < badgeBefore,
+    detail: `conversa aberta em foco sem notificação=${viewingSilent} (na tela=${shownInScreen}); Bruno "${bruno?.title ?? ''}" / "${bruno?.body ?? ''}" foto=${bruno?.icon}; rajada "${burst?.body ?? ''}" (${brunoOpen.length} aberta); grupo com "Autor · Grupo"=${group?.title === 'Carla Dias · Projeto Atlas'} / "${group?.body ?? ''}" foto=${group?.icon}; só pessoas sem grupo=${groupSilent}; desligado sem nada=${offSilent}; clique abriu a conversa=${routed}; Dock ${badgeBefore} -> ${badgeAfter} ${JSON.stringify(notify.badges)}`,
   }
   win.destroy()
 }
@@ -7253,6 +7363,9 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
 
     // Contrato 24 (CA6): com a senha criada, o bloqueio recusa o WhatsApp e o serviço segue conectado.
     await whatsappLockCheck(ctx, watch, whatsapp)
+
+    // Contrato 40: as notificações do WhatsApp, por último (o app já desbloqueado, o serviço falso conectado).
+    await whatsappNotifyCheck(ctx, watch, whatsapp)
   } catch (error) {
     failures.push(`erro: ${error instanceof Error ? (error.stack ?? error.message) : String(error)}`)
   }
@@ -7300,7 +7413,7 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
   for (const [name, check] of Object.entries(calendar)) if (!check.ok) failures.push(`agenda ${name}: ${check.detail}`)
   for (const name of ['microsoft', 'googleCalendar', 'notices', 'settings', 'banner', 'recordFromBanner', 'recordFromNotice', 'upcoming', 'signOut']) if (!calendar[name]) failures.push(`agenda ${name}: não executado`)
   for (const [name, check] of Object.entries(whatsapp)) if (!check.ok) failures.push(`whatsapp ${name}: ${check.detail}`)
-  for (const name of ['detect', 'install', 'risk', 'paired', 'screen', 'draft', 'send', 'correct', 'ask', 'dark', 'locked']) if (!whatsapp[name]) failures.push(`whatsapp ${name}: não executado`)
+  for (const name of ['detect', 'install', 'risk', 'paired', 'screen', 'draft', 'send', 'correct', 'ask', 'dark', 'locked', 'notify']) if (!whatsapp[name]) failures.push(`whatsapp ${name}: não executado`)
   for (const [name, check] of Object.entries(automations)) if (!check.ok) failures.push(`automações ${name}: ${check.detail}`)
   for (const [name, check] of Object.entries(assistant)) if (!check.ok) failures.push(`assistente ${name}: ${check.detail}`)
   for (const name of ['name', 'pending', 'sources', 'reminder', 'whatsapp', 'invalid']) if (!assistant[name]) failures.push(`assistente ${name}: não executado`)

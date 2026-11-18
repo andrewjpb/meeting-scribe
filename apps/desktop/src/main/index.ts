@@ -14,7 +14,7 @@ import { privacyPaneUrl } from '../shared/privacy'
 import type { RouteId } from '../shared/routes'
 import type { AgentProfileId, AppSettings } from '../shared/settings-defaults'
 import type { TranscriptDocument } from '../shared/transcription'
-import { whatsappStateLabel } from '../shared/whatsapp'
+import { WHATSAPP_CHAT_ID_PATTERN, whatsappStateLabel, type WhatsAppMessage } from '../shared/whatsapp'
 import { isBrowserUrl } from './accounts/oauth'
 import { createFileAgentsStore } from './agents/store'
 import { netHttp } from './accounts/transport'
@@ -86,6 +86,7 @@ import { BRIDGE_FAKE_FILE, BRIDGE_FILES, nodeExec, PYTHON_CANDIDATES, WHATSAPP_D
 import { INSTALL_TEST_ENV, runInstallTest } from './whatsapp/install-test'
 import { createInsightsCache, INSIGHTS_FILE } from './whatsapp/insights'
 import { createInsightsService, type InsightsService } from './whatsapp/insights-service'
+import { createWhatsAppNotifier, isGroupChat, shouldNotify, type NoticeHandle, type WhatsAppNotice } from './whatsapp/notify'
 import { createWhatsAppService, type WhatsAppService } from './whatsapp/service'
 
 // `app.setName` fixa o `userData` (~/Library/Application Support/Meeting Scribe) e o item do Chaveiro:
@@ -144,6 +145,8 @@ let leaveAsked = false
 let driveService: DriveSyncService | null = null
 /** WhatsApp (contrato 24): ao desbloquear, o estado volta às janelas; janela fechada esquece os cliques dela. */
 let whatsappService: WhatsAppService | null = null
+/** Contrato 40: as configurações, lidas na hora de notificar e de pôr o número no Dock. */
+let readSettings: (() => Promise<AppSettings>) | null = null
 /** Servidor local da extensão do Meet (contrato 27): sobe e para com "Quem fala no Meet". */
 let meetServer: MeetServer | null = null
 /** Ícone da barra de menus (contrato 23, CA8): aparece sempre que o app está aberto. */
@@ -227,6 +230,7 @@ function openMainWindow(query?: Record<string, string>, invisible = false): Brow
   const contentsId = win.webContents.id
   win.on('closed', () => {
     whatsappService?.forgetSender(contentsId)
+    whatsappViewing.delete(contentsId)
     if (mainWindow === win) mainWindow = null
     // No macOS o app segue aberto sem janela: as conversas do chat morrem em 5 min, como ao sair da tela.
     chatService?.leaveAll()
@@ -334,6 +338,114 @@ function showCalendarNotice(notice: CalendarNotice): void {
   item.show()
 }
 
+/** Contrato 40: as notificações vivas do WhatsApp, à parte e com teto (as mais antigas são soltas primeiro). */
+const WHATSAPP_LIVE_NOTICES_MAX = 50
+const liveWhatsAppNotices = new Set<Notification>()
+
+/** Contrato 40: a conversa aberta na tela "WhatsApp" de cada janela (pelo id do `webContents`). */
+const whatsappViewing = new Map<number, string | null>()
+
+/** A conversa aberta na janela em foco (no smoke, o foco é fingido: as janelas são invisíveis). */
+function whatsappFocusedChat(): string | null {
+  const id = smokeFixtures ? smokeFixtures.whatsappNotify.focusedContentsId : (BrowserWindow.getFocusedWindow()?.webContents.id ?? null)
+  return id === null ? null : (whatsappViewing.get(id) ?? null)
+}
+
+/**
+ * Notificação de uma mensagem do WhatsApp (contrato 40), local; o clique abre o app na conversa. A foto vai como
+ * `icon`, que o macOS costuma ignorar (fica o ícone do app). No smoke, o substituto registra e o smoke "clica".
+ */
+function showWhatsAppNotice(notice: WhatsAppNotice): NoticeHandle {
+  const open = (): void => sendWhenLoaded(showMainWindow(), 'scribe:open-whatsapp', { chatId: notice.chatId })
+  if (smokeFixtures) {
+    const entry = { chatId: notice.chatId, title: notice.title, body: notice.body, count: notice.count, icon: notice.icon !== null, closed: false, open }
+    smokeFixtures.whatsappNotify.notifications.push(entry)
+    return { close: () => void (entry.closed = true) }
+  }
+  if (!Notification.isSupported()) return { close: () => undefined }
+  const icon = notice.icon ? nativeImage.createFromDataURL(notice.icon) : null
+  const item = new Notification({ title: notice.title, body: notice.body, ...(icon && !icon.isEmpty() ? { icon } : {}) })
+  const done = (): void => {
+    liveWhatsAppNotices.delete(item)
+    open()
+  }
+  item.on('click', done)
+  item.on('action', done)
+  item.on('close', () => liveWhatsAppNotices.delete(item))
+  liveWhatsAppNotices.add(item)
+  // O `close` nem sempre chega no macOS e cada uma segura a foto: passou do teto, as mais antigas são só soltas
+  // (continuam na Central de Notificações; o clique nelas pode não chegar).
+  for (const old of liveWhatsAppNotices) {
+    if (liveWhatsAppNotices.size <= WHATSAPP_LIVE_NOTICES_MAX) break
+    liveWhatsAppNotices.delete(old)
+  }
+  item.show()
+  return {
+    close: () => {
+      liveWhatsAppNotices.delete(item)
+      item.close()
+    },
+  }
+}
+
+const whatsappNotifier = createWhatsAppNotifier({ show: showWhatsAppNotice, appName: () => brandName, now: () => Date.now() })
+
+/** Mensagem recebida (contrato 40): notifica pelas regras de `notify.ts`; a foto só com o app desbloqueado. */
+async function notifyWhatsApp(message: WhatsAppMessage, chatName: string): Promise<void> {
+  if (message.fromMe || !readSettings) return
+  const current = await readSettings()
+  const input = () => ({
+    message,
+    chatName,
+    settings: { enabled: current.whatsappNotifications, groups: current.whatsappNotifyGroups },
+    viewing: whatsappFocusedChat() === message.chatId,
+    locked: lockService?.isLocked() ?? false,
+  })
+  const first = input()
+  if (!shouldNotify(first)) return
+  const icon = first.locked ? null : await (whatsappService?.photo({ chatId: message.chatId }) ?? Promise.resolve(null)).catch(() => null)
+  whatsappNotifier.receive({ ...input(), icon })
+}
+
+let badgeTimer: ReturnType<typeof setTimeout> | null = null
+let badgeShown: number | null = null
+/** Cada leitura do número ganha um número; só a mais recente chega ao Dock (uma lenta não sobrescreve a nova). */
+let badgeReads = 0
+
+/**
+ * Contrato 40 (opcional): o total de não lidas no ícone do Dock, com as notificações ligadas e o WhatsApp conectado
+ * (com "Só pessoas", sem os grupos). Relido pouco depois de cada mudança; no smoke, só registra.
+ */
+function refreshWhatsAppBadge(): void {
+  if (badgeTimer) return
+  badgeTimer = setTimeout(() => {
+    badgeTimer = null
+    const read = ++badgeReads
+    void whatsappBadgeCount().then((count) => {
+      if (read !== badgeReads || count === badgeShown) return
+      badgeShown = count
+      if (smokeFixtures) smokeFixtures.whatsappNotify.badges.push(count)
+      else app.setBadgeCount(count)
+    })
+  }, 500)
+}
+
+/** Ao sair: o timer do número do Dock para, e uma leitura em curso não aplica mais nada. */
+function disposeWhatsAppBadge(): void {
+  if (badgeTimer) clearTimeout(badgeTimer)
+  badgeTimer = null
+  badgeReads++
+}
+
+async function whatsappBadgeCount(): Promise<number> {
+  const service = whatsappService
+  if (!service || !readSettings || service.status().state !== 'connected') return 0
+  const current = await readSettings().catch(() => null)
+  if (!current?.whatsappNotifications) return 0
+  const chats = await service.chats().catch(() => [])
+  return chats.filter((chat) => current.whatsappNotifyGroups || !isGroupChat(chat.id)).reduce((total, chat) => total + Math.max(0, chat.unread), 0)
+}
+
 /** "Abrir ao entrar no Mac" (CA9): abre direto na barra de menus, sem janela. No smoke, só registra. */
 function applyLoginItem(openAtLogin: boolean): void {
   if (loginItemApplied === openAtLogin) return
@@ -421,6 +533,8 @@ function broadcastSettings(settings: AppSettings): void {
   // Contrato 27: "Quem fala no Meet" desligado para o servidor local; ligado, ele sobe (se já não estiver no ar).
   if (settings.meetSpeakers) void meetServer?.start().catch(() => null)
   else void meetServer?.stop().catch(() => undefined)
+  // Contrato 40: o número do Dock segue "Notificações do WhatsApp" e "Só pessoas".
+  refreshWhatsAppBadge()
 }
 
 /** Ícone do Dock. No smoke nada toca o Dock de verdade: só o resultado fica registrado. */
@@ -543,6 +657,7 @@ function createAppServices(userData: string): AppServices {
   const fileTranscriber = createFileTranscriber({ fetch: fetchImpl, getApiKey: () => secrets.getApiKey() })
   const mic = createMicPermissions(smokeFixtures ? smokeFixtures.media : process.platform === 'darwin' ? systemPreferences : null)
   const settings = createFileSettingsStore({ dir: userData, onChange: broadcastSettings })
+  readSettings = () => settings.get()
   const meetings = createFileMeetingsStore({ dir: userData })
   const transcripts = createFileTranscriptStore({ dir: userData })
   const summaries = createFileSummaryStore({ dir: userData })
@@ -709,12 +824,17 @@ function createAppServices(userData: string): AppServices {
     // Bloqueado (contrato 22), nada do WhatsApp vai às janelas; o serviço segue conectado.
     onStatus: (status) => {
       if (!lockService?.isLocked()) broadcast(BrowserWindow.getAllWindows(), 'scribe:whatsapp-state', status)
+      refreshWhatsAppBadge()
     },
+    // Contrato 40: a notificação sai também com o app bloqueado (sem o texto); o número do Dock é relido.
     onMessage: (message, chatName) => {
       if (!lockService?.isLocked()) broadcast(BrowserWindow.getAllWindows(), 'scribe:whatsapp-message', { message, chatName })
+      notifyWhatsApp(message, chatName).catch((error: unknown) => console.error('[whatsapp] notificação:', error))
+      refreshWhatsAppBadge()
     },
     onChatsChanged: () => {
       if (!lockService?.isLocked()) broadcast(BrowserWindow.getAllWindows(), 'scribe:whatsapp-chats-changed', undefined)
+      refreshWhatsAppBadge()
     },
     // Só estados, nunca texto de mensagem.
     ...(app.isPackaged ? {} : { log: (message: string) => console.log(message) }),
@@ -1368,7 +1488,13 @@ function registerIpc(services: AppServices): void {
   handle('scribe:whatsapp-logout', appOrigin, () => whatsapp.logout())
   handle('scribe:whatsapp-remove', appOrigin, () => whatsapp.remove())
   handle('scribe:whatsapp-chats', appOrigin, () => whatsapp.chats().catch(() => []))
-  handle('scribe:whatsapp-messages', appOrigin, (_event, request) => whatsapp.messages(request).catch(() => []))
+  // Contrato 40: abrir a conversa zera as não lidas dela; o número do Dock é relido.
+  handle('scribe:whatsapp-messages', appOrigin, (_event, request) =>
+    whatsapp
+      .messages(request)
+      .catch(() => [])
+      .finally(refreshWhatsAppBadge),
+  )
   handle('scribe:whatsapp-search', appOrigin, (_event, request) => whatsapp.search(request).catch(() => []))
   handle('scribe:whatsapp-send', appOrigin, (event, request) => whatsapp.send(event.sender.id, request))
   // Contrato 39: o anexo, pelo mesmo guarda do clique; o clipe só devolve o arquivo conferido para a prévia.
@@ -1389,6 +1515,11 @@ function registerIpc(services: AppServices): void {
   handle('scribe:whatsapp-insights-run', appOrigin, (_event, request) => whatsappInsights.run(request))
   onEvent('scribe:whatsapp-click', appOrigin, (event, token) => whatsapp.registerClick(event.sender.id, token))
   onEvent('scribe:whatsapp-pair-cancel', appOrigin, () => whatsapp.cancelPair())
+  // Contrato 40: a conversa aberta na tela desta janela (só um id válido, ou nenhum).
+  onEvent('scribe:whatsapp-viewing', appOrigin, (event, request) => {
+    const chatId = (request as { chatId?: unknown } | undefined)?.chatId
+    whatsappViewing.set(event.sender.id, typeof chatId === 'string' && WHATSAPP_CHAT_ID_PATTERN.test(chatId) ? chatId : null)
+  })
   // Gravação em curso: o token vale até o fim do "Encerrar" ou até a janela que a abriu sumir.
   handle('scribe:recording-session-open', appOrigin, (event) => {
     recordingStartedAt = Date.now()
@@ -1535,6 +1666,7 @@ void app.whenReady().then(async () => {
     services.drive.dispose()
     void services.whatsapp.dispose()
     void services.meet.stop()
+    disposeWhatsAppBadge()
   })
   installMenu()
   // Contrato 23: fechar a última janela deixa o app na barra de menus (sem Dock) ou sai; o ícone aparece já.
@@ -1614,6 +1746,7 @@ void app.whenReady().then(async () => {
     services.updates.dispose()
     services.drive.dispose()
     await services.whatsapp.dispose()
+    disposeWhatsAppBadge()
     await services.meet.stop()
     app.exit(code)
     return

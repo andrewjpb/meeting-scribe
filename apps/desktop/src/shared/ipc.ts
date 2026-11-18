@@ -371,6 +371,11 @@ export interface RendererEvents {
   'scribe:whatsapp-click': string
   /** Saiu da tela do QR: a aceitação do aviso deste pareamento acaba. */
   'scribe:whatsapp-pair-cancel': undefined
+  /**
+   * Contrato 40: a conversa aberta na tela "WhatsApp" desta janela (`null`: nenhuma, ou saiu da tela). Com a janela em
+   * foco, a mensagem dessa conversa não vira notificação. Só o id; ignorada com o app bloqueado.
+   */
+  'scribe:whatsapp-viewing': { chatId: string | null }
 }
 
 /** main -> renderer (`webContents.send` / `__scribeApi.on`). */
@@ -593,6 +598,7 @@ const RENDERER_EVENTS: Record<RendererEvent, true> = {
   'scribe:lock-activity': true,
   'scribe:whatsapp-click': true,
   'scribe:whatsapp-pair-cancel': true,
+  'scribe:whatsapp-viewing': true,
 }
 const MAIN_EVENTS: Record<MainEvent, true> = {
   'scribe:navigate': true,
@@ -834,6 +840,7 @@ export const RENDERER_EVENTS_WHEN_LOCKED: Readonly<Record<RendererEvent, 'pass' 
   'scribe:open-link': 'ignored',
   'scribe:whatsapp-click': 'ignored',
   'scribe:whatsapp-pair-cancel': 'pass',
+  'scribe:whatsapp-viewing': 'ignored',
 })
 
 /** Mensagens que só o próprio preload manda (o `send` genérico recusa): o clique do envio do WhatsApp. */

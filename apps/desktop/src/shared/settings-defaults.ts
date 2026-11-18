@@ -89,6 +89,13 @@ export interface AppSettings {
    */
   whatsappAutoCorrect: boolean
   /**
+   * "Notificações do WhatsApp" (contrato 40): cada mensagem recebida vira uma notificação do macOS, menos a da conversa
+   * aberta na janela em foco. Bloqueado, sem o texto.
+   */
+  whatsappNotifications: boolean
+  /** "Só pessoas (sem grupos)" desligado: as mensagens de grupo também notificam (contrato 40). */
+  whatsappNotifyGroups: boolean
+  /**
    * Separa os participantes por voz ("Participante A", "B"…). Desligado (padrão desde 15/11/2026), o
    * áudio dos participantes vira "Participantes" e os trechos se dividem só pelas pausas.
    */
@@ -171,6 +178,8 @@ export const DEFAULT_SETTINGS: Readonly<AppSettings> = Object.freeze({
   liveCards: false,
   whatsappInsights: true,
   whatsappAutoCorrect: false,
+  whatsappNotifications: true,
+  whatsappNotifyGroups: true,
   identifySpeakers: false,
   meetSpeakers: true,
   brandName: null,
