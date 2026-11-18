@@ -9,6 +9,8 @@
 // e só chave ausente ou recusada para na hora. Esgotadas, a fonte vira `failed` e a outra segue. Aos
 // 170 min a sessão é trocada de forma planejada (a API fecha em 3 h). Cada conexão pedida leva uma
 // geração: token que chega depois de pausa, retomada ou fim é descartado, sem abrir socket órfão.
+// Fonte desligada de propósito ("Ouvir só os participantes", contrato 29): a sessão dela encerra como na pausa,
+// sem reconexão nem aviso, e fica `paused` até ser religada; a retomada global não a reabre.
 // Tudo com sockets, relógio e timers injetados, para o teste não abrir rede.
 import type { AudioFrame, AudioSource, FrameSink } from '../audio/frames'
 import type { TranscriptSource, TranscriptionTokenResult } from '../../../shared/transcription'
@@ -110,6 +112,10 @@ export class AssemblyAiSink implements FrameSink {
   readonly gaps: Record<AudioSource, number> = { mic: 0, system: 0 }
 
   private readonly runtimes = new Map<TranscriptSource, SourceRuntime>()
+  /** Fontes desligadas de propósito (contrato 29). */
+  private readonly disabled = new Set<TranscriptSource>()
+  /** Pausa global em curso: religar uma fonte espera a retomada. */
+  private paused = false
   private readonly terminateWaiters = new Map<StreamingSocket, ((reached: boolean) => void)[]>()
   private readonly timers: Timers
   private readonly maxBuffered: number
@@ -148,10 +154,44 @@ export class AssemblyAiSink implements FrameSink {
         draining: new Map(),
       }
       this.runtimes.set(source, runtime)
+      // Desligada antes de a captura começar: nasce parada, sem sessão aberta.
+      if (this.disabled.has(source)) {
+        runtime.status = { status: 'paused', attempts: 0, nextRetryMs: null, error: null }
+        this.emit(runtime)
+        continue
+      }
       runtime.status = { status: 'connecting', attempts: 0, nextRetryMs: null, error: null }
       this.emit(runtime)
       this.connect(runtime)
     }
+  }
+
+  /**
+   * "Ouvir só os participantes" (contrato 29): desligada, a sessão da fonte recebe `Terminate` e fecha como na
+   * pausa (o turno final ainda chega), sem reconexão e sem `failed`; religada, abre sessão nova como o "Tentar de
+   * novo" (pausada, só na retomada). A outra fonte não é tocada.
+   */
+  setSourceEnabled(source: TranscriptSource, enabled: boolean): void {
+    const runtime = this.runtimes.get(source)
+    if (enabled) {
+      if (!this.disabled.delete(source)) return
+      if (!runtime || this.paused || runtime.status.status !== 'paused') return
+      runtime.status = { status: 'connecting', attempts: 0, nextRetryMs: null, error: null }
+      this.emit(runtime)
+      this.connect(runtime)
+      return
+    }
+    if (this.disabled.has(source)) return
+    this.disabled.add(source)
+    if (!runtime || this.halted(runtime)) return
+    runtime.generation += 1
+    this.clearTimers(runtime)
+    const socket = runtime.socket
+    runtime.socket = null
+    if (socket) void this.drain(runtime, socket, this.pauseTerminationTimeoutMs)
+    runtime.buffer = []
+    runtime.status = { status: 'paused', attempts: 0, nextRetryMs: null, error: null }
+    this.emit(runtime)
   }
 
   write(frame: AudioFrame): void {
@@ -177,6 +217,7 @@ export class AssemblyAiSink implements FrameSink {
    * `Termination` chega ou em 2 s; até lá o turno final ainda é entregue, com a sessão dele.
    */
   pause(): void {
+    this.paused = true
     for (const runtime of this.runtimes.values()) {
       if (this.halted(runtime)) continue
       runtime.generation += 1
@@ -192,8 +233,10 @@ export class AssemblyAiSink implements FrameSink {
 
   /** Retomar: sessão nova, token novo e deslocamento novo (só o tempo gravado conta). */
   resume(): void {
+    this.paused = false
     for (const runtime of this.runtimes.values()) {
-      if (runtime.status.status !== 'paused') continue
+      // Fonte desligada de propósito (contrato 29) continua parada.
+      if (runtime.status.status !== 'paused' || this.disabled.has(runtime.source)) continue
       runtime.status = { status: 'connecting', attempts: 0, nextRetryMs: null, error: null }
       this.emit(runtime)
       this.connect(runtime)
@@ -203,7 +246,7 @@ export class AssemblyAiSink implements FrameSink {
   /** "Tentar de novo" de uma fonte que esgotou as tentativas (a outra não é tocada). */
   retry(source: TranscriptSource): void {
     const runtime = this.runtimes.get(source)
-    if (!runtime || runtime.status.status === 'paused' || runtime.status.status === 'stopped') return
+    if (!runtime || runtime.status.status === 'paused' || runtime.status.status === 'stopped' || this.disabled.has(source)) return
     this.clearTimers(runtime)
     this.closeSocket(runtime)
     runtime.status = { status: 'connecting', attempts: 0, nextRetryMs: null, error: null }

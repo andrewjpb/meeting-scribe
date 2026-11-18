@@ -43,6 +43,13 @@ export class SilenceDetector {
     this.set('ended')
   }
 
+  /** Recomeça a contar agora (o microfone religado, contrato 29): volta a `ok`, salvo trilha encerrada. */
+  reset(): void {
+    if (this.current === 'ended') return
+    this.lastSoundAt = this.now()
+    this.set('ok')
+  }
+
   private set(state: SilenceState): void {
     if (state === this.current) return
     this.current = state

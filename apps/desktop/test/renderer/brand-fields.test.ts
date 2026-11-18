@@ -11,6 +11,7 @@ const micDenied: CaptureState = {
   silence: { mic: 'ok', system: 'ok' },
   heard: { mic: false, system: true },
   devices: [],
+  micOff: false,
 }
 
 describe('marca escolhida no renderer (contrato 09)', () => {

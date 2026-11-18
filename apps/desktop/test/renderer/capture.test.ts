@@ -292,6 +292,62 @@ describe('CaptureSession', () => {
     expect(h.session.getState().silence).toEqual({ mic: 'silent', system: 'silent' })
   })
 
+  describe('"Ouvir só os participantes" (contrato 29)', () => {
+    it('desligado: trilha enabled=false, quadros do mic descartados, nada de heard, medidor nem silêncio; o estado não vira failed', async () => {
+      const h = harness()
+      await h.session.start()
+      h.session.setMicEnabled(false)
+      const track = h.streams.mic.audio[0] as FakeTrack & { enabled?: boolean }
+      expect(track.enabled).toBe(false)
+      expect(track.readyState).toBe('live')
+      for (let t = 0; t <= 4000; t += 100) {
+        h.setNow(t)
+        h.blocks.mic?.(block(0.3), 48_000)
+        h.blocks.system?.(block(0.1, 2), 48_000)
+      }
+      await vi.advanceTimersByTimeAsync(500)
+      expect(h.sink.counts.mic).toBe(0)
+      expect(h.sink.counts.system).toBeGreaterThan(0)
+      const state = h.session.getState()
+      expect(state).toMatchObject({ micOff: true, mic: 'live', heard: { mic: false, system: true }, silence: { mic: 'ok' } })
+      // Desligado não é fonte ausente: a fita fica sem barras e sem o tracejado.
+      expect(h.session.takeLevels().mic).toBe(0)
+      const result = await h.session.stop()
+      expect(result.sources).toEqual({ mic: false, system: true })
+    })
+
+    it('religar volta a entregar sem novo getUserMedia; pausado, o estado vale ao retomar', async () => {
+      const h = harness()
+      await h.session.start()
+      h.session.pause()
+      h.session.setMicEnabled(false)
+      h.session.resume()
+      h.blocks.mic?.(block(0.3), 48_000)
+      expect(h.sink.counts.mic).toBe(0)
+      h.setNow(5000)
+      h.session.setMicEnabled(true)
+      const track = h.streams.mic.audio[0] as FakeTrack & { enabled?: boolean }
+      expect(track.enabled).toBe(true)
+      expect(h.session.getState().micOff).toBe(false)
+      // O detector recomeça a contar no religar: sem aviso de silêncio logo de cara.
+      await vi.advanceTimersByTimeAsync(250)
+      expect(h.session.getState().silence.mic).toBe('ok')
+      h.blocks.mic?.(block(0.3), 48_000)
+      expect(h.sink.counts.mic).toBeGreaterThan(0)
+      expect(h.session.getState().heard.mic).toBe(true)
+      expect(h.media.getUserMedia).toHaveBeenCalledTimes(1)
+    })
+
+    it('desligado antes de o microfone abrir: a trilha já nasce desligada', async () => {
+      const h = harness()
+      const started = h.session.start()
+      h.session.setMicEnabled(false)
+      await started
+      expect((h.streams.mic.audio[0] as FakeTrack & { enabled?: boolean }).enabled).toBe(false)
+      expect(h.session.getState()).toMatchObject({ mic: 'live', micOff: true })
+    })
+  })
+
   it('takeLevels devolve o RMS da janela e zera', async () => {
     const h = harness()
     await h.session.start()

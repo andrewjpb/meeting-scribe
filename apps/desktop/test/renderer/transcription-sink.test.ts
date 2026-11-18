@@ -502,6 +502,68 @@ describe('reconexão e troca de sessão (CA8)', () => {
   })
 })
 
+describe('"Ouvir só os participantes" (contrato 29)', () => {
+  it('desligar fecha só o socket do mic, sem reconexão nem falha; religar abre sessão nova com token novo', async () => {
+    vi.useFakeTimers()
+    try {
+      const h = harness()
+      h.sink.start(['mic', 'system'])
+      await settle()
+      h.sockets.forEach((socket) => socket.open())
+      const [mic, system] = h.sockets
+      h.sink.setSourceEnabled('mic', false)
+      expect(mic?.text).toEqual([JSON.stringify({ type: 'Terminate' })])
+      expect(system?.text).toEqual([])
+      expect(h.sink.statusOf('mic')?.status).toBe('paused')
+      expect(h.sink.statusOf('system')?.status).toBe('live')
+      await vi.advanceTimersByTimeAsync(PAUSE_TERMINATION_TIMEOUT_MS + RECONNECT_DELAYS_MS.reduce((a, b) => a + b, 0))
+      await settle()
+      expect(mic?.closedWith?.code).toBe(1000)
+      expect(system?.closedWith).toBeNull()
+      // Nenhuma tentativa de reconexão nem aviso de falha: nada de socket novo.
+      expect(h.sockets).toHaveLength(2)
+      expect(h.statuses).not.toContain('reconnecting')
+      expect(h.statuses).not.toContain('failed')
+      h.sink.write(frame('mic', 1))
+      expect(mic?.sent.filter((item) => typeof item !== 'string')).toHaveLength(0)
+      // Pausar e retomar no meio não reabre o mic desligado; "Tentar de novo" também não.
+      h.sink.pause()
+      h.sink.resume()
+      h.sink.retry('mic')
+      await settle()
+      expect(h.urls.filter((url) => url.includes('/mic?'))).toHaveLength(1)
+      expect(h.sink.statusOf('mic')?.status).toBe('paused')
+
+      h.sink.setSourceEnabled('mic', true)
+      await settle()
+      const reopened = h.sockets.at(-1)
+      expect(h.urls.at(-1)).toContain('/mic?')
+      reopened?.open()
+      expect(h.sink.statusOf('mic')?.status).toBe('live')
+      h.sink.write(frame('mic', 2))
+      expect(reopened?.sent.filter((item) => typeof item !== 'string')).toHaveLength(1)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('religado durante a pausa, o mic só reabre na retomada; desligado antes do início, não abre', async () => {
+    const h = harness()
+    h.sink.setSourceEnabled('mic', false)
+    h.sink.start(['mic', 'system'])
+    await settle()
+    expect(h.urls.map((url) => url.split('?')[0])).toEqual(['wss://exemplo/system'])
+    expect(h.sink.statusOf('mic')?.status).toBe('paused')
+    h.sink.pause()
+    h.sink.setSourceEnabled('mic', true)
+    await settle()
+    expect(h.urls).toHaveLength(1)
+    h.sink.resume()
+    await settle()
+    expect(h.urls.map((url) => url.split('?')[0]).sort()).toEqual(['wss://exemplo/mic', 'wss://exemplo/system', 'wss://exemplo/system'])
+  })
+})
+
 describe('TranscriptionSession', () => {
   it('monta a URL com o mesmo construtor do app e as configurações da gravação', async () => {
     const urls: string[] = []

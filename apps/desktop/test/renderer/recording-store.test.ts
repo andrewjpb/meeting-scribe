@@ -56,6 +56,7 @@ vi.mock('../../src/renderer/src/audio/environment', () => ({
 const { useRecording } = await import('../../src/renderer/src/features/live/recordingStore')
 const { useSettings } = await import('../../src/renderer/src/app/settingsStore')
 const { useTranscription } = await import('../../src/renderer/src/transcription/store')
+const { noticesFor } = await import('../../src/renderer/src/features/live/noticeRules')
 
 describe('recordingStore.end', () => {
   const invoke = vi.fn()
@@ -106,6 +107,31 @@ describe('recordingStore.end', () => {
     await new Promise((resolve) => setTimeout(resolve, 0))
     expect(micRequests).toEqual([{ audio: { echoCancellation: true, noiseSuppression: false, autoGainControl: false, channelCount: 1 } }])
     invoke.mockResolvedValueOnce({ id: 'm2', title: 't', startedAt: '2026-11-14T10:00:00.000Z', durationMs: 0, sources: { mic: false, system: false } })
+    await useRecording.getState().end()
+  })
+
+  it('"Ouvir só os participantes" (contrato 29): desliga e religa o microfone sem aviso de mic e sem virar falha; pausado também', async () => {
+    stopFails.value = false
+    micRequests.length = 0
+    useRecording.getState().start()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    useRecording.getState().toggleMic()
+    const offCapture = useRecording.getState().capture
+    expect(offCapture).toMatchObject({ micOff: true, mic: 'live' })
+    if (offCapture) expect(noticesFor(offCapture)).toEqual([])
+    useRecording.getState().togglePause()
+    useRecording.getState().toggleMic()
+    expect(useRecording.getState().capture).toMatchObject({ phase: 'paused', micOff: false })
+    useRecording.getState().toggleMic()
+    useRecording.getState().togglePause()
+    const resumed = useRecording.getState().capture
+    expect(resumed).toMatchObject({ phase: 'recording', micOff: true, mic: 'live' })
+    if (resumed) expect(noticesFor(resumed)).toEqual([])
+    useRecording.getState().toggleMic()
+    expect(useRecording.getState().capture?.micOff).toBe(false)
+    // Religar não pede o microfone de novo.
+    expect(micRequests).toHaveLength(1)
+    invoke.mockResolvedValueOnce({ id: 'm-mic', title: 't', startedAt: '2026-11-14T10:00:00.000Z', durationMs: 0, sources: { mic: false, system: false } })
     await useRecording.getState().end()
   })
 

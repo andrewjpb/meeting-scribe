@@ -1,4 +1,4 @@
-import { HardDrive, Lock, Pause, Play, ScanSearch, StickyNote } from 'lucide-react'
+import { HardDrive, Lock, Mic, MicOff, Pause, Play, ScanSearch, StickyNote } from 'lucide-react'
 import type { ReactNode } from 'react'
 import { LOCK_DISABLED_HINT } from '@shared/lock'
 import { useLock } from '../../app/lockStore'
@@ -8,6 +8,8 @@ import { languagePairLabel, modelLabel } from './labels'
 
 interface ControlBarProps {
   paused: boolean
+  /** "Ouvir só os participantes" (contrato 29): o microfone desta gravação está desligado. */
+  micOff?: boolean
   busy: boolean
   /** O áudio da reunião está indo para a pasta (contrato 07): mostra o marcador "Gravando áudio". */
   savingAudio?: boolean
@@ -19,17 +21,33 @@ interface ControlBarProps {
   /** A gravação já tem o máximo de análises: o botão trava com o aviso. */
   analysisLimit?: boolean
   onTogglePause: () => void
+  onToggleMic?: () => void
   onToggleNotes?: () => void
   onAnalyze?: () => void
   onEnd: () => void
 }
 
 /**
- * Barra de controles: bloco azul (--side-bg, raio 6, sem sombra) a 24 px do rodapé com pausa, anotações
+ * Barra de controles: bloco azul (--side-bg, raio 6, sem sombra) a 24 px do rodapé com pausa, o microfone
+ * ("Ouvir só os participantes", contrato 29, só o ícone para caber em 1120 px), anotações
  * (contrato 13), "Analisar até agora" (contrato 19), idiomas, modelo, "Bloquear" (contrato 22, a gravação
  * continua) e "Encerrar".
  */
-export function ControlBar({ paused, busy, savingAudio = false, notesOpen = false, analyzing = false, canAnalyze = false, analysisLimit = false, onTogglePause, onToggleNotes, onAnalyze, onEnd }: ControlBarProps) {
+export function ControlBar({
+  paused,
+  micOff = false,
+  busy,
+  savingAudio = false,
+  notesOpen = false,
+  analyzing = false,
+  canAnalyze = false,
+  analysisLimit = false,
+  onTogglePause,
+  onToggleMic,
+  onToggleNotes,
+  onAnalyze,
+  onEnd,
+}: ControlBarProps) {
   // Idiomas e modelo como estão em Configurações (mudam na hora se alguém trocar durante a gravação).
   const settings = useSettings((state) => state.settings)
   const model = modelLabel(settings)
@@ -41,12 +59,25 @@ export function ControlBar({ paused, busy, savingAudio = false, notesOpen = fals
       <div
         role="toolbar"
         aria-label="Controles da gravação"
-        className="on-side pointer-events-auto flex items-center gap-1 rounded-[var(--radius-panel)] border border-side-edge bg-side-bg p-1.5 text-side-text"
+        className="on-side pointer-events-auto flex min-w-0 max-w-full items-center gap-1 rounded-[var(--radius-panel)] border border-side-edge bg-side-bg p-1.5 text-side-text"
       >
         <BarButton action="toggle-pause" label={paused ? 'Retomar' : 'Pausar'} onClick={onTogglePause} disabled={busy} ariaShortcut="Space">
           {/* Cheio, como nos mockups: o contorno de 1,5 px some no azul. */}
           <Icon icon={paused ? Play : Pause} className="fill-current" />
         </BarButton>
+        {onToggleMic && (
+          <BarButton
+            action="mic-off"
+            label={micOff ? 'Voltar a me ouvir' : 'Ouvir só os participantes'}
+            title={micOff ? 'Voltar a me ouvir' : 'Ouvir só os participantes'}
+            iconOnly
+            pressed={micOff}
+            onClick={onToggleMic}
+            disabled={busy}
+          >
+            <Icon icon={micOff ? MicOff : Mic} />
+          </BarButton>
+        )}
         {onToggleNotes && (
           <BarButton action="toggle-notes" label="Anotações" onClick={onToggleNotes} disabled={busy} ariaShortcut="Meta+Shift+N" pressed={notesOpen} title="Anotações (⌘⇧N)">
             <Icon icon={StickyNote} />
@@ -74,7 +105,7 @@ export function ControlBar({ paused, busy, savingAudio = false, notesOpen = fals
         </span>
         {model && (
           <span
-            className="block h-7 max-w-[132px] truncate rounded-[var(--radius-control)] bg-side-active px-2.5 font-mono text-11 leading-7 whitespace-nowrap text-side-muted"
+            className="block h-7 min-w-0 max-w-[132px] truncate rounded-[var(--radius-control)] bg-side-active px-2.5 font-mono text-11 leading-7 whitespace-nowrap text-side-muted"
             title={`Modelo de tradução: ${model}`}
           >
             {model}

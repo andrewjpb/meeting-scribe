@@ -15,7 +15,8 @@ export interface Notice {
 export function noticesFor(capture: CaptureState, appName: string = DEFAULT_BRAND_NAME): Notice[] {
   const notices: Notice[] = []
 
-  if (capture.mic === 'failed') {
+  // Microfone desligado de propósito (contrato 29): nenhum aviso de microfone ausente ou bloqueado.
+  if (capture.mic === 'failed' && !capture.micOff) {
     notices.push(
       capture.failure.mic === 'denied'
         ? {

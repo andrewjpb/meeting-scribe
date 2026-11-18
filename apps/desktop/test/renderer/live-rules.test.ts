@@ -12,6 +12,7 @@ const base: CaptureState = {
   silence: { mic: 'ok', system: 'ok' },
   heard: { mic: true, system: true },
   devices: [],
+  micOff: false,
 }
 
 describe('avisos da gravação', () => {
@@ -32,6 +33,12 @@ describe('avisos da gravação', () => {
     for (const phase of ['stopping', 'stopped'] as const) {
       expect(noticesFor({ ...base, phase, system: 'ended', silence: { mic: 'ok', system: 'silent' } as CaptureState['silence'] })).toEqual([])
     }
+  })
+
+  it('microfone desligado de propósito (contrato 29): sem aviso de microfone ausente ou bloqueado', () => {
+    expect(noticesFor({ ...base, micOff: true })).toEqual([])
+    expect(noticesFor({ ...base, micOff: true, mic: 'failed', failure: { mic: 'denied', system: null } })).toEqual([])
+    expect(noticesFor({ ...base, micOff: true, mic: 'failed', failure: { mic: 'unavailable', system: null } })).toEqual([])
   })
 
   it('microfone negado aponta para o painel do microfone', () => {

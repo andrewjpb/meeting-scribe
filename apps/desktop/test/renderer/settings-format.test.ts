@@ -102,6 +102,7 @@ describe('áudio do sistema na barra lateral (CA12)', () => {
     silence: { mic: 'ok', system: 'ok' },
     heard: { mic: true, system: true },
     devices: [],
+    micOff: false,
     ...patch,
   })
 

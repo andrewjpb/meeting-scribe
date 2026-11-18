@@ -72,6 +72,11 @@ export class TranscriptionSession implements FrameSink {
     this.sink.resume()
   }
 
+  /** Contrato 29: liga ou desliga a sessão de uma fonte ("Ouvir só os participantes"). */
+  setSourceEnabled(source: AudioSource, enabled: boolean): void {
+    this.sink.setSourceEnabled(source, enabled)
+  }
+
   retry(source: AudioSource): void {
     this.sink.retry(source)
   }

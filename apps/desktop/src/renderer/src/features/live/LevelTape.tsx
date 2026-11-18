@@ -2,7 +2,8 @@
 // com 1 px de intervalo e pontas retas, encostadas no fio central, a mais nova à direita rolando para
 // a esquerda. Uma coluna a cada 50 ms de
 // gravação; entre colunas a fita desliza de forma contínua (um quadro por `requestAnimationFrame`).
-// Pausada, congela e cai para 40%. Fonte ausente: tracejado em --line-strong e "sem sinal".
+// Pausada, congela e cai para 40%. Fonte ausente: tracejado em --line-strong e "sem sinal". Microfone desligado
+// de propósito (contrato 29): sem barras nem tracejado, com "mic desligado" ao lado de "Você".
 import { useEffect, useRef } from 'react'
 import type { CapturePhase, CaptureSession } from '../../audio/capture'
 import { dbfsToLevel, rmsToDbfs } from '../../audio/levels'
@@ -49,9 +50,11 @@ interface LevelTapeProps {
   phase: CapturePhase
   micAbsent: boolean
   systemAbsent: boolean
+  /** "Ouvir só os participantes" (contrato 29). */
+  micOff?: boolean
 }
 
-export function LevelTape({ session, tape, phase, micAbsent, systemAbsent }: LevelTapeProps) {
+export function LevelTape({ session, tape, phase, micAbsent, systemAbsent, micOff = false }: LevelTapeProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const labelsRef = useRef<HTMLDivElement>(null)
   const phaseRef = useRef(phase)
@@ -67,7 +70,7 @@ export function LevelTape({ session, tape, phase, micAbsent, systemAbsent }: Lev
   useEffect(() => {
     gutterRef.current = measureGutter(labelsRef.current)
     redrawRef.current?.()
-  }, [micAbsent, systemAbsent])
+  }, [micAbsent, systemAbsent, micOff])
 
   useEffect(() => {
     const canvas = canvasRef.current
@@ -169,7 +172,7 @@ export function LevelTape({ session, tape, phase, micAbsent, systemAbsent }: Lev
       <div className={`absolute inset-0 transition-opacity duration-[var(--duration-slow)] ease-[var(--ease-out)] ${live ? 'opacity-100' : 'opacity-40'}`}>
         <canvas ref={canvasRef} className="absolute inset-0 h-24 w-full" aria-hidden="true" />
         <div ref={labelsRef}>
-          <TapeLabel label="Você" tone="mic" absent={micAbsent} position="top" />
+          <TapeLabel label="Você" tone="mic" absent={micAbsent} off={micOff} position="top" />
           <TapeLabel label="Participantes" tone="sys" absent={systemAbsent} position="bottom" />
         </div>
       </div>
@@ -177,14 +180,21 @@ export function LevelTape({ session, tape, phase, micAbsent, systemAbsent }: Lev
   )
 }
 
-function TapeLabel({ label, tone, absent, position }: { label: string; tone: 'mic' | 'sys'; absent: boolean; position: 'top' | 'bottom' }) {
+function TapeLabel({ label, tone, absent, off = false, position }: { label: string; tone: 'mic' | 'sys'; absent: boolean; off?: boolean; position: 'top' | 'bottom' }) {
   return (
     <p
       data-source-label={tone}
+      data-source-off={off || undefined}
       className={`caps absolute left-10 flex h-12 items-center ${position === 'top' ? 'top-0' : 'bottom-0'}`}
     >
       <span className={tone === 'mic' ? 'text-mic' : 'text-sys'}>{label}</span>
-      {absent && <span className="ml-1.5 tracking-normal text-text-faint normal-case">sem sinal</span>}
+      {off ? (
+        <span data-mic-off-label className="ml-1.5 tracking-normal text-text-muted normal-case">
+          mic desligado
+        </span>
+      ) : (
+        absent && <span className="ml-1.5 tracking-normal text-text-faint normal-case">sem sinal</span>
+      )}
     </p>
   )
 }

@@ -2,6 +2,9 @@
 // áudio e leva os blocos para o nível da fita, o detector de silêncio e o enquadrador. Tudo que toca
 // o navegador chega injetado (`MediaApi`, `CreatePipeline`), então a lógica é testada sem WebAudio.
 // Uma fonte falhar nunca derruba a outra (R7), e `devicechange` só relê a lista de dispositivos (R13).
+// "Ouvir só os participantes" (contrato 29): o microfone desligado fica com as trilhas vivas e `enabled=false`
+// (o arquivo da reunião recebe silêncio) e os quadros dele são descartados antes de medidor, enquadrador, detector
+// de silêncio e `heard`. Religar não pede o microfone de novo.
 import { RecordingClock } from './clock'
 import { buildMicConstraints, buildSystemConstraints, resolveMicDeviceId, type MicConstraints, type MicSettings, type SystemConstraints } from './constraints'
 import { Framer, type AudioSource, type FrameSink } from './frames'
@@ -11,6 +14,8 @@ import { SilenceDetector, SILENCE_AFTER_MS, type SilenceState } from './silence'
 
 export interface TrackLike {
   readonly readyState: string
+  /** `MediaStreamTrack.enabled`: desligada, a trilha entrega silêncio a quem a lê. */
+  enabled?: boolean
   stop(): void
   addEventListener(type: 'ended', listener: () => void): void
   removeEventListener(type: 'ended', listener: () => void): void
@@ -59,6 +64,8 @@ export interface CaptureState {
   heard: Readonly<Record<AudioSource, boolean>>
   /** Entradas de áudio (`audioinput`) da última leitura. */
   devices: readonly DeviceInfo[]
+  /** "Ouvir só os participantes" (contrato 29): o microfone desligado de propósito. Não é `failed` nem `ended`. */
+  micOff: boolean
 }
 
 export interface CaptureResult {
@@ -108,6 +115,7 @@ const initialState: CaptureState = {
   silence: { mic: 'ok', system: 'ok' },
   heard: { mic: false, system: false },
   devices: [],
+  micOff: false,
 }
 
 export class CaptureSession {
@@ -145,7 +153,7 @@ export class CaptureSession {
     const mic = this.open('mic', () => this.askMic())
     const system = this.open('system', () => this.deps.media.getDisplayMedia(buildSystemConstraints()))
     this.silenceTimer = setInterval(() => {
-      for (const source of SOURCES) this.runtimes.get(source)?.silence.tick()
+      for (const source of SOURCES) if (!this.isOff(source)) this.runtimes.get(source)?.silence.tick()
     }, SILENCE_TICK_MS)
     return Promise.all([mic, system]).then(() => this.refreshDevices())
   }
@@ -161,6 +169,24 @@ export class CaptureSession {
     for (const source of SOURCES) this.runtimes.get(source)?.meter.reset()
     this.clock.resume()
     this.update({ phase: 'recording' })
+  }
+
+  /**
+   * "Ouvir só os participantes" (contrato 29): desligado, as trilhas do microfone ficam `enabled=false` e os
+   * quadros dele não vão a lugar nenhum; ligado de novo, voltam sem novo `getUserMedia`. Vale também pausado
+   * (o estado vale ao retomar) e antes de o microfone abrir.
+   */
+  setMicEnabled(enabled: boolean): void {
+    if (this.stopped() || this.state.micOff === !enabled) return
+    const runtime = this.runtimes.get('mic')
+    if (runtime) {
+      applyEnabled(runtime.stream, enabled)
+      if (enabled) {
+        runtime.meter.reset()
+        runtime.silence.reset()
+      }
+    }
+    this.update({ micOff: !enabled })
   }
 
   /** Para todas as trilhas e fecha os `AudioContext`. Devolve a duração e as fontes ouvidas. */
@@ -188,8 +214,9 @@ export class CaptureSession {
     const level = (source: AudioSource): number | null => {
       const runtime = this.runtimes.get(source)
       const rms = runtime?.meter.take() ?? null
-      // Pedido ainda em andamento não é fonte ausente: a fita fica vazia, sem o tracejado.
-      if (this.state[source] === 'starting') return 0
+      // Pedido ainda em andamento não é fonte ausente: a fita fica vazia, sem o tracejado. Microfone desligado
+      // de propósito (contrato 29) também não.
+      if (this.state[source] === 'starting' || this.isOff(source)) return 0
       if (!runtime || this.state[source] !== 'live' || this.state.silence[source] !== 'ok') return null
       return rms ?? 0
     }
@@ -269,6 +296,8 @@ export class CaptureSession {
       return
     }
     runtime.pipeline = pipeline
+    // Desligado antes de o microfone abrir: a trilha já nasce desligada.
+    if (this.isOff(source)) applyEnabled(stream, false)
 
     track.addEventListener('ended', runtime.onEnded)
     this.update(statusPatch(source, 'live'))
@@ -282,7 +311,7 @@ export class CaptureSession {
 
   private onBlock(source: AudioSource, channels: Float32Array[], sampleRate: number): void {
     const runtime = this.runtimes.get(source)
-    if (!runtime || this.stopped()) return
+    if (!runtime || this.stopped() || this.isOff(source)) return
     const signal = hasSignal(channels)
     runtime.silence.update(signal)
     if (signal && !this.state.heard[source]) this.update({ heard: { ...this.state.heard, [source]: true } })
@@ -331,6 +360,10 @@ export class CaptureSession {
     this.update({ ...statusPatch(source, 'failed'), failure: { ...this.state.failure, [source]: failure } })
   }
 
+  private isOff(source: AudioSource): boolean {
+    return source === 'mic' && this.state.micOff
+  }
+
   private stopped(): boolean {
     return this.state.phase === 'stopping' || this.state.phase === 'stopped'
   }
@@ -343,6 +376,10 @@ export class CaptureSession {
 
 function statusPatch(source: AudioSource, status: SourceStatus): Pick<CaptureState, 'mic'> | Pick<CaptureState, 'system'> {
   return source === 'mic' ? { mic: status } : { system: status }
+}
+
+function applyEnabled(stream: StreamLike, enabled: boolean): void {
+  for (const track of stream.getAudioTracks()) track.enabled = enabled
 }
 
 function stopTracks(stream: StreamLike): void {
