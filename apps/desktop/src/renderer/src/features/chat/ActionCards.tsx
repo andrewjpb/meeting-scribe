@@ -1,7 +1,7 @@
 // Cartões de ação do Assistente (contrato 25, CA3 e CA4): o que o Claude propôs no fim da resposta, já validado
 // pelo main. Nenhum cartão faz nada sozinho: "Criar lembrete" pede ao main a tarefa "uma vez" das Automações;
-// "Enviar" usa só `window.__scribeApi.whatsappSend` (o token de clique do preload e o diálogo nativo "Enviar para
-// <nome>?" do contrato 24); "Criar tarefa" abre o formulário das Automações preenchido para revisar; "Abrir" leva à
+// "Enviar" usa só `window.__scribeApi.whatsappSend` (o token de clique do preload do contrato 24; sem diálogo
+// nativo desde o contrato 33); "Criar tarefa" abre o formulário das Automações preenchido para revisar; "Abrir" leva à
 // tela. Depois do clique, o cartão mostra o estado, que fica gravado na conversa. Contrato 26: numa resposta que usou a
 // internet, cada cartão vem com o aviso de conferir antes.
 import { Bell, Check, ExternalLink, Globe, ListChecks, MessageSquare, Pencil, Send, X } from 'lucide-react'
@@ -33,7 +33,6 @@ const SEND_ERRORS: Record<string, string> = {
   state: 'O WhatsApp não está conectado. Confira em Configurações › Contas.',
   invalid: 'Esta conversa não existe mais.',
   failed: 'Não foi possível enviar. Tente de novo.',
-  cancelled: 'Envio cancelado.',
 }
 
 const two = (value: number): string => String(value).padStart(2, '0')

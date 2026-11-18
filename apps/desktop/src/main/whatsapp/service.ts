@@ -94,18 +94,6 @@ export interface WhatsAppServiceDeps {
   now?: () => number
 }
 
-/** O que o diálogo nativo de envio mostra. */
-export interface SendQuestion {
-  chatName: string
-  text: string
-}
-
-/** Texto do diálogo nativo: "Enviar para <nome>?" e a mensagem, até 300 caracteres. */
-export function sendDialogText(question: SendQuestion): { message: string; detail: string } {
-  const text = question.text.trim()
-  return { message: `Enviar para ${question.chatName}?`, detail: text.length > 300 ? `${text.slice(0, 300)}…` : text }
-}
-
 export interface WhatsAppService {
   /** Ao abrir o app: reencontra o serviço rodando ou sobe de novo, se estava ligado. */
   init(): Promise<void>
@@ -134,11 +122,8 @@ export interface WhatsAppService {
   lastMessages(chatId: string, max: number): Promise<WhatsAppMessage[]>
   /** O preload registrou um clique de "Enviar" desta janela. */
   registerClick(senderId: number, token: unknown): void
-  /**
-   * Só com o token de clique (uso único, 10 s) da mesma janela e depois do "Enviar" no diálogo nativo (`confirm`),
-   * que mostra a conversa e o texto que vão ao serviço. Em todo envio.
-   */
-  send(senderId: number, request: unknown, confirm: (question: SendQuestion) => Promise<boolean>): Promise<WhatsAppSendResult>
+  /** Só com o token de clique (uso único, 10 s) da mesma janela. Em todo envio. */
+  send(senderId: number, request: unknown): Promise<WhatsAppSendResult>
   forgetSender(senderId: number): void
   draft(request: unknown): Promise<WhatsAppDraftResult>
   link(meetingId: unknown): Promise<WhatsAppMeetingLink | null>
@@ -584,7 +569,7 @@ export function createWhatsAppService(deps: WhatsAppServiceDeps): WhatsAppServic
       guard.register(senderId, token)
     },
 
-    async send(senderId, request, confirm) {
+    async send(senderId, request) {
       const raw = (request ?? {}) as { clickToken?: unknown; chatId?: unknown }
       const parsed = sendSchema.safeParse(request)
       // O token é gasto mesmo com o resto inválido: não serve para uma segunda tentativa.
@@ -598,12 +583,6 @@ export function createWhatsAppService(deps: WhatsAppServiceDeps): WhatsAppServic
       const current = client
       const chat = (await current.chats().catch((): WhatsAppChat[] => [])).find((item) => item.id === parsed.data.chatId)
       if (!chat) return { ok: false, error: 'invalid' }
-      // Segunda barreira: o diálogo nativo do macOS, aberto pelo main, com a conversa e o texto que vão mesmo ao
-      // serviço. Nem um script na tela consegue enviar sem a pessoa ver e clicar em "Enviar" nele.
-      if (!(await confirm({ chatName: chat.name, text: parsed.data.text }).catch(() => false))) {
-        deps.log?.('[whatsapp] envio cancelado no diálogo')
-        return { ok: false, error: 'cancelled' }
-      }
       try {
         const id = await current.send(proof, parsed.data.chatId, parsed.data.text)
         deps.log?.('[whatsapp] mensagem enviada com o clique da pessoa')

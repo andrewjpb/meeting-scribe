@@ -4990,8 +4990,9 @@ async function waSent(ctx: SmokeContext): Promise<{ id: string; chatId: string; 
  * lê o QR; as conversas, a conversa aberta (texto como texto, mídia como metadado) e a mensagem nova pelo SSE;
  * "Rascunho com o Claude" (agente ACP falso) preenche o campo sem enviar; o envio sem clique recusado (canal com
  * token inventado, `whatsappSend` sem ativação do usuário, o evento do clique pelo `send` genérico) e o envio com o
- * clique e a confirmação; e o escopo do "Perguntar" com uma conversa. Contrato 32: as fotos (Ana e Atlas) e as
- * iniciais (Bruno) na lista e o painel Detalhes com a análise do Claude falso, os gráficos locais e o custo.
+ * clique; e o escopo do "Perguntar" com uma conversa. Contrato 32: as fotos (Ana e Atlas) e as iniciais (Bruno) na
+ * lista e o painel Detalhes com a análise do Claude falso, os gráficos locais e o custo. Contrato 33: o topo sem
+ * título nem aviso, os Detalhes fechados ao abrir abaixo de 1280 px e abertos acima, e o envio sem diálogo.
  */
 async function whatsappChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => void, checks: Record<string, Check>, shots: Screenshot[]): Promise<void> {
   const win = ctx.openWindow({ theme: 'light' })
@@ -5118,6 +5119,20 @@ async function whatsappChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => 
   )
   await ctx.whatsapp.fake('incoming', { chatId: WA_ANA, text: 'Chegou agora pelo SSE' })
   const sse = await waitFor(contents, `[...document.querySelectorAll('[data-whatsapp-conversation="${WA_ANA}"] [data-whatsapp-text]')].some((el) => el.textContent === 'Chegou agora pelo SSE')`, 5000)
+  // Contrato 33: sem título nem aviso no topo; as colunas começam no topo da área da tela.
+  const top = await evaluate<{ heading: boolean; notices: string[]; columnsTop: number; areaTop: number }>(
+    contents,
+    `(() => {
+      const area = document.querySelector('main [aria-label="Conversas do WhatsApp"]')?.parentElement?.parentElement
+      return {
+        heading: Boolean(document.querySelector('main h1')),
+        notices: [...document.querySelectorAll('main [data-notice]')].map((el) => el.dataset.notice),
+        columnsTop: document.querySelector('main [aria-label="Conversas do WhatsApp"]')?.getBoundingClientRect().top ?? -1,
+        areaTop: area?.getBoundingClientRect().top ?? -2,
+      }
+    })()`,
+  )
+  const topClean = !top.heading && top.notices.length === 0 && top.columnsTop === top.areaTop
   checks['screen'] = {
     ok:
       listed &&
@@ -5131,11 +5146,19 @@ async function whatsappChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => 
       anaOpen &&
       htmlAsText.text === 'Combinado. <b>Não</b> esquece a pauta.' &&
       htmlAsText.tags === 0 &&
-      sse,
-    detail: `lista=${listed} ${JSON.stringify(rows.map((row) => ({ id: row.id.slice(0, 8), group: row.group, unread: row.unread })))}; mídia "${media}" sem <img>=${noImage}; conversa=${anaOpen}; HTML como texto "${htmlAsText.text}" (${htmlAsText.tags} <b>); SSE=${sse}`,
+      sse &&
+      topClean,
+    detail: `topo sem título=${!top.heading} avisos ${JSON.stringify(top.notices)} colunas no topo=${top.columnsTop === top.areaTop} (${top.columnsTop}); lista=${listed} ${JSON.stringify(rows.map((row) => ({ id: row.id.slice(0, 8), group: row.group, unread: row.unread })))}; mídia "${media}" sem <img>=${noImage}; conversa=${anaOpen}; HTML como texto "${htmlAsText.text}" (${htmlAsText.tags} <b>); SSE=${sse}`,
   }
 
-  // Contrato 32: o painel Detalhes, aberto por padrão, com a análise do Claude falso (sozinha, ao abrir a conversa sem
+  // Contrato 33: a janela do smoke tem menos de 1280 px, então os Detalhes começam fechados; o botão do cabeçalho abre.
+  const narrow = await evaluate<{ width: number; panel: boolean; toggle: string }>(
+    contents,
+    `({ width: window.innerWidth, panel: Boolean(document.querySelector('[data-wa-details]')), toggle: document.querySelector('[data-action="toggle-whatsapp-details"]')?.getAttribute('aria-pressed') ?? '' })`,
+  )
+  const narrowClosed = narrow.width < 1280 && !narrow.panel && narrow.toggle === 'false'
+  await clickSelector(contents, '[data-action="toggle-whatsapp-details"]')
+  // Contrato 32: o painel Detalhes com a análise do Claude falso (sozinha, ao abrir o painel numa conversa sem
   // cache), o humor, o gráfico de atividade com barras e o rodapé com o custo; a foto da Ana e do Atlas na lista e as
   // iniciais do Bruno (o serviço falso não tem foto dele); e o cache em whatsapp/insights.json.
   const detailsShown = await waitFor(contents, `document.querySelector('[data-wa-details] [data-wa-summary]')?.textContent.includes('Conversa com Ana Souza')`, 20_000)
@@ -5178,8 +5201,26 @@ async function whatsappChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => 
   const closed = await waitFor(contents, `!document.querySelector('[data-wa-details]') && document.querySelector('[data-action="toggle-whatsapp-details"]')?.getAttribute('aria-pressed') === 'false'`)
   await clickSelector(contents, '[data-action="toggle-whatsapp-details"]')
   const reopened = await waitFor(contents, `document.querySelector('[data-wa-details] [data-wa-summary]') && document.querySelector('[data-action="toggle-whatsapp-details"]')?.getAttribute('aria-pressed') === 'true'`)
+  // Contrato 33: com a janela larga (1320 px), a tela abre com os Detalhes já abertos; voltar à largura de antes não
+  // fecha o painel (a decisão é só ao abrir a tela).
+  const [narrowWidth, narrowHeight] = win.getContentSize() as [number, number]
+  win.setContentSize(1320, narrowHeight)
+  await clickSelector(contents, '[data-nav="reunioes"]')
+  await waitFor(contents, routeIs('reunioes'))
+  await clickSelector(contents, '[data-nav="whatsapp"]')
+  await waitFor(contents, `${routeIs('whatsapp')} && window.innerWidth >= 1280 && document.querySelectorAll('[data-whatsapp-chat]').length === 3`, 8000)
+  await clickSelector(contents, `[data-whatsapp-chat="${WA_ANA}"]`)
+  const wideOpen = await waitFor(contents, `document.querySelector('[data-wa-details] [data-wa-summary]') && document.querySelector('[data-action="toggle-whatsapp-details"]')?.getAttribute('aria-pressed') === 'true'`)
+  win.setContentSize(narrowWidth, narrowHeight)
+  const narrowAgain = await waitFor(contents, `window.innerWidth === ${narrowWidth}`)
+  await wait(300)
+  const keptOpen = await evaluate<boolean>(contents, `Boolean(document.querySelector('[data-wa-details]'))`)
   checks['details'] = {
     ok:
+      narrowClosed &&
+      wideOpen &&
+      narrowAgain &&
+      keptOpen &&
       detailsShown &&
       // 11 do serviço falso (12 se a do SSE chegou antes de o pedido ler as mensagens).
       Number(/Conversa com Ana Souza: (\d+) mensagens/.exec(details.summary)?.[1] ?? 0) >= WA_ANA_SEEDED &&
@@ -5201,7 +5242,7 @@ async function whatsappChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => 
       mode(insightsFile) === '600' &&
       closed &&
       reopened,
-    detail: `painel=${detailsShown} "${details.summary.slice(0, 80)}"; humor "${details.mood}" (nota=${details.moodNote}, ${details.moodPoints} pontos no tempo); atividade ${details.bars} barras; quem fala ${details.balance} segmentos; rodapé "${details.cost}"; botão aria-pressed=${details.toggle}; fotos Ana=${details.anaPhoto} Atlas=${details.atlasPhoto} cabeçalho=${details.headerPhoto}; Bruno "${details.brunoInitials}"; subtítulo "${details.subtitle}"; meu balão "${details.myBubble}"; cache ${mode(insightsFile)} igual=${cached?.result?.resumo === details.summary}; fechar=${closed}, abrir de novo=${reopened}`,
+    detail: `janela ${narrow.width} px: fechado ao abrir=${narrowClosed}; 1320 px: aberto ao abrir=${wideOpen}, de volta a ${narrowWidth} px continua aberto=${narrowAgain && keptOpen}; painel=${detailsShown} "${details.summary.slice(0, 80)}"; humor "${details.mood}" (nota=${details.moodNote}, ${details.moodPoints} pontos no tempo); atividade ${details.bars} barras; quem fala ${details.balance} segmentos; rodapé "${details.cost}"; botão aria-pressed=${details.toggle}; fotos Ana=${details.anaPhoto} Atlas=${details.atlasPhoto} cabeçalho=${details.headerPhoto}; Bruno "${details.brunoInitials}"; subtítulo "${details.subtitle}"; meu balão "${details.myBubble}"; cache ${mode(insightsFile)} igual=${cached?.result?.resumo === details.summary}; fechar=${closed}, abrir de novo=${reopened}`,
   }
 
   // "Rascunho com o Claude" pelo agente ACP falso: o texto vai para o campo e nada é enviado.
@@ -5236,18 +5277,8 @@ async function whatsappChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => 
   const withoutGesture = (await contents.executeJavaScript(`window.__scribeApi.whatsappSend({ chatId: '${WA_ANA}', text: 'sem clique' })`, false)) as unknown
   const sentWithoutClick = await waSent(ctx)
 
-  // Com o clique, o main abre o diálogo nativo "Enviar para Ana Souza?" com o texto, em todo envio. "Cancelar"
-  // (o substituto responde 0): nada sai e o texto fica no campo. "Enviar": sai. Enter não envia; ⌘↵ também passa
-  // pelo diálogo.
-  const dialogs = ctx.fixtures.whatsappSendDialogs
-  const dialogsBefore = dialogs.length
-  ctx.fixtures.whatsappSendChoice = 0
-  await clickSelector(contents, '[data-action="whatsapp-send"]')
-  const cancelShown = await waitFor(contents, `document.querySelector('[data-whatsapp-send-error]')`)
-  const cancelDialog = dialogs[dialogsBefore]
-  const keptText = await evaluate<string>(contents, `document.querySelector('[data-whatsapp-composer]')?.value ?? ''`)
-  const sentAfterCancel = (await waSent(ctx)).length
-  ctx.fixtures.whatsappSendChoice = 1
+  // Com o clique, sai direto ao serviço, sem diálogo de confirmação (removido a pedido do dono no contrato 33): o
+  // clique e o token do preload bastam. Enter não envia; ⌘↵ envia.
   await clickSelector(contents, '[data-action="whatsapp-send"]')
   let sent = await waSent(ctx)
   for (let attempt = 0; attempt < 50 && sent.length < 1; attempt++) {
@@ -5255,6 +5286,7 @@ async function whatsappChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => 
     sent = await waSent(ctx)
   }
   const cleared = await waitFor(contents, `(document.querySelector('[data-whatsapp-composer]')?.value ?? 'x') === ''`)
+  const noSendError = await evaluate<boolean>(contents, `!document.querySelector('[data-whatsapp-send-error]')`)
   await setValue(contents, '[data-whatsapp-composer]', 'Segunda mensagem')
   await pressEnterIn(contents, '[data-whatsapp-composer]')
   await wait(300)
@@ -5265,8 +5297,6 @@ async function whatsappChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => 
     await wait(100)
     second = await waSent(ctx)
   }
-  ctx.fixtures.whatsappSendChoice = 0
-  const ourDialogs = dialogs.slice(dialogsBefore)
   const shownSent = await waitFor(contents, `[...document.querySelectorAll('[data-whatsapp-message][data-from-me="true"] [data-whatsapp-text]')].some((el) => el.textContent === 'Segunda mensagem')`)
   await settle(contents)
   shots.push(await capture(win, ctx.outDir, 'whatsapp-light'))
@@ -5277,23 +5307,16 @@ async function whatsappChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => 
       genericClick.includes('Canal não permitido') &&
       JSON.stringify(withoutGesture) === JSON.stringify({ ok: false, error: 'click' }) &&
       sentWithoutClick.length === 0 &&
-      cancelShown &&
-      cancelDialog?.message === 'Enviar para Ana Souza?' &&
-      cancelDialog.detail === draftText &&
-      JSON.stringify(cancelDialog.buttons) === JSON.stringify(['Cancelar', 'Enviar']) &&
-      keptText === draftText &&
-      sentAfterCancel === 0 &&
-      ourDialogs.length === 3 &&
-      ourDialogs[2]?.detail === 'Segunda mensagem' &&
-      sent.length >= 1 &&
+      sent.length === 1 &&
       sent[0]?.text === draftText &&
       sent[0]?.chatId === WA_ANA &&
       cleared &&
+      noSendError &&
       afterEnter === 1 &&
       second.length === 2 &&
       second[1]?.text === 'Segunda mensagem' &&
       shownSent,
-    detail: `token inventado=${JSON.stringify(forged)}; sem token=${noToken}; clique pelo send genérico="${genericClick.slice(0, 60)}"; whatsappSend sem ativação=${JSON.stringify(withoutGesture)}; enviadas sem clique=${sentWithoutClick.length}; diálogo nativo "${cancelDialog?.message ?? ''}" com o texto=${cancelDialog?.detail === draftText} botões ${JSON.stringify(cancelDialog?.buttons ?? [])}, "Cancelar" -> enviadas=${sentAfterCancel}, texto mantido=${keptText === draftText}; "Enviar" -> enviada=${sent.length} (igual ao rascunho=${sent[0]?.text === draftText}); campo limpo=${cleared}; Enter não enviou=${afterEnter === 1}; ⌘↵ com diálogo de novo=${ourDialogs.length === 3}, enviada=${second.length === 2}; na conversa=${shownSent}`,
+    detail: `token inventado=${JSON.stringify(forged)}; sem token=${noToken}; clique pelo send genérico="${genericClick.slice(0, 60)}"; whatsappSend sem ativação=${JSON.stringify(withoutGesture)}; enviadas sem clique=${sentWithoutClick.length}; "Enviar" sem diálogo -> enviada=${sent.length} (igual ao rascunho=${sent[0]?.text === draftText}); campo limpo=${cleared}, sem erro=${noSendError}; Enter não enviou=${afterEnter === 1}; ⌘↵ enviou=${second.length === 2}; na conversa=${shownSent}`,
   }
 
   // "Só estas conversas" do Assistente (contrato 25; o "Perguntar" do 24) com a conversa da Ana: o `.md` dela na
@@ -5342,7 +5365,9 @@ async function whatsappChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => 
   await waitFor(dark.webContents, `document.querySelectorAll('[data-whatsapp-chat]').length === 3`, 8000)
   await clickSelector(dark.webContents, `[data-whatsapp-chat="${WA_ANA}"]`)
   const darkOpen = await waitFor(dark.webContents, `document.querySelectorAll('[data-whatsapp-conversation="${WA_ANA}"] [data-whatsapp-message]').length >= 5`)
-  // Contrato 32: o painel Detalhes também no escuro (mensagens novas desde a análise: ela roda de novo, sozinha).
+  // Contrato 32: o painel Detalhes também no escuro (mensagens novas desde a análise: ela roda de novo, sozinha). Na
+  // janela de menos de 1280 px ele começa fechado (contrato 33): o botão do cabeçalho abre.
+  await clickSelector(dark.webContents, '[data-action="toggle-whatsapp-details"]')
   const darkDetails = await waitFor(dark.webContents, `document.querySelector('[data-wa-details] [data-wa-summary]') && !document.querySelector('[data-wa-insights-running]') && document.querySelector('[data-wa-chart="activity"] [data-wa-bar]')`, 20_000)
   await settle(dark.webContents)
   shots.push(await capture(dark, ctx.outDir, 'whatsapp-dark'))
@@ -5421,8 +5446,8 @@ interface SmokeActionFile {
  * novos; "tenho algo pendente no WhatsApp?" responde citando as conversas pendentes; o painel "Contexto" com as
  * fontes; "me lembre amanhã de responder a Ana" vira cartão (data absoluta, "amanhã", 09:00 sem hora no pedido), e
  * "Criar lembrete" cria a tarefa "uma vez" sem agente, que aparece em Automações › Tarefas agendadas; clicar de
- * novo não repete; "responda ao Bruno dizendo sim" vira cartão com o nome e o número lidos do app, e "Enviar" passa
- * pelo diálogo nativo substituto do contrato 24 até o serviço falso; um bloco inválido vira texto. O bloqueio dos
+ * novo não repete; "responda ao Bruno dizendo sim" vira cartão com o nome e o número lidos do app, e "Enviar" (com o
+ * clique, sem diálogo desde o contrato 33) chega ao serviço falso; um bloco inválido vira texto. O bloqueio dos
  * canais novos (`chat-action-*`) fica com `lockChecks`, que chama todo canal recusado.
  */
 async function assistantChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => void, checks: Record<string, Check>, shots: Screenshot[]): Promise<void> {
@@ -5545,18 +5570,13 @@ async function assistantChecks(ctx: SmokeContext, watch: (win: BrowserWindow) =>
   const phone = await evaluate<string>(contents, `${replyCard}?.querySelector('[data-chat-action-phone]')?.textContent ?? ''`)
   const sentBefore = (await waSent(ctx)).length
   await shot('assistente-whatsapp-light')
-  const dialogs = ctx.fixtures.whatsappSendDialogs
-  const dialogsBefore = dialogs.length
-  ctx.fixtures.whatsappSendChoice = 1
   await evaluate(contents, `${replyCard}?.querySelector('[data-action="chat-action-send"]')?.click()`)
   let sent = await waSent(ctx)
   for (let attempt = 0; attempt < 50 && sent.length <= sentBefore; attempt++) {
     await wait(100)
     sent = await waSent(ctx)
   }
-  ctx.fixtures.whatsappSendChoice = 0
   const sentDone = await waitFor(contents, `${replyCard}?.dataset.chatActionStatus === 'done' && (${replyCard}?.querySelector('[data-chat-action-result]')?.textContent ?? '').startsWith('Enviada às ')`)
-  const dialog = dialogs[dialogsBefore]
   const last = sent.at(-1)
   checks['whatsapp'] = {
     ok:
@@ -5564,14 +5584,12 @@ async function assistantChecks(ctx: SmokeContext, watch: (win: BrowserWindow) =>
       replyShown &&
       name === 'Bruno Lima' &&
       phone === '+55 11 92222-0000' &&
-      dialogs.length === dialogsBefore + 1 &&
-      dialog?.message === 'Enviar para Bruno Lima?' &&
       last?.chatId === '5511922220000@s.whatsapp.net' &&
       last.text === 'Sim' &&
       sent.length === sentBefore + 1 &&
       sentDone &&
       lastActions()[0]?.status === 'done',
-    detail: `cartão=${replyShown} "${name}" "${phone}"; diálogo "${dialog?.message ?? ''}"; enviada ${sentBefore} -> ${sent.length} (${JSON.stringify(last ?? null)}); cartão "Enviada"=${sentDone}`,
+    detail: `cartão=${replyShown} "${name}" "${phone}"; enviada sem diálogo ${sentBefore} -> ${sent.length} (${JSON.stringify(last ?? null)}); cartão "Enviada"=${sentDone}`,
   }
 
   // CA3: o bloco inválido vira texto comum, sem cartão.

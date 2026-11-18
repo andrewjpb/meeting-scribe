@@ -8,7 +8,7 @@ export const WHATSAPP_RISK_TITLE = 'Antes de conectar o seu WhatsApp'
 export const WHATSAPP_RISK_TEXT =
   'Este recurso usa um cliente não oficial do WhatsApp (neonize/whatsmeow). O WhatsApp pode suspender ou bloquear o seu número, de forma temporária ou definitiva, sem aviso. A LAP não tem como desfazer um bloqueio. Use por sua conta e risco.'
 export const WHATSAPP_RISK_CHECKBOX = 'Entendo o risco e quero continuar'
-/** Aviso fixo do bloco em Configurações e da tela "WhatsApp" (CA6). */
+/** Aviso fixo do bloco em Configurações (CA6). A tela "WhatsApp" não repete o aviso desde o contrato 33. */
 export const WHATSAPP_FIXED_WARNING = 'Este recurso usa um cliente não oficial do WhatsApp. O WhatsApp pode bloquear o seu número. Use por sua conta e risco.'
 export const WHATSAPP_PAIR_HINT = 'Abra o WhatsApp no celular › Aparelhos conectados › Conectar um aparelho'
 
@@ -97,18 +97,14 @@ export interface WhatsAppPairing {
   code: string | null
 }
 
-/**
- * Enviar: só com o token de clique (gerado no preload no clique, uso único, 10 s) e depois do "Enviar" no diálogo
- * nativo que o main abre em todo envio, com a conversa e o texto.
- */
+/** Enviar: só com o token de clique (gerado no preload no clique, uso único, 10 s), em todo envio. */
 export interface WhatsAppSendRequest {
   chatId: string
   text: string
   clickToken: string
 }
 
-/** `cancelled`: a pessoa clicou em "Cancelar" no diálogo nativo de confirmação (que aparece em todo envio). */
-export type WhatsAppSendResult = { ok: true; id: string } | { ok: false; error: 'click' | 'state' | 'invalid' | 'failed' | 'cancelled' }
+export type WhatsAppSendResult = { ok: true; id: string } | { ok: false; error: 'click' | 'state' | 'invalid' | 'failed' }
 
 /** Validade do token de clique do envio. */
 export const WHATSAPP_CLICK_TTL_MS = 10_000

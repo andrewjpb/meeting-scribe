@@ -1,5 +1,6 @@
 // Painel Detalhes do WhatsApp (contrato 32): os gráficos locais como funções puras (atividade, quem fala, humor no
-// tempo), o avatar (iniciais e cor pelo id) e os textos da conversa (sequência do mesmo autor, telefone).
+// tempo), o avatar (iniciais e cor pelo id) e os textos da conversa (sequência do mesmo autor, telefone). Contrato
+// 33: Detalhes abertos ou fechados ao abrir a tela pela largura da janela.
 import { describe, expect, it } from 'vitest'
 import { AVATAR_TONES, AVATAR_TONE_CLASSES, avatarInitials, avatarTone } from '../../src/renderer/src/features/whatsapp/avatar-tone'
 import {
@@ -16,7 +17,7 @@ import {
   moodSummary,
   talkBalance,
 } from '../../src/renderer/src/features/whatsapp/chart-data'
-import { chatPhone, startsRun } from '../../src/renderer/src/features/whatsapp/format'
+import { chatPhone, DETAILS_OPEN_MIN_WIDTH, detailsStartOpen, startsRun } from '../../src/renderer/src/features/whatsapp/format'
 import type { WhatsAppMessage } from '../../src/shared/whatsapp'
 
 const NOW = new Date(2026, 10, 18, 15, 30).getTime()
@@ -129,5 +130,15 @@ describe('conversa', () => {
     expect(chatPhone({ id: '123@lid', kind: 'person', phone: '+5511944440000' })).toBe('+5511944440000')
     expect(chatPhone({ id: '123@lid', kind: 'person' })).toBeNull()
     expect(chatPhone({ id: '120363000000000001@g.us', kind: 'group' })).toBeNull()
+  })
+})
+
+describe('Detalhes ao abrir a tela (contrato 33)', () => {
+  it('abertos a partir de 1280 px de janela, fechados abaixo', () => {
+    expect(DETAILS_OPEN_MIN_WIDTH).toBe(1280)
+    expect(detailsStartOpen(1279)).toBe(false)
+    expect(detailsStartOpen(1120)).toBe(false)
+    expect(detailsStartOpen(1280)).toBe(true)
+    expect(detailsStartOpen(1728)).toBe(true)
   })
 })

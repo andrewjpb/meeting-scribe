@@ -55,3 +55,11 @@ export function chatPhone(chat: Pick<WhatsAppChat, 'id' | 'kind' | 'phone'>): st
   const [user = '', server = ''] = chat.id.split('@')
   return server === 's.whatsapp.net' && /^\d{6,15}$/.test(user) ? `+${user}` : null
 }
+
+/** Contrato 33: largura da janela (px) a partir da qual o painel Detalhes começa aberto. */
+export const DETAILS_OPEN_MIN_WIDTH = 1280
+
+/** Ao abrir a tela: Detalhes abertos com a janela larga, fechados abaixo. Depois vale a escolha da pessoa. */
+export function detailsStartOpen(windowWidth: number): boolean {
+  return windowWidth >= DETAILS_OPEN_MIN_WIDTH
+}

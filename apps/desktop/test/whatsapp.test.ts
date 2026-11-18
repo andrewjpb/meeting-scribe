@@ -21,7 +21,7 @@ import { storedZip, writeFakeIndex } from '../src/main/whatsapp/fake-index'
 import { findPython, nodeExec, pythonEnv, versionAtLeast, type Exec } from '../src/main/whatsapp/install'
 import { createSendGuard } from '../src/main/whatsapp/send-guard'
 import { killBridgePid } from '../src/main/whatsapp/process'
-import { createWhatsAppService, sendDialogText } from '../src/main/whatsapp/service'
+import { createWhatsAppService } from '../src/main/whatsapp/service'
 
 const ANA = '5511911110000@s.whatsapp.net'
 const GRUPO = '120363000000000001@g.us'
@@ -221,38 +221,24 @@ describe('serviço do WhatsApp no main', () => {
       expect(service.status()).toMatchObject({ state: 'connected', me: { name: 'Andrea' } })
       // O id foi conferido sem token antes de o token ir à porta salva.
       expect(bridge.requests[0]).toMatchObject({ path: '/health', auth: '' })
-      const questions: { chatName: string; text: string }[] = []
-      const yes = (question: { chatName: string; text: string }): Promise<boolean> => {
-        questions.push(question)
-        return Promise.resolve(true)
-      }
-      const no = (question: { chatName: string; text: string }): Promise<boolean> => {
-        questions.push(question)
-        return Promise.resolve(false)
-      }
-      // Sem token, com token inventado, de outra janela: recusado antes do diálogo e nada vai ao serviço.
-      expect(await service.send(1, { chatId: ANA, text: 'oi' }, yes)).toEqual({ ok: false, error: 'click' })
-      expect(await service.send(1, { chatId: ANA, text: 'oi', clickToken: CLICK }, yes)).toEqual({ ok: false, error: 'click' })
+      // Sem token, com token inventado, de outra janela: recusado e nada vai ao serviço.
+      expect(await service.send(1, { chatId: ANA, text: 'oi' })).toEqual({ ok: false, error: 'click' })
+      expect(await service.send(1, { chatId: ANA, text: 'oi', clickToken: CLICK })).toEqual({ ok: false, error: 'click' })
       service.registerClick(2, CLICK)
-      expect(await service.send(1, { chatId: ANA, text: 'oi', clickToken: CLICK }, yes)).toEqual({ ok: false, error: 'click' })
-      expect(questions).toEqual([])
+      expect(await service.send(1, { chatId: ANA, text: 'oi', clickToken: CLICK })).toEqual({ ok: false, error: 'click' })
       expect(bridge.sent).toEqual([])
-      // Com o clique, mas "Cancelar" no diálogo nativo: nada sai.
-      const cancelled = '51111111-2222-4333-8444-555555555555'
-      service.registerClick(1, cancelled)
-      expect(await service.send(1, { chatId: ANA, text: 'Não era para sair.', clickToken: cancelled }, no)).toEqual({ ok: false, error: 'cancelled' })
-      expect(bridge.sent).toEqual([])
-      // Com o clique e "Enviar" no diálogo (que mostra a conversa e o texto que vão ao serviço): sai uma vez.
+      // Com o clique, sai direto (sem diálogo de confirmação desde o contrato 33), uma vez só: o token não volta a valer.
       const click = '41111111-2222-4333-8444-555555555555'
       service.registerClick(1, click)
-      expect(await service.send(1, { chatId: ANA, text: 'Confirmado para sexta.', clickToken: click }, yes)).toEqual({ ok: true, id: 'enviada-1' })
-      expect(await service.send(1, { chatId: ANA, text: 'de novo', clickToken: click }, yes)).toEqual({ ok: false, error: 'click' })
+      expect(await service.send(1, { chatId: ANA, text: 'Confirmado para sexta.', clickToken: click })).toEqual({ ok: true, id: 'enviada-1' })
+      expect(await service.send(1, { chatId: ANA, text: 'de novo', clickToken: click })).toEqual({ ok: false, error: 'click' })
       expect(bridge.sent).toEqual(['Confirmado para sexta.'])
-      expect(questions).toEqual([
-        { chatName: 'Ana Souza', text: 'Não era para sair.' },
-        { chatName: 'Ana Souza', text: 'Confirmado para sexta.' },
-      ])
-      expect(sendDialogText({ chatName: 'Ana', text: 'x'.repeat(400) })).toEqual({ message: 'Enviar para Ana?', detail: `${'x'.repeat(300)}…` })
+      // Token do clique gasto por um pedido inválido (texto vazio) também não serve para um segundo envio.
+      const wasted = '51111111-2222-4333-8444-555555555555'
+      service.registerClick(1, wasted)
+      expect(await service.send(1, { chatId: ANA, text: '  ', clickToken: wasted })).toEqual({ ok: false, error: 'invalid' })
+      expect(await service.send(1, { chatId: ANA, text: 'agora vai?', clickToken: wasted })).toEqual({ ok: false, error: 'click' })
+      expect(bridge.sent).toEqual(['Confirmado para sexta.'])
       // Contrato 32: a foto é pedida ao serviço uma vez e fica na memória; pedido inválido é `null` sem ir ao serviço.
       const photoCalls = (): number => bridge.requests.filter((request) => request.path.endsWith('/photo')).length
       const before = photoCalls()
@@ -452,12 +438,16 @@ describe('nenhum caminho fora do clique alcança o envio (CA4)', () => {
 
   it('o canal de envio só é chamado pelo preload (com o clique) e registrado só no main', () => {
     const users = all.filter(({ text }) => text.includes("'scribe:whatsapp-send'")).map(({ file }) => file)
-    // O diálogo nativo de confirmação também só existe no registro do main.
-    expect(all.filter(({ text }) => text.includes('confirmWhatsAppSend(')).map(({ file }) => file)).toEqual(['main/index.ts'])
+    // Contrato 33: sem o diálogo nativo, o envio do serviço só é chamado pelo registro do canal no main, com a janela
+    // que clicou; nenhum outro arquivo chama `whatsapp.send(`.
+    expect(all.filter(({ text }) => /confirmWhatsAppSend|sendDialogText/.test(text)).map(({ file }) => file)).toEqual([])
+    const serviceSends = all.flatMap(({ file, text }) => (text.match(/\bwhatsapp\.send\([^\n]*/g) ?? []).map((call) => `${file}: ${call}`))
+    expect(serviceSends).toEqual(["main/index.ts: whatsapp.send(event.sender.id, request))"])
+    expect(all.find(({ file }) => file === 'main/index.ts')?.text).toContain("handle('scribe:whatsapp-send', appOrigin, (event, request) => whatsapp.send(event.sender.id, request))")
     // O smoke só chama para conferir que o envio sem clique é recusado.
     expect(users.sort()).toEqual(['main/index.ts', 'main/smoke.ts', 'preload/index.ts', 'shared/ipc.ts'].sort())
     // A tela só envia pelo `whatsappSend` do preload, e só na conversa aberta; o cartão do Assistente (contrato 25)
-    // usa o mesmo caminho, com o mesmo token de clique e o mesmo diálogo nativo.
+    // usa o mesmo caminho, com o mesmo token de clique.
     const screens = all.filter(({ file, text }) => file.startsWith('renderer/') && text.includes('whatsappSend(')).map(({ file }) => file)
     expect(screens.sort()).toEqual(['renderer/src/features/chat/ActionCards.tsx', 'renderer/src/features/whatsapp/WhatsAppScreen.tsx'])
   })

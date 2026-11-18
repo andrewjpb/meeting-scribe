@@ -178,9 +178,6 @@ export interface SmokeFixtures {
   google: FakeGoogle
   /** WhatsApp (contrato 24): o índice de pacotes falso numa pasta local (o serviço é o `backend_fake.py`). */
   whatsapp: { indexDir: string; requirements: string }
-  /** Diálogos nativos de "Enviar para …?" (o de verdade nunca abre no smoke) e o botão que o substituto "clica" (1 é "Enviar"). */
-  whatsappSendDialogs: { message: string; detail: string; buttons: string[] }[]
-  whatsappSendChoice: number
   /** Automações (contrato 23): relógio, notificações, ícone da barra de menus, Dock e "abrir ao entrar" substitutos. */
   automations: SmokeAutomations
   /** Microsoft falsa (contrato 12): token, perfil, foto e agendas em memória; nada sai da máquina. */
@@ -331,8 +328,6 @@ export function createSmokeFixtures(currentVersion: string, userDataDir: string)
     leaveChoice: 0,
     google: createFakeGoogle({ clientId: SMOKE_GOOGLE_CLIENT_ID, clientSecret: SMOKE_GOOGLE_CLIENT_SECRET, profile: { name: 'Andrea Teste', email: 'andrea.teste@example.com' } }),
     whatsapp: writeFakeIndex(join(userDataDir, 'whatsapp-indice-falso')),
-    whatsappSendDialogs: [],
-    whatsappSendChoice: 0,
     automations: { skewMs: 0, notifications: [], trayImages: [], dock: { hides: 0, shows: 0 }, loginItems: [], quitRequests: 0 },
     microsoft: createFakeMicrosoft({ clientId: SMOKE_MICROSOFT_CLIENT_ID, profile: { name: 'Bruno Teste', email: 'bruno.teste@example.com' } }),
     calendar: { notifications: [] },

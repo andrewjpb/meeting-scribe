@@ -83,7 +83,7 @@ import { BRIDGE_FAKE_FILE, BRIDGE_FILES, nodeExec, PYTHON_CANDIDATES, WHATSAPP_D
 import { INSTALL_TEST_ENV, runInstallTest } from './whatsapp/install-test'
 import { createInsightsCache, INSIGHTS_FILE } from './whatsapp/insights'
 import { createInsightsService, type InsightsService } from './whatsapp/insights-service'
-import { createWhatsAppService, sendDialogText, type SendQuestion, type WhatsAppService } from './whatsapp/service'
+import { createWhatsAppService, type WhatsAppService } from './whatsapp/service'
 
 // `app.setName` fixa o `userData` (~/Library/Application Support/Meeting Scribe) e o item do Chaveiro:
 // trocar este nome perderia reuniões, configurações e a chave. O nome que a pessoa vê é o da marca
@@ -1113,22 +1113,6 @@ function openExternal(url: string): void {
   else void shell.openExternal(url)
 }
 
-/**
- * Contrato 24: "Enviar para <nome>?" com o texto (até 300 caracteres), num diálogo nativo do macOS aberto pelo main,
- * em todo envio. "Cancelar" é o padrão. No smoke, o substituto responde e o diálogo fica registrado.
- */
-async function confirmWhatsAppSend(win: BrowserWindow | null, question: SendQuestion): Promise<boolean> {
-  const { message, detail } = sendDialogText(question)
-  const buttons = ['Cancelar', 'Enviar']
-  if (smokeFixtures) {
-    smokeFixtures.whatsappSendDialogs.push({ message, detail, buttons })
-    return smokeFixtures.whatsappSendChoice === 1
-  }
-  const options = { type: 'question' as const, message, detail, buttons, defaultId: 0, cancelId: 0, noLink: true }
-  const result = win && !win.isDestroyed() ? await dialog.showMessageBox(win, options) : await dialog.showMessageBox(options)
-  return result.response === 1
-}
-
 function registerIpc(services: AppServices): void {
   const { settings, meetings, meetingsService, meetingsIndex, tokenClient, translation, claude, files, summary, analysis, aiNotes, download, branding, updates, chat, chatActions, corpus, acp, lock, google, drive, microsoft, calendar, whatsapp, whatsappInsights, automations, meet, pluginSave } = services
   /** Reunião salva, renomeada ou com anotações novas: o `.md` dela no acervo do chat é reescrito. */
@@ -1353,7 +1337,7 @@ function registerIpc(services: AppServices): void {
   handle('scribe:whatsapp-chats', appOrigin, () => whatsapp.chats().catch(() => []))
   handle('scribe:whatsapp-messages', appOrigin, (_event, request) => whatsapp.messages(request).catch(() => []))
   handle('scribe:whatsapp-search', appOrigin, (_event, request) => whatsapp.search(request).catch(() => []))
-  handle('scribe:whatsapp-send', appOrigin, (event, request) => whatsapp.send(event.sender.id, request, (question) => confirmWhatsAppSend(BrowserWindow.fromWebContents(event.sender), question)))
+  handle('scribe:whatsapp-send', appOrigin, (event, request) => whatsapp.send(event.sender.id, request))
   handle('scribe:whatsapp-draft', appOrigin, (_event, request) => whatsapp.draft(request))
   handle('scribe:whatsapp-link-get', appOrigin, (_event, request) => whatsapp.link((request as { meetingId?: unknown } | undefined)?.meetingId))
   handle('scribe:whatsapp-link-set', appOrigin, (_event, request) => whatsapp.setLink(request))

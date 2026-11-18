@@ -6,7 +6,6 @@ import type { Meeting } from '@shared/meetings'
 import {
   mediaLabel,
   WHATSAPP_DRAFT_INSTRUCTION_MAX,
-  WHATSAPP_FIXED_WARNING,
   WHATSAPP_SEND_TEXT_MAX,
   type WhatsAppChat,
   type WhatsAppMessage,
@@ -16,14 +15,12 @@ import {
 import { Button } from '../../design/Button'
 import { Icon } from '../../design/Icon'
 import { Note, NOTE_ACTION_CLASS } from '../../design/Note'
-import { PageHeader } from '../../design/PageHeader'
 import { Avatar } from './Avatar'
 import { DetailsPanel } from './DetailsPanel'
-import { chatPhone, clockLabel, messageTimeLabel, previewText, startsRun } from './format'
+import { chatPhone, clockLabel, detailsStartOpen, messageTimeLabel, previewText, startsRun } from './format'
 import { useWhatsApp } from './whatsappStore'
 
-const SEND_ERRORS: Record<'click' | 'state' | 'invalid' | 'failed' | 'cancelled', string> = {
-  cancelled: 'Não enviada: você cancelou na confirmação. O texto continua no campo.',
+const SEND_ERRORS: Record<'click' | 'state' | 'invalid' | 'failed', string> = {
   click: 'A mensagem só sai com o seu clique em "Enviar". Clique de novo.',
   state: 'O WhatsApp não está conectado. Confira em Configurações › Contas.',
   invalid: 'A mensagem está vazia ou passou de 4 096 caracteres.',
@@ -208,8 +205,8 @@ function Conversation({ chat, initialText, detailsOpen, onDetails }: Conversatio
   }
 
   /**
-   * O envio de verdade: só daqui, no clique (ou ⌘↵) da pessoa. O preload confere a ativação do usuário e o main abre
-   * o diálogo nativo "Enviar para <nome>?" com o texto, em todo envio.
+   * O envio de verdade: só daqui, no clique (ou ⌘↵) da pessoa. O preload confere a ativação do usuário e o main só
+   * envia com o token desse clique (sem diálogo de confirmação desde o contrato 33).
    */
   const sendNow = (): void => {
     const body = text
@@ -233,7 +230,7 @@ function Conversation({ chat, initialText, detailsOpen, onDetails }: Conversatio
   }
 
   const onKey = (event: KeyboardEvent<HTMLTextAreaElement>): void => {
-    // Enter só pula linha; ⌘↵ envia (com a confirmação nativa).
+    // Enter só pula linha; ⌘↵ envia.
     if (event.key === 'Enter' && event.metaKey) {
       event.preventDefault()
       sendNow()
@@ -380,7 +377,7 @@ function Conversation({ chat, initialText, detailsOpen, onDetails }: Conversatio
           <Button action="whatsapp-draft" variant="secondary" icon={Sparkles} onClick={() => setDraftOpen(true)} disabled={draftOpen}>
             Rascunho com o Claude
           </Button>
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-3" title="Nenhuma mensagem sai sem o seu clique em Enviar.">
             <span className="text-12 text-text-faint">Enter pula linha</span>
             <Button action="whatsapp-send" onClick={sendNow} disabled={!text.trim() || sending} shortcut="⌘↵" ariaShortcut="Meta+Enter">
               Enviar
@@ -416,8 +413,9 @@ export function WhatsAppScreen() {
     if (asked?.chatId) setSelected(asked.chatId)
   }
   const [query, setQuery] = useState('')
-  // Contrato 32: o painel Detalhes começa aberto e fica como a pessoa deixou ao trocar de conversa.
-  const [detailsOpen, setDetailsOpen] = useState(true)
+  // Contrato 33: o painel Detalhes começa aberto com a janela larga (fechado abaixo) e, depois, fica como a pessoa
+  // deixou, ao trocar de conversa e ao redimensionar, enquanto a tela está montada.
+  const [detailsOpen, setDetailsOpen] = useState(() => detailsStartOpen(window.innerWidth))
   const [hits, setHits] = useState<{ term: string; found: WhatsAppSearchHit[] } | null>(null)
   const connected = status?.state === 'connected'
 
@@ -453,15 +451,11 @@ export function WhatsAppScreen() {
   const open = chats?.find((chat) => chat.id === selected) ?? null
 
   return (
+    // Contrato 33: sem título nem aviso no topo (o aviso do cliente não oficial fica no pareamento); as colunas
+    // começam no topo da área.
     <div className="flex min-h-0 flex-1 flex-col">
-      <div className="flex flex-col gap-4 px-10 pt-7 pb-6">
-        <PageHeader title="WhatsApp" description="As suas conversas, lidas neste Mac. Nenhuma mensagem sai sem o seu clique em Enviar." />
-        <Note id="whatsapp-screen-warning" icon={TriangleAlert}>
-          {WHATSAPP_FIXED_WARNING}
-        </Note>
-      </div>
       {!connected ? (
-        <div className="border-t border-line px-10 py-8">
+        <div className="px-10 pt-7 pb-8">
           <Note
             id="whatsapp-not-connected"
             icon={TriangleAlert}
@@ -476,7 +470,7 @@ export function WhatsAppScreen() {
           </Note>
         </div>
       ) : (
-        <div className="flex min-h-0 flex-1 border-t border-line">
+        <div className="flex min-h-0 flex-1">
           <aside aria-label="Conversas do WhatsApp" className={`flex w-[300px] shrink-0 flex-col border-r border-line ${open && detailsOpen ? 'max-[1279px]:hidden' : ''}`}>
             <div className="p-3">
               <div className="no-drag flex h-8 items-center gap-2 rounded-[var(--radius-control)] border border-line-strong bg-bg-raised px-2 text-text-faint has-[input:focus-visible]:outline-2 has-[input:focus-visible]:outline-offset-2 has-[input:focus-visible]:outline-focus">

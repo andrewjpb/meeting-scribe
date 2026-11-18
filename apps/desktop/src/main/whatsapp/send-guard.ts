@@ -2,7 +2,8 @@
 // a ativação do usuário viva no frame) e registra aqui por `scribe:whatsapp-click`; o canal `whatsapp-send` só
 // envia com um token registrado pela mesma janela, há no máximo 10 s, e uma vez só. A prova (`SendProof`) só sai
 // de `consume`, e o cliente do serviço só envia com ela: agentes, chat, análises e resumo não têm como chegar ao
-// envio, porque nada fora do registro do IPC recebe este guarda.
+// envio, porque nada fora do registro do IPC recebe este guarda. O diálogo nativo "Enviar para <nome>?" que vinha
+// depois do token foi removido a pedido do dono do projeto em 18/11/2026 (contrato 33): o clique e este token bastam.
 import { WHATSAPP_CLICK_TTL_MS } from '../../shared/whatsapp'
 
 const PROOF = Symbol('whatsapp-send-proof')
