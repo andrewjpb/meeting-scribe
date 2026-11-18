@@ -38,7 +38,7 @@ function LockLayer() {
   const remaining = useRemaining(retryUntil)
   const waiting = remaining > 0
 
-  // Teclas não passam da camada para as telas de trás (barra de espaço, ⌘⇧N, ⌘⇧A, ⌘1…⌘6): o `body` corta a
+  // Teclas não passam da camada para as telas de trás (barra de espaço, ⌘⇧N, ⌘⇧A, ⌘1…⌘7): o `body` corta a
   // propagação antes dos ouvintes da janela. O que a camada trata (Tab, Enter) já foi tratado pelo React.
   useEffect(() => {
     const stop = (event: KeyboardEvent): void => event.stopPropagation()

@@ -35,8 +35,11 @@ export function isRouteId(value: unknown): value is RouteId {
   return typeof value === 'string' && Object.hasOwn(ROUTE_PATHS, value)
 }
 
-/** Abas de Configurações (contrato 18), na ordem da tela. A aba aberta fica na URL: `/configuracoes/:aba`. */
-export const SETTINGS_TABS = ['geral', 'gravacao', 'claude', 'arquivos', 'contas', 'sobre'] as const
+/**
+ * Abas de Configurações (contrato 18), na ordem da tela. A aba aberta fica na URL: `/configuracoes/:aba`. Contrato 31:
+ * "Plugins" entra antes de "Sobre", que continua a última.
+ */
+export const SETTINGS_TABS = ['geral', 'gravacao', 'claude', 'arquivos', 'contas', 'plugins', 'sobre'] as const
 export type SettingsTab = (typeof SETTINGS_TABS)[number]
 export const DEFAULT_SETTINGS_TAB: SettingsTab = 'geral'
 

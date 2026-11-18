@@ -1,5 +1,6 @@
 // Índice estático da busca das Configurações (contrato 18): fica em `shared` porque o smoke (no main) confere
 // que toda linha da tela está nele.
+import { APP_PLUGINS, PLUGIN_INSTALL_DESCRIPTION, PLUGIN_SAVE_DESCRIPTION } from './plugins'
 import type { SettingsTab } from './routes'
 
 /** Descrição do interruptor "Quem fala no Meet" (contrato 27), a mesma na tela e na busca. */
@@ -70,6 +71,12 @@ export function settingsIndex(agent: string): SettingsEntry[] {
     row('contas', 'Agenda', 'Agendas', 'Quais agendas de cada conta o app lê.'),
     row('contas', 'WhatsApp', 'WhatsApp', 'Ler as suas conversas e enviar mensagens só com o seu clique. Experimental.'),
     row('contas', 'Google', 'Guardar no Google Drive', 'Depois de cada reunião, o áudio, a transcrição e o resumo vão para a pasta "LAP Reuniões" do seu Drive.', 'a conta Google está conectada'),
+    // Contrato 31: um cartão por plugin, com o nome (e o estado), "Salvar plugin" e "Como instalar".
+    ...APP_PLUGINS.flatMap((plugin) => [
+      row('plugins', plugin.nome, plugin.nome, `${plugin.navegador}. ${plugin.descricao}`),
+      row('plugins', plugin.nome, 'Salvar plugin', PLUGIN_SAVE_DESCRIPTION),
+      row('plugins', plugin.nome, 'Como instalar', PLUGIN_INSTALL_DESCRIPTION),
+    ]),
     row('sobre', 'Sobre', 'Versão', 'Versão instalada do app.'),
     row('sobre', 'Sobre', 'Electron', 'Base do app.'),
     row('sobre', 'Sobre', 'Chrome', 'Motor das telas.'),

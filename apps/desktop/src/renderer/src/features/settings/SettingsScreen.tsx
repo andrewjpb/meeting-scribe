@@ -35,6 +35,7 @@ import { useAudioInputs } from './audioInputs'
 import { ClaudeCliField } from './ClaudeCliField'
 import { LockSection } from './LockSection'
 import { MeetingFilesSection } from './MeetingFilesSection'
+import { PluginsSection } from './PluginsSection'
 import { micOptions, SYSTEM_DEFAULT } from './micOptions'
 import { ModelPicker } from './ModelPicker'
 import {
@@ -107,7 +108,7 @@ const TABS_ID = 'settings'
 const CONTROL = 'input, select, textarea, button, a[href], [tabindex]:not([tabindex="-1"])'
 
 /**
- * Configurações (contrato 18): título e busca no topo, as seis abas logo abaixo (fixas; só o conteúdo rola) e
+ * Configurações (contrato 18): título e busca no topo, as sete abas logo abaixo (fixas; só o conteúdo rola) e
  * a coluna de leitura de até 760 px, centralizada. A aba aberta fica na URL; sem ela, abre a última aberta
  * nesta sessão. Cada mudança grava na hora, como antes.
  */
@@ -138,7 +139,7 @@ function SettingsTabs({ tab }: { tab: SettingsTab }) {
   const rootRef = useRef<HTMLDivElement>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
   // Depois da próxima navegação: a linha achada pela busca (com o bloco dela, se a linha não aparece) ou a aba
-  // que deve receber o foco (⌘1…⌘6 e Esc).
+  // que deve receber o foco (⌘1…⌘7 e Esc).
   const pendingRef = useRef<{ row: HTMLElement | null; block: Element | null } | null>(null)
   const focusTabRef = useRef(false)
   const queryRef = useRef('')
@@ -155,7 +156,7 @@ function SettingsTabs({ tab }: { tab: SettingsTab }) {
 
   useEffect(() => rememberSettingsTab(tab), [tab])
 
-  // ⌘1…⌘6 abrem a aba N enquanto Configurações está aberta.
+  // ⌘1…⌘7 abrem a aba N enquanto Configurações está aberta.
   useEffect(() => {
     const onKey = (event: KeyboardEvent): void => {
       // Esc que limpou a busca (o campo já tratou o evento): o foco volta para a aba aberta.
@@ -439,6 +440,9 @@ function SettingsTabs({ tab }: { tab: SettingsTab }) {
               <WhatsAppSection />
             </>,
           )}
+
+          {/* Contrato 31: as extensões de navegador que vêm no app. */}
+          {panel('plugins', <PluginsSection />)}
 
           {panel('sobre', <AboutSection />)}
 

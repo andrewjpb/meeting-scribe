@@ -161,6 +161,8 @@ describe('canais com o app bloqueado (contrato 22, CA4)', () => {
       'scribe:meeting-files',
       'scribe:meeting-file-open',
       'scribe:meeting-file-download',
+      // Contrato 31: "Salvar plugin…".
+      'scribe:plugin-save',
       'scribe:settings-update',
       'scribe:lock-password-set',
       'scribe:lock-password-remove',

@@ -35,6 +35,11 @@ mkdir -p "$STAGE/resources/whatsapp-bridge"
 for f in server.py bridge_store.py backend_neonize.py requirements.txt README.md; do
   cp "../../services/whatsapp-bridge/$f" "$STAGE/resources/whatsapp-bridge/$f"
 done
+# Contrato 31: a extensão do Chrome "Quem fala no Meet" (a aba Plugins copia para a pasta que a pessoa escolher).
+mkdir -p "$STAGE/resources/meet-extension"
+for f in manifest.json content.js background.js README.md; do
+  cp "../../extensions/meet/$f" "$STAGE/resources/meet-extension/$f"
+done
 cp -RL node_modules/zod "$STAGE/node_modules/zod"
 cat > "$STAGE/package.json" <<JSON
 { "name": "lap-reunioes", "productName": "$NOME", "version": "$VERSAO", "main": "out/main/index.js", "private": true, "dependencies": { "zod": "$ZOD" } }
@@ -60,6 +65,8 @@ grep -q "^/resources/whatsapp-bridge/server.py$" <<<"$ASAR_LIST" || { echo "pack
 echo "serviço do WhatsApp ok"
 grep -q "^/resources/assistente/guia-do-app.md$" <<<"$ASAR_LIST" || { echo "pack.sh: o pacote não leva o guia do Assistente" >&2; exit 1; }
 echo "guia do Assistente ok"
+grep -q "^/resources/meet-extension/manifest.json$" <<<"$ASAR_LIST" || { echo "pack.sh: o pacote não leva a extensão do Meet" >&2; exit 1; }
+echo "extensão do Meet ok"
 if grep -qiE "backend_fake|neonize-|\.dylib$" <<<"$ASAR_LIST"; then
   echo "pack.sh: o pacote leva o cliente falso do WhatsApp ou o neonize" >&2
   exit 1

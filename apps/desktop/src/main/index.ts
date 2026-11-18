@@ -9,6 +9,7 @@ import { formatRunShort, type AutomationRun } from '../shared/automations'
 import { brandTexts, DEFAULT_BRAND_NAME } from '../shared/branding'
 import { calendarNoticeText, safeJoinUrl, type CalendarNotice } from '../shared/calendar'
 import { lockedWindowTitle, type LockStatus } from '../shared/lock'
+import type { AppPluginId, PluginSaveResult } from '../shared/plugins'
 import { privacyPaneUrl } from '../shared/privacy'
 import type { RouteId } from '../shared/routes'
 import type { AgentProfileId, AppSettings } from '../shared/settings-defaults'
@@ -35,6 +36,7 @@ import { createGoogleAccount, type GoogleAccountService } from './google/account
 import { createMicrosoftAccount, type MicrosoftAccountService } from './microsoft/account'
 import { createCalendarService, type CalendarService } from './calendar/service'
 import { createMeetServer, type MeetServer } from './meet/server'
+import { createPluginSave } from './plugins/save'
 import { createDriveSync, createEndOfRecordingHooks, type DriveSyncService } from './google/drive-sync'
 import { nodeExecFile } from './claude-cli/locate'
 import { createClaudeService, type ClaudeService } from './claude-cli/service'
@@ -494,6 +496,8 @@ interface AppServices {
   automations: AutomationsService
   /** Servidor local da extensão do Meet (contrato 27). */
   meet: MeetServer
+  /** "Salvar plugin…" da aba Plugins (contrato 31). */
+  pluginSave: (input: unknown) => Promise<PluginSaveResult>
 }
 
 /**
@@ -503,6 +507,16 @@ interface AppServices {
  */
 function bridgeSourceDir(): string {
   return app.isPackaged ? join(app.getAppPath(), 'resources', 'whatsapp-bridge') : join(app.getAppPath(), '..', '..', 'services', 'whatsapp-bridge')
+}
+
+/**
+ * Pasta embutida de um plugin (contrato 31): o empacotado leva em `resources/meet-extension` dentro do `app.asar`
+ * (pack.sh); em desenvolvimento e no smoke, a `extensions/meet` do repositório.
+ */
+function pluginSourceDir(id: AppPluginId): string {
+  const packaged: Record<AppPluginId, string> = { meet: 'meet-extension' }
+  const repo: Record<AppPluginId, string> = { meet: 'meet' }
+  return app.isPackaged ? join(app.getAppPath(), 'resources', packaged[id]) : join(app.getAppPath(), '..', '..', 'extensions', repo[id])
 }
 
 function fetchImpl(url: string, init: FetchInit): Promise<FetchResponse> {
@@ -847,6 +861,12 @@ function createAppServices(userData: string): AppServices {
       : nativeSaveDialog,
     downloads: smokeUserData ? join(home, 'Downloads') : app.getPath('downloads'),
   })
+  // "Salvar plugin…" (contrato 31). No smoke o diálogo de pasta responde o mesmo `chosenFolder` da pasta de arquivos.
+  const pluginSave = createPluginSave({
+    sourceDir: pluginSourceDir,
+    dialog: smokeFixtures ? { chooseFolder: () => Promise.resolve(smokeFixtures.chosenFolder) } : nativePluginFolderDialog,
+    defaultFolder: smokeUserData ? join(home, 'Downloads') : app.getPath('downloads'),
+  })
   // Logo próprio (contrato 09). No smoke o diálogo responde o que o smoke mandar.
   const branding = createBrandingService({
     settings,
@@ -992,6 +1012,7 @@ function createAppServices(userData: string): AppServices {
     whatsapp,
     automations,
     meet,
+    pluginSave,
   }
 }
 
@@ -1015,6 +1036,15 @@ async function openBrowser(url: string): Promise<void> {
 const nativeFolderDialog: FolderDialog = {
   async chooseFolder(defaultPath) {
     const options: OpenDialogOptions = { title: 'Pasta dos arquivos da reunião', buttonLabel: 'Escolher', defaultPath, properties: ['openDirectory', 'createDirectory'] }
+    const result = mainWindow ? await dialog.showOpenDialog(mainWindow, options) : await dialog.showOpenDialog(options)
+    return result.canceled ? null : (result.filePaths[0] ?? null)
+  },
+}
+
+/** "Salvar plugin…" (contrato 31): o mesmo diálogo de pasta, com o título do plugin. */
+const nativePluginFolderDialog: FolderDialog = {
+  async chooseFolder(defaultPath) {
+    const options: OpenDialogOptions = { title: 'Onde salvar o plugin', buttonLabel: 'Salvar aqui', defaultPath, properties: ['openDirectory', 'createDirectory'] }
     const result = mainWindow ? await dialog.showOpenDialog(mainWindow, options) : await dialog.showOpenDialog(options)
     return result.canceled ? null : (result.filePaths[0] ?? null)
   },
@@ -1079,7 +1109,7 @@ async function confirmWhatsAppSend(win: BrowserWindow | null, question: SendQues
 }
 
 function registerIpc(services: AppServices): void {
-  const { settings, meetings, meetingsService, meetingsIndex, tokenClient, translation, claude, files, summary, analysis, aiNotes, download, branding, updates, chat, chatActions, corpus, acp, lock, google, drive, microsoft, calendar, whatsapp, automations, meet } = services
+  const { settings, meetings, meetingsService, meetingsIndex, tokenClient, translation, claude, files, summary, analysis, aiNotes, download, branding, updates, chat, chatActions, corpus, acp, lock, google, drive, microsoft, calendar, whatsapp, automations, meet, pluginSave } = services
   /** Reunião salva, renomeada ou com anotações novas: o `.md` dela no acervo do chat é reescrito. */
   const touched = (meetingId: string): void => void corpus.sync(meetingId).catch(() => undefined)
   /**
@@ -1281,6 +1311,7 @@ function registerIpc(services: AppServices): void {
     return event?.title ? { title: event.title } : null
   })
   handle('scribe:meet-status', appOrigin, () => meet.status())
+  handle('scribe:plugin-save', appOrigin, (_event, request) => pluginSave(request))
   handle('scribe:drive-status', appOrigin, (_event, request) => drive.status((request as { meetingId?: unknown } | undefined)?.meetingId))
   handle('scribe:drive-retry', appOrigin, (_event, request) => drive.retry((request as { meetingId?: unknown } | undefined)?.meetingId))
   handle('scribe:drive-open', appOrigin, (_event, request) => {

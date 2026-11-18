@@ -12,6 +12,7 @@ import type { Chat, ChatEvent, ChatListItem, ChatRedoRequest, ChatSendRequest, C
 import type { ClaudeLocateResult, ClaudeRunState, ClaudeStartResult, ClaudeTranslateRequest, ClaudeTranslateResult } from './claude-cli'
 import type { AudioBeginResult, AudioExtension, AudioFinishResult, AudioFolderInfo, MeetingDownloadKind, MeetingDownloadResult, MeetingFileKind, MeetingFilesInfo } from './meeting-files'
 import type { MeetState } from './meet'
+import type { AppPluginId, PluginSaveResult } from './plugins'
 import type { AiNotesRunRequest, AiNotesRunResult } from './ai-notes'
 import type { AnalysisRunRequest, AnalysisRunResult, MeetingAnalysis } from './meeting-analysis'
 import type { MeetingNote } from './meeting-notes'
@@ -251,6 +252,8 @@ export interface InvokeChannels {
   'scribe:calendar-recording': { request: undefined; response: { title: string } | null }
   /** Quem fala no Meet (contrato 27): o estado da extensão agora, para a tela ao abrir (`events` vem vazio). */
   'scribe:meet-status': { request: undefined; response: MeetState }
+  /** "Salvar plugin…" (contrato 31): diálogo de pasta no main e cópia da extensão embutida; `null` se cancelado. */
+  'scribe:plugin-save': { request: { id: AppPluginId }; response: PluginSaveResult }
   /** Estado da reunião no Google Drive (aba "Áudio" do detalhe). */
   'scribe:drive-status': { request: { meetingId: string }; response: DriveMeetingStatus }
   /** "Tentar de novo". */
@@ -500,6 +503,7 @@ const INVOKE: Record<InvokeChannel, true> = {
   'scribe:calendar-join': true,
   'scribe:calendar-recording': true,
   'scribe:meet-status': true,
+  'scribe:plugin-save': true,
   'scribe:drive-status': true,
   'scribe:drive-retry': true,
   'scribe:drive-open': true,
@@ -723,6 +727,7 @@ export const WHEN_LOCKED: Readonly<Record<InvokeChannel, LockedPolicy>> = Object
   'scribe:calendar-recording': 'refused',
   // Contrato 27: o estado do Meet não aparece com o app bloqueado; o servidor continua coletando para a gravação.
   'scribe:meet-status': 'refused',
+  'scribe:plugin-save': 'refused',
   'scribe:drive-status': 'refused',
   'scribe:drive-retry': 'refused',
   'scribe:drive-open': 'refused',

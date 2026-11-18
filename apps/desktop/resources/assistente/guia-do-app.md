@@ -65,7 +65,7 @@ A tela lista as conversas e as mensagens. "Rascunho com o Claude" escreve uma re
 <!-- tela: configuracoes -->
 ## Configurações
 
-Configurações… (⌘,) abre a última aba aberta. ⌘1 a ⌘6 trocam de aba. A busca no topo acha qualquer opção pelo nome.
+Configurações… (⌘,) abre a última aba aberta. ⌘1 a ⌘7 trocam de aba. A busca no topo acha qualquer opção pelo nome.
 
 <!-- aba: geral -->
 ### Geral
@@ -94,6 +94,15 @@ A conta Google (para guardar o áudio, a transcrição e o resumo no Google Driv
 
 No bloco "Agenda": "Avisar reuniões da agenda" (ligado), "Avisar antes" (1, 5 ou 10 minutos; o padrão é 5), "Avisar se a reunião não estiver sendo gravada" (ligado) e quais agendas de cada conta o app lê (o padrão é a principal). O app só lê as agendas: não responde convites, não cria eventos e não manda nada a ninguém.
 
+<!-- aba: plugins -->
+### Plugins
+
+As extensões de navegador que vêm dentro do app. Hoje uma: "Quem fala no Meet", para o Google Chrome, que manda ao app os nomes de quem fala no Google Meet (a transcrição diz quem falou cada trecho). O cartão mostra se ela está conectada agora (fora de reunião, "Desconectado" é o normal).
+
+"Salvar plugin…" grava a pasta "LAP Reunioes - Quem fala no Meet" na pasta que você escolher. "Como instalar" mostra o passo a passo: no Chrome, digitar `chrome://extensions` no endereço (não abre por link), ligar "Modo do desenvolvedor", clicar em "Carregar sem compactação" e escolher a pasta salva; depois recarregar a aba do Meet. Desligue o picture-in-picture automático do Meet (o mini-player esconde a reunião do plugin) e mantenha a aba do Meet aberta. Nada é baixado da internet: o plugin só fala com o app, neste computador.
+
+Na gravação, o marcador do Meet ("Meet desconectado" ou "Meet conectado · N participantes") abre esta aba.
+
 <!-- aba: sobre -->
 ### Sobre
 
@@ -103,7 +112,7 @@ A versão instalada, a versão do Electron e do Chrome e a licença (código abe
 
 - ⌘N: nova gravação.
 - ⌘, : Configurações.
-- ⌘1 a ⌘6: as abas de Configurações.
+- ⌘1 a ⌘7: as abas de Configurações.
 - ⌘F: buscar nas reuniões.
 - ⌘⇧A: analisar a gravação até agora.
 - ⌘⇧L: bloquear o app.

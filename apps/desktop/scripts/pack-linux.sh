@@ -17,7 +17,8 @@ PACKAGER="../../prova/node_modules/.bin/electron-packager"
 
 pnpm build
 
-# A mesma pasta de produção do pack.sh: o build, os ícones, o guia do Assistente, o serviço do WhatsApp e o zod.
+# A mesma pasta de produção do pack.sh: o build, os ícones, o guia do Assistente, o serviço do WhatsApp, a extensão
+# do Meet e o zod.
 STAGE=$(mktemp -d)
 trap 'rm -rf "$STAGE"' EXIT
 cp -R out "$STAGE/out"
@@ -28,6 +29,10 @@ cp -R resources/assistente "$STAGE/resources/assistente"
 mkdir -p "$STAGE/resources/whatsapp-bridge"
 for f in server.py bridge_store.py backend_neonize.py requirements.txt README.md; do
   cp "../../services/whatsapp-bridge/$f" "$STAGE/resources/whatsapp-bridge/$f"
+done
+mkdir -p "$STAGE/resources/meet-extension"
+for f in manifest.json content.js background.js README.md; do
+  cp "../../extensions/meet/$f" "$STAGE/resources/meet-extension/$f"
 done
 cp -RL node_modules/zod "$STAGE/node_modules/zod"
 cat > "$STAGE/package.json" <<JSON
@@ -48,6 +53,7 @@ for ARCH in "${ARCHS[@]}"; do
   DIR="$NOME-linux-$ARCH"
   ASAR_LIST=$(npx -y @electron/asar list "$OUT/$DIR/resources/app.asar")
   grep -q "^/resources/assistente/guia-do-app.md$" <<<"$ASAR_LIST" || { echo "pack-linux.sh: falta o guia do Assistente ($ARCH)" >&2; exit 1; }
+  grep -q "^/resources/meet-extension/manifest.json$" <<<"$ASAR_LIST" || { echo "pack-linux.sh: falta a extensão do Meet ($ARCH)" >&2; exit 1; }
   if grep -qiE "claude-agent|backend_fake|neonize-|\.dylib$" <<<"$ASAR_LIST"; then
     echo "pack-linux.sh: o pacote leva o agente, o cliente falso do WhatsApp ou o neonize ($ARCH)" >&2
     exit 1

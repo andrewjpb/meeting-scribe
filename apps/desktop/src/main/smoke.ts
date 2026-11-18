@@ -113,6 +113,7 @@ import { AGENTS_FILE } from './agents/store'
 import type { TrayController } from './tray/menu'
 import type { CalendarService } from './calendar/service'
 import { MEET_DISCONNECTED_LABEL } from '../shared/meet'
+import { APP_PLUGINS, pluginFolderName } from '../shared/plugins'
 import { MEET_PATH, MEET_PORTS, type MeetServer } from './meet/server'
 import { MEETINGS_DIR } from './meetings/transcripts'
 import { SETTINGS_VERSION } from './settings/schema'
@@ -1861,6 +1862,72 @@ async function summarizeSetting(contents: WebContents, userDataDir: string): Pro
       offSaved === false &&
       onSaved === true,
     detail: `"${row}" ligado=${on}; desligado -> ${offSaved}; religado -> ${onSaved}`,
+  }
+}
+
+/**
+ * Contrato 31 (CA3 e CA6), no claro: a aba "Plugins" com o cartão do Meet e o estado; "Salvar plugin…" cancelado não
+ * grava nada; com a pasta escolhida (diálogo substituto), os 4 arquivos da extensão em "LAP Reunioes - Quem fala no
+ * Meet/" e o "Salvo em …"; "Como instalar" abre o passo a passo. PNG `configuracoes-plugins-light`. Devolve a pasta
+ * do diálogo como estava.
+ */
+async function pluginsSettings(win: BrowserWindow, ctx: SmokeContext): Promise<{ check: Check; shot: Screenshot }> {
+  const contents = win.webContents
+  const plugin = APP_PLUGINS.find((candidate) => candidate.id === 'meet')
+  const card = `[data-settings-panel="plugins"] section[aria-label=${JSON.stringify(plugin?.nome ?? '')}]`
+  const opened = await openSettingsTab(contents, 'plugins')
+  await waitFor(contents, `document.querySelector('${card}')`)
+  const state = await evaluate<string>(contents, `document.querySelector('[data-plugin="meet"]')?.dataset.pluginState ?? ''`)
+  const stateText = await evaluate<string>(contents, `document.querySelector('[data-plugin="meet"] [data-setting-control]')?.textContent ?? ''`)
+  const expectedState = ctx.meet.status().connected ? 'on' : 'off'
+
+  const previous = ctx.fixtures.chosenFolder
+  const chosen = join(smokeHome(ctx), 'Plugins salvos')
+  mkdirSync(chosen, { recursive: true })
+  const folder = join(chosen, plugin ? pluginFolderName(plugin) : '')
+  // Cancelado: nada gravado, nenhum aviso.
+  ctx.fixtures.chosenFolder = null
+  await clickSelector(contents, '[data-action="plugin-save-meet"]')
+  await wait(300)
+  const canceledQuiet = (await evaluate<boolean>(contents, `!document.querySelector('[data-plugin-feedback]')`)) && !existsSync(folder)
+  ctx.fixtures.chosenFolder = chosen
+  await clickSelector(contents, '[data-action="plugin-save-meet"]')
+  const saved = await waitFor(contents, `document.querySelector('[data-plugin-feedback="saved"]')`)
+  const feedback = await evaluate<string>(contents, `document.querySelector('[data-plugin-feedback]')?.textContent ?? ''`)
+  ctx.fixtures.chosenFolder = previous
+  const files = (plugin?.arquivos ?? []).map((name) => ({ name, ok: existsSync(join(folder, name)) }))
+
+  await clickSelector(contents, '[data-action="plugin-manual-meet"]')
+  const manualOpen = await waitFor(contents, `document.querySelector('[data-plugin-manual="meet"]')`)
+  const manual = await evaluate<{ text: string; steps: number; expanded: string }>(
+    contents,
+    `({ text: document.querySelector('[data-plugin-manual="meet"]')?.textContent ?? '', steps: document.querySelectorAll('[data-plugin-manual="meet"] ol > li').length, expanded: document.querySelector('[data-action="plugin-manual-meet"]')?.getAttribute('aria-expanded') ?? '' })`,
+  )
+  await settle(contents)
+  const shot = await capture(win, ctx.outDir, 'configuracoes-plugins-light')
+  return {
+    check: {
+      ok:
+        opened &&
+        plugin !== undefined &&
+        state === expectedState &&
+        stateText === (expectedState === 'on' ? 'Conectado' : 'Desconectado') &&
+        canceledQuiet &&
+        saved &&
+        feedback === `Salvo em ${folder}` &&
+        files.length === 4 &&
+        files.every((file) => file.ok) &&
+        manualOpen &&
+        manual.expanded === 'true' &&
+        manual.steps === 5 &&
+        manual.text.includes('chrome://extensions') &&
+        manual.text.includes('Modo do desenvolvedor') &&
+        manual.text.includes('Carregar sem compactação') &&
+        manual.text.includes('picture-in-picture') &&
+        manual.text.includes('Tudo fica neste computador: o plugin só fala com o app.'),
+      detail: `aba aberta=${opened}; estado "${stateText}" (${state}, esperado ${expectedState}); cancelado sem nada=${canceledQuiet}; salvo=${saved} "${feedback}"; arquivos ${JSON.stringify(files)}; manual aberto=${manualOpen} (aria-expanded=${manual.expanded}, ${manual.steps} passos)`,
+    },
+    shot,
   }
 }
 
@@ -3681,7 +3748,7 @@ async function settingsLayoutMetrics(contents: WebContents): Promise<Record<stri
 
 /**
  * Contrato 18, no claro: "Contas" vazia e sem botões; "Sobre" com versão, Electron e Chrome, o repositório
- * aberto no navegador e o atalho para "Atualizações"; a aba lembrada ao voltar; ⌘2/⌘6 e as setas; ⌘F e a
+ * aberto no navegador e o atalho para "Atualizações"; a aba lembrada ao voltar; ⌘2/⌘7 e as setas; ⌘F e a
  * busca sem acento nem maiúscula, agrupada por aba, com o clique que leva à linha e a destaca por 2 s; Esc limpa.
  */
 async function settingsTabsChecks(contents: WebContents, ctx: SmokeContext, shot: (name: string) => Promise<void>): Promise<Check> {
@@ -3721,15 +3788,15 @@ async function settingsTabsChecks(contents: WebContents, ctx: SmokeContext, shot
   await clickSelector(contents, '[data-nav="configuracoes"]')
   const remembered = await waitFor(contents, `${routeIs('configuracoes')} && ${settingsTabIs('claude')}`)
 
-  // Teclado: ⌘2, ⌘6 e a seta para a direita na lista de abas (da última, volta à primeira).
+  // Teclado: ⌘2, ⌘7 ("Sobre", desde que "Plugins" entrou antes dela no contrato 31) e a seta para a direita na lista de abas (da última, volta à primeira).
   const press = (key: string, meta: boolean): Promise<unknown> =>
     evaluate(contents, `window.dispatchEvent(new KeyboardEvent('keydown', { key: ${JSON.stringify(key)}, metaKey: ${meta}, bubbles: true, cancelable: true })), true`)
   await press('2', true)
   const cmd2 = await waitFor(contents, settingsTabIs('gravacao'))
   const activeTab = `document.activeElement?.getAttribute('role') === 'tab' ? document.activeElement.dataset.tab : ''`
   const cmd2Focus = await evaluate<string>(contents, activeTab)
-  await press('6', true)
-  const cmd6 = await waitFor(contents, settingsTabIs('sobre'))
+  await press('7', true)
+  const cmd7 = await waitFor(contents, settingsTabIs('sobre'))
   await evaluate(contents, `document.querySelector('[role="tab"][data-tab="geral"]').dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true })), true`)
   const arrow = await waitFor(contents, settingsTabIs('geral'))
 
@@ -3807,7 +3874,7 @@ async function settingsTabsChecks(contents: WebContents, ctx: SmokeContext, shot
     remembered &&
     cmd2 &&
     cmd2Focus === 'gravacao' &&
-    cmd6 &&
+    cmd7 &&
     arrow &&
     focused &&
     JSON.stringify(groups) === JSON.stringify(['Gravação', 'Claude']) &&
@@ -3829,7 +3896,7 @@ async function settingsTabsChecks(contents: WebContents, ctx: SmokeContext, shot
     missing.length === 0
   return {
     ok,
-    detail: `Contas "${contas.replace(/\s+/g, ' ').trim()}" (botões ${JSON.stringify(contasButtons)}, ${ctx.fixtures.google.calls.length} pedidos ao Google); Sobre "${sobre.replace(/\s+/g, ' ').slice(0, 160)}", repositório -> ${opened || 'nada'}, "Procurar atualização" -> Geral=${toUpdates}, bloco visível=${updatesVisible}; aba lembrada=${remembered}; ⌘2=${cmd2}, ⌘6=${cmd6}, seta=${arrow}; ⌘F foca=${focused}; "TRADUCAO" -> grupos ${JSON.stringify(groups)}, itens ${JSON.stringify(items)}, painéis escondidos=${panelsHidden}; clique em "Modelo do chat" -> aba Claude e destaque=${jumped}, à vista=${inView}, busca limpa=${cleared}, destaque some em 2 s=${unhighlighted}; Esc limpa=${escaped}; foco: ⌘2 -> aba ${cmd2Focus || 'nenhuma'}, resultado -> ${resultFocus || 'fora da linha'}, Esc -> aba ${escFocus || 'nenhuma'}; durante a busca nenhuma aba marcada=${noneSelected}, região viva "${live}"; "haiku" acha "Modelo" escondido=${hiddenFound}, aviso=${hintShown}; "pasta"=${pastaFound}; ${rows.length} linhas na tela, fora do índice: ${JSON.stringify(missing)}`,
+    detail: `Contas "${contas.replace(/\s+/g, ' ').trim()}" (botões ${JSON.stringify(contasButtons)}, ${ctx.fixtures.google.calls.length} pedidos ao Google); Sobre "${sobre.replace(/\s+/g, ' ').slice(0, 160)}", repositório -> ${opened || 'nada'}, "Procurar atualização" -> Geral=${toUpdates}, bloco visível=${updatesVisible}; aba lembrada=${remembered}; ⌘2=${cmd2}, ⌘7=${cmd7}, seta=${arrow}; ⌘F foca=${focused}; "TRADUCAO" -> grupos ${JSON.stringify(groups)}, itens ${JSON.stringify(items)}, painéis escondidos=${panelsHidden}; clique em "Modelo do chat" -> aba Claude e destaque=${jumped}, à vista=${inView}, busca limpa=${cleared}, destaque some em 2 s=${unhighlighted}; Esc limpa=${escaped}; foco: ⌘2 -> aba ${cmd2Focus || 'nenhuma'}, resultado -> ${resultFocus || 'fora da linha'}, Esc -> aba ${escFocus || 'nenhuma'}; durante a busca nenhuma aba marcada=${noneSelected}, região viva "${live}"; "haiku" acha "Modelo" escondido=${hiddenFound}, aviso=${hintShown}; "pasta"=${pastaFound}; ${rows.length} linhas na tela, fora do índice: ${JSON.stringify(missing)}`,
   }
 }
 
@@ -6003,7 +6070,8 @@ const MEET_MARKER = `(document.querySelector('[data-meet-marker]')?.textContent 
  * recusado (404 sem corpo); numa gravação curta, "Meet conectado · 2 participantes" no cabeçalho e o evento "Ana
  * começou a falar" vira o nome do trecho do sistema no arquivo e no `.md` do acervo ("[mm:ss] Ana: …"); o do
  * microfone continua "Você". "Quem fala no Meet" desligado para o servidor e ligado sobe de novo, desconectado; a
- * gravação começa com "Meet desconectado" em vermelho e fica verde no primeiro envio (adendo 27c).
+ * gravação começa com "Meet desconectado" em vermelho e fica verde no primeiro envio (adendo 27c). Contrato 31: o clique
+ * no marcador abre Configurações › Plugins.
  */
 async function meetChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => void, checks: Record<string, Check>): Promise<void> {
   const win = ctx.openWindow({ theme: 'light' })
@@ -6084,6 +6152,11 @@ async function meetChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => void
   const live = await waitFor(contents, `${probeJs('state()?.mic')} === 'live' && ${probeJs('state()?.system')} === 'live'`)
   const markerOff = await waitFor(contents, `document.querySelector('[data-meet-marker="off"]') && ${MEET_MARKER} === ${JSON.stringify(MEET_DISCONNECTED_LABEL)}`)
   const markerOffText = await text(contents, '[data-meet-marker]')
+  // Contrato 31 (CA4): o marcador leva à aba "Plugins"; a gravação continua e o smoke volta para ela.
+  await clickSelector(contents, '[data-meet-marker]')
+  const markerToPlugins = await waitFor(contents, `${routeIs('configuracoes')} && ${settingsTabIs('plugins')}`)
+  contents.send('scribe:navigate', 'gravacao')
+  const markerBack = await waitFor(contents, `${routeIs('gravacao')} && document.querySelector('[data-meet-marker="off"]')`)
   if (livePort !== null) await meetPost(livePort, 'chrome-extension://abc', body([{ nome: 'Ana', falando: true, ts: Date.now() }]))
   const marker = await waitFor(contents, `document.querySelector('[data-meet-marker="on"]') && ${MEET_MARKER} === 'Meet conectado · 2 participantes'`)
   const markerText = await text(contents, '[data-meet-marker]')
@@ -6122,6 +6195,8 @@ async function meetChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => void
     ok:
       live &&
       markerOff &&
+      markerToPlugins &&
+      markerBack &&
       marker &&
       Boolean(saved) &&
       JSON.stringify(byId['smoke-meet-sys']) === JSON.stringify(['Ana']) &&
@@ -6130,7 +6205,7 @@ async function meetChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => void
       corpusMd.includes('] Você: Pode começar.') &&
       (folderMd === null || folderMd.includes('**Ana** · ')) &&
       labelInDetail,
-    detail: `gravando=${live}; antes do envio "${markerOffText}" vermelho=${markerOff}; depois "${markerText}" verde=${marker}; reunião salva=${Boolean(saved)}; nomes no arquivo: sistema=${JSON.stringify(byId['smoke-meet-sys'] ?? null)}, microfone=${JSON.stringify(byId['smoke-meet-mic'] ?? null)}; acervo com "Ana:"=${corpusMd.includes('] Ana: ')}; .md da pasta ${folderMd === null ? 'sem arquivo' : `com "**Ana**"=${folderMd.includes('**Ana** · ')}`}; "Ana" no detalhe=${labelInDetail}`,
+    detail: `gravando=${live}; antes do envio "${markerOffText}" vermelho=${markerOff}; clique no marcador -> Plugins=${markerToPlugins}, de volta=${markerBack}; depois "${markerText}" verde=${marker}; reunião salva=${Boolean(saved)}; nomes no arquivo: sistema=${JSON.stringify(byId['smoke-meet-sys'] ?? null)}, microfone=${JSON.stringify(byId['smoke-meet-mic'] ?? null)}; acervo com "Ana:"=${corpusMd.includes('] Ana: ')}; .md da pasta ${folderMd === null ? 'sem arquivo' : `com "**Ana**"=${folderMd.includes('**Ana** · ')}`}; "Ana" no detalhe=${labelInDetail}`,
   }
 
   win.destroy()
@@ -6631,6 +6706,10 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
         await waitFor(contents, routeIs('configuracoes'))
         settings['claudeCli'] = (await showClaudeSettings(contents)) ? await claudeChecks(win, ctx) : { ok: false, detail: 'Claude CLI falso não foi encontrado' }
         settings['meetingFiles'] = await meetingFilesSettings(win, ctx)
+        // Contrato 31: a aba "Plugins", o "Salvar plugin…" e o manual.
+        const plugins = await pluginsSettings(win, ctx)
+        settings['plugins'] = plugins.check
+        screenshots.push(plugins.shot)
         settings['summarizeOnStop'] = await summarizeSetting(contents, ctx.userDataDir)
         // Contrato 09: logo, nome e subtítulo próprios e a volta ao padrão.
         const branding = await brandingChecks(win, ctx)
@@ -6796,8 +6875,8 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
   // de uma, no claro (contrato 23); o painel "Contexto" com as fontes, o cartão do lembrete e o da resposta no
   // WhatsApp do Assistente, no claro (contrato 25); "Pedir agora" com o agente com internet e a resposta do Assistente
   // com o link, no claro (contrato 26); o bloco "Agenda", a faixa "não está sendo gravada" e "Próximas", no claro
-  // (contrato 12).
-  const expectedShots = SCREENS.length * THEMES.length + 46
+  // (contrato 12); a aba "Plugins" com o plugin salvo e o manual aberto, no claro (contrato 31).
+  const expectedShots = SCREENS.length * THEMES.length + 47
   if (screenshots.length !== expectedShots) failures.push(`${screenshots.length} PNGs em vez de ${expectedShots}`)
   for (const shot of screenshots) {
     if (shot.width < 1120 || shot.height < 740) failures.push(`${shot.name}: ${shot.width}x${shot.height} abaixo de 1120x740`)

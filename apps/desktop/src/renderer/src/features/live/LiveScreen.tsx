@@ -3,7 +3,7 @@ import { useEffect } from 'react'
 import { useNavigate } from 'react-router'
 import { MEET_DISCONNECTED_LABEL, meetConnectedLabel } from '@shared/meet'
 import { MEETING_TITLE_MAX } from '@shared/meetings'
-import { meetingPath } from '@shared/routes'
+import { meetingPath, settingsPath } from '@shared/routes'
 import { useBranding } from '../../app/brandingStore'
 import { useSettings } from '../../app/settingsStore'
 import { whenUnlocked } from '../../app/lockStore'
@@ -182,19 +182,25 @@ function RecordingStatus({ phase, elapsed }: { phase: CapturePhase; elapsed: num
  * Marcador do Meet (contrato 27, adendo 27c): "Meet conectado · N participantes" com o ponto verde enquanto a
  * extensão do Chrome manda quem fala; "Meet desconectado" com o ponto vermelho quando ela some (mais de 15 s sem
  * envio, o mesmo critério do servidor). No cabeçalho, ao lado do cronômetro, no estilo do marcador "Gravando
- * áudio"; a barra de controles já não tem espaço em 1120 px.
+ * áudio"; a barra de controles já não tem espaço em 1120 px. Contrato 31: o clique leva a Configurações › Plugins,
+ * onde se salva e instala a extensão.
  */
 function MeetMarker({ connected, participants }: { connected: boolean; participants: number }) {
+  const navigate = useNavigate()
+  const hint = connected ? 'A extensão do Chrome manda quem fala no Meet. Tudo fica neste computador.' : 'A extensão do Chrome não está mandando quem fala. Abra o Meet no Chrome com a extensão do LAP Reuniões.'
   return (
-    <span
+    <button
+      type="button"
       data-meet-marker={connected ? 'on' : 'off'}
-      className="flex h-5 items-center gap-1.5 text-12 whitespace-nowrap text-text-muted"
-      title={connected ? 'A extensão do Chrome manda quem fala no Meet. Tudo fica neste computador.' : 'A extensão do Chrome não está mandando quem fala. Abra o Meet no Chrome com a extensão do LAP Reuniões.'}
+      className="no-drag flex h-5 items-center gap-1.5 rounded-[var(--radius-control)] text-12 whitespace-nowrap text-text-muted transition-opacity duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:opacity-80"
+      title={hint}
+      aria-label={hint}
+      onClick={() => void navigate(settingsPath('plugins'))}
     >
       <span aria-hidden="true" data-meet-dot className={`size-2 ${connected ? 'bg-live' : 'bg-rec'}`} />
       <Icon icon={Users} size={14} />
       <span className={connected ? 'text-live' : 'text-rec'}>{connected ? meetConnectedLabel(participants) : MEET_DISCONNECTED_LABEL}</span>
-    </span>
+    </button>
   )
 }
 
