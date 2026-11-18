@@ -96,7 +96,7 @@ export function AccountsSection() {
               </p>
             </div>
           </div>
-          <div data-setting-control className="flex shrink-0 flex-wrap items-center gap-2">
+          <div data-setting-control="end" className="flex shrink-0 flex-wrap items-center gap-2">
             {status && !configured && !configuring && (
               <Button action="google-configure" variant="secondary" onClick={() => setConfiguring(true)}>
                 Configurar…

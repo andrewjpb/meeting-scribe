@@ -80,7 +80,7 @@ const response = (status: number, body: unknown, headers: Record<string, string>
 const offline = (): Promise<HttpResponse> => Promise.reject(new TypeError('fetch failed'))
 
 /** PNG 1×1 quando o teste não dá uma foto. */
-const TINY_PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkqPpfDwAE3gI2d2Ow6wAAAABJRU5ErkJggg==', 'base64')
+const TINY_PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGOQt8r+DwADBAHEUZJjfgAAAABJRU5ErkJggg==', 'base64')
 
 export function createFakeGoogle(options: FakeGoogleOptions): FakeGoogle {
   const profile = options.profile ?? { name: 'Pessoa de Teste', email: 'pessoa.teste@example.com' }

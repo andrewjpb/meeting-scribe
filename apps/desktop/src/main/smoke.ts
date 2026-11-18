@@ -3471,6 +3471,8 @@ const SCREEN_LAYOUT: Record<LayoutScreen, Record<string, Expectation>> = {
     tabsShiftOnScroll: { min: 0, max: 0 },
     // Coluna dos controles: o mesmo `x` em todas as linhas de cada aba, com 1 px de tolerância.
     ...Object.fromEntries(SETTINGS_TABS.map((tab) => [`controlSpread_${tab}`, { min: 0, max: 0.5 }])),
+    // Botões das contas (Google, Microsoft): alinhados pela direita, a mesma borda em todas as linhas.
+    ...Object.fromEntries(SETTINGS_TABS.map((tab) => [`controlEndSpread_${tab}`, { min: 0, max: 0.5 }])),
     inputHeight: { min: 40, max: 40 },
     selectHeight: { min: 40, max: 40 },
     buttonHeight: { min: 40, max: 40 },
@@ -3525,9 +3527,14 @@ async function settingsLayoutMetrics(contents: WebContents): Promise<Record<stri
     await selectSettingsTab(contents, tab)
     const xs = await evaluate<number[]>(
       contents,
-      `[...document.querySelectorAll('[data-settings-panel="${tab}"] [data-setting-control]')].map((el) => (el.firstElementChild ?? el).getBoundingClientRect().left)`,
+      `[...document.querySelectorAll('[data-settings-panel="${tab}"] [data-setting-control]:not([data-setting-control="end"])')].map((el) => (el.firstElementChild ?? el).getBoundingClientRect().left)`,
     )
     if (xs.length > 1) metrics[`controlSpread_${tab}`] = round(Math.max(...xs) - Math.min(...xs))
+    const ends = await evaluate<number[]>(
+      contents,
+      `[...document.querySelectorAll('[data-settings-panel="${tab}"] [data-setting-control="end"]')].map((el) => (el.lastElementChild ?? el).getBoundingClientRect().right)`,
+    )
+    if (ends.length > 1) metrics[`controlEndSpread_${tab}`] = round(Math.max(...ends) - Math.min(...ends))
     const aligned = await evaluate<{ centered: number; header: number; scrollbar: number }>(
       contents,
       `(() => {
@@ -4094,6 +4101,7 @@ async function calendarChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => 
   const signedIn = await waitFor(contents, `${MICROSOFT_STATE} === 'signed-in' && document.querySelector('img[data-microsoft-photo]')?.naturalWidth > 0`, 8000)
   const name = await text(contents, '[data-microsoft-name]')
   const email = await text(contents, '[data-microsoft-line]')
+  const msState = await evaluate<string>(contents, `${MICROSOFT_STATE} + ' foto ' + (document.querySelector('img[data-microsoft-photo]')?.naturalWidth ?? 'sem')`)
   const sessionFile = join(ctx.userDataDir, 'accounts', 'microsoft.bin')
   checks['microsoft'] = {
     ok:
@@ -4118,7 +4126,7 @@ async function calendarChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => 
       microsoft.tokenFields.length > 0 &&
       microsoft.tokenFields.every((fields) => !fields.includes('client_secret')) &&
       mode(sessionFile) === '600',
-    detail: `sem contas: nenhum pedido nem aviso=${idle}; sem cadastro=${unconfigured}, painel=${panel}, salvo=${saved} (linha mascarada=${line.includes('•••') && !line.includes(SMOKE_MICROSOFT_CLIENT_ID)}), microsoft-client.bin ${mode(clientFile)}; URL ${authUrl.split('?')[0] ?? ''} (parâmetros ${[...params.keys()].join(', ')}), volta ${redirect.replace(/\d+$/, '<porta>')}; página ${page.status}; logado=${signedIn}; pedidos de token sem chave secreta=${microsoft.tokenFields.every((fields) => !fields.includes('client_secret'))}; microsoft.bin ${mode(sessionFile)}`,
+    detail: `sem contas: nenhum pedido nem aviso=${idle}; sem cadastro=${unconfigured}, painel=${panel}, salvo=${saved} (linha mascarada=${line.includes('•••') && !line.includes(SMOKE_MICROSOFT_CLIENT_ID)}), microsoft-client.bin ${mode(clientFile)}; URL ${authUrl.split('?')[0] ?? ''} (parâmetros ${[...params.keys()].join(', ')}), volta ${redirect.replace(/\d+$/, '<porta>')}; página ${page.status}; logado=${signedIn} (${msState}); pedidos de token sem chave secreta=${microsoft.tokenFields.every((fields) => !fields.includes('client_secret'))}; microsoft.bin ${mode(sessionFile)}`,
   }
 
   // Google de novo, agora com a agenda no mesmo login.

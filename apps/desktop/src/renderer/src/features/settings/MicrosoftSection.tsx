@@ -80,7 +80,7 @@ export function MicrosoftSection() {
               </p>
             </div>
           </div>
-          <div data-setting-control className="flex shrink-0 flex-wrap items-center gap-2">
+          <div data-setting-control="end" className="flex shrink-0 flex-wrap items-center gap-2">
             {status && state === 'signed-out' && !configuring && (
               <Button action="microsoft-configure" variant="secondary" onClick={() => setConfiguring(true)}>
                 Configurar…

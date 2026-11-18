@@ -47,7 +47,7 @@ const response = (status: number, body: unknown, headers: Record<string, string>
   }
 }
 
-const TINY_PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkqPpfDwAE3gI2d2Ow6wAAAABJRU5ErkJggg==', 'base64')
+const TINY_PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGOQt8r+DwADBAHEUZJjfgAAAABJRU5ErkJggg==', 'base64')
 const GRANTED = 'openid profile email https://graph.microsoft.com/Calendars.Read https://graph.microsoft.com/User.Read'
 
 export function createFakeMicrosoft(options: FakeMicrosoftOptions): FakeMicrosoft {
