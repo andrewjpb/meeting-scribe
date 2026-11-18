@@ -2,9 +2,16 @@
 # pelo smoke do app e pelos testes. Começa aguardando pareamento com um QR de texto fixo; `POST /_fake/scan`
 # faz o papel do celular lendo o QR (conecta e semeia três conversas) e `POST /_fake/incoming` entrega uma
 # mensagem nova. Os envios ficam só na memória (`POST /_fake/sent`): nada sai da máquina.
+#
+# Contrato 32: fotos de perfil determinísticas e pequenas (PNG de 8×8 de uma cor) para a Ana e o Projeto Atlas; o
+# Bruno fica sem foto (o app mostra as iniciais). A Ana ganha também mensagens antigas espalhadas pelos últimos dias
+# (o gráfico "Atividade" do painel Detalhes), como histórico: não contam como não lidas.
+import base64
 import os
 import sqlite3
+import struct
 import threading
+import zlib
 
 from bridge_store import now_ms
 
@@ -18,6 +25,59 @@ SEED_CHATS = [
     ('120363000000000001@g.us', 'Projeto Atlas', 'group'),
     ('5511922220000@s.whatsapp.net', 'Bruno Lima', 'person'),
 ]
+
+
+def solid_png(rgb, size=8):
+    """PNG de `size`×`size` de uma cor só, sempre os mesmos bytes."""
+
+    def chunk(kind, data):
+        return struct.pack('>I', len(data)) + kind + data + struct.pack('>I', zlib.crc32(kind + data) & 0xFFFFFFFF)
+
+    row = b'\x00' + bytes(rgb) * size
+    header = struct.pack('>IIBBBBB', size, size, 8, 2, 0, 0, 0)
+    return b'\x89PNG\r\n\x1a\n' + chunk(b'IHDR', header) + chunk(b'IDAT', zlib.compress(row * size, 9)) + chunk(b'IEND', b'')
+
+
+def png_data_url(rgb):
+    return 'data:image/png;base64,' + base64.b64encode(solid_png(rgb)).decode('ascii')
+
+
+# Ana e Atlas com foto; Bruno sem.
+FAKE_PHOTOS = {
+    SEED_CHATS[0][0]: png_data_url((30, 91, 184)),
+    SEED_CHATS[1][0]: png_data_url((31, 122, 69)),
+}
+
+DAY_MS = 86_400_000
+
+# Histórico da Ana: (dias atrás, minutos, de mim?, texto). Nada com "prazo" (a busca do teste acha só o do Atlas).
+ANA_HISTORY = [
+    (9, 600, False, 'Bom dia! Você recebeu a proposta que mandei?'),
+    (9, 610, True, 'Recebi, vou ler hoje com calma.'),
+    (7, 720, False, 'Conseguiu olhar a proposta?'),
+    (6, 540, True, 'Olhei. Gostei do escopo, só quero rever o valor da segunda fase.'),
+    (6, 545, False, 'Tranquilo, posso ajustar.'),
+    (4, 900, False, 'Mandei a versão ajustada da proposta.'),
+    (3, 660, True, 'Perfeito, ficou ótima. Vou levar para a diretoria.'),
+    (2, 780, False, 'Obrigada! Me avisa quando tiver retorno.'),
+]
+
+
+def history_messages(base):
+    ana = SEED_CHATS[0][0]
+    return [
+        {
+            'id': f'h{index + 1}',
+            'chatId': ana,
+            'author': 'Andrea Teste' if mine else 'Ana Souza',
+            'fromMe': mine,
+            'at': base - days * DAY_MS + (minute - 720) * 60_000,
+            'type': 'text',
+            'text': text,
+            'media': None,
+        }
+        for index, (days, minute, mine, text) in enumerate(ANA_HISTORY)
+    ]
 
 
 def seed_messages(base):
@@ -76,13 +136,20 @@ class FakeBackend:
             self.sent.append({'id': message_id, 'chatId': chat_id, 'text': text})
         return message_id
 
+    def photo(self, chat_id):
+        """Foto de perfil falsa (contrato 32): a mesma para Ana e Atlas; as outras conversas sem foto."""
+        return FAKE_PHOTOS.get(chat_id)
+
     def control(self, action, body):
         if action == 'scan':
             with open(os.path.join(self.data_dir, PAIRED_MARK), 'w', encoding='utf-8') as mark:
                 mark.write('1')
             for chat_id, name, kind in SEED_CHATS:
                 self.bridge.on_chat(chat_id, name, kind)
-            for message in seed_messages(now_ms()):
+            base = now_ms()
+            for message in history_messages(base):
+                self.bridge.on_message(message, count_unread=False)
+            for message in seed_messages(base):
                 self.bridge.on_message(message)
             self.bridge.on_state('connected', dict(FAKE_ME))
             return {'ok': True}

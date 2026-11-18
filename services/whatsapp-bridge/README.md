@@ -27,6 +27,7 @@ WhatsApp e as mensagens ficam em `~/Library/Application Support/Meeting Scribe/w
 | `POST /logout` | sai da conta e apaga a sessão |
 | `GET /chats` | conversas: id, nome, pessoa ou grupo, última mensagem, não lidas |
 | `GET /chats/:id/messages?before&limit` | mensagens (texto, autor, hora, tipo; mídia só como metadado) |
+| `GET /chats/:id/photo` | foto de perfil como data URL (até 512 KB, guardada 7 dias em `photos/`), ou `null` |
 | `GET /search?q` | busca no texto das mensagens guardadas |
 | `POST /chats/:id/send` | envia um texto; responde com o id da mensagem |
 | `GET /events` | SSE com as mensagens novas e as mudanças de estado |

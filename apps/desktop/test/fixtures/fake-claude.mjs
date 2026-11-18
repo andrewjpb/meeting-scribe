@@ -7,7 +7,8 @@
 // `result` com o JSON do resumo entre cercas ```json, montado só a partir das linhas da transcrição. Com a
 // instrução da análise ("Você analisa…", contrato 19), espera 1,5 s e devolve a análise falsa
 // (`fake-analysis.mjs`) entre cercas, com custo nominal. Com a da IA anotando ("Você anota…", contrato 30), espera
-// 0,6 s e devolve o lote falso (`fake-ai-notes.mjs`) entre cercas.
+// 0,6 s e devolve o lote falso (`fake-ai-notes.mjs`) entre cercas. Com a dos Detalhes do WhatsApp ("Você lê uma
+// conversa do WhatsApp…", contrato 32), espera 0,6 s e devolve os Detalhes falsos (`fake-whatsapp-insights.mjs`).
 //
 // Com `--include-partial-messages` (chat "Perguntar", contrato 15): para cada pergunta, lê a pasta atual (o
 // `INDICE.md` do acervo ou o único `.md` de uma reunião), escreve a resposta em pedaços (`stream_event`),
@@ -30,6 +31,7 @@ import { setTimeout as sleep } from 'node:timers/promises'
 import { FAKE_AI_NOTES_DELAY_MS, fakeAiNotes } from './fake-ai-notes.mjs'
 import { FAKE_ANALYSIS_DELAY_MS, fakeAnalysis } from './fake-analysis.mjs'
 import { fakeDraft } from './fake-draft.mjs'
+import { FAKE_INSIGHTS_DELAY_MS, fakeWhatsAppInsights } from './fake-whatsapp-insights.mjs'
 
 const args = process.argv.slice(2)
 
@@ -151,6 +153,23 @@ if (args.includes('--include-partial-messages')) {
     if (systemPrompt.startsWith('Você escreve rascunhos')) {
       process.stdout.write(
         `${JSON.stringify({ type: 'result', subtype: 'success', is_error: false, duration_ms: Date.now() - started, result: fakeDraft(input), usage: { input_tokens: Math.ceil(input.length / 4), output_tokens: 30 }, total_cost_usd: 0 })}\n`,
+        () => process.exit(0),
+      )
+      return
+    }
+    // Contrato 32: os Detalhes da conversa do WhatsApp, só JSON.
+    if (systemPrompt.startsWith('Você lê uma conversa do WhatsApp')) {
+      await sleep(FAKE_INSIGHTS_DELAY_MS)
+      process.stdout.write(
+        `${JSON.stringify({
+          type: 'result',
+          subtype: 'success',
+          is_error: false,
+          duration_ms: Date.now() - started,
+          result: `\`\`\`json\n${JSON.stringify(fakeWhatsAppInsights(input), null, 2)}\n\`\`\``,
+          usage: { input_tokens: Math.ceil(input.length / 4), output_tokens: 80 },
+          total_cost_usd: 0.0031,
+        })}\n`,
         () => process.exit(0),
       )
       return

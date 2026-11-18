@@ -53,6 +53,10 @@ const chatsSchema = z.object({ chats: z.array(chatSchema).max(5000) })
 const messagesSchema = z.object({ messages: z.array(messageSchema).max(1000) })
 const searchSchema = z.object({ messages: z.array(messageSchema.extend({ chatName: z.string().max(200) })).max(1000) })
 const sendSchema = z.object({ id: z.string().min(1).max(200) })
+/** Contrato 32: a foto de perfil como data URL de imagem (até 512 KB em base64), ou `null`. */
+export const PHOTO_DATA_URL = /^data:image\/(?:jpeg|png|webp);base64,[A-Za-z0-9+/]+={0,2}$/
+export const PHOTO_URL_MAX = 700_000
+const photoSchema = z.object({ photo: z.string().max(PHOTO_URL_MAX).regex(PHOTO_DATA_URL).nullable().catch(null) })
 const eventMessageSchema = messageSchema.extend({ chatName: z.string().max(200).nullable().optional() })
 
 export type WhatsAppHealth = z.infer<typeof healthSchema>
@@ -81,6 +85,8 @@ export interface BridgeClient {
   /** Com `before` e `beforeId`, o cursor (hora, id): as do mesmo milissegundo com id menor também vêm. */
   messages(chatId: string, options?: { before?: number; beforeId?: string; limit?: number }): Promise<WhatsAppMessage[]>
   search(term: string): Promise<WhatsAppSearchHit[]>
+  /** Contrato 32: foto de perfil da conversa (data URL) ou `null`. */
+  photo(chatId: string): Promise<string | null>
   /** Só com a prova de um clique de verdade, para a mesma conversa. */
   send(proof: SendProof, chatId: string, text: string): Promise<string>
   /** SSE de `/events`; `onClose` quando a conexão cai. Devolve o que fecha. */
@@ -166,6 +172,7 @@ export function createBridgeClient(port: number, token: string): BridgeClient {
       return (await call('GET', `/chats/${chatPath(chatId)}/messages${suffix}`, messagesSchema)).messages
     },
     search: async (term) => (await call('GET', `/search?q=${encodeURIComponent(term)}`, searchSchema)).messages,
+    photo: async (chatId) => (await call('GET', `/chats/${chatPath(chatId)}/photo`, photoSchema)).photo,
     send: async (proof, chatId, text) => {
       if (!isSendProof(proof) || proof.chatId !== chatId) throw new WhatsAppServiceError(0, 'click')
       return (await call('POST', `/chats/${chatPath(chatId)}/send`, sendSchema, { text })).id

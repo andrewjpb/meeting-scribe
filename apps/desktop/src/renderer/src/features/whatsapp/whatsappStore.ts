@@ -1,6 +1,9 @@
 // WhatsApp no renderer (contrato 24): o estado do serviço local, as conversas e as mensagens da conversa aberta.
 // Nada de token, porta ou caminho chega aqui. O envio passa por `__scribeApi.whatsappSend`, que só funciona no
 // clique (ou ⌘↵) da pessoa: o preload confere a ativação do usuário e gera o token de clique.
+//
+// Contrato 32: as fotos de perfil, pedidas uma vez por conversa que aparece na tela, no máximo 3 ao mesmo tempo e
+// sem segurar nada (a lista mostra as iniciais até a foto chegar).
 import { useEffect } from 'react'
 import { create } from 'zustand'
 import type { WhatsAppChat, WhatsAppMessage, WhatsAppStatus } from '@shared/whatsapp'
@@ -20,7 +23,23 @@ interface WhatsAppState {
   receive: (message: WhatsAppMessage, chatName: string) => void
   /** Várias mensagens novas de uma vez: uma só atualização da tela. */
   receiveMany: (items: readonly { message: WhatsAppMessage; chatName: string }[]) => void
+  /** Contrato 32: foto de perfil por conversa (data URL), ou `null` quando não há. Ausente: ainda não chegou. */
+  photos: Record<string, string | null>
+  /**
+   * Pede a foto da conversa, se ainda não pediu; nunca espera. `again`: ao abrir a conversa, a que veio sem foto é
+   * pedida de novo (uma vez por abertura; o main guarda o "sem foto" por 10 min).
+   */
+  requestPhoto: (chatId: string, again?: boolean) => void
+  /** Saiu da conta, removeu ou desconectou: as fotos guardadas saem. */
+  forgetPhotos: () => void
 }
+
+/** Fotos pedidas ao mesmo tempo. */
+const PHOTO_PARALLEL = 3
+const photoQueue: string[] = []
+const photoAsked = new Set<string>()
+let photoRunning = 0
+const photoRunningIds = new Set<string>()
 
 const byTime = (a: WhatsAppMessage, b: WhatsAppMessage): number => a.at - b.at || a.id.localeCompare(b.id)
 
@@ -36,6 +55,7 @@ export const useWhatsApp = create<WhatsAppState>()((set, get) => ({
   chats: null,
   messages: {},
   exhausted: {},
+  photos: {},
 
   load: async () => {
     try {
@@ -87,6 +107,37 @@ export const useWhatsApp = create<WhatsAppState>()((set, get) => ({
 
   receive: (message, chatName) => get().receiveMany([{ message, chatName }]),
 
+  forgetPhotos: () => {
+    photoQueue.length = 0
+    photoAsked.clear()
+    set({ photos: {} })
+  },
+
+  requestPhoto: (chatId, again = false) => {
+    const known = get().photos[chatId]
+    if (again && known === null && !photoQueue.includes(chatId) && !photoRunningIds.has(chatId)) photoAsked.delete(chatId)
+    if (photoAsked.has(chatId) || (known !== undefined && !(again && known === null))) return
+    photoAsked.add(chatId)
+    photoQueue.push(chatId)
+    const next = (): void => {
+      while (photoRunning < PHOTO_PARALLEL && photoQueue.length) {
+        const id = photoQueue.shift() as string
+        photoRunning++
+        photoRunningIds.add(id)
+        void window.__scribeApi.invoke('scribe:whatsapp-photo', { chatId: id }).then(
+          (photo) => set((state) => ({ photos: { ...state.photos, [id]: photo } })),
+          // Bloqueado ou o serviço caiu: pede de novo da próxima vez que a conversa aparecer.
+          () => photoAsked.delete(id),
+        ).finally(() => {
+          photoRunning--
+          photoRunningIds.delete(id)
+          next()
+        })
+      }
+    }
+    next()
+  },
+
   receiveMany: (items) =>
     set((state) => {
       let chats = state.chats ? [...state.chats] : null
@@ -110,7 +161,11 @@ export const useWhatsApp = create<WhatsAppState>()((set, get) => ({
 
 /** O main avisa cada mudança do serviço e cada mensagem nova; nada chega com o app bloqueado. */
 export function watchWhatsApp(): () => void {
-  const offState = window.__scribeApi.on('scribe:whatsapp-state', (status) => useWhatsApp.setState({ status }))
+  const offState = window.__scribeApi.on('scribe:whatsapp-state', (status) => {
+    // Contrato 32: fora de "conectado" (saiu da conta, removeu, desligou), as fotos guardadas na tela saem.
+    if (status.state !== 'connected') useWhatsApp.getState().forgetPhotos()
+    useWhatsApp.setState({ status })
+  })
   // Mensagens chegam em rajadas (o celular manda muitas de uma vez): junta e atualiza a tela no máximo a cada 250 ms,
   // para a barra lateral e os cliques nunca ficarem presos atrás de milhares de atualizações.
   let pending: { message: WhatsAppMessage; chatName: string }[] = []

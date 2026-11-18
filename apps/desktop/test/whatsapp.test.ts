@@ -27,6 +27,7 @@ const ANA = '5511911110000@s.whatsapp.net'
 const GRUPO = '120363000000000001@g.us'
 const TOKEN = '0123456789abcdef'.repeat(4)
 const CLICK = '11111111-2222-4333-8444-555555555555'
+const PHOTO = 'data:image/png;base64,iVBORw0KGgo='
 
 const message = (id: string, at: number, extra: Partial<WhatsAppMessage> = {}): WhatsAppMessage => ({ id, chatId: ANA, author: 'Ana Souza', fromMe: false, at, type: 'text', text: `texto ${id}`, media: null, ...extra })
 
@@ -96,6 +97,10 @@ function fakeBridge(instance = INSTANCE): Promise<{ server: Server; port: number
         sent.push((JSON.parse(body) as { text: string }).text)
         return json(200, { id: 'enviada-1' })
       }
+      if (url.pathname === '/logout') return json(200, { version: '0.1.0', state: 'disconnected', me: null })
+      // Contrato 32: a Ana com foto; o grupo com algo que não é imagem (o cliente descarta).
+      if (url.pathname === `/chats/${encodeURIComponent(ANA)}/photo`) return json(200, { photo: PHOTO })
+      if (url.pathname === `/chats/${encodeURIComponent(GRUPO)}/photo`) return json(200, { photo: 'javascript:alert(1)' })
       if (url.pathname === '/search') return json(200, { messages: [{ ...messages[0], chatName: 'Ana Souza', extra: '<script>' }] })
       if (url.pathname === '/events') {
         res.writeHead(200, { 'Content-Type': 'text/event-stream' })
@@ -129,6 +134,9 @@ describe('cliente do serviço', () => {
       expect(Object.keys(hits[0] ?? {})).not.toContain('extra')
       expect(bridge.requests.every((request) => request.auth === `Bearer ${TOKEN}`)).toBe(true)
       await expect(createBridgeClient(bridge.port, 'f'.repeat(64)).chats()).rejects.toThrow(/401/)
+      // Contrato 32: a foto como data URL de imagem; outra coisa vira `null`.
+      expect(await client.photo(ANA)).toBe(PHOTO)
+      expect(await client.photo(GRUPO)).toBeNull()
     } finally {
       bridge.server.close()
     }
@@ -245,6 +253,17 @@ describe('serviço do WhatsApp no main', () => {
         { chatName: 'Ana Souza', text: 'Confirmado para sexta.' },
       ])
       expect(sendDialogText({ chatName: 'Ana', text: 'x'.repeat(400) })).toEqual({ message: 'Enviar para Ana?', detail: `${'x'.repeat(300)}…` })
+      // Contrato 32: a foto é pedida ao serviço uma vez e fica na memória; pedido inválido é `null` sem ir ao serviço.
+      const photoCalls = (): number => bridge.requests.filter((request) => request.path.endsWith('/photo')).length
+      const before = photoCalls()
+      expect(await Promise.all([service.photo({ chatId: ANA }), service.photo({ chatId: ANA })])).toEqual([PHOTO, PHOTO])
+      expect(await service.photo({ chatId: ANA })).toBe(PHOTO)
+      expect(await service.photo({ chatId: 'sem-arroba' })).toBeNull()
+      expect(photoCalls() - before).toBe(1)
+      // Os Detalhes leem a conversa e as mensagens sempre com `before` (não zera as não lidas) e nada vai ao envio.
+      expect((await service.findChat(ANA))?.name).toBe('Ana Souza')
+      expect(await service.findChat('invalido')).toBeNull()
+      expect((await service.lastMessages(ANA, 200)).map((item) => item.id)).toEqual(['m1', 'm2'])
       // O rascunho só escreve: nada é enviado.
       expect(await service.draft({ chatId: ANA, instruction: 'confirme sexta', meetingId: null })).toEqual({ ok: true, text: 'Confirmado!' })
       expect(bridge.sent).toHaveLength(1)
@@ -258,6 +277,93 @@ describe('serviço do WhatsApp no main', () => {
       const folder = tempDir()
       expect(await service.exportChats(folder, [ANA, 'invalido'], 30)).toEqual([exportFileName({ id: ANA, name: 'Ana Souza' })])
       expect(bridge.requests.filter((request) => request.path.includes('/messages')).every((request) => request.path.includes('before='))).toBe(true)
+      await service.dispose()
+    } finally {
+      bridge.server.close()
+    }
+  })
+})
+
+describe('Sair da conta e Remover apagam o cache dos Detalhes (contrato 32)', () => {
+  const reattached = async (bridgePort: number, root: string, now: () => number = Date.now) => {
+    const safe = memorySafeStorage()
+    const { createVault } = await import('../src/main/accounts/vault')
+    createVault(join(root, 'service.bin'), safe, (raw) => raw).write({ token: TOKEN, port: bridgePort, on: true, instanceId: INSTANCE })
+    const { mkdirSync, writeFileSync } = await import('node:fs')
+    mkdirSync(join(root, 'venv', 'bin'), { recursive: true })
+    writeFileSync(join(root, 'venv', 'bin', 'python'), '')
+    writeFileSync(join(root, 'installed.json'), '{}')
+    writeFileSync(join(root, 'insights.json'), '{}')
+    const service = createWhatsAppService({
+      root,
+      bridgeSource: root,
+      bridgeFiles: [],
+      backend: 'fake',
+      index: { kind: 'local', dir: root },
+      pythonCandidates: [],
+      exec: () => Promise.resolve({ ok: false, stderr: '' }),
+      // Subir de novo depois de sair da conta falha de propósito (nenhum Python aqui).
+      spawn: () => spawnChild(process.execPath, ['-e', 'process.exit(1)']),
+      safeStorage: safe,
+      baseEnv: {},
+      draft: () => Promise.resolve({ ok: false, error: 'failed' }),
+      meeting: () => Promise.resolve(null),
+      onStatus: () => undefined,
+      onMessage: () => undefined,
+      now,
+    })
+    await service.init()
+    return service
+  }
+
+  it('sem foto vale só 10 min na memória (não as 6 h da foto)', async () => {
+    const bridge = await fakeBridge()
+    const root = tempDir()
+    let clock = 1_000_000
+    try {
+      const service = await reattached(bridge.port, root, () => clock)
+      const asked = (): number => bridge.requests.filter((request) => request.path === `/chats/${encodeURIComponent(GRUPO)}/photo`).length
+      expect(await service.photo({ chatId: GRUPO })).toBeNull()
+      clock += 9 * 60_000
+      expect(await service.photo({ chatId: GRUPO })).toBeNull()
+      expect(asked()).toBe(1)
+      clock += 2 * 60_000
+      expect(await service.photo({ chatId: GRUPO })).toBeNull()
+      expect(asked()).toBe(2)
+      // Com foto, 6 h.
+      expect(await service.photo({ chatId: ANA })).toBe(PHOTO)
+      clock += 5 * 3600_000
+      expect(await service.photo({ chatId: ANA })).toBe(PHOTO)
+      expect(bridge.requests.filter((request) => request.path === `/chats/${encodeURIComponent(ANA)}/photo`).length).toBe(1)
+      await service.dispose()
+    } finally {
+      bridge.server.close()
+    }
+  })
+
+  it('"Sair da conta" apaga o insights.json e esquece as fotos', async () => {
+    const bridge = await fakeBridge()
+    const root = tempDir()
+    try {
+      const service = await reattached(bridge.port, root)
+      expect(await service.photo({ chatId: ANA })).toBe(PHOTO)
+      await service.logout()
+      expect(existsSync(join(root, 'insights.json'))).toBe(false)
+      expect(bridge.requests.some((request) => request.path === '/logout')).toBe(true)
+      await service.dispose()
+    } finally {
+      bridge.server.close()
+    }
+  })
+
+  it('"Remover" apaga o insights.json junto com a sessão', async () => {
+    const bridge = await fakeBridge()
+    const root = tempDir()
+    try {
+      const service = await reattached(bridge.port, root)
+      await service.remove()
+      expect(existsSync(join(root, 'insights.json'))).toBe(false)
+      expect(existsSync(join(root, 'installed.json'))).toBe(false)
       await service.dispose()
     } finally {
       bridge.server.close()
@@ -364,6 +470,8 @@ describe('nenhum caminho fora do clique alcança o envio (CA4)', () => {
     // Chat, resumo, análise, agentes (ACP) e o motor do Claude não importam o serviço do WhatsApp.
     const engines = all.filter(({ file }) => /^main\/(chat|meetings|acp|claude-cli|agents|tasks)\//.test(file))
     for (const { file, text } of engines) expect(`${file}: ${/whatsapp\/(service|client|send-guard)/.test(text)}`).toBe(`${file}: false`)
+    // Contrato 32: os Detalhes (a IA) só recebem a leitura injetada; não importam o serviço, o cliente nem o guarda.
+    for (const { file, text } of all.filter(({ file }) => /^main\/whatsapp\/insights/.test(file))) expect(`${file}: ${/\.\/(service|client|send-guard)'|whatsappSend|scribe:whatsapp-send/.test(text)}`).toBe(`${file}: false`)
   })
 
   it('o chat recebe só a exportação, e o rascunho roda sem ferramenta nenhuma', () => {
@@ -376,7 +484,7 @@ describe('nenhum caminho fora do clique alcança o envio (CA4)', () => {
 
   it('o envio também passa pelo bloqueio: todo canal do WhatsApp é recusado com o app bloqueado', () => {
     const channels = INVOKE_CHANNELS.filter((channel) => channel.startsWith('scribe:whatsapp-'))
-    expect(channels).toHaveLength(15)
+    expect(channels).toHaveLength(18)
     for (const channel of channels) expect(WHEN_LOCKED[channel]).toBe('refused')
     expect(RENDERER_EVENTS_WHEN_LOCKED['scribe:whatsapp-click']).toBe('ignored')
     expect(PRELOAD_ONLY_EVENTS).toEqual(['scribe:whatsapp-click'])

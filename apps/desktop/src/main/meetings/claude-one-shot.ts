@@ -1,7 +1,7 @@
 // Uma execução curta do Claude pelo transporte das Configurações (contrato 17): pelo agente do ACP, se a
 // "Conexão com o Claude" estiver nele e ele estiver instalado, numa pasta vazia própria; senão pela linha de
 // comando, na pasta vazia de sempre. O resumo (contrato 08) e a análise (contrato 19) passam por aqui, com
-// a instrução e a leitura de cada um. O rascunho do WhatsApp (contrato 24) também, sem ferramenta nenhuma.
+// a instrução e a leitura de cada um. O rascunho do WhatsApp (contrato 24) e os Detalhes da conversa (contrato 32) também, sem ferramenta nenhuma.
 import { mkdir } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { ClaudeModel } from '../../shared/settings-defaults'
@@ -28,7 +28,7 @@ export interface OneShotEngine {
 
 export interface OneShotRequest<T> {
   claudePath: string
-  purpose: 'summary' | 'analysis' | 'draft' | 'ai-notes'
+  purpose: 'summary' | 'analysis' | 'draft' | 'ai-notes' | 'whatsapp-insights'
   /** Pasta vazia do ACP dentro de `claude-cwd`. */
   acpDir: string
   systemPrompt: string

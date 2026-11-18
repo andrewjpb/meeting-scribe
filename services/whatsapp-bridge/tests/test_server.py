@@ -51,7 +51,7 @@ def test_every_route_requires_the_token(running):
     assert call(port, 'GET', '/health', token='b' * 48) == (200, {'id': 'id-da-instalacao'})
     full = call(port, 'GET', '/health')[1]
     assert full['id'] == 'id-da-instalacao' and full['pid'] == os.getpid()
-    for method, path in [('GET', '/pair'), ('GET', '/chats'), ('GET', f'/chats/{ANA}/messages'), ('GET', '/search?q=prazo'), ('GET', '/events'), ('POST', '/logout'), ('POST', f'/chats/{ANA}/send')]:
+    for method, path in [('GET', '/pair'), ('GET', '/chats'), ('GET', f'/chats/{ANA}/messages'), ('GET', '/search?q=prazo'), ('GET', f'/chats/{ANA}/photo'), ('GET', '/events'), ('POST', '/logout'), ('POST', f'/chats/{ANA}/send')]:
         assert call(port, method, path, token=None)[0] == 401
         assert call(port, method, path, token='b' * 48)[0] == 401
 
@@ -87,7 +87,8 @@ def test_pairing_then_chats_and_messages(running):
     page = call(port, 'GET', f'/chats/{ANA}/messages?limit=2')[1]['messages']
     assert [m['id'] for m in page] == ['m2', 'm3']
     older = call(port, 'GET', f"/chats/{ANA}/messages?limit=2&before={page[0]['at']}")[1]['messages']
-    assert [m['id'] for m in older] == ['m1']
+    # Contrato 32: antes da m1 vem o histórico da Ana, espalhado pelos últimos dias.
+    assert [m['id'] for m in older] == ['h8', 'm1']
     found = call(port, 'GET', '/search?q=prazo')[1]['messages']
     assert len(found) == 1 and found[0]['chatName'] == 'Projeto Atlas'
     assert call(port, 'GET', '/search?q=a')[0] == 400
@@ -214,3 +215,40 @@ def test_store_batch_and_late_names(tmp_path):
     assert store.set_names({'5511944440000@s.whatsapp.net': 'Bia'}) == 1
     assert store.unnamed_chats() == [] and store.chat('5511944440000@s.whatsapp.net')['name'] == 'Bia'
     store.close()
+
+
+def test_photo_route_with_the_fake_backend(running):
+    """Contrato 32: Ana e Atlas com foto (PNG pequeno, sempre o mesmo), Bruno sem; id inválido é 400."""
+    _, port, _ = running
+    call(port, 'POST', '/_fake/scan', {})
+    status, body = call(port, 'GET', f'/chats/{ANA}/photo')
+    assert status == 200 and body['photo'].startswith('data:image/png;base64,')
+    assert call(port, 'GET', f'/chats/{ANA}/photo')[1] == body
+    atlas = call(port, 'GET', f'/chats/{SEED_CHATS[1][0]}/photo')[1]['photo']
+    assert atlas.startswith('data:image/png;base64,') and atlas != body['photo']
+    assert call(port, 'GET', f'/chats/{SEED_CHATS[2][0]}/photo') == (200, {'photo': None})
+    assert call(port, 'GET', '/chats/sem-arroba/photo')[0] == 400
+
+
+def test_photo_route_drops_what_is_not_an_image_or_too_big(running):
+    bridge, port, _ = running
+    bridge.backend.photo = lambda chat_id: 'javascript:alert(1)'
+    assert call(port, 'GET', f'/chats/{ANA}/photo')[1] == {'photo': None}
+    bridge.backend.photo = lambda chat_id: 'data:image/png;base64,' + 'A' * server.PHOTO_URL_MAX
+    assert call(port, 'GET', f'/chats/{ANA}/photo')[1] == {'photo': None}
+
+    def broken(chat_id):
+        raise RuntimeError('sem rede')
+
+    bridge.backend.photo = broken
+    assert call(port, 'GET', f'/chats/{ANA}/photo') == (200, {'photo': None})
+
+
+def test_fake_history_is_spread_over_days_and_not_unread(running):
+    _, port, _ = running
+    call(port, 'POST', '/_fake/scan', {})
+    ana = next(c for c in call(port, 'GET', '/chats')[1]['chats'] if c['id'] == ANA)
+    assert ana['unread'] == 2
+    messages = call(port, 'GET', f'/chats/{ANA}/messages')[1]['messages']
+    days = {m['at'] // 86_400_000 for m in messages}
+    assert len(messages) == 11 and len(days) >= 6

@@ -81,6 +81,8 @@ import { runClaudeOneShot } from './meetings/claude-one-shot'
 import { ACP_DRAFT_DIR, DRAFT_TIMEOUT_MS, draftSystemPrompt, parseDraft } from './whatsapp/draft'
 import { BRIDGE_FAKE_FILE, BRIDGE_FILES, nodeExec, PYTHON_CANDIDATES, WHATSAPP_DIR } from './whatsapp/install'
 import { INSTALL_TEST_ENV, runInstallTest } from './whatsapp/install-test'
+import { createInsightsCache, INSIGHTS_FILE } from './whatsapp/insights'
+import { createInsightsService, type InsightsService } from './whatsapp/insights-service'
 import { createWhatsAppService, sendDialogText, type SendQuestion, type WhatsAppService } from './whatsapp/service'
 
 // `app.setName` fixa o `userData` (~/Library/Application Support/Meeting Scribe) e o item do Chaveiro:
@@ -492,6 +494,8 @@ interface AppServices {
   calendar: CalendarService
   /** WhatsApp pessoal pelo serviço local (contrato 24). */
   whatsapp: WhatsAppService
+  /** Detalhes da conversa do WhatsApp pelo Claude (contrato 32). */
+  whatsappInsights: InsightsService
   /** Agentes, tarefas agendadas e execuções (contrato 23). */
   automations: AutomationsService
   /** Servidor local da extensão do Meet (contrato 27). */
@@ -696,6 +700,22 @@ function createAppServices(userData: string): AppServices {
     ...(app.isPackaged ? {} : { log: (message: string) => console.log(message) }),
   })
   whatsappService = whatsapp
+  // Contrato 32: os Detalhes da conversa (resumo, humor, pendências) pelo mesmo motor, numa execução curta sem
+  // ferramenta nenhuma. Só lê as mensagens; o resultado fica em `whatsapp/insights.json`.
+  const whatsappInsights = createInsightsService({
+    settings,
+    cache: createInsightsCache(join(userData, WHATSAPP_DIR, INSIGHTS_FILE)),
+    locate: () => claude.locate(),
+    chat: (chatId) => whatsapp.findChat(chatId),
+    messages: (chatId, max) => whatsapp.lastMessages(chatId, max),
+    enabled: async () => (await settings.get()).whatsappInsights,
+    spawn: smokeClaude?.spawnSummary ?? nodeSpawnSummary,
+    openAcp,
+    acpAvailable: async () => (await acpAgent.current()).available(),
+    userData,
+    baseEnv: process.env,
+    ...(app.isPackaged ? {} : { log: (message: string) => console.log(message) }),
+  })
   // Acervo do chat (contrato 15): um `.md` por reunião e o índice, reescritos a cada mudança da reunião.
   const corpus = createChatCorpus({ dir: userData, meetings, transcripts, summaries, notes })
   // Chat do "Assistente": o mesmo `claude` e o mesmo caminho configurado, um processo por conversa, só leitura.
@@ -1010,6 +1030,7 @@ function createAppServices(userData: string): AppServices {
     microsoft,
     calendar,
     whatsapp,
+    whatsappInsights,
     automations,
     meet,
     pluginSave,
@@ -1109,7 +1130,7 @@ async function confirmWhatsAppSend(win: BrowserWindow | null, question: SendQues
 }
 
 function registerIpc(services: AppServices): void {
-  const { settings, meetings, meetingsService, meetingsIndex, tokenClient, translation, claude, files, summary, analysis, aiNotes, download, branding, updates, chat, chatActions, corpus, acp, lock, google, drive, microsoft, calendar, whatsapp, automations, meet, pluginSave } = services
+  const { settings, meetings, meetingsService, meetingsIndex, tokenClient, translation, claude, files, summary, analysis, aiNotes, download, branding, updates, chat, chatActions, corpus, acp, lock, google, drive, microsoft, calendar, whatsapp, whatsappInsights, automations, meet, pluginSave } = services
   /** Reunião salva, renomeada ou com anotações novas: o `.md` dela no acervo do chat é reescrito. */
   const touched = (meetingId: string): void => void corpus.sync(meetingId).catch(() => undefined)
   /**
@@ -1336,6 +1357,10 @@ function registerIpc(services: AppServices): void {
   handle('scribe:whatsapp-draft', appOrigin, (_event, request) => whatsapp.draft(request))
   handle('scribe:whatsapp-link-get', appOrigin, (_event, request) => whatsapp.link((request as { meetingId?: unknown } | undefined)?.meetingId))
   handle('scribe:whatsapp-link-set', appOrigin, (_event, request) => whatsapp.setLink(request))
+  // Contrato 32: a foto de perfil e os Detalhes (só leitura; nenhum caminho daqui alcança o envio).
+  handle('scribe:whatsapp-photo', appOrigin, (_event, request) => whatsapp.photo(request).catch(() => null))
+  handle('scribe:whatsapp-insights', appOrigin, (_event, request) => whatsappInsights.state(request))
+  handle('scribe:whatsapp-insights-run', appOrigin, (_event, request) => whatsappInsights.run(request))
   onEvent('scribe:whatsapp-click', appOrigin, (event, token) => whatsapp.registerClick(event.sender.id, token))
   onEvent('scribe:whatsapp-pair-cancel', appOrigin, () => whatsapp.cancelPair())
   // Gravação em curso: o token vale até o fim do "Encerrar" ou até a janela que a abriu sumir.
@@ -1478,6 +1503,7 @@ void app.whenReady().then(async () => {
     services.summary.dispose()
     services.analysis.dispose()
     services.aiNotes.dispose()
+    services.whatsappInsights.dispose()
     services.chat.dispose()
     services.updates.dispose()
     services.drive.dispose()
@@ -1557,6 +1583,7 @@ void app.whenReady().then(async () => {
     services.summary.dispose()
     services.analysis.dispose()
     services.aiNotes.dispose()
+    services.whatsappInsights.dispose()
     services.chat.dispose()
     services.updates.dispose()
     services.drive.dispose()

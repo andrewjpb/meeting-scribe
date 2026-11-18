@@ -13,6 +13,8 @@
 //   (`fake-analysis.mjs`) entre cercas, com o custo no `usage_update`;
 // - IA anotando (instrução "Você anota…", contrato 30): espera (2 × `pause`) e devolve o lote falso
 //   (`fake-ai-notes.mjs`) entre cercas;
+// - Detalhes do WhatsApp (instrução "Você lê uma conversa do WhatsApp…", contrato 32): espera (2 × `pause`) e devolve
+//   os Detalhes falsos (`fake-whatsapp-insights.mjs`) entre cercas, com o custo no `usage_update`;
 // - chat: pensa em pedaços, monta o "Plano", lê o `INDICE.md` e a reunião mais recente e procura um termo,
 //   cada leitura pedindo permissão; tenta escrever um arquivo (permissão pedida e negada), ler um arquivo
 //   fora da pasta pelo cliente (`fs/read_text_file`, recusado) e abrir um terminal (recusado); responde em
@@ -40,6 +42,7 @@ import * as acp from '@agentclientprotocol/sdk/unstable'
 import { fakeAiNotes } from './fake-ai-notes.mjs'
 import { fakeAnalysis } from './fake-analysis.mjs'
 import { fakeDraft } from './fake-draft.mjs'
+import { fakeWhatsAppInsights } from './fake-whatsapp-insights.mjs'
 
 export const FAKE_ACP_VERSION = '0.107.0-falso'
 const MODEL_IDS = { haiku: 'claude-haiku-5-5', sonnet: 'claude-sonnet-5-5', opus: 'claude-opus-5-5', default: 'claude-sonnet-5-5' }
@@ -169,6 +172,7 @@ export function fakeAcpAgent({ log = () => undefined, pause = 300 } = {}) {
     if (prompt.startsWith('Você analisa')) return 'analysis'
     if (prompt.startsWith('Você anota')) return 'ai-notes'
     if (prompt.startsWith('Você escreve rascunhos')) return 'draft'
+    if (prompt.startsWith('Você lê uma conversa do WhatsApp')) return 'whatsapp-insights'
     return 'chat'
   }
 
@@ -257,6 +261,14 @@ export function fakeAcpAgent({ log = () => undefined, pause = 300 } = {}) {
       if (state.purpose === 'draft') {
         await say(fakeDraft(content))
         return { stopReason: 'end_turn', usage: { totalTokens: Math.ceil(content.length / 4) + 30, inputTokens: Math.ceil(content.length / 4), outputTokens: 30 } }
+      }
+
+      // Contrato 32: os Detalhes da conversa do WhatsApp, só JSON (o agente nunca envia nada).
+      if (state.purpose === 'whatsapp-insights') {
+        await sleep(pause * 2)
+        await say(`\`\`\`json\n${JSON.stringify(fakeWhatsAppInsights(content), null, 2)}\n\`\`\``)
+        await update({ sessionUpdate: 'usage_update', used: 700, size: 200000, cost: { amount: 0.0031, currency: 'USD' }, _meta: { '_claude/model': modelId } })
+        return { stopReason: 'end_turn', usage: { totalTokens: Math.ceil(content.length / 4) + 80, inputTokens: Math.ceil(content.length / 4), outputTokens: 80 } }
       }
 
       // Contrato 30: o lote da IA anotando, só JSON (o agente não tem ferramenta nenhuma aqui).

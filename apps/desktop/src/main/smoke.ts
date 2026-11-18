@@ -70,6 +70,7 @@ import { basename, dirname, join } from 'node:path'
 import { app, BrowserWindow, ipcMain, Menu, nativeTheme, session, type MenuItem, type WebContents } from 'electron'
 import { DRIVE_ROOT_FOLDER_NAME } from '../shared/accounts'
 import { WHATSAPP_EXPORT_PREFIX, WHATSAPP_FIXED_WARNING, WHATSAPP_PAIR_HINT, WHATSAPP_RISK_CHECKBOX, WHATSAPP_RISK_TEXT, WHATSAPP_RISK_TITLE } from '../shared/whatsapp'
+import { INSIGHTS_MOOD_NOTE } from '../shared/whatsapp-insights'
 import { ASSEMBLYAI_DASHBOARD_URL } from '../shared/assemblyai'
 import { INVOKE_CHANNELS, WHEN_LOCKED, type CspViolation } from '../shared/ipc'
 import { LOCK_DISABLED_HINT, LOCKED_ERROR, lockedWindowTitle, TOUCH_ID_FAILED_TEXT } from '../shared/lock'
@@ -4969,6 +4970,9 @@ async function lockChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => void
 const WA_FAKE_QR = '2@smoke-qr-falso,AbCdEfGhIjKlMnOpQrStUvWxYz0123456789+/=,smoke-chave-publica-falsa,smoke-segredo-falso'
 const WA_ANA = '5511911110000@s.whatsapp.net'
 const WA_ATLAS = '120363000000000001@g.us'
+const WA_BRUNO = '5511922220000@s.whatsapp.net'
+/** Contrato 32: a Ana do serviço falso tem 3 mensagens de hoje e 8 de histórico, espalhadas pelos últimos dias. */
+const WA_ANA_SEEDED = 11
 const WA_STATE = `(document.querySelector('[data-whatsapp-state]')?.dataset.whatsappState ?? '')`
 const WA_INSTRUCTION = 'responda confirmando a reunião de sexta'
 
@@ -4986,7 +4990,8 @@ async function waSent(ctx: SmokeContext): Promise<{ id: string; chatId: string; 
  * lê o QR; as conversas, a conversa aberta (texto como texto, mídia como metadado) e a mensagem nova pelo SSE;
  * "Rascunho com o Claude" (agente ACP falso) preenche o campo sem enviar; o envio sem clique recusado (canal com
  * token inventado, `whatsappSend` sem ativação do usuário, o evento do clique pelo `send` genérico) e o envio com o
- * clique e a confirmação; e o escopo do "Perguntar" com uma conversa.
+ * clique e a confirmação; e o escopo do "Perguntar" com uma conversa. Contrato 32: as fotos (Ana e Atlas) e as
+ * iniciais (Bruno) na lista e o painel Detalhes com a análise do Claude falso, os gráficos locais e o custo.
  */
 async function whatsappChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => void, checks: Record<string, Check>, shots: Screenshot[]): Promise<void> {
   const win = ctx.openWindow({ theme: 'light' })
@@ -5106,7 +5111,7 @@ async function whatsappChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => 
   const media = await text(contents, '[data-whatsapp-media]')
   const noImage = await evaluate<boolean>(contents, `!document.querySelector('[data-whatsapp-messages] img')`)
   await clickSelector(contents, `[data-whatsapp-chat="${WA_ANA}"]`)
-  const anaOpen = await waitFor(contents, `document.querySelectorAll('[data-whatsapp-conversation="${WA_ANA}"] [data-whatsapp-message]').length === 3`)
+  const anaOpen = await waitFor(contents, `document.querySelectorAll('[data-whatsapp-conversation="${WA_ANA}"] [data-whatsapp-message]').length === ${WA_ANA_SEEDED}`)
   const htmlAsText = await evaluate<{ text: string; tags: number }>(
     contents,
     `(() => { const el = document.querySelector('[data-whatsapp-message="m3"] [data-whatsapp-text]'); return { text: el?.textContent ?? '', tags: el?.querySelectorAll('b').length ?? -1 } })()`,
@@ -5128,6 +5133,75 @@ async function whatsappChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => 
       htmlAsText.tags === 0 &&
       sse,
     detail: `lista=${listed} ${JSON.stringify(rows.map((row) => ({ id: row.id.slice(0, 8), group: row.group, unread: row.unread })))}; mídia "${media}" sem <img>=${noImage}; conversa=${anaOpen}; HTML como texto "${htmlAsText.text}" (${htmlAsText.tags} <b>); SSE=${sse}`,
+  }
+
+  // Contrato 32: o painel Detalhes, aberto por padrão, com a análise do Claude falso (sozinha, ao abrir a conversa sem
+  // cache), o humor, o gráfico de atividade com barras e o rodapé com o custo; a foto da Ana e do Atlas na lista e as
+  // iniciais do Bruno (o serviço falso não tem foto dele); e o cache em whatsapp/insights.json.
+  const detailsShown = await waitFor(contents, `document.querySelector('[data-wa-details] [data-wa-summary]')?.textContent.includes('Conversa com Ana Souza')`, 20_000)
+  const details = await evaluate<{ summary: string; mood: string; moodNote: boolean; bars: number; activeBars: number; balance: number; moodPoints: number; cost: string; toggle: string; anaPhoto: boolean; atlasPhoto: boolean; brunoInitials: string; headerPhoto: boolean; subtitle: string; myBubble: string }>(
+    contents,
+    `(() => {
+      const panel = document.querySelector('[data-wa-details]')
+      const row = (id) => document.querySelector('[data-whatsapp-chat="' + id + '"]')
+      return {
+        summary: panel?.querySelector('[data-wa-summary]')?.textContent ?? '',
+        mood: panel?.querySelector('[data-wa-mood-label]')?.textContent ?? '',
+        moodNote: (panel?.querySelector('[data-wa-section="mood"]')?.textContent ?? '').includes('${INSIGHTS_MOOD_NOTE}'),
+        bars: panel?.querySelectorAll('[data-wa-chart="activity"] [data-wa-bar]').length ?? 0,
+        activeBars: new Set([...(panel?.querySelectorAll('[data-wa-chart="activity"] [data-wa-bar]') ?? [])].map((bar) => bar.dataset.waBar)).size,
+        balance: panel?.querySelectorAll('[data-wa-chart="balance"] [data-wa-bar]').length ?? 0,
+        moodPoints: panel?.querySelectorAll('[data-wa-chart="mood"] [data-wa-mood]').length ?? 0,
+        cost: panel?.querySelector('[data-wa-insights-cost]')?.textContent ?? '',
+        toggle: document.querySelector('[data-action="toggle-whatsapp-details"]')?.getAttribute('aria-pressed') ?? '',
+        anaPhoto: (row('${WA_ANA}')?.querySelector('img[data-wa-avatar="photo"]')?.getAttribute('src') ?? '').startsWith('data:image/png;base64,'),
+        atlasPhoto: Boolean(row('${WA_ATLAS}')?.querySelector('img[data-wa-avatar="photo"]')),
+        brunoInitials: row('${WA_BRUNO}')?.querySelector('[data-wa-avatar="initials"]')?.textContent ?? '',
+        headerPhoto: Boolean(document.querySelector('[data-whatsapp-conversation="${WA_ANA}"] header img[data-wa-avatar="photo"]')),
+        subtitle: document.querySelector('[data-whatsapp-chat-subtitle]')?.textContent ?? '',
+        myBubble: [...(document.querySelector('[data-whatsapp-message="m2"] > div')?.classList ?? [])].filter((name) => name === 'bg-accent' || name === 'text-on-accent').join(' '),
+      }
+    })()`,
+  )
+  const insightsFile = join(root, 'insights.json')
+  const cached = ((): { at?: number; result?: { resumo?: string } } | undefined => {
+    try {
+      return (JSON.parse(readFileSync(insightsFile, 'utf8')) as Record<string, { at?: number; result?: { resumo?: string } }>)[WA_ANA]
+    } catch {
+      return undefined
+    }
+  })()
+  await settle(contents)
+  shots.push(await capture(win, ctx.outDir, 'whatsapp-detalhes-light'))
+  // Fechar e abrir pelo botão do cabeçalho; aberto de novo com o cache, sem rodar outra vez.
+  await clickSelector(contents, '[data-action="whatsapp-details-close"]')
+  const closed = await waitFor(contents, `!document.querySelector('[data-wa-details]') && document.querySelector('[data-action="toggle-whatsapp-details"]')?.getAttribute('aria-pressed') === 'false'`)
+  await clickSelector(contents, '[data-action="toggle-whatsapp-details"]')
+  const reopened = await waitFor(contents, `document.querySelector('[data-wa-details] [data-wa-summary]') && document.querySelector('[data-action="toggle-whatsapp-details"]')?.getAttribute('aria-pressed') === 'true'`)
+  checks['details'] = {
+    ok:
+      detailsShown &&
+      // 11 do serviço falso (12 se a do SSE chegou antes de o pedido ler as mensagens).
+      Number(/Conversa com Ana Souza: (\d+) mensagens/.exec(details.summary)?.[1] ?? 0) >= WA_ANA_SEEDED &&
+      details.mood === 'Satisfeito' &&
+      details.moodNote &&
+      details.bars >= 5 &&
+      details.activeBars === details.bars &&
+      details.balance === 2 &&
+      details.moodPoints >= 5 &&
+      details.cost.includes('US$') &&
+      details.toggle === 'true' &&
+      details.anaPhoto &&
+      details.atlasPhoto &&
+      details.brunoInitials === 'BL' &&
+      details.headerPhoto &&
+      details.subtitle === '+5511911110000' &&
+      details.myBubble === 'bg-accent text-on-accent' &&
+      cached?.result?.resumo === details.summary &&
+      mode(insightsFile) === '600' &&
+      closed &&
+      reopened,
+    detail: `painel=${detailsShown} "${details.summary.slice(0, 80)}"; humor "${details.mood}" (nota=${details.moodNote}, ${details.moodPoints} pontos no tempo); atividade ${details.bars} barras; quem fala ${details.balance} segmentos; rodapé "${details.cost}"; botão aria-pressed=${details.toggle}; fotos Ana=${details.anaPhoto} Atlas=${details.atlasPhoto} cabeçalho=${details.headerPhoto}; Bruno "${details.brunoInitials}"; subtítulo "${details.subtitle}"; meu balão "${details.myBubble}"; cache ${mode(insightsFile)} igual=${cached?.result?.resumo === details.summary}; fechar=${closed}, abrir de novo=${reopened}`,
   }
 
   // "Rascunho com o Claude" pelo agente ACP falso: o texto vai para o campo e nada é enviado.
@@ -5268,9 +5342,11 @@ async function whatsappChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => 
   await waitFor(dark.webContents, `document.querySelectorAll('[data-whatsapp-chat]').length === 3`, 8000)
   await clickSelector(dark.webContents, `[data-whatsapp-chat="${WA_ANA}"]`)
   const darkOpen = await waitFor(dark.webContents, `document.querySelectorAll('[data-whatsapp-conversation="${WA_ANA}"] [data-whatsapp-message]').length >= 5`)
+  // Contrato 32: o painel Detalhes também no escuro (mensagens novas desde a análise: ela roda de novo, sozinha).
+  const darkDetails = await waitFor(dark.webContents, `document.querySelector('[data-wa-details] [data-wa-summary]') && !document.querySelector('[data-wa-insights-running]') && document.querySelector('[data-wa-chart="activity"] [data-wa-bar]')`, 20_000)
   await settle(dark.webContents)
   shots.push(await capture(dark, ctx.outDir, 'whatsapp-dark'))
-  checks['dark'] = { ok: darkOpen, detail: `conversa no escuro=${darkOpen}` }
+  checks['dark'] = { ok: darkOpen && darkDetails, detail: `conversa no escuro=${darkOpen}; Detalhes no escuro=${darkDetails}` }
   dark.destroy()
 }
 
@@ -6875,8 +6951,9 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
   // de uma, no claro (contrato 23); o painel "Contexto" com as fontes, o cartão do lembrete e o da resposta no
   // WhatsApp do Assistente, no claro (contrato 25); "Pedir agora" com o agente com internet e a resposta do Assistente
   // com o link, no claro (contrato 26); o bloco "Agenda", a faixa "não está sendo gravada" e "Próximas", no claro
-  // (contrato 12); a aba "Plugins" com o plugin salvo e o manual aberto, no claro (contrato 31).
-  const expectedShots = SCREENS.length * THEMES.length + 47
+  // (contrato 12); a aba "Plugins" com o plugin salvo e o manual aberto, no claro (contrato 31); o painel Detalhes do
+  // WhatsApp, no claro (contrato 32; no escuro ele sai no print da tela "WhatsApp").
+  const expectedShots = SCREENS.length * THEMES.length + 48
   if (screenshots.length !== expectedShots) failures.push(`${screenshots.length} PNGs em vez de ${expectedShots}`)
   for (const shot of screenshots) {
     if (shot.width < 1120 || shot.height < 740) failures.push(`${shot.name}: ${shot.width}x${shot.height} abaixo de 1120x740`)

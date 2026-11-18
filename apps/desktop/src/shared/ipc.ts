@@ -23,6 +23,7 @@ import type { RouteId } from './routes'
 import type { AppSettings, SettingsPatch } from './settings-defaults'
 import type { TranscriptCopyResult, TranscriptDocument, TranslateTurnResult, TranscriptionTokenResult } from './transcription'
 import type { UpdateState } from './updates'
+import type { WhatsAppInsightsResult, WhatsAppInsightsState } from './whatsapp-insights'
 import type { WhatsAppChat, WhatsAppDraftRequest, WhatsAppDraftResult, WhatsAppError, WhatsAppMeetingLink, WhatsAppMessage, WhatsAppPairing, WhatsAppSearchHit, WhatsAppSendRequest, WhatsAppSendResult, WhatsAppStatus } from './whatsapp'
 
 export interface AppInfo {
@@ -288,6 +289,12 @@ export interface InvokeChannels {
   /** "Ligar conversa do WhatsApp" no detalhe da reunião. */
   'scribe:whatsapp-link-get': { request: { meetingId: string }; response: WhatsAppMeetingLink | null }
   'scribe:whatsapp-link-set': { request: { meetingId: string; link: WhatsAppMeetingLink | null }; response: WhatsAppMeetingLink | null }
+  /** Contrato 32: foto de perfil da conversa (data URL) ou `null`; o main guarda na memória. */
+  'scribe:whatsapp-photo': { request: { chatId: string }; response: string | null }
+  /** Contrato 32: os Detalhes guardados da conversa e se ainda valem para a última mensagem. Não roda nada. */
+  'scribe:whatsapp-insights': { request: { chatId: string }; response: WhatsAppInsightsState }
+  /** Contrato 32: analisar a conversa agora (só lê; cancela a análise de outra conversa). */
+  'scribe:whatsapp-insights-run': { request: { chatId: string }; response: WhatsAppInsightsResult }
   /** Automações (contrato 23): os agentes, quantas tarefas usam cada um e os modelos que o perfil oferece. */
   'scribe:agents-list': { request: undefined; response: AgentsList }
   /** Criar (`id: null`) ou trocar um agente. */
@@ -522,6 +529,9 @@ const INVOKE: Record<InvokeChannel, true> = {
   'scribe:whatsapp-draft': true,
   'scribe:whatsapp-link-get': true,
   'scribe:whatsapp-link-set': true,
+  'scribe:whatsapp-photo': true,
+  'scribe:whatsapp-insights': true,
+  'scribe:whatsapp-insights-run': true,
   'scribe:agents-list': true,
   'scribe:agents-save': true,
   'scribe:agents-delete': true,
@@ -748,6 +758,9 @@ export const WHEN_LOCKED: Readonly<Record<InvokeChannel, LockedPolicy>> = Object
   'scribe:whatsapp-draft': 'refused',
   'scribe:whatsapp-link-get': 'refused',
   'scribe:whatsapp-link-set': 'refused',
+  'scribe:whatsapp-photo': 'refused',
+  'scribe:whatsapp-insights': 'refused',
+  'scribe:whatsapp-insights-run': 'refused',
   // Automações (contrato 23, CA10): gerenciar agentes e tarefas, testar, pedir e ver o histórico, tudo recusado com
   // o app bloqueado. O agendador não depende de canal: roda no main e as tarefas continuam rodando bloqueado.
   'scribe:agents-list': 'refused',

@@ -163,6 +163,10 @@ describe('canais com o app bloqueado (contrato 22, CA4)', () => {
       'scribe:meeting-file-download',
       // Contrato 31: "Salvar plugin…".
       'scribe:plugin-save',
+      // Contrato 32: a foto de perfil e os Detalhes do WhatsApp.
+      'scribe:whatsapp-photo',
+      'scribe:whatsapp-insights',
+      'scribe:whatsapp-insights-run',
       'scribe:settings-update',
       'scribe:lock-password-set',
       'scribe:lock-password-remove',

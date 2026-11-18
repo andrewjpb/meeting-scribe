@@ -20,6 +20,8 @@ export const WHATSAPP_PATHS = {
   links: 'links.json',
   service: 'service.bin',
   token: 'token',
+  /** Contrato 32: o cache dos Detalhes (resumos das conversas): sai junto com as mensagens. */
+  insights: 'insights.json',
 } as const
 
 /** Arquivos do serviço copiados para `userData/whatsapp/bridge` a cada "Ligar". */
@@ -169,11 +171,12 @@ export async function copyBridge(source: string, root: string, files: readonly s
 }
 
 /**
- * "Remover": o ambiente, os arquivos do serviço, a sessão do WhatsApp com as mensagens, a porta e o token. O registro
+ * "Remover": o ambiente, os arquivos do serviço, a sessão do WhatsApp com as mensagens, o cache dos Detalhes (contrato
+ * 32, feito das mensagens), a porta e o token. O registro
  * das aceitações do aviso fica (é a prova de que a pessoa aceitou), e as ligações com reuniões também.
  */
 export async function removeBridge(root: string): Promise<void> {
-  for (const name of [WHATSAPP_PATHS.installed, WHATSAPP_PATHS.venv, WHATSAPP_PATHS.bridge, WHATSAPP_PATHS.session, WHATSAPP_PATHS.service, WHATSAPP_PATHS.token]) {
+  for (const name of [WHATSAPP_PATHS.installed, WHATSAPP_PATHS.venv, WHATSAPP_PATHS.bridge, WHATSAPP_PATHS.session, WHATSAPP_PATHS.service, WHATSAPP_PATHS.token, WHATSAPP_PATHS.insights]) {
     await rm(join(root, name), { recursive: true, force: true })
   }
 }

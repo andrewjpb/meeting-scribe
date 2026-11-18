@@ -35,7 +35,7 @@ import {
   type WhatsAppStatus,
 } from '../../shared/whatsapp'
 import { createBridgeClient, probeInstance, WhatsAppServiceError, type BridgeClient, type WhatsAppHealth } from './client'
-import { dayLines, exportChats, exportRecentWith, type ExportCache } from './export'
+import { dayLines, exportChats, exportRecentWith, recentMessages, type ExportCache } from './export'
 import { draftInput } from './draft'
 import { copyBridge, installBridge, isInstalled, removeBridge, WHATSAPP_PATHS, type Exec, type PackageIndex } from './install'
 import { killBridgePid, startBridge, type BridgeBackend, type BridgeProcess, type SpawnBridge } from './process'
@@ -49,6 +49,7 @@ export const chatIdSchema = z.string().regex(WHATSAPP_CHAT_ID_PATTERN)
 const meetingIdSchema = z.string().min(1).max(200)
 const messagesSchema = z.object({ chatId: chatIdSchema, before: z.number().int().positive().optional(), beforeId: z.string().min(1).max(200).optional() }).strict()
 const searchSchema = z.object({ term: z.string().trim().min(2).max(100) }).strict()
+const photoSchema = z.object({ chatId: chatIdSchema }).strict()
 const sendSchema = z.object({ chatId: chatIdSchema, text: z.string().max(WHATSAPP_SEND_TEXT_MAX).refine((value) => value.trim() !== ''), clickToken: z.string().max(100) }).strict()
 const draftSchema = z.object({ chatId: chatIdSchema, instruction: z.string().trim().min(1).max(WHATSAPP_DRAFT_INSTRUCTION_MAX), meetingId: meetingIdSchema.nullable() }).strict()
 const riskSchema = z.object({ purpose: z.enum(['install', 'pair']) }).strict()
@@ -122,6 +123,15 @@ export interface WhatsAppService {
   chats(): Promise<WhatsAppChat[]>
   messages(request: unknown): Promise<WhatsAppMessage[]>
   search(request: unknown): Promise<WhatsAppSearchHit[]>
+  /**
+   * Contrato 32: foto de perfil da conversa (data URL) ou `null`, guardada na memória (6 h; sem foto ou falha, 10 min). Pedidos
+   * da mesma conversa ao mesmo tempo viram um só.
+   */
+  photo(request: unknown): Promise<string | null>
+  /** Contrato 32 (Detalhes): a conversa da lista, com a última mensagem. Só leitura. */
+  findChat(chatId: string): Promise<WhatsAppChat | null>
+  /** Contrato 32 (Detalhes): as últimas `max` mensagens da conversa. Só leitura; nunca zera as não lidas. */
+  lastMessages(chatId: string, max: number): Promise<WhatsAppMessage[]>
   /** O preload registrou um clique de "Enviar" desta janela. */
   registerClick(senderId: number, token: unknown): void
   /**
@@ -154,6 +164,10 @@ export interface WhatsAppService {
 
 /** A lista lida na exportação vale para os cartões por 2 min. */
 const KNOWN_CHATS_MS = 2 * 60_000
+/** Contrato 32: a foto vale na memória por 6 h; sem foto ou a que falhou, por 10 min. */
+const PHOTO_MS = 6 * 3600_000
+/** Sem foto ou falha. */
+const PHOTO_FAILED_MS = 10 * 60_000
 
 async function writeAtomic(file: string, content: string): Promise<void> {
   const temp = `${file}.tmp-${process.pid}-${randomUUID()}`
@@ -187,6 +201,9 @@ export function createWhatsAppService(deps: WhatsAppServiceDeps): WhatsAppServic
   let disposed = false
   /** Conversas já confirmadas nesta execução não pedem confirmação de novo (o renderer guarda). */
   let chatNames = new Map<string, string>()
+  /** Contrato 32: fotos de perfil (até quando valem) e os pedidos em curso. */
+  const photos = new Map<string, { until: number; photo: string | null }>()
+  const photoRequests = new Map<string, Promise<string | null>>()
 
   const root = (name: string): string => join(deps.root, name)
 
@@ -486,6 +503,9 @@ export function createWhatsAppService(deps: WhatsAppServiceDeps): WhatsAppServic
       return run('logging-out', async () => {
         const current = requireClient()
         await current.logout()
+        // Contrato 32: o cache dos Detalhes e as fotos são das mensagens apagadas: saem junto.
+        await rm(root(WHATSAPP_PATHS.insights), { force: true })
+        photos.clear()
         // Sessão apagada: o serviço sobe de novo, pronto para um pareamento novo.
         await stopNow(false)
         await startNow()
@@ -500,6 +520,7 @@ export function createWhatsAppService(deps: WhatsAppServiceDeps): WhatsAppServic
         pendingRisk.install = null
         pendingRisk.pair = null
         chatNames = new Map()
+        photos.clear()
         error = null
       })
     },
@@ -522,6 +543,41 @@ export function createWhatsAppService(deps: WhatsAppServiceDeps): WhatsAppServic
       const parsed = searchSchema.safeParse(request)
       if (!parsed.success || !client) return []
       return client.search(parsed.data.term)
+    },
+
+    photo(request) {
+      const parsed = photoSchema.safeParse(request)
+      if (!parsed.success || !client) return Promise.resolve(null)
+      const { chatId } = parsed.data
+      const known = photos.get(chatId)
+      if (known && known.until > now()) return Promise.resolve(known.photo)
+      const running = photoRequests.get(chatId)
+      if (running) return running
+      const current = client
+      const task = current.photo(chatId).then(
+        (photo) => {
+          // Sem foto (ou o serviço não achou) vale pouco: a pessoa pode pôr uma, e a próxima abertura pergunta de novo.
+          photos.set(chatId, { until: now() + (photo ? PHOTO_MS : PHOTO_FAILED_MS), photo })
+          return photo
+        },
+        () => {
+          photos.set(chatId, { until: now() + PHOTO_FAILED_MS, photo: null })
+          return null
+        },
+      )
+      const done = task.finally(() => photoRequests.delete(chatId))
+      photoRequests.set(chatId, done)
+      return done
+    },
+
+    async findChat(chatId) {
+      if (!client || !chatIdSchema.safeParse(chatId).success) return null
+      return (await client.chats().catch((): WhatsAppChat[] => [])).find((item) => item.id === chatId) ?? null
+    },
+
+    async lastMessages(chatId, max) {
+      if (!client || !chatIdSchema.safeParse(chatId).success) return []
+      return recentMessages(client, chatId, 0, max, now() + 1)
     },
 
     registerClick(senderId, token) {

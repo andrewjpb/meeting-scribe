@@ -27,6 +27,7 @@ import { AcpChat, acpStepOf } from '../src/main/acp/chat'
 import { runAcpOneShot, runAcpSummary } from '../src/main/acp/summary'
 import { analysisInput, analysisParser, analysisSystemPrompt } from '../src/main/claude-cli/analysis'
 import { AcpTranslator } from '../src/main/acp/translator'
+import { insightsInput, insightsParser, insightsSystemPrompt } from '../src/main/whatsapp/insights'
 import { CLAUDE_DISALLOWED_TOOLS, claudeProfile } from '../src/main/acp/profiles/claude'
 import { summaryInput } from '../src/main/claude-cli/summary'
 import { createChatCorpus } from '../src/main/chat/corpus'
@@ -490,6 +491,21 @@ describe('análise pelo ACP (contrato 19, CA2)', () => {
     const hang = answering('')
     expect(await run(opener(hang.launch), { timeoutMs: 30 })).toEqual({ ok: false, error: 'timeout' })
     expect(hang.links[0]?.killed).toBe(true)
+  })
+})
+
+describe('Detalhes do WhatsApp pelo ACP (contrato 32)', () => {
+  it('o agente falso reconhece o purpose novo pela instrução e devolve o JSON lido pelo parser, sem ferramentas', async () => {
+    const log: LogEntry[] = []
+    const { launch, links } = memory(fake(log))
+    const input = insightsInput('Ana Souza', 'person', [{ id: 'a', chatId: '5511911110000@s.whatsapp.net', author: 'Ana Souza', fromMe: false, at: new Date(2026, 10, 16, 9).getTime(), type: 'text', text: 'Oi', media: null }], new Date(2026, 10, 18).getTime())
+    const result = await runAcpOneShot({ open: opener(launch), model: 'haiku', cwd: corpus, input, purpose: 'whatsapp-insights', systemPrompt: insightsSystemPrompt(), parse: insightsParser, label: 'detalhes do WhatsApp' })
+    expect(result).toMatchObject({ ok: true, costUsd: 0.0031, content: { humor: { valor: 'positivo' }, humorDias: [{ dia: '2026-11-16', valor: 'positivo' }] } })
+    expect(log.find((entry) => entry.method === 'session/new')).toMatchObject({ purpose: 'whatsapp-insights', options: { tools: [], settingSources: [] } })
+    expect(log.find((entry) => entry.method === 'session/prompt')).toMatchObject({ purpose: 'whatsapp-insights' })
+    expect(links[0]?.killed).toBe(true)
+    // Fora do chat, nenhuma permissão é concedida.
+    expect(await permissionAllowed('whatsapp-insights', { kind: 'read', title: 'ler', locations: [], rawInput: {} } as never, corpus, corpus, { Read: 'read' })).toBe(false)
   })
 })
 

@@ -79,6 +79,11 @@ export interface AppSettings {
    */
   liveCards: boolean
   /**
+   * "Detalhes com IA no WhatsApp" (contrato 32): ao abrir uma conversa com o painel Detalhes aberto, o Claude local lê
+   * as últimas mensagens e escreve o resumo, o humor, as pendências e os compromissos. Desligado, só os gráficos.
+   */
+  whatsappInsights: boolean
+  /**
    * Separa os participantes por voz ("Participante A", "B"…). Desligado (padrão desde 15/11/2026), o
    * áudio dos participantes vira "Participantes" e os trechos se dividem só pelas pausas.
    */
@@ -159,6 +164,7 @@ export const DEFAULT_SETTINGS: Readonly<AppSettings> = Object.freeze({
   audioFolder: null,
   summarizeOnStop: true,
   liveCards: false,
+  whatsappInsights: true,
   identifySpeakers: false,
   meetSpeakers: true,
   brandName: null,

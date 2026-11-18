@@ -1,14 +1,25 @@
-import { Paperclip, Search, Sparkles, TriangleAlert, Users } from 'lucide-react'
-import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type UIEvent } from 'react'
+import { FileText, Image as ImageIcon, Mic, PanelRight, Paperclip, Search, Sparkles, Sticker, TriangleAlert, Video, type LucideIcon } from 'lucide-react'
+import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type RefObject, type UIEvent } from 'react'
 import { Link, useLocation } from 'react-router'
 import { settingsPath, type WhatsAppNavigationState } from '@shared/routes'
 import type { Meeting } from '@shared/meetings'
-import { mediaLabel, WHATSAPP_DRAFT_INSTRUCTION_MAX, WHATSAPP_FIXED_WARNING, WHATSAPP_SEND_TEXT_MAX, type WhatsAppChat, type WhatsAppMessage, type WhatsAppSearchHit } from '@shared/whatsapp'
+import {
+  mediaLabel,
+  WHATSAPP_DRAFT_INSTRUCTION_MAX,
+  WHATSAPP_FIXED_WARNING,
+  WHATSAPP_SEND_TEXT_MAX,
+  type WhatsAppChat,
+  type WhatsAppMessage,
+  type WhatsAppMessageType,
+  type WhatsAppSearchHit,
+} from '@shared/whatsapp'
 import { Button } from '../../design/Button'
 import { Icon } from '../../design/Icon'
 import { Note, NOTE_ACTION_CLASS } from '../../design/Note'
 import { PageHeader } from '../../design/PageHeader'
-import { clockLabel, messageTimeLabel, previewText } from './format'
+import { Avatar } from './Avatar'
+import { DetailsPanel } from './DetailsPanel'
+import { chatPhone, clockLabel, messageTimeLabel, previewText, startsRun } from './format'
 import { useWhatsApp } from './whatsappStore'
 
 const SEND_ERRORS: Record<'click' | 'state' | 'invalid' | 'failed' | 'cancelled', string> = {
@@ -27,54 +38,103 @@ const DRAFT_ERRORS: Record<'not-found' | 'timeout' | 'failed' | 'agent' | 'chat'
   chat: 'A conversa não está mais disponível.',
 }
 
-/** Uma linha da lista de conversas. */
+/** Pede a foto da conversa quando o elemento aparece na tela (sem `IntersectionObserver` ou na conversa aberta, logo ao montar). */
+function usePhoto(chatId: string, target: RefObject<Element | null>, again = false): string | null | undefined {
+  const photo = useWhatsApp((state) => state.photos[chatId])
+  useEffect(() => {
+    const el = target.current
+    // A conversa aberta (`again`) pede de novo a que veio sem foto, uma vez por abertura.
+    if (again || !el || typeof IntersectionObserver === 'undefined') {
+      useWhatsApp.getState().requestPhoto(chatId, again)
+      return
+    }
+    const observer = new IntersectionObserver((entries) => {
+      if (entries.some((entry) => entry.isIntersecting)) {
+        useWhatsApp.getState().requestPhoto(chatId)
+        observer.disconnect()
+      }
+    })
+    observer.observe(el)
+    return () => observer.disconnect()
+  }, [chatId, target, again])
+  return photo
+}
+
+/** Uma linha da lista de conversas: foto (ou iniciais), nome, hora, prévia e não lidas. */
 function ChatRow({ chat, active, onOpen }: { chat: WhatsAppChat; active: boolean; onOpen: () => void }) {
+  const ref = useRef<HTMLButtonElement | null>(null)
+  const photo = usePhoto(chat.id, ref)
+  const group = chat.kind === 'group'
   return (
     <button
+      ref={ref}
       type="button"
       data-whatsapp-chat={chat.id}
       aria-current={active ? 'true' : undefined}
       onClick={onOpen}
-      className={`no-drag flex w-full min-w-0 flex-col gap-0.5 rounded-[var(--radius-control)] px-2.5 py-2 text-left ${active ? 'bg-bg-sunken' : 'hover:bg-bg-sunken'}`}
+      className={`no-drag flex w-full min-w-0 items-center gap-3 rounded-[var(--radius-control)] px-2.5 py-2 text-left ${active ? 'bg-bg-sunken' : 'hover:bg-bg-sunken'}`}
     >
-      <span className="flex items-center gap-2">
-        {chat.kind === 'group' && (
-          <span data-whatsapp-group title="Grupo" className="flex shrink-0 text-text-muted">
-            <Icon icon={Users} size={14} />
-            <span className="sr-only">Grupo:</span>
-          </span>
-        )}
-        <span className={`min-w-0 flex-1 truncate text-13 ${chat.unread ? 'font-bold text-title' : 'font-medium text-text'}`}>{chat.name}</span>
-        <span className="shrink-0 text-12 text-text-faint tabular">{chat.lastMessage ? messageTimeLabel(chat.lastMessage.at) : ''}</span>
+      <span className="flex shrink-0" {...(group ? { 'data-whatsapp-group': '', title: 'Grupo' } : {})}>
+        <Avatar id={chat.id} name={chat.name} photo={photo} group={group} size={10} />
+        {group && <span className="sr-only">Grupo:</span>}
       </span>
-      <span className="flex items-center gap-2">
-        <span className="min-w-0 flex-1 truncate text-12 text-text-muted">{previewText(chat.lastMessage)}</span>
-        {chat.unread > 0 && (
-          <span data-whatsapp-unread className="shrink-0 rounded-[var(--radius-control)] bg-accent px-1.5 text-12 font-medium text-on-accent tabular">
-            {chat.unread}
-          </span>
-        )}
+      <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+        <span className="flex items-center gap-2">
+          <span className={`min-w-0 flex-1 truncate text-13 ${chat.unread ? 'font-bold text-title' : 'font-medium text-text'}`}>{chat.name}</span>
+          <span className={`shrink-0 text-12 tabular ${chat.unread ? 'text-accent' : 'text-text-faint'}`}>{chat.lastMessage ? messageTimeLabel(chat.lastMessage.at) : ''}</span>
+        </span>
+        <span className="flex items-center gap-2">
+          <span className="min-w-0 flex-1 truncate text-12 text-text-muted">{previewText(chat.lastMessage)}</span>
+          {chat.unread > 0 && (
+            <span data-whatsapp-unread className="shrink-0 rounded-[var(--radius-control)] bg-accent px-1.5 text-12 font-medium text-on-accent tabular">
+              {chat.unread}
+            </span>
+          )}
+        </span>
       </span>
     </button>
   )
 }
 
-/** Uma mensagem: autor e hora, o texto sempre como texto e a mídia só como metadado. */
-function MessageItem({ message }: { message: WhatsAppMessage }) {
+const MEDIA_ICONS: Record<WhatsAppMessageType, LucideIcon> = {
+  text: Paperclip,
+  image: ImageIcon,
+  video: Video,
+  audio: Mic,
+  document: FileText,
+  sticker: Sticker,
+  other: Paperclip,
+}
+
+/**
+ * Uma mensagem: o texto sempre como texto e a mídia só como metadado (ícone do tipo, nome e tamanho). As suas à
+ * direita, em azul; as dos outros à esquerda, com a foto (ou as iniciais) e, num grupo, o autor, só na primeira de
+ * uma sequência do mesmo autor.
+ */
+function MessageItem({ message, first, group, photo }: { message: WhatsAppMessage; first: boolean; group: boolean; photo: string | null | undefined }) {
+  const mine = message.fromMe
+  const author = mine ? 'Você' : message.author
   return (
-    <li data-whatsapp-message={message.id} data-from-me={message.fromMe ? 'true' : 'false'} className={`flex flex-col gap-0.5 ${message.fromMe ? 'items-end' : 'items-start'}`}>
-      <span className="flex items-baseline gap-2 text-12">
-        <span className="font-medium text-text-muted">{message.fromMe ? 'Você' : message.author}</span>
-        <span className="text-text-faint tabular">{clockLabel(message.at)}</span>
-      </span>
-      <div className={`max-w-[560px] rounded-[var(--radius-panel)] px-3 py-2 text-15 whitespace-pre-wrap text-text select-text ${message.fromMe ? 'bg-bg-sunken' : 'border border-line bg-bg-raised'}`}>
+    <li
+      data-whatsapp-message={message.id}
+      data-from-me={mine ? 'true' : 'false'}
+      className={`flex items-end gap-2 ${mine ? 'justify-end' : 'justify-start'} ${first ? 'mt-3 first:mt-0' : 'mt-1'}`}
+    >
+      {!mine && (
+        <span className="flex size-8 shrink-0" aria-hidden={first ? undefined : 'true'}>
+          {first && <Avatar id={group ? `${message.chatId}:${message.author}` : message.chatId} name={message.author} photo={group ? null : photo} />}
+        </span>
+      )}
+      <div className={`flex max-w-[560px] min-w-0 flex-col gap-1 rounded-[var(--radius-panel)] px-3 py-2 text-15 whitespace-pre-wrap select-text ${mine ? 'bg-accent text-on-accent' : 'border border-line bg-bg-raised text-text'}`}>
+        {group && !mine && first ? <span className="text-12 font-bold text-accent">{author}</span> : <span className="sr-only">{author}: </span>}
         {message.media && (
-          <span data-whatsapp-media className="mb-1 flex items-center gap-1.5 text-13 text-text-muted">
-            <Icon icon={Paperclip} size={14} className="shrink-0" />
+          <span data-whatsapp-media className={`flex items-center gap-1.5 rounded-[var(--radius-control)] px-2 py-1 text-13 ${mine ? 'bg-bg-raised text-text' : 'bg-bg-sunken text-text-muted'}`}>
+            <Icon icon={MEDIA_ICONS[message.media.kind]} size={14} className="shrink-0" />
             {mediaLabel(message.media)}
           </span>
         )}
         {message.text && <span data-whatsapp-text>{message.text}</span>}
+        <span className={`self-end text-12 tabular ${mine ? 'opacity-80' : 'text-text-faint'}`}>{clockLabel(message.at)}</span>
       </div>
     </li>
   )
@@ -84,11 +144,18 @@ interface ConversationProps {
   chat: WhatsAppChat
   /** Contrato 25: "Abrir no WhatsApp" do cartão do Assistente traz o texto para o campo (nada é enviado). */
   initialText?: string | undefined
+  /** Contrato 32: o painel Detalhes está aberto (o botão do cabeçalho o abre e fecha). */
+  detailsOpen: boolean
+  onDetails: (open: boolean) => void
 }
 
 /** A conversa aberta: mensagens (mais antigas ao rolar para cima), o campo, "Enviar" e "Rascunho com o Claude". */
-function Conversation({ chat, initialText }: ConversationProps) {
+function Conversation({ chat, initialText, detailsOpen, onDetails }: ConversationProps) {
   const messages = useWhatsApp((state) => state.messages[chat.id])
+  const header = useRef<HTMLElement | null>(null)
+  const photo = usePhoto(chat.id, header, true)
+  const group = chat.kind === 'group'
+  const phone = chatPhone(chat)
   const [text, setText] = useState(initialText ?? '')
   const [sending, setSending] = useState(false)
   const [sendError, setSendError] = useState<string | null>(null)
@@ -196,12 +263,26 @@ function Conversation({ chat, initialText }: ConversationProps) {
 
   return (
     <section data-whatsapp-conversation={chat.id} aria-label={chat.name} className="flex min-h-0 min-w-0 flex-1 flex-col">
-      <header className="flex h-12 shrink-0 items-center gap-2 border-b border-line px-6">
-        {chat.kind === 'group' && <Icon icon={Users} className="shrink-0 text-text-muted" />}
-        <h2 data-whatsapp-chat-title className="truncate text-15 font-bold text-title">
-          {chat.name}
-        </h2>
-        {chat.kind === 'group' && <span className="text-12 text-text-muted">Grupo</span>}
+      <header ref={header} className="flex h-14 shrink-0 items-center gap-3 border-b border-line px-6">
+        <Avatar id={chat.id} name={chat.name} photo={photo} group={group} size={10} />
+        <div className="flex min-w-0 flex-1 flex-col">
+          <h2 data-whatsapp-chat-title className="truncate text-15 font-bold text-title">
+            {chat.name}
+          </h2>
+          <span data-whatsapp-chat-subtitle className="truncate text-12 text-text-muted tabular">
+            {group ? 'grupo' : (phone ?? 'pessoa')}
+          </span>
+        </div>
+        <button
+          type="button"
+          data-action="toggle-whatsapp-details"
+          aria-pressed={detailsOpen}
+          onClick={() => onDetails(!detailsOpen)}
+          className={`no-drag inline-flex h-7 shrink-0 items-center gap-1.5 rounded-[var(--radius-control)] border border-line-strong px-2 text-12 font-medium text-title transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-bg-sunken ${detailsOpen ? 'bg-bg-sunken' : ''}`}
+        >
+          <Icon icon={PanelRight} size={14} />
+          Detalhes
+        </button>
       </header>
       <div ref={list} onScroll={onScroll} data-whatsapp-messages className="min-h-0 flex-1 overflow-y-auto px-6 py-4">
         {messages === undefined ? (
@@ -211,9 +292,9 @@ function Conversation({ chat, initialText }: ConversationProps) {
             ))}
           </div>
         ) : messages.length ? (
-          <ol className="flex flex-col gap-3">
-            {messages.map((message) => (
-              <MessageItem key={message.id} message={message} />
+          <ol className="flex flex-col">
+            {messages.map((message, index) => (
+              <MessageItem key={message.id} message={message} first={startsRun(message, messages[index - 1])} group={group} photo={photo} />
             ))}
           </ol>
         ) : (
@@ -311,8 +392,14 @@ function Conversation({ chat, initialText }: ConversationProps) {
   )
 }
 
+/** O painel Detalhes da conversa aberta, com as mensagens carregadas dela. */
+function OpenDetails({ chat, onClose }: { chat: WhatsAppChat; onClose: () => void }) {
+  const messages = useWhatsApp((state) => state.messages[chat.id])
+  return <DetailsPanel chat={chat} messages={messages} onClose={onClose} />
+}
+
 /**
- * Tela "WhatsApp" (contrato 24, CA3): conversas à esquerda (busca, não lidas, grupos marcados) e a conversa aberta.
+ * Tela "WhatsApp" (contrato 24, CA3; três colunas no contrato 32: conversas, a conversa aberta e os Detalhes): conversas à esquerda (busca, não lidas, grupos marcados) e a conversa aberta.
  * Mensagens novas chegam pelo `/events` do serviço. Só aparece na barra lateral com o serviço instalado.
  */
 export function WhatsAppScreen() {
@@ -329,6 +416,8 @@ export function WhatsAppScreen() {
     if (asked?.chatId) setSelected(asked.chatId)
   }
   const [query, setQuery] = useState('')
+  // Contrato 32: o painel Detalhes começa aberto e fica como a pessoa deixou ao trocar de conversa.
+  const [detailsOpen, setDetailsOpen] = useState(true)
   const [hits, setHits] = useState<{ term: string; found: WhatsAppSearchHit[] } | null>(null)
   const connected = status?.state === 'connected'
 
@@ -388,7 +477,7 @@ export function WhatsAppScreen() {
         </div>
       ) : (
         <div className="flex min-h-0 flex-1 border-t border-line">
-          <aside aria-label="Conversas do WhatsApp" className="flex w-[280px] shrink-0 flex-col border-r border-line">
+          <aside aria-label="Conversas do WhatsApp" className={`flex w-[300px] shrink-0 flex-col border-r border-line ${open && detailsOpen ? 'max-[1279px]:hidden' : ''}`}>
             <div className="p-3">
               <div className="no-drag flex h-8 items-center gap-2 rounded-[var(--radius-control)] border border-line-strong bg-bg-raised px-2 text-text-faint has-[input:focus-visible]:outline-2 has-[input:focus-visible]:outline-offset-2 has-[input:focus-visible]:outline-focus">
                 <Icon icon={Search} size={14} />
@@ -442,7 +531,10 @@ export function WhatsAppScreen() {
             </div>
           </aside>
           {open ? (
-            <Conversation key={`${open.id}:${location.key}`} chat={open} initialText={asked?.chatId === open.id ? asked.text : undefined} />
+            <>
+              <Conversation key={`${open.id}:${location.key}`} chat={open} initialText={asked?.chatId === open.id ? asked.text : undefined} detailsOpen={detailsOpen} onDetails={setDetailsOpen} />
+              {detailsOpen && <OpenDetails key={open.id} chat={open} onClose={() => setDetailsOpen(false)} />}
+            </>
           ) : (
             <div className="flex flex-1 items-center justify-center p-8">
               <p className="text-13 text-text-muted">Escolha uma conversa.</p>

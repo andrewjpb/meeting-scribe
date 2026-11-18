@@ -3,14 +3,78 @@
 # mensagens novas e o histórico que o celular manda depois do pareamento. Mídia vira só metadado (tipo, mime,
 # tamanho, nome); nada é baixado. Escrito contra a API do neonize 0.10.0 (`requirements.txt`); os testes trocam
 # o módulo `neonize` por um substituto, então o caminho real só roda no Mac de quem instalou e pareou.
+#
+# Contrato 32: a foto de perfil da conversa (`photo`), pelo `get_profile_picture` do neonize e o endereço que ele
+# devolve (só `https://*.whatsapp.net`, sem seguir redirecionamento), guardada em `<data-dir>/photos/` por 7 dias. Foto acima de 512 KB, sem foto
+# ou falha: `None` (o app mostra as iniciais).
+import base64
+import hashlib
+import json
 import os
 import threading
+import time
+from urllib.parse import urlsplit
+from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from bridge_store import to_ms
 
 # Motivos de `ConnectFailure` do whatsmeow: 402 é a suspensão temporária; 401, 403 e 406 são sessão encerrada.
 TEMP_BANNED = 402
 LOGGED_OUT = (401, 403, 406)
+# Foto de perfil (contrato 32): até 512 KB, guardada por 7 dias; "sem foto" vale por 1 dia (a pessoa pode pôr uma).
+PHOTO_MAX = 512 * 1024
+PHOTO_TTL_S = 7 * 24 * 3600
+NO_PHOTO_TTL_S = 24 * 3600
+PHOTO_TIMEOUT_S = 10
+PHOTO_DIR = 'photos'
+
+
+def image_mime(data):
+    """O tipo da imagem pelos primeiros bytes (JPEG, PNG ou WebP); `None` para qualquer outra coisa."""
+    if data[:3] == b'\xff\xd8\xff':
+        return 'image/jpeg'
+    if data[:8] == b'\x89PNG\r\n\x1a\n':
+        return 'image/png'
+    if data[:4] == b'RIFF' and data[8:12] == b'WEBP':
+        return 'image/webp'
+    return None
+
+
+def photo_data_url(data):
+    """A imagem como data URL, se for JPEG/PNG/WebP de até 512 KB; senão `None`."""
+    if not data or len(data) > PHOTO_MAX:
+        return None
+    mime = image_mime(data)
+    if mime is None:
+        return None
+    return f'data:{mime};base64,{base64.b64encode(data).decode("ascii")}'
+
+
+class NoRedirect(HTTPRedirectHandler):
+    """Não segue redirecionamento nenhum: o 3xx vira erro (a foto fica `None`), e o pedido nunca sai de `*.whatsapp.net`."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: PLR0913 - assinatura da base
+        return None
+
+
+# Sem o tratador de redirecionamento padrão do urllib.
+PHOTO_OPENER = build_opener(NoRedirect)
+
+
+def whatsapp_https(url):
+    parts = urlsplit(url or '')
+    host = (parts.hostname or '').lower()
+    return parts.scheme == 'https' and (host == 'whatsapp.net' or host.endswith('.whatsapp.net'))
+
+
+def fetch_photo(url):
+    """Baixa a foto do endereço que o WhatsApp deu: só https em `*.whatsapp.net`, sem seguir redirecionamento, até
+    512 KB (maior é `None`)."""
+    if not whatsapp_https(url):
+        return None
+    with PHOTO_OPENER.open(Request(url, headers={'User-Agent': 'whatsapp-bridge'}), timeout=PHOTO_TIMEOUT_S) as response:  # https conferido acima
+        data = response.read(PHOTO_MAX + 1)
+    return data if len(data) <= PHOTO_MAX else None
 
 
 def jid_text(jid):
@@ -65,6 +129,10 @@ class NeonizeBackend:
         # Contrato 25: o número das conversas `@lid` (o cartão do Assistente mostra o número, não só o nome).
         self.phones = {}
         self.timers = []
+        # Contrato 32: quem baixa a foto (os testes trocam) e o relógio da validade do cache.
+        self.fetch = fetch_photo
+        self.clock = time.time
+        self.photo_lock = threading.Lock()
 
     def start(self, bridge):
         from neonize.client import NewClient
@@ -233,6 +301,59 @@ class NeonizeBackend:
         if phone:
             self.phones[chat_id] = phone
         return phone
+
+    def _photo_file(self, chat_id):
+        digest = hashlib.sha256(chat_id.encode('utf-8')).hexdigest()[:32]
+        return os.path.join(self.data_dir, PHOTO_DIR, f'{digest}.json')
+
+    def _cached_photo(self, path):
+        """(achou, foto) do cache em disco: vale 7 dias (sem foto, 1 dia); arquivo estragado não vale."""
+        try:
+            with open(path, encoding='utf-8') as handle:
+                saved = json.load(handle)
+            at = float(saved['at'])
+            photo = saved['photo']
+        except (OSError, ValueError, KeyError, TypeError):
+            return False, None
+        if photo is not None and not (isinstance(photo, str) and photo.startswith('data:image/')):
+            return False, None
+        ttl = PHOTO_TTL_S if photo else NO_PHOTO_TTL_S
+        if self.clock() - at > ttl:
+            return False, None
+        return True, photo
+
+    def _save_photo(self, path, photo):
+        os.makedirs(os.path.dirname(path), mode=0o700, exist_ok=True)
+        temp = f'{path}.tmp-{os.getpid()}-{threading.get_ident()}'
+        with open(temp, 'w', encoding='utf-8') as handle:
+            json.dump({'at': self.clock(), 'photo': photo}, handle)
+        os.chmod(temp, 0o600)
+        os.replace(temp, path)
+
+    def photo(self, chat_id):
+        """Foto de perfil da pessoa ou do grupo como data URL, ou `None` (sem foto, grande demais ou falha)."""
+        if self.client is None:
+            return None
+        path = self._photo_file(chat_id)
+        with self.photo_lock:
+            found, photo = self._cached_photo(path)
+        if found:
+            return photo
+        try:
+            from neonize.utils import build_jid
+
+            user, _, server = chat_id.partition('@')
+            info = self.client.get_profile_picture(build_jid(user, server))
+            url = getattr(info, 'URL', '') or ''
+            photo = photo_data_url(self.fetch(url)) if url else None
+        except Exception:  # noqa: BLE001 - falha (rede, privacidade): sem foto agora, tenta de novo depois
+            return None
+        with self.photo_lock:
+            try:
+                self._save_photo(path, photo)
+            except OSError:
+                pass
+        return photo
 
     def chat_name(self, chat_id, chat_jid, group, fallback):
         """Nome da conversa para a mensagem: o achado (guardado) ou o que veio na mensagem; `None` se nenhum."""

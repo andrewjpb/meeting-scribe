@@ -33,6 +33,8 @@ STATES = ('pairing', 'connected', 'disconnected', 'banned')
 SEND_TEXT_MAX = 4096
 BODY_MAX = 64 * 1024
 SSE_PING_S = 15
+# Contrato 32: 512 KB de imagem em base64, com o cabeçalho do data URL.
+PHOTO_URL_MAX = 700_000
 CHAT_ID = re.compile(r'^[\w.+:-]{1,120}@[\w.-]{1,60}$')
 PHONE = re.compile(r'^\d{8,15}$')
 
@@ -232,6 +234,21 @@ def make_handler(bridge, token, instance_id=''):
                 if before is None:
                     bridge.store.set_unread(chat_id, 0)
                 return self.send_json(200, {'messages': messages})
+            # Contrato 32: a foto de perfil da conversa como data URL (JPEG/PNG/WebP até 512 KB), ou `null`.
+            match = re.fullmatch(r'/chats/([^/]+)/photo', path)
+            if match:
+                chat_id = unquote(match.group(1))
+                if not CHAT_ID.match(chat_id):
+                    return self.send_json(400, {'error': 'chat'})
+                photo_of = getattr(bridge.backend, 'photo', None)
+                try:
+                    photo = photo_of(chat_id) if photo_of is not None else None
+                except Exception as error:  # noqa: BLE001 - sem foto em vez de erro
+                    log(f'foto de perfil falhou: {type(error).__name__}')
+                    photo = None
+                if not isinstance(photo, str) or not photo.startswith('data:image/') or len(photo) > PHOTO_URL_MAX:
+                    photo = None
+                return self.send_json(200, {'photo': photo})
             if path == '/search':
                 term = (query.get('q') or [''])[0].strip()
                 if len(term) < 2 or len(term) > 100:

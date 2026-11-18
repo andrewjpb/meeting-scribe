@@ -1,5 +1,5 @@
 // Textos do WhatsApp na tela (contrato 24): erros, horários e a linha da última mensagem.
-import { mediaLabel, type WhatsAppError, type WhatsAppMessage } from '@shared/whatsapp'
+import { mediaLabel, type WhatsAppChat, type WhatsAppError, type WhatsAppMessage } from '@shared/whatsapp'
 
 export function whatsappErrorText(error: WhatsAppError | null): string | null {
   switch (error) {
@@ -43,4 +43,15 @@ export function previewText(message: WhatsAppMessage | null): string {
   const text = message.text.replace(/\s+/g, ' ').trim()
   const body = text || (message.media ? mediaLabel(message.media) : '')
   return message.fromMe ? `Você: ${body}` : body
+}
+
+/** Começo de uma sequência: a primeira mensagem ou outro autor que a anterior. */
+export const startsRun = (message: WhatsAppMessage, previous: WhatsAppMessage | undefined): boolean => !previous || previous.fromMe !== message.fromMe || previous.author !== message.author
+
+/** "+5511911110000" de uma conversa de pessoa (o número do `@lid`, quando o serviço sabe); `null` sem número. */
+export function chatPhone(chat: Pick<WhatsAppChat, 'id' | 'kind' | 'phone'>): string | null {
+  if (chat.kind === 'group') return null
+  if (chat.phone) return chat.phone
+  const [user = '', server = ''] = chat.id.split('@')
+  return server === 's.whatsapp.net' && /^\d{6,15}$/.test(user) ? `+${user}` : null
 }

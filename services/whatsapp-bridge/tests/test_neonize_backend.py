@@ -252,3 +252,100 @@ def test_phone_of_a_lid_chat_comes_from_get_pn_from_lid(fake_neonize, tmp_path):
     assert backend.phone_for('999@lid') == ''
     assert backend.phone_for('5511911110000@s.whatsapp.net') == ''
     backend.stop()
+
+
+PNG = b'\x89PNG\r\n\x1a\n' + b'\x00' * 40
+
+
+def test_photo_comes_from_get_profile_picture_and_is_cached_for_7_days(fake_neonize, tmp_path):
+    # Contrato 32: a foto de perfil pelo neonize, só de https em *.whatsapp.net, guardada em `photos/` por 7 dias.
+    backend, _bridge, client = started(tmp_path)
+    asked = []
+    client.get_profile_picture = lambda target: asked.append((target.User, target.Server)) or Obj(URL='https://pps.whatsapp.net/v/foto.jpg')
+    fetched = []
+    backend.fetch = lambda url: fetched.append(url) or PNG
+    now = [1_000_000.0]
+    backend.clock = lambda: now[0]
+    ana = '5511911110000@s.whatsapp.net'
+    photo = backend.photo(ana)
+    assert photo == 'data:image/png;base64,' + backend_neonize.base64.b64encode(PNG).decode()
+    assert asked == [('5511911110000', 's.whatsapp.net')] and fetched == ['https://pps.whatsapp.net/v/foto.jpg']
+    files = list((tmp_path / 'photos').iterdir())
+    assert len(files) == 1 and oct(files[0].stat().st_mode & 0o777) == '0o600'
+    # Dentro dos 7 dias: do disco, sem perguntar de novo.
+    now[0] += 6 * 24 * 3600
+    assert backend.photo(ana) == photo and len(asked) == 1
+    # Passou dos 7 dias: pergunta de novo.
+    now[0] += 2 * 24 * 3600
+    assert backend.photo(ana) == photo and len(asked) == 2
+    backend.stop()
+
+
+def test_photo_without_picture_too_big_or_failing_is_none(fake_neonize, tmp_path):
+    backend, _bridge, client = started(tmp_path)
+    backend.clock = lambda: 5_000_000.0
+    client.get_profile_picture = lambda target: Obj(URL='')
+    assert backend.photo('5511922220000@s.whatsapp.net') is None
+    client.get_profile_picture = lambda target: Obj(URL='https://pps.whatsapp.net/grande.jpg')
+    backend.fetch = lambda url: b'\xff\xd8\xff' + b'\x00' * backend_neonize.PHOTO_MAX
+    assert backend.photo('5511933330000@s.whatsapp.net') is None
+    backend.fetch = lambda url: b'<html>nao e imagem</html>'
+    assert backend.photo('5511944440000@s.whatsapp.net') is None
+
+    def private(target):
+        raise RuntimeError('privacidade')
+
+    client.get_profile_picture = private
+    assert backend.photo('5511955550000@s.whatsapp.net') is None
+    # A falha não fica guardada: da próxima vez pergunta de novo.
+    client.get_profile_picture = lambda target: Obj(URL='https://pps.whatsapp.net/ok.jpg')
+    backend.fetch = lambda url: PNG
+    assert backend.photo('5511955550000@s.whatsapp.net').startswith('data:image/png;base64,')
+    backend.stop()
+
+
+def test_fetch_photo_only_goes_to_whatsapp_over_https():
+    assert backend_neonize.fetch_photo('http://pps.whatsapp.net/x.jpg') is None
+    assert backend_neonize.fetch_photo('https://exemplo.com/x.jpg') is None
+    assert backend_neonize.fetch_photo('https://whatsapp.net.exemplo.com/x.jpg') is None
+    assert backend_neonize.fetch_photo('') is None
+    assert backend_neonize.image_mime(b'RIFF\x00\x00\x00\x00WEBPVP8 ') == 'image/webp'
+
+
+def test_photo_download_never_follows_a_redirect():
+    """Contrato 32: um 302 para fora não é seguido; vira erro (e `photo()` devolve `None`)."""
+    import threading
+    import urllib.error
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+
+    hits = []
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):  # noqa: N802 - assinatura da base
+            hits.append(self.path)
+            if self.path == '/foto':
+                self.send_response(302)
+                self.send_header('Location', '/fora')
+                self.send_header('Content-Length', '0')
+                self.end_headers()
+                return
+            self.send_response(200)
+            self.send_header('Content-Length', '2')
+            self.end_headers()
+            self.wfile.write(b'ok')
+
+        def log_message(self, *args):
+            pass
+
+    httpd = HTTPServer(('127.0.0.1', 0), Handler)
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    try:
+        # O opener do download de verdade (o endereço local só testa o redirecionamento; a conferência do host vem antes).
+        with pytest.raises(urllib.error.HTTPError) as error:
+            backend_neonize.PHOTO_OPENER.open(f'http://127.0.0.1:{httpd.server_address[1]}/foto', timeout=5)
+        assert error.value.code == 302 and hits == ['/foto']
+    finally:
+        httpd.shutdown()
+    assert not any(isinstance(handler, backend_neonize.HTTPRedirectHandler) and type(handler) is backend_neonize.HTTPRedirectHandler for handler in backend_neonize.PHOTO_OPENER.handlers)
+    assert backend_neonize.whatsapp_https('https://pps.whatsapp.net/x') and not backend_neonize.whatsapp_https('https://pps.whatsapp.net.evil.com/x')
