@@ -265,6 +265,9 @@ async function clickSelector(contents: WebContents, selector: string): Promise<v
   if (!found) throw new Error(`elemento não encontrado: ${selector}`)
 }
 
+/** Contrato 38: o trilho da direita do Assistente (conversas em cima, "Contexto" embaixo). */
+const CHAT_RAIL = 'aside[aria-label="Conversas e contexto"]'
+
 const routeIs = (route: string): string => `document.querySelector('main')?.dataset.route === '${route}'`
 
 /** Contrato 18: a aba marcada e o painel dela à mostra (os outros ficam montados, com `hidden`). */
@@ -511,6 +514,25 @@ async function chatScreenCheck(
     8000,
   )
   const suggestions = await evaluate<string[]>(contents, `[...document.querySelectorAll('[data-chat-suggestion]')].map((b) => b.textContent)`)
+  // Contrato 38: as sugestões numa grade 2×3; o trilho à direita da conversa, só com o histórico (conversa nova: nada de
+  // "Contexto"); a barra lateral do app continua sendo o primeiro `aside`.
+  const emptyLayout = await evaluate<{ columns: number; rows: number; railRight: boolean; noContext: boolean; sidebarFirst: boolean }>(
+    contents,
+    `(() => {
+      const boxes = [...document.querySelectorAll('[data-chat-suggestion]')].map((b) => b.getBoundingClientRect())
+      const distinct = (values) => new Set(values.map((v) => Math.round(v))).size
+      const rail = document.querySelector(${JSON.stringify(CHAT_RAIL)})?.getBoundingClientRect()
+      const conversation = document.querySelector('[data-chat-conversation]')?.getBoundingClientRect()
+      return {
+        columns: distinct(boxes.map((b) => b.left)),
+        rows: distinct(boxes.map((b) => b.top)),
+        railRight: Boolean(rail && conversation && rail.width > 0 && rail.left >= conversation.right - 1),
+        noContext: !document.querySelector('[data-chat-context]') && !document.querySelector('[data-action="expand-context"]') && Boolean(document.querySelector(${JSON.stringify(`${CHAT_RAIL} [data-chat-list]`)})),
+        sidebarFirst: Boolean(document.querySelector('aside')?.querySelector('[data-nav="assistente"]')),
+      }
+    })()`,
+  )
+  const emptyOk = emptyLayout.columns === 2 && emptyLayout.rows === 3 && emptyLayout.railRight && emptyLayout.noContext && emptyLayout.sidebarFirst
   if (shootEmpty) await shootEmpty()
   const asked = await askWatching(contents, 'O que ficou decidido esta semana?')
   const link = await evaluate<string>(contents, `[...document.querySelectorAll('[data-chat-message="assistant"] [data-meeting-link]')].at(-1)?.dataset.meetingLink ?? ''`)
@@ -528,6 +550,7 @@ async function chatScreenCheck(
   const check = {
     ok:
       opened &&
+      emptyOk &&
       asked.streamed &&
       asked.done &&
       asked.answer.includes(`${meetings.length} reuniões`) &&
@@ -547,7 +570,7 @@ async function chatScreenCheck(
       chats.length === chatsBefore + 1 &&
       saved?.messages[1]?.role === 'assistant' &&
       saved.messages[1].error === undefined,
-    detail: `tela=${opened}, sugestões ${JSON.stringify(suggestions)}; estados=${JSON.stringify(asked.statuses)}, terminou=${asked.done}, resposta "${asked.answer.slice(0, 120)}"; link meeting:${link}; pessoa à direita=${userRight}; INDICE.md ${indexLines} linhas para ${meetings.length} reuniões, ${sampleFile ?? 'sem .md da smoke-2'}; permissões pasta ${mode(corpus)}, índice ${mode(join(corpus, CHAT_INDEX_FILE))}; processo ${JSON.stringify(spawn ? { cwd: spawn.cwd.replace(ctx.userDataDir, '<userData>'), args: spawn.args.filter((arg, i) => arg.startsWith('--') || spawn.args[i - 1]?.endsWith('Tools') || spawn.args[i - 1] === '--permission-mode'), env: spawn.envNames } : null)}; conversas ${chatsBefore} -> ${chats.length}`,
+    detail: `tela=${opened}, sugestões ${JSON.stringify(suggestions)}, grade e trilho ${JSON.stringify(emptyLayout)}; estados=${JSON.stringify(asked.statuses)}, terminou=${asked.done}, resposta "${asked.answer.slice(0, 120)}"; link meeting:${link}; pessoa à direita=${userRight}; INDICE.md ${indexLines} linhas para ${meetings.length} reuniões, ${sampleFile ?? 'sem .md da smoke-2'}; permissões pasta ${mode(corpus)}, índice ${mode(join(corpus, CHAT_INDEX_FILE))}; processo ${JSON.stringify(spawn ? { cwd: spawn.cwd.replace(ctx.userDataDir, '<userData>'), args: spawn.args.filter((arg, i) => arg.startsWith('--') || spawn.args[i - 1]?.endsWith('Tools') || spawn.args[i - 1] === '--permission-mode'), env: spawn.envNames } : null)}; conversas ${chatsBefore} -> ${chats.length}`,
   }
   return { check, v2 }
 }
@@ -616,14 +639,25 @@ async function chatAnswerDetailsCheck(
  * consultadas e os totais; "Reuniões escolhidas" com duas reuniões monta `chat-scope/<id>/` só com os `.md`
  * delas e o `INDICE.md` (foto `perguntar-contexto-light`); o modelo trocado na barra do campo abre outro
  * processo com `--model opus`; "Refazer" troca a última resposta num processo novo; renomear pelo menu "…"
- * da lista; ↑ no campo vazio edita a última pergunta.
+ * da lista; ↑ no campo vazio edita a última pergunta. Contrato 38: o "Contexto" é uma seção recolhível no trilho da
+ * direita (abre e recolhe no lugar, embaixo do histórico, com o menu da lista funcionando com ele aberto).
  */
 async function chatContextCheck(contents: WebContents, ctx: SmokeContext, shootContext: () => Promise<void>): Promise<Check> {
   const chatId = await evaluate<string>(contents, `document.querySelector('[data-chat-conversation]')?.getAttribute('data-chat-conversation') ?? ''`)
   const spawns = (): SmokeFixtures['claudeSpawns'] => chatSpawns(ctx.fixtures)
-  // Painel "Contexto".
+  // Contrato 38: com a conversa aberta, o "Contexto" recolhido no trilho (só o cabeçalho); aberto, ele aparece no trilho, à
+  // direita da conversa e embaixo do histórico.
+  const collapsed = await evaluate<boolean>(contents, `!document.querySelector('[data-chat-context]') && Boolean(document.querySelector(${JSON.stringify(`${CHAT_RAIL} [data-action="expand-context"]`)}))`)
   await clickSelector(contents, '[data-action="toggle-context"]')
-  const panel = await waitFor(contents, `document.querySelector('[data-chat-context]')`)
+  const panel = await waitFor(contents, `document.querySelector(${JSON.stringify(`${CHAT_RAIL} [data-chat-context]`)})`)
+  const rail = await evaluate<{ right: boolean; below: boolean }>(
+    contents,
+    `(() => {
+      const box = (selector) => document.querySelector(selector)?.getBoundingClientRect()
+      const rail = box(${JSON.stringify(CHAT_RAIL)}), conversation = box('[data-chat-conversation]'), list = box('[data-chat-list]'), context = box('[data-chat-context]')
+      return { right: Boolean(rail && conversation && rail.left >= conversation.right - 1), below: Boolean(list && context && list.bottom <= context.top + 1) }
+    })()`,
+  )
   const panelConsulted = await evaluate<number>(contents, `document.querySelectorAll('[data-chat-context-consulted] [data-meeting-link]').length`)
   const totals = await evaluate<string>(contents, `document.querySelector('[data-chat-totals]')?.textContent ?? ''`)
   // Teclado no grupo do escopo (tabindex móvel): ↓ marca "Últimos 7 dias" com o foco nele; End vai a
@@ -660,7 +694,7 @@ async function chatContextCheck(contents: WebContents, ctx: SmokeContext, shootC
   const scopeFiles = scopedSpawn && existsSync(scopedSpawn.cwd) ? readdirSync(scopedSpawn.cwd).sort() : []
   const scopeIndex = scopedSpawn && existsSync(join(scopedSpawn.cwd, CHAT_INDEX_FILE)) ? readFileSync(join(scopedSpawn.cwd, CHAT_INDEX_FILE), 'utf8') : ''
   await clickSelector(contents, '[data-action="close-context"]')
-  await waitFor(contents, `!document.querySelector('[data-chat-context]')`)
+  const recollapsed = await waitFor(contents, `!document.querySelector('[data-chat-context]') && document.querySelector('[data-action="expand-context"]')`)
 
   // Modelo trocado na barra do campo: o processo é refeito com --model opus.
   await setValue(contents, '[data-chat-model-select]', 'opus', 'change')
@@ -681,6 +715,13 @@ async function chatContextCheck(contents: WebContents, ctx: SmokeContext, shootC
   await waitFor(contents, CHAT_DONE, 10_000)
   const afterRedo = chatFile(ctx.userDataDir, chatId)
 
+  // Contrato 38: o rótulo do modelo abre o "Contexto" e o trilho rola até ele; o menu do histórico funciona com ele aberto.
+  await clickSelector(contents, '[data-action="chat-model-label"]')
+  const revealed = await waitFor(
+    contents,
+    `(() => { const rail = document.querySelector(${JSON.stringify(CHAT_RAIL)})?.getBoundingClientRect(); const context = document.querySelector('[data-chat-context]')?.getBoundingClientRect(); return Boolean(rail && context && context.top >= rail.top - 1 && context.top < rail.bottom) })()`,
+  )
+
   // Menu "…" pelo teclado: abre com o foco no primeiro item; ↓, End, Home andam; Esc fecha e volta ao "…".
   const focusedAction = (): Promise<string> => evaluate<string>(contents, `document.activeElement?.dataset.action ?? ''`)
   const menuKey = (key: string): Promise<unknown> =>
@@ -695,6 +736,9 @@ async function chatContextCheck(contents: WebContents, ctx: SmokeContext, shootC
   await menuKey('Escape')
   const menuClosed = await waitFor(contents, `!document.querySelector('[role="menu"]') && document.activeElement?.dataset.action === 'chat-row-menu'`)
   const menuOk = JSON.stringify(menuKeys) === JSON.stringify(['rename-chat', 'delete-chat', 'rename-chat', 'delete-chat', 'rename-chat']) && menuClosed
+  const menuWithContext = await evaluate<boolean>(contents, `Boolean(document.querySelector('[data-chat-context]'))`)
+  await clickSelector(contents, '[data-action="close-context"]')
+  const closedAgain = await waitFor(contents, `!document.querySelector('[data-chat-context]')`)
 
   // Renomear pelo menu "…" da linha.
   await clickSelector(contents, `[data-chat-item="${chatId}"] [data-action="chat-row-menu"]`)
@@ -730,6 +774,13 @@ async function chatContextCheck(contents: WebContents, ctx: SmokeContext, shootC
       sendDisabled &&
       nothingSent &&
       menuOk &&
+      collapsed &&
+      rail.right &&
+      rail.below &&
+      recollapsed &&
+      revealed &&
+      menuWithContext &&
+      closedAgain &&
       panel &&
       panelConsulted >= 1 &&
       totals.includes('Mensagens') &&
@@ -766,7 +817,7 @@ async function chatContextCheck(contents: WebContents, ctx: SmokeContext, shootC
       edited.done &&
       afterEdit?.messages.length === lengthBeforeEdit &&
       lastQuestion === 'E quais decisões ficaram?',
-    detail: `conversa ${chatId}; teclado do escopo: 1 parada de Tab=${tabStops === 1}, ↓=${arrowed}, End=${ended}; escolhidas vazio: aviso=${blocked}, Enviar desligado=${sendDisabled}, nada enviado=${nothingSent}; menu "…" pelo teclado ${JSON.stringify(menuKeys)}, Esc fechou=${menuClosed}; painel=${panel}, consultadas no painel=${panelConsulted}, totais "${totals}"; escopo salvo ${JSON.stringify(savedScope)}, rótulo=${scoped}; processo do escopo em ${scopedSpawn ? scopedSpawn.cwd.replace(ctx.userDataDir, '<userData>') : '?'} com ${JSON.stringify(scopeFiles)}, anterior saiu=${previous?.exited ?? '?'}, resposta "${scopedAnswer.answer.slice(0, 80)}"; modelo -> ${opusSpawn?.args[opusSpawn.args.indexOf('--model') + 1] ?? '?'}, rodapé "${opusFooter.slice(0, 40)}"; Refazer: processo novo=${redoSpawn !== opusSpawn}, mensagens ${lengthBefore} -> ${afterRedo?.messages.length ?? '?'}; renomear: linha=${renamedRow}, arquivo "${renamedFile ?? '?'}"; ↑: editando=${editing}, mensagens ${lengthBeforeEdit} -> ${afterEdit?.messages.length ?? '?'}, última pergunta "${lastQuestion ?? '?'}"`,
+    detail: `conversa ${chatId}; teclado do escopo: 1 parada de Tab=${tabStops === 1}, ↓=${arrowed}, End=${ended}; escolhidas vazio: aviso=${blocked}, Enviar desligado=${sendDisabled}, nada enviado=${nothingSent}; menu "…" pelo teclado ${JSON.stringify(menuKeys)}, Esc fechou=${menuClosed}; trilho: recolhido=${collapsed}, à direita=${rail.right}, embaixo do histórico=${rail.below}, recolheu=${recollapsed}, rótulo do modelo abriu e rolou=${revealed}, menu com o Contexto aberto=${menuWithContext}, fechou=${closedAgain}; painel=${panel}, consultadas no painel=${panelConsulted}, totais "${totals}"; escopo salvo ${JSON.stringify(savedScope)}, rótulo=${scoped}; processo do escopo em ${scopedSpawn ? scopedSpawn.cwd.replace(ctx.userDataDir, '<userData>') : '?'} com ${JSON.stringify(scopeFiles)}, anterior saiu=${previous?.exited ?? '?'}, resposta "${scopedAnswer.answer.slice(0, 80)}"; modelo -> ${opusSpawn?.args[opusSpawn.args.indexOf('--model') + 1] ?? '?'}, rodapé "${opusFooter.slice(0, 40)}"; Refazer: processo novo=${redoSpawn !== opusSpawn}, mensagens ${lengthBefore} -> ${afterRedo?.messages.length ?? '?'}; renomear: linha=${renamedRow}, arquivo "${renamedFile ?? '?'}"; ↑: editando=${editing}, mensagens ${lengthBeforeEdit} -> ${afterEdit?.messages.length ?? '?'}, última pergunta "${lastQuestion ?? '?'}"`,
   }
 }
 

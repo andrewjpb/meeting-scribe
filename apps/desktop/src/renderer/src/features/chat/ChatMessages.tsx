@@ -59,12 +59,21 @@ function Plan({ entries }: { entries: readonly ChatPlanEntry[] }) {
   )
 }
 
-/** Pergunta da pessoa: bloco com fundo sutil, à direita. */
-export function UserMessage({ text, editing = false }: { text: string; editing?: boolean }) {
+/**
+ * Contrato 38: no Assistente, a resposta é um cartão suave (fundo elevado, fio e o raio do painel; sem sombra) e as ações
+ * ficam no rodapé dele, separadas por um fio.
+ */
+const CARD = 'rounded-[var(--radius-panel)] border border-line bg-bg-raised px-4 py-3'
+const CARD_ACTIONS = 'mt-1 flex flex-wrap items-center gap-1 border-t border-line pt-2 empty:hidden'
+/** Ações do cartão: o botão discreto com um fio que aparece no passar do mouse. */
+const CARD_BUTTON = `${QUIET_BUTTON} border border-transparent hover:border-line`
+
+/** Pergunta da pessoa: bloco com fundo sutil, à direita (no Assistente, com mais respiro). */
+export function UserMessage({ text, editing = false, card = false }: { text: string; editing?: boolean; card?: boolean }) {
   return (
     <li data-chat-message="user" className="flex justify-end">
       <p
-        className={`max-w-[72ch] rounded-[var(--radius-panel)] bg-bg-sunken px-4 py-2.5 text-15 whitespace-pre-line text-text select-text ${editing ? 'outline-1 outline-dashed outline-line-strong' : ''}`}
+        className={`max-w-[72ch] rounded-[var(--radius-panel)] bg-bg-sunken ${card ? 'px-4 py-3' : 'px-4 py-2.5'} text-15 whitespace-pre-line text-text select-text ${editing ? 'outline-1 outline-dashed outline-line-strong' : ''}`}
       >
         {text}
       </p>
@@ -230,11 +239,13 @@ function AgentActions({ missing }: { missing: boolean }) {
   )
 }
 
-/** Cabeçalho da resposta: "Claude" e o horário. */
-function AssistantHeader({ at }: { at: string }) {
+/** Cabeçalho da resposta: "Claude" e o horário; no cartão em curso, o quadrado do logo pulsando (contrato 38). */
+function AssistantHeader({ at, pulse = false }: { at: string; pulse?: boolean }) {
   const date = at ? new Date(at) : null
   return (
     <p className="flex items-baseline gap-2">
+      {/* Parado com movimento reduzido (regra de tokens.css). */}
+      {pulse && <span aria-hidden="true" className="chat-live-pulse size-1.5 shrink-0 self-center bg-accent" />}
       <span className="text-13 font-bold text-title">Claude</span>
       {date && !Number.isNaN(date.getTime()) && <time className="text-12 text-text-faint tabular">{timeLabel(date)}</time>}
     </p>
@@ -250,10 +261,12 @@ interface AssistantMessageProps {
   /** Contrato 25: a conversa e a posição desta resposta, para os cartões de ação. */
   chatId?: string | null | undefined
   index?: number | undefined
+  /** Contrato 38: cartão (Assistente). */
+  card?: boolean | undefined
 }
 
 /** Resposta gravada: cabeçalho, raciocínio e passos (fechado), o texto, o erro, o rodapé e as ações. */
-export function AssistantMessage({ message, meetings, onCopy, onRedo, chatId = null, index }: AssistantMessageProps) {
+export function AssistantMessage({ message, meetings, onCopy, onRedo, chatId = null, index, card = false }: AssistantMessageProps) {
   const agentLabel = useAgentLabel()
   const [copied, setCopied] = useState(false)
   const copy = (): void => {
@@ -264,7 +277,7 @@ export function AssistantMessage({ message, meetings, onCopy, onRedo, chatId = n
     })
   }
   return (
-    <li data-chat-message="assistant" data-chat-error={message.error} className="flex flex-col gap-2">
+    <li data-chat-message="assistant" data-chat-error={message.error} className={`flex flex-col gap-2 ${card ? CARD : ''}`}>
       <AssistantHeader at={message.at} />
       <Reasoning steps={message.steps ?? []} thinking={message.thinking ?? ''} denied={message.denied ?? 0} plan={message.plan ?? []} live={false} />
       {message.text && (
@@ -276,15 +289,15 @@ export function AssistantMessage({ message, meetings, onCopy, onRedo, chatId = n
       {message.error && <p className="text-13 text-text-muted">{chatErrorText(message.error, agentLabel)}</p>}
       {(message.error === 'agent' || message.error === 'agent-missing') && <AgentActions missing={message.error === 'agent-missing'} />}
       <AnswerFooter meta={message.meta} model={message.model} meetings={meetings} steps={message.steps} />
-      <div data-chat-actions className="-ml-2 flex flex-wrap items-center gap-1">
+      <div data-chat-actions className={card ? CARD_ACTIONS : '-ml-2 flex flex-wrap items-center gap-1'}>
         {message.text && (
-          <button type="button" data-action="chat-copy" onClick={copy} className={QUIET_BUTTON}>
+          <button type="button" data-action="chat-copy" onClick={copy} className={card ? CARD_BUTTON : QUIET_BUTTON}>
             <Icon icon={copied ? Check : Copy} size={14} />
             {copied ? 'Copiado' : 'Copiar'}
           </button>
         )}
         {onRedo && (
-          <button type="button" data-action={message.error ? 'chat-retry' : 'chat-redo'} onClick={onRedo} className={QUIET_BUTTON}>
+          <button type="button" data-action={message.error ? 'chat-retry' : 'chat-redo'} onClick={onRedo} className={card ? CARD_BUTTON : QUIET_BUTTON}>
             <Icon icon={RotateCcw} size={14} />
             {message.error ? 'Tentar de novo' : 'Refazer'}
           </button>
@@ -298,13 +311,13 @@ export function AssistantMessage({ message, meetings, onCopy, onRedo, chatId = n
  * Resposta em curso (contrato 16, CA2): enquanto o texto não começa, uma linha com o estado ("Pensando…",
  * depois o último passo); o bloco "Raciocínio e passos" aberto; o texto aparecendo enquanto é escrito.
  */
-export function LiveAssistantMessage({ answer }: { answer: LiveAnswer }) {
+export function LiveAssistantMessage({ answer, card = false }: { answer: LiveAnswer; card?: boolean }) {
   const status = answer.steps.at(-1)?.label ?? 'Pensando…'
   // Contrato 25: o bloco de ação ainda sendo escrito não aparece; vira cartão quando a resposta termina.
   const text = withoutPendingActions(answer.text)
   return (
-    <li data-chat-message="assistant" data-chat-streaming="" className="flex flex-col gap-2">
-      <AssistantHeader at="" />
+    <li data-chat-message="assistant" data-chat-streaming="" className={`flex flex-col gap-2 ${card ? `${CARD} chat-card-enter` : ''}`}>
+      <AssistantHeader at="" pulse={card} />
       <Reasoning steps={answer.steps} thinking={answer.thinking} denied={answer.denied} plan={answer.plan} live />
       {text ? (
         <div className="max-w-[72ch] text-15 text-text">
@@ -312,8 +325,8 @@ export function LiveAssistantMessage({ answer }: { answer: LiveAnswer }) {
         </div>
       ) : (
         <p role="status" data-chat-status className="flex items-center gap-2 text-13 text-text-muted">
-          {/* Quadrado do logo, pulsando; parado com movimento reduzido (regra de tokens.css). */}
-          <span aria-hidden="true" className="rec-pulse size-1.5 shrink-0 bg-accent" />
+          {/* Quadrado do logo, pulsando; parado com movimento reduzido (regra de tokens.css). No cartão, ele pulsa no cabeçalho. */}
+          {!card && <span aria-hidden="true" className="rec-pulse size-1.5 shrink-0 bg-accent" />}
           {status}
         </p>
       )}

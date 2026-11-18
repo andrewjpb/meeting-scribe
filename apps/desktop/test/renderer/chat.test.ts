@@ -17,6 +17,7 @@ import {
   frequentWord,
   groupChatsByDay,
   modelLabel,
+  railScrollTarget,
   scopeLabel,
   tokensLabel,
 } from '../../src/renderer/src/features/chat/format'
@@ -147,6 +148,22 @@ describe('textos da tela "Perguntar" v2 (contrato 16)', () => {
       ['Hoje', ['a', 'b']],
       ['Ontem', ['c']],
     ])
+  })
+})
+
+describe('trilho do Assistente (contrato 38)', () => {
+  const rail = { top: 100, height: 500, scrollTop: 0 }
+  it('o Contexto inteiro à vista não rola', () => {
+    expect(railScrollTarget(rail, { top: 300, height: 200 })).toBeNull()
+  })
+  it('abaixo da vista e cabendo: rola o mínimo para aparecer inteiro', () => {
+    expect(railScrollTarget(rail, { top: 450, height: 300 })).toBe(150)
+  })
+  it('maior que o trilho: o topo dele no alto, contando a rolagem que já havia', () => {
+    expect(railScrollTarget({ ...rail, scrollTop: 40 }, { top: 400, height: 900 })).toBe(340)
+  })
+  it('acima da vista: volta até o topo dele', () => {
+    expect(railScrollTarget({ ...rail, scrollTop: 300 }, { top: 50, height: 100 })).toBe(250)
   })
 })
 

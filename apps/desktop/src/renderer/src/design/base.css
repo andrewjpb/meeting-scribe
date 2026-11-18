@@ -317,6 +317,20 @@
   }
 }
 
+@layer components {
+  /*
+   * Assistente (contrato 38, padrão do adendo 30b): o cartão da resposta em curso entra com um fade curto e o quadrado do
+   * cabeçalho pulsa devagar enquanto o Claude responde. Com movimento reduzido, nada anima (regra de tokens.css).
+   */
+  .chat-card-enter {
+    animation: route-enter 220ms var(--ease-out);
+  }
+
+  .chat-live-pulse {
+    animation: rec-pulse 1.6s ease-in-out infinite;
+  }
+}
+
 @keyframes note-enter {
   from {
     opacity: 0;

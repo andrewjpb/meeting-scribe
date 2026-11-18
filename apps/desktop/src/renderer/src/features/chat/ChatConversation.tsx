@@ -1,5 +1,6 @@
-import { ArrowDown, ArrowUp, Brain, MessageCircle, PanelRight, Settings, Square } from 'lucide-react'
+import { ArrowDown, ArrowUp, Brain, CalendarDays, Hash, MessageCircle, PanelRight, Settings, Square, Users, type LucideIcon } from 'lucide-react'
 import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent } from 'react'
+import { createPortal } from 'react-dom'
 import { useNavigate } from 'react-router'
 import { CHAT_COUNTER_FROM, CHAT_TEXT_MAX, CHAT_TITLE_MAX, DEFAULT_CHAT_SCOPE, type ChatMessage, type ChatScope, type ChatScopeKind } from '@shared/chat'
 import { settingsPath } from '@shared/routes'
@@ -11,7 +12,7 @@ import { Icon } from '../../design/Icon'
 import { Note } from '../../design/Note'
 import { AssistantMessage, LiveAssistantMessage, UserMessage } from './ChatMessages'
 import { draftOf, listKey, useChat, viewKey } from './chatStore'
-import { ContextPanel, MODEL_OPTIONS } from './ContextPanel'
+import { ContextPanel, MODEL_OPTIONS, RailContext } from './ContextPanel'
 import { chatSuggestionGroups, chosenMeetings, modelLabel, scopeLabel, withWhatsApp } from './format'
 import type { ChatMeetings } from './useChatMeetings'
 
@@ -21,9 +22,14 @@ interface ChatConversationProps {
   /** Conversa da aba de uma reunião (só o `.md` dela); `null` na tela "Assistente". */
   meetingId: string | null
   meetings: ChatMeetings
-  /** Painel "Contexto" aberto (o estado fica com a tela, que encolhe a lista quando falta largura). */
+  /** "Contexto" aberto (o estado fica com a tela). */
   contextOpen: boolean
   onContextOpen: (open: boolean) => void
+  /**
+   * Contrato 38: o Assistente põe o "Contexto" no trilho da direita, neste elemento (`null` até ele montar), e a conversa
+   * não abre o painel ao lado. Sem a prop (aba da reunião), o painel de sempre.
+   */
+  contextSlot?: HTMLElement | null
 }
 
 /** Até 8 linhas de 20 px, mais o respiro do campo. */
@@ -34,17 +40,25 @@ const SCOPE_DELAY_MS = 300
 
 const LABEL_BUTTON =
   'no-drag inline-flex h-7 max-w-[220px] items-center gap-1.5 rounded-[var(--radius-control)] border border-line-strong px-2 text-12 font-medium text-title transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-bg-sunken'
+/** Ícone de cada grupo de sugestões do Assistente (contrato 38), na ordem dos grupos. */
+const SUGGESTION_ICONS: readonly LucideIcon[] = [CalendarDays, Users, Hash]
+const SUGGESTION =
+  'no-drag min-h-16 rounded-[var(--radius-panel)] border border-line-strong bg-bg-raised px-4 py-3 text-left text-13 text-title transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-bg-sunken disabled:opacity-50'
+const SUGGESTION_CARD =
+  'no-drag group flex min-h-16 items-start gap-3 rounded-[var(--radius-panel)] border border-line bg-bg-raised px-4 py-3 text-left text-13 text-title transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:border-line-strong hover:bg-bg-sunken disabled:opacity-50'
+
 const BAR_SELECT =
   'no-drag h-7 rounded-[var(--radius-control)] border border-line-strong bg-bg-raised px-1.5 text-12 text-text transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-bg-sunken'
 
 /**
  * Uma conversa (contratos 15 e 16): cabeçalho com o título editável, o escopo e o modelo; mensagens com a
  * pessoa à direita e o Claude à esquerda (raciocínio e passos, a resposta, o rodapé com os detalhes e as
- * ações); o campo que cresce até 8 linhas com o modelo e o escopo na própria barra; o painel "Contexto".
+ * ações); o campo que cresce até 8 linhas com o modelo e o escopo na própria barra; o "Contexto" (painel ao lado ou, no
+ * Assistente, a seção no trilho da tela, contrato 38).
  * Sem o `claude`, só o aviso com o caminho para Configurações. Sair da tela avisa o main, que mata o processo
  * em 5 min se a conversa não voltar.
  */
-export function ChatConversation({ chatId, meetingId, meetings, contextOpen, onContextOpen }: ChatConversationProps) {
+export function ChatConversation({ chatId, meetingId, meetings, contextOpen, onContextOpen, contextSlot }: ChatConversationProps) {
   const navigate = useNavigate()
   const key = viewKey(chatId, meetingId)
   const claude = useChat((state) => state.claude)
@@ -64,6 +78,7 @@ export function ChatConversation({ chatId, meetingId, meetings, contextOpen, onC
   const atBottom = useRef(true)
   const scroller = useRef<HTMLDivElement | null>(null)
   const input = useRef<HTMLTextAreaElement | null>(null)
+  const contextToggle = useRef<HTMLButtonElement | null>(null)
 
   useEffect(() => {
     void useChat.getState().checkClaude()
@@ -266,6 +281,10 @@ export function ChatConversation({ chatId, meetingId, meetings, contextOpen, onC
   const empty = messages.length === 0 && pending === undefined
   const total = meetings.list?.length ?? null
   const groups = chatSuggestionGroups(meetings.participant, meetings.topic, meetingId !== null)
+  // Contrato 38: no Assistente, respostas em cartões, sugestões com ícone e o campo com a linha de controles separada;
+  // a aba da reunião fica como estava.
+  const cards = meetingId === null
+  const contextProps = { meetingId, scope, model, messages, meetings, onScope: changeScope, notice: scopeNotice, onModel: changeModel, onClose: () => onContextOpen(false) }
 
   return (
     <div className="flex min-h-0 min-w-0 flex-1">
@@ -292,6 +311,7 @@ export function ChatConversation({ chatId, meetingId, meetings, contextOpen, onC
           </button>
           <button
             type="button"
+            ref={contextToggle}
             data-action="toggle-context"
             aria-pressed={contextOpen}
             onClick={() => onContextOpen(!contextOpen)}
@@ -311,7 +331,7 @@ export function ChatConversation({ chatId, meetingId, meetings, contextOpen, onC
                     {meetingId ? 'Pergunte sobre esta reunião.' : 'Pergunte ou peça algo. Nada é criado nem enviado sem o seu clique.'}
                   </div>
                   <div className="grid grid-cols-2 gap-x-4 gap-y-5" aria-label="Sugestões">
-                    {groups.map((group) => (
+                    {groups.map((group, groupIndex) => (
                       <section key={group.title} aria-label={group.title} className="col-span-2 flex flex-col gap-2">
                         <h3 className="text-12 font-bold text-text-muted">{group.title}</h3>
                         <div className="grid grid-cols-2 gap-3">
@@ -322,9 +342,16 @@ export function ChatConversation({ chatId, meetingId, meetings, contextOpen, onC
                               data-chat-suggestion
                               onClick={() => send(suggestion)}
                               disabled={claude !== 'found' || noneChosen}
-                              className="no-drag min-h-16 rounded-[var(--radius-panel)] border border-line-strong bg-bg-raised px-4 py-3 text-left text-13 text-title transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-bg-sunken disabled:opacity-50"
+                              className={cards ? SUGGESTION_CARD : SUGGESTION}
                             >
-                              {suggestion}
+                              {cards ? (
+                                <>
+                                  <Icon icon={SUGGESTION_ICONS[groupIndex] ?? MessageCircle} size={16} className="mt-0.5 shrink-0 text-text-faint transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] group-hover:text-accent" />
+                                  <span className="min-w-0">{suggestion}</span>
+                                </>
+                              ) : (
+                                suggestion
+                              )}
                             </button>
                           ))}
                         </div>
@@ -339,7 +366,7 @@ export function ChatConversation({ chatId, meetingId, meetings, contextOpen, onC
                     // Refazendo: a resposta antiga e a pergunta que vai de novo saem da tela até voltar.
                     if (redoing && index >= lastUser) return null
                     return message.role === 'user' ? (
-                      <UserMessage key={`${index}-${message.at}`} text={message.text} editing={editing && index === lastUser} />
+                      <UserMessage key={`${index}-${message.at}`} text={message.text} editing={editing && index === lastUser} card={cards} />
                     ) : (
                       <AssistantMessage
                         key={`${index}-${message.at}`}
@@ -349,11 +376,12 @@ export function ChatConversation({ chatId, meetingId, meetings, contextOpen, onC
                         onRedo={index === lastAssistant && lastAssistant > lastUser && !busy ? redo : null}
                         chatId={chatId}
                         index={index}
+                        card={cards}
                       />
                     )
                   })}
-                  {pending !== undefined && <UserMessage text={pending || (messages[lastUser]?.text ?? '')} />}
-                  {answer && <LiveAssistantMessage answer={answer} />}
+                  {pending !== undefined && <UserMessage text={pending || (messages[lastUser]?.text ?? '')} card={cards} />}
+                  {answer && <LiveAssistantMessage answer={answer} card={cards} />}
                 </ol>
               )}
               {failure && (
@@ -375,7 +403,7 @@ export function ChatConversation({ chatId, meetingId, meetings, contextOpen, onC
             </button>
           )}
         </div>
-        <div className="shrink-0 border-t border-line px-8 py-4">
+        <div className={`shrink-0 px-8 py-4 ${cards ? '' : 'border-t border-line'}`}>
           <div className="mx-auto flex w-full max-w-[720px] flex-col rounded-[var(--radius-panel)] border border-line-strong bg-bg-raised has-[textarea:focus-visible]:outline-2 has-[textarea:focus-visible]:outline-offset-2 has-[textarea:focus-visible]:outline-focus">
             {noneChosen && (
               <p data-chat-scope-empty role="status" className="px-3 pt-2 text-12 text-rec">
@@ -400,7 +428,7 @@ export function ChatConversation({ chatId, meetingId, meetings, contextOpen, onC
               onKeyDown={onKeyDown}
               className="no-drag min-h-14 resize-none bg-transparent px-3 pt-2.5 pb-1 text-15 text-text select-text placeholder:text-text-faint focus-visible:outline-none"
             />
-            <div className="flex flex-wrap items-center gap-2 px-2 pb-2">
+            <div className={`flex flex-wrap items-center gap-2 px-2 pb-2 ${cards ? 'mx-1 border-t border-line pt-2' : ''}`}>
               <label className="sr-only" htmlFor={`chat-model-${key}`}>
                 Modelo
               </label>
@@ -411,19 +439,6 @@ export function ChatConversation({ chatId, meetingId, meetings, contextOpen, onC
                   </option>
                 ))}
               </select>
-              {viaAgent && (
-                <button
-                  type="button"
-                  data-action="chat-think-more"
-                  aria-pressed={thinkMore}
-                  title="Esforço alto: o Claude pensa mais antes de responder (mais lento)."
-                  onClick={toggleThinkMore}
-                  className={`${BAR_SELECT} inline-flex items-center gap-1.5 ${thinkMore ? 'border-title bg-title font-medium text-bg hover:bg-title' : ''}`}
-                >
-                  <Icon icon={Brain} size={14} />
-                  Pensar mais
-                </button>
-              )}
               {!meetingId && (
                 <>
                   <label className="sr-only" htmlFor={`chat-scope-${key}`}>
@@ -437,13 +452,27 @@ export function ChatConversation({ chatId, meetingId, meetings, contextOpen, onC
                   </select>
                 </>
               )}
+              {viaAgent && (
+                <button
+                  type="button"
+                  data-action="chat-think-more"
+                  aria-pressed={thinkMore}
+                  title="Esforço alto: o Claude pensa mais antes de responder (mais lento)."
+                  onClick={toggleThinkMore}
+                  className={`${BAR_SELECT} inline-flex items-center gap-1.5 ${thinkMore ? 'border-title bg-title font-medium text-bg hover:bg-title' : ''}`}
+                >
+                  <Icon icon={Brain} size={14} />
+                  Pensar mais
+                </button>
+              )}
               <span className="flex-1" />
               {text.length > CHAT_COUNTER_FROM && (
                 <span data-chat-counter className={`text-12 tabular ${text.length >= CHAT_TEXT_MAX ? 'text-rec' : 'text-text-faint'}`}>
                   {COUNT.format(text.length)} / {COUNT.format(CHAT_TEXT_MAX)}
                 </span>
               )}
-              <span className="text-12 text-text-faint">↵ envia · ⇧↵ quebra linha</span>
+              {/* No Assistente, abaixo de 1280 px a dica sai para "Enviar" não quebrar a linha (o atalho segue no campo). */}
+              <span className={`text-12 text-text-faint ${cards ? 'max-[1279px]:hidden' : ''}`}>↵ envia · ⇧↵ quebra linha</span>
               {answering && chatId ? (
                 <Button action="chat-stop" variant="secondary" icon={Square} onClick={() => void useChat.getState().stop(chatId)}>
                   Parar
@@ -457,19 +486,9 @@ export function ChatConversation({ chatId, meetingId, meetings, contextOpen, onC
           </div>
         </div>
       </div>
-      {contextOpen && (
-        <ContextPanel
-          meetingId={meetingId}
-          scope={scope}
-          model={model}
-          messages={messages}
-          meetings={meetings}
-          onScope={changeScope}
-          notice={scopeNotice}
-          onModel={changeModel}
-          onClose={() => onContextOpen(false)}
-        />
-      )}
+      {contextSlot === undefined
+        ? contextOpen && <ContextPanel {...contextProps} />
+        : contextSlot && createPortal(<RailContext {...contextProps} open={contextOpen} chatOpen={chatId !== null} onOpen={() => onContextOpen(true)} onFocusAway={() => contextToggle.current?.focus()} />, contextSlot)}
     </div>
   )
 }

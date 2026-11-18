@@ -7,7 +7,7 @@ import { PageHeader } from '../../design/PageHeader'
 import { timeLabel } from '../meetings/format'
 import { ChatConversation } from './ChatConversation'
 import { listKey, useChat } from './chatStore'
-import { filterChats, groupChatsByDay } from './format'
+import { filterChats, groupChatsByDay, railScrollTarget } from './format'
 import { useChatMeetings } from './useChatMeetings'
 
 /** Fecha a conversa que estava aberta: o processo dela morre (depois da resposta em curso). */
@@ -16,9 +16,9 @@ function closeChat(id: string | null): void {
 }
 
 /**
- * Tela "Assistente" (contratos 15, 16 e 25; antes "Perguntar"): conversas à esquerda (busca por título, agrupadas por dia, "Nova
- * conversa", e renomear e excluir no menu "…" da linha) e a conversa aberta à direita, com o painel
- * "Contexto". Em janela estreita, o painel aberto esconde a lista para a conversa caber.
+ * Tela "Assistente" (contratos 15, 16, 25 e 38; antes "Perguntar"): a conversa aberta e, à direita, um trilho só com as
+ * conversas em cima (busca por título, agrupadas por dia, "Nova conversa", e renomear e excluir no menu "…" da linha) e o
+ * "Contexto" da conversa embaixo, recolhido até a pessoa abrir. Conversa e trilho cabem lado a lado mesmo em 1120 px.
  */
 export function ChatScreen() {
   const key = listKey(null)
@@ -28,10 +28,29 @@ export function ChatScreen() {
   const meetings = useChatMeetings()
   const [query, setQuery] = useState('')
   const [contextOpen, setContextOpen] = useState(false)
+  // O "Contexto" é desenhado pela conversa (que tem o escopo e o modelo) dentro deste elemento do trilho.
+  const [contextSlot, setContextSlot] = useState<HTMLDivElement | null>(null)
+  const rail = useRef<HTMLElement | null>(null)
+  /** Cada pedido para abrir o "Contexto" (mesmo já aberto) rola o trilho até ele. */
+  const [reveal, setReveal] = useState(0)
+  const openContext = (open: boolean): void => {
+    setContextOpen(open)
+    if (open) setReveal((count) => count + 1)
+  }
 
   useEffect(() => {
     void useChat.getState().loadList(null)
   }, [])
+
+  useEffect(() => {
+    const node = rail.current
+    if (!reveal || !node || !contextSlot) return
+    const box = node.getBoundingClientRect()
+    const section = contextSlot.getBoundingClientRect()
+    const top = railScrollTarget({ top: box.top, height: box.height, scrollTop: node.scrollTop }, { top: section.top, height: section.height })
+    if (top === null) return
+    node.scrollTo({ top, behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' })
+  }, [reveal, contextSlot])
 
   const choose = (id: string | null): void => {
     if (id === selected) return
@@ -48,8 +67,20 @@ export function ChatScreen() {
         <PageHeader title="Assistente" description="Pergunte ou peça qualquer coisa: reuniões, WhatsApp, automações e o próprio app." />
       </div>
       <div className="flex min-h-0 flex-1 border-t border-line">
-        <aside aria-label="Conversas" className={`flex w-[248px] shrink-0 flex-col border-r border-line ${contextOpen ? 'max-[1279px]:hidden' : ''}`}>
-          <div className="flex flex-col gap-2 p-3">
+        <section aria-label="Conversa" className="flex min-w-0 flex-1 flex-col">
+          <ChatConversation
+            key={selected ?? 'new'}
+            chatId={selected}
+            meetingId={null}
+            meetings={meetings}
+            contextOpen={contextOpen}
+            onContextOpen={openContext}
+            contextSlot={contextSlot}
+          />
+        </section>
+        {/* Depois da conversa no DOM: a barra lateral do app continua sendo o primeiro `aside` da janela. */}
+        <aside ref={rail} aria-label="Conversas e contexto" className="flex w-[300px] shrink-0 flex-col overflow-y-auto border-l border-line">
+          <div className="flex shrink-0 flex-col gap-2 p-3">
             <Button action="chat-new" variant="secondary" icon={Plus} onClick={() => choose(null)}>
               Nova conversa
             </Button>
@@ -69,7 +100,8 @@ export function ChatScreen() {
             </div>
           </div>
           {failure && <p className="px-4 pb-2 text-12 text-rec">{failure}</p>}
-          <div data-chat-list className="min-h-0 flex-1 overflow-y-auto pb-3">
+          {/* Recolhido, o "Contexto" fica no pé do trilho; aberto, a lista encolhe e o trilho rola. */}
+          <div data-chat-list className={`overflow-y-auto pb-3 ${contextOpen ? 'max-h-[260px] shrink-0' : 'min-h-0 flex-1'}`}>
             {groups.map((group) => (
               <section key={group.key} aria-label={group.label} data-chat-day={group.key}>
                 <h2 className="border-b border-line px-4 pt-3 pb-1.5 text-12 font-bold text-text-muted">{group.label}</h2>
@@ -82,10 +114,8 @@ export function ChatScreen() {
             ))}
             {list && list.length > 0 && !shown.length && <p className="px-4 pt-3 text-12 text-text-muted">Nenhuma conversa com "{query.trim()}".</p>}
           </div>
+          <div ref={setContextSlot} data-chat-rail-context className="shrink-0 border-t border-line empty:hidden" />
         </aside>
-        <section aria-label="Conversa" className="flex min-w-0 flex-1 flex-col">
-          <ChatConversation key={selected ?? 'new'} chatId={selected} meetingId={null} meetings={meetings} contextOpen={contextOpen} onContextOpen={setContextOpen} />
-        </section>
       </div>
     </div>
   )

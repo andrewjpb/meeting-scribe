@@ -198,3 +198,21 @@ export function groupChatsByDay(items: readonly ChatListItem[], now: Date): Chat
   }
   return groups
 }
+
+/** Medidas de tela (as de `getBoundingClientRect`) do trilho e da seção, mais a rolagem atual do trilho. */
+export interface RailBox {
+  top: number
+  height: number
+}
+
+/**
+ * Contrato 38: aonde rolar o trilho do Assistente para o "Contexto" recém-aberto aparecer. Inteiro à vista: não rola
+ * (`null`). Cabe no trilho: o mínimo para ele aparecer inteiro. Maior que o trilho: o topo dele no alto.
+ */
+export function railScrollTarget(rail: RailBox & { scrollTop: number }, section: RailBox): number | null {
+  const start = section.top - rail.top + rail.scrollTop
+  const end = start + section.height
+  if (start >= rail.scrollTop && end <= rail.scrollTop + rail.height) return null
+  if (section.height >= rail.height || start < rail.scrollTop) return Math.max(0, start)
+  return end - rail.height
+}
