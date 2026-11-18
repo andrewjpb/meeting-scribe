@@ -12,12 +12,14 @@ import {
   type WhatsAppMessageType,
   type WhatsAppSearchHit,
 } from '@shared/whatsapp'
+import { useSettings } from '../../app/settingsStore'
 import { Button } from '../../design/Button'
 import { Icon } from '../../design/Icon'
 import { Note, NOTE_ACTION_CLASS } from '../../design/Note'
 import { Avatar } from './Avatar'
 import { DetailsPanel } from './DetailsPanel'
 import { chatPhone, clockLabel, detailsStartOpen, messageTimeLabel, previewText, startsRun } from './format'
+import { visibleMessages, visiblePending, type PendingSend } from './pending'
 import { useWhatsApp } from './whatsappStore'
 
 const SEND_ERRORS: Record<'click' | 'state' | 'invalid' | 'failed', string> = {
@@ -108,7 +110,7 @@ const MEDIA_ICONS: Record<WhatsAppMessageType, LucideIcon> = {
  * direita, em azul; as dos outros à esquerda, com a foto (ou as iniciais) e, num grupo, o autor, só na primeira de
  * uma sequência do mesmo autor.
  */
-function MessageItem({ message, first, group, photo }: { message: WhatsAppMessage; first: boolean; group: boolean; photo: string | null | undefined }) {
+function MessageItem({ message, first, group, photo, swapped }: { message: WhatsAppMessage; first: boolean; group: boolean; photo: string | null | undefined; swapped: boolean }) {
   const mine = message.fromMe
   const author = mine ? 'Você' : message.author
   return (
@@ -130,11 +132,43 @@ function MessageItem({ message, first, group, photo }: { message: WhatsAppMessag
             {mediaLabel(message.media)}
           </span>
         )}
-        {message.text && <span data-whatsapp-text>{message.text}</span>}
+        {/* Contrato 36: entrou no lugar do balão temporário; o texto (o corrigido) troca com um fade curto. */}
+        {message.text && (
+          <span data-whatsapp-text className={swapped ? 'wa-swap-in' : undefined}>
+            {message.text}
+          </span>
+        )}
         <span className={`self-end text-12 tabular ${mine ? 'opacity-80' : 'text-text-faint'}`}>{clockLabel(message.at)}</span>
       </div>
     </li>
   )
+}
+
+/**
+ * Contrato 36: o balão temporário do envio com "Corrigir ao enviar" ligado. O texto como foi digitado, com um brilho
+ * discreto e a linha da IA enquanto ela ajusta; o eco do serviço (com o texto corrigido) entra no lugar dele. Se o eco
+ * demorar, o brilho para e a linha diz "Enviada" (o texto continua o digitado: nada é inventado).
+ */
+function PendingItem({ item }: { item: PendingSend }) {
+  const correcting = item.phase === 'correcting'
+  return (
+    <li data-wa-pending={item.key} data-wa-pending-phase={item.phase} className="mt-3 flex items-end justify-end gap-2 first:mt-0">
+      <div className={`flex max-w-[560px] min-w-0 flex-col gap-1 rounded-[var(--radius-panel)] bg-accent px-3 py-2 text-15 whitespace-pre-wrap text-on-accent select-text ${correcting ? 'wa-pending-shimmer' : ''}`}>
+        <span className="sr-only">Você: </span>
+        <span data-wa-pending-text>{item.text}</span>
+        <span data-wa-pending-status role="status" className="flex items-center gap-1 self-end text-12 opacity-80">
+          <Icon icon={Sparkles} size={14} className="shrink-0" />
+          {correcting ? 'A IA está ajustando o texto…' : 'Enviada'}
+        </span>
+      </div>
+    </li>
+  )
+}
+
+/** O texto que voltou de um envio que falhou, antes do que já estiver no campo (nada se perde). */
+function joinRestored(back: string | undefined, current: string): string {
+  if (!back) return current
+  return current.trim() ? `${back}\n${current}` : back
 }
 
 interface ConversationProps {
@@ -149,13 +183,20 @@ interface ConversationProps {
 /** A conversa aberta: mensagens (mais antigas ao rolar para cima), o campo, "Enviar" e "Rascunho com o Claude". */
 function Conversation({ chat, initialText, detailsOpen, onDetails }: ConversationProps) {
   const messages = useWhatsApp((state) => state.messages[chat.id])
+  const pendingAll = useWhatsApp((state) => state.pending[chat.id])
+  const swapped = useWhatsApp((state) => state.swapped)
+  const autoCorrect = useSettings((state) => state.settings.whatsappAutoCorrect)
+  const pending = visiblePending(pendingAll, messages)
+  const shown = visibleMessages(messages, pendingAll)
   const header = useRef<HTMLElement | null>(null)
   const photo = usePhoto(chat.id, header, true)
   const group = chat.kind === 'group'
   const phone = chatPhone(chat)
-  const [text, setText] = useState(initialText ?? '')
+  // Contrato 36: o envio otimista desta conversa falhou com ela fechada: o texto e o erro voltam ao abrir.
+  const [restored] = useState(() => useWhatsApp.getState().restore[chat.id] ?? null)
+  const [text, setText] = useState(() => joinRestored(restored?.text, initialText ?? ''))
   const [sending, setSending] = useState(false)
-  const [sendError, setSendError] = useState<string | null>(null)
+  const [sendError, setSendError] = useState<string | null>(restored?.error ?? null)
   const [draftOpen, setDraftOpen] = useState(false)
   const [instruction, setInstruction] = useState('')
   const [meetingId, setMeetingId] = useState('')
@@ -179,6 +220,19 @@ function Conversation({ chat, initialText, detailsOpen, onDetails }: Conversatio
     )
   }, [draftOpen])
 
+  // Contrato 36: um envio otimista desta conversa falhou com ela aberta: o texto volta ao campo, sem apagar o que a
+  // pessoa já tiver escrito depois, e o erro aparece como no envio sem correção.
+  useEffect(() => {
+    if (restored && useWhatsApp.getState().restore[chat.id] === restored) useWhatsApp.getState().takeRestore(chat.id)
+    return useWhatsApp.subscribe((state) => {
+      if (!state.restore[chat.id]) return
+      const back = state.takeRestore(chat.id)
+      if (!back) return
+      setText((current) => joinRestored(back.text, current))
+      setSendError(back.error)
+    })
+  }, [restored, chat.id])
+
   // Fim da lista ao abrir e a cada mensagem nova (se a pessoa já estava no fim); mais antigas mantêm a posição.
   useLayoutEffect(() => {
     const el = list.current
@@ -187,7 +241,7 @@ function Conversation({ chat, initialText, detailsOpen, onDetails }: Conversatio
       el.scrollTop = el.scrollHeight - olderFrom.current
       olderFrom.current = null
     } else if (atBottom.current) el.scrollTop = el.scrollHeight
-  }, [messages])
+  }, [messages, pendingAll])
 
   const onScroll = (event: UIEvent<HTMLDivElement>): void => {
     const el = event.currentTarget
@@ -211,6 +265,26 @@ function Conversation({ chat, initialText, detailsOpen, onDetails }: Conversatio
   const sendNow = (): void => {
     const body = text
     if (!body.trim() || sending) return
+    if (autoCorrect) {
+      // Contrato 36: com a correção ligada, o campo limpa na hora e o balão temporário entra com o texto digitado
+      // enquanto a IA ajusta; o eco do serviço (com o `id` que o envio devolve) troca um pelo outro.
+      const chatId = chat.id
+      const key = useWhatsApp.getState().startPending(chatId, body)
+      setText('')
+      setSendError(null)
+      atBottom.current = true
+      void window.__scribeApi.whatsappSend({ chatId, text: body }).then(
+        (result) => {
+          const store = useWhatsApp.getState()
+          if (result.ok) {
+            store.confirmPending(chatId, key, result.id)
+            void store.open(chatId)
+          } else store.failPending(chatId, key, SEND_ERRORS[result.error])
+        },
+        () => useWhatsApp.getState().failPending(chatId, key, SEND_ERRORS.failed),
+      )
+      return
+    }
     setSending(true)
     setSendError(null)
     void window.__scribeApi.whatsappSend({ chatId: chat.id, text: body }).then(
@@ -288,10 +362,13 @@ function Conversation({ chat, initialText, detailsOpen, onDetails }: Conversatio
               <div key={key} className="h-10 w-2/3 rounded-[var(--radius-panel)] bg-bg-sunken" />
             ))}
           </div>
-        ) : messages.length ? (
+        ) : shown?.length || pending.length ? (
           <ol className="flex flex-col">
-            {messages.map((message, index) => (
-              <MessageItem key={message.id} message={message} first={startsRun(message, messages[index - 1])} group={group} photo={photo} />
+            {shown?.map((message, index) => (
+              <MessageItem key={message.id} message={message} first={startsRun(message, shown[index - 1])} group={group} photo={photo} swapped={swapped[message.id] === true} />
+            ))}
+            {pending.map((item) => (
+              <PendingItem key={item.key} item={item} />
             ))}
           </ol>
         ) : (

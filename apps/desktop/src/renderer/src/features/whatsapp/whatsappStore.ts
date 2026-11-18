@@ -4,9 +4,12 @@
 //
 // Contrato 32: as fotos de perfil, pedidas uma vez por conversa que aparece na tela, no máximo 3 ao mesmo tempo e
 // sem segurar nada (a lista mostra as iniciais até a foto chegar).
+//
+// Contrato 36: os balões temporários do envio com "Corrigir ao enviar" ligado, por conversa (`pending.ts`).
 import { useEffect } from 'react'
 import { create } from 'zustand'
 import type { WhatsAppChat, WhatsAppMessage, WhatsAppStatus } from '@shared/whatsapp'
+import { addPending, confirmPending, failPending, markPendingSent, PENDING_ECHO_WAIT_MS, settledIds, settlePending, type PendingByChat } from './pending'
 
 interface WhatsAppState {
   status: WhatsAppStatus | null
@@ -32,6 +35,20 @@ interface WhatsAppState {
   requestPhoto: (chatId: string, again?: boolean) => void
   /** Saiu da conta, removeu ou desconectou: as fotos guardadas saem. */
   forgetPhotos: () => void
+  /** Contrato 36: balões temporários por conversa, até a mensagem real chegar. */
+  pending: PendingByChat
+  /** Mensagens que entraram no lugar de um temporário (o texto entra com um fade curto). */
+  swapped: Record<string, true>
+  /** Envio otimista que falhou: o texto e o erro que voltam ao campo da conversa (que pode estar fechada). */
+  restore: Record<string, { text: string; error: string }>
+  /** O clique em "Enviar" com a correção ligada: o temporário entra com o texto digitado. Devolve a chave dele. */
+  startPending: (chatId: string, text: string) => string
+  /** O envio foi aceito com este `id`: o temporário sai quando o eco chegar (ou já saiu, se chegou antes). */
+  confirmPending: (chatId: string, key: string, id: string) => void
+  /** O envio falhou: o temporário sai e o texto volta ao campo com o erro. */
+  failPending: (chatId: string, key: string, error: string) => void
+  /** O campo da conversa pegou o texto que voltou. */
+  takeRestore: (chatId: string) => { text: string; error: string } | null
 }
 
 /** Fotos pedidas ao mesmo tempo. */
@@ -40,6 +57,7 @@ const photoQueue: string[] = []
 const photoAsked = new Set<string>()
 let photoRunning = 0
 const photoRunningIds = new Set<string>()
+let pendingCount = 0
 
 const byTime = (a: WhatsAppMessage, b: WhatsAppMessage): number => a.at - b.at || a.id.localeCompare(b.id)
 
@@ -49,6 +67,16 @@ function merge(current: readonly WhatsAppMessage[], incoming: readonly WhatsAppM
   return [...seen.values()].sort(byTime)
 }
 
+/** As mensagens das conversas mudaram: os temporários já com a mensagem real saem (e ela ganha o fade). */
+function settleChats(state: Pick<WhatsAppState, 'pending' | 'swapped'>, messages: Record<string, WhatsAppMessage[]>, chatIds: Iterable<string>): Pick<WhatsAppState, 'pending' | 'swapped'> {
+  let pending = state.pending
+  for (const chatId of chatIds) pending = settlePending(pending, chatId, messages[chatId])
+  if (pending === state.pending) return { pending, swapped: state.swapped }
+  const swapped = { ...state.swapped }
+  for (const id of settledIds(state.pending, pending)) swapped[id] = true
+  return { pending, swapped }
+}
+
 export const useWhatsApp = create<WhatsAppState>()((set, get) => ({
   status: null,
   loadFailed: false,
@@ -56,6 +84,42 @@ export const useWhatsApp = create<WhatsAppState>()((set, get) => ({
   messages: {},
   exhausted: {},
   photos: {},
+  pending: {},
+  swapped: {},
+  restore: {},
+
+  startPending: (chatId, text) => {
+    const key = `pendente-${++pendingCount}`
+    set((state) => ({ pending: addPending(state.pending, { key, chatId, text, at: Date.now() }) }))
+    return key
+  },
+
+  confirmPending: (chatId, key, id) => {
+    set((state) => {
+      const pending = confirmPending(state.pending, chatId, key, id, undefined)
+      if (pending === state.pending) return {}
+      // O eco chegou antes da resposta do envio: a mensagem real já está na conversa e o temporário sai agora.
+      return settleChats({ pending, swapped: state.swapped }, state.messages, [chatId])
+    })
+    // Sem o eco em 10 s, o temporário para de brilhar e diz "Enviada" (o texto oficial vem com o eco).
+    setTimeout(() => set((state) => ({ pending: markPendingSent(state.pending, chatId, key) })), PENDING_ECHO_WAIT_MS)
+  },
+
+  failPending: (chatId, key, error) =>
+    set((state) => {
+      const { pending, failed } = failPending(state.pending, chatId, key)
+      if (!failed) return {}
+      const before = state.restore[chatId]?.text
+      // Duas falhas antes de o campo pegar o texto: nenhuma se perde.
+      return { pending, restore: { ...state.restore, [chatId]: { text: before ? `${before}\n${failed.text}` : failed.text, error } } }
+    }),
+
+  takeRestore: (chatId) => {
+    const found = get().restore[chatId] ?? null
+    if (found)
+      set((state) => ({ restore: Object.fromEntries(Object.entries(state.restore).filter(([id]) => id !== chatId)) }))
+    return found
+  },
 
   load: async () => {
     try {
@@ -76,12 +140,16 @@ export const useWhatsApp = create<WhatsAppState>()((set, get) => ({
   open: async (chatId, attempt = 0) => {
     try {
       const messages = await window.__scribeApi.invoke('scribe:whatsapp-messages', { chatId })
-      set((state) => ({
-        messages: { ...state.messages, [chatId]: merge(state.messages[chatId] ?? [], messages) },
-        exhausted: { ...state.exhausted, [chatId]: messages.length < 50 },
-        // Abrir zera as não lidas (só no app; nenhum recibo vai ao WhatsApp).
-        chats: state.chats?.map((chat) => (chat.id === chatId ? { ...chat, unread: 0 } : chat)) ?? null,
-      }))
+      set((state) => {
+        const all = { ...state.messages, [chatId]: merge(state.messages[chatId] ?? [], messages) }
+        return {
+          messages: all,
+          exhausted: { ...state.exhausted, [chatId]: messages.length < 50 },
+          // Abrir zera as não lidas (só no app; nenhum recibo vai ao WhatsApp).
+          chats: state.chats?.map((chat) => (chat.id === chatId ? { ...chat, unread: 0 } : chat)) ?? null,
+          ...settleChats(state, all, [chatId]),
+        }
+      })
     } catch {
       // O serviço estava ocupado (histórico chegando): tenta de novo algumas vezes; depois mostra a conversa vazia
       // em vez de ficar carregando para sempre.
@@ -155,7 +223,7 @@ export const useWhatsApp = create<WhatsAppState>()((set, get) => ({
       }
       for (const [chatId, incoming] of byChat) messages[chatId] = merge(messages[chatId] ?? [], incoming)
       if (chats) chats = chats.sort((a, b) => (b.lastMessage?.at ?? 0) - (a.lastMessage?.at ?? 0))
-      return { chats, messages }
+      return { chats, messages, ...settleChats(state, messages, byChat.keys()) }
     }),
 }))
 

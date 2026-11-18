@@ -4994,6 +4994,44 @@ async function waSent(ctx: SmokeContext): Promise<{ id: string; chatId: string; 
  * lista e o painel Detalhes com a análise do Claude falso, os gráficos locais e o custo. Contrato 33: o topo sem
  * título nem aviso, os Detalhes fechados ao abrir abaixo de 1280 px e abertos acima, e o envio sem diálogo.
  */
+/** Contrato 36: o que o balão temporário do envio mostrou na tela, observado a cada mudança do DOM. */
+interface PendingLog {
+  seen: boolean
+  text: string
+  status: string
+  shimmer: boolean
+  /** O temporário e o balão real de `realText` na tela ao mesmo tempo (nunca deveria). */
+  both: boolean
+}
+
+/** Começa a observar o balão temporário (`[data-wa-pending]`): o eco pode chegar rápido demais para uma consulta só. */
+async function watchPending(contents: WebContents, realText: string): Promise<void> {
+  await evaluate(
+    contents,
+    `(() => {
+      window.__waPendingStop?.()
+      const log = (window.__waPendingLog = { seen: false, text: '', status: '', shimmer: false, both: false })
+      const look = () => {
+        const pending = document.querySelector('[data-wa-pending]')
+        if (!pending) return
+        log.seen = true
+        log.text ||= pending.querySelector('[data-wa-pending-text]')?.textContent ?? ''
+        log.status ||= pending.querySelector('[data-wa-pending-status]')?.textContent ?? ''
+        log.shimmer ||= Boolean(pending.querySelector('.wa-pending-shimmer'))
+        if ([...document.querySelectorAll('[data-whatsapp-message][data-from-me="true"] [data-whatsapp-text]')].some((el) => el.textContent === ${JSON.stringify(realText)})) log.both = true
+      }
+      const observer = new MutationObserver(look)
+      observer.observe(document.body, { subtree: true, childList: true, characterData: true })
+      window.__waPendingStop = () => observer.disconnect()
+      return true
+    })()`,
+  )
+}
+
+async function stopPending(contents: WebContents): Promise<PendingLog> {
+  return evaluate<PendingLog>(contents, `(() => { window.__waPendingStop?.(); window.__waPendingStop = undefined; return window.__waPendingLog })()`)
+}
+
 async function whatsappChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => void, checks: Record<string, Check>, shots: Screenshot[]): Promise<void> {
   const win = ctx.openWindow({ theme: 'light' })
   watch(win)
@@ -5278,7 +5316,9 @@ async function whatsappChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => 
   const sentWithoutClick = await waSent(ctx)
 
   // Com o clique, sai direto ao serviço, sem diálogo de confirmação (removido a pedido do dono no contrato 33): o
-  // clique e o token do preload bastam. Enter não envia; ⌘↵ envia.
+  // clique e o token do preload bastam. Enter não envia; ⌘↵ envia. Contrato 36: com a correção desligada, nenhum
+  // balão temporário aparece nos dois envios.
+  await watchPending(contents, 'Segunda mensagem')
   await clickSelector(contents, '[data-action="whatsapp-send"]')
   let sent = await waSent(ctx)
   for (let attempt = 0; attempt < 50 && sent.length < 1; attempt++) {
@@ -5298,6 +5338,7 @@ async function whatsappChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => 
     second = await waSent(ctx)
   }
   const shownSent = await waitFor(contents, `[...document.querySelectorAll('[data-whatsapp-message][data-from-me="true"] [data-whatsapp-text]')].some((el) => el.textContent === 'Segunda mensagem')`)
+  const sendPending = await stopPending(contents)
   await settle(contents)
   shots.push(await capture(win, ctx.outDir, 'whatsapp-light'))
   checks['send'] = {
@@ -5315,8 +5356,9 @@ async function whatsappChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => 
       afterEnter === 1 &&
       second.length === 2 &&
       second[1]?.text === 'Segunda mensagem' &&
-      shownSent,
-    detail: `token inventado=${JSON.stringify(forged)}; sem token=${noToken}; clique pelo send genérico="${genericClick.slice(0, 60)}"; whatsappSend sem ativação=${JSON.stringify(withoutGesture)}; enviadas sem clique=${sentWithoutClick.length}; "Enviar" sem diálogo -> enviada=${sent.length} (igual ao rascunho=${sent[0]?.text === draftText}); campo limpo=${cleared}, sem erro=${noSendError}; Enter não enviou=${afterEnter === 1}; ⌘↵ enviou=${second.length === 2}; na conversa=${shownSent}`,
+      shownSent &&
+      !sendPending.seen,
+    detail: `token inventado=${JSON.stringify(forged)}; sem token=${noToken}; clique pelo send genérico="${genericClick.slice(0, 60)}"; whatsappSend sem ativação=${JSON.stringify(withoutGesture)}; enviadas sem clique=${sentWithoutClick.length}; "Enviar" sem diálogo -> enviada=${sent.length} (igual ao rascunho=${sent[0]?.text === draftText}); campo limpo=${cleared}, sem erro=${noSendError}; Enter não enviou=${afterEnter === 1}; ⌘↵ enviou=${second.length === 2}; na conversa=${shownSent}; balão temporário com a correção desligada=${sendPending.seen}`,
   }
 
   // Contrato 35: com "Corrigir ao enviar" ligado (e o Sonnet nas Configurações), o clique em "Enviar" manda ao serviço o
@@ -5327,13 +5369,20 @@ async function whatsappChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => 
   await evaluate(contents, "window.__scribeApi.invoke('scribe:settings-update', { whatsappAutoCorrect: true, claudeModel: 'sonnet' }).then(() => true)")
   const correctLogBefore = readAcpLog(ctx.userDataDir).length
   await setValue(contents, '[data-whatsapp-composer]', 'oi tudo bem')
+  // Contrato 36: no clique, o campo limpa e o balão temporário entra com o texto digitado e a linha da IA; o eco com o
+  // corrigido entra no lugar dele (com o fade), sem os dois na tela ao mesmo tempo.
+  await watchPending(contents, 'Oi, tudo bem?')
   await clickSelector(contents, '[data-action="whatsapp-send"]')
+  const clearedAtClick = await evaluate<boolean>(contents, `(document.querySelector('[data-whatsapp-composer]')?.value ?? 'x') === ''`)
   let corrected = await waSent(ctx)
   for (let attempt = 0; attempt < 150 && corrected.length < 3; attempt++) {
     await wait(100)
     corrected = await waSent(ctx)
   }
   const shownCorrected = await waitFor(contents, `[...document.querySelectorAll('[data-whatsapp-message][data-from-me="true"] [data-whatsapp-text]')].some((el) => el.textContent === 'Oi, tudo bem?')`)
+  const pendingGone = await waitFor(contents, `!document.querySelector('[data-wa-pending]')`)
+  const swapFade = await evaluate<boolean>(contents, `[...document.querySelectorAll('[data-whatsapp-message][data-from-me="true"] [data-whatsapp-text]')].some((el) => el.textContent === 'Oi, tudo bem?' && el.classList.contains('wa-swap-in'))`)
+  const correctPending = await stopPending(contents)
   const correctLog = readAcpLog(ctx.userDataDir).slice(correctLogBefore)
   const correctSession = correctLog.find((entry) => entry.method === 'session/new' && entry.purpose === 'whatsapp-correct')
   const correctModel = JSON.stringify((correctSession as { configOptions?: unknown } | undefined)?.configOptions ?? null)
@@ -5348,8 +5397,16 @@ async function whatsappChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => 
       correctModel.includes('haiku') &&
       !correctModel.includes('sonnet') &&
       shownCorrected &&
+      clearedAtClick &&
+      correctPending.seen &&
+      correctPending.text === 'oi tudo bem' &&
+      correctPending.status.includes('ajustando') &&
+      correctPending.shimmer &&
+      !correctPending.both &&
+      pendingGone &&
+      swapFade &&
       readSettings(ctx.userDataDir).whatsappAutoCorrect === false,
-    detail: `padrão desligado=${correctDefault !== true}; ligado -> enviadas=${corrected.length} "${corrected[2]?.text ?? ''}"; sessão ACP de correção=${Boolean(correctSession)} (modelo ${correctModel}); balão corrigido=${shownCorrected}; desligado de novo=${readSettings(ctx.userDataDir).whatsappAutoCorrect === false}`,
+    detail: `padrão desligado=${correctDefault !== true}; ligado -> enviadas=${corrected.length} "${corrected[2]?.text ?? ''}"; sessão ACP de correção=${Boolean(correctSession)} (modelo ${correctModel}); campo limpo no clique=${clearedAtClick}; temporário "${correctPending.text}" (linha "${correctPending.status}", brilho=${correctPending.shimmer}); os dois juntos=${correctPending.both}; temporário saiu=${pendingGone}; balão corrigido=${shownCorrected} (fade=${swapFade}); desligado de novo=${readSettings(ctx.userDataDir).whatsappAutoCorrect === false}`,
   }
 
   // "Só estas conversas" do Assistente (contrato 25; o "Perguntar" do 24) com a conversa da Ana: o `.md` dela na

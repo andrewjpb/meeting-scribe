@@ -283,6 +283,40 @@
   }
 }
 
+@layer components {
+  /*
+   * WhatsApp (contrato 36): o balão temporário do envio com a correção ligada brilha de leve enquanto a IA ajusta o
+   * texto (uma faixa clara atravessa o balão, em loop lento); o texto corrigido entra no lugar com um fade curto.
+   * Com movimento reduzido, nenhum brilho (nem a faixa parada): só a linha "A IA está ajustando o texto…".
+   */
+  .wa-pending-shimmer {
+    position: relative;
+    overflow: hidden;
+    isolation: isolate;
+  }
+
+  .wa-pending-shimmer::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+    pointer-events: none;
+    background: linear-gradient(100deg, transparent 35%, color-mix(in srgb, var(--on-accent) 18%, transparent) 50%, transparent 65%);
+    background-size: 250% 100%;
+    animation: wa-shimmer 1.6s ease-in-out infinite;
+  }
+
+  .wa-swap-in {
+    animation: route-enter 240ms var(--ease-out);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .wa-pending-shimmer::after {
+      display: none;
+    }
+  }
+}
+
 @keyframes note-enter {
   from {
     opacity: 0;
@@ -299,6 +333,15 @@
 @keyframes rec-pulse {
   50% {
     opacity: 0.35;
+  }
+}
+
+@keyframes wa-shimmer {
+  from {
+    background-position: 100% 0;
+  }
+  to {
+    background-position: 0% 0;
   }
 }
 
