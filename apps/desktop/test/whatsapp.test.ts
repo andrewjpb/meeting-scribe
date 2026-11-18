@@ -444,15 +444,43 @@ describe('nenhum caminho fora do clique alcança o envio (CA4)', () => {
     // Contrato 33: sem o diálogo nativo, o envio do serviço só é chamado pelo registro do canal no main, com a janela
     // que clicou; nenhum outro arquivo chama `whatsapp.send(`.
     expect(all.filter(({ text }) => /confirmWhatsAppSend|sendDialogText/.test(text)).map(({ file }) => file)).toEqual([])
-    const serviceSends = all.flatMap(({ file, text }) => (text.match(/\bwhatsapp\.send\([^\n]*/g) ?? []).map((call) => `${file}: ${call}`))
-    expect(serviceSends).toEqual(["main/index.ts: whatsapp.send(event.sender.id, request))"])
+    const serviceSends = all.flatMap(({ file, text }) => (text.match(/\bwhatsapp\.send(?:Media)?\([^\n]*/g) ?? []).map((call) => `${file}: ${call}`))
+    expect(serviceSends).toEqual(['main/index.ts: whatsapp.send(event.sender.id, request))', 'main/index.ts: whatsapp.sendMedia(event.sender.id, request))'])
     expect(all.find(({ file }) => file === 'main/index.ts')?.text).toContain("handle('scribe:whatsapp-send', appOrigin, (event, request) => whatsapp.send(event.sender.id, request))")
+    expect(all.find(({ file }) => file === 'main/index.ts')?.text).toContain("handle('scribe:whatsapp-send-media', appOrigin, (event, request) => whatsapp.sendMedia(event.sender.id, request))")
     // O smoke só chama para conferir que o envio sem clique é recusado.
     expect(users.sort()).toEqual(['main/index.ts', 'main/smoke.ts', 'preload/index.ts', 'shared/ipc.ts'].sort())
     // A tela só envia pelo `whatsappSend` do preload, e só na conversa aberta; o cartão do Assistente (contrato 25)
     // usa o mesmo caminho, com o mesmo token de clique.
     const screens = all.filter(({ file, text }) => file.startsWith('renderer/') && text.includes('whatsappSend(')).map(({ file }) => file)
     expect(screens.sort()).toEqual(['renderer/src/features/chat/ActionCards.tsx', 'renderer/src/features/whatsapp/WhatsAppScreen.tsx'])
+  })
+
+  it('contrato 39: o anexo usa o mesmo clique e o mesmo guarda; arrastar, o clipe e a IA não alcançam o envio', () => {
+    // O canal do anexo: chamado só pelo preload (com a ativação do usuário) e pelo smoke (para conferir a recusa).
+    const users = all.filter(({ text }) => text.includes("'scribe:whatsapp-send-media'")).map(({ file }) => file)
+    expect(users.sort()).toEqual(['main/index.ts', 'main/smoke.ts', 'preload/index.ts', 'shared/ipc.ts'].sort())
+    const preload = all.find(({ file }) => file === 'preload/index.ts')?.text ?? ''
+    const media = preload.slice(preload.indexOf('whatsappSendMedia('), preload.indexOf("'scribe:whatsapp-send-media'"))
+    expect(media).toContain('navigator.userActivation.isActive')
+    expect(media).toContain("ipcRenderer.send('scribe:whatsapp-click', clickToken)")
+    // Na tela, só o "Enviar" da conversa aberta chama o envio do anexo; a prévia, o clipe e o arrastar não.
+    const screens = all.filter(({ file, text }) => file.startsWith('renderer/') && text.includes('whatsappSendMedia(')).map(({ file }) => file)
+    expect(screens).toEqual(['renderer/src/features/whatsapp/WhatsAppScreen.tsx'])
+    for (const file of ['renderer/src/features/whatsapp/attach.ts', 'renderer/src/features/whatsapp/AttachCard.tsx', 'main/whatsapp/attach.ts', 'shared/whatsapp-attach.ts']) {
+      const text = all.find((item) => item.file === file)?.text ?? ''
+      expect(`${file}: ${/whatsappSend|scribe:whatsapp-send|SendProof|send-guard|\.send\(/.test(text)}`).toBe(`${file}: false`)
+    }
+    // O envio do cliente com a prova só sai do serviço; insights, correção, notas, chat e agentes não importam o canal.
+    expect(all.filter(({ text }) => /\.sendMedia\(proof/.test(text)).map(({ file }) => file)).toEqual(['main/whatsapp/service.ts'])
+    const ai = all.filter(({ file }) => /^main\/(whatsapp\/(insights|correct)|chat|meetings|acp|claude-cli|agents|tasks)/.test(file) || /^renderer\/src\/features\/(chat|notes|recording)\//.test(file))
+    expect(ai.length).toBeGreaterThan(10)
+    for (const { file, text } of ai) expect(`${file}: ${/whatsapp-send-media|whatsappSendMedia|sendMedia/.test(text)}`).toBe(`${file}: false`)
+    // A legenda não passa pela correção: no serviço, `deps.correct` aparece só no envio de texto.
+    const service = all.find(({ file }) => file === 'main/whatsapp/service.ts')?.text ?? ''
+    const sendMedia = service.slice(service.indexOf('async sendMedia('), service.indexOf('forgetSender(senderId) {'))
+    expect(sendMedia).toContain('guard.consume(senderId, raw.clickToken')
+    expect(sendMedia).not.toContain('correct')
   })
 
   it('o guarda do clique e o envio do cliente só existem no serviço do WhatsApp', () => {
@@ -484,8 +512,8 @@ describe('nenhum caminho fora do clique alcança o envio (CA4)', () => {
 
   it('o envio também passa pelo bloqueio: todo canal do WhatsApp é recusado com o app bloqueado', () => {
     const channels = INVOKE_CHANNELS.filter((channel) => channel.startsWith('scribe:whatsapp-'))
-    // Contrato 37: a mídia e a transcrição (20 no total).
-    expect(channels).toHaveLength(20)
+    // Contrato 37: a mídia e a transcrição; contrato 39: o envio do anexo e o clipe (22 no total).
+    expect(channels).toHaveLength(22)
     for (const channel of channels) expect(WHEN_LOCKED[channel]).toBe('refused')
     expect(RENDERER_EVENTS_WHEN_LOCKED['scribe:whatsapp-click']).toBe('ignored')
     expect(PRELOAD_ONLY_EVENTS).toEqual(['scribe:whatsapp-click'])

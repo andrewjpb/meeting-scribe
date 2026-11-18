@@ -39,6 +39,14 @@ const api: ScribeApi = {
     ipcRenderer.send('scribe:whatsapp-click', clickToken)
     return ipcRenderer.invoke('scribe:whatsapp-send', { chatId: request.chatId, text: request.text, clickToken })
   },
+  // Contrato 39: o anexo sai pelo mesmo caminho: a mesma ativação viva, o mesmo token e o mesmo guarda no main.
+  whatsappSendMedia(request) {
+    if (!navigator.userActivation.isActive) return Promise.resolve({ ok: false, error: 'click' })
+    const clickToken = crypto.randomUUID()
+    ipcRenderer.send('scribe:whatsapp-click', clickToken)
+    const { chatId, name, mime, bytes, caption } = request
+    return ipcRenderer.invoke('scribe:whatsapp-send-media', { chatId, name, mime, bytes, ...(caption ? { caption } : {}), clickToken })
+  },
   on(channel, listener) {
     assertChannel(MAIN_EVENT_CHANNELS, channel)
     const wrapped = (_event: IpcRendererEvent, payload: Parameters<typeof listener>[0]): void => listener(payload)

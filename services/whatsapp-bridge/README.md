@@ -31,6 +31,7 @@ WhatsApp e as mensagens ficam em `~/Library/Application Support/Meeting Scribe/w
 | `GET /chats/:id/photo` | foto de perfil como data URL (até 512 KB, guardada 7 dias em `photos/`), ou `null` |
 | `GET /search?q` | busca no texto das mensagens guardadas |
 | `POST /chats/:id/send` | envia um texto; responde com o id da mensagem |
+| `POST /chats/:id/send-media` | contrato 39: envia uma imagem (JPEG/PNG/WebP/GIF, até 16 MB) ou um vídeo (MP4/MOV, até 64 MB); os bytes no corpo, o tipo em `X-Media-Mime`, o nome em `X-Media-Name` e a legenda em `X-Caption` (os dois com `encodeURIComponent`). O tipo declarado tem de bater com os primeiros bytes (400); acima do limite, 413; falha do WhatsApp, 502. O eco entra na conversa como mídia baixável |
 | `GET /events` | SSE com as mensagens novas e as mudanças de estado |
 
 O serviço nunca envia nada sozinho, não baixa mídia sozinho (só quando o app pede, no clique da pessoa) e não
@@ -51,3 +52,5 @@ Licenças: o neonize 0.10.0 é Apache-2.0 e embute o whatsmeow, MPL-2.0. O app �
 nenhum dos dois; o serviço só os instala no Mac de quem pediu.
 
 Pré-requisito do neonize no Mac: a `libmagic` (`brew install libmagic`), usada pelo `python-magic`.
+
+Só para enviar vídeo (contrato 39): o `ffmpeg` e o `ffprobe` (`brew install ffmpeg`), procurados no PATH, em `/opt/homebrew/bin` e em `/usr/local/bin`; a duração e a miniatura saem deles, localmente. Sem eles, `send-media` de vídeo responde 503 `{"error": "ffmpeg"}` e o app explica como instalar; imagem e texto não precisam do ffmpeg.

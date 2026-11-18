@@ -11,6 +11,9 @@
 # download devolve o PNG, um WAV PCM curto gerado aqui e uns bytes rotulados `video/mp4` (ninguém dá play no vídeo
 # falso). `fake:gone` faz o papel do arquivo que o WhatsApp não tem mais. A imagem do Atlas (m4) continua sem as
 # chaves, como uma mensagem de antes desta versão.
+#
+# Contrato 39: o envio de imagem e vídeo fica em `sent` (tipo, nome, tamanho e legenda, nunca os bytes) e o eco volta
+# com as chaves falsas do tipo: baixar o eco devolve o PNG (ou o começo de MP4) acima, não o arquivo enviado.
 import base64
 import math
 import os
@@ -190,6 +193,14 @@ class FakeBackend:
             message_id = f'enviada-{self.counter}'
             self.sent.append({'id': message_id, 'chatId': chat_id, 'text': text})
         return message_id
+
+    def send_media(self, chat_id, kind, mime, data, caption, name):
+        """Contrato 39: `(id, chaves do download)`; o envio só fica na memória, sem os bytes."""
+        with self.lock:
+            self.counter += 1
+            message_id = f'enviada-{self.counter}'
+            self.sent.append({'id': message_id, 'chatId': chat_id, 'type': kind, 'mime': mime, 'name': name, 'size': len(data), 'caption': caption})
+        return message_id, f'fake:{kind}'.encode()
 
     def download_media(self, kind, proto):
         """Contrato 37: os bytes falsos do tipo; `fake:gone` é o arquivo que o WhatsApp não tem mais."""

@@ -12,16 +12,26 @@
 # download) e o áudio, a duração; `download_media` reconstrói a mensagem e baixa pelo `download_any` do neonize, só
 # quando a pessoa clica no app. `DownloadError` (endereço expirado, arquivo apagado e também falha passageira, que o
 # whatsmeow não distingue) vira `MediaGone`; o app mostra o aviso e deixa clicar de novo.
+#
+# Contrato 39: `send_media` envia imagem ou vídeo pelo `send_message`; a mensagem montada volta serializada para o eco do
+# serviço baixar depois, como uma recebida. A imagem sai do `build_image_message` do neonize (só bytes locais e o PIL). O
+# vídeo NÃO usa o `build_video_message`: quando a miniatura falha, ele baixa uma imagem da Wikimedia (um destino de rede
+# fora do WhatsApp). Aqui a duração e a miniatura saem do ffprobe e do ffmpeg locais, num arquivo temporário 0600 da pasta
+# de dados, e o VideoMessage é montado à mão com o `upload` do neonize; miniatura que falha vai sem miniatura, nunca pela
+# rede. Sem o ffmpeg ou o ffprobe, `MissingFfmpeg` (o app explica como instalar).
 import base64
 import hashlib
 import json
 import os
+import shutil
+import subprocess
+import tempfile
 import threading
 import time
 from urllib.parse import urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
-from bridge_store import DOWNLOADABLE_KINDS, MediaGone, to_ms
+from bridge_store import DOWNLOADABLE_KINDS, MediaGone, MissingFfmpeg, to_ms
 
 # Motivos de `ConnectFailure` do whatsmeow: 402 é a suspensão temporária; 401, 403 e 406 são sessão encerrada.
 TEMP_BANNED = 402
@@ -32,6 +42,57 @@ PHOTO_TTL_S = 7 * 24 * 3600
 NO_PHOTO_TTL_S = 24 * 3600
 PHOTO_TIMEOUT_S = 10
 PHOTO_DIR = 'photos'
+# Contrato 39: o ffmpeg e o ffprobe do PATH ou do Homebrew (o app aberto pelo Finder tem um PATH curto).
+FFMPEG_DIRS = ('/opt/homebrew/bin', '/usr/local/bin')
+FFMPEG_TIMEOUT_S = 60
+VIDEO_THUMB_MAX = 64 * 1024
+
+
+def find_tool(name):
+    """O caminho do ffmpeg ou do ffprobe, ou `None`."""
+    found = shutil.which(name)
+    if found:
+        return found
+    for folder in FFMPEG_DIRS:
+        path = os.path.join(folder, name)
+        if os.access(path, os.X_OK):
+            return path
+    return None
+
+
+def run_tool(args):
+    """Roda o ffmpeg/ffprobe sem shell, com prazo; a saída em bytes, ou `None` na falha."""
+    try:
+        done = subprocess.run(args, capture_output=True, timeout=FFMPEG_TIMEOUT_S, check=False)  # noqa: S603 - caminho e argumentos fixos
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    return done.stdout if done.returncode == 0 else None
+
+
+def video_details(data, folder):
+    """(segundos, miniatura JPEG ou `None`) do vídeo, pelo ffprobe e pelo ffmpeg locais. Sem eles, `MissingFfmpeg`."""
+    ffmpeg, ffprobe = find_tool('ffmpeg'), find_tool('ffprobe')
+    if not ffmpeg or not ffprobe:
+        raise MissingFfmpeg()
+    handle, path = tempfile.mkstemp(prefix='envio-', suffix='.bin', dir=folder)
+    try:
+        with os.fdopen(handle, 'wb') as file:
+            file.write(data)
+        os.chmod(path, 0o600)
+        probed = run_tool([ffprobe, '-v', 'error', '-show_entries', 'format=duration', '-of', 'default=noprint_wrappers=1:nokey=1', path])
+        try:
+            seconds = max(0, int(float((probed or b'').decode('ascii', 'replace').strip() or 0)))
+        except ValueError:
+            seconds = 0
+        thumb = run_tool([ffmpeg, '-v', 'error', '-i', path, '-frames:v', '1', '-vf', 'scale=200:-2', '-f', 'image2', '-c:v', 'mjpeg', 'pipe:1'])
+        if not thumb or thumb[:3] != b'\xff\xd8\xff' or len(thumb) > VIDEO_THUMB_MAX:
+            thumb = None
+        return seconds, thumb
+    finally:
+        try:
+            os.remove(path)
+        except OSError:
+            pass
 
 
 def image_mime(data):
@@ -280,6 +341,38 @@ class NeonizeBackend:
         user, server = chat_id.split('@', 1)
         response = self.client.send_message(build_jid(user, server), text)
         return getattr(response, 'ID', '') or ''
+
+    def send_media(self, chat_id, kind, mime, data, caption, name):
+        """Contrato 39: envia a imagem ou o vídeo com a legenda; `(id, mensagem serializada)`."""
+        from neonize.utils import build_jid
+
+        user, server = chat_id.split('@', 1)
+        message = self.video_message(bytes(data), mime, caption) if kind == 'video' else self.client.build_image_message(bytes(data), caption or None)
+        response = self.client.send_message(build_jid(user, server), message)
+        return getattr(response, 'ID', '') or '', media_proto(kind, message)
+
+    def video_message(self, data, mime, caption):
+        """Contrato 39: o VideoMessage montado aqui (sem o `build_video_message`, que pode ir à rede pela miniatura)."""
+        from neonize.proto.waE2E.WAWebProtobufsE2E_pb2 import Message, VideoMessage
+        from neonize.utils.enum import MediaType
+
+        seconds, thumb = video_details(data, self.data_dir)
+        upload = self.client.upload(data, MediaType.MediaVideo)
+        fields = {
+            'URL': upload.url,
+            'directPath': upload.DirectPath,
+            'fileEncSHA256': upload.FileEncSHA256,
+            'fileLength': upload.FileLength,
+            'fileSHA256': upload.FileSHA256,
+            'mediaKey': upload.MediaKey,
+            'mimetype': mime,
+            'seconds': seconds,
+        }
+        if caption:
+            fields['caption'] = caption
+        if thumb:
+            fields['JPEGThumbnail'] = thumb
+        return Message(videoMessage=VideoMessage(**fields))
 
     def download_media(self, kind, proto):
         """Contrato 37: os bytes da mídia, pela mensagem guardada. Expirada ou apagada no WhatsApp: `MediaGone`."""

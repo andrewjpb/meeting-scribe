@@ -24,6 +24,10 @@ class MediaGone(Exception):
     """A mídia não está mais disponível no WhatsApp (o endereço expirou ou o servidor recusou)."""
 
 
+class MissingFfmpeg(Exception):
+    """Contrato 39: o envio de vídeo precisa do ffmpeg e do ffprobe (a duração e a miniatura saem deles)."""
+
+
 def _clip(value, limit):
     text = value if isinstance(value, str) else ''
     return text[:limit]

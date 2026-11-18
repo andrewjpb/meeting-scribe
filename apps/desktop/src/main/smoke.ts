@@ -5466,6 +5466,9 @@ async function whatsappChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => 
     detail: `padrão desligado=${correctDefault !== true}; ligado -> enviadas=${corrected.length} "${corrected[2]?.text ?? ''}"; sessão ACP de correção=${Boolean(correctSession)} (modelo ${correctModel}); campo limpo no clique=${clearedAtClick}; temporário "${correctPending.text}" (linha "${correctPending.status}", brilho=${correctPending.shimmer}); os dois juntos=${correctPending.both}; temporário saiu=${pendingGone}; balão corrigido=${shownCorrected} (fade=${swapFade}); desligado de novo=${readSettings(ctx.userDataDir).whatsappAutoCorrect === false}`,
   }
 
+  // Contrato 39: imagem por arrastar e soltar (e pelo clipe), com a legenda; só o clique em "Enviar" envia.
+  checks['attach'] = await whatsappAttachCheck(ctx, win, shots)
+
   // "Só estas conversas" do Assistente (contrato 25; o "Perguntar" do 24) com a conversa da Ana: o `.md` dela na
   // pasta da conversa e no índice.
   await clickSelector(contents, '[data-nav="assistente"]')
@@ -5602,6 +5605,129 @@ async function whatsappMediaCheck(ctx: SmokeContext, win: BrowserWindow, root: s
       cacheModes.every((item) => item === '600') &&
       mode(mediaDir) === '700',
     detail: `m4 antiga: chip com "${old.title}", sem Baixar=${!old.download}; antes do clique nada baixado=${nothingBefore} (${JSON.stringify(before)}); imagem em blob=${image}, sobreposição=${overlay}, Esc fecha=${overlayClosed}; player=${player}, tempo 0:00 / 0:02=${timeShown}, velocidades ${rates.join(' ')}; "Transcrever" com "${transcribeTitle}"; texto no balão=${transcribed}, botão saiu=${buttonGone}; transcripts.json ${mode(transcriptsFile)} igual=${saved === SMOKE_AUDIO_TRANSCRIPT}; uploads ${JSON.stringify(uploads)}; media/ ${mode(mediaDir)} com ${cached.length} arquivos ${cacheModes.join(',')}`,
+  }
+}
+
+/** O que o serviço falso registrou de um envio de anexo (contrato 39): nunca os bytes. */
+interface WaSentMedia {
+  id: string
+  chatId: string
+  type?: string
+  mime?: string
+  name?: string
+  size?: number
+  caption?: string
+}
+
+/**
+ * Contrato 39, na conversa da Ana: arrastar um arquivo mostra "Solte para anexar"; soltar um texto com nome de PNG é
+ * recusado pelos bytes; soltar um texto e o PNG do fixture monta a prévia do PNG (o primeiro válido) e nada é enviado;
+ * Esc e o X descartam; o clipe (o seletor do main, com o fixture escolhido) monta de novo. O canal do anexo sem o clique
+ * é recusado; com a legenda "olha isso", o clique em "Enviar" manda ao serviço falso, a prévia sai e o eco aparece como
+ * balão de mídia seu, que baixa no clique.
+ */
+async function whatsappAttachCheck(ctx: SmokeContext, win: BrowserWindow, shots: Screenshot[]): Promise<Check> {
+  const contents = win.webContents
+  const conversation = `[data-whatsapp-conversation="${WA_ANA}"]`
+  const pngPath = join(app.getAppPath(), 'test', 'fixtures', 'brand', 'logo-smoke.png')
+  const png = readFileSync(pngPath)
+  const files = (list: { name: string; type: string; bytes: Buffer }[]): string =>
+    JSON.stringify(list.map((file) => ({ name: file.name, type: file.type, base64: file.bytes.toString('base64') })))
+  /** Monta o `DataTransfer` com os arquivos e dispara o `dragenter` na conversa (o `drop` vem depois, com o mesmo). */
+  const dragIn = (list: string): Promise<boolean> =>
+    evaluate<boolean>(
+      contents,
+      `(() => { const dt = new DataTransfer(); for (const f of ${list}) dt.items.add(new File([Uint8Array.from(atob(f.base64), (c) => c.charCodeAt(0))], f.name, { type: f.type })); window.__waDrop = dt; const el = document.querySelector('${conversation} [data-whatsapp-messages]'); if (!el) return false; el.dispatchEvent(new DragEvent('dragenter', { dataTransfer: dt, bubbles: true, cancelable: true })); el.dispatchEvent(new DragEvent('dragover', { dataTransfer: dt, bubbles: true, cancelable: true })); return true })()`,
+    )
+  const drop = (): Promise<boolean> =>
+    evaluate<boolean>(contents, `(() => { const el = document.querySelector('${conversation} [data-whatsapp-messages]'); if (!el || !window.__waDrop) return false; el.dispatchEvent(new DragEvent('drop', { dataTransfer: window.__waDrop, bubbles: true, cancelable: true })); return true })()`)
+  const previewShown = `(() => { const img = document.querySelector('${conversation} [data-wa-attach="image"] img[data-wa-attach-thumb]'); return img && img.src.startsWith('blob:') && img.complete && img.naturalWidth > 0 && document.querySelector('[data-wa-attach-name]')?.textContent === 'logo-smoke.png' })()`
+  const noPreview = `!document.querySelector('[data-wa-attach]')`
+  const sentBefore = (await waSent(ctx)).length
+
+  // Um texto com nome e tipo de PNG: recusado pelos bytes.
+  await dragIn(files([{ name: 'falsa.png', type: 'image/png', bytes: Buffer.from('não sou uma imagem, sou texto') }]))
+  const overlay = await waitFor(contents, `document.querySelector('${conversation} [data-wa-drop]')?.textContent === 'Solte para anexar'`)
+  await drop()
+  const lying = await waitFor(contents, `(document.querySelector('[data-wa-attach-error]')?.textContent ?? '').startsWith('Só dá para anexar imagem') && ${noPreview}`)
+  const overlayGone = await waitFor(contents, `!document.querySelector('[data-wa-drop]')`)
+
+  // Um texto e o PNG: fica o PNG (o primeiro válido); soltar não envia nada.
+  await dragIn(files([{ name: 'notas.txt', type: 'text/plain', bytes: Buffer.from('anotações') }, { name: 'logo-smoke.png', type: 'image/png', bytes: png }]))
+  await drop()
+  const dropped = await waitFor(contents, previewShown, 8000)
+  const errorCleared = await evaluate<boolean>(contents, `!document.querySelector('[data-wa-attach-error]')`)
+  await wait(400)
+  const sentAfterDrop = (await waSent(ctx)).length
+
+  // Esc descarta; soltar de novo e o X descarta; o clipe monta pelo main.
+  await evaluate(contents, `window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))`)
+  const escaped = await waitFor(contents, noPreview)
+  await dragIn(files([{ name: 'logo-smoke.png', type: 'image/png', bytes: png }]))
+  await drop()
+  const again = await waitFor(contents, previewShown, 8000)
+  await clickSelector(contents, '[data-action="whatsapp-attach-discard"]')
+  const discarded = await waitFor(contents, noPreview)
+  ctx.fixtures.chosenAttachment = pngPath
+  await clickSelector(contents, '[data-wa-attach-pick]')
+  const picked = await waitFor(contents, previewShown, 8000)
+  ctx.fixtures.chosenAttachment = null
+  await setValue(contents, '[data-whatsapp-composer]', 'olha isso')
+  const placeholder = await evaluate<string>(contents, `document.querySelector('[data-whatsapp-composer]')?.getAttribute('placeholder') ?? ''`)
+  await settle(contents)
+  shots.push(await capture(win, ctx.outDir, 'whatsapp-anexo-light'))
+
+  // O canal do anexo sem o clique: token inventado e sem token, recusados; nada sai.
+  const forged = await evaluate<string>(
+    contents,
+    `window.__scribeApi.invoke('scribe:whatsapp-send-media', { chatId: '${WA_ANA}', name: 'forjada.png', mime: 'image/png', bytes: Uint8Array.from(atob('${png.toString('base64')}'), (c) => c.charCodeAt(0)), clickToken: crypto.randomUUID() }).then((r) => JSON.stringify(r), (e) => 'erro ' + String(e?.message ?? e).slice(0, 60))`,
+  )
+  const noToken = await evaluate<string>(
+    contents,
+    `window.__scribeApi.invoke('scribe:whatsapp-send-media', { chatId: '${WA_ANA}', name: 'forjada.png', mime: 'image/png', bytes: new Uint8Array([137, 80, 78, 71]) }).then((r) => JSON.stringify(r), (e) => 'erro ' + String(e?.message ?? e).slice(0, 60))`,
+  )
+  const sentWithoutClick = (await waSent(ctx)).length
+
+  // O clique em "Enviar": o serviço registra o envio da imagem com a legenda e o eco vira balão de mídia seu.
+  await clickSelector(contents, '[data-action="whatsapp-send"]')
+  let sent = (await waSent(ctx)) as WaSentMedia[]
+  for (let attempt = 0; attempt < 80 && sent.length <= sentBefore; attempt++) {
+    await wait(100)
+    sent = (await waSent(ctx)) as WaSentMedia[]
+  }
+  const last = sent.at(-1)
+  const bubble = `document.querySelector('${conversation} [data-whatsapp-message="${last?.id ?? 'x'}"][data-from-me="true"]')`
+  const echoed = await waitFor(contents, `${bubble}?.querySelector('[data-wa-download]') && ${bubble}?.querySelector('[data-whatsapp-text]')?.textContent === 'olha isso'`, 8000)
+  const cleared = await waitFor(contents, `${noPreview} && (document.querySelector('[data-whatsapp-composer]')?.value ?? 'x') === '' && !document.querySelector('[data-whatsapp-send-error]')`)
+  await clickSelector(contents, `${conversation} [data-whatsapp-message="${last?.id ?? 'x'}"] [data-wa-download]`)
+  const downloaded = await waitFor(contents, `(() => { const img = ${bubble}?.querySelector('img[data-wa-image]'); return img && img.src.startsWith('blob:') && img.complete && img.naturalWidth > 0 })()`, 8000)
+  return {
+    ok:
+      overlay &&
+      lying &&
+      overlayGone &&
+      dropped &&
+      errorCleared &&
+      sentAfterDrop === sentBefore &&
+      escaped &&
+      again &&
+      discarded &&
+      picked &&
+      placeholder === 'Legenda (opcional)' &&
+      forged === JSON.stringify({ ok: false, error: 'click' }) &&
+      noToken === JSON.stringify({ ok: false, error: 'click' }) &&
+      sentWithoutClick === sentBefore &&
+      sent.length === sentBefore + 1 &&
+      last?.chatId === WA_ANA &&
+      last.type === 'image' &&
+      last.mime === 'image/png' &&
+      last.name === 'logo-smoke.png' &&
+      last.size === png.byteLength &&
+      last.caption === 'olha isso' &&
+      echoed &&
+      cleared &&
+      downloaded,
+    detail: `sobreposição=${overlay} (saiu=${overlayGone}); PNG mentiroso recusado=${lying}; texto + PNG -> prévia do PNG=${dropped}, enviadas no soltar=${sentAfterDrop - sentBefore}; Esc=${escaped}; X=${again && discarded}; clipe=${picked}; legenda com "${placeholder}"; token inventado=${forged}; sem token=${noToken}; sem clique=${sentWithoutClick - sentBefore}; com o clique ${JSON.stringify(last ?? null)}; eco como mídia sua=${echoed}; prévia e campo limpos=${cleared}; eco baixa=${downloaded}`,
   }
 }
 
@@ -7201,8 +7327,8 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
   // com o link, no claro (contrato 26); o bloco "Agenda", a faixa "não está sendo gravada" e "Próximas", no claro
   // (contrato 12); a aba "Plugins" com o plugin salvo e o manual aberto, no claro (contrato 31); o painel Detalhes do
   // WhatsApp, no claro (contrato 32; no escuro ele sai no print da tela "WhatsApp"); o balão com a imagem, o player e
-  // a transcrição do áudio, no claro (contrato 37).
-  const expectedShots = SCREENS.length * THEMES.length + 49
+  // a transcrição do áudio, no claro (contrato 37); a prévia do anexo com a legenda, no claro (contrato 39).
+  const expectedShots = SCREENS.length * THEMES.length + 50
   if (screenshots.length !== expectedShots) failures.push(`${screenshots.length} PNGs em vez de ${expectedShots}`)
   for (const shot of screenshots) {
     if (shot.width < 1120 || shot.height < 740) failures.push(`${shot.name}: ${shot.width}x${shot.height} abaixo de 1120x740`)

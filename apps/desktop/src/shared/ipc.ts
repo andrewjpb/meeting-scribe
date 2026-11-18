@@ -41,6 +41,7 @@ import type {
   WhatsAppTranscribeRequest,
   WhatsAppTranscribeResult,
 } from './whatsapp'
+import type { WhatsAppAttachPickResult, WhatsAppSendMediaRequest, WhatsAppSendMediaResult } from './whatsapp-attach'
 
 export interface AppInfo {
   name: string
@@ -300,6 +301,13 @@ export interface InvokeChannels {
    * uso único e com validade de 10 s, e depois do "Enviar" no diálogo nativo que o main abre em todo envio.
    */
   'scribe:whatsapp-send': { request: WhatsAppSendRequest; response: WhatsAppSendResult }
+  /**
+   * Contrato 39: enviar a imagem ou o vídeo anexado, com a legenda como foi digitada. Só com o token de clique, como o
+   * texto (`ScribeApi.whatsappSendMedia`); o main confere de novo o tipo pelos bytes e o limite antes de gastar o token.
+   */
+  'scribe:whatsapp-send-media': { request: WhatsAppSendMediaRequest; response: WhatsAppSendMediaResult }
+  /** Contrato 39: o clipe do campo abre o seletor do macOS; o arquivo escolhido volta conferido (nada é enviado). */
+  'scribe:whatsapp-attach-pick': { request: undefined; response: WhatsAppAttachPickResult }
   /** "Rascunho com o Claude": o texto volta para o campo; nada é enviado. */
   'scribe:whatsapp-draft': { request: WhatsAppDraftRequest; response: WhatsAppDraftResult }
   /** "Ligar conversa do WhatsApp" no detalhe da reunião. */
@@ -549,6 +557,8 @@ const INVOKE: Record<InvokeChannel, true> = {
   'scribe:whatsapp-messages': true,
   'scribe:whatsapp-search': true,
   'scribe:whatsapp-send': true,
+  'scribe:whatsapp-send-media': true,
+  'scribe:whatsapp-attach-pick': true,
   'scribe:whatsapp-draft': true,
   'scribe:whatsapp-link-get': true,
   'scribe:whatsapp-link-set': true,
@@ -780,6 +790,9 @@ export const WHEN_LOCKED: Readonly<Record<InvokeChannel, LockedPolicy>> = Object
   'scribe:whatsapp-messages': 'refused',
   'scribe:whatsapp-search': 'refused',
   'scribe:whatsapp-send': 'refused',
+  // Contrato 39: o envio do anexo e o seletor de arquivo, como o resto do WhatsApp.
+  'scribe:whatsapp-send-media': 'refused',
+  'scribe:whatsapp-attach-pick': 'refused',
   'scribe:whatsapp-draft': 'refused',
   'scribe:whatsapp-link-get': 'refused',
   'scribe:whatsapp-link-set': 'refused',
@@ -842,4 +855,6 @@ export interface ScribeApi {
    * usuário no frame, gera o token de clique, registra no main e envia com ele. Sem clique de verdade, recusado.
    */
   whatsappSend(request: Omit<WhatsAppSendRequest, 'clickToken'>): Promise<WhatsAppSendResult>
+  /** Contrato 39: o "Enviar" com um anexo, pelo mesmo token de clique do `whatsappSend`. */
+  whatsappSendMedia(request: Omit<WhatsAppSendMediaRequest, 'clickToken'>): Promise<WhatsAppSendMediaResult>
 }

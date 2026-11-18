@@ -14,6 +14,10 @@
 // Contrato 37: a mídia de uma mensagem e a transcrição de um áudio, só quando a pessoa clica. Os bytes não ficam no
 // main (o serviço guarda no disco dele; o renderer, o blob da sessão); a transcrição manda o áudio só à AssemblyAI e
 // fica em `whatsapp/transcripts.json`, que sai no "Remover" e no "Sair da conta".
+//
+// Contrato 39: a imagem ou o vídeo anexado sai pelo mesmo guarda do texto (`sendMedia`): o token é gasto primeiro, o
+// tipo é conferido de novo pelos bytes (o que a tela diz é só dica) e a legenda vai como foi digitada, sem a correção do
+// contrato 35. Os bytes só passam por aqui a caminho do serviço; nada fica guardado no main.
 import { randomBytes, randomUUID } from 'node:crypto'
 import { existsSync } from 'node:fs'
 import { chmod, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
@@ -49,6 +53,7 @@ import { draftInput } from './draft'
 import { copyBridge, installBridge, isInstalled, removeBridge, WHATSAPP_PATHS, type Exec, type PackageIndex } from './install'
 import { killBridgePid, startBridge, type BridgeBackend, type BridgeProcess, type SpawnBridge } from './process'
 import { createSendGuard, type SendGuard } from './send-guard'
+import { checkAttachment, WHATSAPP_ATTACH_MIMES, WHATSAPP_ATTACH_NAME_MAX, type WhatsAppSendMediaResult } from '../../shared/whatsapp-attach'
 import { clipTranscript, createTranscriptsCache } from './transcripts'
 
 /** Aceitação da tela de risco vale por 10 min e para um pareamento (ou uma instalação). */
@@ -63,6 +68,16 @@ const photoSchema = z.object({ chatId: chatIdSchema }).strict()
 const mediaSchema = z.object({ chatId: chatIdSchema, messageId: z.string().regex(WHATSAPP_MESSAGE_ID_PATTERN) }).strict()
 const transcribeSchema = mediaSchema.extend({ peek: z.boolean().optional() }).strict()
 const sendSchema = z.object({ chatId: chatIdSchema, text: z.string().max(WHATSAPP_SEND_TEXT_MAX).refine((value) => value.trim() !== ''), clickToken: z.string().max(100) }).strict()
+const sendMediaSchema = z
+  .object({
+    chatId: chatIdSchema,
+    name: z.string().min(1).max(WHATSAPP_ATTACH_NAME_MAX),
+    mime: z.enum(WHATSAPP_ATTACH_MIMES),
+    bytes: z.instanceof(Uint8Array),
+    caption: z.string().max(WHATSAPP_SEND_TEXT_MAX).optional(),
+    clickToken: z.string().max(100),
+  })
+  .strict()
 const draftSchema = z.object({ chatId: chatIdSchema, instruction: z.string().trim().min(1).max(WHATSAPP_DRAFT_INSTRUCTION_MAX), meetingId: meetingIdSchema.nullable() }).strict()
 const riskSchema = z.object({ purpose: z.enum(['install', 'pair']) }).strict()
 const pairSchema = z.object({ phone: z.string().regex(/^\d{8,15}$/).optional() }).strict()
@@ -156,6 +171,8 @@ export interface WhatsAppService {
   registerClick(senderId: number, token: unknown): void
   /** Só com o token de clique (uso único, 10 s) da mesma janela. Em todo envio. */
   send(senderId: number, request: unknown): Promise<WhatsAppSendResult>
+  /** Contrato 39: a imagem ou o vídeo, com a mesma prova de clique do `send`; a legenda não passa pela correção. */
+  sendMedia(senderId: number, request: unknown): Promise<WhatsAppSendMediaResult>
   forgetSender(senderId: number): void
   draft(request: unknown): Promise<WhatsAppDraftResult>
   link(meetingId: unknown): Promise<WhatsAppMeetingLink | null>
@@ -705,6 +722,39 @@ export function createWhatsAppService(deps: WhatsAppServiceDeps): WhatsAppServic
         return { ok: true, id }
       } catch (failure) {
         if (failure instanceof WhatsAppServiceError && failure.status === 409) return { ok: false, error: 'state' }
+        return { ok: false, error: 'failed' }
+      }
+    },
+
+    async sendMedia(senderId, request) {
+      const raw = (request ?? {}) as { clickToken?: unknown; chatId?: unknown }
+      const parsed = sendMediaSchema.safeParse(request)
+      // Como no texto: o token é gasto mesmo com o resto inválido.
+      const proof = guard.consume(senderId, raw.clickToken, typeof raw.chatId === 'string' ? raw.chatId : '')
+      if (!proof) {
+        deps.log?.('[whatsapp] envio de anexo recusado: sem clique')
+        return { ok: false, error: 'click' }
+      }
+      if (!parsed.success) return { ok: false, error: 'invalid' }
+      const { chatId, name, mime, bytes, caption } = parsed.data
+      // O tipo pelos bytes tem de ser o informado, e dentro do limite dele.
+      const checked = checkAttachment(bytes, { declared: mime })
+      if (!checked.ok) return { ok: false, error: checked.error === 'too-big' ? 'too-big' : 'invalid' }
+      if (!client || health?.state !== 'connected') return { ok: false, error: 'state' }
+      const current = client
+      const chat = (await current.chats().catch((): WhatsAppChat[] => [])).find((item) => item.id === chatId)
+      if (!chat) return { ok: false, error: 'invalid' }
+      try {
+        const id = await current.sendMedia(proof, chatId, { name, mime, bytes, caption: caption?.trim() ? caption : undefined })
+        deps.log?.(`[whatsapp] ${checked.kind === 'video' ? 'vídeo enviado' : 'imagem enviada'} com o clique da pessoa`)
+        return { ok: true, id }
+      } catch (failure) {
+        if (failure instanceof WhatsAppServiceError && failure.status === 409) return { ok: false, error: 'state' }
+        if (failure instanceof WhatsAppServiceError && failure.status === 413) return { ok: false, error: 'too-big' }
+        if (failure instanceof WhatsAppServiceError && failure.status === 400) return { ok: false, error: 'invalid' }
+        // Sem resposta no prazo: o arquivo pode ter saído; a tela pede para conferir antes de tentar de novo.
+        if (failure instanceof WhatsAppServiceError && failure.code === 'timeout') return { ok: false, error: 'timeout' }
+        if (failure instanceof WhatsAppServiceError && failure.status === 503 && failure.code === 'ffmpeg') return { ok: false, error: 'ffmpeg' }
         return { ok: false, error: 'failed' }
       }
     },

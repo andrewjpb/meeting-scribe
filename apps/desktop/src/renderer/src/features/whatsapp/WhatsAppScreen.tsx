@@ -1,15 +1,19 @@
-import { PanelRight, Search, Sparkles, TriangleAlert } from 'lucide-react'
-import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type RefObject, type UIEvent } from 'react'
+import { Paperclip, PanelRight, Search, Sparkles, TriangleAlert } from 'lucide-react'
+import { useEffect, useLayoutEffect, useRef, useState, type DragEvent, type KeyboardEvent, type RefObject, type UIEvent } from 'react'
 import { Link, useLocation } from 'react-router'
 import { settingsPath, type WhatsAppNavigationState } from '@shared/routes'
 import type { Meeting } from '@shared/meetings'
 import { WHATSAPP_DRAFT_INSTRUCTION_MAX, WHATSAPP_SEND_TEXT_MAX, type WhatsAppChat, type WhatsAppMessage, type WhatsAppSearchHit } from '@shared/whatsapp'
+import { attachErrorText, attachName, WHATSAPP_ATTACH_HEAD, type WhatsAppAttachment, type WhatsAppSendMediaResult } from '@shared/whatsapp-attach'
 import { useSettings } from '../../app/settingsStore'
 import { Button } from '../../design/Button'
 import { Icon } from '../../design/Icon'
 import { Note, NOTE_ACTION_CLASS } from '../../design/Note'
+import { AttachCard } from './AttachCard'
+import { carriesFiles, chooseDropped, DROP_FILES_MAX, previewFor, type AttachPreview } from './attach'
 import { Avatar } from './Avatar'
 import { DetailsPanel } from './DetailsPanel'
+import { toBlob } from './media'
 import { MessageMedia } from './MessageMedia'
 import { chatPhone, clockLabel, detailsStartOpen, messageTimeLabel, previewText, startsRun } from './format'
 import { visibleMessages, visiblePending, type PendingSend } from './pending'
@@ -20,6 +24,17 @@ const SEND_ERRORS: Record<'click' | 'state' | 'invalid' | 'failed', string> = {
   state: 'O WhatsApp não está conectado. Confira em Configurações › Contas.',
   invalid: 'A mensagem está vazia ou passou de 4 096 caracteres.',
   failed: 'O WhatsApp não aceitou a mensagem. Tente de novo.',
+}
+
+/** Contrato 39: o envio do anexo. */
+const MEDIA_SEND_ERRORS: Record<Extract<WhatsAppSendMediaResult, { ok: false }>['error'], string> = {
+  click: 'O arquivo só sai com o seu clique em "Enviar". Clique de novo.',
+  state: SEND_ERRORS.state,
+  invalid: 'O arquivo não é uma imagem ou um vídeo aceito.',
+  'too-big': 'O arquivo passa do limite do WhatsApp (imagem até 16 MB, vídeo até 64 MB).',
+  timeout: 'Demorou demais — confira na conversa se chegou antes de tentar de novo.',
+  ffmpeg: 'Instale o ffmpeg para enviar vídeos (brew install ffmpeg).',
+  failed: 'O WhatsApp não aceitou o arquivo. Tente de novo.',
 }
 
 const DRAFT_ERRORS: Record<'not-found' | 'timeout' | 'failed' | 'agent' | 'chat', string> = {
@@ -185,6 +200,21 @@ function Conversation({ chat, initialText, detailsOpen, onDetails }: Conversatio
   const list = useRef<HTMLDivElement | null>(null)
   const atBottom = useRef(true)
   const olderFrom = useRef<number | null>(null)
+  // Contrato 39: a prévia do anexo (só na memória desta tela), a recusa e a sobreposição "Solte para anexar".
+  const [previewState, setPreview] = useState<AttachPreview | null>(null)
+  const preview = previewFor(previewState, chat.id)
+  const [attachError, setAttachError] = useState<string | null>(null)
+  const [dragging, setDragging] = useState(false)
+  const dragDepth = useRef(0)
+  // A leitura do arquivo (soltar ou clipe) termina depois: só vira prévia com a conversa ainda aberta e fora de um envio.
+  const mounted = useRef(true)
+  const sendingNow = useRef(false)
+  useEffect(() => {
+    mounted.current = true
+    return () => {
+      mounted.current = false
+    }
+  }, [])
 
   // Cada conversa monta o seu próprio campo (`key`): trocar de conversa começa tudo do zero.
   useEffect(() => {
@@ -212,6 +242,24 @@ function Conversation({ chat, initialText, detailsOpen, onDetails }: Conversatio
     })
   }, [restored, chat.id])
 
+  // Contrato 39: o object URL da miniatura sai junto com a prévia (descartada, enviada ou a conversa fechada).
+  useEffect(() => {
+    if (!previewState) return
+    return () => URL.revokeObjectURL(previewState.url)
+  }, [previewState])
+
+  // Esc descarta a prévia (a sobreposição da imagem do contrato 37, aberta por cima, fecha antes).
+  useEffect(() => {
+    if (!previewState || sending) return
+    const onKey = (event: globalThis.KeyboardEvent): void => {
+      if (event.key !== 'Escape' || event.defaultPrevented) return
+      setPreview(null)
+      setAttachError(null)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [previewState, sending])
+
   // Fim da lista ao abrir e a cada mensagem nova (se a pessoa já estava no fim); mais antigas mantêm a posição.
   useLayoutEffect(() => {
     const el = list.current
@@ -237,11 +285,106 @@ function Conversation({ chat, initialText, detailsOpen, onDetails }: Conversatio
     }
   }
 
+  /** Contrato 39: o arquivo aceito vira a prévia; nada é enviado. Conversa fechada ou envio em curso: descarta. */
+  const showAttachment = (attachment: WhatsAppAttachment): void => {
+    if (!mounted.current || sendingNow.current) return
+    setAttachError(null)
+    setSendError(null)
+    setPreview({ ...attachment, chatId: chat.id, url: URL.createObjectURL(toBlob(attachment.bytes, attachment.mime)) })
+  }
+
+  /** Soltar: o primeiro arquivo aceito pelos primeiros bytes (a extensão e o tipo do navegador não contam). */
+  const attachFiles = async (files: File[]): Promise<void> => {
+    const heads = await Promise.all(files.map(async (file) => ({ size: file.size, head: new Uint8Array(await file.slice(0, WHATSAPP_ATTACH_HEAD).arrayBuffer()) })))
+    const choice = chooseDropped(heads)
+    if (!choice || !mounted.current) return
+    if (!choice.ok) {
+      setAttachError(attachErrorText(choice.error, choice.kind))
+      return
+    }
+    const file = files[choice.index]
+    if (!file) return
+    showAttachment({ name: attachName(file.name), mime: choice.mime, kind: choice.kind, bytes: new Uint8Array(await file.arrayBuffer()) })
+  }
+
+  const onDragEnter = (event: DragEvent<HTMLElement>): void => {
+    if (!carriesFiles([...event.dataTransfer.types])) return
+    event.preventDefault()
+    dragDepth.current += 1
+    setDragging(true)
+  }
+  const onDragOver = (event: DragEvent<HTMLElement>): void => {
+    if (!carriesFiles([...event.dataTransfer.types])) return
+    event.preventDefault()
+    event.dataTransfer.dropEffect = sending ? 'none' : 'copy'
+  }
+  const onDragLeave = (event: DragEvent<HTMLElement>): void => {
+    if (!carriesFiles([...event.dataTransfer.types])) return
+    dragDepth.current = Math.max(0, dragDepth.current - 1)
+    if (dragDepth.current === 0) setDragging(false)
+  }
+  const onDrop = (event: DragEvent<HTMLElement>): void => {
+    if (!carriesFiles([...event.dataTransfer.types])) return
+    event.preventDefault()
+    dragDepth.current = 0
+    setDragging(false)
+    if (sending) return
+    const files = [...event.dataTransfer.files].slice(0, DROP_FILES_MAX)
+    if (files.length) void attachFiles(files).catch(() => setAttachError(attachErrorText('type')))
+  }
+
+  /** O clipe: o seletor do macOS no main, que devolve o arquivo já conferido. */
+  const pickAttachment = (): void => {
+    if (sending) return
+    void window.__scribeApi.invoke('scribe:whatsapp-attach-pick').then(
+      (result) => {
+        if (!result || !mounted.current || sendingNow.current) return
+        if (result.ok) showAttachment(result.attachment)
+        else setAttachError(attachErrorText(result.error, result.kind))
+      },
+      () => {
+        if (mounted.current) setAttachError(attachErrorText('type'))
+      },
+    )
+  }
+
+  /**
+   * Contrato 39: o anexo sai pelo mesmo caminho do texto (o token do clique no preload, o guarda no main), com a legenda
+   * como foi digitada: sem o balão otimista e sem a correção do contrato 35. Falhou, a prévia fica para tentar de novo.
+   */
+  const sendMedia = (current: AttachPreview): void => {
+    const chatId = chat.id
+    sendingNow.current = true
+    setSending(true)
+    setSendError(null)
+    void window.__scribeApi.whatsappSendMedia({ chatId, name: current.name, mime: current.mime, bytes: current.bytes, caption: text.trim() ? text : undefined }).then(
+      (result) => {
+        sendingNow.current = false
+        setSending(false)
+        if (result.ok) {
+          setPreview(null)
+          setText('')
+          atBottom.current = true
+          void useWhatsApp.getState().open(chatId)
+        } else setSendError(MEDIA_SEND_ERRORS[result.error])
+      },
+      () => {
+        sendingNow.current = false
+        setSending(false)
+        setSendError(MEDIA_SEND_ERRORS.failed)
+      },
+    )
+  }
+
   /**
    * O envio de verdade: só daqui, no clique (ou ⌘↵) da pessoa. O preload confere a ativação do usuário e o main só
    * envia com o token desse clique (sem diálogo de confirmação desde o contrato 33).
    */
   const sendNow = (): void => {
+    if (preview) {
+      if (!sending) sendMedia(preview)
+      return
+    }
     const body = text
     if (!body.trim() || sending) return
     if (autoCorrect) {
@@ -312,7 +455,20 @@ function Conversation({ chat, initialText, detailsOpen, onDetails }: Conversatio
   }
 
   return (
-    <section data-whatsapp-conversation={chat.id} aria-label={chat.name} className="flex min-h-0 min-w-0 flex-1 flex-col">
+    <section
+      data-whatsapp-conversation={chat.id}
+      aria-label={chat.name}
+      onDragEnter={onDragEnter}
+      onDragOver={onDragOver}
+      onDragLeave={onDragLeave}
+      onDrop={onDrop}
+      className="relative flex min-h-0 min-w-0 flex-1 flex-col"
+    >
+      {dragging && (
+        <div data-wa-drop aria-hidden="true" className="pointer-events-none absolute inset-3 z-10 flex items-center justify-center rounded-[var(--radius-panel)] border-2 border-dashed border-accent bg-bg/90 text-15 font-medium text-title">
+          Solte para anexar
+        </div>
+      )}
       <header ref={header} className="flex h-14 shrink-0 items-center gap-3 border-b border-line px-6">
         <Avatar id={chat.id} name={chat.name} photo={photo} group={group} size={10} />
         <div className="flex min-w-0 flex-1 flex-col">
@@ -410,8 +566,23 @@ function Conversation({ chat, initialText, detailsOpen, onDetails }: Conversatio
             )}
           </div>
         )}
+        {preview && (
+          <AttachCard
+            preview={preview}
+            sending={sending}
+            onDiscard={() => {
+              setPreview(null)
+              setAttachError(null)
+            }}
+          />
+        )}
+        {attachError && (
+          <p role="alert" data-wa-attach-error className="text-12 text-rec">
+            {attachError}
+          </p>
+        )}
         <label htmlFor="whatsapp-composer" className="sr-only">
-          Mensagem para {chat.name}
+          {preview ? `Legenda para ${chat.name}` : `Mensagem para ${chat.name}`}
         </label>
         <textarea
           id="whatsapp-composer"
@@ -419,7 +590,7 @@ function Conversation({ chat, initialText, detailsOpen, onDetails }: Conversatio
           value={text}
           rows={3}
           maxLength={WHATSAPP_SEND_TEXT_MAX}
-          placeholder="Escreva uma mensagem"
+          placeholder={preview ? 'Legenda (opcional)' : 'Escreva uma mensagem'}
           onChange={(event) => setText(event.target.value)}
           onKeyDown={onKey}
           className="no-drag min-h-[72px] resize-none rounded-[var(--radius-control)] border border-line-strong bg-bg-raised px-3 py-2 text-15 text-text select-text placeholder:text-text-faint"
@@ -430,13 +601,26 @@ function Conversation({ chat, initialText, detailsOpen, onDetails }: Conversatio
           </p>
         )}
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <Button action="whatsapp-draft" variant="secondary" icon={Sparkles} onClick={() => setDraftOpen(true)} disabled={draftOpen}>
-            Rascunho com o Claude
-          </Button>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              data-wa-attach-pick
+              aria-label="Anexar imagem ou vídeo"
+              title="Anexar imagem ou vídeo (ou arraste para a conversa)"
+              onClick={pickAttachment}
+              disabled={sending}
+              className="no-drag inline-flex size-10 shrink-0 items-center justify-center rounded-[var(--radius-control)] border border-line-strong bg-bg-raised text-title transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-bg-sunken disabled:pointer-events-none disabled:opacity-50"
+            >
+              <Icon icon={Paperclip} />
+            </button>
+            <Button action="whatsapp-draft" variant="secondary" icon={Sparkles} onClick={() => setDraftOpen(true)} disabled={draftOpen}>
+              Rascunho com o Claude
+            </Button>
+          </div>
           <div className="flex items-center gap-3" title="Nenhuma mensagem sai sem o seu clique em Enviar.">
             <span className="text-12 text-text-faint">Enter pula linha</span>
-            <Button action="whatsapp-send" onClick={sendNow} disabled={!text.trim() || sending} shortcut="⌘↵" ariaShortcut="Meta+Enter">
-              Enviar
+            <Button action="whatsapp-send" onClick={sendNow} disabled={(!text.trim() && !preview) || sending} shortcut="⌘↵" ariaShortcut="Meta+Enter">
+              {sending && preview ? 'Enviando…' : 'Enviar'}
             </Button>
           </div>
         </div>

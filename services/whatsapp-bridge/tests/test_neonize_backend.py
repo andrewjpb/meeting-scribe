@@ -1,4 +1,5 @@
 # O cliente do neonize com o módulo `neonize` substituído: nenhum neonize instalado, nenhuma rede.
+import os
 import sys
 import types
 
@@ -422,3 +423,139 @@ def test_download_media_rebuilds_the_message_and_maps_expired_to_gone(fake_downl
     with pytest.raises(RuntimeError):
         backend.download_media('image', b'chaves')
     backend.stop()
+
+
+@pytest.fixture()
+def no_network(monkeypatch, fake_neonize):
+    """Contrato 39: o proto do VideoMessage e o `MediaType` sem neonize, e qualquer ida à rede explode."""
+    import socket
+    import urllib.request
+
+    def boom(*_args, **_kwargs):
+        raise AssertionError('tentou ir à rede')
+
+    requests = types.ModuleType('requests')
+    requests.get = boom
+    monkeypatch.setitem(sys.modules, 'requests', requests)
+    monkeypatch.setattr(urllib.request, 'urlopen', boom)
+    monkeypatch.setattr(socket, 'create_connection', boom)
+    monkeypatch.setattr(socket.socket, 'connect', boom)
+
+    class Message:
+        def __init__(self, **fields):
+            self.fields = fields
+
+        def SerializeToString(self):  # noqa: N802 - nome do protobuf
+            video = self.fields.get('videoMessage') or self.fields.get('imageMessage')
+            return repr(sorted(getattr(video, 'fields', {}).items())).encode()
+
+    class VideoMessage:
+        def __init__(self, **fields):
+            self.fields = fields
+
+    names = ['neonize.proto', 'neonize.proto.waE2E', 'neonize.proto.waE2E.WAWebProtobufsE2E_pb2', 'neonize.utils.enum']
+    for name in names:
+        monkeypatch.setitem(sys.modules, name, types.ModuleType(name))
+    sys.modules['neonize.proto.waE2E.WAWebProtobufsE2E_pb2'].Message = Message
+    sys.modules['neonize.proto.waE2E.WAWebProtobufsE2E_pb2'].VideoMessage = VideoMessage
+    sys.modules['neonize.utils.enum'].MediaType = types.SimpleNamespace(MediaVideo='video')
+    return Message
+
+
+JPEG_THUMB = b'\xff\xd8\xff\xe0miniatura'
+
+
+def tools(monkeypatch, thumb=JPEG_THUMB, found=True):
+    """ffmpeg e ffprobe falsos: a duração 3,4 s e a miniatura (ou a falha dela)."""
+    calls = []
+    monkeypatch.setattr(backend_neonize, 'find_tool', lambda name: f'/bin/{name}' if found else None)
+
+    def run(args):
+        calls.append(args)
+        return b'3.4\n' if args[0].endswith('ffprobe') else thumb
+
+    monkeypatch.setattr(backend_neonize, 'run_tool', run)
+    return calls
+
+
+def uploading(client):
+    uploads = []
+
+    def upload(data, media_type=None):
+        uploads.append((data, media_type))
+        return Obj(url='https://mmg.whatsapp.net/v', DirectPath='/v', FileEncSHA256=b'e', FileLength=len(data), FileSHA256=b's', MediaKey=b'k')
+
+    client.upload = upload
+    return uploads
+
+
+def test_send_media_image_uses_build_image_message(no_network, tmp_path):
+    """Contrato 39: a imagem pelo `build_image_message` (bytes locais), enviada pelo `send_message`."""
+    backend, _bridge, client = started(tmp_path)
+
+    class Built:
+        def SerializeToString(self):  # noqa: N802 - nome do protobuf
+            return b'imagem serializada'
+
+    built = []
+    client.build_image_message = lambda data, caption: built.append((data, caption)) or Built()
+    assert backend.send_media('5511911110000@s.whatsapp.net', 'image', 'image/png', b'png', 'olha isso', 'foto.png') == ('3EB0ABC', b'imagem serializada')
+    assert built == [(b'png', 'olha isso')]
+    to, _message = client.sent[-1]
+    assert (to.User, to.Server) == ('5511911110000', 's.whatsapp.net')
+    backend.stop()
+
+
+def test_send_media_video_is_built_here_without_the_network(no_network, monkeypatch, tmp_path):
+    """Contrato 39: o vídeo nunca passa pelo `build_video_message` (que baixa da Wikimedia); duração e miniatura locais."""
+    backend, _bridge, client = started(tmp_path)
+
+    def never(*_args, **_kwargs):
+        raise AssertionError('build_video_message não pode ser usado')
+
+    client.build_video_message = never
+    client.send_video = never
+    uploads = uploading(client)
+    calls = tools(monkeypatch)
+    message_id, proto = backend.send_media('120363000000000001@g.us', 'video', 'video/mp4', b'mp4', 'o vídeo', 'v.mp4')
+    assert message_id == '3EB0ABC' and proto
+    _to, message = client.sent[-1]
+    video = message.fields['videoMessage'].fields
+    assert video['seconds'] == 3 and video['JPEGThumbnail'] == JPEG_THUMB and video['caption'] == 'o vídeo' and video['mimetype'] == 'video/mp4'
+    assert video['URL'].startswith('https://mmg.whatsapp.net/') and uploads == [(b'mp4', 'video')]
+    assert [args[0] for args in calls] == ['/bin/ffprobe', '/bin/ffmpeg']
+    # O arquivo temporário sai depois.
+    assert not [name for name in os.listdir(tmp_path) if name.startswith('envio-')]
+    # Miniatura que falha (ou que não é JPEG): vai sem miniatura, e sem legenda quando ela é vazia.
+    tools(monkeypatch, thumb=None)
+    backend.send_media('120363000000000001@g.us', 'video', 'video/quicktime', b'mov', '', 'v.mov')
+    video = client.sent[-1][1].fields['videoMessage'].fields
+    assert 'JPEGThumbnail' not in video and 'caption' not in video and video['mimetype'] == 'video/quicktime'
+    tools(monkeypatch, thumb=b'<svg>')
+    backend.send_media('120363000000000001@g.us', 'video', 'video/mp4', b'mp4', '', 'v.mp4')
+    assert 'JPEGThumbnail' not in client.sent[-1][1].fields['videoMessage'].fields
+    backend.stop()
+
+
+def test_send_media_video_without_ffmpeg_raises_before_uploading(no_network, monkeypatch, tmp_path):
+    backend, _bridge, client = started(tmp_path)
+    uploads = uploading(client)
+    tools(monkeypatch, found=False)
+    sent_before = len(client.sent)
+    with pytest.raises(backend_neonize.MissingFfmpeg):
+        backend.send_media('5511911110000@s.whatsapp.net', 'video', 'video/mp4', b'mp4', '', 'v.mp4')
+    assert uploads == [] and len(client.sent) == sent_before
+    backend.stop()
+
+
+def test_video_details_with_the_real_ffmpeg(tmp_path):
+    """Com o ffmpeg desta máquina (se houver): a duração e a miniatura de um MP4 gerado aqui, sem rede."""
+    ffmpeg = backend_neonize.find_tool('ffmpeg')
+    if not ffmpeg or not backend_neonize.find_tool('ffprobe'):
+        pytest.skip('sem ffmpeg nesta máquina')
+    out = tmp_path / 'v.mp4'
+    import subprocess
+
+    subprocess.run([ffmpeg, '-v', 'error', '-f', 'lavfi', '-i', 'testsrc=duration=2:size=160x120:rate=10', '-pix_fmt', 'yuv420p', str(out)], check=True, timeout=60)
+    seconds, thumb = backend_neonize.video_details(out.read_bytes(), str(tmp_path))
+    assert seconds == 2 and thumb[:3] == b'\xff\xd8\xff'

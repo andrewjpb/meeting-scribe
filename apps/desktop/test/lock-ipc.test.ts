@@ -170,6 +170,9 @@ describe('canais com o app bloqueado (contrato 22, CA4)', () => {
       // Contrato 37: a mídia baixada e a transcrição do áudio.
       'scribe:whatsapp-media',
       'scribe:whatsapp-transcribe',
+      // Contrato 39: o envio do anexo e o seletor de arquivo.
+      'scribe:whatsapp-send-media',
+      'scribe:whatsapp-attach-pick',
       'scribe:settings-update',
       'scribe:lock-password-set',
       'scribe:lock-password-remove',

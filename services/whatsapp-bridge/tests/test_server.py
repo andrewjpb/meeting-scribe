@@ -438,3 +438,121 @@ def test_expired_media_takes_its_lock_along(running):
     assert raw(port, f'/chats/{BRUNO}/messages/m8/media')[0] == 200
     assert not old.exists() and str(old) not in bridge.media_locks
     assert len(bridge.media_locks) == 1
+
+
+def send_media(port, chat_id, data, mime, name='foto.png', caption='', token=TOKEN, length=None):
+    """Contrato 39: o POST binário do anexo. `(status, corpo JSON)`."""
+    from urllib.parse import quote
+
+    conn = http.client.HTTPConnection(server.HOST, port, timeout=5)
+    headers = {'Authorization': f'Bearer {token}', 'Content-Type': 'application/octet-stream', 'X-Media-Mime': mime, 'X-Media-Name': quote(name)}
+    if caption:
+        headers['X-Caption'] = quote(caption)
+    if length is not None:
+        headers['Content-Length'] = str(length)
+        conn.putrequest('POST', f'/chats/{quote(chat_id)}/send-media')
+        for key, value in headers.items():
+            conn.putheader(key, value)
+        conn.endheaders()
+    else:
+        conn.request('POST', f'/chats/{quote(chat_id)}/send-media', body=data, headers=headers)
+    response = conn.getresponse()
+    payload = json.loads(response.read() or b'null')
+    conn.close()
+    return response.status, payload
+
+
+PNG = backend_fake.FAKE_MEDIA['image']
+MP4 = backend_fake.FAKE_MEDIA['video']
+
+
+def test_send_media_image_records_and_echoes_a_downloadable_message(running):
+    bridge, port, _ = running
+    assert send_media(port, ANA, PNG, 'image/png')[0] == 409
+    assert send_media(port, ANA, PNG, 'image/png', token='b' * 48)[0] == 401
+    call(port, 'POST', '/_fake/scan', {})
+    conn = http.client.HTTPConnection(server.HOST, port, timeout=5)
+    conn.request('GET', '/events', headers={'Authorization': f'Bearer {TOKEN}'})
+    events = conn.getresponse()
+    for _ in range(3):
+        events.fp.readline()
+    status, body = send_media(port, ANA, PNG, 'image/png', name='pasta/foto ação.png', caption='olha isso 👀')
+    assert status == 200 and body == {'id': 'enviada-1'}
+    assert bridge.backend.sent == [{'id': 'enviada-1', 'chatId': ANA, 'type': 'image', 'mime': 'image/png', 'name': 'foto ação.png', 'size': len(PNG), 'caption': 'olha isso 👀'}]
+    # O eco pelo SSE: mídia sua, baixável, com a legenda como texto.
+    assert events.fp.readline() == b'event: message\n'
+    echo = json.loads(events.fp.readline().decode()[len('data: '):])
+    conn.close()
+    assert echo['fromMe'] and echo['type'] == 'image' and echo['text'] == 'olha isso 👀'
+    assert echo['media'] == {'kind': 'image', 'mime': 'image/png', 'size': len(PNG), 'name': 'foto ação.png', 'downloadable': True}
+    assert 'mediaProto' not in echo
+    status, mime, _, data = raw(port, f'/chats/{ANA}/messages/enviada-1/media')
+    assert status == 200 and mime == 'image/png' and data == PNG
+    # Não conta como não lida (as 2 da Ana continuam as do celular).
+    assert next(c for c in call(port, 'GET', '/chats')[1]['chats'] if c['id'] == ANA)['unread'] == 2
+
+
+def test_send_media_video_without_caption(running):
+    bridge, port, _ = running
+    call(port, 'POST', '/_fake/scan', {})
+    status, body = send_media(port, ANA, MP4, 'video/mp4', name='video.mp4')
+    assert status == 200
+    assert bridge.backend.sent[-1] == {'id': body['id'], 'chatId': ANA, 'type': 'video', 'mime': 'video/mp4', 'name': 'video.mp4', 'size': len(MP4), 'caption': ''}
+    last = call(port, 'GET', f'/chats/{ANA}/messages')[1]['messages'][-1]
+    assert last['id'] == body['id'] and last['type'] == 'video' and last['media']['downloadable'] is True and last['text'] == ''
+    # QuickTime também passa.
+    mov = b'\x00\x00\x00\x14ftypqt  \x00\x00\x00\x00qt  ' + b'\x00' * 32
+    assert send_media(port, ANA, mov, 'video/quicktime', name='v.mov')[0] == 200
+
+
+def test_send_media_refuses_a_lying_mime_and_bad_requests(running):
+    bridge, port, _ = running
+    call(port, 'POST', '/_fake/scan', {})
+    jpeg = b'\xff\xd8\xff\xe0' + b'\x00' * 64
+    # Bytes de PNG declarados como JPEG ou vídeo; texto declarado como imagem; HEIF (ftyp heic) como MP4; tipo fora da lista.
+    assert send_media(port, ANA, PNG, 'image/jpeg') == (400, {'error': 'invalid'})
+    assert send_media(port, ANA, PNG, 'video/mp4')[0] == 400
+    assert send_media(port, ANA, b'ola, nao sou imagem' * 4, 'image/png')[0] == 400
+    assert send_media(port, ANA, b'\x00\x00\x00\x18ftypheic' + b'\x00' * 32, 'video/mp4')[0] == 400
+    # SVG disfarçado de QuickTime antigo ("free" nos bytes 4 a 8) e o QuickTime sem `ftyp`: recusados.
+    assert send_media(port, ANA, b'<!--free--><svg xmlns="http://www.w3.org/2000/svg" onload="alert(1)"></svg>', 'video/quicktime') == (400, {'error': 'invalid'})
+    assert send_media(port, ANA, b'\x00\x00\x00\x08wide' + b'\x00' * 32, 'video/quicktime')[0] == 400
+    assert server.sniff_media(b'<!--skip--><html></html>') is None
+    assert send_media(port, ANA, jpeg, 'image/svg+xml')[0] == 400
+    assert send_media(port, ANA, jpeg, 'application/pdf')[0] == 400
+    assert send_media(port, 'sem-arroba', jpeg, 'image/jpeg')[0] == 400
+    assert send_media(port, ANA, b'', 'image/jpeg')[0] == 400
+    assert send_media(port, ANA, jpeg, 'image/jpeg', caption='x' * 4097)[0] == 400
+    assert bridge.backend.sent == []
+    # A falha do cliente vira 502, sem eco.
+    def broken(*_args):
+        raise RuntimeError('upload falhou')
+
+    bridge.backend.send_media = broken
+    assert send_media(port, ANA, jpeg, 'image/jpeg') == (502, {'error': 'failed'})
+    # Sem o ffmpeg, o vídeo volta com o erro dele (o app explica como instalar).
+    def no_ffmpeg(*_args):
+        raise server.MissingFfmpeg()
+
+    bridge.backend.send_media = no_ffmpeg
+    assert send_media(port, ANA, MP4, 'video/mp4') == (503, {'error': 'ffmpeg'})
+    assert all(m['type'] == 'text' for m in call(port, 'GET', f'/chats/{ANA}/messages')[1]['messages'])
+
+
+def test_send_media_oversize_is_413(running, monkeypatch):
+    bridge, port, _ = running
+    call(port, 'POST', '/_fake/scan', {})
+    monkeypatch.setattr(server, 'SEND_IMAGE_MAX', len(PNG) - 1)
+    assert send_media(port, ANA, PNG, 'image/png') == (413, {'error': 'too-big'})
+    # O vídeo tem o limite dele.
+    assert send_media(port, ANA, MP4, 'video/mp4')[0] == 200
+    monkeypatch.setattr(server, 'SEND_VIDEO_MAX', len(MP4) - 1)
+    assert send_media(port, ANA, MP4, 'video/mp4') == (413, {'error': 'too-big'})
+    # Imagem declarada acima de 16 MB: recusa sem ler o corpo (o limite do tipo decide antes do teto de 64 MB).
+    monkeypatch.setattr(server, 'SEND_VIDEO_MAX', 64 * 1024 * 1024)
+    monkeypatch.setattr(server, 'SEND_IMAGE_MAX', 16 * 1024 * 1024)
+    assert send_media(port, ANA, None, 'image/png', length=16 * 1024 * 1024 + 1) == (413, {'error': 'too-big'})
+    # Acima de 64 MB declarados: recusa sem ler o corpo.
+    monkeypatch.setattr(server, 'SEND_VIDEO_MAX', 64 * 1024 * 1024)
+    assert send_media(port, ANA, None, 'video/mp4', length=64 * 1024 * 1024 + 1) == (413, {'error': 'too-big'})
+    assert [item['type'] for item in bridge.backend.sent] == ['video']

@@ -45,3 +45,10 @@ Feature: desktop-shell  ·  Wave: 19  ·  Depende de: 17 (motor via ACP, perfis)
 ## Notas do coordenador
 - Conferir no adaptador como ele trata `mcpServers` vindos do cliente junto com `strictMcpConfig` e `settingSources: []`, e quais transportes ele anuncia em `mcpCapabilities`; relatar. O coordenador testa com o `claude` real e um MCP simples.
 - Nada de commit pelo implementador.
+
+## Adendo de atualização (19/11/2026, coordenador — o contrato acima é de antes dos contratos 22–38)
+- O contrato 20 (vídeo) foi DESCARTADO: todo uso `'video'` sai (usos possíveis: `'chat' | 'analysis'`); a menção à "aba Vídeo (20)" no CA6 morre — a linha "Conexões" entra só no painel Contexto do chat (que hoje vive no trilho direito do Assistente, contrato 38: a seção Contexto do trilho; na aba da reunião, no painel interno).
+- Aba nova de Configurações exige hoje os 8 pontos de registro do padrão do contrato 31 (SETTINGS_TABS em routes.ts + labels + painel + SETTINGS_LABELS do Assistente + marcador no guia-do-app.md + settings-tabs.test + comentários ⌘1…⌘8 + smoke que percorre as abas). "Conexões" entra DEPOIS de "Plugins" e antes de "Sobre".
+- Os purposes ACP hoje são `summary|analysis|draft|ai-notes|whatsapp-insights|whatsapp-correct|chat`; MCP entra SÓ em `chat` e `analysis` (os demais continuam `mcpServers: []`). O smoke usa `SMOKE_MEET_PORTS` e fakes de ACP/claude já existentes (`test/fixtures/fake-acp-agent.mjs`, `fake-claude.mjs`) — estender, não duplicar.
+- A chave/segredos: o padrão `safeStorage` já existe em `src/main/secrets.ts` (AssemblyAI) — seguir o mesmo desenho para os campos `secret`.
+- O aviso de segurança do CA7 permanece integral; acrescentar que fontes de Internet (contrato 26) e MCP são permissões independentes.

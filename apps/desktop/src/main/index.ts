@@ -81,6 +81,7 @@ import { createMainWindow } from './window'
 import { runClaudeOneShot } from './meetings/claude-one-shot'
 import { ACP_DRAFT_DIR, DRAFT_TIMEOUT_MS, draftSystemPrompt, parseDraft } from './whatsapp/draft'
 import { createCorrector } from './whatsapp/correct'
+import { readAttachment } from './whatsapp/attach'
 import { BRIDGE_FAKE_FILE, BRIDGE_FILES, nodeExec, PYTHON_CANDIDATES, WHATSAPP_DIR } from './whatsapp/install'
 import { INSTALL_TEST_ENV, runInstallTest } from './whatsapp/install-test'
 import { createInsightsCache, INSIGHTS_FILE } from './whatsapp/insights'
@@ -1113,6 +1114,19 @@ const nativeImageDialog: ImageDialog = {
   },
 }
 
+/** Contrato 39: o clipe do campo do WhatsApp, só imagem e vídeo (o tipo é conferido de novo pelos bytes). */
+async function chooseWhatsAppAttachment(): Promise<string | null> {
+  if (smokeFixtures) return smokeFixtures.chosenAttachment
+  const options: OpenDialogOptions = {
+    title: 'Anexar imagem ou vídeo',
+    buttonLabel: 'Anexar',
+    properties: ['openFile'],
+    filters: [{ name: 'Imagem ou vídeo', extensions: ['jpg', 'jpeg', 'png', 'webp', 'gif', 'mp4', 'mov'] }],
+  }
+  const result = mainWindow ? await dialog.showOpenDialog(mainWindow, options) : await dialog.showOpenDialog(options)
+  return result.canceled ? null : (result.filePaths[0] ?? null)
+}
+
 const nativeOpener: FileOpener = {
   openPath: (path) => shell.openPath(path),
   showItemInFolder: (path) => shell.showItemInFolder(path),
@@ -1357,6 +1371,12 @@ function registerIpc(services: AppServices): void {
   handle('scribe:whatsapp-messages', appOrigin, (_event, request) => whatsapp.messages(request).catch(() => []))
   handle('scribe:whatsapp-search', appOrigin, (_event, request) => whatsapp.search(request).catch(() => []))
   handle('scribe:whatsapp-send', appOrigin, (event, request) => whatsapp.send(event.sender.id, request))
+  // Contrato 39: o anexo, pelo mesmo guarda do clique; o clipe só devolve o arquivo conferido para a prévia.
+  handle('scribe:whatsapp-send-media', appOrigin, (event, request) => whatsapp.sendMedia(event.sender.id, request))
+  handle('scribe:whatsapp-attach-pick', appOrigin, async () => {
+    const path = await chooseWhatsAppAttachment()
+    return path ? readAttachment(path).catch(() => ({ ok: false, error: 'type' }) as const) : null
+  })
   handle('scribe:whatsapp-draft', appOrigin, (_event, request) => whatsapp.draft(request))
   handle('scribe:whatsapp-link-get', appOrigin, (_event, request) => whatsapp.link((request as { meetingId?: unknown } | undefined)?.meetingId))
   handle('scribe:whatsapp-link-set', appOrigin, (_event, request) => whatsapp.setLink(request))

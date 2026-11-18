@@ -8,6 +8,10 @@
 # Contrato 37: `GET /chats/:id/messages/:msg/media` baixa a imagem, o vídeo ou o áudio de uma mensagem, só quando o
 # app pede (no clique da pessoa), e responde os bytes (não JSON). Guarda em `<data-dir>/media/` por 7 dias.
 #
+# Contrato 39: `POST /chats/:id/send-media` envia uma imagem ou um vídeo (os bytes no corpo; o tipo em `X-Media-Mime`, o
+# nome em `X-Media-Name` e a legenda em `X-Caption`, os dois com `encodeURIComponent`). Como o texto, só depois do clique
+# da pessoa no app. O tipo declarado tem de bater com os primeiros bytes; imagem até 16 MB, vídeo até 64 MB.
+#
 # Ao subir, escreve uma linha JSON no stdout: {"event": "ready", "port": N, "version": "..."}. Logs vão para o
 # stderr e nunca levam texto de mensagem.
 import argparse
@@ -30,7 +34,7 @@ from urllib.parse import parse_qs, unquote, urlsplit
 # só da pasta deste arquivo.
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from bridge_store import MediaGone, Store, now_ms, public_message  # noqa: E402
+from bridge_store import MediaGone, MissingFfmpeg, Store, now_ms, public_message  # noqa: E402
 
 VERSION = '0.1.0'
 HOST = '127.0.0.1'
@@ -50,6 +54,32 @@ MEDIA_DIR = 'media'
 # `fullmatch`: o `$` aceitaria um `\n` no fim, e o mime vai para o cabeçalho da resposta.
 MEDIA_MIME = re.compile(r'(audio|image|video)/[\w.+-]{1,60}(; ?[\w.+-]{1,40}=[\w.+"-]{1,40}){0,3}', re.ASCII)
 MEDIA_DEFAULT_MIME = {'image': 'image/jpeg', 'video': 'video/mp4', 'audio': 'audio/ogg'}
+# Contrato 39: o que dá para enviar, e o limite de cada tipo.
+SEND_MIMES = ('image/jpeg', 'image/png', 'image/webp', 'image/gif', 'video/mp4', 'video/quicktime')
+SEND_IMAGE_MAX = 16 * 1024 * 1024
+SEND_VIDEO_MAX = 64 * 1024 * 1024
+SEND_NAME_MAX = 200
+# Marcas (`ftyp`) de MP4 de vídeo; HEIF, AVIF e áudio M4A ficam de fora. MOV só com `ftyp qt  ` (o QuickTime antigo, sem
+# `ftyp`, não: pelo nome do átomo passaria um SVG ou HTML com "free" nos bytes 4 a 8).
+MP4_BRANDS = re.compile(rb'isom|iso[2-9]|mp4[12]|mp71|avc1|M4V[ HP]|mmp4|dash|MSNV|NDS[CHMPS]|NDX[CHMPS]|f4v |3gp[4-6]|3g2[abc]|XAVC')
+
+
+def sniff_media(data):
+    """Contrato 39: o tipo pelos primeiros bytes (JPEG, PNG, WebP, GIF, MP4, MOV); `None` para qualquer outra coisa."""
+    if data[:3] == b'\xff\xd8\xff':
+        return 'image/jpeg'
+    if data[:8] == b'\x89PNG\r\n\x1a\n':
+        return 'image/png'
+    if data[:4] == b'RIFF' and data[8:12] == b'WEBP':
+        return 'image/webp'
+    if data[:6] in (b'GIF87a', b'GIF89a'):
+        return 'image/gif'
+    if data[4:8] == b'ftyp':
+        brand = data[8:12]
+        if brand == b'qt  ':
+            return 'video/quicktime'
+        return 'video/mp4' if len(brand) == 4 and MP4_BRANDS.fullmatch(brand) else None
+    return None
 
 
 def log(message):
@@ -280,6 +310,8 @@ def make_handler(bridge, token, instance_id=''):
         def authorized(self):
             if self.has_token():
                 return True
+            # O corpo que veio junto (o de um anexo, por exemplo) não é lido: a conexão fecha.
+            self.close_connection = True
             self.send_json(401, {'error': 'unauthorized'})
             return False
 
@@ -384,10 +416,72 @@ def make_handler(bridge, token, instance_id=''):
                 return self.events()
             return self.send_json(404, {'error': 'not-found'})
 
+        def send_media(self, chat_id):
+            """Contrato 39: a imagem ou o vídeo do corpo, com a legenda; o eco entra na conversa como mídia baixável."""
+            # Os bytes vêm até o `Content-Length`; o que for recusado antes de ler fecha a conexão.
+            try:
+                length = int(self.headers.get('Content-Length') or 0)
+            except ValueError:
+                length = -1
+            mime = (self.headers.get('X-Media-Mime') or '').strip()
+            # O limite do tipo declarado decide antes de ler: imagem acima de 16 MB nem entra (o teto geral é 64 MB).
+            declared_max = SEND_IMAGE_MAX if mime.startswith('image/') else SEND_VIDEO_MAX
+            if length > min(declared_max, SEND_VIDEO_MAX):
+                self.close_connection = True
+                return self.send_json(413, {'error': 'too-big'})
+            try:
+                name = unquote(self.headers.get('X-Media-Name') or '', errors='strict')
+                caption = unquote(self.headers.get('X-Caption') or '', errors='strict')
+            except UnicodeDecodeError:
+                name = caption = None
+            if not CHAT_ID.match(chat_id) or length <= 0 or mime not in SEND_MIMES or name is None or len(caption) > SEND_TEXT_MAX:
+                self.close_connection = True
+                return self.send_json(400, {'error': 'invalid'})
+            data = self.rfile.read(length)
+            if len(data) != length:
+                self.close_connection = True
+                return self.send_json(400, {'error': 'invalid'})
+            # O tipo declarado tem de ser o que os bytes dizem; os bytes são opacos, o cabeçalho só aceita ou recusa.
+            if sniff_media(data[:32]) != mime:
+                return self.send_json(400, {'error': 'invalid'})
+            kind = 'video' if mime.startswith('video/') else 'image'
+            if length > (SEND_VIDEO_MAX if kind == 'video' else SEND_IMAGE_MAX):
+                return self.send_json(413, {'error': 'too-big'})
+            if bridge.health()['state'] != 'connected':
+                return self.send_json(409, {'error': 'state'})
+            name = ''.join(char for char in name.split('/')[-1] if char.isprintable())[:SEND_NAME_MAX] or None
+            try:
+                message_id, proto = bridge.backend.send_media(chat_id, kind, mime, data, caption, name)
+            except MissingFfmpeg:
+                log('envio de vídeo sem o ffmpeg')
+                return self.send_json(503, {'error': 'ffmpeg'})
+            except Exception as error:  # noqa: BLE001
+                log(f'envio de mídia falhou: {type(error).__name__}')
+                return self.send_json(502, {'error': 'failed'})
+            me = bridge.health()['me'] or {}
+            message = {
+                'id': message_id,
+                'chatId': chat_id,
+                'author': me.get('name') or 'Você',
+                'fromMe': True,
+                'at': now_ms(),
+                'type': kind,
+                'text': caption,
+                'media': {'kind': kind, 'mime': mime, 'size': length, 'name': name},
+            }
+            if proto:
+                message['mediaProto'] = bytes(proto)
+            bridge.on_message(message, count_unread=False)
+            return self.send_json(200, {'id': message_id})
+
         def do_POST(self):
             if not self.authorized():
                 return
             path = urlsplit(self.path).path
+            # Contrato 39: o corpo é binário (até 64 MB), não JSON.
+            match = re.fullmatch(r'/chats/([^/]+)/send-media', path)
+            if match:
+                return self.send_media(unquote(match.group(1)))
             try:
                 body = self.read_json()
             except (ValueError, UnicodeDecodeError):

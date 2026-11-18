@@ -5,6 +5,9 @@
 //
 // Contrato 37: a mídia de uma mensagem (`media`) volta em bytes, não em JSON: leitor próprio, até 64 MB, com o
 // `Content-Type` conferido (só `audio/`, `image/` e `video/`).
+//
+// Contrato 39: o envio de imagem ou vídeo é um POST com os bytes no corpo e o tipo, o nome e a legenda nos cabeçalhos
+// (`X-Media-Mime`, `X-Media-Name`, `X-Caption`, os dois últimos com `encodeURIComponent`), só com a prova de clique.
 import { request as httpRequest, type IncomingMessage } from 'node:http'
 import { z } from 'zod'
 import { WHATSAPP_MEDIA_MAX, WHATSAPP_SERVICE_STATES, type WhatsAppChat, type WhatsAppMe, type WhatsAppMessage, type WhatsAppSearchHit, type WhatsAppServiceState } from '../../shared/whatsapp'
@@ -15,6 +18,8 @@ const REQUEST_TIMEOUT_MS = 15_000
 const RESPONSE_MAX = 8 * 1024 * 1024
 /** Contrato 37: o download da mídia pode demorar mais que um pedido comum (o serviço baixa do WhatsApp antes). */
 const MEDIA_TIMEOUT_MS = 120_000
+/** Contrato 39: o envio do anexo (o upload ao WhatsApp e, no vídeo, o ffmpeg) tem até 300 s. */
+export const SEND_MEDIA_TIMEOUT_MS = 300_000
 const MEDIA_MIME = /^(?:audio|image|video)\/[\w.+-]{1,60}(?:; ?[\w.+-]{1,40}=[\w.+"-]{1,40}){0,3}$/
 
 const meSchema: z.ZodType<WhatsAppMe> = z.object({ name: z.string().max(200), phone: z.string().max(40) })
@@ -100,6 +105,8 @@ export interface BridgeClient {
   media(chatId: string, messageId: string): Promise<{ mime: string; bytes: Buffer }>
   /** Só com a prova de um clique de verdade, para a mesma conversa. */
   send(proof: SendProof, chatId: string, text: string): Promise<string>
+  /** Contrato 39: a imagem ou o vídeo, com a mesma prova. Lança `WhatsAppServiceError` (400, 409, 413, 502…). */
+  sendMedia(proof: SendProof, chatId: string, media: { name: string; mime: string; bytes: Uint8Array; caption?: string | undefined }): Promise<string>
   /** SSE de `/events`; `onClose` quando a conexão cai. Devolve o que fecha. */
   events(onEvent: (event: BridgeEvent) => void, onClose: () => void): () => void
   /** Rotas do serviço falso (smoke): ler o QR, receber uma mensagem. */
@@ -166,17 +173,17 @@ export function createBridgeClient(port: number, token: string): BridgeClient {
   if (!Number.isInteger(port) || port <= 0 || port > 65_535) throw new Error('porta inválida')
   const headers = { Authorization: `Bearer ${token}` }
 
-  function call<T>(method: 'GET' | 'POST', path: string, schema: z.ZodType<T>, body?: unknown): Promise<T> {
+  /** O pedido com o corpo (JSON ou, no contrato 39, os bytes do anexo) e a resposta JSON conferida com o `schema`. */
+  function request<T>(method: 'GET' | 'POST', path: string, schema: z.ZodType<T>, body: { data: Uint8Array; headers: Record<string, string> } | undefined, timeout: number): Promise<T> {
     return new Promise((resolve, reject) => {
-      const data = body === undefined ? undefined : Buffer.from(JSON.stringify(body), 'utf8')
       const req = httpRequest(
         {
           host: WHATSAPP_HOST,
           port,
           method,
           path,
-          headers: { ...headers, ...(data ? { 'Content-Type': 'application/json', 'Content-Length': String(data.byteLength) } : {}) },
-          timeout: REQUEST_TIMEOUT_MS,
+          headers: { ...headers, ...(body ? { ...body.headers, 'Content-Length': String(body.data.byteLength) } : {}) },
+          timeout,
         },
         (res) => {
           readBody(res).then((text) => {
@@ -200,8 +207,13 @@ export function createBridgeClient(port: number, token: string): BridgeClient {
       )
       req.on('timeout', () => req.destroy(new WhatsAppServiceError(0, 'timeout')))
       req.on('error', reject)
-      req.end(data)
+      req.end(body?.data)
     })
+  }
+
+  function call<T>(method: 'GET' | 'POST', path: string, schema: z.ZodType<T>, body?: unknown): Promise<T> {
+    const data = body === undefined ? undefined : { data: Buffer.from(JSON.stringify(body), 'utf8'), headers: { 'Content-Type': 'application/json' } }
+    return request(method, path, schema, data, REQUEST_TIMEOUT_MS)
   }
 
   /** Contrato 37: GET que responde bytes, com o tipo conferido; erro do serviço vem em JSON. */
@@ -250,6 +262,17 @@ export function createBridgeClient(port: number, token: string): BridgeClient {
     send: async (proof, chatId, text) => {
       if (!isSendProof(proof) || proof.chatId !== chatId) throw new WhatsAppServiceError(0, 'click')
       return (await call('POST', `/chats/${chatPath(chatId)}/send`, sendSchema, { text })).id
+    },
+    sendMedia: async (proof, chatId, media) => {
+      if (!isSendProof(proof) || proof.chatId !== chatId) throw new WhatsAppServiceError(0, 'click')
+      const mediaHeaders: Record<string, string> = {
+        'Content-Type': 'application/octet-stream',
+        'X-Media-Mime': media.mime,
+        'X-Media-Name': encodeURIComponent(media.name),
+        ...(media.caption ? { 'X-Caption': encodeURIComponent(media.caption) } : {}),
+      }
+      // O upload ao WhatsApp (e o quadro do vídeo) demora mais que um pedido comum.
+      return (await request('POST', `/chats/${chatPath(chatId)}/send-media`, sendSchema, { data: media.bytes, headers: mediaHeaders }, SEND_MEDIA_TIMEOUT_MS)).id
     },
     fake: (action, body = {}) => call('POST', `/_fake/${action}`, z.unknown(), body),
 

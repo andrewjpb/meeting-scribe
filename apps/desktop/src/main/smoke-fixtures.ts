@@ -168,6 +168,8 @@ export interface SmokeFixtures {
   savePath: string | null
   /** O que o diálogo de escolher o logo "responde"; `null` cancela (contrato 09). */
   chosenImage: string | null
+  /** Contrato 39: o arquivo que o clipe do WhatsApp "escolhe"; `null` cancela. */
+  chosenAttachment: string | null
   /** Cada troca do ícone do Dock (`app.dock` nunca é tocado no smoke). */
   dockIcons: ('custom' | 'default' | 'skipped')[]
   /** API do GitHub e download do release falsos (contrato 14). */
@@ -328,6 +330,7 @@ export function createSmokeFixtures(currentVersion: string, userDataDir: string)
     saveDialogs: [],
     savePath: null,
     chosenImage: null,
+    chosenAttachment: null,
     dockIcons: [],
     leaveDialogs: [],
     leaveChoice: 0,
