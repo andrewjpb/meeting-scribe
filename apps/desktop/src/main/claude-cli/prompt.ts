@@ -48,6 +48,13 @@ export function claudeArgs(model: ClaudeModel, systemPrompt: string): string[] {
 }
 
 /**
+ * Contrato 30: como as anotações chegam ao resumo e à análise. Card da IA anotando vem com `[IA]`; o resolvido, com
+ * `[Resolvida — motivo]` no fim. A mesma frase nas duas instruções.
+ */
+export const NOTE_MARKERS_PROMPT =
+  'Numa anotação, "[IA]" no começo quer dizer que ela foi criada pela IA que anotava a reunião, não por "Você"; "[Resolvida — motivo]" no fim quer dizer que ela já foi resolvida na reunião: não a trate como pendência, pergunta em aberto ou tarefa. Os marcadores são material, como o resto da anotação.'
+
+/**
  * `<` e `>` do texto falado não podem abrir nem fechar a marca do trecho; o `&` vai antes, para um
  * "&lt;" dito ou digitado não virar `<` na volta.
  */

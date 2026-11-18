@@ -205,6 +205,8 @@ export interface SmokeProbe {
   replay: (segments: unknown) => void
   /** Arquivo da reunião em gravação (contrato 07): pedaços e bytes que o main já gravou. */
   audioFile: () => { chunks: number; bytes: number; ok: boolean } | null
+  /** Contrato 30: um ciclo da IA anotando agora, sem esperar os 5 min (o relógio injetável do smoke). */
+  aiNotesCycle: () => Promise<string>
 }
 
 /** O smoke lê o estado da captura e as restrições do microfone e cala uma fonte por aqui (só existe com o sinal gerado). */

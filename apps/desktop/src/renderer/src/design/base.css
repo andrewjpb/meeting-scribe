@@ -19,6 +19,7 @@
   --color-sys: var(--sys);
   --color-rec: var(--rec);
   --color-ok: var(--ok);
+  --color-live: var(--live);
   --color-focus: var(--focus);
   --color-side-bg: var(--side-bg);
   --color-side-text: var(--side-text);
@@ -199,6 +200,99 @@
       backdrop-filter: none;
       animation: none;
     }
+  }
+}
+
+@layer components {
+  /*
+   * Post-its (contrato 30, adendo 30b): tudo em CSS, curto e com a curva de sempre. Com movimento reduzido nada
+   * anima (regra de tokens.css): os estados finais aparecem direto.
+   */
+  .note-card {
+    transition:
+      opacity 260ms var(--ease-out),
+      outline-color 200ms var(--ease-out);
+  }
+
+  /* Resolvido: esmaece (o ✓ e o motivo entram com `note-fade`). */
+  .note-card[data-note-status='resolvida'] {
+    opacity: 0.62;
+  }
+
+  /* Card novo: post-it sendo colado (cai um pouco e assenta). */
+  .note-enter {
+    animation: note-enter 320ms var(--ease-out);
+  }
+
+  .note-fade {
+    animation: route-enter 220ms var(--ease-out);
+  }
+
+  /* A marca da IA pulsa uma vez na chegada. */
+  .note-badge-pulse {
+    animation: note-badge-pulse 340ms var(--ease-out) 1;
+  }
+
+  /* "anotando…": pulso discreto enquanto o ciclo roda. */
+  .note-busy-pulse {
+    animation: rec-pulse 1.4s ease-in-out infinite;
+  }
+
+  /* Quadro do detalhe: cada post-it levemente torto (--note-tilt, pelo id), pega com a mão. */
+  [data-notes-canvas] > li {
+    cursor: grab;
+    transform: translate(var(--note-x, 0), var(--note-y, 0)) rotate(var(--note-tilt, 0deg));
+    transition: transform 220ms var(--ease-out);
+    touch-action: none;
+  }
+
+  [data-notes-canvas] > li[data-placed] {
+    position: absolute;
+    top: 0;
+    left: 0;
+  }
+
+  /*
+   * Arrastando: levanta (escala e um fio mais forte, já que design.md proíbe sombra) e segue o ponteiro sem atraso; ao
+   * soltar, a transição assenta.
+   */
+  [data-notes-canvas] > li[data-dragging] {
+    cursor: grabbing;
+    z-index: 10;
+    transform: translate(var(--note-x, 0), var(--note-y, 0)) rotate(var(--note-tilt, 0deg)) scale(1.03);
+    transition: none;
+  }
+
+  [data-notes-canvas] > li[data-dragging] .note-card {
+    outline: 2px solid currentColor;
+    outline-offset: -1px;
+  }
+
+  [data-notes-canvas] > li textarea,
+  [data-notes-canvas] > li input {
+    cursor: text;
+  }
+
+  [data-notes-canvas] > li button {
+    cursor: pointer;
+  }
+
+  /* Trocar o filtro: a lista nova entra com um fade curto. */
+  .notes-filter-enter {
+    animation: route-enter 200ms var(--ease-out);
+  }
+}
+
+@keyframes note-enter {
+  from {
+    opacity: 0;
+    transform: translateY(-8px) scale(0.96);
+  }
+}
+
+@keyframes note-badge-pulse {
+  50% {
+    transform: scale(1.3);
   }
 }
 

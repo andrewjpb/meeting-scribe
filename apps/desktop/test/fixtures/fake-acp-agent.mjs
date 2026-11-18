@@ -11,6 +11,8 @@
 // - resumo (instrução "Você resume…"): o JSON do resumo entre cercas, montado só com as linhas da transcrição;
 // - análise (instrução "Você analisa…", contrato 19): espera (5 × `pause`) e devolve a análise falsa
 //   (`fake-analysis.mjs`) entre cercas, com o custo no `usage_update`;
+// - IA anotando (instrução "Você anota…", contrato 30): espera (2 × `pause`) e devolve o lote falso
+//   (`fake-ai-notes.mjs`) entre cercas;
 // - chat: pensa em pedaços, monta o "Plano", lê o `INDICE.md` e a reunião mais recente e procura um termo,
 //   cada leitura pedindo permissão; tenta escrever um arquivo (permissão pedida e negada), ler um arquivo
 //   fora da pasta pelo cliente (`fs/read_text_file`, recusado) e abrir um terminal (recusado); responde em
@@ -35,6 +37,7 @@ import { Readable, Writable } from 'node:stream'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { pathToFileURL } from 'node:url'
 import * as acp from '@agentclientprotocol/sdk/unstable'
+import { fakeAiNotes } from './fake-ai-notes.mjs'
 import { fakeAnalysis } from './fake-analysis.mjs'
 import { fakeDraft } from './fake-draft.mjs'
 
@@ -164,6 +167,7 @@ export function fakeAcpAgent({ log = () => undefined, pause = 300 } = {}) {
     if (prompt.startsWith('You translate')) return 'translate'
     if (prompt.startsWith('Você resume')) return 'summary'
     if (prompt.startsWith('Você analisa')) return 'analysis'
+    if (prompt.startsWith('Você anota')) return 'ai-notes'
     if (prompt.startsWith('Você escreve rascunhos')) return 'draft'
     return 'chat'
   }
@@ -253,6 +257,14 @@ export function fakeAcpAgent({ log = () => undefined, pause = 300 } = {}) {
       if (state.purpose === 'draft') {
         await say(fakeDraft(content))
         return { stopReason: 'end_turn', usage: { totalTokens: Math.ceil(content.length / 4) + 30, inputTokens: Math.ceil(content.length / 4), outputTokens: 30 } }
+      }
+
+      // Contrato 30: o lote da IA anotando, só JSON (o agente não tem ferramenta nenhuma aqui).
+      if (state.purpose === 'ai-notes') {
+        await sleep(pause * 2)
+        await say(`\`\`\`json\n${JSON.stringify(fakeAiNotes(content), null, 2)}\n\`\`\``)
+        await update({ sessionUpdate: 'usage_update', used: 600, size: 200000, cost: { amount: 0.0021, currency: 'USD' }, _meta: { '_claude/model': modelId } })
+        return { stopReason: 'end_turn', usage: { totalTokens: Math.ceil(content.length / 4) + 60, inputTokens: Math.ceil(content.length / 4), outputTokens: 60 } }
       }
 
       if (state.purpose === 'analysis') {

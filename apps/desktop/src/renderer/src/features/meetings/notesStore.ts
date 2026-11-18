@@ -4,8 +4,8 @@
 // responder. Falhou: tenta de novo uma vez; falhou de novo, `saveFailed` liga o aviso do detalhe (visível
 // em qualquer aba) com "Tentar de novo".
 import { create } from 'zustand'
-import type { MeetingNote, NoteColor } from '@shared/meeting-notes'
-import { addNote, createNote, editNote, NOTE_SAVE_DELAY_MS, NOTE_UNDO_MS, noteWithText, removeNote, restoreNote, type RemovedNote } from '../notes/noteList'
+import type { MeetingNote, NoteColor, NotePosition } from '@shared/meeting-notes'
+import { addNote, createNote, editNote, moveNote, NOTE_SAVE_DELAY_MS, NOTE_UNDO_MS, noteWithText, removeNote, reopenNote, resolveNote, restoreNote, type NotePatch, type RemovedNote } from '../notes/noteList'
 import { rereadWhenUnlocked } from '../../app/lockStore'
 
 export interface MeetingNotesEntry {
@@ -29,7 +29,13 @@ interface MeetingNotesState {
   create: (meetingId: string) => void
   /** "Virar anotação" de um item da análise (contrato 19): card amarelo com o texto e o tempo, salvo já. */
   createWithText: (meetingId: string, text: string, atMs: number | null) => Promise<void>
-  change: (meetingId: string, id: string, patch: { text?: string; color?: NoteColor }) => void
+  change: (meetingId: string, id: string, patch: NotePatch & { color?: NoteColor }) => void
+  /** "Concluir" no detalhe (contrato 30): resolvida pela pessoa, sem tempo de gravação; salva já. */
+  resolve: (meetingId: string, id: string, reason: string) => void
+  /** "Reabrir"; salva já. */
+  reopen: (meetingId: string, id: string) => void
+  /** Soltar o card no quadro: a posição nova, salva já. */
+  move: (meetingId: string, id: string, position: NotePosition) => void
   remove: (meetingId: string, id: string) => void
   undo: (meetingId: string) => void
   clearFocus: (meetingId: string) => void
@@ -144,6 +150,27 @@ export const useMeetingNotes = create<MeetingNotesState>()((set, get) => {
       if (!entry) return
       const notes = editNote(entry.notes, id, patch, Date.now())
       if (notes !== entry.notes) update(meetingId, notes, patch.color !== undefined ? 'now' : 'later')
+    },
+
+    resolve(meetingId, id, reason) {
+      const entry = get().meetings[meetingId]
+      if (!entry) return
+      const notes = resolveNote(entry.notes, id, { reason, by: 'manual', atMs: null }, Date.now())
+      if (notes !== entry.notes) update(meetingId, notes, 'now')
+    },
+
+    reopen(meetingId, id) {
+      const entry = get().meetings[meetingId]
+      if (!entry) return
+      const notes = reopenNote(entry.notes, id, Date.now())
+      if (notes !== entry.notes) update(meetingId, notes, 'now')
+    },
+
+    move(meetingId, id, position) {
+      const entry = get().meetings[meetingId]
+      if (!entry) return
+      const notes = moveNote(entry.notes, id, position, Date.now())
+      if (notes !== entry.notes) update(meetingId, notes, 'now')
     },
 
     remove(meetingId, id) {

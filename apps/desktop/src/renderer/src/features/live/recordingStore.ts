@@ -7,9 +7,14 @@
 // As anotações da gravação (contrato 13) ficam aqui até a reunião existir e são salvas nela ao encerrar.
 // "Analisar até agora" (contrato 19) também: cada análise volta do main para cá e é salva com a reunião ao
 // encerrar. A análise roda à parte, sem pausar nem esperar a captura, a transcrição ou a tradução.
+// Quem fala no Meet (contrato 27): a linha do tempo de falas acompanha o relógio da gravação e, ao encerrar,
+// os trechos do sistema ganham os nomes antes de a transcrição ser salva.
+// IA anotando ao vivo (contrato 30): com o interruptor ligado, a cada 5 min do relógio da gravação (sem as pausas) os
+// trechos novos vão ao main e o lote volta como post-its da IA, criados e resolvidos aqui, salvos com os outros.
 import { create } from 'zustand'
+import { AI_NOTES_INTERVAL_MS, type AiNotesRunResult } from '@shared/ai-notes'
 import { analyzedUntil, ANALYSES_MAX, recentAnalyses, type AnalysisError, type AnalysisRunResult, type LiveAnalysisSegment, type MeetingAnalysis } from '@shared/meeting-analysis'
-import type { MeetingNote, NoteColor } from '@shared/meeting-notes'
+import { NOTE_TEXT_MAX, noteContextText, type MeetingNote, type NoteColor } from '@shared/meeting-notes'
 import { audioExtension } from '@shared/meeting-files'
 import { defaultMeetingTitle, MEETING_TITLE_MAX, type Meeting } from '@shared/meetings'
 import type { InvokeChannels, RecordingSessionChannel } from '@shared/ipc'
@@ -23,7 +28,9 @@ import { AudioFileRecorder, type MeetingAudioRecorder } from '../../audio/record
 import { TranscriptionSession } from '../../transcription/session'
 import type { StreamingSocket } from '../../transcription/sink'
 import { persistableTranscript, useTranscription, type TranscriptionSegment } from '../../transcription/store'
-import { addNote, closestSegmentId, createNote, editNote, NOTE_UNDO_MS, noteWithText, removeNote, restoreNote, type RemovedNote } from '../notes/noteList'
+import { aiNotesKnownTitles, aiNotesOpenCards, aiNotesSelection, aiNotesShouldSkip } from './aiNotes'
+import { liveNamer, meetRecordingEnded, meetRecordingPaused, meetRecordingStarted, useMeet, withSpeakerNames, type SpeakerInterval } from './meetStore'
+import { addNote, applyAiBatch, closestSegmentId, createNote, editNote, NOTE_UNDO_MS, noteWithText, removeNote, reopenNote, resolveNote, restoreNote, type NotePatch, type RemovedNote } from '../notes/noteList'
 import { TapeHistory } from './tapeHistory'
 import { tapeStats } from './tapeStats'
 
@@ -77,16 +84,36 @@ interface RecordingState {
   analysisError: AnalysisError | null
   /** Trecho da transcrição para onde rolar (clique no tempo de um item da análise). */
   jump: { id: string; seq: number } | null
+  /** Interruptor "IA anotando" desta gravação (contrato 30); começa como `liveCards` das Configurações. */
+  aiNotes: boolean
+  /** Um ciclo da IA está rodando: o painel mostra "anotando…". */
+  aiNotesBusy: boolean
   /** Inicia a captura. Chamar direto do gesto (clique, tecla ou menu); devolve falso se já havia uma. */
   start: () => boolean
   /** "Tentar de novo" do aviso de início: recarrega o ambiente e começa (o clique é o gesto). */
   retryStart: () => Promise<void>
   togglePause: () => void
+  /**
+   * "Ouvir só os participantes" (contrato 29): desliga ou religa o microfone desta gravação (começa sempre ligado,
+   * não vai para Configurações). Vale também pausado.
+   */
+  toggleMic: () => void
   setTitle: (title: string) => void
   toggleNotes: () => void
   /** "+ Nova anotação": amarela, vazia, com o tempo da gravação agora. */
   addNote: () => void
-  editNote: (id: string, patch: { text?: string; color?: NoteColor }) => void
+  editNote: (id: string, patch: NotePatch & { color?: NoteColor }) => void
+  /** "Concluir" (contrato 30): resolvida pela pessoa, com o motivo (pode ser vazio). */
+  resolveNote: (id: string, reason: string) => void
+  /** "Reabrir": volta a aberta. */
+  reopenNote: (id: string) => void
+  /** Liga ou desliga a IA anotando nesta gravação; ligar recomeça a contagem dos 5 min. */
+  toggleAiNotes: () => void
+  /**
+   * Um ciclo da IA agora (o relógio chama a cada 5 min; o smoke chama direto). `off`: interruptor desligado ou sem
+   * gravação; `busy`: já há um rodando; `skipped`: pouca fala nova; `failed`: erro, prazo ou bloqueio (o próximo tenta).
+   */
+  runAiNotesCycle: () => Promise<'ran' | 'skipped' | 'off' | 'busy' | 'failed'>
   /** Exclui e guarda para o "Desfazer" por 5 s. */
   deleteNote: (id: string) => void
   /** "Desfazer": a última excluída volta para o mesmo lugar. */
@@ -201,6 +228,23 @@ async function addLateAnalysis(meetingId: string, analysis: MeetingAnalysis, cal
   return false
 }
 
+/**
+ * IA anotando da gravação em curso (contrato 30): o relógio (confere a cada segundo se já passaram 5 min de gravação
+ * desde o último ciclo), os trechos que algum ciclo já mandou e o momento (no relógio da gravação) do último ciclo.
+ */
+let aiRun: { session: CaptureSession; timer: ReturnType<typeof setInterval>; sent: Set<string>; lastAt: number } | null = null
+const AI_NOTES_TICK_MS = 1000
+
+/**
+ * Para o relógio e, com o id da gravação, cancela no main o ciclo que ainda gerava (o processo do `claude` morre). No
+ * "Encerrar" vai pelo token da sessão (passa com o app bloqueado).
+ */
+function stopAiNotes(recordingId: string | null = null, call: FinishCall = plainCall): void {
+  if (aiRun) clearInterval(aiRun.timer)
+  aiRun = null
+  if (recordingId) void Promise.resolve(call('scribe:ai-notes-cancel', { recordingId })).catch(() => undefined)
+}
+
 /** Prazo do "Desfazer" da última anotação excluída. */
 let noteUndoTimer: ReturnType<typeof setTimeout> | null = null
 function clearNoteUndoTimer(): void {
@@ -313,6 +357,8 @@ export const useRecording = create<RecordingState>()((set, get) => ({
   analyzing: false,
   analysisError: null,
   jump: null,
+  aiNotes: false,
+  aiNotesBusy: false,
 
   start: () => {
     if (get().session) return false
@@ -361,6 +407,8 @@ export const useRecording = create<RecordingState>()((set, get) => ({
       audioRun = { session, ...audio }
     }
     recordingTokens.set(session, recordingToken)
+    // Contrato 27: os eventos do Meet contam no relógio desta gravação (parado até a captura começar).
+    meetRecordingStarted(session.clock)
     // Contrato 12 (CA9): começando com um evento da agenda, a gravação leva o título dele (se a pessoa ainda não
     // trocou o título). O main decide o evento ao abrir a sessão.
     void recordingToken
@@ -396,6 +444,20 @@ export const useRecording = create<RecordingState>()((set, get) => ({
         )
     }
     session.subscribe((capture) => set({ capture }))
+    // Contrato 30: o relógio da IA anotando. Pausada, o relógio da gravação para e nenhum ciclo extra sai na volta.
+    stopAiNotes()
+    aiRun = {
+      session,
+      sent: new Set(),
+      lastAt: 0,
+      timer: setInterval(() => {
+        const state = get()
+        // Gravação que acabou (ou foi trocada): o relógio dela para.
+        if (aiRun?.session === session && state.session !== session) return stopAiNotes()
+        if (!aiRun || aiRun.session !== session || !state.aiNotes || state.aiNotesBusy || state.capture?.phase !== 'recording') return
+        if (session.clock.elapsedMs - aiRun.lastAt >= AI_NOTES_INTERVAL_MS) void state.runAiNotesCycle()
+      }, AI_NOTES_TICK_MS),
+    }
     set({
       session,
       transcription,
@@ -417,6 +479,8 @@ export const useRecording = create<RecordingState>()((set, get) => ({
       analyzing: false,
       analysisError: null,
       jump: null,
+      aiNotes: settings.liveCards,
+      aiNotesBusy: false,
       // Sem formato aceito ou gravador que nem começou: o aviso já aparece aqui.
       audio: audioRun?.session === session ? (audioRun.file?.ok ? 'recording' : 'failed') : 'off',
     })
@@ -454,11 +518,21 @@ export const useRecording = create<RecordingState>()((set, get) => ({
       transcription?.pause()
       file?.pause()
       session.pause()
+      meetRecordingPaused()
     } else if (capture.phase === 'paused') {
       session.resume()
       file?.resume()
       transcription?.resume()
     }
+  },
+
+  toggleMic: () => {
+    const { session, capture, transcription } = get()
+    if (!session || !capture || capture.phase === 'stopping' || capture.phase === 'stopped') return
+    const enabled = capture.micOff
+    session.setMicEnabled(enabled)
+    // A sessão da AssemblyAI do microfone encerra de propósito (sem reconexão nem aviso) e reabre ao religar.
+    transcription?.setSourceEnabled('mic', enabled)
   },
 
   setTitle: (title) => {
@@ -484,6 +558,49 @@ export const useRecording = create<RecordingState>()((set, get) => ({
   editNote: (id, patch) => {
     if (get().saving) return
     set((state) => ({ notes: editNote(state.notes, id, patch, Date.now()) }))
+  },
+
+  resolveNote: (id, reason) => {
+    const { session, saving } = get()
+    if (!session || saving) return
+    set((state) => ({ notes: resolveNote(state.notes, id, { reason, by: 'manual', atMs: session.clock.elapsedMs }, Date.now()) }))
+  },
+
+  reopenNote: (id) => {
+    if (!get().session || get().saving) return
+    set((state) => ({ notes: reopenNote(state.notes, id, Date.now()) }))
+  },
+
+  toggleAiNotes: () => {
+    const { session, saving, aiNotes } = get()
+    if (!session || saving) return
+    // Ligar é o consentimento (contrato 30, CA2): o primeiro ciclo sai 5 min de gravação depois.
+    if (!aiNotes && aiRun?.session === session) aiRun.lastAt = session.clock.elapsedMs
+    // Desligar é tirar o consentimento: o ciclo em curso é cancelado no main (e o lote, se chegar, descartado).
+    const recordingId = get().recordingId
+    if (aiNotes && recordingId) void Promise.resolve(plainCall('scribe:ai-notes-cancel', { recordingId })).catch(() => undefined)
+    set({ aiNotes: !aiNotes })
+  },
+
+  runAiNotesCycle: async () => {
+    const { session, saving, aiNotes, aiNotesBusy, recordingId, notes } = get()
+    const run = aiRun
+    if (!session || saving || !aiNotes || !recordingId || run?.session !== session) return 'off'
+    if (aiNotesBusy) return 'busy'
+    run.lastAt = session.clock.elapsedMs
+    const selection = aiNotesSelection(useTranscription.getState().segments, run.sent, liveNamer(useMeet.getState().liveIntervals))
+    if (aiNotesShouldSkip(selection)) return 'skipped'
+    set({ aiNotesBusy: true })
+    const request = { recordingId, segments: selection.segments, openCards: aiNotesOpenCards(notes), knownTitles: aiNotesKnownTitles(notes) }
+    // Erro, prazo ou app bloqueado: silencioso (o main registra no log) e o próximo ciclo tenta com os mesmos trechos.
+    const result: AiNotesRunResult = await Promise.resolve(window.__scribeApi.invoke('scribe:ai-notes-run', request)).catch((): AiNotesRunResult => ({ ok: false, error: 'failed' }))
+    const current = get().session === session && get().recordingId === recordingId
+    if (current) set({ aiNotesBusy: false })
+    // Desligado durante o ciclo: sem consentimento, o lote não entra.
+    if (!result?.ok || !current || get().saving || !get().aiNotes) return 'failed'
+    for (const id of selection.ids) run.sent.add(id)
+    set((state) => ({ notes: applyAiBatch(state.notes, result.batch, session.clock.elapsedMs, Date.now()) }))
+    return 'ran'
   },
 
   deleteNote: (id) => {
@@ -528,7 +645,8 @@ export const useRecording = create<RecordingState>()((set, get) => ({
         // "Até" é o fim do último trecho lido: o que a análise cita nunca passa dele.
         atMs: Math.round(analyzedUntil(segments)),
         segments,
-        notes: notes.map(({ text, atMs, createdAt }) => ({ text, atMs, createdAt })),
+        // Contrato 30: título, origem e estado vão no texto (o card resolvido da IA não volta como pendência).
+        notes: notes.map((note) => ({ text: noteContextText(note).slice(0, NOTE_TEXT_MAX), atMs: note.atMs, createdAt: note.createdAt })),
         // Só as mais recentes: o pedido não cresce sem fim.
         previous: recentAnalyses(analyses),
       },
@@ -582,8 +700,14 @@ export const useRecording = create<RecordingState>()((set, get) => ({
     set({ saving: true, saveFailed: false })
     const settings = useSettings.getState().settings
     const audio = audioRun?.session === session ? audioRun : null
+    // Contrato 27: a fala aberta no Meet fecha agora; "Tentar de novo" reaproveita os mesmos intervalos.
+    const intervals = speakerIntervals.get(session) ?? meetRecordingEnded()
+    speakerIntervals.set(session, intervals)
     const token = (await recordingTokens.get(session)) ?? null
     const call = finishCall(token)
+    // Contrato 30: depois da reunião não há ciclo; o que ainda rodava é cancelado no main e o lote, descartado.
+    // Desligado, não há ciclo para cancelar (desligar já cancelou o que havia).
+    if (aiRun?.session === session) stopAiNotes(get().aiNotes ? get().recordingId : null, call)
     try {
       await stopAudioFile(audio)
       const result = lastResult.get(session) ?? (await stopOnce(session))
@@ -597,7 +721,7 @@ export const useRecording = create<RecordingState>()((set, get) => ({
         get().savedMeeting ??
         (await call('scribe:meetings-create', { title: get().title, startedAt, durationMs: result.durationMs, sources: result.sources }))
       set({ savedMeeting: meeting })
-      const hasTranscript = await saveTranscript(meeting.id, useTranscription.getState().segments, settings, call)
+      const hasTranscript = await saveTranscript(meeting.id, useTranscription.getState().segments, settings, call, intervals)
       // Anotações (contrato 13, CA4): antes do `.md` da pasta, que as leva no fim. Falhou: "Tentar de novo".
       await saveNotes(meeting.id, get().notes, call)
       // Análises (contrato 19, CA5): também antes do `.md`. A que ainda estiver gerando não é esperada: quando
@@ -636,6 +760,8 @@ export const useRecording = create<RecordingState>()((set, get) => ({
         analyzing: false,
         analysisError: null,
         jump: null,
+        aiNotes: false,
+        aiNotesBusy: false,
       })
       clearNoteUndoTimer()
       return meeting
@@ -658,6 +784,9 @@ type StopResult = Awaited<ReturnType<CaptureSession['stop']>>
 /** Resultado da captura já encerrada, para "Tentar de novo" salvar sem parar de novo. */
 const lastResult = new WeakMap<CaptureSession, StopResult>()
 
+/** Intervalos de fala do Meet de cada gravação encerrada (contrato 27), para "Tentar de novo". */
+const speakerIntervals = new WeakMap<CaptureSession, SpeakerInterval[]>()
+
 /**
  * Para a captura. Se `stop()` já foi tentado e falhou no meio (a sessão não está mais ativa), o
  * registro sai do cronômetro, que `stop()` para antes de qualquer outra coisa, e das fontes ouvidas.
@@ -668,9 +797,12 @@ async function stopOnce(session: CaptureSession): Promise<StopResult> {
   return session.stop()
 }
 
-/** Grava a transcrição em `meetings/<id>.json` (CA12). Sem trechos (sem chave), nada é escrito e devolve falso. */
-async function saveTranscript(meetingId: string, segments: readonly TranscriptionSegment[], settings: AppSettings, call: FinishCall): Promise<boolean> {
-  const persisted = persistableTranscript(segments)
+/**
+ * Grava a transcrição em `meetings/<id>.json` (CA12). Sem trechos (sem chave), nada é escrito e devolve falso. Com
+ * intervalos do Meet (contrato 27), cada trecho do sistema leva os nomes de quem falava nele.
+ */
+async function saveTranscript(meetingId: string, segments: readonly TranscriptionSegment[], settings: AppSettings, call: FinishCall, intervals: readonly SpeakerInterval[] = []): Promise<boolean> {
+  const persisted = withSpeakerNames(persistableTranscript(segments), intervals)
   if (!persisted.length) return false
   const document: TranscriptDocument = {
     version: TRANSCRIPT_VERSION,
@@ -716,5 +848,6 @@ export function exposeRecordingProbe(): void {
     tapeFrames: () => tapeStats.frames,
     replay: (segments) => useTranscription.getState().replay(segments as TranscriptionSegment[]),
     audioFile: () => (lastAudioFile ? { chunks: lastAudioFile.chunks, bytes: lastAudioFile.bytes, ok: lastAudioFile.ok } : null),
+    aiNotesCycle: () => useRecording.getState().runAiNotesCycle(),
   })
 }

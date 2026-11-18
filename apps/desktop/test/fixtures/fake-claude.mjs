@@ -6,7 +6,8 @@
 // Com `--output-format json` (resumo da reunião, contrato 08): lê o stdin inteiro e devolve um único
 // `result` com o JSON do resumo entre cercas ```json, montado só a partir das linhas da transcrição. Com a
 // instrução da análise ("Você analisa…", contrato 19), espera 1,5 s e devolve a análise falsa
-// (`fake-analysis.mjs`) entre cercas, com custo nominal.
+// (`fake-analysis.mjs`) entre cercas, com custo nominal. Com a da IA anotando ("Você anota…", contrato 30), espera
+// 0,6 s e devolve o lote falso (`fake-ai-notes.mjs`) entre cercas.
 //
 // Com `--include-partial-messages` (chat "Perguntar", contrato 15): para cada pergunta, lê a pasta atual (o
 // `INDICE.md` do acervo ou o único `.md` de uma reunião), escreve a resposta em pedaços (`stream_event`),
@@ -26,6 +27,7 @@ import { join } from 'node:path'
 import process from 'node:process'
 import { createInterface } from 'node:readline'
 import { setTimeout as sleep } from 'node:timers/promises'
+import { FAKE_AI_NOTES_DELAY_MS, fakeAiNotes } from './fake-ai-notes.mjs'
 import { FAKE_ANALYSIS_DELAY_MS, fakeAnalysis } from './fake-analysis.mjs'
 import { fakeDraft } from './fake-draft.mjs'
 
@@ -149,6 +151,22 @@ if (args.includes('--include-partial-messages')) {
     if (systemPrompt.startsWith('Você escreve rascunhos')) {
       process.stdout.write(
         `${JSON.stringify({ type: 'result', subtype: 'success', is_error: false, duration_ms: Date.now() - started, result: fakeDraft(input), usage: { input_tokens: Math.ceil(input.length / 4), output_tokens: 30 }, total_cost_usd: 0 })}\n`,
+        () => process.exit(0),
+      )
+      return
+    }
+    if (systemPrompt.startsWith('Você anota')) {
+      await sleep(FAKE_AI_NOTES_DELAY_MS)
+      process.stdout.write(
+        `${JSON.stringify({
+          type: 'result',
+          subtype: 'success',
+          is_error: false,
+          duration_ms: Date.now() - started,
+          result: `\`\`\`json\n${JSON.stringify(fakeAiNotes(input), null, 2)}\n\`\`\``,
+          usage: { input_tokens: Math.ceil(input.length / 4), output_tokens: 60 },
+          total_cost_usd: 0.0021,
+        })}\n`,
         () => process.exit(0),
       )
       return

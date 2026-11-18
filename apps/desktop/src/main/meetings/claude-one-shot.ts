@@ -28,7 +28,7 @@ export interface OneShotEngine {
 
 export interface OneShotRequest<T> {
   claudePath: string
-  purpose: 'summary' | 'analysis' | 'draft'
+  purpose: 'summary' | 'analysis' | 'draft' | 'ai-notes'
   /** Pasta vazia do ACP dentro de `claude-cwd`. */
   acpDir: string
   systemPrompt: string

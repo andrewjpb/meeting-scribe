@@ -1,9 +1,10 @@
 import { Copy, Plus } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
-import type { NoteColor } from '@shared/meeting-notes'
 import { Button } from '../../design/Button'
+import type { StickyNotePatch } from '../../design/StickyNote'
 import { RetryNotice } from '../live/Notices'
 import { NoteUndo, NotesBoard } from '../notes/NotesBoard'
+import { filterNotes, NotesFilter, type NotesFilterValue } from '../notes/NotesFilter'
 import { useMeetingNotes } from './notesStore'
 
 /**
@@ -11,10 +12,13 @@ import { useMeetingNotes } from './notesStore'
  * gravação e "Copiar anotações". Cards criados aqui não têm tempo. Quem guarda e salva é o `notesStore`
  * (500 ms depois da última tecla; na hora ao sair do card, trocar a cor, excluir, desfazer e sair da aba),
  * que continua vivo quando a aba fecha. Clicar no tempo de um card leva à transcrição (`onJump`).
+ * Contrato 30: os cards ficam num quadro (arrastar e soltar salva a posição), com "Concluir"/"Reabrir" e o filtro
+ * "Abertas · Resolvidas · Todas".
  */
 export function NotesTab({ meetingId, onJump }: { meetingId: string; onJump: (atMs: number) => void }) {
   const entry = useMeetingNotes((state) => state.meetings[meetingId])
   const store = useMeetingNotes.getState()
+  const [filter, setFilter] = useState<NotesFilterValue>('todas')
 
   useEffect(() => {
     void useMeetingNotes.getState().load(meetingId)
@@ -24,8 +28,13 @@ export function NotesTab({ meetingId, onJump }: { meetingId: string; onJump: (at
 
   if (!entry || entry.status === 'loading') return <div className="flex-1" aria-busy="true" />
 
-  const change = (id: string, patch: { text?: string; color?: NoteColor }): void => store.change(meetingId, id, patch)
-  const create = (): void => store.create(meetingId)
+  const change = (id: string, patch: StickyNotePatch): void => store.change(meetingId, id, patch)
+  const create = (): void => {
+    // O card novo está aberto: com "Resolvidas" ele não apareceria.
+    if (filter === 'resolvidas') setFilter('todas')
+    store.create(meetingId)
+  }
+  const shown = filterNotes(entry.notes, filter)
 
   return (
     <div data-notes-scroll className="min-h-0 flex-1 overflow-y-auto px-10 pb-10">
@@ -49,16 +58,23 @@ export function NotesTab({ meetingId, onJump }: { meetingId: string; onJump: (at
                     Nova anotação
                   </Button>
                   <CopyNotes meetingId={meetingId} />
+                  <div className="ml-auto">
+                    <NotesFilter notes={entry.notes} value={filter} onChange={setFilter} />
+                  </div>
                 </div>
                 <NotesBoard
-                  notes={entry.notes}
-                  layout="grid"
+                  notes={shown}
+                  layout="canvas"
                   focusId={entry.focusId}
                   onFocused={() => store.clearFocus(meetingId)}
                   onChange={change}
                   onDelete={(id) => store.remove(meetingId, id)}
+                  onResolve={(id, reason) => store.resolve(meetingId, id, reason)}
+                  onReopen={(id) => store.reopen(meetingId, id)}
+                  onMove={(id, position) => store.move(meetingId, id, position)}
                   onLeave={() => void store.flush(meetingId)}
                   onTimeClick={onJump}
+                  filterKey={filter}
                 />
               </>
             )}

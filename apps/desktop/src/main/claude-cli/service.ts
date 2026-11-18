@@ -24,6 +24,8 @@ export const ACP_TRANSLATE_DIR = 'translate'
 export const ACP_SUMMARY_DIR = 'summary'
 /** Pasta vazia da análise pelo ACP (contrato 19). */
 export const ACP_ANALYSIS_DIR = 'analysis'
+/** Pasta vazia do ACP da IA anotando ao vivo (contrato 30). */
+export const ACP_AI_NOTES_DIR = 'ai-notes'
 
 /** O que a gravação usa de um tradutor, pela linha de comando ou pelo ACP. */
 type Translator = Pick<ClaudeTranslator, 'start' | 'translate' | 'stop' | 'kill'>
