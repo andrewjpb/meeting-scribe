@@ -8,7 +8,8 @@
 // instrução da análise ("Você analisa…", contrato 19), espera 1,5 s e devolve a análise falsa
 // (`fake-analysis.mjs`) entre cercas, com custo nominal. Com a da IA anotando ("Você anota…", contrato 30), espera
 // 0,6 s e devolve o lote falso (`fake-ai-notes.mjs`) entre cercas. Com a dos Detalhes do WhatsApp ("Você lê uma
-// conversa do WhatsApp…", contrato 32), espera 0,6 s e devolve os Detalhes falsos (`fake-whatsapp-insights.mjs`).
+// conversa do WhatsApp…", contrato 32), espera 0,6 s e devolve os Detalhes falsos (`fake-whatsapp-insights.mjs`). Com a
+// da correção ao enviar ("Você corrige mensagens de WhatsApp…", contrato 35), devolve a correção falsa (`fake-correct.mjs`).
 //
 // Com `--include-partial-messages` (chat "Perguntar", contrato 15): para cada pergunta, lê a pasta atual (o
 // `INDICE.md` do acervo ou o único `.md` de uma reunião), escreve a resposta em pedaços (`stream_event`),
@@ -30,6 +31,7 @@ import { createInterface } from 'node:readline'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { FAKE_AI_NOTES_DELAY_MS, fakeAiNotes } from './fake-ai-notes.mjs'
 import { FAKE_ANALYSIS_DELAY_MS, fakeAnalysis } from './fake-analysis.mjs'
+import { FAKE_CORRECT_SLOW_MS, fakeCorrection, isSlowCorrection } from './fake-correct.mjs'
 import { fakeDraft } from './fake-draft.mjs'
 import { FAKE_INSIGHTS_DELAY_MS, fakeWhatsAppInsights } from './fake-whatsapp-insights.mjs'
 
@@ -153,6 +155,15 @@ if (args.includes('--include-partial-messages')) {
     if (systemPrompt.startsWith('Você escreve rascunhos')) {
       process.stdout.write(
         `${JSON.stringify({ type: 'result', subtype: 'success', is_error: false, duration_ms: Date.now() - started, result: fakeDraft(input), usage: { input_tokens: Math.ceil(input.length / 4), output_tokens: 30 }, total_cost_usd: 0 })}\n`,
+        () => process.exit(0),
+      )
+      return
+    }
+    // Contrato 35: a correção da mensagem antes do envio, só texto.
+    if (systemPrompt.startsWith('Você corrige mensagens de WhatsApp')) {
+      if (isSlowCorrection(input)) await sleep(FAKE_CORRECT_SLOW_MS)
+      process.stdout.write(
+        `${JSON.stringify({ type: 'result', subtype: 'success', is_error: false, duration_ms: Date.now() - started, result: fakeCorrection(input), usage: { input_tokens: Math.ceil(input.length / 4), output_tokens: 20 }, total_cost_usd: 0.0004 })}\n`,
         () => process.exit(0),
       )
       return

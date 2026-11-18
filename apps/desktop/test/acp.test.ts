@@ -27,6 +27,7 @@ import { AcpChat, acpStepOf } from '../src/main/acp/chat'
 import { runAcpOneShot, runAcpSummary } from '../src/main/acp/summary'
 import { analysisInput, analysisParser, analysisSystemPrompt } from '../src/main/claude-cli/analysis'
 import { AcpTranslator } from '../src/main/acp/translator'
+import { correctInput, correctionParser, correctSystemPrompt } from '../src/main/whatsapp/correct'
 import { insightsInput, insightsParser, insightsSystemPrompt } from '../src/main/whatsapp/insights'
 import { CLAUDE_DISALLOWED_TOOLS, claudeProfile } from '../src/main/acp/profiles/claude'
 import { summaryInput } from '../src/main/claude-cli/summary'
@@ -506,6 +507,21 @@ describe('Detalhes do WhatsApp pelo ACP (contrato 32)', () => {
     expect(links[0]?.killed).toBe(true)
     // Fora do chat, nenhuma permissão é concedida.
     expect(await permissionAllowed('whatsapp-insights', { kind: 'read', title: 'ler', locations: [], rawInput: {} } as never, corpus, corpus, { Read: 'read' })).toBe(false)
+  })
+})
+
+describe('Correção ao enviar no WhatsApp pelo ACP (contrato 35)', () => {
+  it('o agente falso reconhece o purpose novo pela instrução, com o Haiku e sem ferramentas, e devolve só o texto', async () => {
+    const log: LogEntry[] = []
+    const { launch, links } = memory(fake(log))
+    const result = await runAcpOneShot({ open: opener(launch), model: 'haiku', cwd: corpus, input: correctInput('oi tudo bem'), purpose: 'whatsapp-correct', systemPrompt: correctSystemPrompt(), parse: correctionParser('oi tudo bem'), label: 'correção do WhatsApp' })
+    expect(result).toMatchObject({ ok: true, content: 'Oi, tudo bem?', costUsd: 0.0004 })
+    const opened = log.find((entry) => entry.method === 'session/new')
+    expect(opened).toMatchObject({ purpose: 'whatsapp-correct', options: { tools: [], settingSources: [] } })
+    expect(opened).toMatchObject({ configOptions: expect.arrayContaining([{ configId: 'model', value: 'haiku' }]), options: { model: 'haiku' } })
+    expect(log.find((entry) => entry.method === 'session/prompt')).toMatchObject({ purpose: 'whatsapp-correct' })
+    expect(links[0]?.killed).toBe(true)
+    expect(await permissionAllowed('whatsapp-correct', { kind: 'execute', title: 'enviar', locations: [], rawInput: {} } as never, corpus, corpus, { Read: 'read' })).toBe(false)
   })
 })
 

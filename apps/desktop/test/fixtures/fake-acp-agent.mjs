@@ -15,6 +15,8 @@
 //   (`fake-ai-notes.mjs`) entre cercas;
 // - Detalhes do WhatsApp (instrução "Você lê uma conversa do WhatsApp…", contrato 32): espera (2 × `pause`) e devolve
 //   os Detalhes falsos (`fake-whatsapp-insights.mjs`) entre cercas, com o custo no `usage_update`;
+// - correção ao enviar no WhatsApp (instrução "Você corrige mensagens de WhatsApp…", contrato 35): devolve a correção
+//   falsa (`fake-correct.mjs`), só texto, com o custo no `usage_update`;
 // - chat: pensa em pedaços, monta o "Plano", lê o `INDICE.md` e a reunião mais recente e procura um termo,
 //   cada leitura pedindo permissão; tenta escrever um arquivo (permissão pedida e negada), ler um arquivo
 //   fora da pasta pelo cliente (`fs/read_text_file`, recusado) e abrir um terminal (recusado); responde em
@@ -41,6 +43,7 @@ import { pathToFileURL } from 'node:url'
 import * as acp from '@agentclientprotocol/sdk/unstable'
 import { fakeAiNotes } from './fake-ai-notes.mjs'
 import { fakeAnalysis } from './fake-analysis.mjs'
+import { fakeCorrection } from './fake-correct.mjs'
 import { fakeDraft } from './fake-draft.mjs'
 import { fakeWhatsAppInsights } from './fake-whatsapp-insights.mjs'
 
@@ -173,6 +176,7 @@ export function fakeAcpAgent({ log = () => undefined, pause = 300 } = {}) {
     if (prompt.startsWith('Você anota')) return 'ai-notes'
     if (prompt.startsWith('Você escreve rascunhos')) return 'draft'
     if (prompt.startsWith('Você lê uma conversa do WhatsApp')) return 'whatsapp-insights'
+    if (prompt.startsWith('Você corrige mensagens de WhatsApp')) return 'whatsapp-correct'
     return 'chat'
   }
 
@@ -261,6 +265,13 @@ export function fakeAcpAgent({ log = () => undefined, pause = 300 } = {}) {
       if (state.purpose === 'draft') {
         await say(fakeDraft(content))
         return { stopReason: 'end_turn', usage: { totalTokens: Math.ceil(content.length / 4) + 30, inputTokens: Math.ceil(content.length / 4), outputTokens: 30 } }
+      }
+
+      // Contrato 35: a correção da mensagem antes do envio, só texto (o agente nunca envia nada).
+      if (state.purpose === 'whatsapp-correct') {
+        await say(fakeCorrection(content))
+        await update({ sessionUpdate: 'usage_update', used: 300, size: 200000, cost: { amount: 0.0004, currency: 'USD' }, _meta: { '_claude/model': modelId } })
+        return { stopReason: 'end_turn', usage: { totalTokens: Math.ceil(content.length / 4) + 20, inputTokens: Math.ceil(content.length / 4), outputTokens: 20 } }
       }
 
       // Contrato 32: os Detalhes da conversa do WhatsApp, só JSON (o agente nunca envia nada).

@@ -10,7 +10,7 @@ import {
   type SettingsNavigationState,
   type SettingsTab,
 } from '@shared/routes'
-import { LIVE_CARDS_DESCRIPTION, MEET_SPEAKERS_DESCRIPTION, WHATSAPP_INSIGHTS_DESCRIPTION } from '@shared/settings-index'
+import { LIVE_CARDS_DESCRIPTION, MEET_SPEAKERS_DESCRIPTION, WHATSAPP_AUTO_CORRECT_DESCRIPTION, WHATSAPP_INSIGHTS_DESCRIPTION } from '@shared/settings-index'
 import { DAILY_RUN_LIMIT_OPTIONS, LANGUAGE_CODES, type ChatModel, type ClaudeModel, type ClaudeTransport, type CloseBehavior, type DailyRunLimitOption, type LanguageCode, type ThemeSetting, type TranslationEngine } from '@shared/settings-defaults'
 import { useAgentLabel } from '../../app/agentLabel'
 import { useSettings } from '../../app/settingsStore'
@@ -415,6 +415,10 @@ function SettingsTabs({ tab }: { tab: SettingsTab }) {
                 {/* Contrato 32: o painel Detalhes da conversa do WhatsApp com o Claude. */}
                 <SettingRow name="Detalhes com IA no WhatsApp" nameId="settings-whatsapp-insights" description={WHATSAPP_INSIGHTS_DESCRIPTION}>
                   <Switch checked={settings.whatsappInsights} labelledBy="settings-whatsapp-insights" onChange={(whatsappInsights) => void update({ whatsappInsights })} />
+                </SettingRow>
+                {/* Contrato 35: a correção pelo Haiku dentro do envio, sem nova confirmação. */}
+                <SettingRow name="Corrigir ao enviar no WhatsApp" nameId="settings-whatsapp-auto-correct" description={WHATSAPP_AUTO_CORRECT_DESCRIPTION}>
+                  <Switch checked={settings.whatsappAutoCorrect} labelledBy="settings-whatsapp-auto-correct" onChange={(whatsappAutoCorrect) => void update({ whatsappAutoCorrect })} />
                 </SettingRow>
               </Section>
 

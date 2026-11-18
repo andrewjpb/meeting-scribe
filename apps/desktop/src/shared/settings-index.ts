@@ -12,6 +12,9 @@ export const LIVE_CARDS_DESCRIPTION = 'Durante a gravação, a cada 5 minutos o 
 /** Descrição de "Detalhes com IA no WhatsApp" (contrato 32), a mesma na tela e na busca. */
 export const WHATSAPP_INSIGHTS_DESCRIPTION = 'Ao abrir uma conversa, o Claude local lê as últimas mensagens e escreve o resumo, o humor, as pendências e os compromissos no painel Detalhes. Nunca envia nada.'
 
+/** Descrição de "Corrigir ao enviar no WhatsApp" (contrato 35), a mesma na tela e na busca. */
+export const WHATSAPP_AUTO_CORRECT_DESCRIPTION = 'Ao clicar em Enviar, o Claude (Haiku) corrige ortografia e pontuação e melhora a clareza da mensagem, e o texto corrigido é enviado sem nova confirmação. Se a correção falhar, a mensagem original é enviada.'
+
 /** Uma linha de configuração no índice da busca. */
 export interface SettingsEntry {
   tab: SettingsTab
@@ -64,6 +67,7 @@ export function settingsIndex(agent: string): SettingsEntry[] {
     row('claude', 'Chat e resumo', 'Resumir ao encerrar', 'Ao encerrar, o Claude lê a transcrição e escreve o resumo, as decisões e as tarefas.'),
     row('claude', 'Chat e resumo', 'IA anotando ao vivo', LIVE_CARDS_DESCRIPTION),
     row('claude', 'Chat e resumo', 'Detalhes com IA no WhatsApp', WHATSAPP_INSIGHTS_DESCRIPTION),
+    row('claude', 'Chat e resumo', 'Corrigir ao enviar no WhatsApp', WHATSAPP_AUTO_CORRECT_DESCRIPTION),
     row('claude', 'Automações', 'Limite diário de execuções agendadas', 'Ao passar, todas as tarefas pausam e o app avisa.'),
     row('arquivos', 'Arquivos da reunião', 'Salvar áudio e transcrição numa pasta', 'Para cada reunião: um arquivo de áudio (você e os participantes) e a transcrição em texto. Avise as pessoas antes de gravar.'),
     row('arquivos', 'Arquivos da reunião', 'Pasta', 'Onde ficam o áudio e a transcrição de cada reunião.', '"Salvar áudio e transcrição numa pasta" está ligado'),

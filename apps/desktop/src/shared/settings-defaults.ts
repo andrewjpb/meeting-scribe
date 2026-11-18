@@ -84,6 +84,11 @@ export interface AppSettings {
    */
   whatsappInsights: boolean
   /**
+   * "Corrigir ao enviar no WhatsApp" (contrato 35): no clique em "Enviar", o Claude (sempre o Haiku) corrige a
+   * ortografia, a pontuação e a clareza e o texto corrigido sai sem nova confirmação; se falhar, sai o original.
+   */
+  whatsappAutoCorrect: boolean
+  /**
    * Separa os participantes por voz ("Participante A", "B"…). Desligado (padrão desde 15/11/2026), o
    * áudio dos participantes vira "Participantes" e os trechos se dividem só pelas pausas.
    */
@@ -165,6 +170,7 @@ export const DEFAULT_SETTINGS: Readonly<AppSettings> = Object.freeze({
   summarizeOnStop: true,
   liveCards: false,
   whatsappInsights: true,
+  whatsappAutoCorrect: false,
   identifySpeakers: false,
   meetSpeakers: true,
   brandName: null,

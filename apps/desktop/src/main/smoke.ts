@@ -5319,6 +5319,39 @@ async function whatsappChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => 
     detail: `token inventado=${JSON.stringify(forged)}; sem token=${noToken}; clique pelo send genérico="${genericClick.slice(0, 60)}"; whatsappSend sem ativação=${JSON.stringify(withoutGesture)}; enviadas sem clique=${sentWithoutClick.length}; "Enviar" sem diálogo -> enviada=${sent.length} (igual ao rascunho=${sent[0]?.text === draftText}); campo limpo=${cleared}, sem erro=${noSendError}; Enter não enviou=${afterEnter === 1}; ⌘↵ enviou=${second.length === 2}; na conversa=${shownSent}`,
   }
 
+  // Contrato 35: com "Corrigir ao enviar" ligado (e o Sonnet nas Configurações), o clique em "Enviar" manda ao serviço o
+  // texto corrigido pelo agente falso, sempre com o Haiku, e o balão mostra o corrigido. Desligado (o padrão, acima), o
+  // envio sai como foi digitado.
+  const correctDefault = readSettings(ctx.userDataDir).whatsappAutoCorrect
+  const modelBefore = readSettings(ctx.userDataDir).claudeModel ?? 'haiku'
+  await evaluate(contents, "window.__scribeApi.invoke('scribe:settings-update', { whatsappAutoCorrect: true, claudeModel: 'sonnet' }).then(() => true)")
+  const correctLogBefore = readAcpLog(ctx.userDataDir).length
+  await setValue(contents, '[data-whatsapp-composer]', 'oi tudo bem')
+  await clickSelector(contents, '[data-action="whatsapp-send"]')
+  let corrected = await waSent(ctx)
+  for (let attempt = 0; attempt < 150 && corrected.length < 3; attempt++) {
+    await wait(100)
+    corrected = await waSent(ctx)
+  }
+  const shownCorrected = await waitFor(contents, `[...document.querySelectorAll('[data-whatsapp-message][data-from-me="true"] [data-whatsapp-text]')].some((el) => el.textContent === 'Oi, tudo bem?')`)
+  const correctLog = readAcpLog(ctx.userDataDir).slice(correctLogBefore)
+  const correctSession = correctLog.find((entry) => entry.method === 'session/new' && entry.purpose === 'whatsapp-correct')
+  const correctModel = JSON.stringify((correctSession as { configOptions?: unknown } | undefined)?.configOptions ?? null)
+  await evaluate(contents, `window.__scribeApi.invoke('scribe:settings-update', { whatsappAutoCorrect: false, claudeModel: '${modelBefore}' }).then(() => true)`)
+  checks['correct'] = {
+    ok:
+      correctDefault !== true &&
+      corrected.length === 3 &&
+      corrected[2]?.text === 'Oi, tudo bem?' &&
+      corrected[2]?.chatId === WA_ANA &&
+      Boolean(correctSession) &&
+      correctModel.includes('haiku') &&
+      !correctModel.includes('sonnet') &&
+      shownCorrected &&
+      readSettings(ctx.userDataDir).whatsappAutoCorrect === false,
+    detail: `padrão desligado=${correctDefault !== true}; ligado -> enviadas=${corrected.length} "${corrected[2]?.text ?? ''}"; sessão ACP de correção=${Boolean(correctSession)} (modelo ${correctModel}); balão corrigido=${shownCorrected}; desligado de novo=${readSettings(ctx.userDataDir).whatsappAutoCorrect === false}`,
+  }
+
   // "Só estas conversas" do Assistente (contrato 25; o "Perguntar" do 24) com a conversa da Ana: o `.md` dela na
   // pasta da conversa e no índice.
   await clickSelector(contents, '[data-nav="assistente"]')
@@ -6944,7 +6977,7 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
   for (const [name, check] of Object.entries(calendar)) if (!check.ok) failures.push(`agenda ${name}: ${check.detail}`)
   for (const name of ['microsoft', 'googleCalendar', 'notices', 'settings', 'banner', 'recordFromBanner', 'recordFromNotice', 'upcoming', 'signOut']) if (!calendar[name]) failures.push(`agenda ${name}: não executado`)
   for (const [name, check] of Object.entries(whatsapp)) if (!check.ok) failures.push(`whatsapp ${name}: ${check.detail}`)
-  for (const name of ['detect', 'install', 'risk', 'paired', 'screen', 'draft', 'send', 'ask', 'dark', 'locked']) if (!whatsapp[name]) failures.push(`whatsapp ${name}: não executado`)
+  for (const name of ['detect', 'install', 'risk', 'paired', 'screen', 'draft', 'send', 'correct', 'ask', 'dark', 'locked']) if (!whatsapp[name]) failures.push(`whatsapp ${name}: não executado`)
   for (const [name, check] of Object.entries(automations)) if (!check.ok) failures.push(`automações ${name}: ${check.detail}`)
   for (const [name, check] of Object.entries(assistant)) if (!check.ok) failures.push(`assistente ${name}: ${check.detail}`)
   for (const name of ['name', 'pending', 'sources', 'reminder', 'whatsapp', 'invalid']) if (!assistant[name]) failures.push(`assistente ${name}: não executado`)

@@ -1,7 +1,8 @@
 // Uma execução curta do Claude pelo transporte das Configurações (contrato 17): pelo agente do ACP, se a
 // "Conexão com o Claude" estiver nele e ele estiver instalado, numa pasta vazia própria; senão pela linha de
 // comando, na pasta vazia de sempre. O resumo (contrato 08) e a análise (contrato 19) passam por aqui, com
-// a instrução e a leitura de cada um. O rascunho do WhatsApp (contrato 24) e os Detalhes da conversa (contrato 32) também, sem ferramenta nenhuma.
+// a instrução e a leitura de cada um. O rascunho do WhatsApp (contrato 24), os Detalhes da conversa (contrato 32) e a
+// correção ao enviar (contrato 35) também, sem ferramenta nenhuma.
 import { mkdir } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { ClaudeModel } from '../../shared/settings-defaults'
@@ -28,7 +29,9 @@ export interface OneShotEngine {
 
 export interface OneShotRequest<T> {
   claudePath: string
-  purpose: 'summary' | 'analysis' | 'draft' | 'ai-notes' | 'whatsapp-insights'
+  purpose: 'summary' | 'analysis' | 'draft' | 'ai-notes' | 'whatsapp-insights' | 'whatsapp-correct'
+  /** Modelo fixo, no lugar do das Configurações (a correção do WhatsApp, contrato 35, é sempre o Haiku). */
+  model?: ClaudeModel | undefined
   /** Pasta vazia do ACP dentro de `claude-cwd`. */
   acpDir: string
   systemPrompt: string
@@ -39,9 +42,14 @@ export interface OneShotRequest<T> {
   signal: AbortSignal
 }
 
-/** Roda e devolve o resultado e o modelo usado (o das Configurações naquele momento). Nunca rejeita por falha do Claude. */
+/**
+ * Roda e devolve o resultado e o modelo usado (o do pedido, ou o das Configurações naquele momento). Nunca rejeita por
+ * falha do Claude.
+ */
 export async function runClaudeOneShot<T>(engine: OneShotEngine, request: OneShotRequest<T>): Promise<{ result: OneShotResult<T>; model: ClaudeModel }> {
-  const { claudeModel, claudeTransport } = await engine.settings.get()
+  const current = await engine.settings.get()
+  const { claudeTransport } = current
+  const claudeModel = request.model ?? current.claudeModel
   const common = {
     model: claudeModel,
     input: request.input,

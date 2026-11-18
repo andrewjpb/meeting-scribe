@@ -7,7 +7,7 @@ import type * as acp from '@agentclientprotocol/sdk/unstable'
 import type { AgentProfileId } from '../../../shared/settings-defaults'
 import type { AcpPackage } from '../install'
 
-export type AcpPurpose = 'chat' | 'translate' | 'summary' | 'analysis' | 'draft' | 'ai-notes' | 'whatsapp-insights'
+export type AcpPurpose = 'chat' | 'translate' | 'summary' | 'analysis' | 'draft' | 'ai-notes' | 'whatsapp-insights' | 'whatsapp-correct'
 
 /** O que a fábrica de sessões recebe (CA4d), sem nada do agente. */
 export interface AcpSessionRequest {

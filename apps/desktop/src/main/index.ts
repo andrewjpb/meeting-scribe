@@ -79,6 +79,7 @@ import { netDownload, netDownloadTarball, netFetch } from './updates/transport'
 import { createMainWindow } from './window'
 import { runClaudeOneShot } from './meetings/claude-one-shot'
 import { ACP_DRAFT_DIR, DRAFT_TIMEOUT_MS, draftSystemPrompt, parseDraft } from './whatsapp/draft'
+import { createCorrector } from './whatsapp/correct'
 import { BRIDGE_FAKE_FILE, BRIDGE_FILES, nodeExec, PYTHON_CANDIDATES, WHATSAPP_DIR } from './whatsapp/install'
 import { INSTALL_TEST_ENV, runInstallTest } from './whatsapp/install-test'
 import { createInsightsCache, INSIGHTS_FILE } from './whatsapp/insights'
@@ -682,6 +683,19 @@ function createAppServices(userData: string): AppServices {
       )
       return result
     },
+    // Contrato 35: "Corrigir ao enviar" pelo mesmo motor, sempre com o Haiku, numa execução curta sem ferramenta
+    // nenhuma; recebe e devolve só o texto.
+    correct: createCorrector({
+      settings,
+      locate: () => claude.locate(),
+      enabled: async () => (await settings.get()).whatsappAutoCorrect,
+      spawn: smokeClaude?.spawnSummary ?? nodeSpawnSummary,
+      openAcp,
+      acpAvailable: async () => (await acpAgent.current()).available(),
+      userData,
+      baseEnv: process.env,
+      ...(app.isPackaged ? {} : { log: (message: string) => console.log(message) }),
+    }),
     meeting: async (meetingId) => {
       const meeting = await meetings.get(meetingId)
       return meeting ? { meeting, summary: await summaries.get(meetingId).catch(() => null) } : null

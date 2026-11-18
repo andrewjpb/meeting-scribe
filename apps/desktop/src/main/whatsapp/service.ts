@@ -8,7 +8,8 @@
 // Aviso de risco (CA2): instalar e cada pareamento exigem uma aceitação recente da tela de risco, registrada com a
 // data em `whatsapp/aceite.json`; a aceitação vale para um pareamento só. Envio (CA4): só com a prova de clique de
 // `send-guard.ts`, que só o registro do IPC tem. Rascunho, leitura pelo "Perguntar" e o material do resumo só
-// leem. Logs nunca levam texto de mensagem.
+// leem. A correção ao enviar (contrato 35) roda dentro do envio, com a prova já gasta: só troca o texto. Logs nunca
+// levam texto de mensagem.
 import { randomBytes, randomUUID } from 'node:crypto'
 import { existsSync } from 'node:fs'
 import { chmod, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
@@ -84,6 +85,11 @@ export interface WhatsAppServiceDeps {
   baseEnv: NodeJS.ProcessEnv
   /** Rascunho pelo motor do contrato 17 (só leitura, sem ferramentas). */
   draft: (input: string) => Promise<OneShotResult<string> | { ok: false; error: 'not-found' }>
+  /**
+   * Contrato 35: o texto que sai no envio (o corrigido pelo Claude, com "Corrigir ao enviar" ligado, ou o original).
+   * Só recebe e devolve texto; nunca rejeita. Sem ela, sai o texto digitado.
+   */
+  correct?: (text: string) => Promise<string>
   /** Reunião escolhida como contexto do rascunho; e a data de início, para o material do dia. */
   meeting: (meetingId: string) => Promise<{ meeting: Meeting; summary: MeetingSummary | null } | null>
   onStatus: (status: WhatsAppStatus) => void
@@ -583,8 +589,11 @@ export function createWhatsAppService(deps: WhatsAppServiceDeps): WhatsAppServic
       const current = client
       const chat = (await current.chats().catch((): WhatsAppChat[] => [])).find((item) => item.id === parsed.data.chatId)
       if (!chat) return { ok: false, error: 'invalid' }
+      // Contrato 35: a correção vem depois da prova gasta e antes do envio; ela vale durante a correção (nada de segundo
+      // token). Qualquer falha devolve o original: o clique nunca se perde.
+      const text = deps.correct ? await deps.correct(parsed.data.text).catch(() => parsed.data.text) : parsed.data.text
       try {
-        const id = await current.send(proof, parsed.data.chatId, parsed.data.text)
+        const id = await current.send(proof, parsed.data.chatId, text)
         deps.log?.('[whatsapp] mensagem enviada com o clique da pessoa')
         return { ok: true, id }
       } catch (failure) {
