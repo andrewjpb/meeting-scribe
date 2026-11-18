@@ -141,6 +141,12 @@ describe('canais com o app bloqueado (contrato 22, CA4)', () => {
       'scribe:meetings-get',
       'scribe:meetings-overview',
       'scribe:meetings-search',
+      // Contrato 28: pastas e mover reunião.
+      'scribe:folders-list',
+      'scribe:folders-create',
+      'scribe:folders-rename',
+      'scribe:folders-delete',
+      'scribe:meetings-move',
       'scribe:transcript-get',
       'scribe:transcript-copy',
       'scribe:summary-get',

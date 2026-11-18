@@ -41,10 +41,20 @@ export interface Meeting {
   transcriptPath: string | null
   /** Evento da agenda (contrato 12); ausente ou `null` quando a reunião não veio de um. */
   calendar?: MeetingCalendar | null | undefined
+  /** Pasta da reunião (contrato 28); ausente ou `null` = fora de pasta. */
+  folderId?: string | null | undefined
 }
 
+/** Pasta de reuniões (contrato 28): só organiza a lista; excluir a pasta não apaga reunião nenhuma. */
+export interface MeetingFolder {
+  id: string
+  name: string
+}
+
+export const FOLDER_NAME_MAX = 60
+
 /** O que o renderer manda ao criar: os caminhos dos arquivos ficam com o main. */
-export type NewMeeting = Omit<Meeting, 'id' | 'audioPath' | 'transcriptPath' | 'calendar'>
+export type NewMeeting = Omit<Meeting, 'id' | 'audioPath' | 'transcriptPath' | 'calendar' | 'folderId'>
 
 /** Caminhos dos arquivos da reunião, gravados pelo main ao encerrar. */
 export type MeetingFilePaths = Pick<Meeting, 'audioPath' | 'transcriptPath'>
