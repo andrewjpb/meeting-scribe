@@ -6,7 +6,7 @@ import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { z } from 'zod'
 import { LANGUAGE_CODES } from '../../shared/settings-defaults'
-import { TRANSCRIPT_VERSION, type TranscriptDocument } from '../../shared/transcription'
+import { segmentNames, TRANSCRIPT_VERSION, type TranscriptDocument } from '../../shared/transcription'
 
 export const MEETINGS_DIR = 'meetings'
 
@@ -19,6 +19,11 @@ const segmentSchema = z.object({
   text: z.string(),
   translation: z.string().nullable(),
   translationModel: z.string().nullable(),
+  // Contrato 27: nomes do Meet, cortados em 80 caracteres e no máximo 4. Documento antigo não tem o campo.
+  names: z
+    .array(z.string())
+    .transform((names) => segmentNames(names))
+    .exactOptional(),
 })
 
 const documentSchema = z.object({

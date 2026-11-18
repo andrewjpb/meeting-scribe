@@ -23,6 +23,11 @@ export interface TranscriptSegment {
   text: string
   translation: string | null
   translationModel: string | null
+  /**
+   * Quem falava no Meet durante o trecho (contrato 27), em ordem de maior sobreposição. Só trechos do sistema;
+   * ausente nos documentos antigos e quando a extensão não estava ligada.
+   */
+  names?: string[]
 }
 
 export type TranslationState = 'pending' | 'done' | 'unavailable'
@@ -106,6 +111,29 @@ export function speakerLabel(source: TranscriptSource, label: string | null | un
   const value = typeof label === 'string' ? label.trim().toUpperCase() : ''
   if (/^[A-Z]$/.test(value)) return `Participante ${value}`
   return 'Participantes'
+}
+
+/** Até quantos nomes um trecho guarda e o tamanho de cada um (contrato 27). */
+export const SEGMENT_NAMES_MAX = 4
+export const SEGMENT_NAME_MAX = 80
+
+/** Nomes do Meet de um trecho, numa linha só cada um, cortados em 80 caracteres, sem vazio e no máximo 4. */
+export function segmentNames(names: readonly string[] | null | undefined): string[] {
+  if (!Array.isArray(names)) return []
+  return names
+    .map((name) => (typeof name === 'string' ? name.replace(/\s+/g, ' ').trim().slice(0, SEGMENT_NAME_MAX).trim() : ''))
+    .filter(Boolean)
+    .slice(0, SEGMENT_NAMES_MAX)
+}
+
+/**
+ * Rótulo de um trecho (contrato 27): com os nomes do Meet, "Ana" ou "Ana + Bruno"; sem nomes, o de
+ * `speakerLabel`. Microfone é sempre "Você".
+ */
+export function segmentLabel(segment: { source: TranscriptSource; speaker: string | null | undefined; names?: readonly string[] | null | undefined }): string {
+  if (segment.source === 'mic') return 'Você'
+  const names = segmentNames(segment.names)
+  return names.length ? names.join(' + ') : speakerLabel(segment.source, segment.speaker)
 }
 
 /** Início e fim do trecho no relógio da gravação (CA6): deslocamento da sessão + tempo da palavra. */

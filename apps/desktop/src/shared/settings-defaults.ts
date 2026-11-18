@@ -74,10 +74,20 @@ export interface AppSettings {
   /** Ao encerrar, o `claude` local escreve o resumo, as decisões e as tarefas (contrato 08). */
   summarizeOnStop: boolean
   /**
+   * "IA anotando ao vivo" (contrato 30): valor inicial do interruptor "IA anotando" de cada gravação. Ligado, a cada
+   * 5 min o Claude local cria e resolve post-its com o trecho novo da conversa.
+   */
+  liveCards: boolean
+  /**
    * Separa os participantes por voz ("Participante A", "B"…). Desligado (padrão desde 15/11/2026), o
    * áudio dos participantes vira "Participantes" e os trechos se dividem só pelas pausas.
    */
   identifySpeakers: boolean
+  /**
+   * "Quem fala no Meet" (contrato 27): com a extensão do Chrome, cada fala do Meet ganha o nome de quem falou.
+   * Desligado, o servidor local para e nada é coletado.
+   */
+  meetSpeakers: boolean
   /** Nome do app na barra lateral, no título da janela e nos avisos (contrato 09); `null` é "LAP Reuniões". */
   brandName: string | null
   /** Linha abaixo do nome; `null` é "LAP Software" e texto vazio tira a linha. */
@@ -148,7 +158,9 @@ export const DEFAULT_SETTINGS: Readonly<AppSettings> = Object.freeze({
   saveToFolder: true,
   audioFolder: null,
   summarizeOnStop: true,
+  liveCards: false,
   identifySpeakers: false,
+  meetSpeakers: true,
   brandName: null,
   brandSubtitle: null,
   brandLogo: null,

@@ -3,7 +3,7 @@
 // levam as anotações no fim (contrato 13); o "Copiar transcrição" não.
 import { analysisMarkdown, type MeetingAnalysis } from './meeting-analysis'
 import { notesMarkdown, type MeetingNote } from './meeting-notes'
-import { formatClock, speakerLabel, type TranscriptDocument } from './transcription'
+import { formatClock, segmentLabel, type TranscriptDocument } from './transcription'
 
 export interface MarkdownMeeting {
   title: string
@@ -37,7 +37,7 @@ export function transcriptMarkdown(meeting: MarkdownMeeting, document: Transcrip
   ]
   for (const segment of document.segments) {
     if (!segment.text.trim()) continue
-    lines.push('', `**${speakerLabel(segment.source, segment.speaker)}** · ${formatClock(segment.startMs)}`, segment.text)
+    lines.push('', `**${segmentLabel(segment)}** · ${formatClock(segment.startMs)}`, segment.text)
     // Citação linha a linha: uma tradução com quebra de linha não escapa do bloco no meio.
     if (segment.translation) lines.push('', ...segment.translation.split(/\r?\n/).map((line) => (line.trim() ? `> ${line}` : '>')))
   }

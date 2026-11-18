@@ -50,10 +50,11 @@ type Loaded =
   | { status: 'ready'; meeting: Meeting; transcript: TranscriptDocument | null }
 
 const itemsOf = (transcript: TranscriptDocument | null): TranscriptItem[] =>
-  (transcript?.segments ?? []).map(({ id, source, speaker, startMs, text, translation, translationModel }) => ({
+  (transcript?.segments ?? []).map(({ id, source, speaker, names, startMs, text, translation, translationModel }) => ({
     id,
     source,
     speaker,
+    ...(names?.length ? { names } : {}),
     startMs,
     text,
     translation,

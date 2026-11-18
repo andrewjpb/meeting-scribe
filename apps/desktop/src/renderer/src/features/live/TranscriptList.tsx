@@ -2,12 +2,14 @@
 // 16/26, tradução 14/22 com filete; parcial em --text-muted itálico. Rola sozinha até o fim; se o
 // usuário subir, para de rolar e mostra "Ir para o fim". Sem sombra, sem raio acima do token.
 import { useEffect, useRef, useState, type ReactNode } from 'react'
-import { formatClock, speakerLabel, type TranscriptSource, type TranslationState } from '@shared/transcription'
+import { formatClock, segmentLabel, type TranscriptSource, type TranslationState } from '@shared/transcription'
 
 export interface TranscriptItem {
   id: string
   source: TranscriptSource
   speaker: string | null
+  /** Nomes do Meet (contrato 27): "Ana" ou "Ana + Bruno" no lugar do rótulo. */
+  names?: string[]
   startMs: number
   text: string
   translation: string | null
@@ -96,7 +98,7 @@ function Segment({ item, onRetryTranslation, target }: { item: TranscriptItem; o
     <li data-segment={item.id} data-jump-target={target || undefined} className="grid grid-cols-[64px_minmax(0,1fr)]">
       <time className={`pt-0.5 text-12 tabular ${target ? 'font-bold text-title' : 'text-text-faint'}`}>{formatClock(item.startMs)}</time>
       <div className="flex min-w-0 flex-col gap-1">
-        <p className={`caps ${item.source === 'mic' ? 'text-mic' : 'text-sys'}`}>{speakerLabel(item.source, item.speaker)}</p>
+        <p className={`caps ${item.source === 'mic' ? 'text-mic' : 'text-sys'}`}>{segmentLabel(item)}</p>
         <p data-transcript-text className={`text-16 select-text ${item.partial ? 'text-text-muted italic' : 'text-text'}`}>{item.text}</p>
         {item.translation && <p data-transcript-translation className="border-l-2 border-line-strong pl-3 text-14 text-text-muted select-text">{item.translation}</p>}
         {showUnavailable && (

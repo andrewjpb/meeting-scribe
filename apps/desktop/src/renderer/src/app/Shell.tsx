@@ -5,6 +5,7 @@ import { useMainNavigation } from './useMainNavigation'
 import { useWhatsAppSync } from '../features/whatsapp/whatsappStore'
 import { CalendarBanner } from '../features/calendar/CalendarBanner'
 import { useCalendarSync } from '../features/calendar/calendarStore'
+import { useMeetSync } from '../features/live/meetStore'
 
 /**
  * Esqueleto da janela: barra lateral azul à esquerda, área principal em `--bg`. A faixa arrastável de
@@ -17,6 +18,8 @@ export function Shell() {
   useWhatsAppSync()
   // Contrato 12: "Próximas" e a faixa "não está sendo gravada" chegam do main.
   useCalendarSync()
+  // Contrato 27: a extensão do Meet; os eventos de fala valem em qualquer tela durante a gravação.
+  useMeetSync()
   const routeId = routeIdOf(location.pathname)
   // Trocar de aba em Configurações não remonta a tela (nem refaz a transição de rota).
   const routeKey = routeId === 'configuracoes' ? routeId : location.pathname

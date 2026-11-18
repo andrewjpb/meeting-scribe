@@ -2,6 +2,12 @@
 // que toda linha da tela está nele.
 import type { SettingsTab } from './routes'
 
+/** Descrição do interruptor "Quem fala no Meet" (contrato 27), a mesma na tela e na busca. */
+export const MEET_SPEAKERS_DESCRIPTION = 'Com a extensão do LAP Reuniões no Chrome, cada fala do Meet ganha o nome de quem falou. Tudo fica neste computador.'
+
+/** Descrição de "IA anotando ao vivo" (contrato 30), a mesma na tela e na busca. */
+export const LIVE_CARDS_DESCRIPTION = 'Durante a gravação, a cada 5 minutos o Claude local lê o trecho novo da conversa e cria e resolve post-its. Vale como padrão do interruptor "IA anotando" de cada gravação.'
+
 /** Uma linha de configuração no índice da busca. */
 export interface SettingsEntry {
   tab: SettingsTab
@@ -40,6 +46,7 @@ export function settingsIndex(agent: string): SettingsEntry[] {
     row('gravacao', 'Transcrição', 'Chave da AssemblyAI', 'Guardada cifrada neste Mac, protegida pelo Chaveiro do macOS.'),
     row('gravacao', 'Transcrição', 'Remover eco do alto-falante', 'Some com a fala dos participantes que vaza para o seu microfone quando você não usa fone.'),
     row('gravacao', 'Transcrição', 'Identificar quem fala', 'Separa os participantes por voz. Mais lento; desligado, as falas se dividem pelas pausas.'),
+    row('gravacao', 'Transcrição', 'Quem fala no Meet', MEET_SPEAKERS_DESCRIPTION),
     row('gravacao', 'Idiomas', 'Idioma falado', 'O idioma da reunião.'),
     row('gravacao', 'Idiomas', 'Traduzir ao vivo', 'A tradução aparece abaixo de cada fala.'),
     row('gravacao', 'Idiomas', 'Traduzir para', 'Idioma da tradução.'),
@@ -51,6 +58,7 @@ export function settingsIndex(agent: string): SettingsEntry[] {
     row('claude', 'Modelo de tradução', 'Modelo da AssemblyAI', 'Lista de modelos de tradução com preço e contexto.', '"Traduzir com" está em AssemblyAI'),
     row('claude', 'Chat e resumo', 'Modelo do chat', 'Usado no Assistente. O Opus responde melhor e demora mais.'),
     row('claude', 'Chat e resumo', 'Resumir ao encerrar', 'Ao encerrar, o Claude lê a transcrição e escreve o resumo, as decisões e as tarefas.'),
+    row('claude', 'Chat e resumo', 'IA anotando ao vivo', LIVE_CARDS_DESCRIPTION),
     row('claude', 'Automações', 'Limite diário de execuções agendadas', 'Ao passar, todas as tarefas pausam e o app avisa.'),
     row('arquivos', 'Arquivos da reunião', 'Salvar áudio e transcrição numa pasta', 'Para cada reunião: um arquivo de áudio (você e os participantes) e a transcrição em texto. Avise as pessoas antes de gravar.'),
     row('arquivos', 'Arquivos da reunião', 'Pasta', 'Onde ficam o áudio e a transcrição de cada reunião.', '"Salvar áudio e transcrição numa pasta" está ligado'),

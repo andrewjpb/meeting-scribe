@@ -75,7 +75,7 @@ export function createAnalysisService(deps: AnalysisServiceDeps): AnalysisServic
 
   const segmentsOf = async (meetingId: string): Promise<LiveAnalysisSegment[]> => {
     const document = await deps.transcripts.get(meetingId).catch(() => null)
-    return (document?.segments ?? []).map(({ source, speaker, startMs, endMs, text }) => ({ source, speaker, startMs, endMs, text }))
+    return (document?.segments ?? []).map(({ source, speaker, startMs, endMs, text, names }) => ({ source, speaker, startMs, endMs, text, ...(names?.length ? { names } : {}) }))
   }
 
   async function analyze(request: LiveAnalysisRequest, meetingId: string | null, signal: AbortSignal): Promise<AnalysisRunResult> {

@@ -3,11 +3,12 @@
 // a etiqueta "Exemplo" e nunca entra no registro da reunião. Com o motor Claude CLI e o `claude` não
 // encontrado (contrato 05, CA11), o aviso fica no topo da coluna e a transcrição segue sem tradução.
 import { CloudOff, Languages } from 'lucide-react'
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { useNavigate } from 'react-router'
 import { settingsPath, TRANSCRIPTION_ANCHOR } from '@shared/routes'
 import { Note, NOTE_ACTION_CLASS } from '../../design/Note'
 import { useTranscription } from '../../transcription/store'
+import { liveNamer, useMeet } from './meetStore'
 import { useRecording } from './recordingStore'
 import { EXAMPLE_TRANSCRIPT } from './exampleTranscript'
 import { TranscriptList, type TranscriptItem } from './TranscriptList'
@@ -19,21 +20,29 @@ export function TranscriptArea() {
   const claude = useTranscription((state) => state.claude)
   /** Clique no tempo de um item da análise (contrato 19): rola até o trecho. */
   const jump = useRecording((state) => state.jump)
+  /** Adendo 27b: a linha do tempo parcial do Meet dá o nome ao vivo dos trechos do sistema. */
+  const intervals = useMeet((state) => state.liveIntervals)
+  // Índice montado uma vez por mudança da linha do tempo; cada trecho guarda o resultado (as parciais re-renderizam).
+  const nameOf = useMemo(() => liveNamer(intervals), [intervals])
   const navigate = useNavigate()
   const [showExample, setShowExample] = useState(false)
 
   // Eco do alto-falante (contrato 06): some da coluna, sem animação nem aviso. Só é marcado com a
-  // configuração ligada.
-  const items: TranscriptItem[] = segments.filter((segment) => !segment.echo).map(({ id, source, speaker, startMs, text, translation, partial, translationState }) => ({
-    id,
-    source,
-    speaker,
-    startMs,
-    text,
-    translation,
-    partial,
-    translationState,
-  }))
+  // configuração ligada. Adendo 27b: o nome do Meet ao vivo é só exibição; o salvo sai do merge do "Encerrar".
+  const items: TranscriptItem[] = segments.filter((segment) => !segment.echo).map(({ id, source, speaker, startMs, endMs, text, translation, partial, translationState }) => {
+    const names = nameOf({ id, source, startMs, endMs })
+    return {
+      id,
+      source,
+      speaker,
+      ...(names.length ? { names: [...names] } : {}),
+      startMs,
+      text,
+      translation,
+      partial,
+      translationState,
+    }
+  })
 
   if (showExample) {
     return (

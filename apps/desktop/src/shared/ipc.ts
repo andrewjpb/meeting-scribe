@@ -11,10 +11,12 @@ import type { KeySaveResult, KeyStatus, MicAccess, ModelCheck, ModelsResult } fr
 import type { Chat, ChatEvent, ChatListItem, ChatRedoRequest, ChatSendRequest, ChatSendResult, ChatUpdateRequest } from './chat'
 import type { ClaudeLocateResult, ClaudeRunState, ClaudeStartResult, ClaudeTranslateRequest, ClaudeTranslateResult } from './claude-cli'
 import type { AudioBeginResult, AudioExtension, AudioFinishResult, AudioFolderInfo, MeetingDownloadKind, MeetingDownloadResult, MeetingFileKind, MeetingFilesInfo } from './meeting-files'
+import type { MeetState } from './meet'
+import type { AiNotesRunRequest, AiNotesRunResult } from './ai-notes'
 import type { AnalysisRunRequest, AnalysisRunResult, MeetingAnalysis } from './meeting-analysis'
 import type { MeetingNote } from './meeting-notes'
 import type { SummaryStatus } from './meeting-summary'
-import type { Meeting, NewMeeting } from './meetings'
+import type { Meeting, MeetingFolder, NewMeeting } from './meetings'
 import type { MeetingOverview, MeetingSearchResult } from './meetings-overview'
 import type { RouteId } from './routes'
 import type { AppSettings, SettingsPatch } from './settings-defaults'
@@ -57,6 +59,14 @@ export interface InvokeChannels {
   'scribe:meetings-overview': { request: undefined; response: MeetingOverview[] }
   /** Busca no main, em título, transcrição e resumo; termo de 2 a 100 caracteres. Nada sai do Mac. */
   'scribe:meetings-search': { request: { term: string }; response: MeetingSearchResult[] }
+  /** Pastas de reuniões (contrato 28): só organizam a lista; nome com até 60 caracteres, vazio não cria. */
+  'scribe:folders-list': { request: undefined; response: MeetingFolder[] }
+  'scribe:folders-create': { request: { name: string }; response: MeetingFolder | null }
+  'scribe:folders-rename': { request: { id: string; name: string }; response: MeetingFolder | null }
+  /** As reuniões da pasta ficam fora de pasta; nenhuma é apagada. */
+  'scribe:folders-delete': { request: { id: string }; response: boolean }
+  /** `folderId` `null` tira da pasta; pasta inexistente devolve `null`. */
+  'scribe:meetings-move': { request: { id: string; folderId: string | null }; response: Meeting | null }
   'scribe:settings-get': { request: undefined; response: AppSettings }
   'scribe:settings-update': { request: SettingsPatch; response: AppSettings }
   /** Só o estado da chave; nenhum canal devolve a chave. */
@@ -143,6 +153,13 @@ export interface InvokeChannels {
   'scribe:analyses-add': { request: { meetingId: string; analysis: MeetingAnalysis }; response: boolean }
   /** "Copiar" de um item da análise: o main escreve o texto na área de transferência. */
   'scribe:analysis-copy': { request: { text: string }; response: boolean }
+  /**
+   * IA anotando ao vivo (contrato 30): um ciclo com os trechos novos e os cards abertos da IA; responde o lote (cards
+   * novos e resolvidos) quando acaba, até 90 s. Nada é gravado: a tela aplica e "Encerrar" salva.
+   */
+  'scribe:ai-notes-run': { request: AiNotesRunRequest; response: AiNotesRunResult }
+  /** "Encerrar" ou desligar "IA anotando": o ciclo em curso da gravação é cancelado (o processo morre). */
+  'scribe:ai-notes-cancel': { request: { recordingId: string }; response: boolean }
   /** Marca do app (contrato 09): nome, subtítulo e o logo como data URL PNG, nunca um caminho. */
   'scribe:branding-get': { request: undefined; response: BrandingInfo }
   /** "Escolher imagem…": diálogo nativo no main; só ele confere, copia e grava `brandLogo`. */
@@ -232,6 +249,8 @@ export interface InvokeChannels {
   'scribe:calendar-join': { request: { key: string }; response: boolean }
   /** Título do evento da gravação que acabou de começar (CA9); `null` sem evento. */
   'scribe:calendar-recording': { request: undefined; response: { title: string } | null }
+  /** Quem fala no Meet (contrato 27): o estado da extensão agora, para a tela ao abrir (`events` vem vazio). */
+  'scribe:meet-status': { request: undefined; response: MeetState }
   /** Estado da reunião no Google Drive (aba "Áudio" do detalhe). */
   'scribe:drive-status': { request: { meetingId: string }; response: DriveMeetingStatus }
   /** "Tentar de novo". */
@@ -362,6 +381,11 @@ export interface MainEvents {
   'scribe:recording-end': undefined
   /** Um agente acrescentou um post-it à reunião (contrato 23): o detalhe aberto relê as anotações. */
   'scribe:notes-changed': { meetingId: string }
+  /**
+   * A extensão do Meet (contrato 27) conectou, desconectou, mudou os participantes ou mandou eventos de fala. Chega
+   * também com o app bloqueado: a gravação continua no bloqueio e cada evento vale pelo horário em que chega.
+   */
+  'scribe:meet-changed': MeetState
 }
 
 export type InvokeChannel = keyof InvokeChannels
@@ -383,6 +407,11 @@ const INVOKE: Record<InvokeChannel, true> = {
   'scribe:meetings-delete': true,
   'scribe:meetings-overview': true,
   'scribe:meetings-search': true,
+  'scribe:folders-list': true,
+  'scribe:folders-create': true,
+  'scribe:folders-rename': true,
+  'scribe:folders-delete': true,
+  'scribe:meetings-move': true,
   'scribe:settings-get': true,
   'scribe:settings-update': true,
   'scribe:key-status': true,
@@ -426,6 +455,8 @@ const INVOKE: Record<InvokeChannel, true> = {
   'scribe:analyses-save': true,
   'scribe:analyses-add': true,
   'scribe:analysis-copy': true,
+  'scribe:ai-notes-run': true,
+  'scribe:ai-notes-cancel': true,
   'scribe:branding-get': true,
   'scribe:brand-logo-choose': true,
   'scribe:brand-logo-reset': true,
@@ -468,6 +499,7 @@ const INVOKE: Record<InvokeChannel, true> = {
   'scribe:calendar-dismiss': true,
   'scribe:calendar-join': true,
   'scribe:calendar-recording': true,
+  'scribe:meet-status': true,
   'scribe:drive-status': true,
   'scribe:drive-retry': true,
   'scribe:drive-open': true,
@@ -538,6 +570,7 @@ const MAIN_EVENTS: Record<MainEvent, true> = {
   'scribe:open-whatsapp': true,
   'scribe:recording-end': true,
   'scribe:notes-changed': true,
+  'scribe:meet-changed': true,
 }
 
 /**
@@ -563,6 +596,8 @@ export const RECORDING_SESSION_CHANNELS = [
   'scribe:audio-finish',
   // Só o resumo automático (`auto: true`).
   'scribe:summary-generate',
+  // Contrato 30: cancela o ciclo da IA anotando em curso.
+  'scribe:ai-notes-cancel',
 ] as const satisfies readonly InvokeChannel[]
 export type RecordingSessionChannel = (typeof RECORDING_SESSION_CHANNELS)[number]
 
@@ -605,6 +640,11 @@ export const WHEN_LOCKED: Readonly<Record<InvokeChannel, LockedPolicy>> = Object
   'scribe:meetings-delete': 'refused',
   'scribe:meetings-overview': 'refused',
   'scribe:meetings-search': 'refused',
+  'scribe:folders-list': 'refused',
+  'scribe:folders-create': 'refused',
+  'scribe:folders-rename': 'refused',
+  'scribe:folders-delete': 'refused',
+  'scribe:meetings-move': 'refused',
   'scribe:settings-update': 'refused',
   'scribe:key-status': 'refused',
   'scribe:key-save': 'refused',
@@ -640,6 +680,10 @@ export const WHEN_LOCKED: Readonly<Record<InvokeChannel, LockedPolicy>> = Object
   'scribe:analyses-save': 'session',
   'scribe:analyses-add': 'session',
   'scribe:analysis-copy': 'refused',
+  // Contrato 30: bloqueado, o ciclo da IA é pulado (a gravação segue).
+  'scribe:ai-notes-run': 'refused',
+  // Cancelar no "Encerrar" passa com o token da gravação, como o resto do fim dela.
+  'scribe:ai-notes-cancel': 'session',
   'scribe:brand-logo-choose': 'refused',
   'scribe:brand-logo-reset': 'refused',
   'scribe:update-check': 'refused',
@@ -677,6 +721,8 @@ export const WHEN_LOCKED: Readonly<Record<InvokeChannel, LockedPolicy>> = Object
   'scribe:calendar-dismiss': 'refused',
   'scribe:calendar-join': 'refused',
   'scribe:calendar-recording': 'refused',
+  // Contrato 27: o estado do Meet não aparece com o app bloqueado; o servidor continua coletando para a gravação.
+  'scribe:meet-status': 'refused',
   'scribe:drive-status': 'refused',
   'scribe:drive-retry': 'refused',
   'scribe:drive-open': 'refused',

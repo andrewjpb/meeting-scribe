@@ -1,0 +1,17 @@
+{
+  "manifest_version": 3,
+  "name": "LAP Reuniões — Quem fala no Meet",
+  "version": "0.1.0",
+  "description": "Manda ao app LAP Reuniões, neste computador, os nomes de quem fala no Google Meet. Nada sai da máquina.",
+  "host_permissions": ["https://meet.google.com/*", "http://127.0.0.1/*"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://meet.google.com/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}

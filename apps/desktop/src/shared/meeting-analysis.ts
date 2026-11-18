@@ -100,6 +100,8 @@ export interface LiveAnalysisSegment {
   startMs: number
   endMs: number
   text: string
+  /** Nomes do Meet (contrato 27): só na reunião salva; a gravação em curso ainda não tem. */
+  names?: string[]
 }
 
 /** Fim do último trecho com texto: o `atMs` de uma análise ("Até mm:ss" bate com o que ela leu). */

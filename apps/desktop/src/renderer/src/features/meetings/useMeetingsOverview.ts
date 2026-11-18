@@ -23,6 +23,8 @@ export interface MeetingsOverviewView {
   list: MeetingOverview[] | null
   failed: boolean
   retry: () => void
+  /** Contrato 28: muda as linhas na hora (reunião movida, pasta excluída), sem pedir a lista de novo. */
+  patch: (change: (list: MeetingOverview[]) => MeetingOverview[]) => void
 }
 
 /**
@@ -74,7 +76,9 @@ export function useMeetingsOverview(): MeetingsOverviewView {
     setAttempt((n) => n + 1)
   }
 
-  return { list, failed, retry }
+  const patch = (change: (list: MeetingOverview[]) => MeetingOverview[]): void => setList((current) => (current ? change(current) : current))
+
+  return { list, failed, retry, patch }
 }
 
 export interface MeetingsSearchView {
@@ -88,6 +92,8 @@ export interface MeetingsSearchView {
   /** O termo atual ainda não respondeu. */
   pending: boolean
   retry: () => void
+  /** Contrato 28: muda os resultados na hora (reunião movida, pasta excluída), sem buscar de novo. */
+  patch: (change: (results: MeetingSearchResult[]) => MeetingSearchResult[]) => void
 }
 
 /**
@@ -141,5 +147,8 @@ export function useMeetingsSearch(input: string): MeetingsSearchView {
     setAttempt((n) => n + 1)
   }
 
-  return { active: term !== null, shown: term === null ? null : answer, pending: term !== null && answer?.term !== term, retry }
+  const patch = (change: (results: MeetingSearchResult[]) => MeetingSearchResult[]): void =>
+    setAnswer((current) => (current?.results ? { ...current, results: change(current.results) } : current))
+
+  return { active: term !== null, shown: term === null ? null : answer, pending: term !== null && answer?.term !== term, retry, patch }
 }

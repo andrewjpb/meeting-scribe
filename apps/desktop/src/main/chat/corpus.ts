@@ -17,7 +17,7 @@ import { randomUUID } from 'node:crypto'
 import { chmod, copyFile, link, mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { CHAT_SCOPE_MEETINGS_MAX, MEETING_LINK_SCHEME, type ChatScope } from '../../shared/chat'
-import { notesInOrder, type MeetingNote } from '../../shared/meeting-notes'
+import { noteContextText, notesInOrder, type MeetingNote } from '../../shared/meeting-notes'
 import { escapeHeadings, taskLine, type MeetingSummary } from '../../shared/meeting-summary'
 import type { Meeting } from '../../shared/meetings'
 import { firstSentence } from '../../shared/meetings-overview'
@@ -95,7 +95,7 @@ export function meetingCorpusMarkdown({ meeting, transcript, summary, notes }: C
   else lines.push('Nenhuma tarefa registrada.')
   const ordered = notesInOrder(notes)
   lines.push('', '## Anotações', '')
-  if (ordered.length) lines.push(...ordered.map((note) => `- [${note.atMs === null ? 'depois' : formatClock(note.atMs)}] ${oneLine(note.text)}`))
+  if (ordered.length) lines.push(...ordered.map((note) => `- [${note.atMs === null ? 'depois' : formatClock(note.atMs)}] ${oneLine(noteContextText(note))}`))
   else lines.push('Nenhuma anotação.')
   const speech = transcript ? summaryLines(transcript).map(escapeHeadings) : []
   lines.push('', '## Transcrição', '')

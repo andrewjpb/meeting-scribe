@@ -10,6 +10,7 @@ import {
   type SettingsNavigationState,
   type SettingsTab,
 } from '@shared/routes'
+import { LIVE_CARDS_DESCRIPTION, MEET_SPEAKERS_DESCRIPTION } from '@shared/settings-index'
 import { DAILY_RUN_LIMIT_OPTIONS, LANGUAGE_CODES, type ChatModel, type ClaudeModel, type ClaudeTransport, type CloseBehavior, type DailyRunLimitOption, type LanguageCode, type ThemeSetting, type TranslationEngine } from '@shared/settings-defaults'
 import { useAgentLabel } from '../../app/agentLabel'
 import { useSettings } from '../../app/settingsStore'
@@ -332,6 +333,9 @@ function SettingsTabs({ tab }: { tab: SettingsTab }) {
                 >
                   <Switch checked={settings.identifySpeakers} labelledBy="settings-identify-speakers" onChange={(identifySpeakers) => void update({ identifySpeakers })} />
                 </SettingRow>
+                <SettingRow name="Quem fala no Meet" nameId="settings-meet-speakers" description={MEET_SPEAKERS_DESCRIPTION}>
+                  <Switch checked={settings.meetSpeakers} labelledBy="settings-meet-speakers" onChange={(meetSpeakers) => void update({ meetSpeakers })} />
+                </SettingRow>
               </Section>
 
               <Section title="Idiomas">
@@ -402,6 +406,10 @@ function SettingsTabs({ tab }: { tab: SettingsTab }) {
                 </SettingRow>
                 <SettingRow name="Resumir ao encerrar" nameId="settings-summarize" description="Ao encerrar, o Claude lê a transcrição e escreve o resumo, as decisões e as tarefas.">
                   <Switch checked={settings.summarizeOnStop} labelledBy="settings-summarize" onChange={(summarizeOnStop) => void update({ summarizeOnStop })} />
+                </SettingRow>
+                {/* Contrato 30: o valor inicial do interruptor "IA anotando" de cada gravação. */}
+                <SettingRow name="IA anotando ao vivo" nameId="settings-live-cards" description={LIVE_CARDS_DESCRIPTION}>
+                  <Switch checked={settings.liveCards} labelledBy="settings-live-cards" onChange={(liveCards) => void update({ liveCards })} />
                 </SettingRow>
               </Section>
 

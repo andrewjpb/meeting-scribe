@@ -23,6 +23,8 @@
   --sys: #5b6b85;
   --rec: #c62f34;
   --ok: #1e5bb8;
+  /* Ligado/conectado (adendo 27c, extensão do Meet): verde, 5,3:1 sobre --bg-raised. */
+  --live: #1f7a45;
   --focus: #1e5bb8;
 
   --side-bg: #0a2a5e;
@@ -87,6 +89,8 @@
   /* design.md pede #F0646A; sobre --bg-raised dava 4,47:1. Mesmo matiz, luminosidade +0,2%. */
   --rec: #f0656b;
   --ok: #5392f7;
+  /* Verde do "Meet conectado": 6,2:1 sobre --bg-raised. */
+  --live: #4cc27a;
   --focus: #3b82f6;
 
   --side-bg: #0a2a5e;

@@ -112,6 +112,9 @@ import { SCHEDULE_RUNS_DIR, SCHEDULES_FILE } from './schedules/store'
 import { AGENTS_FILE } from './agents/store'
 import type { TrayController } from './tray/menu'
 import type { CalendarService } from './calendar/service'
+import { MEET_DISCONNECTED_LABEL } from '../shared/meet'
+import { MEET_PATH, MEET_PORTS, type MeetServer } from './meet/server'
+import { MEETINGS_DIR } from './meetings/transcripts'
 import { SETTINGS_VERSION } from './settings/schema'
 import { CLAUDE_DISALLOWED_TOOLS, CLAUDE_READ_TOOLS, CLAUDE_WEB_TOOLS } from './acp/profiles/claude'
 import { LATEST_RELEASE_URL, RELEASE_DOWNLOAD_PREFIX, RELEASE_REDIRECT_HOSTS } from './updates/release'
@@ -172,6 +175,8 @@ export interface SmokeContext {
   tray: () => TrayController | null
   /** Contrato 12: as agendas (o smoke lê de novo depois de mudar os eventos falsos). */
   calendar: Pick<CalendarService, 'refresh' | 'view'>
+  /** Contrato 27: o servidor local do Meet (a porta em que subiu e o estado). */
+  meet: Pick<MeetServer, 'port' | 'status'>
 }
 
 interface Check {
@@ -343,16 +348,17 @@ async function echoCheck(win: BrowserWindow, outDir: string): Promise<{ check: C
   const contents = win.webContents
   const lines = readSessionFixture('echo-session.jsonl')
   const systemFinal = lines.findIndex((line) => line.source === 'system' && (line.message as { end_of_turn?: unknown } | null)?.end_of_turn === true)
-  const rows = `[...document.querySelectorAll('[data-transcript-list] li')].map((li) => ({ label: li.querySelector('.caps')?.textContent ?? '', text: li.querySelector('[data-transcript-text]')?.textContent ?? '' }))`
-  const withPhrase = (list: { label: string; text: string }[]): string[] => list.filter((row) => row.text.includes(ECHO_PHRASE)).map((row) => row.label)
+  const rows = `[...document.querySelectorAll('[data-transcript-list] li')].map((li) => ({ label: li.querySelector('.caps')?.textContent ?? '', system: li.querySelector('.caps')?.classList.contains('text-sys') ?? false, text: li.querySelector('[data-transcript-text]')?.textContent ?? '' }))`
+  type EchoRow = { label: string; system: boolean; text: string }
+  const withPhrase = (list: EchoRow[]): string[] => list.filter((row) => row.text.includes(ECHO_PHRASE)).map((row) => row.label)
 
   await evaluate(contents, `window.__smokeProbe.replay(${JSON.stringify(fixtureSegments(lines.slice(0, systemFinal)))})`)
   await waitFor(contents, `document.querySelectorAll('[data-transcript-list] li').length === 3`)
-  const before = await evaluate<{ label: string; text: string }[]>(contents, rows)
+  const before = await evaluate<EchoRow[]>(contents, rows)
   await evaluate(contents, `window.__smokeProbe.replay(${JSON.stringify(fixtureSegments(lines))})`)
   await waitFor(contents, `document.querySelectorAll('[data-transcript-list] li').length === 2`)
   await settle(contents)
-  const after = await evaluate<{ label: string; text: string }[]>(contents, rows)
+  const after = await evaluate<EchoRow[]>(contents, rows)
   const shot = await capture(win, outDir, 'gravacao-eco-light')
   const beforeLabels = withPhrase(before)
   const afterLabels = withPhrase(after)
@@ -361,7 +367,8 @@ async function echoCheck(win: BrowserWindow, outDir: string): Promise<{ check: C
       ok:
         beforeLabels.includes('Você') &&
         afterLabels.length === 1 &&
-        afterLabels[0] === 'Participante A' &&
+        // O que importa é o trecho ter ido para a linha do sistema; o rótulo pode trazer o nome do Meet (contrato 27).
+        after.some((row) => row.text.includes(ECHO_PHRASE) && row.system && row.label !== 'Você') &&
         after.some((row) => row.label === 'Você' && row.text.startsWith('Pode falar')),
       detail: `antes do final do sistema: "${ECHO_PHRASE}" em [${beforeLabels.join(', ')}]; depois: em [${afterLabels.join(', ')}]; linhas na tela: ${after.map((row) => row.label).join(', ')}`,
     },
@@ -1035,6 +1042,111 @@ async function meetingsSearchCheck(win: BrowserWindow, outDir: string): Promise<
       detail: `⌘F focou=${focused}; "${TRANSCRIPT_ONLY_TERM}" -> ${rows.length} linha(s) em ${answeredMs} ms: ${JSON.stringify(rows)}; "${NOTES_ONLY_TERM}" -> ${JSON.stringify(inNotes)}; sem resultado=${empty}; Esc limpou no campo=${cleared}, fora do campo=${clearedOutside}`,
     },
     shot,
+  }
+}
+
+/**
+ * Contrato 28 (CA3, CA4 e CA7), na lista com seis reuniões: "Nova pasta" cria "Cliente X" pela barra; o "…" da linha
+ * de smoke-1 move a reunião para ela (o `meetings.json` guarda o `folderId`); selecionar a pasta deixa só smoke-1;
+ * "Todas" traz as seis de volta e a linha de smoke-1 mostra "· Cliente X".
+ */
+async function meetingsFoldersCheck(contents: WebContents, userDataDir: string): Promise<Check> {
+  const FOLDER = 'Cliente X'
+  const FOLDER_OPTION = `[...document.querySelectorAll('main [data-folders] [data-folder]')].find((b) => b.dataset.folder !== 'all' && b.textContent.startsWith(${JSON.stringify(FOLDER)}))`
+  const barShown = await waitFor(contents, `document.querySelector('main [data-folders] [data-folder="all"]') && document.querySelector('main [data-action="new-folder"]')`)
+  await clickSelector(contents, 'main [data-action="new-folder"]')
+  await waitFor(contents, `document.querySelector('main [data-new-folder-input]')`)
+  await setValue(contents, 'main [data-new-folder-input]', FOLDER)
+  await pressEnterIn(contents, 'main [data-new-folder-input]')
+  const created = await waitFor(contents, `${FOLDER_OPTION}`)
+  const folderId = await evaluate<string>(contents, `${FOLDER_OPTION}?.dataset.folder ?? ''`)
+  // "…" da linha (fora do link) → "Mover para…" → a pasta.
+  await clickSelector(contents, 'main a[data-meeting="smoke-1"] ~ div [data-meeting-menu]')
+  const menuShown = await waitFor(contents, `document.querySelector('main [data-move-to="${folderId}"]')`)
+  if (menuShown) await clickSelector(contents, `main [data-move-to="${folderId}"]`)
+  let savedFolder: string | null | undefined
+  for (let attempt = 0; attempt < 100 && savedFolder !== folderId; attempt++) {
+    savedFolder = readMeetings(userDataDir).find((meeting) => meeting.id === 'smoke-1')?.folderId
+    if (savedFolder !== folderId) await wait(50)
+  }
+  const ROW_IDS = `[...document.querySelectorAll('main a[data-meeting]')].map((a) => a.dataset.meeting)`
+  const counted = await waitFor(contents, `${FOLDER_OPTION}?.textContent === ${JSON.stringify(`${FOLDER}1`)}`)
+  await clickSelector(contents, `main [data-folder="${folderId}"]`)
+  const filtered = await waitFor(contents, `JSON.stringify(${ROW_IDS}) === '["smoke-1"]'`)
+  const filteredRows = await evaluate<string[]>(contents, ROW_IDS)
+  await clickSelector(contents, 'main [data-folder="all"]')
+  const back = await waitFor(contents, `${ROW_IDS}.length === 6`)
+  const meta = await evaluate<string>(contents, `document.querySelector('main a[data-meeting="smoke-1"] [data-meeting-folder]')?.textContent ?? ''`)
+  return {
+    ok: barShown && created && folderId !== '' && menuShown && savedFolder === folderId && counted && filtered && back && meta === ` · ${FOLDER}`,
+    detail: `barra=${barShown}; pasta criada=${created} (${folderId || 'sem id'}); menu da linha=${menuShown}; folderId salvo=${savedFolder ?? 'nenhum'}; contagem 1=${counted}; filtro -> ${JSON.stringify(filteredRows)}; "Todas" com 6=${back}; meta de smoke-1 "${meta}"`,
+  }
+}
+
+/**
+ * Contrato 28 (CA5), no meio da gravação: na lista de Reuniões, "Gravando agora" com o título e o tempo andando;
+ * o clique no cartão volta para a gravação.
+ */
+async function recordingNowCheck(contents: WebContents): Promise<Check> {
+  await clickSelector(contents, '[data-nav="reunioes"]')
+  const shown = await waitFor(contents, `${routeIs('reunioes')} && document.querySelector('main [data-recording-now]')`)
+  const card = shown ? await text(contents, 'main [data-recording-now]') : ''
+  const before = shown ? await text(contents, 'main [data-recording-now-elapsed]') : ''
+  const moved = shown && (await waitFor(contents, `document.querySelector('main [data-recording-now-elapsed]')?.textContent !== ${JSON.stringify(before)}`, 3000))
+  const after = shown ? await text(contents, 'main [data-recording-now-elapsed]') : ''
+  if (shown) await clickSelector(contents, 'main [data-recording-now]')
+  const back = await waitFor(contents, routeIs('gravacao'))
+  return {
+    ok: shown && card.includes('Gravando agora') && /Reunião de \d{2}\/\d{2} \d{2}:\d{2}/.test(card) && moved && back,
+    detail: `cartão=${shown} "${card}"; tempo ${before} -> ${after} (andou=${moved}); clique voltou à gravação=${back}`,
+  }
+}
+
+/**
+ * Contrato 29 (CA3 e CA5), no meio da gravação: o botão do microfone logo depois de "Pausar" desliga ("Ouvir só os
+ * participantes": `aria-pressed=true`, fita "Você" com "mic desligado", sem "sem sinal" e sem aviso de microfone) e
+ * religa; a barra de controles continua cabendo na janela de 1120 px.
+ */
+async function micOffCheck(contents: WebContents): Promise<Check> {
+  const BUTTON = '[data-action="mic-off"]'
+  const STATE = `(() => {
+    const button = document.querySelector('${BUTTON}')
+    const label = document.querySelector('[data-source-label="mic"]')
+    const bar = document.querySelector('[role="toolbar"][aria-label="Controles da gravação"]')
+    const main = document.querySelector('main')?.getBoundingClientRect()
+    const box = bar?.getBoundingClientRect()
+    return {
+      pressed: button?.getAttribute('aria-pressed') ?? '',
+      afterPause: button?.previousElementSibling?.dataset.action ?? '',
+      title: button?.title ?? '',
+      label: [...(label?.children ?? [])].map((part) => part.textContent ?? ''),
+      micNotices: [...document.querySelectorAll('[data-notice^="mic-"]')].length,
+      barFits: Boolean(bar && box && main && bar.scrollWidth <= bar.clientWidth && box.left >= main.left && box.right <= main.right),
+      bar: bar && box && main ? { scrollWidth: bar.scrollWidth, clientWidth: bar.clientWidth, left: Math.round(box.left - main.left), right: Math.round(main.right - box.right), main: Math.round(main.width) } : null,
+    }
+  })()`
+  type MicState = { pressed: string; afterPause: string; title: string; label: string[]; micNotices: number; barFits: boolean; bar: unknown }
+  const before = await evaluate<MicState>(contents, STATE)
+  await clickSelector(contents, BUTTON)
+  const off = await waitFor(contents, `document.querySelector('${BUTTON}')?.getAttribute('aria-pressed') === 'true' && document.querySelector('[data-mic-off-label]')`)
+  const offState = await evaluate<MicState>(contents, STATE)
+  await clickSelector(contents, BUTTON)
+  const on = await waitFor(contents, `document.querySelector('${BUTTON}')?.getAttribute('aria-pressed') === 'false' && !document.querySelector('[data-mic-off-label]')`)
+  const onState = await evaluate<MicState>(contents, STATE)
+  return {
+    ok:
+      before.pressed === 'false' &&
+      before.afterPause === 'toggle-pause' &&
+      before.title === 'Ouvir só os participantes' &&
+      before.barFits &&
+      off &&
+      offState.title === 'Voltar a me ouvir' &&
+      JSON.stringify(offState.label) === JSON.stringify(['Você', 'mic desligado']) &&
+      offState.micNotices === 0 &&
+      offState.barFits &&
+      on &&
+      onState.title === 'Ouvir só os participantes',
+    detail: `antes ${JSON.stringify(before)}; desligado=${off} ${JSON.stringify(offState)}; religado=${on} ${JSON.stringify(onState)}`,
   }
 }
 
@@ -5863,6 +5975,331 @@ async function automationsChecks(ctx: SmokeContext, watch: (win: BrowserWindow) 
   auto.skewMs = 0
 }
 
+/**
+ * Portas do servidor do Meet no smoke: fora da faixa da extensão (47632–47641). Com o Chrome do Andrew aberto no Meet,
+ * a extensão de verdade mandava nomes reais ao servidor do smoke e o resultado dependia disso.
+ */
+export const SMOKE_MEET_PORTS: readonly number[] = Array.from({ length: 10 }, (_, index) => 47652 + index)
+
+/** POST de um cliente falso no servidor do Meet (contrato 27), fora da sessão do Electron. */
+function meetPost(port: number, origin: string, body: unknown): Promise<{ status: number; body: string }> {
+  return new Promise((resolve) => {
+    const req = httpRequest({ host: '127.0.0.1', port, method: 'POST', path: MEET_PATH, headers: { origin, 'content-type': 'application/json' } }, (res) => {
+      const chunks: Buffer[] = []
+      res.on('data', (chunk: Buffer) => chunks.push(chunk))
+      res.on('end', () => resolve({ status: res.statusCode ?? 0, body: Buffer.concat(chunks).toString('utf8') }))
+    })
+    // Porta fechada (servidor parado): vale como sem resposta.
+    req.on('error', () => resolve({ status: 0, body: '' }))
+    req.end(JSON.stringify(body))
+  })
+}
+
+const MEET_MARKER = `(document.querySelector('[data-meet-marker]')?.textContent ?? '')`
+
+/**
+ * Contrato 27 (CA8), numa janela clara, sem PNG novo: o servidor local do Meet no ar numa das portas 47632–47641;
+ * um cliente falso com origem `chrome-extension://abc` é aceito (`{ ok: true }`) e com `https://mau.example` é
+ * recusado (404 sem corpo); numa gravação curta, "Meet conectado · 2 participantes" no cabeçalho e o evento "Ana
+ * começou a falar" vira o nome do trecho do sistema no arquivo e no `.md` do acervo ("[mm:ss] Ana: …"); o do
+ * microfone continua "Você". "Quem fala no Meet" desligado para o servidor e ligado sobe de novo, desconectado; a
+ * gravação começa com "Meet desconectado" em vermelho e fica verde no primeiro envio (adendo 27c).
+ */
+async function meetChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => void, checks: Record<string, Check>): Promise<void> {
+  const win = ctx.openWindow({ theme: 'light' })
+  watch(win)
+  await loadAndWait(win)
+  const contents = win.webContents
+  const body = (eventos: { nome: string; falando: boolean; ts: number }[]): unknown => ({ reuniao: 'smk-meet-abc', participantes: ['Ana', 'Bruno'], eventos })
+
+  // Estado limpo antes de afirmar "desconectado": desligar e religar o interruptor reinicia o servidor e zera a
+  // janela de 15 s de um envio anterior.
+  const restartMeet = async (): Promise<{ stopped: boolean; restarted: boolean }> => {
+    await evaluate(contents, `window.__scribeApi.invoke('scribe:settings-update', { meetSpeakers: false })`)
+    let stopped = false
+    for (let attempt = 0; attempt < 100 && !stopped; attempt++) {
+      stopped = ctx.meet.port() === null
+      if (!stopped) await wait(50)
+    }
+    await evaluate(contents, `window.__scribeApi.invoke('scribe:settings-update', { meetSpeakers: true })`)
+    let restarted = false
+    for (let attempt = 0; attempt < 100 && !restarted; attempt++) {
+      restarted = ctx.meet.port() !== null
+      if (!restarted) await wait(50)
+    }
+    return { stopped, restarted }
+  }
+  const fresh = await restartMeet()
+  const freshDisconnected = !ctx.meet.status().connected
+
+  // Servidor: aceita só a extensão; a página de fora recebe 404 sem corpo e nada muda.
+  const port = ctx.meet.port()
+  const inRange = port !== null && SMOKE_MEET_PORTS.includes(port) && !MEET_PORTS.includes(port)
+  const refused = port === null ? { status: -1, body: '' } : await meetPost(port, 'https://mau.example', body([{ nome: 'Mau', falando: true, ts: Date.now() }]))
+  const afterRefused = ctx.meet.status()
+  const accepted = port === null ? { status: -1, body: '' } : await meetPost(port, 'chrome-extension://abc', body([]))
+  const afterAccepted = ctx.meet.status()
+  checks['server'] = {
+    ok:
+      fresh.restarted &&
+      freshDisconnected &&
+      inRange &&
+      refused.status === 404 &&
+      refused.body === '' &&
+      !afterRefused.connected &&
+      accepted.status === 200 &&
+      accepted.body === '{"ok":true}' &&
+      afterAccepted.connected &&
+      JSON.stringify(afterAccepted.participants) === JSON.stringify(['Ana', 'Bruno']),
+    detail: `estado limpo (reiniciado=${fresh.stopped && fresh.restarted}, desconectado=${freshDisconnected}); porta ${port ?? 'nenhuma'} na faixa do smoke=${inRange}; https://mau.example → ${refused.status} "${refused.body}", conectado=${afterRefused.connected}; chrome-extension://abc → ${accepted.status} ${accepted.body}, conectado=${afterAccepted.connected}, ${afterAccepted.participants.length} participante(s)`,
+  }
+
+  // "Quem fala no Meet" desligado: o servidor para e a porta fecha; ligado, sobe de novo (e desconectado: a gravação
+  // abaixo começa com o marcador vermelho, adendo 27c).
+  await evaluate(contents, `window.__scribeApi.invoke('scribe:settings-update', { meetSpeakers: false })`)
+  let stopped = false
+  for (let attempt = 0; attempt < 100 && !stopped; attempt++) {
+    stopped = ctx.meet.port() === null
+    if (!stopped) await wait(50)
+  }
+  const closed = port === null ? { status: -1, body: '' } : await meetPost(port, 'chrome-extension://abc', body([]))
+  const disconnected = !ctx.meet.status().connected
+  await evaluate(contents, `window.__scribeApi.invoke('scribe:settings-update', { meetSpeakers: true })`)
+  let restarted = false
+  for (let attempt = 0; attempt < 100 && !restarted; attempt++) {
+    restarted = ctx.meet.port() !== null
+    if (!restarted) await wait(50)
+  }
+  checks['setting'] = {
+    ok: stopped && closed.status !== 200 && disconnected && restarted,
+    detail: `desligado: servidor parado=${stopped}, POST → ${closed.status}, desconectado=${disconnected}; ligado de novo: no ar=${restarted} (porta ${ctx.meet.port() ?? 'nenhuma'})`,
+  }
+
+  // Gravação curta: o marcador vermelho antes do envio e verde depois (adendo 27c), e o nome no trecho do sistema.
+  const livePort = ctx.meet.port()
+  const idsBefore = new Set(readMeetings(ctx.userDataDir).map((meeting) => meeting.id))
+  await clickSelector(contents, '[data-nav="reunioes"]')
+  await waitFor(contents, `${routeIs('reunioes')} && document.querySelector('[data-action="new-recording"]')`)
+  await clickSelector(contents, '[data-action="new-recording"]')
+  const live = await waitFor(contents, `${probeJs('state()?.mic')} === 'live' && ${probeJs('state()?.system')} === 'live'`)
+  const markerOff = await waitFor(contents, `document.querySelector('[data-meet-marker="off"]') && ${MEET_MARKER} === ${JSON.stringify(MEET_DISCONNECTED_LABEL)}`)
+  const markerOffText = await text(contents, '[data-meet-marker]')
+  if (livePort !== null) await meetPost(livePort, 'chrome-extension://abc', body([{ nome: 'Ana', falando: true, ts: Date.now() }]))
+  const marker = await waitFor(contents, `document.querySelector('[data-meet-marker="on"]') && ${MEET_MARKER} === 'Meet conectado · 2 participantes'`)
+  const markerText = await text(contents, '[data-meet-marker]')
+  const base = { speaker: null, translation: null, translationModel: null, partial: false, sessionId: 'smoke-meet', translationState: 'done' }
+  const segments = [
+    { ...base, id: 'smoke-meet-mic', source: 'mic', startMs: 0, endMs: 3000, text: 'Pode começar.', turnOrder: 0 },
+    { ...base, id: 'smoke-meet-sys', source: 'system', startMs: 0, endMs: 3000, text: 'O cronograma fechou ontem.', turnOrder: 1 },
+  ]
+  await evaluate(contents, `window.__smokeProbe.replay(${JSON.stringify(segments)})`)
+  await waitFor(contents, `document.querySelectorAll('[data-transcript-list] li').length === 2`)
+  // A fala de Ana fica aberta: o "Encerrar" fecha. A gravação passa de 3 s (o fim dos trechos).
+  await wait(2000)
+  const saved = await endCalendarRecording(contents, ctx, idsBefore)
+  let transcript: TranscriptDocument | null = null
+  for (let attempt = 0; attempt < 100 && !transcript; attempt++) {
+    try {
+      transcript = saved ? (JSON.parse(readFileSync(join(ctx.userDataDir, MEETINGS_DIR, `${saved.id}.json`), 'utf8')) as TranscriptDocument) : null
+    } catch {
+      await wait(50)
+    }
+  }
+  const byId = Object.fromEntries((transcript?.segments ?? []).map((segment) => [segment.id, segment.names ?? null]))
+  // O `.md` do acervo do chat (o mesmo formato do resumo): "[mm:ss] Ana: texto".
+  const corpusDir = join(ctx.userDataDir, CHAT_CORPUS_DIR)
+  let corpusMd = ''
+  for (let attempt = 0; attempt < 100 && !corpusMd.includes('] Ana: '); attempt++) {
+    const file = saved && existsSync(corpusDir) ? readdirSync(corpusDir).find((name) => name.endsWith(corpusFileSuffix(saved.id))) : undefined
+    corpusMd = file ? readFileSync(join(corpusDir, file), 'utf8') : ''
+    if (!corpusMd.includes('] Ana: ')) await wait(50)
+  }
+  const folderMd = saved?.transcriptPath && existsSync(saved.transcriptPath) ? readFileSync(saved.transcriptPath, 'utf8') : null
+  // Aba "Transcrição" do detalhe (o resumo pode ter aberto a aba "Resumo").
+  if (await waitFor(contents, `document.querySelector('[data-tab="transcricao"]')`, 5000)) await clickSelector(contents, '[data-tab="transcricao"]')
+  const labelInDetail = await waitFor(contents, `[...document.querySelectorAll('[data-transcript-list] li .caps')].some((el) => el.textContent === 'Ana')`, 5000)
+  checks['recording'] = {
+    ok:
+      live &&
+      markerOff &&
+      marker &&
+      Boolean(saved) &&
+      JSON.stringify(byId['smoke-meet-sys']) === JSON.stringify(['Ana']) &&
+      byId['smoke-meet-mic'] === null &&
+      corpusMd.includes('] Ana: O cronograma fechou ontem.') &&
+      corpusMd.includes('] Você: Pode começar.') &&
+      (folderMd === null || folderMd.includes('**Ana** · ')) &&
+      labelInDetail,
+    detail: `gravando=${live}; antes do envio "${markerOffText}" vermelho=${markerOff}; depois "${markerText}" verde=${marker}; reunião salva=${Boolean(saved)}; nomes no arquivo: sistema=${JSON.stringify(byId['smoke-meet-sys'] ?? null)}, microfone=${JSON.stringify(byId['smoke-meet-mic'] ?? null)}; acervo com "Ana:"=${corpusMd.includes('] Ana: ')}; .md da pasta ${folderMd === null ? 'sem arquivo' : `com "**Ana**"=${folderMd.includes('**Ana** · ')}`}; "Ana" no detalhe=${labelInDetail}`,
+  }
+
+  win.destroy()
+}
+
+/** Títulos que `test/fixtures/fake-ai-notes.mjs` cria no primeiro e no segundo ciclo (contrato 30). */
+const AI_NOTES_FIRST_TITLE = 'Confirmar a janela de manutenção'
+const AI_NOTES_SECOND_TITLE = 'Quem aprova o orçamento da réplica'
+const AI_CARD = (title: string): string => `[...document.querySelectorAll('[data-notes-panel] [data-note-origin="ia"]')].find((card) => card.querySelector('[data-note-title]')?.value === ${JSON.stringify(title)})`
+
+/**
+ * Contrato 30, CA6, numa janela clara e numa gravação à parte (as anotações da gravação principal ficam como o
+ * contrato 13 confere): desligado (o padrão), o ciclo não roda; ligado "IA anotando", um ciclo (chamado direto, sem
+ * esperar os 5 min) mostra "anotando…" e traz o card da IA com título; o segundo, com fala nova, resolve esse card
+ * com o motivo e cria outro; o filtro "Resolvidas" mostra só o resolvido. Depois de "Encerrar": o `notes.json` com os
+ * cards da IA; no detalhe, o quadro; arrastar um card (pointer events de verdade) grava a posição, que continua
+ * depois de recarregar a tela; e o filtro do detalhe.
+ */
+async function aiNotesChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => void, checks: Record<string, Check>): Promise<void> {
+  const win = ctx.openWindow({ theme: 'light' })
+  watch(win)
+  await loadAndWait(win)
+  const contents = win.webContents
+  const idsBefore = new Set(readMeetings(ctx.userDataDir).map((meeting) => meeting.id))
+  const defaultOff = DEFAULT_SETTINGS.liveCards === false && readSettings(ctx.userDataDir).liveCards !== true
+
+  await clickSelector(contents, '[data-nav="reunioes"]')
+  await waitFor(contents, `${routeIs('reunioes')} && document.querySelector('[data-action="new-recording"]')`)
+  await clickSelector(contents, '[data-action="new-recording"]')
+  const live = await waitFor(contents, `${probeJs('state()?.mic')} === 'live' && ${probeJs('state()?.system')} === 'live'`)
+  const base = { speaker: null, translation: null, translationModel: null, partial: false, sessionId: 'smoke-ia', translationState: 'done' }
+  const first = [
+    { ...base, id: 'smoke-ia-1', source: 'mic', startMs: 0, endMs: 4000, text: 'Precisamos confirmar a janela de manutenção com o cliente antes de sexta, senão a migração do banco escorrega para o mês que vem.', turnOrder: 0 },
+    { ...base, id: 'smoke-ia-2', source: 'system', speaker: 'A', startMs: 4000, endMs: 9000, text: 'Eu falo com o cliente hoje, mas ainda não sei quem aprova o orçamento da réplica nem se o plano de volta vai por escrito.', turnOrder: 1 },
+  ]
+  const second = [
+    { ...base, id: 'smoke-ia-3', source: 'system', speaker: 'A', startMs: 9000, endMs: 14000, text: 'Falei com o cliente agora há pouco: a janela de manutenção ficou confirmada para sábado às dez da noite, com duas horas de folga.', turnOrder: 2 },
+    { ...base, id: 'smoke-ia-4', source: 'mic', startMs: 14000, endMs: 18000, text: 'Ótimo, então a janela está fechada. Fica faltando só descobrir quem aprova o orçamento da réplica antes da reunião de quinta.', turnOrder: 3 },
+  ]
+  await evaluate(contents, `window.__smokeProbe.replay(${JSON.stringify(first)})`)
+  await waitFor(contents, `document.querySelectorAll('[data-transcript-list] li').length === 2`)
+  await clickSelector(contents, '[data-action="toggle-notes"]')
+  await waitFor(contents, `document.querySelector('[data-notes-panel] [data-action="ai-notes"]')`)
+  const switchOff = await evaluate<boolean>(contents, `document.querySelector('[data-action="ai-notes"]')?.getAttribute('aria-checked') === 'false'`)
+  const offResult = await evaluate<string>(contents, `window.__smokeProbe.aiNotesCycle()`)
+  const spawnsBefore = ctx.fixtures.claudeSpawns.length
+  await clickSelector(contents, '[data-action="ai-notes"]')
+  const switchOn = await waitFor(contents, `document.querySelector('[data-action="ai-notes"]')?.getAttribute('aria-checked') === 'true'`)
+  // O ciclo fica rodando na página; a tela mostra "anotando…" até o lote chegar.
+  await evaluate(contents, `(window.__smokeAiCycle = window.__smokeProbe.aiNotesCycle(), true)`)
+  const busy = await waitFor(contents, `document.querySelector('[data-ai-notes-busy]')?.textContent === 'anotando…'`, 3000)
+  const firstRan = await evaluate<string>(contents, 'window.__smokeAiCycle')
+  const created = await waitFor(contents, `Boolean(${AI_CARD(AI_NOTES_FIRST_TITLE)})`, 5000)
+  const firstCard = await evaluate<{ id: string; color: string; status: string; badge: boolean; text: string; busyGone: boolean }>(
+    contents,
+    `(() => { const card = ${AI_CARD(AI_NOTES_FIRST_TITLE)}; return { id: card?.dataset.note ?? '', color: card?.dataset.color ?? '', status: card?.dataset.noteStatus ?? '', badge: Boolean(card?.querySelector('[data-note-ai]')), text: card?.querySelector('[data-note-text]')?.value ?? '', busyGone: !document.querySelector('[data-ai-notes-busy]') } })()`,
+  )
+  // Segundo ciclo, com fala nova: o card aberto da IA é resolvido com o motivo e outro chega.
+  await evaluate(contents, `window.__smokeProbe.replay(${JSON.stringify([...first, ...second])})`)
+  await waitFor(contents, `document.querySelectorAll('[data-transcript-list] li').length === 4`)
+  const secondRan = await evaluate<string>(contents, `window.__smokeProbe.aiNotesCycle()`)
+  const resolved = await waitFor(contents, `${AI_CARD(AI_NOTES_FIRST_TITLE)}?.dataset.noteStatus === 'resolvida' && Boolean(${AI_CARD(AI_NOTES_SECOND_TITLE)})`, 5000)
+  const reason = await evaluate<string>(contents, `${AI_CARD(AI_NOTES_FIRST_TITLE)}?.querySelector('[data-note-resolution]')?.textContent ?? ''`)
+  const aiSpawns = ctx.fixtures.claudeSpawns.slice(spawnsBefore).filter((item) => (item.args[item.args.indexOf('--system-prompt') + 1] ?? '').startsWith('Você anota')).length
+  const aiAcp = readAcpLog(ctx.userDataDir).filter((entry) => entry.method === 'session/new' && entry.purpose === 'ai-notes').length
+  // Filtro do painel: "Resolvidas" mostra só o resolvido; "Todas" volta os dois.
+  await clickSelector(contents, '[data-notes-panel] [data-notes-filter-option="resolvidas"]')
+  const panelResolved = await waitFor(contents, `document.querySelectorAll('[data-notes-panel] [data-note]').length === 1 && document.querySelector('[data-notes-panel] [data-note]')?.dataset.noteStatus === 'resolvida'`)
+  await clickSelector(contents, '[data-notes-panel] [data-notes-filter-option="todas"]')
+  const panelAll = await waitFor(contents, `document.querySelectorAll('[data-notes-panel] [data-note]').length === 2`)
+  checks['aiNotesLive'] = {
+    ok:
+      defaultOff &&
+      live &&
+      switchOff &&
+      offResult === 'off' &&
+      switchOn &&
+      busy &&
+      firstRan === 'ran' &&
+      created &&
+      firstCard.color === 'blue' &&
+      firstCard.status === 'aberta' &&
+      firstCard.badge &&
+      firstCard.text.startsWith('Fala de Você:') &&
+      firstCard.busyGone &&
+      secondRan === 'ran' &&
+      resolved &&
+      reason.startsWith('Resolvida — Respondido:') &&
+      aiSpawns + aiAcp === 2 &&
+      panelResolved &&
+      panelAll,
+    detail: `padrão desligado=${defaultOff}; interruptor desligado=${switchOff}, ciclo "${offResult}"; ligado=${switchOn}; "anotando…"=${busy}; 1º ciclo "${firstRan}", card ${JSON.stringify(firstCard)}; 2º ciclo "${secondRan}", resolvido=${resolved} "${reason}"; chamadas à IA ${aiSpawns} CLI + ${aiAcp} ACP; filtro Resolvidas=${panelResolved}, Todas=${panelAll}`,
+  }
+
+  // "Encerrar": os cards da IA vão para o `notes.json` com o estado e o motivo.
+  const saved = await endCalendarRecording(contents, ctx, idsBefore)
+  const fileNotes = (): MeetingNote[] => readNotesFile(ctx.userDataDir, saved?.id)?.notes ?? []
+  const waitFile = async (predicate: (notes: MeetingNote[]) => boolean): Promise<boolean> => {
+    for (let attempt = 0; attempt < 80; attempt++) {
+      if (predicate(fileNotes())) return true
+      await wait(50)
+    }
+    return false
+  }
+  const fileOk = await waitFile(
+    (notes) =>
+      notes.length === 2 &&
+      notes.every((note) => note.origin === 'ia' && note.color === 'blue' && typeof note.atMs === 'number') &&
+      notes.some((note) => note.title === AI_NOTES_FIRST_TITLE && note.status === 'resolvida' && note.resolution?.by === 'ia' && note.resolution.reason.startsWith('Respondido:')) &&
+      notes.some((note) => note.title === AI_NOTES_SECOND_TITLE && note.status === 'aberta'),
+  )
+
+  // Detalhe: o quadro, com a mesma ordem da lista (as abas aparecem quando a reunião carrega).
+  if (await waitFor(contents, `document.querySelector('[data-tab="anotacoes"]')`, 8000)) await clickSelector(contents, '[data-tab="anotacoes"]')
+  const canvas = await waitFor(contents, `document.querySelectorAll('[data-notes-canvas] [data-note]').length === 2`)
+  const order = await evaluate<string[]>(contents, `[...document.querySelectorAll('[data-notes-canvas] > li [data-note]')].map((card) => card.dataset.note)`)
+  const orderOk = JSON.stringify(order) === JSON.stringify(fileNotes().map((note) => note.id))
+  const tilts = await evaluate<string[]>(contents, `[...document.querySelectorAll('[data-notes-canvas] > li')].map((li) => li.style.getPropertyValue('--note-tilt'))`)
+  // Arrastar o card aberto pelo papel (o vão ao lado das cores), com eventos de ponteiro de verdade.
+  const dragId = fileNotes().find((note) => note.status !== 'resolvida')?.id ?? ''
+  const grip = await evaluate<{ x: number; y: number } | null>(
+    contents,
+    `(() => { const group = document.querySelector('[data-notes-canvas] [data-note="${dragId}"] [role="group"]'); const box = group?.getBoundingClientRect(); return box ? { x: Math.round(box.right + 18), y: Math.round(box.top + box.height / 2) } : null })()`,
+  )
+  if (grip) {
+    contents.sendInputEvent({ type: 'mouseMove', x: grip.x, y: grip.y })
+    contents.sendInputEvent({ type: 'mouseDown', x: grip.x, y: grip.y, button: 'left', clickCount: 1 })
+    for (let step = 1; step <= 8; step++) {
+      contents.sendInputEvent({ type: 'mouseMove', x: grip.x + step * 40, y: grip.y + step * 25, modifiers: ['leftbuttondown'] })
+      await wait(30)
+    }
+    contents.sendInputEvent({ type: 'mouseUp', x: grip.x + 320, y: grip.y + 200, button: 'left', clickCount: 1 })
+  }
+  const moved = await waitFile((notes) => {
+    const position = notes.find((note) => note.id === dragId)?.position
+    return Boolean(position && position.x > 0 && position.y > 0)
+  })
+  const position = fileNotes().find((note) => note.id === dragId)?.position ?? null
+  const placed = await waitFor(contents, `document.querySelector('[data-notes-canvas] > li[data-note-item="${dragId}"]')?.hasAttribute('data-placed') === true`)
+  // Recarregar a janela e voltar à reunião pela lista: a posição vem do disco.
+  contents.reload()
+  await loadAndWait(win)
+  if (!(await waitFor(contents, routeIs('detalhe'), 3000))) {
+    await clickSelector(contents, '[data-nav="reunioes"]')
+    if (await waitFor(contents, `document.querySelector('main a[data-meeting="${saved?.id ?? ''}"]')`, 8000)) await clickSelector(contents, `main a[data-meeting="${saved?.id ?? ''}"]`)
+    await waitFor(contents, routeIs('detalhe'), 8000)
+  }
+  if (await waitFor(contents, `document.querySelector('[data-tab="anotacoes"]')`, 5000)) await clickSelector(contents, '[data-tab="anotacoes"]')
+  const reloaded = await waitFor(
+    contents,
+    `(() => { const li = document.querySelector('[data-notes-canvas] > li[data-note-item="${dragId}"]'); return Boolean(li?.hasAttribute('data-placed') && parseFloat(li.style.getPropertyValue('--note-x')) > 0) })()`,
+    8000,
+  )
+  // Filtro do detalhe: "Resolvidas" mostra só o resolvido.
+  if (await waitFor(contents, `document.querySelector('[data-notes-tab] [data-notes-filter-option="resolvidas"]')`, 5000)) await clickSelector(contents, '[data-notes-tab] [data-notes-filter-option="resolvidas"]')
+  const detailFilter = await waitFor(contents, `document.querySelectorAll('[data-notes-canvas] [data-note]').length === 1 && document.querySelector('[data-notes-canvas] [data-note]')?.dataset.noteStatus === 'resolvida' && document.querySelector('[data-notes-canvas] [data-note-resolution]')`)
+  const counts = await evaluate<string[]>(contents, `[...document.querySelectorAll('[data-notes-tab] [data-notes-filter-option]')].map((b) => b.textContent)`)
+  checks['notesCanvas'] = {
+    ok: Boolean(saved) && fileOk && canvas && orderOk && tilts.length === 2 && tilts.every((tilt) => /^-?\d+(\.\d+)?deg$/.test(tilt)) && moved && placed && reloaded,
+    detail: `reunião salva=${Boolean(saved)}; notes.json com os cards da IA=${fileOk} ${JSON.stringify(fileNotes().map((note) => [note.title, note.status, note.resolution?.reason ?? null, note.position ?? null]))}; quadro=${canvas}, ordem da lista=${orderOk}; rotações ${JSON.stringify(tilts)}; arrastado de ${JSON.stringify(grip)} -> posição ${JSON.stringify(position)} gravada=${moved}, solto no quadro=${placed}; depois de recarregar=${reloaded}`,
+  }
+  checks['notesFilter'] = {
+    ok: panelResolved && panelAll && detailFilter && JSON.stringify(counts) === JSON.stringify(['Abertas1', 'Resolvidas1', 'Todas2']),
+    detail: `painel: Resolvidas=${panelResolved}, Todas=${panelAll}; detalhe: Resolvidas=${detailFilter}; opções ${JSON.stringify(counts)}`,
+  }
+
+  win.destroy()
+}
+
 export async function runSmoke(ctx: SmokeContext): Promise<number> {
   const timer = setTimeout(() => {
     console.error(`[smoke] tempo esgotado (${TIMEOUT_MS} ms)`)
@@ -5922,6 +6359,8 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
   const assistant: Record<string, Check> = {}
   const automations: Record<string, Check> = {}
   const internet: Record<string, Check> = {}
+  /** Contrato 27: quem fala no Meet. */
+  const meet: Record<string, Check> = {}
   let analysisMeasured: AnalysisMeasured | null = null
 
   // A fixture da sessão real, reduzida pelo mesmo redutor do app: a mesma dos testes (CA4) e do smoke.
@@ -6001,6 +6440,10 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
       if (themeName === 'light') layout['gravacao'] = layoutCheck('gravacao', await layoutMetrics(contents, 'gravacao'))
       // Contrato 07: com a opção ligada (padrão), o áudio vai em pedaços para o `.part` na pasta.
       if (themeName === 'light') recording['audioWhileRecording'] = await audioWhileRecording(contents, defaultMeetingFolder(ctx))
+      // Contrato 28: a gravação em curso aparece no topo da lista e o cartão volta para ela.
+      if (themeName === 'light') meetingsList['recordingNow'] = await recordingNowCheck(contents)
+      // Contrato 29: "Ouvir só os participantes" desliga e religa o microfone no meio da gravação.
+      if (themeName === 'light') recording['micOff'] = await micOffCheck(contents)
 
       // Contrato 06: o eco do alto-falante some de "Você" (a gravação deste passo salva a fixture de eco).
       if (themeName === 'light') {
@@ -6097,6 +6540,8 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
         const search = await meetingsSearchCheck(win, ctx.outDir)
         meetingsList['search'] = search.check
         screenshots.push(search.shot)
+        // Contrato 28: pasta criada pela barra, reunião movida pelo "…" da linha, filtro e "Todas".
+        meetingsList['folders'] = await meetingsFoldersCheck(contents, ctx.userDataDir)
       }
 
       // 6. Clique na primeira linha abre o detalhe.
@@ -6268,6 +6713,12 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
     // Contrato 26: a internet nos agentes, no "Pedir agora" e no Assistente, com o agente ACP falso (sem rede).
     await internetChecks(ctx, watch, internet, screenshots)
 
+    // Contrato 27: quem fala no Meet, com um cliente falso no servidor local; antes do bloqueio.
+    await meetChecks(ctx, watch, meet)
+
+    // Contrato 30: IA anotando ao vivo e o quadro de post-its, numa gravação à parte; antes do bloqueio.
+    await aiNotesChecks(ctx, watch, recording)
+
     // Contrato 22: bloqueio do app, por último (a senha criada vale para o userData inteiro).
     await lockChecks(ctx, watch, lock, screenshots)
 
@@ -6295,7 +6746,7 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
   for (const [name, check] of Object.entries(brand)) if (!check.ok) failures.push(`marca ${name}: ${check.detail}`)
   for (const [name, check] of Object.entries(settings)) if (!check.ok) failures.push(`configurações ${name}: ${check.detail}`)
   for (const [name, check] of Object.entries(meetingsList)) if (!check.ok) failures.push(`lista de reuniões ${name}: ${check.detail}`)
-  for (const name of ['list', 'listDark', 'search']) if (!meetingsList[name]) failures.push(`lista de reuniões ${name}: não executado`)
+  for (const name of ['list', 'listDark', 'search', 'folders', 'recordingNow']) if (!meetingsList[name]) failures.push(`lista de reuniões ${name}: não executado`)
   for (const [name, check] of Object.entries(chat)) if (!check.ok) failures.push(`chat ${name}: ${check.detail}`)
   for (const name of ['screen', 'screenDark', 'details', 'detailsDark', 'stop', 'context', 'meeting', 'acp']) if (!chat[name]) failures.push(`chat ${name}: não executado`)
   for (const name of ['configuracoes', 'gravacao', 'detalhe']) {
@@ -6312,7 +6763,7 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
   for (const name of ['emptyStateButton', 'headerNewRecording', 'menuNovaGravacao', 'sidebarReunioes', 'keyboard', 'detailLoadFailure']) {
     if (!navigation[name]) failures.push(`navegação ${name}: não executado`)
   }
-  for (const name of ['captureWorklet', 'tapeFps', 'endSavesAndOpensDetail', 'pause', 'spaceResumes', 'systemSilenceNotice', 'endFromHeader', 'deleteWithConfirmation', 'noKeyState', 'copyTranscript', 'deleteTranscript', 'echoRemoved', 'echoNotSaved', 'recorderFormat', 'audioWhileRecording', 'audioSaved', 'audioDetail', 'deleteKeepsFiles', 'summary', 'summaryDark', 'summaryDownload', 'notesRecording', 'notesRecordingDark', 'notesDetail', 'notesDetailDark', 'analysisRecording', 'analysisRecordingDark', 'analysisDetail']) {
+  for (const name of ['captureWorklet', 'tapeFps', 'endSavesAndOpensDetail', 'pause', 'spaceResumes', 'systemSilenceNotice', 'endFromHeader', 'deleteWithConfirmation', 'noKeyState', 'copyTranscript', 'deleteTranscript', 'echoRemoved', 'echoNotSaved', 'recorderFormat', 'audioWhileRecording', 'audioSaved', 'audioDetail', 'deleteKeepsFiles', 'summary', 'summaryDark', 'summaryDownload', 'notesRecording', 'notesRecordingDark', 'notesDetail', 'notesDetailDark', 'analysisRecording', 'analysisRecordingDark', 'analysisDetail', 'micOff', 'aiNotesLive', 'notesCanvas', 'notesFilter']) {
     if (!recording[name]) failures.push(`gravação ${name}: não executado`)
   }
   for (const [name, check] of Object.entries(google)) if (!check.ok) failures.push(`google ${name}: ${check.detail}`)
@@ -6327,6 +6778,8 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
   for (const name of ['screen', 'testNow', 'agentForm', 'tasks', 'scheduled', 'afterMeeting', 'skipped', 'tray', 'autoPaused', 'missed', 'askNow', 'runs', 'settings', 'closeKeepsApp', 'dark']) if (!automations[name]) failures.push(`automações ${name}: não executado`)
   for (const [name, check] of Object.entries(internet)) if (!check.ok) failures.push(`internet ${name}: ${check.detail}`)
   for (const name of ['agent', 'askNow', 'noInternet', 'assistant']) if (!internet[name]) failures.push(`internet ${name}: não executado`)
+  for (const [name, check] of Object.entries(meet)) if (!check.ok) failures.push(`meet ${name}: ${check.detail}`)
+  for (const name of ['server', 'recording', 'setting']) if (!meet[name]) failures.push(`meet ${name}: não executado`)
   for (const [name, check] of Object.entries(lock)) if (!check.ok) failures.push(`bloqueio ${name}: ${check.detail}`)
   for (const name of ['password', 'layer', 'channels', 'unlock', 'shortcutAndTouchId', 'recordingContinues', 'leaveDialog', 'endWhileLocked', 'reopen', 'reopenFromDisk', 'dark']) if (!lock[name]) failures.push(`bloqueio ${name}: não executado`)
   if (!theme.ok) failures.push(`tema: ${theme.detail}`)
@@ -6396,6 +6849,8 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
     assistant,
     // Contrato 26: só os resultados (os endereços são os inventados do agente falso).
     internet,
+    // Contrato 27: só os resultados (os nomes são os inventados do cliente falso).
+    meet,
     // Contrato 23: os resultados, as notificações, o Dock e os itens de login substitutos; nenhum texto de reunião.
     automations,
     automationsFixtures: { notifications: ctx.fixtures.automations.notifications.map((notice) => notice.title), trayImages: ctx.fixtures.automations.trayImages, dock: ctx.fixtures.automations.dock, loginItems: ctx.fixtures.automations.loginItems, quitRequests: ctx.fixtures.automations.quitRequests },

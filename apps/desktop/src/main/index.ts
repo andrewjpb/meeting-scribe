@@ -34,6 +34,7 @@ import { createFileChatStore } from './chat/store'
 import { createGoogleAccount, type GoogleAccountService } from './google/account'
 import { createMicrosoftAccount, type MicrosoftAccountService } from './microsoft/account'
 import { createCalendarService, type CalendarService } from './calendar/service'
+import { createMeetServer, type MeetServer } from './meet/server'
 import { createDriveSync, createEndOfRecordingHooks, type DriveSyncService } from './google/drive-sync'
 import { nodeExecFile } from './claude-cli/locate'
 import { createClaudeService, type ClaudeService } from './claude-cli/service'
@@ -44,11 +45,12 @@ import { createRecordingSessions, leaveButtons, RECORDING_LEAVE_MESSAGE } from '
 import { createLockService, type LockService, type TouchIdAccess } from './lock/service'
 import { createFileLockStore } from './lock/store'
 import { createFileAnalysesStore } from './meetings/analyses'
+import { createAiNotesService, type AiNotesService } from './meetings/ai-notes-service'
 import { createAnalysisService, type AnalysisService } from './meetings/analysis-service'
 import { createMeetingsIndex, type MeetingsIndex } from './meetings/overview'
 import { createFileNotesStore } from './meetings/notes'
 import { createMeetingsService } from './meetings/service'
-import { createFileMeetingsStore, type MeetingsStore } from './meetings/store'
+import { createFileMeetingsStore, folderCreateSchema, folderIdSchema, folderRenameSchema, meetingMoveSchema, type MeetingsStore } from './meetings/store'
 import { createFileSummaryStore } from './meetings/summaries'
 import { createSummaryService, type SummaryService } from './meetings/summary-service'
 import { createFileTranscriptStore, type TranscriptStore } from './meetings/transcripts'
@@ -59,7 +61,7 @@ import { createSecretStore, memorySafeStorage } from './secrets'
 import { APP_ORIGIN, applySessionSecurity, originOf } from './security'
 import { createSettingsService, type SettingsService } from './settings/service'
 import { createFileSettingsStore } from './settings/store'
-import { isSmokeRun, prepareSmokeEnvironment, runSmoke } from './smoke'
+import { isSmokeRun, prepareSmokeEnvironment, runSmoke, SMOKE_MEET_PORTS } from './smoke'
 import { createSmokeAcp, createSmokeClaude, createSmokeFixtures, SMOKE_FAKE_KEY, type SmokeFixtures } from './smoke-fixtures'
 import { acpOpener, processLauncher } from './acp/agent'
 import { bundledAdapterEntry, bundledAgent, installedAgent, type AcpAgentService } from './acp/entry'
@@ -135,6 +137,8 @@ let leaveAsked = false
 let driveService: DriveSyncService | null = null
 /** WhatsApp (contrato 24): ao desbloquear, o estado volta às janelas; janela fechada esquece os cliques dela. */
 let whatsappService: WhatsAppService | null = null
+/** Servidor local da extensão do Meet (contrato 27): sobe e para com "Quem fala no Meet". */
+let meetServer: MeetServer | null = null
 /** Ícone da barra de menus (contrato 23, CA8): aparece sempre que o app está aberto. */
 let trayController: TrayController | null = null
 /** Último estado do bloqueio, para o menu do ícone ("Bloquear" só com senha ou Touch ID). */
@@ -407,6 +411,9 @@ function broadcastSettings(settings: AppSettings): void {
   else driveService?.clear()
   // Contrato 12: agendas escolhidas e avisos.
   calendarService?.settingsChanged()
+  // Contrato 27: "Quem fala no Meet" desligado para o servidor local; ligado, ele sobe (se já não estiver no ar).
+  if (settings.meetSpeakers) void meetServer?.start().catch(() => null)
+  else void meetServer?.stop().catch(() => undefined)
 }
 
 /** Ícone do Dock. No smoke nada toca o Dock de verdade: só o resultado fica registrado. */
@@ -461,6 +468,8 @@ interface AppServices {
   summary: SummaryService
   /** "Analisar até agora" (contrato 19). */
   analysis: AnalysisService
+  /** IA anotando ao vivo (contrato 30). */
+  aiNotes: AiNotesService
   download: ReturnType<typeof createMeetingDownload>
   branding: BrandingService
   updates: UpdateService
@@ -483,6 +492,8 @@ interface AppServices {
   whatsapp: WhatsAppService
   /** Agentes, tarefas agendadas e execuções (contrato 23). */
   automations: AutomationsService
+  /** Servidor local da extensão do Meet (contrato 27). */
+  meet: MeetServer
 }
 
 /**
@@ -782,6 +793,17 @@ function createAppServices(userData: string): AppServices {
     onChange: (meetingId) => broadcast(BrowserWindow.getAllWindows(), 'scribe:analyses-changed', { meetingId }),
     ...(app.isPackaged ? {} : { log: (message: string) => console.log(message) }),
   })
+  // IA anotando ao vivo (contrato 30): o mesmo motor, um ciclo a cada 5 min com o interruptor da gravação ligado.
+  const aiNotes = createAiNotesService({
+    settings,
+    locate: () => claude.locate(),
+    spawn: smokeClaude?.spawnSummary ?? nodeSpawnSummary,
+    openAcp,
+    acpAvailable: async () => (await acpAgent.current()).available(),
+    userData,
+    baseEnv: process.env,
+    ...(app.isPackaged ? {} : { log: (message: string) => console.log(message) }),
+  })
   // Excluir a reunião apaga a transcrição, o resumo, as anotações, as análises e as conversas do chat
   // internos; os arquivos da pasta ficam.
   const meetingsService = createMeetingsService({ meetings, transcripts, summaries: summary, notes, analyses: analysis, chats: chat, clipboard: appClipboard })
@@ -931,6 +953,15 @@ function createAppServices(userData: string): AppServices {
     ...devLog,
   })
   calendarService = calendar
+  // Contrato 27: a extensão do Meet manda nomes e eventos de fala. Vai às janelas também com o app bloqueado: a
+  // gravação continua no bloqueio e o renderer carimba cada evento quando ele chega. Nada volta à extensão.
+  const meet = createMeetServer({
+    // Smoke: portas fora da faixa da extensão, para o Chrome de verdade nunca falar com ele.
+    ...(smoke ? { ports: SMOKE_MEET_PORTS } : {}),
+    onChange: (state) => broadcast(BrowserWindow.getAllWindows(), 'scribe:meet-changed', state),
+    ...devLog,
+  })
+  meetServer = meet
   // Contrato 25: o clique nos cartões do Assistente. O lembrete é a tarefa "uma vez" sem agente das Automações.
   const chatActions = createChatActions({ store: chatStore, createReminder: (input) => automations.createReminder(input), timeZone })
   return {
@@ -945,6 +976,7 @@ function createAppServices(userData: string): AppServices {
     files,
     summary,
     analysis,
+    aiNotes,
     download,
     branding,
     updates,
@@ -959,6 +991,7 @@ function createAppServices(userData: string): AppServices {
     calendar,
     whatsapp,
     automations,
+    meet,
   }
 }
 
@@ -1046,7 +1079,7 @@ async function confirmWhatsAppSend(win: BrowserWindow | null, question: SendQues
 }
 
 function registerIpc(services: AppServices): void {
-  const { settings, meetings, meetingsService, meetingsIndex, tokenClient, translation, claude, files, summary, analysis, download, branding, updates, chat, chatActions, corpus, acp, lock, google, drive, microsoft, calendar, whatsapp, automations } = services
+  const { settings, meetings, meetingsService, meetingsIndex, tokenClient, translation, claude, files, summary, analysis, aiNotes, download, branding, updates, chat, chatActions, corpus, acp, lock, google, drive, microsoft, calendar, whatsapp, automations, meet } = services
   /** Reunião salva, renomeada ou com anotações novas: o `.md` dela no acervo do chat é reescrito. */
   const touched = (meetingId: string): void => void corpus.sync(meetingId).catch(() => undefined)
   /**
@@ -1099,6 +1132,18 @@ function registerIpc(services: AppServices): void {
   })
   handle('scribe:meetings-overview', appOrigin, () => meetingsIndex.overview())
   handle('scribe:meetings-search', appOrigin, (_event, request) => meetingsIndex.search((request as { term?: unknown } | undefined)?.term))
+  // Pastas (contrato 28): o nome é dado, cortado em 60 no store; payload fora do formato é recusado aqui.
+  handle('scribe:folders-list', appOrigin, () => meetings.folders())
+  handle('scribe:folders-create', appOrigin, (_event, request) => meetings.createFolder(folderCreateSchema.parse(request).name))
+  handle('scribe:folders-rename', appOrigin, (_event, request) => {
+    const { id, name } = folderRenameSchema.parse(request)
+    return meetings.renameFolder(id, name)
+  })
+  handle('scribe:folders-delete', appOrigin, (_event, request) => meetings.deleteFolder(folderIdSchema.parse(request).id))
+  handle('scribe:meetings-move', appOrigin, (_event, request) => {
+    const { id, folderId } = meetingMoveSchema.parse(request)
+    return meetings.move(id, folderId)
+  })
   handle('scribe:settings-get', appOrigin, () => settings.getSettings())
   handle('scribe:settings-update', appOrigin, (_event, patch) => settings.updateSettings(patch))
   handle('scribe:key-status', appOrigin, () => settings.keyStatus())
@@ -1179,6 +1224,8 @@ function registerIpc(services: AppServices): void {
   handle('scribe:analyses-save', appOrigin, (_event, request) => analysis.save(request))
   handle('scribe:analyses-add', appOrigin, (_event, request) => analysis.add(request))
   handle('scribe:analysis-copy', appOrigin, (_event, request) => analysis.copy(request))
+  handle('scribe:ai-notes-run', appOrigin, (_event, request) => aiNotes.run(request))
+  handle('scribe:ai-notes-cancel', appOrigin, (_event, request) => aiNotes.cancel((request as { recordingId?: unknown } | undefined)?.recordingId))
   handle('scribe:branding-get', appOrigin, () => branding.get())
   handle('scribe:brand-logo-choose', appOrigin, () => branding.chooseLogo())
   handle('scribe:brand-logo-reset', appOrigin, () => branding.resetLogo())
@@ -1233,6 +1280,7 @@ function registerIpc(services: AppServices): void {
     const event = recordingSessions.active() ? calendar.recordingCalendar() : null
     return event?.title ? { title: event.title } : null
   })
+  handle('scribe:meet-status', appOrigin, () => meet.status())
   handle('scribe:drive-status', appOrigin, (_event, request) => drive.status((request as { meetingId?: unknown } | undefined)?.meetingId))
   handle('scribe:drive-retry', appOrigin, (_event, request) => drive.retry((request as { meetingId?: unknown } | undefined)?.meetingId))
   handle('scribe:drive-open', appOrigin, (_event, request) => {
@@ -1371,6 +1419,8 @@ void app.whenReady().then(async () => {
   registerIpc(services)
   // Contrato 24: o WhatsApp sobe sozinho só se a pessoa o deixou ligado (e reencontra um serviço já rodando).
   void services.whatsapp.init().catch(() => undefined)
+  // Contrato 27: o servidor da extensão do Meet, com "Quem fala no Meet" ligado (padrão).
+  if ((await services.settings.getSettings()).meetSpeakers) void services.meet.start().catch(() => null)
   // Marca gravada: título da primeira janela, "Sobre" e ícone do Dock antes de abrir.
   applyBrand(await services.settings.getSettings())
   // Fila do Drive deixada por uma execução anterior (contrato 11): continua sozinha, também bloqueado.
@@ -1396,10 +1446,12 @@ void app.whenReady().then(async () => {
     services.claude.dispose()
     services.summary.dispose()
     services.analysis.dispose()
+    services.aiNotes.dispose()
     services.chat.dispose()
     services.updates.dispose()
     services.drive.dispose()
     void services.whatsapp.dispose()
+    void services.meet.stop()
   })
   installMenu()
   // Contrato 23: fechar a última janela deixa o app na barra de menus (sem Dock) ou sai; o ícone aparece já.
@@ -1464,6 +1516,7 @@ void app.whenReady().then(async () => {
       automations: services.automations,
       tray: () => trayController,
       calendar: services.calendar,
+      meet: services.meet,
     })
     // `app.exit` não passa por `will-quit`.
     services.calendar.dispose()
@@ -1472,10 +1525,12 @@ void app.whenReady().then(async () => {
     services.claude.dispose()
     services.summary.dispose()
     services.analysis.dispose()
+    services.aiNotes.dispose()
     services.chat.dispose()
     services.updates.dispose()
     services.drive.dispose()
     await services.whatsapp.dispose()
+    await services.meet.stop()
     app.exit(code)
     return
   }

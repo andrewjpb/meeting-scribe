@@ -13,6 +13,7 @@ import {
   type MeetingAnalysesFile,
   type MeetingAnalysis,
 } from './meeting-analysis'
+import { SEGMENT_NAME_MAX, SEGMENT_NAMES_MAX } from './transcription'
 
 const isoDate = z.string().refine((value) => !Number.isNaN(Date.parse(value)), 'data inválida')
 const text = z.string().trim().min(1).max(ANALYSIS_TEXT_MAX)
@@ -49,12 +50,13 @@ export const meetingAnalysesFileSchema = z.object({
 })
 
 /** Trecho final que a gravação manda: o texto de um trecho cabe folgado em 20 000 caracteres. */
-const liveSegmentSchema = z.object({
+export const liveSegmentSchema = z.object({
   source: z.enum(['mic', 'system']),
   speaker: z.string().max(20).nullable(),
   startMs: time,
   endMs: time,
   text: z.string().max(20_000),
+  names: z.array(z.string().max(SEGMENT_NAME_MAX)).max(SEGMENT_NAMES_MAX).exactOptional(),
 })
 
 export const liveAnalysisRequestSchema = z

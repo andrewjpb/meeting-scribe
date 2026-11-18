@@ -26,7 +26,9 @@ describe('esquema de configurações (CA1)', () => {
       saveToFolder: true,
       audioFolder: null,
       summarizeOnStop: true,
+      liveCards: false,
       identifySpeakers: false,
+      meetSpeakers: true,
       brandName: null,
       brandSubtitle: null,
       brandLogo: null,
@@ -79,7 +81,9 @@ describe('esquema de configurações (CA1)', () => {
       saveToFolder: false,
       audioFolder: '/Users/teste/Reuniões',
       summarizeOnStop: false,
+      liveCards: true,
       identifySpeakers: true,
+      meetSpeakers: false,
       brandName: 'Atas da Diretoria',
       brandSubtitle: '',
       brandLogo: 'logo-0123456789ab.png',
@@ -139,7 +143,7 @@ describe('esquema de configurações (CA1)', () => {
   it('Claude CLI (contrato 05, CA1): motor, modelo e caminho com padrão próprio cada um', () => {
     // `settings.json` do contrato 04, sem os campos novos: carrega com os padrões deles e mantém o resto.
     const old = { translationEnabled: false, translationModel: 'gpt-oss-120b', sourceLanguage: 'es', targetLanguage: 'ja', echoCancellation: true, theme: 'dark', micDeviceId: null }
-    expect(parseSettings(old)).toEqual({ ...old, removeEcho: true, translationEngine: 'assemblyai', claudeModel: 'haiku', chatModel: 'sonnet', claudePath: null, claudeTransport: 'acp', agentProfile: 'claude', saveToFolder: true, audioFolder: null, summarizeOnStop: true, identifySpeakers: false, brandName: null, brandSubtitle: null, brandLogo: null, autoCheckUpdates: true, lockUseTouchId: false, lockAfterMinutes: 0, lockOnSystemLock: true, lockOnLaunch: false, saveToDrive: true, closeBehavior: 'tray', openAtLogin: false, scheduledRunsDailyLimit: 50, calendarAlerts: true, calendarLeadMinutes: 5, calendarNotRecordingAlert: true, calendarIds: { google: null, microsoft: null } })
+    expect(parseSettings(old)).toEqual({ ...old, removeEcho: true, translationEngine: 'assemblyai', claudeModel: 'haiku', chatModel: 'sonnet', claudePath: null, claudeTransport: 'acp', agentProfile: 'claude', saveToFolder: true, audioFolder: null, summarizeOnStop: true, liveCards: false, identifySpeakers: false, meetSpeakers: true, brandName: null, brandSubtitle: null, brandLogo: null, autoCheckUpdates: true, lockUseTouchId: false, lockAfterMinutes: 0, lockOnSystemLock: true, lockOnLaunch: false, saveToDrive: true, closeBehavior: 'tray', openAtLogin: false, scheduledRunsDailyLimit: 50, calendarAlerts: true, calendarLeadMinutes: 5, calendarNotRecordingAlert: true, calendarIds: { google: null, microsoft: null } })
     expect(parseSettings({ translationEngine: 'claude-cli', claudeModel: 'sonnet' })).toMatchObject({ translationEngine: 'claude-cli', claudeModel: 'sonnet' })
     // Fora da lista cai no padrão: só `haiku` e `sonnet`, só os dois motores.
     expect(parseSettings({ translationEngine: 'openai' }).translationEngine).toBe('assemblyai')
@@ -216,6 +220,15 @@ describe('esquema de configurações (CA1)', () => {
     expect(parseSettings({ identifySpeakers: 'sim' }).identifySpeakers).toBe(false)
     expect(parseSettingsPatch({ identifySpeakers: true })).toEqual({ identifySpeakers: true })
     expect(() => parseSettingsPatch({ summarizeOnStop: 'nao' })).toThrow()
+  })
+
+  it('meetSpeakers (contrato 27, CA6): ligado por padrão, antigo carrega ligado, inválido volta ao padrão', () => {
+    expect(DEFAULT_SETTINGS.meetSpeakers).toBe(true)
+    expect(parseSettings({ theme: 'dark' }).meetSpeakers).toBe(true)
+    expect(parseSettings({ meetSpeakers: false }).meetSpeakers).toBe(false)
+    expect(parseSettings({ meetSpeakers: 'sim' }).meetSpeakers).toBe(true)
+    expect(parseSettingsPatch({ meetSpeakers: false })).toEqual({ meetSpeakers: false })
+    expect(() => parseSettingsPatch({ meetSpeakers: 'nao' })).toThrow()
   })
 
   it('Marca (contrato 09, CA1): padrões nulos; arquivo antigo carrega com os padrões; inválido volta ao padrão', () => {
