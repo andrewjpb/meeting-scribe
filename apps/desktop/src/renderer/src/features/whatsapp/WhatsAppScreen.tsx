@@ -1,23 +1,16 @@
-import { FileText, Image as ImageIcon, Mic, PanelRight, Paperclip, Search, Sparkles, Sticker, TriangleAlert, Video, type LucideIcon } from 'lucide-react'
+import { PanelRight, Search, Sparkles, TriangleAlert } from 'lucide-react'
 import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type RefObject, type UIEvent } from 'react'
 import { Link, useLocation } from 'react-router'
 import { settingsPath, type WhatsAppNavigationState } from '@shared/routes'
 import type { Meeting } from '@shared/meetings'
-import {
-  mediaLabel,
-  WHATSAPP_DRAFT_INSTRUCTION_MAX,
-  WHATSAPP_SEND_TEXT_MAX,
-  type WhatsAppChat,
-  type WhatsAppMessage,
-  type WhatsAppMessageType,
-  type WhatsAppSearchHit,
-} from '@shared/whatsapp'
+import { WHATSAPP_DRAFT_INSTRUCTION_MAX, WHATSAPP_SEND_TEXT_MAX, type WhatsAppChat, type WhatsAppMessage, type WhatsAppSearchHit } from '@shared/whatsapp'
 import { useSettings } from '../../app/settingsStore'
 import { Button } from '../../design/Button'
 import { Icon } from '../../design/Icon'
 import { Note, NOTE_ACTION_CLASS } from '../../design/Note'
 import { Avatar } from './Avatar'
 import { DetailsPanel } from './DetailsPanel'
+import { MessageMedia } from './MessageMedia'
 import { chatPhone, clockLabel, detailsStartOpen, messageTimeLabel, previewText, startsRun } from './format'
 import { visibleMessages, visiblePending, type PendingSend } from './pending'
 import { useWhatsApp } from './whatsappStore'
@@ -95,18 +88,9 @@ function ChatRow({ chat, active, onOpen }: { chat: WhatsAppChat; active: boolean
   )
 }
 
-const MEDIA_ICONS: Record<WhatsAppMessageType, LucideIcon> = {
-  text: Paperclip,
-  image: ImageIcon,
-  video: Video,
-  audio: Mic,
-  document: FileText,
-  sticker: Sticker,
-  other: Paperclip,
-}
-
 /**
- * Uma mensagem: o texto sempre como texto e a mídia só como metadado (ícone do tipo, nome e tamanho). As suas à
+ * Uma mensagem: o texto sempre como texto e a mídia como metadado (ícone do tipo, nome e tamanho) ou, no contrato 37,
+ * o "Baixar" que a mostra no balão (`MessageMedia`), só no clique. As suas à
  * direita, em azul; as dos outros à esquerda, com a foto (ou as iniciais) e, num grupo, o autor, só na primeira de
  * uma sequência do mesmo autor.
  */
@@ -126,12 +110,7 @@ function MessageItem({ message, first, group, photo, swapped }: { message: Whats
       )}
       <div className={`flex max-w-[560px] min-w-0 flex-col gap-1 rounded-[var(--radius-panel)] px-3 py-2 text-15 whitespace-pre-wrap select-text ${mine ? 'bg-accent text-on-accent' : 'border border-line bg-bg-raised text-text'}`}>
         {group && !mine && first ? <span className="text-12 font-bold text-accent">{author}</span> : <span className="sr-only">{author}: </span>}
-        {message.media && (
-          <span data-whatsapp-media className={`flex items-center gap-1.5 rounded-[var(--radius-control)] px-2 py-1 text-13 ${mine ? 'bg-bg-raised text-text' : 'bg-bg-sunken text-text-muted'}`}>
-            <Icon icon={MEDIA_ICONS[message.media.kind]} size={14} className="shrink-0" />
-            {mediaLabel(message.media)}
-          </span>
-        )}
+        {message.media && <MessageMedia message={message} mine={mine} />}
         {/* Contrato 36: entrou no lugar do balão temporário; o texto (o corrigido) troca com um fade curto. */}
         {message.text && (
           <span data-whatsapp-text className={swapped ? 'wa-swap-in' : undefined}>

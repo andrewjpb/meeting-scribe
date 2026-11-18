@@ -55,12 +55,16 @@ export interface WhatsAppStatus {
 export type WhatsAppChatKind = 'person' | 'group'
 export type WhatsAppMessageType = 'text' | 'image' | 'video' | 'audio' | 'document' | 'sticker' | 'other'
 
-/** Mídia só como metadado: nada é baixado (CA3). */
+/** Mídia como metadado (CA3); contrato 37: imagem, vídeo e áudio com `downloadable` baixam só no clique. */
 export interface WhatsAppMedia {
   kind: WhatsAppMessageType
   mime: string | null
   size: number | null
   name: string | null
+  /** Contrato 37: o serviço guardou as chaves do download (mensagens a partir desta versão). */
+  downloadable?: boolean | undefined
+  /** Contrato 37: duração do áudio em segundos, quando o WhatsApp informa. */
+  seconds?: number | undefined
 }
 
 export interface WhatsAppMessage {
@@ -142,6 +146,40 @@ export const WHATSAPP_RECENT_CHATS_MAX = 40
 export const WHATSAPP_RECENT_MESSAGES_MAX = 3000
 /** Uma linha por conversa recente, com "pendente de resposta". */
 export const WHATSAPP_OVERVIEW_FILE = 'CONVERSAS-WHATSAPP.md'
+
+/** Contrato 37: id de mensagem do WhatsApp (`3EB0…`, `m7` no serviço falso). */
+export const WHATSAPP_MESSAGE_ID_PATTERN = /^[A-Za-z0-9_.:+-]{1,200}$/
+/** Contrato 37: o maior arquivo que baixa no clique. */
+export const WHATSAPP_MEDIA_MAX = 64 * 1024 * 1024
+/** Contrato 37: tipos que baixam no clique (documento e figurinha ficam de fora). */
+export const WHATSAPP_DOWNLOADABLE_KINDS = ['image', 'video', 'audio'] as const satisfies readonly WhatsAppMessageType[]
+/** Contrato 37: texto da transcrição guardado (o resto é cortado). */
+export const WHATSAPP_TRANSCRIPT_MAX = 20_000
+
+/** Contrato 37: a mídia de uma mensagem pedida no clique. */
+export interface WhatsAppMediaRequest {
+  chatId: string
+  messageId: string
+}
+
+/**
+ * `too-big`: acima de 64 MB; `gone`: o WhatsApp não tem mais o arquivo; `unavailable`: sem as chaves do download, o
+ * serviço parado ou outra falha.
+ */
+export type WhatsAppMediaError = 'too-big' | 'gone' | 'unavailable'
+export type WhatsAppMediaResult = { ok: true; mime: string; bytes: Uint8Array } | { ok: false; error: WhatsAppMediaError }
+
+/** Contrato 37: transcrever um áudio; com `peek`, só lê o que já foi transcrito (nada é baixado nem enviado). */
+export interface WhatsAppTranscribeRequest extends WhatsAppMediaRequest {
+  peek?: boolean | undefined
+}
+
+/**
+ * Além dos da mídia: `not-cached` (o `peek` sem transcrição guardada), `no-key` (sem a chave da AssemblyAI), `key`
+ * (chave recusada), `timeout` (passou de 120 s) e `failed`.
+ */
+export type WhatsAppTranscribeError = WhatsAppMediaError | 'not-cached' | 'no-key' | 'key' | 'timeout' | 'failed'
+export type WhatsAppTranscribeResult = { ok: true; text: string } | { ok: false; error: WhatsAppTranscribeError }
 
 /** Mudança vinda do serviço: estado, mensagem nova (com o nome da conversa). */
 export type WhatsAppEvent = { type: 'status'; status: WhatsAppStatus } | { type: 'message'; message: WhatsAppMessage; chatName: string }

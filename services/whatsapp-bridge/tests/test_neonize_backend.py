@@ -349,3 +349,76 @@ def test_photo_download_never_follows_a_redirect():
         httpd.shutdown()
     assert not any(isinstance(handler, backend_neonize.HTTPRedirectHandler) and type(handler) is backend_neonize.HTTPRedirectHandler for handler in backend_neonize.PHOTO_OPENER.handlers)
     assert backend_neonize.whatsapp_https('https://pps.whatsapp.net/x') and not backend_neonize.whatsapp_https('https://pps.whatsapp.net.evil.com/x')
+
+
+class Proto(Obj):
+    """Mensagem com `SerializeToString`, como o `waE2E.Message` do neonize."""
+
+    def SerializeToString(self):  # noqa: N802 - nome do protobuf
+        return b'serializada:' + ','.join(sorted(name for name in self.__dict__ if name != 'conversation')).encode()
+
+
+def test_media_messages_keep_the_serialized_message_and_audio_seconds(fake_neonize, tmp_path):
+    # Contrato 37: imagem, vídeo e áudio guardam a mensagem serializada (as chaves do download); o áudio, a duração.
+    _, bridge, client = started(tmp_path)
+    source = Obj(Chat=jid('5511922220000', 's.whatsapp.net'), Sender=jid('5511922220000', 's.whatsapp.net'), IsFromMe=False, IsGroup=False)
+    info = Obj(MessageSource=source, ID='AUD1', Pushname='Bruno', Timestamp=1_763_300_000)
+    audio = Obj(mimetype='audio/ogg; codecs=opus', fileLength=4096, seconds=12)
+    client.handlers['MessageEv'](client, Obj(Info=info, Message=Proto(conversation='', audioMessage=audio)))
+    message = bridge.messages[-1][0]
+    assert message['mediaProto'] == b'serializada:audioMessage'
+    assert message['media'] == {'kind': 'audio', 'mime': 'audio/ogg; codecs=opus', 'size': 4096, 'name': None, 'seconds': 12}
+    # Documento não guarda as chaves (fora do contrato).
+    document = Obj(caption='', mimetype='application/pdf', fileLength=10, fileName='a.pdf', title='')
+    client.handlers['MessageEv'](client, Obj(Info=Obj(MessageSource=source, ID='DOC1', Pushname='Bruno', Timestamp=1), Message=Proto(conversation='', documentMessage=document)))
+    assert 'mediaProto' not in bridge.messages[-1][0]
+    # Do histórico também.
+    web = Obj(key=Obj(ID='H9', fromMe=False, participant=''), message=Proto(conversation='', imageMessage=Obj(caption='', mimetype='image/jpeg', fileLength=99)), messageTimestamp=1, pushName='Ana', participant='')
+    conversation = Obj(ID='5511911110000@s.whatsapp.net', name='Ana Souza', displayName='', messages=[Obj(message=web)])
+    client.handlers['HistorySyncEv'](client, Obj(Data=Obj(conversations=[conversation])))
+    assert bridge.messages[-1][0]['mediaProto'] == b'serializada:imageMessage'
+
+
+@pytest.fixture()
+def fake_download(monkeypatch, fake_neonize):
+    """`neonize.exc.DownloadError` e o `waE2E.Message` com `FromString`, sem neonize."""
+
+    class DownloadError(Exception):
+        pass
+
+    class Message:
+        @staticmethod
+        def FromString(data):  # noqa: N802 - nome do protobuf
+            return ('mensagem', data)
+
+    exc = types.ModuleType('neonize.exc')
+    exc.DownloadError = DownloadError
+    names = ['neonize.proto', 'neonize.proto.waE2E', 'neonize.proto.waE2E.WAWebProtobufsE2E_pb2']
+    for name in names:
+        monkeypatch.setitem(sys.modules, name, types.ModuleType(name))
+    sys.modules['neonize.proto.waE2E.WAWebProtobufsE2E_pb2'].Message = Message
+    monkeypatch.setitem(sys.modules, 'neonize.exc', exc)
+    return DownloadError
+
+
+def test_download_media_rebuilds_the_message_and_maps_expired_to_gone(fake_download, tmp_path):
+    backend, _bridge, client = started(tmp_path)
+    asked = []
+    client.download_any = lambda message: asked.append(message) or b'bytes do audio'
+    assert backend.download_media('audio', b'chaves') == b'bytes do audio'
+    assert asked == [('mensagem', b'chaves')]
+
+    def expired(message):
+        raise fake_download('download failed with status code 410')
+
+    client.download_any = expired
+    with pytest.raises(backend_neonize.MediaGone):
+        backend.download_media('audio', b'chaves')
+
+    def offline(message):
+        raise RuntimeError('sem conexão')
+
+    client.download_any = offline
+    with pytest.raises(RuntimeError):
+        backend.download_media('image', b'chaves')
+    backend.stop()

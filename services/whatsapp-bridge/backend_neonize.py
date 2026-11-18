@@ -1,12 +1,17 @@
 # Cliente do WhatsApp pelo neonize (biblioteca Python sobre o whatsmeow, cliente NÃO OFICIAL do WhatsApp
 # multi-dispositivo). Traduz os eventos do neonize para o serviço: QR, conectado, desconectado, número bloqueado,
-# mensagens novas e o histórico que o celular manda depois do pareamento. Mídia vira só metadado (tipo, mime,
-# tamanho, nome); nada é baixado. Escrito contra a API do neonize 0.10.0 (`requirements.txt`); os testes trocam
+# mensagens novas e o histórico que o celular manda depois do pareamento. Mídia vira metadado (tipo, mime,
+# tamanho, nome); nada é baixado sozinho. Escrito contra a API do neonize 0.10.0 (`requirements.txt`); os testes trocam
 # o módulo `neonize` por um substituto, então o caminho real só roda no Mac de quem instalou e pareou.
 #
 # Contrato 32: a foto de perfil da conversa (`photo`), pelo `get_profile_picture` do neonize e o endereço que ele
 # devolve (só `https://*.whatsapp.net`, sem seguir redirecionamento), guardada em `<data-dir>/photos/` por 7 dias. Foto acima de 512 KB, sem foto
 # ou falha: `None` (o app mostra as iniciais).
+#
+# Contrato 37: imagem, vídeo e áudio guardam a mensagem do WhatsApp serializada (`mediaProto`, com as chaves do
+# download) e o áudio, a duração; `download_media` reconstrói a mensagem e baixa pelo `download_any` do neonize, só
+# quando a pessoa clica no app. `DownloadError` (endereço expirado, arquivo apagado e também falha passageira, que o
+# whatsmeow não distingue) vira `MediaGone`; o app mostra o aviso e deixa clicar de novo.
 import base64
 import hashlib
 import json
@@ -16,7 +21,7 @@ import time
 from urllib.parse import urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
-from bridge_store import to_ms
+from bridge_store import DOWNLOADABLE_KINDS, MediaGone, to_ms
 
 # Motivos de `ConnectFailure` do whatsmeow: 402 é a suspensão temporária; 401, 403 e 406 são sessão encerrada.
 TEMP_BANNED = 402
@@ -114,8 +119,34 @@ def media_of(message):
             caption = getattr(part, 'caption', '') or ''
             name = getattr(part, 'fileName', '') or getattr(part, 'title', '') or None
             size = getattr(part, 'fileLength', 0) or None
-            return kind, caption, {'kind': kind, 'mime': getattr(part, 'mimetype', '') or None, 'size': int(size) if size else None, 'name': name}
+            media = {'kind': kind, 'mime': getattr(part, 'mimetype', '') or None, 'size': int(size) if size else None, 'name': name}
+            seconds = getattr(part, 'seconds', 0) if kind == 'audio' else 0
+            if isinstance(seconds, int) and seconds > 0:
+                media['seconds'] = seconds
+            return kind, caption, media
     return 'other', '', {'kind': 'other', 'mime': None, 'size': None, 'name': None}
+
+
+def media_proto(kind, message):
+    """Contrato 37: a mensagem serializada (as chaves do download) da imagem, do vídeo ou do áudio; senão `None`."""
+    if kind not in DOWNLOADABLE_KINDS or message is None:
+        return None
+    serialize = getattr(message, 'SerializeToString', None)
+    if serialize is None:
+        return None
+    try:
+        data = serialize()
+    except Exception:  # noqa: BLE001 - sem as chaves, a mensagem fica sem download
+        return None
+    return data if isinstance(data, (bytes, bytearray)) and data else None
+
+
+def with_proto(message, kind, source):
+    """A mensagem do serviço com `mediaProto`, quando há o que baixar."""
+    proto = media_proto(kind, source)
+    if proto is not None:
+        message['mediaProto'] = bytes(proto)
+    return message
 
 
 class NeonizeBackend:
@@ -249,6 +280,19 @@ class NeonizeBackend:
         user, server = chat_id.split('@', 1)
         response = self.client.send_message(build_jid(user, server), text)
         return getattr(response, 'ID', '') or ''
+
+    def download_media(self, kind, proto):
+        """Contrato 37: os bytes da mídia, pela mensagem guardada. Expirada ou apagada no WhatsApp: `MediaGone`."""
+        from neonize.exc import DownloadError
+        from neonize.proto.waE2E.WAWebProtobufsE2E_pb2 import Message
+
+        if self.client is None:
+            raise RuntimeError('sem cliente')
+        message = Message.FromString(proto)
+        try:
+            return self.client.download_any(message)
+        except DownloadError as error:
+            raise MediaGone() from error
 
     def lookup_name(self, chat_id, chat_jid=None, group=None):
         """Nome de verdade da conversa: o do grupo ou o da agenda de contatos (também para ids `@lid`, pelo número).
@@ -395,7 +439,7 @@ class NeonizeBackend:
         group = bool(source.IsGroup)
         me = self.bridge.health().get('me') or {}
         author = (me.get('name') or 'Você') if source.IsFromMe else (info.Pushname or jid_text(source.Sender).split('@')[0])
-        return {
+        message = {
             'id': info.ID,
             'chatId': chat_id,
             # O nome de quem mandou só vale para a conversa quando não é você (senão a conversa ganharia o seu nome).
@@ -408,6 +452,7 @@ class NeonizeBackend:
             'text': text,
             'media': media,
         }
+        return with_proto(message, kind, event.Message)
 
     def from_history(self, event):
         data = getattr(event, 'Data', None)
@@ -427,18 +472,17 @@ class NeonizeBackend:
                 kind, text, media = media_of(web.message)
                 from_me = bool(web.key.fromMe)
                 author = 'Você' if from_me else (web.pushName or (web.participant or web.key.participant or chat_id).split('@')[0])
-                result.append(
-                    {
-                        'id': web.key.ID,
-                        'chatId': chat_id,
-                        'chatName': name or None,
-                        'chatKind': 'group' if group else 'person',
-                        'author': author,
-                        'fromMe': from_me,
-                        'at': to_ms(web.messageTimestamp),
-                        'type': kind,
-                        'text': text,
-                        'media': media,
-                    }
-                )
+                message = {
+                    'id': web.key.ID,
+                    'chatId': chat_id,
+                    'chatName': name or None,
+                    'chatKind': 'group' if group else 'person',
+                    'author': author,
+                    'fromMe': from_me,
+                    'at': to_ms(web.messageTimestamp),
+                    'type': kind,
+                    'text': text,
+                    'media': media,
+                }
+                result.append(with_proto(message, kind, web.message))
         return result

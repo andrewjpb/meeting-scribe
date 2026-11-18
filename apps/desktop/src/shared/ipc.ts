@@ -24,7 +24,23 @@ import type { AppSettings, SettingsPatch } from './settings-defaults'
 import type { TranscriptCopyResult, TranscriptDocument, TranslateTurnResult, TranscriptionTokenResult } from './transcription'
 import type { UpdateState } from './updates'
 import type { WhatsAppInsightsResult, WhatsAppInsightsState } from './whatsapp-insights'
-import type { WhatsAppChat, WhatsAppDraftRequest, WhatsAppDraftResult, WhatsAppError, WhatsAppMeetingLink, WhatsAppMessage, WhatsAppPairing, WhatsAppSearchHit, WhatsAppSendRequest, WhatsAppSendResult, WhatsAppStatus } from './whatsapp'
+import type {
+  WhatsAppChat,
+  WhatsAppDraftRequest,
+  WhatsAppDraftResult,
+  WhatsAppError,
+  WhatsAppMediaRequest,
+  WhatsAppMediaResult,
+  WhatsAppMeetingLink,
+  WhatsAppMessage,
+  WhatsAppPairing,
+  WhatsAppSearchHit,
+  WhatsAppSendRequest,
+  WhatsAppSendResult,
+  WhatsAppStatus,
+  WhatsAppTranscribeRequest,
+  WhatsAppTranscribeResult,
+} from './whatsapp'
 
 export interface AppInfo {
   name: string
@@ -291,6 +307,13 @@ export interface InvokeChannels {
   'scribe:whatsapp-link-set': { request: { meetingId: string; link: WhatsAppMeetingLink | null }; response: WhatsAppMeetingLink | null }
   /** Contrato 32: foto de perfil da conversa (data URL) ou `null`; o main guarda na memória. */
   'scribe:whatsapp-photo': { request: { chatId: string }; response: string | null }
+  /**
+   * Contrato 37: os bytes da imagem, do vídeo ou do áudio de uma mensagem, só no clique em "Baixar" (o renderer faz o
+   * blob). Nada é baixado sem o pedido.
+   */
+  'scribe:whatsapp-media': { request: WhatsAppMediaRequest; response: WhatsAppMediaResult }
+  /** Contrato 37: transcrever um áudio pela AssemblyAI (só no clique); com `peek`, só a transcrição já guardada. */
+  'scribe:whatsapp-transcribe': { request: WhatsAppTranscribeRequest; response: WhatsAppTranscribeResult }
   /** Contrato 32: os Detalhes guardados da conversa e se ainda valem para a última mensagem. Não roda nada. */
   'scribe:whatsapp-insights': { request: { chatId: string }; response: WhatsAppInsightsState }
   /** Contrato 32: analisar a conversa agora (só lê; cancela a análise de outra conversa). */
@@ -530,6 +553,8 @@ const INVOKE: Record<InvokeChannel, true> = {
   'scribe:whatsapp-link-get': true,
   'scribe:whatsapp-link-set': true,
   'scribe:whatsapp-photo': true,
+  'scribe:whatsapp-media': true,
+  'scribe:whatsapp-transcribe': true,
   'scribe:whatsapp-insights': true,
   'scribe:whatsapp-insights-run': true,
   'scribe:agents-list': true,
@@ -759,6 +784,8 @@ export const WHEN_LOCKED: Readonly<Record<InvokeChannel, LockedPolicy>> = Object
   'scribe:whatsapp-link-get': 'refused',
   'scribe:whatsapp-link-set': 'refused',
   'scribe:whatsapp-photo': 'refused',
+  'scribe:whatsapp-media': 'refused',
+  'scribe:whatsapp-transcribe': 'refused',
   'scribe:whatsapp-insights': 'refused',
   'scribe:whatsapp-insights-run': 'refused',
   // Automações (contrato 23, CA10): gerenciar agentes e tarefas, testar, pedir e ver o histórico, tudo recusado com

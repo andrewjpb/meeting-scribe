@@ -6,14 +6,20 @@
 # Contrato 32: fotos de perfil determinísticas e pequenas (PNG de 8×8 de uma cor) para a Ana e o Projeto Atlas; o
 # Bruno fica sem foto (o app mostra as iniciais). A Ana ganha também mensagens antigas espalhadas pelos últimos dias
 # (o gráfico "Atividade" do painel Detalhes), como histórico: não contam como não lidas.
+#
+# Contrato 37: o Bruno ganha um áudio e uma imagem que baixam no clique (as "chaves" são rótulos `fake:<tipo>`); o
+# download devolve o PNG, um WAV PCM curto gerado aqui e uns bytes rotulados `video/mp4` (ninguém dá play no vídeo
+# falso). `fake:gone` faz o papel do arquivo que o WhatsApp não tem mais. A imagem do Atlas (m4) continua sem as
+# chaves, como uma mensagem de antes desta versão.
 import base64
+import math
 import os
 import sqlite3
 import struct
 import threading
 import zlib
 
-from bridge_store import now_ms
+from bridge_store import MediaGone, now_ms
 
 FAKE_QR = '2@smoke-qr-falso,AbCdEfGhIjKlMnOpQrStUvWxYz0123456789+/=,smoke-chave-publica-falsa,smoke-segredo-falso'
 FAKE_PAIR_CODE = 'SMKE-1234'
@@ -36,6 +42,25 @@ def solid_png(rgb, size=8):
     row = b'\x00' + bytes(rgb) * size
     header = struct.pack('>IIBBBBB', size, size, 8, 2, 0, 0, 0)
     return b'\x89PNG\r\n\x1a\n' + chunk(b'IHDR', header) + chunk(b'IDAT', zlib.compress(row * size, 9)) + chunk(b'IEND', b'')
+
+
+def tone_wav(seconds=2, rate=8000):
+    """WAV PCM de 16 bits, mono, com um tom baixo de 440 Hz: sempre os mesmos bytes."""
+    frames = b''.join(struct.pack('<h', int(3000 * math.sin(2 * math.pi * 440 * index / rate))) for index in range(seconds * rate))
+    header = b'RIFF' + struct.pack('<I', 36 + len(frames)) + b'WAVE'
+    header += b'fmt ' + struct.pack('<IHHIIHH', 16, 1, 1, rate, rate * 2, 2, 16)
+    return header + b'data' + struct.pack('<I', len(frames)) + frames
+
+
+FAKE_AUDIO_SECONDS = 2
+FAKE_MEDIA = {
+    'image': solid_png((214, 120, 40), size=48),
+    'audio': tone_wav(FAKE_AUDIO_SECONDS),
+    # Só o começo de um MP4 (a caixa `ftyp`): ninguém dá play no vídeo falso.
+    'video': b'\x00\x00\x00\x18ftypmp42\x00\x00\x00\x00mp42isom' + b'\x00' * 64,
+}
+
+FAKE_MIME = {'image': 'image/png', 'audio': 'audio/wav', 'video': 'video/mp4'}
 
 
 def png_data_url(rgb):
@@ -94,6 +119,36 @@ def seed_messages(base):
     ]
 
 
+def media_messages(base):
+    """Contrato 37: o áudio e a imagem do Bruno, com as chaves falsas do download (histórico: não contam como não lidas)."""
+    bruno = SEED_CHATS[2][0]
+    minute = 60_000
+    return [
+        {
+            'id': 'm7',
+            'chatId': bruno,
+            'author': 'Bruno Lima',
+            'fromMe': False,
+            'at': base - 96 * minute,
+            'type': 'audio',
+            'text': '',
+            'media': {'kind': 'audio', 'mime': 'audio/wav', 'size': len(FAKE_MEDIA['audio']), 'name': None, 'seconds': FAKE_AUDIO_SECONDS},
+            'mediaProto': b'fake:audio',
+        },
+        {
+            'id': 'm8',
+            'chatId': bruno,
+            'author': 'Bruno Lima',
+            'fromMe': False,
+            'at': base - 94 * minute,
+            'type': 'image',
+            'text': 'Foto do quadro',
+            'media': {'kind': 'image', 'mime': 'image/png', 'size': len(FAKE_MEDIA['image']), 'name': None},
+            'mediaProto': b'fake:image',
+        },
+    ]
+
+
 class FakeBackend:
     def __init__(self, data_dir):
         self.data_dir = data_dir
@@ -136,6 +191,12 @@ class FakeBackend:
             self.sent.append({'id': message_id, 'chatId': chat_id, 'text': text})
         return message_id
 
+    def download_media(self, kind, proto):
+        """Contrato 37: os bytes falsos do tipo; `fake:gone` é o arquivo que o WhatsApp não tem mais."""
+        if proto == b'fake:gone':
+            raise MediaGone()
+        return FAKE_MEDIA[kind]
+
     def photo(self, chat_id):
         """Foto de perfil falsa (contrato 32): a mesma para Ana e Atlas; as outras conversas sem foto."""
         return FAKE_PHOTOS.get(chat_id)
@@ -147,7 +208,7 @@ class FakeBackend:
             for chat_id, name, kind in SEED_CHATS:
                 self.bridge.on_chat(chat_id, name, kind)
             base = now_ms()
-            for message in history_messages(base):
+            for message in history_messages(base) + media_messages(base):
                 self.bridge.on_message(message, count_unread=False)
             for message in seed_messages(base):
                 self.bridge.on_message(message)
@@ -157,16 +218,32 @@ class FakeBackend:
             with self.lock:
                 self.counter += 1
                 message_id = f'recebida-{self.counter}'
+            # Contrato 37: `type` e `media` entregam uma mídia; imagem, vídeo e áudio baixam (com `gone: true`, o
+            # arquivo já não existe no WhatsApp), a não ser com `downloadable: false`.
+            kind = body.get('type') if body.get('type') in ('image', 'video', 'audio', 'document', 'sticker') else 'text'
+            given = body.get('media') if isinstance(body.get('media'), dict) else {}
+            media = None
+            if kind != 'text':
+                media = {
+                    'kind': kind,
+                    'mime': given.get('mime') or FAKE_MIME.get(kind),
+                    'size': given.get('size') if isinstance(given.get('size'), int) else None,
+                    'name': given.get('name') or None,
+                }
+                if isinstance(given.get('seconds'), int):
+                    media['seconds'] = given['seconds']
             message = {
                 'id': message_id,
                 'chatId': str(body.get('chatId') or SEED_CHATS[0][0]),
                 'author': str(body.get('author') or 'Ana Souza'),
                 'fromMe': False,
                 'at': now_ms(),
-                'type': 'text',
+                'type': kind,
                 'text': str(body.get('text') or ''),
-                'media': None,
+                'media': media,
             }
+            if kind in FAKE_MEDIA and body.get('downloadable') is not False:
+                message['mediaProto'] = b'fake:gone' if body.get('gone') else f'fake:{kind}'.encode()
             self.bridge.on_message(message)
             return {'ok': True, 'id': message_id}
         if action == 'sent':

@@ -97,6 +97,7 @@ Reuniões em Markdown no seu Mac ─> agente de IA via ACP ─> resumo · análi
 | O quê | Para onde vai |
 |---|---|
 | Áudio da reunião | só para a AssemblyAI, durante a gravação |
+| Áudio do WhatsApp que você manda transcrever | só para a AssemblyAI (`api.assemblyai.com`), no clique em "Transcrever" |
 | Texto da reunião | só para o agente de IA local que você escolheu (com a sua conta) |
 | Arquivos (áudio, transcrição, resumo, anotações) | ficam no seu Mac |
 | Chaves e tokens | cifrados pelo Chaveiro do macOS |
@@ -128,7 +129,7 @@ Depois disso, as versões novas chegam pelo próprio app.
 
 > Este recurso usa um cliente não oficial do WhatsApp (neonize/whatsmeow). O WhatsApp pode suspender ou bloquear o seu número, de forma temporária ou definitiva, sem aviso. A LAP não tem como desfazer um bloqueio. Use por sua conta e risco.
 
-Desligado por padrão. Em Configurações › Contas › WhatsApp, depois de aceitar o aviso, o app instala um serviço pequeno em Python neste Mac (precisa do Python 3.10 ou mais novo e da `libmagic`: `brew install python libmagic`), liga, mostra o aviso de novo e o QR code para conectar como um aparelho. A tela **WhatsApp** lista as conversas e mensagens; o **Assistente** lê as conversas recentes (ou só as que você escolher) junto com as reuniões e pode propor uma resposta num cartão; e o **Rascunho com o Claude** escreve uma resposta no campo. **Nenhuma mensagem sai sem o seu clique em "Enviar"** e a confirmação do macOS: o Claude e os agentes só leem, escrevem rascunhos e propõem. A sessão e as mensagens ficam só no Mac. Detalhes em [`services/whatsapp-bridge/`](services/whatsapp-bridge/README.md).
+Desligado por padrão. Em Configurações › Contas › WhatsApp, depois de aceitar o aviso, o app instala um serviço pequeno em Python neste Mac (precisa do Python 3.10 ou mais novo e da `libmagic`: `brew install python libmagic`), liga, mostra o aviso de novo e o QR code para conectar como um aparelho. A tela **WhatsApp** lista as conversas e mensagens (áudio, imagem e vídeo só baixam no clique em "Baixar": o áudio toca no próprio balão e pode ser transcrito pela AssemblyAI no clique em "Transcrever"); o **Assistente** lê as conversas recentes (ou só as que você escolher) junto com as reuniões e pode propor uma resposta num cartão; e o **Rascunho com o Claude** escreve uma resposta no campo. **Nenhuma mensagem sai sem o seu clique em "Enviar"** e a confirmação do macOS: o Claude e os agentes só leem, escrevem rascunhos e propõem. A sessão e as mensagens ficam só no Mac. Detalhes em [`services/whatsapp-bridge/`](services/whatsapp-bridge/README.md).
 
 ---
 

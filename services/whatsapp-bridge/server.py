@@ -5,9 +5,13 @@
 # ficam em `--data-dir` (no `userData` do app), nunca no repositório. O serviço não manda nada sozinho: a única
 # rota que envia é `POST /chats/:id/send`, e o app só a chama depois do clique da pessoa.
 #
+# Contrato 37: `GET /chats/:id/messages/:msg/media` baixa a imagem, o vídeo ou o áudio de uma mensagem, só quando o
+# app pede (no clique da pessoa), e responde os bytes (não JSON). Guarda em `<data-dir>/media/` por 7 dias.
+#
 # Ao subir, escreve uma linha JSON no stdout: {"event": "ready", "port": N, "version": "..."}. Logs vão para o
 # stderr e nunca levam texto de mensagem.
 import argparse
+import hashlib
 import hmac
 import json
 import os
@@ -18,6 +22,7 @@ import signal
 import stat
 import sys
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, unquote, urlsplit
 
@@ -25,7 +30,7 @@ from urllib.parse import parse_qs, unquote, urlsplit
 # só da pasta deste arquivo.
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from bridge_store import Store, now_ms  # noqa: E402
+from bridge_store import MediaGone, Store, now_ms, public_message  # noqa: E402
 
 VERSION = '0.1.0'
 HOST = '127.0.0.1'
@@ -36,7 +41,15 @@ SSE_PING_S = 15
 # Contrato 32: 512 KB de imagem em base64, com o cabeçalho do data URL.
 PHOTO_URL_MAX = 700_000
 CHAT_ID = re.compile(r'^[\w.+:-]{1,120}@[\w.-]{1,60}$')
+MESSAGE_ID = re.compile(r'^[A-Za-z0-9_.:+-]{1,200}$')
 PHONE = re.compile(r'^\d{8,15}$')
+# Contrato 37: a mídia baixada no clique, até 64 MB, guardada por 7 dias em `media/`.
+MEDIA_MAX = 64 * 1024 * 1024
+MEDIA_TTL_S = 7 * 24 * 3600
+MEDIA_DIR = 'media'
+# `fullmatch`: o `$` aceitaria um `\n` no fim, e o mime vai para o cabeçalho da resposta.
+MEDIA_MIME = re.compile(r'(audio|image|video)/[\w.+-]{1,60}(; ?[\w.+-]{1,40}=[\w.+"-]{1,40}){0,3}', re.ASCII)
+MEDIA_DEFAULT_MIME = {'image': 'image/jpeg', 'video': 'video/mp4', 'audio': 'audio/ogg'}
 
 
 def log(message):
@@ -55,6 +68,12 @@ class Bridge:
         self.qr = None
         self.lock = threading.Lock()
         self.listeners = []
+        # Contrato 37: um download por mensagem de cada vez (o segundo pedido espera e lê do disco). A geração sobe no
+        # "Sair da conta": um download que termina depois não grava os bytes da conta que saiu.
+        self.media_locks = {}
+        self.media_save_lock = threading.Lock()
+        self.media_generation = 0
+        self.clock = time.time
 
     # Chamados pelo cliente do WhatsApp (neonize ou o falso).
     def on_state(self, state, me=None):
@@ -76,7 +95,7 @@ class Bridge:
 
     def on_message(self, message, count_unread=True):
         if self.store.add_message(message, count_unread):
-            self.publish('message', dict(message, chatName=(self.store.chat(message['chatId']) or {}).get('name')))
+            self.publish('message', dict(public_message(message), chatName=(self.store.chat(message['chatId']) or {}).get('name')))
 
     def on_history(self, messages):
         """Histórico do celular: grava tudo de uma vez e avisa só "as conversas mudaram" (uma vez), em vez de uma
@@ -119,8 +138,93 @@ class Bridge:
             if listener in self.listeners:
                 self.listeners.remove(listener)
 
+    def _media_file(self, chat_id, message_id):
+        digest = hashlib.sha256(f'{chat_id}\n{message_id}'.encode('utf-8')).hexdigest()[:32]
+        return os.path.join(self.data_dir, MEDIA_DIR, f'{digest}.bin')
+
+    def _cached_media(self, path):
+        try:
+            if self.clock() - os.path.getmtime(path) > MEDIA_TTL_S:
+                return None
+            with open(path, 'rb') as handle:
+                data = handle.read(MEDIA_MAX + 1)
+        except OSError:
+            return None
+        return data if 0 < len(data) <= MEDIA_MAX else None
+
+    def _save_media(self, path, data, generation):
+        with self.media_save_lock:
+            if generation != self.media_generation:
+                return
+            folder = os.path.dirname(path)
+            os.makedirs(folder, mode=0o700, exist_ok=True)
+            os.chmod(folder, 0o700)
+            temp = f'{path}.tmp-{os.getpid()}-{threading.get_ident()}'
+            with open(temp, 'wb') as handle:
+                handle.write(data)
+            os.chmod(temp, 0o600)
+            os.replace(temp, path)
+            # Os vencidos saem a cada gravação, com as travas deles.
+            removed = []
+            for name in os.listdir(folder):
+                other = os.path.join(folder, name)
+                try:
+                    if other != path and self.clock() - os.path.getmtime(other) > MEDIA_TTL_S:
+                        os.remove(other)
+                        removed.append(other)
+                except OSError:
+                    pass
+        with self.lock:
+            for other in removed:
+                lock = self.media_locks.get(other)
+                if lock is not None and not lock.locked():
+                    del self.media_locks[other]
+
+    def media(self, chat_id, message_id):
+        """
+        Contrato 37: a mídia de uma mensagem, `('ok', mime, bytes)`, ou `(erro,)`: `missing` (sem as chaves do download),
+        `too-big` (acima de 64 MB), `gone` (o WhatsApp não tem mais o arquivo) ou `failed`.
+        """
+        source = self.store.media_source(chat_id, message_id)
+        if source is None:
+            return ('missing',)
+        kind, mime, size, proto = source
+        mime = mime if isinstance(mime, str) and MEDIA_MIME.fullmatch(mime) and mime.startswith(f'{kind}/') else MEDIA_DEFAULT_MIME[kind]
+        if isinstance(size, int) and size > MEDIA_MAX:
+            return ('too-big',)
+        path = self._media_file(chat_id, message_id)
+        generation = self.media_generation
+        with self.lock:
+            key_lock = self.media_locks.setdefault(path, threading.Lock())
+        with key_lock:
+            data = self._cached_media(path)
+            if data is not None:
+                return ('ok', mime, data)
+            download = getattr(self.backend, 'download_media', None)
+            if download is None:
+                return ('missing',)
+            try:
+                data = download(kind, proto)
+            except MediaGone:
+                return ('gone',)
+            except Exception as error:  # noqa: BLE001 - falha do cliente vira resposta
+                log(f'download da mídia falhou: {type(error).__name__}')
+                return ('failed',)
+            if not isinstance(data, (bytes, bytearray)) or not data:
+                return ('gone',)
+            if len(data) > MEDIA_MAX:
+                return ('too-big',)
+            try:
+                self._save_media(path, bytes(data), generation)
+            except OSError:
+                pass
+            return ('ok', mime, bytes(data))
+
     def logout(self):
         """Sai da conta e apaga a sessão e as mensagens guardadas."""
+        # Contrato 37: um download em curso não grava mais nada (a gravação em andamento termina antes de apagar).
+        with self.media_save_lock:
+            self.media_generation += 1
         try:
             self.backend.logout()
         finally:
@@ -156,6 +260,16 @@ def make_handler(bridge, token, instance_id=''):
             self.send_header('Content-Type', 'application/json; charset=utf-8')
             self.send_header('Content-Length', str(len(data)))
             self.send_header('Cache-Control', 'no-store')
+            self.end_headers()
+            self.wfile.write(data)
+
+        def send_bytes(self, mime, data):
+            # Contrato 37: bytes opacos com o tipo guardado; o navegador não adivinha outro tipo.
+            self.send_response(200)
+            self.send_header('Content-Type', mime)
+            self.send_header('Content-Length', str(len(data)))
+            self.send_header('Cache-Control', 'no-store')
+            self.send_header('X-Content-Type-Options', 'nosniff')
             self.end_headers()
             self.wfile.write(data)
 
@@ -234,6 +348,18 @@ def make_handler(bridge, token, instance_id=''):
                 if before is None:
                     bridge.store.set_unread(chat_id, 0)
                 return self.send_json(200, {'messages': messages})
+            # Contrato 37: a mídia de uma mensagem, só quando o app pede (o clique da pessoa).
+            match = re.fullmatch(r'/chats/([^/]+)/messages/([^/]+)/media', path)
+            if match:
+                chat_id = unquote(match.group(1))
+                message_id = unquote(match.group(2))
+                if not CHAT_ID.match(chat_id) or not MESSAGE_ID.match(message_id):
+                    return self.send_json(400, {'error': 'media'})
+                result = bridge.media(chat_id, message_id)
+                if result[0] == 'ok':
+                    return self.send_bytes(result[1], result[2])
+                status = {'missing': 404, 'too-big': 413, 'gone': 410}.get(result[0], 502)
+                return self.send_json(status, {'error': result[0]})
             # Contrato 32: a foto de perfil da conversa como data URL (JPEG/PNG/WebP até 512 KB), ou `null`.
             match = re.fullmatch(r'/chats/([^/]+)/photo', path)
             if match:

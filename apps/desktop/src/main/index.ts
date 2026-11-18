@@ -19,6 +19,7 @@ import { isBrowserUrl } from './accounts/oauth'
 import { createFileAgentsStore } from './agents/store'
 import { netHttp } from './accounts/transport'
 import { createGatewayClient, type FetchInit, type FetchResponse } from './assemblyai/gateway'
+import { createFileTranscriber } from './assemblyai/transcript'
 import { createTokenClient, requestToken } from './assemblyai/token'
 import { createTranslationService } from './assemblyai/translation'
 import { createMeetingDownload, type SaveDialog } from './audio-files/download'
@@ -538,6 +539,7 @@ function createAppServices(userData: string): AppServices {
   })
   if (smokeFixtures) secrets.save(SMOKE_FAKE_KEY)
   const gateway = createGatewayClient({ fetch: fetchImpl, getApiKey: () => secrets.getApiKey() })
+  const fileTranscriber = createFileTranscriber({ fetch: fetchImpl, getApiKey: () => secrets.getApiKey() })
   const mic = createMicPermissions(smokeFixtures ? smokeFixtures.media : process.platform === 'darwin' ? systemPreferences : null)
   const settings = createFileSettingsStore({ dir: userData, onChange: broadcastSettings })
   const meetings = createFileMeetingsStore({ dir: userData })
@@ -700,6 +702,9 @@ function createAppServices(userData: string): AppServices {
       const meeting = await meetings.get(meetingId)
       return meeting ? { meeting, summary: await summaries.get(meetingId).catch(() => null) } : null
     },
+    // Contrato 37: "Transcrever" o áudio, só no clique: o arquivo vai à AssemblyAI com a chave já guardada (no smoke,
+    // as respostas falsas de `smokeFixtures.fetch`).
+    transcribe: (bytes) => fileTranscriber.transcribe(bytes),
     // Bloqueado (contrato 22), nada do WhatsApp vai às janelas; o serviço segue conectado.
     onStatus: (status) => {
       if (!lockService?.isLocked()) broadcast(BrowserWindow.getAllWindows(), 'scribe:whatsapp-state', status)
@@ -1357,6 +1362,9 @@ function registerIpc(services: AppServices): void {
   handle('scribe:whatsapp-link-set', appOrigin, (_event, request) => whatsapp.setLink(request))
   // Contrato 32: a foto de perfil e os Detalhes (só leitura; nenhum caminho daqui alcança o envio).
   handle('scribe:whatsapp-photo', appOrigin, (_event, request) => whatsapp.photo(request).catch(() => null))
+  // Contrato 37: a mídia e a transcrição, só no clique; erro nunca derruba nada.
+  handle('scribe:whatsapp-media', appOrigin, (_event, request) => whatsapp.media(request).catch(() => ({ ok: false, error: 'unavailable' }) as const))
+  handle('scribe:whatsapp-transcribe', appOrigin, (_event, request) => whatsapp.transcribe(request).catch(() => ({ ok: false, error: 'failed' }) as const))
   handle('scribe:whatsapp-insights', appOrigin, (_event, request) => whatsappInsights.state(request))
   handle('scribe:whatsapp-insights-run', appOrigin, (_event, request) => whatsappInsights.run(request))
   onEvent('scribe:whatsapp-click', appOrigin, (event, token) => whatsapp.registerClick(event.sender.id, token))

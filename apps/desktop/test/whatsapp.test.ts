@@ -484,7 +484,8 @@ describe('nenhum caminho fora do clique alcança o envio (CA4)', () => {
 
   it('o envio também passa pelo bloqueio: todo canal do WhatsApp é recusado com o app bloqueado', () => {
     const channels = INVOKE_CHANNELS.filter((channel) => channel.startsWith('scribe:whatsapp-'))
-    expect(channels).toHaveLength(18)
+    // Contrato 37: a mídia e a transcrição (20 no total).
+    expect(channels).toHaveLength(20)
     for (const channel of channels) expect(WHEN_LOCKED[channel]).toBe('refused')
     expect(RENDERER_EVENTS_WHEN_LOCKED['scribe:whatsapp-click']).toBe('ignored')
     expect(PRELOAD_ONLY_EVENTS).toEqual(['scribe:whatsapp-click'])

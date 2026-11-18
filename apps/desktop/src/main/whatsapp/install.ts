@@ -22,6 +22,8 @@ export const WHATSAPP_PATHS = {
   token: 'token',
   /** Contrato 32: o cache dos Detalhes (resumos das conversas): sai junto com as mensagens. */
   insights: 'insights.json',
+  /** Contrato 37: as transcrições dos áudios: saem junto com as mensagens. */
+  transcripts: 'transcripts.json',
 } as const
 
 /** Arquivos do serviço copiados para `userData/whatsapp/bridge` a cada "Ligar". */
@@ -176,7 +178,7 @@ export async function copyBridge(source: string, root: string, files: readonly s
  * das aceitações do aviso fica (é a prova de que a pessoa aceitou), e as ligações com reuniões também.
  */
 export async function removeBridge(root: string): Promise<void> {
-  for (const name of [WHATSAPP_PATHS.installed, WHATSAPP_PATHS.venv, WHATSAPP_PATHS.bridge, WHATSAPP_PATHS.session, WHATSAPP_PATHS.service, WHATSAPP_PATHS.token, WHATSAPP_PATHS.insights]) {
+  for (const name of [WHATSAPP_PATHS.installed, WHATSAPP_PATHS.venv, WHATSAPP_PATHS.bridge, WHATSAPP_PATHS.session, WHATSAPP_PATHS.service, WHATSAPP_PATHS.token, WHATSAPP_PATHS.insights, WHATSAPP_PATHS.transcripts]) {
     await rm(join(root, name), { recursive: true, force: true })
   }
 }

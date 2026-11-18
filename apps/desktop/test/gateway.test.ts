@@ -175,7 +175,7 @@ describe('createGatewayClient', () => {
     const fetch = vi.fn<FetchLike>(() => reply(200, CHAT_OK))
     const client = createGatewayClient({ fetch, getApiKey: () => 'chave-x' })
     expect(await checkModelAccess(client, 'qwen3.5-4b-32k-fast')).toBe('available')
-    const body = JSON.parse(fetch.mock.calls[0]?.[1].body ?? '{}') as { model: string; max_tokens: number; messages: unknown[] }
+    const body = JSON.parse(String(fetch.mock.calls[0]?.[1].body ?? '{}')) as { model: string; max_tokens: number; messages: unknown[] }
     expect(body.model).toBe('qwen3.5-4b-32k-fast')
     expect(body.max_tokens).toBeGreaterThan(0)
     expect(body.max_tokens).toBeLessThanOrEqual(8)

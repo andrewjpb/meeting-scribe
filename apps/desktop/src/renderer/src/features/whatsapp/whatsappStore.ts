@@ -9,6 +9,7 @@
 import { useEffect } from 'react'
 import { create } from 'zustand'
 import type { WhatsAppChat, WhatsAppMessage, WhatsAppStatus } from '@shared/whatsapp'
+import { sessionBlobs, sessionTranscripts } from './media'
 import { addPending, confirmPending, failPending, markPendingSent, PENDING_ECHO_WAIT_MS, settledIds, settlePending, type PendingByChat } from './pending'
 
 interface WhatsAppState {
@@ -230,8 +231,13 @@ export const useWhatsApp = create<WhatsAppState>()((set, get) => ({
 /** O main avisa cada mudança do serviço e cada mensagem nova; nada chega com o app bloqueado. */
 export function watchWhatsApp(): () => void {
   const offState = window.__scribeApi.on('scribe:whatsapp-state', (status) => {
-    // Contrato 32: fora de "conectado" (saiu da conta, removeu, desligou), as fotos guardadas na tela saem.
-    if (status.state !== 'connected') useWhatsApp.getState().forgetPhotos()
+    // Contrato 32: fora de "conectado" (saiu da conta, removeu, desligou), as fotos guardadas na tela saem. Contrato 37:
+    // e as mídias baixadas e as transcrições lidas nesta sessão.
+    if (status.state !== 'connected') {
+      useWhatsApp.getState().forgetPhotos()
+      sessionBlobs.clear()
+      sessionTranscripts.clear()
+    }
     useWhatsApp.setState({ status })
   })
   // Mensagens chegam em rajadas (o celular manda muitas de uma vez): junta e atualiza a tela no máximo a cada 250 ms,

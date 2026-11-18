@@ -10,6 +10,7 @@ import time
 
 import pytest
 
+import backend_fake
 import server
 from backend_fake import FAKE_QR, SEED_CHATS, FakeBackend
 
@@ -51,7 +52,7 @@ def test_every_route_requires_the_token(running):
     assert call(port, 'GET', '/health', token='b' * 48) == (200, {'id': 'id-da-instalacao'})
     full = call(port, 'GET', '/health')[1]
     assert full['id'] == 'id-da-instalacao' and full['pid'] == os.getpid()
-    for method, path in [('GET', '/pair'), ('GET', '/chats'), ('GET', f'/chats/{ANA}/messages'), ('GET', '/search?q=prazo'), ('GET', f'/chats/{ANA}/photo'), ('GET', '/events'), ('POST', '/logout'), ('POST', f'/chats/{ANA}/send')]:
+    for method, path in [('GET', '/pair'), ('GET', '/chats'), ('GET', f'/chats/{ANA}/messages'), ('GET', '/search?q=prazo'), ('GET', f'/chats/{ANA}/photo'), ('GET', f'/chats/{ANA}/messages/m1/media'), ('GET', '/events'), ('POST', '/logout'), ('POST', f'/chats/{ANA}/send')]:
         assert call(port, method, path, token=None)[0] == 401
         assert call(port, method, path, token='b' * 48)[0] == 401
 
@@ -81,7 +82,8 @@ def test_pairing_then_chats_and_messages(running):
     atlas = chats[0]
     assert atlas['kind'] == 'group' and atlas['unread'] == 2 and atlas['lastMessage']['text'].startswith('O prazo')
     messages = call(port, 'GET', f"/chats/{atlas['id']}/messages")[1]['messages']
-    assert messages[0]['type'] == 'image' and messages[0]['media'] == {'kind': 'image', 'mime': 'image/jpeg', 'size': 122880, 'name': None}
+    # Contrato 37: a imagem do Atlas é de antes das chaves do download (só o chip).
+    assert messages[0]['type'] == 'image' and messages[0]['media'] == {'kind': 'image', 'mime': 'image/jpeg', 'size': 122880, 'name': None, 'downloadable': False}
     # Abrir zera as não lidas; mais antigas com `before`.
     assert call(port, 'GET', '/chats')[1]['chats'][0]['unread'] == 0
     page = call(port, 'GET', f'/chats/{ANA}/messages?limit=2')[1]['messages']
@@ -244,6 +246,141 @@ def test_photo_route_drops_what_is_not_an_image_or_too_big(running):
     assert call(port, 'GET', f'/chats/{ANA}/photo') == (200, {'photo': None})
 
 
+def raw(port, path, token=TOKEN):
+    """Pedido que pode voltar em bytes (a mídia): `(status, Content-Type, Content-Length, corpo)`."""
+    conn = http.client.HTTPConnection(server.HOST, port, timeout=5)
+    conn.request('GET', path, headers={'Authorization': f'Bearer {token}'})
+    response = conn.getresponse()
+    body = response.read()
+    conn.close()
+    return response.status, response.getheader('Content-Type'), response.getheader('Content-Length'), body
+
+
+BRUNO = SEED_CHATS[2][0]
+ATLAS = SEED_CHATS[1][0]
+
+
+def test_media_is_listed_as_downloadable_only_with_the_keys(running):
+    """Contrato 37: o áudio e a imagem do Bruno baixam (o áudio com a duração); a imagem do Atlas, de antes, não."""
+    _, port, _ = running
+    call(port, 'POST', '/_fake/scan', {})
+    bruno = {m['id']: m for m in call(port, 'GET', f'/chats/{BRUNO}/messages')[1]['messages']}
+    assert bruno['m7']['media'] == {'kind': 'audio', 'mime': 'audio/wav', 'size': len(backend_fake.FAKE_MEDIA['audio']), 'name': None, 'downloadable': True, 'seconds': 2}
+    assert bruno['m8']['media']['downloadable'] is True and bruno['m6']['media'] is None
+    assert 'mediaProto' not in bruno['m7']
+    # As do Bruno são histórico: não contam como não lidas, e a última da conversa continua o texto.
+    chat = next(c for c in call(port, 'GET', '/chats')[1]['chats'] if c['id'] == BRUNO)
+    assert chat['unread'] == 0 and chat['lastMessage']['id'] == 'm6'
+    found = call(port, 'GET', '/search?q=quadro')[1]['messages']
+    assert {m['id']: m['media']['downloadable'] for m in found} == {'m4': False, 'm8': True}
+
+
+def test_media_route_serves_bytes_and_caches_them(running):
+    bridge, port, data = running
+    call(port, 'POST', '/_fake/scan', {})
+    status, mime, length, body = raw(port, f'/chats/{BRUNO}/messages/m8/media')
+    assert status == 200 and mime == 'image/png' and int(length) == len(body) and body == backend_fake.FAKE_MEDIA['image']
+    status, mime, _, body = raw(port, f'/chats/{BRUNO}/messages/m7/media')
+    assert status == 200 and mime == 'audio/wav' and body[:4] == b'RIFF' and body[8:12] == b'WAVE'
+    # No disco, em `media/`, só para o dono.
+    files = list((data / 'media').iterdir())
+    assert len(files) == 2 and all(oct(f.stat().st_mode & 0o777) == '0o600' for f in files)
+    assert oct((data / 'media').stat().st_mode & 0o777) == '0o700'
+    # A segunda vez vem do disco, sem pedir ao WhatsApp.
+    def broken(kind, proto):
+        raise RuntimeError('sem rede')
+
+    bridge.backend.download_media = broken
+    assert raw(port, f'/chats/{BRUNO}/messages/m8/media')[3] == backend_fake.FAKE_MEDIA['image']
+    # Passados os 7 dias, pede de novo (e a falha vira 502).
+    for item in files:
+        os.utime(item, (time.time() - 8 * 24 * 3600, time.time() - 8 * 24 * 3600))
+    status, mime, _, body = raw(port, f'/chats/{BRUNO}/messages/m8/media')
+    assert status == 502 and json.loads(body) == {'error': 'failed'}
+    # Sair da conta leva a mídia junto.
+    call(port, 'POST', '/logout', {})
+    assert not (data / 'media').exists()
+
+
+def test_media_route_without_keys_too_big_and_gone(running, monkeypatch):
+    _, port, _ = running
+    call(port, 'POST', '/_fake/scan', {})
+    # Mensagem de antes (sem as chaves), texto e mensagem que não existe: 404; id inválido: 400.
+    assert raw(port, f'/chats/{ATLAS}/messages/m4/media')[0] == 404
+    assert raw(port, f'/chats/{ANA}/messages/m1/media')[0] == 404
+    assert raw(port, f'/chats/{ANA}/messages/nada/media')[0] == 404
+    assert raw(port, f'/chats/{ANA}/messages/m%3Cb%3E/media')[0] == 400
+    assert raw(port, '/chats/sem-arroba/messages/m1/media')[0] == 400
+    # O WhatsApp não tem mais o arquivo: 410.
+    gone = call(port, 'POST', '/_fake/incoming', {'chatId': ANA, 'type': 'audio', 'gone': True})[1]['id']
+    status, _, _, body = raw(port, f'/chats/{ANA}/messages/{gone}/media')
+    assert status == 410 and json.loads(body) == {'error': 'gone'}
+    # Documento e figurinha nunca baixam; `downloadable: false` também não.
+    document = call(port, 'POST', '/_fake/incoming', {'chatId': ANA, 'type': 'document', 'media': {'name': 'a.pdf'}})[1]['id']
+    assert raw(port, f'/chats/{ANA}/messages/{document}/media')[0] == 404
+    # Acima do limite: pelo tamanho que a mensagem diz (sem baixar) e pelo que veio.
+    monkeypatch.setattr(server, 'MEDIA_MAX', 200)
+    assert raw(port, f'/chats/{BRUNO}/messages/m8/media')[0] == 200
+    status, _, _, body = raw(port, f'/chats/{BRUNO}/messages/m7/media')
+    assert status == 413 and json.loads(body) == {'error': 'too-big'}
+    monkeypatch.setattr(server, 'MEDIA_MAX', 50)
+    unsized = call(port, 'POST', '/_fake/incoming', {'chatId': ANA, 'type': 'video'})[1]['id']
+    assert raw(port, f'/chats/{ANA}/messages/{unsized}/media')[0] == 413
+
+
+def test_new_media_message_event_says_downloadable_without_the_keys(running):
+    _, port, _ = running
+    call(port, 'POST', '/_fake/scan', {})
+    conn = http.client.HTTPConnection(server.HOST, port, timeout=5)
+    conn.request('GET', '/events', headers={'Authorization': f'Bearer {TOKEN}'})
+    response = conn.getresponse()
+    for _ in range(3):
+        response.fp.readline()
+    threading.Timer(0.1, lambda: call(port, 'POST', '/_fake/incoming', {'chatId': ANA, 'type': 'image', 'text': 'foto'})).start()
+    assert response.fp.readline() == b'event: message\n'
+    data = json.loads(response.fp.readline().decode()[len('data: '):])
+    assert data['media']['downloadable'] is True and 'mediaProto' not in data
+    conn.close()
+
+
+def test_old_database_loads_and_keeps_its_messages_without_download(tmp_path):
+    """Contrato 37: o banco de antes (sem `media_proto`) abre, ganha as colunas e as mensagens antigas não baixam."""
+    import sqlite3
+
+    from bridge_store import Store
+
+    path = tmp_path / 'messages.db'
+    old = sqlite3.connect(path)
+    old.executescript(
+        '''
+        CREATE TABLE chats (id TEXT PRIMARY KEY, name TEXT NOT NULL DEFAULT '', kind TEXT NOT NULL DEFAULT 'person', unread INTEGER NOT NULL DEFAULT 0, last_at INTEGER NOT NULL DEFAULT 0);
+        CREATE TABLE messages (id TEXT NOT NULL, chat_id TEXT NOT NULL, author TEXT NOT NULL DEFAULT '', from_me INTEGER NOT NULL DEFAULT 0, at INTEGER NOT NULL, kind TEXT NOT NULL DEFAULT 'text', text TEXT NOT NULL DEFAULT '', media_mime TEXT, media_size INTEGER, media_name TEXT, PRIMARY KEY (chat_id, id));
+        INSERT INTO chats (id, name, last_at) VALUES ('5511944440000@s.whatsapp.net', 'Bia', 10);
+        INSERT INTO messages (id, chat_id, author, at, kind, text, media_mime, media_size) VALUES ('A1', '5511944440000@s.whatsapp.net', 'Bia', 10, 'audio', '', 'audio/ogg', 2048);
+        '''
+    )
+    old.commit()
+    old.close()
+    store = Store(str(path))
+    [message] = store.messages('5511944440000@s.whatsapp.net')
+    assert message['media'] == {'kind': 'audio', 'mime': 'audio/ogg', 'size': 2048, 'name': None, 'downloadable': False}
+    assert store.media_source('5511944440000@s.whatsapp.net', 'A1') is None
+    audio = {'id': 'A2', 'chatId': '5511944440000@s.whatsapp.net', 'author': 'Bia', 'fromMe': False, 'at': 20, 'type': 'audio', 'text': '', 'media': {'kind': 'audio', 'mime': 'audio/ogg', 'size': 10, 'name': None, 'seconds': 7}, 'mediaProto': b'chaves'}
+    # A mensagem serializada só fica para imagem, vídeo e áudio, e até 256 KB.
+    sticker = dict(audio, id='A3', type='sticker', media={'kind': 'sticker', 'mime': 'image/webp', 'size': 10, 'name': None})
+    huge = dict(audio, id='A4', mediaProto=b'x' * (256 * 1024 + 1))
+    assert store.add_messages([audio, sticker, huge]) == 3
+    assert store.media_source('5511944440000@s.whatsapp.net', 'A2') == ('audio', 'audio/ogg', 10, b'chaves')
+    assert store.media_source('5511944440000@s.whatsapp.net', 'A3') is None and store.media_source('5511944440000@s.whatsapp.net', 'A4') is None
+    listed = {m['id']: m['media'] for m in store.messages('5511944440000@s.whatsapp.net')}
+    assert listed['A2']['downloadable'] is True and listed['A2']['seconds'] == 7 and listed['A4']['downloadable'] is False
+    store.close()
+    # Abrir de novo (já com as colunas) não muda nada.
+    again = Store(str(path))
+    assert len(again.messages('5511944440000@s.whatsapp.net')) == 4
+    again.close()
+
+
 def test_fake_history_is_spread_over_days_and_not_unread(running):
     _, port, _ = running
     call(port, 'POST', '/_fake/scan', {})
@@ -252,3 +389,52 @@ def test_fake_history_is_spread_over_days_and_not_unread(running):
     messages = call(port, 'GET', f'/chats/{ANA}/messages')[1]['messages']
     days = {m['at'] // 86_400_000 for m in messages}
     assert len(messages) == 11 and len(days) >= 6
+
+
+def test_stored_mime_with_a_newline_never_reaches_the_header(running):
+    """Contrato 37: o mime vem do contato e vai para o cabeçalho; com `\\n` no fim (o `$` aceitaria), vale o padrão."""
+    bridge, port, _ = running
+    call(port, 'POST', '/_fake/scan', {})
+    assert server.MEDIA_MIME.fullmatch('audio/ogg\n') is None and server.MEDIA_MIME.fullmatch('audio/ogg; codecs=opus')
+    sent = call(port, 'POST', '/_fake/incoming', {'chatId': ANA, 'type': 'image', 'media': {'mime': 'image/png\nX-Injetado: 1'}})[1]['id']
+    status, mime, _, _ = raw(port, f'/chats/{ANA}/messages/{sent}/media')
+    assert status == 200 and mime == 'image/jpeg'
+    newline = call(port, 'POST', '/_fake/incoming', {'chatId': ANA, 'type': 'audio', 'media': {'mime': 'audio/wav\n'}})[1]['id']
+    assert raw(port, f'/chats/{ANA}/messages/{newline}/media')[1] == 'audio/ogg'
+
+
+def test_download_finishing_after_logout_saves_nothing(running):
+    """Contrato 37: o "Sair da conta" no meio de um download: os bytes da conta que saiu não voltam ao disco."""
+    bridge, port, data = running
+    call(port, 'POST', '/_fake/scan', {})
+    started = threading.Event()
+    release = threading.Event()
+    original = bridge.backend.download_media
+
+    def slow(kind, proto):
+        started.set()
+        release.wait(5)
+        return original(kind, proto)
+
+    bridge.backend.download_media = slow
+    result = {}
+    worker = threading.Thread(target=lambda: result.setdefault('media', bridge.media(BRUNO, 'm8')))
+    worker.start()
+    assert started.wait(5)
+    bridge.logout()
+    release.set()
+    worker.join(5)
+    assert result['media'][0] == 'ok'
+    assert not (data / 'media').exists()
+
+
+def test_expired_media_takes_its_lock_along(running):
+    bridge, port, data = running
+    call(port, 'POST', '/_fake/scan', {})
+    assert raw(port, f'/chats/{BRUNO}/messages/m7/media')[0] == 200
+    [old] = list((data / 'media').iterdir())
+    assert str(old) in bridge.media_locks
+    os.utime(old, (time.time() - 8 * 24 * 3600, time.time() - 8 * 24 * 3600))
+    assert raw(port, f'/chats/{BRUNO}/messages/m8/media')[0] == 200
+    assert not old.exists() and str(old) not in bridge.media_locks
+    assert len(bridge.media_locks) == 1

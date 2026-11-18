@@ -22,7 +22,8 @@ export const MODEL_CHECK_MAX_TOKENS = 1
 export interface FetchInit {
   method: 'GET' | 'POST'
   headers: Record<string, string>
-  body?: string
+  /** Contrato 37: o upload do áudio para a transcrição vai em bytes. */
+  body?: string | Uint8Array
   signal: AbortSignal
   /** Sempre `error`: o cabeçalho `authorization` nunca segue um redirecionamento para outro lugar. */
   redirect: 'error'

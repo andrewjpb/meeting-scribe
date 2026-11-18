@@ -2,14 +2,20 @@
 // em todo pedido, e toda resposta conferida com zod antes de chegar ao resto do app. O envio exige a prova de
 // clique (`SendProof`, de `send-guard.ts`). `/events` é lido como SSE e reconectado pelo serviço do main. Nada
 // daqui vai para log com texto de mensagem.
+//
+// Contrato 37: a mídia de uma mensagem (`media`) volta em bytes, não em JSON: leitor próprio, até 64 MB, com o
+// `Content-Type` conferido (só `audio/`, `image/` e `video/`).
 import { request as httpRequest, type IncomingMessage } from 'node:http'
 import { z } from 'zod'
-import { WHATSAPP_SERVICE_STATES, type WhatsAppChat, type WhatsAppMe, type WhatsAppMessage, type WhatsAppSearchHit, type WhatsAppServiceState } from '../../shared/whatsapp'
+import { WHATSAPP_MEDIA_MAX, WHATSAPP_SERVICE_STATES, type WhatsAppChat, type WhatsAppMe, type WhatsAppMessage, type WhatsAppSearchHit, type WhatsAppServiceState } from '../../shared/whatsapp'
 import { isSendProof, type SendProof } from './send-guard'
 
 export const WHATSAPP_HOST = '127.0.0.1'
 const REQUEST_TIMEOUT_MS = 15_000
 const RESPONSE_MAX = 8 * 1024 * 1024
+/** Contrato 37: o download da mídia pode demorar mais que um pedido comum (o serviço baixa do WhatsApp antes). */
+const MEDIA_TIMEOUT_MS = 120_000
+const MEDIA_MIME = /^(?:audio|image|video)\/[\w.+-]{1,60}(?:; ?[\w.+-]{1,40}=[\w.+"-]{1,40}){0,3}$/
 
 const meSchema: z.ZodType<WhatsAppMe> = z.object({ name: z.string().max(200), phone: z.string().max(40) })
 export const healthSchema = z.object({
@@ -25,6 +31,9 @@ const mediaSchema = z.object({
   mime: z.string().max(100).nullable(),
   size: z.number().int().nonnegative().nullable(),
   name: z.string().max(200).nullable(),
+  // Contrato 37: baixa no clique; a duração do áudio.
+  downloadable: z.boolean().optional().catch(undefined),
+  seconds: z.number().int().positive().max(86_400).optional().catch(undefined),
 })
 export const messageSchema = z.object({
   id: z.string().min(1).max(200),
@@ -87,6 +96,8 @@ export interface BridgeClient {
   search(term: string): Promise<WhatsAppSearchHit[]>
   /** Contrato 32: foto de perfil da conversa (data URL) ou `null`. */
   photo(chatId: string): Promise<string | null>
+  /** Contrato 37: os bytes da mídia de uma mensagem (até 64 MB). Lança `WhatsAppServiceError` (404, 410, 413…). */
+  media(chatId: string, messageId: string): Promise<{ mime: string; bytes: Buffer }>
   /** Só com a prova de um clique de verdade, para a mesma conversa. */
   send(proof: SendProof, chatId: string, text: string): Promise<string>
   /** SSE de `/events`; `onClose` quando a conexão cai. Devolve o que fecha. */
@@ -114,6 +125,42 @@ function readBody(res: IncomingMessage): Promise<string> {
 }
 
 const chatPath = (chatId: string): string => encodeURIComponent(chatId)
+
+/** Contrato 37: o corpo em bytes, até `max` (o `Content-Length` maior que isso já recusa sem ler). */
+function readBytes(res: IncomingMessage, max: number): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    const declared = Number(res.headers['content-length'] ?? NaN)
+    if (Number.isFinite(declared) && declared > max) {
+      res.destroy()
+      reject(new WhatsAppServiceError(413, 'too-big'))
+      return
+    }
+    const chunks: Buffer[] = []
+    let size = 0
+    res.on('data', (chunk: Buffer) => {
+      size += chunk.byteLength
+      if (size > max) {
+        res.destroy()
+        reject(new WhatsAppServiceError(413, 'too-big'))
+        return
+      }
+      chunks.push(chunk)
+    })
+    res.on('end', () => resolve(Buffer.concat(chunks)))
+    res.on('error', reject)
+  })
+}
+
+/** O código de erro do corpo JSON (`{"error": "gone"}`), ou `http`. */
+function errorCode(text: string): string {
+  try {
+    const parsed: unknown = JSON.parse(text)
+    const code = typeof parsed === 'object' && parsed !== null ? (parsed as { error?: unknown }).error : undefined
+    return typeof code === 'string' ? code.slice(0, 40) : 'http'
+  } catch {
+    return 'http'
+  }
+}
 
 export function createBridgeClient(port: number, token: string): BridgeClient {
   if (!Number.isInteger(port) || port <= 0 || port > 65_535) throw new Error('porta inválida')
@@ -157,6 +204,32 @@ export function createBridgeClient(port: number, token: string): BridgeClient {
     })
   }
 
+  /** Contrato 37: GET que responde bytes, com o tipo conferido; erro do serviço vem em JSON. */
+  function callBinary(path: string): Promise<{ mime: string; bytes: Buffer }> {
+    return new Promise((resolve, reject) => {
+      const req = httpRequest({ host: WHATSAPP_HOST, port, method: 'GET', path, headers, timeout: MEDIA_TIMEOUT_MS }, (res) => {
+        const status = res.statusCode ?? 0
+        if (status !== 200) {
+          readBody(res).then((text) => reject(new WhatsAppServiceError(status, errorCode(text))), reject)
+          return
+        }
+        const mime = String(res.headers['content-type'] ?? '').trim()
+        if (!MEDIA_MIME.test(mime)) {
+          res.destroy()
+          reject(new WhatsAppServiceError(200, 'mime'))
+          return
+        }
+        readBytes(res, WHATSAPP_MEDIA_MAX).then((bytes) => {
+          if (bytes.byteLength === 0) reject(new WhatsAppServiceError(200, 'empty'))
+          else resolve({ mime, bytes })
+        }, reject)
+      })
+      req.on('timeout', () => req.destroy(new WhatsAppServiceError(0, 'timeout')))
+      req.on('error', reject)
+      req.end()
+    })
+  }
+
   return {
     port,
     health: () => call('GET', '/health', healthSchema),
@@ -173,6 +246,7 @@ export function createBridgeClient(port: number, token: string): BridgeClient {
     },
     search: async (term) => (await call('GET', `/search?q=${encodeURIComponent(term)}`, searchSchema)).messages,
     photo: async (chatId) => (await call('GET', `/chats/${chatPath(chatId)}/photo`, photoSchema)).photo,
+    media: (chatId, messageId) => callBinary(`/chats/${chatPath(chatId)}/messages/${encodeURIComponent(messageId)}/media`),
     send: async (proof, chatId, text) => {
       if (!isSendProof(proof) || proof.chatId !== chatId) throw new WhatsAppServiceError(0, 'click')
       return (await call('POST', `/chats/${chatPath(chatId)}/send`, sendSchema, { text })).id

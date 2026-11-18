@@ -70,7 +70,9 @@ export function buildCsp(mode: CspMode, devOrigin?: string): string {
       "script-src 'self'",
       "style-src 'self'",
       "font-src 'self'",
-      "img-src 'self' data:",
+      // Contrato 37: a mídia do WhatsApp chega em bytes pelo IPC e vira blob no renderer (imagem, áudio e vídeo).
+      "img-src 'self' data: blob:",
+      "media-src 'self' blob:",
       // Única saída do renderer: a transcrição ao vivo vai direto para a AssemblyAI (CA13).
       "connect-src 'self' wss://streaming.assemblyai.com",
       "worker-src 'self'",
@@ -86,7 +88,8 @@ export function buildCsp(mode: CspMode, devOrigin?: string): string {
     `script-src 'self' 'unsafe-inline' ${devOrigin ?? ''}`.trim(),
     "style-src 'self' 'unsafe-inline'",
     "font-src 'self'",
-    "img-src 'self' data:",
+    "img-src 'self' data: blob:",
+    "media-src 'self' blob:",
     `connect-src 'self' wss://streaming.assemblyai.com ${devOrigin ?? ''} ${ws}`.trim(),
     "worker-src 'self'",
     "object-src 'none'",

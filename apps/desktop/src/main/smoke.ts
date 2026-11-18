@@ -121,6 +121,7 @@ import { SETTINGS_VERSION } from './settings/schema'
 import { CLAUDE_DISALLOWED_TOOLS, CLAUDE_READ_TOOLS, CLAUDE_WEB_TOOLS } from './acp/profiles/claude'
 import { LATEST_RELEASE_URL, RELEASE_DOWNLOAD_PREFIX, RELEASE_REDIRECT_HOSTS } from './updates/release'
 import {
+  SMOKE_AUDIO_TRANSCRIPT,
   SMOKE_FAKE_KEY,
   SMOKE_GOOGLE_CLIENT_ID,
   SMOKE_GOOGLE_CLIENT_SECRET,
@@ -5189,6 +5190,11 @@ async function whatsappChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => 
     detail: `topo sem título=${!top.heading} avisos ${JSON.stringify(top.notices)} colunas no topo=${top.columnsTop === top.areaTop} (${top.columnsTop}); lista=${listed} ${JSON.stringify(rows.map((row) => ({ id: row.id.slice(0, 8), group: row.group, unread: row.unread })))}; mídia "${media}" sem <img>=${noImage}; conversa=${anaOpen}; HTML como texto "${htmlAsText.text}" (${htmlAsText.tags} <b>); SSE=${sse}`,
   }
 
+  // Contrato 37: a mídia por clique (o áudio e a imagem do Bruno; a imagem do Atlas é de antes das chaves).
+  checks['media'] = await whatsappMediaCheck(ctx, win, root, shots)
+  await clickSelector(contents, `[data-whatsapp-chat="${WA_ANA}"]`)
+  await waitFor(contents, `document.querySelectorAll('[data-whatsapp-conversation="${WA_ANA}"] [data-whatsapp-message]').length >= ${WA_ANA_SEEDED}`)
+
   // Contrato 33: a janela do smoke tem menos de 1280 px, então os Detalhes começam fechados; o botão do cabeçalho abre.
   const narrow = await evaluate<{ width: number; panel: boolean; toggle: string }>(
     contents,
@@ -5463,6 +5469,89 @@ async function whatsappChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => 
   shots.push(await capture(dark, ctx.outDir, 'whatsapp-dark'))
   checks['dark'] = { ok: darkOpen && darkDetails, detail: `conversa no escuro=${darkOpen}; Detalhes no escuro=${darkDetails}` }
   dark.destroy()
+}
+
+/**
+ * Contrato 37: nada baixa sem o clique. A imagem antiga (m4, sem as chaves) fica como chip com o aviso; no Bruno, o
+ * "Baixar" da imagem traz o `<img>` em blob (e a sobreposição em tamanho natural, que o Esc fecha) e o do áudio traz o
+ * player; "Transcrever" manda o WAV à AssemblyAI falsa e o texto aparece no balão, guardado em `transcripts.json`.
+ */
+async function whatsappMediaCheck(ctx: SmokeContext, win: BrowserWindow, root: string, shots: Screenshot[]): Promise<Check> {
+  const contents = win.webContents
+  const mediaDir = join(root, 'session', 'media')
+  const transcriptsFile = join(root, 'transcripts.json')
+  await clickSelector(contents, `[data-whatsapp-chat="${WA_ATLAS}"]`)
+  await waitFor(contents, `document.querySelector('[data-whatsapp-conversation="${WA_ATLAS}"] [data-whatsapp-message="m4"] [data-whatsapp-media]')`)
+  const old = await evaluate<{ title: string; download: boolean }>(
+    contents,
+    `(() => { const m = document.querySelector('[data-whatsapp-message="m4"]'); return { title: m?.querySelector('[data-whatsapp-media]')?.getAttribute('title') ?? '', download: Boolean(m?.querySelector('[data-wa-download]')) } })()`,
+  )
+  await clickSelector(contents, `[data-whatsapp-chat="${WA_BRUNO}"]`)
+  const listed = await waitFor(contents, `document.querySelector('[data-whatsapp-message="m7"] [data-wa-download]') && document.querySelector('[data-whatsapp-message="m8"] [data-wa-download]')`, 8000)
+  await wait(500)
+  // Conversa aberta, nada baixado: nenhum blob na tela, nada em `media/`, nenhum upload, sem "Transcrever".
+  const before = await evaluate<{ blobs: number; transcribe: boolean; audio: boolean }>(
+    contents,
+    `({ blobs: [...document.querySelectorAll('[data-whatsapp-messages] img, [data-whatsapp-messages] audio, [data-whatsapp-messages] video')].length, transcribe: Boolean(document.querySelector('[data-wa-transcribe]')), audio: Boolean(document.querySelector('[data-wa-audio]')) })`,
+  )
+  const nothingBefore = listed && before.blobs === 0 && !before.transcribe && !before.audio && !existsSync(mediaDir) && ctx.fixtures.audioUploads.length === 0
+
+  await clickSelector(contents, '[data-whatsapp-message="m8"] [data-wa-download]')
+  const image = await waitFor(contents, `(() => { const img = document.querySelector('[data-whatsapp-message="m8"] img[data-wa-image]'); return img && img.src.startsWith('blob:') && img.complete && img.naturalWidth === 48 })()`, 8000)
+  await clickSelector(contents, '[data-whatsapp-message="m8"] [data-wa-image-open]')
+  const overlay = await waitFor(contents, `(() => { const img = document.querySelector('[data-wa-image-overlay] img'); return img && img.src.startsWith('blob:') })()`)
+  await evaluate(contents, `window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))`)
+  const overlayClosed = await waitFor(contents, `!document.querySelector('[data-wa-image-overlay]')`)
+
+  await clickSelector(contents, '[data-whatsapp-message="m7"] [data-wa-download]')
+  const player = await waitFor(contents, `(() => { const p = document.querySelector('[data-whatsapp-message="m7"] [data-wa-audio]'); return p && p.querySelector('audio')?.src.startsWith('blob:') })()`, 8000)
+  const timeShown = await waitFor(contents, `document.querySelector('[data-whatsapp-message="m7"] [data-wa-audio-time]')?.textContent === '0:00 / 0:02'`)
+  const rates: string[] = []
+  for (let index = 0; index < 3; index++) {
+    await clickSelector(contents, '[data-whatsapp-message="m7"] [data-wa-audio-rate]')
+    rates.push(await evaluate<string>(contents, `(() => { const p = document.querySelector('[data-whatsapp-message="m7"] [data-wa-audio]'); return (p?.querySelector('[data-wa-audio-rate]')?.textContent ?? '') + '@' + (p?.querySelector('audio')?.playbackRate ?? 0) })()`))
+  }
+  const transcribeTitle = await evaluate<string>(contents, `document.querySelector('[data-whatsapp-message="m7"] [data-wa-transcribe]')?.getAttribute('title') ?? ''`)
+
+  await clickSelector(contents, '[data-whatsapp-message="m7"] [data-wa-transcribe]')
+  const transcribed = await waitFor(contents, `document.querySelector('[data-whatsapp-message="m7"] [data-wa-transcript]')?.textContent === ${JSON.stringify(SMOKE_AUDIO_TRANSCRIPT)}`, 15_000)
+  const buttonGone = await evaluate<boolean>(contents, `!document.querySelector('[data-whatsapp-message="m7"] [data-wa-transcribe]')`)
+  const saved = ((): string => {
+    try {
+      return Object.values(JSON.parse(readFileSync(transcriptsFile, 'utf8')) as Record<string, { text?: string }>)[0]?.text ?? ''
+    } catch {
+      return ''
+    }
+  })()
+  const uploads = [...ctx.fixtures.audioUploads]
+  const cached = existsSync(mediaDir) ? readdirSync(mediaDir) : []
+  const cacheModes = cached.map((name) => mode(join(mediaDir, name)))
+  // O print do balão com a imagem, o player e a transcrição.
+  await settle(contents)
+  shots.push(await capture(win, ctx.outDir, 'whatsapp-midia-light'))
+  return {
+    ok:
+      old.title === 'Disponível só para mensagens recebidas a partir desta versão' &&
+      !old.download &&
+      nothingBefore &&
+      image &&
+      overlay &&
+      overlayClosed &&
+      player &&
+      timeShown &&
+      rates.join(',') === '1.5x@1.5,2x@2,1x@1' &&
+      transcribeTitle === 'O áudio é enviado à AssemblyAI para transcrever' &&
+      transcribed &&
+      buttonGone &&
+      saved === SMOKE_AUDIO_TRANSCRIPT &&
+      mode(transcriptsFile) === '600' &&
+      uploads.length === 1 &&
+      uploads[0]?.wav === true &&
+      cached.length === 2 &&
+      cacheModes.every((item) => item === '600') &&
+      mode(mediaDir) === '700',
+    detail: `m4 antiga: chip com "${old.title}", sem Baixar=${!old.download}; antes do clique nada baixado=${nothingBefore} (${JSON.stringify(before)}); imagem em blob=${image}, sobreposição=${overlay}, Esc fecha=${overlayClosed}; player=${player}, tempo 0:00 / 0:02=${timeShown}, velocidades ${rates.join(' ')}; "Transcrever" com "${transcribeTitle}"; texto no balão=${transcribed}, botão saiu=${buttonGone}; transcripts.json ${mode(transcriptsFile)} igual=${saved === SMOKE_AUDIO_TRANSCRIPT}; uploads ${JSON.stringify(uploads)}; media/ ${mode(mediaDir)} com ${cached.length} arquivos ${cacheModes.join(',')}`,
+  }
 }
 
 /**
@@ -7060,8 +7149,9 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
   // WhatsApp do Assistente, no claro (contrato 25); "Pedir agora" com o agente com internet e a resposta do Assistente
   // com o link, no claro (contrato 26); o bloco "Agenda", a faixa "não está sendo gravada" e "Próximas", no claro
   // (contrato 12); a aba "Plugins" com o plugin salvo e o manual aberto, no claro (contrato 31); o painel Detalhes do
-  // WhatsApp, no claro (contrato 32; no escuro ele sai no print da tela "WhatsApp").
-  const expectedShots = SCREENS.length * THEMES.length + 48
+  // WhatsApp, no claro (contrato 32; no escuro ele sai no print da tela "WhatsApp"); o balão com a imagem, o player e
+  // a transcrição do áudio, no claro (contrato 37).
+  const expectedShots = SCREENS.length * THEMES.length + 49
   if (screenshots.length !== expectedShots) failures.push(`${screenshots.length} PNGs em vez de ${expectedShots}`)
   for (const shot of screenshots) {
     if (shot.width < 1120 || shot.height < 740) failures.push(`${shot.name}: ${shot.width}x${shot.height} abaixo de 1120x740`)

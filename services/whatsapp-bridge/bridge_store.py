@@ -1,5 +1,8 @@
 # Banco local do serviço (contrato 24, CA1): conversas e mensagens em SQLite, em `<data-dir>/messages.db`,
-# nunca no repositório. Mídia fica só como metadado (tipo, mime, tamanho, nome); nada é baixado. As não lidas
+# nunca no repositório. Mídia fica como metadado (tipo, mime, tamanho, nome); nada é baixado sozinho. Contrato 37:
+# imagem, vídeo e áudio guardam também a mensagem do WhatsApp serializada (`media_proto`, as chaves do download) e,
+# o áudio, a duração; o download só acontece no clique, pela rota da mídia. Banco antigo ganha as colunas ao abrir
+# (as mensagens de antes ficam sem as chaves e não baixam). As não lidas
 # contam as mensagens recebidas desde a última vez que o app abriu a conversa; abrir não manda recibo de
 # leitura ao WhatsApp (o serviço não envia nada sozinho).
 import os
@@ -10,11 +13,36 @@ import time
 TEXT_MAX = 20_000
 NAME_MAX = 200
 MESSAGE_KINDS = ('text', 'image', 'video', 'audio', 'document', 'sticker', 'other')
+# Contrato 37: os tipos que baixam no clique (documento e figurinha ficam de fora).
+DOWNLOADABLE_KINDS = ('image', 'video', 'audio')
+# A mensagem serializada que passa disso não fica guardada (a mensagem continua, sem o download).
+MEDIA_PROTO_MAX = 256 * 1024
+COLUMNS = 'id, chat_id, author, from_me, at, kind, text, media_mime, media_size, media_name, media_proto IS NOT NULL, media_seconds'
+
+
+class MediaGone(Exception):
+    """A mídia não está mais disponível no WhatsApp (o endereço expirou ou o servidor recusou)."""
 
 
 def _clip(value, limit):
     text = value if isinstance(value, str) else ''
     return text[:limit]
+
+
+def media_proto_of(message):
+    """A mensagem serializada que fica guardada (imagem, vídeo ou áudio, até 256 KB), ou `None`."""
+    proto = message.get('mediaProto')
+    if message.get('type') not in DOWNLOADABLE_KINDS or not isinstance(proto, (bytes, bytearray)) or not proto or len(proto) > MEDIA_PROTO_MAX:
+        return None
+    return bytes(proto)
+
+
+def public_message(message):
+    """A mensagem como sai do serviço (`/events`): sem as chaves do download, com `downloadable` na mídia."""
+    result = {key: value for key, value in message.items() if key != 'mediaProto'}
+    if result.get('media'):
+        result['media'] = dict(result['media'], downloadable=media_proto_of(message) is not None)
+    return result
 
 
 def now_ms():
@@ -66,6 +94,12 @@ class Store:
             CREATE INDEX IF NOT EXISTS messages_by_chat ON messages (chat_id, at);
             '''
         )
+        # Contrato 37: banco de antes ganha as colunas novas (vazias nas mensagens que já estavam lá).
+        columns = {row[1] for row in self.db.execute('PRAGMA table_info(messages)').fetchall()}
+        if 'media_proto' not in columns:
+            self.db.execute('ALTER TABLE messages ADD COLUMN media_proto BLOB')
+        if 'media_seconds' not in columns:
+            self.db.execute('ALTER TABLE messages ADD COLUMN media_seconds INTEGER')
         self.db.commit()
 
     def close(self):
@@ -104,9 +138,11 @@ class Store:
     def _add_message(self, message, count_unread):
         kind = message.get('type') if message.get('type') in MESSAGE_KINDS else 'other'
         media = message.get('media') or {}
+        proto = media_proto_of(message)
+        seconds = media.get('seconds') if kind == 'audio' else None
         self._upsert_chat(message['chatId'], message.get('chatName'), message.get('chatKind'))
         cursor = self.db.execute(
-            'INSERT OR IGNORE INTO messages (id, chat_id, author, from_me, at, kind, text, media_mime, media_size, media_name) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+            'INSERT OR IGNORE INTO messages (id, chat_id, author, from_me, at, kind, text, media_mime, media_size, media_name, media_proto, media_seconds) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
             (
                 _clip(message['id'], 200),
                 message['chatId'],
@@ -118,6 +154,8 @@ class Store:
                 _clip(media.get('mime'), 100) or None,
                 int(media['size']) if isinstance(media.get('size'), int) else None,
                 _clip(media.get('name'), NAME_MAX) or None,
+                proto,
+                int(seconds) if isinstance(seconds, int) and 0 < seconds < 24 * 3600 else None,
             ),
         )
         created = cursor.rowcount == 1
@@ -164,7 +202,7 @@ class Store:
             result = []
             for chat_id, name, kind, unread in rows:
                 last = self.db.execute(
-                    'SELECT id, chat_id, author, from_me, at, kind, text, media_mime, media_size, media_name FROM messages WHERE chat_id = ? ORDER BY at DESC LIMIT 1',
+                    f'SELECT {COLUMNS} FROM messages WHERE chat_id = ? ORDER BY at DESC LIMIT 1',
                     (chat_id,),
                 ).fetchone()
                 result.append(
@@ -187,17 +225,17 @@ class Store:
         with self.lock:
             if before is not None and before_id is not None:
                 rows = self.db.execute(
-                    'SELECT id, chat_id, author, from_me, at, kind, text, media_mime, media_size, media_name FROM messages WHERE chat_id = ? AND (at < ? OR (at = ? AND id < ?)) ORDER BY at DESC, id DESC LIMIT ?',
+                    f'SELECT {COLUMNS} FROM messages WHERE chat_id = ? AND (at < ? OR (at = ? AND id < ?)) ORDER BY at DESC, id DESC LIMIT ?',
                     (chat_id, int(before), int(before), before_id, limit),
                 ).fetchall()
             elif before is None:
                 rows = self.db.execute(
-                    'SELECT id, chat_id, author, from_me, at, kind, text, media_mime, media_size, media_name FROM messages WHERE chat_id = ? ORDER BY at DESC, id DESC LIMIT ?',
+                    f'SELECT {COLUMNS} FROM messages WHERE chat_id = ? ORDER BY at DESC, id DESC LIMIT ?',
                     (chat_id, limit),
                 ).fetchall()
             else:
                 rows = self.db.execute(
-                    'SELECT id, chat_id, author, from_me, at, kind, text, media_mime, media_size, media_name FROM messages WHERE chat_id = ? AND at < ? ORDER BY at DESC, id DESC LIMIT ?',
+                    f'SELECT {COLUMNS} FROM messages WHERE chat_id = ? AND at < ? ORDER BY at DESC, id DESC LIMIT ?',
                     (chat_id, int(before), limit),
                 ).fetchall()
         return [_row(row) for row in reversed(rows)]
@@ -206,13 +244,30 @@ class Store:
         term = query.replace('\\', '\\\\').replace('%', '\\%').replace('_', '\\_')
         with self.lock:
             rows = self.db.execute(
-                "SELECT m.id, m.chat_id, m.author, m.from_me, m.at, m.kind, m.text, m.media_mime, m.media_size, m.media_name, c.name FROM messages m JOIN chats c ON c.id = m.chat_id WHERE m.text LIKE ? ESCAPE '\\' ORDER BY m.at DESC LIMIT ?",
+                "SELECT m.id, m.chat_id, m.author, m.from_me, m.at, m.kind, m.text, m.media_mime, m.media_size, m.media_name, m.media_proto IS NOT NULL, m.media_seconds, c.name FROM messages m JOIN chats c ON c.id = m.chat_id WHERE m.text LIKE ? ESCAPE '\\' ORDER BY m.at DESC LIMIT ?",
                 (f'%{term}%', max(1, min(int(limit), 200))),
             ).fetchall()
-        return [dict(_row(row[:10]), chatName=row[10] or row[1].split('@')[0]) for row in rows]
+        return [dict(_row(row[:12]), chatName=row[12] or row[1].split('@')[0]) for row in rows]
+
+
+    def media_source(self, chat_id, message_id):
+        """Contrato 37: `(tipo, mime, tamanho, mensagem serializada)` da mídia que baixa, ou `None` (sem as chaves)."""
+        with self.lock:
+            row = self.db.execute(
+                'SELECT kind, media_mime, media_size, media_proto FROM messages WHERE chat_id = ? AND id = ? AND media_proto IS NOT NULL',
+                (chat_id, message_id),
+            ).fetchone()
+        if row is None or row[0] not in DOWNLOADABLE_KINDS:
+            return None
+        return row[0], row[1], row[2], bytes(row[3])
 
 
 def _row(row):
-    message_id, chat_id, author, from_me, at, kind, text, mime, size, name = row
-    media = None if kind == 'text' else {'kind': kind, 'mime': mime, 'size': size, 'name': name}
+    message_id, chat_id, author, from_me, at, kind, text, mime, size, name, has_proto, seconds = row
+    media = None
+    if kind != 'text':
+        # Contrato 37: `downloadable` diz se o clique baixa (as chaves ficaram guardadas); o áudio leva a duração.
+        media = {'kind': kind, 'mime': mime, 'size': size, 'name': name, 'downloadable': bool(has_proto)}
+        if kind == 'audio' and seconds:
+            media['seconds'] = seconds
     return {'id': message_id, 'chatId': chat_id, 'author': author, 'fromMe': bool(from_me), 'at': at, 'type': kind, 'text': text, 'media': media}

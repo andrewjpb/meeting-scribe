@@ -26,13 +26,15 @@ WhatsApp e as mensagens ficam em `~/Library/Application Support/Meeting Scribe/w
 | `GET /pair` | QR code em texto; com `?phone=5511…`, o código de pareamento por número |
 | `POST /logout` | sai da conta e apaga a sessão |
 | `GET /chats` | conversas: id, nome, pessoa ou grupo, última mensagem, não lidas |
-| `GET /chats/:id/messages?before&limit` | mensagens (texto, autor, hora, tipo; mídia só como metadado) |
+| `GET /chats/:id/messages?before&limit` | mensagens (texto, autor, hora, tipo; mídia como metadado, com `downloadable` e, no áudio, `seconds`) |
+| `GET /chats/:id/messages/:msg/media` | os bytes da imagem, do vídeo ou do áudio (até 64 MB, guardados 7 dias em `media/`); 404 sem as chaves do download, 410 quando o WhatsApp não tem mais o arquivo, 413 acima do limite |
 | `GET /chats/:id/photo` | foto de perfil como data URL (até 512 KB, guardada 7 dias em `photos/`), ou `null` |
 | `GET /search?q` | busca no texto das mensagens guardadas |
 | `POST /chats/:id/send` | envia um texto; responde com o id da mensagem |
 | `GET /events` | SSE com as mensagens novas e as mudanças de estado |
 
-O serviço nunca envia nada sozinho, não baixa mídia e não manda recibo de leitura. Logs não levam texto de
+O serviço nunca envia nada sozinho, não baixa mídia sozinho (só quando o app pede, no clique da pessoa) e não
+manda recibo de leitura. Mensagens gravadas antes do contrato 37 não têm as chaves do download e não baixam. Logs não levam texto de
 mensagem.
 
 ## Desenvolvimento

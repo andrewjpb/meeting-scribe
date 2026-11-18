@@ -10,6 +10,10 @@
 // `send-guard.ts`, que só o registro do IPC tem. Rascunho, leitura pelo "Perguntar" e o material do resumo só
 // leem. A correção ao enviar (contrato 35) roda dentro do envio, com a prova já gasta: só troca o texto. Logs nunca
 // levam texto de mensagem.
+//
+// Contrato 37: a mídia de uma mensagem e a transcrição de um áudio, só quando a pessoa clica. Os bytes não ficam no
+// main (o serviço guarda no disco dele; o renderer, o blob da sessão); a transcrição manda o áudio só à AssemblyAI e
+// fica em `whatsapp/transcripts.json`, que sai no "Remover" e no "Sair da conta".
 import { randomBytes, randomUUID } from 'node:crypto'
 import { existsSync } from 'node:fs'
 import { chmod, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
@@ -18,22 +22,26 @@ import { z } from 'zod'
 import type { OneShotResult } from '../claude-cli/summary'
 import type { SafeStorageLike } from '../secrets'
 import { createVault, type Vault } from '../accounts/vault'
+import { FileTranscriptError } from '../assemblyai/transcript'
 import type { MeetingSummary } from '../../shared/meeting-summary'
 import type { Meeting } from '../../shared/meetings'
 import {
   WHATSAPP_CHAT_ID_PATTERN,
   WHATSAPP_DRAFT_INSTRUCTION_MAX,
+  WHATSAPP_MESSAGE_ID_PATTERN,
   WHATSAPP_SCOPE_CHATS_MAX,
   WHATSAPP_SEND_TEXT_MAX,
   type WhatsAppChat,
   type WhatsAppDraftResult,
   type WhatsAppError,
+  type WhatsAppMediaResult,
   type WhatsAppMeetingLink,
   type WhatsAppMessage,
   type WhatsAppPairing,
   type WhatsAppSearchHit,
   type WhatsAppSendResult,
   type WhatsAppStatus,
+  type WhatsAppTranscribeResult,
 } from '../../shared/whatsapp'
 import { createBridgeClient, probeInstance, WhatsAppServiceError, type BridgeClient, type WhatsAppHealth } from './client'
 import { dayLines, exportChats, exportRecentWith, recentMessages, type ExportCache } from './export'
@@ -41,6 +49,7 @@ import { draftInput } from './draft'
 import { copyBridge, installBridge, isInstalled, removeBridge, WHATSAPP_PATHS, type Exec, type PackageIndex } from './install'
 import { killBridgePid, startBridge, type BridgeBackend, type BridgeProcess, type SpawnBridge } from './process'
 import { createSendGuard, type SendGuard } from './send-guard'
+import { clipTranscript, createTranscriptsCache } from './transcripts'
 
 /** Aceitação da tela de risco vale por 10 min e para um pareamento (ou uma instalação). */
 export const RISK_ACCEPT_TTL_MS = 10 * 60_000
@@ -51,6 +60,8 @@ const meetingIdSchema = z.string().min(1).max(200)
 const messagesSchema = z.object({ chatId: chatIdSchema, before: z.number().int().positive().optional(), beforeId: z.string().min(1).max(200).optional() }).strict()
 const searchSchema = z.object({ term: z.string().trim().min(2).max(100) }).strict()
 const photoSchema = z.object({ chatId: chatIdSchema }).strict()
+const mediaSchema = z.object({ chatId: chatIdSchema, messageId: z.string().regex(WHATSAPP_MESSAGE_ID_PATTERN) }).strict()
+const transcribeSchema = mediaSchema.extend({ peek: z.boolean().optional() }).strict()
 const sendSchema = z.object({ chatId: chatIdSchema, text: z.string().max(WHATSAPP_SEND_TEXT_MAX).refine((value) => value.trim() !== ''), clickToken: z.string().max(100) }).strict()
 const draftSchema = z.object({ chatId: chatIdSchema, instruction: z.string().trim().min(1).max(WHATSAPP_DRAFT_INSTRUCTION_MAX), meetingId: meetingIdSchema.nullable() }).strict()
 const riskSchema = z.object({ purpose: z.enum(['install', 'pair']) }).strict()
@@ -90,6 +101,11 @@ export interface WhatsAppServiceDeps {
    * Só recebe e devolve texto; nunca rejeita. Sem ela, sai o texto digitado.
    */
   correct?: (text: string) => Promise<string>
+  /**
+   * Contrato 37: o texto de um áudio pela AssemblyAI (upload e consulta, até 120 s). Lança `FileTranscriptError`. Sem
+   * ela, "Transcrever" falha.
+   */
+  transcribe?: (bytes: Uint8Array) => Promise<string>
   /** Reunião escolhida como contexto do rascunho; e a data de início, para o material do dia. */
   meeting: (meetingId: string) => Promise<{ meeting: Meeting; summary: MeetingSummary | null } | null>
   onStatus: (status: WhatsAppStatus) => void
@@ -122,6 +138,16 @@ export interface WhatsAppService {
    * da mesma conversa ao mesmo tempo viram um só.
    */
   photo(request: unknown): Promise<string | null>
+  /**
+   * Contrato 37: os bytes da imagem, do vídeo ou do áudio de uma mensagem, só no clique. Pedidos iguais ao mesmo tempo
+   * viram um só; nada fica guardado no main.
+   */
+  media(request: unknown): Promise<WhatsAppMediaResult>
+  /**
+   * Contrato 37: o texto de um áudio. Já transcrito: do `transcripts.json`, sem baixar nem enviar nada; com `peek`, só
+   * isso. Senão baixa, manda à AssemblyAI e guarda.
+   */
+  transcribe(request: unknown): Promise<WhatsAppTranscribeResult>
   /** Contrato 32 (Detalhes): a conversa da lista, com a última mensagem. Só leitura. */
   findChat(chatId: string): Promise<WhatsAppChat | null>
   /** Contrato 32 (Detalhes): as últimas `max` mensagens da conversa. Só leitura; nunca zera as não lidas. */
@@ -160,6 +186,22 @@ const PHOTO_MS = 6 * 3600_000
 /** Sem foto ou falha. */
 const PHOTO_FAILED_MS = 10 * 60_000
 
+/** Contrato 37: o erro do serviço na resposta da mídia. */
+function mediaError(failure: unknown): 'too-big' | 'gone' | 'unavailable' {
+  if (failure instanceof WhatsAppServiceError && failure.status === 413) return 'too-big'
+  if (failure instanceof WhatsAppServiceError && failure.status === 410) return 'gone'
+  return 'unavailable'
+}
+
+/** Contrato 37: o erro da AssemblyAI na resposta de "Transcrever". */
+function transcribeError(failure: unknown): 'no-key' | 'key' | 'timeout' | 'failed' {
+  if (!(failure instanceof FileTranscriptError)) return 'failed'
+  if (failure.kind === 'no-key') return 'no-key'
+  if (failure.kind === 'key-rejected') return 'key'
+  if (failure.kind === 'timeout') return 'timeout'
+  return 'failed'
+}
+
 async function writeAtomic(file: string, content: string): Promise<void> {
   const temp = `${file}.tmp-${process.pid}-${randomUUID()}`
   await writeFile(temp, content, { encoding: 'utf8', mode: 0o600 })
@@ -195,6 +237,12 @@ export function createWhatsAppService(deps: WhatsAppServiceDeps): WhatsAppServic
   /** Contrato 32: fotos de perfil (até quando valem) e os pedidos em curso. */
   const photos = new Map<string, { until: number; photo: string | null }>()
   const photoRequests = new Map<string, Promise<string | null>>()
+  /** Contrato 37: downloads e transcrições em curso, por mensagem (`<conversa>\n<id>`). */
+  const mediaRequests = new Map<string, Promise<WhatsAppMediaResult>>()
+  const transcribeRequests = new Map<string, Promise<WhatsAppTranscribeResult>>()
+  const transcripts = createTranscriptsCache(join(deps.root, WHATSAPP_PATHS.transcripts), now)
+  /** Sobe a cada "Sair da conta" e "Remover": a transcrição que terminar depois não grava nada. */
+  let generation = 0
 
   const root = (name: string): string => join(deps.root, name)
 
@@ -390,6 +438,38 @@ export function createWhatsAppService(deps: WhatsAppServiceDeps): WhatsAppServic
     return status()
   }
 
+  function download(chatId: string, messageId: string): Promise<WhatsAppMediaResult> {
+    if (!client) return Promise.resolve({ ok: false, error: 'unavailable' })
+    const key = `${chatId}\n${messageId}`
+    const running = mediaRequests.get(key)
+    if (running) return running
+    const task = client.media(chatId, messageId).then(
+      ({ mime, bytes }): WhatsAppMediaResult => ({ ok: true, mime, bytes }),
+      (failure): WhatsAppMediaResult => ({ ok: false, error: mediaError(failure) }),
+    )
+    const done = task.finally(() => mediaRequests.delete(key))
+    mediaRequests.set(key, done)
+    return done
+  }
+
+  async function transcribeNow(chatId: string, messageId: string): Promise<WhatsAppTranscribeResult> {
+    if (!deps.transcribe) return { ok: false, error: 'failed' }
+    const started = generation
+    const media = await download(chatId, messageId)
+    if (!media.ok) return media
+    if (!media.mime.startsWith('audio/')) return { ok: false, error: 'unavailable' }
+    let text: string
+    try {
+      text = await deps.transcribe(media.bytes)
+    } catch (failure) {
+      deps.log?.(`[whatsapp] transcrição falhou: ${failure instanceof FileTranscriptError ? failure.kind : 'erro'}`)
+      return { ok: false, error: transcribeError(failure) }
+    }
+    deps.log?.('[whatsapp] áudio transcrito pela AssemblyAI')
+    if (started !== generation) return { ok: true, text: clipTranscript(text) }
+    return { ok: true, text: await transcripts.set(chatId, messageId, text).catch(() => clipTranscript(text)) }
+  }
+
   const requireClient = (): BridgeClient => {
     if (!client) throw new WhatsAppServiceError(0, 'stopped')
     return client
@@ -494,8 +574,12 @@ export function createWhatsAppService(deps: WhatsAppServiceDeps): WhatsAppServic
       return run('logging-out', async () => {
         const current = requireClient()
         await current.logout()
-        // Contrato 32: o cache dos Detalhes e as fotos são das mensagens apagadas: saem junto.
+        // Contrato 32: o cache dos Detalhes e as fotos são das mensagens apagadas: saem junto. Contrato 37: e as
+        // transcrições dos áudios.
+        generation++
         await rm(root(WHATSAPP_PATHS.insights), { force: true })
+        await rm(root(WHATSAPP_PATHS.transcripts), { force: true })
+        transcripts.forget()
         photos.clear()
         // Sessão apagada: o serviço sobe de novo, pronto para um pareamento novo.
         await stopNow(false)
@@ -505,9 +589,11 @@ export function createWhatsAppService(deps: WhatsAppServiceDeps): WhatsAppServic
 
     remove() {
       return run('removing', async () => {
+        generation++
         await stopNow(true)
         vault.remove()
         await removeBridge(deps.root)
+        transcripts.forget()
         pendingRisk.install = null
         pendingRisk.pair = null
         chatNames = new Map()
@@ -558,6 +644,27 @@ export function createWhatsAppService(deps: WhatsAppServiceDeps): WhatsAppServic
       )
       const done = task.finally(() => photoRequests.delete(chatId))
       photoRequests.set(chatId, done)
+      return done
+    },
+
+    media(request) {
+      const parsed = mediaSchema.safeParse(request)
+      if (!parsed.success) return Promise.resolve({ ok: false, error: 'unavailable' })
+      return download(parsed.data.chatId, parsed.data.messageId)
+    },
+
+    async transcribe(request) {
+      const parsed = transcribeSchema.safeParse(request)
+      if (!parsed.success) return { ok: false, error: 'unavailable' }
+      const { chatId, messageId, peek } = parsed.data
+      const saved = await transcripts.get(chatId, messageId)
+      if (saved !== null) return { ok: true, text: saved }
+      if (peek) return { ok: false, error: 'not-cached' }
+      const key = `${chatId}\n${messageId}`
+      const running = transcribeRequests.get(key)
+      if (running) return running
+      const done = transcribeNow(chatId, messageId).finally(() => transcribeRequests.delete(key))
+      transcribeRequests.set(key, done)
       return done
     },
 

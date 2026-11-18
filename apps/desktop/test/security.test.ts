@@ -129,4 +129,14 @@ describe('buildCsp', () => {
     expect(csp).toContain('ws://localhost:5173')
     expect(csp).not.toContain('unsafe-eval')
   })
+
+  it('contrato 37: blob só para imagem e mídia (áudio e vídeo do WhatsApp), em produção e em desenvolvimento', () => {
+    for (const csp of [buildCsp('production'), buildCsp('development', 'http://localhost:5173')]) {
+      const directives = csp.split('; ')
+      expect(directives).toContain("img-src 'self' data: blob:")
+      expect(directives).toContain("media-src 'self' blob:")
+      // Em nenhum outro lugar: script, worker, conexão e o padrão continuam sem blob.
+      expect(directives.filter((directive) => directive.includes('blob:'))).toHaveLength(2)
+    }
+  })
 })

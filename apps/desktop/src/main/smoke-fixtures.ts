@@ -33,6 +33,8 @@ export const SMOKE_OFFLINE_KEY = 'smoke-chave-sem-rede-7c1e'
  * Modelos que o gateway falso responde como não liberado (o 400 real; a conta de teste não tem o
  * gpt-oss-20b liberado, conferido em 14/11/2026) e por falha de rede.
  */
+/** Contrato 37: o texto que a transcrição falsa do áudio do WhatsApp devolve. */
+export const SMOKE_AUDIO_TRANSCRIPT = 'Oi, aqui é o Bruno. O contrato revisado já está no seu e-mail.'
 export const SMOKE_NOT_ALLOWED_MODEL = 'gpt-oss-20b'
 export const SMOKE_OFFLINE_MODEL = 'deepseek-v4.1-flash'
 /** Cadastro OAuth inventado do Google falso (contrato 11): o smoke cola os dois em Configurações › Contas. */
@@ -139,6 +141,8 @@ export interface SmokeFixtures {
   /** Textos que o app "copiou": o clipboard do Mac nunca é tocado no smoke. */
   copiedTexts: string[]
   calls: SmokeCall[]
+  /** Contrato 37: os uploads de áudio à AssemblyAI falsa (tamanho e se é um WAV); nada sai da máquina. */
+  audioUploads: { bytes: number; wav: boolean }[]
   /** Liga a falha de rede no catálogo. */
   failCatalog: boolean
   /** O `claude` falso some: `--version` falha e a busca dá "não encontrado". */
@@ -312,6 +316,7 @@ export function createSmokeFixtures(currentVersion: string, userDataDir: string)
     openedUrls: [],
     copiedTexts: [],
     calls: [],
+    audioUploads: [],
     failCatalog: false,
     claudeMissing: false,
     claudeSpawns: [],
@@ -336,7 +341,7 @@ export function createSmokeFixtures(currentVersion: string, userDataDir: string)
       const path = new URL(url).pathname
       const auth = init.headers['authorization'] ?? ''
       let model: string | null = null
-      if (init.body) {
+      if (typeof init.body === 'string' && path === '/v1/chat/completions') {
         const parsed = JSON.parse(init.body) as { model?: unknown }
         model = typeof parsed.model === 'string' ? parsed.model : null
       }
@@ -346,6 +351,15 @@ export function createSmokeFixtures(currentVersion: string, userDataDir: string)
       if (init.method === 'GET' && path === '/v1/models') return fixtures.failCatalog ? offline() : Promise.resolve(reply(200, CATALOG))
       // Token temporário de streaming: token fictício, nenhuma conexão é aberta no smoke.
       if (init.method === 'GET' && path === '/v3/token') return Promise.resolve(reply(200, { token: 'smoke-token-ficticio-0000', expires_in_seconds: 60 }))
+      // Contrato 37: a transcrição do áudio do WhatsApp (upload, pedido e consulta), com respostas fictícias.
+      if (path.startsWith('/v2/') && auth !== SMOKE_FAKE_KEY) return Promise.resolve(reply(401, { error: 'Authentication error, API token missing/invalid' }))
+      if (init.method === 'POST' && path === '/v2/upload') {
+        const body = init.body instanceof Uint8Array ? init.body : new Uint8Array()
+        fixtures.audioUploads.push({ bytes: body.byteLength, wav: Buffer.from(body.subarray(0, 4)).toString('latin1') === 'RIFF' })
+        return Promise.resolve(reply(200, { upload_url: 'https://cdn.assemblyai.com/upload/smoke-audio-ficticio' }))
+      }
+      if (init.method === 'POST' && path === '/v2/transcript') return Promise.resolve(reply(200, { id: 'smoke-transcricao-1', status: 'queued' }))
+      if (init.method === 'GET' && path === '/v2/transcript/smoke-transcricao-1') return Promise.resolve(reply(200, { id: 'smoke-transcricao-1', status: 'completed', text: SMOKE_AUDIO_TRANSCRIPT }))
       if (init.method !== 'POST' || path !== '/v1/chat/completions') return Promise.resolve(reply(404, { message: 'not found' }))
       if (auth === SMOKE_OFFLINE_KEY) return offline()
       if (!auth || auth === SMOKE_REFUSED_KEY) return Promise.resolve(reply(401, AUTH_ERROR))
