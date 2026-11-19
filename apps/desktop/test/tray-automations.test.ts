@@ -7,7 +7,13 @@ import { INVOKE_CHANNELS, WHEN_LOCKED } from '../src/shared/ipc'
 const handlers = (calls: string[]): TrayHandlers => ({
   open: () => calls.push('open'),
   newRecording: () => calls.push('newRecording'),
+  openRecording: () => calls.push('openRecording'),
   stopRecording: () => calls.push('stopRecording'),
+  recordEvent: (key) => calls.push(`recordEvent:${key}`),
+  joinEvent: (key) => calls.push(`joinEvent:${key}`),
+  openMeeting: (id) => calls.push(`openMeeting:${id}`),
+  toggleMeetingPrompt: () => calls.push('toggleMeetingPrompt'),
+  openPlugins: () => calls.push('openPlugins'),
   lock: () => calls.push('lock'),
   automations: () => calls.push('automations'),
   togglePause: () => calls.push('togglePause'),
@@ -26,24 +32,35 @@ const state = (patch: Partial<TrayState> = {}): TrayState => ({
     { name: 'Outra', when: 'qua 08:00' },
     { name: 'Quarta', when: 'qui 08:00' },
   ],
+  meetings: [],
+  recent: [],
+  meetingPrompt: true,
+  plugins: [],
   ...patch,
 })
 
 const labels = (template: ReturnType<typeof trayMenuTemplate>): string[] => template.map((item) => (item.type === 'separator' ? '—' : (item.label ?? '')))
+const submenu = (template: ReturnType<typeof trayMenuTemplate>, label: string): ReturnType<typeof trayMenuTemplate> => {
+  const found = template.find((item) => item.label === label)?.submenu
+  return Array.isArray(found) ? found : []
+}
 
 describe('ícone na barra de menus (contrato 23, CA8 e CA9)', () => {
-  it('desbloqueado: abrir, gravar, bloquear, Automações, as próximas 3 tarefas, pausar e sair', () => {
+  it('desbloqueado: abrir, gravar, bloquear, o submenu Automações com as próximas 3 tarefas e pausar, e sair (contrato 50)', () => {
     const calls: string[] = []
     const template = trayMenuTemplate(state(), handlers(calls))
-    expect(labels(template)).toEqual(['Abrir LAP Reuniões', 'Nova gravação', 'Bloquear', '—', 'Automações', 'Resumo da semana · sex 17:00', 'Minhas tarefas · ter 08:00', 'Outra · qua 08:00', 'Pausar todas as tarefas', '—', 'Sair'])
-    for (const item of template) (item.click as (() => void) | undefined)?.()
-    expect(calls).toEqual(['open', 'newRecording', 'lock', 'automations', 'togglePause', 'quit'])
+    expect(labels(template)).toEqual(['Abrir LAP Reuniões', 'Nova gravação', '—', 'Nenhuma reunião hoje', '—', 'Recentes', '—', 'Avisar quando uma reunião começar', 'Automações', 'Bloquear', '—', 'Sair'])
+    const automations = submenu(template, 'Automações')
+    expect(labels(automations)).toEqual(['Abrir Automações', '—', 'Resumo da semana · sex 17:00', 'Minhas tarefas · ter 08:00', 'Outra · qua 08:00', '—', 'Pausar todas as tarefas'])
+    for (const item of [...template, ...automations]) (item.click as (() => void) | undefined)?.()
+    expect(calls).toEqual(['open', 'newRecording', 'toggleMeetingPrompt', 'lock', 'quit', 'automations', 'togglePause'])
   })
 
-  it('gravando: "Gravando · 12:34" com "Encerrar"; pausado: "Retomar"', () => {
-    const template = trayMenuTemplate(state({ recording: { elapsedMs: 754_000 }, paused: true, next: [] }), handlers([]))
-    expect(labels(template)).toEqual(['Abrir LAP Reuniões', 'Nova gravação', 'Gravando · 12:34', 'Encerrar', 'Bloquear', '—', 'Automações', 'Tarefas pausadas', 'Retomar', '—', 'Sair'])
-    expect(template.find((item) => item.label === 'Nova gravação')?.enabled).toBe(false)
+  it('gravando: "Gravando · 12:34" com "Abrir gravação" e "Encerrar" no lugar de "Nova gravação"; pausado: "Retomar"', () => {
+    const template = trayMenuTemplate(state({ recording: { elapsedMs: 754_000, title: null }, paused: true, next: [] }), handlers([]))
+    expect(labels(template).slice(0, 5)).toEqual(['Abrir LAP Reuniões', 'Gravando · 12:34', 'Abrir gravação', 'Encerrar', '—'])
+    expect(labels(template)).not.toContain('Nova gravação')
+    expect(labels(submenu(template, 'Automações'))).toEqual(['Abrir Automações', '—', 'Tarefas pausadas', '—', 'Retomar'])
     expect(elapsedLabel(3_723_000)).toBe('1:02:03')
   })
 
@@ -53,16 +70,15 @@ describe('ícone na barra de menus (contrato 23, CA8 e CA9)', () => {
     expect(JSON.stringify(template)).not.toContain('Resumo da semana')
   })
 
-  it('o ícone ganha o ponto com uma tarefa rodando; o clique abre o menu de agora', () => {
+  it('o ícone ganha o ponto com uma tarefa rodando; o menu fica preso ao ícone (o clique abre)', () => {
     let running = false
     const images: unknown[] = []
     const menus: unknown[] = []
-    const listeners: Record<string, () => void> = {}
     const tray: TrayLike = {
       setImage: (image) => images.push(image),
       setToolTip: () => undefined,
-      on: (event, listener) => (listeners[event] = listener),
-      popUpContextMenu: (menu) => menus.push(menu),
+      setContextMenu: (menu) => menus.push(menu),
+      setTitle: () => undefined,
       destroy: () => undefined,
     }
     const controller = createTrayController({
@@ -82,8 +98,9 @@ describe('ícone na barra de menus (contrato 23, CA8 e CA9)', () => {
     running = false
     controller.refresh()
     expect(images).toEqual(['idle', 'running', 'idle'])
-    listeners['click']?.()
-    expect(menus).toEqual([expect.arrayContaining(['Nenhuma tarefa agendada'])])
+    // A primeira montagem é na hora (sem `prepare`, sem espera).
+    expect(menus).toEqual([expect.arrayContaining(['Automações'])])
+    controller.dispose()
   })
 
   it('fechar a última janela: na barra de menus esconde o Dock; "Sair do app" sai; reabrir mostra o Dock', async () => {
@@ -115,7 +132,7 @@ describe('ícone na barra de menus (contrato 23, CA8 e CA9)', () => {
 
   it('visible() lê o tamanho do ícone na barra', () => {
     let bounds = { width: 0, height: 0 }
-    const tray: TrayLike = { setImage: () => undefined, setToolTip: () => undefined, on: () => undefined, popUpContextMenu: () => undefined, destroy: () => undefined, getBounds: () => bounds }
+    const tray: TrayLike = { setImage: () => undefined, setToolTip: () => undefined, setContextMenu: () => undefined, setTitle: () => undefined, destroy: () => undefined, getBounds: () => bounds }
     const controller = createTrayController({ create: () => tray, image: (icon) => icon, buildMenu: (t) => t, state: () => state(), running: () => false, handlers: handlers([]) })
     expect(controller.visible()).toBe(false)
     bounds = { width: 34, height: 24 }

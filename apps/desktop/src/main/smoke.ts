@@ -74,7 +74,7 @@ import { spawn as spawnChild } from 'node:child_process'
 import { request as httpRequest } from 'node:http'
 import { tmpdir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
-import { app, BrowserWindow, ipcMain, Menu, nativeTheme, session, type MenuItem, type WebContents } from 'electron'
+import { app, BrowserWindow, ipcMain, Menu, nativeTheme, session, type MenuItem, type MenuItemConstructorOptions, type WebContents } from 'electron'
 import { DRIVE_ROOT_FOLDER_NAME } from '../shared/accounts'
 import { WHATSAPP_EXPORT_PREFIX, WHATSAPP_FIXED_WARNING, WHATSAPP_PAIR_HINT, WHATSAPP_RISK_CHECKBOX, WHATSAPP_RISK_TEXT, WHATSAPP_RISK_TITLE } from '../shared/whatsapp'
 import { INSIGHTS_MOOD_NOTE } from '../shared/whatsapp-insights'
@@ -6851,10 +6851,12 @@ async function automationsIdle(ctx: SmokeContext): Promise<void> {
   await wait(100)
 }
 
-const trayLabels = (ctx: SmokeContext): string[] => (ctx.tray()?.template() ?? []).map((item) => (item.type === 'separator' ? '—' : String(item.label ?? '')))
+/** Contrato 50: os itens dos submenus (Automações, Recentes, cada reunião) entram logo depois do item pai. */
+const trayItems = (items: readonly MenuItemConstructorOptions[]): MenuItemConstructorOptions[] => items.flatMap((item) => [item, ...(Array.isArray(item.submenu) ? trayItems(item.submenu) : [])])
+const trayLabels = (ctx: SmokeContext): string[] => trayItems(ctx.tray()?.template() ?? []).map((item) => (item.type === 'separator' ? '—' : String(item.label ?? '')))
 
 function trayClick(ctx: SmokeContext, id: string): boolean {
-  const item = ctx.tray()?.template().find((entry) => entry.id === id)
+  const item = trayItems(ctx.tray()?.template() ?? []).find((entry) => entry.id === id)
   if (!item?.click) return false
   ;(item.click as () => void)()
   return true
@@ -7038,11 +7040,29 @@ async function automationsChecks(ctx: SmokeContext, watch: (win: BrowserWindow) 
   await wait(300)
   const second = await invoke<{ ok: boolean; error?: string }>(`window.__scribeApi.invoke('scribe:tasks-run-now', { id: ${JSON.stringify(slowId)} })`)
   const runningIcon = ctx.tray()?.icon()
+  // Contrato 50: o menu montado com o que é assíncrono (configurações, reuniões gravadas) lido agora.
+  await ctx.tray()?.rebuild()
+  const top = ctx.tray()?.template() ?? []
+  const all = trayItems(top)
+  const automationsMenu = top.find((item) => item.id === 'tray-automations-menu')
+  const promptItem = top.find((item) => item.id === 'tray-meeting-prompt')
+  const structure =
+    top.some((item) => item.id === 'tray-recent' && Array.isArray(item.submenu)) &&
+    Array.isArray(automationsMenu?.submenu) &&
+    automationsMenu.submenu.some((item) => item.id === 'tray-pause') &&
+    automationsMenu.submenu.some((item) => item.id === 'tray-automations') &&
+    promptItem?.type === 'checkbox' &&
+    promptItem.checked === (readSettings(ctx.userDataDir).meetingPrompt ?? DEFAULT_SETTINGS.meetingPrompt) &&
+    all.some((item) => item.id === 'tray-event-none' || item.id === 'tray-event-0')
   const menu = trayLabels(ctx)
+  // No relatório, sem os títulos da agenda e das reuniões gravadas (o relatório não leva dado da agenda).
+  const reportLabels = (items: MenuItemConstructorOptions[]): string[] => items.filter((item) => !/^tray-(event|recent)-/.test(item.id ?? '')).map((item) => (item.type === 'separator' ? '—' : String(item.label ?? '')))
+  const shownMenu = reportLabels(all)
   const nextLine = menu.find((label) => label.startsWith('Resumo diário do smoke · '))
   const pauseClicked = trayClick(ctx, 'tray-pause')
   await wait(200)
   const pausedMenu = trayLabels(ctx)
+  const shownPaused = reportLabels(trayItems(ctx.tray()?.template() ?? []))
   trayClick(ctx, 'tray-pause')
   await wait(200)
   await automationsIdle(ctx)
@@ -7054,13 +7074,14 @@ async function automationsChecks(ctx: SmokeContext, watch: (win: BrowserWindow) 
   checks['tray'] = {
     ok:
       runningIcon === 'running' &&
+      structure &&
       (menu[0] ?? '').startsWith('Abrir ') &&
       ['Nova gravação', 'Bloquear', 'Automações', 'Pausar todas as tarefas', 'Sair'].every((label) => menu.includes(label)) &&
       nextLine !== undefined &&
       pauseClicked &&
       pausedMenu.includes('Retomar') &&
       trayLabels(ctx).includes('Pausar todas as tarefas'),
-    detail: `ícone rodando=${runningIcon}; menu ${JSON.stringify(menu)}; próxima "${nextLine ?? ''}"; pausado ${JSON.stringify(pausedMenu)}`,
+    detail: `ícone rodando=${runningIcon}; estrutura do contrato 50=${structure} (ids ${JSON.stringify(all.map((item) => item.id).filter(Boolean))}); menu ${JSON.stringify(shownMenu)}; próxima "${nextLine ?? ''}"; pausado ${JSON.stringify(shownPaused)}`,
   }
 
   // 3 falhas seguidas: a tarefa pausa sozinha e avisa.

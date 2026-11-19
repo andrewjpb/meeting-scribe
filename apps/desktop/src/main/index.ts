@@ -2,7 +2,7 @@
 import { readFileSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { app, BrowserWindow, clipboard, dialog, Menu, nativeImage, net, Notification, powerMonitor, safeStorage, screen, session, shell, systemPreferences, Tray, type NativeImage, type OpenDialogOptions, type SaveDialogOptions } from 'electron'
+import { app, BrowserWindow, clipboard, dialog, Menu, nativeImage, net, Notification, powerMonitor, safeStorage, screen, session, shell, systemPreferences, Tray, type MenuItemConstructorOptions, type NativeImage, type OpenDialogOptions, type SaveDialogOptions } from 'electron'
 import { DRIVE_FOLDER_URL_PREFIX } from '../shared/accounts'
 import { ASSEMBLYAI_DASHBOARD_URL } from '../shared/assemblyai'
 import { formatRunShort, type AutomationRun } from '../shared/automations'
@@ -12,7 +12,7 @@ import { lockedWindowTitle, type LockStatus } from '../shared/lock'
 import type { NavegadorState } from '../shared/navegador'
 import type { AppPluginId, PluginSaveResult } from '../shared/plugins'
 import { privacyPaneUrl } from '../shared/privacy'
-import type { RouteId } from '../shared/routes'
+import type { MainEvents } from '../shared/ipc'
 import type { AgentProfileId, AppSettings } from '../shared/settings-defaults'
 import type { TranscriptDocument } from '../shared/transcription'
 import { WHATSAPP_CHAT_ID_PATTERN, whatsappStateLabel, type WhatsAppMessage } from '../shared/whatsapp'
@@ -84,7 +84,7 @@ import { applyOutput } from './schedules/outputs'
 import { createAgentRunner } from './schedules/runner'
 import { createAutomationsService, type AutomationNotice, type AutomationsService } from './schedules/service'
 import { createFileRunsStore, createFileSchedulesStore } from './schedules/store'
-import { createTrayController, createWindowLifecycle, type TrayController, type TrayIcon, type TrayLike } from './tray/menu'
+import { createTrayController, createWindowLifecycle, todayMeetings, TRAY_LIST_MAX, trayJoinUrl, type TrayController, type TrayIcon, type TrayLike, type TrayRecent } from './tray/menu'
 import { createUpdateService, type UpdateService } from './updates/service'
 import { netDownload, netDownloadTarball, netFetch } from './updates/transport'
 import { createMainWindow } from './window'
@@ -145,6 +145,8 @@ const recordingSessions = createRecordingSessions(() => {
   meetingPromptController?.recordingEnded()
   // Contrato 23: a gravação terminou de salvar (ou a janela que gravava sumiu).
   onRecordingFinished?.()
+  // Contrato 50: o tempo some da barra de menus e o menu volta a "Nova gravação".
+  trayController?.refresh()
   if (!quitAfterRecording) return
   quitAfterRecording = false
   app.quit()
@@ -299,13 +301,13 @@ function showMainWindow(): BrowserWindow {
 }
 
 /** Manda ao renderer depois que a página carregou (janela recém-aberta). */
-function sendWhenLoaded<C extends 'scribe:navigate' | 'scribe:open-run' | 'scribe:open-whatsapp'>(
+function sendWhenLoaded<C extends 'scribe:navigate' | 'scribe:open-run' | 'scribe:open-whatsapp' | 'scribe:open-meeting' | 'scribe:open-settings'>(
   win: BrowserWindow,
   channel: C,
-  payload: C extends 'scribe:navigate' ? RouteId : C extends 'scribe:open-run' ? { runId: string | null } : { chatId: string },
+  payload: MainEvents[C],
 ): void {
   const contents = win.webContents
-  const send = (): void => sendTo(contents, channel, payload as never)
+  const send = (): void => sendTo(contents, channel, payload)
   if (contents.isLoading()) contents.once('did-finish-load', send)
   else send()
 }
@@ -531,47 +533,112 @@ function trayImage(icon: TrayIcon): NativeImage {
   return image
 }
 
-/** Ícone da barra de menus. No smoke, um substituto que registra as imagens; o `Tray` de verdade nunca é criado. */
-function installTray(automations: AutomationsService): void {
+/**
+ * O que o menu do ícone lê de forma assíncrona (contrato 50), relido antes de cada montagem: as 3 reuniões gravadas
+ * mais recentes e as configurações que ele mostra.
+ */
+let trayRecent: TrayRecent[] = []
+let traySettings: Pick<AppSettings, 'meetingPrompt' | 'meetSpeakers' | 'navegadorPlugin'> | null = null
+/** Último "Meet conectado" visto: os eventos de fala chegam a todo instante e só a conexão muda o menu. */
+let trayMeetConnected = false
+
+/** Ícone da barra de menus. No smoke, um substituto que registra os itens; o `Tray` de verdade nunca é criado. */
+function installTray(services: AppServices): void {
+  const { automations, calendar, meetings, meet, meetingPrompt, settings } = services
   const fixtures = smokeFixtures
   const smokeTray = (image: unknown): TrayLike => {
     fixtures?.automations.trayImages.push(String(image))
     return {
       setImage: (next) => void fixtures?.automations.trayImages.push(String(next)),
       setToolTip: () => undefined,
-      on: () => undefined,
-      popUpContextMenu: () => undefined,
+      setContextMenu: () => undefined,
+      setTitle: (title) => void fixtures?.automations.trayTitles.push(title),
       destroy: () => undefined,
     }
   }
+  /** O item do menu montado: no Electron, pelo id; no smoke, o menu é o próprio template. */
+  const smokeItem = (items: MenuItemConstructorOptions[], id: string): MenuItemConstructorOptions | null => {
+    for (const item of items) {
+      if (item.id === id) return item
+      const found = Array.isArray(item.submenu) ? smokeItem(item.submenu, id) : null
+      if (found) return found
+    }
+    return null
+  }
   const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone
+  const locked = (): boolean => lockService?.isLocked() ?? false
   trayController = createTrayController({
     create: (image) => (fixtures ? smokeTray(image) : new Tray(image as NativeImage)),
     image: (icon) => (fixtures ? icon : trayImage(icon)),
     buildMenu: (template) => (fixtures ? template : Menu.buildFromTemplate(template)),
+    setLabel: (menu, id, label) => {
+      const item = fixtures ? smokeItem(menu as MenuItemConstructorOptions[], id) : (menu as Menu).getMenuItemById(id)
+      if (item) item.label = label
+    },
+    prepare: async () => {
+      traySettings = await settings.getSettings()
+      trayRecent = (await meetings.list()).slice(0, TRAY_LIST_MAX).map((meeting) => ({ id: meeting.id, title: meeting.title }))
+    },
     running: () => automations.snapshot().running.length > 0,
     state: () => {
       const status = automations.snapshot()
+      const isLocked = locked()
+      const startedAt = recordingSessions.active() !== null ? recordingStartedAt : null
+      const current = traySettings
       return {
         brandName,
-        locked: lockService?.isLocked() ?? false,
+        locked: isLocked,
         canLock: lastLockStatus?.canLock ?? false,
-        recording: recordingSessions.active() !== null && recordingStartedAt !== null ? { elapsedMs: Date.now() - recordingStartedAt } : null,
+        recording: startedAt !== null ? { elapsedMs: Date.now() - startedAt, title: isLocked ? null : (meetingPrompt.recordingTitle() ?? calendar.recordingCalendar()?.title ?? null) } : null,
         paused: status.paused,
         next: status.next.slice(0, 3).map((task) => ({ name: task.name, when: formatRunShort(Date.parse(task.at), timeZone) })),
+        // Bloqueado, nada da agenda nem das reuniões chega ao menu (o template também não mostra).
+        meetings: isLocked ? [] : todayMeetings(calendar.view().upcoming, Date.now()),
+        recent: isLocked ? [] : trayRecent,
+        meetingPrompt: current?.meetingPrompt ?? false,
+        plugins: [
+          ...(current?.meetSpeakers ? [{ name: 'Meet', connected: meet.status().connected }] : []),
+          ...(current?.navegadorPlugin ? [{ name: 'Navegador', connected: navegadorServer?.connected() ?? false }] : []),
+        ],
       }
     },
     handlers: {
       open: () => void showMainWindow(),
       newRecording: () => {
-        if (lockService?.isLocked()) return
+        if (locked()) return
         windowLifecycle?.reopened()
         startRecordingFromMenu().catch((error: unknown) => console.error('[barra de menus] nova gravação:', error))
       },
+      openRecording: () => {
+        if (locked()) return
+        sendWhenLoaded(showMainWindow(), 'scribe:navigate', 'gravacao')
+      },
       stopRecording: () => broadcast(appWindows(), 'scribe:recording-end', undefined),
+      // O mesmo caminho do "Gravar" da notificação da agenda (bloqueado ou já gravando, só mostra a janela).
+      recordEvent: (key) => recordFromCalendar(key),
+      joinEvent: (key) => {
+        if (locked()) return
+        const url = trayJoinUrl(calendar.joinUrl(key))
+        if (url) openExternal(url)
+      },
+      openMeeting: (id) => {
+        if (locked()) return
+        sendWhenLoaded(showMainWindow(), 'scribe:open-meeting', { meetingId: id })
+      },
+      toggleMeetingPrompt: () => {
+        if (locked()) return
+        void settings
+          .getSettings()
+          .then((current) => settings.updateSettings({ meetingPrompt: !current.meetingPrompt }))
+          .catch(() => undefined)
+      },
+      openPlugins: () => {
+        if (locked()) return
+        sendWhenLoaded(showMainWindow(), 'scribe:open-settings', { tab: 'plugins' })
+      },
       lock: () => lockApp('menu'),
       automations: () => {
-        if (lockService?.isLocked()) return
+        if (locked()) return
         sendWhenLoaded(showMainWindow(), 'scribe:navigate', 'automacoes')
       },
       togglePause: () => void automations.setPaused({ paused: !automations.snapshot().paused }).catch(() => undefined),
@@ -1292,6 +1359,8 @@ function createAppServices(userData: string): AppServices {
     notify: showCalendarNotice,
     // Bloqueado (contrato 22), nada da agenda vai às janelas; ao desbloquear, o estado de agora.
     onView: (view) => {
+      // Contrato 50: as reuniões de hoje no menu do ícone (que não mostra nada bloqueado).
+      trayController?.refresh()
       if (!lockService?.isLocked()) broadcast(appWindows(), 'scribe:calendar-state', view)
     },
     ...devLog,
@@ -1349,6 +1418,11 @@ function createAppServices(userData: string): AppServices {
     onChange: (state) => {
       broadcast(appWindows(), 'scribe:meet-changed', state)
       void meetingPrompt.meetChanged(state)
+      // Contrato 50: "Meet: conectado" no menu do ícone; só a conexão muda o menu.
+      if (state.connected !== trayMeetConnected) {
+        trayMeetConnected = state.connected
+        trayController?.refresh()
+      }
     },
     ...devLog,
   })
@@ -1358,7 +1432,11 @@ function createAppServices(userData: string): AppServices {
   const navegador = createNavegadorServer({
     // Smoke: portas fora da faixa da extensão, como no Meet.
     ...(smoke ? { ports: SMOKE_NAVEGADOR_PORTS } : {}),
-    onChange: () => broadcast(appWindows(), 'scribe:navegador-changed', navegadorState()),
+    onChange: () => {
+      broadcast(appWindows(), 'scribe:navegador-changed', navegadorState())
+      // Contrato 50: "Navegador: conectado" no menu do ícone.
+      trayController?.refresh()
+    },
     ...devLog,
   })
   navegadorServer = navegador
@@ -1530,11 +1608,14 @@ function registerIpc(services: AppServices): void {
     // Contrato 12 (CA9): a reunião da gravação em curso leva o evento da agenda, que o main decidiu ao começar.
     const meeting = await meetings.create(input, { calendar: recordingSessions.active() ? calendar.recordingCalendar() : null })
     touched(meeting.id)
+    // Contrato 50: "Recentes" no menu do ícone.
+    trayController?.refresh()
     return meeting
   })
   handle('scribe:meetings-rename', appOrigin, async (_event, { id, title }) => {
     const meeting = await meetings.rename(id, title)
     if (meeting) touched(meeting.id)
+    trayController?.refresh()
     return meeting
   })
   // Excluir a reunião apaga também a transcrição, o resumo e as anotações internos dela; os arquivos da pasta ficam.
@@ -1542,6 +1623,7 @@ function registerIpc(services: AppServices): void {
     const deleted = await meetingsService.deleteMeeting(id)
     // Contrato 24: a conversa do WhatsApp ligada a ela sai junto.
     if (deleted) await whatsapp.removeMeeting(id).catch(() => undefined)
+    trayController?.refresh()
     return deleted
   })
   handle('scribe:meetings-overview', appOrigin, () => meetingsIndex.overview())
@@ -1798,6 +1880,8 @@ function registerIpc(services: AppServices): void {
     calendar.recordingStarted()
     // Contrato 48: o aviso de reunião fecha e o título dele (se a gravação veio do aviso) fica para esta gravação.
     meetingPrompt.recordingStarted()
+    // Contrato 50: o tempo aparece ao lado do ícone e o menu ganha "Gravando".
+    trayController?.refresh()
     return token
   })
   handle('scribe:recording-session-close', appOrigin, (_event, request) => recordingSessions.close((request as { token?: unknown } | undefined)?.token))
@@ -1974,7 +2058,7 @@ void app.whenReady().then(async () => {
     },
   })
   applyLoginItem((await services.settings.getSettings()).openAtLogin)
-  installTray(services.automations)
+  installTray(services)
   applyLockStatus(lockAtLaunch)
   // Agendador (CA5): confere já (horários perdidos com o app fechado) e a cada 30 s.
   services.automations.start()

@@ -221,6 +221,8 @@ export interface SmokeAutomations {
   notifications: { title: string; body: string; runId: string | null }[]
   /** Cada troca da imagem do ícone da barra de menus (o `Tray` de verdade nunca é criado no smoke). */
   trayImages: string[]
+  /** Contrato 50: cada texto posto ao lado do ícone (o tempo da gravação; vazio, nenhum). */
+  trayTitles: string[]
   /** `app.dock.hide()` / `show()` pedidos ao fechar a última janela e ao reabrir (o Dock de verdade fica intacto). */
   dock: { hides: number; shows: number }
   /** `app.setLoginItemSettings` pedidos (nada entra nos itens de login do Mac). */
@@ -353,7 +355,7 @@ export function createSmokeFixtures(currentVersion: string, userDataDir: string)
     leaveChoice: 0,
     google: createFakeGoogle({ clientId: SMOKE_GOOGLE_CLIENT_ID, clientSecret: SMOKE_GOOGLE_CLIENT_SECRET, profile: { name: 'Andrea Teste', email: 'andrea.teste@example.com' } }),
     whatsapp: writeFakeIndex(join(userDataDir, 'whatsapp-indice-falso')),
-    automations: { skewMs: 0, notifications: [], trayImages: [], dock: { hides: 0, shows: 0 }, loginItems: [], quitRequests: 0 },
+    automations: { skewMs: 0, notifications: [], trayImages: [], trayTitles: [], dock: { hides: 0, shows: 0 }, loginItems: [], quitRequests: 0 },
     microsoft: createFakeMicrosoft({ clientId: SMOKE_MICROSOFT_CLIENT_ID, profile: { name: 'Bruno Teste', email: 'bruno.teste@example.com' } }),
     calendar: { notifications: [] },
     meetingPrompt: { windows: [] },

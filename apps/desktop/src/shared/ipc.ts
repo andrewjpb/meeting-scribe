@@ -23,7 +23,7 @@ import type { MeetingNote } from './meeting-notes'
 import type { SummaryStatus } from './meeting-summary'
 import type { Meeting, MeetingFolder, NewMeeting } from './meetings'
 import type { MeetingOverview, MeetingSearchResult } from './meetings-overview'
-import type { RouteId } from './routes'
+import type { RouteId, SettingsTab } from './routes'
 import type { AppSettings, SettingsPatch } from './settings-defaults'
 import type { TranscriptCopyResult, TranscriptDocument, TranslateTurnResult, TranscriptionTokenResult } from './transcription'
 import type { UpdateState } from './updates'
@@ -499,6 +499,10 @@ export interface MainEvents {
   'scribe:open-whatsapp': { chatId: string }
   /** "Encerrar" no menu do ícone da barra de menus: o renderer encerra a gravação em curso. */
   'scribe:recording-end': undefined
+  /** "Recentes" no menu do ícone da barra de menus (contrato 50): o detalhe da reunião. Ignorado com o app bloqueado. */
+  'scribe:open-meeting': { meetingId: string }
+  /** A linha dos plugins no menu do ícone (contrato 50): uma aba de Configurações. Ignorado com o app bloqueado. */
+  'scribe:open-settings': { tab: SettingsTab }
   /** Um agente acrescentou um post-it à reunião (contrato 23): o detalhe aberto relê as anotações. */
   'scribe:notes-changed': { meetingId: string }
   /**
@@ -738,6 +742,8 @@ const MAIN_EVENTS: Record<MainEvent, true> = {
   'scribe:open-run': true,
   'scribe:open-whatsapp': true,
   'scribe:recording-end': true,
+  'scribe:open-meeting': true,
+  'scribe:open-settings': true,
   'scribe:notes-changed': true,
   'scribe:meet-changed': true,
   'scribe:meeting-prompt-changed': true,
