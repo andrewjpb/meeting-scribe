@@ -1041,6 +1041,8 @@ function createAppServices(userData: string): AppServices {
       configFile: smokeMcp?.cliFile ?? join(app.getPath('home'), '.claude.json'),
       cwd: join(userData, CLAUDE_CWD_DIR, 'mcp'),
       ...(smokeMcp ? { extraEnv: smokeMcp.env } : {}),
+      // Contrato 58: as ferramentas dos conectores, do `claude` no modo de controle (no smoke, o falso).
+      spawn: smokeClaude?.spawnSummary ?? nodeSpawnSummary,
     }),
     locate: () => claude.locate(),
     desktopConfig: smokeMcp?.desktopFile ?? join(app.getPath('appData'), 'Claude', 'claude_desktop_config.json'),
@@ -1917,6 +1919,7 @@ function registerIpc(services: AppServices): void {
   handle('scribe:mcp-update', appOrigin, (_event, request) => mcpChanging(mcp.update(request)))
   handle('scribe:mcp-remove', appOrigin, (_event, request) => mcpChanging(mcp.remove(request)))
   handle('scribe:mcp-details', appOrigin, (_event, request) => mcp.details(request))
+  handle('scribe:mcp-connector-tools', appOrigin, (_event, request) => mcp.connectorTools(request))
   handle('scribe:mcp-import', appOrigin, (_event, request) => mcpChanging(mcp.importFound(request)))
   // Bloqueio (contrato 22): a senha só passa por aqui até o serviço, que confere com o hash.
   handle('scribe:lock-status', appOrigin, () => lock.status())

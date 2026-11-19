@@ -16,7 +16,7 @@ import type { MeetState } from './meet'
 import type { MeetingPromptAction, MeetingPromptState } from './meeting-prompt'
 import type { NavegadorState } from './navegador'
 import type { AppPluginId, PluginSaveResult } from './plugins'
-import type { McpChatServer, McpCliDetails, McpOverview, McpSaveResult, McpServerInput, McpTestResult, McpToolPolicy, McpUse } from './mcp'
+import type { ClaudeConnectorTools, McpChatServer, McpCliDetails, McpOverview, McpSaveResult, McpServerInput, McpTestResult, McpToolPolicy, McpUse } from './mcp'
 import type { AiNotesRunRequest, AiNotesRunResult } from './ai-notes'
 import type { AnalysisRunRequest, AnalysisRunResult, MeetingAnalysis } from './meeting-analysis'
 import type { MeetingNote } from './meeting-notes'
@@ -249,6 +249,8 @@ export interface InvokeChannels {
   'scribe:mcp-details': { request: { name: string }; response: McpCliDetails | null }
   /** "Importar" um servidor do Claude Desktop: para o Claude CLI ou só no app (sem os segredos). */
   'scribe:mcp-import': { request: { id: string; target: 'cli' | 'app' }; response: McpSaveResult }
+  /** Contrato 58: "Ver ferramentas" de um conector do claude.ai, do `mcpServerStatus` do `claude` (nada vai ao modelo). */
+  'scribe:mcp-connector-tools': { request: { name: string }; response: ClaudeConnectorTools }
   /** Bloqueio do app (contrato 22): estado, sem nada da senha. */
   'scribe:lock-status': { request: undefined; response: LockStatus }
   /** "Bloquear" (barra lateral, barra da gravação, ⌘⇧L): só bloqueia se houver senha ou Touch ID. */
@@ -643,6 +645,7 @@ const INVOKE: Record<InvokeChannel, true> = {
   'scribe:mcp-remove': true,
   'scribe:mcp-details': true,
   'scribe:mcp-import': true,
+  'scribe:mcp-connector-tools': true,
   'scribe:lock-status': true,
   'scribe:lock-now': true,
   'scribe:lock-unlock': true,
@@ -920,6 +923,7 @@ export const WHEN_LOCKED: Readonly<Record<InvokeChannel, LockedPolicy>> = Object
   'scribe:mcp-remove': 'refused',
   'scribe:mcp-details': 'refused',
   'scribe:mcp-import': 'refused',
+  'scribe:mcp-connector-tools': 'refused',
   // Conta Google e Drive (contrato 11): tudo é de Configurações e do detalhe, recusado bloqueado. A fila de envio
   // não depende de canal: roda no main e continua com o app bloqueado.
   'scribe:google-status': 'refused',

@@ -34,6 +34,8 @@ import {
   type McpTransport,
 } from '../../shared/mcp'
 import { claudeEnv, LOGIN_SHELL, LOGIN_SHELL_TIMEOUT_MS, type ExecFile } from '../claude-cli/locate'
+import type { SpawnSummary } from '../claude-cli/summary'
+import { readConnectorTools, type ConnectorStatus } from './connector-tools'
 
 /** `claude mcp list` confere a saúde de cada servidor (sobe os de comando local): pode demorar. */
 export const MCP_LIST_TIMEOUT_MS = 60_000
@@ -216,6 +218,8 @@ export interface McpCliOptions {
   cwd: string
   /** Só no smoke: onde o `claude` falso guarda os servidores. */
   extraEnv?: NodeJS.ProcessEnv | undefined
+  /** Contrato 58: abre o `claude` no modo de controle para ler as ferramentas dos conectores. Sem isto, não lê. */
+  spawn?: SpawnSummary | undefined
 }
 
 export interface McpCli {
@@ -227,12 +231,18 @@ export interface McpCli {
   details(claudePath: string, name: string): Promise<{ label: string; value: string }[]>
   add(claudePath: string, name: string, definition: CliDefinition): Promise<void>
   remove(claudePath: string, name: string): Promise<void>
+  /**
+   * Contrato 58: os conectores do `mcpServerStatus`, com as ferramentas; termina quando todos de `names` saem de "pending"
+   * (o conjunto pode crescer durante a leitura).
+   */
+  connectorTools(claudePath: string, names: ReadonlySet<string>): Promise<ConnectorStatus[]>
 }
 
 export function createMcpCli(options: McpCliOptions): McpCli {
+  const envFor = (claudePath: string): NodeJS.ProcessEnv => ({ ...claudeEnv(options.baseEnv, claudePath), ...(options.extraEnv ?? {}) })
   const run = async (claudePath: string, args: readonly string[], timeoutMs: number): Promise<string> => {
     await mkdir(options.cwd, { recursive: true, mode: 0o700 })
-    const { stdout } = await options.exec(claudePath, args, { timeoutMs, env: { ...claudeEnv(options.baseEnv, claudePath), ...(options.extraEnv ?? {}) }, cwd: options.cwd })
+    const { stdout } = await options.exec(claudePath, args, { timeoutMs, env: envFor(claudePath), cwd: options.cwd })
     return stdout
   }
   const definitions = (): Promise<Map<string, CliDefinition>> => readServersFile(options.configFile)
@@ -249,6 +259,11 @@ export function createMcpCli(options: McpCliOptions): McpCli {
     },
     remove: async (claudePath, name) => {
       await run(claudePath, ['mcp', 'remove', '-s', 'user', name], MCP_CLI_TIMEOUT_MS)
+    },
+    connectorTools: async (claudePath, names) => {
+      if (!options.spawn) throw new Error('sem como abrir o claude')
+      await mkdir(options.cwd, { recursive: true, mode: 0o700 })
+      return readConnectorTools({ spawn: options.spawn, claudePath, env: envFor(claudePath), cwd: options.cwd, names })
     },
   }
 }
