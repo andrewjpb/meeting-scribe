@@ -33,9 +33,12 @@ let retryAt = 0
 
 const cleanName = (value) => (typeof value === 'string' ? value.replace(/\s+/g, ' ').trim().slice(0, NAME_MAX).trim() : '')
 
+/** Origens aceitas: as páginas onde o `content.js` roda (contrato 41 estendeu ao Teams). */
+const ORIGINS = ['https://meet.google.com/', 'https://teams.microsoft.com/', 'https://teams.live.com/', 'https://teams.cloud.microsoft/']
+
 chrome.runtime.onMessage.addListener((message, sender) => {
-  // Só o nosso `content.js`, de uma aba do Meet.
-  if (sender.id !== chrome.runtime.id || !sender.tab || !sender.url || !sender.url.startsWith('https://meet.google.com/')) return
+  // Só o nosso `content.js`, de uma aba do Meet ou do Teams.
+  if (sender.id !== chrome.runtime.id || !sender.tab || !sender.url || !ORIGINS.some((origin) => sender.url.startsWith(origin))) return
   if (!message || message.tipo !== 'meet' || typeof message.reuniao !== 'string' || !Array.isArray(message.participantes) || !Array.isArray(message.eventos)) return
   const now = Date.now()
   lastMessageAt = now

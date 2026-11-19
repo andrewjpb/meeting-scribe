@@ -18,7 +18,7 @@ export const APP_PLUGINS: readonly AppPlugin[] = [
     id: 'meet',
     nome: 'Quem fala no Meet',
     navegador: 'Google Chrome',
-    descricao: 'No Google Meet, manda ao app os nomes de quem fala, para a transcrição dizer quem falou cada trecho.',
+    descricao: 'No Google Meet e no Microsoft Teams aberto no Chrome (não no app do Teams), manda ao app os nomes de quem fala, para a transcrição dizer quem falou cada trecho.',
     arquivos: ['manifest.json', 'content.js', 'background.js', 'README.md'],
   },
 ]

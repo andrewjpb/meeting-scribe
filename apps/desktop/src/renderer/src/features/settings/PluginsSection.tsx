@@ -100,11 +100,12 @@ function InstallManual({ id, plugin }: { id: string; plugin: AppPlugin }) {
         </li>
         <li>Ligue o “Modo do desenvolvedor”, no canto superior direito.</li>
         <li>Clique em “Carregar sem compactação” e escolha a pasta “{pluginFolderName(plugin)}” que você salvou.</li>
-        <li>Recarregue a aba do Meet.</li>
+        <li>Recarregue a aba do Meet ou do Teams.</li>
       </ol>
       <p className="text-12 text-text-muted">
         Desligue o picture-in-picture automático do Meet (o mini-player esconde a reunião do plugin) e mantenha a aba do Meet aberta durante a gravação.
       </p>
+      <p className="text-12 text-text-muted">No Teams, só funciona na reunião aberta no Chrome (teams.microsoft.com, teams.live.com ou teams.cloud.microsoft), não no app do Teams. A leitura do Teams é melhor esforço: a Microsoft muda a tela com frequência e pode ser preciso ajustar o plugin.</p>
       <p className="text-12 text-text-muted">Tudo fica neste computador: o plugin só fala com o app.</p>
     </div>
   )

@@ -1,16 +1,18 @@
-// LAP Reuniões — Quem fala no Meet (contrato 27, CA1). Roda só em https://meet.google.com/*.
+// LAP Reuniões — Quem fala no Meet e no Teams (contratos 27 e 41). Roda só em https://meet.google.com/*,
+// https://teams.microsoft.com/* e https://teams.live.com/* (o Teams aberto no Chrome; o app do Teams não tem como).
 //
 // Lê, sem mexer em nada da página, (a) os nomes visíveis dos participantes e (b) quem começou ou parou de falar,
 // pelo indicador visual de fala de cada participante. Não lê legendas, não injeta nada e não altera o DOM: só
 // consulta. O que vê vai ao `background.js` por `chrome.runtime.sendMessage`; ele junta e manda ao app.
 //
-// O arquivo tem duas partes:
+// O arquivo tem três partes:
 // 1. `LEITOR_MEET`: tudo o que conhece o DOM do Meet (seletores, id da reunião, leitura da página). O DOM do Meet
 //    muda sem aviso; quando mudar, é só aqui que se ajusta (confira no DevTools da chamada, aba Elements).
-// 2. O motor genérico (observador, varredura, envio), que só conhece a interface do leitor:
+// 2. `LEITOR_TEAMS` (contrato 41): o mesmo para o Teams web, com a mesma interface. Reaproveita o `cleanName` e os
+//    utilitários do Meet.
+// 3. O motor genérico (observador, varredura, envio), que só conhece a interface do leitor:
 //    `{ id(): string | null, read(): { participantes: string[], falando: Set<string> } }`.
-// Um leitor do Teams (ou de outra plataforma) entra como outro objeto com a mesma interface; o motor e o protocolo
-// com o app não mudam.
+// O leitor é escolhido pelo endereço da aba (`location.hostname`); o motor e o protocolo com o app não mudam.
 'use strict'
 
 // ===============================================================================================================
@@ -148,7 +150,167 @@ const LEITOR_MEET = {
 }
 
 // ===============================================================================================================
-// 2. Motor genérico: observa a página, compara leituras e manda ao background. Só usa `leitor.id()` e `leitor.read()`.
+// 2. Leitor do Microsoft Teams web (contrato 41; melhor esforço, montado sem reunião real: TODOS os seletores abaixo
+//    são palpite até a calibração numa chamada do Teams no Chrome)
+// ===============================================================================================================
+
+const LEITOR_TEAMS = {
+  /**
+   * Tile de cada participante no palco da chamada. O Teams marca os elementos com `data-tid`/`data-cid`; o nome
+   * costuma vir no `aria-label` do tile ("Ana Rocha, câmera desligada, microfone mudo").
+   */
+  TILE_SELECTORS: ['[data-cid="calling-participant-stream"]', '[data-tid="video-tile"]', '[data-stream-type][aria-label]'],
+
+  /**
+   * Linha de cada pessoa no painel "Pessoas"/"Participantes" (quando aberto). Fica preso ao painel de propósito: a
+   * lista de conversas do Teams também é uma árvore de `treeitem`, e os nomes dela não são da reunião.
+   */
+  ROSTER_ROW_SELECTORS: [
+    '[data-tid^="participantsInCall-"]',
+    '[data-cid="roster-participant"]',
+    '[aria-label="Participantes"] [role="treeitem"]',
+    '[aria-label="Participants"] [role="treeitem"]',
+  ],
+
+  /** Nome dentro do tile ou da linha, em ordem de preferência. Sem nenhum, cai no `aria-label` (até a 1ª vírgula). */
+  NAME_SELECTORS: ['[data-tid="display-name"]', '[data-tid="roster-participant-name"]', '[data-tid="participant-name"]', 'span[title]'],
+
+  /** Cabeçalhos dos grupos do painel ("Na reunião (3)", "Outros convidados"): também são `treeitem`, não são gente. */
+  NOT_A_NAME: /^(na reunião|na reuniao|in this meeting|in the meeting|in meeting|outros convidados|others invited|convidados|participantes|participants|sala de espera|lobby|waiting in lobby)\b/i,
+
+  /**
+   * Indicador de fala, no próprio tile/linha ou dentro dele: o anel/realce do tile de quem fala (o contorno
+   * `voice-level-stream-outline` ganha uma classe enquanto a pessoa fala) ou um atributo de "está falando".
+   */
+  SPEAKING_SELECTORS: [
+    '[data-tid="voice-level-stream-outline"].vdi-frame-occlusion',
+    '[data-is-speaking="true"]',
+    '[data-speaking="true"]',
+    '[data-tid="speaking-indicator"]',
+  ],
+  /** Texto de acessibilidade do indicador de voz ("Ana está falando" / "Ana is speaking")... */
+  SPEAKING_LABEL: /\b(falando|speaking)\b/i,
+  /** ...que não conta quando nega ("não está falando" / "not speaking"). */
+  NOT_SPEAKING_LABEL: /(não|nao|not)\s+(está\s+|esta\s+|is\s+)?(falando|speaking)/i,
+
+  /**
+   * O próprio usuário: o painel mostra "Ana (Você)"/"Ana (You)" (o mesmo `SELF_SUFFIX` do Meet), e o tile do
+   * próprio vídeo tem marca própria.
+   */
+  SELF_SUFFIX: LEITOR_MEET.SELF_SUFFIX,
+  SELF_SELECTORS: ['[data-cid="calling-self-stream"]', '[data-tid="self-video"]', '[data-tid="local-video"]'],
+
+  /** Sufixos do Teams que não fazem parte do nome ("Ana (Convidado)", "Ana (Externo)", "Ana (Organizador)"). */
+  EXTRA_SUFFIX: /\s*\((convidad[oa]|guest|extern[oa]|external|não verificad[oa]|nao verificad[oa]|unverified|organizador[a]?|organizer)\)\s*$/i,
+
+  /** Sinal de que está dentro da chamada (o botão "Sair"); só com ele o id cai no hash do endereço. */
+  IN_CALL_SELECTORS: ['#hangup-button', '[data-tid="hangup-main-btn"]', '[data-tid="call-hangup"]', 'button[aria-label^="Sair" i]', 'button[aria-label^="Leave" i]'],
+
+  PARTICIPANTS_MAX: LEITOR_MEET.PARTICIPANTS_MAX,
+
+  /** Último id achado no endereço: o Teams troca a URL depois de entrar, e a reunião continua a mesma. Zera fora da chamada. */
+  lastId: null,
+
+  /**
+   * Id da reunião: o id da conversa da reunião (`19:meeting_…@thread.v2`) quando a URL o traz (link de entrada);
+   * no teams.live.com, o número de `/meet/<número>`; senão, dentro da chamada, o último achado ou um hash do
+   * caminho da URL. Fora de uma chamada (e sem id na URL), `null` e nada é mandado.
+   */
+  id() {
+    let href = location.href
+    try {
+      href = decodeURIComponent(href)
+    } catch {
+      // URL com escape quebrado: procura no texto cru.
+    }
+    const thread = /19:meeting_[A-Za-z0-9_-]+@thread\.v2/.exec(href)
+    const live = /\/meet\/(\d{6,})/.exec(location.pathname)
+    const found = thread ? thread[0] : live ? `teams-live-${live[1]}` : null
+    if (found) {
+      this.lastId = found
+      return found
+    }
+    if (!LEITOR_MEET.firstMatch(document, this.IN_CALL_SELECTORS)) {
+      // Saiu da chamada: a próxima (na mesma aba) não herda o id desta.
+      this.lastId = null
+      return null
+    }
+    return this.lastId || `teams-${this.hash(location.pathname)}`
+  },
+
+  /** Hash curto e estável de um texto (djb2), só para o id de reserva. */
+  hash(text) {
+    let value = 5381
+    for (let i = 0; i < text.length; i += 1) value = ((value * 33) ^ text.charCodeAt(i)) >>> 0
+    return value.toString(36)
+  },
+
+  /** O mesmo `cleanName` do Meet (com o corte de duplicação), depois de tirar os sufixos do Teams. */
+  cleanName(raw) {
+    if (typeof raw !== 'string') return ''
+    const name = LEITOR_MEET.cleanName(raw.replace(/\s+/g, ' ').trim().replace(this.EXTRA_SUFFIX, ''))
+    return LEITOR_MEET.cleanName(name.replace(this.EXTRA_SUFFIX, ''))
+  },
+
+  /** Texto cru do nome: o elemento de nome; senão o `title`; senão o `aria-label` até a 1ª vírgula. */
+  rawName(element) {
+    const label = LEITOR_MEET.firstMatch(element, this.NAME_SELECTORS)
+    const text = label ? label.textContent || label.getAttribute('title') || '' : ''
+    if (text.trim()) return text
+    return (element.getAttribute('aria-label') || '').split(',')[0]
+  },
+
+  nameOf(element) {
+    const name = this.cleanName(this.rawName(element))
+    return this.NOT_A_NAME.test(name) ? '' : name
+  },
+
+  /** O elemento ou um descendente casa com algum dos seletores. */
+  matchesAny(element, selectors) {
+    for (const selector of selectors) {
+      try {
+        if (element.matches(selector) || element.querySelector(selector)) return true
+      } catch {
+        // Seletor inválido nesta versão do Chrome: tenta o próximo.
+      }
+    }
+    return false
+  },
+
+  isSelf(element) {
+    if (this.matchesAny(element, this.SELF_SELECTORS)) return true
+    return this.SELF_SUFFIX.test(this.rawName(element).replace(/\s+/g, ' ').trim())
+  },
+
+  isSpeaking(element) {
+    if (this.matchesAny(element, this.SPEAKING_SELECTORS)) return true
+    for (const node of [element, ...element.querySelectorAll('[aria-label]')]) {
+      const label = node.getAttribute('aria-label') || ''
+      if (this.SPEAKING_LABEL.test(label) && !this.NOT_SPEAKING_LABEL.test(label)) return true
+    }
+    return false
+  },
+
+  /** Uma leitura da página: participantes visíveis e quem fala agora (sem o próprio usuário: ele é o microfone). */
+  read() {
+    const participantes = []
+    const falando = new Set()
+    const seen = new Set()
+    for (const element of [...LEITOR_MEET.allMatches(this.TILE_SELECTORS), ...LEITOR_MEET.allMatches(this.ROSTER_ROW_SELECTORS)]) {
+      const name = this.nameOf(element)
+      if (!name) continue
+      if (!seen.has(name) && participantes.length < this.PARTICIPANTS_MAX) {
+        seen.add(name)
+        participantes.push(name)
+      }
+      if (!this.isSelf(element) && this.isSpeaking(element)) falando.add(name)
+    }
+    return { participantes, falando }
+  },
+}
+
+// ===============================================================================================================
+// 3. Motor genérico: observa a página, compara leituras e manda ao background. Só usa `leitor.id()` e `leitor.read()`.
 // ===============================================================================================================
 
 /** Varredura periódica (o MutationObserver pede varreduras extras, no máximo uma a cada `OBSERVER_GAP_MS`). */
@@ -206,4 +368,11 @@ function startEngine(leitor) {
   setInterval(() => scan(true), SCAN_INTERVAL_MS)
 }
 
-startEngine(LEITOR_MEET)
+/** Qual leitor serve a esta aba, pelo endereço (os mesmos do `manifest.json`). */
+const LEITORES = [
+  { hosts: ['meet.google.com'], leitor: LEITOR_MEET },
+  { hosts: ['teams.microsoft.com', 'teams.live.com', 'teams.cloud.microsoft'], leitor: LEITOR_TEAMS },
+]
+
+const escolhido = LEITORES.find((entry) => entry.hosts.includes(location.hostname))
+if (escolhido) startEngine(escolhido.leitor)

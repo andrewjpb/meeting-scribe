@@ -19,3 +19,17 @@ Feature: desktop-shell · Wave: 41 · Depende de: 27 · Pedido do Andrew (19/11/
 
 ## Telas de impacto no usuário
 - O mesmo plugin passa a funcionar em reuniões do Teams abertas no Chrome (após calibração real).
+
+## Adendo de fechamento (18/11/2026)
+
+- O Andrew autorizou a mudança no `background.js`: o filtro de origem virou a lista ORIGINS
+  (meet.google.com, teams.microsoft.com, teams.live.com e teams.cloud.microsoft). Protocolo
+  (`tipo:'meet'`) inalterado.
+- Revisão cega: aprovado com ressalvas. Aplicado: domínio `teams.cloud.microsoft` (o Teams web
+  vem migrando para ele) no manifest, no content.js (LEITORES), no background.js e nos textos;
+  ressalva da aba Plugins completada (três domínios + aviso de melhor esforço).
+- Ressalvas que dependem de calibração numa reunião Teams real (seletores são palpites
+  declarados): atributos `data-is-speaking` fora do MutationObserver (atraso de até 1 s no
+  timestamp); `lastId` pode zerar se o botão Sair sumir do DOM; fallback de nome pelo
+  `aria-label` corta em vírgula ("Silva, João" → "Silva"); seletor de linha casando com
+  container pode atribuir a fala ao primeiro nome do grupo.
