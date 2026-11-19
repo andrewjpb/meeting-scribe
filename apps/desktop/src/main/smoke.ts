@@ -8486,6 +8486,41 @@ async function emailNotifyCheck(ctx: SmokeContext, watch: (win: BrowserWindow) =
   win.destroy()
 }
 
+/**
+ * Contrato 53 (CA15): uma regra "assunto contém Fatura-smoke → mover para Arquivo", gravada pelo IPC; o servidor falso
+ * recebe um email que casa e ele vai para "Arquivo", sem ficar na INBOX. A regra sai no fim (o resto do smoke não a vê).
+ */
+async function emailRulesCheck(ctx: SmokeContext, watch: (win: BrowserWindow) => void, checks: Record<string, Check>): Promise<void> {
+  const fake = ctx.fixtures.email
+  const win = ctx.openWindow({ theme: 'light' })
+  watch(win)
+  await loadAndWait(win)
+  const contents = win.webContents
+  const accountId = await evaluate<string>(contents, `window.__scribeApi.invoke('scribe:email-accounts').then((list) => list[0]?.account.id ?? '')`)
+  const rule = { id: '5c0f1d7e-53aa-4c53-9b1e-000000000053', name: 'Faturas para o Arquivo', enabled: true, match: 'all', conditions: [{ field: 'subject', value: 'Fatura-smoke' }], actions: { moveTo: 'Arquivo', markRead: false, flag: false, delete: false, silent: false }, stopHere: false }
+  const saved = await evaluate<{ ok: boolean; error?: string }>(contents, `window.__scribeApi.invoke('scribe:email-rules-set', { accountId: ${JSON.stringify(accountId)}, rules: [${JSON.stringify(rule)}] })`)
+  const archived = (): number[] => fake.mailboxes()['Arquivo']?.uids ?? []
+  const before = archived().length
+  await fake.deliver({ from: { name: 'Financeiro LAP', address: 'financeiro@lap.example' }, subject: 'Fatura-smoke de novembro', text: 'Segue a fatura.' })
+  const until = Date.now() + 5000
+  while (archived().length === before && Date.now() < until) await wait(50)
+  const moved = archived().length === before + 1
+  const inbox = await evaluate<string[]>(contents, `window.__scribeApi.invoke('scribe:email-messages', { accountId: ${JSON.stringify(accountId)} }).then((list) => list.map((item) => item.subject))`)
+  // O estado da regra é gravado logo depois do mover.
+  let hits = 0
+  for (const stop = Date.now() + 3000; hits === 0 && Date.now() < stop; await wait(50)) {
+    const state = await evaluate<{ ok: boolean; state?: Record<string, { hits: number }> }>(contents, `window.__scribeApi.invoke('scribe:email-rules-get', { accountId: ${JSON.stringify(accountId)} })`)
+    hits = state.state?.[rule.id]?.hits ?? 0
+  }
+  const cleared = await evaluate<{ ok: boolean }>(contents, `window.__scribeApi.invoke('scribe:email-rules-set', { accountId: ${JSON.stringify(accountId)}, rules: [] })`)
+  const notInInbox = !inbox.some((subject) => subject.startsWith('Fatura-smoke'))
+  checks['rules'] = {
+    ok: saved.ok && moved && notInInbox && hits === 1 && cleared.ok,
+    detail: `regra gravada=${saved.ok}${saved.error ? ` (${saved.error})` : ''}; no Arquivo=${moved}; fora da INBOX=${notInInbox}; contagem da regra=${hits}; regra tirada=${cleared.ok}`,
+  }
+  win.destroy()
+}
+
 export async function runSmoke(ctx: SmokeContext): Promise<number> {
   const timer = setTimeout(() => {
     console.error(`[smoke] tempo esgotado (${TIMEOUT_MS} ms)`)
@@ -8943,6 +8978,9 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
 
     // Contrato 43: as notificações de email, por último também (com a senha do bloqueio criada).
     await emailNotifyCheck(ctx, watch, email)
+
+    // Contrato 53 (CA15): uma regra de mover, no email novo do servidor falso (o app já desbloqueado).
+    await emailRulesCheck(ctx, watch, email)
   } catch (error) {
     failures.push(`erro: ${error instanceof Error ? (error.stack ?? error.message) : String(error)}`)
   }

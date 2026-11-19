@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<title>Gravação sem chave da AssemblyAI</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0}
+.sc{scrollbar-width:none}.sc::-webkit-scrollbar{display:none}
+</style>
+</helmet>
+<div style="display: flex; width: 1120px; height: 740px; overflow: hidden; background: #ffffff; color: #061a3d; font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; font-size: 13px; line-height: 20px; -webkit-font-smoothing: antialiased">
+
+<div style="flex: 0 0 224px; width: 224px; height: 740px">
+<dc-import name="SidebarRaiz" ativo="nenhum" nao-lidas="{{duas}}" hint-size="224px,740px"></dc-import>
+</div>
+
+<main style="position: relative; flex: 1 1 0; min-width: 0; height: 740px; display: flex; flex-direction: column; overflow: hidden">
+<div aria-hidden="true" style="flex: none; height: 52px"></div>
+
+<header style="flex: none; padding: 28px 40px 20px">
+<div style="display: flex; align-items: center; gap: 20px">
+<p aria-live="polite" style="margin: 0; display: flex; align-items: center; gap: 12px; height: 20px">
+<span aria-hidden="true" style="width: 8px; height: 8px; background: #c62f34"></span>
+<span style="font-size: 13px; font-weight: 500; color: #c62f34">Gravando</span>
+<span aria-label="Tempo gravado" style="font-size: 15px; line-height: 20px; font-weight: 500; font-variant-numeric: tabular-nums">02:14</span>
+</p>
+</div>
+<h1 style="margin: 10px 0 0; font-size: 20px; line-height: 26px; font-weight: 700; letter-spacing: -0.3px; color: #0a2a5e">Reunião de 17/11 15:41</h1>
+</header>
+
+<section role="img" aria-label="Níveis de áudio de você e dos participantes" style="flex: none; position: relative; height: 96px; background: #eef2f9">
+<svg width="736" height="96" viewBox="0 0 736 96" aria-hidden="true" style="position: absolute; left: 160px; top: 0; display: block">
+<rect x="0" y="48" width="736" height="1" fill="#c9d4e5"></rect>
+<sc-for list="{{micBars}}" as="b" hint-placeholder-count="0"><rect x="{{b.x}}" y="{{b.y}}" width="3" height="{{b.h}}" fill="#1e5bb8"></rect></sc-for>
+<sc-for list="{{sysBars}}" as="b" hint-placeholder-count="0"><rect x="{{b.x}}" y="49" width="3" height="{{b.h}}" fill="#5b6b85"></rect></sc-for>
+</svg>
+<span style="position: absolute; left: 40px; top: 0; height: 48px; display: flex; align-items: center; font-size: 10px; line-height: 14px; font-weight: 500; letter-spacing: 0.14em; color: #1e5bb8">VOCÊ</span>
+<span style="position: absolute; left: 40px; top: 48px; height: 48px; display: flex; align-items: center; font-size: 10px; line-height: 14px; font-weight: 500; letter-spacing: 0.14em; color: #5b6b85">PARTICIPANTES</span>
+</section>
+
+<div class="sc" style="flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 0 40px 112px">
+<div style="margin: 0 auto; max-width: 680px; padding-top: 28px; display: grid; grid-template-columns: 64px minmax(0, 1fr)">
+<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#7f8da6" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true" style="display: block; margin-top: 2px"><path d="m2 2 20 20M5.782 5.782A7 7 0 0 0 9 19h8.5a4.5 4.5 0 0 0 1.307-.193M21.532 16.5A4.5 4.5 0 0 0 17.5 10h-1.79A7.008 7.008 0 0 0 10 5.07"></path></svg>
+<div style="min-width: 0">
+<p style="margin: 0; font-size: 15px; line-height: 20px; font-weight: 500">Adicione sua chave da AssemblyAI para transcrever.</p>
+<p style="margin: 4px 0 0; max-width: 460px; font-size: 13px; line-height: 20px; color: #5b6b85; text-wrap: pretty">A gravação e a fita de níveis funcionam normalmente. Com a chave, cada fala aparece aqui durante a reunião.</p>
+<div style="margin-top: 12px; display: flex; align-items: center; gap: 16px">
+<button type="button" style="display: inline-flex; align-items: center; height: 40px; padding: 0 16px; border: 0; border-radius: 4px; background: #1e5bb8; color: #ffffff; font: inherit; font-size: 13px; font-weight: 500; white-space: nowrap; cursor: pointer">Abrir Configurações</button>
+<button type="button" style="padding: 0; border: 0; border-radius: 4px; background: transparent; color: #1e5bb8; font: inherit; font-size: 13px; font-weight: 500; text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 3px; cursor: pointer">Ver exemplo</button>
+</div>
+</div>
+</div>
+</div>
+
+<div style="position: absolute; left: 0; right: 0; bottom: 24px; display: flex; justify-content: center; box-sizing: border-box; padding: 0 16px">
+<div role="toolbar" aria-label="Controles da gravação" style="display: flex; align-items: center; gap: 4px; min-width: 0; max-width: 100%; box-sizing: border-box; padding: 6px; border: 1px solid transparent; border-radius: 6px; background: #0a2a5e; color: #ffffff">
+<button type="button" aria-keyshortcuts="Space" style="flex: none; display: inline-flex; align-items: center; gap: 8px; height: 40px; padding: 0 14px; border: 0; border-radius: 4px; background: transparent; color: #ffffff; font: inherit; font-size: 13px; font-weight: 500; white-space: nowrap; cursor: pointer">
+<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" style="display: block"><rect x="6" y="4" width="4" height="16"></rect><rect x="14" y="4" width="4" height="16"></rect></svg>
+Pausar
+</button>
+<button type="button" aria-label="Ouvir só os participantes" aria-pressed="false" title="Ouvir só os participantes" style="flex: none; display: inline-flex; align-items: center; height: 40px; padding: 0 12px; border: 0; border-radius: 4px; background: transparent; color: #ffffff; cursor: pointer">
+<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true" style="display: block"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"></path><path d="M19 10v2a7 7 0 0 1-14 0v-2"></path><path d="M12 19v3"></path></svg>
+</button>
+<button type="button" aria-pressed="false" aria-keyshortcuts="Meta+Shift+N" title="Anotações (⌘⇧N)" style="flex: none; display: inline-flex; align-items: center; gap: 8px; height: 40px; padding: 0 14px; border: 0; border-radius: 4px; background: transparent; color: #ffffff; font: inherit; font-size: 13px; font-weight: 500; white-space: nowrap; cursor: pointer">
+<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true" style="display: block"><path d="M15.5 3H5a2 2 0 0 0-2 2v14c0 1.1.9 2 2 2h14a2 2 0 0 0 2-2V8.5L15.5 3Z"></path><path d="M15 3v4a2 2 0 0 0 2 2h4"></path></svg>
+Anotações
+</button>
+<button type="button" disabled="{{true}}" aria-keyshortcuts="Meta+Shift+A" title="Disponível depois da primeira fala transcrita" style="flex: none; display: inline-flex; align-items: center; gap: 8px; height: 40px; padding: 0 14px; border: 0; border-radius: 4px; background: transparent; color: #ffffff; font: inherit; font-size: 13px; font-weight: 500; white-space: nowrap; opacity: 0.5">
+<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true" style="display: block"><path d="M3 7V5a2 2 0 0 1 2-2h2M17 3h2a2 2 0 0 1 2 2v2M21 17v2a2 2 0 0 1-2 2h-2M7 21H5a2 2 0 0 1-2-2v-2"></path><circle cx="12" cy="12" r="3"></circle><path d="m16 16-1.9-1.9"></path></svg>
+Analisar até agora
+</button>
+<span aria-hidden="true" style="flex: none; width: 1px; height: 24px; background: rgba(255,255,255,0.2)"></span>
+<span title="Idioma falado e idioma da tradução" style="flex: none; display: flex; align-items: center; height: 28px; margin-left: 8px; padding: 0 10px; border-radius: 4px; background: rgba(255,255,255,0.12); font-size: 12px; font-weight: 500; white-space: nowrap">PT → EN</span>
+<span title="Modelo de tradução: claude-cli:haiku" style="flex: 0 1 auto; min-width: 0; max-width: 132px; height: 28px; padding: 0 10px; box-sizing: border-box; border-radius: 4px; background: rgba(255,255,255,0.12); font-family: Menlo, ui-monospace, monospace; font-size: 11px; line-height: 28px; color: #a8b5cc; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">claude-cli:haiku</span>
+<span title="O áudio da reunião está sendo salvo na pasta escolhida em Configurações" style="flex: none; display: flex; align-items: center; gap: 6px; height: 28px; padding: 0 8px; font-size: 12px; color: #a8b5cc; white-space: nowrap">
+<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true" style="display: block"><path d="M22 12H2M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11zM6 16h.01M10 16h.01"></path></svg>
+Gravando áudio
+</span>
+<span aria-hidden="true" style="flex: none; width: 4px"></span>
+<span aria-hidden="true" style="flex: none; width: 1px; height: 24px; background: rgba(255,255,255,0.2)"></span>
+<button type="button" aria-label="Bloquear" aria-keyshortcuts="Meta+Shift+L" title="Bloquear o app; a gravação continua (⌘⇧L)" style="flex: none; display: inline-flex; align-items: center; height: 40px; padding: 0 12px; border: 0; border-radius: 4px; background: transparent; color: #ffffff; cursor: pointer">
+<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true" style="display: block"><rect width="18" height="11" x="3" y="11" rx="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>
+</button>
+<span aria-hidden="true" style="flex: none; width: 1px; height: 24px; background: rgba(255,255,255,0.2)"></span>
+<a href="DetalheResumo.dc.html" style="flex: none; display: inline-flex; align-items: center; gap: 8px; height: 40px; padding: 0 14px; border-radius: 4px; color: #ffffff; text-decoration: none; font-size: 13px; font-weight: 500; white-space: nowrap">
+<span aria-hidden="true" style="width: 8px; height: 8px; background: #f0646a"></span>
+Encerrar
+</a>
+</div>
+</div>
+
+</main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1120,"height":740}}'>
+class Component extends DCLogic {
+  renderVals() {
+    var seed = 19;
+    function rnd() { seed = (seed * 9301 + 49297) % 233280; return seed / 233280; }
+    var mic = [], sys = [];
+    for (var i = 0; i < 184; i++) {
+      var x = i * 4;
+      var micOn = (i > 10 && i < 52) || (i > 120 && i < 150);
+      var sysOn = (i > 56 && i < 116) || i > 154;
+      var m = micOn ? Math.round(6 + rnd() * 34) : (rnd() < 0.12 ? 2 : 0);
+      var s = sysOn ? Math.round(6 + rnd() * 34) : (rnd() < 0.12 ? 2 : 0);
+      if (m > 0) mic.push({ x: x, h: m, y: 48 - m });
+      if (s > 0) sys.push({ x: x, h: s });
+    }
+    return { duas: 3, micBars: mic, sysBars: sys };
+  }
+}
+</script>
+</body>
+</html>

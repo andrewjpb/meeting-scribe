@@ -1,0 +1,110 @@
+{
+  "v": 3,
+  "createdOnFiles": { "v": 1, "at": "2026-11-19T21:46:32Z" },
+  "title": "Telas do LAP Reuniões",
+  "launch": { "view": "canvas" },
+  "pages": [],
+  "boards": {
+    "SidebarRaiz.dc.html": { "x": 0, "y": 0, "w": 224, "h": 740, "title": "Sidebar · raiz" },
+    "SidebarEmail.dc.html": { "x": 304, "y": 0, "w": 224, "h": 740, "title": "Sidebar · nível Email" },
+    "SidebarConfig.dc.html": { "x": 608, "y": 0, "w": 224, "h": 740, "title": "Sidebar · nível Configurações" },
+
+    "Main.dc.html": { "x": 0, "y": 1100, "w": 1120, "h": 740, "title": "Reuniões" },
+    "ReunioesVazia.dc.html": { "x": 1200, "y": 1100, "w": 1120, "h": 740, "title": "Reuniões · vazio" },
+
+    "GravacaoAnalise.dc.html": { "x": 0, "y": 2200, "w": 1120, "h": 740, "title": "Gravação · Análise" },
+    "GravacaoAnotacoes.dc.html": { "x": 1200, "y": 2200, "w": 1120, "h": 740, "title": "Gravação · Anotações" },
+    "GravacaoSemChave.dc.html": { "x": 2400, "y": 2200, "w": 1120, "h": 740, "title": "Gravação · sem chave da AssemblyAI" },
+    "GravacaoVazia.dc.html": { "x": 3600, "y": 2200, "w": 1120, "h": 740, "title": "Gravação · nenhuma em andamento" },
+    "GravacaoEscuro.dc.html": { "x": 4800, "y": 2200, "w": 1120, "h": 740, "title": "Gravação · Análise, tema escuro" },
+
+    "DetalheResumo.dc.html": { "x": 0, "y": 3300, "w": 1120, "h": 740, "title": "Detalhe · Resumo" },
+    "DetalheAnotacoes.dc.html": { "x": 1200, "y": 3300, "w": 1120, "h": 740, "title": "Detalhe · Anotações" },
+    "DetalheTranscricao.dc.html": { "x": 2400, "y": 3300, "w": 1120, "h": 740, "title": "Detalhe · Transcrição" },
+    "DetalheAudio.dc.html": { "x": 3600, "y": 3300, "w": 1120, "h": 740, "title": "Detalhe · Áudio" },
+
+    "AssistenteConversa.dc.html": { "x": 0, "y": 4400, "w": 1120, "h": 740, "title": "Assistente · conversa" },
+    "AssistenteVazio.dc.html": { "x": 1200, "y": 4400, "w": 1120, "h": 740, "title": "Assistente · vazio" },
+    "AssistenteEscuro.dc.html": { "x": 2400, "y": 4400, "w": 1120, "h": 740, "title": "Assistente · tema escuro" },
+
+    "AutomacoesAgentes.dc.html": { "x": 0, "y": 5500, "w": 1120, "h": 740, "title": "Automações · Agentes" },
+    "AutomacoesTarefas.dc.html": { "x": 1200, "y": 5500, "w": 1120, "h": 740, "title": "Automações · Tarefas agendadas" },
+    "WhatsApp.dc.html": { "x": 2400, "y": 5500, "w": 1120, "h": 740, "title": "WhatsApp" },
+    "Email.dc.html": { "x": 3600, "y": 5500, "w": 1120, "h": 740, "title": "Email" },
+
+    "ConfigGeral.dc.html": { "x": 0, "y": 6600, "w": 1120, "h": 740, "title": "Configurações · Geral" },
+    "ConfigClaude.dc.html": { "x": 1200, "y": 6600, "w": 1120, "h": 740, "title": "Configurações · Claude" },
+    "ConfigContas.dc.html": { "x": 2400, "y": 6600, "w": 1120, "h": 740, "title": "Configurações · Contas" },
+    "ConfigConexoes.dc.html": { "x": 3600, "y": 6600, "w": 1120, "h": 740, "title": "Configurações · Conexões" },
+
+    "Bloqueio.dc.html": { "x": 0, "y": 7700, "w": 1120, "h": 740, "title": "Bloqueio" },
+    "AvisoReuniao.dc.html": { "x": 1200, "y": 7700, "w": 460, "h": 88, "title": "Aviso de reunião (janela auxiliar)" },
+
+    "PrintReunioes.dc.html": { "x": 0, "y": 8800, "w": 1120, "h": 740, "title": "Print · Reuniões" },
+    "PrintGravacaoAnalise.dc.html": { "x": 1200, "y": 8800, "w": 1120, "h": 740, "title": "Print · Gravação, Análise" },
+    "PrintGravacaoAnotacoes.dc.html": { "x": 2400, "y": 8800, "w": 1120, "h": 740, "title": "Print · Gravação, Anotações" },
+    "PrintDetalheResumo.dc.html": { "x": 3600, "y": 8800, "w": 1120, "h": 740, "title": "Print · Detalhe, Resumo" },
+    "PrintAssistenteContexto.dc.html": { "x": 4800, "y": 8800, "w": 1120, "h": 740, "title": "Print · Assistente, Contexto" },
+    "PrintAssistenteLembrete.dc.html": { "x": 6000, "y": 8800, "w": 1120, "h": 740, "title": "Print · Assistente, lembrete" },
+    "PrintAssistenteWhatsApp.dc.html": { "x": 7200, "y": 8800, "w": 1120, "h": 740, "title": "Print · Assistente, WhatsApp" },
+    "PrintConfigClaude.dc.html": { "x": 8400, "y": 8800, "w": 1120, "h": 740, "title": "Print · Configurações, Claude" }
+  },
+  "order": [
+    "Main.dc.html",
+    "SidebarRaiz.dc.html",
+    "SidebarEmail.dc.html",
+    "SidebarConfig.dc.html",
+    "ReunioesVazia.dc.html",
+    "GravacaoAnalise.dc.html",
+    "GravacaoAnotacoes.dc.html",
+    "GravacaoSemChave.dc.html",
+    "GravacaoVazia.dc.html",
+    "GravacaoEscuro.dc.html",
+    "DetalheResumo.dc.html",
+    "DetalheAnotacoes.dc.html",
+    "DetalheTranscricao.dc.html",
+    "DetalheAudio.dc.html",
+    "AssistenteConversa.dc.html",
+    "AssistenteVazio.dc.html",
+    "AssistenteEscuro.dc.html",
+    "AutomacoesAgentes.dc.html",
+    "AutomacoesTarefas.dc.html",
+    "WhatsApp.dc.html",
+    "Email.dc.html",
+    "ConfigGeral.dc.html",
+    "ConfigClaude.dc.html",
+    "ConfigContas.dc.html",
+    "ConfigConexoes.dc.html",
+    "Bloqueio.dc.html",
+    "AvisoReuniao.dc.html",
+    "PrintReunioes.dc.html",
+    "PrintGravacaoAnalise.dc.html",
+    "PrintGravacaoAnotacoes.dc.html",
+    "PrintDetalheResumo.dc.html",
+    "PrintAssistenteContexto.dc.html",
+    "PrintAssistenteLembrete.dc.html",
+    "PrintAssistenteWhatsApp.dc.html",
+    "PrintConfigClaude.dc.html"
+  ],
+  "notes": {
+    "t-sidebar": { "x": 0, "y": -230, "text": "Sidebar em pilha", "kind": "title1", "maxW": 4800 },
+    "t-reunioes": { "x": 0, "y": 870, "text": "Reuniões", "kind": "title1", "maxW": 4800 },
+    "t-gravacao": { "x": 0, "y": 1970, "text": "Gravação ao vivo", "kind": "title1", "maxW": 4800 },
+    "t-detalhe": { "x": 0, "y": 3070, "text": "Detalhe da reunião", "kind": "title1", "maxW": 4800 },
+    "t-assistente": { "x": 0, "y": 4170, "text": "Assistente", "kind": "title1", "maxW": 4800 },
+    "t-automacoes": { "x": 0, "y": 5270, "text": "Automações, WhatsApp e Email", "kind": "title1", "maxW": 4800 },
+    "t-config": { "x": 0, "y": 6370, "text": "Configurações (nível no sidebar, sem abas)", "kind": "title1", "maxW": 4800 },
+    "t-bloqueio": { "x": 0, "y": 7470, "text": "Bloqueio e janela auxiliar", "kind": "title1", "maxW": 4800 },
+    "t-prints": { "x": 0, "y": 8570, "text": "Prints reais do README (nov/2026, sidebar antigo)", "kind": "title1", "maxW": 4800 },
+    "s-sobre": { "x": 912, "y": 0, "w": 420, "fill": "blue", "text": "Telas recriadas do código em 19/11/2026, já com o sidebar em pilha (spec sidebar-pilha, contratos 65 e 66, em implementação). As telas de Configurações mostram o nível no sidebar e o topo sem abas. Última linha: prints reais do README, ainda com o sidebar antigo." }
+  },
+  "designSystems": [
+    {
+      "title": "LAP Reuniões Design System",
+      "namespace": "lap-reunioes",
+      "artifact": "https://claude.ai/artifact/XifBZPKYhAdXQoBYD1pxMe",
+      "version": null,
+      "copiedAt": "2026-11-19T21:46:32Z"
+    }
+  ]
+}

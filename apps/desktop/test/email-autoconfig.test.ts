@@ -1,7 +1,7 @@
 // Contrato 42, CA2: descobrir os servidores pelo endereço. Presets embutidos sem rede, o XML do ISPDB do Thunderbird
 // por um HTTP falso (nenhum pedido sai da máquina) e o ISPDB fora do ar voltando `null` em até 5 s.
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { autoconfigure, AUTOCONFIG_TIMEOUT_MS, ISPDB_URL, parseIspdb, presetFor, type AutoconfigFetch } from '../src/main/email/autoconfig'
+import { autoconfigure, AUTOCONFIG_TIMEOUT_MS, ISPDB_URL, parseIspdb, presetFor, presetForMx, type AutoconfigFetch, type MxResolver } from '../src/main/email/autoconfig'
 
 const ISPDB_XML = `<?xml version="1.0" encoding="UTF-8"?>
 <clientConfig version="1.1">
@@ -55,6 +55,7 @@ describe('autoconfig (contrato 42, CA2)', () => {
     ['fulano@icloud.com', 'imap.mail.me.com', 993, 'tls', 'smtp.mail.me.com', 587, 'starttls'],
     ['fulano@uol.com.br', 'imap.uol.com.br', 993, 'tls', 'smtps.uol.com.br', 587, 'starttls'],
     ['fulano@terra.com.br', 'imap.terra.com.br', 993, 'tls', 'smtp.terra.com.br', 587, 'starttls'],
+    ['fulano@zoho.com', 'imap.zoho.com', 993, 'tls', 'smtp.zoho.com', 465, 'tls'],
   ])('%s: preset embutido, sem rede', async (address, inHost, inPort, inSecurity, outHost, outPort, outSecurity) => {
     const fetch = fakeFetch(() => Promise.reject(new Error('não devia ir à rede')))
     expect(await autoconfigure(address, { fetch })).toEqual({
@@ -137,5 +138,64 @@ describe('autoconfig (contrato 42, CA2)', () => {
     expect(await autoconfigure('sem-arroba', { fetch })).toBeNull()
     expect(await autoconfigure('a@../../etc', { fetch })).toBeNull()
     expect(fetch.urls).toEqual([])
+  })
+
+  describe('MX do domínio (domínio próprio hospedado em provedor conhecido)', () => {
+    const notFound = () => fakeFetch(() => Promise.resolve({ status: 404, text: () => Promise.resolve('Not found') }))
+    const mx = (hosts: string[]): MxResolver & { domains: string[] } => {
+      const domains: string[] = []
+      return Object.assign(async (domain: string) => {
+        domains.push(domain)
+        return hosts
+      }, { domains })
+    }
+
+    it('MX da Zoho: imappro/smtppro do mesmo data center, usuário é o endereço, e só o domínio vai ao DNS', async () => {
+      const resolveMx = mx(['mx.zoho.com.', 'MX2.zoho.com', 'mx3.zoho.com'])
+      expect(await autoconfigure('contato@empresa.com.br', { fetch: notFound(), resolveMx })).toEqual({
+        source: 'mx',
+        username: 'contato@empresa.com.br',
+        incoming: { protocol: 'imap', host: 'imappro.zoho.com', port: 993, security: 'tls' },
+        outgoing: { host: 'smtppro.zoho.com', port: 465, security: 'tls' },
+      })
+      expect(resolveMx.domains).toEqual(['empresa.com.br'])
+      expect(presetForMx('a@b.eu', ['mx.zoho.eu'])?.incoming.host).toBe('imappro.zoho.eu')
+      expect(presetForMx('a@b.eu', ['mx.zoho.eu'])?.outgoing.host).toBe('smtppro.zoho.eu')
+      expect(presetForMx('a@b.in', ['mx.zoho.in'])?.incoming.host).toBe('imappro.zoho.in')
+    })
+
+    it('MX do Google Workspace e do Microsoft 365: os presets do Gmail e do Outlook', async () => {
+      expect((await autoconfigure('a@empresa.com', { fetch: notFound(), resolveMx: mx(['aspmx.l.google.com', 'alt1.aspmx.l.google.com']) }))?.incoming.host).toBe('imap.gmail.com')
+      expect((await autoconfigure('a@empresa.com', { fetch: notFound(), resolveMx: mx(['empresa-com.mail.protection.outlook.com']) }))?.outgoing.host).toBe('smtp.office365.com')
+    })
+
+    it('MX desconhecido, vazio, com erro ou fora do padrão de host: null; e sem resolveMx a etapa não existe', async () => {
+      expect(await autoconfigure('a@empresa.com', { fetch: notFound(), resolveMx: mx(['mail.empresa.com']) })).toBeNull()
+      expect(await autoconfigure('a@empresa.com', { fetch: notFound(), resolveMx: mx([]) })).toBeNull()
+      expect(await autoconfigure('a@empresa.com', { fetch: notFound(), resolveMx: () => Promise.reject(new Error('ENOTFOUND')) })).toBeNull()
+      expect(presetForMx('a@empresa.com', ['zoho.com.evil.example'])).toBeNull()
+      expect(presetForMx('a@empresa.com', ['notzoho.com'])).toBeNull()
+      expect(presetForMx('sem-arroba', ['mx.zoho.com'])).toBeNull()
+      expect(await autoconfigure('a@empresa.com', { fetch: notFound() })).toBeNull()
+    })
+
+    it('ISPDB conhece o domínio: ele ganha do MX', async () => {
+      const fetch = fakeFetch(() => Promise.resolve({ status: 200, text: () => Promise.resolve(ISPDB_XML) }))
+      const config = await autoconfigure('fulano@exemplo.com.br', { fetch, resolveMx: mx(['mx.zoho.com']) })
+      expect(config?.source).toBe('ispdb')
+    })
+
+    it('preset embutido: nem o DNS é consultado', async () => {
+      const resolveMx = mx(['mx.zoho.com'])
+      await autoconfigure('fulano@gmail.com', { fetch: fakeFetch(() => Promise.reject(new Error('não devia ir à rede'))), resolveMx })
+      expect(resolveMx.domains).toEqual([])
+    })
+
+    it('DNS que nunca responde: null em até 5 s', async () => {
+      vi.useFakeTimers()
+      const pending = autoconfigure('a@empresa.com', { fetch: notFound(), resolveMx: () => new Promise(() => {}) })
+      await vi.advanceTimersByTimeAsync(AUTOCONFIG_TIMEOUT_MS + 1)
+      expect(await pending).toBeNull()
+    })
   })
 })

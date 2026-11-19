@@ -3,8 +3,6 @@
 > Aprovado pelo Andrew em 19/11/2026, com as decisões D1–D11 como propostas.
 Feature: email-organizacao · Wave: 2 · Depende de: 52, 54 · Spec: `docs/specs/email-organizacao/spec.md` (R4, R5, N1, N2, N3, N5, N6, F1, F4, F5) · Plan: `docs/specs/email-organizacao/plan.md`
 
-> RASCUNHO (19/11/2026) — aguarda o ok do Andrew nas decisões marcadas **[decidir]** antes de ir ao implementador.
-
 Pedido do Andrew (19/11/2026 13:00): "regras que agem sozinhas no email que chega". Este contrato é só o main + preload +
 IPC + testes. O editor de regras, a lista com "último erro" e o diálogo do "Executar agora" são do contrato 55; aqui NÃO
 se mexe no renderer além do mínimo para compilar (tipos novos no `window.scribe`).

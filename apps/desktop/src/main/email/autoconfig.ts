@@ -1,13 +1,17 @@
 // Descobrir os servidores de uma conta pelo endereço (contrato 42, R1 da PRD): primeiro a lista embutida dos
-// provedores mais comuns (sem rede); depois a base aberta do Thunderbird (ISPDB,
-// `https://autoconfig.thunderbird.net/v1.1/<domínio>`), com no máximo 5 s; senão `null`, e a tela cai no manual.
-// Só o domínio vai à rede, nunca o endereço inteiro. O `fetch` chega injetado (nos testes, um HTTP falso).
+// provedores mais comuns (sem rede); depois, em paralelo e com no máximo 5 s, a base aberta do Thunderbird (ISPDB,
+// `https://autoconfig.thunderbird.net/v1.1/<domínio>`) e o MX do domínio no DNS, que denuncia quem hospeda um
+// domínio próprio (Zoho, Google Workspace, Microsoft 365); o ISPDB tem preferência; senão `null`, e a tela cai no
+// manual. Só o domínio vai à rede, nunca o endereço inteiro. O `fetch` e o `resolveMx` chegam injetados (nos
+// testes, um HTTP e um DNS falsos).
 import { EMAIL_ADDRESS_PATTERN, EMAIL_HOST_PATTERN, type EmailAutoconfig, type EmailIncomingServer, type EmailProtocol, type EmailSecurity, type EmailServer } from '../../shared/email'
 
 export const ISPDB_URL = 'https://autoconfig.thunderbird.net/v1.1/'
 export const AUTOCONFIG_TIMEOUT_MS = 5_000
 
 export type AutoconfigFetch = (url: string, init: { signal: AbortSignal }) => Promise<{ status: number; text(): Promise<string> }>
+/** Os hosts MX de um domínio, do mais prioritário ao menos. Falha ou domínio sem MX: lista vazia ou erro, tanto faz. */
+export type MxResolver = (domain: string) => Promise<string[]>
 
 interface Preset {
   incoming: EmailIncomingServer
@@ -24,6 +28,8 @@ const ICLOUD: Preset = { incoming: imap('imap.mail.me.com'), outgoing: smtp('smt
 const UOL: Preset = { incoming: imap('imap.uol.com.br'), outgoing: smtp('smtps.uol.com.br', 587) }
 const BOL: Preset = { incoming: imap('imap.bol.com.br'), outgoing: smtp('smtps.bol.com.br', 587) }
 const TERRA: Preset = { incoming: imap('imap.terra.com.br'), outgoing: smtp('smtp.terra.com.br', 587) }
+/** Conta pessoal `@zoho.com`. Domínio próprio na Zoho usa os `*pro` (ver `presetForMx`). */
+const ZOHO: Preset = { incoming: imap('imap.zoho.com'), outgoing: smtp('smtp.zoho.com', 465) }
 
 /** Presets embutidos, por domínio. O usuário é sempre o endereço inteiro. */
 export const EMAIL_PRESETS: Readonly<Record<string, Preset>> = Object.freeze({
@@ -44,7 +50,32 @@ export const EMAIL_PRESETS: Readonly<Record<string, Preset>> = Object.freeze({
   'uol.com.br': UOL,
   'bol.com.br': BOL,
   'terra.com.br': TERRA,
+  'zoho.com': ZOHO,
+  'zohomail.com': ZOHO,
 })
+
+/** Zoho de organização, por data center: o MX é `mx*.zoho.<tld>` e os servidores são `imappro`/`smtppro.zoho.<tld>`. */
+const ZOHO_MX = /(^|\.)zoho\.(com|eu|in|com\.au|jp|ca|sa)$/
+const GOOGLE_MX = /(^|\.)(google|googlemail)\.com$/
+const MICROSOFT_MX = /\.mail\.protection\.outlook\.com$/
+
+/** Preset pelos hosts MX do domínio (quem hospeda um domínio próprio); `null` se nenhum for de um provedor conhecido. */
+export function presetForMx(address: string, mxHosts: readonly string[]): EmailAutoconfig | null {
+  if (!EMAIL_ADDRESS_PATTERN.test(address)) return null
+  for (const raw of mxHosts) {
+    const host = raw.toLowerCase().replace(/\.$/, '')
+    const zoho = ZOHO_MX.exec(host)
+    const preset: Preset | null = zoho
+      ? { incoming: imap(`imappro.zoho.${zoho[2]}`), outgoing: smtp(`smtppro.zoho.${zoho[2]}`, 465) }
+      : GOOGLE_MX.test(host)
+        ? GMAIL
+        : MICROSOFT_MX.test(host)
+          ? OUTLOOK
+          : null
+    if (preset) return { source: 'mx', username: address, incoming: { ...preset.incoming }, outgoing: { ...preset.outgoing } }
+  }
+  return null
+}
 
 /** Domínio do endereço, em minúsculas; `null` se o endereço não passar no formato. */
 export function addressDomain(address: string): string | null {
@@ -138,11 +169,13 @@ export function parseIspdb(xml: string, address: string): EmailAutoconfig | null
 
 export interface AutoconfigOptions {
   fetch: AutoconfigFetch
+  /** Sem ele, a etapa do MX não existe (o smoke e os testes antigos). */
+  resolveMx?: MxResolver
   timeoutMs?: number
 }
 
-/** Preset → ISPDB → `null`. Qualquer falha da rede (fora do ar, 404, XML estranho, tempo esgotado) é `null`. */
-export async function autoconfigure(address: string, { fetch, timeoutMs = AUTOCONFIG_TIMEOUT_MS }: AutoconfigOptions): Promise<EmailAutoconfig | null> {
+/** Preset → ISPDB (senão o MX, consultado junto) → `null`. Qualquer falha da rede (fora do ar, 404, XML estranho, tempo esgotado) é `null`. */
+export async function autoconfigure(address: string, { fetch, resolveMx, timeoutMs = AUTOCONFIG_TIMEOUT_MS }: AutoconfigOptions): Promise<EmailAutoconfig | null> {
   const preset = presetFor(address)
   if (preset) return preset
   const domain = addressDomain(address)
@@ -161,8 +194,13 @@ export async function autoconfigure(address: string, { fetch, timeoutMs = AUTOCO
     const xml = await response.text()
     return xml.length > 256 * 1024 ? null : parseIspdb(xml, address)
   })().catch(() => null)
+  const byMx = resolveMx
+    ? (async (): Promise<EmailAutoconfig | null> => presetForMx(address, await resolveMx(domain)))().catch(() => null)
+    : Promise.resolve(null)
   try {
-    return await Promise.race([lookup, timeout])
+    const fromIspdb = await Promise.race([lookup, timeout])
+    if (fromIspdb) return fromIspdb
+    return await Promise.race([byMx, timeout])
   } finally {
     if (timer) clearTimeout(timer)
   }
