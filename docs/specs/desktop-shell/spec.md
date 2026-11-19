@@ -25,7 +25,7 @@ O Meeting Scribe ainda não tem código de produto; só o app de prova em `prova
 
 ## Regras de negócio
 
-- N1. O áudio só sai da máquina para a AssemblyAI, e só durante uma gravação com chave configurada. As únicas chamadas de rede do app são para `streaming.assemblyai.com` e `llm-gateway.assemblyai.com`.
+- N1. O áudio só sai da máquina para a AssemblyAI, e só durante uma gravação com chave configurada (`streaming.assemblyai.com`, `llm-gateway.assemblyai.com`) ou numa transcrição de áudio do WhatsApp por clique (`api.assemblyai.com`, contrato 37). Fora isso, o app só fala com: `github.com`/`objects.githubusercontent.com` para a atualização (contrato 14); fotos e mídia do WhatsApp baixadas pela bridge local somente de `https://*.whatsapp.net`, sem redirecionamento (contratos 32 e 37); e os servidores MCP que a própria pessoa cadastrar (contrato 21). O Claude roda pelo CLI local. A extensão do Chrome fala só com `127.0.0.1`.
 - N2. A chave da AssemblyAI fica só no processo main, cifrada em disco com `safeStorage`. Nunca vai para o renderer, para log, para arquivo de teste nem para print. O renderer recebe apenas token temporário.
 - N3. Dado de exemplo sempre aparece rotulado "Exemplo" e nunca é salvo como reunião.
 - N4. Registro de reunião: `id` (uuid), `title` (padrão "Reunião de DD/MM HH:mm"), `startedAt` (ISO), `durationMs` (sem contar pausas), `sources: {mic: boolean, system: boolean}`.

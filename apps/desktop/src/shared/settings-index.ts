@@ -4,8 +4,8 @@ import { MCP_ADD_DESCRIPTION, MCP_CLI_DESCRIPTION, MCP_FOUND_DESCRIPTION } from 
 import { APP_PLUGINS, PLUGIN_INSTALL_DESCRIPTION, PLUGIN_SAVE_DESCRIPTION } from './plugins'
 import type { SettingsTab } from './routes'
 
-/** Descrição do interruptor "Quem fala no Meet" (contrato 27), a mesma na tela e na busca. */
-export const MEET_SPEAKERS_DESCRIPTION = 'Com a extensão do LAP Reuniões no Chrome, cada fala do Meet ganha o nome de quem falou. Tudo fica neste computador.'
+/** Descrição do interruptor "Quem fala no Meet" (contratos 27 e 41), a mesma na tela e na busca. */
+export const MEET_SPEAKERS_DESCRIPTION = 'Com a extensão do LAP Reuniões no Chrome, cada fala do Meet e do Teams ganha o nome de quem falou. Tudo fica neste computador.'
 
 /** Descrição de "IA anotando ao vivo" (contrato 30), a mesma na tela e na busca. */
 export const LIVE_CARDS_DESCRIPTION = 'Durante a gravação, a cada 5 minutos o Claude local lê o trecho novo da conversa e cria e resolve post-its. Vale como padrão do interruptor "IA anotando" de cada gravação.'
