@@ -17,6 +17,11 @@ export interface IncomingEmail {
   viewing: boolean
   /** App bloqueado (contrato 22): sem o assunto. */
   locked: boolean
+  /**
+   * Contrato 53 (D5): uma regra levou o email novo a outra pasta e o aviso continua: ele não está na Caixa de Entrada
+   * (nem à vista nela), mas notifica.
+   */
+  movedByRule?: boolean | undefined
 }
 
 export interface EmailNotice {
@@ -45,9 +50,10 @@ export function emailNoticeBody(message: Pick<EmailMessage, 'subject'>): string 
 
 /** Notifica? Nada desligado; nunca o que saiu da própria conta; nada com a Caixa de Entrada já à vista. */
 export function shouldNotifyEmail(input: IncomingEmail): boolean {
-  if (!input.enabled || !isInbox(input.message)) return false
+  if (!input.enabled || (!isInbox(input.message) && input.movedByRule !== true)) return false
   const own = input.account.address.toLowerCase()
   if (input.message.from.some((item) => item.address.toLowerCase() === own)) return false
+  if (input.movedByRule === true) return true
   // Bloqueado, a tela fica coberta: avisa, sem o assunto.
   return input.locked || !input.viewing
 }

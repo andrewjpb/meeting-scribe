@@ -106,7 +106,7 @@ import { emailStateLabel, exportEmail } from './email/export'
 import { readEmailAttachments } from './email/attach'
 import { createEmailNotifier, type EmailNotice } from './email/notify'
 import { loadRemoteImages, readLimited, systemLookup, type HostLookup, type RemoteImageFetch } from './email/remote-images'
-import { EMAIL_ACCOUNT_ID_PATTERN, EMAIL_REMOTE_IMAGE_MAX_BYTES, type EmailFolder, type EmailMessage } from '../shared/email'
+import { EMAIL_ACCOUNT_ID_PATTERN, EMAIL_REMOTE_IMAGE_MAX_BYTES, isInbox, type EmailFolder, type EmailMessage } from '../shared/email'
 
 // `app.setName` fixa o `userData` (~/Library/Application Support/Meeting Scribe) e o item do Chaveiro:
 // trocar este nome perderia reuniões, configurações e a chave. O nome que a pessoa vê é o da marca
@@ -537,7 +537,8 @@ async function notifyEmail(message: EmailMessage): Promise<void> {
   const account = emailService?.accounts().find((status) => status.account.id === message.accountId)?.account
   if (!account || !readSettings) return
   const current = await readSettings()
-  emailNotifier.receive({ message, account, enabled: current.emailNotifications, viewing: emailFocusedInbox() === message.accountId, locked: lockService?.isLocked() ?? false })
+  // Contrato 53: o `onMessage` só traz email novo da INBOX; fora dela, uma regra o moveu (e pediu o aviso).
+  emailNotifier.receive({ message, account, enabled: current.emailNotifications, viewing: emailFocusedInbox() === message.accountId, locked: lockService?.isLocked() ?? false, movedByRule: !isInbox(message) })
 }
 
 /** Contrato 43: as imagens do "Carregar imagens", sem cookie e sem seguir redirecionamento. No smoke, o servidor falso. */
@@ -1141,10 +1142,11 @@ function createAppServices(userData: string): AppServices {
     onStatus: (statuses) => {
       if (!lockService?.isLocked()) broadcast(appWindows(), 'scribe:email-state', statuses)
     },
-    // Contrato 43: a notificação sai também com o app bloqueado (sem o assunto).
-    onMessage: (message) => {
+    // Contrato 43: a notificação sai também com o app bloqueado (sem o assunto). Contrato 53: sem ela quando uma regra
+    // pediu "não avisar" ou levou o email à Lixeira (`notify: false`); a lista recebe sempre.
+    onMessage: (message, { notify }) => {
       if (!lockService?.isLocked()) broadcast(appWindows(), 'scribe:email-message', message)
-      notifyEmail(message).catch((error: unknown) => console.error('[email] notificação:', error))
+      if (notify) notifyEmail(message).catch((error: unknown) => console.error('[email] notificação:', error))
     },
     onMessagesChanged: (accountId) => {
       if (!lockService?.isLocked()) broadcast(appWindows(), 'scribe:email-changed', { accountId })
@@ -2038,6 +2040,12 @@ function registerIpc(services: AppServices): void {
   // formato já volta `invalid` do serviço; exceção que sobra é do `settings.json`.
   handle('scribe:email-signature-get', appOrigin, (_event, request) => email.signatureGet(request).catch(() => ({ ok: false, error: 'storage' }) as const))
   handle('scribe:email-signature-set', appOrigin, (_event, request) => email.signatureSet(request).catch(() => ({ ok: false, error: 'storage' }) as const))
+  // Contrato 53: as regras da conta e o "Executar agora" em dois passos (o segundo só com o token do primeiro). Nenhum
+  // envia email; o Assistente não tem nada disto.
+  handle('scribe:email-rules-get', appOrigin, (_event, request) => email.rulesGet(request).catch(() => ({ ok: false, error: 'unavailable' }) as const))
+  handle('scribe:email-rules-set', appOrigin, (_event, request) => email.rulesSet(request).catch(() => ({ ok: false, error: 'unavailable' }) as const))
+  handle('scribe:email-rules-preview', appOrigin, (_event, request) => email.rulesPreview(request).catch(() => ({ ok: false, error: 'unavailable' }) as const))
+  handle('scribe:email-rules-run', appOrigin, (_event, request) => email.rulesRun(request).catch(() => ({ ok: false, error: 'unavailable' }) as const))
   onEvent('scribe:email-folder-watch', appOrigin, (event, request) => email.watchFolder(event.sender.id, request))
   onEvent('scribe:email-viewing', appOrigin, (event, request) => {
     const viewing = request as { accountId?: unknown; folder?: unknown } | null | undefined

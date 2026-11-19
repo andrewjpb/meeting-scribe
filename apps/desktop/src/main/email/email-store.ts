@@ -12,8 +12,12 @@
 // As outras pastas abertas ficam à parte, em `<conta>.folders/`: um arquivo por pasta (as 200 mais recentes) e um índice
 // com a hora de uso de cada uma; passou de 30, sai a usada há mais tempo. O caminho da INBOX (IDLE, lida, apagar) não lê
 // nem grava esses arquivos.
+//
+// Contrato 53: o estado das regras da conta (último erro, último "Executar agora", contagem) em
+// `<conta>.rules-state.json`, na mesma fila da conta, fora do `settings.json` (D1). E `pruneBodies`: os corpos e as
+// mensagens inteiras de `<conta>.bodies/` que não são de nenhuma mensagem guardada saem (o achado N2 da revisão do 52).
 import { createHash, randomUUID } from 'node:crypto'
-import { chmod, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
+import { chmod, mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { z } from 'zod'
 import {
@@ -27,6 +31,7 @@ import {
   type EmailBody,
   type EmailMessage,
 } from '../../shared/email'
+import { EMAIL_RULE_ERROR_CODES, type EmailRuleState } from '../../shared/email-rules'
 
 export const EMAIL_DIR = 'email'
 /** Contrato 52: pastas abertas guardadas por conta (a usada há mais tempo sai). */
@@ -83,6 +88,15 @@ const cachedFolderSchema = z.object({
   messages: z.array(messageSchema).max(EMAIL_FOLDER_MESSAGES_MAX),
 })
 const folderIndexSchema = z.object({ version: z.literal(1), folders: z.record(mailboxSchema, z.object({ file: z.string().regex(/^[0-9a-f]{32}$/), at: z.number() })) })
+const ruleStateSchema = z.object({
+  version: z.literal(1),
+  rules: z.record(
+    z.string().max(64),
+    z.object({ lastError: z.object({ at: z.number(), code: z.enum(EMAIL_RULE_ERROR_CODES) }).strict().nullable(), lastRunAt: z.number().nullable(), hits: z.number().int().nonnegative() }).strict(),
+  ),
+})
+/** Contrato 53: um temporário de gravação mais velho que isto sobrou de uma gravação que não terminou. */
+const STALE_TEMP_MS = 10 * 60_000
 const bodySchema = z.object({
   text: z.string().nullable(),
   html: z.string().nullable(),
@@ -92,6 +106,12 @@ const bodySchema = z.object({
 export type EmailAccountData = z.infer<typeof dataSchema>
 
 export type EmailCachedFolder = z.infer<typeof cachedFolderSchema>
+
+/** Contrato 53 (CA11): o que está guardado da conta na hora da limpeza: o `<conta>.json` e as pastas abertas. */
+export interface EmailPruneLists {
+  data: EmailAccountData
+  folders: EmailCachedFolder[]
+}
 
 export const emptyAccountData = (): EmailAccountData => ({ version: STORE_VERSION, uidValidity: null, polled: false, seenUidls: [], inbox: [], sent: [], sentMailbox: EMAIL_SENT_MAILBOX })
 
@@ -127,12 +147,29 @@ export interface EmailStore {
   /** Contrato 52: uma pasta aberta guardada (fora a INBOX), ou `null`. */
   folder(accountId: string, path: string): Promise<EmailCachedFolder | null>
   /** Contrato 52: lê, aplica e grava uma pasta aberta (`null` tira); conta como uso dela no teto de pastas. */
-  updateFolder(accountId: string, path: string, change: (folder: EmailCachedFolder | null) => EmailCachedFolder | null): Promise<EmailCachedFolder | null>
+  updateFolder(
+    accountId: string,
+    path: string,
+    change: (folder: EmailCachedFolder | null) => EmailCachedFolder | null,
+    /** Contrato 53: alguma pasta saiu pelo teto de 30 (os corpos dela ficam para o `pruneBodies`). */
+    onEvicted?: () => void,
+  ): Promise<EmailCachedFolder | null>
   /** Contrato 52: os paths das pastas abertas guardadas. */
   folderPaths(accountId: string): Promise<string[]>
   /** Todos os corpos da conta (o `UIDVALIDITY` mudou). */
   clearBodies(accountId: string): Promise<void>
-  /** A conta saiu: o arquivo e os corpos. */
+  /**
+   * Contrato 53 (CA11): apaga de `<conta>.bodies/` todo corpo e mensagem inteira que não é de uma chave de `keep`, e os
+   * temporários com mais de 10 min. Pasta ausente não é erro. Devolve quantos apagou.
+   * Com `keep` função, as chaves saem das listas lidas já dentro da fila da conta (nenhum `update`/`setBody` entra entre
+   * a leitura e a limpeza); se o `<conta>.json` está ausente ou não se lê, nada é apagado.
+   */
+  pruneBodies(accountId: string, keep: Iterable<string> | ((lists: EmailPruneLists) => Iterable<string>)): Promise<number>
+  /** Contrato 53 (CA7): o estado das regras da conta, por id de regra (arquivo ausente ou inválido: vazio). */
+  ruleState(accountId: string): Promise<Record<string, EmailRuleState>>
+  /** Lê, aplica e grava o estado das regras, na fila da conta. */
+  updateRuleState(accountId: string, change: (state: Record<string, EmailRuleState>) => Record<string, EmailRuleState>): Promise<Record<string, EmailRuleState>>
+  /** A conta saiu: o arquivo, os corpos, as pastas e o estado das regras. */
   remove(accountId: string): Promise<void>
 }
 
@@ -156,7 +193,7 @@ async function readJson(file: string): Promise<unknown> {
   }
 }
 
-export function createEmailStore(root: string): EmailStore {
+export function createEmailStore(root: string, now: () => number = Date.now): EmailStore {
   const queues = new Map<string, Promise<unknown>>()
 
   const checkId = (accountId: string): string => {
@@ -170,6 +207,7 @@ export function createEmailStore(root: string): EmailStore {
   const bodyFile = (accountId: string, messageId: string): string => join(bodiesDir(accountId), `${fileName(messageId)}.json`)
   const rawFile = (accountId: string, messageId: string): string => join(bodiesDir(accountId), `${fileName(messageId)}.eml`)
   const foldersDir = (accountId: string): string => join(root, `${checkId(accountId)}.folders`)
+  const ruleStateFile = (accountId: string): string => join(root, `${checkId(accountId)}.rules-state.json`)
   const indexFile = (accountId: string): string => join(foldersDir(accountId), 'index.json')
   const folderFile = (accountId: string, file: string): string => join(foldersDir(accountId), `${file}.json`)
 
@@ -192,6 +230,11 @@ export function createEmailStore(root: string): EmailStore {
       run.catch(() => undefined),
     )
     return run
+  }
+
+  async function readRuleState(accountId: string): Promise<Record<string, EmailRuleState>> {
+    const parsed = ruleStateSchema.safeParse(await readJson(ruleStateFile(accountId)))
+    return parsed.success ? parsed.data.rules : {}
   }
 
   async function load(accountId: string): Promise<EmailAccountData> {
@@ -244,7 +287,7 @@ export function createEmailStore(root: string): EmailStore {
 
     folder: (accountId, path) => readFolder(accountId, path),
 
-    updateFolder: (accountId, path, change) =>
+    updateFolder: (accountId, path, change, onEvicted) =>
       serial(accountId, async () => {
         const index = await readIndex(accountId)
         const changed = change(await readFolder(accountId, path))
@@ -261,15 +304,65 @@ export function createEmailStore(root: string): EmailStore {
         }
         // Passou do teto: sai a pasta usada há mais tempo (o arquivo dela também).
         const order = [...folders].sort((a, b) => b[1].at - a[1].at)
-        for (const [gone, entry] of order.slice(EMAIL_CACHED_FOLDERS_MAX)) {
+        const evicted = order.slice(EMAIL_CACHED_FOLDERS_MAX)
+        for (const [gone, entry] of evicted) {
           folders.delete(gone)
           await rm(folderFile(accountId, entry.file), { force: true })
         }
         await writeAtomic(indexFile(accountId), `${JSON.stringify({ version: 1, folders: Object.fromEntries(folders) })}\n`)
+        if (evicted.length > 0) onEvicted?.()
         return next
       }),
 
     folderPaths: async (accountId) => Object.keys((await readIndex(accountId)).folders),
+
+    pruneBodies: (accountId, keep) =>
+      serial(accountId, async () => {
+        const dir = bodiesDir(accountId)
+        let keys: Iterable<string>
+        if (typeof keep === 'function') {
+          // Ausente ou ilegível não é "vazio": o `.eml` do POP3 pode ser a única cópia.
+          const data = migrateAccountData(await readJson(accountFile(accountId)))
+          if (data === null) return 0
+          const folders: EmailCachedFolder[] = []
+          for (const path of Object.keys((await readIndex(accountId)).folders)) {
+            const folder = await readFolder(accountId, path)
+            if (folder) folders.push(folder)
+          }
+          keys = keep({ data, folders })
+        } else keys = keep
+        const wanted = new Set([...keys].map(fileName))
+        let names: string[]
+        try {
+          names = await readdir(dir)
+        } catch {
+          return 0
+        }
+        let removed = 0
+        for (const name of names) {
+          const kept = /^([0-9a-f]{32})\.(json|eml)$/.exec(name)
+          if (kept) {
+            if (wanted.has(kept[1] ?? '')) continue
+          } else if (/\.tmp-/.test(name)) {
+            const info = await stat(join(dir, name)).catch(() => null)
+            if (!info || now() - info.mtimeMs <= STALE_TEMP_MS) continue
+          } else continue
+          await rm(join(dir, name), { force: true })
+          removed++
+        }
+        return removed
+      }),
+
+    ruleState: (accountId) => serial(accountId, () => readRuleState(accountId)),
+
+    updateRuleState: (accountId, change) =>
+      serial(accountId, async () => {
+        const rules = change(await readRuleState(accountId))
+        const next = ruleStateSchema.parse({ version: 1, rules })
+        await mkdir(root, { recursive: true, mode: 0o700 })
+        await writeAtomic(ruleStateFile(accountId), `${JSON.stringify(next)}\n`)
+        return next.rules
+      }),
 
     clearBodies: (accountId) => serial(accountId, () => rm(bodiesDir(accountId), { recursive: true, force: true })),
 
@@ -278,6 +371,7 @@ export function createEmailStore(root: string): EmailStore {
         await rm(accountFile(accountId), { force: true })
         await rm(bodiesDir(accountId), { recursive: true, force: true })
         await rm(foldersDir(accountId), { recursive: true, force: true })
+        await rm(ruleStateFile(accountId), { force: true })
       }),
   }
 }

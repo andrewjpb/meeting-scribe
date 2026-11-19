@@ -224,6 +224,8 @@ describe('assinatura no settings e no IPC (CA1, CA2)', () => {
         setEmailAccounts: (accounts) => real.setEmailAccounts(accounts),
         getEmailSignatures: () => Promise.reject(new Error('EIO')),
         setEmailSignature: () => Promise.reject(new Error('ENOSPC')),
+        getEmailRules: () => real.getEmailRules(),
+        setEmailRules: (accountId, rules) => real.setEmailRules(accountId, rules),
       },
       safeStorage: fakeSafeStorage,
       fetch: () => Promise.reject(new Error('sem rede no teste')),

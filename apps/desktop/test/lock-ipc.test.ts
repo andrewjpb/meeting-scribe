@@ -237,6 +237,11 @@ describe('canais com o app bloqueado (contrato 22, CA4)', () => {
       'scribe:email-open-folder',
       'scribe:email-remote-images',
       'scribe:email-remove-account',
+      // Contrato 53: as regras.
+      'scribe:email-rules-get',
+      'scribe:email-rules-preview',
+      'scribe:email-rules-run',
+      'scribe:email-rules-set',
       'scribe:email-send',
       // Contrato 54: a assinatura.
       'scribe:email-signature-get',

@@ -9,6 +9,7 @@ import type { BrandingInfo, BrandLogoChoice } from './branding'
 import type { LockResponse, LockStatus } from './lock'
 import type { EmailAccountInput, EmailAccountStatus, EmailAddResult, EmailAttachmentRequest, EmailAttachmentSaveResult, EmailAttachmentsResult, EmailAttachPickResult, EmailAutoconfig, EmailBodyResult, EmailFolder, EmailFolderDeleteResult, EmailFolderPathResult, EmailFoldersResult, EmailMessage, EmailMoveResult, EmailOpenFolderResult, EmailSendRequest, EmailSendResult, EmailTestResult } from './email'
 import type { EmailSignature, EmailSignatureResult } from './email-signature'
+import type { EmailRule, EmailRulePreviewResult, EmailRuleRunResult, EmailRulesGetResult, EmailRulesSetResult } from './email-rules'
 import type { KeySaveResult, KeyStatus, MicAccess, ModelCheck, ModelsResult } from './assemblyai'
 import type { Chat, ChatApprovalAnswer, ChatEvent, ChatListItem, ChatRedoRequest, ChatSendRequest, ChatSendResult, ChatUpdateRequest } from './chat'
 import type { ClaudeLocateResult, ClaudeRunState, ClaudeStartResult, ClaudeTranslateRequest, ClaudeTranslateResult } from './claude-cli'
@@ -427,6 +428,14 @@ export interface InvokeChannels {
   'scribe:email-signature-get': { request: { accountId: string }; response: EmailSignatureResult }
   /** Contrato 54 (CA2): grava a assinatura da conta (texto até 2000 caracteres e os dois interruptores). */
   'scribe:email-signature-set': { request: { accountId: string; signature: EmailSignature }; response: EmailSignatureResult }
+  /** Contrato 53 (CA12): as regras da conta, na ordem, com o estado de cada uma (último erro, último "Executar agora"). */
+  'scribe:email-rules-get': { request: { accountId: string }; response: EmailRulesGetResult }
+  /** Contrato 53 (CA9): a lista inteira, na ordem; confere a pasta de destino, a Lixeira e o POP3 antes de gravar. */
+  'scribe:email-rules-set': { request: { accountId: string; rules: EmailRule[] }; response: EmailRulesSetResult }
+  /** Contrato 53 (CA10): "Executar agora", primeiro passo: a contagem e o token. Nada muda. */
+  'scribe:email-rules-preview': { request: { accountId: string; ruleId: string }; response: EmailRulePreviewResult }
+  /** Segundo passo: só com o token do preview. */
+  'scribe:email-rules-run': { request: { accountId: string; ruleId: string; token: string }; response: EmailRuleRunResult }
   /** Automações (contrato 23): os agentes, quantas tarefas usam cada um e os modelos que o perfil oferece. */
   'scribe:agents-list': { request: undefined; response: AgentsList }
   /** Criar (`id: null`) ou trocar um agente. */
@@ -745,6 +754,10 @@ const INVOKE: Record<InvokeChannel, true> = {
   'scribe:email-folder-delete': true,
   'scribe:email-signature-get': true,
   'scribe:email-signature-set': true,
+  'scribe:email-rules-get': true,
+  'scribe:email-rules-set': true,
+  'scribe:email-rules-preview': true,
+  'scribe:email-rules-run': true,
   'scribe:agents-list': true,
   'scribe:agents-save': true,
   'scribe:agents-delete': true,
@@ -1038,6 +1051,11 @@ export const WHEN_LOCKED: Readonly<Record<InvokeChannel, LockedPolicy>> = Object
   // Contrato 54: a assinatura, como o resto do email.
   'scribe:email-signature-get': 'refused',
   'scribe:email-signature-set': 'refused',
+  // Contrato 53: as regras, como o resto do email.
+  'scribe:email-rules-get': 'refused',
+  'scribe:email-rules-set': 'refused',
+  'scribe:email-rules-preview': 'refused',
+  'scribe:email-rules-run': 'refused',
   // Automações (contrato 23, CA10): gerenciar agentes e tarefas, testar, pedir e ver o histórico, tudo recusado com
   // o app bloqueado. O agendador não depende de canal: roda no main e as tarefas continuam rodando bloqueado.
   'scribe:agents-list': 'refused',

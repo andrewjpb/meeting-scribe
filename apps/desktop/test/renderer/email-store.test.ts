@@ -94,6 +94,14 @@ describe('emailStore', () => {
     expect(useEmail.getState().folders[folderKey(A, 'inbox')]?.map((item) => item.id)).toEqual(['3', '2'])
   })
 
+  it('email movido por regra (contrato 53) não entra na Caixa de Entrada nem nos Enviados', () => {
+    useEmail.setState({ folders: { [folderKey(A, 'inbox')]: [message('1', 10)], [folderKey(A, 'sent')]: [] } })
+    useEmail.getState().receive(message('2', 20, { mailbox: 'Arquivo', id: 'servidor:1:2:Arquivo' }))
+    useEmail.getState().receive(message('3', 30, { mailbox: 'Lixeira', id: 'servidor:1:3:Lixeira' }))
+    expect(useEmail.getState().folders[folderKey(A, 'inbox')]?.map((item) => item.id)).toEqual(['1'])
+    expect(useEmail.getState().folders[folderKey(A, 'sent')]).toEqual([])
+  })
+
   it('corpo pedido uma vez, no máximo 3 ao mesmo tempo; a falha pode ser pedida de novo', async () => {
     const pending: ((value: unknown) => void)[] = []
     invoke.mockImplementation(() => new Promise((resolve) => pending.push(resolve)))

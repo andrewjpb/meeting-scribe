@@ -111,6 +111,9 @@ function fakeImap(initial: ImapMessage[] = []): FakeImap {
         setSeen: async (uid, seen) => {
           fake.calls.push(`UID STORE ${uid} ${seen ? '+' : '-'}FLAGS (\\Seen)`)
         },
+        setFlagged: async (uid, flagged) => {
+          fake.calls.push(`UID STORE ${uid} ${flagged ? '+' : '-'}FLAGS (\\Flagged)`)
+        },
         remove: async (uid) => {
           fake.calls.push(`UID STORE ${uid} +FLAGS (\\Deleted)`, `UID EXPUNGE ${uid}`)
           fake.messages = fake.messages.filter((message) => message.uid !== uid)

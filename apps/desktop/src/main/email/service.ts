@@ -25,10 +25,18 @@
 // Contrato 54: a assinatura de cada conta, lida e gravada no `settings.json` (sai junto quando a conta sai). Quem a põe no
 // texto é o rascunho da tela, antes do envio; o envio (o do clique e o da tarefa agendada) não acrescenta nada.
 //
+// Contrato 53: as regras da conta (`rules.ts`), no email novo que chega à INBOX (`fetchNew` do IMAP e o poll do POP3,
+// fora o primeiro), antes do `onMessage`: corpo (se alguma regra olha corpo ou anexo), marcas (`\Seen`, `\Flagged`) e
+// mover (para a pasta da regra ou para a `\Trash`), na fila da conta, com o corpo do mover (`moveQueued`), nunca o
+// `moveMessages` (enfileiraria de novo e travaria a conta). Falha deixa a mensagem na INBOX, com o "último erro" da regra
+// no `<conta>.rules-state.json` do store; nunca vira estado de erro da conta. "Executar agora" em dois passos
+// (`previewRule` devolve a contagem e um token; `runRule` só age com ele). E `pruneBodies`: os corpos que não são de
+// nenhuma mensagem guardada saem depois de cada corte pelo teto, no sincronismo e ao abrir o app, sempre na fila da conta.
+//
 // Erro de conexão (N4) nunca derruba o app: a conta fica `error` com uma mensagem curta e as outras seguem. Usuário ou
 // senha recusados não tentam de novo sozinhos (para o servidor não bloquear a conta); o resto tenta de novo em 1 min
 // (IMAP) ou no próximo poll (POP3).
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import type { ConnectionOptions } from 'node:tls'
 import { z } from 'zod'
 import {
@@ -74,6 +82,19 @@ import {
   isInbox,
 } from '../../shared/email'
 import { DEFAULT_EMAIL_SIGNATURE, type EmailSignature, type EmailSignatureResult } from '../../shared/email-signature'
+import {
+  EMAIL_RULE_TOKEN_TTL_MS,
+  EMPTY_EMAIL_RULE_STATE,
+  emailRuleListSchema,
+  type EmailRule,
+  type EmailRuleErrorCode,
+  type EmailRulePreviewResult,
+  type EmailRuleRunResult,
+  type EmailRulesFailure,
+  type EmailRulesGetResult,
+  type EmailRulesSetResult,
+  type EmailRuleState,
+} from '../../shared/email-rules'
 import type { SafeStorageLike } from '../secrets'
 import { emailAddressSchema, emailIncomingSchema, emailNameSchema, emailServerSchema, emailSignatureSchema, emailUsernameSchema, type StoredEmailAccount } from '../settings/schema'
 import type { SettingsStore } from '../settings/store'
@@ -95,6 +116,7 @@ import {
   type ImapSession,
 } from './imap-client'
 import { connectPop3, Pop3Error, type Pop3Connect, type Pop3Session } from './pop3-client'
+import { needsBody, planActions, ruleBody, type EmailRuleInput, type EmailRulePlan } from './rules'
 import { createEmailSecrets } from './secrets'
 import { sendSmtp, SmtpError, verifySmtp, type OutgoingMail, type SmtpSend, type SmtpVerify } from './smtp-client'
 
@@ -188,6 +210,11 @@ const folderDeleteSchema = z.object({ accountId: accountIdSchema, path: folderPa
 const messageRequestSchema = z.object({ accountId: accountIdSchema, id: messageIdSchema }).strict()
 const markReadSchema = messageRequestSchema.extend({ seen: z.boolean() }).strict()
 const signatureSetSchema = z.object({ accountId: accountIdSchema, signature: emailSignatureSchema }).strict()
+/** Contrato 53: os pedidos das regras (a lista é conferida à parte, para o erro ser `invalid` e não uma exceção). */
+const ruleIdSchema = z.string().min(1).max(64)
+const rulesSetSchema = z.object({ accountId: accountIdSchema, rules: z.array(z.unknown()) }).strict()
+const rulePreviewSchema = z.object({ accountId: accountIdSchema, ruleId: ruleIdSchema }).strict()
+const ruleRunSchema = z.object({ accountId: accountIdSchema, ruleId: ruleIdSchema, token: z.string().min(1).max(100) }).strict()
 /** Contrato 43: o nome do anexo, sem caminho nem caractere de controle. */
 const attachmentSchema = z
   .object({
@@ -468,7 +495,9 @@ const folderFailure = (error: EmailFolderFailure['error']): EmailFolderFailure =
 export interface EmailServiceDeps {
   /** `userData/email`. */
   root: string
-  settings: Pick<SettingsStore, 'get' | 'getEmailAccounts' | 'setEmailAccounts' | 'getEmailSignatures' | 'setEmailSignature'>
+  /** O store em `root` (nos testes, um que falha ou atrasa de propósito). */
+  store?: EmailStore
+  settings: Pick<SettingsStore, 'get' | 'getEmailAccounts' | 'setEmailAccounts' | 'getEmailSignatures' | 'setEmailSignature' | 'getEmailRules' | 'setEmailRules'>
   safeStorage: SafeStorageLike
   /** ISPDB do autoconfig (no smoke e nos testes, um HTTP falso). */
   fetch: AutoconfigFetch
@@ -489,8 +518,11 @@ export interface EmailServiceDeps {
   /** Opções extras do TLS do POP3 e do IMAP/SMTP (nos testes, o certificado do servidor falso). */
   tls?: ConnectionOptions
   onStatus: (statuses: EmailAccountStatus[]) => void
-  /** Mensagem nova na INBOX (IDLE do IMAP, ou poll do POP3 depois do primeiro). */
-  onMessage: (message: EmailMessage) => void
+  /**
+   * Mensagem nova na INBOX (IDLE do IMAP, ou poll do POP3 depois do primeiro), já com as regras aplicadas (contrato 53):
+   * `notify: false` quando uma regra pediu "não avisar" ou levou a mensagem à Lixeira.
+   */
+  onMessage: (message: EmailMessage, options: { notify: boolean }) => void
   /** A lista de uma conta mudou (sincronismo, lida, apagada, enviada): a tela relê. */
   onMessagesChanged?: (accountId: string) => void
   /** Só estados e tipos de erro: nunca senha, endereço ou texto de mensagem. */
@@ -572,6 +604,19 @@ export interface EmailService {
   /** Contrato 54 (CA2): a assinatura da conta (a padrão, vazia e com os dois interruptores ligados, se nunca foi gravada). */
   signatureGet(request: unknown): Promise<EmailSignatureResult>
   signatureSet(request: unknown): Promise<EmailSignatureResult>
+  /** Contrato 53 (CA12): as regras da conta, na ordem, com o estado de cada uma. */
+  rulesGet(request: unknown): Promise<EmailRulesGetResult>
+  /**
+   * A lista inteira das regras da conta (CA9: confere POP3 e, nas regras ligadas novas ou com as ações mudadas, a pasta
+   * e a Lixeira antes de gravar; apagar sem Lixeira grava com o erro na regra).
+   */
+  rulesSet(request: unknown): Promise<EmailRulesSetResult>
+  rulesPreview(request: unknown): Promise<EmailRulePreviewResult>
+  rulesRun(request: unknown): Promise<EmailRuleRunResult>
+  /** Contrato 53 (CA10): "Executar agora", primeiro passo: só aquela regra nas mensagens da INBOX guardada. Nada muda. */
+  previewRule(accountId: string, ruleId: string): Promise<EmailRulePreviewResult>
+  /** Segundo passo: só com o token do preview (uso único, 2 min, a mesma regra e as mesmas mensagens). */
+  runRule(accountId: string, ruleId: string, token: string): Promise<EmailRuleRunResult>
   /** Sair do app: fecha as conexões e para os relógios. */
   dispose(): Promise<void>
 }
@@ -608,7 +653,7 @@ export function createEmailService(deps: EmailServiceDeps): EmailService {
   const readAttachments = deps.parseAttachments ?? parseAttachments
   const retryMs = deps.retryMs ?? EMAIL_RETRY_MS
   const secrets = createEmailSecrets(deps.safeStorage)
-  const store: EmailStore = createEmailStore(deps.root)
+  const store: EmailStore = deps.store ?? createEmailStore(deps.root)
   const guard = createEmailClickGuard(now)
   const runtimes = new Map<string, Runtime>()
   /** Adicionar e remover conta leem e gravam a lista inteira: um de cada vez, para nenhum perder a conta do outro. */
@@ -623,6 +668,8 @@ export function createEmailService(deps: EmailServiceDeps): EmailService {
   const folderCache = new Map<string, ImapFolderEntry[]>()
   /** Contrato 52: a pasta aberta relida de cada janela (pelo id do `webContents`). */
   const folderWatches = new Map<number, { accountId: string; path: string; timer: ReturnType<typeof setInterval>; failures: number }>()
+  /** Contrato 53 (CA10): os tokens do "Executar agora" (uso único, 2 min), presos à conta, à regra e às mensagens. */
+  const ruleTokens = new Map<string, { accountId: string; ruleId: string; hash: string; ids: string[]; at: number }>()
   let disposed = false
 
   const log = (message: string): void => deps.log?.(`[email] ${message}`)
@@ -690,6 +737,8 @@ export function createEmailService(deps: EmailServiceDeps): EmailService {
     })
     rt.sentMailbox = data.sentMailbox
     if (reset && live(rt, generation)) await store.clearBodies(id)
+    // Contrato 53 (CA11): o que saiu da INBOX (pelo teto ou do servidor) não deixa o corpo para trás.
+    if (live(rt, generation)) await pruneAccount(rt)
     changed(id)
   }
 
@@ -703,13 +752,26 @@ export function createEmailService(deps: EmailServiceDeps): EmailService {
     const known = new Set(data.inbox.map((message) => message.id))
     const added = fresh.map((message) => fromImap(id, message)).filter((message) => !known.has(message.id))
     if (added.length === 0 || !live(rt, generation)) return
-    await store.update(id, (current) => ({ ...current, inbox: capInbox([...added, ...current.inbox.filter((message) => !added.some((item) => item.id === message.id))]) }))
+    let capped = false
+    await store.update(id, (current) => {
+      const merged = [...added, ...current.inbox.filter((message) => !added.some((item) => item.id === message.id))]
+      capped = merged.length > EMAIL_INBOX_MAX
+      return { ...current, inbox: capInbox(merged) }
+    })
     // Contrato 52: o que entrou na INBOX por "Mover" não é email novo.
     const at = now()
     for (const [key, until] of rt.movedIn) if (until < at) rt.movedIn.delete(key)
     const fresh2 = added.filter((message) => !(message.messageId !== null && rt.movedIn.has(message.messageId)))
     log(`${tag(rt)}: ${added.length} mensagem(ns) nova(s)`)
-    for (const message of fresh2) if (!disposed) deps.onMessage(message)
+    // Contrato 53: sem regra ligada, o caminho de sempre (nenhuma ida a mais ao servidor).
+    const rules = fresh2.length > 0 ? await enabledRules(id) : []
+    if (rules.length === 0) {
+      for (const message of fresh2) if (!disposed) deps.onMessage(message, { notify: true })
+    } else {
+      const delivered = await applyRules(rt, session, fresh2, rules)
+      for (const item of delivered) if (!disposed && live(rt, generation)) deps.onMessage(item.message, { notify: item.notify })
+    }
+    if (capped && live(rt, generation)) await pruneAccount(rt)
     changed(id)
   }
 
@@ -762,6 +824,7 @@ export function createEmailService(deps: EmailServiceDeps): EmailService {
     let session: Pop3Session | null = null
     const added: EmailMessage[] = []
     let firstPoll = false
+    let capped = false
     try {
       session = await pop3(serverConfig(rt, pass, rt.account.incoming))
       const list = await session.uidl()
@@ -776,11 +839,11 @@ export function createEmailService(deps: EmailServiceDeps): EmailService {
       /** Grava o UIDL como visto (e a mensagem, se veio) logo em seguida: uma falha adiante não desfaz o que já entrou. */
       const record = async (uidls: string[], message: EmailMessage | null): Promise<void> => {
         if (!live(rt, generation)) throw new Error('conta removida')
-        await store.update(id, (current) => ({
-          ...current,
-          seenUidls: [...current.seenUidls.filter((uidl) => !uidls.includes(uidl)), ...uidls].slice(-20_000),
-          inbox: message ? capInbox([message, ...current.inbox.filter((item) => item.id !== message.id)]) : current.inbox,
-        }))
+        await store.update(id, (current) => {
+          const merged = message ? [message, ...current.inbox.filter((item) => item.id !== message.id)] : current.inbox
+          if (merged.length > EMAIL_INBOX_MAX) capped = true
+          return { ...current, seenUidls: [...current.seenUidls.filter((uidl) => !uidls.includes(uidl)), ...uidls].slice(-20_000), inbox: capInbox(merged) }
+        })
       }
       if (skipped.length > 0) await record(skipped, null)
       for (const [number, uidl] of wanted) {
@@ -816,20 +879,28 @@ export function createEmailService(deps: EmailServiceDeps): EmailService {
       // Os UIDLs do servidor agora: os que saíram dele não ficam lembrados para sempre.
       const onServer = new Set(list.values())
       await store.update(id, (current) => ({ ...current, polled: true, seenUidls: current.seenUidls.filter((uidl) => onServer.has(uidl)) }))
-      announceAdded()
+      await announceAdded()
+      if (capped && live(rt, generation)) await pruneAccount(rt)
       setState(rt, 'connected', null)
       schedule(rt, await retry())
     } catch (error) {
       session?.close()
       // O que já foi gravado antes da falha aparece na tela.
-      if (live(rt, generation)) announceAdded()
+      if (live(rt, generation)) await announceAdded().catch((announceError: unknown) => log(`${tag(rt)}: regras não aplicadas (${failureOf(announceError)})`))
       fail(rt, error, generation, await retry())
     }
 
-    function announceAdded(): void {
+    async function announceAdded(): Promise<void> {
       if (added.length === 0) return
       log(`${tag(rt)}: ${added.length} mensagem(ns) baixada(s) pelo POP3`)
-      if (!firstPoll) for (const message of added) if (!disposed) deps.onMessage(message)
+      // Contrato 53: as regras só no que vira aviso (o primeiro poll não avisa nem aplica regra).
+      const rules = firstPoll ? [] : await enabledRules(id)
+      if (rules.length === 0) {
+        if (!firstPoll) for (const message of added) if (!disposed) deps.onMessage(message, { notify: true })
+      } else {
+        const delivered = await applyRules(rt, null, added, rules)
+        for (const item of delivered) if (!disposed && live(rt, generation)) deps.onMessage(item.message, { notify: item.notify })
+      }
       changed(id)
     }
   }
@@ -977,14 +1048,20 @@ export function createEmailService(deps: EmailServiceDeps): EmailService {
     // O envio já saiu: falhar ao guardar ou no APPEND não vira erro para a tela.
     try {
       if (rt.removed) throw new Error('conta removida')
-      await store.update(accountId, (current) => ({
+      let sentCapped = false
+      await store.update(accountId, (current) => {
+        sentCapped = current.sent.length + 1 > EMAIL_SENT_MAX
+        return {
         ...current,
         sent: [{ ...sent, mailbox: current.sentMailbox }, ...current.sent].slice(0, EMAIL_SENT_MAX),
         inbox: parent ? current.inbox.map((item) => (item.id === parent.id ? { ...item, answered: true } : item)) : current.inbox,
-      }))
+        }
+      })
       await store.setBody(accountId, bodyKey(sent), { text, html: null, attachments: attachments.map((item) => ({ filename: item.name, contentType: 'application/octet-stream', size: item.bytes.byteLength })) })
       // Contrato 43: os bytes enviados, para baixar ou encaminhar os anexos depois.
       if (attachments.length > 0) await store.setRaw(accountId, bodyKey(sent), bytes)
+      // Contrato 53 (CA11): o enviado mais antigo saiu pelo teto; o corpo e o `.eml` dele também.
+      if (sentCapped) void enqueue(rt, () => pruneAccount(rt))
     } catch (error) {
       log(`${tag(rt)}: enviado não guardado (${failureOf(error)})`)
     }
@@ -1120,7 +1197,8 @@ export function createEmailService(deps: EmailServiceDeps): EmailService {
       const ids = new Set(messages.map((message) => message.id))
       dropped = (current?.messages ?? []).filter((message) => !ids.has(message.id))
       return { path, uidValidity: read.uidValidity, at: now(), messages }
-    })
+      // Contrato 53 (CA11): uma pasta saiu pelo teto de 30; os corpos dela saem na fila da conta.
+    }, () => void enqueue(rt, () => pruneAccount(rt)))
     // Os corpos das que saíram da pasta (ou do `UIDVALIDITY` antigo) não ficam para sempre.
     for (const message of dropped) await store.removeBody(accountId, bodyKey(message)).catch(() => undefined)
     if (rt.generation === generation) log(`${tag(rt)}: pasta aberta (${messages.length} mensagens)`)
@@ -1137,10 +1215,12 @@ export function createEmailService(deps: EmailServiceDeps): EmailService {
     if (isFailure(rt)) return rt
     const list = [...new Set(parsed.data.uids)]
     // Na fila da conta: um sincronismo da INBOX em andamento termina antes, e não devolve as movidas à lista.
-    return enqueue(rt, () => moveQueued(rt, fromPath, list, toPath))
+    const result = await enqueue(rt, () => moveQueued(rt, fromPath, list, toPath))
+    return result.ok ? { ok: true, moved: result.moved } : result
   }
 
-  async function moveQueued(rt: Runtime, fromPath: string, list: number[], toPath: string): Promise<EmailMoveResult> {
+  /** O mover já na fila da conta; com o `UIDVALIDITY` do destino (`COPYUID`), que as regras usam (contrato 53). */
+  async function moveQueued(rt: Runtime, fromPath: string, list: number[], toPath: string): Promise<{ ok: true; moved: { fromUid: number; toUid: number | null }[]; uidValidity: string | null } | EmailFolderFailure> {
     const accountId = rt.account.id
     if (rt.removed) return folderFailure('missing')
     const fromInbox = isInbox({ mailbox: fromPath })
@@ -1160,7 +1240,7 @@ export function createEmailService(deps: EmailServiceDeps): EmailService {
       folderCache.delete(accountId)
       return result
     }
-    if (rt.removed) return { ok: true, moved: result.moved }
+    if (rt.removed) return { ok: true, moved: result.moved, uidValidity: result.uidValidity }
     const target = new Map(result.moved.map((item) => [item.fromUid, item.toUid]))
     const keep = (messages: EmailMessage[]): EmailMessage[] => messages.filter((message) => message.uid === null || !gone.has(message.uid))
     // As que chegam com o UID novo (`COPYUID`): a cópia na pasta de destino.
@@ -1171,11 +1251,16 @@ export function createEmailService(deps: EmailServiceDeps): EmailService {
         return { ...message, mailbox, uid, id: id(uid) }
       })
     }
+    let capped = false
     await store.update(accountId, (current) => {
       let inbox = fromInbox ? keep(current.inbox) : current.inbox
       if (toInbox && result.uidValidity === current.uidValidity) {
         const copies = arrived(EMAIL_INBOX_MAILBOX, (uid) => String(uid))
-        if (copies) inbox = capInbox([...copies, ...inbox.filter((message) => !copies.some((item) => item.id === message.id))])
+        if (copies) {
+          const merged = [...copies, ...inbox.filter((message) => !copies.some((item) => item.id === message.id))]
+          capped = merged.length > EMAIL_INBOX_MAX
+          inbox = capInbox(merged)
+        }
       }
       return { ...current, inbox }
     })
@@ -1196,9 +1281,10 @@ export function createEmailService(deps: EmailServiceDeps): EmailService {
       }
     }
     for (const message of known) await store.removeBody(accountId, bodyKey(message)).catch(() => undefined)
+    if (capped) await pruneAccount(rt)
     log(`${tag(rt)}: ${list.length} mensagem(ns) movida(s)`)
     foldersChanged(rt)
-    return { ok: true, moved: result.moved }
+    return { ok: true, moved: result.moved, uidValidity: result.uidValidity }
   }
 
   async function createFolder(accountId: string, parentPath: string | null, name: string): Promise<EmailFolderPathResult> {
@@ -1255,6 +1341,7 @@ export function createEmailService(deps: EmailServiceDeps): EmailService {
     foldersChanged(rt)
     if (isFailure(renamed)) return renamed
     await forgetFolder(rt, entry)
+    await retargetRules(rt, entry, renamed)
     log(`${tag(rt)}: pasta renomeada`)
     return { ok: true, path: renamed }
   }
@@ -1276,8 +1363,441 @@ export function createEmailService(deps: EmailServiceDeps): EmailService {
     foldersChanged(rt)
     if (isFailure(deleted)) return deleted
     await forgetFolder(rt, entry)
+    await markRulesFolderMissing(rt, entry)
     log(`${tag(rt)}: pasta apagada`)
     return { ok: true }
+  }
+
+  // Contrato 53: as regras da conta.
+
+  /** As regras gravadas da conta, na ordem. */
+  async function savedRules(accountId: string): Promise<EmailRule[]> {
+    return (await deps.settings.getEmailRules())[accountId] ?? []
+  }
+
+  /** As ligadas; o `settings.json` que não se lê vale como nenhuma (o email chega como sempre). */
+  async function enabledRules(accountId: string): Promise<EmailRule[]> {
+    try {
+      return (await savedRules(accountId)).filter((rule) => rule.enabled)
+    } catch {
+      log('regras: settings.json não lido')
+      return []
+    }
+  }
+
+  /**
+   * CA11: os corpos (e as mensagens inteiras) que não são de nenhuma mensagem guardada (INBOX, enviados, pastas abertas)
+   * saem. Sempre na fila da conta: um poll do POP3 grava o `.eml` antes de pôr a mensagem na lista. As listas são lidas
+   * dentro da fila do store, na mesma tarefa da limpeza: um envio no meio (que não passa pela fila da conta) entra na
+   * lista antes ou grava o corpo depois, nunca entre as duas. O `<conta>.json` que sumiu ou não se lê não apaga nada:
+   * o `.eml` do POP3 pode ser a única cópia.
+   */
+  async function pruneAccount(rt: Runtime): Promise<void> {
+    if (rt.removed) return
+    const id = rt.account.id
+    try {
+      const removed = await store.pruneBodies(id, ({ data, folders }) => [...data.inbox, ...data.sent, ...folders.flatMap((folder) => folder.messages)].map(bodyKey))
+      if (removed > 0) log(`${tag(rt)}: ${removed} corpo(s) sem mensagem apagado(s)`)
+    } catch (error) {
+      log(`${tag(rt)}: limpeza dos corpos falhou (${failureOf(error)})`)
+    }
+  }
+
+  const ruleInput = (message: EmailMessage, body: EmailBody | null): EmailRuleInput => ({ from: message.from, to: message.to, cc: message.cc, subject: message.subject, ...ruleBody(body) })
+
+  /** O corpo para as condições: o guardado ou, no IMAP, baixado e guardado; grande demais ou ilegível, `null` (D8). */
+  async function ruleBodyOf(rt: Runtime, session: ImapSession | null, message: EmailMessage): Promise<EmailBody | null> {
+    const cached = await store.body(rt.account.id, bodyKey(message)).catch(() => null)
+    if (cached || message.uid === null || !session) return cached
+    try {
+      const raw = await session.source(message.uid)
+      if (!Buffer.isBuffer(raw)) return null
+      const parsed = await parse(raw)
+      if (!rt.removed) await store.setBody(rt.account.id, bodyKey(message), parsed.body)
+      return parsed.body
+    } catch (error) {
+      log(`${tag(rt)}: regras: corpo não lido (${failureOf(error)})`)
+      return null
+    }
+  }
+
+  const ruleErrorOf = (error: unknown): EmailRuleErrorCode => (['connection', 'timeout', 'tls', 'closed'].includes(failureOf(error)) ? 'unavailable' : 'server')
+
+  interface RuleTarget {
+    message: EmailMessage
+    plan: EmailRulePlan
+  }
+  /** O estado final da mensagem (`message`), se saiu da INBOX e se alguma etapa falhou. */
+  interface RuleOutcome {
+    message: EmailMessage
+    moved: boolean
+    failed: boolean
+  }
+  /** Por regra, nesta rodada: em quantas mensagens agiu e o último erro (`null`: nenhum). */
+  type RuleTally = Map<string, { hits: number; error: EmailRuleErrorCode | null }>
+
+  /**
+   * Os planos, na fila da conta: (1) as marcas (`\Seen`, `\Flagged`) na conexão da INBOX; (2) o mover, um `MOVE` por
+   * destino (até 500), pelo corpo do mover (`moveQueued`); apagar é mover para a `\Trash` do `LIST` (N3). A pasta que não
+   * está no `LIST` (relido uma vez) nem é tentada. POP3: só "marcar lida", no app (N2). O que falha fica onde está.
+   */
+  async function executePlans(rt: Runtime, session: ImapSession | null, targets: readonly RuleTarget[], rules: readonly EmailRule[], tally: RuleTally): Promise<RuleOutcome[]> {
+    const id = rt.account.id
+    const pop3 = rt.account.incoming.protocol === 'pop3'
+    const byId = new Map(rules.map((rule) => [rule.id, rule]))
+    const outcomes: RuleOutcome[] = targets.map((target) => ({ message: { ...target.message }, moved: false, failed: false }))
+    const errors = targets.map(() => new Map<string, EmailRuleErrorCode>())
+    /** A etapa falhou: o erro vai para as regras do plano que pediram aquela ação. */
+    const blame = (index: number, pick: (rule: EmailRule) => boolean, code: EmailRuleErrorCode): void => {
+      for (const ruleId of targets[index]?.plan.ruleIds ?? []) {
+        const rule = byId.get(ruleId)
+        if (rule && pick(rule)) errors[index]?.set(ruleId, code)
+      }
+      const outcome = outcomes[index]
+      if (outcome) outcome.failed = true
+    }
+    const wantsMove = (rule: EmailRule): boolean => rule.actions.moveTo !== null
+    const wantsDelete = (rule: EmailRule): boolean => rule.actions.delete
+
+    const seen = new Set<string>()
+    const flagged = new Set<string>()
+    for (const [index, { message, plan }] of targets.entries()) {
+      if (pop3) {
+        if (plan.markRead) seen.add(message.id)
+        // Só por arquivo antigo ou editado à mão: o POP3 não tem como ir ao servidor.
+        if (plan.flag) blame(index, (rule) => rule.actions.flag, 'pop3')
+        if (plan.moveTo !== null) blame(index, wantsMove, 'pop3')
+        if (plan.delete) blame(index, wantsDelete, 'pop3')
+        continue
+      }
+      if (message.uid === null) continue
+      if (plan.markRead && !message.seen) {
+        if (!session) blame(index, (rule) => rule.actions.markRead, 'unavailable')
+        else
+          await session.setSeen(message.uid, true).then(
+            () => seen.add(message.id),
+            (error: unknown) => blame(index, (rule) => rule.actions.markRead, ruleErrorOf(error)),
+          )
+      }
+      if (plan.flag && !message.flagged) {
+        if (!session) blame(index, (rule) => rule.actions.flag, 'unavailable')
+        else
+          await session.setFlagged(message.uid, true).then(
+            () => flagged.add(message.id),
+            (error: unknown) => blame(index, (rule) => rule.actions.flag, ruleErrorOf(error)),
+          )
+      }
+    }
+    if (seen.size > 0 || flagged.size > 0) {
+      for (const outcome of outcomes) {
+        if (seen.has(outcome.message.id)) outcome.message.seen = true
+        if (flagged.has(outcome.message.id)) outcome.message.flagged = true
+      }
+      if (!rt.removed) {
+        const mark = (item: EmailMessage): EmailMessage => (seen.has(item.id) || flagged.has(item.id) ? { ...item, seen: item.seen || seen.has(item.id), flagged: item.flagged || flagged.has(item.id) } : item)
+        // As marcas já estão no servidor: o store que não grava agora acerta no próximo sincronismo.
+        await store.update(id, (current) => ({ ...current, inbox: current.inbox.map(mark) })).catch((error: unknown) => log(`${tag(rt)}: regras: marcas não guardadas (${failureOf(error)})`))
+      }
+    }
+
+    if (!pop3) {
+      let refreshed = false
+      /** A pasta no `LIST` (o guardado; sem achar, relido uma vez). `undefined`: o `LIST` não veio; `null`: não está. */
+      const lookup = async (pick: (entries: readonly ImapFolderEntry[]) => ImapFolderEntry | undefined): Promise<ImapFolderEntry | null | undefined> => {
+        for (let attempt = 0; attempt < 2; attempt++) {
+          if (attempt === 1) {
+            if (refreshed) break
+            refreshed = true
+            folderCache.delete(id)
+          }
+          const entries = await folderEntries(rt)
+          if (isFailure(entries)) return undefined
+          const found = pick(entries)
+          if (found) return found
+        }
+        return null
+      }
+      const groups = new Map<string, number[]>()
+      // Cada etapa no seu `try`: o que já foi movido continua dito como movido se uma etapa adiante lançar.
+      const failMove = (index: number, error: unknown): void => {
+        log(`${tag(rt)}: regras: mover não feito (${failureOf(error)})`)
+        blame(index, targets[index]?.plan.delete === true ? wantsDelete : wantsMove, ruleErrorOf(error))
+      }
+      for (const [index, { message, plan }] of targets.entries()) {
+        if ((plan.moveTo === null && !plan.delete) || message.uid === null || rt.removed) continue
+        let dest: string
+        try {
+          if (plan.delete) {
+            const trash = await lookup((entries) => entries.find((entry) => entry.specialUse === '\\Trash' && !entry.noselect))
+            if (!trash) {
+              blame(index, wantsDelete, trash === null ? 'no-trash' : 'unavailable')
+              continue
+            }
+            dest = trash.path
+          } else {
+            const path = plan.moveTo as string
+            // Sem o `LIST`, o `MOVE` é tentado assim mesmo; não estar nele, nem tenta.
+            if ((await lookup((entries) => entries.find((entry) => entry.path === path && !entry.noselect))) === null) {
+              blame(index, wantsMove, 'folder-missing')
+              continue
+            }
+            dest = path
+          }
+        } catch (error) {
+          failMove(index, error)
+          continue
+        }
+        groups.set(dest, [...(groups.get(dest) ?? []), index])
+      }
+      for (const [dest, indexes] of groups) {
+        for (let start = 0; start < indexes.length; start += EMAIL_MOVE_MAX) {
+          const chunk = indexes.slice(start, start + EMAIL_MOVE_MAX)
+          const uids = chunk.map((index) => targets[index]?.message.uid as number)
+          let result: Awaited<ReturnType<typeof moveQueued>>
+          try {
+            result = await moveQueued(rt, EMAIL_INBOX_MAILBOX, uids, dest)
+          } catch (error) {
+            for (const index of chunk) failMove(index, error)
+            continue
+          }
+          if (!result.ok) {
+            const code: EmailRuleErrorCode = result.error === 'unavailable' ? 'unavailable' : 'server'
+            let gone = false
+            // O `LIST` guardado dizia que a pasta existia: relido, ela pode ter sumido por fora (webmail).
+            if (code === 'server' && !refreshed) {
+              refreshed = true
+              folderCache.delete(id)
+              const entries = await folderEntries(rt).catch((): EmailFolderFailure => folderFailure('unavailable'))
+              gone = !isFailure(entries) && !entries.some((entry) => entry.path === dest && !entry.noselect)
+            }
+            for (const index of chunk) {
+              const deleting = targets[index]?.plan.delete === true
+              blame(index, deleting ? wantsDelete : wantsMove, gone ? (deleting ? 'no-trash' : 'folder-missing') : code)
+            }
+            continue
+          }
+          const map = new Map(result.moved.map((item) => [item.fromUid, item.toUid]))
+          for (const index of chunk) {
+            const outcome = outcomes[index]
+            if (!outcome || outcome.message.uid === null) continue
+            const toUid = map.get(outcome.message.uid) ?? null
+            outcome.moved = true
+            // Com o `COPYUID`, a mensagem como está no destino; sem ele, o id da origem e sem UID (abrir é do 55).
+            outcome.message =
+              toUid !== null && result.uidValidity !== null
+                ? { ...outcome.message, mailbox: dest, uid: toUid, id: serverMessageId(dest, result.uidValidity, toUid) }
+                : { ...outcome.message, mailbox: dest, uid: null }
+          }
+        }
+      }
+    }
+
+    for (const [index, target] of targets.entries()) {
+      for (const ruleId of target.plan.ruleIds) {
+        const entry = tally.get(ruleId) ?? { hits: 0, error: null }
+        const code = errors[index]?.get(ruleId)
+        if (code) entry.error = code
+        else entry.hits++
+        tally.set(ruleId, entry)
+      }
+    }
+    return outcomes
+  }
+
+  /** CA7: grava a rodada no estado das regras: erro novo, ou o sucesso limpa o anterior; `runRuleId` ganha `lastRunAt`. */
+  async function saveTally(rt: Runtime, tally: RuleTally, runRuleId: string | null = null): Promise<void> {
+    if ((tally.size === 0 && runRuleId === null) || rt.removed) return
+    const at = now()
+    try {
+      await store.updateRuleState(rt.account.id, (state) => {
+        const next = { ...state }
+        for (const [ruleId, item] of tally) {
+          const current = next[ruleId] ?? { ...EMPTY_EMAIL_RULE_STATE }
+          next[ruleId] = { ...current, hits: current.hits + item.hits, lastError: item.error ? { at, code: item.error } : null }
+        }
+        if (runRuleId !== null) next[runRuleId] = { ...(next[runRuleId] ?? { ...EMPTY_EMAIL_RULE_STATE }), lastRunAt: at }
+        return next
+      })
+    } catch (error) {
+      log(`${tag(rt)}: estado das regras não gravado (${failureOf(error)})`)
+    }
+  }
+
+  /** CA4: as regras ligadas nas mensagens novas; devolve cada uma no estado final, com o aviso (CA5). */
+  async function applyRules(rt: Runtime, session: ImapSession | null, messages: readonly EmailMessage[], rules: readonly EmailRule[]): Promise<{ message: EmailMessage; notify: boolean }[]> {
+    const wantBody = needsBody(rules)
+    const targets: RuleTarget[] = []
+    for (const message of messages) {
+      const body = wantBody ? await ruleBodyOf(rt, session, message) : null
+      targets.push({ message, plan: planActions(ruleInput(message, body), rules) })
+    }
+    const acting = targets.filter((target) => target.plan.ruleIds.length > 0)
+    const tally: RuleTally = new Map()
+    let outcomes: RuleOutcome[]
+    try {
+      outcomes = acting.length > 0 ? await executePlans(rt, session, acting, rules, tally) : []
+    } catch (error) {
+      // Nunca derruba a conta nem impede o aviso: a mensagem fica como chegou.
+      log(`${tag(rt)}: regras não aplicadas (${failureOf(error)})`)
+      outcomes = acting.map((target) => ({ message: target.message, moved: false, failed: true }))
+    }
+    await saveTally(rt, tally)
+    const final = new Map(acting.map((target, index) => [target.message.id, { plan: target.plan, message: outcomes[index]?.message ?? target.message }]))
+    if (acting.length > 0) log(`${tag(rt)}: regras aplicadas em ${acting.length} mensagem(ns)`)
+    return messages.map((message) => {
+      const item = final.get(message.id)
+      return item ? { message: item.message, notify: !(item.plan.silent || item.plan.delete) } : { message, notify: true }
+    })
+  }
+
+  /**
+   * CA9: a pasta de destino e a Lixeira, pelo `LIST` (relido uma vez se faltar algo), só das regras que se conferem
+   * (`changedRules`). Pasta que não existe: `folder-missing` (a lista não grava). Apagar sem Lixeira não trava a lista:
+   * volta em `noTrash` (os ids dessas regras), que gravam com o erro. Sem o `LIST`, nada a dizer (grava).
+   */
+  async function checkRuleTargets(rt: Runtime, rules: readonly EmailRule[]): Promise<{ missing: boolean; noTrash: string[] }> {
+    const moves = rules.flatMap((rule) => (rule.actions.moveTo === null ? [] : [rule.actions.moveTo]))
+    const deletes = rules.filter((rule) => rule.actions.delete).map((rule) => rule.id)
+    const none = { missing: false, noTrash: [] }
+    if (moves.length === 0 && deletes.length === 0) return none
+    const missing = (entries: readonly ImapFolderEntry[]): boolean => moves.some((path) => !entries.some((entry) => entry.path === path && !entry.noselect))
+    const noTrash = (entries: readonly ImapFolderEntry[]): boolean => deletes.length > 0 && !entries.some((entry) => entry.specialUse === '\\Trash' && !entry.noselect)
+    let entries = await folderEntries(rt)
+    if (isFailure(entries)) return none
+    if (missing(entries) || noTrash(entries)) {
+      folderCache.delete(rt.account.id)
+      entries = await folderEntries(rt)
+      if (isFailure(entries)) return none
+    }
+    return { missing: missing(entries), noTrash: noTrash(entries) ? deletes : [] }
+  }
+
+  /**
+   * CA9 e D6: as regras que se conferem ao gravar: as ligadas que são novas ou cujas ações mudaram. Uma regra antiga já
+   * quebrada (pasta que sumiu, sem Lixeira), ligada ou não, não impede gravar o resto da lista; o erro dela segue no
+   * estado.
+   */
+  function changedRules(rules: readonly EmailRule[], saved: readonly EmailRule[]): EmailRule[] {
+    const before = new Map(saved.map((rule) => [rule.id, rule]))
+    return rules.filter((rule) => {
+      if (!rule.enabled) return false
+      const previous = before.get(rule.id)
+      return !previous || JSON.stringify(previous.actions) !== JSON.stringify(rule.actions)
+    })
+  }
+
+  /** Os paths de dentro de uma pasta (e o dela), pelo delimitador. */
+  const underFolder = (entry: Pick<ImapFolderEntry, 'path' | 'delimiter'>, path: string): boolean => path === entry.path || (entry.delimiter !== null && path.startsWith(`${entry.path}${entry.delimiter}`))
+
+  /** CA8: a pasta renomeada pelo app: as regras que apontavam para ela (ou para uma de dentro) passam ao path novo. */
+  async function retargetRules(rt: Runtime, entry: Pick<ImapFolderEntry, 'path' | 'delimiter'>, newPath: string): Promise<void> {
+    const id = rt.account.id
+    const moved: string[] = []
+    try {
+      await accountsSerial(async () => {
+        const rules = await savedRules(id)
+        const next = rules.map((rule) => {
+          const to = rule.actions.moveTo
+          if (to === null || !underFolder(entry, to)) return rule
+          moved.push(rule.id)
+          return { ...rule, actions: { ...rule.actions, moveTo: `${newPath}${to.slice(entry.path.length)}` } }
+        })
+        if (moved.length > 0) await deps.settings.setEmailRules(id, next)
+      })
+      if (moved.length > 0) {
+        await store.updateRuleState(id, (state) => Object.fromEntries(Object.entries(state).map(([ruleId, item]) => [ruleId, moved.includes(ruleId) ? { ...item, lastError: null } : item])))
+        log(`${tag(rt)}: ${moved.length} regra(s) seguiram a pasta renomeada`)
+      }
+    } catch (error) {
+      log(`${tag(rt)}: regras não atualizadas com a pasta renomeada (${failureOf(error)})`)
+    }
+  }
+
+  /** CA8: a pasta apagada pelo app: as regras ficam (nem apagadas nem desligadas, D6), com `folder-missing`. */
+  async function markRulesFolderMissing(rt: Runtime, entry: Pick<ImapFolderEntry, 'path' | 'delimiter'>): Promise<void> {
+    const id = rt.account.id
+    try {
+      const hit = (await savedRules(id)).filter((rule) => rule.actions.moveTo !== null && underFolder(entry, rule.actions.moveTo)).map((rule) => rule.id)
+      if (hit.length === 0) return
+      const at = now()
+      await store.updateRuleState(id, (state) => {
+        const next = { ...state }
+        for (const ruleId of hit) next[ruleId] = { ...(next[ruleId] ?? { ...EMPTY_EMAIL_RULE_STATE }), lastError: { at, code: 'folder-missing' } }
+        return next
+      })
+    } catch (error) {
+      log(`${tag(rt)}: regras não marcadas com a pasta apagada (${failureOf(error)})`)
+    }
+  }
+
+  const rulesFailure = (error: EmailRulesFailure['error']): EmailRulesFailure => ({ ok: false, error })
+  const ruleHash = (rule: EmailRule): string => createHash('sha256').update(JSON.stringify(rule)).digest('hex')
+
+  function sweepRuleTokens(): void {
+    const limit = now() - EMAIL_RULE_TOKEN_TTL_MS
+    for (const [token, entry] of ruleTokens) if (entry.at < limit) ruleTokens.delete(token)
+    // Poucos de cada vez: sai o mais antigo.
+    while (ruleTokens.size >= 20) ruleTokens.delete(ruleTokens.keys().next().value as string)
+  }
+
+  async function previewRule(accountId: string, ruleId: string): Promise<EmailRulePreviewResult> {
+    const rt = runtimes.get(accountId)
+    if (!rt || rt.removed) return rulesFailure('missing')
+    let rules: EmailRule[]
+    try {
+      rules = await savedRules(accountId)
+    } catch {
+      return rulesFailure('unavailable')
+    }
+    const rule = rules.find((item) => item.id === ruleId)
+    if (!rule) return rulesFailure('missing')
+    // Só esta regra, ligada ou não, sem "parar aqui".
+    const single: EmailRule = { ...rule, enabled: true, stopHere: false }
+    const wantBody = needsBody([single])
+    const session = rt.account.incoming.protocol === 'imap' ? rt.session : null
+    const ids: string[] = []
+    for (const message of [...(await store.read(accountId)).inbox].sort((a, b) => b.date - a.date)) {
+      if (rt.removed) return rulesFailure('missing')
+      const body = wantBody ? await ruleBodyOf(rt, session, message) : null
+      if (planActions(ruleInput(message, body), [single]).ruleIds.length > 0) ids.push(message.id)
+    }
+    sweepRuleTokens()
+    const token = randomUUID()
+    ruleTokens.set(token, { accountId, ruleId, hash: ruleHash(rule), ids, at: now() })
+    const { markRead, flag, moveTo, delete: remove } = rule.actions
+    return { ok: true, count: ids.length, actions: { markRead, flag, moveTo, delete: remove }, token }
+  }
+
+  async function runRule(accountId: string, ruleId: string, token: string): Promise<EmailRuleRunResult> {
+    sweepRuleTokens()
+    const entry = ruleTokens.get(token)
+    // Uso único: gasto mesmo quando recusado.
+    ruleTokens.delete(token)
+    if (!entry || entry.accountId !== accountId || entry.ruleId !== ruleId || now() - entry.at > EMAIL_RULE_TOKEN_TTL_MS) return rulesFailure('stale')
+    const rt = runtimes.get(accountId)
+    if (!rt || rt.removed) return rulesFailure('missing')
+    let rule: EmailRule | undefined
+    try {
+      rule = (await savedRules(accountId)).find((item) => item.id === ruleId)
+    } catch {
+      return rulesFailure('unavailable')
+    }
+    if (!rule || ruleHash(rule) !== entry.hash) return rulesFailure('stale')
+    const current = rule
+    return enqueue(rt, async (): Promise<EmailRuleRunResult> => {
+      if (rt.removed) return rulesFailure('missing')
+      const wanted = new Set(entry.ids)
+      const present = (await store.read(accountId)).inbox.filter((message) => wanted.has(message.id))
+      const { markRead, flag, moveTo, delete: remove } = current.actions
+      const plan: EmailRulePlan = { ruleIds: [current.id], markRead, flag, moveTo, delete: remove, silent: false }
+      const tally: RuleTally = new Map()
+      const outcomes = await executePlans(rt, rt.account.incoming.protocol === 'imap' ? rt.session : null, present.map((message) => ({ message, plan })), [current], tally)
+      await saveTally(rt, tally, current.id)
+      changed(accountId)
+      const done = outcomes.filter((outcome) => !outcome.failed).length
+      log(`${tag(rt)}: regra executada à mão (${done} de ${entry.ids.length})`)
+      return { ok: true, done, skipped: entry.ids.length - done }
+    })
   }
 
   function stopWatch(senderId: number): void {
@@ -1314,6 +1834,8 @@ export function createEmailService(deps: EmailServiceDeps): EmailService {
       // Contrato 52: a pasta dos enviados que ficou gravada, já antes de conectar (ou com a conta fora do ar).
       for (const rt of runtimes.values()) rt.sentMailbox = (await store.read(rt.account.id).catch(() => null))?.sentMailbox ?? rt.sentMailbox
       announce()
+      // Contrato 53 (CA11): o que a 0.15.0 e o 52 deixaram em `<conta>.bodies/`, antes do primeiro sincronismo.
+      for (const rt of runtimes.values()) void enqueue(rt, () => pruneAccount(rt))
       for (const rt of runtimes.values()) void connect(rt)
     },
 
@@ -1394,6 +1916,7 @@ export function createEmailService(deps: EmailServiceDeps): EmailService {
       runtimes.delete(rt.account.id)
       folderCache.delete(rt.account.id)
       for (const [senderId, watch] of folderWatches) if (watch.accountId === rt.account.id) stopWatch(senderId)
+      for (const [token, entry] of ruleTokens) if (entry.accountId === rt.account.id) ruleTokens.delete(token)
       await accountsSerial(async () => deps.settings.setEmailAccounts((await deps.settings.getEmailAccounts()).filter((account) => account.id !== rt.account.id)))
       await store.remove(rt.account.id)
       log(`${tag(rt)}: removida`)
@@ -1677,6 +2200,76 @@ export function createEmailService(deps: EmailServiceDeps): EmailService {
       }
       return saved ? { ok: true, signature: { ...signature } } : { ok: false, error: 'missing' }
     },
+
+    async rulesGet(request) {
+      const parsed = accountRequestSchema.safeParse(request)
+      if (!parsed.success) return rulesFailure('invalid')
+      const { accountId } = parsed.data
+      if (!runtimes.has(accountId)) return rulesFailure('missing')
+      let rules: EmailRule[]
+      try {
+        rules = await savedRules(accountId)
+      } catch {
+        return rulesFailure('unavailable')
+      }
+      const saved = await store.ruleState(accountId).catch((): Record<string, EmailRuleState> => ({}))
+      return { ok: true, rules, state: Object.fromEntries(rules.map((rule) => [rule.id, saved[rule.id] ?? { ...EMPTY_EMAIL_RULE_STATE }])) }
+    },
+
+    async rulesSet(request) {
+      const parsed = rulesSetSchema.safeParse(request)
+      const list = parsed.success ? emailRuleListSchema.safeParse(parsed.data.rules) : null
+      if (!parsed.success || !list?.success) return rulesFailure('invalid')
+      const { accountId } = parsed.data
+      const rules = list.data
+      const rt = runtimes.get(accountId)
+      if (!rt || rt.removed) return rulesFailure('missing')
+      if (rt.account.incoming.protocol === 'pop3') {
+        // N2: no POP3, só "marcar lida" e "não avisar".
+        if (rules.some((rule) => rule.actions.moveTo !== null || rule.actions.flag || rule.actions.delete)) return rulesFailure('pop3')
+      }
+      let noTrash: string[] = []
+      if (rt.account.incoming.protocol === 'imap' && rt.state === 'connected') {
+        // O `settings.json` que não se lê: todas contam como novas.
+        const before = await savedRules(accountId).catch((): EmailRule[] => [])
+        const check = await checkRuleTargets(rt, changedRules(rules, before))
+        if (check.missing) return rulesFailure('folder-missing')
+        noTrash = check.noTrash
+      }
+      let saved: boolean
+      try {
+        // Na fila de adicionar e remover conta: as regras nunca ficam de uma conta que acabou de sair.
+        saved = await accountsSerial(() => deps.settings.setEmailRules(accountId, rules))
+      } catch {
+        log('regras: não foi possível gravar o settings.json')
+        return rulesFailure('unavailable')
+      }
+      if (!saved) return rulesFailure('missing')
+      // A regra apagada sai do estado; a de apagar numa conta sem Lixeira fica com o erro (a ação não age, N3).
+      const ids = new Set(rules.map((rule) => rule.id))
+      const at = now()
+      await store
+        .updateRuleState(accountId, (state) => {
+          const next = Object.fromEntries(Object.entries(state).filter(([ruleId]) => ids.has(ruleId)))
+          for (const ruleId of noTrash) next[ruleId] = { ...(next[ruleId] ?? { ...EMPTY_EMAIL_RULE_STATE }), lastError: { at, code: 'no-trash' } }
+          return next
+        })
+        .catch(() => log(`${tag(rt)}: estado das regras não gravado`))
+      return { ok: true, rules }
+    },
+
+    async rulesPreview(request) {
+      const parsed = rulePreviewSchema.safeParse(request)
+      return parsed.success ? previewRule(parsed.data.accountId, parsed.data.ruleId) : rulesFailure('invalid')
+    },
+
+    async rulesRun(request) {
+      const parsed = ruleRunSchema.safeParse(request)
+      return parsed.success ? runRule(parsed.data.accountId, parsed.data.ruleId, parsed.data.token) : rulesFailure('invalid')
+    },
+
+    previewRule,
+    runRule,
 
     async poll(accountId) {
       const rt = runtimes.get(accountId)

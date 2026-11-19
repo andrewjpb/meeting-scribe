@@ -158,7 +158,9 @@ export const useEmail = create<EmailState>()((set, get) => ({
 
   receive: (message) =>
     set((state) => {
-      const key = folderKey(message.accountId, isInbox(message) ? 'inbox' : 'sent')
+      // Contrato 53: a que uma regra levou a outra pasta (Arquivo, Lixeira) não é da Caixa de Entrada nem dos Enviados.
+      if (!isInbox(message)) return {}
+      const key = folderKey(message.accountId, 'inbox')
       const list = state.folders[key]
       if (!list) return {}
       return { folders: { ...state.folders, [key]: [message, ...list.filter((item) => item.id !== message.id)].sort(byDate) } }

@@ -4,6 +4,8 @@
 // Contrato 52: as pastas em memória (INBOX, "Enviados", "Arquivo" e as criadas), com `LIST` aninhado pelo delimitador,
 // `STATUS`, `MOVE` (ou, com `capabilities.move` desligado, `COPY` + `\Deleted` + `EXPUNGE`), o `COPYUID` (com
 // `capabilities.uidplus`), `CREATE`, `RENAME` e `DELETE`. Os comandos ficam em `folderLog`.
+// Contrato 53: `STORE \Flagged` na conexão da INBOX, a pasta "Lixeira" (`\Trash`, com `trash: true`) e o registro dos
+// comandos da conexão da INBOX (`sessionLog`: as marcas e o `EXPUNGE` do "Apagar").
 import type { EmailAddress } from '../../shared/email'
 import { ImapFolderError, movedList, type ImapConnect, type ImapFolderConnect, type ImapFolderEntry, type ImapMessage, type ImapReaderConnect, type ImapSession } from './imap-client'
 import type { Pop3Connect } from './pop3-client'
@@ -123,7 +125,12 @@ export interface FakeEmailOptions {
   delimiter?: '/' | '.'
   /** Pastas a mais ao começar (as do meio de um path aninhado entram sozinhas). */
   folders?: { path: string; specialUse?: string; noselect?: boolean }[]
+  /** Contrato 53: o servidor tem a pasta "Lixeira" (`\Trash`). Sem isto, não tem Lixeira. */
+  trash?: boolean
 }
+
+/** Contrato 53: a Lixeira do servidor falso (com `trash: true`). */
+export const SMOKE_EMAIL_TRASH_FOLDER = 'Lixeira'
 
 export interface FakeEmail {
   imap: ImapConnect
@@ -131,10 +138,12 @@ export interface FakeEmail {
   imapFolders: ImapFolderConnect
   /** Contrato 52: o servidor tem `MOVE` e `UIDPLUS` (o `COPYUID`); dá para desligar cada um. */
   capabilities: { move: boolean; uidplus: boolean }
-  /** Contrato 52: o próximo comando de pastas com este nome (`MOVE`, `CREATE`, `RENAME`, `DELETE`) é recusado. */
+  /** Contrato 52: o próximo comando de pastas com este nome (`MOVE`, `CREATE`, `RENAME`, `DELETE` e, no contrato 53, `STORE` da conexão da INBOX) é recusado. */
   failNext: string | null
   /** Contrato 52: os comandos de pastas que o servidor recebeu (`UID MOVE 1,2 Arquivo`, `CREATE x`…). */
   folderLog: string[]
+  /** Contrato 53: os comandos da conexão da INBOX (`UID STORE 5 +FLAGS (\Seen)`, `UID EXPUNGE 5`…). */
+  sessionLog: string[]
   /** Contrato 52: a pasta ganha um `UIDVALIDITY` novo (os UIDs guardados deixam de valer). */
   resetUidValidity(path: string): void
   /** Contrato 52: as pastas como estão (path → UIDs e flags). */
@@ -153,7 +162,7 @@ export interface FakeEmail {
   /** O SMTP recusa o próximo envio (o composer mantém o rascunho com o aviso). */
   failNextSend: boolean
   /** Um email novo na INBOX, avisado pelo "IDLE". */
-  deliver(input: { from: EmailAddress; subject: string; text: string }): Promise<void>
+  deliver(input: { from: EmailAddress; subject: string; text: string; cc?: EmailAddress[]; attachments?: Seed['attachments'] }): Promise<void>
   /** Imagens remotas pedidas pelo "Carregar imagens". */
   imageRequests: string[]
   fetchImage(url: string): Promise<{ type: string; bytes: Uint8Array } | null>
@@ -196,6 +205,7 @@ export function createFakeEmail(now: () => number = Date.now, options: FakeEmail
       if (!folders.has(part)) folders.set(part, { uidValidity: String(nextValidity++), nextUid: 1, specialUse: index === parts.length ? specialUse : null, noselect: index === parts.length ? noselect : false, items: [] })
     }
   }
+  if (options.trash) ensure(SMOKE_EMAIL_TRASH_FOLDER, '\\Trash')
   for (const folder of options.folders ?? []) ensure(folder.path, folder.specialUse ?? null, folder.noselect ?? false)
   const boxes = (): Record<string, { message: ImapMessage; raw: Buffer }[]> => Object.fromEntries([...folders].map(([path, box]) => [path, box.items]))
   const copyOf = (item: { message: ImapMessage; raw: Buffer }): ImapMessage => ({ ...item.message, flags: [...item.message.flags] })
@@ -230,6 +240,7 @@ export function createFakeEmail(now: () => number = Date.now, options: FakeEmail
     capabilities: { move: true, uidplus: true },
     failNext: null,
     folderLog: [],
+    sessionLog: [],
     resetUidValidity(path) {
       const box = folders.get(path)
       if (box) box.uidValidity = String(nextValidity++)
@@ -350,10 +361,19 @@ export function createFakeEmail(now: () => number = Date.now, options: FakeEmail
         since: async (uid) => inbox.filter((item) => item.message.uid > uid).map((item) => ({ ...item.message, flags: [...item.message.flags] })),
         source: async (uid) => inbox.find((item) => item.message.uid === uid)?.raw ?? null,
         setSeen: async (uid, seen) => {
+          fake.sessionLog.push(`UID STORE ${uid} ${seen ? '+' : '-'}FLAGS (\\Seen)`)
+          refuse('STORE')
           const found = inbox.find((item) => item.message.uid === uid)
           if (found) found.message.flags = seen ? [...new Set([...found.message.flags, '\\Seen'])] : found.message.flags.filter((flag) => flag !== '\\Seen')
         },
+        setFlagged: async (uid, flagged) => {
+          fake.sessionLog.push(`UID STORE ${uid} ${flagged ? '+' : '-'}FLAGS (\\Flagged)`)
+          refuse('STORE')
+          const found = inbox.find((item) => item.message.uid === uid)
+          if (found) found.message.flags = flagged ? [...new Set([...found.message.flags, '\\Flagged'])] : found.message.flags.filter((flag) => flag !== '\\Flagged')
+        },
         remove: async (uid) => {
+          fake.sessionLog.push(`UID EXPUNGE ${uid}`)
           const index = inbox.findIndex((item) => item.message.uid === uid)
           if (index >= 0) inbox.splice(index, 1)
         },
@@ -389,7 +409,7 @@ export function createFakeEmail(now: () => number = Date.now, options: FakeEmail
       if (config.pass === SMOKE_EMAIL_WRONG_PASSWORD) throw new SmtpError('auth')
     },
     async deliver(input) {
-      add({ from: input.from, subject: input.subject, text: input.text, minutesAgo: 0, seen: false }, now())
+      add({ from: input.from, subject: input.subject, text: input.text, minutesAgo: 0, seen: false, ...(input.cc ? { cc: input.cc } : {}), ...(input.attachments ? { attachments: input.attachments } : {}) }, now())
       for (const listener of listeners) listener()
     },
     async fetchImage(url) {

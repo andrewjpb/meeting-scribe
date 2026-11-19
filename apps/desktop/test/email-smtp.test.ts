@@ -140,6 +140,7 @@ function fakeImap(parent: ImapMessage): { connect: ImapConnect; appended: Buffer
     since: () => Promise.resolve([]),
     source: () => Promise.resolve(PARENT_RAW),
     setSeen: () => Promise.resolve(),
+    setFlagged: () => Promise.resolve(),
     remove: () => Promise.resolve(),
     appendSent: (raw) => {
       appended.push(raw)

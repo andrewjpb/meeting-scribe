@@ -41,6 +41,8 @@ export interface ImapSession {
   source(uid: number): Promise<Buffer | 'too-big' | null>
   /** `UID STORE +FLAGS (\Seen)` (ou `-FLAGS`). */
   setSeen(uid: number, seen: boolean): Promise<void>
+  /** Contrato 53: `UID STORE +FLAGS (\Flagged)` (ou `-FLAGS`), a estrela de uma regra. */
+  setFlagged(uid: number, flagged: boolean): Promise<void>
   /** `UID STORE +FLAGS (\Deleted)` e `EXPUNGE`. */
   remove(uid: number): Promise<void>
   /** `APPEND` na pasta de enviados (`\Sent`, ou pelo nome); `false` quando o servidor não tem uma. */
@@ -134,6 +136,8 @@ export const connectImap: ImapConnect = async (config) => {
       const found = await client.fetchOne(String(uid), { uid: true, size: true }, { uid: true })
       if (!found) return null
       if ((found.size ?? 0) > EMAIL_RAW_MAX_BYTES) return 'too-big'
+      // O `source` do `imapflow` vai como `BODY.PEEK[]` (conferido na 2.12.1): baixar (a leitura, a condição de corpo de
+      // uma regra) não marca como lida no servidor.
       const full = await client.fetchOne(String(uid), { uid: true, source: true }, { uid: true })
       return full && full.source ? full.source : null
     },
@@ -141,6 +145,11 @@ export const connectImap: ImapConnect = async (config) => {
     async setSeen(uid, seen) {
       if (seen) await client.messageFlagsAdd(String(uid), ['\\Seen'], { uid: true })
       else await client.messageFlagsRemove(String(uid), ['\\Seen'], { uid: true })
+    },
+
+    async setFlagged(uid, flagged) {
+      if (flagged) await client.messageFlagsAdd(String(uid), ['\\Flagged'], { uid: true })
+      else await client.messageFlagsRemove(String(uid), ['\\Flagged'], { uid: true })
     },
 
     async remove(uid) {
