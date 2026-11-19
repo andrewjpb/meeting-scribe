@@ -63,6 +63,21 @@ A tela que antes se chamava "Perguntar".
 
 ![Assistente propondo uma resposta no WhatsApp: o macOS pergunta antes de enviar](docs/images/assistente-whatsapp-light.png)
 
+### Email: IMAP, POP3 e SMTP
+
+- Qualquer conta de email que fale **IMAP ou POP3** para receber e **SMTP** para enviar. Você digita o endereço e a senha, e o app descobre os servidores sozinho: tem presets para Gmail, Yahoo, iCloud, UOL, BOL e Terra, e para os outros domínios usa o [banco aberto do Thunderbird](https://autoconfig.thunderbird.net/). Se não achar, há a "Configuração avançada" para preencher na mão. Nenhum registro de app nem login de terceiros é exigido.
+- As contas aparecem no **menu lateral**, com Caixa de Entrada e Enviados, e cada conta abre e fecha. A tela segue o desenho do Outlook para desktop: lista de mensagens de um lado e leitura do outro, com Responder, Responder a todos, Encaminhar, Marcar e Apagar. Dá para mandar e baixar anexos, e o encaminhar leva os anexos da mensagem original.
+- O HTML do email é limpo antes de aparecer: script, formulário e iframe nunca rodam. As imagens de fora só carregam no clique em "Carregar imagens", e nunca de endereços da sua rede local.
+- O **Assistente** lê os emails: "o que tenho de email pendente?", "acha o email do contador de março", inclusive em pastas antigas do servidor (só leitura, sem marcar como lido). Ele também propõe resposta num cartão, que **só sai no seu clique em "Enviar"**, e cria lembrete ligado ao email.
+- **Tarefas agendadas podem enviar sozinhas** se você permitir antes: na tarefa, ligue "Pode enviar email" e escolha a conta, a lista de destinatários permitidos (endereços ou `@empresa.com`) e um limite por execução. Tudo o que sair aparece em Execuções e em Enviados, e desligar a seção corta na hora. Envio para fora da lista é recusado, mesmo que um email lido pela tarefa peça outra coisa.
+
+**Gmail:** o Google não aceita a senha normal por IMAP. Use uma **senha de app**:
+1. Ligue a verificação em duas etapas na sua [Conta do Google](https://myaccount.google.com/security).
+2. Abra [Senhas de app](https://myaccount.google.com/apppasswords), dê um nome (por exemplo, "LAP Reuniões") e copie a senha de 16 letras.
+3. No app, em Configurações › Contas › Email › Adicionar conta, digite o seu `@gmail.com` e cole essa senha.
+
+**Outlook, Hotmail e Live pessoais** ainda não funcionam: a Microsoft só aceita login moderno (OAuth) por IMAP, e isso exigiria registrar o app numa conta da Microsoft. Exchange e Microsoft 365 também ficam para depois.
+
 ### Do seu jeito
 - **Configurações em abas** (Geral, Gravação, Claude, Arquivos, Contas, Sobre) com busca (⌘F).
 - **Sua marca**: troque o nome e o logo do app.
@@ -98,6 +113,8 @@ Reuniões em Markdown no seu Mac ─> agente de IA via ACP ─> resumo · análi
 |---|---|
 | Áudio da reunião | só para a AssemblyAI, durante a gravação |
 | Áudio do WhatsApp que você manda transcrever | só para a AssemblyAI (`api.assemblyai.com`), no clique em "Transcrever" |
+| Emails | ficam no seu Mac; só falam com os servidores IMAP, POP3 e SMTP da sua conta. Para descobrir os servidores, só o domínio vai ao Thunderbird |
+| Senha do email | cifrada pelo Chaveiro do macOS (`safeStorage`) |
 | Texto da reunião | só para o agente de IA local que você escolheu (com a sua conta) |
 | Arquivos (áudio, transcrição, resumo, anotações) | ficam no seu Mac |
 | Chaves e tokens | cifrados pelo Chaveiro do macOS |
