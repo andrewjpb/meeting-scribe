@@ -6,6 +6,10 @@
   <string>O LAP Reuniões grava o seu microfone para transcrever a reunião.</string>
   <key>NSAudioCaptureUsageDescription</key>
   <string>O LAP Reuniões captura o áudio do sistema para transcrever o que os participantes falam.</string>
+  <key>NSCalendarsFullAccessUsageDescription</key>
+  <string>Para pôr na sua agenda os convites de reunião que chegam por email.</string>
+  <key>NSCalendarsUsageDescription</key>
+  <string>Para pôr na sua agenda os convites de reunião que chegam por email.</string>
   <key>LSApplicationCategoryType</key>
   <string>public.app-category.productivity</string>
 </dict>

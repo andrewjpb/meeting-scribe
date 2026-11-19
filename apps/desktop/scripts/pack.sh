@@ -71,6 +71,12 @@ MIC_WATCH="$APP/Contents/Resources/bin/lap-mic-watch"
 mkdir -p "$(dirname "$MIC_WATCH")"
 swiftc -O -target arm64-apple-macos14.4 native/mic-watch/main.swift -o "$MIC_WATCH"
 codesign --force --sign - --entitlements build/entitlements.plist "$MIC_WATCH"
+# Contrato 60: o lap-calendar (EventKit), no mesmo lugar e com a mesma assinatura do lap-mic-watch. O Info.plist vai
+# embutido no binário (identidade com.lap.reunioes.calendar e a frase de uso do Calendário); os argumentos do swiftc
+# são os de MAC_CALENDAR_SWIFTC_ARGS (src/main/mac-calendar/process.ts), conferidos no teste.
+CAL="$APP/Contents/Resources/bin/lap-calendar"
+swiftc -O -target arm64-apple-macos14.4 -warnings-as-errors -Xlinker -sectcreate -Xlinker __TEXT -Xlinker __info_plist -Xlinker native/calendar/Info.plist native/calendar/main.swift -o "$CAL"
+codesign --force --sign - --entitlements build/entitlements.plist "$CAL"
 codesign --force --deep --sign - --entitlements build/entitlements.plist "$APP"
 codesign --verify --deep --strict "$APP" && echo "assinatura ok"
 npx -y @electron/asar list "$APP/Contents/Resources/app.asar" | grep -q "^/node_modules/zod/package.json" && echo "zod ok"
@@ -99,11 +105,18 @@ echo "ical.js ok"
 codesign --verify --strict "$MIC_WATCH" || { echo "pack.sh: o lap-mic-watch não está assinado" >&2; exit 1; }
 "$MIC_WATCH" --version </dev/null | grep -q "^lap-mic-watch " || { echo "pack.sh: o lap-mic-watch não roda" >&2; exit 1; }
 echo "lap-mic-watch ok"
+codesign --verify --strict "$CAL" || { echo "pack.sh: o lap-calendar não está assinado" >&2; exit 1; }
+"$CAL" --version </dev/null | grep -q "^lap-calendar " || { echo "pack.sh: o lap-calendar não roda" >&2; exit 1; }
+CAL_SIGN=$(codesign -dv "$CAL" 2>&1)
+grep -q "^Identifier=com.lap.reunioes.calendar$" <<<"$CAL_SIGN" || { echo "pack.sh: o lap-calendar não leva a identidade com.lap.reunioes.calendar" >&2; exit 1; }
+grep -q "^Info.plist entries=6$" <<<"$CAL_SIGN" || { echo "pack.sh: o lap-calendar não leva o Info.plist embutido" >&2; exit 1; }
+plutil -p "$APP/Contents/Info.plist" | grep -q "NSCalendarsFullAccessUsageDescription" || { echo "pack.sh: o Info.plist do app não leva a frase do Calendário" >&2; exit 1; }
+echo "lap-calendar ok"
 if grep -qiE "backend_fake|neonize-|\.dylib$" <<<"$ASAR_LIST"; then
   echo "pack.sh: o pacote leva o cliente falso do WhatsApp ou o neonize" >&2
   exit 1
 fi
-plutil -p "$APP/Contents/Info.plist" | grep -E 'CFBundleIdentifier|CFBundleName|NSMicrophoneUsageDescription|NSAudioCaptureUsageDescription'
+plutil -p "$APP/Contents/Info.plist" | grep -E 'CFBundleIdentifier|CFBundleName|NSMicrophoneUsageDescription|NSAudioCaptureUsageDescription|NSCalendarsFullAccessUsageDescription|NSCalendarsUsageDescription'
 
 # Nome que o app procura no release do GitHub (contrato 14): LAP-Reunioes-<versão>-<arch>.dmg, com o
 # .sha256 ao lado (formato do shasum, conferido pelo app antes de abrir) e o latest.json de referência.

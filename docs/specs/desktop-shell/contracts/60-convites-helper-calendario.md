@@ -64,6 +64,12 @@ Liga o app ao **Calendário do Mac** por um binário Swift separado, no molde do
 
 Limites (exportados em `protocol.ts` e iguais no `main.swift` e no falso): linha de requisição até **64 KiB**; linha de resposta até **1 MiB**; `title` 1–1024 caracteres; `location` até 1024; `notes` até **4000** (R4); `url` só `http:`/`https:`, até 2048; `exdates` até 500; `find` olha a janela `[start − 1 dia, end + 1 dia]`.
 
+### Extensão aprovada na devolução (19/11/2026)
+- O objeto de erro ganha o campo **opcional** `saved: { eventIdentifier, calendarItemIdentifier, externalIdentifier }`, aceito **só** com `code: "unavailable"` e `reason: "eventkit"`. Ele aparece quando algo já ficou gravado antes do erro: no `create`, quando o EXDATE falha e a remoção da série também falha ("A série ficou gravada…"); no `update`, quando os campos foram salvos e um EXDATE falhou. Com `saved` presente, o 62 trata o evento como gravado pelo app (N3) e mostra o erro. O falso nunca manda `saved`.
+- `update` que troca `allDay` sem mandar `start` e `end` é `invalid`/`schema`, no real e no falso.
+- Dia inteiro e `until` de data contam dia de calendário no fuso local (`allDayRange`, `nextLocalDay`), nunca 86.400 s.
+- `EKError`: `eventNotMutable` e `invitesCannotBeMoved` → `not-mutable`; agenda só leitura/imutável → `not-mutable` no update/remove e `read-only-calendar` no create; `startDateCollidesWithOtherOccurrence` → `dates`; `eventStoreNotAuthorized` → `denied`.
+
 ## Critérios de aceite
 Âncora de asserção: cada CA de protocolo é um caso da tabela de conformidade em `test/mac-calendar.test.ts` (`describe('protocolo do lap-calendar')`), que roda contra o helper falso nos gates e, com `LAP_CALENDAR_REAL=1` no Mac do Andrew, contra o binário de verdade **só nos casos marcados "só leitura"** (status, calendars, refresh, find e os `invalid`). Os de cliente ficam em `describe('cliente do lap-calendar')`.
 
