@@ -25,6 +25,13 @@ export const WHATSAPP_ONLY_PEOPLE_DESCRIPTION = 'Mensagens de grupo não geram n
 /** Descrição de "Mostrar quando estou digitando" (contrato 34), a mesma na tela e na busca. */
 export const WHATSAPP_TYPING_SIGNAL_DESCRIPTION = 'Quem está na conversa aberta vê "digitando…" enquanto você escreve. Desligado, ninguém vê.'
 
+/**
+ * Descrição de "Buscar emails novos a cada" (contrato 42, `emailPollMinutes`), a mesma na tela e na busca. A linha entra
+ * no índice junto com o bloco "Email" de Configurações › Contas (contrato 43): antes disso a busca levaria a um bloco
+ * que não existe.
+ */
+export const EMAIL_POLL_DESCRIPTION = 'Só nas contas POP3: de quantos em quantos minutos o app procura email novo. As contas IMAP recebem na hora.'
+
 /** Uma linha de configuração no índice da busca. */
 export interface SettingsEntry {
   tab: SettingsTab

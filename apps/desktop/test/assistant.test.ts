@@ -208,8 +208,8 @@ describe('cartões: só com o clique, uma vez só (CA3, CA5)', () => {
     expect(channels.sort()).toEqual(['scribe:chat-action-reminder', 'scribe:chat-action-state'])
     for (const channel of channels) expect(WHEN_LOCKED[channel]).toBe('refused')
     // Nenhum caminho novo de envio: o WhatsApp continua só com o `whatsapp-send` e, no contrato 39, o anexo pelo mesmo
-    // guarda do clique (`whatsapp-send-media`).
-    expect(INVOKE_CHANNELS.filter((channel) => /send/.test(channel))).toEqual(['scribe:chat-send', 'scribe:whatsapp-send', 'scribe:whatsapp-send-media'])
+    // guarda do clique (`whatsapp-send-media`). Contrato 42: o email entra com o `email-send`, também só com o clique.
+    expect(INVOKE_CHANNELS.filter((channel) => /send/.test(channel))).toEqual(['scribe:chat-send', 'scribe:whatsapp-send', 'scribe:whatsapp-send-media', 'scribe:email-send'])
   })
 })
 

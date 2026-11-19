@@ -2,6 +2,7 @@
 // Expõe apenas `window.__scribeApi`, e só para os canais declarados em `shared/ipc.ts`.
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron'
 import {
+  EMAIL_PRELOAD_ONLY_EVENTS,
   INVOKE_CHANNELS,
   MAIN_EVENT_CHANNELS,
   PRELOAD_ONLY_EVENTS,
@@ -28,7 +29,7 @@ const api: ScribeApi = {
   },
   send(channel, payload) {
     assertChannel(RENDERER_EVENT_CHANNELS, channel)
-    if (PRELOAD_ONLY_EVENTS.includes(channel)) throw new Error(`Canal não permitido: ${channel}`)
+    if (PRELOAD_ONLY_EVENTS.includes(channel) || EMAIL_PRELOAD_ONLY_EVENTS.includes(channel)) throw new Error(`Canal não permitido: ${channel}`)
     ipcRenderer.send(channel, payload)
   },
   // Contrato 24, CA4: o token de clique nasce aqui, só com a ativação do usuário viva (um clique ou tecla de
@@ -54,6 +55,14 @@ const api: ScribeApi = {
     const clickToken = crypto.randomUUID()
     ipcRenderer.send('scribe:whatsapp-click', clickToken)
     return ipcRenderer.invoke('scribe:whatsapp-react', { chatId: request.chatId, messageId: request.messageId, emoji: request.emoji, clickToken })
+  },
+  // Contrato 42: o envio do email pelo mesmo caminho: a mesma ativação viva e um token de clique próprio.
+  emailSend(request) {
+    if (!navigator.userActivation.isActive) return Promise.resolve({ ok: false, error: 'click' })
+    const clickToken = crypto.randomUUID()
+    ipcRenderer.send('scribe:email-click', clickToken)
+    const { accountId, to, subject, text, inReplyTo } = request
+    return ipcRenderer.invoke('scribe:email-send', { accountId, to, subject, text, ...(inReplyTo ? { inReplyTo } : {}), clickToken })
   },
   on(channel, listener) {
     assertChannel(MAIN_EVENT_CHANNELS, channel)

@@ -1,0 +1,829 @@
+// Email no app (contrato 42): contas IMAP ou POP3 para receber e SMTP para enviar, tudo no main, no desenho do WhatsApp
+// (service + clientes + store + IPC). As contas ficam em `settings.json` com a senha cifrada pelo `safeStorage`
+// (`secrets.ts`); a senha em claro só existe na hora de conectar e nunca vai a log nem ao renderer.
+//
+// IMAP: ao conectar, as últimas 200 da INBOX (UID, flags, envelope) vão para o `email-store`; mensagem nova chega pelo
+// IDLE (`ImapSession.onNew`) e vira o evento `onMessage`. "Marcar lida" e "Apagar" vão ao servidor (`STORE \Seen`,
+// `\Deleted` + `EXPUNGE`) e depois ao store. O corpo só é baixado quando a tela pede, passa pelo `mailparser` e fica no
+// store. POP3: um poll a cada `emailPollMinutes`, pelo `UIDL`; só as ainda não vistas são baixadas (`RETR`), já com o
+// corpo, e ficam no servidor (`DELE` só com `deleteFromServer`). O primeiro poll de uma conta não avisa mensagem nova.
+//
+// Envio (R4): só com um token de clique (a mesma regra do WhatsApp: o preload gera o token no clique da pessoa e só o
+// registro do IPC chama `registerClick` e `send`), sem diálogo de confirmação. Os bytes enviados vão também ao `APPEND` da pasta de
+// enviados (IMAP) e o enviado fica guardado no app (as duas modalidades).
+//
+// Erro de conexão (N4) nunca derruba o app: a conta fica `error` com uma mensagem curta e as outras seguem. Usuário ou
+// senha recusados não tentam de novo sozinhos (para o servidor não bloquear a conta); o resto tenta de novo em 1 min
+// (IMAP) ou no próximo poll (POP3).
+import { randomUUID } from 'node:crypto'
+import type { ConnectionOptions } from 'node:tls'
+import { z } from 'zod'
+import {
+  EMAIL_ACCOUNT_ID_PATTERN,
+  EMAIL_CLICK_TTL_MS,
+  EMAIL_INBOX_MAX,
+  EMAIL_RAW_MAX_BYTES,
+  EMAIL_RECIPIENTS_MAX,
+  EMAIL_SENT_MAX,
+  EMAIL_SUBJECT_MAX,
+  EMAIL_TEXT_MAX,
+  type EmailAccount,
+  type EmailAccountState,
+  type EmailAccountStatus,
+  type EmailAddResult,
+  type EmailAddress,
+  type EmailAutoconfig,
+  type EmailBody,
+  type EmailBodyResult,
+  type EmailMessage,
+  type EmailSendResult,
+} from '../../shared/email'
+import type { SafeStorageLike } from '../secrets'
+import { emailAddressSchema, emailIncomingSchema, emailNameSchema, emailServerSchema, emailUsernameSchema, type StoredEmailAccount } from '../settings/schema'
+import type { SettingsStore } from '../settings/store'
+import { addressDomain, autoconfigure, AUTOCONFIG_TIMEOUT_MS, type AutoconfigFetch } from './autoconfig'
+import { capInbox, createEmailStore, type EmailAccountData, type EmailStore } from './email-store'
+import { connectImap, messageIds, type ImapConnect, type ImapMessage, type ImapSession } from './imap-client'
+import { connectPop3, Pop3Error, type Pop3Connect, type Pop3Session } from './pop3-client'
+import { createEmailSecrets } from './secrets'
+import { sendSmtp, SmtpError, type OutgoingMail, type SmtpSend } from './smtp-client'
+
+/**
+ * Token de clique do "Enviar" (a regra do contrato 24, CA4, com guarda próprio: o do WhatsApp fica só com ele). O token
+ * vale uma vez, só para a janela que o registrou e por 10 s; tentativa com um token registrado o gasta, mesmo recusada.
+ */
+export interface EmailClickGuard {
+  register(senderId: number, token: unknown): void
+  consume(senderId: number, token: unknown): boolean
+  forget(senderId: number): void
+}
+
+const CLICK_TOKEN = /^[0-9a-f-]{36}$/
+
+export function createEmailClickGuard(now: () => number = Date.now, ttlMs = EMAIL_CLICK_TTL_MS): EmailClickGuard {
+  const tokens = new Map<string, { senderId: number; at: number }>()
+  const used = new Set<string>()
+  const sweep = (): void => {
+    const limit = now() - ttlMs
+    for (const [token, entry] of tokens) if (entry.at < limit) tokens.delete(token)
+    if (used.size > 1000) used.clear()
+  }
+  return {
+    register(senderId, token) {
+      sweep()
+      if (typeof token !== 'string' || !CLICK_TOKEN.test(token) || tokens.has(token) || used.has(token) || tokens.size >= 20) return
+      tokens.set(token, { senderId, at: now() })
+    },
+    consume(senderId, token) {
+      sweep()
+      if (typeof token !== 'string') return false
+      const entry = tokens.get(token)
+      tokens.delete(token)
+      if (entry) used.add(token)
+      return entry !== undefined && entry.senderId === senderId && now() - entry.at <= ttlMs
+    },
+    forget(senderId) {
+      for (const [token, entry] of tokens) if (entry.senderId === senderId) tokens.delete(token)
+    },
+  }
+}
+
+/** IMAP caído (ou servidor fora): nova tentativa em 1 min. */
+export const EMAIL_RETRY_MS = 60_000
+
+/** O que a tela mostra quando a conta falha. Nunca leva senha, endereço nem a resposta do servidor. */
+export const EMAIL_FAILURES = {
+  auth: 'Usuário ou senha recusados.',
+  connection: 'Servidor fora do ar ou inacessível.',
+  tls: 'Falha na conexão segura (TLS).',
+  timeout: 'O servidor não respondeu a tempo.',
+  secret: 'A senha guardada não abre neste Mac. Adicione a conta de novo.',
+  closed: 'A conexão com o servidor caiu.',
+  failed: 'Erro ao falar com o servidor.',
+} as const
+export type EmailFailure = keyof typeof EMAIL_FAILURES
+
+const accountIdSchema = z.string().regex(EMAIL_ACCOUNT_ID_PATTERN)
+const messageIdSchema = z.string().min(1).max(1000)
+const headerIdSchema = z.string().regex(/^<[^<>\s]{1,250}>$/)
+const addSchema = z
+  .object({
+    address: emailAddressSchema,
+    password: z.string().min(1).max(1024),
+    name: emailNameSchema.optional(),
+    username: z.union([emailUsernameSchema, z.literal('')]).optional(),
+    incoming: emailIncomingSchema,
+    outgoing: emailServerSchema,
+    deleteFromServer: z.boolean().optional(),
+  })
+  .strict()
+const accountRequestSchema = z.object({ accountId: accountIdSchema }).strict()
+const autoconfigSchema = z.object({ address: emailAddressSchema }).strict()
+const messagesSchema = z.object({ accountId: accountIdSchema, folder: z.enum(['inbox', 'sent']).optional() }).strict()
+const messageRequestSchema = z.object({ accountId: accountIdSchema, id: messageIdSchema }).strict()
+const markReadSchema = messageRequestSchema.extend({ seen: z.boolean() }).strict()
+const sendSchema = z
+  .object({
+    accountId: accountIdSchema,
+    to: z.array(emailAddressSchema).min(1).max(EMAIL_RECIPIENTS_MAX),
+    subject: z.string().max(EMAIL_SUBJECT_MAX).refine((value) => !/[\r\n]/.test(value)),
+    text: z.string().max(EMAIL_TEXT_MAX),
+    inReplyTo: headerIdSchema.optional(),
+    clickToken: z.string().max(100),
+  })
+  .strict()
+
+/** O que sai do `mailparser`: cabeçalho e corpo. */
+export interface ParsedEmail {
+  subject: string
+  date: number | null
+  from: EmailAddress[]
+  to: EmailAddress[]
+  cc: EmailAddress[]
+  messageId: string | null
+  inReplyTo: string | null
+  references: string[]
+  body: EmailBody
+}
+
+export type EmailParse = (raw: Buffer) => Promise<ParsedEmail>
+
+interface ParsedAddressList {
+  value: { name: string; address?: string | undefined; group?: ParsedAddressList['value'] | undefined }[]
+}
+
+function flattenAddresses(input: ParsedAddressList | ParsedAddressList[] | undefined): EmailAddress[] {
+  const lists = input === undefined ? [] : Array.isArray(input) ? input : [input]
+  const out: EmailAddress[] = []
+  const walk = (items: ParsedAddressList['value']): void => {
+    for (const item of items) {
+      if (item.group) walk(item.group)
+      else if (item.address) out.push({ name: item.name ? item.name : null, address: item.address })
+    }
+  }
+  for (const list of lists) walk(list.value)
+  return out.slice(0, 100)
+}
+
+/** `mailparser` (carregado no primeiro uso): cabeçalho e corpo, sem guardar o conteúdo dos anexos. */
+export const parseEmail: EmailParse = async (raw) => {
+  const { simpleParser } = await import('mailparser')
+  const parsed = await simpleParser(raw, { skipTextToHtml: true, skipTextLinks: true, skipImageLinks: true })
+  const references = parsed.references === undefined ? [] : (Array.isArray(parsed.references) ? parsed.references : [parsed.references]).flatMap((value) => messageIds(value))
+  return {
+    subject: parsed.subject ?? '',
+    date: parsed.date ? parsed.date.getTime() : null,
+    from: flattenAddresses(parsed.from),
+    to: flattenAddresses(parsed.to),
+    cc: flattenAddresses(parsed.cc),
+    messageId: parsed.messageId ?? null,
+    inReplyTo: parsed.inReplyTo ? (messageIds(parsed.inReplyTo)[0] ?? null) : null,
+    references: references.slice(-50),
+    body: {
+      text: parsed.text ?? null,
+      html: typeof parsed.html === 'string' ? parsed.html : null,
+      // Nos limites do store: um nome de anexo enorme não impede a mensagem de entrar.
+      attachments: parsed.attachments.slice(0, 500).map((item) => ({ filename: item.filename ? clip(item.filename, 1000) : null, contentType: clip(item.contentType, 300), size: item.size })),
+    },
+  }
+}
+
+/** Erro de qualquer cliente no tipo curto da tela. */
+export function failureOf(error: unknown): EmailFailure {
+  if (error instanceof Pop3Error) return error.kind === 'auth' || error.kind === 'connection' || error.kind === 'tls' || error.kind === 'timeout' ? error.kind : 'failed'
+  if (error instanceof SmtpError) return error.kind === 'auth' ? 'auth' : error.kind === 'connection' ? 'connection' : 'failed'
+  const record = typeof error === 'object' && error !== null ? (error as { code?: unknown; authenticationFailed?: unknown; tlsFailed?: unknown }) : {}
+  if (record.authenticationFailed === true) return 'auth'
+  // O `imapflow` marca a falha do TLS (handshake, certificado, STARTTLS) com `tlsFailed`.
+  if (record.tlsFailed === true) return 'tls'
+  const code = typeof record.code === 'string' ? record.code : ''
+  if (code.includes('TLS') || code.startsWith('ERR_SSL') || /CERT|SELF_SIGNED|UNABLE_TO_VERIFY/.test(code)) return 'tls'
+  if (['ETIMEDOUT', 'ETIMEOUT', 'CONNECT_TIMEOUT', 'GREETING_TIMEOUT', 'UPGRADE_TIMEOUT'].includes(code)) return 'timeout'
+  if (['ECONNREFUSED', 'ENOTFOUND', 'EHOSTUNREACH', 'ENETUNREACH', 'ECONNRESET', 'EAI_AGAIN', 'EPIPE', 'NoConnection', 'EConnectionClosed', 'ClosedAfterConnectText', 'ClosedAfterConnectTLS'].includes(code)) return 'connection'
+  return 'failed'
+}
+
+const clip = (value: string, max: number): string => (value.length > max ? value.slice(0, max) : value)
+const clipAddresses = (list: EmailAddress[], max: number): EmailAddress[] =>
+  list.slice(0, max).map((item) => ({ name: item.name === null ? null : clip(item.name, 500), address: clip(item.address, 500) }))
+
+function fromImap(accountId: string, message: ImapMessage): EmailMessage {
+  return {
+    id: String(message.uid),
+    accountId,
+    folder: 'inbox',
+    uid: message.uid,
+    seen: message.flags.includes('\\Seen'),
+    flagged: message.flags.includes('\\Flagged'),
+    answered: message.flags.includes('\\Answered'),
+    from: clipAddresses(message.from, 100),
+    to: clipAddresses(message.to, 500),
+    cc: clipAddresses(message.cc, 500),
+    subject: clip(message.subject, 10_000),
+    date: message.date,
+    messageId: message.messageId ? clip(message.messageId, 1000) : null,
+    inReplyTo: message.inReplyTo ? clip(message.inReplyTo, 1000) : null,
+    references: message.references.slice(-100),
+  }
+}
+
+function fromParsed(accountId: string, id: string, parsed: ParsedEmail, now: number): EmailMessage {
+  return {
+    id,
+    accountId,
+    folder: 'inbox',
+    uid: null,
+    seen: false,
+    flagged: false,
+    answered: false,
+    from: clipAddresses(parsed.from, 100),
+    to: clipAddresses(parsed.to, 500),
+    cc: clipAddresses(parsed.cc, 500),
+    subject: clip(parsed.subject, 10_000),
+    date: parsed.date ?? now,
+    messageId: parsed.messageId ? clip(parsed.messageId, 1000) : null,
+    inReplyTo: parsed.inReplyTo,
+    references: parsed.references,
+  }
+}
+
+const publicAccount = ({ password: _password, ...account }: StoredEmailAccount): EmailAccount => account
+
+/** Chave do corpo no store: a pasta e o id (o id do enviado é o Message-ID). */
+const bodyKey = (message: Pick<EmailMessage, 'folder' | 'id'>): string => `${message.folder}:${message.id}`
+
+export interface EmailServiceDeps {
+  /** `userData/email`. */
+  root: string
+  settings: Pick<SettingsStore, 'get' | 'getEmailAccounts' | 'setEmailAccounts'>
+  safeStorage: SafeStorageLike
+  /** ISPDB do autoconfig (no smoke e nos testes, um HTTP falso). */
+  fetch: AutoconfigFetch
+  imap?: ImapConnect
+  pop3?: Pop3Connect
+  smtp?: SmtpSend
+  parse?: EmailParse
+  /** Opções extras do TLS do POP3 e do IMAP/SMTP (nos testes, o certificado do servidor falso). */
+  tls?: ConnectionOptions
+  onStatus: (statuses: EmailAccountStatus[]) => void
+  /** Mensagem nova na INBOX (IDLE do IMAP, ou poll do POP3 depois do primeiro). */
+  onMessage: (message: EmailMessage) => void
+  /** A lista de uma conta mudou (sincronismo, lida, apagada, enviada): a tela relê. */
+  onMessagesChanged?: (accountId: string) => void
+  /** Só estados e tipos de erro: nunca senha, endereço ou texto de mensagem. */
+  log?: (message: string) => void
+  now?: () => number
+  retryMs?: number
+  autoconfigTimeoutMs?: number
+}
+
+export interface EmailService {
+  /** Ao abrir o app: as contas gravadas conectam. */
+  init(): Promise<void>
+  accounts(): EmailAccountStatus[]
+  autoconfig(request: unknown): Promise<EmailAutoconfig | null>
+  addAccount(request: unknown): Promise<EmailAddResult>
+  removeAccount(request: unknown): Promise<boolean>
+  /** INBOX (padrão) ou enviados, da mais nova para a mais antiga. Só o store, nada vai ao servidor. */
+  messages(request: unknown): Promise<EmailMessage[]>
+  /** Corpo: do store; senão (IMAP) baixa, passa pelo `mailparser` e guarda. */
+  body(request: unknown): Promise<EmailBodyResult>
+  markRead(request: unknown): Promise<boolean>
+  remove(request: unknown): Promise<boolean>
+  /** O preload registrou um clique de "Enviar" desta janela. */
+  registerClick(senderId: number, token: unknown): void
+  /** Só com o token de clique (uso único, 10 s) da mesma janela. */
+  send(senderId: number, request: unknown): Promise<EmailSendResult>
+  forgetSender(senderId: number): void
+  /** POP3: busca agora (o mesmo do relógio). */
+  poll(accountId: string): Promise<void>
+  /** Sair do app: fecha as conexões e para os relógios. */
+  dispose(): Promise<void>
+}
+
+interface Runtime {
+  account: StoredEmailAccount
+  state: EmailAccountState
+  error: string | null
+  session: ImapSession | null
+  timer: ReturnType<typeof setTimeout> | null
+  /** Sobe a cada reconexão e ao remover: o resultado de uma tentativa antiga não vale mais. */
+  generation: number
+  /** Busca de mensagens novas (IMAP) ou poll (POP3) em fila. */
+  queue: Promise<unknown>
+  removed: boolean
+}
+
+export function createEmailService(deps: EmailServiceDeps): EmailService {
+  const now = deps.now ?? Date.now
+  const imap = deps.imap ?? connectImap
+  const pop3 = deps.pop3 ?? connectPop3
+  const smtp = deps.smtp ?? sendSmtp
+  const parse = deps.parse ?? parseEmail
+  const retryMs = deps.retryMs ?? EMAIL_RETRY_MS
+  const secrets = createEmailSecrets(deps.safeStorage)
+  const store: EmailStore = createEmailStore(deps.root)
+  const guard = createEmailClickGuard(now)
+  const runtimes = new Map<string, Runtime>()
+  /** Adicionar e remover conta leem e gravam a lista inteira: um de cada vez, para nenhum perder a conta do outro. */
+  let accountsQueue: Promise<unknown> = Promise.resolve()
+  const accountsSerial = <T>(task: () => Promise<T>): Promise<T> => {
+    const run = accountsQueue.then(task, task)
+    accountsQueue = run.catch(() => undefined)
+    return run
+  }
+  const bodyRequests = new Map<string, Promise<EmailBodyResult>>()
+  let disposed = false
+
+  const log = (message: string): void => deps.log?.(`[email] ${message}`)
+  /** Nos logs, só o começo do id da conta. */
+  const tag = (rt: Runtime): string => `conta ${rt.account.id.slice(0, 8)}`
+  const statusOf = (rt: Runtime): EmailAccountStatus => ({ account: publicAccount(rt.account), state: rt.state, error: rt.error })
+  const statuses = (): EmailAccountStatus[] => [...runtimes.values()].map(statusOf)
+  const announce = (): void => {
+    if (!disposed) deps.onStatus(statuses())
+  }
+  const changed = (accountId: string): void => {
+    if (!disposed) deps.onMessagesChanged?.(accountId)
+  }
+  const live = (rt: Runtime, generation: number): boolean => !disposed && !rt.removed && rt.generation === generation
+
+  function setState(rt: Runtime, state: EmailAccountState, error: string | null): void {
+    rt.state = state
+    rt.error = error
+    announce()
+  }
+
+  function enqueue<T>(rt: Runtime, task: () => Promise<T>): Promise<T> {
+    const run = rt.queue.then(task, task)
+    rt.queue = run.catch(() => undefined)
+    return run
+  }
+
+  function schedule(rt: Runtime, ms: number): void {
+    if (rt.timer) clearTimeout(rt.timer)
+    if (disposed || rt.removed) return
+    rt.timer = setTimeout(() => {
+      rt.timer = null
+      void connect(rt)
+    }, ms)
+    rt.timer.unref?.()
+  }
+
+  /** A tentativa falhou: estado `error` e, se não foi a senha, nova tentativa mais tarde. */
+  function fail(rt: Runtime, error: unknown, generation: number, retryIn: number): void {
+    if (!live(rt, generation)) return
+    const failure = error === 'closed' || error === 'secret' ? error : failureOf(error)
+    log(`${tag(rt)}: falhou (${failure})`)
+    setState(rt, 'error', EMAIL_FAILURES[failure])
+    if (failure !== 'auth' && failure !== 'secret') schedule(rt, retryIn)
+  }
+
+  const serverConfig = (rt: Runtime, pass: string, server: StoredEmailAccount['outgoing']) => ({
+    host: server.host,
+    port: server.port,
+    security: server.security,
+    user: rt.account.username,
+    pass,
+    ...(deps.tls ? { tls: deps.tls } : {}),
+  })
+
+  async function syncInbox(rt: Runtime, session: ImapSession, generation: number): Promise<void> {
+    const id = rt.account.id
+    const list = await session.recent(EMAIL_INBOX_MAX)
+    // Conta removida (ou reconectada) no meio: nada é regravado em `userData/email/`.
+    if (!live(rt, generation)) return
+    let reset = false
+    await store.update(id, (data) => {
+      reset = data.uidValidity !== null && data.uidValidity !== session.uidValidity
+      return { ...data, uidValidity: session.uidValidity, inbox: capInbox(list.map((message) => fromImap(id, message))) }
+    })
+    if (reset && live(rt, generation)) await store.clearBodies(id)
+    changed(id)
+  }
+
+  /** IDLE avisou: as mensagens com UID acima da maior guardada. */
+  async function fetchNew(rt: Runtime, session: ImapSession, generation: number): Promise<void> {
+    if (!live(rt, generation) || rt.session !== session) return
+    const id = rt.account.id
+    const data = await store.read(id)
+    const lastUid = data.inbox.reduce((max, message) => Math.max(max, message.uid ?? 0), 0)
+    const fresh = (await session.since(lastUid)).slice(-EMAIL_INBOX_MAX)
+    const known = new Set(data.inbox.map((message) => message.id))
+    const added = fresh.map((message) => fromImap(id, message)).filter((message) => !known.has(message.id))
+    if (added.length === 0 || !live(rt, generation)) return
+    await store.update(id, (current) => ({ ...current, inbox: capInbox([...added, ...current.inbox.filter((message) => !added.some((item) => item.id === message.id))]) }))
+    log(`${tag(rt)}: ${added.length} mensagem(ns) nova(s)`)
+    for (const message of added) if (!disposed) deps.onMessage(message)
+    changed(id)
+  }
+
+  async function connectImapAccount(rt: Runtime, pass: string, generation: number): Promise<void> {
+    let session: ImapSession
+    try {
+      session = await imap(serverConfig(rt, pass, rt.account.incoming))
+    } catch (error) {
+      fail(rt, error, generation, retryMs)
+      return
+    }
+    if (!live(rt, generation)) {
+      void session.close().catch(() => undefined)
+      return
+    }
+    rt.session = session
+    session.onClose(() => {
+      if (rt.session !== session) return
+      rt.session = null
+      fail(rt, 'closed', generation, retryMs)
+    })
+    session.onNew(() => {
+      void enqueue(rt, () => fetchNew(rt, session, generation)).catch((error: unknown) => log(`${tag(rt)}: mensagem nova não lida (${failureOf(error)})`))
+    })
+    try {
+      await enqueue(rt, () => syncInbox(rt, session, generation))
+    } catch (error) {
+      rt.session = null
+      void session.close().catch(() => undefined)
+      fail(rt, error, generation, retryMs)
+      return
+    }
+    if (!live(rt, generation)) return
+    log(`${tag(rt)}: IMAP conectado`)
+    setState(rt, 'connected', null)
+  }
+
+  async function pollPop3(rt: Runtime, pass: string, generation: number): Promise<void> {
+    const id = rt.account.id
+    const retry = async (): Promise<number> => ((await deps.settings.get().catch(() => null))?.emailPollMinutes ?? 5) * 60_000
+    let session: Pop3Session | null = null
+    const added: EmailMessage[] = []
+    let firstPoll = false
+    try {
+      session = await pop3(serverConfig(rt, pass, rt.account.incoming))
+      const list = await session.uidl()
+      const data = await store.read(id)
+      firstPoll = !data.polled
+      const seen = new Set(data.seenUidls)
+      const fresh = [...list].filter(([, uidl]) => !seen.has(uidl)).sort((a, b) => a[0] - b[0])
+      // Primeiro poll: só as 200 mais novas são baixadas; as mais antigas ficam vistas (no servidor, sem aviso).
+      const skipped = fresh.slice(0, Math.max(0, fresh.length - EMAIL_INBOX_MAX)).map(([, uidl]) => uidl)
+      const wanted = fresh.slice(-EMAIL_INBOX_MAX)
+      const sizes = wanted.length > 0 ? await session.sizes() : new Map<number, number>()
+      /** Grava o UIDL como visto (e a mensagem, se veio) logo em seguida: uma falha adiante não desfaz o que já entrou. */
+      const record = async (uidls: string[], message: EmailMessage | null): Promise<void> => {
+        if (!live(rt, generation)) throw new Error('conta removida')
+        await store.update(id, (current) => ({
+          ...current,
+          seenUidls: [...current.seenUidls.filter((uidl) => !uidls.includes(uidl)), ...uidls].slice(-20_000),
+          inbox: message ? capInbox([message, ...current.inbox.filter((item) => item.id !== message.id)]) : current.inbox,
+        }))
+      }
+      if (skipped.length > 0) await record(skipped, null)
+      for (const [number, uidl] of wanted) {
+        // Grande demais: nem é baixada; fica vista (e no servidor) para não travar os polls seguintes.
+        if ((sizes.get(number) ?? 0) > EMAIL_RAW_MAX_BYTES) {
+          log(`${tag(rt)}: mensagem POP3 grande demais, pulada`)
+          await record([uidl], null)
+          continue
+        }
+        const raw = await session.retr(number)
+        let message: EmailMessage
+        try {
+          const parsed = await parse(raw)
+          message = fromParsed(id, uidl, parsed, now())
+          if (!live(rt, generation)) throw new Error('conta removida')
+          await store.setBody(id, bodyKey(message), parsed.body)
+        } catch (error) {
+          if (!live(rt, generation)) throw error
+          // Mensagem que não se lê (MIME quebrado, campo fora do limite): pulada e vista, as outras seguem.
+          log(`${tag(rt)}: mensagem POP3 ilegível, pulada (${failureOf(error)})`)
+          await record([uidl], null)
+          continue
+        }
+        await record([uidl], message)
+        added.push(message)
+        if (rt.account.deleteFromServer) await session.dele(number)
+      }
+      await session.quit()
+      session = null
+      if (!live(rt, generation)) return
+      // Os UIDLs do servidor agora: os que saíram dele não ficam lembrados para sempre.
+      const onServer = new Set(list.values())
+      await store.update(id, (current) => ({ ...current, polled: true, seenUidls: current.seenUidls.filter((uidl) => onServer.has(uidl)) }))
+      announceAdded()
+      setState(rt, 'connected', null)
+      schedule(rt, await retry())
+    } catch (error) {
+      session?.close()
+      // O que já foi gravado antes da falha aparece na tela.
+      if (live(rt, generation)) announceAdded()
+      fail(rt, error, generation, await retry())
+    }
+
+    function announceAdded(): void {
+      if (added.length === 0) return
+      log(`${tag(rt)}: ${added.length} mensagem(ns) baixada(s) pelo POP3`)
+      if (!firstPoll) for (const message of added) if (!disposed) deps.onMessage(message)
+      changed(id)
+    }
+  }
+
+  async function connect(rt: Runtime): Promise<void> {
+    if (disposed || rt.removed) return
+    if (rt.timer) clearTimeout(rt.timer)
+    rt.timer = null
+    if (rt.account.incoming.protocol === 'pop3') {
+      // Um poll por vez: o seguinte espera o anterior terminar e gravar.
+      await enqueue(rt, async () => {
+        if (disposed || rt.removed) return
+        const generation = ++rt.generation
+        // Cada poll não pisca "conectando" numa conta que já está bem.
+        if (rt.state !== 'connected') setState(rt, 'connecting', null)
+        const pass = secrets.open(rt.account.password)
+        if (pass === null) fail(rt, 'secret', generation, retryMs)
+        else await pollPop3(rt, pass, generation)
+      })
+      return
+    }
+    const generation = ++rt.generation
+    const previous = rt.session
+    rt.session = null
+    if (previous) void previous.close().catch(() => undefined)
+    setState(rt, 'connecting', null)
+    const pass = secrets.open(rt.account.password)
+    if (pass === null) {
+      fail(rt, 'secret', generation, retryMs)
+      return
+    }
+    await connectImapAccount(rt, pass, generation)
+  }
+
+  function runtime(account: StoredEmailAccount): Runtime {
+    return { account, state: 'offline', error: null, session: null, timer: null, generation: 0, queue: Promise.resolve(), removed: false }
+  }
+
+  async function findMessage(accountId: string, id: string): Promise<{ data: EmailAccountData; message: EmailMessage } | null> {
+    const data = await store.read(accountId)
+    const message = data.inbox.find((item) => item.id === id) ?? data.sent.find((item) => item.id === id)
+    return message ? { data, message } : null
+  }
+
+  async function downloadBody(rt: Runtime, message: EmailMessage): Promise<EmailBodyResult> {
+    const cached = await store.body(rt.account.id, bodyKey(message))
+    if (cached) return { ok: true, body: cached }
+    if (message.uid === null) return { ok: false, error: 'not-found' }
+    const session = rt.session
+    if (!session) return { ok: false, error: 'unavailable' }
+    const raw = await session.source(message.uid)
+    if (raw === 'too-big') return { ok: false, error: 'too-big' }
+    if (raw === null) return { ok: false, error: 'not-found' }
+    const parsed = await parse(raw)
+    if (!rt.removed) await store.setBody(rt.account.id, bodyKey(message), parsed.body)
+    return { ok: true, body: parsed.body }
+  }
+
+  return {
+    async init() {
+      const saved = await deps.settings.getEmailAccounts()
+      for (const account of saved) if (!runtimes.has(account.id)) runtimes.set(account.id, runtime(account))
+      announce()
+      for (const rt of runtimes.values()) void connect(rt)
+    },
+
+    accounts: statuses,
+
+    async autoconfig(request) {
+      const parsed = autoconfigSchema.safeParse(request)
+      if (!parsed.success) return null
+      return autoconfigure(parsed.data.address, { fetch: deps.fetch, timeoutMs: deps.autoconfigTimeoutMs ?? AUTOCONFIG_TIMEOUT_MS })
+    },
+
+    async addAccount(request) {
+      const parsed = addSchema.safeParse(request)
+      if (!parsed.success) return { ok: false, error: 'invalid' }
+      const input = parsed.data
+      return accountsSerial(async (): Promise<EmailAddResult> => {
+        const saved = await deps.settings.getEmailAccounts()
+        if (saved.some((account) => account.address.toLowerCase() === input.address.toLowerCase())) return { ok: false, error: 'duplicate' }
+        let password: string
+        try {
+          password = secrets.seal(input.password)
+        } catch {
+          return { ok: false, error: 'encryption' }
+        }
+        const account: StoredEmailAccount = {
+          id: randomUUID(),
+          address: input.address,
+          name: input.name ?? null,
+          username: input.username ? input.username : input.address,
+          incoming: input.incoming,
+          outgoing: input.outgoing,
+          deleteFromServer: input.deleteFromServer ?? false,
+          password,
+        }
+        await deps.settings.setEmailAccounts([...saved, account])
+        const rt = runtime(account)
+        runtimes.set(account.id, rt)
+        log(`${tag(rt)}: adicionada (${account.incoming.protocol})`)
+        void connect(rt)
+        return { ok: true, status: statusOf(rt) }
+      })
+    },
+
+    async removeAccount(request) {
+      const parsed = accountRequestSchema.safeParse(request)
+      if (!parsed.success) return false
+      const rt = runtimes.get(parsed.data.accountId)
+      if (!rt) return false
+      rt.removed = true
+      rt.generation++
+      if (rt.timer) clearTimeout(rt.timer)
+      rt.timer = null
+      const session = rt.session
+      rt.session = null
+      if (session) void session.close().catch(() => undefined)
+      runtimes.delete(rt.account.id)
+      await accountsSerial(async () => deps.settings.setEmailAccounts((await deps.settings.getEmailAccounts()).filter((account) => account.id !== rt.account.id)))
+      await store.remove(rt.account.id)
+      log(`${tag(rt)}: removida`)
+      announce()
+      return true
+    },
+
+    async messages(request) {
+      const parsed = messagesSchema.safeParse(request)
+      if (!parsed.success || !runtimes.has(parsed.data.accountId)) return []
+      const data = await store.read(parsed.data.accountId)
+      return [...(parsed.data.folder === 'sent' ? data.sent : data.inbox)].sort((a, b) => b.date - a.date)
+    },
+
+    async body(request) {
+      const parsed = messageRequestSchema.safeParse(request)
+      if (!parsed.success) return { ok: false, error: 'not-found' }
+      const rt = runtimes.get(parsed.data.accountId)
+      const found = rt ? await findMessage(parsed.data.accountId, parsed.data.id) : null
+      if (!rt || !found) return { ok: false, error: 'not-found' }
+      const key = `${rt.account.id}\n${bodyKey(found.message)}`
+      const running = bodyRequests.get(key)
+      if (running) return running
+      const task = downloadBody(rt, found.message).catch((error: unknown): EmailBodyResult => {
+        log(`${tag(rt)}: corpo não baixado (${failureOf(error)})`)
+        return { ok: false, error: 'unavailable' }
+      })
+      const done = task.finally(() => bodyRequests.delete(key))
+      bodyRequests.set(key, done)
+      return done
+    },
+
+    async markRead(request) {
+      const parsed = markReadSchema.safeParse(request)
+      if (!parsed.success) return false
+      const { accountId, id, seen } = parsed.data
+      const rt = runtimes.get(accountId)
+      const found = rt ? await findMessage(accountId, id) : null
+      if (!rt || !found) return false
+      const { message } = found
+      if (message.folder === 'inbox' && message.uid !== null) {
+        if (!rt.session) return false
+        try {
+          await rt.session.setSeen(message.uid, seen)
+        } catch (error) {
+          log(`${tag(rt)}: marcar lida falhou (${failureOf(error)})`)
+          return false
+        }
+      }
+      if (rt.removed) return false
+      const mark = (list: EmailMessage[]): EmailMessage[] => list.map((item) => (item.id === id && item.folder === message.folder ? { ...item, seen } : item))
+      await store.update(accountId, (data) => ({ ...data, inbox: mark(data.inbox), sent: mark(data.sent) }))
+      changed(accountId)
+      return true
+    },
+
+    async remove(request) {
+      const parsed = messageRequestSchema.safeParse(request)
+      if (!parsed.success) return false
+      const { accountId, id } = parsed.data
+      const rt = runtimes.get(accountId)
+      const found = rt ? await findMessage(accountId, id) : null
+      if (!rt || !found) return false
+      const { message } = found
+      // IMAP: no servidor primeiro. POP3 e enviados: só no app (o UIDL fica lembrado, a mensagem não volta).
+      if (message.folder === 'inbox' && message.uid !== null) {
+        if (!rt.session) return false
+        try {
+          await rt.session.remove(message.uid)
+        } catch (error) {
+          log(`${tag(rt)}: apagar falhou (${failureOf(error)})`)
+          return false
+        }
+      }
+      if (rt.removed) return false
+      const keep = (list: EmailMessage[]): EmailMessage[] => list.filter((item) => !(item.id === id && item.folder === message.folder))
+      await store.update(accountId, (data) => ({ ...data, inbox: keep(data.inbox), sent: keep(data.sent) }))
+      await store.removeBody(accountId, bodyKey(message)).catch(() => undefined)
+      changed(accountId)
+      return true
+    },
+
+    registerClick(senderId, token) {
+      guard.register(senderId, token)
+    },
+
+    async send(senderId, request) {
+      const raw = (request ?? {}) as { clickToken?: unknown }
+      const parsed = sendSchema.safeParse(request)
+      // O token é gasto mesmo com o resto inválido: não serve para uma segunda tentativa.
+      if (!guard.consume(senderId, raw.clickToken)) {
+        log('envio recusado: sem clique')
+        return { ok: false, error: 'click' }
+      }
+      if (!parsed.success) return { ok: false, error: 'invalid' }
+      const { accountId, to, subject, text, inReplyTo } = parsed.data
+      const rt = runtimes.get(accountId)
+      const pass = rt ? secrets.open(rt.account.password) : null
+      if (!rt || pass === null) return { ok: false, error: 'account' }
+      const domain = addressDomain(rt.account.address) ?? 'localhost'
+      const messageId = `<${randomUUID()}@${domain}>`
+      const data = await store.read(accountId)
+      const parent = inReplyTo ? data.inbox.find((item) => item.messageId === inReplyTo) : undefined
+      // References: as da mensagem respondida e o Message-ID dela por último (RFC 5322, 3.6.4).
+      const references = inReplyTo ? [...(parent?.references ?? []).filter((value) => value !== inReplyTo), inReplyTo].slice(-50) : []
+      const date = now()
+      const mail: OutgoingMail = { from: { name: rt.account.name, address: rt.account.address }, to, subject, text, messageId, inReplyTo: inReplyTo ?? null, references, date: new Date(date) }
+      let bytes: Buffer
+      try {
+        bytes = await smtp(serverConfig(rt, pass, rt.account.outgoing), mail)
+      } catch (error) {
+        const kind = error instanceof SmtpError ? error.kind : 'failed'
+        log(`${tag(rt)}: envio falhou (${kind})`)
+        return { ok: false, error: kind }
+      }
+      log(`${tag(rt)}: mensagem enviada com o clique da pessoa`)
+      const sent: EmailMessage = {
+        id: messageId,
+        accountId,
+        folder: 'sent',
+        uid: null,
+        seen: true,
+        flagged: false,
+        answered: false,
+        from: [{ name: rt.account.name, address: rt.account.address }],
+        to: to.map((address) => ({ name: null, address })),
+        cc: [],
+        subject,
+        date,
+        messageId,
+        inReplyTo: inReplyTo ?? null,
+        references,
+      }
+      // O envio já saiu: falhar ao guardar ou no APPEND não vira erro para a tela.
+      try {
+        if (rt.removed) throw new Error('conta removida')
+        await store.update(accountId, (current) => ({
+          ...current,
+          sent: [sent, ...current.sent].slice(0, EMAIL_SENT_MAX),
+          inbox: parent ? current.inbox.map((item) => (item.id === parent.id ? { ...item, answered: true } : item)) : current.inbox,
+        }))
+        await store.setBody(accountId, bodyKey(sent), { text, html: null, attachments: [] })
+      } catch (error) {
+        log(`${tag(rt)}: enviado não guardado (${failureOf(error)})`)
+      }
+      if (rt.account.incoming.protocol === 'imap') {
+        const session = rt.session
+        if (!session) log(`${tag(rt)}: enviado fora da pasta de enviados (IMAP desconectado)`)
+        else
+          await session.appendSent(bytes).then(
+            (ok) => {
+              if (!ok) log(`${tag(rt)}: servidor sem pasta de enviados`)
+            },
+            (error: unknown) => log(`${tag(rt)}: APPEND nos enviados falhou (${failureOf(error)})`),
+          )
+      }
+      changed(accountId)
+      return { ok: true, messageId }
+    },
+
+    forgetSender(senderId) {
+      guard.forget(senderId)
+    },
+
+    async poll(accountId) {
+      const rt = runtimes.get(accountId)
+      if (!rt || rt.account.incoming.protocol !== 'pop3') return
+      await connect(rt)
+    },
+
+    async dispose() {
+      disposed = true
+      const sessions: ImapSession[] = []
+      for (const rt of runtimes.values()) {
+        rt.generation++
+        if (rt.timer) clearTimeout(rt.timer)
+        rt.timer = null
+        if (rt.session) sessions.push(rt.session)
+        rt.session = null
+      }
+      await Promise.all(sessions.map((session) => session.close().catch(() => undefined)))
+    },
+  }
+}

@@ -2,11 +2,13 @@
 // aplicada e regravada de forma atômica (arquivo temporário + `rename`), em fila, e avisada a quem
 // assinou (o main repassa a todas as janelas). Arquivo ausente ou corrompido vale como os padrões; o
 // corrompido é guardado como `settings.json.corrupt-<timestamp>` na primeira gravação seguinte.
+// Contrato 42: as contas de email vão no mesmo arquivo, em `emailAccounts` (fora de `settings`, sem aviso às janelas),
+// e só aparecem no arquivo quando há alguma.
 import { randomUUID } from 'node:crypto'
 import { readFile, rename, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { applySettingsPatch, DEFAULT_SETTINGS, type AppSettings } from '../../shared/settings-defaults'
-import { audioFolderSchema, brandLogoSchema, claudePathSchema, modelIdSchema, parseSettings, parseSettingsPatch, SETTINGS_VERSION } from './schema'
+import { audioFolderSchema, brandLogoSchema, checkEmailAccounts, claudePathSchema, modelIdSchema, parseEmailAccounts, parseSettings, parseSettingsPatch, SETTINGS_VERSION, type StoredEmailAccount } from './schema'
 
 export const SETTINGS_FILE = 'settings.json'
 
@@ -23,6 +25,10 @@ export interface SettingsStore {
   setAudioFolder(path: string | null): Promise<AppSettings>
   /** Só para o main, depois de copiar o logo para `userData/branding/` (`branding/service.ts`); `null` volta ao símbolo da LAP. */
   setBrandLogo(name: string | null): Promise<AppSettings>
+  /** Só para o main (`email/service.ts`): as contas de email, com a senha cifrada. */
+  getEmailAccounts(): Promise<StoredEmailAccount[]>
+  /** Só para o main: grava a lista inteira de contas; conta fora do formato lança erro e nada é gravado. */
+  setEmailAccounts(accounts: readonly StoredEmailAccount[]): Promise<StoredEmailAccount[]>
 }
 
 export interface FileSettingsStoreOptions {
@@ -35,6 +41,7 @@ export interface FileSettingsStoreOptions {
 export function createFileSettingsStore({ dir, onChange, now = Date.now }: FileSettingsStoreOptions): SettingsStore {
   const file = join(dir, SETTINGS_FILE)
   let cached: AppSettings | null = null
+  let emailAccounts: StoredEmailAccount[] = []
   let corrupt = false
   let queue: Promise<unknown> = Promise.resolve()
 
@@ -46,6 +53,7 @@ export function createFileSettingsStore({ dir, onChange, now = Date.now }: FileS
 
   async function load(): Promise<AppSettings> {
     if (cached) return cached
+    emailAccounts = []
     let raw: string
     try {
       raw = await readFile(file, 'utf8')
@@ -63,17 +71,19 @@ export function createFileSettingsStore({ dir, onChange, now = Date.now }: FileS
     }
     const data = typeof parsed === 'object' && parsed !== null && 'settings' in parsed ? (parsed as { settings: unknown }).settings : undefined
     cached = parseSettings(data)
+    if (typeof parsed === 'object' && parsed !== null && 'emailAccounts' in parsed) emailAccounts = parseEmailAccounts((parsed as { emailAccounts: unknown }).emailAccounts)
     return cached
   }
 
-  async function write(settings: AppSettings): Promise<void> {
+  async function write(settings: AppSettings, accounts: readonly StoredEmailAccount[] = emailAccounts): Promise<void> {
     if (corrupt) {
       const stamp = new Date(now()).toISOString().replace(/[:.]/g, '-')
       await rename(file, `${file}.corrupt-${stamp}`).catch(() => undefined)
       corrupt = false
     }
     const temp = `${file}.tmp-${process.pid}-${randomUUID()}`
-    await writeFile(temp, `${JSON.stringify({ version: SETTINGS_VERSION, settings }, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 })
+    const content = accounts.length > 0 ? { version: SETTINGS_VERSION, settings, emailAccounts: accounts } : { version: SETTINGS_VERSION, settings }
+    await writeFile(temp, `${JSON.stringify(content, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 })
     await rename(temp, file)
   }
 
@@ -92,5 +102,17 @@ export function createFileSettingsStore({ dir, onChange, now = Date.now }: FileS
     setClaudePath: (path) => serial(async () => commit({ ...(await load()), claudePath: path === null ? null : claudePathSchema.parse(path) })),
     setAudioFolder: (path) => serial(async () => commit({ ...(await load()), audioFolder: path === null ? null : audioFolderSchema.parse(path) })),
     setBrandLogo: (name) => serial(async () => commit({ ...(await load()), brandLogo: name === null ? null : brandLogoSchema.parse(name) })),
+    getEmailAccounts: () =>
+      serial(async () => {
+        await load()
+        return emailAccounts.map((account) => ({ ...account }))
+      }),
+    setEmailAccounts: (accounts) =>
+      serial(async () => {
+        const next = checkEmailAccounts(accounts)
+        await write(await load(), next)
+        emailAccounts = next
+        return next.map((account) => ({ ...account }))
+      }),
   }
 }

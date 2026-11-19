@@ -51,6 +51,7 @@ describe('esquema de configurações (CA1)', () => {
       calendarLeadMinutes: 5,
       calendarNotRecordingAlert: true,
       calendarIds: { google: null, microsoft: null },
+      emailPollMinutes: 5,
     })
     expect(parseSettings(undefined)).toEqual(DEFAULT_SETTINGS)
     expect(parseSettings({})).toEqual(DEFAULT_SETTINGS)
@@ -112,6 +113,7 @@ describe('esquema de configurações (CA1)', () => {
       calendarLeadMinutes: 10,
       calendarNotRecordingAlert: false,
       calendarIds: { google: ['primary', 'equipe@group.calendar.google.com'], microsoft: null },
+      emailPollMinutes: 15,
     }
     expect(parseSettings(saved)).toEqual(saved)
     // Contrato 12: minutos fora da lista e uma lista de agendas inválida voltam ao padrão, sem perder a outra conta.
@@ -155,7 +157,7 @@ describe('esquema de configurações (CA1)', () => {
   it('Claude CLI (contrato 05, CA1): motor, modelo e caminho com padrão próprio cada um', () => {
     // `settings.json` do contrato 04, sem os campos novos: carrega com os padrões deles e mantém o resto.
     const old = { translationEnabled: false, translationModel: 'gpt-oss-120b', sourceLanguage: 'es', targetLanguage: 'ja', echoCancellation: true, theme: 'dark', micDeviceId: null }
-    expect(parseSettings(old)).toEqual({ ...old, removeEcho: true, translationEngine: 'assemblyai', claudeModel: 'haiku', chatModel: 'sonnet', claudePath: null, claudeTransport: 'acp', agentProfile: 'claude', saveToFolder: true, audioFolder: null, summarizeOnStop: true, liveCards: false, whatsappInsights: true, whatsappAutoCorrect: false, whatsappNotifications: true, whatsappNotifyGroups: true, whatsappTypingSignal: false, identifySpeakers: false, meetSpeakers: true, navegadorPlugin: false, brandName: null, brandSubtitle: null, brandLogo: null, autoCheckUpdates: true, lockUseTouchId: false, lockAfterMinutes: 0, lockOnSystemLock: true, lockOnLaunch: false, saveToDrive: true, closeBehavior: 'tray', openAtLogin: false, scheduledRunsDailyLimit: 50, calendarAlerts: true, calendarLeadMinutes: 5, calendarNotRecordingAlert: true, calendarIds: { google: null, microsoft: null } })
+    expect(parseSettings(old)).toEqual({ ...old, removeEcho: true, translationEngine: 'assemblyai', claudeModel: 'haiku', chatModel: 'sonnet', claudePath: null, claudeTransport: 'acp', agentProfile: 'claude', saveToFolder: true, audioFolder: null, summarizeOnStop: true, liveCards: false, whatsappInsights: true, whatsappAutoCorrect: false, whatsappNotifications: true, whatsappNotifyGroups: true, whatsappTypingSignal: false, identifySpeakers: false, meetSpeakers: true, navegadorPlugin: false, brandName: null, brandSubtitle: null, brandLogo: null, autoCheckUpdates: true, lockUseTouchId: false, lockAfterMinutes: 0, lockOnSystemLock: true, lockOnLaunch: false, saveToDrive: true, closeBehavior: 'tray', openAtLogin: false, scheduledRunsDailyLimit: 50, calendarAlerts: true, calendarLeadMinutes: 5, calendarNotRecordingAlert: true, calendarIds: { google: null, microsoft: null }, emailPollMinutes: 5 })
     expect(parseSettings({ translationEngine: 'claude-cli', claudeModel: 'sonnet' })).toMatchObject({ translationEngine: 'claude-cli', claudeModel: 'sonnet' })
     // Fora da lista cai no padrão: só `haiku` e `sonnet`, só os dois motores.
     expect(parseSettings({ translationEngine: 'openai' }).translationEngine).toBe('assemblyai')
@@ -250,6 +252,18 @@ describe('esquema de configurações (CA1)', () => {
     expect(parseSettings({ navegadorPlugin: 'sim' }).navegadorPlugin).toBe(false)
     expect(parseSettingsPatch({ navegadorPlugin: true })).toEqual({ navegadorPlugin: true })
     expect(() => parseSettingsPatch({ navegadorPlugin: 'sim' })).toThrow()
+  })
+
+  it('Email (contrato 42): "Buscar emails novos a cada" 5 min por padrão, só os minutos da lista', () => {
+    expect(DEFAULT_SETTINGS.emailPollMinutes).toBe(5)
+    expect(parseSettings({ theme: 'dark' }).emailPollMinutes).toBe(5)
+    for (const minutes of [1, 5, 15, 30, 60]) expect(parseSettings({ emailPollMinutes: minutes }).emailPollMinutes).toBe(minutes)
+    expect(parseSettings({ emailPollMinutes: 2 }).emailPollMinutes).toBe(5)
+    expect(parseSettings({ emailPollMinutes: '15' }).emailPollMinutes).toBe(5)
+    expect(parseSettingsPatch({ emailPollMinutes: 30 })).toEqual({ emailPollMinutes: 30 })
+    expect(() => parseSettingsPatch({ emailPollMinutes: 7 })).toThrow()
+    // As contas não passam pelo renderer.
+    expect(() => parseSettingsPatch({ emailAccounts: [] })).toThrow()
   })
 
   it('Marca (contrato 09, CA1): padrões nulos; arquivo antigo carrega com os padrões; inválido volta ao padrão', () => {
@@ -410,6 +424,41 @@ describe('store de configurações (CA2)', () => {
     expect(onDisk().settings.brandLogo).toBe('logo-deadbeef01.png')
     await expect(store.setBrandLogo('../logo-deadbeef.png')).rejects.toThrow()
     expect(await store.setBrandLogo(null)).toEqual(DEFAULT_SETTINGS)
+  })
+
+  it('contas de email (contrato 42): só pela função interna, ao lado de settings, sem aviso às janelas', async () => {
+    const onChange = vi.fn()
+    const store = createFileSettingsStore({ dir, onChange })
+    expect(await store.getEmailAccounts()).toEqual([])
+    const account = {
+      id: '0b8f5a52-6f6c-4f0e-9a51-6c1f0f7e9d10',
+      address: 'ana@exemplo.com.br',
+      name: 'Ana',
+      username: 'ana@exemplo.com.br',
+      incoming: { protocol: 'imap' as const, host: 'imap.exemplo.com.br', port: 993, security: 'tls' as const },
+      outgoing: { host: 'smtp.exemplo.com.br', port: 587, security: 'starttls' as const },
+      deleteFromServer: false,
+      password: Buffer.from('cifrado').toString('base64'),
+    }
+    expect(await store.setEmailAccounts([account])).toEqual([account])
+    expect(JSON.parse(readFileSync(join(dir, SETTINGS_FILE), 'utf8'))).toEqual({ version: 1, settings: DEFAULT_SETTINGS, emailAccounts: [account] })
+    expect(onChange).not.toHaveBeenCalled()
+    // Mudar uma configuração mantém as contas; outra instância lê as duas coisas.
+    await store.update({ theme: 'dark' })
+    expect(JSON.parse(readFileSync(join(dir, SETTINGS_FILE), 'utf8')).emailAccounts).toEqual([account])
+    const reopened = createFileSettingsStore({ dir })
+    expect(await reopened.getEmailAccounts()).toEqual([account])
+    expect((await reopened.get()).theme).toBe('dark')
+    // Conta fora do formato: nada é gravado.
+    await expect(store.setEmailAccounts([{ ...account, password: 'senha em claro' }])).rejects.toThrow()
+    await expect(store.setEmailAccounts([{ ...account, incoming: { ...account.incoming, port: 0 } }])).rejects.toThrow()
+    expect(await store.getEmailAccounts()).toEqual([account])
+    // No arquivo, a conta inválida sai sozinha e a válida fica.
+    writeFileSync(join(dir, SETTINGS_FILE), JSON.stringify({ version: 1, settings: {}, emailAccounts: [account, { ...account, id: 'x' }, 'lixo'] }))
+    expect(await createFileSettingsStore({ dir }).getEmailAccounts()).toEqual([account])
+    // Sem contas, o arquivo volta ao formato antigo.
+    expect(await store.setEmailAccounts([])).toEqual([])
+    expect(Object.keys(JSON.parse(readFileSync(join(dir, SETTINGS_FILE), 'utf8')))).toEqual(['version', 'settings'])
   })
 
   it('mudança inválida não grava nem avisa', async () => {

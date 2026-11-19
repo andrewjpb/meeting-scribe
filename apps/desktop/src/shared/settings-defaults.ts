@@ -1,5 +1,6 @@
 // Configurações do app: tipos, padrões (N5 da spec) e a regra de troca de idiomas. O esquema que valida
 // o arquivo e o store que grava ficam no main (`main/settings/`); o renderer lê pelo `settingsStore`.
+import type { EmailPollMinutes } from './email'
 
 export const LANGUAGE_CODES = ['pt', 'en', 'es', 'ja', 'ko', 'zh'] as const
 export const THEME_SETTINGS = ['system', 'light', 'dark'] as const
@@ -157,6 +158,12 @@ export interface AppSettings {
   calendarNotRecordingAlert: boolean
   /** Quais agendas de cada conta o app lê; `null` é a principal. */
   calendarIds: CalendarSelection
+  /**
+   * Contrato 42: de quantos em quantos minutos as contas POP3 buscam email novo (o IMAP recebe na hora, pelo IDLE). As
+   * contas de email ficam no mesmo `settings.json`, fora daqui (`SettingsStore.getEmailAccounts`): a senha cifrada e os
+   * endereços nunca chegam ao renderer pelas configurações.
+   */
+  emailPollMinutes: EmailPollMinutes
 }
 
 /**
@@ -210,6 +217,7 @@ export const DEFAULT_SETTINGS: Readonly<AppSettings> = Object.freeze({
   calendarLeadMinutes: 5,
   calendarNotRecordingAlert: true,
   calendarIds: Object.freeze({ google: null, microsoft: null }) as CalendarSelection,
+  emailPollMinutes: 5,
 })
 
 /** Prefixo do modelo gravado na reunião quando a tradução veio do Claude CLI (`claude-cli:haiku`). */
