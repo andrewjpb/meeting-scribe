@@ -40,6 +40,7 @@ import { createCalendarService, type CalendarService } from './calendar/service'
 import { createMeetServer, type MeetServer } from './meet/server'
 import { createMeetingPromptController, type MeetingPromptController, type MeetingPromptSettings } from './meeting-prompt/controller'
 import { createMeetingPromptWindow } from './meeting-prompt/window'
+import { createMicWatchService, locateMicWatch, type MicWatchService } from './mic-watch/process'
 import { recordingTitleFor } from '../shared/meeting-prompt'
 import { createNavegadorMcpServer, type NavegadorMcpServer } from './navegador/mcp'
 import { createNavegadorServer, parseNavegadorSet, type NavegadorServer } from './navegador/server'
@@ -166,6 +167,8 @@ let readSettings: (() => Promise<AppSettings>) | null = null
 let meetServer: MeetServer | null = null
 /** Aviso "Começar a transcrever" ao entrar numa reunião (contrato 48). */
 let meetingPromptController: MeetingPromptController | null = null
+/** O `lap-mic-watch` (contrato 49): sobe e para com "Avisar quando uma reunião começar". */
+let micWatchService: MicWatchService | null = null
 /**
  * Janelas do aviso de reunião (contrato 48): ficam fora de `appWindows()`, então não recebem os eventos do app, não
  * levam o título da marca e fechar uma delas nunca conta como "fechar a última janela".
@@ -232,9 +235,12 @@ function windowTitle(): string {
 
 /** Cada mudança do bloqueio: título das janelas, item "Bloquear" do menu e o aviso às janelas. */
 function applyLockStatus(status: LockStatus): void {
+  const wasLocked = lastLockStatus?.locked ?? false
   lastLockStatus = status
   // Contrato 48: bloqueado, o aviso de reunião (que mostra o título dela) fecha.
   if (status.locked) meetingPromptController?.close()
+  // Contrato 49: desbloqueado, a reunião (da extensão ou de um app) que não avisou por causa do bloqueio avisa agora.
+  else if (wasLocked) void meetingPromptController?.recheck()
   trayController?.refresh()
   const title = windowTitle()
   for (const win of appWindows()) win.setTitle(title)
@@ -609,6 +615,8 @@ function broadcastSettings(settings: AppSettings): void {
   else void meetServer?.stop().catch(() => undefined)
   // Contrato 48: "Avisar quando uma reunião começar" desligado fecha o aviso aberto.
   if (!settings.meetingPrompt) meetingPromptController?.close()
+  // Contrato 49: e liga ou desliga o observador do microfone dos outros apps.
+  micWatchService?.apply(settings.meetingPrompt)
   // Contrato 46: "Ativar ponte" ligado sobe a ponte do navegador; desligado, para (e recusa o comando em curso).
   applyNavegador(settings.navegadorPlugin)
   // Contrato 40: o número do Dock segue "Notificações do WhatsApp" e "Só pessoas".
@@ -699,6 +707,8 @@ interface AppServices {
   meet: MeetServer
   /** Aviso "Começar a transcrever" ao entrar numa reunião (contrato 48). */
   meetingPrompt: MeetingPromptController
+  /** Microfone ligado por outro app, para o mesmo aviso (contrato 49). */
+  micWatch: MicWatchService
   /** "Salvar plugin…" da aba Plugins (contrato 31). */
   pluginSave: (input: unknown) => Promise<PluginSaveResult>
   /** Servidores MCP do agente: a aba "Conexões" e as sessões (contrato 21). */
@@ -1312,6 +1322,27 @@ function createAppServices(userData: string): AppServices {
     disable: () => settings.update({ meetingPrompt: false }),
   })
   meetingPromptController = meetingPrompt
+  // Contrato 49: o microfone ligado por outro app (Zoom, FaceTime…) também passa pelo aviso. No smoke, o binário falso
+  // (test/fixtures/fake-mic-watch.mjs), que repete as linhas que o smoke escreve no arquivo das fixtures.
+  const micWatch = createMicWatchService({
+    command: smokeFixtures
+      ? async () => ({ file: process.execPath, args: [join(app.getAppPath(), 'test', 'fixtures', 'fake-mic-watch.mjs')], env: { ELECTRON_RUN_AS_NODE: '1', FAKE_MIC_WATCH_FILE: smokeFixtures.micWatch.file } })
+      : async () => {
+          const file = await locateMicWatch({
+            platform: process.platform,
+            arch: process.arch,
+            systemVersion: process.getSystemVersion(),
+            packaged: app.isPackaged,
+            resourcesPath: process.resourcesPath,
+            appPath: app.getAppPath(),
+            log: (message) => console.warn(message),
+          })
+          return file ? { file, args: [], env: { PATH: '/usr/bin:/bin' } } : null
+        },
+    onState: (state) => void meetingPrompt.micChanged(state),
+    log: (message) => console.warn(message),
+  })
+  micWatchService = micWatch
   const meet = createMeetServer({
     // Smoke: portas fora da faixa da extensão, para o Chrome de verdade nunca falar com ele.
     ...(smoke ? { ports: SMOKE_MEET_PORTS } : {}),
@@ -1364,6 +1395,7 @@ function createAppServices(userData: string): AppServices {
     automations,
     meet,
     meetingPrompt,
+    micWatch,
     pluginSave,
     mcp,
     navegador,
@@ -1876,6 +1908,8 @@ void app.whenReady().then(async () => {
   void services.email.init().catch(() => undefined)
   // Contrato 27: o servidor da extensão do Meet, com "Quem fala no Meet" ligado (padrão).
   if ((await services.settings.getSettings()).meetSpeakers) void services.meet.start().catch(() => null)
+  // Contrato 49: o observador do microfone, com "Avisar quando uma reunião começar" ligado (padrão).
+  services.micWatch.apply((await services.settings.getSettings()).meetingPrompt)
   // Contrato 46: a ponte do navegador, só com "Ativar ponte" ligado (padrão desligado).
   applyNavegador((await services.settings.getSettings()).navegadorPlugin)
   // Marca gravada: título da primeira janela, "Sobre" e ícone do Dock antes de abrir.
@@ -1911,6 +1945,7 @@ void app.whenReady().then(async () => {
     void services.whatsapp.dispose()
     void services.email.dispose()
     void services.meet.stop()
+    void services.micWatch.dispose()
     void services.navegador.close()
     void services.navegadorMcp.close()
     disposeWhatsAppBadge()
@@ -1997,6 +2032,7 @@ void app.whenReady().then(async () => {
     await services.email.dispose()
     disposeWhatsAppBadge()
     await services.meet.stop()
+    await services.micWatch.dispose()
     await services.navegador.close()
     await services.navegadorMcp.close()
     app.exit(code)

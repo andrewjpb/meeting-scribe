@@ -114,6 +114,7 @@ export interface AppSettings {
   /**
    * "Avisar quando uma reunião começar" (contrato 48, padrão ligado): com "Quem fala no Meet" ligado e a extensão
    * instalada, entrar numa reunião do Meet ou do Teams mostra um aviso no topo da tela com "Começar a transcrever".
+   * Contrato 49: também quando outro app (Zoom, FaceTime…) liga o microfone; ligado, o `lap-mic-watch` fica no ar.
    */
   meetingPrompt: boolean
   /**

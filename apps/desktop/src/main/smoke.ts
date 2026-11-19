@@ -69,7 +69,7 @@
 // a aba "Conexões", ligar um do CLI para o chat, importar do Claude Desktop falso sem o segredo, adicionar pelo
 // formulário (no CLI) e por JSON colado (só no app), "Testar conexão", o cartão de aprovação com "Permitir uma vez" e a
 // ferramenta negada pela política. Termina com tudo desligado. Nenhum segredo vai para a tela, o log ou o relatório.
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { spawn as spawnChild } from 'node:child_process'
 import { request as httpRequest } from 'node:http'
 import { tmpdir } from 'node:os'
@@ -124,6 +124,7 @@ import { MEET_DISCONNECTED_LABEL } from '../shared/meet'
 import { APP_PLUGINS, pluginFolderName } from '../shared/plugins'
 import { MEET_PATH, MEET_PORTS, type MeetServer } from './meet/server'
 import { MEETING_PROMPT_SIZE } from './meeting-prompt/window'
+import { MIC_PROMPT_MIN_MS } from '../shared/meeting-prompt'
 import { MCP_CLI_ENABLED_FILE, MCP_SERVERS_FILE } from './mcp/store'
 import { MCP_FIXED_WARNING } from '../shared/mcp'
 import { NAVEGADOR_COMANDOS_PATH, NAVEGADOR_PORTS, type NavegadorServer } from './navegador/server'
@@ -7460,6 +7461,42 @@ async function meetingPromptChecks(ctx: SmokeContext, watch: (win: BrowserWindow
   win.destroy()
 }
 
+/**
+ * Contrato 49 (aviso-reuniao), com o `lap-mic-watch` falso (test/fixtures/fake-mic-watch.mjs), que repete as linhas
+ * que o smoke acrescenta no arquivo das fixtures: o microfone só do navegador não avisa; o do Zoom, depois de 3 s,
+ * abre o aviso "Reunião no Zoom" (sem foco, sempre na frente); o Zoom desligar o microfone fecha o aviso.
+ */
+async function micWatchChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => void, checks: Record<string, Check>): Promise<void> {
+  const opened = ctx.fixtures.meetingPrompt.windows
+  const before = opened.length
+  const line = (mic: boolean, apps: string[], names: Record<string, string> = {}): void => appendFileSync(ctx.fixtures.micWatch.file, `${JSON.stringify({ v: 1, mic, apps, names, camera: false })}\n`)
+  // O observador subiu de novo quando `meetingPromptChecks` religou a configuração: espera o falso ler o arquivo.
+  await wait(500)
+  line(true, ['com.google.Chrome.helper'], { 'com.google.Chrome.helper': 'Google Chrome Helper' })
+  await wait(MIC_PROMPT_MIN_MS + 800)
+  const browserQuiet = opened.length === before
+  line(true, ['com.google.Chrome.helper', 'us.zoom.xos'], { 'us.zoom.xos': 'zoom.us' })
+  const startedAt = Date.now()
+  for (let attempt = 0; attempt < 200 && opened.length === before; attempt++) await wait(50)
+  const elapsed = Date.now() - startedAt
+  const prompt = opened[before] ?? null
+  if (prompt) watch(prompt)
+  const titled = prompt ? await waitFor(prompt.webContents, `(document.querySelector('[data-meeting-prompt-title]')?.textContent ?? '') === 'Reunião no Zoom'`, 8000) : false
+  const unfocused = prompt !== null && !prompt.isFocusable() && !prompt.isFocused() && prompt.isAlwaysOnTop()
+  const single = opened.length === before + 1
+  line(false, [])
+  for (let attempt = 0; attempt < 100 && prompt && !prompt.isDestroyed(); attempt++) await wait(50)
+  const closedWhenOff = prompt !== null && prompt.isDestroyed()
+  // Fechado o aviso do Zoom, a última reunião da extensão (a que `meetingPromptChecks` mandou com o aviso desligado)
+  // pode avisar agora, se a extensão ainda constar como conectada: esse aviso não é desta checagem e fecha aqui.
+  await wait(300)
+  for (const extra of opened.slice(before + 1)) if (!extra.isDestroyed()) extra.destroy()
+  checks['micWatch'] = {
+    ok: browserQuiet && prompt !== null && elapsed >= MIC_PROMPT_MIN_MS - 500 && titled && unfocused && single && closedWhenOff,
+    detail: `só o navegador com o microfone, nada abriu=${browserQuiet}; Zoom: aviso aberto=${prompt !== null} depois de ${elapsed} ms, "Reunião no Zoom"=${titled}, sem foco e na frente=${unfocused}, um aviso só=${single}; Zoom desligou o microfone, o aviso fechou=${closedWhenOff}`,
+  }
+}
+
 /** Títulos que `test/fixtures/fake-ai-notes.mjs` cria no primeiro e no segundo ciclo (contrato 30). */
 const AI_NOTES_FIRST_TITLE = 'Confirmar a janela de manutenção'
 const AI_NOTES_SECOND_TITLE = 'Quem aprova o orçamento da réplica'
@@ -8051,6 +8088,9 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
     // Contrato 48: o aviso de reunião, com o servidor do Meet no ar (como `meetChecks` deixa); antes do bloqueio.
     await meetingPromptChecks(ctx, watch, meet, screenshots)
 
+    // Contrato 49: o mesmo aviso pelo microfone de outro app, com o `lap-mic-watch` falso.
+    await micWatchChecks(ctx, watch, meet)
+
     // Contrato 30: IA anotando ao vivo e o quadro de post-its, numa gravação à parte; antes do bloqueio.
     await aiNotesChecks(ctx, watch, recording)
 
@@ -8119,7 +8159,7 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
   for (const [name, check] of Object.entries(mcp)) if (!check.ok) failures.push(`mcp ${name}: ${check.detail}`)
   for (const name of ['tab', 'cliEnable', 'import', 'addForm', 'addJson', 'chat', 'session', 'otherUses', 'remove', 'secrets', 'dark']) if (!mcp[name]) failures.push(`mcp ${name}: não executado`)
   for (const [name, check] of Object.entries(meet)) if (!check.ok) failures.push(`meet ${name}: ${check.detail}`)
-  for (const name of ['server', 'recording', 'setting', 'meetingPrompt', 'meetingPromptRecord', 'meetingPromptNever']) if (!meet[name]) failures.push(`meet ${name}: não executado`)
+  for (const name of ['server', 'recording', 'setting', 'meetingPrompt', 'meetingPromptRecord', 'meetingPromptNever', 'micWatch']) if (!meet[name]) failures.push(`meet ${name}: não executado`)
   for (const [name, check] of Object.entries(lock)) if (!check.ok) failures.push(`bloqueio ${name}: ${check.detail}`)
   for (const name of ['password', 'layer', 'channels', 'unlock', 'shortcutAndTouchId', 'recordingContinues', 'leaveDialog', 'endWhileLocked', 'reopen', 'reopenFromDisk', 'dark']) if (!lock[name]) failures.push(`bloqueio ${name}: não executado`)
   if (!theme.ok) failures.push(`tema: ${theme.detail}`)

@@ -194,6 +194,8 @@ export interface SmokeFixtures {
   calendar: SmokeCalendar
   /** Aviso de reunião (contrato 48): cada janela do aviso que o app abriu, na ordem. */
   meetingPrompt: { windows: BrowserWindow[] }
+  /** Contrato 49: o arquivo de onde o `lap-mic-watch` falso tira as linhas que escreve (o smoke acrescenta nele). */
+  micWatch: { file: string }
   /** Notificações do WhatsApp (contrato 40): as substitutas, o foco fingido e o número do Dock. */
   whatsappNotify: SmokeWhatsAppNotify
 }
@@ -355,6 +357,7 @@ export function createSmokeFixtures(currentVersion: string, userDataDir: string)
     microsoft: createFakeMicrosoft({ clientId: SMOKE_MICROSOFT_CLIENT_ID, profile: { name: 'Bruno Teste', email: 'bruno.teste@example.com' } }),
     calendar: { notifications: [] },
     meetingPrompt: { windows: [] },
+    micWatch: { file: join(userDataDir, 'mic-watch-falso.jsonl') },
     whatsappNotify: { notifications: [], focusedContentsId: null, badges: [] },
     lock: { skewMs: 0, touchIdAvailable: true, touchIdApproves: true, touchIdPrompts: 0, power: new EventEmitter(), refresh: () => undefined },
     fetch: (url: string, init: FetchInit) => {

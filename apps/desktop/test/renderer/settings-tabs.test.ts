@@ -111,12 +111,12 @@ describe('índice da busca (contrato 18, devolução)', () => {
     expect(found.map((entry) => entry.name)).toContain('Ativar ponte')
   })
 
-  it('"Avisar quando uma reunião começar" fica em Gravação › Transcrição, logo abaixo de "Quem fala no Meet" (contrato 48)', () => {
+  it('"Avisar quando uma reunião começar" fica em Gravação › Transcrição, logo abaixo de "Quem fala no Meet" (contratos 48 e 49)', () => {
     const transcription = index.filter((entry) => entry.tab === 'gravacao' && entry.section === 'Transcrição').map((entry) => entry.name)
     expect(transcription.indexOf('Avisar quando uma reunião começar')).toBe(transcription.indexOf('Quem fala no Meet') + 1)
     const found = searchSettings(index, 'aviso').flatMap((group) => group.indexes.map((i) => index[i] as SettingsEntry))
     expect(found.map((entry) => entry.name)).toContain('Avisar quando uma reunião começar')
-    expect(found.find((entry) => entry.name === 'Avisar quando uma reunião começar')?.description).toContain('Precisa do plugin Quem fala no Meet.')
+    expect(found.find((entry) => entry.name === 'Avisar quando uma reunião começar')?.description).toBe('Mostra um aviso no topo da tela quando você entra numa reunião: Meet e Teams no navegador (com o plugin) ou apps como Zoom e FaceTime.')
   })
 
   it('"Salvar plugin" e "Como instalar" de cada cartão: o rótulo do resultado diz de qual plugin é', () => {

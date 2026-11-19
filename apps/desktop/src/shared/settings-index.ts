@@ -7,8 +7,8 @@ import type { SettingsTab } from './routes'
 /** Descrição do interruptor "Quem fala no Meet" (contratos 27 e 41), a mesma na tela e na busca. */
 export const MEET_SPEAKERS_DESCRIPTION = 'Com a extensão do LAP Reuniões no Chrome, cada fala do Meet e do Teams ganha o nome de quem falou. Tudo fica neste computador.'
 
-/** Descrição de "Avisar quando uma reunião começar" (contrato 48), a mesma na tela e na busca. */
-export const MEETING_PROMPT_DESCRIPTION = 'Mostra um aviso no topo da tela quando você entra numa reunião do Meet ou do Teams. Precisa do plugin Quem fala no Meet.'
+/** Descrição de "Avisar quando uma reunião começar" (contratos 48 e 49), a mesma na tela e na busca. */
+export const MEETING_PROMPT_DESCRIPTION = 'Mostra um aviso no topo da tela quando você entra numa reunião: Meet e Teams no navegador (com o plugin) ou apps como Zoom e FaceTime.'
 
 /** Descrição de "Ativar ponte" do plugin "Controle do navegador" (contrato 46), a mesma na tela e na busca. */
 export const NAVEGADOR_BRIDGE_DESCRIPTION = 'Liga a conexão local que a extensão usa para receber os comandos do app. Desligada, nada chega ao Chrome.'
