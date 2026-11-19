@@ -1,0 +1,332 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Conexões · Conectores do claude.ai</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0;background:#D9DEE7}
+.board{display:flex;flex-direction:column;gap:56px;padding:40px;font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;color:#061A3D}
+.board>header h1{margin:0;font-size:26px;line-height:32px;font-weight:700;letter-spacing:-.3px;color:#0A2A5E}
+.board>header p{margin:6px 0 0;font-size:13px;color:#5B6B85;max-width:900px}
+.state{display:flex;flex-direction:column;gap:16px}
+.state h2{margin:0;font-size:17px;line-height:24px;font-weight:700;color:#0A2A5E}
+.state h2 b{display:inline-block;min-width:22px;padding:0 6px;margin-right:8px;background:#0A2A5E;color:#fff;border-radius:4px;text-align:center}
+.state>p{margin:0;font-size:13px;color:#5B6B85;max-width:900px}
+.pair{display:flex;flex-wrap:wrap;gap:32px;align-items:flex-start}
+.cap{font-size:10px;font-weight:500;letter-spacing:.14em;color:#5B6B85;margin-bottom:6px}
+
+.t-light{--bg:#FFFFFF;--bg-raised:#FFFFFF;--bg-sunken:#EEF2F9;--line:#E3E9F2;--line-strong:#C9D4E5;--title:#0A2A5E;--text:#061A3D;--text-muted:#5B6B85;--text-faint:#7F8DA6;--accent:#1E5BB8;--on-accent:#FFFFFF;--rec:#C62F34;--live:#1F7A45}
+.t-dark{--bg:#061A3D;--bg-raised:#0A2A5E;--bg-sunken:#04122B;--line:rgba(201,212,229,.14);--line-strong:rgba(201,212,229,.28);--title:#FFFFFF;--text:#FFFFFF;--text-muted:#A8B5CC;--text-faint:#7C8CAB;--accent:#5392F7;--on-accent:#061A3D;--rec:#F0656B;--live:#4CC27A}
+.win{--side-bg:#0A2A5E;--side-muted:#A8B5CC;--side-active:rgba(255,255,255,.12);--side-ok:#3B82F6;
+ display:flex;width:1120px;max-width:100%;background:var(--bg);color:var(--text);font-size:13px;line-height:1.4;border-radius:6px;overflow:hidden;outline:1px solid rgba(6,26,61,.18)}
+.t-dark.win{outline-color:rgba(201,212,229,.28)}
+.side{flex:0 0 224px;box-sizing:border-box;background:var(--side-bg);color:#fff;display:flex;flex-direction:column;gap:24px;padding:52px 12px 20px}
+.brand{display:flex;align-items:center;gap:10px;padding:0 8px}
+.brand-t{display:flex;flex-direction:column;gap:2px}.bn{font-size:15px;font-weight:700;letter-spacing:-.2px}
+.caps{font-size:10px;font-weight:500;letter-spacing:.14em;color:var(--side-muted)}
+.navs{display:flex;flex-direction:column;gap:2px}
+.nav{display:flex;align-items:center;gap:10px;height:40px;padding:0 10px;border-radius:4px;color:var(--side-muted);font-size:13px}
+.nav.on{background:var(--side-active);color:#fff;font-weight:500}
+.perm{margin-top:auto;display:flex;flex-direction:column;gap:10px;padding:16px 10px 0;border-top:1px solid rgba(255,255,255,.12)}
+.prow{display:flex;align-items:center;gap:8px;font-size:12px}.grow{flex-grow:1}.sm{color:var(--side-muted)}
+.sq{width:6px;height:6px;background:var(--side-ok)}
+.main{flex:1 1 auto;min-width:0;display:flex;flex-direction:column}
+.head{padding:28px 40px 0}
+.ph{display:flex;align-items:center;justify-content:space-between;gap:16px}
+.ph h1{margin:0;font-size:26px;line-height:32px;font-weight:700;letter-spacing:-.3px;color:var(--title)}
+.search{display:flex;align-items:center;gap:8px;width:240px;height:40px;box-sizing:border-box;padding:0 12px;border:1px solid var(--line-strong);border-radius:4px;background:var(--bg-raised);color:var(--text-faint)}
+.tabs{display:flex;gap:24px;margin-top:20px;border-bottom:1px solid var(--line)}
+.tab{height:40px;line-height:40px;font-size:13px;font-weight:500;color:var(--text-muted);border-bottom:2px solid transparent;margin-bottom:-1px}
+.tab.on{color:var(--title);border-bottom-color:var(--accent)}
+.col{display:flex;flex-direction:column;gap:40px;padding:32px 40px 48px;max-width:760px}
+.note{display:flex;align-items:center;gap:12px;border-left:3px solid var(--title);background:var(--bg-sunken);padding:12px 16px;font-size:13px}
+.note svg{flex-shrink:0;color:var(--text-muted)}.note p{margin:0;color:var(--text)}
+.note.sm{padding:8px 12px;font-size:12px}
+.sec{display:flex;flex-direction:column}
+.sec h2{margin:0;font-size:17px;line-height:24px;font-weight:700;color:var(--title)}
+.rule{width:24px;height:2px;margin:8px 0;background:var(--title)}
+.srow{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:12px;min-height:64px;padding:8px 0;box-sizing:border-box;border-bottom:1px solid var(--line)}
+.sl{display:flex;flex-direction:column;gap:2px;max-width:500px}
+.sn{font-size:13px;font-weight:500}.sd{font-size:12px;color:var(--text-muted)}
+.count{font-size:13px;color:var(--text-muted)}
+.list>*+*{border-top:1px solid var(--line)}
+.item{display:flex;flex-direction:column;gap:12px;padding:16px 0}
+.ihead{display:flex;align-items:flex-start;justify-content:space-between;gap:16px}
+.itxt{display:flex;flex-direction:column;gap:2px;min-width:0}
+.itxt p{margin:0}
+.iname{font-size:13px;font-weight:500}
+.isub,.isub2{font-size:12px;color:var(--text-muted)}
+.faint,.nextq{margin:0;font-size:12px;color:var(--text-faint)}
+.nextq{color:var(--text-muted)}
+.live{color:var(--live)}.muted{color:var(--text-muted)}.rec{color:var(--rec)}
+.lnk{display:inline-flex;align-items:center;gap:4px;color:var(--accent);font-weight:500;text-decoration:underline;text-decoration-thickness:1px;text-underline-offset:3px}
+.sw{display:flex;flex-shrink:0;align-items:center;justify-content:flex-start;width:44px;height:24px;padding:3px;box-sizing:border-box;border:1px solid var(--line-strong);border-radius:4px;background:var(--bg-sunken)}
+.sw>span{width:16px;height:16px;border-radius:2px;background:var(--text-muted)}
+.sw.on{justify-content:flex-end;border-color:var(--accent);background:var(--accent)}.sw.on>span{background:var(--on-accent)}
+.sw.dis{opacity:.5}
+.uses,.acts{display:flex;flex-wrap:wrap;align-items:center;gap:6px}
+.acts{gap:8px}
+.btn{display:inline-flex;align-items:center;gap:6px;height:32px;box-sizing:border-box;padding:0 10px;border:1px solid var(--line-strong);border-radius:4px;background:var(--bg-raised);color:var(--title);font-size:12px;font-weight:500;white-space:nowrap}
+.btn.md{height:40px;padding:0 14px;font-size:13px}
+.btn.pressed{background:var(--title);border-color:var(--title);color:var(--bg)}
+.btn.danger{border-color:transparent;background:transparent;color:var(--rec)}
+.empty{margin:0;padding:16px 0;font-size:12px;color:var(--text-muted)}
+.crop{padding:10px 12px;border:1px dashed var(--line-strong);border-radius:4px;font-size:12px;color:var(--text-faint)}
+.tools{list-style:none;margin:0;padding:0;border:1px solid var(--line);border-radius:4px}
+.tools li{display:flex;align-items:center;gap:12px;padding:8px 12px}
+.tools li+li{border-top:1px solid var(--line)}
+.tl{display:flex;flex:1;flex-direction:column;min-width:0}
+.tn{display:flex;align-items:center;gap:8px}
+.mono{font-family:Menlo,ui-monospace,monospace;font-size:12px;color:var(--text)}
+.td{font-size:12px;color:var(--text-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tag{display:inline-flex;align-items:center;height:18px;padding:0 6px;border:1px solid var(--line-strong);border-radius:4px;font-size:11px;font-weight:500;color:var(--text-muted)}
+.sel{display:inline-flex;align-items:center;justify-content:space-between;gap:6px;min-width:104px;height:32px;box-sizing:border-box;padding:0 8px;border:1px solid var(--line-strong);border-radius:4px;background:var(--bg-raised);color:var(--text);font-size:12px}
+.sel svg{color:var(--text-muted)}
+.nologin{display:flex;flex-wrap:wrap;align-items:center;gap:12px;padding:16px 0}
+.nologin p{margin:0;flex:1 1 320px;font-size:13px;color:var(--text)}
+.new{display:flex;flex-direction:column;gap:12px}
+</style>
+</helmet>
+<div class="board">
+<header><h1>Configurações › Conexões · Conectores do claude.ai</h1>
+<p>Mockup do contrato 58 para aprovação. Desenho estático: nenhum dado real. Cada estado aparece no tema claro e no escuro, com as mesmas variáveis de tokens.css.</p></header>
+<section class="state" id="estado-1"><h2><b>1</b>Seção com três conectores</h2><p>Abaixo das seções MCP do contrato 21, que ficam iguais. Notion e Google Drive conectados, Gmail precisa autorizar e mostra o link. Tudo desligado por padrão. O plugin continua com "Não dá para usar no app".</p><div class="pair"><div><div class="cap">CLARO</div><div class="win t-light" data-theme="light">
+<nav class="side" aria-label="Principal">
+<div class="brand">
+<svg width="28" height="28" viewBox="0 0 100 100" role="img" aria-label="LAP"><rect width="100" height="100" rx="6" fill="#FFFFFF"></rect><path d="M 20 25 L 20 75 L 55 75" fill="none" stroke="#0A2A5E" stroke-width="8" stroke-linecap="square"></path><rect x="62" y="58" width="22" height="22" fill="#3B82F6"></rect></svg>
+<div class="brand-t"><span class="bn">Meeting Scribe</span><span class="caps">LAP SOFTWARE</span></div>
+</div>
+<div class="navs"><a class="nav"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" aria-hidden="true"><rect x="4" y="3" width="16" height="18"></rect><path d="M8 8h8M8 12h8M8 16h5"></path></svg>Reuniões</a><a class="nav"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" aria-hidden="true"><path d="M12 3l2 6 6 2-6 2-2 6-2-6-6-2 6-2z"></path></svg>Assistente</a><a class="nav"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" aria-hidden="true"><rect x="5" y="8" width="14" height="11"></rect><path d="M12 4v4M9 13v1M15 13v1"></path></svg>Automações</a><a class="nav"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" aria-hidden="true"><rect x="7" y="3" width="10" height="18"></rect><path d="M11 18h2"></path></svg>WhatsApp</a><a class="nav on" aria-current="page"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h2M10 17h10"></path><rect x="14" y="5" width="4" height="4"></rect><rect x="6" y="15" width="4" height="4"></rect></svg>Configurações</a></div>
+<div class="perm"><span class="caps">PERMISSÕES</span>
+<div class="prow"><span class="sq ok"></span><span class="grow">Microfone</span><span class="sm">concedido</span></div>
+<div class="prow"><span class="sq ok"></span><span class="grow">Áudio do sistema</span><span class="sm">concedido</span></div>
+</div>
+</nav>
+<main class="main"><div class="head">
+<div class="ph"><h1>Configurações</h1><span class="search"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" aria-hidden="true"><circle cx="11" cy="11" r="6"></circle><path d="M16 16l4 4"></path></svg><span>Buscar configuração</span></span></div>
+<div class="tabs" role="tablist"><span class="tab">Geral</span><span class="tab">Gravação</span><span class="tab">Claude</span><span class="tab">Arquivos</span><span class="tab">Contas</span><span class="tab">Plugins</span><span class="tab on">Conexões</span><span class="tab">Sobre</span></div>
+</div><div class="col"><div class="note"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" aria-hidden="true"><path d="M12 3l7 3v6c0 4-3 7-7 9-4-2-7-5-7-9V6z"></path><path d="M12 8v5M12 16v.5"></path></svg><p>Servidores MCP dão ao Claude acesso a outros sistemas. Ligue só os que você confia. Texto de reunião pode tentar pedir ações: confira cada pedido. A fonte "Internet" do Assistente e os servidores MCP são permissões separadas: ligar uma não liga a outra.</p></div><section class="sec"><h2>Do Claude CLI</h2><span class="rule"></span><div class="srow"><div class="sl"><span class="sn">Servidores do Claude CLI</span><span class="sd">Os servidores MCP do claude instalado neste Mac (claude mcp list). Ligue os que o app pode usar.</span></div><span class="btn md"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" aria-hidden="true"><path d="M4 12a8 8 0 0 1 14-5.3L20 9M20 4v5h-5M20 12a8 8 0 0 1-14 5.3L4 15M4 20v-5h5"></path></svg>Atualizar</span></div><div class="list"><div class="item">
+<div class="ihead"><div class="itxt"><p class="iname">calculadora</p>
+<p class="isub">Comando local (stdio) · CLI: Conectado · <span class="live">Conectado · 3 ferramentas</span></p></div>
+<span class="sw on" role="switch" aria-checked="true" aria-label="calculadora"><span></span></span></div>
+<div class="uses"><span class="sd">Usar em</span><span class="btn pressed">Chat</span><span class="btn">Análise</span></div>
+<div class="acts"><span class="btn">Testar</span><span class="btn">Ver detalhes</span><span class="btn danger"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" aria-hidden="true"><path d="M5 7h14M10 7V4h4v3M7 7l1 13h8l1-13"></path></svg>Remover</span></div>
+</div><div class="item">
+<div class="ihead"><div class="itxt"><p class="iname">plugin:figma:figma</p>
+<p class="isub">Endereço (HTTP) · CLI: Conectado · Desligado</p>
+<p class="faint">Não dá para usar no app: este servidor não está no escopo user do Claude CLI (conectores do claude.ai e de plugins).</p></div>
+<span class="sw dis" role="switch" aria-checked="false" aria-label="plugin:figma:figma"><span></span></span></div>
+</div></div></section><section class="sec"><h2>Servidores do app</h2><span class="rule"></span><div class="srow"><div class="sl"><span class="sn">Adicionar servidor MCP</span><span class="sd">Um comando local (stdio) ou um endereço (HTTP), no Claude CLI ou só neste app.</span></div><span class="btn md"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" aria-hidden="true"><path d="M12 5v14M5 12h14"></path></svg>Adicionar servidor MCP</span></div><div class="list"><p class="empty">Nenhum servidor só deste app.</p></div></section><section class="sec"><h2>Encontrados neste Mac</h2><span class="rule"></span><div class="srow"><div class="sl"><span class="sn">Claude Desktop</span><span class="sd">Servidores de outras ferramentas (Claude Desktop). Importar não traz os segredos.</span></div><span class="count">1 servidor</span></div></section><div class="new"><section class="sec"><h2>Conectores do claude.ai</h2><span class="rule"></span><div class="srow"><div class="sl"><span class="sn">Conectores da sua conta</span><span class="sd">Os conectores ligados na sua conta do claude.ai (claude mcp list). O login de cada um fica no claude.ai: o app não vê nem guarda token. Ligado, vale no Assistente e no chat da reunião.</span></div><span class="count">3 conectores</span></div><div class="list"><div class="item" data-connector="notion">
+<div class="ihead"><div class="itxt"><p class="iname">Notion</p><p class="isub">Conector do claude.ai · <span class="live">Conectado</span></p></div>
+<span class="sw" role="switch" aria-checked="false" aria-label="Notion"><span></span></span></div>
+<div class="acts"><span class="btn" aria-expanded="false"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" aria-hidden="true"><path d="M6 9l6 6 6-6"></path></svg>Ver ferramentas</span></div>
+</div><div class="item" data-connector="google-drive">
+<div class="ihead"><div class="itxt"><p class="iname">Google Drive</p><p class="isub">Conector do claude.ai · <span class="live">Conectado</span></p></div>
+<span class="sw" role="switch" aria-checked="false" aria-label="Google Drive"><span></span></span></div>
+<div class="acts"><span class="btn" aria-expanded="false"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" aria-hidden="true"><path d="M6 9l6 6 6-6"></path></svg>Ver ferramentas</span></div>
+</div><div class="item" data-connector="gmail">
+<div class="ihead"><div class="itxt"><p class="iname">Gmail</p><p class="isub">Conector do claude.ai · <span class="muted">Precisa autorizar</span></p><p class="isub2">Autorize na sua conta para o app poder ligar. <a class="lnk" href="https://claude.ai/settings/connectors">Autorizar no claude.ai<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" aria-hidden="true"><path d="M14 4h6v6M20 4l-9 9M18 14v6H4V6h6"></path></svg></a></p></div>
+<span class="sw dis" role="switch" aria-checked="false" aria-label="Gmail"><span></span></span></div>
+
+</div></div></section></div></div></main>
+</div></div><div><div class="cap">ESCURO</div><div class="win t-dark" data-theme="dark">
+<nav class="side" aria-label="Principal">
+<div class="brand">
+<svg width="28" height="28" viewBox="0 0 100 100" role="img" aria-label="LAP"><rect width="100" height="100" rx="6" fill="#FFFFFF"></rect><path d="M 20 25 L 20 75 L 55 75" fill="none" stroke="#0A2A5E" stroke-width="8" stroke-linecap="square"></path><rect x="62" y="58" width="22" height="22" fill="#3B82F6"></rect></svg>
+<div class="brand-t"><span class="bn">Meeting Scribe</span><span class="caps">LAP SOFTWARE</span></div>
+</div>
+<div class="navs"><a class="nav"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" aria-hidden="true"><rect x="4" y="3" width="16" height="18"></rect><path d="M8 8h8M8 12h8M8 16h5"></path></svg>Reuniões</a><a class="nav"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" aria-hidden="true"><path d="M12 3l2 6 6 2-6 2-2 6-2-6-6-2 6-2z"></path></svg>Assistente</a><a class="nav"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" aria-hidden="true"><rect x="5" y="8" width="14" height="11"></rect><path d="M12 4v4M9 13v1M15 13v1"></path></svg>Automações</a><a class="nav"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" aria-hidden="true"><rect x="7" y="3" width="10" height="18"></rect><path d="M11 18h2"></path></svg>WhatsApp</a><a class="nav on" aria-current="page"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h2M10 17h10"></path><rect x="14" y="5" width="4" height="4"></rect><rect x="6" y="15" width="4" height="4"></rect></svg>Configurações</a></div>
+<div class="perm"><span class="caps">PERMISSÕES</span>
+<div class="prow"><span class="sq ok"></span><span class="grow">Microfone</span><span class="sm">concedido</span></div>
+<div class="prow"><span class="sq ok"></span><span class="grow">Áudio do sistema</span><span class="sm">concedido</span></div>
+</div>
+</nav>
+<main class="main"><div class="head">
+<div class="ph"><h1>Configurações</h1><span class="search"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" aria-hidden="true"><circle cx="11" cy="11" r="6"></circle><path d="M16 16l4 4"></path></svg><span>Buscar configuração</span></span></div>
+<div class="tabs" role="tablist"><span class="tab">Geral</span><span class="tab">Gravação</span><span class="tab">Claude</span><span class="tab">Arquivos</span><span class="tab">Contas</span><span class="tab">Plugins</span><span class="tab on">Conexões</span><span class="tab">Sobre</span></div>
+</div><div class="col"><div class="note"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" aria-hidden="true"><path d="M12 3l7 3v6c0 4-3 7-7 9-4-2-7-5-7-9V6z"></path><path d="M12 8v5M12 16v.5"></path></svg><p>Servidores MCP dão ao Claude acesso a outros sistemas. Ligue só os que você confia. Texto de reunião pode tentar pedir ações: confira cada pedido. A fonte "Internet" do Assistente e os servidores MCP são permissões separadas: ligar uma não liga a outra.</p></div><section class="sec"><h2>Do Claude CLI</h2><span class="rule"></span><div class="srow"><div class="sl"><span class="sn">Servidores do Claude CLI</span><span class="sd">Os servidores MCP do claude instalado neste Mac (claude mcp list). Ligue os que o app pode usar.</span></div><span class="btn md"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" aria-hidden="true"><path d="M4 12a8 8 0 0 1 14-5.3L20 9M20 4v5h-5M20 12a8 8 0 0 1-14 5.3L4 15M4 20v-5h5"></path></svg>Atualizar</span></div><div class="list"><div class="item">
+<div class="ihead"><div class="itxt"><p class="iname">calculadora</p>
+<p class="isub">Comando local (stdio) · CLI: Conectado · <span class="live">Conectado · 3 ferramentas</span></p></div>
+<span class="sw on" role="switch" aria-checked="true" aria-label="calculadora"><span></span></span></div>
+<div class="uses"><span class="sd">Usar em</span><span class="btn pressed">Chat</span><span class="btn">Análise</span></div>
+<div class="acts"><span class="btn">Testar</span><span class="btn">Ver detalhes</span><span class="btn danger"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" aria-hidden="true"><path d="M5 7h14M10 7V4h4v3M7 7l1 13h8l1-13"></path></svg>Remover</span></div>
+</div><div class="item">
+<div class="ihead"><div class="itxt"><p class="iname">plugin:figma:figma</p>
+<p class="isub">Endereço (HTTP) · CLI: Conectado · Desligado</p>
+<p class="faint">Não dá para usar no app: este servidor não está no escopo user do Claude CLI (conectores do claude.ai e de plugins).</p></div>
+<span class="sw dis" role="switch" aria-checked="false" aria-label="plugin:figma:figma"><span></span></span></div>
+</div></div></section><section class="sec"><h2>Servidores do app</h2><span class="rule"></span><div class="srow"><div class="sl"><span class="sn">Adicionar servidor MCP</span><span class="sd">Um comando local (stdio) ou um endereço (HTTP), no Claude CLI ou só neste app.</span></div><span class="btn md"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" aria-hidden="true"><path d="M12 5v14M5 12h14"></path></svg>Adicionar servidor MCP</span></div><div class="list"><p class="empty">Nenhum servidor só deste app.</p></div></section><section class="sec"><h2>Encontrados neste Mac</h2><span class="rule"></span><div class="srow"><div class="sl"><span class="sn">Claude Desktop</span><span class="sd">Servidores de outras ferramentas (Claude Desktop). Importar não traz os segredos.</span></div><span class="count">1 servidor</span></div></section><div class="new"><section class="sec"><h2>Conectores do claude.ai</h2><span class="rule"></span><div class="srow"><div class="sl"><span class="sn">Conectores da sua conta</span><span class="sd">Os conectores ligados na sua conta do claude.ai (claude mcp list). O login de cada um fica no claude.ai: o app não vê nem guarda token. Ligado, vale no Assistente e no chat da reunião.</span></div><span class="count">3 conectores</span></div><div class="list"><div class="item" data-connector="notion">
+<div class="ihead"><div class="itxt"><p class="iname">Notion</p><p class="isub">Conector do claude.ai · <span class="live">Conectado</span></p></div>
+<span class="sw" role="switch" aria-checked="false" aria-label="Notion"><span></span></span></div>
+<div class="acts"><span class="btn" aria-expanded="false"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" aria-hidden="true"><path d="M6 9l6 6 6-6"></path></svg>Ver ferramentas</span></div>
+</div><div class="item" data-connector="google-drive">
+<div class="ihead"><div class="itxt"><p class="iname">Google Drive</p><p class="isub">Conector do claude.ai · <span class="live">Conectado</span></p></div>
+<span class="sw" role="switch" aria-checked="false" aria-label="Google Drive"><span></span></span></div>
+<div class="acts"><span class="btn" aria-expanded="false"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" aria-hidden="true"><path d="M6 9l6 6 6-6"></path></svg>Ver ferramentas</span></div>
+</div><div class="item" data-connector="gmail">
+<div class="ihead"><div class="itxt"><p class="iname">Gmail</p><p class="isub">Conector do claude.ai · <span class="muted">Precisa autorizar</span></p><p class="isub2">Autorize na sua conta para o app poder ligar. <a class="lnk" href="https://claude.ai/settings/connectors">Autorizar no claude.ai<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" aria-hidden="true"><path d="M14 4h6v6M20 4l-9 9M18 14v6H4V6h6"></path></svg></a></p></div>
+<span class="sw dis" role="switch" aria-checked="false" aria-label="Gmail"><span></span></span></div>
+
+</div></div></section></div></div></main>
+</div></div></div></section><section class="state" id="estado-2"><h2><b>2</b>Conector recém-ligado</h2><p>Notion acabou de ser ligado: aviso de uma linha (CA2), sem diálogo, e a nota de que vale na próxima pergunta (CA5).</p><div class="pair"><div><div class="cap">CLARO</div><div class="win t-light" data-theme="light">
+<nav class="side" aria-label="Principal">
+<div class="brand">
+<svg width="28" height="28" viewBox="0 0 100 100" role="img" aria-label="LAP"><rect width="100" height="100" rx="6" fill="#FFFFFF"></rect><path d="M 20 25 L 20 75 L 55 75" fill="none" stroke="#0A2A5E" stroke-width="8" stroke-linecap="square"></path><rect x="62" y="58" width="22" height="22" fill="#3B82F6"></rect></svg>
+<div class="brand-t"><span class="bn">Meeting Scribe</span><span class="caps">LAP SOFTWARE</span></div>
+</div>
+<div class="navs"><a class="nav"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" aria-hidden="true"><rect x="4" y="3" width="16" height="18"></rect><path d="M8 8h8M8 12h8M8 16h5"></path></svg>Reuniões</a><a class="nav"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" aria-hidden="true"><path d="M12 3l2 6 6 2-6 2-2 6-2-6-6-2 6-2z"></path></svg>Assistente</a><a class="nav"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" aria-hidden="true"><rect x="5" y="8" width="14" height="11"></rect><path d="M12 4v4M9 13v1M15 13v1"></path></svg>Automações</a><a class="nav"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" aria-hidden="true"><rect x="7" y="3" width="10" height="18"></rect><path d="M11 18h2"></path></svg>WhatsApp</a><a class="nav on" aria-current="page"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h2M10 17h10"></path><rect x="14" y="5" width="4" height="4"></rect><rect x="6" y="15" width="4" height="4"></rect></svg>Configurações</a></div>
+<div class="perm"><span class="caps">PERMISSÕES</span>
+<div class="prow"><span class="sq ok"></span><span class="grow">Microfone</span><span class="sm">concedido</span></div>
+<div class="prow"><span class="sq ok"></span><span class="grow">Áudio do sistema</span><span class="sm">concedido</span></div>
+</div>
+</nav>
+<main class="main"><div class="head">
+<div class="ph"><h1>Configurações</h1><span class="search"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" aria-hidden="true"><circle cx="11" cy="11" r="6"></circle><path d="M16 16l4 4"></path></svg><span>Buscar configuração</span></span></div>
+<div class="tabs" role="tablist"><span class="tab">Geral</span><span class="tab">Gravação</span><span class="tab">Claude</span><span class="tab">Arquivos</span><span class="tab">Contas</span><span class="tab">Plugins</span><span class="tab on">Conexões</span><span class="tab">Sobre</span></div>
+</div><div class="col"><div class="crop">Seções MCP acima (aviso, Do Claude CLI, Servidores do app, Encontrados neste Mac): iguais ao estado 1</div><div class="new"><section class="sec"><h2>Conectores do claude.ai</h2><span class="rule"></span><div class="srow"><div class="sl"><span class="sn">Conectores da sua conta</span><span class="sd">Os conectores ligados na sua conta do claude.ai (claude mcp list). O login de cada um fica no claude.ai: o app não vê nem guarda token. Ligado, vale no Assistente e no chat da reunião.</span></div><span class="count">3 conectores</span></div><div class="list"><div class="item" data-connector="notion">
+<div class="ihead"><div class="itxt"><p class="iname">Notion</p><p class="isub">Conector do claude.ai · <span class="live">Conectado</span></p><p class="nextq">Vale na próxima pergunta. A conversa aberta continua como estava.</p></div>
+<span class="sw on" role="switch" aria-checked="true" aria-label="Notion"><span></span></span></div>
+<div class="note sm" role="status"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" aria-hidden="true"><rect x="4" y="4" width="16" height="16"></rect><path d="M12 11v5M12 8v.5"></path></svg><p>O agente poderá usar o Notion da sua conta do claude.ai. Cada ferramenta pergunta antes, até você mudar.</p></div><div class="acts"><span class="btn" aria-expanded="false"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" aria-hidden="true"><path d="M6 9l6 6 6-6"></path></svg>Ver ferramentas</span></div>
+</div><div class="item" data-connector="google-drive">
+<div class="ihead"><div class="itxt"><p class="iname">Google Drive</p><p class="isub">Conector do claude.ai · <span class="live">Conectado</span></p></div>
+<span class="sw" role="switch" aria-checked="false" aria-label="Google Drive"><span></span></span></div>
+<div class="acts"><span class="btn" aria-expanded="false"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" aria-hidden="true"><path d="M6 9l6 6 6-6"></path></svg>Ver ferramentas</span></div>
+</div><div class="item" data-connector="gmail">
+<div class="ihead"><div class="itxt"><p class="iname">Gmail</p><p class="isub">Conector do claude.ai · <span class="muted">Precisa autorizar</span></p><p class="isub2">Autorize na sua conta para o app poder ligar. <a class="lnk" href="https://claude.ai/settings/connectors">Autorizar no claude.ai<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" aria-hidden="true"><path d="M14 4h6v6M20 4l-9 9M18 14v6H4V6h6"></path></svg></a></p></div>
+<span class="sw dis" role="switch" aria-checked="false" aria-label="Gmail"><span></span></span></div>
+
+</div></div></section></div></div></main>
+</div></div><div><div class="cap">ESCURO</div><div class="win t-dark" data-theme="dark">
+<nav class="side" aria-label="Principal">
+<div class="brand">
+<svg width="28" height="28" viewBox="0 0 100 100" role="img" aria-label="LAP"><rect width="100" height="100" rx="6" fill="#FFFFFF"></rect><path d="M 20 25 L 20 75 L 55 75" fill="none" stroke="#0A2A5E" stroke-width="8" stroke-linecap="square"></path><rect x="62" y="58" width="22" height="22" fill="#3B82F6"></rect></svg>
+<div class="brand-t"><span class="bn">Meeting Scribe</span><span class="caps">LAP SOFTWARE</span></div>
+</div>
+<div class="navs"><a class="nav"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" aria-hidden="true"><rect x="4" y="3" width="16" height="18"></rect><path d="M8 8h8M8 12h8M8 16h5"></path></svg>Reuniões</a><a class="nav"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" aria-hidden="true"><path d="M12 3l2 6 6 2-6 2-2 6-2-6-6-2 6-2z"></path></svg>Assistente</a><a class="nav"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" aria-hidden="true"><rect x="5" y="8" width="14" height="11"></rect><path d="M12 4v4M9 13v1M15 13v1"></path></svg>Automações</a><a class="nav"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" aria-hidden="true"><rect x="7" y="3" width="10" height="18"></rect><path d="M11 18h2"></path></svg>WhatsApp</a><a class="nav on" aria-current="page"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h2M10 17h10"></path><rect x="14" y="5" width="4" height="4"></rect><rect x="6" y="15" width="4" height="4"></rect></svg>Configurações</a></div>
+<div class="perm"><span class="caps">PERMISSÕES</span>
+<div class="prow"><span class="sq ok"></span><span class="grow">Microfone</span><span class="sm">concedido</span></div>
+<div class="prow"><span class="sq ok"></span><span class="grow">Áudio do sistema</span><span class="sm">concedido</span></div>
+</div>
+</nav>
+<main class="main"><div class="head">
+<div class="ph"><h1>Configurações</h1><span class="search"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" aria-hidden="true"><circle cx="11" cy="11" r="6"></circle><path d="M16 16l4 4"></path></svg><span>Buscar configuração</span></span></div>
+<div class="tabs" role="tablist"><span class="tab">Geral</span><span class="tab">Gravação</span><span class="tab">Claude</span><span class="tab">Arquivos</span><span class="tab">Contas</span><span class="tab">Plugins</span><span class="tab on">Conexões</span><span class="tab">Sobre</span></div>
+</div><div class="col"><div class="crop">Seções MCP acima (aviso, Do Claude CLI, Servidores do app, Encontrados neste Mac): iguais ao estado 1</div><div class="new"><section class="sec"><h2>Conectores do claude.ai</h2><span class="rule"></span><div class="srow"><div class="sl"><span class="sn">Conectores da sua conta</span><span class="sd">Os conectores ligados na sua conta do claude.ai (claude mcp list). O login de cada um fica no claude.ai: o app não vê nem guarda token. Ligado, vale no Assistente e no chat da reunião.</span></div><span class="count">3 conectores</span></div><div class="list"><div class="item" data-connector="notion">
+<div class="ihead"><div class="itxt"><p class="iname">Notion</p><p class="isub">Conector do claude.ai · <span class="live">Conectado</span></p><p class="nextq">Vale na próxima pergunta. A conversa aberta continua como estava.</p></div>
+<span class="sw on" role="switch" aria-checked="true" aria-label="Notion"><span></span></span></div>
+<div class="note sm" role="status"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" aria-hidden="true"><rect x="4" y="4" width="16" height="16"></rect><path d="M12 11v5M12 8v.5"></path></svg><p>O agente poderá usar o Notion da sua conta do claude.ai. Cada ferramenta pergunta antes, até você mudar.</p></div><div class="acts"><span class="btn" aria-expanded="false"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" aria-hidden="true"><path d="M6 9l6 6 6-6"></path></svg>Ver ferramentas</span></div>
+</div><div class="item" data-connector="google-drive">
+<div class="ihead"><div class="itxt"><p class="iname">Google Drive</p><p class="isub">Conector do claude.ai · <span class="live">Conectado</span></p></div>
+<span class="sw" role="switch" aria-checked="false" aria-label="Google Drive"><span></span></span></div>
+<div class="acts"><span class="btn" aria-expanded="false"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" aria-hidden="true"><path d="M6 9l6 6 6-6"></path></svg>Ver ferramentas</span></div>
+</div><div class="item" data-connector="gmail">
+<div class="ihead"><div class="itxt"><p class="iname">Gmail</p><p class="isub">Conector do claude.ai · <span class="muted">Precisa autorizar</span></p><p class="isub2">Autorize na sua conta para o app poder ligar. <a class="lnk" href="https://claude.ai/settings/connectors">Autorizar no claude.ai<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" aria-hidden="true"><path d="M14 4h6v6M20 4l-9 9M18 14v6H4V6h6"></path></svg></a></p></div>
+<span class="sw dis" role="switch" aria-checked="false" aria-label="Gmail"><span></span></span></div>
+
+</div></div></section></div></div></main>
+</div></div></div></section><section class="state" id="estado-3"><h2><b>3</b>"Ver ferramentas" aberto</h2><p>Cada ferramenta com Perguntar, Permitir ou Negar (padrão Perguntar). O rótulo "Escrita" marca create, update, delete e send, sem mudar o padrão.</p><div class="pair"><div><div class="cap">CLARO</div><div class="win t-light" data-theme="light">
+<nav class="side" aria-label="Principal">
+<div class="brand">
+<svg width="28" height="28" viewBox="0 0 100 100" role="img" aria-label="LAP"><rect width="100" height="100" rx="6" fill="#FFFFFF"></rect><path d="M 20 25 L 20 75 L 55 75" fill="none" stroke="#0A2A5E" stroke-width="8" stroke-linecap="square"></path><rect x="62" y="58" width="22" height="22" fill="#3B82F6"></rect></svg>
+<div class="brand-t"><span class="bn">Meeting Scribe</span><span class="caps">LAP SOFTWARE</span></div>
+</div>
+<div class="navs"><a class="nav"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" aria-hidden="true"><rect x="4" y="3" width="16" height="18"></rect><path d="M8 8h8M8 12h8M8 16h5"></path></svg>Reuniões</a><a class="nav"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" aria-hidden="true"><path d="M12 3l2 6 6 2-6 2-2 6-2-6-6-2 6-2z"></path></svg>Assistente</a><a class="nav"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" aria-hidden="true"><rect x="5" y="8" width="14" height="11"></rect><path d="M12 4v4M9 13v1M15 13v1"></path></svg>Automações</a><a class="nav"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" aria-hidden="true"><rect x="7" y="3" width="10" height="18"></rect><path d="M11 18h2"></path></svg>WhatsApp</a><a class="nav on" aria-current="page"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h2M10 17h10"></path><rect x="14" y="5" width="4" height="4"></rect><rect x="6" y="15" width="4" height="4"></rect></svg>Configurações</a></div>
+<div class="perm"><span class="caps">PERMISSÕES</span>
+<div class="prow"><span class="sq ok"></span><span class="grow">Microfone</span><span class="sm">concedido</span></div>
+<div class="prow"><span class="sq ok"></span><span class="grow">Áudio do sistema</span><span class="sm">concedido</span></div>
+</div>
+</nav>
+<main class="main"><div class="head">
+<div class="ph"><h1>Configurações</h1><span class="search"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" aria-hidden="true"><circle cx="11" cy="11" r="6"></circle><path d="M16 16l4 4"></path></svg><span>Buscar configuração</span></span></div>
+<div class="tabs" role="tablist"><span class="tab">Geral</span><span class="tab">Gravação</span><span class="tab">Claude</span><span class="tab">Arquivos</span><span class="tab">Contas</span><span class="tab">Plugins</span><span class="tab on">Conexões</span><span class="tab">Sobre</span></div>
+</div><div class="col"><div class="crop">Seções MCP acima (aviso, Do Claude CLI, Servidores do app, Encontrados neste Mac): iguais ao estado 1</div><div class="new"><section class="sec"><h2>Conectores do claude.ai</h2><span class="rule"></span><div class="srow"><div class="sl"><span class="sn">Conectores da sua conta</span><span class="sd">Os conectores ligados na sua conta do claude.ai (claude mcp list). O login de cada um fica no claude.ai: o app não vê nem guarda token. Ligado, vale no Assistente e no chat da reunião.</span></div><span class="count">3 conectores</span></div><div class="list"><div class="item" data-connector="notion">
+<div class="ihead"><div class="itxt"><p class="iname">Notion</p><p class="isub">Conector do claude.ai · <span class="live">Conectado</span></p></div>
+<span class="sw on" role="switch" aria-checked="true" aria-label="Notion"><span></span></span></div>
+<div class="acts"><span class="btn" aria-expanded="true"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" aria-hidden="true"><path d="M6 15l6-6 6 6"></path></svg>Ocultar ferramentas</span></div><ul class="tools"><li><div class="tl"><span class="tn"><span class="mono">search</span></span><span class="td">Busca páginas e bancos de dados no seu Notion.</span></div><span class="sel" role="combobox" aria-label="Regra de search">Permitir<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" aria-hidden="true"><path d="M6 9l6 6 6-6"></path></svg></span></li><li><div class="tl"><span class="tn"><span class="mono">fetch</span></span><span class="td">Lê o conteúdo de uma página ou banco.</span></div><span class="sel" role="combobox" aria-label="Regra de fetch">Perguntar<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" aria-hidden="true"><path d="M6 9l6 6 6-6"></path></svg></span></li><li><div class="tl"><span class="tn"><span class="mono">create-pages</span><span class="tag">Escrita</span></span><span class="td">Cria páginas novas.</span></div><span class="sel" role="combobox" aria-label="Regra de create-pages">Perguntar<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" aria-hidden="true"><path d="M6 9l6 6 6-6"></path></svg></span></li><li><div class="tl"><span class="tn"><span class="mono">update-page</span><span class="tag">Escrita</span></span><span class="td">Muda o conteúdo ou as propriedades de uma página.</span></div><span class="sel" role="combobox" aria-label="Regra de update-page">Perguntar<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" aria-hidden="true"><path d="M6 9l6 6 6-6"></path></svg></span></li><li><div class="tl"><span class="tn"><span class="mono">delete-comment</span><span class="tag">Escrita</span></span><span class="td">Apaga um comentário.</span></div><span class="sel" role="combobox" aria-label="Regra de delete-comment">Negar<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" aria-hidden="true"><path d="M6 9l6 6 6-6"></path></svg></span></li></ul><p class="faint">Cada ferramenta: Perguntar, Permitir ou Negar. "Escrita" é só um aviso pelo nome da ferramenta; o padrão continua Perguntar.</p>
+</div><div class="item" data-connector="google-drive">
+<div class="ihead"><div class="itxt"><p class="iname">Google Drive</p><p class="isub">Conector do claude.ai · <span class="live">Conectado</span></p></div>
+<span class="sw" role="switch" aria-checked="false" aria-label="Google Drive"><span></span></span></div>
+<div class="acts"><span class="btn" aria-expanded="false"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" aria-hidden="true"><path d="M6 9l6 6 6-6"></path></svg>Ver ferramentas</span></div>
+</div><div class="item" data-connector="gmail">
+<div class="ihead"><div class="itxt"><p class="iname">Gmail</p><p class="isub">Conector do claude.ai · <span class="muted">Precisa autorizar</span></p><p class="isub2">Autorize na sua conta para o app poder ligar. <a class="lnk" href="https://claude.ai/settings/connectors">Autorizar no claude.ai<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" aria-hidden="true"><path d="M14 4h6v6M20 4l-9 9M18 14v6H4V6h6"></path></svg></a></p></div>
+<span class="sw dis" role="switch" aria-checked="false" aria-label="Gmail"><span></span></span></div>
+
+</div></div></section></div></div></main>
+</div></div><div><div class="cap">ESCURO</div><div class="win t-dark" data-theme="dark">
+<nav class="side" aria-label="Principal">
+<div class="brand">
+<svg width="28" height="28" viewBox="0 0 100 100" role="img" aria-label="LAP"><rect width="100" height="100" rx="6" fill="#FFFFFF"></rect><path d="M 20 25 L 20 75 L 55 75" fill="none" stroke="#0A2A5E" stroke-width="8" stroke-linecap="square"></path><rect x="62" y="58" width="22" height="22" fill="#3B82F6"></rect></svg>
+<div class="brand-t"><span class="bn">Meeting Scribe</span><span class="caps">LAP SOFTWARE</span></div>
+</div>
+<div class="navs"><a class="nav"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" aria-hidden="true"><rect x="4" y="3" width="16" height="18"></rect><path d="M8 8h8M8 12h8M8 16h5"></path></svg>Reuniões</a><a class="nav"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" aria-hidden="true"><path d="M12 3l2 6 6 2-6 2-2 6-2-6-6-2 6-2z"></path></svg>Assistente</a><a class="nav"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" aria-hidden="true"><rect x="5" y="8" width="14" height="11"></rect><path d="M12 4v4M9 13v1M15 13v1"></path></svg>Automações</a><a class="nav"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" aria-hidden="true"><rect x="7" y="3" width="10" height="18"></rect><path d="M11 18h2"></path></svg>WhatsApp</a><a class="nav on" aria-current="page"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h2M10 17h10"></path><rect x="14" y="5" width="4" height="4"></rect><rect x="6" y="15" width="4" height="4"></rect></svg>Configurações</a></div>
+<div class="perm"><span class="caps">PERMISSÕES</span>
+<div class="prow"><span class="sq ok"></span><span class="grow">Microfone</span><span class="sm">concedido</span></div>
+<div class="prow"><span class="sq ok"></span><span class="grow">Áudio do sistema</span><span class="sm">concedido</span></div>
+</div>
+</nav>
+<main class="main"><div class="head">
+<div class="ph"><h1>Configurações</h1><span class="search"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" aria-hidden="true"><circle cx="11" cy="11" r="6"></circle><path d="M16 16l4 4"></path></svg><span>Buscar configuração</span></span></div>
+<div class="tabs" role="tablist"><span class="tab">Geral</span><span class="tab">Gravação</span><span class="tab">Claude</span><span class="tab">Arquivos</span><span class="tab">Contas</span><span class="tab">Plugins</span><span class="tab on">Conexões</span><span class="tab">Sobre</span></div>
+</div><div class="col"><div class="crop">Seções MCP acima (aviso, Do Claude CLI, Servidores do app, Encontrados neste Mac): iguais ao estado 1</div><div class="new"><section class="sec"><h2>Conectores do claude.ai</h2><span class="rule"></span><div class="srow"><div class="sl"><span class="sn">Conectores da sua conta</span><span class="sd">Os conectores ligados na sua conta do claude.ai (claude mcp list). O login de cada um fica no claude.ai: o app não vê nem guarda token. Ligado, vale no Assistente e no chat da reunião.</span></div><span class="count">3 conectores</span></div><div class="list"><div class="item" data-connector="notion">
+<div class="ihead"><div class="itxt"><p class="iname">Notion</p><p class="isub">Conector do claude.ai · <span class="live">Conectado</span></p></div>
+<span class="sw on" role="switch" aria-checked="true" aria-label="Notion"><span></span></span></div>
+<div class="acts"><span class="btn" aria-expanded="true"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" aria-hidden="true"><path d="M6 15l6-6 6 6"></path></svg>Ocultar ferramentas</span></div><ul class="tools"><li><div class="tl"><span class="tn"><span class="mono">search</span></span><span class="td">Busca páginas e bancos de dados no seu Notion.</span></div><span class="sel" role="combobox" aria-label="Regra de search">Permitir<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" aria-hidden="true"><path d="M6 9l6 6 6-6"></path></svg></span></li><li><div class="tl"><span class="tn"><span class="mono">fetch</span></span><span class="td">Lê o conteúdo de uma página ou banco.</span></div><span class="sel" role="combobox" aria-label="Regra de fetch">Perguntar<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" aria-hidden="true"><path d="M6 9l6 6 6-6"></path></svg></span></li><li><div class="tl"><span class="tn"><span class="mono">create-pages</span><span class="tag">Escrita</span></span><span class="td">Cria páginas novas.</span></div><span class="sel" role="combobox" aria-label="Regra de create-pages">Perguntar<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" aria-hidden="true"><path d="M6 9l6 6 6-6"></path></svg></span></li><li><div class="tl"><span class="tn"><span class="mono">update-page</span><span class="tag">Escrita</span></span><span class="td">Muda o conteúdo ou as propriedades de uma página.</span></div><span class="sel" role="combobox" aria-label="Regra de update-page">Perguntar<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" aria-hidden="true"><path d="M6 9l6 6 6-6"></path></svg></span></li><li><div class="tl"><span class="tn"><span class="mono">delete-comment</span><span class="tag">Escrita</span></span><span class="td">Apaga um comentário.</span></div><span class="sel" role="combobox" aria-label="Regra de delete-comment">Negar<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" aria-hidden="true"><path d="M6 9l6 6 6-6"></path></svg></span></li></ul><p class="faint">Cada ferramenta: Perguntar, Permitir ou Negar. "Escrita" é só um aviso pelo nome da ferramenta; o padrão continua Perguntar.</p>
+</div><div class="item" data-connector="google-drive">
+<div class="ihead"><div class="itxt"><p class="iname">Google Drive</p><p class="isub">Conector do claude.ai · <span class="live">Conectado</span></p></div>
+<span class="sw" role="switch" aria-checked="false" aria-label="Google Drive"><span></span></span></div>
+<div class="acts"><span class="btn" aria-expanded="false"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" aria-hidden="true"><path d="M6 9l6 6 6-6"></path></svg>Ver ferramentas</span></div>
+</div><div class="item" data-connector="gmail">
+<div class="ihead"><div class="itxt"><p class="iname">Gmail</p><p class="isub">Conector do claude.ai · <span class="muted">Precisa autorizar</span></p><p class="isub2">Autorize na sua conta para o app poder ligar. <a class="lnk" href="https://claude.ai/settings/connectors">Autorizar no claude.ai<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" aria-hidden="true"><path d="M14 4h6v6M20 4l-9 9M18 14v6H4V6h6"></path></svg></a></p></div>
+<span class="sw dis" role="switch" aria-checked="false" aria-label="Gmail"><span></span></span></div>
+
+</div></div></section></div></div></main>
+</div></div></div></section><section class="state" id="estado-4"><h2><b>4</b>Sem login por assinatura</h2><p>Com chave de API ou outro provedor, a seção mostra só a frase do CA4 e o atalho para Configurações › Claude.</p><div class="pair"><div><div class="cap">CLARO</div><div class="win t-light" data-theme="light">
+<nav class="side" aria-label="Principal">
+<div class="brand">
+<svg width="28" height="28" viewBox="0 0 100 100" role="img" aria-label="LAP"><rect width="100" height="100" rx="6" fill="#FFFFFF"></rect><path d="M 20 25 L 20 75 L 55 75" fill="none" stroke="#0A2A5E" stroke-width="8" stroke-linecap="square"></path><rect x="62" y="58" width="22" height="22" fill="#3B82F6"></rect></svg>
+<div class="brand-t"><span class="bn">Meeting Scribe</span><span class="caps">LAP SOFTWARE</span></div>
+</div>
+<div class="navs"><a class="nav"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" aria-hidden="true"><rect x="4" y="3" width="16" height="18"></rect><path d="M8 8h8M8 12h8M8 16h5"></path></svg>Reuniões</a><a class="nav"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" aria-hidden="true"><path d="M12 3l2 6 6 2-6 2-2 6-2-6-6-2 6-2z"></path></svg>Assistente</a><a class="nav"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" aria-hidden="true"><rect x="5" y="8" width="14" height="11"></rect><path d="M12 4v4M9 13v1M15 13v1"></path></svg>Automações</a><a class="nav"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" aria-hidden="true"><rect x="7" y="3" width="10" height="18"></rect><path d="M11 18h2"></path></svg>WhatsApp</a><a class="nav on" aria-current="page"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h2M10 17h10"></path><rect x="14" y="5" width="4" height="4"></rect><rect x="6" y="15" width="4" height="4"></rect></svg>Configurações</a></div>
+<div class="perm"><span class="caps">PERMISSÕES</span>
+<div class="prow"><span class="sq ok"></span><span class="grow">Microfone</span><span class="sm">concedido</span></div>
+<div class="prow"><span class="sq ok"></span><span class="grow">Áudio do sistema</span><span class="sm">concedido</span></div>
+</div>
+</nav>
+<main class="main"><div class="head">
+<div class="ph"><h1>Configurações</h1><span class="search"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" aria-hidden="true"><circle cx="11" cy="11" r="6"></circle><path d="M16 16l4 4"></path></svg><span>Buscar configuração</span></span></div>
+<div class="tabs" role="tablist"><span class="tab">Geral</span><span class="tab">Gravação</span><span class="tab">Claude</span><span class="tab">Arquivos</span><span class="tab">Contas</span><span class="tab">Plugins</span><span class="tab on">Conexões</span><span class="tab">Sobre</span></div>
+</div><div class="col"><div class="crop">Seções MCP acima (aviso, Do Claude CLI, Servidores do app, Encontrados neste Mac): iguais ao estado 1</div><div class="new"><section class="sec"><h2>Conectores do claude.ai</h2><span class="rule"></span><div class="srow"><div class="sl"><span class="sn">Conectores da sua conta</span><span class="sd">Os conectores ligados na sua conta do claude.ai (claude mcp list). O login de cada um fica no claude.ai: o app não vê nem guarda token. Ligado, vale no Assistente e no chat da reunião.</span></div></div><div class="list"><div class="nologin"><p>Os conectores do claude.ai só funcionam com o Claude logado pela assinatura.</p><span class="btn">Abrir Configurações › Claude</span></div></div></section></div></div></main>
+</div></div><div><div class="cap">ESCURO</div><div class="win t-dark" data-theme="dark">
+<nav class="side" aria-label="Principal">
+<div class="brand">
+<svg width="28" height="28" viewBox="0 0 100 100" role="img" aria-label="LAP"><rect width="100" height="100" rx="6" fill="#FFFFFF"></rect><path d="M 20 25 L 20 75 L 55 75" fill="none" stroke="#0A2A5E" stroke-width="8" stroke-linecap="square"></path><rect x="62" y="58" width="22" height="22" fill="#3B82F6"></rect></svg>
+<div class="brand-t"><span class="bn">Meeting Scribe</span><span class="caps">LAP SOFTWARE</span></div>
+</div>
+<div class="navs"><a class="nav"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" aria-hidden="true"><rect x="4" y="3" width="16" height="18"></rect><path d="M8 8h8M8 12h8M8 16h5"></path></svg>Reuniões</a><a class="nav"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" aria-hidden="true"><path d="M12 3l2 6 6 2-6 2-2 6-2-6-6-2 6-2z"></path></svg>Assistente</a><a class="nav"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" aria-hidden="true"><rect x="5" y="8" width="14" height="11"></rect><path d="M12 4v4M9 13v1M15 13v1"></path></svg>Automações</a><a class="nav"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" aria-hidden="true"><rect x="7" y="3" width="10" height="18"></rect><path d="M11 18h2"></path></svg>WhatsApp</a><a class="nav on" aria-current="page"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h2M10 17h10"></path><rect x="14" y="5" width="4" height="4"></rect><rect x="6" y="15" width="4" height="4"></rect></svg>Configurações</a></div>
+<div class="perm"><span class="caps">PERMISSÕES</span>
+<div class="prow"><span class="sq ok"></span><span class="grow">Microfone</span><span class="sm">concedido</span></div>
+<div class="prow"><span class="sq ok"></span><span class="grow">Áudio do sistema</span><span class="sm">concedido</span></div>
+</div>
+</nav>
+<main class="main"><div class="head">
+<div class="ph"><h1>Configurações</h1><span class="search"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" aria-hidden="true"><circle cx="11" cy="11" r="6"></circle><path d="M16 16l4 4"></path></svg><span>Buscar configuração</span></span></div>
+<div class="tabs" role="tablist"><span class="tab">Geral</span><span class="tab">Gravação</span><span class="tab">Claude</span><span class="tab">Arquivos</span><span class="tab">Contas</span><span class="tab">Plugins</span><span class="tab on">Conexões</span><span class="tab">Sobre</span></div>
+</div><div class="col"><div class="crop">Seções MCP acima (aviso, Do Claude CLI, Servidores do app, Encontrados neste Mac): iguais ao estado 1</div><div class="new"><section class="sec"><h2>Conectores do claude.ai</h2><span class="rule"></span><div class="srow"><div class="sl"><span class="sn">Conectores da sua conta</span><span class="sd">Os conectores ligados na sua conta do claude.ai (claude mcp list). O login de cada um fica no claude.ai: o app não vê nem guarda token. Ligado, vale no Assistente e no chat da reunião.</span></div></div><div class="list"><div class="nologin"><p>Os conectores do claude.ai só funcionam com o Claude logado pela assinatura.</p><span class="btn">Abrir Configurações › Claude</span></div></div></section></div></div></main>
+</div></div></div></section>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":2352,"height":4600}}'>
+class Component extends DCLogic {
+renderVals() {
+return {};
+}
+}
+</script>
+</body>
+</html>

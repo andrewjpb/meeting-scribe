@@ -5,6 +5,16 @@ Feature: desktop-shell · Wave: 2 · Depende de: 57 · PRD/Plan: `prd-conectores
 - Contrato 57 pronto. O desenho da seção foi APROVADO pelo Andrew antes deste contrato começar (mockup no cofre, regra do `~/CLAUDE.md`).
 - Seguir `renderer/src/features/settings/ConnectionsSection.tsx` (contrato 21): mesmos componentes, interruptor, "Ver detalhes" e política por ferramenta.
 
+## Desenho aprovado (19/11/2026)
+Mockup `docs/specs/desktop-shell/mockups/ConexoesConectores.dc.html`, aprovado pelo Andrew em 19/11/2026, com estas decisões (valem como parte dos critérios):
+- A seção vem por último, depois de "Encontrados neste Mac"; as três seções MCP do contrato 21 ficam literalmente intactas. Cabeçalho "Conectores da sua conta" com a descrição do mockup e a contagem à direita.
+- Subtítulo da linha: "Conector do claude.ai · <estado>"; Conectado em `--live`, Precisa autorizar em `--text-muted`, Com problema em `--rec`.
+- Sem "Usar em" (Chat/Análise) nos conectores: a descrição diz onde valem (Assistente e chat da reunião).
+- "Precisa autorizar": interruptor desabilitado, frase "Autorize na sua conta para o app poder ligar." antes do link; "Ver ferramentas" só em Conectado.
+- A nota do CA5 aparece abaixo do estado do conector que acabou de mudar (ligar e desligar).
+- Sem assinatura (CA4): além da frase, botão "Abrir Configurações › Claude", no padrão do aviso "claude não encontrado".
+- O texto dos plugins perde "conectores do claude.ai e" (deixa de ser verdade depois deste contrato).
+
 ## Critérios de aceite
 - CA1 — A seção **"Conectores do claude.ai"** fica abaixo dos servidores MCP, com uma linha por conector: nome sem o prefixo "claude.ai", estado (Conectado, Precisa autorizar ou Com problema) e interruptor desligado por padrão. O texto "Não dá para usar no app" deixa de aparecer para conector; para plugin continua, porque fica fora de escopo.
 - CA2 — Ao ligar um conector pela primeira vez, aparece um aviso de uma linha: "O agente poderá usar o <Nome> da sua conta do claude.ai. Cada ferramenta pergunta antes, até você mudar." Nada de diálogo extra.
