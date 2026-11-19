@@ -12,6 +12,7 @@ import type { Chat, ChatEvent, ChatListItem, ChatRedoRequest, ChatSendRequest, C
 import type { ClaudeLocateResult, ClaudeRunState, ClaudeStartResult, ClaudeTranslateRequest, ClaudeTranslateResult } from './claude-cli'
 import type { AudioBeginResult, AudioExtension, AudioFinishResult, AudioFolderInfo, MeetingDownloadKind, MeetingDownloadResult, MeetingFileKind, MeetingFilesInfo } from './meeting-files'
 import type { MeetState } from './meet'
+import type { NavegadorState } from './navegador'
 import type { AppPluginId, PluginSaveResult } from './plugins'
 import type { AiNotesRunRequest, AiNotesRunResult } from './ai-notes'
 import type { AnalysisRunRequest, AnalysisRunResult, MeetingAnalysis } from './meeting-analysis'
@@ -276,6 +277,10 @@ export interface InvokeChannels {
   'scribe:meet-status': { request: undefined; response: MeetState }
   /** "Salvar plugin…" (contrato 31): diálogo de pasta no main e cópia da extensão embutida; `null` se cancelado. */
   'scribe:plugin-save': { request: { id: AppPluginId }; response: PluginSaveResult }
+  /** Controle do navegador (contrato 46): a ponte ligada na configuração e a extensão conectada agora. */
+  'scribe:navegador-status': { request: undefined; response: NavegadorState }
+  /** "Ativar ponte": grava a configuração (o servidor sobe ou para junto) e devolve o estado. */
+  'scribe:navegador-set': { request: { ativo: boolean }; response: NavegadorState }
   /** Estado da reunião no Google Drive (aba "Áudio" do detalhe). */
   'scribe:drive-status': { request: { meetingId: string }; response: DriveMeetingStatus }
   /** "Tentar de novo". */
@@ -450,6 +455,8 @@ export interface MainEvents {
    * também com o app bloqueado: a gravação continua no bloqueio e cada evento vale pelo horário em que chega.
    */
   'scribe:meet-changed': MeetState
+  /** A ponte do "Controle do navegador" (contrato 46) ligou, desligou, conectou ou desconectou. */
+  'scribe:navegador-changed': NavegadorState
 }
 
 export type InvokeChannel = keyof InvokeChannels
@@ -565,6 +572,8 @@ const INVOKE: Record<InvokeChannel, true> = {
   'scribe:calendar-recording': true,
   'scribe:meet-status': true,
   'scribe:plugin-save': true,
+  'scribe:navegador-status': true,
+  'scribe:navegador-set': true,
   'scribe:drive-status': true,
   'scribe:drive-retry': true,
   'scribe:drive-open': true,
@@ -648,6 +657,7 @@ const MAIN_EVENTS: Record<MainEvent, true> = {
   'scribe:recording-end': true,
   'scribe:notes-changed': true,
   'scribe:meet-changed': true,
+  'scribe:navegador-changed': true,
 }
 
 /**
@@ -801,6 +811,8 @@ export const WHEN_LOCKED: Readonly<Record<InvokeChannel, LockedPolicy>> = Object
   // Contrato 27: o estado do Meet não aparece com o app bloqueado; o servidor continua coletando para a gravação.
   'scribe:meet-status': 'refused',
   'scribe:plugin-save': 'refused',
+  'scribe:navegador-status': 'refused',
+  'scribe:navegador-set': 'refused',
   'scribe:drive-status': 'refused',
   'scribe:drive-retry': 'refused',
   'scribe:drive-open': 'refused',

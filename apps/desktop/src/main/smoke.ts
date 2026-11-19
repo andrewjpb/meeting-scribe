@@ -116,6 +116,7 @@ import type { CalendarService } from './calendar/service'
 import { MEET_DISCONNECTED_LABEL } from '../shared/meet'
 import { APP_PLUGINS, pluginFolderName } from '../shared/plugins'
 import { MEET_PATH, MEET_PORTS, type MeetServer } from './meet/server'
+import { NAVEGADOR_COMANDOS_PATH, NAVEGADOR_PORTS, type NavegadorServer } from './navegador/server'
 import { MEETINGS_DIR } from './meetings/transcripts'
 import { SETTINGS_VERSION } from './settings/schema'
 import { CLAUDE_DISALLOWED_TOOLS, CLAUDE_READ_TOOLS, CLAUDE_WEB_TOOLS } from './acp/profiles/claude'
@@ -180,6 +181,8 @@ export interface SmokeContext {
   calendar: Pick<CalendarService, 'refresh' | 'view'>
   /** Contrato 27: o servidor local do Meet (a porta em que subiu e o estado). */
   meet: Pick<MeetServer, 'port' | 'status'>
+  /** Contrato 46: a ponte do "Controle do navegador" (a porta em que subiu e se a extensão está conectada). */
+  navegador: Pick<NavegadorServer, 'port' | 'connected'>
 }
 
 interface Check {
@@ -1959,9 +1962,12 @@ async function pluginsSettings(win: BrowserWindow, ctx: SmokeContext): Promise<{
   )
   await settle(contents)
   const shot = await capture(win, ctx.outDir, 'configuracoes-plugins-light')
+  // Contrato 46: depois do PNG, para ele não mudar: o cartão do navegador, "Ativar ponte" e o cliente falso.
+  const navegador = await navegadorPluginChecks(contents, ctx)
   return {
     check: {
       ok:
+        navegador.ok &&
         opened &&
         plugin !== undefined &&
         state === expectedState &&
@@ -1979,9 +1985,88 @@ async function pluginsSettings(win: BrowserWindow, ctx: SmokeContext): Promise<{
         manual.text.includes('Carregar sem compactação') &&
         manual.text.includes('picture-in-picture') &&
         manual.text.includes('Tudo fica neste computador: o plugin só fala com o app.'),
-      detail: `aba aberta=${opened}; estado "${stateText}" (${state}, esperado ${expectedState}); cancelado sem nada=${canceledQuiet}; salvo=${saved} "${feedback}"; arquivos ${JSON.stringify(files)}; manual aberto=${manualOpen} (aria-expanded=${manual.expanded}, ${manual.steps} passos)`,
+      detail: `aba aberta=${opened}; estado "${stateText}" (${state}, esperado ${expectedState}); cancelado sem nada=${canceledQuiet}; salvo=${saved} "${feedback}"; arquivos ${JSON.stringify(files)}; manual aberto=${manualOpen} (aria-expanded=${manual.expanded}, ${manual.steps} passos); navegador: ${navegador.detail}`,
     },
     shot,
+  }
+}
+
+/**
+ * Portas da ponte do navegador no smoke (contrato 46): fora da faixa da extensão (47672–47681), para o Chrome de
+ * verdade, com a extensão instalada, nunca falar com o smoke.
+ */
+export const SMOKE_NAVEGADOR_PORTS: readonly number[] = Array.from({ length: 10 }, (_, index) => 47692 + index)
+
+/** GET de um cliente falso na ponte do navegador (contrato 46), fora da sessão do Electron. */
+function navegadorGet(port: number, origin: string): Promise<{ status: number; body: string }> {
+  return new Promise((resolve) => {
+    const req = httpRequest({ agent: false, host: '127.0.0.1', port, method: 'GET', path: NAVEGADOR_COMANDOS_PATH, headers: { origin } }, (res) => {
+      const chunks: Buffer[] = []
+      res.on('data', (chunk: Buffer) => chunks.push(chunk))
+      res.on('end', () => resolve({ status: res.statusCode ?? 0, body: Buffer.concat(chunks).toString('utf8') }))
+    })
+    // Porta fechada ou conexão cortada ao desligar: vale como sem resposta.
+    req.on('error', () => resolve({ status: 0, body: '' }))
+    req.end()
+  })
+}
+
+/**
+ * Contrato 46, na aba Plugins: o cartão "Controle do navegador" começa desligado e "Desconectado"; "Ativar ponte"
+ * grava `navegadorPlugin` e sobe a ponte numa porta do smoke; a origem de página é recusada (404) e um cliente
+ * falso com origem `chrome-extension://` (o GET do long-poll, que fica pendurado) deixa o cartão "Conectado";
+ * desligar fecha a porta, solta o GET e o cartão volta a "Desconectado".
+ */
+async function navegadorPluginChecks(contents: WebContents, ctx: SmokeContext): Promise<Check> {
+  const card = '[data-plugin="navegador"]'
+  const toggle = '[data-action="navegador-ponte"]'
+  const cardState = (): Promise<{ state: string; text: string; checked: string }> =>
+    evaluate(
+      contents,
+      `({ state: document.querySelector('${card}')?.dataset.pluginState ?? '', text: document.querySelector('${card} [data-setting-control]')?.textContent ?? '', checked: document.querySelector('${toggle}')?.getAttribute('aria-checked') ?? '' })`,
+    )
+  const present = await waitFor(contents, `document.querySelector('${card}') && document.querySelector('${toggle}')`)
+  const before = await cardState()
+  if (!present) return { ok: false, detail: 'cartão ou "Ativar ponte" não apareceu' }
+
+  await clickSelector(contents, toggle)
+  let port: number | null = null
+  for (let attempt = 0; attempt < 100 && port === null; attempt++) {
+    port = ctx.navegador.port()
+    if (port === null) await wait(50)
+  }
+  const inRange = port !== null && SMOKE_NAVEGADOR_PORTS.includes(port) && !NAVEGADOR_PORTS.includes(port)
+  const saved = readSettings(ctx.userDataDir).navegadorPlugin === true
+  const refused = port === null ? { status: -1, body: '' } : await navegadorGet(port, 'https://mau.example')
+  const quietAfterRefused = !ctx.navegador.connected()
+  // O GET do long-poll fica pendurado até 25 s; o cartão vira "Conectado" assim que ele chega.
+  const poll = port === null ? Promise.resolve({ status: -1, body: '' }) : navegadorGet(port, 'chrome-extension://abc')
+  const connected = await waitFor(contents, `document.querySelector('${card}')?.dataset.pluginState === 'on'`)
+  const on = await cardState()
+
+  await clickSelector(contents, toggle)
+  const disconnected = await waitFor(contents, `document.querySelector('${card}')?.dataset.pluginState === 'off' && document.querySelector('${toggle}')?.getAttribute('aria-checked') === 'false'`)
+  const released = await poll
+  const after = await cardState()
+  const closed = ctx.navegador.port() === null && readSettings(ctx.userDataDir).navegadorPlugin === false
+  return {
+    ok:
+      before.state === 'off' &&
+      before.text.startsWith('Desconectado') &&
+      before.checked === 'false' &&
+      inRange &&
+      saved &&
+      refused.status === 404 &&
+      refused.body === '' &&
+      quietAfterRefused &&
+      connected &&
+      on.text.startsWith('Conectado') &&
+      on.checked === 'true' &&
+      disconnected &&
+      released.status !== -1 &&
+      after.text.startsWith('Desconectado') &&
+      closed,
+    detail: `antes ${before.state} "${before.text}" (ponte ${before.checked}); ligada: porta ${port ?? 'nenhuma'} na faixa do smoke=${inRange}, gravada=${saved}; https://mau.example → ${refused.status} "${refused.body}", conectado=${!quietAfterRefused}; chrome-extension://abc → ${on.state} "${on.text}"; desligada: ${after.state} "${after.text}", GET solto com ${released.status} "${released.body}", porta fechada e gravada=${closed}`,
   }
 }
 

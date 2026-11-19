@@ -97,11 +97,13 @@ No bloco "Agenda": "Avisar reuniões da agenda" (ligado), "Avisar antes" (1, 5 o
 <!-- aba: plugins -->
 ### Plugins
 
-As extensões de navegador que vêm dentro do app. Hoje uma: "Quem fala no Meet", para o Google Chrome, que manda ao app os nomes de quem fala no Google Meet (a transcrição diz quem falou cada trecho). O cartão mostra se ela está conectada agora (fora de reunião, "Desconectado" é o normal).
+Aqui ficam as extensões de navegador que vêm dentro do app. São duas, ambas para o Google Chrome. A primeira, "Quem fala no Meet", manda ao app os nomes de quem fala no Google Meet (a transcrição diz quem falou cada trecho). O cartão mostra se ela está conectada agora (fora de reunião, "Desconectado" é o normal).
 
 "Salvar plugin…" grava a pasta "LAP Reunioes - Quem fala no Meet" na pasta que você escolher. "Como instalar" mostra o passo a passo: no Chrome, digitar `chrome://extensions` no endereço (não abre por link), ligar "Modo do desenvolvedor", clicar em "Carregar sem compactação" e escolher a pasta salva; depois recarregar a aba do Meet. Desligue o picture-in-picture automático do Meet (o mini-player esconde a reunião do plugin) e mantenha a aba do Meet aberta. Nada é baixado da internet: o plugin só fala com o app, neste computador.
 
 Na gravação, o marcador do Meet ("Meet desconectado" ou "Meet conectado · N participantes") abre esta aba.
+
+A segunda, "Controle do navegador", é a ponte para o app executar comandos numa janela própria do Chrome (abrir endereços em abas novas, ler a página, clicar, digitar, fechar). Age só nessa janela, com até 10 abas: não lê nem mexe nas suas abas e não digita em campo de senha. O texto das páginas volta ao app só como dado. "Ativar ponte" liga a conexão local (vem desligada); o cartão mostra "Conectado" quando a extensão está carregada no Chrome e a ponte ligada. Instala do mesmo jeito: "Salvar plugin…" grava a pasta "LAP Reunioes - Controle do navegador", e "Como instalar" mostra o passo a passo. Por enquanto o Assistente ainda não usa essa ponte.
 
 <!-- aba: sobre -->
 ### Sobre

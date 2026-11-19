@@ -93,12 +93,20 @@ describe('índice da busca (contrato 18, devolução)', () => {
     expect(pasta?.when).toContain('ligado')
   })
 
-  it('toda aba com linhas (Contas desde o contrato 11); nomes únicos por aba', () => {
+  it('toda aba com linhas (Contas desde o contrato 11); nomes únicos por bloco', () => {
     for (const tab of SETTINGS_TABS) {
-      const names = index.filter((entry) => entry.tab === tab).map((entry) => entry.name)
+      // Contrato 46: cada cartão de plugin tem o seu "Salvar plugin" e o seu "Como instalar"; o bloco desempata.
+      const names = index.filter((entry) => entry.tab === tab).map((entry) => `${entry.section} › ${entry.name}`)
       expect(names.length > 0).toBe(true)
       expect(new Set(names).size).toBe(names.length)
     }
+  })
+
+  it('o cartão do "Controle do navegador" entra na busca, com "Ativar ponte" (contrato 46)', () => {
+    const plugins = index.filter((entry) => entry.tab === 'plugins' && entry.section === 'Controle do navegador').map((entry) => entry.name)
+    expect(plugins).toEqual(['Controle do navegador', 'Ativar ponte', 'Salvar plugin', 'Como instalar'])
+    const found = searchSettings(index, 'ponte').flatMap((group) => group.indexes.map((i) => index[i] as SettingsEntry))
+    expect(found.map((entry) => entry.name)).toContain('Ativar ponte')
   })
 
   it('casa a linha da tela pelo nome ou pelo nome com a versão', () => {
