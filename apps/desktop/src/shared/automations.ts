@@ -220,6 +220,17 @@ export interface AutomationRun {
   outputResult: string | null
   /** Contrato 51: os emails que a execução enviou ou que foram recusados, na ordem. Ausente: nenhum pedido de envio. */
   emails?: RunEmail[] | undefined
+  /**
+   * Contrato 56 (D19): os pedidos de organizar o email que o modelo fez nesta execução, todos recusados (tarefa agendada
+   * não move, não cria pasta e não apaga). Ausente: nenhum pedido.
+   */
+  organizeRefused?: RunOrganizeRefused[] | undefined
+}
+
+/** Contrato 56 (D19): um pedido de organizar o email recusado numa execução ("mover 23 emails para Resolvidos"). */
+export interface RunOrganizeRefused {
+  at: string
+  request: string
 }
 
 export type AutomationRunListItem = Omit<AutomationRun, 'prompt' | 'answer'>

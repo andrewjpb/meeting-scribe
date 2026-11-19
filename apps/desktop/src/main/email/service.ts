@@ -22,6 +22,10 @@
 // fila da conta (a mesma do sincronismo da INBOX e do IDLE), e o que chega à INBOX por ele não vira aviso de email novo.
 // Nenhum pedido de pastas faz login numa conta com a senha recusada; a pasta vigiada só é relida com a conta conectada.
 //
+// Contrato 56: o que o agente do Assistente usa para organizar (`organize.ts`): `moveMessages` com o `UIDVALIDITY` da
+// referência (pasta nunca aberta no app) e os Message-IDs que voltam à INBOX sem aviso de email novo, `listFolders` com
+// o `LIST` relido e `locateMessages` (`UID SEARCH` só para leitura) para o Desfazer achar a mensagem no destino.
+//
 // Contrato 54: a assinatura de cada conta, lida e gravada no `settings.json` (sai junto quando a conta sai). Quem a põe no
 // texto é o rascunho da tela, antes do envio; o envio (o do clique e o da tarefa agendada) não acrescenta nada.
 //
@@ -110,6 +114,7 @@ import {
   type ImapFolderConnect,
   type ImapFolderEntry,
   type ImapFolderSession,
+  type ImapLocated,
   type ImapMessage,
   type ImapReaderConnect,
   type ImapSearchQuery,
@@ -203,6 +208,10 @@ const openFolderSchema = z.object({ accountId: accountIdSchema, path: folderPath
 const folderWatchSchema = z.object({ accountId: accountIdSchema, path: folderPathSchema.nullable() }).strict().nullable()
 const moveSchema = z
   .object({ accountId: accountIdSchema, fromPath: folderPathSchema, uids: z.array(z.number().int().positive().max(0xffffffff)).min(1).max(EMAIL_MOVE_MAX), toPath: folderPathSchema })
+  .strict()
+/** Contrato 56 (CA7): o `UIDVALIDITY` da referência e os Message-IDs que voltam à INBOX. */
+const moveOptionsSchema = z
+  .object({ uidValidity: z.string().regex(/^\d{1,20}$/).optional(), messageIds: z.array(messageIdSchema).max(EMAIL_MOVE_MAX).optional() })
   .strict()
 const folderCreateSchema = z.object({ accountId: accountIdSchema, parentPath: folderPathSchema.nullable(), name: z.string().max(EMAIL_FOLDER_PATH_MAX) }).strict()
 const folderRenameSchema = z.object({ accountId: accountIdSchema, path: folderPathSchema, newName: z.string().max(EMAIL_FOLDER_PATH_MAX) }).strict()
@@ -418,6 +427,12 @@ export function serverMessageId(mailbox: string, uidValidity: string, uid: numbe
   return `servidor:${uidValidity}:${uid}:${mailbox}`.slice(0, 1000)
 }
 
+/** Contrato 56: a pasta, o `UIDVALIDITY` e o UID de um id de `serverMessageId`, ou `null`. */
+export function serverMessageParts(id: string): { mailbox: string; uidValidity: string; uid: number } | null {
+  const match = /^servidor:([^:]*):(\d+):([\s\S]+)$/.exec(id)
+  return match ? { uidValidity: match[1] ?? '', uid: Number(match[2]), mailbox: match[3] ?? '' } : null
+}
+
 /** Contrato 52: a pasta de um id de `serverMessageId`, ou `null` (id do cache da INBOX, do POP3 ou dos enviados). */
 export function serverMessageMailbox(id: string): string | null {
   const match = /^servidor:[^:]*:\d+:([\s\S]+)$/.exec(id)
@@ -492,6 +507,12 @@ export function validFolderName(name: string, delimiter: string | null): boolean
 
 const folderFailure = (error: EmailFolderFailure['error']): EmailFolderFailure => ({ ok: false, error })
 
+/** Contrato 56 (CA7): o mover do agente e do Desfazer. */
+export interface EmailMoveOptions {
+  uidValidity?: string | undefined
+  messageIds?: readonly string[] | undefined
+}
+
 export interface EmailServiceDeps {
   /** `userData/email`. */
   root: string
@@ -525,6 +546,8 @@ export interface EmailServiceDeps {
   onMessage: (message: EmailMessage, options: { notify: boolean }) => void
   /** A lista de uma conta mudou (sincronismo, lida, apagada, enviada): a tela relê. */
   onMessagesChanged?: (accountId: string) => void
+  /** Contrato 56: a conta saiu (os lotes do agente saem com ela). */
+  onAccountRemoved?: (accountId: string) => void
   /** Só estados e tipos de erro: nunca senha, endereço ou texto de mensagem. */
   log?: (message: string) => void
   now?: () => number
@@ -550,7 +573,7 @@ export interface EmailService {
    * Contrato 45: o cache local de cada conta (a INBOX e os enviados guardados), para o Assistente. Só leitura do store:
    * nada vai ao servidor.
    */
-  cached(): Promise<{ status: EmailAccountStatus; inbox: EmailMessage[]; sent: EmailMessage[] }[]>
+  cached(): Promise<{ status: EmailAccountStatus; inbox: EmailMessage[]; sent: EmailMessage[]; uidValidity: string | null }[]>
   /** Contrato 45: o corpo de uma mensagem se já foi baixado; `null` se não (nunca baixa). */
   cachedBody(accountId: string, message: Pick<EmailMessage, 'mailbox' | 'id' | 'uid'>): Promise<EmailBody | null>
   /**
@@ -581,10 +604,19 @@ export interface EmailService {
   attachments(request: unknown): Promise<EmailAttachmentsResult>
   /** POP3: busca agora (o mesmo do relógio). */
   poll(accountId: string): Promise<void>
-  /** Contrato 52 (CA2): as pastas em árvore, com as contagens; guardadas na memória até mudar algo ou reconectar. */
-  listFolders(accountId: string): Promise<EmailFoldersResult>
-  /** Contrato 52 (CA4): `MOVE` de até 500 UIDs; erro do servidor não tira nada do store. */
-  moveMessages(accountId: string, fromPath: string, uids: readonly number[], toPath: string): Promise<EmailMoveResult>
+  /**
+   * Contrato 52 (CA2): as pastas em árvore, com as contagens; guardadas na memória até mudar algo ou reconectar.
+   * Contrato 56: `fresh` relê o `LIST` do servidor.
+   */
+  listFolders(accountId: string, options?: { fresh?: boolean }): Promise<EmailFoldersResult>
+  /**
+   * Contrato 52 (CA4): `MOVE` de até 500 UIDs; erro do servidor não tira nada do store. Contrato 56 (CA7): com
+   * `uidValidity`, os UIDs valem com ele (a pasta de origem não precisa ter sido aberta no app); com `messageIds`, os que
+   * chegam à INBOX não viram aviso de email novo. Com `options`, o resultado traz o `UIDVALIDITY` do destino.
+   */
+  moveMessages(accountId: string, fromPath: string, uids: readonly number[], toPath: string, options?: EmailMoveOptions): Promise<EmailMoveResult & { uidValidity?: string | null }>
+  /** Contrato 56 (CA9): só leitura, numa conexão à parte: o `UIDVALIDITY` da pasta, os UIDs que existem e os de cada Message-ID. */
+  locateMessages(accountId: string, path: string, uids: readonly number[], messageIds: readonly string[]): Promise<({ ok: true } & ImapLocated) | EmailFolderFailure>
   /** Contrato 52 (CA5): pasta nova na raiz (`parentPath` `null`) ou dentro de outra. */
   createFolder(accountId: string, parentPath: string | null, name: string): Promise<EmailFolderPathResult>
   renameFolder(accountId: string, path: string, newName: string): Promise<EmailFolderPathResult>
@@ -1163,12 +1195,13 @@ export function createEmailService(deps: EmailServiceDeps): EmailService {
     return [node(EMAIL_INBOX_MAILBOX, null, data.inbox), node(EMAIL_SENT_MAILBOX, '\\Sent', data.sent)]
   }
 
-  async function listFolders(accountId: string): Promise<EmailFoldersResult> {
+  async function listFolders(accountId: string, options: { fresh?: boolean } = {}): Promise<EmailFoldersResult> {
     const rt = imapRuntime(accountId)
     if (isFailure(rt)) {
       const pop = rt.error === 'pop3' ? runtimes.get(accountId) : undefined
       return pop ? { ok: true, folders: await pop3Folders(pop), pop3: true } : rt
     }
+    if (options.fresh) folderCache.delete(rt.account.id)
     const entries = await folderEntries(rt)
     if (isFailure(entries)) return entries
     return { ok: true, folders: folderTree(entries), pop3: false }
@@ -1208,32 +1241,39 @@ export function createEmailService(deps: EmailServiceDeps): EmailService {
   /** Um Message-ID que chega à INBOX por "Mover" fica sem aviso de email novo por 10 min. */
   const MOVED_IN_MS = 10 * 60_000
 
-  async function moveMessages(accountId: string, fromPath: string, uids: readonly number[], toPath: string): Promise<EmailMoveResult> {
+  async function moveMessages(accountId: string, fromPath: string, uids: readonly number[], toPath: string, options?: EmailMoveOptions): Promise<EmailMoveResult & { uidValidity?: string | null }> {
     const parsed = moveSchema.safeParse({ accountId, fromPath, uids: [...uids], toPath })
     if (!parsed.success || fromPath === toPath) return folderFailure('invalid')
+    if (options && !moveOptionsSchema.safeParse({ uidValidity: options.uidValidity, messageIds: options.messageIds ? [...options.messageIds] : undefined }).success) return folderFailure('invalid')
     const rt = imapRuntime(accountId)
     if (isFailure(rt)) return rt
     const list = [...new Set(parsed.data.uids)]
     // Na fila da conta: um sincronismo da INBOX em andamento termina antes, e não devolve as movidas à lista.
-    const result = await enqueue(rt, () => moveQueued(rt, fromPath, list, toPath))
-    return result.ok ? { ok: true, moved: result.moved } : result
+    const result = await enqueue(rt, () => moveQueued(rt, fromPath, list, toPath, options))
+    if (!result.ok) return result
+    return options ? { ok: true, moved: result.moved, uidValidity: result.uidValidity } : { ok: true, moved: result.moved }
   }
 
   /** O mover já na fila da conta; com o `UIDVALIDITY` do destino (`COPYUID`), que as regras usam (contrato 53). */
-  async function moveQueued(rt: Runtime, fromPath: string, list: number[], toPath: string): Promise<{ ok: true; moved: { fromUid: number; toUid: number | null }[]; uidValidity: string | null } | EmailFolderFailure> {
+  async function moveQueued(rt: Runtime, fromPath: string, list: number[], toPath: string, options?: EmailMoveOptions): Promise<{ ok: true; moved: { fromUid: number; toUid: number | null }[]; uidValidity: string | null } | EmailFolderFailure> {
     const accountId = rt.account.id
     if (rt.removed) return folderFailure('missing')
     const fromInbox = isInbox({ mailbox: fromPath })
     const toInbox = isInbox({ mailbox: toPath })
     // Os UIDs valem com o `UIDVALIDITY` guardado da pasta de origem: sem ele (pasta nunca aberta), não há como conferir.
+    // Contrato 56 (CA7): o agente e o Desfazer trazem o da referência, que vale mesmo sem a pasta no store.
     const data = await store.read(accountId)
     const source = fromInbox ? null : await store.folder(accountId, fromPath)
-    const uidValidity = fromInbox ? data.uidValidity : (source?.uidValidity ?? null)
+    const uidValidity = options?.uidValidity ?? (fromInbox ? data.uidValidity : (source?.uidValidity ?? null))
     if (uidValidity === null) return folderFailure('invalid')
     const gone = new Set(list)
-    const known = (fromInbox ? data.inbox : (source?.messages ?? [])).filter((message) => message.uid !== null && gone.has(message.uid))
+    // O que o store guarda da origem só vale com o mesmo `UIDVALIDITY` (o de outra época tem outros UIDs).
+    const sameSource = fromInbox ? data.uidValidity === uidValidity : source?.uidValidity === uidValidity
+    const known = sameSource ? (fromInbox ? data.inbox : (source?.messages ?? [])).filter((message) => message.uid !== null && gone.has(message.uid)) : []
     // Antes do servidor: o IDLE pode avisar a chegada na INBOX antes de o mover voltar.
     if (toInbox) for (const message of known) if (message.messageId !== null) rt.movedIn.set(message.messageId, now() + MOVED_IN_MS)
+    // Contrato 56: os Message-IDs de quem pediu, mesmo sem a mensagem no store (o Desfazer de uma pasta nunca aberta).
+    if (toInbox) for (const messageId of options?.messageIds ?? []) rt.movedIn.set(messageId, now() + MOVED_IN_MS)
     const result = await withFolders(rt, 'mover', (session) => session.move(fromPath, list, toPath, uidValidity))
     // Erro do servidor: nada sai do store; o `LIST` guardado é relido (as contagens podem ter mudado).
     if (isFailure(result)) {
@@ -1253,7 +1293,7 @@ export function createEmailService(deps: EmailServiceDeps): EmailService {
     }
     let capped = false
     await store.update(accountId, (current) => {
-      let inbox = fromInbox ? keep(current.inbox) : current.inbox
+      let inbox = fromInbox && sameSource ? keep(current.inbox) : current.inbox
       if (toInbox && result.uidValidity === current.uidValidity) {
         const copies = arrived(EMAIL_INBOX_MAILBOX, (uid) => String(uid))
         if (copies) {
@@ -1264,7 +1304,7 @@ export function createEmailService(deps: EmailServiceDeps): EmailService {
       }
       return { ...current, inbox }
     })
-    if (!fromInbox) await store.updateFolder(accountId, fromPath, (current) => (current ? { ...current, messages: keep(current.messages), at: now() } : null))
+    if (!fromInbox && sameSource) await store.updateFolder(accountId, fromPath, (current) => (current ? { ...current, messages: keep(current.messages), at: now() } : null))
     if (!toInbox) {
       const cached = await store.folder(accountId, toPath)
       if (cached) {
@@ -1921,6 +1961,7 @@ export function createEmailService(deps: EmailServiceDeps): EmailService {
       await store.remove(rt.account.id)
       log(`${tag(rt)}: removida`)
       announce()
+      deps.onAccountRemoved?.(rt.account.id)
       return true
     },
 
@@ -1934,10 +1975,11 @@ export function createEmailService(deps: EmailServiceDeps): EmailService {
     },
 
     async cached() {
-      const list: { status: EmailAccountStatus; inbox: EmailMessage[]; sent: EmailMessage[] }[] = []
+      const list: { status: EmailAccountStatus; inbox: EmailMessage[]; sent: EmailMessage[]; uidValidity: string | null }[] = []
       for (const rt of runtimes.values()) {
         const data = await store.read(rt.account.id).catch(() => null)
-        if (data && !rt.removed) list.push({ status: statusOf(rt), inbox: data.inbox, sent: data.sent })
+        // Contrato 56: o `UIDVALIDITY` da INBOX guardada (o do lote do agente).
+        if (data && !rt.removed) list.push({ status: statusOf(rt), inbox: data.inbox, sent: data.sent, uidValidity: data.uidValidity })
       }
       return list
     },
@@ -1991,6 +2033,26 @@ export function createEmailService(deps: EmailServiceDeps): EmailService {
       } catch (error) {
         log(`${tag(rt)}: leitura no servidor falhou (${failureOf(error)})`)
         return { ok: false, error: 'unavailable' }
+      } finally {
+        await reader?.close().catch(() => undefined)
+      }
+    },
+
+    async locateMessages(accountId, path, uids, messageIds) {
+      if (!folderPathSchema.safeParse(path).success) return folderFailure('invalid')
+      const rt = imapRuntime(accountId)
+      if (isFailure(rt)) return rt
+      // Como os pedidos de pastas: senha recusada não tenta login de novo.
+      if (rt.foldersAuthRefused || (rt.state === 'error' && (rt.error === EMAIL_FAILURES.auth || rt.error === EMAIL_FAILURES.secret))) return folderFailure('unavailable')
+      const pass = secrets.open(rt.account.password)
+      if (pass === null) return folderFailure('unavailable')
+      let reader: Awaited<ReturnType<ImapReaderConnect>> | null = null
+      try {
+        reader = await imapReader(serverConfig(rt, pass, rt.account.incoming))
+        return { ok: true, ...(await reader.locate(path, uids, messageIds)) }
+      } catch (error) {
+        log(`${tag(rt)}: procura no servidor falhou (${failureOf(error)})`)
+        return folderFailure('unavailable')
       } finally {
         await reader?.close().catch(() => undefined)
       }

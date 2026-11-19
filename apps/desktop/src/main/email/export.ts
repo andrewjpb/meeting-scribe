@@ -125,6 +125,8 @@ export interface EmailCache {
   status: EmailAccountStatus
   inbox: EmailMessage[]
   sent: EmailMessage[]
+  /** Contrato 56: o `UIDVALIDITY` da INBOX guardada (IMAP); ausente ou `null` no POP3. */
+  uidValidity?: string | null | undefined
 }
 
 /** Um lembrete ligado a um email (as tarefas "uma vez" ligadas das Automações): a próxima vez, já em texto. */

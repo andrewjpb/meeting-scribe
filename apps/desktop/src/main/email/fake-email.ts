@@ -6,6 +6,9 @@
 // `capabilities.uidplus`), `CREATE`, `RENAME` e `DELETE`. Os comandos ficam em `folderLog`.
 // Contrato 53: `STORE \Flagged` na conexão da INBOX, a pasta "Lixeira" (`\Trash`, com `trash: true`) e o registro dos
 // comandos da conexão da INBOX (`sessionLog`: as marcas e o `EXPUNGE` do "Apagar").
+// Contrato 56: o `UID SEARCH UID` e o `UID SEARCH HEADER Message-ID` da conexão de leitura (`locate`, com o
+// `UIDVALIDITY` de verdade da pasta), mensagens postas direto numa pasta (`put`, com `References`/`In-Reply-To`), a
+// pasta apagada por fora (`dropFolder`) e a mensagem tirada por fora (`take`).
 import type { EmailAddress } from '../../shared/email'
 import { ImapFolderError, movedList, type ImapConnect, type ImapFolderConnect, type ImapFolderEntry, type ImapMessage, type ImapReaderConnect, type ImapSession } from './imap-client'
 import type { Pop3Connect } from './pop3-client'
@@ -129,6 +132,19 @@ export interface FakeEmailOptions {
   trash?: boolean
 }
 
+/** Contrato 56: uma mensagem posta direto numa pasta do servidor falso. */
+export interface FakePut {
+  from: EmailAddress
+  to?: EmailAddress[]
+  subject: string
+  date: number
+  messageId?: string | null
+  inReplyTo?: string | null
+  references?: string[]
+  seen?: boolean
+  text?: string
+}
+
 /** Contrato 53: a Lixeira do servidor falso (com `trash: true`). */
 export const SMOKE_EMAIL_TRASH_FOLDER = 'Lixeira'
 
@@ -148,6 +164,14 @@ export interface FakeEmail {
   resetUidValidity(path: string): void
   /** Contrato 52: as pastas como estão (path → UIDs e flags). */
   mailboxes(): Record<string, { uids: number[]; unseen: number; specialUse: string | null; noselect: boolean }>
+  /** Contrato 56: uma mensagem posta direto na pasta (criada se faltar), sem aviso do IDLE; devolve o UID. */
+  put(path: string, input: FakePut): number
+  /** Contrato 56: a pasta some do servidor por fora do app (apagada ou renomeada noutro cliente). */
+  dropFolder(path: string): void
+  /** Contrato 56: a mensagem sai da pasta por fora do app (a pessoa a moveu noutro cliente); devolve a que saiu. */
+  take(path: string, uid: number): ImapMessage | null
+  /** Contrato 56: os Message-IDs de uma pasta, na ordem dos UIDs. */
+  messageIdsIn(path: string): (string | null)[]
   /** Contrato 45 (CA7): a conexão só de leitura da busca do Assistente (INBOX, "Enviados" e "Arquivo"). */
   imapReader: ImapReaderConnect
   /** As buscas e as leituras dessa conexão (o smoke confere que houve e que nada mudou de flag). */
@@ -249,6 +273,30 @@ export function createFakeEmail(now: () => number = Date.now, options: FakeEmail
       Object.fromEntries(
         [...folders].map(([path, box]) => [path, { uids: box.items.map((item) => item.message.uid), unseen: box.items.filter((item) => !item.message.flags.includes('\\Seen')).length, specialUse: box.specialUse, noselect: box.noselect }]),
       ),
+    put(path, input) {
+      ensure(path)
+      const box = selectable(path)
+      const uid = box.nextUid++
+      const messageId = input.messageId === undefined ? `<put-${path.replace(/[^\w]/g, '')}-${uid}@cliente.example>` : input.messageId
+      const to = input.to ?? [ANDREW]
+      const date = new Date(input.date)
+      const seed: Seed = { from: input.from, subject: input.subject, minutesAgo: 0, seen: input.seen ?? true, text: input.text ?? `Mensagem ${uid}.` }
+      box.items.push({
+        message: { uid, flags: input.seen === false ? [] : ['\\Seen'], date: date.getTime(), subject: input.subject, from: [input.from], to, cc: [], messageId, inReplyTo: input.inReplyTo ?? null, references: input.references ?? [] },
+        raw: rfc822(seed, date, messageId ?? ''),
+      })
+      return uid
+    },
+    dropFolder(path) {
+      if (path !== 'INBOX') folders.delete(path)
+    },
+    take(path, uid) {
+      const box = folders.get(path)
+      const index = box ? box.items.findIndex((item) => item.message.uid === uid) : -1
+      if (!box || index < 0) return null
+      return box.items.splice(index, 1)[0]?.message ?? null
+    },
+    messageIdsIn: (path) => [...(folders.get(path)?.items ?? [])].sort((a, b) => a.message.uid - b.message.uid).map((item) => item.message.messageId),
     async imapFolders(config) {
       login(config.pass)
       return {
@@ -291,6 +339,10 @@ export function createFakeEmail(now: () => number = Date.now, options: FakeEmail
             target.items.push({ message: { ...item.message, uid: toUid }, raw: item.raw })
             map.set(uid, toUid)
           }
+          // Contrato 56: como no servidor de verdade, o IDLE da INBOX avisa o que chegou a ela por outra conexão.
+          if (to === 'INBOX' && map.size) queueMicrotask(() => {
+            for (const listener of listeners) listener()
+          })
           return movedList(uids, fake.capabilities.uidplus ? map : undefined, fake.capabilities.uidplus ? target.uidValidity : null)
         },
         create: async (path) => {
@@ -344,6 +396,15 @@ export function createFakeEmail(now: () => number = Date.now, options: FakeEmail
         peek: async (path, uid) => {
           fake.reader.peeks++
           return (boxes()[path] ?? []).find((item) => item.message.uid === uid)?.raw ?? null
+        },
+        // Contrato 56: `EXAMINE` + `UID SEARCH UID` + `UID SEARCH HEADER Message-ID`, com o `UIDVALIDITY` da pasta.
+        locate: async (path, uids, messageIds) => {
+          const box = selectable(path)
+          fake.folderLog.push(`UID SEARCH HEADER Message-ID ${path} (${messageIds.length})`)
+          const present = new Set(box.items.map((item) => item.message.uid))
+          const byMessageId: Record<string, number[]> = {}
+          for (const id of messageIds) byMessageId[id] = box.items.filter((item) => item.message.messageId === id).map((item) => item.message.uid)
+          return { uidValidity: box.uidValidity, existing: uids.filter((uid) => present.has(uid)), byMessageId }
         },
         close: async () => undefined,
       }

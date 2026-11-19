@@ -384,7 +384,7 @@ export function createAutomationsService(deps: AutomationsDeps): AutomationsServ
         if (!disposed) deps.onEvent({ ...event, runId: job.runId })
       })
       const ended = now()
-      run = { ...base, status: result.status, endedAt: iso(ended), durationMs: Math.max(0, ended - started), costUsd: result.costUsd, answer: result.answer, error: result.error ? clipError(result.error) : null, ...(emails.length ? { emails: [...emails] } : {}) }
+      run = { ...base, status: result.status, endedAt: iso(ended), durationMs: Math.max(0, ended - started), costUsd: result.costUsd, answer: result.answer, error: result.error ? clipError(result.error) : null, ...(emails.length ? { emails: [...emails] } : {}), ...(result.organizeRefused?.length ? { organizeRefused: result.organizeRefused } : {}) }
       // A saída só com resposta; o histórico guarda de qualquer jeito.
       if (job.persist && job.output && result.status === 'ok' && result.answer.text.trim()) {
         const title = job.task ? `Tarefa: ${job.task.name}` : `Pedir agora: ${job.agent.name}`

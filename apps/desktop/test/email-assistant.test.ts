@@ -312,6 +312,7 @@ describe('busca no servidor, só leitura (CA7)', () => {
         folders: () => (calls.push('LIST'), reader.folders().then((list) => [...list, ...more])),
         search: (path, query, limit) => (calls.push(`SEARCH ${path}`), reader.search(path, query, limit)),
         peek: (path, uid) => (calls.push(`PEEK ${path} ${uid}`), reader.peek(path, uid)),
+        locate: (path, uids, ids) => (calls.push(`LOCATE ${path}`), reader.locate(path, uids, ids)),
         close: () => (calls.push('LOGOUT'), reader.close()),
       }
     }
@@ -500,6 +501,17 @@ describe('ferramentas pedidas pela resposta (CA7)', () => {
     expect(withoutPendingActions(text)).toBe('Vou procurar.')
     expect(withoutActionBlocks(text)).toBe('Vou procurar.')
     expect(toolFollowUp('buscar_emails', { file: EMAIL_SEARCH_FILE, label: '' })).toContain(`arquivo ${EMAIL_SEARCH_FILE}`)
+  })
+
+  it('contrato 56 (CA1): com uma ferramenta que move, a instrução deixa de dizer "só de leitura" e diz quando pode usar', () => {
+    const read: AssistantTool = { name: 'buscar_emails', describe: 'x', pending: 'x', step: 'Grep', run: () => Promise.resolve({ file: null, label: '' }) }
+    const move: AssistantTool = { ...read, name: 'mover_emails', changes: true, rounds: 40 }
+    expect(toolsInstructions([read])[0]).toContain('só de leitura')
+    const lines = toolsInstructions([read, move])
+    expect(lines[0]).not.toContain('só de leitura')
+    expect(lines[0]).toContain('de leitura e uma que muda o email (mover_emails)')
+    expect(lines[1]).toContain('só podem ser usadas quando a pessoa pediu nesta conversa para organizar ou mover emails')
+    expect(lines[1]).toContain('Nenhuma ferramenta apaga email')
   })
 
   /** Processo falso do `claude` (linha de comando): o teste responde pelo stdout. */
