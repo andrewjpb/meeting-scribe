@@ -81,6 +81,21 @@ grep -q "^/resources/assistente/guia-do-app.md$" <<<"$ASAR_LIST" || { echo "pack
 echo "guia do Assistente ok"
 grep -q "^/resources/meet-extension/manifest.json$" <<<"$ASAR_LIST" || { echo "pack.sh: o pacote não leva a extensão do Meet" >&2; exit 1; }
 echo "extensão do Meet ok"
+# Contrato 59: o ical.js vai embutido no main (electron.vite.config.ts), como as bibliotecas de email; o pacote não
+# leva node_modules/ical.js. Nenhum .js do main pode pedir o módulo de fora, e, quando o main usa os convites
+# (shared/invite), o código dele tem de estar lá: o literal "component began but did not end" só existe no
+# node_modules/ical.js/dist/ical.js (conferido com grep -r em src/). Antes disso o bundler nem inclui o ical.js.
+ASAR_DIR=$(mktemp -d)
+trap 'rm -rf "$STAGE" "$ASAR_DIR"' EXIT
+npx -y @electron/asar extract "$APP/Contents/Resources/app.asar" "$ASAR_DIR/app"
+if grep -rqF --include='*.js' -e 'require("ical.js")' -e "require('ical.js')" -e 'from "ical.js"' -e "from 'ical.js'" "$ASAR_DIR/app/out/main"; then
+  echo "pack.sh: o main ainda pede o ical.js de fora do pacote" >&2
+  exit 1
+fi
+if grep -rqE "shared/invite['\"]" src/main; then
+  grep -rqF --include='*.js' 'component began but did not end' "$ASAR_DIR/app/out/main" || { echo "pack.sh: o pacote não leva o ical.js" >&2; exit 1; }
+fi
+echo "ical.js ok"
 codesign --verify --strict "$MIC_WATCH" || { echo "pack.sh: o lap-mic-watch não está assinado" >&2; exit 1; }
 "$MIC_WATCH" --version </dev/null | grep -q "^lap-mic-watch " || { echo "pack.sh: o lap-mic-watch não roda" >&2; exit 1; }
 echo "lap-mic-watch ok"
