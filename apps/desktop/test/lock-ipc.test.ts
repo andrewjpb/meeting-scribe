@@ -1,5 +1,5 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
-import { INVOKE_CHANNELS, RECORDING_SESSION_CHANNELS, RENDERER_EVENT_CHANNELS, RENDERER_EVENTS_WHEN_LOCKED, WHEN_LOCKED, type InvokeChannel, type RendererEvent } from '../src/shared/ipc'
+import { EMAIL_PRELOAD_ONLY_EVENTS, INVOKE_CHANNELS, PRELOAD_ONLY_EVENTS, RECORDING_SESSION_CHANNELS, RENDERER_EVENT_CHANNELS, RENDERER_EVENTS_WHEN_LOCKED, WHEN_LOCKED, type InvokeChannel, type RendererEvent } from '../src/shared/ipc'
 import { createRecordingSessions, leaveButtons } from '../src/main/lock/recording-session'
 
 // O registro do main (`main/ipc.ts`) com um `ipcMain` falso: cada canal registrado fica aqui para o teste chamar.
@@ -173,6 +173,16 @@ describe('canais com o app bloqueado (contrato 22, CA4)', () => {
       // Contrato 39: o envio do anexo e o seletor de arquivo.
       'scribe:whatsapp-send-media',
       'scribe:whatsapp-attach-pick',
+      // Contrato 42: contas, mensagens, corpo, lida, apagar, autoconfig e envio do email.
+      'scribe:email-accounts',
+      'scribe:email-autoconfig',
+      'scribe:email-add-account',
+      'scribe:email-remove-account',
+      'scribe:email-messages',
+      'scribe:email-get-body',
+      'scribe:email-mark-read',
+      'scribe:email-delete',
+      'scribe:email-send',
       'scribe:settings-update',
       'scribe:lock-password-set',
       'scribe:lock-password-remove',
@@ -194,6 +204,15 @@ describe('canais com o app bloqueado (contrato 22, CA4)', () => {
     expect(RENDERER_EVENTS_WHEN_LOCKED['scribe:open-link']).toBe('ignored')
     expect(RENDERER_EVENTS_WHEN_LOCKED['scribe:open-privacy-settings']).toBe('ignored')
     expect(RENDERER_EVENTS_WHEN_LOCKED['scribe:open-key-dashboard']).toBe('ignored')
+  })
+
+  it('contrato 42: todo canal do email é recusado bloqueado; o clique do envio é ignorado e só o preload o manda', () => {
+    const channels = INVOKE_CHANNELS.filter((channel) => channel.startsWith('scribe:email-'))
+    expect(channels.sort()).toEqual(['scribe:email-accounts', 'scribe:email-add-account', 'scribe:email-autoconfig', 'scribe:email-delete', 'scribe:email-get-body', 'scribe:email-mark-read', 'scribe:email-messages', 'scribe:email-remove-account', 'scribe:email-send'])
+    for (const channel of channels) expect(WHEN_LOCKED[channel], channel).toBe('refused')
+    expect(RENDERER_EVENTS_WHEN_LOCKED['scribe:email-click']).toBe('ignored')
+    expect(EMAIL_PRELOAD_ONLY_EVENTS).toEqual(['scribe:email-click'])
+    expect(PRELOAD_ONLY_EVENTS).not.toContain('scribe:email-click')
   })
 
   it('contrato 40: a conversa aberta no WhatsApp é ignorada bloqueado (o main não muda a regra da notificação)', () => {

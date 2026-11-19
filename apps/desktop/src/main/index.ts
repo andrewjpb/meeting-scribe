@@ -88,6 +88,8 @@ import { createInsightsCache, INSIGHTS_FILE } from './whatsapp/insights'
 import { createInsightsService, type InsightsService } from './whatsapp/insights-service'
 import { createWhatsAppNotifier, isGroupChat, shouldNotify, type NoticeHandle, type WhatsAppNotice } from './whatsapp/notify'
 import { createWhatsAppService, type WhatsAppService } from './whatsapp/service'
+import { EMAIL_DIR } from './email/email-store'
+import { createEmailService, type EmailService } from './email/service'
 
 // `app.setName` fixa o `userData` (~/Library/Application Support/Meeting Scribe) e o item do Chaveiro:
 // trocar este nome perderia reuniões, configurações e a chave. O nome que a pessoa vê é o da marca
@@ -145,6 +147,8 @@ let leaveAsked = false
 let driveService: DriveSyncService | null = null
 /** WhatsApp (contrato 24): ao desbloquear, o estado volta às janelas; janela fechada esquece os cliques dela. */
 let whatsappService: WhatsAppService | null = null
+/** Email (contrato 42): o mesmo do WhatsApp, o estado ao desbloquear e os cliques da janela fechada. */
+let emailService: EmailService | null = null
 /** Contrato 40: as configurações, lidas na hora de notificar e de pôr o número no Dock. */
 let readSettings: (() => Promise<AppSettings>) | null = null
 /** Servidor local da extensão do Meet (contrato 27): sobe e para com "Quem fala no Meet". */
@@ -210,6 +214,8 @@ function applyLockStatus(status: LockStatus): void {
   broadcast(BrowserWindow.getAllWindows(), 'scribe:lock-state', status)
   // Contrato 24: bloqueado, nada do WhatsApp chega às janelas; ao desbloquear, o estado de agora.
   if (!status.locked && whatsappService) broadcast(BrowserWindow.getAllWindows(), 'scribe:whatsapp-state', whatsappService.status())
+  // Contrato 42: o mesmo para as contas de email.
+  if (!status.locked && emailService) broadcast(BrowserWindow.getAllWindows(), 'scribe:email-state', emailService.accounts())
   // Contrato 12: o mesmo para as próximas reuniões e a faixa da agenda.
   if (!status.locked && calendarService) broadcast(BrowserWindow.getAllWindows(), 'scribe:calendar-state', calendarService.view())
 }
@@ -230,6 +236,7 @@ function openMainWindow(query?: Record<string, string>, invisible = false): Brow
   const contentsId = win.webContents.id
   win.on('closed', () => {
     whatsappService?.forgetSender(contentsId)
+    emailService?.forgetSender(contentsId)
     whatsappViewing.delete(contentsId)
     if (mainWindow === win) mainWindow = null
     // No macOS o app segue aberto sem janela: as conversas do chat morrem em 5 min, como ao sair da tela.
@@ -613,6 +620,8 @@ interface AppServices {
   whatsapp: WhatsAppService
   /** Detalhes da conversa do WhatsApp pelo Claude (contrato 32). */
   whatsappInsights: InsightsService
+  /** Contas de email IMAP, POP3 e SMTP (contrato 42). */
+  email: EmailService
   /** Agentes, tarefas agendadas e execuções (contrato 23). */
   automations: AutomationsService
   /** Servidor local da extensão do Meet (contrato 27). */
@@ -840,6 +849,29 @@ function createAppServices(userData: string): AppServices {
     ...(app.isPackaged ? {} : { log: (message: string) => console.log(message) }),
   })
   whatsappService = whatsapp
+  // Email (contrato 42): as contas conectam direto do main (IMAP/POP3/SMTP), com a senha cifrada no `settings.json`.
+  // O autoconfig só manda o domínio ao ISPDB do Thunderbird; no smoke, nenhuma rede (a tela cai no manual).
+  const email = createEmailService({
+    root: join(userData, EMAIL_DIR),
+    settings,
+    safeStorage: smokeFixtures ? memorySafeStorage() : safeStorage,
+    fetch: smokeFixtures
+      ? () => Promise.reject(new TypeError('smoke: sem rede'))
+      : (url, { signal }) => netFetch(url, { method: 'GET', headers: { accept: 'application/xml' }, signal, redirect: 'error' }),
+    // Bloqueado (contrato 22), nada do email vai às janelas; as contas seguem conectadas.
+    onStatus: (statuses) => {
+      if (!lockService?.isLocked()) broadcast(BrowserWindow.getAllWindows(), 'scribe:email-state', statuses)
+    },
+    onMessage: (message) => {
+      if (!lockService?.isLocked()) broadcast(BrowserWindow.getAllWindows(), 'scribe:email-message', message)
+    },
+    onMessagesChanged: (accountId) => {
+      if (!lockService?.isLocked()) broadcast(BrowserWindow.getAllWindows(), 'scribe:email-changed', { accountId })
+    },
+    // Só estados e tipos de erro, nunca senha, endereço ou texto de mensagem.
+    ...(app.isPackaged ? {} : { log: (message: string) => console.log(message) }),
+  })
+  emailService = email
   // Contrato 32: os Detalhes da conversa (resumo, humor, pendências) pelo mesmo motor, numa execução curta sem
   // ferramenta nenhuma. Só lê as mensagens; o resultado fica em `whatsapp/insights.json`.
   const whatsappInsights = createInsightsService({
@@ -1171,6 +1203,7 @@ function createAppServices(userData: string): AppServices {
     calendar,
     whatsapp,
     whatsappInsights,
+    email,
     automations,
     meet,
     pluginSave,
@@ -1267,7 +1300,7 @@ function openExternal(url: string): void {
 }
 
 function registerIpc(services: AppServices): void {
-  const { settings, meetings, meetingsService, meetingsIndex, tokenClient, translation, claude, files, summary, analysis, aiNotes, download, branding, updates, chat, chatActions, corpus, acp, lock, google, drive, microsoft, calendar, whatsapp, whatsappInsights, automations, meet, pluginSave } = services
+  const { settings, meetings, meetingsService, meetingsIndex, tokenClient, translation, claude, files, summary, analysis, aiNotes, download, branding, updates, chat, chatActions, corpus, acp, lock, google, drive, microsoft, calendar, whatsapp, whatsappInsights, email, automations, meet, pluginSave } = services
   /** Reunião salva, renomeada ou com anotações novas: o `.md` dela no acervo do chat é reescrito. */
   const touched = (meetingId: string): void => void corpus.sync(meetingId).catch(() => undefined)
   /**
@@ -1515,6 +1548,17 @@ function registerIpc(services: AppServices): void {
   handle('scribe:whatsapp-insights-run', appOrigin, (_event, request) => whatsappInsights.run(request))
   onEvent('scribe:whatsapp-click', appOrigin, (event, token) => whatsapp.registerClick(event.sender.id, token))
   onEvent('scribe:whatsapp-pair-cancel', appOrigin, () => whatsapp.cancelPair())
+  // Email (contrato 42): o serviço valida cada pedido; falha vira resposta tipada, nunca exceção para a tela.
+  handle('scribe:email-accounts', appOrigin, () => email.accounts())
+  handle('scribe:email-autoconfig', appOrigin, (_event, request) => email.autoconfig(request).catch(() => null))
+  handle('scribe:email-add-account', appOrigin, (_event, request) => email.addAccount(request).catch(() => ({ ok: false, error: 'invalid' }) as const))
+  handle('scribe:email-remove-account', appOrigin, (_event, request) => email.removeAccount(request).catch(() => false))
+  handle('scribe:email-messages', appOrigin, (_event, request) => email.messages(request).catch(() => []))
+  handle('scribe:email-get-body', appOrigin, (_event, request) => email.body(request).catch(() => ({ ok: false, error: 'unavailable' }) as const))
+  handle('scribe:email-mark-read', appOrigin, (_event, request) => email.markRead(request).catch(() => false))
+  handle('scribe:email-delete', appOrigin, (_event, request) => email.remove(request).catch(() => false))
+  handle('scribe:email-send', appOrigin, (event, request) => email.send(event.sender.id, request).catch(() => ({ ok: false, error: 'failed' }) as const))
+  onEvent('scribe:email-click', appOrigin, (event, token) => email.registerClick(event.sender.id, token))
   // Contrato 40: a conversa aberta na tela desta janela (só um id válido, ou nenhum).
   onEvent('scribe:whatsapp-viewing', appOrigin, (event, request) => {
     const chatId = (request as { chatId?: unknown } | undefined)?.chatId
@@ -1632,6 +1676,8 @@ void app.whenReady().then(async () => {
   registerIpc(services)
   // Contrato 24: o WhatsApp sobe sozinho só se a pessoa o deixou ligado (e reencontra um serviço já rodando).
   void services.whatsapp.init().catch(() => undefined)
+  // Contrato 42: as contas de email gravadas conectam (sem conta, nada acontece).
+  void services.email.init().catch(() => undefined)
   // Contrato 27: o servidor da extensão do Meet, com "Quem fala no Meet" ligado (padrão).
   if ((await services.settings.getSettings()).meetSpeakers) void services.meet.start().catch(() => null)
   // Marca gravada: título da primeira janela, "Sobre" e ícone do Dock antes de abrir.
@@ -1665,6 +1711,7 @@ void app.whenReady().then(async () => {
     services.updates.dispose()
     services.drive.dispose()
     void services.whatsapp.dispose()
+    void services.email.dispose()
     void services.meet.stop()
     disposeWhatsAppBadge()
   })
@@ -1746,6 +1793,7 @@ void app.whenReady().then(async () => {
     services.updates.dispose()
     services.drive.dispose()
     await services.whatsapp.dispose()
+    await services.email.dispose()
     disposeWhatsAppBadge()
     await services.meet.stop()
     app.exit(code)

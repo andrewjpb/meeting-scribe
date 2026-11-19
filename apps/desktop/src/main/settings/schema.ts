@@ -5,9 +5,12 @@
 // `claudePath` segue a mesma regra: só depois de `claude --version` responder (`setClaudePath`).
 // `audioFolder` também fica de fora: só o diálogo nativo do main a escolhe (`setAudioFolder`).
 // `brandLogo` idem: só o main grava, depois de conferir e copiar a imagem (`setBrandLogo`).
+// As contas de email (contrato 42) ficam no mesmo arquivo, ao lado de `settings`, com a senha cifrada: só o main grava
+// (`setEmailAccounts`) e o renderer não as recebe junto com as configurações.
 import { z } from 'zod'
 import { isAbsolute } from 'node:path'
 import { BRAND_LOGO_PATTERN, BRAND_TEXT_MAX } from '../../shared/branding'
+import { EMAIL_ACCOUNT_ID_PATTERN, EMAIL_ADDRESS_PATTERN, EMAIL_HOST_PATTERN, EMAIL_POLL_MINUTES, EMAIL_PROTOCOLS, EMAIL_SECURITY, type EmailAccount } from '../../shared/email'
 import { AGENT_PROFILES, CALENDAR_IDS_MAX, CALENDAR_LEAD_MINUTES, CHAT_MODELS, CLAUDE_MODELS, CLAUDE_TRANSPORTS, CLOSE_BEHAVIORS, DAILY_RUN_LIMIT_OPTIONS, DEFAULT_SETTINGS, LANGUAGE_CODES, LOCK_AFTER_MINUTES, THEME_SETTINGS, TRANSLATION_ENGINES, type AppSettings, type SettingsPatch } from '../../shared/settings-defaults'
 
 export const SETTINGS_VERSION = 1
@@ -90,6 +93,7 @@ const lenientSchema = z.object({
   calendarIds: z
     .object({ google: calendarIdList.nullable().catch(null), microsoft: calendarIdList.nullable().catch(null) })
     .catch({ google: null, microsoft: null }),
+  emailPollMinutes: z.literal(EMAIL_POLL_MINUTES).catch(D.emailPollMinutes),
 })
 
 const patchSchema = z
@@ -130,6 +134,7 @@ const patchSchema = z
     calendarLeadMinutes: z.literal(CALENDAR_LEAD_MINUTES),
     calendarNotRecordingAlert: z.boolean(),
     calendarIds: calendarIdsSchema.strict(),
+    emailPollMinutes: z.literal(EMAIL_POLL_MINUTES),
   })
   .partial()
   .strict()
@@ -154,4 +159,48 @@ export function parseSettingsPatch(raw: unknown): SettingsPatch {
     if (value !== undefined) Object.assign(patch, { [key]: value })
   }
   return patch
+}
+
+/** Contrato 42: servidor de email (host, porta e segurança). */
+export const emailServerSchema = z
+  .object({ host: z.string().max(253).regex(EMAIL_HOST_PATTERN), port: z.number().int().min(1).max(65_535), security: z.enum(EMAIL_SECURITY) })
+  .strict()
+export const emailIncomingSchema = emailServerSchema.extend({ protocol: z.enum(EMAIL_PROTOCOLS) }).strict()
+export const emailAddressSchema = z.string().max(254).regex(EMAIL_ADDRESS_PATTERN)
+/** Usuário do servidor: uma linha, sem caractere de controle. */
+export const emailUsernameSchema = z.string().min(1).max(254).refine(hasNoControlChar)
+export const emailNameSchema = z.string().trim().min(1).max(120).refine(hasNoControlChar)
+
+/**
+ * Conta de email gravada em `settings.json` (contrato 42), ao lado de `settings`. `password` é o resultado de
+ * `safeStorage.encryptString` em base64: a senha em claro nunca vai ao disco. Só o main lê e grava.
+ */
+const storedEmailAccountSchema = z
+  .object({
+    id: z.string().regex(EMAIL_ACCOUNT_ID_PATTERN),
+    address: emailAddressSchema,
+    name: emailNameSchema.nullable(),
+    username: emailUsernameSchema,
+    incoming: emailIncomingSchema,
+    outgoing: emailServerSchema,
+    deleteFromServer: z.boolean(),
+    password: z.string().min(1).max(8192).regex(/^[A-Za-z0-9+/]+={0,2}$/),
+  })
+  .strict()
+export type StoredEmailAccount = EmailAccount & { password: string }
+
+/** Lista do arquivo: conta inválida (ou id repetido) sai sozinha, sem levar as outras. */
+export function parseEmailAccounts(raw: unknown): StoredEmailAccount[] {
+  if (!Array.isArray(raw)) return []
+  const accounts: StoredEmailAccount[] = []
+  for (const item of raw.slice(0, 50)) {
+    const parsed = storedEmailAccountSchema.safeParse(item)
+    if (parsed.success && !accounts.some((account) => account.id === parsed.data.id)) accounts.push(parsed.data)
+  }
+  return accounts
+}
+
+/** Só para o main: confere a lista antes de gravar; uma conta fora do formato lança erro. */
+export function checkEmailAccounts(accounts: readonly StoredEmailAccount[]): StoredEmailAccount[] {
+  return z.array(storedEmailAccountSchema).max(50).parse(accounts)
 }

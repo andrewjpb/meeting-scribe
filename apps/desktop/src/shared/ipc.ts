@@ -7,6 +7,7 @@ import type { DriveMeetingStatus, GoogleAccountStatus, GoogleClientSaveResult, M
 import type { CalendarListResult, CalendarView } from './calendar'
 import type { BrandingInfo, BrandLogoChoice } from './branding'
 import type { LockResponse, LockStatus } from './lock'
+import type { EmailAccountInput, EmailAccountStatus, EmailAddResult, EmailAutoconfig, EmailBodyResult, EmailFolder, EmailMessage, EmailSendRequest, EmailSendResult } from './email'
 import type { KeySaveResult, KeyStatus, MicAccess, ModelCheck, ModelsResult } from './assemblyai'
 import type { Chat, ChatEvent, ChatListItem, ChatRedoRequest, ChatSendRequest, ChatSendResult, ChatUpdateRequest } from './chat'
 import type { ClaudeLocateResult, ClaudeRunState, ClaudeStartResult, ClaudeTranslateRequest, ClaudeTranslateResult } from './claude-cli'
@@ -326,6 +327,27 @@ export interface InvokeChannels {
   'scribe:whatsapp-insights': { request: { chatId: string }; response: WhatsAppInsightsState }
   /** Contrato 32: analisar a conversa agora (só lê; cancela a análise de outra conversa). */
   'scribe:whatsapp-insights-run': { request: { chatId: string }; response: WhatsAppInsightsResult }
+  /** Email (contrato 42): as contas, com o estado de cada uma. Nenhuma senha volta, nem cifrada. */
+  'scribe:email-accounts': { request: undefined; response: EmailAccountStatus[] }
+  /** Servidores pelo endereço: preset embutido, ISPDB do Thunderbird (até 5 s) ou `null` (a tela cai no manual). */
+  'scribe:email-autoconfig': { request: { address: string }; response: EmailAutoconfig | null }
+  /** A senha vai ao main, que guarda só cifrada pelo `safeStorage`; a conta conecta em seguida. */
+  'scribe:email-add-account': { request: EmailAccountInput; response: EmailAddResult }
+  /** Remove a conta, o cache das mensagens e os corpos baixados. Nada é apagado no servidor. */
+  'scribe:email-remove-account': { request: { accountId: string }; response: boolean }
+  /** INBOX (padrão) ou enviados, do cache local. */
+  'scribe:email-messages': { request: { accountId: string; folder?: EmailFolder }; response: EmailMessage[] }
+  /** Corpo de uma mensagem: do cache, ou baixado agora (IMAP) e passado pelo `mailparser`. */
+  'scribe:email-get-body': { request: { accountId: string; id: string }; response: EmailBodyResult }
+  /** "Marcar como (não) lida": no servidor (IMAP) e no cache. */
+  'scribe:email-mark-read': { request: { accountId: string; id: string; seen: boolean }; response: boolean }
+  /** "Apagar": `\Deleted` + `EXPUNGE` no IMAP; no POP3 e nos enviados, só no app. */
+  'scribe:email-delete': { request: { accountId: string; id: string }; response: boolean }
+  /**
+   * Enviar (R4 da PRD): só com o token de clique que o preload gera no clique em "Enviar" (`ScribeApi.emailSend`), de uso
+   * único e com validade de 10 s, como no WhatsApp; sem diálogo de confirmação. Falha volta tipada, sem exceção.
+   */
+  'scribe:email-send': { request: EmailSendRequest; response: EmailSendResult }
   /** Automações (contrato 23): os agentes, quantas tarefas usam cada um e os modelos que o perfil oferece. */
   'scribe:agents-list': { request: undefined; response: AgentsList }
   /** Criar (`id: null`) ou trocar um agente. */
@@ -376,6 +398,8 @@ export interface RendererEvents {
    * foco, a mensagem dessa conversa não vira notificação. Só o id; ignorada com o app bloqueado.
    */
   'scribe:whatsapp-viewing': { chatId: string | null }
+  /** Clique em "Enviar" do email (contrato 42): só o preload manda, com a ativação do usuário viva. */
+  'scribe:email-click': string
 }
 
 /** main -> renderer (`webContents.send` / `__scribeApi.on`). */
@@ -432,6 +456,12 @@ export interface MainEvents {
    * também com o app bloqueado: a gravação continua no bloqueio e cada evento vale pelo horário em que chega.
    */
   'scribe:meet-changed': MeetState
+  /** Contrato 42: uma conta de email mudou de estado (ou entrou, ou saiu); vai a lista inteira. Não chega bloqueado. */
+  'scribe:email-state': EmailAccountStatus[]
+  /** Email novo na INBOX (IDLE do IMAP ou poll do POP3). Não chega com o app bloqueado. */
+  'scribe:email-message': EmailMessage
+  /** As mensagens de uma conta mudaram (sincronismo, lida, apagada, enviada): a tela relê. Não chega bloqueado. */
+  'scribe:email-changed': { accountId: string }
 }
 
 export type InvokeChannel = keyof InvokeChannels
@@ -572,6 +602,15 @@ const INVOKE: Record<InvokeChannel, true> = {
   'scribe:whatsapp-transcribe': true,
   'scribe:whatsapp-insights': true,
   'scribe:whatsapp-insights-run': true,
+  'scribe:email-accounts': true,
+  'scribe:email-autoconfig': true,
+  'scribe:email-add-account': true,
+  'scribe:email-remove-account': true,
+  'scribe:email-messages': true,
+  'scribe:email-get-body': true,
+  'scribe:email-mark-read': true,
+  'scribe:email-delete': true,
+  'scribe:email-send': true,
   'scribe:agents-list': true,
   'scribe:agents-save': true,
   'scribe:agents-delete': true,
@@ -599,6 +638,7 @@ const RENDERER_EVENTS: Record<RendererEvent, true> = {
   'scribe:whatsapp-click': true,
   'scribe:whatsapp-pair-cancel': true,
   'scribe:whatsapp-viewing': true,
+  'scribe:email-click': true,
 }
 const MAIN_EVENTS: Record<MainEvent, true> = {
   'scribe:navigate': true,
@@ -626,6 +666,9 @@ const MAIN_EVENTS: Record<MainEvent, true> = {
   'scribe:recording-end': true,
   'scribe:notes-changed': true,
   'scribe:meet-changed': true,
+  'scribe:email-state': true,
+  'scribe:email-message': true,
+  'scribe:email-changed': true,
 }
 
 /**
@@ -807,6 +850,17 @@ export const WHEN_LOCKED: Readonly<Record<InvokeChannel, LockedPolicy>> = Object
   'scribe:whatsapp-transcribe': 'refused',
   'scribe:whatsapp-insights': 'refused',
   'scribe:whatsapp-insights-run': 'refused',
+  // Email (contrato 42, CA7): tudo recusado com o app bloqueado, como o WhatsApp. As contas continuam conectadas no main
+  // (as mensagens chegam ao cache), mas nada chega à tela até desbloquear.
+  'scribe:email-accounts': 'refused',
+  'scribe:email-autoconfig': 'refused',
+  'scribe:email-add-account': 'refused',
+  'scribe:email-remove-account': 'refused',
+  'scribe:email-messages': 'refused',
+  'scribe:email-get-body': 'refused',
+  'scribe:email-mark-read': 'refused',
+  'scribe:email-delete': 'refused',
+  'scribe:email-send': 'refused',
   // Automações (contrato 23, CA10): gerenciar agentes e tarefas, testar, pedir e ver o histórico, tudo recusado com
   // o app bloqueado. O agendador não depende de canal: roda no main e as tarefas continuam rodando bloqueado.
   'scribe:agents-list': 'refused',
@@ -841,10 +895,13 @@ export const RENDERER_EVENTS_WHEN_LOCKED: Readonly<Record<RendererEvent, 'pass' 
   'scribe:whatsapp-click': 'ignored',
   'scribe:whatsapp-pair-cancel': 'pass',
   'scribe:whatsapp-viewing': 'ignored',
+  'scribe:email-click': 'ignored',
 })
 
 /** Mensagens que só o próprio preload manda (o `send` genérico recusa): o clique do envio do WhatsApp. */
 export const PRELOAD_ONLY_EVENTS: readonly RendererEvent[] = ['scribe:whatsapp-click']
+/** Contrato 42: o clique do envio do email, também só pelo preload (lista à parte: a do WhatsApp fica como estava). */
+export const EMAIL_PRELOAD_ONLY_EVENTS: readonly RendererEvent[] = ['scribe:email-click']
 
 export const INVOKE_CHANNELS = Object.keys(INVOKE) as InvokeChannel[]
 export const RENDERER_EVENT_CHANNELS = Object.keys(RENDERER_EVENTS) as RendererEvent[]
@@ -864,4 +921,6 @@ export interface ScribeApi {
   whatsappSend(request: Omit<WhatsAppSendRequest, 'clickToken'>): Promise<WhatsAppSendResult>
   /** Contrato 39: o "Enviar" com um anexo, pelo mesmo token de clique do `whatsappSend`. */
   whatsappSendMedia(request: Omit<WhatsAppSendMediaRequest, 'clickToken'>): Promise<WhatsAppSendMediaResult>
+  /** Contrato 42: o "Enviar" do email, com o mesmo desenho do `whatsappSend` (ativação viva, token de clique). */
+  emailSend(request: Omit<EmailSendRequest, 'clickToken'>): Promise<EmailSendResult>
 }

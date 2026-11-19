@@ -19,6 +19,13 @@ export const WHATSAPP_AUTO_CORRECT_DESCRIPTION = 'Ao clicar em Enviar, o Claude 
 export const WHATSAPP_NOTIFICATIONS_DESCRIPTION = 'Uma notificação do macOS a cada mensagem recebida, menos da conversa que está aberta na frente. Com o app bloqueado, sem o texto.'
 export const WHATSAPP_ONLY_PEOPLE_DESCRIPTION = 'Mensagens de grupo não geram notificação.'
 
+/**
+ * Descrição de "Buscar emails novos a cada" (contrato 42, `emailPollMinutes`), a mesma na tela e na busca. A linha entra
+ * no índice junto com o bloco "Email" de Configurações › Contas (contrato 43): antes disso a busca levaria a um bloco
+ * que não existe.
+ */
+export const EMAIL_POLL_DESCRIPTION = 'Só nas contas POP3: de quantos em quantos minutos o app procura email novo. As contas IMAP recebem na hora.'
+
 /** Uma linha de configuração no índice da busca. */
 export interface SettingsEntry {
   tab: SettingsTab
