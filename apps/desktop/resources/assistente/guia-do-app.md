@@ -79,6 +79,8 @@ Marca (nome do app, subtítulo e logo), tema (sistema, claro ou escuro), o que a
 
 Microfone, cancelamento de eco, a chave da AssemblyAI (a transcrição), remover o eco do alto-falante, identificar quem fala, o idioma falado e a tradução ao vivo.
 
+"Avisar quando uma reunião começar" (vem ligado) fica logo abaixo de "Quem fala no Meet" e depende dele e do plugin no Chrome: ao entrar numa reunião do Google Meet ou do Teams no Chrome, aparece um aviso pequeno no topo da tela, sem tirar o foco da reunião, com o título dela e o botão "Começar a transcrever", que abre o app e começa a gravação com o título da reunião. A seta ao lado do botão tem "Não perguntar nesta reunião" e "Nunca perguntar" (que desliga esta opção); o "x" fecha só desta vez. Cada reunião avisa uma vez; o aviso some sozinho em 1 minuto e não aparece com uma gravação em andamento nem com o app bloqueado.
+
 <!-- aba: claude -->
 ### Claude
 

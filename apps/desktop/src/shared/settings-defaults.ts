@@ -112,6 +112,11 @@ export interface AppSettings {
    */
   meetSpeakers: boolean
   /**
+   * "Avisar quando uma reunião começar" (contrato 48, padrão ligado): com "Quem fala no Meet" ligado e a extensão
+   * instalada, entrar numa reunião do Meet ou do Teams mostra um aviso no topo da tela com "Começar a transcrever".
+   */
+  meetingPrompt: boolean
+  /**
    * "Ativar ponte" do plugin "Controle do navegador" (contrato 46): sobe o servidor local que a extensão do Chrome
    * usa para receber comandos do app. Desligado por padrão; desligado, o servidor para.
    */
@@ -200,6 +205,7 @@ export const DEFAULT_SETTINGS: Readonly<AppSettings> = Object.freeze({
   whatsappTypingSignal: false,
   identifySpeakers: false,
   meetSpeakers: true,
+  meetingPrompt: true,
   navegadorPlugin: false,
   brandName: null,
   brandSubtitle: null,

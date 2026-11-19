@@ -11,8 +11,13 @@
 // 2. `LEITOR_TEAMS` (contrato 41): o mesmo para o Teams web, com a mesma interface. Reaproveita o `cleanName` e os
 //    utilitários do Meet.
 // 3. O motor genérico (observador, varredura, envio), que só conhece a interface do leitor:
-//    `{ id(): string | null, read(): { participantes: string[], falando: Set<string> } }`.
+//    `{ id(): string | null, read(): { participantes: string[], falando: Set<string> }, titulo(reuniao): string | null,
+//    plataforma: 'meet' | 'teams' }`.
 // O leitor é escolhido pelo endereço da aba (`location.hostname`); o motor e o protocolo com o app não mudam.
+//
+// Contrato 48: cada envio leva também `plataforma` ('meet' ou 'teams', do leitor escolhido) e `titulo`, o título da
+// reunião como a aba mostra (`document.title` limpo: só texto, numa linha, até 120 caracteres; sem título próprio,
+// nada). O app usa os dois no aviso "Começar a transcrever". É dado da página, nunca HTML.
 'use strict'
 
 // ===============================================================================================================
@@ -53,6 +58,10 @@ const LEITOR_MEET = {
 
   NAME_MAX: 80,
   PARTICIPANTS_MAX: 100,
+  TITLE_MAX: 120,
+
+  /** Contrato 48: de onde é a reunião, no envio ao app. */
+  plataforma: 'meet',
 
   /** Id da reunião na URL (`/abc-defg-hij`); fora de uma chamada, `null` e nada é mandado. */
   id() {
@@ -71,6 +80,25 @@ const LEITOR_MEET = {
       else break
     }
     return name.slice(0, this.NAME_MAX).trim()
+  },
+
+  /** Título de aba numa linha só, sem caractere de controle, cortado em 120 caracteres. */
+  cleanTitle(raw) {
+    if (typeof raw !== 'string') return ''
+    return Array.from(raw, (char) => (char.charCodeAt(0) < 32 || char.charCodeAt(0) === 127 ? ' ' : char))
+      .join('')
+      .replace(/\s+/g, ' ')
+      .trim()
+  },
+
+  /**
+   * Contrato 48: título da reunião pela aba. O Meet mostra "Meet - <título do evento>" (ou "Meet - abc-defg-hij"
+   * sem evento); sem título próprio, `null` (o app mostra "Reunião no Meet").
+   */
+  titulo(reuniao) {
+    const text = this.cleanTitle(document.title).replace(/^(google\s+)?meet\s*[-–—:|]\s*/i, '').slice(0, this.TITLE_MAX).trim()
+    if (!text || text === reuniao || /^(google\s+)?meet$/i.test(text)) return null
+    return text
   },
 
   firstMatch(root, selectors) {
@@ -208,6 +236,26 @@ const LEITOR_TEAMS = {
 
   PARTICIPANTS_MAX: LEITOR_MEET.PARTICIPANTS_MAX,
 
+  /** Contrato 48: de onde é a reunião, no envio ao app. */
+  plataforma: 'teams',
+
+  /** Títulos de aba do Teams que não são o nome de uma reunião (telas do app, ou a reunião sem nome). */
+  NOT_A_TITLE: /^(microsoft teams|teams|chat|bate-papo|calendário|calendario|calendar|atividade|activity|equipes|reunião|reuniao|meeting|meet|chamada|call)$/i,
+
+  /**
+   * Contrato 48: título da reunião pela aba. O Teams mostra "<título> | Microsoft Teams", às vezes com o número de não
+   * lidas na frente ("(2) …"); sem título próprio, `null` (o app mostra "Reunião no Teams").
+   */
+  titulo() {
+    const text = LEITOR_MEET.cleanTitle(document.title)
+      .replace(/^\(\d+\)\s*/, '')
+      .replace(/\s*[|–—-]\s*microsoft teams.*$/i, '')
+      .slice(0, LEITOR_MEET.TITLE_MAX)
+      .trim()
+    if (!text || this.NOT_A_TITLE.test(text)) return null
+    return text
+  },
+
   /** Último id achado no endereço: o Teams troca a URL depois de entrar, e a reunião continua a mesma. Zera fora da chamada. */
   lastId: null,
 
@@ -310,7 +358,8 @@ const LEITOR_TEAMS = {
 }
 
 // ===============================================================================================================
-// 3. Motor genérico: observa a página, compara leituras e manda ao background. Só usa `leitor.id()` e `leitor.read()`.
+// 3. Motor genérico: observa a página, compara leituras e manda ao background. Só usa `leitor.id()`, `leitor.read()`,
+//    `leitor.titulo()` e `leitor.plataforma` (contrato 48).
 // ===============================================================================================================
 
 /** Varredura periódica (o MutationObserver pede varreduras extras, no máximo uma a cada `OBSERVER_GAP_MS`). */
@@ -351,7 +400,7 @@ function startEngine(leitor) {
     previousParticipants = key
     // Fora da chamada (sala de espera, tela inicial): nenhum participante, nada a mandar.
     if (!participantes.length && !eventos.length) return
-    if (eventos.length || changed || heartbeat) send({ tipo: 'meet', reuniao, participantes, eventos })
+    if (eventos.length || changed || heartbeat) send({ tipo: 'meet', reuniao, participantes, eventos, plataforma: leitor.plataforma, titulo: leitor.titulo(reuniao) })
   }
 
   const observer = new MutationObserver(() => {

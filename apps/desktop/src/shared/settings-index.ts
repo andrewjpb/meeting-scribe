@@ -7,6 +7,9 @@ import type { SettingsTab } from './routes'
 /** Descrição do interruptor "Quem fala no Meet" (contratos 27 e 41), a mesma na tela e na busca. */
 export const MEET_SPEAKERS_DESCRIPTION = 'Com a extensão do LAP Reuniões no Chrome, cada fala do Meet e do Teams ganha o nome de quem falou. Tudo fica neste computador.'
 
+/** Descrição de "Avisar quando uma reunião começar" (contrato 48), a mesma na tela e na busca. */
+export const MEETING_PROMPT_DESCRIPTION = 'Mostra um aviso no topo da tela quando você entra numa reunião do Meet ou do Teams. Precisa do plugin Quem fala no Meet.'
+
 /** Descrição de "Ativar ponte" do plugin "Controle do navegador" (contrato 46), a mesma na tela e na busca. */
 export const NAVEGADOR_BRIDGE_DESCRIPTION = 'Liga a conexão local que a extensão usa para receber os comandos do app. Desligada, nada chega ao Chrome.'
 
@@ -71,6 +74,7 @@ export function settingsIndex(agent: string): SettingsEntry[] {
     row('gravacao', 'Transcrição', 'Remover eco do alto-falante', 'Some com a fala dos participantes que vaza para o seu microfone quando você não usa fone.'),
     row('gravacao', 'Transcrição', 'Identificar quem fala', 'Separa os participantes por voz. Mais lento; desligado, as falas se dividem pelas pausas.'),
     row('gravacao', 'Transcrição', 'Quem fala no Meet', MEET_SPEAKERS_DESCRIPTION),
+    row('gravacao', 'Transcrição', 'Avisar quando uma reunião começar', MEETING_PROMPT_DESCRIPTION),
     row('gravacao', 'Idiomas', 'Idioma falado', 'O idioma da reunião.'),
     row('gravacao', 'Idiomas', 'Traduzir ao vivo', 'A tradução aparece abaixo de cada fala.'),
     row('gravacao', 'Idiomas', 'Traduzir para', 'Idioma da tradução.'),

@@ -34,6 +34,7 @@ describe('esquema de configurações (CA1)', () => {
       whatsappTypingSignal: false,
       identifySpeakers: false,
       meetSpeakers: true,
+      meetingPrompt: true,
       navegadorPlugin: false,
       brandName: null,
       brandSubtitle: null,
@@ -96,6 +97,7 @@ describe('esquema de configurações (CA1)', () => {
       whatsappTypingSignal: true,
       identifySpeakers: true,
       meetSpeakers: false,
+      meetingPrompt: false,
       navegadorPlugin: true,
       brandName: 'Atas da Diretoria',
       brandSubtitle: '',
@@ -157,7 +159,7 @@ describe('esquema de configurações (CA1)', () => {
   it('Claude CLI (contrato 05, CA1): motor, modelo e caminho com padrão próprio cada um', () => {
     // `settings.json` do contrato 04, sem os campos novos: carrega com os padrões deles e mantém o resto.
     const old = { translationEnabled: false, translationModel: 'gpt-oss-120b', sourceLanguage: 'es', targetLanguage: 'ja', echoCancellation: true, theme: 'dark', micDeviceId: null }
-    expect(parseSettings(old)).toEqual({ ...old, removeEcho: true, translationEngine: 'assemblyai', claudeModel: 'haiku', chatModel: 'sonnet', claudePath: null, claudeTransport: 'acp', agentProfile: 'claude', saveToFolder: true, audioFolder: null, summarizeOnStop: true, liveCards: false, whatsappInsights: true, whatsappAutoCorrect: false, whatsappNotifications: true, whatsappNotifyGroups: true, whatsappTypingSignal: false, identifySpeakers: false, meetSpeakers: true, navegadorPlugin: false, brandName: null, brandSubtitle: null, brandLogo: null, autoCheckUpdates: true, lockUseTouchId: false, lockAfterMinutes: 0, lockOnSystemLock: true, lockOnLaunch: false, saveToDrive: true, closeBehavior: 'tray', openAtLogin: false, scheduledRunsDailyLimit: 50, calendarAlerts: true, calendarLeadMinutes: 5, calendarNotRecordingAlert: true, calendarIds: { google: null, microsoft: null }, emailPollMinutes: 5 })
+    expect(parseSettings(old)).toEqual({ ...old, removeEcho: true, translationEngine: 'assemblyai', claudeModel: 'haiku', chatModel: 'sonnet', claudePath: null, claudeTransport: 'acp', agentProfile: 'claude', saveToFolder: true, audioFolder: null, summarizeOnStop: true, liveCards: false, whatsappInsights: true, whatsappAutoCorrect: false, whatsappNotifications: true, whatsappNotifyGroups: true, whatsappTypingSignal: false, identifySpeakers: false, meetSpeakers: true, meetingPrompt: true, navegadorPlugin: false, brandName: null, brandSubtitle: null, brandLogo: null, autoCheckUpdates: true, lockUseTouchId: false, lockAfterMinutes: 0, lockOnSystemLock: true, lockOnLaunch: false, saveToDrive: true, closeBehavior: 'tray', openAtLogin: false, scheduledRunsDailyLimit: 50, calendarAlerts: true, calendarLeadMinutes: 5, calendarNotRecordingAlert: true, calendarIds: { google: null, microsoft: null }, emailPollMinutes: 5 })
     expect(parseSettings({ translationEngine: 'claude-cli', claudeModel: 'sonnet' })).toMatchObject({ translationEngine: 'claude-cli', claudeModel: 'sonnet' })
     // Fora da lista cai no padrão: só `haiku` e `sonnet`, só os dois motores.
     expect(parseSettings({ translationEngine: 'openai' }).translationEngine).toBe('assemblyai')
@@ -243,6 +245,15 @@ describe('esquema de configurações (CA1)', () => {
     expect(parseSettings({ meetSpeakers: 'sim' }).meetSpeakers).toBe(true)
     expect(parseSettingsPatch({ meetSpeakers: false })).toEqual({ meetSpeakers: false })
     expect(() => parseSettingsPatch({ meetSpeakers: 'nao' })).toThrow()
+  })
+
+  it('meetingPrompt (contrato 48): ligado por padrão, antigo carrega ligado, inválido volta ao padrão', () => {
+    expect(DEFAULT_SETTINGS.meetingPrompt).toBe(true)
+    expect(parseSettings({ theme: 'dark' }).meetingPrompt).toBe(true)
+    expect(parseSettings({ meetingPrompt: false }).meetingPrompt).toBe(false)
+    expect(parseSettings({ meetingPrompt: 'sim' }).meetingPrompt).toBe(true)
+    expect(parseSettingsPatch({ meetingPrompt: false })).toEqual({ meetingPrompt: false })
+    expect(() => parseSettingsPatch({ meetingPrompt: 'nao' })).toThrow()
   })
 
   it('navegadorPlugin (contrato 46): desligado por padrão, antigo carrega desligado, inválido volta ao padrão', () => {

@@ -30,7 +30,9 @@ aba do Meet (ou do Teams).
 
 Conferir sem o app: o servidor local escuta numa das portas 47632 a 47641. Para ver o que a extensão manda,
 abra `chrome://extensions`, clique em **service worker** da extensão e veja a aba **Network**: um `POST
-/v1/eventos` a cada segundo, com `{ reuniao, participantes, eventos }`.
+/v1/eventos` a cada segundo, com `{ reuniao, participantes, eventos }` e, desde o aviso de reunião (contrato 48),
+`plataforma` (`meet` ou `teams`) e `titulo` (o título da aba, só texto, até 120 caracteres), os dois opcionais.
+Com eles, ao entrar numa reunião o app mostra no topo da tela o aviso **Começar a transcrever**.
 
 Conferir o servidor sem a extensão (com o app aberto):
 
@@ -47,7 +49,8 @@ Responde `{"ok":true}`. Sem a origem `chrome-extension://`, responde 404.
 O Meet muda a página sem aviso. Quando os nomes pararem de aparecer, ajuste os seletores do objeto
 `LEITOR_MEET` no topo de `content.js` (`TILE_SELECTORS`, `NAME_SELECTORS`, `SPEAKING_CLASSES`, `SILENT_CLASSES`,
 `PEOPLE_ROW_SELECTORS`). O motor, abaixo dele, não muda. Cada plataforma é um leitor com a mesma interface:
-`id()` e `read()`, que devolve `{ participantes, falando }`; o leitor é escolhido pelo endereço da aba.
+`id()`, `read()` (que devolve `{ participantes, falando }`), `titulo()` e `plataforma`; o leitor é escolhido pelo
+endereço da aba.
 Para achar os novos: na chamada, abra o DevTools (⌥⌘I), inspecione o tile de quem está falando e veja qual classe
 muda quando a pessoa fala e quando para. A gravação nunca é afetada: sem a extensão, a transcrição só perde os
 nomes.

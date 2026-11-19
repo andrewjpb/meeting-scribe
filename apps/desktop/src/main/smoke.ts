@@ -123,6 +123,7 @@ import type { CalendarService } from './calendar/service'
 import { MEET_DISCONNECTED_LABEL } from '../shared/meet'
 import { APP_PLUGINS, pluginFolderName } from '../shared/plugins'
 import { MEET_PATH, MEET_PORTS, type MeetServer } from './meet/server'
+import { MEETING_PROMPT_SIZE } from './meeting-prompt/window'
 import { MCP_CLI_ENABLED_FILE, MCP_SERVERS_FILE } from './mcp/store'
 import { MCP_FIXED_WARNING } from '../shared/mcp'
 import { NAVEGADOR_COMANDOS_PATH, NAVEGADOR_PORTS, type NavegadorServer } from './navegador/server'
@@ -7203,6 +7204,9 @@ function meetPost(port: number, origin: string, body: unknown): Promise<{ status
 
 const MEET_MARKER = `(document.querySelector('[data-meet-marker]')?.textContent ?? '')`
 
+/** O PNG do aviso de reunião (contrato 48): o único no tamanho da janela dele, não no de 1120×740. */
+const MEETING_PROMPT_SHOT = 'aviso-reuniao-light'
+
 /**
  * Contrato 27 (CA8), numa janela clara, sem PNG novo: o servidor local do Meet no ar numa das portas 47632–47641;
  * um cliente falso com origem `chrome-extension://abc` é aceito (`{ ok: true }`) e com `https://mau.example` é
@@ -7345,6 +7349,112 @@ async function meetChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => void
       (folderMd === null || folderMd.includes('**Ana** · ')) &&
       labelInDetail,
     detail: `gravando=${live}; antes do envio "${markerOffText}" vermelho=${markerOff}; clique no marcador -> Plugins=${markerToPlugins}, de volta=${markerBack}; depois "${markerText}" verde=${marker}; reunião salva=${Boolean(saved)}; nomes no arquivo: sistema=${JSON.stringify(byId['smoke-meet-sys'] ?? null)}, microfone=${JSON.stringify(byId['smoke-meet-mic'] ?? null)}; acervo com "Ana:"=${corpusMd.includes('] Ana: ')}; .md da pasta ${folderMd === null ? 'sem arquivo' : `com "**Ana**"=${folderMd.includes('**Ana** · ')}`}; "Ana" no detalhe=${labelInDetail}`,
+  }
+
+  win.destroy()
+}
+
+/**
+ * Contrato 48 (aviso-reuniao), numa janela clara, com "Quem fala no Meet" ligado (como `meetChecks` deixa): um envio
+ * de reunião nova abre a janela do aviso (invisível no smoke, sem foco, sempre na frente, 460×88) com o título da
+ * página; outro envio da mesma reunião não abre outra, nem depois do "x"; "Começar a transcrever" fecha o aviso e
+ * começa a gravação com o título da reunião, e durante ela outra reunião não avisa; sem título, "Reunião no Meet";
+ * "Nunca perguntar" desliga "Avisar quando uma reunião começar" e, desligado, nada abre. Um PNG do aviso, no claro.
+ */
+/**
+ * Clique que fecha a própria janela (os botões do aviso): o clique sai depois que o `executeJavaScript` responde, senão
+ * a janela some no meio do pedido ("Render frame was disposed").
+ */
+async function clickThenClose(contents: WebContents, selector: string): Promise<boolean> {
+  return evaluate<boolean>(contents, `(() => { const el = document.querySelector(${JSON.stringify(selector)}); if (!el) return false; setTimeout(() => el.click(), 0); return true })()`)
+}
+
+async function meetingPromptChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => void, checks: Record<string, Check>, shots: Screenshot[]): Promise<void> {
+  const win = ctx.openWindow({ theme: 'light' })
+  watch(win)
+  await loadAndWait(win)
+  const contents = win.webContents
+  const opened = ctx.fixtures.meetingPrompt.windows
+  const before = opened.length
+  const port = ctx.meet.port()
+  const post = async (reuniao: string, titulo?: string): Promise<number> =>
+    port === null ? -1 : (await meetPost(port, 'chrome-extension://abc', { reuniao, participantes: ['Ana', 'Bruno'], eventos: [], plataforma: 'meet', ...(titulo ? { titulo } : {}) })).status
+  // A janela número `count` do aviso (contando desde o começo desta checagem), quando o app abrir.
+  const nth = async (count: number): Promise<BrowserWindow | null> => {
+    for (let attempt = 0; attempt < 100 && opened.length < before + count; attempt++) await wait(50)
+    const prompt = opened[before + count - 1] ?? null
+    if (prompt) watch(prompt)
+    return prompt
+  }
+  const gone = async (prompt: BrowserWindow | null): Promise<boolean> => {
+    for (let attempt = 0; attempt < 100 && prompt && !prompt.isDestroyed(); attempt++) await wait(50)
+    return prompt !== null && prompt.isDestroyed()
+  }
+  const PROMPT_TITLE = `(document.querySelector('[data-meeting-prompt-title]')?.textContent ?? '')`
+
+  // Reunião nova: o aviso abre, sem foco e na frente, com o título; a mesma reunião não abre outro, nem depois do "x".
+  const posted = await post('smk-aviso-uma', 'Revisão do contrato')
+  const first = await nth(1)
+  const titled = first ? await waitFor(first.webContents, `${PROMPT_TITLE} === 'Revisão do contrato' && document.querySelector('[data-action="meeting-prompt-record"]')`, 8000) : false
+  const bounds = first?.getBounds()
+  const sized = bounds?.width === MEETING_PROMPT_SIZE.width && bounds.height === MEETING_PROMPT_SIZE.height
+  const unfocused = first !== null && !first.isFocusable() && !first.isFocused() && first.isAlwaysOnTop()
+  if (first) {
+    await settle(first.webContents)
+    shots.push(await capture(first, ctx.outDir, MEETING_PROMPT_SHOT))
+  }
+  await post('smk-aviso-uma', 'Revisão do contrato')
+  await wait(300)
+  const kept = opened.length === before + 1 && first !== null && !first.isDestroyed()
+  if (first) await clickThenClose(first.webContents, '[data-action="meeting-prompt-close"]')
+  const closedByX = await gone(first)
+  await post('smk-aviso-uma', 'Revisão do contrato')
+  await wait(300)
+  const notAgain = opened.length === before + 1
+  checks['meetingPrompt'] = {
+    ok: posted === 200 && titled && sized && unfocused && kept && closedByX && notAgain,
+    detail: `envio=${posted}; aviso aberto com "Revisão do contrato"=${titled}, ${bounds ? `${bounds.width}x${bounds.height}` : 'sem janela'}, sem foco e na frente=${unfocused}; mesma reunião não abre outro=${kept}; "x" fechou=${closedByX}; de novo a mesma reunião, nada=${notAgain}`,
+  }
+
+  // "Começar a transcrever": o aviso fecha e a gravação começa com o título; gravando, outra reunião não avisa.
+  const idsBefore = new Set(readMeetings(ctx.userDataDir).map((meeting) => meeting.id))
+  await post('smk-aviso-duas', 'Planejamento do trimestre')
+  const second = await nth(2)
+  if (second && (await waitFor(second.webContents, `document.querySelector('[data-action="meeting-prompt-record"]')`, 8000))) await clickThenClose(second.webContents, '[data-action="meeting-prompt-record"]')
+  const secondClosed = await gone(second)
+  const recording = await waitFor(contents, `${routeIs('gravacao')} && ${probeJs('state()?.mic')} === 'live' && ${LIVE_TITLE} === 'Planejamento do trimestre'`, 8000)
+  await post('smk-aviso-tres')
+  await wait(300)
+  const quietWhileRecording = opened.length === before + 2
+  const saved = await endCalendarRecording(contents, ctx, idsBefore)
+  checks['meetingPromptRecord'] = {
+    ok: second !== null && secondClosed && recording && quietWhileRecording && saved?.title === 'Planejamento do trimestre',
+    detail: `aviso da segunda reunião=${second !== null}, fechou no clique=${secondClosed}; gravando com o título da reunião=${recording}; outra reunião durante a gravação não avisou=${quietWhileRecording}; reunião salva como "${saved?.title ?? 'nenhuma'}"`,
+  }
+
+  // Sem título, "Reunião no Meet"; "Nunca perguntar" desliga a configuração e, desligada, nada abre.
+  await post('smk-aviso-quatro')
+  const third = await nth(3)
+  const fallback = third ? await waitFor(third.webContents, `${PROMPT_TITLE} === 'Reunião no Meet'`, 8000) : false
+  if (third) {
+    await clickSelector(third.webContents, '[data-action="meeting-prompt-more"]')
+    if (await waitFor(third.webContents, `document.querySelector('[data-action="meeting-prompt-never"]') && document.querySelector('[data-meeting-prompt-where]')`)) {
+      await clickThenClose(third.webContents, '[data-action="meeting-prompt-never"]')
+    }
+  }
+  const thirdClosed = await gone(third)
+  let off = false
+  for (let attempt = 0; attempt < 100 && !off; attempt++) {
+    off = readSettings(ctx.userDataDir).meetingPrompt === false
+    if (!off) await wait(50)
+  }
+  await post('smk-aviso-cinco')
+  await wait(500)
+  const quietWhenOff = opened.length === before + 3
+  await evaluate(contents, `window.__scribeApi.invoke('scribe:settings-update', { meetingPrompt: true })`)
+  checks['meetingPromptNever'] = {
+    ok: fallback && thirdClosed && off && quietWhenOff,
+    detail: `sem título, "Reunião no Meet"=${fallback}; "Nunca perguntar" fechou=${thirdClosed} e desligou a configuração=${off}; desligada, reunião nova não abriu nada=${quietWhenOff}`,
   }
 
   win.destroy()
@@ -7938,6 +8048,9 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
     // Contrato 27: quem fala no Meet, com um cliente falso no servidor local; antes do bloqueio.
     await meetChecks(ctx, watch, meet)
 
+    // Contrato 48: o aviso de reunião, com o servidor do Meet no ar (como `meetChecks` deixa); antes do bloqueio.
+    await meetingPromptChecks(ctx, watch, meet, screenshots)
+
     // Contrato 30: IA anotando ao vivo e o quadro de post-its, numa gravação à parte; antes do bloqueio.
     await aiNotesChecks(ctx, watch, recording)
 
@@ -8006,7 +8119,7 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
   for (const [name, check] of Object.entries(mcp)) if (!check.ok) failures.push(`mcp ${name}: ${check.detail}`)
   for (const name of ['tab', 'cliEnable', 'import', 'addForm', 'addJson', 'chat', 'session', 'otherUses', 'remove', 'secrets', 'dark']) if (!mcp[name]) failures.push(`mcp ${name}: não executado`)
   for (const [name, check] of Object.entries(meet)) if (!check.ok) failures.push(`meet ${name}: ${check.detail}`)
-  for (const name of ['server', 'recording', 'setting']) if (!meet[name]) failures.push(`meet ${name}: não executado`)
+  for (const name of ['server', 'recording', 'setting', 'meetingPrompt', 'meetingPromptRecord', 'meetingPromptNever']) if (!meet[name]) failures.push(`meet ${name}: não executado`)
   for (const [name, check] of Object.entries(lock)) if (!check.ok) failures.push(`bloqueio ${name}: ${check.detail}`)
   for (const name of ['password', 'layer', 'channels', 'unlock', 'shortcutAndTouchId', 'recordingContinues', 'leaveDialog', 'endWhileLocked', 'reopen', 'reopenFromDisk', 'dark']) if (!lock[name]) failures.push(`bloqueio ${name}: não executado`)
   if (!theme.ok) failures.push(`tema: ${theme.detail}`)
@@ -8026,11 +8139,14 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
   // (contrato 12); a aba "Plugins" com o plugin salvo e o manual aberto, no claro (contrato 31); o painel Detalhes do
   // WhatsApp, no claro (contrato 32; no escuro ele sai no print da tela "WhatsApp"); o balão com a imagem, o player e
   // a transcrição do áudio, no claro (contrato 37); a prévia do anexo com a legenda, no claro (contrato 39); a aba
-  // "Conexões" nos dois temas, o formulário testado e o cartão de aprovação da ferramenta MCP, no claro (contrato 21).
-  const expectedShots = SCREENS.length * THEMES.length + 55
+  // "Conexões" nos dois temas, o formulário testado e o cartão de aprovação da ferramenta MCP, no claro (contrato 21);
+  // o aviso de reunião, no claro e no tamanho dele (contrato 48).
+  const expectedShots = SCREENS.length * THEMES.length + 56
   if (screenshots.length !== expectedShots) failures.push(`${screenshots.length} PNGs em vez de ${expectedShots}`)
   for (const shot of screenshots) {
-    if (shot.width < 1120 || shot.height < 740) failures.push(`${shot.name}: ${shot.width}x${shot.height} abaixo de 1120x740`)
+    if (shot.name === MEETING_PROMPT_SHOT) {
+      if (shot.width !== MEETING_PROMPT_SIZE.width || shot.height !== MEETING_PROMPT_SIZE.height) failures.push(`${shot.name}: ${shot.width}x${shot.height} em vez de ${MEETING_PROMPT_SIZE.width}x${MEETING_PROMPT_SIZE.height}`)
+    } else if (shot.width < 1120 || shot.height < 740) failures.push(`${shot.name}: ${shot.width}x${shot.height} abaixo de 1120x740`)
     if (shot.distinctColors <= 50) failures.push(`${shot.name}: só ${shot.distinctColors} cores distintas`)
   }
 

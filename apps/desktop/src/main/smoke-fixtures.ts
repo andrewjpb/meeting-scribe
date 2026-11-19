@@ -9,6 +9,7 @@ import { mkdirSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:http'
 import { join } from 'node:path'
 import { gzipSync } from 'node:zlib'
+import type { BrowserWindow } from 'electron'
 import { updateAssetName } from '../shared/updates'
 import type { FetchInit, FetchLike, FetchResponse } from './assemblyai/gateway'
 import type { ExecFile } from './claude-cli/locate'
@@ -191,6 +192,8 @@ export interface SmokeFixtures {
   microsoft: FakeMicrosoft
   /** Agendas (contrato 12): as notificações substitutas. */
   calendar: SmokeCalendar
+  /** Aviso de reunião (contrato 48): cada janela do aviso que o app abriu, na ordem. */
+  meetingPrompt: { windows: BrowserWindow[] }
   /** Notificações do WhatsApp (contrato 40): as substitutas, o foco fingido e o número do Dock. */
   whatsappNotify: SmokeWhatsAppNotify
 }
@@ -351,6 +354,7 @@ export function createSmokeFixtures(currentVersion: string, userDataDir: string)
     automations: { skewMs: 0, notifications: [], trayImages: [], dock: { hides: 0, shows: 0 }, loginItems: [], quitRequests: 0 },
     microsoft: createFakeMicrosoft({ clientId: SMOKE_MICROSOFT_CLIENT_ID, profile: { name: 'Bruno Teste', email: 'bruno.teste@example.com' } }),
     calendar: { notifications: [] },
+    meetingPrompt: { windows: [] },
     whatsappNotify: { notifications: [], focusedContentsId: null, badges: [] },
     lock: { skewMs: 0, touchIdAvailable: true, touchIdApproves: true, touchIdPrompts: 0, power: new EventEmitter(), refresh: () => undefined },
     fetch: (url: string, init: FetchInit) => {

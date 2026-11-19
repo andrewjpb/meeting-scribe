@@ -7,6 +7,9 @@ import type { CaptureEnvironment } from '../../src/renderer/src/audio/environmen
 import type { MeetState } from '../../src/shared/meet'
 import type { RuntimeSegment, TranscriptDocument, TranscriptSegment } from '../../src/shared/transcription'
 
+/** Contrato 48: o id, a plataforma e o título da reunião não mudam nada aqui. */
+const NO_MEETING: Pick<MeetState, 'meeting' | 'plataforma' | 'titulo'> = { meeting: null, plataforma: null, titulo: null }
+
 const track = (): TrackLike => ({ readyState: 'live', stop: () => undefined, addEventListener: () => undefined, removeEventListener: () => undefined })
 const stream = (): StreamLike => {
   const audio = [track()]
@@ -238,11 +241,11 @@ describe('extensão desconectada (adendo 27b)', () => {
     try {
       meetRecordingStarted(clock)
       clock.elapsedMs = 1000
-      useMeet.getState().receive({ connected: true, participants: ['Ana'], events: [{ name: 'Ana', speaking: true, ts: 0 }] })
+      useMeet.getState().receive({ connected: true, participants: ['Ana'], events: [{ name: 'Ana', speaking: true, ts: 0 }], ...NO_MEETING })
       expect(useMeet.getState().liveIntervals).toEqual([{ name: 'Ana', fromMs: 1000, toMs: Number.POSITIVE_INFINITY }])
       clock.elapsedMs = 4000
       // Queda (ou status expirado): o servidor manda `connected: false` sem evento nenhum.
-      useMeet.getState().receive({ connected: false, participants: [], events: [] })
+      useMeet.getState().receive({ connected: false, participants: [], events: [], ...NO_MEETING })
       expect(useMeet.getState().liveIntervals).toEqual([{ name: 'Ana', fromMs: 1000, toMs: 4000 }])
       clock.elapsedMs = 20_000
       expect(segmentNames(segment('depois', 'system', 10_000, 15_000), useMeet.getState().liveIntervals)).toEqual([])
@@ -274,7 +277,7 @@ describe('gravação com o Meet conectado', () => {
     vi.unstubAllGlobals()
   })
 
-  const meet = (events: MeetState['events']): void => useMeet.getState().receive({ connected: true, participants: ['Ana', 'Bruno'], events })
+  const meet = (events: MeetState['events']): void => useMeet.getState().receive({ connected: true, participants: ['Ana', 'Bruno'], events, ...NO_MEETING })
   const runtime = (item: TranscriptSegment): RuntimeSegment => ({ ...item, partial: false, turnOrder: 0, sessionId: 's', translationState: 'done' })
 
   it('ao encerrar, a transcrição salva leva os nomes nos trechos do sistema; o que chegou em pausa não conta', async () => {

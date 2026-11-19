@@ -218,6 +218,17 @@ describe('canais com o app bloqueado (contrato 22, CA4)', () => {
     expect(PRELOAD_ONLY_EVENTS).not.toContain('scribe:email-click')
   })
 
+  it('contrato 48: os dois canais do aviso de reunião são recusados bloqueado, antes do handler', async () => {
+    locked = true
+    for (const channel of ['scribe:meeting-prompt-state', 'scribe:meeting-prompt-act'] as const) {
+      expect(WHEN_LOCKED[channel], channel).toBe('refused')
+      await expect(Promise.resolve().then(() => invokeHandlers.get(channel)?.(trusted, { acao: 'gravar' }))).rejects.toThrow(/^locked$/)
+    }
+    expect(calls).toEqual([])
+    locked = false
+    await expect(invoke('scribe:meeting-prompt-state')).resolves.toBe('resposta')
+  })
+
   it('contrato 40: a conversa aberta no WhatsApp é ignorada bloqueado (o main não muda a regra da notificação)', () => {
     expect(RENDERER_EVENTS_WHEN_LOCKED['scribe:whatsapp-viewing']).toBe('ignored')
   })

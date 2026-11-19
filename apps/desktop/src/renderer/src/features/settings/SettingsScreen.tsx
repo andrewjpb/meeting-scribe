@@ -10,7 +10,7 @@ import {
   type SettingsNavigationState,
   type SettingsTab,
 } from '@shared/routes'
-import { LIVE_CARDS_DESCRIPTION, MEET_SPEAKERS_DESCRIPTION, WHATSAPP_AUTO_CORRECT_DESCRIPTION, WHATSAPP_INSIGHTS_DESCRIPTION } from '@shared/settings-index'
+import { LIVE_CARDS_DESCRIPTION, MEET_SPEAKERS_DESCRIPTION, MEETING_PROMPT_DESCRIPTION, WHATSAPP_AUTO_CORRECT_DESCRIPTION, WHATSAPP_INSIGHTS_DESCRIPTION } from '@shared/settings-index'
 import { DAILY_RUN_LIMIT_OPTIONS, LANGUAGE_CODES, type ChatModel, type ClaudeModel, type ClaudeTransport, type CloseBehavior, type DailyRunLimitOption, type LanguageCode, type ThemeSetting, type TranslationEngine } from '@shared/settings-defaults'
 import { useAgentLabel } from '../../app/agentLabel'
 import { useSettings } from '../../app/settingsStore'
@@ -341,6 +341,10 @@ function SettingsTabs({ tab }: { tab: SettingsTab }) {
                 </SettingRow>
                 <SettingRow name="Quem fala no Meet" nameId="settings-meet-speakers" description={MEET_SPEAKERS_DESCRIPTION}>
                   <Switch checked={settings.meetSpeakers} labelledBy="settings-meet-speakers" onChange={(meetSpeakers) => void update({ meetSpeakers })} />
+                </SettingRow>
+                {/* Contrato 48: o aviso no topo da tela ao entrar numa reunião (depende do servidor do Meet acima). */}
+                <SettingRow name="Avisar quando uma reunião começar" nameId="settings-meeting-prompt" description={MEETING_PROMPT_DESCRIPTION}>
+                  <Switch checked={settings.meetingPrompt} labelledBy="settings-meeting-prompt" action="meeting-prompt" onChange={(meetingPrompt) => void update({ meetingPrompt })} />
                 </SettingRow>
               </Section>
 

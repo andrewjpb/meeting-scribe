@@ -13,6 +13,7 @@ import type { Chat, ChatApprovalAnswer, ChatEvent, ChatListItem, ChatRedoRequest
 import type { ClaudeLocateResult, ClaudeRunState, ClaudeStartResult, ClaudeTranslateRequest, ClaudeTranslateResult } from './claude-cli'
 import type { AudioBeginResult, AudioExtension, AudioFinishResult, AudioFolderInfo, MeetingDownloadKind, MeetingDownloadResult, MeetingFileKind, MeetingFilesInfo } from './meeting-files'
 import type { MeetState } from './meet'
+import type { MeetingPromptAction, MeetingPromptState } from './meeting-prompt'
 import type { NavegadorState } from './navegador'
 import type { AppPluginId, PluginSaveResult } from './plugins'
 import type { McpChatServer, McpCliDetails, McpOverview, McpSaveResult, McpServerInput, McpTestResult, McpToolPolicy, McpUse } from './mcp'
@@ -298,6 +299,10 @@ export interface InvokeChannels {
   'scribe:calendar-recording': { request: undefined; response: { title: string } | null }
   /** Quem fala no Meet (contrato 27): o estado da extensão agora, para a tela ao abrir (`events` vem vazio). */
   'scribe:meet-status': { request: undefined; response: MeetState }
+  /** Aviso de reunião (contrato 48), só a janela do aviso: o título e a plataforma que ela mostra. */
+  'scribe:meeting-prompt-state': { request: undefined; response: MeetingPromptState }
+  /** Um botão do aviso; falso se o pedido não veio da janela do aviso. */
+  'scribe:meeting-prompt-act': { request: { acao: MeetingPromptAction }; response: boolean }
   /** "Salvar plugin…" (contrato 31): diálogo de pasta no main e cópia da extensão embutida; `null` se cancelado. */
   'scribe:plugin-save': { request: { id: AppPluginId }; response: PluginSaveResult }
   /** Controle do navegador (contrato 46): a ponte ligada na configuração e a extensão conectada agora. */
@@ -501,6 +506,11 @@ export interface MainEvents {
    * também com o app bloqueado: a gravação continua no bloqueio e cada evento vale pelo horário em que chega.
    */
   'scribe:meet-changed': MeetState
+  /**
+   * Contrato 48: o título (ou a plataforma) da reunião do aviso aberto mudou; vai só à janela do aviso (nunca pelo
+   * `broadcast`) e nunca com o app bloqueado (o aviso fecha ao bloquear).
+   */
+  'scribe:meeting-prompt-changed': MeetingPromptState
   /** A ponte do "Controle do navegador" (contrato 46) ligou, desligou, conectou ou desconectou. */
   'scribe:navegador-changed': NavegadorState
   /** Contrato 42: uma conta de email mudou de estado (ou entrou, ou saiu); vai a lista inteira. Não chega bloqueado. */
@@ -632,6 +642,8 @@ const INVOKE: Record<InvokeChannel, true> = {
   'scribe:calendar-join': true,
   'scribe:calendar-recording': true,
   'scribe:meet-status': true,
+  'scribe:meeting-prompt-state': true,
+  'scribe:meeting-prompt-act': true,
   'scribe:plugin-save': true,
   'scribe:navegador-status': true,
   'scribe:navegador-set': true,
@@ -728,6 +740,7 @@ const MAIN_EVENTS: Record<MainEvent, true> = {
   'scribe:recording-end': true,
   'scribe:notes-changed': true,
   'scribe:meet-changed': true,
+  'scribe:meeting-prompt-changed': true,
   'scribe:navegador-changed': true,
   'scribe:email-state': true,
   'scribe:email-message': true,
@@ -894,6 +907,9 @@ export const WHEN_LOCKED: Readonly<Record<InvokeChannel, LockedPolicy>> = Object
   'scribe:calendar-recording': 'refused',
   // Contrato 27: o estado do Meet não aparece com o app bloqueado; o servidor continua coletando para a gravação.
   'scribe:meet-status': 'refused',
+  // Contrato 48: bloqueado, o aviso nem abre (e fecha se estava aberto); os botões dele também ficam recusados.
+  'scribe:meeting-prompt-state': 'refused',
+  'scribe:meeting-prompt-act': 'refused',
   'scribe:plugin-save': 'refused',
   'scribe:navegador-status': 'refused',
   'scribe:navegador-set': 'refused',

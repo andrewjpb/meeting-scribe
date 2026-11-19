@@ -1,7 +1,7 @@
 // LAP Reuniões — Quem fala no Meet (contrato 27, CA1): junta o que o `content.js` vê e manda ao app, a cada ~1 s,
 // por POST em http://127.0.0.1:<porta>/v1/eventos. Só fala com 127.0.0.1: nada sai do computador. O app responde
 // só `{ ok: true }` e nunca manda nada de volta. Sem resposta do app, guarda os eventos por até 60 s e descarta o
-// que passar disso.
+// que passar disso. Contrato 48: repassa também a plataforma e o título da reunião (só texto, até 120 caracteres).
 'use strict'
 
 /** Portas que o app pode usar, na ordem em que ele tenta. */
@@ -14,6 +14,7 @@ const KEEP_MS = 60_000
 const EVENTS_PER_POST = 200
 const PARTICIPANTS_MAX = 100
 const NAME_MAX = 80
+const TITLE_MAX = 120
 /** Cada porta tem este prazo para responder. */
 const REQUEST_TIMEOUT_MS = 1500
 /** App fechado: espera isto antes de procurar de novo nas 10 portas. */
@@ -25,6 +26,9 @@ const TAB_SILENT_MS = 5000
 let port = null
 let meeting = null
 let participants = []
+/** Contrato 48: 'meet' ou 'teams', e o título que a aba mostra (`null` sem título próprio). */
+let platform = null
+let title = null
 /** Eventos ainda não entregues, com o horário da chegada aqui. */
 let queue = []
 let lastMessageAt = 0
@@ -32,6 +36,7 @@ let sending = false
 let retryAt = 0
 
 const cleanName = (value) => (typeof value === 'string' ? value.replace(/\s+/g, ' ').trim().slice(0, NAME_MAX).trim() : '')
+const cleanTitle = (value) => (typeof value === 'string' ? value.replace(/\s+/g, ' ').trim().slice(0, TITLE_MAX).trim() || null : null)
 
 /** Origens aceitas: as páginas onde o `content.js` roda (contrato 41 estendeu ao Teams). */
 const ORIGINS = ['https://meet.google.com/', 'https://teams.microsoft.com/', 'https://teams.live.com/', 'https://teams.cloud.microsoft/']
@@ -44,6 +49,8 @@ chrome.runtime.onMessage.addListener((message, sender) => {
   lastMessageAt = now
   meeting = message.reuniao.slice(0, 200)
   participants = message.participantes.map(cleanName).filter(Boolean).slice(0, PARTICIPANTS_MAX)
+  platform = message.plataforma === 'meet' || message.plataforma === 'teams' ? message.plataforma : null
+  title = cleanTitle(message.titulo)
   for (const event of message.eventos) {
     const nome = cleanName(event && event.nome)
     if (!nome || typeof event.falando !== 'boolean' || typeof event.ts !== 'number' || !Number.isFinite(event.ts)) continue
@@ -84,7 +91,11 @@ async function flush() {
   sending = true
   try {
     const batch = queue.slice(0, EVENTS_PER_POST)
-    const body = JSON.stringify({ reuniao: meeting, participantes: participants, eventos: batch.map(({ nome, falando, ts }) => ({ nome, falando, ts })) })
+    const payload = { reuniao: meeting, participantes: participants, eventos: batch.map(({ nome, falando, ts }) => ({ nome, falando, ts })) }
+    // Opcionais (contrato 48): só vão quando há o que mandar.
+    if (platform) payload.plataforma = platform
+    if (title) payload.titulo = title
+    const body = JSON.stringify(payload)
     const order = port === null ? PORTS : [port, ...PORTS.filter((candidate) => candidate !== port)]
     for (const candidate of order) {
       if (await post(candidate, body)) {

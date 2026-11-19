@@ -1,11 +1,12 @@
 // Quem fala no Meet (contrato 27, CA2 e CA8): o servidor local só aceita o POST da extensão (origem
 // `chrome-extension://`, JSON, até 64 KB) e responde só `{ ok: true }`; o zod corta os nomes e limita as contagens;
-// porta ocupada passa para a próxima; desligar para o servidor e o estado.
+// porta ocupada passa para a próxima; desligar para o servidor e o estado. Contrato 48: o id, a plataforma e o
+// título da reunião vão ao estado (campos opcionais; a extensão antiga continua aceita) e desconectar zera os três.
 import { createServer, request as httpRequest, type Server } from 'node:http'
 import { afterEach, describe, expect, it } from 'vitest'
 import type { MeetState } from '../src/shared/meet'
 import { INVOKE_CHANNELS, MAIN_EVENT_CHANNELS, WHEN_LOCKED } from '../src/shared/ipc'
-import { createMeetServer, MEET_BODY_MAX_BYTES, MEET_PORTS, parseMeetPost, type MeetServer } from '../src/main/meet/server'
+import { createMeetServer, MEET_BODY_MAX_BYTES, MEET_PORTS, parseMeetPost, platformOfMeeting, type MeetServer } from '../src/main/meet/server'
 
 interface Reply {
   status: number
@@ -29,6 +30,10 @@ function send(port: number, options: { method?: string; path?: string; headers?:
 const EXTENSION = { origin: 'chrome-extension://abcdefghijklmnop', 'content-type': 'application/json' }
 const post = (port: number, value: unknown, headers: Record<string, string> = EXTENSION): Promise<Reply> => send(port, { headers, body: JSON.stringify(value) })
 const body = (patch: Record<string, unknown> = {}): Record<string, unknown> => ({ reuniao: 'abc-defg-hij', participantes: ['Ana', 'Bruno'], eventos: [{ nome: 'Ana', falando: true, ts: 1000 }], ...patch })
+
+/** Estado de reunião do `body()` de sempre (extensão antiga: a plataforma sai do id, sem título). */
+const OLD_MEETING = { meeting: 'abc-defg-hij', plataforma: 'meet', titulo: null } as const
+const NO_MEETING = { meeting: null, plataforma: null, titulo: null } as const
 
 /** Portas altas fora da faixa do app (que pode estar aberto nesta máquina). */
 const TEST_PORTS = [48632, 48633, 48634]
@@ -59,8 +64,8 @@ describe('servidor local do Meet', () => {
     const port = await start(changes)
     const reply = await post(port, body())
     expect(reply).toEqual({ status: 200, body: '{"ok":true}' })
-    expect(changes).toEqual([{ connected: true, participants: ['Ana', 'Bruno'], events: [{ name: 'Ana', speaking: true, ts: 1000 }] }])
-    expect(server?.status()).toEqual({ connected: true, participants: ['Ana', 'Bruno'], events: [] })
+    expect(changes).toEqual([{ connected: true, participants: ['Ana', 'Bruno'], events: [{ name: 'Ana', speaking: true, ts: 1000 }], ...OLD_MEETING }])
+    expect(server?.status()).toEqual({ connected: true, participants: ['Ana', 'Bruno'], events: [], ...OLD_MEETING })
     // Mesmo estado e nenhum evento novo: nada a avisar.
     await post(port, body({ eventos: [] }))
     expect(changes).toHaveLength(1)
@@ -112,20 +117,44 @@ describe('servidor local do Meet', () => {
     const port = await start(changes, 50)
     await post(port, body({ eventos: [] }))
     await new Promise((resolve) => setTimeout(resolve, 120))
-    expect(changes.at(-1)).toEqual({ connected: false, participants: [], events: [] })
+    expect(changes.at(-1)).toEqual({ connected: false, participants: [], events: [], ...NO_MEETING })
     await post(port, body({ eventos: [] }))
     expect(changes.at(-1)?.connected).toBe(true)
     await server?.stop()
-    expect(changes.at(-1)).toEqual({ connected: false, participants: [], events: [] })
+    expect(changes.at(-1)).toEqual({ connected: false, participants: [], events: [], ...NO_MEETING })
     expect(server?.port()).toBeNull()
     // Porta fechada: a conexão falha (ou cai), nunca 200.
     expect((await post(port, body()).catch(() => ({ status: -1, body: '' }))).status).not.toBe(200)
+  })
+
+  it('contrato 48: reunião, plataforma e título vão ao estado; trocar de reunião avisa; desconectar zera os três', async () => {
+    const changes: MeetState[] = []
+    const port = await start(changes, 80)
+    await post(port, body({ eventos: [], reuniao: '19:meeting_abc@thread.v2', plataforma: 'teams', titulo: 'Revisão do contrato' }))
+    expect(changes.at(-1)).toMatchObject({ connected: true, meeting: '19:meeting_abc@thread.v2', plataforma: 'teams', titulo: 'Revisão do contrato' })
+    expect(server?.status()).toMatchObject({ meeting: '19:meeting_abc@thread.v2', plataforma: 'teams', titulo: 'Revisão do contrato' })
+    // Mesmos participantes, outra reunião: muda o estado.
+    await post(port, body({ eventos: [], reuniao: 'xyz-abcd-efg', plataforma: 'meet' }))
+    expect(changes).toHaveLength(2)
+    expect(changes.at(-1)).toMatchObject({ meeting: 'xyz-abcd-efg', plataforma: 'meet', titulo: null })
+    // Só o título mudou: também.
+    await post(port, body({ eventos: [], reuniao: 'xyz-abcd-efg', plataforma: 'meet', titulo: 'Planejamento' }))
+    expect(changes).toHaveLength(3)
+    await new Promise((resolve) => setTimeout(resolve, 160))
+    expect(changes.at(-1)).toEqual({ connected: false, participants: [], events: [], ...NO_MEETING })
+    expect(server?.status()).toEqual({ connected: false, participants: [], events: [], ...NO_MEETING })
+    // Parar com a reunião no estado também zera.
+    await post(port, body({ eventos: [], titulo: 'Outra' }))
+    await server?.stop()
+    expect(changes.at(-1)).toEqual({ connected: false, participants: [], events: [], ...NO_MEETING })
   })
 
   it('o canal novo é recusado com o app bloqueado e o evento é declarado', () => {
     expect(INVOKE_CHANNELS).toContain('scribe:meet-status')
     expect(WHEN_LOCKED['scribe:meet-status']).toBe('refused')
     expect(MAIN_EVENT_CHANNELS).toContain('scribe:meet-changed')
+    // Contrato 48: o título atualizado vai só à janela do aviso.
+    expect(MAIN_EVENT_CHANNELS).toContain('scribe:meeting-prompt-changed')
   })
 })
 
@@ -162,5 +191,33 @@ describe('corpo do envio da extensão', () => {
     expect(parseMeetPost(body({ comando: 'apagar tudo' }))).toBeNull()
     expect(parseMeetPost(null)).toBeNull()
     expect(parseMeetPost('texto')).toBeNull()
+  })
+
+  it('contrato 48: plataforma e título opcionais; a extensão antiga (sem eles) continua aceita', () => {
+    expect(parseMeetPost(body())).toMatchObject({ meeting: 'abc-defg-hij', plataforma: 'meet', titulo: null })
+    expect(parseMeetPost(body({ plataforma: 'teams', titulo: 'Revisão' }))).toMatchObject({ plataforma: 'teams', titulo: 'Revisão' })
+    expect(parseMeetPost(body({ reuniao: 'teams-live-123456', plataforma: undefined }))?.plataforma).toBe('teams')
+    // Plataforma fora da lista ou título que não é texto: o envio inteiro é recusado (zod estrito).
+    expect(parseMeetPost(body({ plataforma: 'zoom' }))).toBeNull()
+    expect(parseMeetPost(body({ titulo: 42 }))).toBeNull()
+    expect(parseMeetPost(body({ titulo: 'x'.repeat(1001) }))).toBeNull()
+  })
+
+  it('contrato 48: o título é só texto, numa linha, sem caractere de controle e cortado em 120', () => {
+    expect(parseMeetPost(body({ titulo: '  Revisão\n\tdo\u0000contrato  ' }))?.titulo).toBe('Revisão do contrato')
+    expect(parseMeetPost(body({ titulo: 'T'.repeat(300) }))?.titulo).toBe('T'.repeat(120))
+    expect(parseMeetPost(body({ titulo: '   ' }))?.titulo).toBeNull()
+    // HTML é só texto: o app nunca interpreta (a tela mostra como texto).
+    expect(parseMeetPost(body({ titulo: '<b>Reunião</b>' }))?.titulo).toBe('<b>Reunião</b>')
+  })
+
+  it('contrato 48: plataforma pelo id quando a extensão não manda', () => {
+    expect(platformOfMeeting('abc-defg-hij')).toBe('meet')
+    expect(platformOfMeeting('abcd-efgh-ijk')).toBe('meet')
+    expect(platformOfMeeting('19:meeting_NzQ@thread.v2')).toBe('teams')
+    expect(platformOfMeeting('teams-live-9876543')).toBe('teams')
+    expect(platformOfMeeting('teams-1x2y3z')).toBe('teams')
+    expect(platformOfMeeting('reuniao-qualquer')).toBeNull()
+    expect(platformOfMeeting('')).toBeNull()
   })
 })
