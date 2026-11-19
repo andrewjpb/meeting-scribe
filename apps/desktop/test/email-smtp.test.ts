@@ -8,7 +8,7 @@ import { join, relative, resolve } from 'node:path'
 import { simpleParser } from 'mailparser'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { ImapConnect, ImapMessage, ImapSession } from '../src/main/email/imap-client'
-import { createEmailService, type EmailService } from '../src/main/email/service'
+import { createEmailService, safeAttachmentName, type EmailService, type EmailServiceDeps } from '../src/main/email/service'
 import { smtpErrorKind } from '../src/main/email/smtp-client'
 import { createFileSettingsStore } from '../src/main/settings/store'
 import type { SafeStorageLike } from '../src/main/secrets'
@@ -138,7 +138,7 @@ function fakeImap(parent: ImapMessage): { connect: ImapConnect; appended: Buffer
     uidValidity: '1',
     recent: () => Promise.resolve([parent]),
     since: () => Promise.resolve([]),
-    source: () => Promise.resolve(null),
+    source: () => Promise.resolve(PARENT_RAW),
     setSeen: () => Promise.resolve(),
     remove: () => Promise.resolve(),
     appendSent: (raw) => {
@@ -165,13 +165,43 @@ const PARENT: ImapMessage = {
   references: ['<raiz@cliente.com>'],
 }
 
+/** A original no servidor (contrato 43, CA8 e CA9): texto e dois anexos, um deles com caminho no nome. */
+const PARENT_RAW = Buffer.from(
+  [
+    'From: Bruno <bruno@cliente.com>',
+    'To: ana@exemplo.com.br',
+    'Subject: Proposta',
+    'Message-ID: <orig@cliente.com>',
+    'MIME-Version: 1.0',
+    'Content-Type: multipart/mixed; boundary="m"',
+    '',
+    '--m',
+    'Content-Type: text/plain; charset=utf-8',
+    '',
+    'Segue a planilha.',
+    '--m',
+    'Content-Type: text/csv; name="planilha.csv"',
+    'Content-Disposition: attachment; filename="planilha.csv"',
+    'Content-Transfer-Encoding: base64',
+    '',
+    Buffer.from('a;b\n1;2\n').toString('base64'),
+    '--m',
+    'Content-Type: text/plain; name="x.txt"',
+    'Content-Disposition: attachment; filename="../../segredo.txt"',
+    '',
+    'segredo',
+    '--m--',
+    '',
+  ].join('\r\n'),
+)
+
 const cleanups: (() => Promise<void> | void)[] = []
 afterEach(async () => {
   for (const cleanup of cleanups.splice(0).reverse()) await cleanup()
   vi.restoreAllMocks()
 })
 
-async function setup(smtpPort: number, protocol: 'imap' | 'pop3' = 'imap') {
+async function setup(smtpPort: number, protocol: 'imap' | 'pop3' = 'imap', extra: Partial<EmailServiceDeps> = {}) {
   const userData = mkdtempSync(join(tmpdir(), 'scribe-smtp-'))
   const imap = fakeImap(PARENT)
   const logs: string[] = []
@@ -187,6 +217,7 @@ async function setup(smtpPort: number, protocol: 'imap' | 'pop3' = 'imap') {
     onMessage: () => undefined,
     log: (message) => logs.push(message),
     retryMs: 3_600_000,
+    ...extra,
   })
   cleanups.push(async () => {
     await service.dispose()
@@ -241,6 +272,100 @@ describe('envio por SMTP (contrato 42, CA5)', () => {
     expect(sent).toMatchObject([{ id: result.messageId, folder: 'sent', subject: 'Re: Proposta', inReplyTo: '<orig@cliente.com>' }])
     expect(await service.body({ accountId, id: result.messageId })).toEqual({ ok: true, body: { text: 'Pode ser na quinta.', html: null, attachments: [] } })
     expect((await service.messages({ accountId }))[0]?.answered).toBe(true)
+  })
+
+  it('contrato 43: Cc e anexos locais chegam ao servidor; o enviado guarda o nome e o tamanho de cada anexo', async () => {
+    const smtp = await startFakeSmtp()
+    cleanups.push(() => smtp.close())
+    const { service, accountId } = await setup(smtp.port)
+    service.registerClick(SENDER, CLICK[3])
+    const bytes = new TextEncoder().encode('conteúdo da planilha')
+    const result = await service.send(SENDER, { accountId, to: ['bruno@cliente.com'], cc: ['carol@cliente.com'], subject: 'Planilha', text: 'Segue.', attachments: [{ name: 'notas.csv', bytes }], clickToken: CLICK[3] })
+    if (!result.ok) throw new Error(`envio falhou: ${result.error}`)
+    expect(smtp.deliveries[0]?.to).toEqual(['bruno@cliente.com', 'carol@cliente.com'])
+    const parsed = await simpleParser(smtp.deliveries[0]?.data ?? '')
+    expect(parsed.cc && !Array.isArray(parsed.cc) ? parsed.cc.value.map((item) => item.address) : []).toEqual(['carol@cliente.com'])
+    expect(parsed.attachments.map((item) => [item.filename, item.contentType, item.content.toString('utf8')])).toEqual([['notas.csv', 'text/csv', 'conteúdo da planilha']])
+    expect(await service.messages({ accountId, folder: 'sent' })).toMatchObject([{ cc: [{ name: null, address: 'carol@cliente.com' }] }])
+    expect(await service.body({ accountId, id: result.messageId })).toMatchObject({ ok: true, body: { attachments: [{ filename: 'notas.csv', size: bytes.byteLength }] } })
+  })
+
+  it('contrato 43 (CA8): o anexo recebido vem do servidor sob demanda, com o nome limpo; índice fora da lista não acha', async () => {
+    const smtp = await startFakeSmtp()
+    cleanups.push(() => smtp.close())
+    const { service, accountId } = await setup(smtp.port)
+    const first = await service.attachment({ accountId, id: '10', index: 0 })
+    expect(first.ok && [first.name, Buffer.from(first.bytes).toString('utf8')]).toEqual(['planilha.csv', 'a;b\n1;2\n'])
+    const second = await service.attachment({ accountId, id: '10', index: 1 })
+    expect(second.ok && second.name).toBe('_.._segredo.txt')
+    expect(await service.attachment({ accountId, id: '10', index: 2 })).toEqual({ ok: false, error: 'not-found' })
+    expect(await service.attachment({ accountId, id: '10', index: -1 })).toEqual({ ok: false, error: 'not-found' })
+    expect(await service.attachment({ accountId, id: '99', index: 0 })).toEqual({ ok: false, error: 'not-found' })
+    expect(safeAttachmentName(null, 3)).toBe('anexo-4')
+    expect(safeAttachmentName('  .oculto:a.txt', 0)).toBe('oculto_a.txt')
+  })
+
+  it('contrato 43 (CA9): Encaminhar leva os anexos da original até o SMTP; do enviado, o anexo sai da mensagem guardada', async () => {
+    const smtp = await startFakeSmtp()
+    cleanups.push(() => smtp.close())
+    const { service, accountId } = await setup(smtp.port)
+    const found = await service.attachments({ accountId, id: '10' })
+    if (!found.ok) throw new Error('anexos não vieram')
+    expect(found.skipped).toEqual([])
+    service.registerClick(SENDER, CLICK[2])
+    const result = await service.send(SENDER, { accountId, to: ['carol@cliente.com'], subject: 'Enc: Proposta', text: 'Segue.', attachments: found.attachments, clickToken: CLICK[2] })
+    if (!result.ok) throw new Error(`envio falhou: ${result.error}`)
+    const parsed = await simpleParser(smtp.deliveries[0]?.data ?? '')
+    expect(parsed.attachments.map((item) => [item.filename, item.content.toString('utf8')])).toEqual([
+      ['planilha.csv', 'a;b\n1;2\n'],
+      ['_.._segredo.txt', 'segredo'],
+    ])
+    const again = await service.attachment({ accountId, id: result.messageId, index: 0 })
+    expect(again.ok && Buffer.from(again.bytes).toString('utf8')).toBe('a;b\n1;2\n')
+  })
+
+  it('contrato 43 (CA9): acima de 10 anexos ou de 20 MB, os excedentes ficam de fora pelo nome', async () => {
+    const smtp = await startFakeSmtp()
+    cleanups.push(() => smtp.close())
+    const many = [
+      ...Array.from({ length: 11 }, (_, index) => ({ filename: `f${index}.txt`, contentType: 'text/plain', content: Buffer.alloc(10) })),
+    ]
+    const { service, accountId } = await setup(smtp.port, 'imap', { parseAttachments: async () => many })
+    const found = await service.attachments({ accountId, id: '10' })
+    expect(found.ok && [found.attachments.length, found.skipped]).toEqual([10, ['f10.txt']])
+    const big = [
+      { filename: 'a.bin', contentType: 'application/octet-stream', content: Buffer.alloc(15 * 1024 * 1024) },
+      { filename: 'b.bin', contentType: 'application/octet-stream', content: Buffer.alloc(8 * 1024 * 1024) },
+      { filename: 'c.txt', contentType: 'text/plain', content: Buffer.alloc(10) },
+    ]
+    const other = await setup(smtp.port, 'imap', { parseAttachments: async () => big })
+    const limited = await other.service.attachments({ accountId: other.accountId, id: '10' })
+    expect(limited.ok && [limited.attachments.map((item) => item.name), limited.skipped]).toEqual([['a.bin', 'c.txt'], ['b.bin']])
+  })
+
+  it('contrato 43: anexo com caminho no nome ou acima do limite é recusado sem sair nada', async () => {
+    const smtp = await startFakeSmtp()
+    cleanups.push(() => smtp.close())
+    const { service, accountId } = await setup(smtp.port)
+    service.registerClick(SENDER, CLICK[0])
+    expect(await service.send(SENDER, { accountId, to: ['b@c.com'], subject: 'x', text: 'y', attachments: [{ name: '../../etc/passwd', bytes: new Uint8Array(1) }], clickToken: CLICK[0] })).toEqual({ ok: false, error: 'invalid' })
+    service.registerClick(SENDER, CLICK[1])
+    expect(await service.send(SENDER, { accountId, to: ['b@c.com'], subject: 'x', text: 'y', attachments: [{ name: 'grande.bin', bytes: new Uint8Array(21 * 1024 * 1024) }], clickToken: CLICK[1] })).toEqual({ ok: false, error: 'invalid' })
+    expect(smtp.deliveries).toEqual([])
+  })
+
+  it('contrato 43: "Testar conexão" fala com o recebimento e faz o AUTH no SMTP sem mandar nada nem gravar a conta', async () => {
+    const smtp = await startFakeSmtp()
+    cleanups.push(() => smtp.close())
+    const { service } = await setup(smtp.port)
+    const before = service.accounts().length
+    const input = { address: 'novo@exemplo.com.br', password: PASSWORD, incoming: { protocol: 'imap', host: '127.0.0.1', port: 993, security: 'tls' }, outgoing: { host: '127.0.0.1', port: smtp.port, security: 'none' } }
+    expect(await service.test(input)).toEqual({ ok: true })
+    expect(smtp.deliveries).toEqual([])
+    expect(await service.test({ ...input, password: 'errada' })).toEqual({ ok: false, stage: 'outgoing', error: 'Usuário ou senha recusados.' })
+    expect(await service.test({ ...input, outgoing: { host: '127.0.0.1', port: 1, security: 'none' } })).toMatchObject({ ok: false, stage: 'outgoing' })
+    expect(await service.test({ address: 'x' })).toMatchObject({ ok: false, stage: 'invalid' })
+    expect(service.accounts()).toHaveLength(before)
   })
 
   it('mensagem nova (sem inReplyTo): sem In-Reply-To nem References; em POP3 não há APPEND', async () => {

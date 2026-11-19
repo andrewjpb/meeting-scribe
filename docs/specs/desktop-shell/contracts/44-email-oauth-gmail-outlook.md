@@ -1,5 +1,7 @@
 # Contrato 44 — OAuth2 (XOAUTH2) para Gmail e Outlook/Microsoft
-Feature: desktop-shell · Wave: 3 · Depende de: 42, 43 · PRD: `docs/specs/desktop-shell/prd-email.md`
+**ADIADO em 19/11/2026 a pedido do Andrew: nada que exija client ID registrado (sistema open source, sem vínculos). Gmail usa senha de app + IMAP (contrato 42); Outlook pessoal fica sem suporte. NÃO implementar até novo pedido.**
+
+Feature: desktop-shell · Wave: — (adiado) · Depende de: 42, 43 · PRD: `docs/specs/desktop-shell/prd-email.md`
 
 ## Pré-condições
 - 42 e 43 prontos. Evidência do Outlook (PRD): Gmail/Microsoft usam IMAP/SMTP comuns com `AUTHENTICATE XOAUTH2` — aqui é igual, sem EWS.

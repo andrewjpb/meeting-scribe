@@ -329,6 +329,86 @@
   .chat-live-pulse {
     animation: rec-pulse 1.6s ease-in-out infinite;
   }
+
+  /*
+   * Contrato 43: o corpo de um email (HTML já sanitizado, sem cor nem estilo próprio) nas cores e na tipografia do app.
+   * Tabelas largas rolam dentro do painel; imagens nunca passam da largura.
+   */
+  .email-body {
+    font-size: 15px;
+    line-height: 24px;
+    color: var(--text);
+    overflow-wrap: anywhere;
+    overflow-x: auto;
+  }
+  .email-body p,
+  .email-body ul,
+  .email-body ol,
+  .email-body blockquote,
+  .email-body pre,
+  .email-body table {
+    margin: 0 0 12px;
+  }
+  .email-body h1,
+  .email-body h2,
+  .email-body h3 {
+    margin: 16px 0 8px;
+    font-size: 17px;
+    line-height: 24px;
+    font-weight: 700;
+    color: var(--title);
+  }
+  .email-body ul {
+    list-style: disc;
+    padding-left: 24px;
+  }
+  .email-body ol {
+    list-style: decimal;
+    padding-left: 24px;
+  }
+  .email-body a {
+    color: var(--accent);
+    text-decoration: underline;
+    text-underline-offset: 3px;
+    cursor: pointer;
+  }
+  .email-body blockquote {
+    border-left: 2px solid var(--line-strong);
+    padding-left: 12px;
+    color: var(--text-muted);
+  }
+  .email-body pre,
+  .email-body code {
+    font-family: Menlo, ui-monospace, monospace;
+    font-size: 13px;
+    white-space: pre-wrap;
+  }
+  .email-body table {
+    border-collapse: collapse;
+    max-width: 100%;
+  }
+  .email-body td,
+  .email-body th {
+    padding: 4px 8px;
+    vertical-align: top;
+  }
+  .email-body img {
+    max-width: 100%;
+    height: auto;
+  }
+  .email-body hr {
+    border: 0;
+    border-top: 1px solid var(--line);
+    margin: 16px 0;
+  }
+  .email-body [data-email-image-blocked] {
+    display: inline-block;
+    border: 1px dashed var(--line-strong);
+    border-radius: var(--radius-control);
+    padding: 2px 8px;
+    font-size: 12px;
+    color: var(--text-faint);
+  }
 }
 
 @keyframes note-enter {

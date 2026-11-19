@@ -19,12 +19,12 @@ export const WHATSAPP_AUTO_CORRECT_DESCRIPTION = 'Ao clicar em Enviar, o Claude 
 export const WHATSAPP_NOTIFICATIONS_DESCRIPTION = 'Uma notificação do macOS a cada mensagem recebida, menos da conversa que está aberta na frente. Com o app bloqueado, sem o texto.'
 export const WHATSAPP_ONLY_PEOPLE_DESCRIPTION = 'Mensagens de grupo não geram notificação.'
 
-/**
- * Descrição de "Buscar emails novos a cada" (contrato 42, `emailPollMinutes`), a mesma na tela e na busca. A linha entra
- * no índice junto com o bloco "Email" de Configurações › Contas (contrato 43): antes disso a busca levaria a um bloco
- * que não existe.
- */
+/** Descrição de "Buscar emails novos a cada" (contrato 42, `emailPollMinutes`), a mesma na tela e na busca. */
 export const EMAIL_POLL_DESCRIPTION = 'Só nas contas POP3: de quantos em quantos minutos o app procura email novo. As contas IMAP recebem na hora.'
+
+/** Descrições do bloco "Email" de Configurações › Contas (contrato 43), as mesmas na tela e na busca. */
+export const EMAIL_ACCOUNTS_DESCRIPTION = 'Ler e enviar email por IMAP, POP3 e SMTP. A senha fica cifrada neste Mac e nada sai sem o seu clique.'
+export const EMAIL_NOTIFICATIONS_DESCRIPTION = 'Uma notificação do macOS a cada email novo, menos da Caixa de Entrada que está aberta na frente. Com o app bloqueado, sem o assunto.'
 
 /** Uma linha de configuração no índice da busca. */
 export interface SettingsEntry {
@@ -91,6 +91,10 @@ export function settingsIndex(agent: string): SettingsEntry[] {
     row('contas', 'WhatsApp', 'WhatsApp', 'Ler as suas conversas e enviar mensagens só com o seu clique. Experimental.'),
     row('contas', 'WhatsApp', 'Notificações do WhatsApp', WHATSAPP_NOTIFICATIONS_DESCRIPTION),
     row('contas', 'WhatsApp', 'Só pessoas (sem grupos)', WHATSAPP_ONLY_PEOPLE_DESCRIPTION, '"Notificações do WhatsApp" está ligado'),
+    // Contrato 43: as contas de email, as notificações e o intervalo do POP3.
+    row('contas', 'Email', 'Contas de email', EMAIL_ACCOUNTS_DESCRIPTION),
+    row('contas', 'Email', 'Notificações de email', EMAIL_NOTIFICATIONS_DESCRIPTION),
+    row('contas', 'Email', 'Buscar emails novos a cada', EMAIL_POLL_DESCRIPTION),
     row('contas', 'Google', 'Guardar no Google Drive', 'Depois de cada reunião, o áudio, a transcrição e o resumo vão para a pasta "LAP Reuniões" do seu Drive.', 'a conta Google está conectada'),
     // Contrato 31: um cartão por plugin, com o nome (e o estado), "Salvar plugin" e "Como instalar".
     ...APP_PLUGINS.flatMap((plugin) => [

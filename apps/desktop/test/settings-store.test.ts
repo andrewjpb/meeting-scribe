@@ -50,6 +50,8 @@ describe('esquema de configurações (CA1)', () => {
       calendarNotRecordingAlert: true,
       calendarIds: { google: null, microsoft: null },
       emailPollMinutes: 5,
+      emailNotifications: true,
+      emailCollapsed: [],
     })
     expect(parseSettings(undefined)).toEqual(DEFAULT_SETTINGS)
     expect(parseSettings({})).toEqual(DEFAULT_SETTINGS)
@@ -110,6 +112,8 @@ describe('esquema de configurações (CA1)', () => {
       calendarNotRecordingAlert: false,
       calendarIds: { google: ['primary', 'equipe@group.calendar.google.com'], microsoft: null },
       emailPollMinutes: 15,
+      emailNotifications: false,
+      emailCollapsed: ['0b6f2c1e-3a4d-4c5b-8e9f-0a1b2c3d4e5f'],
     }
     expect(parseSettings(saved)).toEqual(saved)
     // Contrato 12: minutos fora da lista e uma lista de agendas inválida voltam ao padrão, sem perder a outra conta.
@@ -153,7 +157,7 @@ describe('esquema de configurações (CA1)', () => {
   it('Claude CLI (contrato 05, CA1): motor, modelo e caminho com padrão próprio cada um', () => {
     // `settings.json` do contrato 04, sem os campos novos: carrega com os padrões deles e mantém o resto.
     const old = { translationEnabled: false, translationModel: 'gpt-oss-120b', sourceLanguage: 'es', targetLanguage: 'ja', echoCancellation: true, theme: 'dark', micDeviceId: null }
-    expect(parseSettings(old)).toEqual({ ...old, removeEcho: true, translationEngine: 'assemblyai', claudeModel: 'haiku', chatModel: 'sonnet', claudePath: null, claudeTransport: 'acp', agentProfile: 'claude', saveToFolder: true, audioFolder: null, summarizeOnStop: true, liveCards: false, whatsappInsights: true, whatsappAutoCorrect: false, whatsappNotifications: true, whatsappNotifyGroups: true, identifySpeakers: false, meetSpeakers: true, brandName: null, brandSubtitle: null, brandLogo: null, autoCheckUpdates: true, lockUseTouchId: false, lockAfterMinutes: 0, lockOnSystemLock: true, lockOnLaunch: false, saveToDrive: true, closeBehavior: 'tray', openAtLogin: false, scheduledRunsDailyLimit: 50, calendarAlerts: true, calendarLeadMinutes: 5, calendarNotRecordingAlert: true, calendarIds: { google: null, microsoft: null }, emailPollMinutes: 5 })
+    expect(parseSettings(old)).toEqual({ ...old, removeEcho: true, translationEngine: 'assemblyai', claudeModel: 'haiku', chatModel: 'sonnet', claudePath: null, claudeTransport: 'acp', agentProfile: 'claude', saveToFolder: true, audioFolder: null, summarizeOnStop: true, liveCards: false, whatsappInsights: true, whatsappAutoCorrect: false, whatsappNotifications: true, whatsappNotifyGroups: true, identifySpeakers: false, meetSpeakers: true, brandName: null, brandSubtitle: null, brandLogo: null, autoCheckUpdates: true, lockUseTouchId: false, lockAfterMinutes: 0, lockOnSystemLock: true, lockOnLaunch: false, saveToDrive: true, closeBehavior: 'tray', openAtLogin: false, scheduledRunsDailyLimit: 50, calendarAlerts: true, calendarLeadMinutes: 5, calendarNotRecordingAlert: true, calendarIds: { google: null, microsoft: null }, emailPollMinutes: 5, emailNotifications: true, emailCollapsed: [] })
     expect(parseSettings({ translationEngine: 'claude-cli', claudeModel: 'sonnet' })).toMatchObject({ translationEngine: 'claude-cli', claudeModel: 'sonnet' })
     // Fora da lista cai no padrão: só `haiku` e `sonnet`, só os dois motores.
     expect(parseSettings({ translationEngine: 'openai' }).translationEngine).toBe('assemblyai')
@@ -251,6 +255,17 @@ describe('esquema de configurações (CA1)', () => {
     expect(() => parseSettingsPatch({ emailPollMinutes: 7 })).toThrow()
     // As contas não passam pelo renderer.
     expect(() => parseSettingsPatch({ emailAccounts: [] })).toThrow()
+  })
+
+  it('Email (contrato 43): "Notificações de email" ligado por padrão; contas recolhidas só por id', () => {
+    expect(DEFAULT_SETTINGS.emailNotifications).toBe(true)
+    expect(DEFAULT_SETTINGS.emailCollapsed).toEqual([])
+    expect(parseSettings({ emailNotifications: 'sim' }).emailNotifications).toBe(true)
+    expect(parseSettings({ emailCollapsed: ['../x'] }).emailCollapsed).toEqual([])
+    expect(parseSettingsPatch({ emailNotifications: false })).toEqual({ emailNotifications: false })
+    const id = '0b6f2c1e-3a4d-4c5b-8e9f-0a1b2c3d4e5f'
+    expect(parseSettingsPatch({ emailCollapsed: [id] })).toEqual({ emailCollapsed: [id] })
+    expect(() => parseSettingsPatch({ emailCollapsed: ['conta'] })).toThrow()
   })
 
   it('Marca (contrato 09, CA1): padrões nulos; arquivo antigo carrega com os padrões; inválido volta ao padrão', () => {

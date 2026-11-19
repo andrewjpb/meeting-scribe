@@ -183,6 +183,12 @@ describe('canais com o app bloqueado (contrato 22, CA4)', () => {
       'scribe:email-mark-read',
       'scribe:email-delete',
       'scribe:email-send',
+      // Contrato 43: o teste da conta, o clipe do composer e as imagens remotas.
+      'scribe:email-test',
+      'scribe:email-attach-pick',
+      'scribe:email-remote-images',
+      'scribe:email-attachment-save',
+      'scribe:email-attachments',
       'scribe:settings-update',
       'scribe:lock-password-set',
       'scribe:lock-password-remove',
@@ -208,11 +214,31 @@ describe('canais com o app bloqueado (contrato 22, CA4)', () => {
 
   it('contrato 42: todo canal do email é recusado bloqueado; o clique do envio é ignorado e só o preload o manda', () => {
     const channels = INVOKE_CHANNELS.filter((channel) => channel.startsWith('scribe:email-'))
-    expect(channels.sort()).toEqual(['scribe:email-accounts', 'scribe:email-add-account', 'scribe:email-autoconfig', 'scribe:email-delete', 'scribe:email-get-body', 'scribe:email-mark-read', 'scribe:email-messages', 'scribe:email-remove-account', 'scribe:email-send'])
+    expect(channels.sort()).toEqual([
+      'scribe:email-accounts',
+      'scribe:email-add-account',
+      'scribe:email-attach-pick',
+      'scribe:email-attachment-save',
+      'scribe:email-attachments',
+      'scribe:email-autoconfig',
+      'scribe:email-delete',
+      'scribe:email-get-body',
+      'scribe:email-mark-read',
+      'scribe:email-messages',
+      'scribe:email-remote-images',
+      'scribe:email-remove-account',
+      'scribe:email-send',
+      'scribe:email-test',
+    ])
     for (const channel of channels) expect(WHEN_LOCKED[channel], channel).toBe('refused')
     expect(RENDERER_EVENTS_WHEN_LOCKED['scribe:email-click']).toBe('ignored')
     expect(EMAIL_PRELOAD_ONLY_EVENTS).toEqual(['scribe:email-click'])
     expect(PRELOAD_ONLY_EVENTS).not.toContain('scribe:email-click')
+  })
+
+  it('contrato 43: a pasta aberta na tela do email é ignorada bloqueado (o main não muda a regra da notificação)', () => {
+    expect(RENDERER_EVENTS_WHEN_LOCKED['scribe:email-viewing']).toBe('ignored')
+    expect(EMAIL_PRELOAD_ONLY_EVENTS).not.toContain('scribe:email-viewing')
   })
 
   it('contrato 40: a conversa aberta no WhatsApp é ignorada bloqueado (o main não muda a regra da notificação)', () => {

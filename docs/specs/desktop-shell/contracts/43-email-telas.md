@@ -17,6 +17,10 @@ Feature: desktop-shell · Wave: 2 · Depende de: 42 · PRD: `docs/specs/desktop-
 - CA5 — Configurações › Contas › Email: adicionar conta em dois passos (email+senha → autoconfig do 42 preenche; "Configuração avançada" abre os campos manuais IMAP/POP3/SMTP), "Testar conexão" com resultado visível, lista com estado (conectada/erro), remover com confirmação.
 - CA6 — Testes renderer (stores e formatação: prévia, hora, agrupamento de não-lidas, sanitização) + smoke com conta fake: screenshot `email` (três painéis com mensagens fake), `email-leitura`, `email-composer`, light e dark, passando nos gates de forma/cor do projeto.
 
+- CA7 — (pedido do Andrew 19/11 09:20) Barra de ações da leitura em UMA linha na janela padrão (1120 px), como no Outlook desktop: botões compactos (ícone + rótulo curto; se não couber, ações secundárias viram ícone com tooltip ou menu "Mais"), nunca quebra. Conferido no print `email-leitura-light`.
+- CA8 — (pedido do Andrew) Anexo recebido: na leitura, cada anexo (nome, tamanho) tem "Baixar", que salva via diálogo nativo do macOS (padrão: pasta Downloads, nome sanitizado, sem sobrescrever sem perguntar). Bytes vêm do servidor sob demanda (IMAP: parte da mensagem; POP3: da mensagem guardada) — nunca abre/executa o arquivo. Canal novo bloqueado com o app travado. Teste + check no smoke (anexo fake salvo com o conteúdo certo).
+- CA9 — (pedido do Andrew) Encaminhar leva os anexos da mensagem original: o composer abre com eles listados (removíveis) e o envio os inclui, respeitando os limites de 20 MB/10 arquivos (acima do limite: aviso e os excedentes ficam de fora, escolha visível). Teste com o SMTP falso recebendo o anexo encaminhado.
+
 ## Invariantes
 - Menu lateral: itens existentes intactos; tela WhatsApp intacta (reusar componentes só por extração, sem mudar comportamento).
 - Nenhum canal IPC novo fora do padrão do 42.

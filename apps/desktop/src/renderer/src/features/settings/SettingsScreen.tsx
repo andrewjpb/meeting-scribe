@@ -28,6 +28,7 @@ import { AccountsSection } from './AccountsSection'
 import { CalendarSection } from './CalendarSection'
 import { MicrosoftSection } from './MicrosoftSection'
 import { WhatsAppSection } from './WhatsAppSection'
+import { EmailSection } from './EmailSection'
 import { AcpAgentField } from './AcpAgentField'
 import { ApiKeyField } from './ApiKeyField'
 import { BrandSection } from './BrandSection'
@@ -446,6 +447,8 @@ function SettingsTabs({ tab }: { tab: SettingsTab }) {
               <MicrosoftSection />
               <CalendarSection />
               <WhatsAppSection />
+              {/* Contrato 43: as contas de email, as notificações e o intervalo do POP3. */}
+              <EmailSection />
             </>,
           )}
 

@@ -53,8 +53,18 @@ const api: ScribeApi = {
     if (!navigator.userActivation.isActive) return Promise.resolve({ ok: false, error: 'click' })
     const clickToken = crypto.randomUUID()
     ipcRenderer.send('scribe:email-click', clickToken)
-    const { accountId, to, subject, text, inReplyTo } = request
-    return ipcRenderer.invoke('scribe:email-send', { accountId, to, subject, text, ...(inReplyTo ? { inReplyTo } : {}), clickToken })
+    // Contrato 43: o Cc e os anexos do composer vão juntos, só quando há.
+    const { accountId, to, cc, subject, text, inReplyTo, attachments } = request
+    return ipcRenderer.invoke('scribe:email-send', {
+      accountId,
+      to,
+      ...(cc?.length ? { cc } : {}),
+      subject,
+      text,
+      ...(inReplyTo ? { inReplyTo } : {}),
+      ...(attachments?.length ? { attachments: attachments.map((item) => ({ name: item.name, bytes: item.bytes })) } : {}),
+      clickToken,
+    })
   },
   on(channel, listener) {
     assertChannel(MAIN_EVENT_CHANNELS, channel)

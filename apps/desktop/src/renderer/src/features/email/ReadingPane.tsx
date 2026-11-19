@@ -1,0 +1,365 @@
+import { ArrowLeft, Download, ExternalLink, Forward, ImageOff, Mail, MailOpen, Paperclip, Reply, ReplyAll, Trash2, TriangleAlert } from 'lucide-react'
+import { Component, useMemo, useState, type MouseEvent, type ReactNode } from 'react'
+import type { EmailAccount, EmailMessage } from '@shared/email'
+import { Button } from '../../design/Button'
+import { Icon } from '../../design/Icon'
+import { Note } from '../../design/Note'
+import { Avatar } from '../whatsapp/Avatar'
+import { bodyKey, useEmail } from './emailStore'
+import { addressLabel, addressLine, emailFullDate, sizeLabel, type ComposeMode } from './format'
+import { linkify, sanitizeEmailHtml } from './sanitize'
+import type { LucideIcon } from 'lucide-react'
+
+/** "Voltar para a lista": só na janela estreita, quando a lista e a leitura se alternam. */
+const NARROW_ONLY = 'min-[900px]:hidden'
+const BACK_BUTTON = 'no-drag inline-flex size-7 items-center justify-center rounded-[var(--radius-control)] text-title hover:bg-bg-sunken'
+
+/**
+ * Botão da barra de ações da leitura: compacto (28 px), ícone e rótulo, como o "Detalhes" do WhatsApp. `iconOnly`: só
+ * o ícone, com o rótulo no `aria-label` e na dica (CA7: as ações secundárias, para a barra caber numa linha).
+ */
+export function ActionButton({ icon, label, action, onClick, tone = 'normal', iconOnly = false, disabled = false }: { icon: LucideIcon; label: string; action: string; onClick: () => void; tone?: 'normal' | 'danger'; iconOnly?: boolean; disabled?: boolean }) {
+  return (
+    <button
+      type="button"
+      data-action={action}
+      onClick={onClick}
+      disabled={disabled}
+      {...(iconOnly ? { 'aria-label': label, title: label } : {})}
+      className={`no-drag inline-flex h-7 shrink-0 items-center gap-1.5 rounded-[var(--radius-control)] border border-line-strong text-12 font-medium whitespace-nowrap transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-bg-sunken disabled:pointer-events-none disabled:opacity-50 ${iconOnly ? 'w-7 justify-center' : 'px-2'} ${tone === 'danger' ? 'text-rec' : 'text-title'}`}
+    >
+      <Icon icon={icon} size={14} />
+      {!iconOnly && label}
+    </button>
+  )
+}
+
+/** Falha ao desenhar o corpo de um email: o aviso no lugar dele, sem derrubar o resto do app. */
+class BodyBoundary extends Component<{ children: ReactNode }, { failed: boolean }> {
+  override state = { failed: false }
+
+  static getDerivedStateFromError(): { failed: boolean } {
+    return { failed: true }
+  }
+
+  override render(): ReactNode {
+    if (!this.state.failed) return this.props.children
+    return (
+      <Note id="email-body-crash" icon={TriangleAlert} role="alert">
+        Não foi possível mostrar esta mensagem.
+      </Note>
+    )
+  }
+}
+
+/** Link de um email: `https` abre no navegador depois da confirmação; `mailto:` abre o composer. */
+type LinkAsk = { kind: 'https'; url: string } | { kind: 'insecure'; url: string }
+
+interface ReadingPaneProps {
+  account: EmailAccount
+  message: EmailMessage
+  /** Responder, Responder a todos e Encaminhar: quem chama espera o corpo (e os anexos) antes de abrir o composer. */
+  onCompose: (mode: Exclude<ComposeMode, 'new'>) => void
+  /** Já preparando o composer (o corpo ou os anexos ainda chegando). */
+  composing: boolean
+  /** `mailto:` de um link do email. */
+  onMailto: (address: string) => void
+  onDeleted: () => void
+  /** Janela estreita: volta para a lista. */
+  onBack: () => void
+}
+
+/**
+ * Painel de leitura (contrato 43, CA1 e CA2): a barra de ações (Responder, Responder a todos, Encaminhar, Apagar e
+ * Marcar como lida ou não lida), o cabeçalho (assunto, remetente, Para, Cc e data) e o corpo. HTML só sanitizado,
+ * com as imagens de fora bloqueadas até "Carregar imagens"; texto puro com os links clicáveis.
+ */
+export function ReadingPane({ account, message, onCompose, composing, onMailto, onDeleted, onBack }: ReadingPaneProps) {
+  const state = useEmail((store) => store.bodies[bodyKey(account.id, message.id)])
+  const [confirmDelete, setConfirmDelete] = useState(false)
+  const [actionError, setActionError] = useState<string | null>(null)
+  const [ask, setAsk] = useState<LinkAsk | null>(null)
+  const sender = message.from[0]
+
+  const remove = (): void => {
+    void useEmail
+      .getState()
+      .remove(account.id, message.id)
+      .then((ok) => {
+        setConfirmDelete(false)
+        if (ok) onDeleted()
+        else setActionError('Não foi possível apagar agora. Confira se a conta está conectada e tente de novo.')
+      })
+  }
+
+  const toggleSeen = (): void => {
+    setActionError(null)
+    void useEmail
+      .getState()
+      .markRead(account.id, message.id, !message.seen)
+      .then((ok) => {
+        if (!ok) setActionError('Não foi possível marcar agora. Confira se a conta está conectada e tente de novo.')
+      })
+  }
+
+  const openLink = (href: string): void => {
+    if (/^mailto:/i.test(href)) {
+      let address = href.slice(7).split('?')[0] ?? ''
+      try {
+        address = decodeURIComponent(address)
+      } catch {
+        // Escape quebrado no link: fica o texto como veio (o composer confere o endereço).
+      }
+      onMailto(address)
+      return
+    }
+    setAsk(/^https:/i.test(href) ? { kind: 'https', url: href } : { kind: 'insecure', url: href })
+  }
+
+  return (
+    <section data-email-reading={message.id} aria-label={message.subject || '(sem assunto)'} className="flex min-h-0 min-w-0 flex-1 flex-col">
+      {/* CA7: uma linha só, como no Outlook: as três respostas com rótulo à esquerda; Marcar e Apagar só com o ícone, à direita. */}
+      <div data-email-actions className="flex h-14 shrink-0 flex-nowrap items-center gap-2 overflow-hidden border-b border-line px-6">
+        <button type="button" data-action="email-back" onClick={onBack} aria-label="Voltar para a lista" className={`${BACK_BUTTON} ${NARROW_ONLY}`}>
+          <Icon icon={ArrowLeft} />
+        </button>
+        <ActionButton icon={Reply} label="Responder" action="email-reply" disabled={composing} onClick={() => onCompose('reply')} />
+        <ActionButton icon={ReplyAll} label="Responder a todos" action="email-reply-all" disabled={composing} onClick={() => onCompose('replyAll')} />
+        <ActionButton icon={Forward} label="Encaminhar" action="email-forward" disabled={composing} onClick={() => onCompose('forward')} />
+        <span className="ml-auto" />
+        {message.folder === 'inbox' && (
+          <ActionButton icon={message.seen ? Mail : MailOpen} label={message.seen ? 'Marcar como não lida' : 'Marcar como lida'} action="email-toggle-seen" iconOnly onClick={toggleSeen} />
+        )}
+        <ActionButton icon={Trash2} label="Apagar" action="email-delete" tone="danger" iconOnly onClick={() => setConfirmDelete(true)} />
+      </div>
+      <div data-email-reading-scroll className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
+        <div className="mx-auto flex w-full max-w-[760px] flex-col gap-4">
+          {confirmDelete && (
+            <Note
+              id="email-delete-confirm"
+              icon={Trash2}
+              role="alert"
+              action={
+                <div className="flex gap-2">
+                  <Button action="email-delete-confirm" variant="danger" onClick={remove}>
+                    Apagar
+                  </Button>
+                  <Button action="email-delete-cancel" variant="secondary" onClick={() => setConfirmDelete(false)}>
+                    Cancelar
+                  </Button>
+                </div>
+              }
+            >
+              {message.folder === 'inbox' && message.uid !== null ? 'Apagar esta mensagem? Ela sai também do servidor.' : 'Apagar esta mensagem do app?'}
+            </Note>
+          )}
+          {actionError && (
+            <Note id="email-action-error" icon={TriangleAlert} role="alert">
+              {actionError}
+            </Note>
+          )}
+          <h2 data-email-subject className="text-20 font-bold tracking-[-0.2px] text-title select-text">
+            {message.subject || '(sem assunto)'}
+          </h2>
+          <div className="flex items-start gap-3">
+            <Avatar id={sender?.address ?? message.id} name={addressLabel(sender)} size={10} />
+            <div className="flex min-w-0 flex-1 flex-col gap-0.5 text-12 text-text-muted select-text">
+              <p className="flex flex-wrap items-baseline gap-x-2">
+                <span data-email-from className="text-13 font-bold text-text">
+                  {addressLabel(sender)}
+                </span>
+                {sender && sender.name && <span className="truncate">{sender.address}</span>}
+              </p>
+              {message.to.length > 0 && <p data-email-to>Para: {message.to.map(addressLine).join(', ')}</p>}
+              {message.cc.length > 0 && <p data-email-cc>Cc: {message.cc.map(addressLine).join(', ')}</p>}
+            </div>
+            <span data-email-date className="shrink-0 text-12 tabular text-text-faint">
+              {emailFullDate(message.date)}
+            </span>
+          </div>
+          {ask && (
+            <Note
+              id="email-external-link"
+              icon={ExternalLink}
+              action={
+                <div className="flex gap-2">
+                  {ask.kind === 'https' && (
+                    <Button
+                      action="email-open-link"
+                      variant="secondary"
+                      onClick={() => {
+                        window.__scribeApi.send('scribe:open-link', ask.url)
+                        setAsk(null)
+                      }}
+                    >
+                      Abrir
+                    </Button>
+                  )}
+                  <Button action="email-cancel-link" variant="secondary" onClick={() => setAsk(null)}>
+                    {ask.kind === 'https' ? 'Cancelar' : 'Fechar'}
+                  </Button>
+                </div>
+              }
+            >
+              {ask.kind === 'https' ? `Abrir ${ask.url} no navegador?` : `O app só abre links seguros (https). Este não abre: ${ask.url}`}
+            </Note>
+          )}
+          <BodyBoundary>
+            <MessageBody accountId={account.id} messageId={message.id} state={state} onLink={openLink} />
+          </BodyBoundary>
+        </div>
+      </div>
+    </section>
+  )
+}
+
+function MessageBody({ accountId, messageId, state, onLink }: { accountId: string; messageId: string; state: ReturnType<typeof useEmail.getState>['bodies'][string] | undefined; onLink: (href: string) => void }) {
+  if (state === undefined || state === 'loading') {
+    return (
+      <div className="flex flex-col gap-2" aria-hidden="true" data-email-body-loading>
+        {[0, 1, 2].map((key) => (
+          <div key={key} className="h-4 w-full rounded-[var(--radius-control)] bg-bg-sunken last:w-2/3" />
+        ))}
+      </div>
+    )
+  }
+  if (state === 'error') {
+    return (
+      <Note
+        id="email-body-error"
+        icon={TriangleAlert}
+        role="alert"
+        action={
+          <button type="button" className="no-drag text-13 font-medium text-accent underline decoration-1 underline-offset-3" onClick={() => useEmail.getState().requestBody(accountId, messageId, true)}>
+            Tentar de novo
+          </button>
+        }
+      >
+        Não foi possível abrir esta mensagem agora.
+      </Note>
+    )
+  }
+  return (
+    <>
+      {state.html ? <HtmlBody html={state.html} onLink={onLink} /> : <TextBody text={state.text ?? ''} onLink={onLink} />}
+      {state.attachments.length > 0 && (
+        <ul data-email-attachments aria-label="Anexos" className="flex flex-wrap gap-2 border-t border-line pt-4">
+          {state.attachments.map((item, index) => (
+            <AttachmentItem key={`${item.filename ?? ''}:${index}`} accountId={accountId} messageId={messageId} index={index} name={item.filename} size={item.size} />
+          ))}
+        </ul>
+      )}
+    </>
+  )
+}
+
+const SAVE_ERRORS = { 'not-found': 'O anexo não está mais nesta mensagem.', unavailable: 'Não foi possível baixar agora. Confira se a conta está conectada.', write: 'Não foi possível gravar o arquivo nessa pasta.' } as const
+
+/**
+ * Um anexo recebido (CA8): nome, tamanho e "Baixar", que salva pelo diálogo do macOS. Os bytes vêm do servidor ou da
+ * mensagem guardada só no clique; o arquivo nunca é aberto.
+ */
+function AttachmentItem({ accountId, messageId, index, name, size }: { accountId: string; messageId: string; index: number; name: string | null; size: number }) {
+  const [state, setState] = useState<{ busy: boolean; saved: string | null; error: string | null }>({ busy: false, saved: null, error: null })
+  const save = (): void => {
+    setState({ busy: true, saved: null, error: null })
+    void window.__scribeApi.invoke('scribe:email-attachment-save', { accountId, id: messageId, index }).then(
+      (result) => setState(result === null ? { busy: false, saved: null, error: null } : result.ok ? { busy: false, saved: result.name, error: null } : { busy: false, saved: null, error: SAVE_ERRORS[result.error] }),
+      () => setState({ busy: false, saved: null, error: SAVE_ERRORS.unavailable }),
+    )
+  }
+  return (
+    <li data-email-attachment={index} className="flex min-w-0 flex-col gap-1">
+      <div className="flex min-w-0 items-center gap-2 rounded-[var(--radius-control)] border border-line bg-bg-sunken py-1 pr-1 pl-2.5 text-12 text-text">
+        <Icon icon={Paperclip} size={14} className="shrink-0 text-text-muted" />
+        <span className="max-w-[240px] truncate">{name ?? 'Anexo sem nome'}</span>
+        <span className="shrink-0 tabular text-text-faint">{sizeLabel(size)}</span>
+        <ActionButton icon={Download} label={state.busy ? 'Baixando…' : 'Baixar'} action="email-attachment-save" disabled={state.busy} onClick={save} />
+      </div>
+      {state.saved && (
+        <p role="status" data-email-attachment-saved className="text-12 text-text-muted">
+          Salvo como {state.saved}.
+        </p>
+      )}
+      {state.error && (
+        <p role="alert" className="text-12 text-rec">
+          {state.error}
+        </p>
+      )}
+    </li>
+  )
+}
+
+/** HTML sanitizado; o clique num link passa pela confirmação. As imagens de fora só com "Carregar imagens". */
+function HtmlBody({ html, onLink }: { html: string; onLink: (href: string) => void }) {
+  const [images, setImages] = useState<Record<string, string | null> | null>(null)
+  const [loading, setLoading] = useState(false)
+  const clean = useMemo(() => sanitizeEmailHtml(html, images ? { images } : {}), [html, images])
+  const pending = images ? clean.blocked.filter((url) => !(url in images)) : clean.blocked
+
+  const load = (): void => {
+    setLoading(true)
+    void window.__scribeApi.invoke('scribe:email-remote-images', { urls: clean.blocked }).then(
+      (found) => {
+        setLoading(false)
+        // As que não vieram ficam como texto alternativo (e não são pedidas de novo).
+        setImages({ ...Object.fromEntries(clean.blocked.map((url) => [url, null])), ...found })
+      },
+      () => setLoading(false),
+    )
+  }
+
+  const onClick = (event: MouseEvent<HTMLDivElement>): void => {
+    const link = (event.target as Element).closest('a[data-email-link]')
+    if (!link) return
+    event.preventDefault()
+    const href = link.getAttribute('href')
+    if (href) onLink(href)
+  }
+
+  return (
+    <>
+      {pending.length > 0 && (
+        <Note
+          id="email-images-blocked"
+          icon={ImageOff}
+          role="status"
+          action={
+            <Button action="email-load-images" variant="secondary" onClick={load} disabled={loading}>
+              {loading ? 'Carregando…' : 'Carregar imagens'}
+            </Button>
+          }
+        >
+          {pending.length === 1 ? 'Uma imagem de fora deste email foi bloqueada.' : `${pending.length} imagens de fora deste email foram bloqueadas.`}
+        </Note>
+      )}
+      {/* `clean.html` só tem as marcas e os atributos da lista de permitidos (`sanitize.ts`). */}
+      <div data-email-body="html" onClick={onClick} className="email-body select-text" dangerouslySetInnerHTML={{ __html: clean.html }} />
+    </>
+  )
+}
+
+function TextBody({ text, onLink }: { text: string; onLink: (href: string) => void }) {
+  const parts: ReactNode[] = linkify(text).map((part, index) =>
+    part.kind === 'link' ? (
+      <a
+        key={index}
+        href={part.url}
+        data-email-link=""
+        onClick={(event) => {
+          event.preventDefault()
+          onLink(part.url)
+        }}
+      >
+        {part.text}
+      </a>
+    ) : (
+      part.text
+    ),
+  )
+  return (
+    <div data-email-body="text" className="email-body text-15 whitespace-pre-wrap select-text">
+      {parts}
+    </div>
+  )
+}

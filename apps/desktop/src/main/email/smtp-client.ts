@@ -17,8 +17,12 @@ export interface SmtpConfig {
 export interface OutgoingMail {
   from: EmailAddress
   to: string[]
+  /** Contrato 43: "Responder a todos" e o campo "Cc". */
+  cc?: string[] | undefined
   subject: string
   text: string
+  /** Contrato 43: anexos locais (o tipo sai da extensão do nome). */
+  attachments?: { name: string; bytes: Uint8Array }[] | undefined
   /** Com os `<` e `>`. */
   messageId: string
   inReplyTo: string | null
@@ -44,12 +48,14 @@ export async function buildMessage(mail: OutgoingMail): Promise<Buffer> {
   return new MailComposer({
     from: mail.from.name ? { name: mail.from.name, address: mail.from.address } : mail.from.address,
     to: mail.to,
+    ...(mail.cc && mail.cc.length > 0 ? { cc: mail.cc } : {}),
     subject: mail.subject,
     text: mail.text,
     messageId: mail.messageId,
     date: mail.date,
     ...(mail.inReplyTo ? { inReplyTo: mail.inReplyTo } : {}),
     ...(mail.references.length > 0 ? { references: mail.references } : {}),
+    ...(mail.attachments && mail.attachments.length > 0 ? { attachments: mail.attachments.map((item) => ({ filename: item.name, content: Buffer.from(item.bytes) })) } : {}),
   })
     .compile()
     .build()
@@ -66,10 +72,12 @@ export function smtpErrorKind(error: unknown): SmtpErrorKind {
   return 'failed'
 }
 
-export const sendSmtp: SmtpSend = async (config, mail) => {
-  const raw = await buildMessage(mail)
+/** Contrato 43: "Testar conexão" do envio: conecta, faz o `AUTH` e sai, sem mandar nada. Lança `SmtpError`. */
+export type SmtpVerify = (config: SmtpConfig) => Promise<void>
+
+async function transportFor(config: SmtpConfig) {
   const { createTransport } = await import('nodemailer')
-  const transport = createTransport({
+  return createTransport({
     host: config.host,
     port: config.port,
     secure: config.security === 'tls',
@@ -84,8 +92,24 @@ export const sendSmtp: SmtpSend = async (config, mail) => {
     socketTimeout: 60_000,
     tls: { ...(isIP(config.host) ? {} : { servername: config.host }), ...config.tls },
   })
+}
+
+export const verifySmtp: SmtpVerify = async (config) => {
+  const transport = await transportFor(config)
   try {
-    await transport.sendMail({ envelope: { from: mail.from.address, to: mail.to }, raw })
+    await transport.verify()
+  } catch (error) {
+    throw new SmtpError(smtpErrorKind(error))
+  } finally {
+    transport.close()
+  }
+}
+
+export const sendSmtp: SmtpSend = async (config, mail) => {
+  const raw = await buildMessage(mail)
+  const transport = await transportFor(config)
+  try {
+    await transport.sendMail({ envelope: { from: mail.from.address, to: [...mail.to, ...(mail.cc ?? [])] }, raw })
     return raw
   } catch (error) {
     throw new SmtpError(smtpErrorKind(error))

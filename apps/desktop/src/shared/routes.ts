@@ -1,5 +1,5 @@
 // Rotas do renderer. O main só conhece o id; o caminho é detalhe do roteador em memória.
-export type RouteId = 'reunioes' | 'assistente' | 'automacoes' | 'whatsapp' | 'gravacao' | 'detalhe' | 'configuracoes'
+export type RouteId = 'reunioes' | 'assistente' | 'automacoes' | 'whatsapp' | 'email' | 'gravacao' | 'detalhe' | 'configuracoes'
 
 export const ROUTE_PATHS: Record<RouteId, string> = {
   reunioes: '/',
@@ -9,6 +9,11 @@ export const ROUTE_PATHS: Record<RouteId, string> = {
   automacoes: '/automacoes',
   /** WhatsApp pessoal (contrato 24): só aparece na barra lateral com o serviço instalado. */
   whatsapp: '/whatsapp',
+  /**
+   * Email (contrato 43): a pasta de uma conta, aberta pela barra lateral. Padrão do roteador; o caminho concreto sai de
+   * `emailPath(conta, pasta)`. Sem conta, a tela abre a Caixa de Entrada da primeira.
+   */
+  email: '/email/:conta?/:pasta?',
   gravacao: '/gravacao',
   /** Padrão do roteador; o caminho concreto sai de `meetingPath(id)`. */
   detalhe: '/reunioes/:id',
@@ -25,6 +30,19 @@ export const ROUTE_REDIRECTS: readonly { from: string; to: string }[] = [{ from:
 export interface WhatsAppNavigationState {
   chatId?: string
   text?: string
+}
+
+/** Pastas do email na URL (contrato 43): "Caixa de Entrada" e "Enviados". */
+export const EMAIL_FOLDER_SLUGS = { inbox: 'entrada', sent: 'enviados' } as const
+
+/** Caminho da pasta de uma conta: `/email/<id>/entrada`. */
+export function emailPath(accountId: string, folder: 'inbox' | 'sent' = 'inbox'): string {
+  return `/email/${encodeURIComponent(accountId)}/${EMAIL_FOLDER_SLUGS[folder]}`
+}
+
+/** `state` da navegação para o email que abre uma mensagem (o clique na notificação, contrato 43). */
+export interface EmailNavigationState {
+  messageId?: string
 }
 
 export function meetingPath(id: string): string {

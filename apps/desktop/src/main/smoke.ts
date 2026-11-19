@@ -118,6 +118,7 @@ import { APP_PLUGINS, pluginFolderName } from '../shared/plugins'
 import { MEET_PATH, MEET_PORTS, type MeetServer } from './meet/server'
 import { MEETINGS_DIR } from './meetings/transcripts'
 import { SETTINGS_VERSION } from './settings/schema'
+import { SMOKE_EMAIL_ADDRESS, SMOKE_EMAIL_ATTACHMENT, SMOKE_EMAIL_PASSWORD, SMOKE_EMAIL_WRONG_PASSWORD } from './email/fake-email'
 import { CLAUDE_DISALLOWED_TOOLS, CLAUDE_READ_TOOLS, CLAUDE_WEB_TOOLS } from './acp/profiles/claude'
 import { LATEST_RELEASE_URL, RELEASE_DOWNLOAD_PREFIX, RELEASE_REDIRECT_HOSTS } from './updates/release'
 import {
@@ -137,7 +138,8 @@ import {
 // contrato 24 (WhatsApp, com o `venv` e o `pip` de verdade do índice local), uns 40 s; o contrato 23 (Automações), uns
 // 60 s.
 // Contrato 12 (agendas): uns 25 s.
-const TIMEOUT_MS = 570_000
+// Contrato 43 (email): uns 25 s.
+const TIMEOUT_MS = 600_000
 const THEMES = ['light', 'dark'] as const
 /** Telas fotografadas em cada tema, na ordem do roteiro de `runSmoke`. */
 const SCREENS = [
@@ -3911,7 +3913,7 @@ async function settingsTabsChecks(contents: WebContents, ctx: SmokeContext, shot
     // Contrato 24: o bloco "WhatsApp" (não instalado) com o "Instalar" e o aviso fixo.
     // Contrato 12: o bloco "Microsoft" sem cadastro e o bloco "Agenda" (dois interruptores e "Avisar antes").
     // Contrato 40: os dois interruptores das notificações do WhatsApp, depois do "Instalar".
-    JSON.stringify(contasButtons) === JSON.stringify(['Configurar…', 'Configurar…', '', '1 min', '5 min', '10 min', '', 'Instalar', '', '']) &&
+    JSON.stringify(contasButtons) === JSON.stringify(['Configurar…', 'Configurar…', '', '1 min', '5 min', '10 min', '', 'Instalar', '', '', 'Adicionar conta', '']) &&
     contas.includes('Conta Microsoft') &&
     contas.includes('Entre com a conta Google ou Microsoft acima para escolher as agendas.') &&
     contas.includes(WHATSAPP_FIXED_WARNING) &&
@@ -6935,6 +6937,382 @@ async function aiNotesChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => v
   win.destroy()
 }
 
+// ---------------------------------------------------------------------------------------------------------
+// Contrato 43: as telas de email com o servidor falso em memória (`email/fake-email.ts`; domínios `.example`).
+
+const EMAIL_INBOX_LINK = '[data-email-folder="inbox"]'
+const EMAIL_SENT_LINK = '[data-email-folder="sent"]'
+const EMAIL_ROWS = `document.querySelectorAll('[data-email-list] [data-email-message]')`
+const EMAIL_UNREAD = `(document.querySelector('[data-email-unread-count]')?.firstChild?.textContent ?? '')`
+const emailRow = (subject: string): string => `[...${EMAIL_ROWS}].find((el) => el.querySelector('[data-email-row-subject]')?.textContent === ${JSON.stringify(subject)})`
+const EMAIL_HTML_SUBJECT = 'Proposta revisada do projeto de integração'
+
+async function clickEmailRow(contents: WebContents, subject: string): Promise<boolean> {
+  if (!(await waitFor(contents, emailRow(subject)))) return false
+  await evaluate(contents, `${emailRow(subject)}.click(), true`)
+  return waitFor(contents, `document.querySelector('[data-email-reading] [data-email-subject]')?.textContent === ${JSON.stringify(subject)}`)
+}
+
+/** Abre a Caixa de Entrada (ou Enviados) pela barra lateral e espera a lista. */
+async function openEmailFolder(contents: WebContents, folder: 'inbox' | 'sent', rows = 1): Promise<boolean> {
+  const link = folder === 'inbox' ? EMAIL_INBOX_LINK : EMAIL_SENT_LINK
+  await waitFor(contents, `document.querySelector('${link}')`, 8000)
+  await clickSelector(contents, link)
+  return waitFor(contents, `${routeIs('email')} && document.querySelector('[data-email-folder-view="${folder}"]') && ${EMAIL_ROWS}.length >= ${rows}`, 8000)
+}
+
+/**
+ * Contrato 43 (CA1, CA2, CA3, CA5 e CA6), numa janela clara e depois numa escura: a conta adicionada em Configurações ›
+ * Contas › Email (a dica do Gmail, o autoconfig sem rede caindo no manual, "Testar conexão" com a senha recusada e com
+ * a certa, "Adicionar conta"); a conta na barra lateral com as pastas e as não lidas; a lista em duas colunas com as
+ * prévias; a leitura do HTML sanitizado (sem script, iframe, form nem `on*`), a imagem remota só depois de "Carregar
+ * imagens" e o link pela confirmação; Responder com o "Re:", a citação e um anexo, enviado sem diálogo e mostrado em
+ * Enviados; o erro do SMTP mantendo o rascunho; a conta recolhida gravada nas configurações; apagar; e remover uma
+ * conta com problema pela confirmação.
+ */
+async function emailChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => void, checks: Record<string, Check>, shots: Screenshot[]): Promise<void> {
+  const fake = ctx.fixtures.email
+  const win = ctx.openWindow({ theme: 'light' })
+  watch(win)
+  await loadAndWait(win)
+  const contents = win.webContents
+
+  // Configurações › Contas › Email: adicionar em dois passos.
+  await openSettingsTab(contents, 'contas')
+  await scrollToSection(contents, 'Email')
+  const navHidden = await evaluate<boolean>(contents, `!document.querySelector('[data-email-nav]')`)
+  await clickSelector(contents, '[data-action="email-add-account"]')
+  await waitFor(contents, `document.querySelector('[data-email-add-panel="credentials"]')`)
+  await setValue(contents, '#email-add-address', 'fulano@gmail.com')
+  const gmailHint = await waitFor(contents, `document.querySelector('[data-notice="email-gmail-hint"]')?.textContent.includes('senha de app')`)
+  await setValue(contents, '#email-add-address', SMOKE_EMAIL_ADDRESS)
+  const hintGone = await waitFor(contents, `!document.querySelector('[data-notice="email-gmail-hint"]')`)
+  await setValue(contents, '#email-add-password', SMOKE_EMAIL_WRONG_PASSWORD)
+  await clickSelector(contents, '[data-action="email-add-next"]')
+  const manual = await waitFor(contents, `document.querySelector('[data-email-autoconfig="manual"]') && document.querySelector('[data-email-advanced]') && document.querySelector('#email-add-in-host')?.value === 'imap.lap.example'`)
+  await clickSelector(contents, '[data-action="email-test"]')
+  const testRefused = await waitFor(contents, `document.querySelector('[data-notice="email-test-error"]')?.textContent.includes('Recebimento: Usuário ou senha recusados.')`, 8000)
+  await setValue(contents, '#email-add-password', SMOKE_EMAIL_PASSWORD)
+  await setValue(contents, '#email-add-name', 'Andrew Teste')
+  await clickSelector(contents, '[data-action="email-test"]')
+  const testOk = await waitFor(contents, `document.querySelector('[data-notice="email-test-ok"]')`, 8000)
+  await clickSelector(contents, '[data-action="email-add-confirm"]')
+  const added = await waitFor(contents, `document.querySelector('[data-email-settings-state="connected"]') && !document.querySelector('[data-email-add-panel]')`, 8000)
+  const line = await text(contents, '[data-email-settings-line]')
+  const accountId = await evaluate<string>(contents, `document.querySelector('[data-email-settings-account]')?.dataset.emailSettingsAccount ?? ''`)
+  checks['settings'] = {
+    ok: navHidden && gmailHint && hintGone && manual && testRefused && testOk && added && line === 'IMAP · Conectada' && accountId !== '',
+    detail: `sem conta, nada na barra=${navHidden}; dica do Gmail=${gmailHint} (some em outro domínio=${hintGone}); sem autoconfig cai no manual=${manual}; teste com a senha recusada=${testRefused}; teste ok=${testOk}; adicionada=${added} "${line}"`,
+  }
+
+  // Barra lateral: a conta pelo nome, as pastas e as não lidas; a lista em duas colunas.
+  const sidebar = await waitFor(contents, `document.querySelector('[data-email-account-toggle]')?.textContent.includes('Andrew Teste') && document.querySelector('${EMAIL_INBOX_LINK}') && document.querySelector('${EMAIL_SENT_LINK}') && ${EMAIL_UNREAD} === '2'`, 8000)
+  const navOrder = await evaluate<string[]>(contents, `[...document.querySelectorAll('aside nav[aria-label="Navegação principal"] [data-nav]')].map((el) => el.dataset.nav)`)
+  const listed = await openEmailFolder(contents, 'inbox', 4)
+  const previews = await waitFor(contents, `[...${EMAIL_ROWS}].every((el) => el.querySelector('[data-email-row-preview]')?.textContent.trim().length > 3)`, 8000)
+  const rows = await evaluate<{ from: string; unread: string; dot: boolean }[]>(contents, `[...${EMAIL_ROWS}].map((el) => ({ from: el.querySelector('[data-email-row-from]')?.textContent ?? '', unread: el.dataset.emailUnread, dot: Boolean(el.querySelector('[data-email-unread-dot]')) }))`)
+  const groups = await evaluate<string[]>(contents, `[...document.querySelectorAll('[data-email-group]')].map((el) => el.dataset.emailGroup)`)
+  const newButton = await evaluate<boolean>(contents, `Boolean(document.querySelector('[data-email-list]')?.closest('aside')?.querySelector('[data-action="email-new"]'))`)
+  // O print "email": a barra lateral, a lista e uma mensagem já lida aberta (as não lidas continuam 2).
+  const firstRead = await clickEmailRow(contents, 'Re: Agenda da apresentação')
+  await waitFor(contents, `document.querySelector('[data-email-body="text"]')`, 8000)
+  await settle(contents)
+  shots.push(await capture(win, ctx.outDir, 'email-light'))
+  checks['list'] = {
+    ok:
+      sidebar &&
+      JSON.stringify(navOrder) === JSON.stringify(['reunioes', 'assistente', 'automacoes', 'whatsapp', 'configuracoes']) &&
+      listed &&
+      previews &&
+      rows.length === 4 &&
+      rows[0]?.from === 'Marina Rocha' &&
+      rows.filter((row) => row.unread === 'true' && row.dot).length === 2 &&
+      groups[0] === 'Hoje' &&
+      newButton &&
+      firstRead,
+    detail: `barra lateral com a conta, as pastas e 2 não lidas=${sidebar}; itens de sempre ${JSON.stringify(navOrder)}; lista=${listed} com prévias=${previews}; linhas ${JSON.stringify(rows)}; grupos ${JSON.stringify(groups)}; "Nova mensagem" no topo=${newButton}`,
+  }
+
+  // Leitura: o HTML sanitizado, a imagem só com o clique e o link pela confirmação.
+  const opened = await clickEmailRow(contents, EMAIL_HTML_SUBJECT)
+  const bodyShown = await waitFor(contents, `document.querySelector('[data-email-body="html"]')?.textContent.includes('proposta revisada')`, 8000)
+  const reading = await evaluate<{ html: string; xss: boolean; blocked: boolean; img: number; cc: string; from: string; actions: string[]; oneLine: boolean }>(
+    contents,
+    `(() => {
+      const body = document.querySelector('[data-email-body="html"]')
+      return {
+        html: body?.innerHTML ?? '',
+        xss: window.__emailXss === true,
+        blocked: Boolean(document.querySelector('[data-notice="email-images-blocked"]')) && Boolean(body?.querySelector('[data-email-image-blocked]')),
+        img: body?.querySelectorAll('img').length ?? -1,
+        cc: document.querySelector('[data-email-cc]')?.textContent ?? '',
+        from: document.querySelector('[data-email-from]')?.textContent ?? '',
+        actions: [...document.querySelectorAll('[data-email-actions] [data-action^="email-"]:not([data-action="email-back"])')].map((el) => el.getAttribute('aria-label') || el.textContent.trim()),
+        // CA7: na janela padrão, todas as ações na mesma linha e nada cortado.
+        oneLine: (() => {
+          const bar = document.querySelector('[data-email-actions]')
+          const tops = [...bar.querySelectorAll('[data-action^="email-"]:not([data-action="email-back"])')].map((el) => Math.round(el.getBoundingClientRect().top))
+          const right = Math.max(...[...bar.querySelectorAll('[data-action^="email-"]:not([data-action="email-back"])')].map((el) => el.getBoundingClientRect().right))
+          return new Set(tops).size === 1 && bar.scrollWidth <= bar.clientWidth && right <= bar.getBoundingClientRect().right
+        })(),
+      }
+    })()`,
+  )
+  const markedRead = await waitFor(contents, `${EMAIL_UNREAD} === '1'`)
+  await settle(contents)
+  shots.push(await capture(win, ctx.outDir, 'email-leitura-light'))
+  const requestsBefore = fake.imageRequests.length
+  await clickSelector(contents, '[data-action="email-load-images"]')
+  const imageLoaded = await waitFor(contents, `document.querySelector('[data-email-body="html"] img')?.src.startsWith('data:image/png;base64,')`, 8000)
+  await evaluate(contents, `document.querySelector('[data-email-body="html"] a[data-email-link]')?.click(), true`)
+  const asked = await waitFor(contents, `document.querySelector('[data-notice="email-external-link"]')?.textContent.includes('https://portal.cliente.example/proposta')`)
+  const openedBefore = ctx.fixtures.openedUrls.length
+  await clickSelector(contents, '[data-action="email-open-link"]')
+  await wait(200)
+  const linkOpened = ctx.fixtures.openedUrls.slice(openedBefore).includes('https://portal.cliente.example/proposta')
+  const dangerous = /<script|<iframe|<form|<input|<style|onclick|onerror|javascript:/i.test(reading.html)
+  checks['reading'] = {
+    ok:
+      opened &&
+      bodyShown &&
+      !dangerous &&
+      !reading.xss &&
+      reading.blocked &&
+      reading.img === 0 &&
+      requestsBefore === 0 &&
+      imageLoaded &&
+      fake.imageRequests.length === 1 &&
+      asked &&
+      linkOpened &&
+      reading.from === 'Marina Rocha' &&
+      reading.cc.includes('paulo.nunes@cliente.example') &&
+      JSON.stringify(reading.actions) === JSON.stringify(['Responder', 'Responder a todos', 'Encaminhar', 'Marcar como não lida', 'Apagar']) &&
+      reading.oneLine &&
+      markedRead,
+    detail: `aberta=${opened}, corpo=${bodyShown}; marcas perigosas no HTML=${dangerous}, script rodou=${reading.xss}; imagem bloqueada=${reading.blocked} (${reading.img} img, ${requestsBefore} pedidos antes do clique); "Carregar imagens"=${imageLoaded} (${fake.imageRequests.length} pedido); link pela confirmação=${asked}, aberto no navegador=${linkOpened}; de "${reading.from}", Cc com o Paulo=${reading.cc.includes('paulo.nunes@cliente.example')}; ações ${JSON.stringify(reading.actions)} numa linha=${reading.oneLine}; lida ao abrir=${markedRead}`,
+  }
+
+  // Responder: "Re:", a citação e um anexo local; Enviar sem diálogo, e a mensagem em Enviados.
+  await clickSelector(contents, '[data-action="email-reply"]')
+  const composer = await waitFor(contents, `document.querySelector('[data-email-composer="reply"]')`)
+  const prefilled = await evaluate<{ to: string[]; subject: string; quoted: boolean }>(
+    contents,
+    `({ to: [...document.querySelectorAll('[data-email-recipients="to"] [data-email-chip]')].map((el) => el.dataset.emailChip), subject: document.querySelector('#email-compose-subject')?.value ?? '', quoted: (document.querySelector('#email-compose-text')?.value ?? '').includes('Marina Rocha <marina.rocha@cliente.example> escreveu:\\n> ') })`,
+  )
+  const attachmentFile = join(ctx.userDataDir, 'cronograma.txt')
+  writeFileSync(attachmentFile, 'Fase 1: levantamento\nFase 2: integração\n')
+  ctx.fixtures.chosenEmailAttachments = [attachmentFile]
+  await clickSelector(contents, '[data-action="email-attach"]')
+  const attached = await waitFor(contents, `document.querySelector('[data-email-compose-attachments]')?.textContent.includes('cronograma.txt')`)
+  const quote = await evaluate<string>(contents, `document.querySelector('#email-compose-text')?.value ?? ''`)
+  await setValue(contents, '#email-compose-text', `Obrigado, Marina. Fechado.${quote}`)
+  await settle(contents)
+  shots.push(await capture(win, ctx.outDir, 'email-composer-light'))
+  await clickSelector(contents, '[data-action="email-send"]')
+  const toSent = await waitFor(
+    contents,
+    `${routeIs('email')} && document.querySelector('[data-email-folder-view="sent"]') && !document.querySelector('[data-email-composer]') && document.querySelector('[data-email-reading] [data-email-subject]')?.textContent === ${JSON.stringify(`Re: ${EMAIL_HTML_SUBJECT}`)}`,
+    8000,
+  )
+  const delivered = fake.sent[0]
+  const sentOk =
+    delivered?.to.join() === 'marina.rocha@cliente.example' &&
+    delivered.subject === `Re: ${EMAIL_HTML_SUBJECT}` &&
+    /^<smoke-\d+@cliente\.example>$/.test(delivered.inReplyTo ?? '') &&
+    delivered.text.startsWith('Obrigado, Marina. Fechado.') &&
+    delivered.attachments.length === 1 &&
+    delivered.attachments[0]?.name === 'cronograma.txt' &&
+    fake.appended === 1
+
+  // Erro do SMTP: o rascunho fica, com o aviso.
+  await clickSelector(contents, '[data-action="email-new"]')
+  await waitFor(contents, `document.querySelector('[data-email-composer="new"]')`)
+  await setValue(contents, '#email-compose-to', 'cliente@parceiro.example,')
+  await setValue(contents, '#email-compose-subject', 'Envio que falha')
+  fake.failNextSend = true
+  await clickSelector(contents, '[data-action="email-send"]')
+  const keptDraft = await waitFor(
+    contents,
+    `document.querySelector('[data-notice="email-send-error"]')?.textContent.includes('recusou') && document.querySelector('#email-compose-subject')?.value === 'Envio que falha' && document.querySelector('[data-email-chip="cliente@parceiro.example"]')`,
+    8000,
+  )
+  await clickSelector(contents, '[data-action="email-discard"]')
+  await clickSelector(contents, '[data-action="email-discard-confirm"]')
+  const discarded = await waitFor(contents, `!document.querySelector('[data-email-composer]')`)
+  checks['compose'] = {
+    ok: composer && JSON.stringify(prefilled.to) === JSON.stringify(['marina.rocha@cliente.example']) && prefilled.subject === `Re: ${EMAIL_HTML_SUBJECT}` && prefilled.quoted && attached && toSent && sentOk && keptDraft && discarded && fake.sent.length === 1,
+    detail: `composer=${composer}; para ${JSON.stringify(prefilled.to)}, "Re:"=${prefilled.subject.startsWith('Re: ')}, citação=${prefilled.quoted}; anexo=${attached}; enviado e aberto em Enviados=${toSent}; no SMTP falso=${sentOk} (${fake.sent.length} envio, ${fake.appended} APPEND); erro mantém o rascunho=${keptDraft}; descartado=${discarded}`,
+  }
+
+  // Conta recolhida: some com as pastas, fica gravada e vale numa janela nova.
+  await clickSelector(contents, `[data-email-account-toggle="${accountId}"]`)
+  const collapsed = await waitFor(contents, `!document.querySelector('${EMAIL_INBOX_LINK}') && document.querySelector('[data-email-account-toggle]')?.getAttribute('aria-expanded') === 'false'`)
+  await wait(300)
+  const saved = (readSettings(ctx.userDataDir).emailCollapsed ?? []).includes(accountId)
+  const again = ctx.openWindow({ theme: 'light' })
+  watch(again)
+  await loadAndWait(again)
+  const stillCollapsed = await waitFor(again.webContents, `document.querySelector('[data-email-account-toggle]')?.getAttribute('aria-expanded') === 'false' && !document.querySelector('${EMAIL_INBOX_LINK}')`, 8000)
+  again.destroy()
+  await clickSelector(contents, `[data-email-account-toggle="${accountId}"]`)
+  const expanded = await waitFor(contents, `document.querySelector('${EMAIL_INBOX_LINK}')`)
+
+  // Apagar, pela confirmação.
+  await openEmailFolder(contents, 'inbox', 4)
+  await clickEmailRow(contents, 'Backup concluído com sucesso')
+  await clickSelector(contents, '[data-action="email-delete"]')
+  await clickSelector(contents, '[data-action="email-delete-confirm"]')
+  const deleted = await waitFor(contents, `${EMAIL_ROWS}.length === 3 && !${emailRow('Backup concluído com sucesso')}`)
+  // CA8: "Baixar" o anexo do Financeiro: o diálogo começa em Downloads com o nome do anexo e o arquivo sai com o conteúdo.
+  const savedFile = join(ctx.userDataDir, 'anexo-baixado.csv')
+  const savePathBefore = ctx.fixtures.savePath
+  ctx.fixtures.savePath = savedFile
+  await clickEmailRow(contents, 'Fechamento de novembro: notas para conferir')
+  await waitFor(contents, `document.querySelector('[data-email-attachment="0"]')?.textContent.includes(${JSON.stringify(SMOKE_EMAIL_ATTACHMENT.name)})`, 8000)
+  await clickSelector(contents, '[data-email-attachment="0"] [data-action="email-attachment-save"]')
+  const downloadedShown = await waitFor(contents, `document.querySelector('[data-email-attachment-saved]')?.textContent.includes('anexo-baixado.csv')`, 8000)
+  const downloaded = existsSync(savedFile) && readFileSync(savedFile, 'utf8') === SMOKE_EMAIL_ATTACHMENT.content
+  const dialogStart = ctx.fixtures.saveDialogs.at(-1) ?? ''
+  ctx.fixtures.savePath = savePathBefore
+  const download = downloadedShown && downloaded && dialogStart === join(app.getPath('downloads'), SMOKE_EMAIL_ATTACHMENT.name)
+
+  // CA9: "Encaminhar" leva o anexo da original até o SMTP falso.
+  await clickSelector(contents, '[data-action="email-forward"]')
+  const forwardOpen = await waitFor(contents, `document.querySelector('[data-email-composer="forward"] [data-email-compose-attachments]')?.textContent.includes(${JSON.stringify(SMOKE_EMAIL_ATTACHMENT.name)})`, 8000)
+  await setValue(contents, '#email-compose-to', 'contabilidade@parceiro.example,')
+  const sentBefore = fake.sent.length
+  await clickSelector(contents, '[data-action="email-send"]')
+  await waitFor(contents, `!document.querySelector('[data-email-composer]')`, 8000)
+  const forwarded = fake.sent[sentBefore]
+  const forwardOk = forwardOpen && forwarded?.subject === 'Enc: Fechamento de novembro: notas para conferir' && forwarded.attachments.map((item) => `${item.name}:${item.size}`).join() === `${SMOKE_EMAIL_ATTACHMENT.name}:${Buffer.byteLength(SMOKE_EMAIL_ATTACHMENT.content)}`
+  await openEmailFolder(contents, 'inbox', 3)
+  checks['attachments'] = {
+    ok: download && forwardOk,
+    detail: `baixado=${downloadedShown}, conteúdo certo=${downloaded}, diálogo começa em Downloads com o nome=${dialogStart.endsWith(SMOKE_EMAIL_ATTACHMENT.name)}; encaminhar com o anexo=${forwardOpen}, no SMTP falso=${forwardOk}`,
+  }
+
+  checks['folders'] = {
+    ok: collapsed && saved && stillCollapsed && expanded && deleted,
+    detail: `recolhida=${collapsed}, gravada=${saved}, recolhida na janela nova=${stillCollapsed}, aberta de novo=${expanded}; apagada pela confirmação=${deleted}`,
+  }
+
+  // Conta com problema: o estado na lista e "Remover" pela confirmação.
+  await evaluate(
+    contents,
+    `window.__scribeApi.invoke('scribe:email-add-account', { address: 'recusada@lap.example', password: ${JSON.stringify(SMOKE_EMAIL_WRONG_PASSWORD)}, incoming: { protocol: 'imap', host: 'imap.lap.example', port: 993, security: 'tls' }, outgoing: { host: 'smtp.lap.example', port: 465, security: 'tls' } }).then(() => true)`,
+  )
+  await openSettingsTab(contents, 'contas')
+  const errorLine = await waitFor(contents, `[...document.querySelectorAll('[data-email-settings-state="error"] [data-email-settings-line]')].some((el) => el.textContent === 'IMAP · Com problema: Usuário ou senha recusados.')`, 8000)
+  const errorInSidebar = await waitFor(contents, `document.querySelector('[data-email-account-error]')`)
+  await clickSelector(contents, '[data-email-settings-state="error"] [data-action="email-remove-account"]')
+  const confirmShown = await waitFor(contents, `document.querySelector('[data-notice="email-remove-confirm"]')?.textContent.includes('recusada@lap.example')`)
+  await clickSelector(contents, '[data-action="email-remove-confirm"]')
+  const removed = await waitFor(contents, `document.querySelectorAll('[data-email-settings-account]').length === 1 && document.querySelectorAll('[data-email-account]').length === 1`, 8000)
+  checks['remove'] = {
+    ok: errorLine && errorInSidebar && confirmShown && removed,
+    detail: `estado com problema na lista=${errorLine} e na barra=${errorInSidebar}; confirmação=${confirmShown}; removida=${removed}`,
+  }
+  win.destroy()
+
+  // Escuro: a lista, a leitura e o composer.
+  const dark = ctx.openWindow({ theme: 'dark' })
+  watch(dark)
+  await loadAndWait(dark)
+  const darkContents = dark.webContents
+  const darkList = await openEmailFolder(darkContents, 'inbox', 3)
+  await waitFor(darkContents, `[...${EMAIL_ROWS}].every((el) => el.querySelector('[data-email-row-preview]')?.textContent.trim().length > 3)`, 8000)
+  const darkFirst = await clickEmailRow(darkContents, 'Re: Agenda da apresentação')
+  await settle(darkContents)
+  shots.push(await capture(dark, ctx.outDir, 'email-dark'))
+  const darkReading = await clickEmailRow(darkContents, 'Fechamento de novembro: notas para conferir')
+  await waitFor(darkContents, `document.querySelector('[data-email-body="text"]')`, 8000)
+  await settle(darkContents)
+  shots.push(await capture(dark, ctx.outDir, 'email-leitura-dark'))
+  await clickSelector(darkContents, '[data-action="email-reply-all"]')
+  const darkComposer = await waitFor(darkContents, `document.querySelector('[data-email-composer="replyAll"]')`)
+  await settle(darkContents)
+  shots.push(await capture(dark, ctx.outDir, 'email-composer-dark'))
+  await clickSelector(darkContents, '[data-action="email-discard"]')
+  await clickSelector(darkContents, '[data-action="email-discard-confirm"]')
+  const darkTheme = await evaluate<string>(darkContents, 'document.documentElement.dataset.theme ?? ""')
+  checks['dark'] = { ok: darkList && darkFirst && darkReading && darkComposer && darkTheme === 'dark', detail: `lista=${darkList} (${darkFirst}), leitura=${darkReading}, composer=${darkComposer}, tema=${darkTheme}` }
+  dark.destroy()
+}
+
+type EmailNoticeRecord = SmokeFixtures['emailNotify']['notifications'][number]
+
+/** A primeira notificação de email registrada depois de `from` que passa no filtro (até `ms`). */
+async function waitEmailNotice(ctx: SmokeContext, from: number, match: (item: EmailNoticeRecord) => boolean, ms = 5000): Promise<EmailNoticeRecord | null> {
+  const until = Date.now() + ms
+  for (;;) {
+    const found = ctx.fixtures.emailNotify.notifications.slice(from).find(match)
+    if (found || Date.now() > until) return found ?? null
+    await wait(50)
+  }
+}
+
+/**
+ * Contrato 43 (CA4): as notificações de email com a `Notification` substituta, por último (a senha do bloqueio já
+ * existe). A Caixa de Entrada aberta na janela "em foco" não notifica; com Enviados aberto, notifica com o remetente e
+ * o assunto; três do mesmo remetente em 5 s viram uma; o da própria conta e com a opção desligada, nada; bloqueado, sem
+ * o assunto; o clique abre a mensagem.
+ */
+async function emailNotifyCheck(ctx: SmokeContext, watch: (win: BrowserWindow) => void, checks: Record<string, Check>): Promise<void> {
+  const fake = ctx.fixtures.email
+  const notify = ctx.fixtures.emailNotify
+  const win = ctx.openWindow({ theme: 'light' })
+  watch(win)
+  await loadAndWait(win)
+  const contents = win.webContents
+  await openEmailFolder(contents, 'inbox', 3)
+  await wait(200)
+  notify.focusedContentsId = contents.id
+  const paulo = { name: 'Paulo Nunes', address: 'paulo.nunes@cliente.example' }
+  const juliana = { name: 'Juliana Prado', address: 'juliana.prado@parceiro.example' }
+
+  const start = notify.notifications.length
+  await fake.deliver({ from: paulo, subject: 'Com a caixa aberta', text: 'Chegou com a Caixa de Entrada à vista.' })
+  const inList = await waitFor(contents, emailRow('Com a caixa aberta'), 5000)
+  await wait(800)
+  const viewingSilent = notify.notifications.length === start
+
+  await openEmailFolder(contents, 'sent', 1)
+  await wait(200)
+  await fake.deliver({ from: paulo, subject: 'Cronograma aprovado', text: 'Pode seguir.' })
+  const single = await waitEmailNotice(ctx, start, (item) => item.body === 'Cronograma aprovado')
+  await fake.deliver({ from: paulo, subject: 'Segundo', text: '2' })
+  await fake.deliver({ from: paulo, subject: 'Terceiro', text: '3' })
+  const burst = await waitEmailNotice(ctx, start, (item) => item.count === 3)
+  const openNow = notify.notifications.slice(start).filter((item) => !item.closed).length
+
+  const ownFrom = notify.notifications.length
+  await fake.deliver({ from: { name: 'Andrew Teste', address: SMOKE_EMAIL_ADDRESS }, subject: 'Da própria conta', text: 'x' })
+  const ownSilent = (await waitEmailNotice(ctx, ownFrom, () => true, 1200)) === null
+  await evaluate(contents, "window.__scribeApi.invoke('scribe:settings-update', { emailNotifications: false }).then(() => true)")
+  const offFrom = notify.notifications.length
+  await fake.deliver({ from: juliana, subject: 'Com as notificações desligadas', text: 'x' })
+  const offSilent = (await waitEmailNotice(ctx, offFrom, () => true, 1200)) === null
+  await evaluate(contents, "window.__scribeApi.invoke('scribe:settings-update', { emailNotifications: true }).then(() => true)")
+
+  // Bloqueado: só de quem é, sem o assunto; o clique (depois de desbloquear) abre a mensagem.
+  await evaluate(contents, "window.__scribeApi.invoke('scribe:lock-now').then(() => true)")
+  await waitFor(contents, LOCK_LAYER)
+  const lockedFrom = notify.notifications.length
+  await fake.deliver({ from: juliana, subject: 'Assunto sigiloso', text: 'x' })
+  const locked = await waitEmailNotice(ctx, lockedFrom, () => true)
+  await typeLockPassword(contents, LOCK_PASSWORD)
+  const unlocked = await waitFor(contents, `!${LOCK_LAYER}`)
+  locked?.open()
+  const routed = await waitFor(contents, `${routeIs('email')} && document.querySelector('[data-email-folder-view="inbox"]') && document.querySelector('[data-email-reading="${locked?.id ?? 'x'}"] [data-email-subject]')?.textContent === 'Assunto sigiloso'`, 8000)
+  notify.focusedContentsId = null
+  const lockedHidden = locked ? !`${locked.title} ${locked.body}`.includes('sigiloso') : false
+  checks['notify'] = {
+    ok: inList && viewingSilent && single?.title === 'Paulo Nunes' && burst?.body === '3 emails de Paulo Nunes' && openNow === 1 && ownSilent && offSilent && locked?.body === 'Email de Juliana Prado' && lockedHidden && unlocked && routed,
+    detail: `Caixa de Entrada à vista sem notificação=${viewingSilent} (na lista=${inList}); "${single?.title ?? ''}" / "${single?.body ?? ''}"; rajada "${burst?.body ?? ''}" (${openNow} aberta); própria conta sem nada=${ownSilent}; desligado sem nada=${offSilent}; bloqueado "${locked?.body ?? ''}" sem o assunto=${lockedHidden}; clique abriu a mensagem=${routed}`,
+  }
+  win.destroy()
+}
+
 export async function runSmoke(ctx: SmokeContext): Promise<number> {
   const timer = setTimeout(() => {
     console.error(`[smoke] tempo esgotado (${TIMEOUT_MS} ms)`)
@@ -6996,6 +7374,7 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
   const internet: Record<string, Check> = {}
   /** Contrato 27: quem fala no Meet. */
   const meet: Record<string, Check> = {}
+  const email: Record<string, Check> = {}
   let analysisMeasured: AnalysisMeasured | null = null
 
   // A fixture da sessão real, reduzida pelo mesmo redutor do app: a mesma dos testes (CA4) e do smoke.
@@ -7358,6 +7737,9 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
     // Contrato 30: IA anotando ao vivo e o quadro de post-its, numa gravação à parte; antes do bloqueio.
     await aiNotesChecks(ctx, watch, recording)
 
+    // Contrato 43: as telas de email com o servidor falso; antes do bloqueio (que recusa os canais novos junto).
+    await emailChecks(ctx, watch, email, screenshots)
+
     // Contrato 22: bloqueio do app, por último (a senha criada vale para o userData inteiro).
     await lockChecks(ctx, watch, lock, screenshots)
 
@@ -7366,6 +7748,9 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
 
     // Contrato 40: as notificações do WhatsApp, por último (o app já desbloqueado, o serviço falso conectado).
     await whatsappNotifyCheck(ctx, watch, whatsapp)
+
+    // Contrato 43: as notificações de email, por último também (com a senha do bloqueio criada).
+    await emailNotifyCheck(ctx, watch, email)
   } catch (error) {
     failures.push(`erro: ${error instanceof Error ? (error.stack ?? error.message) : String(error)}`)
   }
@@ -7422,6 +7807,8 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
   for (const name of ['agent', 'askNow', 'noInternet', 'assistant']) if (!internet[name]) failures.push(`internet ${name}: não executado`)
   for (const [name, check] of Object.entries(meet)) if (!check.ok) failures.push(`meet ${name}: ${check.detail}`)
   for (const name of ['server', 'recording', 'setting']) if (!meet[name]) failures.push(`meet ${name}: não executado`)
+  for (const [name, check] of Object.entries(email)) if (!check.ok) failures.push(`email ${name}: ${check.detail}`)
+  for (const name of ['settings', 'list', 'reading', 'compose', 'folders', 'attachments', 'remove', 'dark', 'notify']) if (!email[name]) failures.push(`email ${name}: não executado`)
   for (const [name, check] of Object.entries(lock)) if (!check.ok) failures.push(`bloqueio ${name}: ${check.detail}`)
   for (const name of ['password', 'layer', 'channels', 'unlock', 'shortcutAndTouchId', 'recordingContinues', 'leaveDialog', 'endWhileLocked', 'reopen', 'reopenFromDisk', 'dark']) if (!lock[name]) failures.push(`bloqueio ${name}: não executado`)
   if (!theme.ok) failures.push(`tema: ${theme.detail}`)
@@ -7440,8 +7827,9 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
   // com o link, no claro (contrato 26); o bloco "Agenda", a faixa "não está sendo gravada" e "Próximas", no claro
   // (contrato 12); a aba "Plugins" com o plugin salvo e o manual aberto, no claro (contrato 31); o painel Detalhes do
   // WhatsApp, no claro (contrato 32; no escuro ele sai no print da tela "WhatsApp"); o balão com a imagem, o player e
-  // a transcrição do áudio, no claro (contrato 37); a prévia do anexo com a legenda, no claro (contrato 39).
-  const expectedShots = SCREENS.length * THEMES.length + 50
+  // a transcrição do áudio, no claro (contrato 37); a prévia do anexo com a legenda, no claro (contrato 39); a lista, a
+  // leitura e o composer do email, nos dois temas (contrato 43).
+  const expectedShots = SCREENS.length * THEMES.length + 56
   if (screenshots.length !== expectedShots) failures.push(`${screenshots.length} PNGs em vez de ${expectedShots}`)
   for (const shot of screenshots) {
     if (shot.width < 1120 || shot.height < 740) failures.push(`${shot.name}: ${shot.width}x${shot.height} abaixo de 1120x740`)
@@ -7495,6 +7883,8 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
     internet,
     // Contrato 27: só os resultados (os nomes são os inventados do cliente falso).
     meet,
+    // Contrato 43: só os resultados (os endereços e assuntos são os inventados do servidor falso).
+    email,
     // Contrato 23: os resultados, as notificações, o Dock e os itens de login substitutos; nenhum texto de reunião.
     automations,
     automationsFixtures: { notifications: ctx.fixtures.automations.notifications.map((notice) => notice.title), trayImages: ctx.fixtures.automations.trayImages, dock: ctx.fixtures.automations.dock, loginItems: ctx.fixtures.automations.loginItems, quitRequests: ctx.fixtures.automations.quitRequests },

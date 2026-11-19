@@ -62,6 +62,13 @@ Experimental e desligado por padrão. Usa um cliente não oficial do WhatsApp: o
 
 A tela lista as conversas e as mensagens. "Rascunho com o Claude" escreve uma resposta no campo. Nenhuma mensagem sai sem o seu clique em "Enviar" (ou ⌘↵) e a confirmação do macOS. As mensagens ficam só neste Mac; anexos aparecem só como nome e tamanho, nada é baixado.
 
+<!-- tela: email -->
+## Email
+
+Contas de email IMAP ou POP3 (para receber) e SMTP (para enviar), adicionadas em Configurações › Contas › Email: o email e a senha (no Gmail, uma "senha de app" do Google), e o app descobre os servidores sozinho; "Configuração avançada" mostra os servidores para editar. "Testar conexão" confere antes de adicionar.
+
+Cada conta aparece na barra lateral, abaixo dos outros itens, pelo nome; a seta abre e fecha as pastas "Caixa de Entrada" (com o número de não lidas) e "Enviados", e o app lembra o que ficou aberto. A tela tem duas colunas: a lista das mensagens, com "Nova mensagem" no topo, e a leitura da mensagem escolhida, com Responder, Responder a todos, Encaminhar, Apagar e Marcar como lida ou não lida. As imagens de fora do email só aparecem com "Carregar imagens", e os links abrem no navegador depois da confirmação. Nada é enviado sem o seu clique em "Enviar". Cada email novo vira uma notificação do macOS (dá para desligar em Contas › Email).
+
 <!-- tela: configuracoes -->
 ## Configurações
 
@@ -90,7 +97,7 @@ A conexão com o Claude (pelo agente ou pela linha de comando), o caminho do cla
 <!-- aba: contas -->
 ### Contas
 
-A conta Google (para guardar o áudio, a transcrição e o resumo no Google Drive, na pasta "LAP Reuniões", e para ler a agenda), a conta Microsoft (para ler a agenda do Outlook; pede só o "ID do aplicativo (cliente)" registrado no Microsoft Entra), o bloco "Agenda" e o WhatsApp (experimental). Quem conectou o Google antes da agenda vê "Permitir acesso à agenda".
+A conta Google (para guardar o áudio, a transcrição e o resumo no Google Drive, na pasta "LAP Reuniões", e para ler a agenda), a conta Microsoft (para ler a agenda do Outlook; pede só o "ID do aplicativo (cliente)" registrado no Microsoft Entra), o bloco "Agenda", o WhatsApp (experimental) e as contas de email. Quem conectou o Google antes da agenda vê "Permitir acesso à agenda".
 
 No bloco "Agenda": "Avisar reuniões da agenda" (ligado), "Avisar antes" (1, 5 ou 10 minutos; o padrão é 5), "Avisar se a reunião não estiver sendo gravada" (ligado) e quais agendas de cada conta o app lê (o padrão é a principal). O app só lê as agendas: não responde convites, não cria eventos e não manda nada a ninguém.
 

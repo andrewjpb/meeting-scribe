@@ -135,11 +135,39 @@ export type EmailBodyResult = { ok: true; body: EmailBody } | { ok: false; error
 export interface EmailSendRequest {
   accountId: string
   to: string[]
+  /** Contrato 43: "Responder a todos" e o campo "Cc" do composer. */
+  cc?: string[] | undefined
   subject: string
   text: string
   inReplyTo?: string | undefined
+  /** Contrato 43: anexos locais, escolhidos no seletor do macOS (`scribe:email-attach-pick`). */
+  attachments?: EmailOutgoingAttachment[] | undefined
   clickToken: string
 }
+
+/** Contrato 43: um anexo do composer. O tipo sai do nome (o `nodemailer` deduz pela extensão). */
+export interface EmailOutgoingAttachment {
+  name: string
+  bytes: Uint8Array
+}
+
+/** Contrato 43: anexos de uma mensagem enviada, somados. */
+export const EMAIL_ATTACH_MAX_BYTES = 20 * 1024 * 1024
+export const EMAIL_ATTACH_MAX_FILES = 10
+export const EMAIL_ATTACH_NAME_MAX = 200
+
+/** Contrato 43: o clipe do composer. `null`: a pessoa cancelou o seletor. */
+export type EmailAttachPickResult = { ok: true; attachments: EmailOutgoingAttachment[] } | { ok: false; error: 'too-big' | 'unreadable' } | null
+
+/**
+ * Contrato 43: "Testar conexão" com o que está no formulário, sem gravar a conta. `stage` diz qual servidor falhou;
+ * `error` é a mesma frase curta do estado da conta (nunca a resposta do servidor nem a senha).
+ */
+export type EmailTestResult = { ok: true } | { ok: false; stage: 'invalid' | 'incoming' | 'outgoing'; error: string }
+
+/** Contrato 43: as imagens remotas de um email, baixadas pelo main no clique em "Carregar imagens". */
+export const EMAIL_REMOTE_IMAGES_MAX = 40
+export const EMAIL_REMOTE_IMAGE_MAX_BYTES = 5 * 1024 * 1024
 
 /**
  * `click`: sem clique de verdade; `invalid`: pedido fora do formato; `account`: conta inexistente ou sem senha;
@@ -148,3 +176,19 @@ export interface EmailSendRequest {
  */
 export type EmailSendError = 'click' | 'invalid' | 'account' | 'auth' | 'connection' | 'rejected' | 'failed'
 export type EmailSendResult = { ok: true; messageId: string } | { ok: false; error: EmailSendError }
+
+/** Contrato 43 (CA8 e CA9): um anexo recebido, pela posição dele em `EmailBody.attachments`. */
+export interface EmailAttachmentRequest {
+  accountId: string
+  id: string
+  index: number
+}
+
+/** "Baixar": salvo onde a pessoa escolheu (`null`: cancelou o diálogo). Nada é aberto nem executado. */
+export type EmailAttachmentSaveResult = { ok: true; name: string } | { ok: false; error: 'not-found' | 'unavailable' | 'write' } | null
+
+/**
+ * "Encaminhar": os anexos da original, nos limites do envio (20 MB somados, 10 arquivos); os que passam ficam de fora
+ * em `skipped`, pelo nome.
+ */
+export type EmailAttachmentsResult = { ok: true; attachments: EmailOutgoingAttachment[]; skipped: string[] } | { ok: false; error: 'not-found' | 'unavailable' }

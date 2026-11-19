@@ -20,7 +20,7 @@ bibliotecas Node no main do Electron, sem bridge.
 - **SMTP**: `nodemailer`. **MIME de entrada**: `mailparser`.
 - **POP3**: cliente mínimo próprio sobre `node:tls`/`node:net` (UIDL/RETR/TOP/DELE/STLS). Porquê: não há lib POP3 mantida; o protocolo é trivial e testável com servidor falso.
 - **Autoconfiguração**: presets embutidos (gmail, outlook/hotmail/live, yahoo, icloud, uol, terra) → ISPDB do Thunderbird (`https://autoconfig.thunderbird.net/v1.1/<domínio>`) → manual. Porquê: é o mecanismo aberto equivalente ao autodiscover.
-- **Gmail/Outlook**: mesmos IMAP/SMTP com XOAUTH2 (loopback + PKCE); client IDs ficam nas Configurações, nunca no repo.
+- **Gmail/Outlook**: ADIADO (decisão do Andrew 19/11 02:10 — nada que exija client ID registrado; o sistema é open source e não deve ter vínculo). Gmail funciona hoje com senha de app + IMAP comum (preset já existe); Outlook pessoal fica de fora até alguém configurar OAuth próprio. O contrato 44 fica guardado para o futuro.
 - **Exchange/EWS/Graph**: fora desta fase (o Outlook usa autodiscover+EWS; fica para depois).
 - **Segredos** (senhas, refresh tokens): `safeStorage` do Electron, guardados cifrados no settings.
 - **Cache de mensagens**: store próprio em `userData` (padrão dos stores existentes), corpo sob demanda.
@@ -32,7 +32,7 @@ bibliotecas Node no main do Electron, sem bridge.
 - R3 QUANDO uma conta POP3 está conectada, O SISTEMA DEVE baixar novas por UIDL em intervalo configurável, mantendo-as no servidor por padrão.
 - R4 QUANDO o Andrew envia/responde, O SISTEMA DEVE enviar por SMTP da conta escolhida, sem diálogo de confirmação (regra já definida no WhatsApp), e gravar o enviado na pasta de enviados (IMAP APPEND; POP3: só local).
 - R5 QUANDO chega email novo, O SISTEMA DEVE notificar como no contrato 40 (foco/conversa aberta não notifica; app bloqueado = sem conteúdo; interruptor próprio).
-- R6 QUANDO a conta é Gmail ou Outlook/Microsoft, O SISTEMA DEVE autenticar por OAuth2 (XOAUTH2) com renovação automática e estado visível de "reconectar" quando o refresh falhar.
+- R6 (ADIADO 19/11) OAuth2 para Gmail/Outlook — ver Fora de escopo F5.
 - R7 QUANDO o Andrew fala com o Assistente, O SISTEMA DEVE expor emails como contexto (pendências, resumo, busca) e permitir rascunho de resposta e criação de tarefa — envio só por clique.
 
 ## Regras de negócio
@@ -53,6 +53,7 @@ bibliotecas Node no main do Electron, sem bridge.
 - F2 Pastas além de INBOX + Enviados; regras/filtros; busca no servidor além de UID SEARCH básico.
 - F3 Assinaturas HTML ricas, criptografia S/MIME/PGP, convites .ics.
 - F4 Responder automático pelo Assistente.
+- F5 OAuth2/XOAUTH2 (contrato 44, adiado 19/11): exigiria client ID registrado no Google/Entra — ou embutido no repo (vínculo com a conta de quem registra, que o Andrew não quer) ou configurado por cada usuário. Gmail = senha de app; Outlook pessoal fica sem suporte por ora. O README deve explicar a senha de app do Gmail.
 
 ## Verificação end-to-end
 1. Adicionar conta IMAP real → INBOX aparece; chega email → notificação; abrir → ler; responder → chega no destinatário; enviado aparece em Enviados.
@@ -65,8 +66,8 @@ bibliotecas Node no main do Electron, sem bridge.
 |---|---|---|---|---|
 | 42 | Núcleo: contas, IMAP/POP3/SMTP, autoconfig, store, IPC | shared/, main/email/, settings, test/ | — | 1 |
 | 43 | Telas: Configurações, tela Email, notificações, smoke | renderer/, preload, main (notif.) | 42 | 2 |
-| 44 | OAuth2 Gmail + Microsoft (XOAUTH2) | main/email/, Configurações | 42, 43 | 3 |
-| 45 | Assistente: contexto, cartões, tarefas | main/assistant*, renderer | 42, 43 | 4 |
+| 44 | (ADIADO) OAuth2 Gmail + Microsoft | — | — | — |
+| 45 | Assistente: contexto, cartões, tarefas | main/assistant*, renderer | 42, 43 | 3 |
 
 ## Gates
 - `SMOKE_NO_SANDBOX=1 bash apps/desktop/scripts/gates.sh` verde em todo contrato.

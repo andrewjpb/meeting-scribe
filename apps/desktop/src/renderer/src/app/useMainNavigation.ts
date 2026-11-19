@@ -1,6 +1,6 @@
 import { useEffect } from 'react'
 import { useNavigate } from 'react-router'
-import { ROUTE_PATHS, type WhatsAppNavigationState } from '@shared/routes'
+import { emailPath, ROUTE_PATHS, type EmailNavigationState, type WhatsAppNavigationState } from '@shared/routes'
 import { useAutomations } from '../features/agents/automationsStore'
 import { useRecording } from '../features/live/recordingStore'
 import { useStartRecording } from '../features/live/useStartRecording'
@@ -48,6 +48,17 @@ export function useMainNavigation(): void {
         if (useLock.getState().status.locked) return
         const state: WhatsAppNavigationState = { chatId }
         void navigate(ROUTE_PATHS.whatsapp, { state })
+      }),
+    [navigate],
+  )
+
+  // Contrato 43: o clique na notificação de email: a Caixa de Entrada da conta com a mensagem aberta.
+  useEffect(
+    () =>
+      window.__scribeApi.on('scribe:open-email', ({ accountId, id }) => {
+        if (useLock.getState().status.locked) return
+        const state: EmailNavigationState = { messageId: id }
+        void navigate(emailPath(accountId, 'inbox'), { state })
       }),
     [navigate],
   )

@@ -1,6 +1,7 @@
 // Cache local do email (contrato 42), em `userData/email/`: um arquivo por conta (`<conta>.json`, com a INBOX, os
 // enviados, o `UIDVALIDITY` do IMAP e os UIDLs já vistos do POP3) e os corpos já baixados em `<conta>.bodies/`, um
-// arquivo por mensagem. Pasta 0700, arquivos 0600, gravação atômica (temporário + `rename`) e em fila por conta.
+// arquivo por mensagem. Contrato 43: ao lado do corpo, a mensagem inteira (`.eml`) das que não ficam no servidor (POP3 e
+// enviados), para baixar e encaminhar os anexos depois; as do IMAP são pedidas de novo ao servidor. Pasta 0700, arquivos 0600, gravação atômica (temporário + `rename`) e em fila por conta.
 // Arquivo ausente ou inválido vale como vazio: o próximo sincronismo refaz.
 import { createHash, randomUUID } from 'node:crypto'
 import { chmod, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
@@ -62,16 +63,19 @@ export interface EmailStore {
   body(accountId: string, messageId: string): Promise<EmailBody | null>
   setBody(accountId: string, messageId: string, body: EmailBody): Promise<void>
   removeBody(accountId: string, messageId: string): Promise<void>
+  /** Contrato 43: a mensagem inteira guardada (POP3 e enviados), ou `null`. */
+  raw(accountId: string, messageId: string): Promise<Buffer | null>
+  setRaw(accountId: string, messageId: string, raw: Buffer): Promise<void>
   /** Todos os corpos da conta (o `UIDVALIDITY` mudou). */
   clearBodies(accountId: string): Promise<void>
   /** A conta saiu: o arquivo e os corpos. */
   remove(accountId: string): Promise<void>
 }
 
-async function writeAtomic(file: string, content: string): Promise<void> {
+async function writeAtomic(file: string, content: string | Buffer): Promise<void> {
   const temp = `${file}.tmp-${process.pid}-${randomUUID()}`
   try {
-    await writeFile(temp, content, { encoding: 'utf8', mode: 0o600 })
+    await writeFile(temp, content, { mode: 0o600 })
     await chmod(temp, 0o600)
     await rename(temp, file)
   } catch (error) {
@@ -98,7 +102,9 @@ export function createEmailStore(root: string): EmailStore {
   const accountFile = (accountId: string): string => join(root, `${checkId(accountId)}.json`)
   const bodiesDir = (accountId: string): string => join(root, `${checkId(accountId)}.bodies`)
   // O id da mensagem vem do servidor (UIDL) ou é um Message-ID: o nome do arquivo é o hash dele.
-  const bodyFile = (accountId: string, messageId: string): string => join(bodiesDir(accountId), `${createHash('sha256').update(messageId).digest('hex').slice(0, 32)}.json`)
+  const fileName = (messageId: string): string => createHash('sha256').update(messageId).digest('hex').slice(0, 32)
+  const bodyFile = (accountId: string, messageId: string): string => join(bodiesDir(accountId), `${fileName(messageId)}.json`)
+  const rawFile = (accountId: string, messageId: string): string => join(bodiesDir(accountId), `${fileName(messageId)}.eml`)
 
   const serial = <T>(accountId: string, task: () => Promise<T>): Promise<T> => {
     const run = (queues.get(accountId) ?? Promise.resolve()).then(task, task)
@@ -138,7 +144,25 @@ export function createEmailStore(root: string): EmailStore {
         await writeAtomic(bodyFile(accountId, messageId), content)
       }),
 
-    removeBody: (accountId, messageId) => serial(accountId, () => rm(bodyFile(accountId, messageId), { force: true })),
+    removeBody: (accountId, messageId) =>
+      serial(accountId, async () => {
+        await rm(bodyFile(accountId, messageId), { force: true })
+        await rm(rawFile(accountId, messageId), { force: true })
+      }),
+
+    async raw(accountId, messageId) {
+      try {
+        return await readFile(rawFile(accountId, messageId))
+      } catch {
+        return null
+      }
+    },
+
+    setRaw: (accountId, messageId, raw) =>
+      serial(accountId, async () => {
+        await mkdir(bodiesDir(accountId), { recursive: true, mode: 0o700 })
+        await writeAtomic(rawFile(accountId, messageId), raw)
+      }),
 
     clearBodies: (accountId) => serial(accountId, () => rm(bodiesDir(accountId), { recursive: true, force: true })),
 

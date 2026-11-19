@@ -154,6 +154,13 @@ export interface AppSettings {
    * endereços nunca chegam ao renderer pelas configurações.
    */
   emailPollMinutes: EmailPollMinutes
+  /**
+   * "Notificações de email" (contrato 43): cada email novo vira uma notificação do macOS, menos o da conta com a Caixa
+   * de Entrada aberta na janela em foco. Bloqueado, sem o assunto.
+   */
+  emailNotifications: boolean
+  /** Contrato 43: as contas de email recolhidas na barra lateral (as outras aparecem abertas, com as pastas). */
+  emailCollapsed: string[]
 }
 
 /**
@@ -206,6 +213,8 @@ export const DEFAULT_SETTINGS: Readonly<AppSettings> = Object.freeze({
   calendarNotRecordingAlert: true,
   calendarIds: Object.freeze({ google: null, microsoft: null }) as CalendarSelection,
   emailPollMinutes: 5,
+  emailNotifications: true,
+  emailCollapsed: Object.freeze([]) as unknown as string[],
 })
 
 /** Prefixo do modelo gravado na reunião quando a tradução veio do Claude CLI (`claude-cli:haiku`). */

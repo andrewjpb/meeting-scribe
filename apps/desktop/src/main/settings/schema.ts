@@ -47,6 +47,9 @@ const lockAfterMinutesSchema = z.literal(LOCK_AFTER_MINUTES)
 const calendarIdList = z.array(z.string().min(1).max(1024).refine(hasNoControlChar)).max(CALENDAR_IDS_MAX)
 const calendarIdsSchema = z.object({ google: calendarIdList.nullable(), microsoft: calendarIdList.nullable() })
 
+/** Contrato 43: as contas de email recolhidas na barra lateral (só ids de conta). */
+const emailCollapsedSchema = z.array(z.string().regex(EMAIL_ACCOUNT_ID_PATTERN)).max(50)
+
 const D = DEFAULT_SETTINGS
 
 const lenientSchema = z.object({
@@ -94,6 +97,8 @@ const lenientSchema = z.object({
     .object({ google: calendarIdList.nullable().catch(null), microsoft: calendarIdList.nullable().catch(null) })
     .catch({ google: null, microsoft: null }),
   emailPollMinutes: z.literal(EMAIL_POLL_MINUTES).catch(D.emailPollMinutes),
+  emailNotifications: z.boolean().catch(D.emailNotifications),
+  emailCollapsed: emailCollapsedSchema.catch([]),
 })
 
 const patchSchema = z
@@ -135,6 +140,8 @@ const patchSchema = z
     calendarNotRecordingAlert: z.boolean(),
     calendarIds: calendarIdsSchema.strict(),
     emailPollMinutes: z.literal(EMAIL_POLL_MINUTES),
+    emailNotifications: z.boolean(),
+    emailCollapsed: emailCollapsedSchema,
   })
   .partial()
   .strict()

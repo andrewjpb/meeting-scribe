@@ -6,6 +6,7 @@ import { matchPath, Navigate } from 'react-router'
 import { ROUTE_PATHS, ROUTE_REDIRECTS, SETTINGS_ROUTE_PATTERN, type RouteId } from '@shared/routes'
 import { AutomationsScreen } from '../features/agents/AutomationsScreen'
 import { ChatScreen } from '../features/chat/ChatScreen'
+import { EmailScreen } from '../features/email/EmailScreen'
 import { LiveScreen } from '../features/live/LiveScreen'
 import { MeetingDetailScreen } from '../features/meetings/MeetingDetailScreen'
 import { MeetingsScreen } from '../features/meetings/MeetingsScreen'
@@ -27,6 +28,8 @@ export const APP_ROUTES: AppRoute[] = [
   { id: 'automacoes', path: ROUTE_PATHS.automacoes, element: <AutomationsScreen />, nav: { label: 'Automações', icon: Bot } },
   // Contrato 24: só aparece na barra lateral com o serviço do WhatsApp instalado (`Sidebar`).
   { id: 'whatsapp', path: ROUTE_PATHS.whatsapp, element: <WhatsAppScreen />, nav: { label: 'WhatsApp', icon: Smartphone } },
+  // Contrato 43: sem `nav`; cada conta de email entra na barra lateral com as pastas (`EmailNav`).
+  { id: 'email', path: ROUTE_PATHS.email, element: <EmailScreen /> },
   { id: 'gravacao', path: ROUTE_PATHS.gravacao, element: <LiveScreen /> },
   { id: 'detalhe', path: ROUTE_PATHS.detalhe, element: <MeetingDetailScreen /> },
   {

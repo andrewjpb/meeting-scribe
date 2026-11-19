@@ -20,6 +20,9 @@ import type { ConnectionOptions } from 'node:tls'
 import { z } from 'zod'
 import {
   EMAIL_ACCOUNT_ID_PATTERN,
+  EMAIL_ATTACH_MAX_BYTES,
+  EMAIL_ATTACH_MAX_FILES,
+  EMAIL_ATTACH_NAME_MAX,
   EMAIL_CLICK_TTL_MS,
   EMAIL_INBOX_MAX,
   EMAIL_RAW_MAX_BYTES,
@@ -37,6 +40,9 @@ import {
   type EmailBodyResult,
   type EmailMessage,
   type EmailSendResult,
+  type EmailAttachmentsResult,
+  type EmailOutgoingAttachment,
+  type EmailTestResult,
 } from '../../shared/email'
 import type { SafeStorageLike } from '../secrets'
 import { emailAddressSchema, emailIncomingSchema, emailNameSchema, emailServerSchema, emailUsernameSchema, type StoredEmailAccount } from '../settings/schema'
@@ -46,7 +52,7 @@ import { capInbox, createEmailStore, type EmailAccountData, type EmailStore } fr
 import { connectImap, messageIds, type ImapConnect, type ImapMessage, type ImapSession } from './imap-client'
 import { connectPop3, Pop3Error, type Pop3Connect, type Pop3Session } from './pop3-client'
 import { createEmailSecrets } from './secrets'
-import { sendSmtp, SmtpError, type OutgoingMail, type SmtpSend } from './smtp-client'
+import { sendSmtp, SmtpError, verifySmtp, type OutgoingMail, type SmtpSend, type SmtpVerify } from './smtp-client'
 
 /**
  * Token de clique do "Enviar" (a regra do contrato 24, CA4, com guarda próprio: o do WhatsApp fica só com ele). O token
@@ -122,13 +128,30 @@ const autoconfigSchema = z.object({ address: emailAddressSchema }).strict()
 const messagesSchema = z.object({ accountId: accountIdSchema, folder: z.enum(['inbox', 'sent']).optional() }).strict()
 const messageRequestSchema = z.object({ accountId: accountIdSchema, id: messageIdSchema }).strict()
 const markReadSchema = messageRequestSchema.extend({ seen: z.boolean() }).strict()
+/** Contrato 43: o nome do anexo, sem caminho nem caractere de controle. */
+const attachmentSchema = z
+  .object({
+    name: z
+      .string()
+      .min(1)
+      .max(EMAIL_ATTACH_NAME_MAX)
+      .refine((value) => !/[\\/]/.test(value) && ![...value].some((char) => char.charCodeAt(0) < 0x20 || char.charCodeAt(0) === 0x7f) && value !== '.' && value !== '..'),
+    bytes: z.instanceof(Uint8Array),
+  })
+  .strict()
 const sendSchema = z
   .object({
     accountId: accountIdSchema,
     to: z.array(emailAddressSchema).min(1).max(EMAIL_RECIPIENTS_MAX),
+    cc: z.array(emailAddressSchema).max(EMAIL_RECIPIENTS_MAX).optional(),
     subject: z.string().max(EMAIL_SUBJECT_MAX).refine((value) => !/[\r\n]/.test(value)),
     text: z.string().max(EMAIL_TEXT_MAX),
     inReplyTo: headerIdSchema.optional(),
+    attachments: z
+      .array(attachmentSchema)
+      .max(EMAIL_ATTACH_MAX_FILES)
+      .refine((list) => list.reduce((total, item) => total + item.bytes.byteLength, 0) <= EMAIL_ATTACH_MAX_BYTES)
+      .optional(),
     clickToken: z.string().max(100),
   })
   .strict()
@@ -186,6 +209,30 @@ export const parseEmail: EmailParse = async (raw) => {
       attachments: parsed.attachments.slice(0, 500).map((item) => ({ filename: item.filename ? clip(item.filename, 1000) : null, contentType: clip(item.contentType, 300), size: item.size })),
     },
   }
+}
+
+/** Contrato 43: os anexos de uma mensagem, com o conteúdo, na mesma ordem de `EmailBody.attachments`. */
+export type EmailAttachmentsParse = (raw: Buffer) => Promise<{ filename: string | null; contentType: string; content: Buffer }[]>
+
+export const parseAttachments: EmailAttachmentsParse = async (raw) => {
+  const { simpleParser } = await import('mailparser')
+  const parsed = await simpleParser(raw, { skipTextToHtml: true, skipTextLinks: true, skipImageLinks: true })
+  return parsed.attachments.slice(0, 500).map((item) => ({ filename: item.filename ?? null, contentType: item.contentType, content: item.content }))
+}
+
+/** Nome de arquivo para salvar ou anexar: sem caminho, sem caractere de controle nem ponto no começo; vazio vira "anexo". */
+export function safeAttachmentName(name: string | null, index: number): string {
+  const clean = [...(name ?? '')]
+    .filter((char) => char.charCodeAt(0) >= 0x20 && char.charCodeAt(0) !== 0x7f)
+    .join('')
+    .replace(/[/\\:]/g, '_')
+    .replace(/^[.\s]+/, '')
+    .trim()
+  const value = clean || `anexo-${index + 1}`
+  if (value.length <= EMAIL_ATTACH_NAME_MAX) return value
+  const dot = value.lastIndexOf('.')
+  const extension = dot > 0 && value.length - dot <= 12 ? value.slice(dot) : ''
+  return `${value.slice(0, EMAIL_ATTACH_NAME_MAX - extension.length)}${extension}`
 }
 
 /** Erro de qualquer cliente no tipo curto da tela. */
@@ -247,6 +294,8 @@ function fromParsed(accountId: string, id: string, parsed: ParsedEmail, now: num
   }
 }
 
+type EmailServerInput = z.infer<typeof emailServerSchema>
+
 const publicAccount = ({ password: _password, ...account }: StoredEmailAccount): EmailAccount => account
 
 /** Chave do corpo no store: a pasta e o id (o id do enviado é o Message-ID). */
@@ -262,7 +311,11 @@ export interface EmailServiceDeps {
   imap?: ImapConnect
   pop3?: Pop3Connect
   smtp?: SmtpSend
+  /** Contrato 43: o "Testar conexão" do envio (no smoke, um substituto). */
+  smtpVerify?: SmtpVerify
   parse?: EmailParse
+  /** Contrato 43: os anexos com o conteúdo (no teste, o `mailparser` de verdade também). */
+  parseAttachments?: EmailAttachmentsParse
   /** Opções extras do TLS do POP3 e do IMAP/SMTP (nos testes, o certificado do servidor falso). */
   tls?: ConnectionOptions
   onStatus: (statuses: EmailAccountStatus[]) => void
@@ -283,6 +336,8 @@ export interface EmailService {
   accounts(): EmailAccountStatus[]
   autoconfig(request: unknown): Promise<EmailAutoconfig | null>
   addAccount(request: unknown): Promise<EmailAddResult>
+  /** Contrato 43: "Testar conexão" com os dados do formulário: recebimento e envio, sem gravar nada. */
+  test(request: unknown): Promise<EmailTestResult>
   removeAccount(request: unknown): Promise<boolean>
   /** INBOX (padrão) ou enviados, da mais nova para a mais antiga. Só o store, nada vai ao servidor. */
   messages(request: unknown): Promise<EmailMessage[]>
@@ -295,6 +350,10 @@ export interface EmailService {
   /** Só com o token de clique (uso único, 10 s) da mesma janela. */
   send(senderId: number, request: unknown): Promise<EmailSendResult>
   forgetSender(senderId: number): void
+  /** Contrato 43 (CA8): um anexo recebido, com os bytes (do servidor no IMAP, da mensagem guardada no POP3 e nos enviados). */
+  attachment(request: unknown): Promise<{ ok: true; name: string; bytes: Uint8Array } | { ok: false; error: 'not-found' | 'unavailable' }>
+  /** Contrato 43 (CA9): os anexos para o "Encaminhar", nos limites do envio (os que passam ficam em `skipped`). */
+  attachments(request: unknown): Promise<EmailAttachmentsResult>
   /** POP3: busca agora (o mesmo do relógio). */
   poll(accountId: string): Promise<void>
   /** Sair do app: fecha as conexões e para os relógios. */
@@ -319,7 +378,9 @@ export function createEmailService(deps: EmailServiceDeps): EmailService {
   const imap = deps.imap ?? connectImap
   const pop3 = deps.pop3 ?? connectPop3
   const smtp = deps.smtp ?? sendSmtp
+  const smtpVerify = deps.smtpVerify ?? verifySmtp
   const parse = deps.parse ?? parseEmail
+  const readAttachments = deps.parseAttachments ?? parseAttachments
   const retryMs = deps.retryMs ?? EMAIL_RETRY_MS
   const secrets = createEmailSecrets(deps.safeStorage)
   const store: EmailStore = createEmailStore(deps.root)
@@ -493,6 +554,8 @@ export function createEmailService(deps: EmailServiceDeps): EmailService {
           message = fromParsed(id, uidl, parsed, now())
           if (!live(rt, generation)) throw new Error('conta removida')
           await store.setBody(id, bodyKey(message), parsed.body)
+          // Contrato 43: a mensagem inteira fica guardada (o POP3 pode apagar do servidor): os anexos saem dela depois.
+          await store.setRaw(id, bodyKey(message), raw)
         } catch (error) {
           if (!live(rt, generation)) throw error
           // Mensagem que não se lê (MIME quebrado, campo fora do limite): pulada e vista, as outras seguem.
@@ -582,6 +645,34 @@ export function createEmailService(deps: EmailServiceDeps): EmailService {
     return { ok: true, body: parsed.body }
   }
 
+  /** A mensagem inteira: a guardada (POP3, enviados) ou, no IMAP, pedida de novo ao servidor. */
+  async function rawOf(rt: Runtime, message: EmailMessage): Promise<Buffer | 'not-found' | 'unavailable'> {
+    const saved = await store.raw(rt.account.id, bodyKey(message))
+    if (saved) return saved
+    if (message.uid === null) return 'not-found'
+    const session = rt.session
+    if (!session) return 'unavailable'
+    const raw = await session.source(message.uid)
+    if (raw === 'too-big') return 'unavailable'
+    return raw ?? 'not-found'
+  }
+
+  async function attachmentsOf(request: unknown): Promise<{ ok: true; list: Awaited<ReturnType<EmailAttachmentsParse>> } | { ok: false; error: 'not-found' | 'unavailable' }> {
+    const parsed = messageRequestSchema.safeParse(request)
+    if (!parsed.success) return { ok: false, error: 'not-found' }
+    const rt = runtimes.get(parsed.data.accountId)
+    const found = rt ? await findMessage(parsed.data.accountId, parsed.data.id) : null
+    if (!rt || !found) return { ok: false, error: 'not-found' }
+    try {
+      const raw = await rawOf(rt, found.message)
+      if (typeof raw === 'string') return { ok: false, error: raw }
+      return { ok: true, list: await readAttachments(raw) }
+    } catch (error) {
+      log(`${tag(rt)}: anexos não lidos (${failureOf(error)})`)
+      return { ok: false, error: 'unavailable' }
+    }
+  }
+
   return {
     async init() {
       const saved = await deps.settings.getEmailAccounts()
@@ -628,6 +719,28 @@ export function createEmailService(deps: EmailServiceDeps): EmailService {
         void connect(rt)
         return { ok: true, status: statusOf(rt) }
       })
+    },
+
+    async test(request) {
+      const parsed = addSchema.safeParse(request)
+      if (!parsed.success) return { ok: false, stage: 'invalid', error: 'Confira o endereço, a senha e os servidores.' }
+      const input = parsed.data
+      const user = input.username ? input.username : input.address
+      const config = (server: EmailServerInput) => ({ host: server.host, port: server.port, security: server.security, user, pass: input.password, ...(deps.tls ? { tls: deps.tls } : {}) })
+      try {
+        if (input.incoming.protocol === 'imap') await (await imap(config(input.incoming))).close()
+        else await (await pop3(config(input.incoming))).quit()
+      } catch (error) {
+        log(`teste: recebimento falhou (${failureOf(error)})`)
+        return { ok: false, stage: 'incoming', error: EMAIL_FAILURES[failureOf(error)] }
+      }
+      try {
+        await smtpVerify(config(input.outgoing))
+      } catch (error) {
+        log(`teste: envio falhou (${failureOf(error)})`)
+        return { ok: false, stage: 'outgoing', error: EMAIL_FAILURES[failureOf(error)] }
+      }
+      return { ok: true }
     },
 
     async removeAccount(request) {
@@ -739,6 +852,8 @@ export function createEmailService(deps: EmailServiceDeps): EmailService {
       }
       if (!parsed.success) return { ok: false, error: 'invalid' }
       const { accountId, to, subject, text, inReplyTo } = parsed.data
+      const cc = parsed.data.cc ?? []
+      const attachments = parsed.data.attachments ?? []
       const rt = runtimes.get(accountId)
       const pass = rt ? secrets.open(rt.account.password) : null
       if (!rt || pass === null) return { ok: false, error: 'account' }
@@ -749,7 +864,7 @@ export function createEmailService(deps: EmailServiceDeps): EmailService {
       // References: as da mensagem respondida e o Message-ID dela por último (RFC 5322, 3.6.4).
       const references = inReplyTo ? [...(parent?.references ?? []).filter((value) => value !== inReplyTo), inReplyTo].slice(-50) : []
       const date = now()
-      const mail: OutgoingMail = { from: { name: rt.account.name, address: rt.account.address }, to, subject, text, messageId, inReplyTo: inReplyTo ?? null, references, date: new Date(date) }
+      const mail: OutgoingMail = { from: { name: rt.account.name, address: rt.account.address }, to, cc, subject, text, attachments, messageId, inReplyTo: inReplyTo ?? null, references, date: new Date(date) }
       let bytes: Buffer
       try {
         bytes = await smtp(serverConfig(rt, pass, rt.account.outgoing), mail)
@@ -769,7 +884,7 @@ export function createEmailService(deps: EmailServiceDeps): EmailService {
         answered: false,
         from: [{ name: rt.account.name, address: rt.account.address }],
         to: to.map((address) => ({ name: null, address })),
-        cc: [],
+        cc: cc.map((address) => ({ name: null, address })),
         subject,
         date,
         messageId,
@@ -784,7 +899,9 @@ export function createEmailService(deps: EmailServiceDeps): EmailService {
           sent: [sent, ...current.sent].slice(0, EMAIL_SENT_MAX),
           inbox: parent ? current.inbox.map((item) => (item.id === parent.id ? { ...item, answered: true } : item)) : current.inbox,
         }))
-        await store.setBody(accountId, bodyKey(sent), { text, html: null, attachments: [] })
+        await store.setBody(accountId, bodyKey(sent), { text, html: null, attachments: attachments.map((item) => ({ filename: item.name, contentType: 'application/octet-stream', size: item.bytes.byteLength })) })
+        // Contrato 43: os bytes enviados, para baixar ou encaminhar os anexos depois.
+        if (attachments.length > 0) await store.setRaw(accountId, bodyKey(sent), bytes)
       } catch (error) {
         log(`${tag(rt)}: enviado não guardado (${failureOf(error)})`)
       }
@@ -805,6 +922,35 @@ export function createEmailService(deps: EmailServiceDeps): EmailService {
 
     forgetSender(senderId) {
       guard.forget(senderId)
+    },
+
+    async attachment(request) {
+      const index = (request as { index?: unknown } | undefined)?.index
+      if (typeof index !== 'number' || !Number.isInteger(index) || index < 0 || index >= 500) return { ok: false, error: 'not-found' }
+      const { index: _index, ...rest } = request as Record<string, unknown>
+      const result = await attachmentsOf(rest)
+      if (!result.ok) return result
+      const item = result.list[index]
+      if (!item) return { ok: false, error: 'not-found' }
+      return { ok: true, name: safeAttachmentName(item.filename, index), bytes: new Uint8Array(item.content) }
+    },
+
+    async attachments(request) {
+      const result = await attachmentsOf(request)
+      if (!result.ok) return result
+      const attachments: EmailOutgoingAttachment[] = []
+      const skipped: string[] = []
+      let total = 0
+      result.list.forEach((item, index) => {
+        const name = safeAttachmentName(item.filename, index)
+        if (attachments.length >= EMAIL_ATTACH_MAX_FILES || total + item.content.byteLength > EMAIL_ATTACH_MAX_BYTES) {
+          skipped.push(name)
+          return
+        }
+        total += item.content.byteLength
+        attachments.push({ name, bytes: new Uint8Array(item.content) })
+      })
+      return { ok: true, attachments, skipped }
     },
 
     async poll(accountId) {

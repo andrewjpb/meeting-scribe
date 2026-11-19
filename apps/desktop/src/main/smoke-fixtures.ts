@@ -2,6 +2,8 @@
 // abre. O catálogo é a resposta real de `GET /v1/models` de 14/11/2026 reduzida aos campos que o app lê
 // (a resposta inteira fica em test/fixtures/assemblyai/models.json); os corpos de erro também são reais.
 // A chave é fictícia: só os quatro últimos caracteres aparecem na tela (••••4f2a, como no mockup).
+import { createFakeEmail, type FakeEmail } from './email/fake-email'
+import type { EmailNotice } from './email/notify'
 import { execFile, spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { EventEmitter } from 'node:events'
@@ -192,6 +194,17 @@ export interface SmokeFixtures {
   calendar: SmokeCalendar
   /** Notificações do WhatsApp (contrato 40): as substitutas, o foco fingido e o número do Dock. */
   whatsappNotify: SmokeWhatsAppNotify
+  /** Contrato 43: o servidor de email falso (IMAP, SMTP e imagens remotas em memória). */
+  email: FakeEmail
+  /** Contrato 43: as notificações de email substitutas e o foco fingido. */
+  emailNotify: SmokeEmailNotify
+  /** Contrato 43: os arquivos que o clipe do composer do email "escolhe"; vazio cancela. */
+  chosenEmailAttachments: string[]
+}
+
+export interface SmokeEmailNotify {
+  notifications: (EmailNotice & { closed: boolean; open: () => void })[]
+  focusedContentsId: number | null
 }
 
 export interface SmokeWhatsAppNotify {
@@ -351,6 +364,9 @@ export function createSmokeFixtures(currentVersion: string, userDataDir: string)
     microsoft: createFakeMicrosoft({ clientId: SMOKE_MICROSOFT_CLIENT_ID, profile: { name: 'Bruno Teste', email: 'bruno.teste@example.com' } }),
     calendar: { notifications: [] },
     whatsappNotify: { notifications: [], focusedContentsId: null, badges: [] },
+    email: createFakeEmail(),
+    emailNotify: { notifications: [], focusedContentsId: null },
+    chosenEmailAttachments: [],
     lock: { skewMs: 0, touchIdAvailable: true, touchIdApproves: true, touchIdPrompts: 0, power: new EventEmitter(), refresh: () => undefined },
     fetch: (url: string, init: FetchInit) => {
       const path = new URL(url).pathname

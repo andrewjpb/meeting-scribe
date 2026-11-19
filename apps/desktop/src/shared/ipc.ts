@@ -7,7 +7,7 @@ import type { DriveMeetingStatus, GoogleAccountStatus, GoogleClientSaveResult, M
 import type { CalendarListResult, CalendarView } from './calendar'
 import type { BrandingInfo, BrandLogoChoice } from './branding'
 import type { LockResponse, LockStatus } from './lock'
-import type { EmailAccountInput, EmailAccountStatus, EmailAddResult, EmailAutoconfig, EmailBodyResult, EmailFolder, EmailMessage, EmailSendRequest, EmailSendResult } from './email'
+import type { EmailAccountInput, EmailAccountStatus, EmailAddResult, EmailAttachmentRequest, EmailAttachmentSaveResult, EmailAttachmentsResult, EmailAttachPickResult, EmailAutoconfig, EmailBodyResult, EmailFolder, EmailMessage, EmailSendRequest, EmailSendResult, EmailTestResult } from './email'
 import type { KeySaveResult, KeyStatus, MicAccess, ModelCheck, ModelsResult } from './assemblyai'
 import type { Chat, ChatEvent, ChatListItem, ChatRedoRequest, ChatSendRequest, ChatSendResult, ChatUpdateRequest } from './chat'
 import type { ClaudeLocateResult, ClaudeRunState, ClaudeStartResult, ClaudeTranslateRequest, ClaudeTranslateResult } from './claude-cli'
@@ -348,6 +348,22 @@ export interface InvokeChannels {
    * único e com validade de 10 s, como no WhatsApp; sem diálogo de confirmação. Falha volta tipada, sem exceção.
    */
   'scribe:email-send': { request: EmailSendRequest; response: EmailSendResult }
+  /** Contrato 43: "Testar conexão" com os dados do formulário (recebimento e envio); nada é gravado. */
+  'scribe:email-test': { request: EmailAccountInput; response: EmailTestResult }
+  /** Contrato 43: o clipe do composer abre o seletor do macOS; os arquivos voltam para a lista de anexos (nada é enviado). */
+  'scribe:email-attach-pick': { request: undefined; response: EmailAttachPickResult }
+  /**
+   * Contrato 43: "Carregar imagens" de um email: o main baixa só as imagens `http(s)` pedidas (nunca de endereço local)
+   * e devolve data URLs; a que falhar volta `null`. Sem o clique, nada é baixado.
+   */
+  'scribe:email-remote-images': { request: { urls: string[] }; response: Record<string, string | null> }
+  /**
+   * Contrato 43 (CA8): "Baixar" um anexo recebido: os bytes vêm do servidor (IMAP) ou da mensagem guardada (POP3,
+   * enviados) e vão para o arquivo escolhido no diálogo do macOS. Nada é aberto.
+   */
+  'scribe:email-attachment-save': { request: EmailAttachmentRequest; response: EmailAttachmentSaveResult }
+  /** Contrato 43 (CA9): os anexos da mensagem para o "Encaminhar", nos limites do envio. */
+  'scribe:email-attachments': { request: { accountId: string; id: string }; response: EmailAttachmentsResult }
   /** Automações (contrato 23): os agentes, quantas tarefas usam cada um e os modelos que o perfil oferece. */
   'scribe:agents-list': { request: undefined; response: AgentsList }
   /** Criar (`id: null`) ou trocar um agente. */
@@ -400,6 +416,11 @@ export interface RendererEvents {
   'scribe:whatsapp-viewing': { chatId: string | null }
   /** Clique em "Enviar" do email (contrato 42): só o preload manda, com a ativação do usuário viva. */
   'scribe:email-click': string
+  /**
+   * Contrato 43: a pasta aberta na tela "Email" desta janela (`null`: nenhuma, ou saiu da tela). Com a janela em foco e a
+   * Caixa de Entrada da conta aberta, o email novo dela não vira notificação. Ignorada com o app bloqueado.
+   */
+  'scribe:email-viewing': { accountId: string; folder: EmailFolder } | null
 }
 
 /** main -> renderer (`webContents.send` / `__scribeApi.on`). */
@@ -462,6 +483,8 @@ export interface MainEvents {
   'scribe:email-message': EmailMessage
   /** As mensagens de uma conta mudaram (sincronismo, lida, apagada, enviada): a tela relê. Não chega bloqueado. */
   'scribe:email-changed': { accountId: string }
+  /** Contrato 43: o clique na notificação de email: a Caixa de Entrada da conta com a mensagem aberta. */
+  'scribe:open-email': { accountId: string; id: string }
 }
 
 export type InvokeChannel = keyof InvokeChannels
@@ -611,6 +634,11 @@ const INVOKE: Record<InvokeChannel, true> = {
   'scribe:email-mark-read': true,
   'scribe:email-delete': true,
   'scribe:email-send': true,
+  'scribe:email-test': true,
+  'scribe:email-attach-pick': true,
+  'scribe:email-remote-images': true,
+  'scribe:email-attachment-save': true,
+  'scribe:email-attachments': true,
   'scribe:agents-list': true,
   'scribe:agents-save': true,
   'scribe:agents-delete': true,
@@ -639,6 +667,7 @@ const RENDERER_EVENTS: Record<RendererEvent, true> = {
   'scribe:whatsapp-pair-cancel': true,
   'scribe:whatsapp-viewing': true,
   'scribe:email-click': true,
+  'scribe:email-viewing': true,
 }
 const MAIN_EVENTS: Record<MainEvent, true> = {
   'scribe:navigate': true,
@@ -669,6 +698,7 @@ const MAIN_EVENTS: Record<MainEvent, true> = {
   'scribe:email-state': true,
   'scribe:email-message': true,
   'scribe:email-changed': true,
+  'scribe:open-email': true,
 }
 
 /**
@@ -861,6 +891,12 @@ export const WHEN_LOCKED: Readonly<Record<InvokeChannel, LockedPolicy>> = Object
   'scribe:email-mark-read': 'refused',
   'scribe:email-delete': 'refused',
   'scribe:email-send': 'refused',
+  // Contrato 43: o teste da conta, o clipe do composer e as imagens remotas, como o resto do email.
+  'scribe:email-test': 'refused',
+  'scribe:email-attach-pick': 'refused',
+  'scribe:email-remote-images': 'refused',
+  'scribe:email-attachment-save': 'refused',
+  'scribe:email-attachments': 'refused',
   // Automações (contrato 23, CA10): gerenciar agentes e tarefas, testar, pedir e ver o histórico, tudo recusado com
   // o app bloqueado. O agendador não depende de canal: roda no main e as tarefas continuam rodando bloqueado.
   'scribe:agents-list': 'refused',
@@ -896,6 +932,7 @@ export const RENDERER_EVENTS_WHEN_LOCKED: Readonly<Record<RendererEvent, 'pass' 
   'scribe:whatsapp-pair-cancel': 'pass',
   'scribe:whatsapp-viewing': 'ignored',
   'scribe:email-click': 'ignored',
+  'scribe:email-viewing': 'ignored',
 })
 
 /** Mensagens que só o próprio preload manda (o `send` genérico recusa): o clique do envio do WhatsApp. */

@@ -3,6 +3,7 @@ import { APP_ROUTES, redirectElement, REDIRECTS, routeIdOf } from './routes'
 import { Sidebar } from './Sidebar'
 import { useMainNavigation } from './useMainNavigation'
 import { useWhatsAppSync } from '../features/whatsapp/whatsappStore'
+import { useEmailSync } from '../features/email/emailStore'
 import { CalendarBanner } from '../features/calendar/CalendarBanner'
 import { useCalendarSync } from '../features/calendar/calendarStore'
 import { useMeetSync } from '../features/live/meetStore'
@@ -16,13 +17,15 @@ export function Shell() {
   const location = useLocation()
   useMainNavigation()
   useWhatsAppSync()
+  // Contrato 43: as contas de email e as não lidas de cada uma, para a barra lateral.
+  useEmailSync()
   // Contrato 12: "Próximas" e a faixa "não está sendo gravada" chegam do main.
   useCalendarSync()
   // Contrato 27: a extensão do Meet; os eventos de fala valem em qualquer tela durante a gravação.
   useMeetSync()
   const routeId = routeIdOf(location.pathname)
-  // Trocar de aba em Configurações não remonta a tela (nem refaz a transição de rota).
-  const routeKey = routeId === 'configuracoes' ? routeId : location.pathname
+  // Trocar de aba em Configurações (ou de pasta no email, contrato 43) não remonta a tela (nem refaz a transição de rota).
+  const routeKey = routeId === 'configuracoes' || routeId === 'email' ? routeId : location.pathname
 
   return (
     <div className="flex h-full">

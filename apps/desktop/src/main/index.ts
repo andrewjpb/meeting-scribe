@@ -1,7 +1,7 @@
 // Processo principal: esquema do app, segurança da sessão, IPC, menu e janela.
 import { readFileSync } from 'node:fs'
-import { readFile } from 'node:fs/promises'
-import { join } from 'node:path'
+import { readFile, writeFile } from 'node:fs/promises'
+import { basename, join } from 'node:path'
 import { app, BrowserWindow, clipboard, dialog, Menu, nativeImage, net, Notification, powerMonitor, safeStorage, session, shell, systemPreferences, Tray, type NativeImage, type OpenDialogOptions, type SaveDialogOptions } from 'electron'
 import { DRIVE_FOLDER_URL_PREFIX } from '../shared/accounts'
 import { ASSEMBLYAI_DASHBOARD_URL } from '../shared/assemblyai'
@@ -90,6 +90,10 @@ import { createWhatsAppNotifier, isGroupChat, shouldNotify, type NoticeHandle, t
 import { createWhatsAppService, type WhatsAppService } from './whatsapp/service'
 import { EMAIL_DIR } from './email/email-store'
 import { createEmailService, type EmailService } from './email/service'
+import { readEmailAttachments } from './email/attach'
+import { createEmailNotifier, type EmailNotice } from './email/notify'
+import { loadRemoteImages, readLimited, systemLookup, type HostLookup, type RemoteImageFetch } from './email/remote-images'
+import { EMAIL_ACCOUNT_ID_PATTERN, EMAIL_REMOTE_IMAGE_MAX_BYTES, type EmailFolder, type EmailMessage } from '../shared/email'
 
 // `app.setName` fixa o `userData` (~/Library/Application Support/Meeting Scribe) e o item do Chaveiro:
 // trocar este nome perderia reuniões, configurações e a chave. O nome que a pessoa vê é o da marca
@@ -238,6 +242,7 @@ function openMainWindow(query?: Record<string, string>, invisible = false): Brow
     whatsappService?.forgetSender(contentsId)
     emailService?.forgetSender(contentsId)
     whatsappViewing.delete(contentsId)
+    emailViewing.delete(contentsId)
     if (mainWindow === win) mainWindow = null
     // No macOS o app segue aberto sem janela: as conversas do chat morrem em 5 min, como ao sair da tela.
     chatService?.leaveAll()
@@ -264,10 +269,10 @@ function showMainWindow(): BrowserWindow {
 }
 
 /** Manda ao renderer depois que a página carregou (janela recém-aberta). */
-function sendWhenLoaded<C extends 'scribe:navigate' | 'scribe:open-run' | 'scribe:open-whatsapp'>(
+function sendWhenLoaded<C extends 'scribe:navigate' | 'scribe:open-run' | 'scribe:open-whatsapp' | 'scribe:open-email'>(
   win: BrowserWindow,
   channel: C,
-  payload: C extends 'scribe:navigate' ? RouteId : C extends 'scribe:open-run' ? { runId: string | null } : { chatId: string },
+  payload: C extends 'scribe:navigate' ? RouteId : C extends 'scribe:open-run' ? { runId: string | null } : C extends 'scribe:open-email' ? { accountId: string; id: string } : { chatId: string },
 ): void {
   const contents = win.webContents
   const send = (): void => sendTo(contents, channel, payload as never)
@@ -413,6 +418,75 @@ async function notifyWhatsApp(message: WhatsAppMessage, chatName: string): Promi
   const icon = first.locked ? null : await (whatsappService?.photo({ chatId: message.chatId }) ?? Promise.resolve(null)).catch(() => null)
   whatsappNotifier.receive({ ...input(), icon })
 }
+
+/** Contrato 43: as notificações vivas do email, à parte e com o mesmo teto das do WhatsApp. */
+const liveEmailNotices = new Set<Notification>()
+
+/** Contrato 43: a pasta aberta na tela "Email" de cada janela (pelo id do `webContents`). */
+const emailViewing = new Map<number, { accountId: string; folder: EmailFolder } | null>()
+
+/** A Caixa de Entrada aberta na janela em foco (no smoke, o foco é fingido, como no WhatsApp). */
+function emailFocusedInbox(): string | null {
+  const id = smokeFixtures ? smokeFixtures.emailNotify.focusedContentsId : (BrowserWindow.getFocusedWindow()?.webContents.id ?? null)
+  const viewing = id === null ? null : (emailViewing.get(id) ?? null)
+  return viewing?.folder === 'inbox' ? viewing.accountId : null
+}
+
+/** Notificação de um email (contrato 43), local; o clique abre o app na mensagem. No smoke, o substituto registra. */
+function showEmailNotice(notice: EmailNotice): NoticeHandle {
+  const open = (): void => sendWhenLoaded(showMainWindow(), 'scribe:open-email', { accountId: notice.accountId, id: notice.id })
+  if (smokeFixtures) {
+    const entry = { ...notice, closed: false, open }
+    smokeFixtures.emailNotify.notifications.push(entry)
+    return { close: () => void (entry.closed = true) }
+  }
+  if (!Notification.isSupported()) return { close: () => undefined }
+  const item = new Notification({ title: notice.title, body: notice.body })
+  const done = (): void => {
+    liveEmailNotices.delete(item)
+    open()
+  }
+  item.on('click', done)
+  item.on('action', done)
+  item.on('close', () => liveEmailNotices.delete(item))
+  liveEmailNotices.add(item)
+  for (const old of liveEmailNotices) {
+    if (liveEmailNotices.size <= WHATSAPP_LIVE_NOTICES_MAX) break
+    liveEmailNotices.delete(old)
+  }
+  item.show()
+  return {
+    close: () => {
+      liveEmailNotices.delete(item)
+      item.close()
+    },
+  }
+}
+
+const emailNotifier = createEmailNotifier({ show: showEmailNotice, appName: () => brandName, now: () => Date.now() })
+
+/** Email novo (contrato 43): notifica pelas regras de `email/notify.ts`. */
+async function notifyEmail(message: EmailMessage): Promise<void> {
+  const account = emailService?.accounts().find((status) => status.account.id === message.accountId)?.account
+  if (!account || !readSettings) return
+  const current = await readSettings()
+  emailNotifier.receive({ message, account, enabled: current.emailNotifications, viewing: emailFocusedInbox() === message.accountId, locked: lockService?.isLocked() ?? false })
+}
+
+/** Contrato 43: as imagens do "Carregar imagens", sem cookie e sem seguir redirecionamento. No smoke, o servidor falso. */
+const fetchRemoteImage: RemoteImageFetch = async (url, signal) => {
+  if (smokeFixtures) return smokeFixtures.email.fetchImage(url)
+  const response = await net.fetch(url, { method: 'GET', credentials: 'omit', redirect: 'error', signal } as RequestInit)
+  if (!response.ok) return null
+  const type = (response.headers.get('content-type') ?? '').split(';')[0]?.trim() ?? ''
+  if (Number(response.headers.get('content-length') ?? 0) > EMAIL_REMOTE_IMAGE_MAX_BYTES) return null
+  // Sem `content-length` (ou com um falso): lido aos pedaços e cortado ao passar de 5 MB.
+  const bytes = await readLimited(response.body)
+  return bytes ? { type, bytes } : null
+}
+
+/** Contrato 43: o DNS de verdade; no smoke, o nome inventado do servidor falso resolve para um endereço público. */
+const remoteImageLookup: HostLookup = smokeFixtures ? async () => [{ address: '93.184.216.34', family: 4 }] : systemLookup
 
 let badgeTimer: ReturnType<typeof setTimeout> | null = null
 let badgeShown: number | null = null
@@ -855,6 +929,8 @@ function createAppServices(userData: string): AppServices {
     root: join(userData, EMAIL_DIR),
     settings,
     safeStorage: smokeFixtures ? memorySafeStorage() : safeStorage,
+    // Contrato 43: no smoke, o servidor de email falso em memória (IMAP, SMTP e o teste de conexão).
+    ...(smokeFixtures ? { imap: smokeFixtures.email.imap, pop3: smokeFixtures.email.pop3, smtp: smokeFixtures.email.smtp, smtpVerify: smokeFixtures.email.smtpVerify } : {}),
     fetch: smokeFixtures
       ? () => Promise.reject(new TypeError('smoke: sem rede'))
       : (url, { signal }) => netFetch(url, { method: 'GET', headers: { accept: 'application/xml' }, signal, redirect: 'error' }),
@@ -862,8 +938,10 @@ function createAppServices(userData: string): AppServices {
     onStatus: (statuses) => {
       if (!lockService?.isLocked()) broadcast(BrowserWindow.getAllWindows(), 'scribe:email-state', statuses)
     },
+    // Contrato 43: a notificação sai também com o app bloqueado (sem o assunto).
     onMessage: (message) => {
       if (!lockService?.isLocked()) broadcast(BrowserWindow.getAllWindows(), 'scribe:email-message', message)
+      notifyEmail(message).catch((error: unknown) => console.error('[email] notificação:', error))
     },
     onMessagesChanged: (accountId) => {
       if (!lockService?.isLocked()) broadcast(BrowserWindow.getAllWindows(), 'scribe:email-changed', { accountId })
@@ -1280,6 +1358,25 @@ async function chooseWhatsAppAttachment(): Promise<string | null> {
   return result.canceled ? null : (result.filePaths[0] ?? null)
 }
 
+/** Contrato 43 (CA8): onde salvar o anexo baixado. No smoke, o substituto registra e "responde" `savePath`. */
+async function chooseAttachmentSavePath(defaultPath: string): Promise<string | null> {
+  if (smokeFixtures) {
+    smokeFixtures.saveDialogs.push(defaultPath)
+    return smokeFixtures.savePath
+  }
+  const options: SaveDialogOptions = { title: 'Salvar anexo', defaultPath, buttonLabel: 'Salvar' }
+  const result = mainWindow ? await dialog.showSaveDialog(mainWindow, options) : await dialog.showSaveDialog(options)
+  return result.canceled || !result.filePath ? null : result.filePath
+}
+
+/** Contrato 43: o clipe do composer do email, qualquer arquivo (até 10 de uma vez). */
+async function chooseEmailAttachments(): Promise<string[]> {
+  if (smokeFixtures) return smokeFixtures.chosenEmailAttachments
+  const options: OpenDialogOptions = { title: 'Anexar arquivos', buttonLabel: 'Anexar', properties: ['openFile', 'multiSelections'] }
+  const result = mainWindow ? await dialog.showOpenDialog(mainWindow, options) : await dialog.showOpenDialog(options)
+  return result.canceled ? [] : result.filePaths
+}
+
 const nativeOpener: FileOpener = {
   openPath: (path) => shell.openPath(path),
   showItemInFolder: (path) => shell.showItemInFolder(path),
@@ -1559,6 +1656,35 @@ function registerIpc(services: AppServices): void {
   handle('scribe:email-delete', appOrigin, (_event, request) => email.remove(request).catch(() => false))
   handle('scribe:email-send', appOrigin, (event, request) => email.send(event.sender.id, request).catch(() => ({ ok: false, error: 'failed' }) as const))
   onEvent('scribe:email-click', appOrigin, (event, token) => email.registerClick(event.sender.id, token))
+  // Contrato 43: o teste da conta, o clipe do composer, as imagens remotas e a pasta aberta na tela.
+  handle('scribe:email-test', appOrigin, (_event, request) => email.test(request).catch(() => ({ ok: false, stage: 'incoming', error: 'Erro ao falar com o servidor.' }) as const))
+  handle('scribe:email-attach-pick', appOrigin, async () => {
+    const paths = await chooseEmailAttachments()
+    return paths.length ? readEmailAttachments(paths).catch(() => ({ ok: false, error: 'unreadable' }) as const) : null
+  })
+  handle('scribe:email-remote-images', appOrigin, (_event, request) => loadRemoteImages(request, fetchRemoteImage, remoteImageLookup).catch(() => ({})))
+  // Contrato 43 (CA8): "Baixar" um anexo: o diálogo de salvar do macOS (que pergunta antes de trocar um arquivo que já
+  // existe), começando em Downloads com o nome limpo. O arquivo só é gravado; nunca aberto.
+  handle('scribe:email-attachment-save', appOrigin, async (_event, request) => {
+    const found = await email.attachment(request).catch(() => ({ ok: false, error: 'unavailable' }) as const)
+    if (!found.ok) return found
+    const path = await chooseAttachmentSavePath(join(app.getPath('downloads'), found.name))
+    if (!path) return null
+    try {
+      await writeFile(path, found.bytes)
+      return { ok: true, name: basename(path) }
+    } catch {
+      return { ok: false, error: 'write' }
+    }
+  })
+  // Contrato 43 (CA9): os anexos da original para o "Encaminhar".
+  handle('scribe:email-attachments', appOrigin, (_event, request) => email.attachments(request).catch(() => ({ ok: false, error: 'unavailable' }) as const))
+  onEvent('scribe:email-viewing', appOrigin, (event, request) => {
+    const viewing = request as { accountId?: unknown; folder?: unknown } | null | undefined
+    const accountId = viewing?.accountId
+    const folder = viewing?.folder
+    emailViewing.set(event.sender.id, typeof accountId === 'string' && EMAIL_ACCOUNT_ID_PATTERN.test(accountId) && (folder === 'inbox' || folder === 'sent') ? { accountId, folder } : null)
+  })
   // Contrato 40: a conversa aberta na tela desta janela (só um id válido, ou nenhum).
   onEvent('scribe:whatsapp-viewing', appOrigin, (event, request) => {
     const chatId = (request as { chatId?: unknown } | undefined)?.chatId
