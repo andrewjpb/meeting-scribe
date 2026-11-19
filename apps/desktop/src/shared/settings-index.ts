@@ -7,6 +7,9 @@ import type { SettingsTab } from './routes'
 /** Descrição do interruptor "Quem fala no Meet" (contratos 27 e 41), a mesma na tela e na busca. */
 export const MEET_SPEAKERS_DESCRIPTION = 'Com a extensão do LAP Reuniões no Chrome, cada fala do Meet e do Teams ganha o nome de quem falou. Tudo fica neste computador.'
 
+/** Descrição de "Ativar ponte" do plugin "Controle do navegador" (contrato 46), a mesma na tela e na busca. */
+export const NAVEGADOR_BRIDGE_DESCRIPTION = 'Liga a conexão local que a extensão usa para receber os comandos do app. Desligada, nada chega ao Chrome.'
+
 /** Descrição de "IA anotando ao vivo" (contrato 30), a mesma na tela e na busca. */
 export const LIVE_CARDS_DESCRIPTION = 'Durante a gravação, a cada 5 minutos o Claude local lê o trecho novo da conversa e cria e resolve post-its. Vale como padrão do interruptor "IA anotando" de cada gravação.'
 
@@ -89,9 +92,11 @@ export function settingsIndex(agent: string): SettingsEntry[] {
     row('contas', 'WhatsApp', 'Só pessoas (sem grupos)', WHATSAPP_ONLY_PEOPLE_DESCRIPTION, '"Notificações do WhatsApp" está ligado'),
     row('contas', 'WhatsApp', 'Mostrar quando estou digitando', WHATSAPP_TYPING_SIGNAL_DESCRIPTION),
     row('contas', 'Google', 'Guardar no Google Drive', 'Depois de cada reunião, o áudio, a transcrição e o resumo vão para a pasta "LAP Reuniões" do seu Drive.', 'a conta Google está conectada'),
-    // Contrato 31: um cartão por plugin, com o nome (e o estado), "Salvar plugin" e "Como instalar".
+    // Contrato 31: um cartão por plugin, com o nome (e o estado), "Salvar plugin" e "Como instalar". Contrato 46: o
+    // do navegador tem também "Ativar ponte".
     ...APP_PLUGINS.flatMap((plugin) => [
       row('plugins', plugin.nome, plugin.nome, `${plugin.navegador}. ${plugin.descricao}`),
+      ...(plugin.id === 'navegador' ? [row('plugins', plugin.nome, 'Ativar ponte', NAVEGADOR_BRIDGE_DESCRIPTION)] : []),
       row('plugins', plugin.nome, 'Salvar plugin', PLUGIN_SAVE_DESCRIPTION),
       row('plugins', plugin.nome, 'Como instalar', PLUGIN_INSTALL_DESCRIPTION),
     ]),

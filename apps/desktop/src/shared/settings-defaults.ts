@@ -110,6 +110,11 @@ export interface AppSettings {
    * Desligado, o servidor local para e nada é coletado.
    */
   meetSpeakers: boolean
+  /**
+   * "Ativar ponte" do plugin "Controle do navegador" (contrato 46): sobe o servidor local que a extensão do Chrome
+   * usa para receber comandos do app. Desligado por padrão; desligado, o servidor para.
+   */
+  navegadorPlugin: boolean
   /** Nome do app na barra lateral, no título da janela e nos avisos (contrato 09); `null` é "LAP Reuniões". */
   brandName: string | null
   /** Linha abaixo do nome; `null` é "LAP Software" e texto vazio tira a linha. */
@@ -188,6 +193,7 @@ export const DEFAULT_SETTINGS: Readonly<AppSettings> = Object.freeze({
   whatsappTypingSignal: false,
   identifySpeakers: false,
   meetSpeakers: true,
+  navegadorPlugin: false,
   brandName: null,
   brandSubtitle: null,
   brandLogo: null,

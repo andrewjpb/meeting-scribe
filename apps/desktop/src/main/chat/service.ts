@@ -20,6 +20,10 @@
 // escopo), que a cada pergunta recebe de novo as fontes do app (estado, guia, automações, WhatsApp), com a
 // instrução do Assistente. Os blocos `lap-acao` do fim da resposta viram ações propostas, gravadas com ela; nenhuma
 // roda aqui. A conversa de uma reunião e as conversas criadas pelas automações não passam por isso.
+//
+// Contrato 47: a sessão ACP do Assistente abre com as ferramentas do navegador só se "Ativar ponte" (`navegadorPlugin`)
+// estiver ligado e a extensão conectada naquele momento; sem isso, abre como antes. A conversa já aberta segue como
+// abriu: a ponte que cai no meio vira erro da ferramenta, explicado ao agente.
 import { randomUUID } from 'node:crypto'
 import { z } from 'zod'
 import { withoutActionBlocks, type ChatAction } from '../../shared/assistant'
@@ -89,6 +93,8 @@ export interface ChatServiceDeps {
    * linha de comando.
    */
   openAcp?: (claudePath: string) => (request: AcpSessionRequest) => Promise<AcpOpenResult>
+  /** Contrato 47: a ponte do navegador (contrato 46); a extensão conectada agora. Sem ela, nunca há navegador. */
+  navegador?: { connected(): boolean }
   /** Resposta crescendo ou terminada, para todas as janelas. */
   onEvent: (event: ChatEvent) => void
   log?: (message: string) => void
@@ -289,7 +295,7 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
   }
 
   async function openSession(chat: Chat, binaryPath: string): Promise<Session | null> {
-    const { claudeTransport } = await deps.settings.get()
+    const { claudeTransport, navegadorPlugin } = await deps.settings.get()
     const transport: ClaudeTransport = claudeTransport === 'acp' && deps.openAcp ? 'acp' : 'cli'
     const existing = sessions.get(chat.id)
     if (existing && existing.transport === transport) return existing
@@ -335,7 +341,9 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
     // Contrato 26: a fonte "Internet" do Assistente (ligada por padrão) só vale pelo ACP, onde o app confere cada
     // página; pela linha de comando a busca e a página continuam negadas, e a instrução diz isso.
     const web = assistant && transport === 'acp' && chatSourcesOf(chat.scope).internet
-    const systemPrompt = assistant && folder !== 'meeting' ? { systemPrompt: assistantSystemPrompt(folder, transport === 'acp' ? web : 'cli') } : {}
+    // Contrato 47: o navegador, só pelo ACP, com a ponte ligada e a extensão conectada agora.
+    const navegador = assistant && transport === 'acp' && folder !== 'meeting' && navegadorPlugin && deps.navegador?.connected() === true
+    const systemPrompt = assistant && folder !== 'meeting' ? { systemPrompt: assistantSystemPrompt(folder, transport === 'acp' ? web : 'cli', navegador) } : {}
     const claude: ChatEngine =
       transport === 'acp' && deps.openAcp
         ? new AcpChat({
@@ -348,6 +356,8 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
             ...(web ? { web: true } : {}),
             // Contrato 21: os servidores MCP ligados para o chat, menos os desligados nesta conversa.
             mcp: { off: chat.scope.mcpOff ?? [] },
+            // Servidor do navegador que não abre: a sessão segue sem ele e com a instrução sem ele.
+            ...(navegador && folder !== 'meeting' ? { navegador: true, systemPromptSemNavegador: assistantSystemPrompt(folder, web) } : {}),
             cwd,
             titleOf,
             now,

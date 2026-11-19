@@ -9,6 +9,7 @@ import { formatRunShort, type AutomationRun } from '../shared/automations'
 import { brandTexts, DEFAULT_BRAND_NAME } from '../shared/branding'
 import { calendarNoticeText, safeJoinUrl, type CalendarNotice } from '../shared/calendar'
 import { lockedWindowTitle, type LockStatus } from '../shared/lock'
+import type { NavegadorState } from '../shared/navegador'
 import type { AppPluginId, PluginSaveResult } from '../shared/plugins'
 import { privacyPaneUrl } from '../shared/privacy'
 import type { RouteId } from '../shared/routes'
@@ -37,6 +38,8 @@ import { createGoogleAccount, type GoogleAccountService } from './google/account
 import { createMicrosoftAccount, type MicrosoftAccountService } from './microsoft/account'
 import { createCalendarService, type CalendarService } from './calendar/service'
 import { createMeetServer, type MeetServer } from './meet/server'
+import { createNavegadorMcpServer, type NavegadorMcpServer } from './navegador/mcp'
+import { createNavegadorServer, parseNavegadorSet, type NavegadorServer } from './navegador/server'
 import { createPluginSave } from './plugins/save'
 import { createDriveSync, createEndOfRecordingHooks, type DriveSyncService } from './google/drive-sync'
 import { nodeExecFile } from './claude-cli/locate'
@@ -67,7 +70,7 @@ import { createMcpStore } from './mcp/store'
 import { APP_ORIGIN, applySessionSecurity, originOf } from './security'
 import { createSettingsService, type SettingsService } from './settings/service'
 import { createFileSettingsStore } from './settings/store'
-import { isSmokeRun, prepareSmokeEnvironment, runSmoke, SMOKE_MEET_PORTS } from './smoke'
+import { isSmokeRun, prepareSmokeEnvironment, runSmoke, SMOKE_MEET_PORTS, SMOKE_NAVEGADOR_PORTS } from './smoke'
 import { createSmokeAcp, createSmokeClaude, createSmokeFixtures, SMOKE_FAKE_KEY, writeSmokeMcpFixtures, type SmokeFixtures } from './smoke-fixtures'
 import { acpOpener, processLauncher } from './acp/agent'
 import { bundledAdapterEntry, bundledAgent, installedAgent, type AcpAgentService } from './acp/entry'
@@ -152,6 +155,10 @@ let whatsappService: WhatsAppService | null = null
 let readSettings: (() => Promise<AppSettings>) | null = null
 /** Servidor local da extensão do Meet (contrato 27): sobe e para com "Quem fala no Meet". */
 let meetServer: MeetServer | null = null
+/** Ponte do "Controle do navegador" (contrato 46): sobe e para com "Ativar ponte" (`navegadorPlugin`). */
+let navegadorServer: NavegadorServer | null = null
+/** Última configuração vista de "Ativar ponte", para o estado que vai às janelas. */
+let navegadorAtivo = false
 /** Ícone da barra de menus (contrato 23, CA8): aparece sempre que o app está aberto. */
 let trayController: TrayController | null = null
 /** Último estado do bloqueio, para o menu do ícone ("Bloquear" só com senha ou Touch ID). */
@@ -520,6 +527,20 @@ function installTray(automations: AutomationsService): void {
   })
 }
 
+/** Estado da ponte do navegador (contrato 46) para a tela. */
+function navegadorState(): NavegadorState {
+  return { ativo: navegadorAtivo, conectado: navegadorServer?.connected() ?? false }
+}
+
+/** Contrato 46: a ponte do navegador segue "Ativar ponte"; ligar ou desligar vai às janelas. */
+function applyNavegador(ativo: boolean): void {
+  if (ativo) void navegadorServer?.start().catch(() => null)
+  else void navegadorServer?.close().catch(() => undefined)
+  if (ativo === navegadorAtivo) return
+  navegadorAtivo = ativo
+  broadcast(BrowserWindow.getAllWindows(), 'scribe:navegador-changed', navegadorState())
+}
+
 /** Mudança de configuração vai para todas as janelas abertas; a marca vai para o título, o "Sobre" e o Dock. */
 function broadcastSettings(settings: AppSettings): void {
   broadcast(BrowserWindow.getAllWindows(), 'scribe:settings-changed', settings)
@@ -536,6 +557,8 @@ function broadcastSettings(settings: AppSettings): void {
   // Contrato 27: "Quem fala no Meet" desligado para o servidor local; ligado, ele sobe (se já não estiver no ar).
   if (settings.meetSpeakers) void meetServer?.start().catch(() => null)
   else void meetServer?.stop().catch(() => undefined)
+  // Contrato 46: "Ativar ponte" ligado sobe a ponte do navegador; desligado, para (e recusa o comando em curso).
+  applyNavegador(settings.navegadorPlugin)
   // Contrato 40: o número do Dock segue "Notificações do WhatsApp" e "Só pessoas".
   refreshWhatsAppBadge()
 }
@@ -624,6 +647,10 @@ interface AppServices {
   pluginSave: (input: unknown) => Promise<PluginSaveResult>
   /** Servidores MCP do agente: a aba "Conexões" e as sessões (contrato 21). */
   mcp: McpService
+  /** Ponte do "Controle do navegador" (contrato 46). */
+  navegador: NavegadorServer
+  /** Servidor MCP das ferramentas do navegador do Assistente (contrato 47). */
+  navegadorMcp: NavegadorMcpServer
 }
 
 /**
@@ -636,12 +663,12 @@ function bridgeSourceDir(): string {
 }
 
 /**
- * Pasta embutida de um plugin (contrato 31): o empacotado leva em `resources/meet-extension` dentro do `app.asar`
- * (pack.sh); em desenvolvimento e no smoke, a `extensions/meet` do repositório.
+ * Pasta embutida de um plugin (contrato 31): o empacotado leva em `resources/<id>-extension` dentro do `app.asar`
+ * (pack.sh); em desenvolvimento e no smoke, a `extensions/<id>` do repositório. Contrato 46: e o do navegador.
  */
 function pluginSourceDir(id: AppPluginId): string {
-  const packaged: Record<AppPluginId, string> = { meet: 'meet-extension' }
-  const repo: Record<AppPluginId, string> = { meet: 'meet' }
+  const packaged: Record<AppPluginId, string> = { meet: 'meet-extension', navegador: 'navegador-extension' }
+  const repo: Record<AppPluginId, string> = { meet: 'meet', navegador: 'navegador' }
   return app.isPackaged ? join(app.getAppPath(), 'resources', packaged[id]) : join(app.getAppPath(), '..', '..', 'extensions', repo[id])
 }
 
@@ -752,7 +779,11 @@ function createAppServices(userData: string): AppServices {
   // Contrato 21: os servidores MCP entram só nas sessões que pedem (chat das conversas e análise); o serviço nasce depois
   // do `claude` (precisa achar o binário), então a fábrica lê por aqui.
   const mcpRef: { current: McpService | null } = { current: null }
+  // Contrato 47: o servidor MCP local com as ferramentas do navegador, para a sessão do Assistente que abre com a ponte
+  // ligada e a extensão conectada. Sobe na primeira dessas sessões; cada uma tem o próprio token.
+  const navegadorMcp = createNavegadorMcpServer({ ponte: () => navegadorServer, ...devLog })
   const openAcp = acpOpener({
+    navegadorMcp,
     profile: currentProfile,
     mcp: {
       servers: async (use, off) => (mcpRef.current ? mcpRef.current.sessionServers(use, off) : []),
@@ -958,6 +989,8 @@ function createAppServices(userData: string): AppServices {
     locate: () => claude.locate(),
     spawn: smokeClaude?.spawn ?? nodeSpawnClaude,
     openAcp,
+    // Contrato 47: a ponte do navegador conectada agora (a sessão do Assistente abre com as ferramentas dela).
+    navegador: { connected: () => navegadorServer?.connected() ?? false },
     baseEnv: process.env,
     onEvent: (event) => broadcast(BrowserWindow.getAllWindows(), 'scribe:chat-event', event),
     clipboard: appClipboard,
@@ -1184,6 +1217,15 @@ function createAppServices(userData: string): AppServices {
     ...devLog,
   })
   meetServer = meet
+  // Contrato 46: a ponte do "Controle do navegador". Conectar e desconectar vai às janelas; os comandos só saem do
+  // main (neste contrato, nenhum consumidor ainda).
+  const navegador = createNavegadorServer({
+    // Smoke: portas fora da faixa da extensão, como no Meet.
+    ...(smoke ? { ports: SMOKE_NAVEGADOR_PORTS } : {}),
+    onChange: () => broadcast(BrowserWindow.getAllWindows(), 'scribe:navegador-changed', navegadorState()),
+    ...devLog,
+  })
+  navegadorServer = navegador
   // Contrato 25: o clique nos cartões do Assistente. O lembrete é a tarefa "uma vez" sem agente das Automações.
   const chatActions = createChatActions({ store: chatStore, createReminder: (input) => automations.createReminder(input), timeZone })
   return {
@@ -1217,6 +1259,8 @@ function createAppServices(userData: string): AppServices {
     meet,
     pluginSave,
     mcp,
+    navegador,
+    navegadorMcp,
   }
 }
 
@@ -1531,6 +1575,13 @@ function registerIpc(services: AppServices): void {
   })
   handle('scribe:meet-status', appOrigin, () => meet.status())
   handle('scribe:plugin-save', appOrigin, (_event, request) => pluginSave(request))
+  // Contrato 46: o estado da ponte do navegador e o "Ativar ponte" (grava a configuração; o servidor segue ela).
+  handle('scribe:navegador-status', appOrigin, () => navegadorState())
+  handle('scribe:navegador-set', appOrigin, async (_event, request) => {
+    const ativo = parseNavegadorSet(request)
+    if (ativo !== null) await settings.updateSettings({ navegadorPlugin: ativo })
+    return navegadorState()
+  })
   handle('scribe:drive-status', appOrigin, (_event, request) => drive.status((request as { meetingId?: unknown } | undefined)?.meetingId))
   handle('scribe:drive-retry', appOrigin, (_event, request) => drive.retry((request as { meetingId?: unknown } | undefined)?.meetingId))
   handle('scribe:drive-open', appOrigin, (_event, request) => {
@@ -1698,6 +1749,8 @@ void app.whenReady().then(async () => {
   void services.whatsapp.init().catch(() => undefined)
   // Contrato 27: o servidor da extensão do Meet, com "Quem fala no Meet" ligado (padrão).
   if ((await services.settings.getSettings()).meetSpeakers) void services.meet.start().catch(() => null)
+  // Contrato 46: a ponte do navegador, só com "Ativar ponte" ligado (padrão desligado).
+  applyNavegador((await services.settings.getSettings()).navegadorPlugin)
   // Marca gravada: título da primeira janela, "Sobre" e ícone do Dock antes de abrir.
   applyBrand(await services.settings.getSettings())
   // Fila do Drive deixada por uma execução anterior (contrato 11): continua sozinha, também bloqueado.
@@ -1730,6 +1783,8 @@ void app.whenReady().then(async () => {
     services.drive.dispose()
     void services.whatsapp.dispose()
     void services.meet.stop()
+    void services.navegador.close()
+    void services.navegadorMcp.close()
     disposeWhatsAppBadge()
   })
   installMenu()
@@ -1796,6 +1851,7 @@ void app.whenReady().then(async () => {
       tray: () => trayController,
       calendar: services.calendar,
       meet: services.meet,
+      navegador: services.navegador,
     })
     // `app.exit` não passa por `will-quit`.
     services.calendar.dispose()
@@ -1812,6 +1868,8 @@ void app.whenReady().then(async () => {
     await services.whatsapp.dispose()
     disposeWhatsAppBadge()
     await services.meet.stop()
+    await services.navegador.close()
+    await services.navegadorMcp.close()
     app.exit(code)
     return
   }

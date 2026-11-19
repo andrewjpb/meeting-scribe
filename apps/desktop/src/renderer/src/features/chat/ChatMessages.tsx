@@ -21,11 +21,11 @@ import type { ChatMeetings } from './useChatMeetings'
 export const QUIET_BUTTON =
   'no-drag inline-flex h-7 items-center gap-1.5 rounded-[var(--radius-control)] px-2 text-12 text-text-muted transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-bg-sunken hover:text-title disabled:pointer-events-none disabled:opacity-50'
 
-/** Ícone de cada passo: o índice, uma reunião, uma busca, a lista de arquivos, a internet (contrato 26), o MCP (contrato 21). */
+/** Ícone de cada passo: o índice, uma reunião, uma busca, a lista de arquivos, a internet (contrato 26), o MCP (contrato 21) e o navegador (contrato 47). */
 function stepIcon(step: ChatStep): LucideIcon {
   if (step.tool === 'Mcp') return step.status === 'failed' ? ShieldOff : Plug
   if (step.tool === 'WebFetch' && step.status === 'failed') return ShieldOff
-  if (step.tool === 'WebSearch' || step.tool === 'WebFetch') return Globe
+  if (step.tool === 'WebSearch' || step.tool === 'WebFetch' || step.tool.startsWith('navegador_')) return Globe
   if (step.tool === 'Grep') return Search
   if (step.tool === 'Glob') return FolderSearch
   return step.meetingId ? FileText : ListTree

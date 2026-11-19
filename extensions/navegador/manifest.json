@@ -1,0 +1,11 @@
+{
+  "manifest_version": 3,
+  "name": "LAP Reuniões — Controle do navegador",
+  "version": "0.1.0",
+  "description": "Executa, numa janela própria do Chrome, os comandos que o app LAP Reuniões manda deste computador (abrir, ler, clicar, digitar). Não mexe nas suas abas. Só fala com 127.0.0.1.",
+  "permissions": ["tabs", "scripting", "storage"],
+  "host_permissions": ["<all_urls>", "http://127.0.0.1/*"],
+  "background": {
+    "service_worker": "background.js"
+  }
+}

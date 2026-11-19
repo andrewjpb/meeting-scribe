@@ -46,6 +46,7 @@ import {
   rememberSettingsTab,
   resultsLabel,
   searchSettings,
+  settingsResultLabel,
   settingsIndex,
   SETTINGS_TAB_LABELS,
   tabForShortcut,
@@ -228,8 +229,11 @@ function SettingsTabs({ tab }: { tab: SettingsTab }) {
     const entry = entries[index]
     if (!entry) return
     const panelEl = rootRef.current?.querySelector(`[data-settings-panel="${entry.tab}"]`)
-    const row = [...(panelEl?.querySelectorAll<HTMLElement>('[data-setting-row]') ?? [])].find((el) => matchesRow(entry, el.dataset.settingName ?? '')) ?? null
     const block = panelEl?.querySelector(`section[aria-label="${CSS.escape(entry.section)}"]`) ?? null
+    // Contrato 46: com dois cartões de plugin, "Salvar plugin" se repete na aba; vale a linha do bloco da entrada.
+    const rowIn = (root: Element | null | undefined): HTMLElement | null =>
+      [...(root?.querySelectorAll<HTMLElement>('[data-setting-row]') ?? [])].find((el) => matchesRow(entry, el.dataset.settingName ?? '')) ?? null
+    const row = rowIn(block) ?? rowIn(panelEl)
     pendingRef.current = { row, block }
     setHint(row ? null : entry)
     setQuery('')
@@ -501,9 +505,7 @@ function SearchResults({ query, entries, groups, onOpen }: SearchResultsProps) {
                     onClick={() => onOpen(index)}
                     className="no-drag flex w-full flex-col items-start gap-0.5 px-4 py-3 text-left transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-bg-sunken focus-visible:outline-offset-[-2px]"
                   >
-                    <span className="text-13 font-medium text-text">
-                      {group.label} › {entry.name}
-                    </span>
+                    <span className="text-13 font-medium text-text">{settingsResultLabel(entries, entry)}</span>
                     {entry.description && <span className="text-12 text-text-muted">{entry.description}</span>}
                   </button>
                 </li>

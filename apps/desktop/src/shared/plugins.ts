@@ -2,7 +2,7 @@
 // mostra um cartão por plugin e "Salvar plugin…" copia a pasta dele para onde a pessoa escolher, para carregar sem
 // compactação no navegador. Um plugin novo (ex.: Teams) = uma entrada aqui + a pasta embutida pelo pack.sh.
 
-export type AppPluginId = 'meet'
+export type AppPluginId = 'meet' | 'navegador'
 
 export interface AppPlugin {
   id: AppPluginId
@@ -20,6 +20,14 @@ export const APP_PLUGINS: readonly AppPlugin[] = [
     navegador: 'Google Chrome',
     descricao: 'No Google Meet e no Microsoft Teams aberto no Chrome (não no app do Teams), manda ao app os nomes de quem fala, para a transcrição dizer quem falou cada trecho.',
     arquivos: ['manifest.json', 'content.js', 'background.js', 'README.md'],
+  },
+  // Contrato 46 (plugin-navegador): a ponte com o Chrome; neste contrato, sem consumidor além do teste.
+  {
+    id: 'navegador',
+    nome: 'Controle do navegador',
+    navegador: 'Google Chrome',
+    descricao: 'O agente usa uma janela própria do Chrome para abrir e ler páginas. Não mexe nas suas abas.',
+    arquivos: ['manifest.json', 'background.js', 'README.md'],
   },
 ]
 

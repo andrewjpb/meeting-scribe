@@ -5,6 +5,7 @@
 // estado atual, e a resposta pode trazer ações propostas (`ChatAction`), que só rodam com o clique da pessoa.
 import type { ChatAction } from './assistant'
 import type { McpApproval, McpApprovalDecision } from './mcp'
+import { NAVEGADOR_FERRAMENTAS } from './navegador-ferramentas'
 import type { ChatModel } from './settings-defaults'
 
 /** Até 200 mensagens por conversa; acima disso as mais antigas saem. */
@@ -35,10 +36,10 @@ export const CHAT_PLAN_MAX = 50
 export const CHAT_PLAN_TEXT_MAX = 500
 
 /**
- * Ferramentas que viram passo na tela: as de leitura, (contrato 26) a busca na web e a página aberta e (contrato 21) as
- * dos servidores MCP ("Usando <ferramenta> (<servidor>)").
+ * Ferramentas que viram passo na tela: as de leitura, (contrato 26) a busca na web e a página aberta, (contrato 21) as
+ * dos servidores MCP ("Usando <ferramenta> (<servidor>)") e (contrato 47) as do navegador do Assistente.
  */
-export const CHAT_STEP_TOOLS = ['Read', 'Grep', 'Glob', 'WebSearch', 'WebFetch', 'Mcp'] as const
+export const CHAT_STEP_TOOLS = ['Read', 'Grep', 'Glob', 'WebSearch', 'WebFetch', 'Mcp', ...NAVEGADOR_FERRAMENTAS] as const
 export type ChatStepTool = (typeof CHAT_STEP_TOOLS)[number]
 
 /**
