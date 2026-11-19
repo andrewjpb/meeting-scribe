@@ -12,7 +12,7 @@ import { useWhatsApp } from '../features/whatsapp/whatsappStore'
 import { useEmail } from '../features/email/emailStore'
 import { totalUnread, unreadBadge } from '../features/email/format'
 import { APP_ROUTES, routeIdOf } from './routes'
-import { activeNavId, lastEmailPath, levelFor, rememberEmailPath, sectionOf } from './sidebarLevels'
+import { activeNavId, isSidebarSection, lastEmailPath, levelFor, rememberEmailPath, sectionOf, type SidebarSection } from './sidebarLevels'
 import { SidebarStack, type SidebarFocus } from './SidebarStack'
 
 // O item leva ao caminho da rota (Configurações sem a aba abre a última aberta; Email, contrato 65, à última pasta aberta).
@@ -20,7 +20,8 @@ const NAV_ITEMS = APP_ROUTES.flatMap((route) => (route.nav ? [{ ...route.nav, id
 
 /**
  * Barra lateral opaca em azul profundo: espaço dos botões da janela, marca (a escolhida em Configurações
- * ou a da LAP), a coluna em pilha (contrato 65: a raiz com os itens, ou o nível Email com as contas) e, no rodapé,
+ * ou a da LAP), a coluna em pilha (contrato 65: a raiz com os itens, o nível Email com as contas ou, contrato 66, o
+ * nível Configurações com as abas) e, no rodapé,
  * "Bloquear", o aviso de versão nova e as permissões.
  */
 export function Sidebar() {
@@ -40,15 +41,17 @@ export function Sidebar() {
 
   useEffect(() => rememberEmailPath(location.pathname), [location.pathname])
 
-  // Email: na seção, só mostra o nível de novo (rota e mensagem aberta iguais); de fora, abre a última pasta aberta.
-  const openEmail = (event: MouseEvent): void => {
+  // Item de seção: na seção, só mostra o nível de novo (rota, mensagem e aba abertas iguais); de fora, o Email abre a
+  // última pasta aberta e Configurações, `/configuracoes`, que o `SettingsScreen` leva à última aba vista.
+  const openSection = (section: SidebarSection) => (event: MouseEvent): void => {
     event.preventDefault()
     focusRef.current = '[data-sidebar-back]'
-    if (sectionOf(location.pathname) === 'email') setPoppedKey(null)
-    else void navigate(lastEmailPath(useEmail.getState().accounts?.map((status) => status.account.id) ?? []))
+    if (sectionOf(location.pathname) === section) setPoppedKey(null)
+    else if (section === 'email') void navigate(lastEmailPath(useEmail.getState().accounts?.map((status) => status.account.id) ?? []))
+    else void navigate(ROUTE_PATHS.configuracoes)
   }
   const back = (): void => {
-    focusRef.current = '[data-nav="email"]'
+    if (level !== 'root') focusRef.current = `[data-nav="${level}"]`
     setPoppedKey(location.key)
   }
 
@@ -62,7 +65,7 @@ export function Sidebar() {
         data-nav={item.id}
         aria-current={active ? 'page' : undefined}
         draggable={false}
-        onClick={item.id === 'email' ? openEmail : undefined}
+        onClick={isSidebarSection(item.id) ? openSection(item.id) : undefined}
         className={`flex h-10 items-center gap-2.5 rounded-[var(--radius-control)] px-2.5 text-13 transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] ${
           active ? 'bg-side-active text-side-text' : 'text-side-muted hover:text-side-text'
         }`}

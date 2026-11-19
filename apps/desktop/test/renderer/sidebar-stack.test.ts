@@ -1,4 +1,4 @@
-// Barra lateral em pilha (contrato 65, CA20): o nível de cada rota, o "voltar" que vale só para a navegação dele, o
+// Barra lateral em pilha (contrato 65, CA20; contrato 66, CA11, o nível Configurações): o nível de cada rota, o "voltar" que vale só para a navegação dele, o
 // deslize entre os níveis, o último email aberto na sessão e o número do item "Email" na raiz.
 import { beforeEach, describe, expect, it } from 'vitest'
 import type { EmailMessage } from '../../src/shared/email'
@@ -15,7 +15,14 @@ describe('nível da barra lateral (contrato 65)', () => {
   it('sectionOf: só /email e /email/* são a seção Email', () => {
     expect(sectionOf('/email')).toBe('email')
     expect(sectionOf('/email/a/entrada')).toBe('email')
-    for (const path of ['/', '/reunioes/x', '/gravacao', '/automacoes', '/whatsapp', '/assistente', '/configuracoes/geral']) expect(sectionOf(path)).toBeNull()
+    for (const path of ['/', '/reunioes/x', '/gravacao', '/automacoes', '/whatsapp', '/assistente']) expect(sectionOf(path)).toBeNull()
+  })
+
+  it('sectionOf: /configuracoes e /configuracoes/* são a seção Configurações (contrato 66)', () => {
+    expect(sectionOf('/configuracoes')).toBe('configuracoes')
+    expect(sectionOf('/configuracoes/conexoes')).toBe('configuracoes')
+    expect(sectionOf('/configuracoes/gravacao')).toBe('configuracoes')
+    expect(sectionOf('/configuracoesx')).toBeNull()
   })
 
   it('levelFor: a rota manda, menos o "voltar" da mesma navegação', () => {
@@ -23,6 +30,9 @@ describe('nível da barra lateral (contrato 65)', () => {
     expect(levelFor('/email/a/entrada', 'k1', 'k1')).toBe('root')
     expect(levelFor('/email/a/entrada', 'k0', 'k1')).toBe('email')
     expect(levelFor('/', null, 'k1')).toBe('root')
+    expect(levelFor('/configuracoes/geral', null, 'k1')).toBe('configuracoes')
+    expect(levelFor('/configuracoes/geral', 'k1', 'k1')).toBe('root')
+    expect(levelFor('/configuracoes/geral', 'k0', 'k1')).toBe('configuracoes')
   })
 
   it('nível e item marcado saem do mesmo padrão: /email mais fundo mostra o nível Email e marca "Email"', () => {
@@ -42,6 +52,10 @@ describe('nível da barra lateral (contrato 65)', () => {
     expect(transitionOf('email', 'email')).toBeNull()
     expect(transitionOf('root', 'email')).toBe('push')
     expect(transitionOf('email', 'root')).toBe('pop')
+    // Contrato 66: do nível Email, ⌘, entra direto no nível Configurações (e o contrário), sem passar pela raiz.
+    expect(transitionOf('email', 'configuracoes')).toBe('push')
+    expect(transitionOf('configuracoes', 'email')).toBe('push')
+    expect(transitionOf('configuracoes', 'root')).toBe('pop')
   })
 
   it('o deslize dura o --duration-slow, com reserva de 80 ms', () => {

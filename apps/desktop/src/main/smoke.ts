@@ -286,6 +286,8 @@ async function clickSelector(contents: WebContents, selector: string): Promise<v
 /** Contrato 65: a barra lateral em pilha. O nível à mostra (o que está saindo no deslize não conta). */
 const SIDEBAR_ROOT = '[data-sidebar-level="root"]:not([data-sidebar-leaving])'
 const SIDEBAR_EMAIL = '[data-sidebar-level="email"]:not([data-sidebar-leaving])'
+/** Contrato 66: o nível Configurações, com uma linha por aba. */
+const SIDEBAR_SETTINGS = '[data-sidebar-level="configuracoes"]:not([data-sidebar-leaving])'
 const SIDEBAR_BACK = '[data-sidebar-level]:not([data-sidebar-leaving]) [data-sidebar-back]'
 
 /** A raiz da barra lateral à mostra: num nível de seção, o cabeçalho-voltar (que não navega). */
@@ -317,20 +319,32 @@ async function showEmailLevel(contents: WebContents): Promise<void> {
   if (!(await waitFor(contents, `document.querySelector('${SIDEBAR_EMAIL}')`, 8000))) throw new Error('o nível Email da barra lateral não apareceu')
 }
 
+/** Contrato 66: o nível Configurações à mostra: senão, o item "Configurações" da raiz. */
+async function showSettingsLevel(contents: WebContents): Promise<void> {
+  if (await evaluate<boolean>(contents, `Boolean(document.querySelector('${SIDEBAR_SETTINGS}'))`)) return
+  await clickNav(contents, 'configuracoes')
+  if (!(await waitFor(contents, `document.querySelector('${SIDEBAR_SETTINGS}')`, 8000))) throw new Error('o nível Configurações da barra lateral não apareceu')
+}
+
 /** Contrato 38: o trilho da direita do Assistente (conversas em cima, "Contexto" embaixo). */
 const CHAT_RAIL = 'aside[aria-label="Conversas e contexto"]'
 
 const routeIs = (route: string): string => `document.querySelector('main')?.dataset.route === '${route}'`
 
-/** Contrato 18: a aba marcada e o painel dela à mostra (os outros ficam montados, com `hidden`). */
+/**
+ * Contrato 18: a aba marcada e o painel dela à mostra (os outros ficam montados, com `hidden`). Contrato 66: a aba
+ * marcada é a linha dela no nível Configurações da barra lateral.
+ */
 const settingsTabIs = (tab: SettingsTab): string =>
-  `document.querySelector('[role="tab"][data-tab="${tab}"]')?.getAttribute('aria-selected') === 'true' && document.querySelector('[data-settings-panel="${tab}"]')?.hidden === false`
+  `document.querySelector('${SIDEBAR_SETTINGS} [data-settings-tab-link="${tab}"]')?.getAttribute('aria-current') === 'page' && document.querySelector('[data-settings-panel="${tab}"]')?.hidden === false`
 
-/** Contrato 18: troca de aba pelo clique, já em Configurações. */
+/** Contrato 18: troca de aba pelo clique (contrato 66: na linha do nível Configurações), já em Configurações. */
 async function selectSettingsTab(contents: WebContents, tab: SettingsTab): Promise<boolean> {
+  await showSettingsLevel(contents)
+  const link = `${SIDEBAR_SETTINGS} [data-settings-tab-link="${tab}"]`
   // 15 s: com a máquina carregada a troca de rota passa dos 5 s e o teste desistia cedo (flake da aba "geral").
-  await waitFor(contents, `document.querySelector('[role="tab"][data-tab="${tab}"]')`, 15_000)
-  await clickSelector(contents, `[role="tab"][data-tab="${tab}"]`)
+  await waitFor(contents, `document.querySelector('${link}')`, 15_000)
+  await clickSelector(contents, link)
   return waitFor(contents, settingsTabIs(tab))
 }
 
@@ -2903,7 +2917,10 @@ async function probeOrigin(contents: WebContents): Promise<{ origin: string; opf
   )
 }
 
-/** Tab até o item "Configurações" e Enter, com eventos de teclado reais do Chromium. */
+/**
+ * Tab até o item "Configurações" e Enter, com eventos de teclado reais do Chromium. Contrato 66: o Enter mostra o nível
+ * Configurações, com o foco no cabeçalho-voltar.
+ */
 async function keyboardNavigation(contents: WebContents): Promise<Check> {
   await evaluate(contents, "document.activeElement instanceof HTMLElement && document.activeElement.blur(), true")
   // Contrato 65: o item "Email" é mais uma parada antes de Configurações.
@@ -2916,10 +2933,10 @@ async function keyboardNavigation(contents: WebContents): Promise<Check> {
       contents.sendInputEvent({ type: 'keyDown', keyCode: 'Return' })
       contents.sendInputEvent({ type: 'char', keyCode: 'Return' })
       contents.sendInputEvent({ type: 'keyUp', keyCode: 'Return' })
-      await wait(200)
+      const level = await waitFor(contents, `${routeIs('configuracoes')} && document.querySelector('${SIDEBAR_SETTINGS}') && document.querySelectorAll('[data-sidebar-level]').length === 1`, 5000)
       const route = await currentRoute(contents)
-      const nav = await activeNav(contents)
-      return { ok: route === 'configuracoes' && nav === 'configuracoes', detail: `Tab x${i + 1} + Enter -> rota ${route}, aria-current em ${nav}` }
+      const focus = await evaluate<boolean>(contents, `document.activeElement?.matches('${SIDEBAR_SETTINGS} [data-sidebar-back]') === true`)
+      return { ok: route === 'configuracoes' && level && focus, detail: `Tab x${i + 1} + Enter -> rota ${route}, nível Configurações=${level}, foco no cabeçalho-voltar=${focus}` }
     }
   }
   return { ok: false, detail: 'Tab não chegou ao item Configurações' }
@@ -3794,14 +3811,18 @@ async function layoutMetrics(contents: WebContents, screen: LayoutScreen): Promi
       const lineHeight = (selector) => round(parseFloat(getComputedStyle(document.querySelector(selector)).lineHeight))
       const out = {
         sidebarWidth: round(box('aside')?.width ?? 0),
-        navItemHeight: round(box('[data-nav="reunioes"]')?.height ?? 0),
+        // Contrato 66: em Configurações a raiz não está à mostra; o cabeçalho-voltar tem a altura dos itens.
+        navItemHeight: round(box(${JSON.stringify(screen)} === 'configuracoes' ? '${SIDEBAR_BACK}' : '[data-nav="reunioes"]')?.height ?? 0),
         permissionSquare: round(box('[data-permission="mic"] span[aria-hidden="true"]')?.width ?? 0),
       }
       if (${JSON.stringify(screen)} === 'configuracoes') {
-        const title = box('main h1')
+        // Contrato 66: o título da aba (20/26) fica centrado na linha da busca, que começa a 28 do topo como antes.
+        const title = box('[data-settings-title]')
+        const search = box('[data-settings-search]')
         Object.assign(out, {
-          contentTop: round(title.top - main.top),
+          contentTop: round(box('main header').top - main.top),
           contentLeft: round(title.left - main.left),
+          titleCentered: round(Math.abs(title.top + title.height / 2 - (search.top + search.height / 2))),
           inputHeight: round(box('#assemblyai-key').height),
           selectHeight: round(box('#settings-mic').height),
           buttonHeight: round(box('[data-action="save-key"]').height),
@@ -3851,7 +3872,9 @@ const SCREEN_LAYOUT: Record<LayoutScreen, Record<string, Expectation>> = {
     headerAlign: { min: 0, max: 0.5 },
     // Só registra a largura reservada para a barra (0 com a barra sobreposta do macOS).
     scrollbarGutter: { min: 0, max: 40 },
-    tabsShiftOnScroll: { min: 0, max: 0 },
+    // Contrato 66: sem a fileira de abas, o cabeçalho (o nome da aba) é o que não pode se mexer ao rolar.
+    titleShiftOnScroll: { min: 0, max: 0 },
+    titleCentered: { min: 0, max: 0.5 },
     // Coluna dos controles: o mesmo `x` em todas as linhas de cada aba, com 1 px de tolerância.
     ...Object.fromEntries(SETTINGS_TABS.map((tab) => [`controlSpread_${tab}`, { min: 0, max: 0.5 }])),
     // Botões das contas (Google, Microsoft): alinhados pela direita, a mesma borda em todas as linhas.
@@ -3878,28 +3901,28 @@ const SCREEN_LAYOUT: Record<LayoutScreen, Record<string, Expectation>> = {
 /**
  * Contrato 18: as medidas de Configurações na aba "Gravação" (campo, seletor, botão e linha), a linha de
  * modelo na aba "Claude" e, em cada aba, o alinhamento da coluna dos controles (o `x` do primeiro elemento
- * de cada `[data-setting-control]`), a largura e a centralização da coluna e as abas paradas ao rolar.
+ * de cada `[data-setting-control]`), a largura e a centralização da coluna e o cabeçalho parado ao rolar.
  */
 async function settingsLayoutMetrics(contents: WebContents): Promise<Record<string, number>> {
   const round = (n: number): number => Math.round(n * 10) / 10
   await selectSettingsTab(contents, 'gravacao')
   const metrics = await layoutMetrics(contents, 'configuracoes')
-  const column = await evaluate<{ width: number; tabsShift: number }>(
+  const column = await evaluate<{ width: number; titleShift: number }>(
     contents,
     `(() => {
       const scroller = document.querySelector('[data-settings-scroll]')
-      const tablist = document.querySelector('[role="tablist"]')
-      const before = tablist.getBoundingClientRect().top
+      const title = document.querySelector('[data-settings-title]')
+      const before = title.getBoundingClientRect().top
       scroller.scrollTop = scroller.scrollHeight
-      const after = tablist.getBoundingClientRect().top
+      const after = title.getBoundingClientRect().top
       scroller.scrollTop = 0
-      return { width: document.querySelector('[data-settings-column]').getBoundingClientRect().width, tabsShift: Math.abs(after - before) }
+      return { width: document.querySelector('[data-settings-column]').getBoundingClientRect().width, titleShift: Math.abs(after - before) }
     })()`,
   )
   metrics['columnWidth'] = round(column.width)
-  metrics['tabsShiftOnScroll'] = round(column.tabsShift)
+  metrics['titleShiftOnScroll'] = round(column.titleShift)
   // Em cada aba, no topo e rolada até o fim: a coluna centralizada na área principal (sem descontar a barra de
-  // rolagem) e o título, as abas e a busca no mesmo `x` da coluna.
+  // rolagem) e o título e a busca no mesmo `x` da coluna.
   let centered = 0
   let headerAlign = 0
   let scrollbar = 0
@@ -3925,12 +3948,11 @@ async function settingsLayoutMetrics(contents: WebContents): Promise<Record<stri
         const measure = () => {
           const main = document.querySelector('main').getBoundingClientRect()
           const col = document.querySelector('[data-settings-column]').getBoundingClientRect()
-          const title = document.querySelector('main h1').getBoundingClientRect()
-          const tabs = document.querySelector('[role="tablist"]').getBoundingClientRect()
+          const title = document.querySelector('[data-settings-title]').getBoundingClientRect()
           const search = document.querySelector('[data-settings-search]').getBoundingClientRect()
           return {
             centered: Math.abs((col.left - main.left) - (main.right - col.right)),
-            header: Math.max(Math.abs(title.left - col.left), Math.abs(tabs.left - col.left), Math.abs(search.right - col.right)),
+            header: Math.max(Math.abs(title.left - col.left), Math.abs(search.right - col.right)),
           }
         }
         const top = measure()
@@ -3952,8 +3974,9 @@ async function settingsLayoutMetrics(contents: WebContents): Promise<Record<stri
 
 /**
  * Contrato 18, no claro: "Contas" vazia e sem botões; "Sobre" com versão, Electron e Chrome, o repositório
- * aberto no navegador e o atalho para "Atualizações"; a aba lembrada ao voltar; ⌘2/⌘8 e as setas; ⌘F e a
- * busca sem acento nem maiúscula, agrupada por aba, com o clique que leva à linha e a destaca por 2 s; Esc limpa.
+ * aberto no navegador e o atalho para "Atualizações"; a aba lembrada ao voltar; ⌘2/⌘8 (contrato 66: também com a raiz
+ * da barra lateral à mostra, que dá lugar ao nível Configurações); ⌘F e a busca sem acento nem maiúscula, agrupada por
+ * aba, com o clique que leva à linha e a destaca por 2 s; Esc limpa.
  */
 async function settingsTabsChecks(contents: WebContents, ctx: SmokeContext, shot: (name: string) => Promise<void>): Promise<Check> {
   const visibleText = (selector: string): Promise<string> => evaluate<string>(contents, `document.querySelector(${JSON.stringify(selector)})?.innerText ?? ''`)
@@ -3992,18 +4015,21 @@ async function settingsTabsChecks(contents: WebContents, ctx: SmokeContext, shot
   await clickNav(contents, 'configuracoes')
   const remembered = await waitFor(contents, `${routeIs('configuracoes')} && ${settingsTabIs('claude')}`)
 
-  // Teclado: ⌘2, ⌘8 ("Sobre", desde que "Plugins" (contrato 31) e "Conexões" (contrato 21) entraram antes dela) e a seta
-  // para a direita na lista de abas (da última, volta à primeira).
+  // Teclado: ⌘2, ⌘8 ("Sobre", desde que "Plugins" (contrato 31) e "Conexões" (contrato 21) entraram antes dela). Contrato
+  // 66: o foco vai para a linha da aba no nível Configurações; sem as Tabs, as setas saem, e ⌘2 com a raiz à mostra
+  // mostra o nível de novo e foca a linha.
   const press = (key: string, meta: boolean): Promise<unknown> =>
     evaluate(contents, `window.dispatchEvent(new KeyboardEvent('keydown', { key: ${JSON.stringify(key)}, metaKey: ${meta}, bubbles: true, cancelable: true })), true`)
   await press('2', true)
   const cmd2 = await waitFor(contents, settingsTabIs('gravacao'))
-  const activeTab = `document.activeElement?.getAttribute('role') === 'tab' ? document.activeElement.dataset.tab : ''`
+  const activeTab = `document.activeElement?.matches('${SIDEBAR_SETTINGS} [data-settings-tab-link]') ? document.activeElement.dataset.settingsTabLink : ''`
   const cmd2Focus = await evaluate<string>(contents, activeTab)
   await press('8', true)
   const cmd8 = await waitFor(contents, settingsTabIs('sobre'))
-  await evaluate(contents, `document.querySelector('[role="tab"][data-tab="geral"]').dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true })), true`)
-  const arrow = await waitFor(contents, settingsTabIs('geral'))
+  await showRoot(contents)
+  await press('2', true)
+  const rootCmd2 = await waitFor(contents, `${settingsTabIs('gravacao')} && document.querySelectorAll('[data-sidebar-level]').length === 1`)
+  const rootCmd2Focus = await evaluate<string>(contents, activeTab)
 
   // ⌘F e a busca.
   const input = '[data-settings-search] input'
@@ -4014,7 +4040,11 @@ async function settingsTabsChecks(contents: WebContents, ctx: SmokeContext, shot
   const groups = await evaluate<string[]>(contents, "[...document.querySelectorAll('[data-settings-results] [role=\"group\"]')].map((el) => el.getAttribute('aria-label'))")
   const items = await evaluate<string[]>(contents, "[...document.querySelectorAll('[data-settings-result]')].map((el) => el.innerText)")
   const panelsHidden = await evaluate<boolean>(contents, "[...document.querySelectorAll('[data-settings-panel]')].every((el) => el.hidden)")
-  const noneSelected = await evaluate<boolean>(contents, `!document.querySelector('[role="tab"][aria-selected="true"]')`)
+  // Contrato 66: durante a busca, o título diz "Configurações" e a linha da aba aberta continua marcada (a rota não muda).
+  const searchHeader = await evaluate<boolean>(
+    contents,
+    `document.querySelector('[data-settings-title]')?.textContent === 'Configurações' && document.querySelector('${SIDEBAR_SETTINGS} [data-settings-tab-link="gravacao"]')?.getAttribute('aria-current') === 'page'`,
+  )
   const live = await evaluate<string>(contents, `(document.querySelector('[data-settings-results-count]')?.getAttribute('aria-live') ?? '') + ':' + (document.querySelector('[data-settings-results-count]')?.textContent ?? '')`)
   await shot('configuracoes-busca-light')
   await setValue(contents, input, 'modelo do chat')
@@ -4083,12 +4113,13 @@ async function settingsTabsChecks(contents: WebContents, ctx: SmokeContext, shot
     cmd2 &&
     cmd2Focus === 'gravacao' &&
     cmd8 &&
-    arrow &&
+    rootCmd2 &&
+    rootCmd2Focus === 'gravacao' &&
     focused &&
     JSON.stringify(groups) === JSON.stringify(['Gravação', 'Claude']) &&
     items.every((item) => item.normalize('NFD').replace(/\p{Diacritic}/gu, '').toLowerCase().includes('traduc')) &&
     panelsHidden &&
-    noneSelected &&
+    searchHeader &&
     live === `polite:${items.length} resultados` &&
     jumped &&
     resultFocus === 'BUTTON:haiku' &&
@@ -4104,7 +4135,7 @@ async function settingsTabsChecks(contents: WebContents, ctx: SmokeContext, shot
     missing.length === 0
   return {
     ok,
-    detail: `Contas "${contas.replace(/\s+/g, ' ').trim()}" (botões ${JSON.stringify(contasButtons)}, ${ctx.fixtures.google.calls.length} pedidos ao Google); Sobre "${sobre.replace(/\s+/g, ' ').slice(0, 160)}", repositório -> ${opened || 'nada'}, "Procurar atualização" -> Geral=${toUpdates}, bloco visível=${updatesVisible}; aba lembrada=${remembered}; ⌘2=${cmd2}, ⌘8=${cmd8}, seta=${arrow}; ⌘F foca=${focused}; "TRADUCAO" -> grupos ${JSON.stringify(groups)}, itens ${JSON.stringify(items)}, painéis escondidos=${panelsHidden}; clique em "Modelo do chat" -> aba Claude e destaque=${jumped}, à vista=${inView}, busca limpa=${cleared}, destaque some em 2 s=${unhighlighted}; Esc limpa=${escaped}; foco: ⌘2 -> aba ${cmd2Focus || 'nenhuma'}, resultado -> ${resultFocus || 'fora da linha'}, Esc -> aba ${escFocus || 'nenhuma'}; durante a busca nenhuma aba marcada=${noneSelected}, região viva "${live}"; "haiku" acha "Modelo" escondido=${hiddenFound}, aviso=${hintShown}; "pasta"=${pastaFound}; ${rows.length} linhas na tela, fora do índice: ${JSON.stringify(missing)}`,
+    detail: `Contas "${contas.replace(/\s+/g, ' ').trim()}" (botões ${JSON.stringify(contasButtons)}, ${ctx.fixtures.google.calls.length} pedidos ao Google); Sobre "${sobre.replace(/\s+/g, ' ').slice(0, 160)}", repositório -> ${opened || 'nada'}, "Procurar atualização" -> Geral=${toUpdates}, bloco visível=${updatesVisible}; aba lembrada=${remembered}; ⌘2=${cmd2}, ⌘8=${cmd8}, ⌘2 com a raiz à mostra=${rootCmd2} (foco na linha ${rootCmd2Focus || 'nenhuma'}); ⌘F foca=${focused}; "TRADUCAO" -> grupos ${JSON.stringify(groups)}, itens ${JSON.stringify(items)}, painéis escondidos=${panelsHidden}; clique em "Modelo do chat" -> aba Claude e destaque=${jumped}, à vista=${inView}, busca limpa=${cleared}, destaque some em 2 s=${unhighlighted}; Esc limpa=${escaped}; foco: ⌘2 -> linha ${cmd2Focus || 'nenhuma'}, resultado -> ${resultFocus || 'fora da linha'}, Esc -> linha ${escFocus || 'nenhuma'}; durante a busca o título "Configurações" e a linha Gravação marcada=${searchHeader}, região viva "${live}"; "haiku" acha "Modelo" escondido=${hiddenFound}, aviso=${hintShown}; "pasta"=${pastaFound}; ${rows.length} linhas na tela, fora do índice: ${JSON.stringify(missing)}`,
   }
 }
 
@@ -4871,10 +4902,11 @@ async function lockChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => void
     await wait(40)
     tabStops.push((await lockLayerView(win)).focus)
   }
-  // Clique na barra lateral e atalho de aba (⌘2) não chegam à tela de trás.
+  // Clique na barra lateral e atalho de aba (⌘2) não chegam à tela de trás. Contrato 66: em Configurações, a barra
+  // mostra o nível Configurações; o clique vai na linha "Gravação", que trocaria de aba.
   const navPoint = await evaluate<{ x: number; y: number; hit: boolean } | null>(
     contents,
-    `(() => { const r = document.querySelector('[data-nav="reunioes"]')?.getBoundingClientRect(); if (!r) return null; const x = Math.round(r.left + r.width / 2), y = Math.round(r.top + r.height / 2); return { x, y, hit: ${LOCK_LAYER}.contains(document.elementFromPoint(x, y)) } })()`,
+    `(() => { const r = document.querySelector('${SIDEBAR_SETTINGS} [data-settings-tab-link="gravacao"]')?.getBoundingClientRect(); if (!r) return null; const x = Math.round(r.left + r.width / 2), y = Math.round(r.top + r.height / 2); return { x, y, hit: ${LOCK_LAYER}.contains(document.elementFromPoint(x, y)) } })()`,
   )
   if (navPoint) {
     contents.sendInputEvent({ type: 'mouseDown', x: navPoint.x, y: navPoint.y, button: 'left', clickCount: 1 })
@@ -4902,7 +4934,7 @@ async function lockChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => void
       navPoint?.hit === true &&
       stillGeral &&
       menuItem()?.enabled === false,
-    detail: `pelo botão=${lockedByButton}; backdrop-filter=${layer.blur}, véu ${layer.veil}, resto inert=${layer.inert}; título "${layer.title}"; foco em ${layer.focus}; Tab: ${tabStops.join(' > ')}; bordas nítidas fora do cartão ${sharpBefore} -> ${sharpAfter}; clique em Reuniões caiu na camada=${navPoint?.hit}, ⌘2 e o clique não mudaram a tela=${stillGeral}; menu "Bloquear" desabilitado=${menuItem()?.enabled === false}`,
+    detail: `pelo botão=${lockedByButton}; backdrop-filter=${layer.blur}, véu ${layer.veil}, resto inert=${layer.inert}; título "${layer.title}"; foco em ${layer.focus}; Tab: ${tabStops.join(' > ')}; bordas nítidas fora do cartão ${sharpBefore} -> ${sharpAfter}; clique na linha Gravação caiu na camada=${navPoint?.hit}, ⌘2 e o clique não mudaram a tela=${stillGeral}; menu "Bloquear" desabilitado=${menuItem()?.enabled === false}`,
   }
 
   // CA4: todos os canais de conteúdo devolvem `locked`; os da base respondem.
@@ -6648,6 +6680,9 @@ async function mcpChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => void,
     const detailsShown = await waitFor(contents, `document.querySelector('${server('cli:calculadora')} [data-mcp-details]')?.textContent.includes('CALC_TOKEN=••••')`)
     await settle(contents)
     shots.push(await capture(win, ctx.outDir, 'configuracoes-conexoes-light'))
+    // Contrato 66: Configurações › Conexões com o nível Configurações à mostra (um nível só, sem deslize).
+    await waitFor(contents, `${settingsTabIs('conexoes')} && document.querySelectorAll('[data-sidebar-level]').length === 1`)
+    shots.push(await capture(win, ctx.outDir, 'sidebar-configuracoes-light'))
     const leakList = await leakOnScreen()
     checks['tab'] = {
       ok:
@@ -6851,6 +6886,8 @@ async function mcpChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => void,
     const darkListed = await waitFor(dark.webContents, `document.querySelector('[data-mcp-cli-state="ok"]') && document.querySelector('${server('cli:calculadora')}')?.dataset.mcpState !== 'off'`, 15_000)
     await settle(dark.webContents)
     shots.push(await capture(dark, ctx.outDir, 'configuracoes-conexoes-dark'))
+    await waitFor(dark.webContents, `${settingsTabIs('conexoes')} && document.querySelectorAll('[data-sidebar-level]').length === 1`)
+    shots.push(await capture(dark, ctx.outDir, 'sidebar-configuracoes-dark'))
     checks['dark'] = { ok: darkListed, detail: `lista no escuro=${darkListed}` }
     dark.destroy()
   } finally {
@@ -7983,6 +8020,279 @@ async function openEmailFolder(contents: WebContents, folder: 'inbox' | 'sent', 
   return waitFor(contents, `${routeIs('email')} && document.querySelector('[data-email-folder-view="${folder}"]') && ${EMAIL_ROWS}.length >= ${rows}`, 8000)
 }
 
+/** Contrato 66: os rótulos das linhas do nível Configurações, na ordem de `SETTINGS_TABS`. */
+const SETTINGS_ROW_LABELS = ['Geral', 'Gravação', 'Claude', 'Arquivos', 'Contas', 'Plugins', 'Conexões', 'Sobre']
+
+/** Contrato 66: grava os pares de níveis (o que sai > o que entra) enquanto a barra lateral desliza, e se a raiz apareceu. */
+const WATCH_LEVELS = `(() => {
+  window.__smokeLevels = { pairs: [], root: false }
+  const record = () => {
+    const levels = [...${SIDEBAR_LEVELS}]
+    if (levels.some((el) => el.dataset.sidebarLevel === 'root')) window.__smokeLevels.root = true
+    if (levels.length !== 2) return
+    const leaving = levels.find((el) => el.hasAttribute('data-sidebar-leaving'))
+    const entering = levels.find((el) => !el.hasAttribute('data-sidebar-leaving'))
+    const pair = (leaving?.dataset.sidebarLevel ?? '') + '>' + (entering?.dataset.sidebarLevel ?? '') + (entering?.classList.contains('side-level-push-in') ? ':push' : '')
+    if (!window.__smokeLevels.pairs.includes(pair)) window.__smokeLevels.pairs.push(pair)
+  }
+  window.__smokeObserver?.disconnect()
+  window.__smokeObserver = new MutationObserver(record)
+  window.__smokeObserver.observe(document.querySelector('[data-sidebar-stack]'), { childList: true, subtree: true, attributes: true })
+  return true
+})()`
+
+/**
+ * Contrato 66, numa janela clara: o nível Configurações da barra lateral. CA4: de Reuniões, "Configurações" abre a última
+ * aba vista (Geral na primeira vez), com o foco no cabeçalho-voltar; CA3: o clique numa linha; CA1 e CA2: as linhas e o
+ * cabeçalho; CA7: o "voltar" não navega; CA5: da raiz, na seção, o nível volta sem navegar; CA8: a tela sem Tabs; CA6: ⌘, e
+ * `scribe:open-settings` levam ao nível sem mexer no foco (do nível Email, deslizando direto); CA9: a âncora e o destaque
+ * da busca; e dois ⌘, seguidos, que antes deixavam a tela em branco.
+ */
+async function settingsLevelChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => void, sidebarChecks: Record<string, Check>): Promise<void> {
+  const win = ctx.openWindow({ theme: 'light' })
+  watch(win)
+  await loadAndWait(win)
+  const contents = win.webContents
+  const oneLevel = `${SIDEBAR_LEVELS}.length === 1`
+  const backButton = `${SIDEBAR_SETTINGS} [data-sidebar-back]`
+  const focusIn = (selector: string): Promise<boolean> => evaluate<boolean>(contents, `document.activeElement?.matches(${JSON.stringify(selector)}) === true`)
+  const focusInSidebar = (): Promise<boolean> => evaluate<boolean>(contents, `Boolean(document.activeElement?.closest('[data-sidebar-stack]'))`)
+
+  // Duplo clique de verdade (eventos de mouse do Chromium) em "Configurações", de Reuniões, com e sem movimento reduzido:
+  // o 2º clique cai no nível que entrou, numa linha de aba, e não vale; abre a última aba lembrada (Geral, na primeira vez).
+  const doubleClicks: { reduced: boolean; second: string; tab: boolean }[] = []
+  for (const reduced of [false, true]) {
+    await clickNav(contents, 'reunioes')
+    await waitFor(contents, `${routeIs('reunioes')} && document.querySelector('${SIDEBAR_ROOT}') && ${oneLevel}`, 8000)
+    if (reduced) {
+      contents.debugger.attach('1.3')
+      await contents.debugger.sendCommand('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'reduce' }] })
+    }
+    try {
+      const point = await evaluate<{ x: number; y: number }>(
+        contents,
+        `(() => {
+          window.__smokeSecondClick = ''
+          window.__smokeClickProbe ??= window.addEventListener('click', (event) => { if (event.detail === 2) window.__smokeSecondClick = event.target.closest('[data-settings-tab-link]')?.dataset.settingsTabLink ?? event.target.closest('[data-nav]')?.dataset.nav ?? event.target.tagName }, { capture: true }) ?? true
+          const r = document.querySelector('${SIDEBAR_ROOT} [data-nav="configuracoes"]').getBoundingClientRect()
+          return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) }
+        })()`,
+      )
+      contents.sendInputEvent({ type: 'mouseDown', x: point.x, y: point.y, button: 'left', clickCount: 1 })
+      contents.sendInputEvent({ type: 'mouseUp', x: point.x, y: point.y, button: 'left', clickCount: 1 })
+      // O 2º clique depois do deslize (180 ms, dentro do tempo de um duplo clique), quando a linha já está sob o ponteiro.
+      await waitFor(contents, `document.querySelector('${SIDEBAR_SETTINGS}') && ${oneLevel}`, 8000)
+      contents.sendInputEvent({ type: 'mouseDown', x: point.x, y: point.y, button: 'left', clickCount: 2 })
+      contents.sendInputEvent({ type: 'mouseUp', x: point.x, y: point.y, button: 'left', clickCount: 2 })
+      await wait(400)
+      const second = await evaluate<string>(contents, 'window.__smokeSecondClick')
+      const tab = await waitFor(contents, `${routeIs('configuracoes')} && ${settingsTabIs('geral')} && ${oneLevel}`, 8000)
+      doubleClicks.push({ reduced, second, tab })
+    } finally {
+      if (reduced) {
+        await contents.debugger.sendCommand('Emulation.setEmulatedMedia', { features: [] }).catch(() => undefined)
+        contents.debugger.detach()
+      }
+    }
+  }
+  sidebarChecks['settingsDoubleClick'] = {
+    ok: doubleClicks.length === 2 && doubleClicks.every((attempt) => attempt.tab && (SETTINGS_TABS as readonly string[]).includes(attempt.second)),
+    detail: `duplo clique em Configurações de Reuniões: ${doubleClicks.map((attempt) => `${attempt.reduced ? 'com' : 'sem'} movimento reduzido, 2º clique na linha "${attempt.second || 'nenhuma'}", Geral aberta=${attempt.tab}`).join('; ')}`,
+  }
+
+  // CA4 e CA3: na primeira vez, Geral; o clique numa linha troca a aba; de Reuniões de novo, a última aba vista.
+  await clickNav(contents, 'reunioes')
+  await waitFor(contents, `${routeIs('reunioes')} && ${oneLevel}`, 8000)
+  await clickNav(contents, 'configuracoes')
+  const firstTime = await waitFor(contents, `${routeIs('configuracoes')} && ${settingsTabIs('geral')} && ${oneLevel}`, 8000)
+  const firstFocus = await focusIn(backButton)
+  const clicked = await selectSettingsTab(contents, 'conexoes')
+  await clickNav(contents, 'reunioes')
+  await waitFor(contents, `${routeIs('reunioes')} && document.querySelector('${SIDEBAR_ROOT}') && ${oneLevel}`)
+  await clickNav(contents, 'configuracoes')
+  const lastTab = await waitFor(contents, `${routeIs('configuracoes')} && ${settingsTabIs('conexoes')} && ${oneLevel}`, 8000)
+  const lastFocus = await focusIn(backButton)
+  sidebarChecks['settingsEnter'] = {
+    ok: firstTime && firstFocus && clicked && lastTab && lastFocus,
+    detail: `de Reuniões, a primeira vez em Geral=${firstTime} (foco no cabeçalho-voltar=${firstFocus}); clique na linha Conexões=${clicked}; de Reuniões de novo, Conexões=${lastTab} (foco no cabeçalho-voltar=${lastFocus})`,
+  }
+
+  // CA1 e CA2: o cabeçalho-voltar e uma linha de 30 px por aba, sem ícone, recuada 32 px, com ⌘N; Conexões marcada.
+  const rows = await evaluate<{ tab: string; label: string; height: number; top: number; padding: string; current: boolean; hint: string; keys: string; icons: number }[]>(
+    contents,
+    `[...document.querySelectorAll('${SIDEBAR_SETTINGS} [data-settings-tab-link]')].map((el) => {
+      const box = el.getBoundingClientRect()
+      const style = getComputedStyle(el)
+      return { tab: el.dataset.settingsTabLink, label: el.querySelector('span')?.textContent ?? '', height: Math.round(box.height * 10) / 10, top: box.top, padding: style.paddingLeft + ' ' + style.paddingRight, current: el.getAttribute('aria-current') === 'page', hint: el.querySelector('kbd')?.textContent ?? '', keys: el.getAttribute('aria-keyshortcuts') ?? '', icons: el.querySelectorAll('svg').length }
+    })`,
+  )
+  const header = await evaluate<{ level: string; label: string; text: string; height: number; bottom: number; icons: number }>(
+    contents,
+    `(() => { const el = document.querySelector('${backButton}'); const box = el.getBoundingClientRect(); return { level: document.querySelector('${SIDEBAR_SETTINGS}').getAttribute('aria-label') ?? '', label: el.getAttribute('aria-label') ?? '', text: el.textContent ?? '', height: box.height, bottom: box.bottom, icons: el.querySelectorAll('svg').length } })()`,
+  )
+  const round = (n: number): number => Math.round(n * 10) / 10
+  const firstGap = rows[0] ? round(rows[0].top - header.bottom) : -1
+  const gaps = rows.slice(1).map((row, index) => round(row.top - (rows[index]?.top ?? 0) - (rows[index]?.height ?? 0)))
+  const rowsOk =
+    JSON.stringify(rows.map((row) => row.tab)) === JSON.stringify(SETTINGS_TABS) &&
+    JSON.stringify(rows.map((row) => row.label)) === JSON.stringify(SETTINGS_ROW_LABELS) &&
+    rows.every((row, index) => row.height === 30 && row.icons === 0 && row.padding === '32px 10px' && row.hint === `⌘${index + 1}` && row.keys === `Meta+${index + 1}`) &&
+    rows.filter((row) => row.current).map((row) => row.tab).join() === 'conexoes' &&
+    rows.find((row) => row.tab === 'conexoes')?.hint === '⌘7'
+  const headerOk = header.level === 'Configurações' && header.label === 'Configurações: voltar ao menu' && header.text === 'Configurações' && header.height === 40 && header.icons === 2 && firstGap === 8 && gaps.every((gap) => gap === 2)
+  sidebarChecks['settingsRows'] = {
+    ok: rowsOk && headerOk,
+    detail: `linhas ${JSON.stringify(rows.map((row) => `${row.label} ${row.height}px ${row.padding} ${row.hint}${row.current ? ' (aberta)' : ''}${row.icons ? ' com ícone' : ''}`))}; cabeçalho "${header.label}" (${header.height}px, ${header.icons} ícones), 1ª linha a ${firstGap}px, entre as linhas ${JSON.stringify([...new Set(gaps)])}px`,
+  }
+
+  // CA7: o "voltar" mostra a raiz sem navegar (o painel e a rolagem ficam) e põe o foco em "Configurações", marcada.
+  const mark = await evaluate<number>(contents, `(() => { const s = document.querySelector('[data-settings-scroll]'); s.scrollTop = 120; window.__smokePanel = document.querySelector('[data-settings-panel="conexoes"]'); return s.scrollTop })()`)
+  const kept = `document.querySelector('[data-settings-scroll]').scrollTop === ${mark} && window.__smokePanel === document.querySelector('[data-settings-panel="conexoes"]') && window.__smokePanel.hidden === false && ${routeIs('configuracoes')}`
+  await clickSelector(contents, backButton)
+  const backed = await waitFor(contents, `document.querySelector('${SIDEBAR_ROOT}') && ${oneLevel}`)
+  const backState = await evaluate<{ kept: boolean; current: string; focus: boolean }>(
+    contents,
+    `({ kept: ${kept}, current: document.querySelector('${SIDEBAR_ROOT} [data-nav="configuracoes"]')?.getAttribute('aria-current') ?? '', focus: document.activeElement?.matches('${SIDEBAR_ROOT} [data-nav="configuracoes"]') === true })`,
+  )
+  sidebarChecks['settingsBack'] = {
+    ok: mark > 0 && backed && backState.kept && backState.current === 'page' && backState.focus,
+    detail: `raiz à mostra=${backed}; rota, painel e rolagem (${mark}px) iguais=${backState.kept}; "Configurações" com aria-current="${backState.current}", com o foco=${backState.focus}`,
+  }
+
+  // CA5: na seção, o clique em "Configurações" na raiz mostra o nível sem navegar.
+  await clickNav(contents, 'configuracoes')
+  const again = await waitFor(contents, `document.querySelector('${SIDEBAR_SETTINGS}') && ${oneLevel} && ${settingsTabIs('conexoes')}`)
+  const againKept = await evaluate<boolean>(contents, kept)
+  const againFocus = await focusIn(backButton)
+  sidebarChecks['settingsEnterInSection'] = {
+    ok: again && againKept && againFocus,
+    detail: `nível Configurações com Conexões=${again}; sem navegar (painel e rolagem iguais)=${againKept}; foco no cabeçalho-voltar=${againFocus}`,
+  }
+
+  // CA8 e CA9: sem Tabs; o nome da aba em 20/26 peso 700; os painéis como regiões com o nome da aba.
+  const screen = await evaluate<{ tablist: boolean; tabs: number; tabpanels: number; tag: string; title: string; font: string; weight: string; regions: string[]; search: boolean }>(
+    contents,
+    `(() => {
+      const title = document.querySelector('[data-settings-title]')
+      const style = getComputedStyle(title)
+      return {
+        tablist: Boolean(document.querySelector('main [role="tablist"]')),
+        tabs: document.querySelectorAll('main [role="tab"]').length,
+        tabpanels: document.querySelectorAll('main [role="tabpanel"]').length,
+        tag: title.tagName,
+        title: title.textContent,
+        font: style.fontSize + '/' + style.lineHeight,
+        weight: style.fontWeight,
+        regions: [...document.querySelectorAll('[data-settings-panel]')].map((el) => el.getAttribute('role') + ':' + el.getAttribute('aria-label')),
+        search: Boolean(document.querySelector('[data-settings-search] input')),
+      }
+    })()`,
+  )
+  sidebarChecks['settingsScreen'] = {
+    ok:
+      !screen.tablist &&
+      screen.tabs === 0 &&
+      screen.tabpanels === 0 &&
+      screen.tag === 'H1' &&
+      screen.title === 'Conexões' &&
+      screen.font === '20px/26px' &&
+      screen.weight === '700' &&
+      JSON.stringify(screen.regions) === JSON.stringify(SETTINGS_ROW_LABELS.map((label) => `region:${label}`)) &&
+      screen.search,
+    detail: `tablist=${screen.tablist}, ${screen.tabs} abas e ${screen.tabpanels} tabpanel em main; título ${screen.tag} "${screen.title}" ${screen.font} peso ${screen.weight}; painéis ${JSON.stringify(screen.regions)}; busca=${screen.search}`,
+  }
+
+  // CA6: a rota leva ao nível, sem mexer no foco. Da raiz, ainda em Configurações, com o foco na busca: o mesmo campo segue
+  // com o foco.
+  await showRoot(contents)
+  const searchFocused = await evaluate<boolean>(contents, `(() => { const el = document.querySelector('[data-settings-search] input'); el.focus(); return document.activeElement === el })()`)
+  contents.send('scribe:open-settings', { tab: 'gravacao' })
+  const fromBack = await waitFor(contents, `${settingsTabIs('gravacao')} && ${oneLevel}`, 8000)
+  const fromBackFocus = await focusIn('[data-settings-search] input')
+  // Da raiz em Reuniões: o foco não entra na barra lateral.
+  await clickNav(contents, 'reunioes')
+  await waitFor(contents, `${routeIs('reunioes')} && ${oneLevel}`)
+  contents.send('scribe:open-settings', { tab: 'conexoes' })
+  const fromRoot = await waitFor(contents, `${routeIs('configuracoes')} && ${settingsTabIs('conexoes')} && ${oneLevel}`, 8000)
+  const fromRootFocus = await focusInSidebar()
+  // Do nível Email, ⌘, desliza direto para o nível Configurações (sem a raiz no meio); depois, `scribe:open-settings`.
+  await showEmailLevel(contents)
+  await waitFor(contents, `${routeIs('email')} && ${oneLevel}`, 8000)
+  await evaluate(contents, WATCH_LEVELS)
+  const settingsItem = Menu.getApplicationMenu()?.getMenuItemById(MENU_IDS.settings)
+  settingsItem?.click()
+  const fromEmail = await waitFor(contents, `${routeIs('configuracoes')} && ${settingsTabIs('conexoes')} && ${oneLevel}`, 8000)
+  const slide = await evaluate<{ pairs: string[]; root: boolean }>(contents, `(() => { window.__smokeObserver?.disconnect(); return window.__smokeLevels })()`)
+  const fromEmailFocus = await focusInSidebar()
+  await showEmailLevel(contents)
+  await waitFor(contents, `${routeIs('email')} && ${oneLevel}`, 8000)
+  contents.send('scribe:open-settings', { tab: 'conexoes' })
+  const noticeFromEmail = await waitFor(contents, `${routeIs('configuracoes')} && ${settingsTabIs('conexoes')} && ${oneLevel}`, 8000)
+  const noticeFromEmailFocus = await focusInSidebar()
+  sidebarChecks['settingsRouteLevel'] = {
+    ok:
+      searchFocused &&
+      fromBack &&
+      fromBackFocus &&
+      fromRoot &&
+      !fromRootFocus &&
+      fromEmail &&
+      JSON.stringify(slide.pairs) === JSON.stringify(['email>configuracoes:push']) &&
+      !slide.root &&
+      !fromEmailFocus &&
+      noticeFromEmail &&
+      !noticeFromEmailFocus,
+    detail: `open-settings da raiz em Configurações -> Gravação com o nível=${fromBack}, foco na busca mantido=${searchFocused && fromBackFocus}; da raiz em Reuniões -> Conexões=${fromRoot}, foco na barra=${fromRootFocus}; ⌘, no nível Email -> nível Configurações=${fromEmail}, deslize ${JSON.stringify(slide.pairs)}, raiz no meio=${slide.root}, foco na barra=${fromEmailFocus}; open-settings no nível Email -> Conexões=${noticeFromEmail}, foco na barra=${noticeFromEmailFocus}`,
+  }
+
+  // CA9: a âncora ("Procurar atualização" em Sobre leva a Geral › Atualizações) e o resultado da busca que destaca a linha.
+  await selectSettingsTab(contents, 'sobre')
+  await clickSelector(contents, '[data-action="about-update-check"]')
+  // "Atualizações" fica perto do fim de Geral: a rolagem para no fim e o bloco só precisa estar à vista.
+  const anchored = await waitFor(
+    contents,
+    `${settingsTabIs('geral')} && (() => { const s = document.querySelector('[data-settings-scroll]'); const b = document.querySelector('section[aria-label="Atualizações"]').getBoundingClientRect(); const r = s.getBoundingClientRect(); return s.scrollTop > 0 && b.top >= r.top - 1 && b.top < r.bottom })()`,
+  )
+  const input = '[data-settings-search] input'
+  await setValue(contents, input, 'tema')
+  await waitFor(contents, "[...document.querySelectorAll('[data-settings-result]')].some((el) => el.innerText.startsWith('Geral › Tema'))")
+  const searchTitle = await text(contents, '[data-settings-title]')
+  await evaluate(contents, "[...document.querySelectorAll('[data-settings-result]')].find((el) => el.innerText.startsWith('Geral › Tema'))?.click(), true")
+  const highlighted = await waitFor(contents, `${settingsTabIs('geral')} && document.querySelector('[data-setting-row][data-setting-name="Tema"]')?.hasAttribute('data-highlighted') && document.querySelector('[data-settings-title]')?.textContent === 'Geral'`)
+  sidebarChecks['settingsAnchor'] = {
+    ok: anchored && searchTitle === 'Configurações' && highlighted,
+    detail: `"Procurar atualização" -> Geral rolada até "Atualizações"=${anchored}; título durante a busca "${searchTitle}"; o resultado "Tema" destaca a linha, com o título "Geral"=${highlighted}`,
+  }
+
+  // Dois ⌘, seguidos vindo de Automações, o segundo no meio do redirecionamento do primeiro (`/configuracoes` já na
+  // tela, sem nenhum painel ainda): a tela abre a última aba, nunca em branco. Cinco vezes, porque a corrida depende do
+  // tempo; `pending` diz se o segundo chegou mesmo no meio (pelo menos uma tentativa precisa cair no meio).
+  const doubled: { pending: boolean; shown: boolean }[] = []
+  for (let attempt = 0; attempt < 5; attempt++) {
+    await clickNav(contents, 'automacoes')
+    await waitFor(contents, `${routeIs('automacoes')} && ${oneLevel}`, 8000)
+    await evaluate(
+      contents,
+      `(window.__smokePending = new Promise((resolve) => {
+        const pending = () => document.querySelector('main')?.dataset.route === 'configuracoes' && !document.querySelector('[data-settings-panel]')
+        const observer = new MutationObserver(() => { if (pending()) { observer.disconnect(); resolve(true) } })
+        observer.observe(document.body, { childList: true, subtree: true, attributes: true })
+        setTimeout(() => { observer.disconnect(); resolve(false) }, 2000)
+      })), true`,
+    )
+    contents.send('scribe:navigate', 'configuracoes')
+    const pending = await evaluate<boolean>(contents, 'window.__smokePending')
+    contents.send('scribe:navigate', 'configuracoes')
+    const shown = await waitFor(contents, `${routeIs('configuracoes')} && ${settingsTabIs('geral')} && document.querySelector('[data-settings-title]')?.textContent === 'Geral'`, 5000)
+    doubled.push({ pending, shown })
+  }
+  sidebarChecks['settingsDoubleMenu'] = {
+    ok: doubled.every((attempt) => attempt.shown) && doubled.some((attempt) => attempt.pending),
+    detail: `dois ⌘, seguidos de Automações: ${doubled.filter((attempt) => attempt.pending).length} de ${doubled.length} com o segundo no meio do redirecionamento; Geral aberta em ${doubled.filter((attempt) => attempt.shown).length} de ${doubled.length} (${JSON.stringify(doubled)})`,
+  }
+  win.destroy()
+}
+
 /**
  * Contrato 43 (CA1, CA2, CA3, CA5 e CA6), numa janela clara e depois numa escura: a conta adicionada em Configurações ›
  * Contas › Email (a dica do Gmail, o autoconfig sem rede caindo no manual, "Testar conexão" com a senha recusada e com
@@ -8271,11 +8581,11 @@ async function emailChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => voi
   const noticeFromBack = await openNotice()
   const sameFocus = await evaluate<boolean>(contents, `document.activeElement === window.__smokeFocus && window.__smokeFocus?.isConnected === true`)
 
-  // CA9: ⌘, com o nível Email à mostra volta à raiz com Configurações marcada (sem passar por Reuniões).
+  // CA9: ⌘, com o nível Email à mostra leva a Configurações sem passar por Reuniões. Contrato 66: direto ao nível
+  // Configurações (o deslize é conferido em `settingsLevelChecks`).
   const settingsItem = Menu.getApplicationMenu()?.getMenuItemById(MENU_IDS.settings)
   settingsItem?.click()
-  const settingsRoot = await waitFor(contents, `${routeIs('configuracoes')} && document.querySelector('${SIDEBAR_ROOT} [data-nav="configuracoes"]')?.getAttribute('aria-current') === 'page' && ${SIDEBAR_LEVELS}.length === 1`, 8000)
-  const settingsNav = await activeNav(contents)
+  const settingsLevel = await waitFor(contents, `${routeIs('configuracoes')} && document.querySelector('${SIDEBAR_SETTINGS}') && ${SIDEBAR_LEVELS}.length === 1`, 8000)
 
   await clickNav(contents, 'reunioes')
   await waitFor(contents, `${routeIs('reunioes')} && ${SIDEBAR_LEVELS}.length === 1`)
@@ -8285,8 +8595,8 @@ async function emailChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => voi
   contents.send('scribe:navigate', 'gravacao')
   const menuRoot = await waitFor(contents, `${routeIs('gravacao')} && document.querySelector('${SIDEBAR_ROOT}') && ${SIDEBAR_LEVELS}.length === 1`, 8000)
   sidebarChecks['routeLevel'] = {
-    ok: Boolean(agendaId) && mainFocused && noticeFromBack && sameFocus && settingsRoot && settingsNav === 'configuracoes' && rootFocused && noticeFromRoot && !rootFocus.inSidebar && menuRoot,
-    detail: `aviso com a raiz do "voltar" -> nível Email com a mensagem=${noticeFromBack}, foco no "Nova mensagem" mantido=${mainFocused && sameFocus}; ⌘, no nível Email -> raiz com Configurações marcada=${settingsRoot} (${settingsNav}); aviso em Reuniões com o foco na raiz -> nível Email=${noticeFromRoot}, foco fora da barra lateral=${rootFocused && !rootFocus.inSidebar} (${rootFocus.tag}); menu "gravacao" -> raiz=${menuRoot}`,
+    ok: Boolean(agendaId) && mainFocused && noticeFromBack && sameFocus && settingsLevel && rootFocused && noticeFromRoot && !rootFocus.inSidebar && menuRoot,
+    detail: `aviso com a raiz do "voltar" -> nível Email com a mensagem=${noticeFromBack}, foco no "Nova mensagem" mantido=${mainFocused && sameFocus}; ⌘, no nível Email -> nível Configurações=${settingsLevel}; aviso em Reuniões com o foco na raiz -> nível Email=${noticeFromRoot}, foco fora da barra lateral=${rootFocused && !rootFocus.inSidebar} (${rootFocus.tag}); menu "gravacao" -> raiz=${menuRoot}`,
   }
 
   // CA16: com movimento reduzido, a troca é instantânea: nunca dois níveis, do quadro do clique até 10 quadros depois.
@@ -8833,7 +9143,8 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
   /** Contrato 27: quem fala no Meet. */
   const meet: Record<string, Check> = {}
   const email: Record<string, Check> = {}
-  // Contrato 65: a barra lateral em pilha (a raiz com o Email e o nível Email), nos passos do email.
+  // Contrato 65: a barra lateral em pilha (a raiz com o Email e o nível Email), nos passos do email. Contrato 66: e o nível
+  // Configurações, em `settingsLevelChecks`.
   const sidebar: Record<string, Check> = {}
   let analysisMeasured: AnalysisMeasured | null = null
 
@@ -9125,9 +9436,11 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
 
         await clickNav(contents, 'configuracoes')
         await waitFor(contents, routeIs('configuracoes'))
+        // Contrato 66: Configurações mostra o nível dela (a raiz sai).
+        const settingsLevel = await waitFor(contents, `document.querySelector('${SIDEBAR_SETTINGS}') && document.querySelectorAll('[data-sidebar-level]').length === 1`)
         navigation['sidebarConfiguracoes'] = {
-          ok: (await currentRoute(contents)) === 'configuracoes' && (await activeNav(contents)) === 'configuracoes',
-          detail: `clique em Configurações -> rota ${await currentRoute(contents)}, aria-current em ${await activeNav(contents)}`,
+          ok: (await currentRoute(contents)) === 'configuracoes' && settingsLevel,
+          detail: `clique em Configurações -> rota ${await currentRoute(contents)}, nível Configurações=${settingsLevel}`,
         }
 
         await clickNav(contents, 'reunioes')
@@ -9196,6 +9509,9 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
 
     // Contrato 58: os conectores do claude.ai na aba Conexões e na sessão do chat; termina com todos desligados.
     await connectorChecks(ctx, watch, mcp, screenshots)
+
+    // Contrato 66: o nível Configurações da barra lateral, numa janela à parte.
+    await settingsLevelChecks(ctx, watch, sidebar)
 
     // Contrato 27: quem fala no Meet, com um cliente falso no servidor local; antes do bloqueio.
     await meetChecks(ctx, watch, meet)
@@ -9290,7 +9606,9 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
   for (const [name, check] of Object.entries(email)) if (!check.ok) failures.push(`email ${name}: ${check.detail}`)
   for (const name of ['settings', 'list', 'reading', 'compose', 'folders', 'attachments', 'remove', 'dark', 'notify', 'assistantPending', 'assistantReply', 'assistantTask', 'assistantSearch', 'taskEmailForm', 'taskEmailRun']) if (!email[name]) failures.push(`email ${name}: não executado`)
   for (const [name, check] of Object.entries(sidebar)) if (!check.ok) failures.push(`barra lateral ${name}: ${check.detail}`)
-  for (const name of ['noAccount', 'rootItems', 'enterFirstTime', 'back', 'enterInSection', 'enterLast', 'slide', 'still', 'routeLevel', 'reducedMotion', 'badge']) if (!sidebar[name]) failures.push(`barra lateral ${name}: não executado`)
+  for (const name of ['noAccount', 'rootItems', 'enterFirstTime', 'back', 'enterInSection', 'enterLast', 'slide', 'still', 'routeLevel', 'reducedMotion', 'badge', 'settingsEnter', 'settingsRows', 'settingsBack', 'settingsEnterInSection', 'settingsScreen', 'settingsRouteLevel', 'settingsAnchor', 'settingsDoubleMenu', 'settingsDoubleClick']) {
+    if (!sidebar[name]) failures.push(`barra lateral ${name}: não executado`)
+  }
   for (const [name, check] of Object.entries(lock)) if (!check.ok) failures.push(`bloqueio ${name}: ${check.detail}`)
   for (const name of ['password', 'layer', 'channels', 'unlock', 'shortcutAndTouchId', 'recordingContinues', 'leaveDialog', 'endWhileLocked', 'reopen', 'reopenFromDisk', 'dark']) if (!lock[name]) failures.push(`bloqueio ${name}: não executado`)
   if (!theme.ok) failures.push(`tema: ${theme.detail}`)
@@ -9315,8 +9633,9 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
   // temas (contrato 43); o cartão dos emails pendentes e o rascunho de resposta por email no Assistente, no claro
   // (contrato 45); o formulário da tarefa com "Pode enviar email" e a execução com os emails enviado e recusado, no
   // claro (contrato 51); a seção "Conectores do claude.ai" com o Notion ligado e as ferramentas, nos dois temas
-  // (contrato 58); a raiz da barra lateral com o número do Email e o nível Email, nos dois temas (contrato 65).
-  const expectedShots = SCREENS.length * THEMES.length + 72
+  // (contrato 58); a raiz da barra lateral com o número do Email e o nível Email, nos dois temas (contrato 65); o nível
+  // Configurações com Conexões aberta, nos dois temas (contrato 66).
+  const expectedShots = SCREENS.length * THEMES.length + 74
   if (screenshots.length !== expectedShots) failures.push(`${screenshots.length} PNGs em vez de ${expectedShots}`)
   for (const shot of screenshots) {
     if (shot.name === MEETING_PROMPT_SHOT) {

@@ -1,5 +1,6 @@
-// Abas de Configurações (contrato 18): rótulos, a aba lembrada na sessão, os atalhos ⌘1…⌘8 e a busca, que
-// filtra as linhas de todas as abas pelo nome e pela descrição, sem acento nem maiúscula.
+// Abas de Configurações (contrato 18; desde o contrato 66, linhas do nível Configurações da barra lateral, não mais uma
+// fileira no topo da tela): rótulos, a aba lembrada na sessão, os atalhos ⌘1…⌘8 e a busca, que filtra as linhas de
+// todas as abas pelo nome e pela descrição, sem acento nem maiúscula.
 import { DEFAULT_SETTINGS_TAB, SETTINGS_TABS, type SettingsTab } from '@shared/routes'
 import type { SettingsEntry } from '@shared/settings-index'
 import { normalizeSearch } from './modelFormat'

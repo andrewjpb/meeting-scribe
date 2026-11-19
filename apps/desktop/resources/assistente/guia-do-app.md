@@ -8,7 +8,7 @@ Cite este guia como [Guia].
 
 ## Barra lateral
 
-A barra lateral tem, de cima para baixo: Reuniões, Assistente, Email (com o número de emails não lidos de todas as contas), Automações, WhatsApp (só aparece com o WhatsApp instalado) e Configurações. Email abre um nível próprio da barra, que desliza por cima do menu: no topo, a seta "Email" volta ao menu sem sair da tela aberta; abaixo, as contas de email com as pastas. Qualquer tela de email aberta mostra esse nível; as outras telas mostram o menu. No rodapé ficam o botão "Bloquear", o aviso de versão nova (quando há) e as permissões do microfone e do áudio do sistema.
+A barra lateral tem, de cima para baixo: Reuniões, Assistente, Email (com o número de emails não lidos de todas as contas), Automações, WhatsApp (só aparece com o WhatsApp instalado) e Configurações. Email abre um nível próprio da barra, que desliza por cima do menu: no topo, a seta "Email" volta ao menu sem sair da tela aberta; abaixo, as contas de email com as pastas. Qualquer tela de email aberta mostra esse nível. Configurações também abre um nível próprio, com a seta "Configurações" no topo e uma linha por aba; qualquer tela de Configurações mostra esse nível. As outras telas mostram o menu. No rodapé ficam o botão "Bloquear", o aviso de versão nova (quando há) e as permissões do microfone e do áudio do sistema.
 
 <!-- tela: reunioes -->
 ## Reuniões
@@ -76,7 +76,7 @@ Email, na barra lateral, abre o nível Email: a última pasta aberta na sessão 
 <!-- tela: configuracoes -->
 ## Configurações
 
-Configurações… (⌘,) abre a última aba aberta. ⌘1 a ⌘8 trocam de aba. A busca no topo acha qualquer opção pelo nome.
+Configurações… (⌘,) abre a última aba aberta. As abas ficam no nível Configurações da barra lateral, uma por linha, com o atalho ao lado; a seta "Configurações" no topo do nível volta ao menu sem sair da aba aberta. ⌘1 a ⌘8 trocam de aba (as linhas da barra lateral, na ordem). A tela mostra no topo o nome da aba aberta e a busca, que acha qualquer opção pelo nome.
 
 <!-- aba: geral -->
 ### Geral
@@ -142,7 +142,7 @@ A versão instalada, a versão do Electron e do Chrome e a licença (código abe
 
 - ⌘N: nova gravação.
 - ⌘, : Configurações.
-- ⌘1 a ⌘8: as abas de Configurações.
+- ⌘1 a ⌘8: as abas de Configurações (as linhas do nível Configurações da barra lateral).
 - ⌘F: buscar nas reuniões.
 - ⌘⇧A: analisar a gravação até agora.
 - ⌘⇧L: bloquear o app.

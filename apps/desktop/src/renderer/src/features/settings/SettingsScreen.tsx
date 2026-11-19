@@ -5,7 +5,6 @@ import {
   DEFAULT_SETTINGS_TAB,
   isSettingsTab,
   settingsPath,
-  SETTINGS_TABS,
   TRANSCRIPTION_ANCHOR,
   type SettingsNavigationState,
   type SettingsTab,
@@ -21,7 +20,6 @@ import { Segmented } from '../../design/Segmented'
 import { SettingRow } from '../../design/SettingRow'
 import { Note } from '../../design/Note'
 import { Switch } from '../../design/Switch'
-import { tabId, tabPanelId, Tabs } from '../../design/Tabs'
 import { SearchField } from '../meetings/SearchField'
 import { AboutSection } from './AboutSection'
 import { AccountsSection } from './AccountsSection'
@@ -104,32 +102,35 @@ const CLOSE_BEHAVIORS: { value: CloseBehavior; label: string }[] = [
 /** "Limite diário de execuções agendadas" (contrato 23, CA10). */
 const DAILY_LIMITS = DAILY_RUN_LIMIT_OPTIONS.map((value) => ({ value: String(value) as `${DailyRunLimitOption}`, label: `${value} por dia` }))
 
-const TABS = SETTINGS_TABS.map((value) => ({ value, label: SETTINGS_TAB_LABELS[value] }))
-const TABS_ID = 'settings'
-
 /** Primeiro controle de uma linha (campo, seletor, botão ou link), para o foco depois da busca. */
 const CONTROL = 'input, select, textarea, button, a[href], [tabindex]:not([tabindex="-1"])'
 
+/** Contrato 66: a linha da aba no nível Configurações da barra lateral (o que sai no deslize não conta). */
+const focusTabLink = (tab: SettingsTab): void =>
+  document.querySelector<HTMLElement>(`[data-sidebar-level="configuracoes"]:not([data-sidebar-leaving]) [data-settings-tab-link="${tab}"]`)?.focus()
+
 /**
- * Configurações (contrato 18): título e busca no topo, as oito abas logo abaixo (fixas; só o conteúdo rola) e
- * a coluna de leitura de até 760 px, centralizada. A aba aberta fica na URL; sem ela, abre a última aberta
- * nesta sessão. Cada mudança grava na hora, como antes.
+ * Configurações (contrato 18; contrato 66, as abas no nível Configurações da barra lateral): o nome da aba e a busca
+ * no topo (fixos; só o conteúdo rola) e a coluna de leitura de até 760 px, centralizada. A aba aberta fica na URL;
+ * sem ela, abre a última aberta nesta sessão. Cada mudança grava na hora, como antes.
  */
 export function SettingsScreen() {
   const { aba } = useParams()
   const location = useLocation()
   if (!isSettingsTab(aba)) {
     const tab = aba === undefined ? lastSettingsTab() : DEFAULT_SETTINGS_TAB
-    return <Navigate replace to={{ pathname: settingsPath(tab), hash: location.hash }} state={location.state as unknown} />
+    // `key`: uma segunda ida a `/configuracoes` antes do redirecionamento da primeira terminar (dois ⌘, seguidos)
+    // remonta o `<Navigate>`; sem ela o efeito dele não roda de novo e a tela fica em branco.
+    return <Navigate key={location.key} replace to={{ pathname: settingsPath(tab), hash: location.hash }} state={location.state as unknown} />
   }
-  return <SettingsTabs tab={aba} />
+  return <SettingsPanels tab={aba} />
 }
 
 /**
  * As abas ficam todas montadas e só a aberta aparece (`hidden` nas outras): cada bloco carrega o que precisa
  * ao abrir Configurações, como na página única, e a busca lê as linhas de todas.
  */
-function SettingsTabs({ tab }: { tab: SettingsTab }) {
+function SettingsPanels({ tab }: { tab: SettingsTab }) {
   const settings = useSettings((state) => state.settings)
   const update = useSettings((state) => state.update)
   const devices = useAudioInputs()
@@ -141,8 +142,8 @@ function SettingsTabs({ tab }: { tab: SettingsTab }) {
   const location = useLocation()
   const rootRef = useRef<HTMLDivElement>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
-  // Depois da próxima navegação: a linha achada pela busca (com o bloco dela, se a linha não aparece) ou a aba
-  // que deve receber o foco (⌘1…⌘8 e Esc).
+  // Depois da próxima navegação: a linha achada pela busca (com o bloco dela, se a linha não aparece) ou a linha
+  // da aba que deve receber o foco (⌘1…⌘8).
   const pendingRef = useRef<{ row: HTMLElement | null; block: Element | null } | null>(null)
   const focusTabRef = useRef(false)
   const queryRef = useRef('')
@@ -153,18 +154,27 @@ function SettingsTabs({ tab }: { tab: SettingsTab }) {
   const groups = searchSettings(entries, query)
   const resultCount = groups.reduce((total, group) => total + group.indexes.length, 0)
 
+  // Contrato 66: a troca de aba vem também da barra lateral (como o clique na aba de antes): cada navegação fecha a
+  // busca, e o aviso "Esta opção aparece quando…" de outra aba some.
+  const [seenKey, setSeenKey] = useState(location.key)
+  if (seenKey !== location.key) {
+    setSeenKey(location.key)
+    setQuery('')
+    if (hint && hint.tab !== tab) setHint(null)
+  }
+
   useEffect(() => {
     queryRef.current = query
   })
 
   useEffect(() => rememberSettingsTab(tab), [tab])
 
-  // ⌘1…⌘8 abrem a aba N enquanto Configurações está aberta.
+  // ⌘1…⌘8 abrem a aba N enquanto Configurações está aberta (a barra lateral mostra o nível Configurações, pela rota).
   useEffect(() => {
     const onKey = (event: KeyboardEvent): void => {
-      // Esc que limpou a busca (o campo já tratou o evento): o foco volta para a aba aberta.
+      // Esc que limpou a busca (o campo já tratou o evento): o foco volta para a linha da aba aberta.
       if (event.key === 'Escape') {
-        if (event.defaultPrevented && queryRef.current) document.getElementById(tabId(TABS_ID, tab))?.focus()
+        if (event.defaultPrevented && queryRef.current) focusTabLink(tab)
         return
       }
       const next = tabForShortcut(event)
@@ -187,7 +197,7 @@ function SettingsTabs({ tab }: { tab: SettingsTab }) {
     pendingRef.current = null
     if (focusTabRef.current) {
       focusTabRef.current = false
-      document.getElementById(tabId(TABS_ID, tab))?.focus()
+      focusTabLink(tab)
     }
     const target = pending?.row
     if (target) {
@@ -205,19 +215,13 @@ function SettingsTabs({ tab }: { tab: SettingsTab }) {
       return undefined
     }
     const anchor = location.hash.slice(1)
-    const block = anchor ? document.getElementById(tabPanelId(TABS_ID, tab))?.querySelector(`[data-settings-anchor="${CSS.escape(anchor)}"]`) : null
+    const block = anchor ? rootRef.current?.querySelector(`[data-settings-panel="${tab}"] [data-settings-anchor="${CSS.escape(anchor)}"]`) : null
     if (block) block.scrollIntoView({ block: 'start' })
     else if (scroller) scroller.scrollTop = 0
     const focus = (location.state as SettingsNavigationState | null)?.focus
     if (focus) document.getElementById(focus)?.focus()
     return undefined
   }, [location, tab])
-
-  const selectTab = (next: SettingsTab): void => {
-    setQuery('')
-    setHint(null)
-    void navigate(settingsPath(next))
-  }
 
   const search = (value: string): void => {
     setQuery(value)
@@ -245,9 +249,8 @@ function SettingsTabs({ tab }: { tab: SettingsTab }) {
   const panel = (value: SettingsTab, children: ReactNode) => (
     <div
       key={value}
-      role="tabpanel"
-      id={tabPanelId(TABS_ID, value)}
-      aria-labelledby={tabId(TABS_ID, value)}
+      role="region"
+      aria-label={SETTINGS_TAB_LABELS[value]}
       data-settings-panel={value}
       hidden={searching || value !== tab}
       className="flex flex-col gap-8"
@@ -260,22 +263,24 @@ function SettingsTabs({ tab }: { tab: SettingsTab }) {
     <div className="flex min-h-0 flex-1 flex-col">
       {/*
        * O cabeçalho reserva o mesmo espaço da barra de rolagem que a área de baixo (dos dois lados, para a coluna
-       * seguir centralizada): título, busca, abas e coluna ficam no mesmo `x` com e sem barra.
+       * seguir centralizada): título, busca e coluna ficam no mesmo `x` com e sem barra.
        */}
-      <div className="overflow-hidden px-10 pt-7 [scrollbar-gutter:stable_both-edges]">
+      {/* `pb-1`: sem as abas embaixo, os 4 px do campo que passam da linha do cabeçalho não podem ser cortados. */}
+      <div className="overflow-hidden px-10 pt-7 pb-1 [scrollbar-gutter:stable_both-edges]">
         <div className="mx-auto w-full max-w-[var(--settings-width)]">
+          {/* Contrato 66: o nome da aba (20/26); com a busca preenchida, "Configurações". */}
           <PageHeader
-            title="Configurações"
+            size="section"
+            title={searching ? 'Configurações' : SETTINGS_TAB_LABELS[tab]}
+            titleAttrs={{ 'data-settings-title': '' }}
             actions={
-              // O campo (40 px) não empurra o título (32 px) para baixo: o título fica a 28 px do topo.
+              // O campo (40 px) ocupa 32 px na linha do cabeçalho, como ao lado do título de 26/32 de antes: a busca fica
+              // onde estava e o título, centrado nela.
               <div data-settings-search className="-my-1">
                 <SearchField value={query} onChange={search} label="Buscar configuração" />
               </div>
             }
           />
-          <div className="mt-5 border-b border-line">
-            <Tabs value={searching ? null : tab} tabs={TABS} onChange={selectTab} label="Seções das configurações" id={TABS_ID} />
-          </div>
         </div>
       </div>
       <div ref={scrollRef} data-settings-scroll className="min-h-0 flex-1 overflow-y-auto px-10 pt-8 pb-12 [scrollbar-gutter:stable_both-edges]">
