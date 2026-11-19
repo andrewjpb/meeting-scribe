@@ -25,7 +25,7 @@ import {
   type LaunchAcp,
 } from '../src/main/acp/agent'
 import { AcpChat, acpStepOf } from '../src/main/acp/chat'
-import { NAVEGADOR_MCP_TOOLS } from '../src/main/acp/navegador'
+import { NAVEGADOR_MCP_TOOLS, navegadorAbaOf, navegadorDadosOf, navegadorRotuloOf } from '../src/main/acp/navegador'
 import { runAcpOneShot, runAcpSummary } from '../src/main/acp/summary'
 import { analysisInput, analysisParser, analysisSystemPrompt } from '../src/main/claude-cli/analysis'
 import { assistantSystemPrompt } from '../src/main/claude-cli/chat'
@@ -697,8 +697,8 @@ describe('navegador do Assistente (contrato 47)', () => {
     expect([...last.values()].map((step) => [step.tool, step.label, step.status])).toEqual([
       ['navegador_abrir', 'Abriu exemplo.example (aba 2)', 'completed'],
       ['navegador_ler', 'Leu a página', 'completed'],
-      ['navegador_digitar', 'Digitou no campo 1', 'completed'],
-      ['navegador_clicar', 'Clicou no elemento 3', 'completed'],
+      ['navegador_digitar', 'Digitou em «Buscar»', 'completed'],
+      ['navegador_clicar', 'Clicou em «Entrar»', 'completed'],
       ['navegador_aguardar', 'Aguardou 5 s', 'completed'],
       ['navegador_abas', 'Listou as abas', 'completed'],
       ['navegador_fechar', 'Fechou a aba 2', 'completed'],
@@ -718,6 +718,25 @@ describe('navegador do Assistente (contrato 47)', () => {
     expect(acpStepOf(claudeProfile, 't', { name: 'mcp__navegador__navegador_abrir', locations: [], rawInput: { url: 'nada' } })).toMatchObject({ label: 'Abriu um site', status: 'pending' })
     expect(acpStepOf(claudeProfile, 't', { name: 'mcp__navegador__navegador_fechar', locations: [], rawInput: {} })).toMatchObject({ label: 'Fechou a aba' })
     expect(acpStepOf(claudeProfile, 't', { name: 'mcp__outro__navegador_abrir', locations: [] })).toBeNull()
+    // Sem o rótulo no resultado (extensão antiga, ou o resultado ainda não chegou): o número do elemento.
+    expect(acpStepOf(claudeProfile, 't', { name: 'mcp__navegador__navegador_clicar', locations: [], rawInput: { ref: 3 } })).toMatchObject({ label: 'Clicou no elemento 3' })
+    expect(acpStepOf(claudeProfile, 't', { name: 'mcp__navegador__navegador_digitar', locations: [], rawInput: { ref: 1, texto: 'x' }, output: '{"ok":true}' })).toMatchObject({ label: 'Digitou no campo 1' })
+    expect(acpStepOf(claudeProfile, 't', { name: 'mcp__navegador__navegador_clicar', locations: [], rawInput: { ref: 3 }, output: '{"ok":true,"rotulo":"  Enviar\\n pedido "}' })).toMatchObject({ label: 'Clicou em «Enviar pedido»' })
+  })
+
+  it('o resultado do navegador em qualquer embrulho: JSON puro, com espaço ou prefixo, ou nos blocos do MCP; senão, sem aba', () => {
+    const json = '{"aba":4,"titulo":"T","url":"https://exemplo.example/"}'
+    const wrapped = [json, `  ${json}\n`, `Resultado: ${json}`, JSON.stringify([{ type: 'text', text: json }]), JSON.stringify({ type: 'text', text: json }), JSON.stringify([{ type: 'image' }, { type: 'text', text: `  ${json}` }])]
+    for (const output of wrapped) expect(navegadorAbaOf(output), output).toBe(4)
+    for (const output of [undefined, '', 'Erro: aba não existe', '{"aba":', '{"aba":"4"}', '{"aba":0}', '[]', JSON.stringify([{ type: 'text', text: 'nada' }])]) {
+      expect(navegadorAbaOf(output), String(output)).toBeNull()
+    }
+    expect(navegadorDadosOf(JSON.stringify([{ type: 'text', text: '{"ok":true}' }]))).toEqual({ ok: true })
+    expect(navegadorRotuloOf(JSON.stringify([{ type: 'text', text: '{"ok":true,"rotulo":"Entrar"}' }]))).toBe('Entrar')
+    expect(navegadorRotuloOf('{"ok":true,"rotulo":"   "}')).toBeNull()
+    const abrir = (output: string) => acpStepOf(claudeProfile, 't', { name: 'mcp__navegador__navegador_abrir', locations: [], rawInput: { url: 'https://exemplo.example/' }, output })
+    expect(abrir(JSON.stringify([{ type: 'text', text: json }]))).toMatchObject({ label: 'Abriu exemplo.example (aba 4)' })
+    expect(abrir('texto qualquer')).toMatchObject({ label: 'Abriu exemplo.example' })
   })
 
   it('serviço do Assistente: navegador só com "Ativar ponte" ligado e a extensão conectada ao abrir a sessão', async () => {

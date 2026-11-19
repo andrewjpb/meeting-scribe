@@ -6,12 +6,21 @@
 // sessão ACP (`open`, revogado quando ela fecha); sem token, 401 sem corpo. Pedido com `Origin` (vindo de um navegador)
 // ou com outro `Host` é recusado. Os argumentos passam pelo esquema estrito do comando (`navegadorComandoSchema`); o que
 // volta da página é dado, devolvido ao agente como JSON, nunca instrução. Um comando por vez: as chamadas fazem fila.
+// O `navegador_abrir` só abre endereço público: `localhost`, nome sem ponto, `.local`, loopback, link-local e as faixas
+// privadas (IPv4 e IPv6) são recusados aqui, no app, antes de o comando ir à extensão (`privateHost`, a mesma regra
+// da internet do contrato 26), e também quando o nome resolve (DNS, até 3 s) para algum endereço local. Depois, todo
+// resultado que traz `url` (abrir, clicar, ler, abas) é conferido de novo: a página que caiu num endereço local
+// (redirecionamento, link clicado, aba aberta pela página) não tem o conteúdo entregue ao agente, e na lista de abas
+// ela aparece sem título nem endereço.
 import { createHash, randomBytes } from 'node:crypto'
+import { lookup } from 'node:dns/promises'
+import { isIP } from 'node:net'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import { z } from 'zod'
 import { isNavegadorFerramenta, type NavegadorFerramenta } from '../../shared/navegador-ferramentas'
 import { NAVEGADOR_AGUARDAR_MAX, NAVEGADOR_AGUARDAR_MIN, NAVEGADOR_DIGITAR_MAX, NAVEGADOR_ELEMENTOS_MAX, NAVEGADOR_URL_MAX, navegadorComandoSchema, type NavegadorComando } from '../../shared/navegador'
 import type { NavegadorMcpEntry, NavegadorMcpHost } from '../acp/agent'
+import { privateHost } from '../acp/web'
 import { NavegadorErro, type NavegadorServer } from './server'
 
 export const NAVEGADOR_MCP_PATH = '/mcp'
@@ -44,7 +53,8 @@ const objeto = (properties: Record<string, unknown>, required: string[] = []) =>
 export const NAVEGADOR_MCP_TOOL_LIST: readonly { name: NavegadorFerramenta; description: string; inputSchema: Record<string, unknown> }[] = [
   {
     name: 'navegador_abrir',
-    description: 'Abre um endereço http ou https numa aba nova da janela própria do navegador (não mexe nas abas da pessoa). Devolve a aba, o título e o endereço.',
+    description:
+      'Abre um endereço http ou https público numa aba nova da janela própria do navegador (não mexe nas abas da pessoa). Endereço local não abre: localhost, nome sem ponto, .local, IP privado ou de loopback, ou nome que resolve para um deles. Devolve a aba, o título e o endereço.',
     inputSchema: objeto({ url: { type: 'string', maxLength: NAVEGADOR_URL_MAX, description: 'Endereço completo, com http:// ou https://.' } }, ['url']),
   },
   { name: 'navegador_abas', description: 'Lista as abas abertas na janela própria do navegador, com o número, o título e o endereço de cada uma.', inputSchema: objeto({}) },
@@ -81,8 +91,17 @@ export interface NavegadorMcpServer extends NavegadorMcpHost {
 export interface NavegadorMcpDeps {
   /** A ponte do contrato 46, lida a cada chamada (`null`: ainda não existe). */
   ponte: () => NavegadorPonte | null
+  /** Endereços IP de um nome (teste); o padrão é o DNS do sistema (`dns.promises.lookup`, todos). */
+  resolver?: (hostname: string) => Promise<string[]>
+  /** Prazo da resolução do nome antes do `abrir`. */
+  resolverMs?: number
   log?: (message: string) => void
 }
+
+/** Prazo padrão da resolução do nome: o agente não fica parado esperando um DNS lento. */
+export const NAVEGADOR_DNS_MS = 3_000
+
+const resolverPadrao = async (hostname: string): Promise<string[]> => (await lookup(hostname, { all: true, verbatim: true })).map((entry) => entry.address)
 
 /**
  * Mensagem para o agente a partir do erro da ponte: curta e com o que fazer. O texto da extensão é dela (nunca da
@@ -112,6 +131,82 @@ export function navegadorErroTexto(error: unknown): string {
   }
 }
 
+/** Erro do `navegador_abrir` com endereço da rede local. */
+export const NAVEGADOR_URL_LOCAL = 'endereço local não é permitido — só endereço público http ou https abre (nada de localhost, rede interna ou IP privado)'
+
+/** Endereço que o navegador pode abrir: público (fora da rede local e do próprio computador). */
+export function navegadorUrlPublica(raw: string): boolean {
+  try {
+    return !privateHost(new URL(raw).hostname)
+  } catch {
+    return false
+  }
+}
+
+/** Resultado que caiu num endereço local: o conteúdo não vai ao agente. */
+export const NAVEGADOR_PAGINA_LOCAL = 'a página caiu num endereço local — conteúdo não entregue; feche a aba com navegador_fechar'
+
+/** Endereço que a página devolveu é local? Só `http`/`https` contam (`about:blank` e a página de erro do Chrome, não). */
+export function navegadorUrlLocal(raw: unknown): boolean {
+  if (typeof raw !== 'string' || raw === '') return false
+  let url: URL
+  try {
+    url = new URL(raw)
+  } catch {
+    return true
+  }
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') return false
+  return privateHost(url.hostname)
+}
+
+/**
+ * O resultado conferido antes de ir ao agente: `abrir`, `clicar` e `ler` com o endereço local viram erro (com a aba,
+ * para fechar); em `abas`, a aba local fica na lista só com o número, sem título nem endereço.
+ */
+export function navegadorResultadoSeguro(tipo: NavegadorComando['tipo'], dados: unknown): { ok: true; dados: unknown } | { ok: false; erro: string } {
+  if (typeof dados !== 'object' || dados === null) return { ok: true, dados }
+  const record = dados as Record<string, unknown>
+  if (tipo === 'abas' && Array.isArray(record['abas'])) {
+    const abas = (record['abas'] as Record<string, unknown>[]).map((aba) => (navegadorUrlLocal(aba['url']) ? { aba: aba['aba'], titulo: '', url: '', ativa: aba['ativa'], local: true } : aba))
+    return { ok: true, dados: { ...record, abas } }
+  }
+  if ((tipo === 'abrir' || tipo === 'clicar' || tipo === 'ler') && navegadorUrlLocal(record['url'])) {
+    const aba = typeof record['aba'] === 'number' ? ` (aba ${record['aba']})` : ''
+    return { ok: false, erro: NAVEGADOR_PAGINA_LOCAL.replace('endereço local', `endereço local${aba}`) }
+  }
+  return { ok: true, dados }
+}
+
+/**
+ * Antes do `abrir`: o nome do endereço resolvido, e recusado se algum endereço for local (um domínio público apontado
+ * para 192.168…, `192-168-0-1.nip.io`). IP escrito no endereço já foi conferido pelo nome. Falha ou demora do DNS
+ * também recusa. `null`: pode abrir.
+ */
+export async function navegadorDnsErro(raw: string, resolver: (hostname: string) => Promise<string[]> = resolverPadrao, ms = NAVEGADOR_DNS_MS): Promise<string | null> {
+  let hostname: string
+  try {
+    hostname = new URL(raw).hostname.replace(/^\[|\]$/g, '')
+  } catch {
+    return NAVEGADOR_URL_LOCAL
+  }
+  if (isIP(hostname)) return null
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const prazo = new Promise<'tempo'>((resolve) => {
+    timer = setTimeout(() => resolve('tempo'), ms)
+    timer.unref?.()
+  })
+  try {
+    const enderecos = await Promise.race([resolver(hostname), prazo])
+    if (enderecos === 'tempo') return `o nome ${hostname.slice(0, 100)} não resolveu a tempo — confira o endereço e tente de novo`
+    if (!enderecos.length) return `o nome ${hostname.slice(0, 100)} não existe — confira o endereço`
+    return enderecos.some((endereco) => privateHost(endereco)) ? NAVEGADOR_URL_LOCAL : null
+  } catch {
+    return `o nome ${hostname.slice(0, 100)} não existe — confira o endereço`
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
 /** Argumentos de uma ferramenta: os mesmos campos do comando (esquema estrito), sem o `tipo`. */
 export function navegadorComandoOf(tool: NavegadorFerramenta, args: unknown): { ok: true; comando: NavegadorComando } | { ok: false; erro: string } {
   const fields = args === undefined || args === null ? {} : args
@@ -119,7 +214,10 @@ export function navegadorComandoOf(tool: NavegadorFerramenta, args: unknown): { 
   // O `tipo` é da ferramenta, nunca do agente: vindo nos argumentos, é campo a mais.
   if ('tipo' in fields) return { ok: false, erro: 'argumentos fora do formato da ferramenta (tipo)' }
   const parsed = navegadorComandoSchema.safeParse({ ...fields, tipo: COMANDO[tool] })
-  if (parsed.success) return { ok: true, comando: parsed.data }
+  if (parsed.success) {
+    if (parsed.data.tipo === 'abrir' && !navegadorUrlPublica(parsed.data.url)) return { ok: false, erro: NAVEGADOR_URL_LOCAL }
+    return { ok: true, comando: parsed.data }
+  }
   const campos = [...new Set(parsed.error.issues.map((issue) => (issue.code === 'unrecognized_keys' ? issue.keys.join(', ') : issue.path.join('.'))).filter(Boolean))]
   return { ok: false, erro: `argumentos fora do formato da ferramenta${campos.length ? ` (${campos.join(', ').slice(0, 120)})` : ''}` }
 }
@@ -206,9 +304,15 @@ export function createNavegadorMcpServer(deps: NavegadorMcpDeps): NavegadorMcpSe
     if (!comando.ok) return texto(`Erro: ${comando.erro}`, true)
     const ponte = deps.ponte()
     if (!ponte) return texto(`Erro: ${navegadorErroTexto(new NavegadorErro('desligada', 'ponte desligada'))}`, true)
+    if (comando.comando.tipo === 'abrir') {
+      const dns = await navegadorDnsErro(comando.comando.url, deps.resolver, deps.resolverMs)
+      if (dns) return texto(`Erro: ${dns}`, true)
+    }
     try {
       const dados = await enfileirar(() => ponte.enviarComando(comando.comando))
-      return texto(JSON.stringify(dados))
+      const seguro = navegadorResultadoSeguro(comando.comando.tipo, dados)
+      if (!seguro.ok) return texto(`Erro: ${seguro.erro}`, true)
+      return texto(JSON.stringify(seguro.dados))
     } catch (error) {
       return texto(`Erro: ${navegadorErroTexto(error)}`, true)
     }

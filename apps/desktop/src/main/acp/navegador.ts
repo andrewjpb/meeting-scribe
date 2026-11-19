@@ -25,9 +25,51 @@ export function navegadorToolOf(call: Pick<KnownToolCall, 'name'>): NavegadorFer
   return isNavegadorFerramenta(tool) ? tool : null
 }
 
-/** Número da aba no começo do resultado (`{"aba":2,…}`, como o servidor MCP escreve); `null` sem ele. */
-export function navegadorAbaOf(output: unknown): number | null {
+const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value)
+
+/** Objeto JSON de um texto: inteiro, ou do primeiro `{` ao último `}` (com espaço ou um prefixo antes). */
+function objectIn(text: string): unknown {
+  const trimmed = text.trim()
+  try {
+    return JSON.parse(trimmed) as unknown
+  } catch {
+    const start = trimmed.indexOf('{')
+    const end = trimmed.lastIndexOf('}')
+    if (start === -1 || end <= start) return null
+    try {
+      return JSON.parse(trimmed.slice(start, end + 1)) as unknown
+    } catch {
+      return null
+    }
+  }
+}
+
+/**
+ * Os dados de uma ferramenta do navegador a partir do texto do resultado, como chegou ao `tool_call_update`: o JSON do
+ * servidor MCP puro, com espaço ou prefixo antes, ou embrulhado nos blocos do MCP (`[{"type":"text","text":"{…}"}]`).
+ * `null` se nada casar. Só para o rótulo do passo: o que sai daqui nunca é instrução.
+ */
+export function navegadorDadosOf(output: unknown): Record<string, unknown> | null {
   if (typeof output !== 'string') return null
-  const match = /^\{"aba":(\d{1,9})[,}]/.exec(output)
-  return match ? Number(match[1]) : null
+  let value = objectIn(output)
+  if (Array.isArray(value)) {
+    const block = value.find((item): item is { text: string } => isRecord(item) && item['type'] === 'text' && typeof item['text'] === 'string')
+    value = block ? objectIn(block.text) : null
+  }
+  if (isRecord(value) && value['type'] === 'text' && typeof value['text'] === 'string') value = objectIn(value['text'])
+  return isRecord(value) ? value : null
+}
+
+/** Número da aba no resultado (`{"aba":2,…}`); `null` sem ele. */
+export function navegadorAbaOf(output: unknown): number | null {
+  const aba = navegadorDadosOf(output)?.['aba']
+  return typeof aba === 'number' && Number.isInteger(aba) && aba > 0 ? aba : null
+}
+
+/** Rótulo do elemento no resultado de `clicar` e `digitar`, numa linha e curto; `null` sem ele. */
+export function navegadorRotuloOf(output: unknown): string | null {
+  const rotulo = navegadorDadosOf(output)?.['rotulo']
+  if (typeof rotulo !== 'string') return null
+  const line = rotulo.replace(/\s+/g, ' ').trim()
+  return line ? line.slice(0, 80) : null
 }

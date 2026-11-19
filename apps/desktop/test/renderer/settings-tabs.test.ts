@@ -6,6 +6,7 @@ import {
   rememberSettingsTab,
   resultsLabel,
   searchSettings,
+  settingsResultLabel,
   settingsIndex,
   SETTINGS_TAB_LABELS,
   tabForShortcut,
@@ -107,6 +108,15 @@ describe('índice da busca (contrato 18, devolução)', () => {
     expect(plugins).toEqual(['Controle do navegador', 'Ativar ponte', 'Salvar plugin', 'Como instalar'])
     const found = searchSettings(index, 'ponte').flatMap((group) => group.indexes.map((i) => index[i] as SettingsEntry))
     expect(found.map((entry) => entry.name)).toContain('Ativar ponte')
+  })
+
+  it('"Salvar plugin" e "Como instalar" de cada cartão: o rótulo do resultado diz de qual plugin é', () => {
+    const found = searchSettings(index, 'salvar plugin').flatMap((group) => group.indexes.map((i) => index[i] as SettingsEntry))
+    expect(found.map((entry) => settingsResultLabel(index, entry))).toEqual(['Plugins › Quem fala no Meet › Salvar plugin', 'Plugins › Controle do navegador › Salvar plugin'])
+    const install = index.filter((entry) => entry.name === 'Como instalar').map((entry) => settingsResultLabel(index, entry))
+    expect(new Set(install).size).toBe(install.length)
+    // Nome único na aba: o rótulo de sempre.
+    expect(settingsResultLabel(index, index.find((entry) => entry.name === 'Modelo do chat') as SettingsEntry)).toBe('Claude › Modelo do chat')
   })
 
   it('casa a linha da tela pelo nome ou pelo nome com a versão', () => {

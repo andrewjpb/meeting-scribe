@@ -11,6 +11,9 @@ uma aba ou a janela.
 - O texto das páginas volta ao app como dado; a extensão nunca segue instrução escrita numa página.
 - Só fala com `127.0.0.1` (o app). Nada sai do computador.
 - Sem `chrome.debugger`: nenhuma faixa de "depurando este navegador".
+- Lembra a janela própria e os números das abas mesmo quando o Chrome para o service worker da extensão (permissão
+  `storage`, em `chrome.storage.session`: só na memória do Chrome, apagado ao fechar o navegador). Na volta, confere
+  que a janela e cada aba ainda existem antes de usar.
 
 ## Instalar (sem compactar)
 
@@ -33,9 +36,12 @@ O app escuta numa das portas 47672 a 47681 (a extensão tenta nessa ordem e lemb
   ou `{}`.
 - `POST /v1/navegador/resultados` com `{ "id", "ok", "dados"?, "erro"? }`.
 
-Comandos: `abrir` (`url`, só http/https; sempre aba nova, devolve o número `aba`), `abas` (a lista, com a usada
+Comandos: `abrir` (`url`, só http/https; sempre aba nova, devolve o número `aba`; o app só manda endereço
+público: `localhost`, nome sem ponto, `.local`, IP privado, de loopback ou link-local, e nome que resolve para um
+deles, ele recusa antes; página que cai num endereço local depois de aberta tem o conteúdo retido pelo app), `abas` (a lista, com a usada
 por último marcada `ativa`), `ler` (título, endereço, texto visível até 40 KB e os elementos interativos com `ref`),
-`clicar` (`ref`), `digitar` (`ref`, `texto`), `aguardar` (`segundos`, 1 a 10) e `fechar` (com `aba`, só ela; sem,
+`clicar` (`ref`; devolve também o `rotulo` do elemento, o mesmo do `ler`), `digitar` (`ref`, `texto`; devolve o
+`rotulo` do campo), `aguardar` (`segundos`, 1 a 10) e `fechar` (com `aba`, só ela; sem,
 a janela inteira). `ler`, `clicar`, `digitar` e `fechar` aceitam `aba`; sem ela, vale a última aba usada. Número
 de aba que não existe dá "aba não existe"; o 11º `abrir` dá "muitas abas".
 Os `ref` valem até a próxima leitura ou navegação daquela aba; depois disso o erro é "ref vencida, leia a página

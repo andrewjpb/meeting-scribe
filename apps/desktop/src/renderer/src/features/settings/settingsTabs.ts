@@ -48,6 +48,16 @@ export interface SettingsResultGroup {
   indexes: number[]
 }
 
+/**
+ * Rótulo do resultado da busca: "<aba> › <nome>". Quando o mesmo nome aparece em mais de um bloco da aba ("Salvar
+ * plugin" e "Como instalar" de cada cartão de plugin), entra o bloco no meio: "Plugins › Quem fala no Meet › Salvar plugin".
+ */
+export function settingsResultLabel(entries: readonly SettingsEntry[], entry: SettingsEntry): string {
+  const repeated = entries.some((other) => other !== entry && other.tab === entry.tab && other.name === entry.name && other.section !== entry.section)
+  const tab = SETTINGS_TAB_LABELS[entry.tab]
+  return repeated ? `${tab} › ${entry.section} › ${entry.name}` : `${tab} › ${entry.name}`
+}
+
 /** Linhas cujo nome ou descrição contém o termo, agrupadas por aba na ordem das abas. Termo vazio: nada. */
 export function searchSettings(entries: readonly SettingsEntry[], query: string): SettingsResultGroup[] {
   const needle = normalizeSearch(query)

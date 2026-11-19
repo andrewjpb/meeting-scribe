@@ -21,7 +21,7 @@ import { escapeTurnText } from '../claude-cli/prompt'
 import type { Timers } from '../claude-cli/translator'
 import { contentText, type AcpOpenResult, type AcpSession, type AcpSessionRequest, type KnownToolCall, type SessionUpdate, type Usage } from './agent'
 import { isNavegadorFerramenta, type NavegadorFerramenta } from '../../shared/navegador-ferramentas'
-import { navegadorAbaOf } from './navegador'
+import { navegadorAbaOf, navegadorRotuloOf } from './navegador'
 import type { AgentProfile } from './profiles/types'
 import { webDomain } from './web'
 
@@ -100,9 +100,10 @@ export function webStepOf(tool: 'WebSearch' | 'WebFetch', input: Record<string, 
 const positive = (value: unknown): number | null => (typeof value === 'number' && Number.isInteger(value) && value > 0 ? value : null)
 
 /**
- * Passo do navegador (contrato 47): "Abriu <domínio> (aba N)", "Listou as abas", "Leu a página", "Clicou no elemento
- * N", "Digitou no campo N", "Aguardou N s", "Fechou a aba N". Só o domínio do endereço vai à tela; o texto digitado e o
- * conteúdo da página nunca. A aba aberta sai do começo do resultado (`output`), quando ele já chegou.
+ * Passo do navegador (contrato 47): "Abriu <domínio> (aba N)", "Listou as abas", "Leu a página", "Clicou em «<rótulo>»",
+ * "Digitou em «<rótulo>»", "Aguardou N s", "Fechou a aba N". Só o domínio do endereço vai à tela, nunca o texto digitado
+ * nem o da página; o rótulo do elemento é o que a extensão devolve no resultado (`output`), e sem ele vale o número
+ * ("Clicou no elemento N"). A aba aberta também sai do resultado, quando ele já chegou.
  */
 export function navegadorStepOf(tool: NavegadorFerramenta, input: Record<string, unknown>, output?: string): Omit<ChatStep, 'id' | 'status'> {
   const step = (label: string): Omit<ChatStep, 'id' | 'status'> => ({ tool, label: label.length > CHAT_STEP_LABEL_MAX ? `${label.slice(0, CHAT_STEP_LABEL_MAX - 1)}…` : label, meetingId: null })
@@ -119,11 +120,13 @@ export function navegadorStepOf(tool: NavegadorFerramenta, input: Record<string,
       return step('Leu a página')
     case 'navegador_clicar': {
       const ref = positive(input['ref'])
-      return step(ref ? `Clicou no elemento ${ref}` : 'Clicou na página')
+      const rotulo = navegadorRotuloOf(output)
+      return step(rotulo ? `Clicou em «${rotulo}»` : ref ? `Clicou no elemento ${ref}` : 'Clicou na página')
     }
     case 'navegador_digitar': {
       const ref = positive(input['ref'])
-      return step(ref ? `Digitou no campo ${ref}` : 'Digitou na página')
+      const rotulo = navegadorRotuloOf(output)
+      return step(rotulo ? `Digitou em «${rotulo}»` : ref ? `Digitou no campo ${ref}` : 'Digitou na página')
     }
     case 'navegador_aguardar': {
       const segundos = positive(input['segundos'])
@@ -141,7 +144,8 @@ function outputOf(content: unknown): string | undefined {
     const inner = typeof block === 'object' && block !== null ? (block as { content?: unknown }).content : undefined
     if (typeof inner === 'object' && inner !== null && (inner as { type?: unknown }).type === 'text') {
       const text = (inner as { text?: unknown }).text
-      if (typeof text === 'string') return text.slice(0, 200)
+      // O resultado de `clicar` (título, endereço e rótulo) cabe com folga; o do `ler`, cortado, só não dá rótulo.
+      if (typeof text === 'string') return text.slice(0, 8_192)
     }
   }
   return undefined

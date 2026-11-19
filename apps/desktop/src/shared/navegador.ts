@@ -80,8 +80,9 @@ export const navegadorDadosSchemas = {
         .max(NAVEGADOR_ELEMENTOS_MAX),
     })
     .strict(),
-  clicar: z.object({ ok: z.literal(true), aba: abaSchema, titulo: tituloSchema, url: paginaUrlSchema }).strict(),
-  digitar: okSchema,
+  // Contrato 47: o rótulo do elemento (o mesmo do `ler`), quando a página deu um; o passo da conversa diz em quê.
+  clicar: z.object({ ok: z.literal(true), aba: abaSchema, titulo: tituloSchema, url: paginaUrlSchema, rotulo: linha(NAVEGADOR_ROTULO_MAX).optional() }).strict(),
+  digitar: z.object({ ok: z.literal(true), rotulo: linha(NAVEGADOR_ROTULO_MAX).optional() }).strict(),
   aguardar: okSchema,
   fechar: okSchema,
 } as const satisfies Record<NavegadorTipo, z.ZodType>

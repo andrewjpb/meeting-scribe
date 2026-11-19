@@ -1,12 +1,21 @@
 // Contrato 47 (plugin-navegador): o servidor MCP local das ferramentas do navegador. `initialize` e `tools/list` com as 7;
 // `tools/call` vira o comando da ponte (uma ponte falsa injetada) e o resultado volta como texto JSON; erros da ponte viram
 // mensagens acionáveis; sem token, com token revogado, com `Origin` ou com outro `Host`, recusado; ferramenta
-// desconhecida e JSON-RPC quebrado viram erro limpo; uma chamada por vez na ponte.
+// desconhecida e JSON-RPC quebrado viram erro limpo; uma chamada por vez na ponte. Endereço local não abre (pelo nome
+// e pelo DNS, com um resolvedor injetado), e a página que cai num endereço local não tem o conteúdo entregue.
 import { request as httpRequest } from 'node:http'
 import { afterEach, describe, expect, it } from 'vitest'
 import { NAVEGADOR_FERRAMENTAS } from '../src/shared/navegador-ferramentas'
-import type { NavegadorComando } from '../src/shared/navegador'
-import { createNavegadorMcpServer, NAVEGADOR_MCP_PATH, NAVEGADOR_MCP_TOOL_LIST, navegadorComandoOf, navegadorErroTexto, type NavegadorMcpServer, type NavegadorPonte } from '../src/main/navegador/mcp'
+import { navegadorDadosSchemas, type NavegadorComando } from '../src/shared/navegador'
+import {
+  createNavegadorMcpServer,
+  NAVEGADOR_MCP_PATH,
+  NAVEGADOR_PAGINA_LOCAL,
+  NAVEGADOR_URL_LOCAL,
+  navegadorDnsErro,
+  navegadorResultadoSeguro,
+  navegadorUrlLocal,
+  navegadorUrlPublica, NAVEGADOR_MCP_TOOL_LIST, navegadorComandoOf, navegadorErroTexto, type NavegadorMcpServer, type NavegadorPonte } from '../src/main/navegador/mcp'
 import { NavegadorErro } from '../src/main/navegador/server'
 
 interface Reply {
@@ -46,8 +55,9 @@ describe('servidor MCP do navegador', () => {
     server = null
   })
 
-  const start = async (ponte: NavegadorPonte | null) => {
-    server = createNavegadorMcpServer({ ponte: () => ponte })
+  /** Sem DNS de verdade: todo nome resolve para um IP público, a não ser que o teste diga outra coisa. */
+  const start = async (ponte: NavegadorPonte | null, resolver: (hostname: string) => Promise<string[]> = () => Promise.resolve(['93.184.216.34'])) => {
+    server = createNavegadorMcpServer({ ponte: () => ponte, resolver, resolverMs: 100 })
     const entry = await server.open()
     if (!entry) throw new Error('sem servidor')
     const port = Number(new URL(entry.url).port)
@@ -132,6 +142,131 @@ describe('servidor MCP do navegador', () => {
     const result = (await semPonte('tools/call', { name: 'navegador_abas' })).json?.['result'] as { content: { text: string }[]; isError: boolean }
     expect(result).toMatchObject({ isError: true })
     expect(result.content[0]?.text).toContain('ponte desligada')
+  })
+
+  it('navegador_abrir recusa endereço local (localhost, nome sem ponto, loopback, link-local, faixas privadas) antes da ponte', async () => {
+    const ponte = fakePonte((comando) => Promise.resolve(comando.tipo === 'abrir' ? { aba: 1, titulo: 'T', url: comando.url } : { ok: true }))
+    const { rpc } = await start(ponte)
+    const locais = [
+      'http://localhost:3000/',
+      'http://LOCALHOST/',
+      'http://app.localhost/',
+      'http://127.0.0.1/',
+      'http://127.1/',
+      'http://2130706433/',
+      'http://10.1.2.3/',
+      'http://172.16.0.1/',
+      'http://172.31.255.255/',
+      'http://192.168.0.10/',
+      'http://169.254.169.254/latest/meta-data',
+      'http://0.0.0.0/',
+      'http://[::1]/',
+      'http://[fd12:3456::1]/',
+      'http://[fc00::1]/',
+      'http://[fe80::1]/',
+      'http://[::ffff:127.0.0.1]/',
+      'http://intranet/',
+      'http://impressora.local/',
+    ]
+    for (const url of locais) {
+      expect(navegadorUrlPublica(url), url).toBe(false)
+      const result = (await rpc('tools/call', { name: 'navegador_abrir', arguments: { url } })).json?.['result'] as { content: { text: string }[]; isError?: boolean }
+      expect(result, url).toEqual({ content: [{ type: 'text', text: `Erro: ${NAVEGADOR_URL_LOCAL}` }], isError: true })
+    }
+    expect(ponte.comandos).toEqual([])
+    expect(NAVEGADOR_URL_LOCAL.startsWith('endereço local não é permitido')).toBe(true)
+    // Público: abre (172.32 já está fora da faixa privada).
+    for (const url of ['https://exemplo.example/', 'http://172.32.0.1/', 'https://8.8.8.8/']) expect(navegadorUrlPublica(url), url).toBe(true)
+    expect((await rpc('tools/call', { name: 'navegador_abrir', arguments: { url: 'https://exemplo.example/' } })).json?.['result']).not.toHaveProperty('isError')
+    expect(ponte.comandos).toEqual([{ tipo: 'abrir', url: 'https://exemplo.example/' }])
+  })
+
+  it('nome que resolve para endereço local (ou não resolve) não abre; IP público resolvido abre', async () => {
+    const tabela: Record<string, string[]> = {
+      'exemplo.example': ['93.184.216.34', '2606:2800:220:1::1'],
+      '192-168-0-1.nip.io': ['192.168.0.1'],
+      'misto.example': ['93.184.216.34', '10.0.0.7'],
+      'v6.example': ['fd00::5'],
+      'mapeado.example': ['::ffff:192.168.1.1'],
+      'metadados.example': ['169.254.169.254'],
+    }
+    const resolver = (hostname: string): Promise<string[]> => (hostname in tabela ? Promise.resolve(tabela[hostname] ?? []) : Promise.reject(new Error('ENOTFOUND')))
+    const ponte = fakePonte((comando) => Promise.resolve(comando.tipo === 'abrir' ? { aba: 1, titulo: 'T', url: comando.url } : { ok: true }))
+    const { rpc } = await start(ponte, resolver)
+    const abrir = async (url: string): Promise<{ text: string; isError: boolean }> => {
+      const result = (await rpc('tools/call', { name: 'navegador_abrir', arguments: { url } })).json?.['result'] as { content: { text: string }[]; isError?: boolean }
+      return { text: result.content[0]?.text ?? '', isError: result.isError === true }
+    }
+    for (const host of ['192-168-0-1.nip.io', 'misto.example', 'v6.example', 'mapeado.example', 'metadados.example']) {
+      expect(await abrir(`https://${host}/`), host).toEqual({ text: `Erro: ${NAVEGADOR_URL_LOCAL}`, isError: true })
+    }
+    expect(await abrir('https://nao-existe.example/')).toEqual({ text: 'Erro: o nome nao-existe.example não existe — confira o endereço', isError: true })
+    expect(ponte.comandos).toEqual([])
+    expect((await abrir('https://exemplo.example/')).isError).toBe(false)
+    // IP público escrito no endereço não passa pelo DNS.
+    expect(await navegadorDnsErro('https://8.8.8.8/', () => Promise.reject(new Error('não devia resolver')))).toBeNull()
+    // DNS lento: recusa no prazo, sem travar o agente.
+    expect(await navegadorDnsErro('https://lento.example/', () => new Promise(() => undefined), 20)).toBe('o nome lento.example não resolveu a tempo — confira o endereço e tente de novo')
+    expect(await navegadorDnsErro('https://vazio.example/', () => Promise.resolve([]))).toMatch(/não existe/)
+  })
+
+  it('página que cai num endereço local (redirecionamento, clique, aba aberta pela página): conteúdo não vai ao agente', async () => {
+    let url = 'http://192.168.0.1/admin'
+    const ponte = fakePonte((comando) => {
+      if (comando.tipo === 'abas') {
+        return Promise.resolve({
+          abas: [
+            { aba: 1, titulo: 'Público', url: 'https://exemplo.example/', ativa: false },
+            { aba: 2, titulo: 'Roteador — senha', url, ativa: true },
+          ],
+        })
+      }
+      if (comando.tipo === 'ler') return Promise.resolve({ aba: 2, titulo: 'Roteador', url, texto: 'senha do wi-fi: segredo', elementos: [] })
+      if (comando.tipo === 'clicar') return Promise.resolve({ ok: true, aba: 2, titulo: 'Roteador', url, rotulo: 'Entrar' })
+      return Promise.resolve({ aba: 2, titulo: 'Roteador', url })
+    })
+    const { rpc } = await start(ponte)
+    const call = async (name: string, args: unknown = {}): Promise<{ text: string; isError: boolean }> => {
+      const result = (await rpc('tools/call', { name, arguments: args })).json?.['result'] as { content: { text: string }[]; isError?: boolean }
+      return { text: result.content[0]?.text ?? '', isError: result.isError === true }
+    }
+    const bloqueado = { text: `Erro: ${NAVEGADOR_PAGINA_LOCAL.replace('endereço local', 'endereço local (aba 2)')}`, isError: true }
+    // O `abrir` de um endereço público que redirecionou para a rede local.
+    expect(await call('navegador_abrir', { url: 'https://exemplo.example/' })).toEqual(bloqueado)
+    expect(await call('navegador_ler')).toEqual(bloqueado)
+    expect(await call('navegador_clicar', { ref: 1 })).toEqual(bloqueado)
+    for (const tool of ['navegador_abrir', 'navegador_ler', 'navegador_clicar']) expect(JSON.stringify(await call(tool, tool === 'navegador_clicar' ? { ref: 1 } : tool === 'navegador_abrir' ? { url: 'https://exemplo.example/' } : {}))).not.toContain('segredo')
+    // Na lista, a aba local fica só com o número (dá para fechar), sem título nem endereço.
+    const abas = JSON.parse((await call('navegador_abas')).text) as { abas: Record<string, unknown>[] }
+    expect(abas.abas).toEqual([
+      { aba: 1, titulo: 'Público', url: 'https://exemplo.example/', ativa: false },
+      { aba: 2, titulo: '', url: '', ativa: true, local: true },
+    ])
+    // Outras faixas e o loopback também; página pública, about:blank e a de erro do Chrome, não.
+    for (const local of ['http://127.0.0.1:8080/', 'http://[::1]/', 'http://169.254.169.254/latest', 'http://intranet/', 'http://10.0.0.1/']) expect(navegadorUrlLocal(local), local).toBe(true)
+    for (const fora of ['https://exemplo.example/', 'about:blank', 'chrome-error://chromewebdata/', '']) expect(navegadorUrlLocal(fora), fora).toBe(false)
+    url = 'https://exemplo.example/painel'
+    expect((await call('navegador_ler')).isError).toBe(false)
+    expect(navegadorResultadoSeguro('digitar', { ok: true })).toEqual({ ok: true, dados: { ok: true } })
+  })
+
+  it('o rótulo do elemento volta no resultado de clicar e digitar', async () => {
+    const ponte = fakePonte((comando) =>
+      Promise.resolve(
+        comando.tipo === 'clicar'
+          ? navegadorDadosSchemas.clicar.parse({ ok: true, aba: 1, titulo: 'T', url: 'https://exemplo.example/', rotulo: ' Entrar\n agora ' })
+          : navegadorDadosSchemas.digitar.parse({ ok: true, rotulo: 'Buscar' }),
+      ),
+    )
+    const { rpc } = await start(ponte)
+    const text = async (name: string, args: unknown): Promise<string> => ((await rpc('tools/call', { name, arguments: args })).json?.['result'] as { content: { text: string }[] }).content[0]?.text ?? ''
+    expect(JSON.parse(await text('navegador_clicar', { ref: 3 }))).toMatchObject({ rotulo: 'Entrar agora' })
+    expect(JSON.parse(await text('navegador_digitar', { ref: 1, texto: 'x' }))).toEqual({ ok: true, rotulo: 'Buscar' })
+    // Sem o rótulo (extensão antiga) também vale; campo a mais, não.
+    expect(navegadorDadosSchemas.digitar.safeParse({ ok: true }).success).toBe(true)
+    expect(navegadorDadosSchemas.clicar.safeParse({ ok: true, aba: 1, titulo: 'T', url: 'u' }).success).toBe(true)
+    expect(navegadorDadosSchemas.digitar.safeParse({ ok: true, rotulo: 'x', valor: 'segredo' }).success).toBe(false)
+    expect(navegadorDadosSchemas.clicar.parse({ ok: true, aba: 1, titulo: 'T', url: 'u', rotulo: 'x'.repeat(500) }).rotulo).toHaveLength(200)
   })
 
   it('mensagens acionáveis da tabela do contrato', () => {

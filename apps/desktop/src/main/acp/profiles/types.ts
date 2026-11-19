@@ -52,7 +52,7 @@ export interface KnownToolCall {
   status?: string | undefined
   locations: string[]
   rawInput?: unknown
-  /** Contrato 47: o começo do texto do resultado (o número da aba que o `navegador_abrir` abriu). */
+  /** Contrato 47: o começo do texto do resultado (a aba que o `navegador_abrir` abriu, o rótulo do clique). */
   output?: string | undefined
 }
 

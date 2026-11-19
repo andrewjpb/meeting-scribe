@@ -4,6 +4,10 @@
 // sai do computador. Nunca toca uma aba da pessoa: tudo acontece na janela própria (`janela`), que pode ter várias
 // abas, cada uma com um número sequencial (`aba`: 1, 2, 3…) que não muda até ela fechar. O texto das páginas é
 // dado que volta ao app, nunca comando: esta extensão só executa o que chega do app, um por vez.
+//
+// O Chrome para o service worker quando quer: a janela, o mapa das abas, o último número dado e a aba usada por último
+// ficam também em `chrome.storage.session` (só na memória do Chrome, apagado ao fechar o navegador) e voltam na subida,
+// conferidos: a janela que não existe mais é esquecida, e a aba fechada ou levada para outra janela sai do mapa.
 'use strict'
 
 /** Portas que o app pode usar, na ordem em que ele tenta. */
@@ -45,7 +49,41 @@ let ultimaAba = 0
 /** A aba usada por último: vale quando o comando não diz qual. */
 let ativa = null
 
+/** Chave do estado em `chrome.storage.session`. */
+const ESTADO_KEY = 'navegador-estado'
+
 class ErroComando extends Error {}
+
+/** Grava o estado de agora (falha de gravação não para o comando: só perde a lembrança). */
+function salvar() {
+  const estado = { janela, abas: [...abas], ultimaAba, ativa }
+  void chrome.storage.session.set({ [ESTADO_KEY]: estado }).catch(() => undefined)
+}
+
+/** Na subida do service worker: o estado gravado, só com a janela e as abas que ainda existem. */
+async function restaurar() {
+  const gravado = await chrome.storage.session.get(ESTADO_KEY).catch(() => ({}))
+  const estado = gravado && gravado[ESTADO_KEY]
+  if (!estado || typeof estado !== 'object') return
+  if (Number.isInteger(estado.ultimaAba) && estado.ultimaAba > ultimaAba) ultimaAba = estado.ultimaAba
+  const windowId = estado.janela && Number.isInteger(estado.janela.windowId) ? estado.janela.windowId : null
+  const existe = windowId === null ? null : await chrome.windows.get(windowId).catch(() => null)
+  if (!existe) {
+    salvar()
+    return
+  }
+  janela = { windowId }
+  for (const par of Array.isArray(estado.abas) ? estado.abas : []) {
+    if (!Array.isArray(par) || !Number.isInteger(par[0]) || !Number.isInteger(par[1]) || abas.size >= ABAS_MAX) continue
+    const tab = await chrome.tabs.get(par[1]).catch(() => null)
+    if (tab && tab.windowId === windowId) abas.set(par[0], par[1])
+  }
+  ativa = Number.isInteger(estado.ativa) && abas.has(estado.ativa) ? estado.ativa : abas.size ? Math.max(...abas.keys()) : null
+  salvar()
+}
+
+/** O estado restaurado: todo comando e todo evento das abas esperam por ele. */
+const pronto = restaurar().catch(() => undefined)
 
 const esperar = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
@@ -63,6 +101,7 @@ function esquecerJanela() {
   janela = null
   abas.clear()
   ativa = null
+  salvar()
 }
 
 const numeroDa = (tabId) => {
@@ -74,25 +113,30 @@ const numeroDa = (tabId) => {
 function esquecerAba(aba) {
   abas.delete(aba)
   if (ativa === aba) ativa = abas.size ? Math.max(...abas.keys()) : null
+  salvar()
 }
 
 function adotar(tabId) {
   ultimaAba += 1
   abas.set(ultimaAba, tabId)
+  salvar()
   return ultimaAba
 }
 
-chrome.windows.onRemoved.addListener((windowId) => {
+chrome.windows.onRemoved.addListener(async (windowId) => {
+  await pronto
   if (janela && janela.windowId === windowId) esquecerJanela()
 })
 // Fechada à mão pela pessoa (ou pela página): sai do mapa.
-chrome.tabs.onRemoved.addListener((tabId) => {
+chrome.tabs.onRemoved.addListener(async (tabId) => {
+  await pronto
   const aba = numeroDa(tabId)
   if (aba !== null) esquecerAba(aba)
 })
 // Link `_blank` de uma aba nossa, aberto dentro da janela própria: entra no mapa com o próximo número. Aba de outra
 // janela, ou sem uma aba nossa como origem, nunca entra.
-chrome.tabs.onCreated.addListener((tab) => {
+chrome.tabs.onCreated.addListener(async (tab) => {
+  await pronto
   if (!janela || tab.id === undefined || tab.windowId !== janela.windowId) return
   if (tab.openerTabId === undefined || numeroDa(tab.openerTabId) === null || numeroDa(tab.id) !== null) return
   if (abas.size >= ABAS_MAX) return
@@ -223,6 +267,8 @@ function coletarPagina(textoMax, elementosMax, rotuloMax) {
     elementos.push({ ref: refs.length, rotulo: rotulo(el), papel: linha(papel(el)) })
   }
   window.__lapRefs = refs
+  // O rótulo de cada `ref`, o mesmo do `ler`: volta no resultado de `clicar` e `digitar` (o passo no app diz em quê).
+  window.__lapRotulos = elementos.map((elemento) => elemento.rotulo)
   const texto = document.body ? document.body.innerText.slice(0, textoMax) : ''
   return { titulo: document.title || '', url: location.href, texto, elementos }
 }
@@ -231,9 +277,10 @@ function coletarPagina(textoMax, elementosMax, rotuloMax) {
 function clicarNaPagina(ref, vencida) {
   const el = Array.isArray(window.__lapRefs) ? window.__lapRefs[ref - 1] : undefined
   if (!el || !el.isConnected) return { erro: vencida }
+  const rotulo = Array.isArray(window.__lapRotulos) && typeof window.__lapRotulos[ref - 1] === 'string' ? window.__lapRotulos[ref - 1] : ''
   el.scrollIntoView({ block: 'center', inline: 'center' })
   el.click()
-  return { ok: true }
+  return { ok: true, rotulo }
 }
 
 /** Roda dentro da página: escreve no campo do `ref` e avisa a página (`input` e `change`). Senha, nunca. */
@@ -252,7 +299,8 @@ function digitarNaPagina(ref, texto, vencida) {
   else el.value = texto
   el.dispatchEvent(new Event('input', { bubbles: true }))
   el.dispatchEvent(new Event('change', { bubbles: true }))
-  return { ok: true }
+  const rotulo = Array.isArray(window.__lapRotulos) && typeof window.__lapRotulos[ref - 1] === 'string' ? window.__lapRotulos[ref - 1] : ''
+  return { ok: true, rotulo }
 }
 
 /** Injeta `func` só no quadro principal da aba e devolve o que ela devolveu. */
@@ -271,18 +319,18 @@ async function ler(numero) {
 
 async function clicar(ref, numero) {
   const { aba, tab } = await abaPropria(numero)
-  await naPagina(tab, clicarNaPagina, [ref, REF_VENCIDA])
+  const { rotulo } = await naPagina(tab, clicarNaPagina, [ref, REF_VENCIDA])
   // O clique pode navegar: espera a página nova (se começou a carregar) antes de dizer onde está.
   await esperar(DEPOIS_DO_CLIQUE_MS)
   const depois = await abaPropria(aba)
   if (depois.tab.status === 'loading') await esperarCarregar(depois.tab.id)
-  return { ok: true, aba, ...pagina((await abaPropria(aba)).tab) }
+  return { ok: true, aba, ...pagina((await abaPropria(aba)).tab), ...(rotulo ? { rotulo: rotulo.slice(0, ROTULO_MAX) } : {}) }
 }
 
 async function digitar(ref, texto, numero) {
   const { tab } = await abaPropria(numero)
-  await naPagina(tab, digitarNaPagina, [ref, texto, REF_VENCIDA])
-  return { ok: true }
+  const { rotulo } = await naPagina(tab, digitarNaPagina, [ref, texto, REF_VENCIDA])
+  return { ok: true, ...(rotulo ? { rotulo: rotulo.slice(0, ROTULO_MAX) } : {}) }
 }
 
 /** Com `aba`, fecha só ela; sem, a janela própria inteira. */
@@ -399,12 +447,16 @@ function caber(resultado) {
 
 async function atender(candidate, comando) {
   if (!comando || typeof comando.id !== 'string' || typeof comando.tipo !== 'string') return
+  await pronto
   try {
     const dados = await executar(comando)
     await responder(candidate, caber({ id: comando.id, ok: true, dados }))
   } catch (error) {
     const erro = error instanceof ErroComando ? error.message : `falhou: ${error && error.message ? error.message : String(error)}`
     await responder(candidate, { id: comando.id, ok: false, erro: erro.slice(0, ERRO_MAX) })
+  } finally {
+    // `janela` e `ativa` mudam dentro dos comandos (abrir, a aba usada): o estado fica gravado como terminou.
+    salvar()
   }
 }
 

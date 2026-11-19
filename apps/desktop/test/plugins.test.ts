@@ -64,7 +64,7 @@ describe('registro de plugins', () => {
     expect(pluginFolderName(NAVEGADOR)).toBe('LAP Reunioes - Controle do navegador')
     for (const name of NAVEGADOR.arquivos) expect(existsSync(join(NAVEGADOR_SOURCE, name)), name).toBe(true)
     const manifest = JSON.parse(readFileSync(join(NAVEGADOR_SOURCE, 'manifest.json'), 'utf8')) as Record<string, unknown>
-    expect(manifest).toMatchObject({ manifest_version: 3, permissions: ['tabs', 'scripting'], host_permissions: ['<all_urls>', 'http://127.0.0.1/*'] })
+    expect(manifest).toMatchObject({ manifest_version: 3, permissions: ['tabs', 'scripting', 'storage'], host_permissions: ['<all_urls>', 'http://127.0.0.1/*'] })
     expect(manifest['content_scripts']).toBeUndefined()
     expect(JSON.stringify(manifest)).not.toContain('debugger')
   })
