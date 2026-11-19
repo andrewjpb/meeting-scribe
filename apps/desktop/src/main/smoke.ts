@@ -298,9 +298,16 @@ const anchoredAt = (label: string): string =>
 
 /** Contrato 18: Configurações pela barra lateral e a aba pelo clique. */
 async function openSettingsTab(contents: WebContents, tab: SettingsTab): Promise<boolean> {
-  // O clique às vezes se perde numa corrida com o que acabou de rodar na tela; clicar de novo é inofensivo.
   await clickSelector(contents, '[data-nav="configuracoes"]')
   if (!(await waitFor(contents, routeIs('configuracoes'), 5000))) {
+    // Um <dialog> modal aberto deixa o resto da tela inerte e o click() programático some. Registra o
+    // estado (para a flake da aba "geral" ter diagnóstico), fecha o que estiver aberto e tenta de novo.
+    const stuck = await evaluate<string>(
+      contents,
+      `JSON.stringify({ rota: location.hash || location.pathname, dialogs: [...document.querySelectorAll('dialog[open]')].map((d) => d.id || d.className).slice(0, 3), foco: document.activeElement?.tagName })`,
+    )
+    console.log(`[smoke] configuracoes não abriu de primeira: ${stuck}`)
+    await evaluate(contents, `(() => { for (const d of document.querySelectorAll('dialog[open]')) d.close(); return true })()`)
     await clickSelector(contents, '[data-nav="configuracoes"]')
     await waitFor(contents, routeIs('configuracoes'), 15_000)
   }
