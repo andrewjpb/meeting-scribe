@@ -1,4 +1,4 @@
-// Barra lateral em pilha (contrato 65, CA20; contrato 66, CA11, o nível Configurações): o nível de cada rota, o "voltar" que vale só para a navegação dele, o
+// Barra lateral em pilha (contrato 65, CA20; contrato 66, CA11, o nível Configurações; contrato 67, CA13, o nível Assistente): o nível de cada rota, o "voltar" que vale só para a navegação dele, o
 // deslize entre os níveis, o último email aberto na sessão e o número do item "Email" na raiz.
 import { beforeEach, describe, expect, it } from 'vitest'
 import type { EmailMessage } from '../../src/shared/email'
@@ -15,7 +15,7 @@ describe('nível da barra lateral (contrato 65)', () => {
   it('sectionOf: só /email e /email/* são a seção Email', () => {
     expect(sectionOf('/email')).toBe('email')
     expect(sectionOf('/email/a/entrada')).toBe('email')
-    for (const path of ['/', '/reunioes/x', '/gravacao', '/automacoes', '/whatsapp', '/assistente']) expect(sectionOf(path)).toBeNull()
+    for (const path of ['/', '/reunioes/x', '/gravacao', '/automacoes', '/whatsapp']) expect(sectionOf(path)).toBeNull()
   })
 
   it('sectionOf: /configuracoes e /configuracoes/* são a seção Configurações (contrato 66)', () => {
@@ -23,6 +23,21 @@ describe('nível da barra lateral (contrato 65)', () => {
     expect(sectionOf('/configuracoes/conexoes')).toBe('configuracoes')
     expect(sectionOf('/configuracoes/gravacao')).toBe('configuracoes')
     expect(sectionOf('/configuracoesx')).toBeNull()
+  })
+
+  it('sectionOf: /assistente e /assistente/* são a seção Assistente (contrato 67)', () => {
+    expect(sectionOf('/assistente')).toBe('assistente')
+    expect(sectionOf('/assistente/x')).toBe('assistente')
+    expect(sectionOf('/assistentex')).toBeNull()
+  })
+
+  it('/assistente: o nível, o "voltar" da mesma navegação, o item marcado e o deslize (contrato 67)', () => {
+    expect(levelFor('/assistente', null, 'k')).toBe('assistente')
+    expect(levelFor('/assistente', 'k', 'k')).toBe('root')
+    expect(activeNavId('/assistente', 'assistente')).toBe('assistente')
+    expect(transitionOf('assistente', 'email')).toBe('push')
+    expect(transitionOf('assistente', 'root')).toBe('pop')
+    expect(transitionOf('root', 'assistente')).toBe('push')
   })
 
   it('levelFor: a rota manda, menos o "voltar" da mesma navegação', () => {

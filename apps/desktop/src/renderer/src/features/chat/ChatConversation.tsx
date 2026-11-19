@@ -12,7 +12,7 @@ import { Icon } from '../../design/Icon'
 import { Note } from '../../design/Note'
 import { AssistantMessage, LiveAssistantMessage, UserMessage } from './ChatMessages'
 import { draftOf, listKey, useChat, viewKey } from './chatStore'
-import { ContextPanel, MODEL_OPTIONS, RailContext } from './ContextPanel'
+import { ContextPanel, MODEL_OPTIONS, RailContext, type ContextTarget } from './ContextPanel'
 import { chatSuggestionGroups, chosenMeetings, modelLabel, scopeLabel, withWhatsApp } from './format'
 import type { ChatMeetings } from './useChatMeetings'
 
@@ -22,7 +22,7 @@ interface ChatConversationProps {
   /** Conversa da aba de uma reunião (só o `.md` dela); `null` na tela "Assistente". */
   meetingId: string | null
   meetings: ChatMeetings
-  /** "Contexto" aberto (o estado fica com a tela). */
+  /** "Contexto" aberto (o estado fica com a tela). Contrato 67: no Assistente, só vale na conversa nova. */
   contextOpen: boolean
   onContextOpen: (open: boolean) => void
   /**
@@ -30,6 +30,13 @@ interface ChatConversationProps {
    * não abre o painel ao lado. Sem a prop (aba da reunião), o painel de sempre.
    */
   contextSlot?: HTMLElement | null
+  /**
+   * Contrato 67: numa conversa salva do Assistente o "Contexto" fica sempre aberto no trilho, e o cabeçalho da conversa
+   * pede para levar o trilho até a seção (a tela rola e põe o foco).
+   */
+  onContextReveal?: (target: ContextTarget) => void
+  /** Id do trilho do Assistente (o `aria-controls` do botão "Contexto"). */
+  railId?: string
 }
 
 /** Até 8 linhas de 20 px, mais o respiro do campo. */
@@ -58,7 +65,7 @@ const BAR_SELECT =
  * Sem o `claude`, só o aviso com o caminho para Configurações. Sair da tela avisa o main, que mata o processo
  * em 5 min se a conversa não voltar.
  */
-export function ChatConversation({ chatId, meetingId, meetings, contextOpen, onContextOpen, contextSlot }: ChatConversationProps) {
+export function ChatConversation({ chatId, meetingId, meetings, contextOpen, onContextOpen, contextSlot, onContextReveal, railId }: ChatConversationProps) {
   const navigate = useNavigate()
   const key = viewKey(chatId, meetingId)
   const claude = useChat((state) => state.claude)
@@ -133,6 +140,8 @@ export function ChatConversation({ chatId, meetingId, meetings, contextOpen, onC
   }
 
   useEffect(() => {
+    // Contrato 67: entrando no Assistente pela barra lateral, o foco fica no cabeçalho-voltar que ela pôs no nível.
+    if (document.activeElement?.closest('[data-sidebar-back]')) return
     input.current?.focus()
   }, [chatId])
 
@@ -253,10 +262,17 @@ export function ChatConversation({ chatId, meetingId, meetings, contextOpen, onC
     if (chatId) void useChat.getState().update(chatId, { thinkMore: !thinkMore })
     else useChat.getState().setDraft(meetingId, { thinkMore: !thinkMore })
   }
+  // Contrato 67: conversa salva do Assistente, com o "Contexto" sempre aberto no trilho.
+  const pinned = contextSlot !== undefined && chatId !== null
+  /** O "Contexto" à vista: na conversa salva do Assistente, o trilho vai até a seção; senão, abre. */
+  const showContext = (target: ContextTarget): void => {
+    if (pinned && onContextReveal) onContextReveal(target)
+    else onContextOpen(true)
+  }
   const pickScope = (kind: ChatScopeKind): void => {
     changeScope(withWhatsApp(kind === 'meetings' ? { kind, meetingIds: scope.meetingIds ?? [] } : { kind }, scope))
     // "Reuniões escolhidas" se escolhe no painel.
-    if (kind === 'meetings') onContextOpen(true)
+    if (kind === 'meetings') showContext('picker')
   }
 
   if (claude === 'not-found') {
@@ -303,20 +319,21 @@ export function ChatConversation({ chatId, meetingId, meetings, contextOpen, onC
               Só esta reunião
             </span>
           ) : (
-            <button type="button" data-action="chat-scope-label" title="Escopo da conversa" onClick={() => onContextOpen(true)} className={LABEL_BUTTON}>
+            <button type="button" data-action="chat-scope-label" title="Escopo da conversa" onClick={() => showContext('scope')} className={LABEL_BUTTON}>
               <span className="truncate">{scopeLabel(scope, total, exists)}</span>
             </button>
           )}
-          <button type="button" data-action="chat-model-label" title="Modelo da conversa" onClick={() => onContextOpen(true)} className={LABEL_BUTTON}>
+          <button type="button" data-action="chat-model-label" title="Modelo da conversa" onClick={() => showContext('model')} className={LABEL_BUTTON}>
             {modelLabel(model)}
           </button>
           <button
             type="button"
             ref={contextToggle}
             data-action="toggle-context"
-            aria-pressed={contextOpen}
-            onClick={() => onContextOpen(!contextOpen)}
-            className={`${LABEL_BUTTON} ${contextOpen ? 'bg-bg-sunken' : ''}`}
+            aria-pressed={pinned ? undefined : contextOpen}
+            aria-controls={railId && (pinned || contextOpen) ? railId : undefined}
+            onClick={() => (pinned ? showContext('top') : onContextOpen(!contextOpen))}
+            className={`${LABEL_BUTTON} ${!pinned && contextOpen ? 'bg-bg-sunken' : ''}`}
           >
             <Icon icon={PanelRight} size={14} />
             Contexto
@@ -489,7 +506,7 @@ export function ChatConversation({ chatId, meetingId, meetings, contextOpen, onC
       </div>
       {contextSlot === undefined
         ? contextOpen && <ContextPanel {...contextProps} />
-        : contextSlot && createPortal(<RailContext {...contextProps} open={contextOpen} chatOpen={chatId !== null} onOpen={() => onContextOpen(true)} onFocusAway={() => contextToggle.current?.focus()} />, contextSlot)}
+        : contextSlot && createPortal(<RailContext {...contextProps} pinned={pinned} open={contextOpen} onFocusAway={() => contextToggle.current?.focus()} />, contextSlot)}
     </div>
   )
 }

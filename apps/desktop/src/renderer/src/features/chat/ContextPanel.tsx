@@ -1,5 +1,5 @@
-import { ChevronDown, Search, X } from 'lucide-react'
-import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
+import { Search, X } from 'lucide-react'
+import { useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
 import { useNavigate } from 'react-router'
 import { CHAT_SCOPE_MEETINGS_MAX, type ChatMessage, type ChatScope, type ChatScopeKind } from '@shared/chat'
 import type { MeetingOverview } from '@shared/meetings-overview'
@@ -9,7 +9,7 @@ import { Icon } from '../../design/Icon'
 import { Segmented } from '../../design/Segmented'
 import { dayLabel, timeLabel } from '../meetings/format'
 import { useMeetingsSearch } from '../meetings/useMeetingsOverview'
-import { answerTimeLabel, CHAT_MODEL_LABELS, chatTotals, chosenMeetings, consultedIn, COST_HINT, costLabel, modelLabel, scopeLabel, tokensLabel, withWhatsApp } from './format'
+import { answerTimeLabel, CHAT_MODEL_LABELS, chatTotals, chosenMeetings, consultedIn, COST_HINT, costLabel, scopeLabel, tokensLabel, withWhatsApp } from './format'
 import type { ChatMeetings } from './useChatMeetings'
 import { ConnectionsContext } from './ConnectionsContext'
 import { SourcesSection } from './SourcesSection'
@@ -23,9 +23,12 @@ const SCOPE_OPTIONS: readonly { kind: ChatScopeKind; label: (total: number | nul
 
 export const MODEL_OPTIONS: readonly { value: ChatModel; label: string }[] = (['haiku', 'sonnet', 'opus'] as const).map((value) => ({ value, label: CHAT_MODEL_LABELS[value] }))
 
-function PanelSection({ title, children }: { title: string; children: ReactNode }) {
+/** Contrato 67: as seções do "Contexto", marcadas para o Assistente levar o trilho até uma delas. */
+export type ContextSection = 'scope' | 'sources' | 'connections' | 'consulted' | 'totals' | 'model'
+
+function PanelSection({ title, section, children }: { title: string; section: ContextSection; children: ReactNode }) {
   return (
-    <section aria-label={title} className="flex flex-col gap-2 border-b border-line px-4 py-4 last:border-b-0">
+    <section aria-label={title} data-context-section={section} className="flex flex-col gap-2 border-b border-line px-4 py-4 last:border-b-0">
       <h3 className="text-12 font-bold text-text-muted">{title}</h3>
       {children}
     </section>
@@ -152,84 +155,53 @@ export function ContextPanel({ onClose, ...sections }: ContextPanelProps) {
 }
 
 interface RailContextProps extends ContextPanelProps {
-  /** Seção aberta; recolhida, só o cabeçalho (e nada numa conversa nova). */
+  /** Conversa salva: o "Contexto" fica sempre aberto, sem o X. */
+  pinned: boolean
+  /** Conversa nova: aberto pelo cabeçalho da conversa; fechado, nada. */
   open: boolean
-  /** Há uma conversa aberta (uma nova, ainda sem pergunta, não tem). */
-  chatOpen: boolean
-  onOpen: () => void
-  /** Recolhida pelo X numa conversa nova (sem o cabeçalho recolhido): para onde vai o foco. */
+  /** Fechado pelo X numa conversa nova (o trilho sai): para onde vai o foco. */
   onFocusAway: () => void
 }
 
-/** Id da seção aberta, alvo do `aria-controls` dos dois botões (só existe uma no trilho). */
-const RAIL_CONTEXT_ID = 'chat-rail-context'
+/** Contrato 67: aonde o cabeçalho da conversa salva leva o trilho do Assistente: o topo do "Contexto", o Escopo, o seletor das reuniões escolhidas ou o Modelo. */
+export type ContextTarget = 'top' | 'scope' | 'picker' | 'model'
+
+/** O que o trilho mostra inteiro (`section`) e onde põe o foco (`focus`, o primeiro controle dali) para cada destino. */
+export const CONTEXT_TARGETS: Readonly<Record<ContextTarget, { section: string; focus: string }>> = {
+  top: { section: '[data-chat-context]', focus: '[data-context-section="scope"] [role="radio"][aria-checked="true"]' },
+  scope: { section: '[data-context-section="scope"]', focus: '[data-context-section="scope"] [role="radio"][aria-checked="true"]' },
+  picker: { section: '[data-chat-scope-picker]', focus: '[data-chat-scope-search]' },
+  model: { section: '[data-context-section="model"]', focus: '[data-context-section="model"] [aria-pressed="true"]' },
+}
 
 /**
- * Contrato 38: a seção "Contexto" no trilho da direita do Assistente, embaixo do histórico. Recolhida por padrão (só o
- * cabeçalho, com o escopo e o modelo); aberta, o conteúdo do painel. Sem conversa aberta, nada: o trilho fica só com o
- * histórico, até abrir pelo cabeçalho da conversa.
+ * Contrato 38: o "Contexto" no trilho da direita do Assistente. Contrato 67: o trilho é só ele; numa conversa salva fica
+ * sempre aberto, sem X (o cabeçalho da conversa leva o trilho à seção); numa conversa nova abre pelo cabeçalho da
+ * conversa e fecha pelo X, que devolve o foco ao botão "Contexto". O `aside` do trilho já diz "Contexto".
  */
-export function RailContext({ open, chatOpen, onOpen, onClose, onFocusAway, ...sections }: RailContextProps) {
-  const closeButton = useRef<HTMLButtonElement | null>(null)
-  const expandButton = useRef<HTMLButtonElement | null>(null)
-  /** O botão clicado sai da tela: o foco vai para o que toma o lugar dele (só depois desses cliques). */
-  const handoff = useRef(false)
-  useEffect(() => {
-    if (!handoff.current) return
-    handoff.current = false
-    if (open) closeButton.current?.focus()
-    else if (expandButton.current) expandButton.current.focus()
-    else onFocusAway()
-    // Só na troca de aberto/recolhido; `onFocusAway` muda a cada render.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open])
-  if (open) {
-    return (
-      <section id={RAIL_CONTEXT_ID} data-chat-context aria-label="Contexto" className="flex flex-col">
-        <div className="flex h-12 shrink-0 items-center justify-between border-b border-line pr-2 pl-4">
-          <h2 className="text-13 font-bold text-title">Contexto</h2>
+export function RailContext({ pinned, open, onClose, onFocusAway, ...sections }: RailContextProps) {
+  if (!pinned && !open) return null
+  return (
+    <section data-chat-context className="flex flex-col">
+      <div className={`flex h-12 shrink-0 items-center justify-between border-b border-line pl-4 ${pinned ? 'pr-4' : 'pr-2'}`}>
+        <h2 className="text-13 font-bold text-title">Contexto</h2>
+        {!pinned && (
           <button
-            ref={closeButton}
             type="button"
             data-action="close-context"
-            aria-label="Recolher o Contexto"
-            aria-expanded={true}
-            aria-controls={RAIL_CONTEXT_ID}
+            aria-label="Fechar o Contexto"
             onClick={() => {
-              handoff.current = true
               onClose()
+              onFocusAway()
             }}
             className="no-drag flex size-8 items-center justify-center rounded-[var(--radius-control)] text-text-muted hover:bg-bg-sunken hover:text-title"
           >
             <Icon icon={X} />
           </button>
-        </div>
-        <ContextSections {...sections} />
-      </section>
-    )
-  }
-  if (!chatOpen) return null
-  const total = sections.meetings.list?.length ?? null
-  const exists = sections.meetings.list ? (id: string): boolean => sections.meetings.byId.has(id) : null
-  return (
-    <button
-      ref={expandButton}
-      type="button"
-      data-action="expand-context"
-      aria-expanded={false}
-      aria-controls={RAIL_CONTEXT_ID}
-      onClick={() => {
-        handoff.current = true
-        onOpen()
-      }}
-      className="no-drag flex h-12 w-full items-center gap-2 pr-3 pl-4 text-left transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-bg-sunken focus-visible:outline-offset-[-2px]"
-    >
-      <span className="text-13 font-bold text-title">Contexto</span>
-      <span className="min-w-0 flex-1 truncate text-12 text-text-faint">
-        {sections.meetingId ? 'Só esta reunião' : scopeLabel(sections.scope, total, exists)} · {modelLabel(sections.model)}
-      </span>
-      <Icon icon={ChevronDown} size={14} className="shrink-0 text-text-muted" />
-    </button>
+        )}
+      </div>
+      <ContextSections {...sections} />
+    </section>
   )
 }
 
@@ -265,7 +237,7 @@ function ContextSections({ meetingId, scope, model, messages, meetings, onScope,
   }
   return (
     <>
-      <PanelSection title="Escopo">
+      <PanelSection title="Escopo" section="scope">
         {meetingId ? (
           <p className="text-13 text-text">Só esta reunião</p>
         ) : (
@@ -299,10 +271,21 @@ function ContextSections({ meetingId, scope, model, messages, meetings, onScope,
           </>
         )}
       </PanelSection>
-      {!meetingId && <SourcesSection scope={scope} onScope={onScope} />}
+      {/*
+        Contrato 67: as fontes e as conexões desenham a própria seção; a marca fica num invólucro com `display: contents`,
+        sem caixa: o `getBoundingClientRect` dele dá zero. Se um destino de `CONTEXT_TARGETS` precisar de uma delas, a marca
+        tem que descer para dentro de `SourcesSection`/`ConnectionsContext`.
+      */}
+      {!meetingId && (
+        <div data-context-section="sources" className="contents">
+          <SourcesSection scope={scope} onScope={onScope} />
+        </div>
+      )}
       {/* Contrato 21: os servidores MCP desta conversa (também na de uma reunião). */}
-      <ConnectionsContext scope={scope} onScope={onScope} />
-      <PanelSection title="Consultadas nesta conversa">
+      <div data-context-section="connections" className="contents">
+        <ConnectionsContext scope={scope} onScope={onScope} />
+      </div>
+      <PanelSection title="Consultadas nesta conversa" section="consulted">
         {consulted.length ? (
           <ul data-chat-context-consulted className="-mx-1 flex flex-col">
             {consulted.map((id) => {
@@ -314,7 +297,7 @@ function ContextSections({ meetingId, scope, model, messages, meetings, onScope,
           <p className="text-12 text-text-muted">Nenhuma ainda.</p>
         )}
       </PanelSection>
-      <PanelSection title="Totais">
+      <PanelSection title="Totais" section="totals">
         <dl data-chat-totals className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-13 tabular">
           <dt className="text-text-muted">Mensagens</dt>
           <dd className="text-right text-text">{totals.messages}</dd>
@@ -331,7 +314,7 @@ function ContextSections({ meetingId, scope, model, messages, meetings, onScope,
         </dl>
         <p className="text-12 text-text-faint">{COST_HINT}</p>
       </PanelSection>
-      <PanelSection title="Modelo">
+      <PanelSection title="Modelo" section="model">
         <span id="chat-context-model" className="sr-only">
           Modelo da conversa
         </span>

@@ -1,9 +1,10 @@
-import { ChevronLeft, Mail, Settings, type LucideIcon } from 'lucide-react'
+import { ChevronLeft, Mail, Settings, Sparkles, type LucideIcon } from 'lucide-react'
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from 'react'
 import { NavLink } from 'react-router'
 import { settingsPath, SETTINGS_TABS } from '@shared/routes'
 import { Icon } from '../design/Icon'
 import { Shortcut } from '../design/Shortcut'
+import { ChatHistory } from '../features/chat/ChatHistory'
 import { EmailNav } from '../features/email/EmailNav'
 import { useEmail } from '../features/email/emailStore'
 import { SETTINGS_TAB_LABELS } from '../features/settings/settingsTabs'
@@ -12,9 +13,9 @@ import { SIDEBAR_SLIDE_FALLBACK_MS, transitionOf, type SidebarLevel, type Sideba
 /** Para onde vai o foco depois da troca de nível: o cabeçalho-voltar do nível novo ou o item da seção na raiz. */
 export type SidebarFocus = '[data-sidebar-back]' | `[data-nav="${SidebarSection}"]`
 
-const LEVEL_LABELS: Record<SidebarLevel, string> = { root: 'Navegação principal', email: 'Email', configuracoes: 'Configurações' }
+const LEVEL_LABELS: Record<SidebarLevel, string> = { root: 'Navegação principal', email: 'Email', configuracoes: 'Configurações', assistente: 'Assistente' }
 // A raiz é a lista dos itens, como o `<nav>` de antes; os níveis de seção arrumam o cabeçalho e a lista deles.
-const LEVEL_CLASSES: Record<SidebarLevel, string> = { root: 'gap-0.5', email: '', configuracoes: '' }
+const LEVEL_CLASSES: Record<SidebarLevel, string> = { root: 'gap-0.5', email: '', configuracoes: '', assistente: '' }
 const levelClass = (level: SidebarLevel, slide: string | null): string | undefined => [LEVEL_CLASSES[level], slide].filter(Boolean).join(' ') || undefined
 
 interface Shown {
@@ -25,7 +26,7 @@ interface Shown {
 const reducedMotion = (): boolean => window.matchMedia('(prefers-reduced-motion: reduce)').matches
 
 /**
- * Coluna do meio da barra lateral em pilha (contrato 65; contrato 66, o nível Configurações): a raiz ou o nível de uma seção, entre a marca e o rodapé, que
+ * Coluna do meio da barra lateral em pilha (contrato 65; contrato 66, o nível Configurações; contrato 67, o nível Assistente): a raiz ou o nível de uma seção, entre a marca e o rodapé, que
  * ficam parados. O nível vem pronto do `Sidebar` (sai da rota); aqui só o deslize: durante ele, o nível que sai fica no
  * DOM, inerte, até o `animationend` do que entra ou a reserva de tempo (com movimento reduzido a troca é instantânea e
  * nunca há dois níveis). `focusRef` é a marca posta pelo clique que trocou o nível, lida depois da troca.
@@ -57,8 +58,20 @@ export function SidebarStack({ level, root, onBack, focusRef }: { level: Sidebar
   }, [current, focusRef])
 
   const content = (item: SidebarLevel): ReactNode => {
-    if (item === 'root') return root
-    return item === 'email' ? <EmailLevel onBack={onBack} /> : <SettingsLevel onBack={onBack} />
+    switch (item) {
+      case 'root':
+        return root
+      case 'email':
+        return <EmailLevel onBack={onBack} />
+      case 'configuracoes':
+        return <SettingsLevel onBack={onBack} />
+      case 'assistente':
+        return <AssistantLevel onBack={onBack} />
+      default: {
+        const never: never = item
+        return never
+      }
+    }
   }
   const entering = (
     <nav
@@ -67,8 +80,9 @@ export function SidebarStack({ level, root, onBack, focusRef }: { level: Sidebar
       data-sidebar-level={current}
       aria-label={LEVEL_LABELS[current]}
       className={levelClass(current, leaving && `side-level-${leaving.transition}-in`)}
-      // O 2º clique de um duplo clique em "Email" ou "Configurações" (ou no cabeçalho-voltar) cai no nível que acabou de
-      // entrar, no lugar do item clicado: abriria a pasta ou a aba que estiver ali. Com ou sem deslize, ele não vale.
+      // O 2º clique de um duplo clique em "Email", "Configurações" ou "Assistente" (ou no cabeçalho-voltar) cai no nível que
+      // acabou de entrar, no lugar do item clicado: abriria a pasta, a aba ou a conversa que estiver ali. Com ou sem
+      // deslize, ele não vale.
       onClickCapture={(event) => {
         if (event.detail < 2) return
         event.preventDefault()
@@ -160,6 +174,19 @@ function SettingsLevel({ onBack }: { onBack: () => void }) {
           )
         })}
       </div>
+    </div>
+  )
+}
+
+/**
+ * Nível Assistente (contrato 67): o cabeçalho-voltar e o histórico das conversas ("Nova conversa", a busca e a lista por
+ * dia); só a lista rola.
+ */
+function AssistantLevel({ onBack }: { onBack: () => void }) {
+  return (
+    <div className="flex min-h-0 flex-1 flex-col">
+      <BackHeader icon={Sparkles} label="Assistente" onBack={onBack} />
+      <ChatHistory />
     </div>
   )
 }

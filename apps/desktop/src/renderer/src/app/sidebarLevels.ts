@@ -1,11 +1,11 @@
-// Barra lateral em pilha (contratos 65 e 66): de qual nível é cada rota, o deslize entre um nível e outro e o último email
+// Barra lateral em pilha (contratos 65, 66 e 67): de qual nível é cada rota, o deslize entre um nível e outro e o último email
 // aberto na sessão. Sem DOM: testado em test/renderer/sidebar-stack.test.ts. O nome não é `sidebarStack.ts` porque, no
 // disco do Mac (sem distinção de maiúsculas), `./SidebarStack` resolveria para ele e não para o componente.
 import { matchPath } from 'react-router'
 import { EMAIL_ROOT_PATH, ROUTE_PATHS } from '@shared/routes'
 
-/** Seções com nível próprio na barra lateral (contrato 66: Configurações, com as abas). */
-export const SIDEBAR_SECTIONS = ['email', 'configuracoes'] as const
+/** Seções com nível próprio na barra lateral (contrato 66: Configurações, com as abas; contrato 67: Assistente, com as conversas). */
+export const SIDEBAR_SECTIONS = ['email', 'configuracoes', 'assistente'] as const
 export type SidebarSection = (typeof SIDEBAR_SECTIONS)[number]
 export type SidebarLevel = 'root' | SidebarSection
 export type SidebarTransition = 'push' | 'pop' | null
@@ -20,18 +20,20 @@ export const SIDEBAR_SLIDE_FALLBACK_MS = SIDEBAR_SLIDE_MS + 80
 const EMAIL_SECTION_PATTERN = `${EMAIL_ROOT_PATH}/*`
 const EMAIL_FOLDER_PATTERN = `${EMAIL_ROOT_PATH}/:conta/:pasta`
 const SETTINGS_SECTION_PATTERN = `${ROUTE_PATHS.configuracoes}/*`
+const ASSISTANT_SECTION_PATTERN = `${ROUTE_PATHS.assistente}/*`
 
 export function isSidebarSection(id: string): id is SidebarSection {
   return (SIDEBAR_SECTIONS as readonly string[]).includes(id)
 }
 
 /**
- * A seção da rota: `email` em `/email` e `/email/*`, `configuracoes` em `/configuracoes` e `/configuracoes/*`; as outras
- * rotas não têm nível próprio.
+ * A seção da rota: `email` em `/email` e `/email/*`, `configuracoes` em `/configuracoes` e `/configuracoes/*`,
+ * `assistente` em `/assistente` e `/assistente/*`; as outras rotas não têm nível próprio.
  */
 export function sectionOf(pathname: string): SidebarSection | null {
   if (matchPath(EMAIL_SECTION_PATTERN, pathname)) return 'email'
-  return matchPath(SETTINGS_SECTION_PATTERN, pathname) ? 'configuracoes' : null
+  if (matchPath(SETTINGS_SECTION_PATTERN, pathname)) return 'configuracoes'
+  return matchPath(ASSISTANT_SECTION_PATTERN, pathname) ? 'assistente' : null
 }
 
 /**

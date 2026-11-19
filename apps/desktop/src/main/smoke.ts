@@ -288,6 +288,8 @@ const SIDEBAR_ROOT = '[data-sidebar-level="root"]:not([data-sidebar-leaving])'
 const SIDEBAR_EMAIL = '[data-sidebar-level="email"]:not([data-sidebar-leaving])'
 /** Contrato 66: o nível Configurações, com uma linha por aba. */
 const SIDEBAR_SETTINGS = '[data-sidebar-level="configuracoes"]:not([data-sidebar-leaving])'
+/** Contrato 67: o nível Assistente, com "Nova conversa", a busca e as conversas. */
+const SIDEBAR_ASSISTANT = '[data-sidebar-level="assistente"]:not([data-sidebar-leaving])'
 const SIDEBAR_BACK = '[data-sidebar-level]:not([data-sidebar-leaving]) [data-sidebar-back]'
 
 /** A raiz da barra lateral à mostra: num nível de seção, o cabeçalho-voltar (que não navega). */
@@ -326,8 +328,26 @@ async function showSettingsLevel(contents: WebContents): Promise<void> {
   if (!(await waitFor(contents, `document.querySelector('${SIDEBAR_SETTINGS}')`, 8000))) throw new Error('o nível Configurações da barra lateral não apareceu')
 }
 
-/** Contrato 38: o trilho da direita do Assistente (conversas em cima, "Contexto" embaixo). */
-const CHAT_RAIL = 'aside[aria-label="Conversas e contexto"]'
+/**
+ * Contrato 67: o nível Assistente à mostra e parado (sem nível saindo: durante o deslize há dois no DOM); senão, o item
+ * "Assistente" da raiz, que leva a `/assistente`.
+ */
+async function showAssistantLevel(contents: WebContents): Promise<void> {
+  if (!(await evaluate<boolean>(contents, `Boolean(document.querySelector('${SIDEBAR_ASSISTANT}'))`))) await clickNav(contents, 'assistente')
+  if (!(await waitFor(contents, `${routeIs('assistente')} && document.querySelector('${SIDEBAR_ASSISTANT}') && !document.querySelector('[data-sidebar-leaving]')`, 8000))) {
+    throw new Error('o nível Assistente da barra lateral não apareceu')
+  }
+}
+
+/**
+ * Contrato 38: o trilho da direita do Assistente. Contrato 67: só o "Contexto" (as conversas foram para o nível
+ * Assistente da barra lateral). O `ContextPanel` da aba de chat da reunião também é `aside[aria-label="Contexto"]`: os
+ * passos do Assistente rodam em `/assistente`, onde só existe o trilho.
+ */
+const CHAT_RAIL = 'aside[aria-label="Contexto"]'
+/** Contrato 67: a lista de conversas, no nível Assistente da barra lateral. */
+const CHAT_HISTORY = `${SIDEBAR_ASSISTANT} [data-chat-list]`
+const chatRow = (id: string): string => `${SIDEBAR_ASSISTANT} [data-chat-item="${id}"]`
 
 const routeIs = (route: string): string => `document.querySelector('main')?.dataset.route === '${route}'`
 
@@ -592,21 +612,22 @@ async function chatScreenCheck(
     8000,
   )
   const suggestions = await evaluate<string[]>(contents, `[...document.querySelectorAll('[data-chat-suggestion]')].map((b) => b.textContent)`)
-  // Contrato 38: as sugestões numa grade 2×3; o trilho à direita da conversa, só com o histórico (conversa nova: nada de
-  // "Contexto"); a barra lateral do app continua sendo o primeiro `aside`.
+  // Contrato 38: as sugestões numa grade 2×3. Contrato 67: na conversa nova, sem o trilho (a conversa vai até a borda
+  // direita) e sem "Contexto"; a lista no nível Assistente da barra lateral, que continua sendo o primeiro `aside` (com o
+  // nível à mostra, não a raiz).
   const emptyLayout = await evaluate<{ columns: number; rows: number; railRight: boolean; noContext: boolean; sidebarFirst: boolean }>(
     contents,
     `(() => {
       const boxes = [...document.querySelectorAll('[data-chat-suggestion]')].map((b) => b.getBoundingClientRect())
       const distinct = (values) => new Set(values.map((v) => Math.round(v))).size
-      const rail = document.querySelector(${JSON.stringify(CHAT_RAIL)})?.getBoundingClientRect()
+      const main = document.querySelector('main')?.getBoundingClientRect()
       const conversation = document.querySelector('[data-chat-conversation]')?.getBoundingClientRect()
       return {
         columns: distinct(boxes.map((b) => b.left)),
         rows: distinct(boxes.map((b) => b.top)),
-        railRight: Boolean(rail && conversation && rail.width > 0 && rail.left >= conversation.right - 1),
-        noContext: !document.querySelector('[data-chat-context]') && !document.querySelector('[data-action="expand-context"]') && Boolean(document.querySelector(${JSON.stringify(`${CHAT_RAIL} [data-chat-list]`)})),
-        sidebarFirst: Boolean(document.querySelector('aside')?.querySelector('[data-nav="assistente"]')),
+        railRight: !document.querySelector(${JSON.stringify(CHAT_RAIL)}) && Boolean(main && conversation && conversation.right >= main.right - 1),
+        noContext: !document.querySelector('[data-chat-context]') && !document.querySelector('[data-action="expand-context"]') && Boolean(document.querySelector(${JSON.stringify(CHAT_HISTORY)})),
+        sidebarFirst: Boolean(document.querySelector('aside')?.querySelector('[data-sidebar-level="assistente"]')) && !document.querySelector('${SIDEBAR_ROOT}'),
       }
     })()`,
   )
@@ -717,23 +738,25 @@ async function chatAnswerDetailsCheck(
  * consultadas e os totais; "Reuniões escolhidas" com duas reuniões monta `chat-scope/<id>/` só com os `.md`
  * delas e o `INDICE.md` (foto `perguntar-contexto-light`); o modelo trocado na barra do campo abre outro
  * processo com `--model opus`; "Refazer" troca a última resposta num processo novo; renomear pelo menu "…"
- * da lista; ↑ no campo vazio edita a última pergunta. Contrato 38: o "Contexto" é uma seção recolhível no trilho da
- * direita (abre e recolhe no lugar, embaixo do histórico, com o menu da lista funcionando com ele aberto).
+ * da lista; ↑ no campo vazio edita a última pergunta. Contrato 38: o "Contexto" no trilho da direita. Contrato 67: o
+ * trilho é só o "Contexto", sempre aberto na conversa salva (o botão "Contexto" e o rótulo do modelo levam o trilho à
+ * seção, com o foco nela), e o menu "…", renomear e a lista ficam no nível Assistente da barra lateral.
  */
 async function chatContextCheck(contents: WebContents, ctx: SmokeContext, shootContext: () => Promise<void>): Promise<Check> {
   const chatId = await evaluate<string>(contents, `document.querySelector('[data-chat-conversation]')?.getAttribute('data-chat-conversation') ?? ''`)
   const spawns = (): SmokeFixtures['claudeSpawns'] => chatSpawns(ctx.fixtures)
-  // Contrato 38: com a conversa aberta, o "Contexto" recolhido no trilho (só o cabeçalho); aberto, ele aparece no trilho, à
-  // direita da conversa e embaixo do histórico.
-  const collapsed = await evaluate<boolean>(contents, `!document.querySelector('[data-chat-context]') && Boolean(document.querySelector(${JSON.stringify(`${CHAT_RAIL} [data-action="expand-context"]`)}))`)
+  // Contrato 67: com a conversa salva aberta, o "Contexto" aberto no trilho, sem expandir nem X; o botão "Contexto" não o
+  // fecha (leva o trilho ao topo dele, com o foco no rádio marcado do Escopo); o trilho à direita da conversa.
+  const pinned = `document.querySelector(${JSON.stringify(`${CHAT_RAIL} [data-chat-context]`)}) && !document.querySelector('[data-action="expand-context"]') && !document.querySelector('[data-action="close-context"]')`
+  const collapsed = await waitFor(contents, pinned)
   await clickSelector(contents, '[data-action="toggle-context"]')
-  const panel = await waitFor(contents, `document.querySelector(${JSON.stringify(`${CHAT_RAIL} [data-chat-context]`)})`)
+  const panel = await waitFor(contents, `${pinned} && document.activeElement?.matches('[data-context-section="scope"] [role="radio"][aria-checked="true"]')`)
   const rail = await evaluate<{ right: boolean; below: boolean }>(
     contents,
     `(() => {
       const box = (selector) => document.querySelector(selector)?.getBoundingClientRect()
-      const rail = box(${JSON.stringify(CHAT_RAIL)}), conversation = box('[data-chat-conversation]'), list = box('[data-chat-list]'), context = box('[data-chat-context]')
-      return { right: Boolean(rail && conversation && rail.left >= conversation.right - 1), below: Boolean(list && context && list.bottom <= context.top + 1) }
+      const rail = box(${JSON.stringify(CHAT_RAIL)}), conversation = box('[data-chat-conversation]')
+      return { right: Boolean(rail && conversation && rail.left >= conversation.right - 1), below: !document.querySelector(${JSON.stringify(`${CHAT_RAIL} [data-chat-list]`)}) }
     })()`,
   )
   const panelConsulted = await evaluate<number>(contents, `document.querySelectorAll('[data-chat-context-consulted] [data-meeting-link]').length`)
@@ -771,8 +794,8 @@ async function chatContextCheck(contents: WebContents, ctx: SmokeContext, shootC
   const scopedSpawn = spawns().at(-1)
   const scopeFiles = scopedSpawn && existsSync(scopedSpawn.cwd) ? readdirSync(scopedSpawn.cwd).sort() : []
   const scopeIndex = scopedSpawn && existsSync(join(scopedSpawn.cwd, CHAT_INDEX_FILE)) ? readFileSync(join(scopedSpawn.cwd, CHAT_INDEX_FILE), 'utf8') : ''
-  await clickSelector(contents, '[data-action="close-context"]')
-  const recollapsed = await waitFor(contents, `!document.querySelector('[data-chat-context]') && document.querySelector('[data-action="expand-context"]')`)
+  // Contrato 67: sem X na conversa salva; o "Contexto" continua aberto depois da resposta.
+  const recollapsed = await waitFor(contents, pinned)
 
   // Modelo trocado na barra do campo: o processo é refeito com --model opus.
   await setValue(contents, '[data-chat-model-select]', 'opus', 'change')
@@ -793,18 +816,19 @@ async function chatContextCheck(contents: WebContents, ctx: SmokeContext, shootC
   await waitFor(contents, CHAT_DONE, 10_000)
   const afterRedo = chatFile(ctx.userDataDir, chatId)
 
-  // Contrato 38: o rótulo do modelo abre o "Contexto" e o trilho rola até ele; o menu do histórico funciona com ele aberto.
+  // Contrato 67: o rótulo do modelo leva o trilho até o Modelo (inteiro à vista) e põe o foco no seletor; o menu do
+  // histórico (no nível Assistente) funciona com o "Contexto" aberto.
   await clickSelector(contents, '[data-action="chat-model-label"]')
   const revealed = await waitFor(
     contents,
-    `(() => { const rail = document.querySelector(${JSON.stringify(CHAT_RAIL)})?.getBoundingClientRect(); const context = document.querySelector('[data-chat-context]')?.getBoundingClientRect(); return Boolean(rail && context && context.top >= rail.top - 1 && context.top < rail.bottom) })()`,
+    `(() => { const rail = document.querySelector(${JSON.stringify(CHAT_RAIL)})?.getBoundingClientRect(); const model = document.querySelector('${CHAT_RAIL} [data-context-section="model"]')?.getBoundingClientRect(); return Boolean(rail && model && model.top >= rail.top - 1 && model.bottom <= rail.bottom + 1 && document.activeElement?.matches('[data-context-section="model"] [data-chat-model][aria-pressed="true"]')) })()`,
   )
 
   // Menu "…" pelo teclado: abre com o foco no primeiro item; ↓, End, Home andam; Esc fecha e volta ao "…".
   const focusedAction = (): Promise<string> => evaluate<string>(contents, `document.activeElement?.dataset.action ?? ''`)
   const menuKey = (key: string): Promise<unknown> =>
     evaluate(contents, `document.activeElement?.dispatchEvent(new KeyboardEvent('keydown', { key: ${JSON.stringify(key)}, bubbles: true }))`)
-  await clickSelector(contents, `[data-chat-item="${chatId}"] [data-action="chat-row-menu"]`)
+  await clickSelector(contents, `${chatRow(chatId)} [data-action="chat-row-menu"]`)
   await waitFor(contents, `document.activeElement?.dataset.action === 'rename-chat'`)
   const menuKeys: string[] = [await focusedAction()]
   for (const key of ['ArrowDown', 'ArrowDown', 'End', 'Home']) {
@@ -815,16 +839,14 @@ async function chatContextCheck(contents: WebContents, ctx: SmokeContext, shootC
   const menuClosed = await waitFor(contents, `!document.querySelector('[role="menu"]') && document.activeElement?.dataset.action === 'chat-row-menu'`)
   const menuOk = JSON.stringify(menuKeys) === JSON.stringify(['rename-chat', 'delete-chat', 'rename-chat', 'delete-chat', 'rename-chat']) && menuClosed
   const menuWithContext = await evaluate<boolean>(contents, `Boolean(document.querySelector('[data-chat-context]'))`)
-  await clickSelector(contents, '[data-action="close-context"]')
-  const closedAgain = await waitFor(contents, `!document.querySelector('[data-chat-context]')`)
 
   // Renomear pelo menu "…" da linha.
-  await clickSelector(contents, `[data-chat-item="${chatId}"] [data-action="chat-row-menu"]`)
+  await clickSelector(contents, `${chatRow(chatId)} [data-action="chat-row-menu"]`)
   await clickSelector(contents, '[data-action="rename-chat"]')
   await waitFor(contents, `document.querySelector('[data-chat-rename-input]')`)
   await setValue(contents, '[data-chat-rename-input]', 'Conversa renomeada')
   await pressEnterIn(contents, '[data-chat-rename-input]')
-  const renamedRow = await waitFor(contents, `document.querySelector('[data-chat-item="${chatId}"]')?.textContent?.includes('Conversa renomeada')`)
+  const renamedRow = await waitFor(contents, `document.querySelector('${chatRow(chatId)}')?.textContent?.includes('Conversa renomeada')`)
   for (let i = 0; i < 40 && chatFile(ctx.userDataDir, chatId)?.title !== 'Conversa renomeada'; i++) await wait(50)
   const renamedFile = chatFile(ctx.userDataDir, chatId)?.title
 
@@ -858,7 +880,6 @@ async function chatContextCheck(contents: WebContents, ctx: SmokeContext, shootC
       recollapsed &&
       revealed &&
       menuWithContext &&
-      closedAgain &&
       panel &&
       panelConsulted >= 1 &&
       totals.includes('Mensagens') &&
@@ -895,7 +916,37 @@ async function chatContextCheck(contents: WebContents, ctx: SmokeContext, shootC
       edited.done &&
       afterEdit?.messages.length === lengthBeforeEdit &&
       lastQuestion === 'E quais decisões ficaram?',
-    detail: `conversa ${chatId}; teclado do escopo: 1 parada de Tab=${tabStops === 1}, ↓=${arrowed}, End=${ended}; escolhidas vazio: aviso=${blocked}, Enviar desligado=${sendDisabled}, nada enviado=${nothingSent}; menu "…" pelo teclado ${JSON.stringify(menuKeys)}, Esc fechou=${menuClosed}; trilho: recolhido=${collapsed}, à direita=${rail.right}, embaixo do histórico=${rail.below}, recolheu=${recollapsed}, rótulo do modelo abriu e rolou=${revealed}, menu com o Contexto aberto=${menuWithContext}, fechou=${closedAgain}; painel=${panel}, consultadas no painel=${panelConsulted}, totais "${totals}"; escopo salvo ${JSON.stringify(savedScope)}, rótulo=${scoped}; processo do escopo em ${scopedSpawn ? scopedSpawn.cwd.replace(ctx.userDataDir, '<userData>') : '?'} com ${JSON.stringify(scopeFiles)}, anterior saiu=${previous?.exited ?? '?'}, resposta "${scopedAnswer.answer.slice(0, 80)}"; modelo -> ${opusSpawn?.args[opusSpawn.args.indexOf('--model') + 1] ?? '?'}, rodapé "${opusFooter.slice(0, 40)}"; Refazer: processo novo=${redoSpawn !== opusSpawn}, mensagens ${lengthBefore} -> ${afterRedo?.messages.length ?? '?'}; renomear: linha=${renamedRow}, arquivo "${renamedFile ?? '?'}"; ↑: editando=${editing}, mensagens ${lengthBeforeEdit} -> ${afterEdit?.messages.length ?? '?'}, última pergunta "${lastQuestion ?? '?'}"`,
+    detail: `conversa ${chatId}; teclado do escopo: 1 parada de Tab=${tabStops === 1}, ↓=${arrowed}, End=${ended}; escolhidas vazio: aviso=${blocked}, Enviar desligado=${sendDisabled}, nada enviado=${nothingSent}; menu "…" pelo teclado ${JSON.stringify(menuKeys)}, Esc fechou=${menuClosed}; trilho: aberto sem expandir nem X=${collapsed}, à direita=${rail.right}, sem a lista=${rail.below}, aberto depois da resposta=${recollapsed}, rótulo do modelo levou ao Modelo com o foco=${revealed}, menu com o Contexto aberto=${menuWithContext}; "Contexto" sem fechar, foco no Escopo=${panel}, consultadas no painel=${panelConsulted}, totais "${totals}"; escopo salvo ${JSON.stringify(savedScope)}, rótulo=${scoped}; processo do escopo em ${scopedSpawn ? scopedSpawn.cwd.replace(ctx.userDataDir, '<userData>') : '?'} com ${JSON.stringify(scopeFiles)}, anterior saiu=${previous?.exited ?? '?'}, resposta "${scopedAnswer.answer.slice(0, 80)}"; modelo -> ${opusSpawn?.args[opusSpawn.args.indexOf('--model') + 1] ?? '?'}, rodapé "${opusFooter.slice(0, 40)}"; Refazer: processo novo=${redoSpawn !== opusSpawn}, mensagens ${lengthBefore} -> ${afterRedo?.messages.length ?? '?'}; renomear: linha=${renamedRow}, arquivo "${renamedFile ?? '?'}"; ↑: editando=${editing}, mensagens ${lengthBeforeEdit} -> ${afterEdit?.messages.length ?? '?'}, última pergunta "${lastQuestion ?? '?'}"`,
+  }
+}
+
+/**
+ * Contrato 67 (CA9 e CA10): na aba de chat do detalhe da reunião (sem o trilho do Assistente), o botão "Contexto" ainda
+ * abre e fecha o painel ao lado, com o X "Fechar o painel Contexto"; as seções dele levam a marca `data-context-section`.
+ */
+async function meetingContextCheck(contents: WebContents): Promise<Check> {
+  const toggle = '[data-meeting-chat] [data-action="toggle-context"]'
+  const panel = 'aside[data-chat-context][aria-label="Contexto"]'
+  const pressed = (): Promise<string> => evaluate<string>(contents, `document.querySelector('${toggle}')?.getAttribute('aria-pressed') ?? ''`)
+  const before = { panel: await evaluate<boolean>(contents, `Boolean(document.querySelector('${panel}'))`), pressed: await pressed() }
+  await clickSelector(contents, toggle)
+  const opened = await waitFor(contents, `document.querySelector('${panel} [data-action="close-context"]')?.getAttribute('aria-label') === 'Fechar o painel Contexto' && !document.querySelector('[data-chat-rail]')`)
+  const openPressed = await pressed()
+  const sections = await evaluate<string[]>(contents, `[...document.querySelectorAll('${panel} [data-context-section]')].map((el) => el.dataset.contextSection)`)
+  await clickSelector(contents, `${panel} [data-action="close-context"]`)
+  const closed = await waitFor(contents, `!document.querySelector('${panel}')`)
+  const closedPressed = await pressed()
+  return {
+    ok:
+      !before.panel &&
+      before.pressed === 'false' &&
+      opened &&
+      openPressed === 'true' &&
+      ['scope', 'connections', 'consulted', 'totals', 'model'].every((name) => sections.includes(name)) &&
+      !sections.includes('sources') &&
+      closed &&
+      closedPressed === 'false',
+    detail: `aba de chat da reunião: painel antes=${before.panel} (aria-pressed ${before.pressed}); "Contexto" abriu o painel com o X "Fechar o painel Contexto"=${opened} (aria-pressed ${openPressed}), seções ${JSON.stringify(sections)}; o X fechou=${closed} (aria-pressed ${closedPressed})`,
   }
 }
 
@@ -2599,8 +2650,7 @@ async function acpChecks(win: BrowserWindow, ctx: SmokeContext, shot: () => Prom
   const fallbackOk = fallback.ok && fixtures.claudeSpawns.length === cliBefore + 1 && fixtures.acpSpawns.length === acpBefore && fixtures.registryCalls.length === 0
 
   // O chat sem o agente: "Instalar o agente do Claude" e "Usar a linha de comando"; o clique instala.
-  await clickNav(contents, 'assistente')
-  await waitFor(contents, routeIs('assistente'))
+  await showAssistantLevel(contents)
   await clickSelector(contents, '[data-action="chat-new"]')
   await waitFor(contents, `document.querySelector('[data-chat-input]') && !document.querySelector('[data-chat-message]')`)
   await setValue(contents, '[data-chat-input]', 'Oi, agente?')
@@ -5662,8 +5712,7 @@ async function whatsappChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => 
 
   // "Só estas conversas" do Assistente (contrato 25; o "Perguntar" do 24) com a conversa da Ana: o `.md` dela na
   // pasta da conversa e no índice.
-  await clickNav(contents, 'assistente')
-  await waitFor(contents, routeIs('assistente'))
+  await showAssistantLevel(contents)
   await clickSelector(contents, '[data-action="chat-new"]')
   await waitFor(contents, `document.querySelector('[data-chat-input]') && !document.querySelector('[data-chat-message]')`)
   await clickSelector(contents, '[data-action="chat-scope-label"]')
@@ -6317,8 +6366,7 @@ async function assistantChecks(ctx: SmokeContext, watch: (win: BrowserWindow) =>
   await showRoot(contents)
   const navLabel = await evaluate<string>(contents, `document.querySelector('${SIDEBAR_ROOT} [data-nav="assistente"]')?.textContent ?? ''`)
   const noOldName = await evaluate<boolean>(contents, `document.querySelectorAll('${SIDEBAR_ROOT} [data-nav]').length > 0 && ![...document.querySelectorAll('[data-nav]')].some((el) => el.textContent.includes('Perguntar'))`)
-  await clickNav(contents, 'assistente')
-  await waitFor(contents, routeIs('assistente'))
+  await showAssistantLevel(contents)
   await clickSelector(contents, '[data-action="chat-new"]')
   await waitFor(contents, `document.querySelector('[data-chat-input]') && !document.querySelector('[data-chat-message]')`)
   const header = await evaluate<string>(contents, `document.querySelector('main h1')?.parentElement?.textContent ?? ''`)
@@ -6355,14 +6403,16 @@ async function assistantChecks(ctx: SmokeContext, watch: (win: BrowserWindow) =>
     detail: `resposta=${pending.done} "${pending.answer.slice(0, 240)}"; pendentes ${JSON.stringify(pendingNames)}, respondidas ${JSON.stringify(answeredNames)}; pasta ${JSON.stringify(files.filter((name) => isSourceFile(name)).sort())}; estado com a versão=${stateText.includes('Versão instalada')}`,
   }
 
-  // CA2: o painel "Contexto" com as fontes, todas ligadas.
+  // CA2: o painel "Contexto" com as fontes, todas ligadas. Contrato 67: na conversa salva o "Contexto" já está aberto no
+  // trilho; o botão "Contexto" leva o trilho ao topo dele (e não fecha: não há X).
   await clickSelector(contents, '[data-action="toggle-context"]')
   const sources = await waitFor(
     contents,
     `['whatsapp', 'automations', 'guide'].every((kind) => document.querySelector('[data-chat-source="' + kind + '"] [role="switch"]')?.getAttribute('aria-checked') === 'true') && document.querySelector('[data-chat-whatsapp-mode="recent"]')?.getAttribute('aria-checked') === 'true'`,
   )
+  // O foco que o botão pôs no rádio do Escopo sai antes da foto (sem anel de foco no print).
+  await evaluate(contents, `document.activeElement instanceof HTMLElement && document.activeElement.blur(), true`)
   await shot('assistente-contexto-light')
-  await clickSelector(contents, '[data-action="close-context"]')
   checks['sources'] = { ok: sources, detail: `WhatsApp, Automações e Guia ligados, conversas recentes=${sources}` }
 
   // CA3 e CA4: o lembrete, do cartão até a tarefa.
@@ -6564,8 +6614,7 @@ async function internetChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => 
   await waitFor(contents, `!document.querySelector('[data-ask-now] [data-run-answer]')`)
 
   // CA2 e CA4: o Assistente, com a fonte "Internet" ligada por padrão; o link abre no navegador do sistema.
-  await clickNav(contents, 'assistente')
-  await waitFor(contents, routeIs('assistente'))
+  await showAssistantLevel(contents)
   await clickSelector(contents, '[data-action="chat-new"]')
   await waitFor(contents, `document.querySelector('[data-chat-input]') && !document.querySelector('[data-chat-message]')`)
   await clickSelector(contents, '[data-action="toggle-context"]')
@@ -6790,8 +6839,7 @@ async function mcpChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => void,
 
     // CA4 a CA6: o Assistente com as conexões; `calc-form` desligado só nesta conversa.
     const sessionsBefore = readAcpLog(ctx.userDataDir).filter((entry) => entry.method === 'session/new').length
-    await clickNav(contents, 'assistente')
-    await waitFor(contents, routeIs('assistente'))
+    await showAssistantLevel(contents)
     await clickSelector(contents, '[data-action="chat-new"]')
     await waitFor(contents, `document.querySelector('[data-chat-input]') && !document.querySelector('[data-chat-message]')`)
     await clickSelector(contents, '[data-action="toggle-context"]')
@@ -7004,8 +7052,7 @@ async function connectorChecks(ctx: SmokeContext, watch: (win: BrowserWindow) =>
 
     // CA6 (e CA4 do contrato 57): a sessão do chat com o Notion ligado, sem o modo estrito e com o resto bloqueado.
     const sessionsBefore = readAcpLog(ctx.userDataDir).filter((entry) => entry.method === 'session/new').length
-    await clickNav(contents, 'assistente')
-    await waitFor(contents, routeIs('assistente'))
+    await showAssistantLevel(contents)
     await clickSelector(contents, '[data-action="chat-new"]')
     await waitFor(contents, `document.querySelector('[data-chat-input]') && !document.querySelector('[data-chat-message]')`)
     await setValue(contents, '[data-chat-input]', 'O que tenho no Notion sobre o orçamento?')
@@ -8293,6 +8340,375 @@ async function settingsLevelChecks(ctx: SmokeContext, watch: (win: BrowserWindow
   win.destroy()
 }
 
+/** Contrato 67: as três conversas do nível Assistente nos prints (duas hoje e uma ontem), com títulos inventados. */
+const LEVEL_CHATS = [
+  { id: 'smoke-67-a', title: 'Resumo da reunião com o time', agoMs: 60_000 },
+  { id: 'smoke-67-b', title: 'Pendências da semana', agoMs: 120_000 },
+  { id: 'smoke-67-c', title: 'Ideias para o lançamento', agoMs: 24 * 60 * 60_000 },
+] as const
+
+/**
+ * Contrato 67: troca as conversas do userData pelas três de `LEVEL_CHATS` (cópias de uma que o próprio smoke gravou,
+ * com o escopo de todas as reuniões) enquanto `run` roda, e devolve as de antes no fim, mesmo com erro. O main lê a
+ * pasta a cada lista; nada nele muda.
+ */
+async function withLevelChats(ctx: SmokeContext, run: () => Promise<void>): Promise<void> {
+  const dir = join(ctx.userDataDir, CHATS_DIR)
+  const kept = join(ctx.userDataDir, `${CHATS_DIR}.contrato-67`)
+  const base = existsSync(dir)
+    ? readdirSync(dir)
+        .filter((name) => name.endsWith('.json'))
+        .map((name) => JSON.parse(readFileSync(join(dir, name), 'utf8')) as Record<string, unknown> & SmokeChatFile)
+        .find((chat) => chat.meetingId === null && chat.messages.length >= 2)
+    : undefined
+  if (!base) throw new Error('contrato 67: nenhuma conversa do smoke para copiar')
+  // Sobra de uma execução que morreu no meio: sem isso o `renameSync` falharia.
+  rmSync(kept, { recursive: true, force: true })
+  if (existsSync(dir)) renameSync(dir, kept)
+  try {
+    mkdirSync(dir, { recursive: true, mode: 0o700 })
+    for (const entry of LEVEL_CHATS) {
+      const at = new Date(Date.now() - entry.agoMs).toISOString()
+      const messages = base.messages.slice(0, 2).map(({ actions: _actions, ...message }) => ({ ...message, at }))
+      const chat = { ...base, id: entry.id, title: entry.title, createdAt: at, scope: { kind: 'all' }, messages }
+      writeFileSync(join(dir, `${entry.id}.json`), `${JSON.stringify(chat, null, 2)}\n`, { mode: 0o600 })
+    }
+    await run()
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+    if (existsSync(kept)) {
+      // Uma gravação tardia do main pode ter recriado `chats/` (o `renameSync` falharia com ENOTEMPTY).
+      rmSync(dir, { recursive: true, force: true })
+      renameSync(kept, dir)
+    }
+  }
+}
+
+/**
+ * Contrato 67, numa janela clara e depois numa escura, com as três conversas de `LEVEL_CHATS`: o nível Assistente da
+ * barra lateral (CA1: entrar de Reuniões, voltar sem mudar a conversa, entrar de novo sem navegar, ⌘, e `scribe:navigate`
+ * sem mexer no foco; CA2 e CA3: a ordem, as alturas, os dias em caixa alta, a linha sem hora e a aberta marcada; CA4: o
+ * "…" só no hover e no foco, excluir com confirmação; CA5: abrir e começar; CA25 da spec: a busca) e a tela (CA6: o
+ * trilho só com o "Contexto", aberto e sem X; CA7: o cabeçalho leva o trilho à seção; CA8: a conversa nova sem trilho,
+ * "Contexto" com o X, e a primeira resposta deixa o trilho aberto sem X). Prints `sidebar-assistente-light` e `-dark`
+ * (uma conversa aberta, menu fechado) e `assistente-contexto-dark` (o `-light` sai em `assistantChecks`).
+ */
+async function assistantLevelChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => void, sidebarChecks: Record<string, Check>, shots: Screenshot[]): Promise<void> {
+  const [first, second, third] = LEVEL_CHATS
+  await withLevelChats(ctx, async () => {
+    const win = ctx.openWindow({ theme: 'light' })
+    watch(win)
+    await loadAndWait(win)
+    const contents = win.webContents
+    const oneLevel = `${SIDEBAR_LEVELS}.length === 1`
+    const focusIn = (selector: string): Promise<boolean> => evaluate<boolean>(contents, `document.activeElement?.matches(${JSON.stringify(selector)}) === true`)
+    const focusInSidebar = (): Promise<boolean> => evaluate<boolean>(contents, `Boolean(document.activeElement?.closest('[data-sidebar-stack]'))`)
+    const conversationIs = (id: string): string => `document.querySelector('[data-chat-conversation]')?.getAttribute('data-chat-conversation') === ${JSON.stringify(id)}`
+    const rowsShown = (count: number): string => `document.querySelectorAll('${CHAT_HISTORY} [data-chat-item]').length === ${count}`
+    const openRow = async (id: string): Promise<boolean> => {
+      await clickSelector(contents, `${chatRow(id)} button`)
+      return waitFor(contents, conversationIs(id), 8000)
+    }
+
+    // CA1: de Reuniões, "Assistente" desliza para o nível (o foco no cabeçalho-voltar) e abre `/assistente`.
+    await clickNav(contents, 'reunioes')
+    await waitFor(contents, `${routeIs('reunioes')} && document.querySelector('${SIDEBAR_ROOT}') && ${oneLevel}`, 8000)
+    await evaluate(contents, WATCH_LEVELS)
+    await clickNav(contents, 'assistente')
+    const entered = await waitFor(contents, `${routeIs('assistente')} && document.querySelector('${SIDEBAR_ASSISTANT}') && ${oneLevel} && ${rowsShown(3)}`, 8000)
+    const slide = await evaluate<{ pairs: string[] }>(contents, `(() => { window.__smokeObserver?.disconnect(); return window.__smokeLevels })()`)
+    const enterFocus = await focusIn(`${SIDEBAR_ASSISTANT} [data-sidebar-back]`)
+    const opened = await openRow(first.id)
+    // Voltar mostra a raiz sem navegar: a mesma conversa (o mesmo elemento) e "Assistente" marcado, com o foco.
+    await evaluate(contents, `(window.__smokeConversation = document.querySelector('[data-chat-conversation]'), window.__smokeHistory = history.length, true)`)
+    const same = `window.__smokeConversation === document.querySelector('[data-chat-conversation]') && window.__smokeHistory === history.length && ${routeIs('assistente')} && ${conversationIs(first.id)}`
+    await clickSelector(contents, `${SIDEBAR_ASSISTANT} [data-sidebar-back]`)
+    const backed = await waitFor(contents, `document.querySelector('${SIDEBAR_ROOT}') && ${oneLevel}`)
+    const backState = await evaluate<{ same: boolean; current: string; focus: boolean }>(
+      contents,
+      `({ same: ${same}, current: document.querySelector('${SIDEBAR_ROOT} [data-nav="assistente"]')?.getAttribute('aria-current') ?? '', focus: document.activeElement?.matches('${SIDEBAR_ROOT} [data-nav="assistente"]') === true })`,
+    )
+    // Na seção, "Assistente" só mostra o nível de novo: sem navegar, com o foco no cabeçalho-voltar.
+    await clickNav(contents, 'assistente')
+    const again = await waitFor(contents, `document.querySelector('${SIDEBAR_ASSISTANT}') && ${oneLevel}`)
+    const againSame = await evaluate<boolean>(contents, same)
+    const againFocus = await focusIn(`${SIDEBAR_ASSISTANT} [data-sidebar-back]`)
+    // ⌘, e `scribe:navigate` trocam de nível sem pôr o foco na barra lateral.
+    await evaluate(contents, `document.querySelector('[data-chat-input]')?.focus(), true`)
+    Menu.getApplicationMenu()?.getMenuItemById(MENU_IDS.settings)?.click()
+    const toSettings = await waitFor(contents, `${routeIs('configuracoes')} && document.querySelector('${SIDEBAR_SETTINGS}') && ${oneLevel}`, 8000)
+    const toSettingsFocus = await focusInSidebar()
+    contents.send('scribe:navigate', 'assistente')
+    const toAssistant = await waitFor(contents, `${routeIs('assistente')} && document.querySelector('${SIDEBAR_ASSISTANT}') && ${oneLevel} && ${conversationIs(first.id)}`, 8000)
+    const toAssistantFocus = await focusInSidebar()
+    sidebarChecks['assistantEnter'] = {
+      ok:
+        entered &&
+        JSON.stringify(slide.pairs) === JSON.stringify(['root>assistente:push']) &&
+        enterFocus &&
+        opened &&
+        backed &&
+        backState.same &&
+        backState.current === 'page' &&
+        backState.focus &&
+        again &&
+        againSame &&
+        againFocus &&
+        toSettings &&
+        !toSettingsFocus &&
+        toAssistant &&
+        !toAssistantFocus,
+      detail: `de Reuniões -> nível Assistente com 3 conversas=${entered}, deslize ${JSON.stringify(slide.pairs)}, foco no cabeçalho-voltar=${enterFocus}; conversa aberta pela linha=${opened}; voltar: raiz=${backed}, mesma conversa sem navegar=${backState.same}, "Assistente" aria-current="${backState.current}" com o foco=${backState.focus}; de novo: nível=${again}, sem navegar=${againSame}, foco no cabeçalho-voltar=${againFocus}; ⌘, -> nível Configurações=${toSettings}, foco na barra=${toSettingsFocus}; scribe:navigate -> nível Assistente na mesma conversa=${toAssistant}, foco na barra=${toAssistantFocus}`,
+    }
+
+    // CA2 e CA3: cabeçalho, "Nova conversa", a busca e a lista, nessa ordem; os dias em caixa alta; linhas de 30 px sem
+    // a hora, a aberta com aria-current="page".
+    await waitFor(contents, rowsShown(3))
+    const level = await evaluate<{
+      header: string
+      label: string
+      icons: number
+      order: boolean
+      newHeight: number
+      newIcons: number
+      newText: string
+      newBg: string
+      searchHeight: number
+      searchBg: string
+      placeholder: string
+      days: { key: string; text: string; upper: boolean; font: string }[]
+      rows: { id: string; text: string; height: number; padding: string; current: string }[]
+      dots: number[]
+      fits: boolean
+    }>(
+      contents,
+      `(() => {
+        const levelEl = document.querySelector('${SIDEBAR_ASSISTANT}')
+        const back = levelEl.querySelector('[data-sidebar-back]'), add = levelEl.querySelector('[data-action="chat-new"]'), input = levelEl.querySelector('[data-chat-search]'), search = input.parentElement, list = levelEl.querySelector('[data-chat-list]')
+        const box = (el) => el.getBoundingClientRect()
+        return {
+          header: back.textContent ?? '',
+          label: back.getAttribute('aria-label') ?? '',
+          icons: back.querySelectorAll('svg').length,
+          order: box(back).bottom <= box(add).top + 0.5 && box(add).bottom <= box(search).top + 0.5 && box(search).bottom <= box(list).top + 0.5,
+          newHeight: Math.round(box(add).height * 10) / 10,
+          newIcons: add.querySelectorAll('svg').length,
+          newText: add.textContent ?? '',
+          newBg: getComputedStyle(add).backgroundColor + ' ' + getComputedStyle(add).borderTopWidth,
+          searchHeight: Math.round(box(search).height * 10) / 10,
+          searchBg: getComputedStyle(search).backgroundColor,
+          placeholder: input.placeholder,
+          days: [...list.querySelectorAll('[data-chat-day]')].map((el) => { const h = el.querySelector('h2'); const style = getComputedStyle(h); return { key: el.dataset.chatDay, text: h.innerText, upper: style.textTransform === 'uppercase', font: style.fontSize } }),
+          rows: [...list.querySelectorAll('[data-chat-item]')].map((el) => { const b = el.querySelector('button'); return { id: el.dataset.chatItem, text: b.textContent ?? '', height: Math.round(box(el).height * 10) / 10, padding: getComputedStyle(b).paddingLeft, current: b.getAttribute('aria-current') ?? '' } }),
+          dots: [...list.querySelectorAll('[data-action="chat-row-menu"]')].map((el) => Math.round(box(el).height)),
+          // Tudo dentro do recuo de 12 px da barra (um título comprido não alarga a coluna).
+          fits: [back, add, search, ...list.querySelectorAll('[data-chat-item]')].every((el) => box(el).right <= document.querySelector('aside').getBoundingClientRect().right - 11.5),
+        }
+      })()`,
+    )
+    const levelOk =
+      level.header === 'Assistente' &&
+      level.label === 'Assistente: voltar ao menu' &&
+      level.icons === 2 &&
+      level.order &&
+      level.newHeight === 30 &&
+      level.newIcons === 1 &&
+      level.newText === 'Nova conversa' &&
+      level.newBg.startsWith('rgba(0, 0, 0, 0)') &&
+      level.searchHeight === 28 &&
+      level.searchBg !== 'rgba(0, 0, 0, 0)' &&
+      level.placeholder === 'Buscar conversas' &&
+      JSON.stringify(level.days.map((day) => day.text)) === JSON.stringify(['HOJE', 'ONTEM']) &&
+      level.days.every((day) => day.upper && day.font === '10px') &&
+      JSON.stringify(level.rows.map((row) => row.id)) === JSON.stringify([first.id, second.id, third.id]) &&
+      level.rows.every((row, index) => row.text === LEVEL_CHATS[index]?.title && row.height === 30 && row.padding === '32px') &&
+      level.rows.filter((row) => row.current === 'page').map((row) => row.id).join() === first.id &&
+      level.dots.length === 3 &&
+      level.dots.every((height) => height === 24) &&
+      level.fits
+    sidebarChecks['assistantLevel'] = {
+      ok: levelOk,
+      detail: `cabeçalho "${level.label}" (${level.icons} ícones); ordem cabeçalho > Nova conversa > busca > lista=${level.order}; "Nova conversa" ${level.newHeight}px, ${level.newIcons} ícone, fundo e borda ${level.newBg}; busca ${level.searchHeight}px fundo ${level.searchBg} "${level.placeholder}"; dias ${JSON.stringify(level.days)}; linhas ${JSON.stringify(level.rows)}; "…" ${JSON.stringify(level.dots)}px; dentro do recuo da barra=${level.fits}`,
+    }
+
+    // Print do nível: duas no dia, uma ontem, a primeira aberta, o menu fechado (o foco no campo da conversa).
+    await evaluate(contents, `document.querySelector('[data-chat-input]')?.focus(), true`)
+    await settle(contents)
+    shots.push(await capture(win, ctx.outDir, 'sidebar-assistente-light'))
+
+    // CA4: o "…" escondido fora do hover e do foco; à mostra com o foco na linha.
+    const dotOpacity = (id: string): Promise<string> => evaluate<string>(contents, `getComputedStyle(document.querySelector('${chatRow(id)} [data-action="chat-row-menu"]')).opacity`)
+    const hidden = await dotOpacity(second.id)
+    await evaluate(contents, `document.querySelector('${chatRow(second.id)} button')?.focus(), true`)
+    const focusedShown = await waitFor(contents, `getComputedStyle(document.querySelector('${chatRow(second.id)} [data-action="chat-row-menu"]')).opacity === '1'`)
+    const otherHidden = await dotOpacity(third.id)
+    // O menu abre abaixo do "…", alinhado à direita da linha, e rola a lista o mínimo para aparecer inteiro.
+    await clickSelector(contents, `${chatRow(third.id)} [data-action="chat-row-menu"]`)
+    const menu = await waitFor(contents, `document.activeElement?.dataset.action === 'rename-chat' && document.querySelector('${chatRow(third.id)} [role="menu"]')`)
+    const menuPlace = await evaluate<{ below: boolean; right: boolean; inside: boolean; shown: string }>(
+      contents,
+      `(() => {
+        const row = document.querySelector('${chatRow(third.id)}').getBoundingClientRect(), dots = document.querySelector('${chatRow(third.id)} [data-action="chat-row-menu"]'), panel = document.querySelector('${chatRow(third.id)} [role="menu"]').getBoundingClientRect(), list = document.querySelector('${CHAT_HISTORY}').getBoundingClientRect()
+        return { below: panel.top >= dots.getBoundingClientRect().bottom - 1, right: Math.abs(row.right - 4 - panel.right) <= 1, inside: panel.top >= list.top - 1 && panel.bottom <= list.bottom + 1, shown: getComputedStyle(dots).opacity }
+      })()`,
+    )
+    await evaluate(contents, `document.activeElement?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })), true`)
+    const menuClosed = await waitFor(contents, `!document.querySelector('[role="menu"]') && document.activeElement?.dataset.action === 'chat-row-menu'`)
+    sidebarChecks['assistantRowMenu'] = {
+      ok: hidden === '0' && focusedShown && otherHidden === '0' && menu && menuPlace.below && menuPlace.right && menuPlace.inside && menuPlace.shown === '1' && menuClosed,
+      detail: `"…" fora do hover e do foco opacity ${hidden}; com o foco na linha à mostra=${focusedShown} (a linha de baixo ${otherHidden}); menu aberto com o foco em Renomear=${menu}, abaixo do "…"=${menuPlace.below}, à direita da linha=${menuPlace.right}, inteiro na lista=${menuPlace.inside}, "…" com o menu aberto ${menuPlace.shown}; Esc fechou e voltou ao "…"=${menuClosed}`,
+    }
+
+    // CA6: o trilho só com o "Contexto", aberto, 300 px, sem X; à direita da conversa; as seções marcadas.
+    await openRow(first.id)
+    const rail = await evaluate<{ width: number; right: boolean; header: string; headerHeight: number; close: boolean; expand: boolean; label: string; sections: string[]; list: boolean; first: boolean }>(
+      contents,
+      `(() => {
+        const rail = document.querySelector('${CHAT_RAIL}'), conversation = document.querySelector('[data-chat-conversation]').getBoundingClientRect(), context = rail?.querySelector('[data-chat-context]'), h2 = context?.querySelector('h2')
+        return {
+          width: rail ? Math.round(rail.getBoundingClientRect().width) : 0,
+          right: Boolean(rail && rail.getBoundingClientRect().left >= conversation.right - 1),
+          header: h2?.textContent ?? '',
+          headerHeight: h2 ? Math.round(h2.parentElement.getBoundingClientRect().height) : 0,
+          close: Boolean(document.querySelector('[data-action="close-context"]')),
+          expand: Boolean(document.querySelector('[data-action="expand-context"]')),
+          label: context?.getAttribute('aria-label') ?? '',
+          sections: [...(rail?.querySelectorAll('[data-context-section]') ?? [])].map((el) => el.dataset.contextSection),
+          list: Boolean(rail?.querySelector('[data-chat-list]')),
+          first: rail?.firstElementChild?.firstElementChild === context,
+        }
+      })()`,
+    )
+    sidebarChecks['assistantRail'] = {
+      ok:
+        rail.width === 300 &&
+        rail.right &&
+        rail.header === 'Contexto' &&
+        rail.headerHeight === 48 &&
+        !rail.close &&
+        !rail.expand &&
+        rail.label === '' &&
+        JSON.stringify(rail.sections) === JSON.stringify(['scope', 'sources', 'connections', 'consulted', 'totals', 'model']) &&
+        !rail.list &&
+        rail.first,
+      detail: `trilho ${rail.width}px à direita=${rail.right}, só o Contexto=${rail.first && !rail.list}; cabeçalho "${rail.header}" ${rail.headerHeight}px, X=${rail.close}, expandir=${rail.expand}, aria-label da seção "${rail.label}"; seções ${JSON.stringify(rail.sections)}`,
+    }
+
+    // CA7: o cabeçalho da conversa leva o trilho à seção, com o foco no primeiro controle dela; "Escolhidas" leva ao
+    // seletor das reuniões (na segunda conversa, que volta a "todas" depois).
+    const whole = (selector: string): string =>
+      `(() => { const r = document.querySelector('${CHAT_RAIL}').getBoundingClientRect(), s = document.querySelector('${CHAT_RAIL} ${selector}')?.getBoundingClientRect(); return Boolean(s && s.top >= r.top - 1 && (s.bottom <= r.bottom + 1 || s.height >= r.height)) })()`
+    const toggleAttrs = await evaluate<{ pressed: boolean; controls: string }>(contents, `(() => { const b = document.querySelector('[data-action="toggle-context"]'); return { pressed: b.hasAttribute('aria-pressed'), controls: b.getAttribute('aria-controls') ?? '' } })()`)
+    const railId = await evaluate<string>(contents, `document.querySelector('${CHAT_RAIL}')?.id ?? ''`)
+    await clickSelector(contents, '[data-action="chat-model-label"]')
+    const toModel = await waitFor(contents, `${whole('[data-context-section="model"]')} && document.activeElement?.matches('[data-context-section="model"] [aria-pressed="true"]')`)
+    await clickSelector(contents, '[data-action="chat-scope-label"]')
+    const toScope = await waitFor(contents, `${whole('[data-context-section="scope"]')} && document.activeElement?.matches('[data-context-section="scope"] [role="radio"][aria-checked="true"]')`)
+    await clickSelector(contents, '[data-action="chat-model-label"]')
+    await waitFor(contents, whole('[data-context-section="model"]'))
+    await clickSelector(contents, '[data-action="toggle-context"]')
+    const toTop = await waitFor(contents, `document.querySelector('${CHAT_RAIL}').scrollTop === 0 && document.activeElement?.matches('[data-context-section="scope"] [role="radio"][aria-checked="true"]') && document.querySelector('${CHAT_RAIL} [data-chat-context]')`)
+    await openRow(second.id)
+    await setValue(contents, '[data-chat-scope-select]', 'meetings', 'change')
+    const toPicker = await waitFor(contents, `${whole('[data-chat-scope-picker]')} && document.activeElement?.matches('[data-chat-scope-search]')`)
+    await setValue(contents, '[data-chat-scope-select]', 'all', 'change')
+    for (let i = 0; i < 40 && chatFile(ctx.userDataDir, second.id)?.scope?.kind !== 'all'; i++) await wait(50)
+    sidebarChecks['assistantReveal'] = {
+      ok: !toggleAttrs.pressed && railId !== '' && toggleAttrs.controls === railId && toModel && toScope && toTop && toPicker,
+      detail: `"Contexto" sem aria-pressed=${!toggleAttrs.pressed}, aria-controls="${toggleAttrs.controls}" (trilho "${railId}"); modelo -> Modelo à vista com o foco no seletor=${toModel}; escopo -> Escopo com o foco no rádio marcado=${toScope}; "Contexto" -> topo com o foco no Escopo=${toTop}; "Reuniões escolhidas" na barra -> seletor das reuniões com o foco na busca=${toPicker}`,
+    }
+
+    // CA5: a linha abre a conversa; "Nova conversa" começa outra (sem trilho, CA8).
+    await openRow(first.id)
+    const rowOpened = await evaluate<boolean>(contents, `document.querySelector('${chatRow(first.id)} button')?.getAttribute('aria-current') === 'page' && !document.querySelector('${chatRow(second.id)} button[aria-current]')`)
+    await clickSelector(contents, `${SIDEBAR_ASSISTANT} [data-action="chat-new"]`)
+    const fresh = await waitFor(contents, `${conversationIs('new')} && !document.querySelector('${CHAT_HISTORY} [aria-current]')`)
+    sidebarChecks['assistantOpen'] = {
+      ok: rowOpened && fresh,
+      detail: `linha -> conversa ${first.id} marcada=${rowOpened}; "Nova conversa" -> conversa nova sem linha marcada=${fresh}`,
+    }
+
+    // CA25 da spec: a busca sem acento nem caixa; sem resultado, a frase.
+    const search = `${SIDEBAR_ASSISTANT} [data-chat-search]`
+    await setValue(contents, search, 'REUNIAO')
+    const found = await waitFor(contents, `[...document.querySelectorAll('${CHAT_HISTORY} [data-chat-item]')].map((el) => el.dataset.chatItem).join() === ${JSON.stringify(first.id)}`)
+    await setValue(contents, search, 'zzz nada')
+    const none = await waitFor(contents, `${rowsShown(0)} && document.querySelector('${CHAT_HISTORY}')?.textContent === 'Nenhuma conversa com "zzz nada".'`)
+    await setValue(contents, search, '')
+    const all = await waitFor(contents, rowsShown(3))
+    sidebarChecks['assistantSearch'] = {
+      ok: found && none && all,
+      detail: `"REUNIAO" acha só "${first.title}"=${found}; "zzz nada" mostra a frase=${none}; busca vazia, as 3 de volta=${all}`,
+    }
+    win.destroy()
+
+    // No escuro: os prints com a primeira conversa aberta; depois excluir (CA4) e a conversa nova (CA8).
+    const dark = ctx.openWindow({ theme: 'dark' })
+    watch(dark)
+    await loadAndWait(dark)
+    const darkContents = dark.webContents
+    await showAssistantLevel(darkContents)
+    await waitFor(darkContents, `document.querySelectorAll('${CHAT_HISTORY} [data-chat-item]').length === 3`, 8000)
+    await clickSelector(darkContents, `${chatRow(first.id)} button`)
+    await waitFor(darkContents, `document.querySelector('[data-chat-conversation="${first.id}"]') && document.querySelector('${CHAT_RAIL} [data-chat-context]')`, 8000)
+    await evaluate(darkContents, `document.querySelector('[data-chat-input]')?.focus(), true`)
+    await settle(darkContents)
+    shots.push(await capture(dark, ctx.outDir, 'sidebar-assistente-dark'))
+    shots.push(await capture(dark, ctx.outDir, 'assistente-contexto-dark'))
+
+    // CA4: excluir pede a confirmação; "Cancelar" volta à linha; "Excluir" tira a linha, o arquivo e o dia vazio.
+    const third67 = chatRow(third.id)
+    await clickSelector(darkContents, `${third67} [data-action="chat-row-menu"]`)
+    await clickSelector(darkContents, `${third67} [data-action="delete-chat"]`)
+    const confirm = await waitFor(darkContents, `document.querySelector('${third67}')?.textContent?.startsWith('Excluir esta conversa?') && document.querySelector('${third67} [data-action="confirm-delete-chat"]') && document.querySelector('${third67} [data-action="cancel-delete-chat"]')`)
+    await clickSelector(darkContents, `${third67} [data-action="cancel-delete-chat"]`)
+    const cancelled = await waitFor(darkContents, `document.querySelector('${third67} button')?.textContent === ${JSON.stringify(third.title)}`)
+    await clickSelector(darkContents, `${third67} [data-action="chat-row-menu"]`)
+    await clickSelector(darkContents, `${third67} [data-action="delete-chat"]`)
+    await waitFor(darkContents, `document.querySelector('${third67} [data-action="confirm-delete-chat"]')`)
+    await clickSelector(darkContents, `${third67} [data-action="confirm-delete-chat"]`)
+    const removed = await waitFor(darkContents, `!document.querySelector('${third67}') && document.querySelectorAll('${CHAT_HISTORY} [data-chat-day]').length === 1`)
+    for (let i = 0; i < 40 && chatFile(ctx.userDataDir, third.id); i++) await wait(50)
+    const fileGone = !chatFile(ctx.userDataDir, third.id)
+    sidebarChecks['assistantDelete'] = {
+      ok: confirm && cancelled && removed && fileGone,
+      detail: `"Excluir" no menu -> "Excluir esta conversa?" com Excluir e Cancelar=${confirm}; Cancelar voltou à linha=${cancelled}; Excluir tirou a linha e o dia "Ontem"=${removed}, arquivo apagado=${fileGone}`,
+    }
+
+    // CA8: a conversa nova sem trilho (até a borda de `main`); "Contexto" abre o trilho com o X (aria-pressed), que fecha e
+    // devolve o foco; a primeira resposta deixa o trilho aberto, agora sem X.
+    await clickSelector(darkContents, `${SIDEBAR_ASSISTANT} [data-action="chat-new"]`)
+    await waitFor(darkContents, `document.querySelector('[data-chat-conversation="new"]')`)
+    const noRail = await evaluate<boolean>(
+      darkContents,
+      `!document.querySelector('${CHAT_RAIL}') && document.querySelector('[data-chat-conversation]').getBoundingClientRect().right >= document.querySelector('main').getBoundingClientRect().right - 1 && document.querySelector('[data-action="toggle-context"]')?.getAttribute('aria-pressed') === 'false'`,
+    )
+    await clickSelector(darkContents, '[data-action="toggle-context"]')
+    const withX = await waitFor(
+      darkContents,
+      `document.querySelector('${CHAT_RAIL} [data-action="close-context"]')?.getAttribute('aria-label') === 'Fechar o Contexto' && document.querySelector('[data-action="toggle-context"]')?.getAttribute('aria-pressed') === 'true'`,
+    )
+    await clickSelector(darkContents, '[data-action="close-context"]')
+    const closed = await waitFor(darkContents, `!document.querySelector('${CHAT_RAIL}') && document.activeElement?.dataset.action === 'toggle-context'`)
+    await clickSelector(darkContents, '[data-action="toggle-context"]')
+    await waitFor(darkContents, `document.querySelector('${CHAT_RAIL} [data-chat-context]')`)
+    const answer = await askChat(darkContents, 'O que ficou decidido na última reunião?')
+    const saved = await waitFor(
+      darkContents,
+      `!document.querySelector('[data-chat-conversation="new"]') && document.querySelector('${CHAT_RAIL} [data-chat-context]') && !document.querySelector('[data-action="close-context"]') && !document.querySelector('[data-action="toggle-context"]')?.hasAttribute('aria-pressed')`,
+      8000,
+    )
+    // A conversa criada pela resposta já gravada antes de a pasta voltar (nada do main chega depois).
+    const newId = await evaluate<string>(darkContents, `document.querySelector('[data-chat-conversation]')?.getAttribute('data-chat-conversation') ?? ''`)
+    for (let i = 0; i < 100 && chatFile(ctx.userDataDir, newId)?.messages.at(-1)?.role !== 'assistant'; i++) await wait(50)
+    sidebarChecks['assistantNewChat'] = {
+      ok: noRail && withX && closed && answer.done && saved,
+      detail: `conversa nova sem trilho, até a borda=${noRail}; "Contexto" abriu com o X "Fechar o Contexto"=${withX}; o X fechou e devolveu o foco=${closed}; primeira resposta=${answer.done}, trilho aberto sem X=${saved}`,
+    }
+    dark.destroy()
+  })
+}
+
 /**
  * Contrato 43 (CA1, CA2, CA3, CA5 e CA6), numa janela clara e depois numa escura: a conta adicionada em Configurações ›
  * Contas › Email (a dica do Gmail, o autoconfig sem rede caindo no manual, "Testar conexão" com a senha recusada e com
@@ -8768,8 +9184,7 @@ async function emailAssistantChecks(ctx: SmokeContext, watch: (win: BrowserWindo
   const accountId = await evaluate<string>(contents, `window.__scribeApi.invoke('scribe:email-accounts').then((list) => list[0]?.account.id ?? '')`)
   const inbox = (): Promise<{ id: string; subject: string; seen: boolean; messageId: string | null }[]> =>
     evaluate(contents, `window.__scribeApi.invoke('scribe:email-messages', { accountId: '${accountId}' }).then((list) => list.map((item) => ({ id: item.id, subject: item.subject, seen: item.seen, messageId: item.messageId })))`)
-  await clickNav(contents, 'assistente')
-  await waitFor(contents, routeIs('assistente'))
+  await showAssistantLevel(contents)
   await clickSelector(contents, '[data-action="chat-new"]')
   await waitFor(contents, `document.querySelector('[data-chat-input]') && !document.querySelector('[data-chat-message]')`)
 
@@ -9380,6 +9795,7 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
         chat['stop'] = await chatStopCheck(contents, ctx)
         chat['context'] = await chatContextCheck(contents, ctx, () => extraShot('perguntar-contexto-light'))
         chat['meeting'] = await chatMeetingCheck(contents, ctx)
+        chat['meetingContext'] = await meetingContextCheck(contents)
       }
 
       // 7. Configurações (chave conferida, catálogo das fixtures) e o seletor com um modelo não liberado.
@@ -9513,6 +9929,9 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
     // Contrato 66: o nível Configurações da barra lateral, numa janela à parte.
     await settingsLevelChecks(ctx, watch, sidebar)
 
+    // Contrato 67: o nível Assistente da barra lateral e o trilho só com o "Contexto", com três conversas de exemplo.
+    await assistantLevelChecks(ctx, watch, sidebar, screenshots)
+
     // Contrato 27: quem fala no Meet, com um cliente falso no servidor local; antes do bloqueio.
     await meetChecks(ctx, watch, meet)
 
@@ -9569,7 +9988,7 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
   for (const [name, check] of Object.entries(meetingsList)) if (!check.ok) failures.push(`lista de reuniões ${name}: ${check.detail}`)
   for (const name of ['list', 'listDark', 'search', 'folders', 'recordingNow']) if (!meetingsList[name]) failures.push(`lista de reuniões ${name}: não executado`)
   for (const [name, check] of Object.entries(chat)) if (!check.ok) failures.push(`chat ${name}: ${check.detail}`)
-  for (const name of ['screen', 'screenDark', 'details', 'detailsDark', 'stop', 'context', 'meeting', 'acp']) if (!chat[name]) failures.push(`chat ${name}: não executado`)
+  for (const name of ['screen', 'screenDark', 'details', 'detailsDark', 'stop', 'context', 'meeting', 'meetingContext', 'acp']) if (!chat[name]) failures.push(`chat ${name}: não executado`)
   for (const name of ['configuracoes', 'gravacao', 'detalhe']) {
     const check = layout[name]
     if (!check) failures.push(`medidas ${name}: não executado`)
@@ -9606,7 +10025,7 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
   for (const [name, check] of Object.entries(email)) if (!check.ok) failures.push(`email ${name}: ${check.detail}`)
   for (const name of ['settings', 'list', 'reading', 'compose', 'folders', 'attachments', 'remove', 'dark', 'notify', 'assistantPending', 'assistantReply', 'assistantTask', 'assistantSearch', 'taskEmailForm', 'taskEmailRun']) if (!email[name]) failures.push(`email ${name}: não executado`)
   for (const [name, check] of Object.entries(sidebar)) if (!check.ok) failures.push(`barra lateral ${name}: ${check.detail}`)
-  for (const name of ['noAccount', 'rootItems', 'enterFirstTime', 'back', 'enterInSection', 'enterLast', 'slide', 'still', 'routeLevel', 'reducedMotion', 'badge', 'settingsEnter', 'settingsRows', 'settingsBack', 'settingsEnterInSection', 'settingsScreen', 'settingsRouteLevel', 'settingsAnchor', 'settingsDoubleMenu', 'settingsDoubleClick']) {
+  for (const name of ['noAccount', 'rootItems', 'enterFirstTime', 'back', 'enterInSection', 'enterLast', 'slide', 'still', 'routeLevel', 'reducedMotion', 'badge', 'settingsEnter', 'settingsRows', 'settingsBack', 'settingsEnterInSection', 'settingsScreen', 'settingsRouteLevel', 'settingsAnchor', 'settingsDoubleMenu', 'settingsDoubleClick', 'assistantEnter', 'assistantLevel', 'assistantRowMenu', 'assistantRail', 'assistantReveal', 'assistantOpen', 'assistantSearch', 'assistantDelete', 'assistantNewChat']) {
     if (!sidebar[name]) failures.push(`barra lateral ${name}: não executado`)
   }
   for (const [name, check] of Object.entries(lock)) if (!check.ok) failures.push(`bloqueio ${name}: ${check.detail}`)
@@ -9634,8 +10053,9 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
   // (contrato 45); o formulário da tarefa com "Pode enviar email" e a execução com os emails enviado e recusado, no
   // claro (contrato 51); a seção "Conectores do claude.ai" com o Notion ligado e as ferramentas, nos dois temas
   // (contrato 58); a raiz da barra lateral com o número do Email e o nível Email, nos dois temas (contrato 65); o nível
-  // Configurações com Conexões aberta, nos dois temas (contrato 66).
-  const expectedShots = SCREENS.length * THEMES.length + 74
+  // Configurações com Conexões aberta, nos dois temas (contrato 66); o nível Assistente, nos dois temas, e a conversa
+  // salva com o "Contexto" no escuro (contrato 67; no claro ele é o print do contrato 25).
+  const expectedShots = SCREENS.length * THEMES.length + 77
   if (screenshots.length !== expectedShots) failures.push(`${screenshots.length} PNGs em vez de ${expectedShots}`)
   for (const shot of screenshots) {
     if (shot.name === MEETING_PROMPT_SHOT) {

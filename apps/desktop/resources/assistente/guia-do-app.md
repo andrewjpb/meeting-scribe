@@ -8,7 +8,7 @@ Cite este guia como [Guia].
 
 ## Barra lateral
 
-A barra lateral tem, de cima para baixo: Reuniões, Assistente, Email (com o número de emails não lidos de todas as contas), Automações, WhatsApp (só aparece com o WhatsApp instalado) e Configurações. Email abre um nível próprio da barra, que desliza por cima do menu: no topo, a seta "Email" volta ao menu sem sair da tela aberta; abaixo, as contas de email com as pastas. Qualquer tela de email aberta mostra esse nível. Configurações também abre um nível próprio, com a seta "Configurações" no topo e uma linha por aba; qualquer tela de Configurações mostra esse nível. As outras telas mostram o menu. No rodapé ficam o botão "Bloquear", o aviso de versão nova (quando há) e as permissões do microfone e do áudio do sistema.
+A barra lateral tem, de cima para baixo: Reuniões, Assistente, Email (com o número de emails não lidos de todas as contas), Automações, WhatsApp (só aparece com o WhatsApp instalado) e Configurações. Email abre um nível próprio da barra, que desliza por cima do menu: no topo, a seta "Email" volta ao menu sem sair da tela aberta; abaixo, as contas de email com as pastas. Qualquer tela de email aberta mostra esse nível. Configurações também abre um nível próprio, com a seta "Configurações" no topo e uma linha por aba; qualquer tela de Configurações mostra esse nível. O Assistente também abre um nível próprio, com a seta "Assistente" no topo e as conversas; a tela do Assistente mostra esse nível. As outras telas mostram o menu. No rodapé ficam o botão "Bloquear", o aviso de versão nova (quando há) e as permissões do microfone e do áudio do sistema.
 
 <!-- tela: reunioes -->
 ## Reuniões
@@ -34,7 +34,7 @@ Abre ao clicar numa reunião. Tem as abas Resumo, Anotações, Assistente (um ch
 <!-- tela: assistente -->
 ## Assistente
 
-Antes se chamava "Perguntar". É este chat: responde sobre as reuniões, o WhatsApp, os emails, as automações e o próprio app, e pode propor ações. As conversas ficam à esquerda; "Nova conversa" começa outra.
+Antes se chamava "Perguntar". É este chat: responde sobre as reuniões, o WhatsApp, os emails, as automações e o próprio app, e pode propor ações. As conversas ficam no nível Assistente da barra lateral: "Nova conversa" começa outra, a busca procura pelo título, as conversas aparecem agrupadas por dia, e o "…" de cada uma renomeia ou exclui. O Contexto fica à direita, sempre aberto numa conversa; no topo da conversa, "Contexto", o escopo e o modelo levam à seção dele. Numa conversa nova, o Contexto abre pelo botão "Contexto".
 
 O painel "Contexto" mostra o escopo das reuniões (todas, últimos 7 ou 30 dias, ou as escolhidas), as fontes com interruptor (WhatsApp, Email, Automações, Guia do app, Internet; o Email só aparece com conta de email), as reuniões consultadas, os totais e o modelo. O estado do app (data, hora, fuso, conexões) vai sempre.
 

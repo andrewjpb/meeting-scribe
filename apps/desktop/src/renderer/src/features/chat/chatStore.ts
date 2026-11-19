@@ -373,3 +373,15 @@ export const useChat = create<ChatState>()((set, get) => {
     },
   }
 })
+
+/**
+ * Contrato 67: abre a conversa `id` (ou a nova, `null`) na tela "Assistente", pela lista do sidebar ou pela tela. A que
+ * estava aberta fecha: o processo dela morre (depois da resposta em curso).
+ */
+export function openChat(id: string | null): void {
+  const key = listKey(null)
+  const selected = useChat.getState().selected[key] ?? null
+  if (id === selected) return
+  if (selected) window.__scribeApi.send('scribe:chat-close', { id: selected })
+  useChat.getState().select(null, id)
+}

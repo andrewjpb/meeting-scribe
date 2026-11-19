@@ -20,8 +20,8 @@ const NAV_ITEMS = APP_ROUTES.flatMap((route) => (route.nav ? [{ ...route.nav, id
 
 /**
  * Barra lateral opaca em azul profundo: espaço dos botões da janela, marca (a escolhida em Configurações
- * ou a da LAP), a coluna em pilha (contrato 65: a raiz com os itens, o nível Email com as contas ou, contrato 66, o
- * nível Configurações com as abas) e, no rodapé,
+ * ou a da LAP), a coluna em pilha (contrato 65: a raiz com os itens, o nível Email com as contas, contrato 66, o
+ * nível Configurações com as abas ou, contrato 67, o nível Assistente com as conversas) e, no rodapé,
  * "Bloquear", o aviso de versão nova e as permissões.
  */
 export function Sidebar() {
@@ -41,13 +41,15 @@ export function Sidebar() {
 
   useEffect(() => rememberEmailPath(location.pathname), [location.pathname])
 
-  // Item de seção: na seção, só mostra o nível de novo (rota, mensagem e aba abertas iguais); de fora, o Email abre a
-  // última pasta aberta e Configurações, `/configuracoes`, que o `SettingsScreen` leva à última aba vista.
+  // Item de seção: na seção, só mostra o nível de novo (rota, mensagem, aba e conversa abertas iguais); de fora, o Email
+  // abre a última pasta aberta, Configurações, `/configuracoes`, que o `SettingsScreen` leva à última aba vista, e o
+  // Assistente (contrato 67), `/assistente`, com a conversa que estava aberta no store.
   const openSection = (section: SidebarSection) => (event: MouseEvent): void => {
     event.preventDefault()
     focusRef.current = '[data-sidebar-back]'
     if (sectionOf(location.pathname) === section) setPoppedKey(null)
     else if (section === 'email') void navigate(lastEmailPath(useEmail.getState().accounts?.map((status) => status.account.id) ?? []))
+    else if (section === 'assistente') void navigate(ROUTE_PATHS.assistente)
     else void navigate(ROUTE_PATHS.configuracoes)
   }
   const back = (): void => {
