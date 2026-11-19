@@ -78,6 +78,13 @@ A tela que antes se chamava "Perguntar".
 
 **Outlook, Hotmail e Live pessoais** ainda não funcionam: a Microsoft só aceita login moderno (OAuth) por IMAP, e isso exigiria registrar o app numa conta da Microsoft. Exchange e Microsoft 365 também ficam para depois.
 
+### Conexões: servidores MCP e conectores do claude.ai
+- Em **Configurações › Conexões**, servidores MCP (os do Claude CLI, os só do app e os importados do Claude Desktop) dão ao Assistente ferramentas de outros sistemas. Tudo começa desligado. Cada ferramenta tem uma regra: **Perguntar** (o padrão), Permitir ou Negar. Com "Perguntar", a conversa mostra um cartão com os argumentos, e sem resposta em 2 minutos o app nega.
+- **Conectores do claude.ai** (Notion, Google Drive, Gmail…): a última seção da aba lista os conectores da sua conta (lidos do `claude mcp list`). Todos ficam **desligados por padrão**, inclusive um conector novo que aparecer na conta depois: o agente só usa o que você ligar, um por um. Ligado, o conector vale no Assistente e no chat da reunião a partir da próxima pergunta; tradução, resumo, análise e Automações nunca usam conector.
+- "Ver ferramentas" lista as ferramentas do conector (do próprio `claude`, sem perguntar nada ao modelo), cada uma começando em Perguntar. O rótulo "Escrita" marca as que têm nome de escrita (send, create, delete, update), sem mudar a regra.
+- O login de cada conector fica no claude.ai: o app não vê nem guarda token. Conector em "Precisa autorizar" mostra o link para [claude.ai/settings/connectors](https://claude.ai/settings/connectors).
+- **Os conectores só funcionam com o Claude logado pela assinatura.** Com chave de API ou outro provedor, a seção mostra só esse aviso.
+
 ### Do seu jeito
 - **Configurações em abas** (Geral, Gravação, Claude, Arquivos, Contas, Sobre) com busca (⌘F).
 - **Sua marca**: troque o nome e o logo do app.
@@ -119,7 +126,7 @@ Reuniões em Markdown no seu Mac ─> agente de IA via ACP ─> resumo · análi
 | Arquivos (áudio, transcrição, resumo, anotações) | ficam no seu Mac |
 | Chaves e tokens | cifrados pelo Chaveiro do macOS |
 
-O agente **não escreve arquivos, não roda comandos e não usa MCP**. A internet só entra onde você liga (a fonte "Internet" do Assistente e o "Pode pesquisar na internet" de cada agente): a busca é livre (até 10 por pedido), mas o app só deixa abrir uma página cujo endereço veio de um resultado dessa busca ou foi escrito por você (até 15 por pedido). Um endereço montado pelo agente, que poderia levar trechos das suas reuniões para fora, é recusado. Tradução, resumo e análise nunca acessam a internet. Ele roda sem as suas configurações pessoais do Claude (hooks, `CLAUDE.md`, permissões globais) e só lê dentro da pasta das reuniões — o app confere cada pedido e o próprio `claude` recebe `--restricted`. O agente oficial do Claude (que tem licença proprietária da Anthropic) **não vem dentro do instalador**: o app baixa do registro do npm na primeira vez, só com o seu clique, conferindo o hash de cada pacote.
+O agente **não escreve arquivos, não roda comandos e só usa os servidores MCP e os conectores do claude.ai que você ligar**, com a regra de cada ferramenta. A internet só entra onde você liga (a fonte "Internet" do Assistente e o "Pode pesquisar na internet" de cada agente): a busca é livre (até 10 por pedido), mas o app só deixa abrir uma página cujo endereço veio de um resultado dessa busca ou foi escrito por você (até 15 por pedido). Um endereço montado pelo agente, que poderia levar trechos das suas reuniões para fora, é recusado. Tradução, resumo e análise nunca acessam a internet. Ele roda sem as suas configurações pessoais do Claude (hooks, `CLAUDE.md`, permissões globais) e só lê dentro da pasta das reuniões — o app confere cada pedido e o próprio `claude` recebe `--restricted`. O agente oficial do Claude (que tem licença proprietária da Anthropic) **não vem dentro do instalador**: o app baixa do registro do npm na primeira vez, só com o seu clique, conferindo o hash de cada pacote.
 
 Avise as pessoas antes de gravar uma reunião.
 
@@ -155,7 +162,6 @@ Desligado por padrão. Em Configurações › Contas › WhatsApp, depois de ace
 - **Agendas Google e Microsoft**: aviso 5 min antes da reunião, aviso quando a reunião começou e não está sendo gravada ou foi cancelada, título e participantes vindos do evento.
 - **Google Drive**: áudio, transcrição e resumo guardados numa pasta do seu Drive.
 - **Vídeo da reunião**: peça ao Claude (Opus ou Fable) um vídeo com os principais pontos; o app monta e grava o MP4.
-- **Conexões MCP**: ligar o agente a outros sistemas, com aprovação de cada uso.
 - **Gemini CLI e Codex** como agentes ACP.
 
 ---

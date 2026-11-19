@@ -288,6 +288,21 @@ function formatStatus(servers) {
   return blocks.join('\n\n')
 }
 
+/**
+ * Contrato 58 (smoke, sem `mcpStatus`): sem o modo estrito, o `claude` sobe os conectores da conta. O falso os tira das
+ * regras da sessão (`permissions.ask` dos ligados e o bloqueio inteiro dos outros), com `_` no lugar do espaço
+ * (`claude_ai_Google_Drive` → `claude.ai Google Drive`), todos conectados.
+ */
+function accountConnectors(state) {
+  if (state.strict) return []
+  const servers = new Set()
+  for (const rule of [...state.ask, ...state.disallowedTools]) {
+    const match = /^mcp__claude_ai_([A-Za-z0-9-]+(?:_[A-Za-z0-9-]+)*)$/.exec(rule)
+    if (match) servers.add(`claude.ai ${match[1].replace(/_/g, ' ')}`)
+  }
+  return [...servers].map((name) => ({ name, status: 'connected', tools: 3 }))
+}
+
 export function fakeAcpAgent({ log = () => undefined, pause = 300, mcpStatus = null } = {}) {
   const sessions = new Map()
   let next = 0
@@ -326,6 +341,7 @@ export function fakeAcpAgent({ log = () => undefined, pause = 300, mcpStatus = n
         openedAt: Date.now(),
         strict: options.strictMcpConfig === true,
         disallowedTools: Array.isArray(options.disallowedTools) ? options.disallowedTools : [],
+        ask: Array.isArray(options.settings?.permissions?.ask) ? options.settings.permissions.ask : [],
         passed: allServers.map((server) => server.name),
         cwd: ctx.params.cwd,
         systemPrompt: typeof options.systemPrompt === 'string' ? options.systemPrompt : '',
@@ -388,7 +404,7 @@ export function fakeAcpAgent({ log = () => undefined, pause = 300, mcpStatus = n
 
       // Contrato 57: o `/mcp` (comando local: não conta como resposta do modelo).
       if (content.trim() === '/mcp') {
-        const extra = mcpStatus ? mcpStatus({ index: state.index, strict: state.strict, disallowedTools: state.disallowedTools, elapsedMs: Date.now() - state.openedAt }) : []
+        const extra = mcpStatus ? mcpStatus({ index: state.index, strict: state.strict, disallowedTools: state.disallowedTools, elapsedMs: Date.now() - state.openedAt }) : accountConnectors(state)
         const servers = [...state.passed.map((name) => ({ name, status: 'connected', tools: 2 })), ...extra]
         log({ event: 'mcp-status', sessionId, servers: servers.map((server) => `${server.name}=${server.status}`) })
         await say(formatStatus(servers))
