@@ -13,12 +13,13 @@ const status = (id: string): EmailAccountStatus => ({
   account: { id, address: `${id.slice(0, 4)}@lap.example`, name: null, username: 'x', incoming: { protocol: 'imap', host: 'imap.lap.example', port: 993, security: 'tls' }, outgoing: { host: 'smtp.lap.example', port: 465, security: 'tls' }, deleteFromServer: false },
   state: 'connected',
   error: null,
+  sentMailbox: 'Sent',
 })
 
 const message = (id: string, date: number, over: Partial<EmailMessage> = {}): EmailMessage => ({
   id,
   accountId: A,
-  folder: 'inbox',
+  mailbox: 'INBOX',
   uid: Number(id),
   seen: false,
   flagged: false,

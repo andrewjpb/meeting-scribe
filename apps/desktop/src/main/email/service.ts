@@ -14,6 +14,14 @@
 // Contrato 51: a única saída sem clique é `sendForTask`, o envio de uma tarefa agendada com "Pode enviar email", chamado
 // só pela montagem das automações no main (nunca pelo IPC), depois das regras da permissão de `schedules/email-send.ts`.
 //
+// Contrato 52: as pastas da conta IMAP (`LIST` + `STATUS`, em árvore), abrir uma pasta (as 200 mais recentes, guardadas
+// no store), mover (`MOVE`, ou `COPY` + `EXPUNGE`) e criar, renomear e apagar pasta, cada pedido numa conexão à parte
+// (`ImapFolderSession`): a da INBOX segue no IDLE. A INBOX e as pastas especiais (`\Sent`, `\Trash`…) não se renomeiam
+// nem se apagam. Erro do servidor não muda nada no store. `listFolders`, `moveMessages` e `createFolder` são o caminho
+// interno (o IPC e, depois, o agente do contrato 56 chamam os mesmos). POP3 não tem pastas no servidor. O mover passa pela
+// fila da conta (a mesma do sincronismo da INBOX e do IDLE), e o que chega à INBOX por ele não vira aviso de email novo.
+// Nenhum pedido de pastas faz login numa conta com a senha recusada; a pasta vigiada só é relida com a conta conectada.
+//
 // Erro de conexão (N4) nunca derruba o app: a conta fica `error` com uma mensagem curta e as outras seguem. Usuário ou
 // senha recusados não tentam de novo sozinhos (para o servidor não bloquear a conta); o resto tenta de novo em 1 min
 // (IMAP) ou no próximo poll (POP3).
@@ -26,9 +34,17 @@ import {
   EMAIL_ATTACH_MAX_FILES,
   EMAIL_ATTACH_NAME_MAX,
   EMAIL_CLICK_TTL_MS,
+  EMAIL_FOLDER_MESSAGES_MAX,
+  EMAIL_FOLDER_NAME_MAX,
+  EMAIL_FOLDER_PATH_MAX,
+  EMAIL_FOLDER_REFRESH_MS,
+  EMAIL_INBOX_MAILBOX,
   EMAIL_INBOX_MAX,
+  EMAIL_MOVE_MAX,
+  EMAIL_PROTECTED_SPECIAL_USE,
   EMAIL_RAW_MAX_BYTES,
   EMAIL_RECIPIENTS_MAX,
+  EMAIL_SENT_MAILBOX,
   EMAIL_SENT_MAX,
   EMAIL_SUBJECT_MAX,
   EMAIL_TEXT_MAX,
@@ -40,18 +56,40 @@ import {
   type EmailAutoconfig,
   type EmailBody,
   type EmailBodyResult,
+  type EmailFolderDeleteResult,
+  type EmailFolderFailure,
+  type EmailFolderNode,
+  type EmailFolderPathResult,
+  type EmailFoldersResult,
   type EmailMessage,
+  type EmailMoveResult,
+  type EmailOpenFolderResult,
   type EmailSendResult,
   type EmailAttachmentsResult,
   type EmailOutgoingAttachment,
   type EmailTestResult,
+  isInbox,
 } from '../../shared/email'
 import type { SafeStorageLike } from '../secrets'
 import { emailAddressSchema, emailIncomingSchema, emailNameSchema, emailServerSchema, emailUsernameSchema, type StoredEmailAccount } from '../settings/schema'
 import type { SettingsStore } from '../settings/store'
 import { addressDomain, autoconfigure, AUTOCONFIG_TIMEOUT_MS, type AutoconfigFetch } from './autoconfig'
-import { capInbox, createEmailStore, type EmailAccountData, type EmailStore } from './email-store'
-import { connectImap, connectImapReader, messageIds, type ImapConnect, type ImapMessage, type ImapReaderConnect, type ImapSearchQuery, type ImapSession } from './imap-client'
+import { capInbox, createEmailStore, type EmailAccountData, type EmailCachedFolder, type EmailStore } from './email-store'
+import {
+  connectImap,
+  connectImapFolders,
+  connectImapReader,
+  ImapFolderError,
+  messageIds,
+  type ImapConnect,
+  type ImapFolderConnect,
+  type ImapFolderEntry,
+  type ImapFolderSession,
+  type ImapMessage,
+  type ImapReaderConnect,
+  type ImapSearchQuery,
+  type ImapSession,
+} from './imap-client'
 import { connectPop3, Pop3Error, type Pop3Connect, type Pop3Session } from './pop3-client'
 import { createEmailSecrets } from './secrets'
 import { sendSmtp, SmtpError, verifySmtp, type OutgoingMail, type SmtpSend, type SmtpVerify } from './smtp-client'
@@ -127,7 +165,22 @@ const addSchema = z
   .strict()
 const accountRequestSchema = z.object({ accountId: accountIdSchema }).strict()
 const autoconfigSchema = z.object({ address: emailAddressSchema }).strict()
-const messagesSchema = z.object({ accountId: accountIdSchema, folder: z.enum(['inbox', 'sent']).optional() }).strict()
+/** Contrato 52: o path de uma pasta, sem quebra de linha nem caractere nulo. */
+const folderPathSchema = z
+  .string()
+  .min(1)
+  .max(EMAIL_FOLDER_PATH_MAX)
+  .refine((value) => !/[\r\n\0]/.test(value))
+/** `mailbox` (contrato 52): uma pasta aberta, do que ficou guardado (nada vai ao servidor). */
+const messagesSchema = z.object({ accountId: accountIdSchema, folder: z.enum(['inbox', 'sent']).optional(), mailbox: folderPathSchema.optional() }).strict()
+const openFolderSchema = z.object({ accountId: accountIdSchema, path: folderPathSchema }).strict()
+const folderWatchSchema = z.object({ accountId: accountIdSchema, path: folderPathSchema.nullable() }).strict().nullable()
+const moveSchema = z
+  .object({ accountId: accountIdSchema, fromPath: folderPathSchema, uids: z.array(z.number().int().positive().max(0xffffffff)).min(1).max(EMAIL_MOVE_MAX), toPath: folderPathSchema })
+  .strict()
+const folderCreateSchema = z.object({ accountId: accountIdSchema, parentPath: folderPathSchema.nullable(), name: z.string().max(EMAIL_FOLDER_PATH_MAX) }).strict()
+const folderRenameSchema = z.object({ accountId: accountIdSchema, path: folderPathSchema, newName: z.string().max(EMAIL_FOLDER_PATH_MAX) }).strict()
+const folderDeleteSchema = z.object({ accountId: accountIdSchema, path: folderPathSchema, force: z.boolean().optional() }).strict()
 const messageRequestSchema = z.object({ accountId: accountIdSchema, id: messageIdSchema }).strict()
 const markReadSchema = messageRequestSchema.extend({ seen: z.boolean() }).strict()
 /** Contrato 43: o nome do anexo, sem caminho nem caractere de controle. */
@@ -283,11 +336,11 @@ const clip = (value: string, max: number): string => (value.length > max ? value
 const clipAddresses = (list: EmailAddress[], max: number): EmailAddress[] =>
   list.slice(0, max).map((item) => ({ name: item.name === null ? null : clip(item.name, 500), address: clip(item.address, 500) }))
 
-function fromImap(accountId: string, message: ImapMessage): EmailMessage {
+function fromImap(accountId: string, message: ImapMessage, mailbox: string = EMAIL_INBOX_MAILBOX): EmailMessage {
   return {
     id: String(message.uid),
     accountId,
-    folder: 'inbox',
+    mailbox,
     uid: message.uid,
     seen: message.flags.includes('\\Seen'),
     flagged: message.flags.includes('\\Flagged'),
@@ -307,7 +360,7 @@ function fromParsed(accountId: string, id: string, parsed: ParsedEmail, now: num
   return {
     id,
     accountId,
-    folder: 'inbox',
+    mailbox: EMAIL_INBOX_MAILBOX,
     uid: null,
     seen: false,
     flagged: false,
@@ -333,6 +386,12 @@ export function serverMessageId(mailbox: string, uidValidity: string, uid: numbe
   return `servidor:${uidValidity}:${uid}:${mailbox}`.slice(0, 1000)
 }
 
+/** Contrato 52: a pasta de um id de `serverMessageId`, ou `null` (id do cache da INBOX, do POP3 ou dos enviados). */
+export function serverMessageMailbox(id: string): string | null {
+  const match = /^servidor:[^:]*:\d+:([\s\S]+)$/.exec(id)
+  return match ? (match[1] ?? null) : null
+}
+
 /** Contrato 45 (CA7): uma mensagem achada no servidor, com a pasta (o `id` dela é o de `serverMessageId`). */
 export interface EmailServerFound {
   mailbox: string
@@ -350,8 +409,56 @@ export const EMAIL_SEARCH_FOLDERS_MAX = 30
 
 const publicAccount = ({ password: _password, ...account }: StoredEmailAccount): EmailAccount => account
 
-/** Chave do corpo no store: a pasta e o id (o id do enviado é o Message-ID). */
-const bodyKey = (message: Pick<EmailMessage, 'folder' | 'id'>): string => `${message.folder}:${message.id}`
+/**
+ * Chave do corpo no store: a lista e o id (o id do enviado é o Message-ID). As da INBOX e dos enviados são as mesmas da
+ * 0.15.0 (`inbox:` e `sent:`), para os corpos já baixados continuarem valendo; a de outra pasta aberta (contrato 52) leva
+ * o id de `serverMessageId`, que já tem a pasta e o `UIDVALIDITY`.
+ */
+const bodyKey = (message: Pick<EmailMessage, 'mailbox' | 'id' | 'uid'>): string => `${isInbox(message) ? 'inbox' : message.uid === null ? 'sent' : 'box'}:${message.id}`
+
+/** Contrato 52: a pasta não se renomeia nem se apaga (a INBOX, uma especial, ou uma que tem uma delas dentro). */
+export function isProtectedFolder(entry: ImapFolderEntry, entries: readonly ImapFolderEntry[]): boolean {
+  const special = (item: ImapFolderEntry): boolean => item.path.toUpperCase() === EMAIL_INBOX_MAILBOX || (item.specialUse !== null && (EMAIL_PROTECTED_SPECIAL_USE as readonly string[]).includes(item.specialUse))
+  return special(entry) || descendants(entry, entries).some(special)
+}
+
+/** As pastas de dentro de uma pasta (em qualquer nível), pelo delimitador. */
+function descendants(entry: Pick<ImapFolderEntry, 'path' | 'delimiter'>, entries: readonly ImapFolderEntry[]): ImapFolderEntry[] {
+  if (!entry.delimiter) return []
+  const prefix = `${entry.path}${entry.delimiter}`
+  return entries.filter((item) => item.path.startsWith(prefix))
+}
+
+/** Contrato 52: a INBOX primeiro, o resto pelo nome. */
+const folderOrder = (a: EmailFolderNode, b: EmailFolderNode): number =>
+  Number(b.path.toUpperCase() === EMAIL_INBOX_MAILBOX) - Number(a.path.toUpperCase() === EMAIL_INBOX_MAILBOX) || a.name.localeCompare(b.name, 'pt-BR')
+
+/** Contrato 52: o `LIST` em árvore, pelo delimitador de cada pasta; pasta cujo pai não veio no `LIST` fica na raiz. */
+export function folderTree(entries: readonly ImapFolderEntry[]): EmailFolderNode[] {
+  const nodes = new Map<string, EmailFolderNode>()
+  for (const entry of entries) if (!nodes.has(entry.path)) nodes.set(entry.path, { path: entry.path, name: entry.name, delimiter: entry.delimiter, specialUse: entry.specialUse, noselect: entry.noselect, unseen: entry.unseen, total: entry.total, children: [] })
+  const roots: EmailFolderNode[] = []
+  for (const node of nodes.values()) {
+    const cut = node.delimiter ? node.path.lastIndexOf(node.delimiter) : -1
+    const parent = cut > 0 ? nodes.get(node.path.slice(0, cut)) : undefined
+    ;(parent ?? { children: roots }).children.push(node)
+  }
+  const sort = (list: EmailFolderNode[]): EmailFolderNode[] => {
+    list.sort(folderOrder)
+    for (const node of list) sort(node.children)
+    return list
+  }
+  return sort(roots)
+}
+
+/** Contrato 52: nome de pasta válido: 1 a 100 caracteres, sem o delimitador nem caractere de controle (CR, LF…). */
+export function validFolderName(name: string, delimiter: string | null): boolean {
+  if (name.length < 1 || name.length > EMAIL_FOLDER_NAME_MAX || name.trim() === '') return false
+  if ([...name].some((char) => char.charCodeAt(0) < 0x20 || char.charCodeAt(0) === 0x7f)) return false
+  return !delimiter || !name.includes(delimiter)
+}
+
+const folderFailure = (error: EmailFolderFailure['error']): EmailFolderFailure => ({ ok: false, error })
 
 export interface EmailServiceDeps {
   /** `userData/email`. */
@@ -363,6 +470,10 @@ export interface EmailServiceDeps {
   imap?: ImapConnect
   /** Contrato 45 (CA7): a conexão só de leitura da busca do Assistente (no smoke e nos testes, o IMAP falso). */
   imapReader?: ImapReaderConnect
+  /** Contrato 52: a conexão das pastas (listar, abrir, mover, criar, renomear, apagar). */
+  imapFolders?: ImapFolderConnect
+  /** Contrato 52: de quanto em quanto tempo a pasta aberta (fora a INBOX) é relida. */
+  folderRefreshMs?: number
   pop3?: Pop3Connect
   smtp?: SmtpSend
   /** Contrato 43: o "Testar conexão" do envio (no smoke, um substituto). */
@@ -393,7 +504,10 @@ export interface EmailService {
   /** Contrato 43: "Testar conexão" com os dados do formulário: recebimento e envio, sem gravar nada. */
   test(request: unknown): Promise<EmailTestResult>
   removeAccount(request: unknown): Promise<boolean>
-  /** INBOX (padrão) ou enviados, da mais nova para a mais antiga. Só o store, nada vai ao servidor. */
+  /**
+   * INBOX (padrão) ou enviados, da mais nova para a mais antiga; com `mailbox` (contrato 52), a pasta aberta como ficou
+   * guardada. Só o store, nada vai ao servidor.
+   */
   messages(request: unknown): Promise<EmailMessage[]>
   /**
    * Contrato 45: o cache local de cada conta (a INBOX e os enviados guardados), para o Assistente. Só leitura do store:
@@ -401,7 +515,7 @@ export interface EmailService {
    */
   cached(): Promise<{ status: EmailAccountStatus; inbox: EmailMessage[]; sent: EmailMessage[] }[]>
   /** Contrato 45: o corpo de uma mensagem se já foi baixado; `null` se não (nunca baixa). */
-  cachedBody(accountId: string, message: Pick<EmailMessage, 'folder' | 'id'>): Promise<EmailBody | null>
+  cachedBody(accountId: string, message: Pick<EmailMessage, 'mailbox' | 'id' | 'uid'>): Promise<EmailBody | null>
   /**
    * Contrato 45 (CA7): `UID SEARCH` no servidor IMAP, em todas as pastas do `LIST` abertas só para leitura (`EXAMINE`),
    * as `limit` mais recentes no total. Nada é gravado no cache e nenhuma flag muda. POP3 não tem busca no servidor.
@@ -430,6 +544,26 @@ export interface EmailService {
   attachments(request: unknown): Promise<EmailAttachmentsResult>
   /** POP3: busca agora (o mesmo do relógio). */
   poll(accountId: string): Promise<void>
+  /** Contrato 52 (CA2): as pastas em árvore, com as contagens; guardadas na memória até mudar algo ou reconectar. */
+  listFolders(accountId: string): Promise<EmailFoldersResult>
+  /** Contrato 52 (CA4): `MOVE` de até 500 UIDs; erro do servidor não tira nada do store. */
+  moveMessages(accountId: string, fromPath: string, uids: readonly number[], toPath: string): Promise<EmailMoveResult>
+  /** Contrato 52 (CA5): pasta nova na raiz (`parentPath` `null`) ou dentro de outra. */
+  createFolder(accountId: string, parentPath: string | null, name: string): Promise<EmailFolderPathResult>
+  renameFolder(accountId: string, path: string, newName: string): Promise<EmailFolderPathResult>
+  /** Pasta com mensagens ou subpastas só sai com `force`. */
+  deleteFolder(accountId: string, path: string, force: boolean): Promise<EmailFolderDeleteResult>
+  /** Contrato 52 (CA3): as 200 mais recentes da pasta, gravadas no store; a INBOX vem do store (ela segue no IDLE). */
+  openFolder(accountId: string, path: string): Promise<EmailOpenFolderResult>
+  /** Os mesmos, pelos pedidos do IPC (validados aqui). */
+  folders(request: unknown): Promise<EmailFoldersResult>
+  open(request: unknown): Promise<EmailOpenFolderResult>
+  move(request: unknown): Promise<EmailMoveResult>
+  folderCreate(request: unknown): Promise<EmailFolderPathResult>
+  folderRename(request: unknown): Promise<EmailFolderPathResult>
+  folderDelete(request: unknown): Promise<EmailFolderDeleteResult>
+  /** A pasta aberta na tela desta janela (só uma por janela): fora a INBOX, relida a cada 5 min; `null` para. */
+  watchFolder(senderId: number, request: unknown): void
   /** Sair do app: fecha as conexões e para os relógios. */
   dispose(): Promise<void>
 }
@@ -445,12 +579,20 @@ interface Runtime {
   /** Busca de mensagens novas (IMAP) ou poll (POP3) em fila. */
   queue: Promise<unknown>
   removed: boolean
+  /** Contrato 52: a pasta dos enviados (`EmailAccountStatus.sentMailbox`). */
+  sentMailbox: string
+  /** Contrato 52: Message-IDs que chegaram à INBOX por "Mover" (até quando): o IDLE não os avisa como novos. */
+  movedIn: Map<string, number>
+  /** Contrato 52: a conexão das pastas teve a senha recusada; nenhum pedido de pastas tenta de novo até reconectar. */
+  foldersAuthRefused: boolean
 }
 
 export function createEmailService(deps: EmailServiceDeps): EmailService {
   const now = deps.now ?? Date.now
   const imap = deps.imap ?? connectImap
   const imapReader = deps.imapReader ?? connectImapReader
+  const imapFolders = deps.imapFolders ?? connectImapFolders
+  const folderRefreshMs = deps.folderRefreshMs ?? EMAIL_FOLDER_REFRESH_MS
   const pop3 = deps.pop3 ?? connectPop3
   const smtp = deps.smtp ?? sendSmtp
   const smtpVerify = deps.smtpVerify ?? verifySmtp
@@ -469,12 +611,16 @@ export function createEmailService(deps: EmailServiceDeps): EmailService {
     return run
   }
   const bodyRequests = new Map<string, Promise<EmailBodyResult>>()
+  /** Contrato 52: o `LIST` de cada conta, até mover, criar, renomear, apagar ou reconectar. */
+  const folderCache = new Map<string, ImapFolderEntry[]>()
+  /** Contrato 52: a pasta aberta relida de cada janela (pelo id do `webContents`). */
+  const folderWatches = new Map<number, { accountId: string; path: string; timer: ReturnType<typeof setInterval>; failures: number }>()
   let disposed = false
 
   const log = (message: string): void => deps.log?.(`[email] ${message}`)
   /** Nos logs, só o começo do id da conta. */
   const tag = (rt: Runtime): string => `conta ${rt.account.id.slice(0, 8)}`
-  const statusOf = (rt: Runtime): EmailAccountStatus => ({ account: publicAccount(rt.account), state: rt.state, error: rt.error })
+  const statusOf = (rt: Runtime): EmailAccountStatus => ({ account: publicAccount(rt.account), state: rt.state, error: rt.error, sentMailbox: rt.sentMailbox })
   const statuses = (): EmailAccountStatus[] => [...runtimes.values()].map(statusOf)
   const announce = (): void => {
     if (!disposed) deps.onStatus(statuses())
@@ -530,10 +676,11 @@ export function createEmailService(deps: EmailServiceDeps): EmailService {
     // Conta removida (ou reconectada) no meio: nada é regravado em `userData/email/`.
     if (!live(rt, generation)) return
     let reset = false
-    await store.update(id, (data) => {
-      reset = data.uidValidity !== null && data.uidValidity !== session.uidValidity
-      return { ...data, uidValidity: session.uidValidity, inbox: capInbox(list.map((message) => fromImap(id, message))) }
+    const data = await store.update(id, (current) => {
+      reset = current.uidValidity !== null && current.uidValidity !== session.uidValidity
+      return { ...current, uidValidity: session.uidValidity, inbox: capInbox(list.map((message) => fromImap(id, message))) }
     })
+    rt.sentMailbox = data.sentMailbox
     if (reset && live(rt, generation)) await store.clearBodies(id)
     changed(id)
   }
@@ -549,8 +696,12 @@ export function createEmailService(deps: EmailServiceDeps): EmailService {
     const added = fresh.map((message) => fromImap(id, message)).filter((message) => !known.has(message.id))
     if (added.length === 0 || !live(rt, generation)) return
     await store.update(id, (current) => ({ ...current, inbox: capInbox([...added, ...current.inbox.filter((message) => !added.some((item) => item.id === message.id))]) }))
+    // Contrato 52: o que entrou na INBOX por "Mover" não é email novo.
+    const at = now()
+    for (const [key, until] of rt.movedIn) if (until < at) rt.movedIn.delete(key)
+    const fresh2 = added.filter((message) => !(message.messageId !== null && rt.movedIn.has(message.messageId)))
     log(`${tag(rt)}: ${added.length} mensagem(ns) nova(s)`)
-    for (const message of added) if (!disposed) deps.onMessage(message)
+    for (const message of fresh2) if (!disposed) deps.onMessage(message)
     changed(id)
   }
 
@@ -582,6 +733,15 @@ export function createEmailService(deps: EmailServiceDeps): EmailService {
       void session.close().catch(() => undefined)
       fail(rt, error, generation, retryMs)
       return
+    }
+    if (!live(rt, generation)) return
+    // Contrato 52: os enviados guardados ficam na pasta `\\Sent` do servidor (sem ela, `Sent`).
+    if (session.sentPath) {
+      try {
+        await useSentMailbox(rt, (await session.sentPath()) ?? EMAIL_SENT_MAILBOX)
+      } catch (error) {
+        log(`${tag(rt)}: pasta de enviados não lida (${failureOf(error)})`)
+      }
     }
     if (!live(rt, generation)) return
     log(`${tag(rt)}: IMAP conectado`)
@@ -670,6 +830,8 @@ export function createEmailService(deps: EmailServiceDeps): EmailService {
     if (disposed || rt.removed) return
     if (rt.timer) clearTimeout(rt.timer)
     rt.timer = null
+    folderCache.delete(rt.account.id)
+    rt.foldersAuthRefused = false
     if (rt.account.incoming.protocol === 'pop3') {
       // Um poll por vez: o seguinte espera o anterior terminar e gravar.
       await enqueue(rt, async () => {
@@ -697,22 +859,40 @@ export function createEmailService(deps: EmailServiceDeps): EmailService {
   }
 
   function runtime(account: StoredEmailAccount): Runtime {
-    return { account, state: 'offline', error: null, session: null, timer: null, generation: 0, queue: Promise.resolve(), removed: false }
+    return { account, state: 'offline', error: null, session: null, timer: null, generation: 0, queue: Promise.resolve(), removed: false, sentMailbox: EMAIL_SENT_MAILBOX, movedIn: new Map(), foldersAuthRefused: false }
   }
 
-  async function findMessage(accountId: string, id: string): Promise<{ data: EmailAccountData; message: EmailMessage } | null> {
+  /** A mensagem guardada; com `folders` (contrato 52), também nas outras pastas abertas (corpo e anexos). */
+  async function findMessage(accountId: string, id: string, folders = false): Promise<{ data: EmailAccountData; message: EmailMessage } | null> {
     const data = await store.read(accountId)
-    const message = data.inbox.find((item) => item.id === id) ?? data.sent.find((item) => item.id === id)
+    let message = data.inbox.find((item) => item.id === id) ?? data.sent.find((item) => item.id === id)
+    const mailbox = folders && !message ? serverMessageMailbox(id) : null
+    if (mailbox !== null) message = (await store.folder(accountId, mailbox))?.messages.find((item) => item.id === id)
     return message ? { data, message } : null
+  }
+
+  /**
+   * A mensagem inteira do servidor: a da INBOX pela conexão do IDLE; a de outra pasta (contrato 52) por `BODY.PEEK[]`
+   * numa conexão só de leitura (não marca como lida). `unavailable`: sem conexão.
+   */
+  async function serverSource(rt: Runtime, message: EmailMessage & { uid: number }): Promise<Buffer | 'too-big' | 'unavailable' | null> {
+    if (isInbox(message)) return rt.session ? rt.session.source(message.uid) : 'unavailable'
+    const pass = secrets.open(rt.account.password)
+    if (pass === null) return 'unavailable'
+    const reader = await imapReader(serverConfig(rt, pass, rt.account.incoming))
+    try {
+      return await reader.peek(message.mailbox, message.uid)
+    } finally {
+      await reader.close().catch(() => undefined)
+    }
   }
 
   async function downloadBody(rt: Runtime, message: EmailMessage): Promise<EmailBodyResult> {
     const cached = await store.body(rt.account.id, bodyKey(message))
     if (cached) return { ok: true, body: cached }
     if (message.uid === null) return { ok: false, error: 'not-found' }
-    const session = rt.session
-    if (!session) return { ok: false, error: 'unavailable' }
-    const raw = await session.source(message.uid)
+    const raw = await serverSource(rt, { ...message, uid: message.uid })
+    if (raw === 'unavailable') return { ok: false, error: 'unavailable' }
     if (raw === 'too-big') return { ok: false, error: 'too-big' }
     if (raw === null) return { ok: false, error: 'not-found' }
     const parsed = await parse(raw)
@@ -725,10 +905,8 @@ export function createEmailService(deps: EmailServiceDeps): EmailService {
     const saved = await store.raw(rt.account.id, bodyKey(message))
     if (saved) return saved
     if (message.uid === null) return 'not-found'
-    const session = rt.session
-    if (!session) return 'unavailable'
-    const raw = await session.source(message.uid)
-    if (raw === 'too-big') return 'unavailable'
+    const raw = await serverSource(rt, { ...message, uid: message.uid })
+    if (raw === 'too-big' || raw === 'unavailable') return 'unavailable'
     return raw ?? 'not-found'
   }
 
@@ -736,7 +914,7 @@ export function createEmailService(deps: EmailServiceDeps): EmailService {
     const parsed = messageRequestSchema.safeParse(request)
     if (!parsed.success) return { ok: false, error: 'not-found' }
     const rt = runtimes.get(parsed.data.accountId)
-    const found = rt ? await findMessage(parsed.data.accountId, parsed.data.id) : null
+    const found = rt ? await findMessage(parsed.data.accountId, parsed.data.id, true) : null
     if (!rt || !found) return { ok: false, error: 'not-found' }
     try {
       const raw = await rawOf(rt, found.message)
@@ -774,7 +952,7 @@ export function createEmailService(deps: EmailServiceDeps): EmailService {
     const sent: EmailMessage = {
       id: messageId,
       accountId,
-      folder: 'sent',
+      mailbox: rt.sentMailbox,
       uid: null,
       seen: true,
       flagged: false,
@@ -793,7 +971,7 @@ export function createEmailService(deps: EmailServiceDeps): EmailService {
       if (rt.removed) throw new Error('conta removida')
       await store.update(accountId, (current) => ({
         ...current,
-        sent: [sent, ...current.sent].slice(0, EMAIL_SENT_MAX),
+        sent: [{ ...sent, mailbox: current.sentMailbox }, ...current.sent].slice(0, EMAIL_SENT_MAX),
         inbox: parent ? current.inbox.map((item) => (item.id === parent.id ? { ...item, answered: true } : item)) : current.inbox,
       }))
       await store.setBody(accountId, bodyKey(sent), { text, html: null, attachments: attachments.map((item) => ({ filename: item.name, contentType: 'application/octet-stream', size: item.bytes.byteLength })) })
@@ -817,10 +995,316 @@ export function createEmailService(deps: EmailServiceDeps): EmailService {
     return { ok: true, messageId }
   }
 
+  /** Contrato 52: os enviados guardados passam a dizer a pasta de enviados do servidor (o store e o estado da conta). */
+  async function useSentMailbox(rt: Runtime, path: string): Promise<void> {
+    if (rt.removed) return
+    const data = await store.update(rt.account.id, (current) =>
+      current.sentMailbox === path ? current : { ...current, sentMailbox: path, sent: current.sent.map((message) => ({ ...message, mailbox: path })) },
+    )
+    if (rt.sentMailbox === data.sentMailbox) return
+    rt.sentMailbox = data.sentMailbox
+    announce()
+    changed(rt.account.id)
+  }
+
+  /** Conta IMAP pronta para um pedido de pastas, ou a falha (`missing`, `pop3`, `invalid`). */
+  function imapRuntime(accountId: string): Runtime | EmailFolderFailure {
+    if (!EMAIL_ACCOUNT_ID_PATTERN.test(accountId)) return folderFailure('invalid')
+    const rt = runtimes.get(accountId)
+    if (!rt || rt.removed) return folderFailure('missing')
+    if (rt.account.incoming.protocol !== 'imap') return folderFailure('pop3')
+    return rt
+  }
+
+  /**
+   * Um pedido numa conexão das pastas, aberta e fechada aqui. Sem senha ou sem conexão: `unavailable`; o servidor
+   * recusou o comando: `server`.
+   */
+  async function withFolders<T>(rt: Runtime, what: string, task: (session: ImapFolderSession) => Promise<T>): Promise<T | EmailFolderFailure> {
+    // Senha recusada (pela conexão da INBOX ou pela das pastas): nenhum login novo até reconectar, para o servidor não
+    // bloquear a conta.
+    if (rt.foldersAuthRefused || (rt.state === 'error' && (rt.error === EMAIL_FAILURES.auth || rt.error === EMAIL_FAILURES.secret))) return folderFailure('unavailable')
+    const pass = secrets.open(rt.account.password)
+    if (pass === null) return folderFailure('unavailable')
+    let session: ImapFolderSession
+    try {
+      session = await imapFolders(serverConfig(rt, pass, rt.account.incoming))
+    } catch (error) {
+      const failure = failureOf(error)
+      if (failure === 'auth') rt.foldersAuthRefused = true
+      log(`${tag(rt)}: ${what}: sem conexão (${failure})`)
+      return folderFailure('unavailable')
+    }
+    try {
+      return await task(session)
+    } catch (error) {
+      if (error instanceof ImapFolderError) {
+        log(`${tag(rt)}: ${what}: não feito (${error.kind})`)
+        return folderFailure(error.kind === 'unsupported' ? 'unsupported' : 'invalid')
+      }
+      log(`${tag(rt)}: ${what}: recusado pelo servidor (${failureOf(error)})`)
+      return folderFailure('server')
+    } finally {
+      await session.close().catch(() => undefined)
+    }
+  }
+
+  const isFailure = (value: unknown): value is EmailFolderFailure => typeof value === 'object' && value !== null && (value as { ok?: unknown }).ok === false
+
+  /** O `LIST` da conta (o guardado, ou pedido agora); aproveita para saber a pasta de enviados. */
+  async function folderEntries(rt: Runtime): Promise<ImapFolderEntry[] | EmailFolderFailure> {
+    const cached = folderCache.get(rt.account.id)
+    if (cached) return cached
+    const generation = rt.generation
+    const entries = await withFolders(rt, 'LIST', (session) => session.list())
+    if (isFailure(entries)) return entries
+    if (rt.removed) return folderFailure('missing')
+    if (rt.generation === generation) folderCache.set(rt.account.id, entries)
+    const sent = entries.find((entry) => entry.specialUse === '\\Sent' && !entry.noselect)
+    if (sent) await useSentMailbox(rt, sent.path).catch(() => undefined)
+    return entries
+  }
+
+  /** Mudou algo nas pastas: o `LIST` guardado não vale mais e a tela relê. */
+  function foldersChanged(rt: Runtime): void {
+    folderCache.delete(rt.account.id)
+    changed(rt.account.id)
+  }
+
+  /** POP3: só a Caixa de Entrada e os enviados do app, contados no store. */
+  async function pop3Folders(rt: Runtime): Promise<EmailFolderNode[]> {
+    const data = await store.read(rt.account.id)
+    const node = (path: string, specialUse: string | null, list: EmailMessage[]): EmailFolderNode => ({ path, name: path, delimiter: null, specialUse, noselect: false, unseen: list.filter((message) => !message.seen).length, total: list.length, children: [] })
+    return [node(EMAIL_INBOX_MAILBOX, null, data.inbox), node(EMAIL_SENT_MAILBOX, '\\Sent', data.sent)]
+  }
+
+  async function listFolders(accountId: string): Promise<EmailFoldersResult> {
+    const rt = imapRuntime(accountId)
+    if (isFailure(rt)) {
+      const pop = rt.error === 'pop3' ? runtimes.get(accountId) : undefined
+      return pop ? { ok: true, folders: await pop3Folders(pop), pop3: true } : rt
+    }
+    const entries = await folderEntries(rt)
+    if (isFailure(entries)) return entries
+    return { ok: true, folders: folderTree(entries), pop3: false }
+  }
+
+  async function openFolder(accountId: string, path: string): Promise<EmailOpenFolderResult> {
+    if (!folderPathSchema.safeParse(path).success) return folderFailure('invalid')
+    const rt = imapRuntime(accountId)
+    if (isFailure(rt)) {
+      const pop = rt.error === 'pop3' ? runtimes.get(accountId) : undefined
+      if (!pop) return rt
+      // POP3: a Caixa de Entrada e os enviados do app; outra pasta não existe.
+      if (!isInbox({ mailbox: path }) && path !== EMAIL_SENT_MAILBOX) return rt
+      const data = await store.read(accountId)
+      return { ok: true, messages: [...(isInbox({ mailbox: path }) ? data.inbox : data.sent)].sort((a, b) => b.date - a.date) }
+    }
+    // A INBOX segue o fluxo de sempre (as 200 do IDLE, no store).
+    if (isInbox({ mailbox: path })) return { ok: true, messages: [...(await store.read(accountId)).inbox].sort((a, b) => b.date - a.date) }
+    const generation = rt.generation
+    const read = await withFolders(rt, 'abrir pasta', (session) => session.recent(path, EMAIL_FOLDER_MESSAGES_MAX))
+    if (isFailure(read)) return read
+    if (rt.removed || disposed) return folderFailure('missing')
+    const messages = read.messages.slice(-EMAIL_FOLDER_MESSAGES_MAX).map((message) => ({ ...fromImap(accountId, message, path), id: serverMessageId(path, read.uidValidity, message.uid) }))
+    let dropped: EmailMessage[] = []
+    await store.updateFolder(accountId, path, (current) => {
+      const ids = new Set(messages.map((message) => message.id))
+      dropped = (current?.messages ?? []).filter((message) => !ids.has(message.id))
+      return { path, uidValidity: read.uidValidity, at: now(), messages }
+    })
+    // Os corpos das que saíram da pasta (ou do `UIDVALIDITY` antigo) não ficam para sempre.
+    for (const message of dropped) await store.removeBody(accountId, bodyKey(message)).catch(() => undefined)
+    if (rt.generation === generation) log(`${tag(rt)}: pasta aberta (${messages.length} mensagens)`)
+    return { ok: true, messages: [...messages].sort((a, b) => b.date - a.date) }
+  }
+
+  /** Um Message-ID que chega à INBOX por "Mover" fica sem aviso de email novo por 10 min. */
+  const MOVED_IN_MS = 10 * 60_000
+
+  async function moveMessages(accountId: string, fromPath: string, uids: readonly number[], toPath: string): Promise<EmailMoveResult> {
+    const parsed = moveSchema.safeParse({ accountId, fromPath, uids: [...uids], toPath })
+    if (!parsed.success || fromPath === toPath) return folderFailure('invalid')
+    const rt = imapRuntime(accountId)
+    if (isFailure(rt)) return rt
+    const list = [...new Set(parsed.data.uids)]
+    // Na fila da conta: um sincronismo da INBOX em andamento termina antes, e não devolve as movidas à lista.
+    return enqueue(rt, () => moveQueued(rt, fromPath, list, toPath))
+  }
+
+  async function moveQueued(rt: Runtime, fromPath: string, list: number[], toPath: string): Promise<EmailMoveResult> {
+    const accountId = rt.account.id
+    if (rt.removed) return folderFailure('missing')
+    const fromInbox = isInbox({ mailbox: fromPath })
+    const toInbox = isInbox({ mailbox: toPath })
+    // Os UIDs valem com o `UIDVALIDITY` guardado da pasta de origem: sem ele (pasta nunca aberta), não há como conferir.
+    const data = await store.read(accountId)
+    const source = fromInbox ? null : await store.folder(accountId, fromPath)
+    const uidValidity = fromInbox ? data.uidValidity : (source?.uidValidity ?? null)
+    if (uidValidity === null) return folderFailure('invalid')
+    const gone = new Set(list)
+    const known = (fromInbox ? data.inbox : (source?.messages ?? [])).filter((message) => message.uid !== null && gone.has(message.uid))
+    // Antes do servidor: o IDLE pode avisar a chegada na INBOX antes de o mover voltar.
+    if (toInbox) for (const message of known) if (message.messageId !== null) rt.movedIn.set(message.messageId, now() + MOVED_IN_MS)
+    const result = await withFolders(rt, 'mover', (session) => session.move(fromPath, list, toPath, uidValidity))
+    // Erro do servidor: nada sai do store; o `LIST` guardado é relido (as contagens podem ter mudado).
+    if (isFailure(result)) {
+      folderCache.delete(accountId)
+      return result
+    }
+    if (rt.removed) return { ok: true, moved: result.moved }
+    const target = new Map(result.moved.map((item) => [item.fromUid, item.toUid]))
+    const keep = (messages: EmailMessage[]): EmailMessage[] => messages.filter((message) => message.uid === null || !gone.has(message.uid))
+    // As que chegam com o UID novo (`COPYUID`): a cópia na pasta de destino.
+    const arrived = (mailbox: string, id: (uid: number) => string): EmailMessage[] | null => {
+      if (known.length !== list.length || result.moved.some((item) => item.toUid === null)) return null
+      return known.map((message) => {
+        const uid = target.get(message.uid ?? 0) as number
+        return { ...message, mailbox, uid, id: id(uid) }
+      })
+    }
+    await store.update(accountId, (current) => {
+      let inbox = fromInbox ? keep(current.inbox) : current.inbox
+      if (toInbox && result.uidValidity === current.uidValidity) {
+        const copies = arrived(EMAIL_INBOX_MAILBOX, (uid) => String(uid))
+        if (copies) inbox = capInbox([...copies, ...inbox.filter((message) => !copies.some((item) => item.id === message.id))])
+      }
+      return { ...current, inbox }
+    })
+    if (!fromInbox) await store.updateFolder(accountId, fromPath, (current) => (current ? { ...current, messages: keep(current.messages), at: now() } : null))
+    if (!toInbox) {
+      const cached = await store.folder(accountId, toPath)
+      if (cached) {
+        const copies = result.uidValidity === cached.uidValidity ? arrived(toPath, (uid) => serverMessageId(toPath, cached.uidValidity, uid)) : null
+        if (copies) {
+          await store.updateFolder(accountId, toPath, (current) =>
+            current ? { ...current, messages: [...copies, ...current.messages.filter((message) => !copies.some((item) => item.id === message.id))].sort((a, b) => b.date - a.date).slice(0, EMAIL_FOLDER_MESSAGES_MAX) } : null,
+          )
+        } else {
+          // Sem o UID novo de cada uma, a pasta guardada não confere mais: relida ao abrir.
+          await store.updateFolder(accountId, toPath, () => null)
+          for (const message of cached.messages) await store.removeBody(accountId, bodyKey(message)).catch(() => undefined)
+        }
+      }
+    }
+    for (const message of known) await store.removeBody(accountId, bodyKey(message)).catch(() => undefined)
+    log(`${tag(rt)}: ${list.length} mensagem(ns) movida(s)`)
+    foldersChanged(rt)
+    return { ok: true, moved: result.moved }
+  }
+
+  async function createFolder(accountId: string, parentPath: string | null, name: string): Promise<EmailFolderPathResult> {
+    if ((parentPath !== null && !folderPathSchema.safeParse(parentPath).success) || typeof name !== 'string') return folderFailure('invalid')
+    const rt = imapRuntime(accountId)
+    if (isFailure(rt)) return rt
+    const entries = await folderEntries(rt)
+    if (isFailure(entries)) return entries
+    const parent = parentPath === null ? null : entries.find((entry) => entry.path === parentPath)
+    if (parent === undefined) return folderFailure('missing')
+    const delimiter = parent?.delimiter ?? entries.find((entry) => entry.delimiter)?.delimiter ?? null
+    if (!validFolderName(name, delimiter)) return folderFailure('invalid')
+    if (parent && !delimiter) return folderFailure('invalid')
+    const path = parent ? `${parent.path}${delimiter ?? ''}${name}` : name
+    if (path.length > EMAIL_FOLDER_PATH_MAX) return folderFailure('invalid')
+    if (entries.some((entry) => entry.path === path)) return { ok: true, path }
+    const created = await withFolders(rt, 'criar pasta', (session) => session.create(path))
+    foldersChanged(rt)
+    if (isFailure(created)) return created
+    log(`${tag(rt)}: pasta criada`)
+    return { ok: true, path: created }
+  }
+
+  /** Tira do store a pasta (e as de dentro) que mudou de nome ou saiu do servidor, e para de vigiá-las. */
+  async function forgetFolder(rt: Runtime, entry: Pick<ImapFolderEntry, 'path' | 'delimiter'>): Promise<void> {
+    const prefix = entry.delimiter ? `${entry.path}${entry.delimiter}` : null
+    const gone = (path: string): boolean => path === entry.path || (prefix !== null && path.startsWith(prefix))
+    for (const [senderId, watch] of folderWatches) if (watch.accountId === rt.account.id && gone(watch.path)) stopWatch(senderId)
+    for (const path of (await store.folderPaths(rt.account.id)).filter(gone)) {
+      let removed: EmailCachedFolder | null = null
+      await store.updateFolder(rt.account.id, path, (current) => {
+        removed = current
+        return null
+      })
+      for (const message of (removed as EmailCachedFolder | null)?.messages ?? []) await store.removeBody(rt.account.id, bodyKey(message)).catch(() => undefined)
+    }
+  }
+
+  async function renameFolder(accountId: string, path: string, newName: string): Promise<EmailFolderPathResult> {
+    if (!folderPathSchema.safeParse(path).success || typeof newName !== 'string') return folderFailure('invalid')
+    const rt = imapRuntime(accountId)
+    if (isFailure(rt)) return rt
+    const entries = await folderEntries(rt)
+    if (isFailure(entries)) return entries
+    const entry = entries.find((item) => item.path === path)
+    if (!entry) return folderFailure('missing')
+    if (isProtectedFolder(entry, entries)) return folderFailure('protected')
+    if (!validFolderName(newName, entry.delimiter)) return folderFailure('invalid')
+    const cut = entry.delimiter ? path.lastIndexOf(entry.delimiter) : -1
+    const newPath = `${cut > 0 ? path.slice(0, cut + 1) : ''}${newName}`
+    if (newPath === path) return { ok: true, path }
+    if (newPath.length > EMAIL_FOLDER_PATH_MAX || entries.some((item) => item.path === newPath)) return folderFailure('invalid')
+    const renamed = await withFolders(rt, 'renomear pasta', (session) => session.rename(path, newPath))
+    foldersChanged(rt)
+    if (isFailure(renamed)) return renamed
+    await forgetFolder(rt, entry)
+    log(`${tag(rt)}: pasta renomeada`)
+    return { ok: true, path: renamed }
+  }
+
+  async function deleteFolder(accountId: string, path: string, force: boolean): Promise<EmailFolderDeleteResult> {
+    if (!folderPathSchema.safeParse(path).success) return folderFailure('invalid')
+    const rt = imapRuntime(accountId)
+    if (isFailure(rt)) return rt
+    const entries = await folderEntries(rt)
+    if (isFailure(entries)) return entries
+    const entry = entries.find((item) => item.path === path)
+    if (!entry) return folderFailure('missing')
+    if (isProtectedFolder(entry, entries)) return folderFailure('protected')
+    const folders = descendants(entry, entries).length
+    const messages = entry.total ?? 0
+    // Sem a contagem do servidor (e a pasta abre), vale como "pode ter mensagens": só com `force`.
+    if (!force && (messages > 0 || folders > 0 || (entry.total === null && !entry.noselect))) return { ok: false, error: 'invalid', contents: { messages, folders } }
+    const deleted = await withFolders(rt, 'apagar pasta', (session) => session.delete(path))
+    foldersChanged(rt)
+    if (isFailure(deleted)) return deleted
+    await forgetFolder(rt, entry)
+    log(`${tag(rt)}: pasta apagada`)
+    return { ok: true }
+  }
+
+  function stopWatch(senderId: number): void {
+    const watch = folderWatches.get(senderId)
+    if (watch) clearInterval(watch.timer)
+    folderWatches.delete(senderId)
+  }
+
+  /**
+   * A cada 5 min, a pasta vigiada é relida, só com a conta conectada (sem login com a senha recusada nem com o servidor
+   * fora). Para sozinha quando a conta ou a pasta some, e depois de duas recusas seguidas do servidor.
+   */
+  async function refreshWatch(senderId: number): Promise<void> {
+    const watch = folderWatches.get(senderId)
+    if (!watch) return
+    const rt = runtimes.get(watch.accountId)
+    if (!rt || rt.removed) return stopWatch(senderId)
+    if (rt.state !== 'connected' || rt.foldersAuthRefused) return
+    const result = await openFolder(watch.accountId, watch.path).catch((): EmailOpenFolderResult => folderFailure('server'))
+    if (folderWatches.get(senderId) !== watch) return
+    if (result.ok) {
+      watch.failures = 0
+      changed(watch.accountId)
+      return
+    }
+    if (result.error === 'server') watch.failures++
+    if (result.error === 'missing' || result.error === 'pop3' || result.error === 'invalid' || rt.foldersAuthRefused || watch.failures >= 2) stopWatch(senderId)
+  }
+
   return {
     async init() {
       const saved = await deps.settings.getEmailAccounts()
       for (const account of saved) if (!runtimes.has(account.id)) runtimes.set(account.id, runtime(account))
+      // Contrato 52: a pasta dos enviados que ficou gravada, já antes de conectar (ou com a conta fora do ar).
+      for (const rt of runtimes.values()) rt.sentMailbox = (await store.read(rt.account.id).catch(() => null))?.sentMailbox ?? rt.sentMailbox
       announce()
       for (const rt of runtimes.values()) void connect(rt)
     },
@@ -900,6 +1384,8 @@ export function createEmailService(deps: EmailServiceDeps): EmailService {
       rt.session = null
       if (session) void session.close().catch(() => undefined)
       runtimes.delete(rt.account.id)
+      folderCache.delete(rt.account.id)
+      for (const [senderId, watch] of folderWatches) if (watch.accountId === rt.account.id) stopWatch(senderId)
       await accountsSerial(async () => deps.settings.setEmailAccounts((await deps.settings.getEmailAccounts()).filter((account) => account.id !== rt.account.id)))
       await store.remove(rt.account.id)
       log(`${tag(rt)}: removida`)
@@ -911,7 +1397,9 @@ export function createEmailService(deps: EmailServiceDeps): EmailService {
       const parsed = messagesSchema.safeParse(request)
       if (!parsed.success || !runtimes.has(parsed.data.accountId)) return []
       const data = await store.read(parsed.data.accountId)
-      return [...(parsed.data.folder === 'sent' ? data.sent : data.inbox)].sort((a, b) => b.date - a.date)
+      const { folder, mailbox } = parsed.data
+      const list = mailbox !== undefined && !isInbox({ mailbox }) ? ((await store.folder(parsed.data.accountId, mailbox))?.messages ?? []) : folder === 'sent' ? data.sent : data.inbox
+      return [...list].sort((a, b) => b.date - a.date)
     },
 
     async cached() {
@@ -945,7 +1433,7 @@ export function createEmailService(deps: EmailServiceDeps): EmailService {
           const { uidValidity, messages } = await reader.search(box.path, query, limit)
           // O id leva a pasta e o UIDVALIDITY: nunca cai no espaço dos ids da INBOX do cache (o UID puro).
           for (const message of messages)
-            found.push({ mailbox: box.path, uidValidity, specialUse: box.specialUse, message: { ...fromImap(accountId, message), id: serverMessageId(box.path, uidValidity, message.uid), folder: box.specialUse === '\\Sent' ? 'sent' : 'inbox' } })
+            found.push({ mailbox: box.path, uidValidity, specialUse: box.specialUse, message: { ...fromImap(accountId, message, box.path), id: serverMessageId(box.path, uidValidity, message.uid) } })
         }
         log(`${tag(rt)}: busca no servidor em ${folders.length} pastas (${found.length} achadas)`)
         return { ok: true, found: found.sort((a, b) => b.message.date - a.message.date).slice(0, limit), skippedFolders: all.length - folders.length }
@@ -981,7 +1469,7 @@ export function createEmailService(deps: EmailServiceDeps): EmailService {
       const parsed = messageRequestSchema.safeParse(request)
       if (!parsed.success) return { ok: false, error: 'not-found' }
       const rt = runtimes.get(parsed.data.accountId)
-      const found = rt ? await findMessage(parsed.data.accountId, parsed.data.id) : null
+      const found = rt ? await findMessage(parsed.data.accountId, parsed.data.id, true) : null
       if (!rt || !found) return { ok: false, error: 'not-found' }
       const key = `${rt.account.id}\n${bodyKey(found.message)}`
       const running = bodyRequests.get(key)
@@ -1003,7 +1491,7 @@ export function createEmailService(deps: EmailServiceDeps): EmailService {
       const found = rt ? await findMessage(accountId, id) : null
       if (!rt || !found) return false
       const { message } = found
-      if (message.folder === 'inbox' && message.uid !== null) {
+      if (isInbox(message) && message.uid !== null) {
         if (!rt.session) return false
         try {
           await rt.session.setSeen(message.uid, seen)
@@ -1013,7 +1501,7 @@ export function createEmailService(deps: EmailServiceDeps): EmailService {
         }
       }
       if (rt.removed) return false
-      const mark = (list: EmailMessage[]): EmailMessage[] => list.map((item) => (item.id === id && item.folder === message.folder ? { ...item, seen } : item))
+      const mark = (list: EmailMessage[]): EmailMessage[] => list.map((item) => (item.id === id && item.mailbox === message.mailbox ? { ...item, seen } : item))
       await store.update(accountId, (data) => ({ ...data, inbox: mark(data.inbox), sent: mark(data.sent) }))
       changed(accountId)
       return true
@@ -1028,7 +1516,7 @@ export function createEmailService(deps: EmailServiceDeps): EmailService {
       if (!rt || !found) return false
       const { message } = found
       // IMAP: no servidor primeiro. POP3 e enviados: só no app (o UIDL fica lembrado, a mensagem não volta).
-      if (message.folder === 'inbox' && message.uid !== null) {
+      if (isInbox(message) && message.uid !== null) {
         if (!rt.session) return false
         try {
           await rt.session.remove(message.uid)
@@ -1038,7 +1526,7 @@ export function createEmailService(deps: EmailServiceDeps): EmailService {
         }
       }
       if (rt.removed) return false
-      const keep = (list: EmailMessage[]): EmailMessage[] => list.filter((item) => !(item.id === id && item.folder === message.folder))
+      const keep = (list: EmailMessage[]): EmailMessage[] => list.filter((item) => !(item.id === id && item.mailbox === message.mailbox))
       await store.update(accountId, (data) => ({ ...data, inbox: keep(data.inbox), sent: keep(data.sent) }))
       await store.removeBody(accountId, bodyKey(message)).catch(() => undefined)
       changed(accountId)
@@ -1071,6 +1559,7 @@ export function createEmailService(deps: EmailServiceDeps): EmailService {
 
     forgetSender(senderId) {
       guard.forget(senderId)
+      stopWatch(senderId)
     },
 
     async attachment(request) {
@@ -1102,6 +1591,55 @@ export function createEmailService(deps: EmailServiceDeps): EmailService {
       return { ok: true, attachments, skipped }
     },
 
+    listFolders,
+    moveMessages,
+    createFolder,
+    renameFolder,
+    deleteFolder,
+    openFolder,
+
+    async folders(request) {
+      const parsed = accountRequestSchema.safeParse(request)
+      return parsed.success ? listFolders(parsed.data.accountId) : folderFailure('invalid')
+    },
+
+    async open(request) {
+      const parsed = openFolderSchema.safeParse(request)
+      return parsed.success ? openFolder(parsed.data.accountId, parsed.data.path) : folderFailure('invalid')
+    },
+
+    async move(request) {
+      const parsed = moveSchema.safeParse(request)
+      return parsed.success ? moveMessages(parsed.data.accountId, parsed.data.fromPath, parsed.data.uids, parsed.data.toPath) : folderFailure('invalid')
+    },
+
+    async folderCreate(request) {
+      const parsed = folderCreateSchema.safeParse(request)
+      return parsed.success ? createFolder(parsed.data.accountId, parsed.data.parentPath, parsed.data.name) : folderFailure('invalid')
+    },
+
+    async folderRename(request) {
+      const parsed = folderRenameSchema.safeParse(request)
+      return parsed.success ? renameFolder(parsed.data.accountId, parsed.data.path, parsed.data.newName) : folderFailure('invalid')
+    },
+
+    async folderDelete(request) {
+      const parsed = folderDeleteSchema.safeParse(request)
+      return parsed.success ? deleteFolder(parsed.data.accountId, parsed.data.path, parsed.data.force ?? false) : folderFailure('invalid')
+    },
+
+    watchFolder(senderId, request) {
+      stopWatch(senderId)
+      const parsed = folderWatchSchema.safeParse(request ?? null)
+      if (disposed || !parsed.success || parsed.data === null || parsed.data.path === null) return
+      const { accountId, path } = parsed.data
+      // A INBOX já chega pelo IDLE; POP3 não tem outra pasta.
+      if (isInbox({ mailbox: path }) || runtimes.get(accountId)?.account.incoming.protocol !== 'imap') return
+      const timer = setInterval(() => void refreshWatch(senderId), folderRefreshMs)
+      timer.unref?.()
+      folderWatches.set(senderId, { accountId, path, timer, failures: 0 })
+    },
+
     async poll(accountId) {
       const rt = runtimes.get(accountId)
       if (!rt || rt.account.incoming.protocol !== 'pop3') return
@@ -1110,6 +1648,7 @@ export function createEmailService(deps: EmailServiceDeps): EmailService {
 
     async dispose() {
       disposed = true
+      for (const senderId of [...folderWatches.keys()]) stopWatch(senderId)
       const sessions: ImapSession[] = []
       for (const rt of runtimes.values()) {
         rt.generation++

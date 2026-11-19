@@ -7,7 +7,7 @@
 // baixa a mensagem sem marcá-la como lida).
 import { useEffect } from 'react'
 import { create } from 'zustand'
-import type { EmailAccountStatus, EmailBody, EmailFolder, EmailMessage } from '@shared/email'
+import { isInbox, type EmailAccountStatus, type EmailBody, type EmailFolder, type EmailMessage } from '@shared/email'
 import type { ComposeDraft } from './format'
 
 /** `carregando`, o corpo, ou a falha (a leitura diz "não foi possível abrir"). */
@@ -158,7 +158,7 @@ export const useEmail = create<EmailState>()((set, get) => ({
 
   receive: (message) =>
     set((state) => {
-      const key = folderKey(message.accountId, message.folder)
+      const key = folderKey(message.accountId, isInbox(message) ? 'inbox' : 'sent')
       const list = state.folders[key]
       if (!list) return {}
       return { folders: { ...state.folders, [key]: [message, ...list.filter((item) => item.id !== message.id)].sort(byDate) } }

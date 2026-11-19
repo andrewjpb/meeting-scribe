@@ -73,6 +73,11 @@ export interface EmailAccountStatus {
   state: EmailAccountState
   /** Mensagem curta para a tela; nunca leva senha nem resposta do servidor. */
   error: string | null
+  /**
+   * Contrato 52: a pasta dos enviados guardados no app (`EmailMessage.mailbox` deles): o path da pasta `\Sent` do
+   * servidor (IMAP, depois de conectar) ou `Sent` (POP3, ou servidor sem ela).
+   */
+  sentMailbox: string
 }
 
 export type EmailAddResult = { ok: true; status: EmailAccountStatus } | { ok: false; error: 'invalid' | 'duplicate' | 'encryption' }
@@ -90,13 +95,23 @@ export interface EmailAddress {
   address: string
 }
 
+/** As duas listas fixas da tela (contrato 43): a Caixa de Entrada e os enviados guardados no app. */
 export type EmailFolder = 'inbox' | 'sent'
 
+/** Contrato 52: a Caixa de Entrada, no IMAP e no POP3. */
+export const EMAIL_INBOX_MAILBOX = 'INBOX'
+/** Contrato 52: a pasta local dos enviados (POP3, ou servidor IMAP sem pasta `\Sent`). */
+export const EMAIL_SENT_MAILBOX = 'Sent'
+
 export interface EmailMessage {
-  /** IMAP: o UID na INBOX; POP3: o UIDL do servidor; enviados: o Message-ID. */
+  /**
+   * IMAP: o UID na INBOX; POP3: o UIDL do servidor; enviados: o Message-ID. Contrato 52: numa outra pasta aberta, o id de
+   * `serverMessageId` (a pasta, o `UIDVALIDITY` e o UID).
+   */
   id: string
   accountId: string
-  folder: EmailFolder
+  /** Contrato 52: o path IMAP da pasta (`INBOX`, `Enviados`, `Projetos/ABF`…); no POP3, `INBOX` ou `Sent`. */
+  mailbox: string
   /** IMAP: o UID; POP3 e enviados: `null`. */
   uid: number | null
   seen: boolean
@@ -112,6 +127,70 @@ export interface EmailMessage {
   inReplyTo: string | null
   references: string[]
 }
+
+/** Contrato 52: a mensagem é da Caixa de Entrada (o nome `INBOX` vale em qualquer caixa, RFC 3501). */
+export function isInbox(message: Pick<EmailMessage, 'mailbox'>): boolean {
+  return message.mailbox.toUpperCase() === EMAIL_INBOX_MAILBOX
+}
+
+/** Contrato 52: a mensagem é da pasta de enviados da conta (`EmailAccountStatus.sentMailbox`). */
+export function isSent(message: Pick<EmailMessage, 'mailbox'>, account: Pick<EmailAccountStatus, 'sentMailbox'>): boolean {
+  return message.mailbox === account.sentMailbox
+}
+
+// Contrato 52: as pastas da conta. No IMAP, o `LIST` com o `STATUS (MESSAGES UNSEEN)` de cada pasta, em árvore pelo
+// delimitador; no POP3, só a Caixa de Entrada e os enviados do app (não há pastas no servidor).
+
+/** As mais recentes de uma pasta aberta, como a INBOX. */
+export const EMAIL_FOLDER_MESSAGES_MAX = 200
+/** UIDs num "Mover" só. */
+export const EMAIL_MOVE_MAX = 500
+/** Nome de pasta (criar e renomear). */
+export const EMAIL_FOLDER_NAME_MAX = 100
+/** Path de pasta aceito nos pedidos. */
+export const EMAIL_FOLDER_PATH_MAX = 1000
+/** Pasta aberta que não é a INBOX: relida a cada 5 min enquanto a tela diz que está aberta. */
+export const EMAIL_FOLDER_REFRESH_MS = 5 * 60_000
+/** Pastas especiais: não se renomeiam nem se apagam (nem a INBOX). */
+export const EMAIL_PROTECTED_SPECIAL_USE = ['\\Sent', '\\Trash', '\\Junk', '\\Drafts', '\\Archive', '\\All', '\\Flagged'] as const
+
+export interface EmailFolderNode {
+  path: string
+  /** A última parte do path. */
+  name: string
+  /** O delimitador do `LIST` (`/`, `.`), ou `null` (pasta sem hierarquia, POP3). */
+  delimiter: string | null
+  /** `\Sent`, `\Trash`, `\Junk`…, ou `null`. */
+  specialUse: string | null
+  /** `\Noselect`: aparece na árvore, mas não abre (nem recebe mensagem). */
+  noselect: boolean
+  /** Do `STATUS`; `null` quando o servidor não disse (ou pasta `\Noselect`). */
+  unseen: number | null
+  total: number | null
+  children: EmailFolderNode[]
+}
+
+/**
+ * `missing`: conta (ou pasta) inexistente; `pop3`: conta POP3 (sem pastas no servidor); `protected`: INBOX ou pasta
+ * especial; `invalid`: pedido fora do formato (ou apagar pasta com conteúdo sem `force`); `unavailable`: sem conexão
+ * com o servidor; `server`: o servidor recusou o comando; `unsupported`: o servidor não tem como mover sem risco (sem
+ * `MOVE` e sem `UIDPLUS`, o `EXPUNGE` apagaria outras mensagens). No mover, `invalid` também é o `UIDVALIDITY` da origem
+ * que mudou (os UIDs são de outra pasta): nada foi movido.
+ */
+export type EmailFolderError = 'missing' | 'pop3' | 'protected' | 'invalid' | 'unavailable' | 'server' | 'unsupported'
+export interface EmailFolderFailure {
+  ok: false
+  error: EmailFolderError
+  /** Só no apagar sem `force`: o que a pasta ainda tem. */
+  contents?: { messages: number; folders: number } | undefined
+}
+
+export type EmailFoldersResult = { ok: true; folders: EmailFolderNode[]; pop3: boolean } | EmailFolderFailure
+export type EmailOpenFolderResult = { ok: true; messages: EmailMessage[] } | EmailFolderFailure
+/** `toUid`: o UID na pasta de destino (`COPYUID` do servidor), ou `null` se ele não disse. */
+export type EmailMoveResult = { ok: true; moved: { fromUid: number; toUid: number | null }[] } | EmailFolderFailure
+export type EmailFolderPathResult = { ok: true; path: string } | EmailFolderFailure
+export type EmailFolderDeleteResult = { ok: true } | EmailFolderFailure
 
 export interface EmailAttachmentInfo {
   filename: string | null

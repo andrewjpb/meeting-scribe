@@ -1,8 +1,11 @@
 // Servidor de email falso do smoke (contrato 43): uma INBOX IMAP em memória com mensagens inventadas (domínios
 // `.example`), o SMTP que só registra o que sairia e as imagens remotas do "Carregar imagens". Nada sai da máquina e
 // nenhuma senha de verdade é usada: a senha `SMOKE_EMAIL_WRONG_PASSWORD` faz o servidor recusar o login.
+// Contrato 52: as pastas em memória (INBOX, "Enviados", "Arquivo" e as criadas), com `LIST` aninhado pelo delimitador,
+// `STATUS`, `MOVE` (ou, com `capabilities.move` desligado, `COPY` + `\Deleted` + `EXPUNGE`), o `COPYUID` (com
+// `capabilities.uidplus`), `CREATE`, `RENAME` e `DELETE`. Os comandos ficam em `folderLog`.
 import type { EmailAddress } from '../../shared/email'
-import type { ImapConnect, ImapMessage, ImapReaderConnect, ImapSession } from './imap-client'
+import { ImapFolderError, movedList, type ImapConnect, type ImapFolderConnect, type ImapFolderEntry, type ImapMessage, type ImapReaderConnect, type ImapSession } from './imap-client'
 import type { Pop3Connect } from './pop3-client'
 import { SmtpError, type OutgoingMail, type SmtpSend, type SmtpVerify } from './smtp-client'
 
@@ -106,8 +109,36 @@ function rfc822(seed: Seed, date: Date, messageId: string): Buffer {
   return Buffer.from(`${head.join('\r\n')}\r\nContent-Type: multipart/alternative; boundary="b1"\r\n\r\n--b1\r\n${part('text/plain', seed.text)}\r\n--b1\r\n${part('text/html', seed.html)}\r\n--b1--\r\n`)
 }
 
+/** Contrato 52: uma pasta do servidor falso. */
+interface FakeMailbox {
+  uidValidity: string
+  nextUid: number
+  specialUse: string | null
+  noselect: boolean
+  items: { message: ImapMessage; raw: Buffer }[]
+}
+
+export interface FakeEmailOptions {
+  /** O delimitador do `LIST` (padrão `/`). */
+  delimiter?: '/' | '.'
+  /** Pastas a mais ao começar (as do meio de um path aninhado entram sozinhas). */
+  folders?: { path: string; specialUse?: string; noselect?: boolean }[]
+}
+
 export interface FakeEmail {
   imap: ImapConnect
+  /** Contrato 52: a conexão das pastas. */
+  imapFolders: ImapFolderConnect
+  /** Contrato 52: o servidor tem `MOVE` e `UIDPLUS` (o `COPYUID`); dá para desligar cada um. */
+  capabilities: { move: boolean; uidplus: boolean }
+  /** Contrato 52: o próximo comando de pastas com este nome (`MOVE`, `CREATE`, `RENAME`, `DELETE`) é recusado. */
+  failNext: string | null
+  /** Contrato 52: os comandos de pastas que o servidor recebeu (`UID MOVE 1,2 Arquivo`, `CREATE x`…). */
+  folderLog: string[]
+  /** Contrato 52: a pasta ganha um `UIDVALIDITY` novo (os UIDs guardados deixam de valer). */
+  resetUidValidity(path: string): void
+  /** Contrato 52: as pastas como estão (path → UIDs e flags). */
+  mailboxes(): Record<string, { uids: number[]; unseen: number; specialUse: string | null; noselect: boolean }>
   /** Contrato 45 (CA7): a conexão só de leitura da busca do Assistente (INBOX, "Enviados" e "Arquivo"). */
   imapReader: ImapReaderConnect
   /** As buscas e as leituras dessa conexão (o smoke confere que houve e que nada mudou de flag). */
@@ -128,12 +159,13 @@ export interface FakeEmail {
   fetchImage(url: string): Promise<{ type: string; bytes: Uint8Array } | null>
 }
 
-export function createFakeEmail(now: () => number = Date.now): FakeEmail {
-  let nextUid = 1
-  const inbox: { message: ImapMessage; raw: Buffer }[] = []
+export function createFakeEmail(now: () => number = Date.now, options: FakeEmailOptions = {}): FakeEmail {
+  const delimiter = options.delimiter ?? '/'
+  const inboxBox: FakeMailbox = { uidValidity: '1', nextUid: 1, specialUse: null, noselect: false, items: [] }
+  const inbox = inboxBox.items
   const listeners = new Set<() => void>()
   const add = (seed: Seed, at: number): void => {
-    const uid = nextUid++
+    const uid = inboxBox.nextUid++
     const messageId = `<smoke-${uid}@cliente.example>`
     const date = new Date(at)
     inbox.push({
@@ -150,7 +182,33 @@ export function createFakeEmail(now: () => number = Date.now): FakeEmail {
       raw: rfc822(SMOKE_EMAIL_ARCHIVED, archivedAt, '<arquivo-7@parceiro.example>'),
     },
   ]
-  const boxes = (): Record<string, { message: ImapMessage; raw: Buffer }[]> => ({ INBOX: inbox, Enviados: [], [SMOKE_EMAIL_ARCHIVE_FOLDER]: archived })
+  let nextValidity = 10
+  const folders = new Map<string, FakeMailbox>([
+    ['INBOX', inboxBox],
+    ['Enviados', { uidValidity: '1', nextUid: 1, specialUse: '\\Sent', noselect: false, items: [] }],
+    [SMOKE_EMAIL_ARCHIVE_FOLDER, { uidValidity: '1', nextUid: 8, specialUse: '\\Archive', noselect: false, items: archived }],
+  ])
+  /** Cria a pasta (e as do meio do path que faltarem, como o servidor faz). */
+  const ensure = (path: string, specialUse: string | null = null, noselect = false): void => {
+    const parts = path.split(delimiter)
+    for (let index = 1; index <= parts.length; index++) {
+      const part = parts.slice(0, index).join(delimiter)
+      if (!folders.has(part)) folders.set(part, { uidValidity: String(nextValidity++), nextUid: 1, specialUse: index === parts.length ? specialUse : null, noselect: index === parts.length ? noselect : false, items: [] })
+    }
+  }
+  for (const folder of options.folders ?? []) ensure(folder.path, folder.specialUse ?? null, folder.noselect ?? false)
+  const boxes = (): Record<string, { message: ImapMessage; raw: Buffer }[]> => Object.fromEntries([...folders].map(([path, box]) => [path, box.items]))
+  const copyOf = (item: { message: ImapMessage; raw: Buffer }): ImapMessage => ({ ...item.message, flags: [...item.message.flags] })
+  const refuse = (command: string): void => {
+    if (fake.failNext !== command) return
+    fake.failNext = null
+    throw new Error(`falso: ${command} recusado`)
+  }
+  const selectable = (path: string): FakeMailbox => {
+    const box = folders.get(path)
+    if (!box || box.noselect) throw new Error('falso: pasta inexistente')
+    return box
+  }
   const matches = (item: { message: ImapMessage; raw: Buffer }, query: Parameters<Awaited<ReturnType<ImapReaderConnect>>['search']>[1]): boolean => {
     const has = (value: string, needle: string | undefined): boolean => !needle || value.toLowerCase().includes(needle.toLowerCase())
     const people = (list: EmailAddress[]): string => list.map((one) => `${one.name ?? ''} ${one.address}`).join(' ')
@@ -169,15 +227,97 @@ export function createFakeEmail(now: () => number = Date.now): FakeEmail {
   }
 
   const fake: FakeEmail = {
+    capabilities: { move: true, uidplus: true },
+    failNext: null,
+    folderLog: [],
+    resetUidValidity(path) {
+      const box = folders.get(path)
+      if (box) box.uidValidity = String(nextValidity++)
+    },
+    mailboxes: () =>
+      Object.fromEntries(
+        [...folders].map(([path, box]) => [path, { uids: box.items.map((item) => item.message.uid), unseen: box.items.filter((item) => !item.message.flags.includes('\\Seen')).length, specialUse: box.specialUse, noselect: box.noselect }]),
+      ),
+    async imapFolders(config) {
+      login(config.pass)
+      return {
+        list: async (): Promise<ImapFolderEntry[]> =>
+          [...folders].map(([path, box]) => ({
+            path,
+            name: path.split(delimiter).pop() ?? path,
+            delimiter,
+            specialUse: box.specialUse,
+            noselect: box.noselect,
+            total: box.noselect ? null : box.items.length,
+            unseen: box.noselect ? null : box.items.filter((item) => !item.message.flags.includes('\\Seen')).length,
+          })),
+        recent: async (path, limit) => {
+          const box = selectable(path)
+          return { uidValidity: box.uidValidity, messages: [...box.items].sort((a, b) => a.message.uid - b.message.uid).slice(-limit).map(copyOf) }
+        },
+        move: async (from, uids, to, uidValidity) => {
+          // Como a conexão de verdade: sem MOVE e sem UIDPLUS nem tenta; UIDVALIDITY diferente, nada muda.
+          if (!fake.capabilities.move && !fake.capabilities.uidplus) throw new ImapFolderError('unsupported')
+          const source = selectable(from)
+          const target = selectable(to)
+          if (source.uidValidity !== uidValidity) throw new ImapFolderError('uidvalidity')
+          const set = uids.join(',')
+          if (fake.capabilities.move) {
+            fake.folderLog.push(`UID MOVE ${set} ${to}`)
+            refuse('MOVE')
+          } else {
+            fake.folderLog.push(`UID COPY ${set} ${to}`)
+            refuse('COPY')
+            fake.folderLog.push(`UID STORE ${set} +FLAGS (\\Deleted)`, `UID EXPUNGE ${set}`)
+          }
+          const map = new Map<number, number>()
+          for (const uid of uids) {
+            const index = source.items.findIndex((item) => item.message.uid === uid)
+            if (index < 0) continue
+            const [item] = source.items.splice(index, 1)
+            if (!item) continue
+            const toUid = target.nextUid++
+            target.items.push({ message: { ...item.message, uid: toUid }, raw: item.raw })
+            map.set(uid, toUid)
+          }
+          return movedList(uids, fake.capabilities.uidplus ? map : undefined, fake.capabilities.uidplus ? target.uidValidity : null)
+        },
+        create: async (path) => {
+          fake.folderLog.push(`CREATE ${path}`)
+          refuse('CREATE')
+          ensure(path)
+          return path
+        },
+        rename: async (path, newPath) => {
+          fake.folderLog.push(`RENAME ${path} ${newPath}`)
+          refuse('RENAME')
+          if (!folders.has(path) || folders.has(newPath)) throw new Error('falso: RENAME impossível')
+          // A pasta e as de dentro dela mudam de path; a ordem do `LIST` fica.
+          const prefix = `${path}${delimiter}`
+          const renamed = [...folders].map(([key, box]): [string, FakeMailbox] => [key === path ? newPath : key.startsWith(prefix) ? `${newPath}${delimiter}${key.slice(prefix.length)}` : key, box])
+          folders.clear()
+          for (const [key, box] of renamed) folders.set(key, box)
+          return newPath
+        },
+        delete: async (path) => {
+          fake.folderLog.push(`DELETE ${path}`)
+          refuse('DELETE')
+          const box = folders.get(path)
+          if (!box || path === 'INBOX') throw new Error('falso: DELETE impossível')
+          // Com pastas dentro, ela fica só como nó (`\Noselect`), sem as mensagens (RFC 3501, 6.3.4).
+          if ([...folders.keys()].some((key) => key.startsWith(`${path}${delimiter}`))) {
+            box.items.splice(0)
+            box.noselect = true
+          } else folders.delete(path)
+        },
+        close: async () => undefined,
+      }
+    },
     reader: { searches: 0, peeks: 0 },
     async imapReader(config) {
       login(config.pass)
       return {
-        folders: async () => [
-          { path: 'INBOX', name: 'INBOX', specialUse: null },
-          { path: 'Enviados', name: 'Enviados', specialUse: '\\Sent' },
-          { path: SMOKE_EMAIL_ARCHIVE_FOLDER, name: SMOKE_EMAIL_ARCHIVE_FOLDER, specialUse: '\\Archive' },
-        ],
+        folders: async () => [...folders].filter(([, box]) => !box.noselect).map(([path, box]) => ({ path, name: path.split(delimiter).pop() ?? path, specialUse: box.specialUse })),
         search: async (path, query, limit) => {
           fake.reader.searches++
           return {
@@ -221,6 +361,7 @@ export function createFakeEmail(now: () => number = Date.now): FakeEmail {
           fake.appended++
           return true
         },
+        sentPath: async () => [...folders].find(([, box]) => box.specialUse === '\\Sent')?.[0] ?? null,
         onNew: (listener) => {
           own.add(listener)
           listeners.add(listener)

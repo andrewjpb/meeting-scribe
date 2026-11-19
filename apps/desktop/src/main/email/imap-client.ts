@@ -45,6 +45,8 @@ export interface ImapSession {
   remove(uid: number): Promise<void>
   /** `APPEND` na pasta de enviados (`\Sent`, ou pelo nome); `false` quando o servidor não tem uma. */
   appendSent(raw: Buffer): Promise<boolean>
+  /** Contrato 52: o path da pasta de enviados (`\Sent`, ou pelo nome), pelo `LIST`; `null` se o servidor não tem uma. */
+  sentPath?(): Promise<string | null>
   /** O IDLE avisou mensagem nova na INBOX. */
   onNew(listener: () => void): void
   /** A conexão caiu (ou o servidor a fechou). */
@@ -82,6 +84,11 @@ export function toImapMessage(message: FetchMessageObject): ImapMessage {
 
 const QUERY = { uid: true, flags: true, envelope: true, headers: ['references'] }
 const SENT_NAMES = /^(sent|sent items|sent messages|sent mail|enviados|itens enviados|mensagens enviadas)$/i
+
+/** A pasta de enviados do `LIST`: a marcada `\Sent` ou, sem ela, a que tem o nome de enviados. */
+function findSent<T extends { name: string; specialUse?: string | undefined }>(boxes: readonly T[]): T | undefined {
+  return boxes.find((box) => box.specialUse === '\\Sent') ?? boxes.find((box) => SENT_NAMES.test(box.name))
+}
 
 export const connectImap: ImapConnect = async (config) => {
   const { ImapFlow: Client } = await import('imapflow')
@@ -142,10 +149,13 @@ export const connectImap: ImapConnect = async (config) => {
     },
 
     async appendSent(raw) {
-      const boxes = await client.list()
-      const sent = boxes.find((box) => box.specialUse === '\\Sent') ?? boxes.find((box) => SENT_NAMES.test(box.name))
+      const sent = findSent(await client.list())
       if (!sent) return false
       return (await client.append(sent.path, raw, ['\\Seen'])) !== false
+    },
+
+    async sentPath() {
+      return findSent(await client.list())?.path ?? null
     },
 
     onNew(listener) {
@@ -250,6 +260,132 @@ export const connectImapReader: ImapReaderConnect = async (config) => {
       if ((found.size ?? 0) > EMAIL_RAW_MAX_BYTES) return 'too-big'
       const full = await client.fetchOne(String(uid), { uid: true, source: true }, { uid: true })
       return full && full.source ? full.source : null
+    },
+
+    async close() {
+      await client.logout().catch(() => client.close())
+    },
+  }
+}
+
+// Contrato 52: as pastas da conta, numa conexão à parte para cada pedido (a da INBOX fica no IDLE, com a INBOX
+// selecionada): `LIST` com `STATUS (MESSAGES UNSEEN)`, as mais recentes de uma pasta (só leitura, `EXAMINE`), `MOVE` e
+// `CREATE`/`RENAME`/`DELETE`. Sem `MOVE` no servidor, o `imapflow` faz `COPY` + `\Deleted` + `UID EXPUNGE` (com
+// `UIDPLUS`), e só tira da origem se a cópia deu certo. Sem `MOVE` e sem `UIDPLUS` o mover é recusado: o `EXPUNGE` puro
+// apagaria também as outras mensagens marcadas `\Deleted` da pasta. O mover confere antes o `UIDVALIDITY` da origem: os
+// UIDs pedidos só valem com o dela.
+
+/** Uma pasta do `LIST`, com o `STATUS` (quando o servidor deu). */
+export interface ImapFolderEntry {
+  path: string
+  name: string
+  delimiter: string | null
+  specialUse: string | null
+  /** `\Noselect` (ou `\NonExistent`): só um nó da árvore. */
+  noselect: boolean
+  total: number | null
+  unseen: number | null
+}
+
+/** O resultado do `MOVE`: o UID de destino de cada um (`COPYUID`), ou `null` quando o servidor não disse. */
+export interface ImapMoved {
+  /** O `UIDVALIDITY` da pasta de destino (do `COPYUID`), ou `null`. */
+  uidValidity: string | null
+  moved: { fromUid: number; toUid: number | null }[]
+}
+
+/**
+ * Contrato 52: o mover não foi feito. `uidvalidity`: a pasta de origem mudou de `UIDVALIDITY` (os UIDs pedidos são de
+ * outra); `unsupported`: servidor sem `MOVE` e sem `UIDPLUS`.
+ */
+export class ImapFolderError extends Error {
+  constructor(readonly kind: 'uidvalidity' | 'unsupported') {
+    super(kind === 'uidvalidity' ? 'UIDVALIDITY da origem mudou' : 'servidor sem MOVE nem UIDPLUS')
+    this.name = 'ImapFolderError'
+  }
+}
+
+export interface ImapFolderSession {
+  list(): Promise<ImapFolderEntry[]>
+  /** As últimas `limit` da pasta, aberta só para leitura, com o `UIDVALIDITY` dela. */
+  recent(path: string, limit: number): Promise<{ uidValidity: string; messages: ImapMessage[] }>
+  /**
+   * `UID MOVE` (ou `COPY` + `UID EXPUNGE`) só se o `UIDVALIDITY` da origem é `uidValidity`; erro do servidor vira exceção
+   * (`ImapFolderError` quando nem foi tentado), e nada foi tirado da origem.
+   */
+  move(from: string, uids: readonly number[], to: string, uidValidity: string): Promise<ImapMoved>
+  /** `CREATE`; devolve o path criado (o servidor pode pôr o prefixo do namespace). Já existir não é erro. */
+  create(path: string): Promise<string>
+  /** `RENAME`; devolve o path novo. */
+  rename(path: string, newPath: string): Promise<string>
+  delete(path: string): Promise<void>
+  close(): Promise<void>
+}
+
+export type ImapFolderConnect = (config: ImapConfig) => Promise<ImapFolderSession>
+
+/** O mapa do `COPYUID` do `imapflow` na lista do serviço, na ordem dos UIDs pedidos. */
+export function movedList(uids: readonly number[], uidMap: ReadonlyMap<number, number> | undefined, uidValidity: bigint | string | null | undefined = null): ImapMoved {
+  return { uidValidity: uidValidity === null || uidValidity === undefined ? null : String(uidValidity), moved: uids.map((uid) => ({ fromUid: uid, toUid: uidMap?.get(uid) ?? null })) }
+}
+
+export const connectImapFolders: ImapFolderConnect = async (config) => {
+  const { ImapFlow: Client } = await import('imapflow')
+  const client: ImapFlow = new Client({
+    host: config.host,
+    port: config.port,
+    secure: config.security === 'tls',
+    doSTARTTLS: config.security === 'starttls' ? true : config.security === 'none' ? false : undefined,
+    auth: { user: config.user, pass: config.pass },
+    logger: false,
+    ...(config.tls ? { tls: config.tls } : {}),
+  })
+  client.on('error', () => undefined)
+  await client.connect()
+  return {
+    async list() {
+      const boxes = await client.list({ statusQuery: { messages: true, unseen: true } })
+      return boxes.map((box) => {
+        const noselect = box.flags.has('\\Noselect') || box.flags.has('\\NonExistent')
+        return {
+          path: box.path,
+          name: box.name,
+          delimiter: box.delimiter ? box.delimiter : null,
+          specialUse: box.specialUse ?? null,
+          noselect,
+          total: noselect ? null : (box.status?.messages ?? null),
+          unseen: noselect ? null : (box.status?.unseen ?? null),
+        }
+      })
+    },
+
+    async recent(path, limit) {
+      const box = await client.mailboxOpen(path, { readOnly: true })
+      const uidValidity = String(box.uidValidity)
+      if (box.exists === 0) return { uidValidity, messages: [] }
+      const messages = (await client.fetchAll(`${Math.max(1, box.exists - limit + 1)}:*`, QUERY)).map(toImapMessage).sort((a, b) => a.uid - b.uid)
+      return { uidValidity, messages }
+    },
+
+    async move(from, uids, to, uidValidity) {
+      if (!client.capabilities.has('MOVE') && !client.capabilities.has('UIDPLUS')) throw new ImapFolderError('unsupported')
+      const box = await client.mailboxOpen(from)
+      if (String(box.uidValidity) !== uidValidity) throw new ImapFolderError('uidvalidity')
+      const result = await client.messageMove(uids.join(','), to, { uid: true })
+      if (!result) throw new Error('MOVE recusado')
+      return movedList(uids, result.uidMap, result.uidValidity)
+    },
+
+    async create(path) {
+      return (await client.mailboxCreate(path)).path
+    },
+
+    async rename(path, newPath) {
+      return (await client.mailboxRename(path, newPath)).newPath
+    },
+
+    async delete(path) {
+      await client.mailboxDelete(path)
     },
 
     async close() {

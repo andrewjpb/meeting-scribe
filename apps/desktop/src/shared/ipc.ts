@@ -7,7 +7,7 @@ import type { DriveMeetingStatus, GoogleAccountStatus, GoogleClientSaveResult, M
 import type { CalendarListResult, CalendarView } from './calendar'
 import type { BrandingInfo, BrandLogoChoice } from './branding'
 import type { LockResponse, LockStatus } from './lock'
-import type { EmailAccountInput, EmailAccountStatus, EmailAddResult, EmailAttachmentRequest, EmailAttachmentSaveResult, EmailAttachmentsResult, EmailAttachPickResult, EmailAutoconfig, EmailBodyResult, EmailFolder, EmailMessage, EmailSendRequest, EmailSendResult, EmailTestResult } from './email'
+import type { EmailAccountInput, EmailAccountStatus, EmailAddResult, EmailAttachmentRequest, EmailAttachmentSaveResult, EmailAttachmentsResult, EmailAttachPickResult, EmailAutoconfig, EmailBodyResult, EmailFolder, EmailFolderDeleteResult, EmailFolderPathResult, EmailFoldersResult, EmailMessage, EmailMoveResult, EmailOpenFolderResult, EmailSendRequest, EmailSendResult, EmailTestResult } from './email'
 import type { KeySaveResult, KeyStatus, MicAccess, ModelCheck, ModelsResult } from './assemblyai'
 import type { Chat, ChatApprovalAnswer, ChatEvent, ChatListItem, ChatRedoRequest, ChatSendRequest, ChatSendResult, ChatUpdateRequest } from './chat'
 import type { ClaudeLocateResult, ClaudeRunState, ClaudeStartResult, ClaudeTranslateRequest, ClaudeTranslateResult } from './claude-cli'
@@ -381,8 +381,8 @@ export interface InvokeChannels {
   'scribe:email-add-account': { request: EmailAccountInput; response: EmailAddResult }
   /** Remove a conta, o cache das mensagens e os corpos baixados. Nada é apagado no servidor. */
   'scribe:email-remove-account': { request: { accountId: string }; response: boolean }
-  /** INBOX (padrão) ou enviados, do cache local. */
-  'scribe:email-messages': { request: { accountId: string; folder?: EmailFolder }; response: EmailMessage[] }
+  /** INBOX (padrão) ou enviados, do cache local; com `mailbox` (contrato 52), a pasta aberta como ficou guardada. */
+  'scribe:email-messages': { request: { accountId: string; folder?: EmailFolder; mailbox?: string }; response: EmailMessage[] }
   /** Corpo de uma mensagem: do cache, ou baixado agora (IMAP) e passado pelo `mailparser`. */
   'scribe:email-get-body': { request: { accountId: string; id: string }; response: EmailBodyResult }
   /** "Marcar como (não) lida": no servidor (IMAP) e no cache. */
@@ -410,6 +410,18 @@ export interface InvokeChannels {
   'scribe:email-attachment-save': { request: EmailAttachmentRequest; response: EmailAttachmentSaveResult }
   /** Contrato 43 (CA9): os anexos da mensagem para o "Encaminhar", nos limites do envio. */
   'scribe:email-attachments': { request: { accountId: string; id: string }; response: EmailAttachmentsResult }
+  /** Contrato 52 (CA2): as pastas da conta em árvore, com as contagens (`LIST` + `STATUS`). POP3: INBOX e Sent, `pop3`. */
+  'scribe:email-folders': { request: { accountId: string }; response: EmailFoldersResult }
+  /** Contrato 52 (CA3): as 200 mais recentes da pasta, gravadas no cache; a INBOX vem do cache (segue no IDLE). */
+  'scribe:email-open-folder': { request: { accountId: string; path: string }; response: EmailOpenFolderResult }
+  /** Contrato 52 (CA4): "Mover para…" no servidor (`MOVE`, ou `COPY` + `EXPUNGE`), até 500 UIDs; nada é enviado. */
+  'scribe:email-move': { request: { accountId: string; fromPath: string; uids: number[]; toPath: string }; response: EmailMoveResult }
+  /** Contrato 52 (CA5): pasta nova (`parentPath` `null`: na raiz). */
+  'scribe:email-folder-create': { request: { accountId: string; parentPath: string | null; name: string }; response: EmailFolderPathResult }
+  /** Contrato 52 (CA5): a INBOX e as pastas especiais voltam `protected`. */
+  'scribe:email-folder-rename': { request: { accountId: string; path: string; newName: string }; response: EmailFolderPathResult }
+  /** Contrato 52 (CA5): pasta com mensagens ou subpastas só sai com `force`. */
+  'scribe:email-folder-delete': { request: { accountId: string; path: string; force?: boolean }; response: EmailFolderDeleteResult }
   /** Automações (contrato 23): os agentes, quantas tarefas usam cada um e os modelos que o perfil oferece. */
   'scribe:agents-list': { request: undefined; response: AgentsList }
   /** Criar (`id: null`) ou trocar um agente. */
@@ -467,6 +479,11 @@ export interface RendererEvents {
    * Caixa de Entrada da conta aberta, o email novo dela não vira notificação. Ignorada com o app bloqueado.
    */
   'scribe:email-viewing': { accountId: string; folder: EmailFolder } | null
+  /**
+   * Contrato 52 (CA3): a pasta aberta na tela desta janela, fora a INBOX, relida a cada 5 min (só uma por janela);
+   * `null` (ou `path` `null`) para. Ignorada com o app bloqueado.
+   */
+  'scribe:email-folder-watch': { accountId: string; path: string | null } | null
 }
 
 /** main -> renderer (`webContents.send` / `__scribeApi.on`). */
@@ -715,6 +732,12 @@ const INVOKE: Record<InvokeChannel, true> = {
   'scribe:email-remote-images': true,
   'scribe:email-attachment-save': true,
   'scribe:email-attachments': true,
+  'scribe:email-folders': true,
+  'scribe:email-open-folder': true,
+  'scribe:email-move': true,
+  'scribe:email-folder-create': true,
+  'scribe:email-folder-rename': true,
+  'scribe:email-folder-delete': true,
   'scribe:agents-list': true,
   'scribe:agents-save': true,
   'scribe:agents-delete': true,
@@ -744,6 +767,7 @@ const RENDERER_EVENTS: Record<RendererEvent, true> = {
   'scribe:whatsapp-viewing': true,
   'scribe:email-click': true,
   'scribe:email-viewing': true,
+  'scribe:email-folder-watch': true,
 }
 const MAIN_EVENTS: Record<MainEvent, true> = {
   'scribe:navigate': true,
@@ -997,6 +1021,13 @@ export const WHEN_LOCKED: Readonly<Record<InvokeChannel, LockedPolicy>> = Object
   'scribe:email-remote-images': 'refused',
   'scribe:email-attachment-save': 'refused',
   'scribe:email-attachments': 'refused',
+  // Contrato 52: as pastas, como o resto do email.
+  'scribe:email-folders': 'refused',
+  'scribe:email-open-folder': 'refused',
+  'scribe:email-move': 'refused',
+  'scribe:email-folder-create': 'refused',
+  'scribe:email-folder-rename': 'refused',
+  'scribe:email-folder-delete': 'refused',
   // Automações (contrato 23, CA10): gerenciar agentes e tarefas, testar, pedir e ver o histórico, tudo recusado com
   // o app bloqueado. O agendador não depende de canal: roda no main e as tarefas continuam rodando bloqueado.
   'scribe:agents-list': 'refused',
@@ -1033,6 +1064,7 @@ export const RENDERER_EVENTS_WHEN_LOCKED: Readonly<Record<RendererEvent, 'pass' 
   'scribe:whatsapp-viewing': 'ignored',
   'scribe:email-click': 'ignored',
   'scribe:email-viewing': 'ignored',
+  'scribe:email-folder-watch': 'ignored',
 })
 
 /** Mensagens que só o próprio preload manda (o `send` genérico recusa): o clique do envio do WhatsApp. */

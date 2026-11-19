@@ -1,6 +1,6 @@
 import { ArrowLeft, Download, ExternalLink, Forward, ImageOff, Mail, MailOpen, Paperclip, Reply, ReplyAll, Trash2, TriangleAlert } from 'lucide-react'
 import { Component, useMemo, useState, type MouseEvent, type ReactNode } from 'react'
-import type { EmailAccount, EmailMessage } from '@shared/email'
+import { isInbox, type EmailAccount, type EmailMessage } from '@shared/email'
 import { Button } from '../../design/Button'
 import { Icon } from '../../design/Icon'
 import { Note } from '../../design/Note'
@@ -127,7 +127,7 @@ export function ReadingPane({ account, message, onCompose, composing, onMailto, 
         <ActionButton icon={ReplyAll} label="Responder a todos" action="email-reply-all" disabled={composing} onClick={() => onCompose('replyAll')} />
         <ActionButton icon={Forward} label="Encaminhar" action="email-forward" disabled={composing} onClick={() => onCompose('forward')} />
         <span className="ml-auto" />
-        {message.folder === 'inbox' && (
+        {isInbox(message) && (
           <ActionButton icon={message.seen ? Mail : MailOpen} label={message.seen ? 'Marcar como não lida' : 'Marcar como lida'} action="email-toggle-seen" iconOnly onClick={toggleSeen} />
         )}
         <ActionButton icon={Trash2} label="Apagar" action="email-delete" tone="danger" iconOnly onClick={() => setConfirmDelete(true)} />
@@ -150,7 +150,7 @@ export function ReadingPane({ account, message, onCompose, composing, onMailto, 
                 </div>
               }
             >
-              {message.folder === 'inbox' && message.uid !== null ? 'Apagar esta mensagem? Ela sai também do servidor.' : 'Apagar esta mensagem do app?'}
+              {isInbox(message) && message.uid !== null ? 'Apagar esta mensagem? Ela sai também do servidor.' : 'Apagar esta mensagem do app?'}
             </Note>
           )}
           {actionError && (

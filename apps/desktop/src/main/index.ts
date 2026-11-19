@@ -1133,7 +1133,7 @@ function createAppServices(userData: string): AppServices {
     settings,
     safeStorage: smokeFixtures ? memorySafeStorage() : safeStorage,
     // Contrato 43: no smoke, o servidor de email falso em memória (IMAP, SMTP e o teste de conexão).
-    ...(smokeFixtures ? { imap: smokeFixtures.email.imap, imapReader: smokeFixtures.email.imapReader, pop3: smokeFixtures.email.pop3, smtp: smokeFixtures.email.smtp, smtpVerify: smokeFixtures.email.smtpVerify } : {}),
+    ...(smokeFixtures ? { imap: smokeFixtures.email.imap, imapReader: smokeFixtures.email.imapReader, imapFolders: smokeFixtures.email.imapFolders, pop3: smokeFixtures.email.pop3, smtp: smokeFixtures.email.smtp, smtpVerify: smokeFixtures.email.smtpVerify } : {}),
     fetch: smokeFixtures
       ? () => Promise.reject(new TypeError('smoke: sem rede'))
       : (url, { signal }) => netFetch(url, { method: 'GET', headers: { accept: 'application/xml' }, signal, redirect: 'error' }),
@@ -2027,6 +2027,14 @@ function registerIpc(services: AppServices): void {
   })
   // Contrato 43 (CA9): os anexos da original para o "Encaminhar".
   handle('scribe:email-attachments', appOrigin, (_event, request) => email.attachments(request).catch(() => ({ ok: false, error: 'unavailable' }) as const))
+  // Contrato 52: as pastas (listar, abrir, mover, criar, renomear, apagar). Nenhum canal daqui envia email.
+  handle('scribe:email-folders', appOrigin, (_event, request) => email.folders(request).catch(() => ({ ok: false, error: 'unavailable' }) as const))
+  handle('scribe:email-open-folder', appOrigin, (_event, request) => email.open(request).catch(() => ({ ok: false, error: 'unavailable' }) as const))
+  handle('scribe:email-move', appOrigin, (_event, request) => email.move(request).catch(() => ({ ok: false, error: 'unavailable' }) as const))
+  handle('scribe:email-folder-create', appOrigin, (_event, request) => email.folderCreate(request).catch(() => ({ ok: false, error: 'unavailable' }) as const))
+  handle('scribe:email-folder-rename', appOrigin, (_event, request) => email.folderRename(request).catch(() => ({ ok: false, error: 'unavailable' }) as const))
+  handle('scribe:email-folder-delete', appOrigin, (_event, request) => email.folderDelete(request).catch(() => ({ ok: false, error: 'unavailable' }) as const))
+  onEvent('scribe:email-folder-watch', appOrigin, (event, request) => email.watchFolder(event.sender.id, request))
   onEvent('scribe:email-viewing', appOrigin, (event, request) => {
     const viewing = request as { accountId?: unknown; folder?: unknown } | null | undefined
     const accountId = viewing?.accountId

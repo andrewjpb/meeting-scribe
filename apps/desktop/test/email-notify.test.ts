@@ -15,7 +15,7 @@ const ACCOUNT = { id: '0b6f2c1e-3a4d-4c5b-8e9f-0a1b2c3d4e5f', address: 'andrew@l
 const message = (over: Partial<EmailMessage> = {}): EmailMessage => ({
   id: '1',
   accountId: ACCOUNT.id,
-  folder: 'inbox',
+  mailbox: 'INBOX',
   uid: 1,
   seen: false,
   flagged: false,
@@ -59,7 +59,7 @@ describe('quando notificar', () => {
     expect(notifier.receive(input({ message: message({ from: [{ name: 'Eu', address: 'ANDREW@lap.example' }] }) }))).toBeNull()
     expect(notifier.receive(input({ enabled: false }))).toBeNull()
     expect(notifier.receive(input({ enabled: false, locked: true }))).toBeNull()
-    expect(notifier.receive(input({ message: message({ folder: 'sent' }) }))).toBeNull()
+    expect(notifier.receive(input({ message: message({ mailbox: 'Sent' }) }))).toBeNull()
     expect(shown).toHaveLength(0)
   })
 

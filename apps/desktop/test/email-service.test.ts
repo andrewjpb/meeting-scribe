@@ -312,7 +312,7 @@ describe('IMAP com o cliente falso (contrato 42, CA3)', () => {
     expect(received).toEqual([])
     imap.deliver(imapMessage(201, { subject: 'Chegou agora' }))
     await vi.waitFor(() => expect(received).toHaveLength(1))
-    expect(received[0]).toMatchObject({ accountId: id, id: '201', subject: 'Chegou agora', folder: 'inbox' })
+    expect(received[0]).toMatchObject({ accountId: id, id: '201', subject: 'Chegou agora', mailbox: 'INBOX' })
     expect(imap.calls).toContain('UID FETCH 201:*')
     const list = await service.messages({ accountId: id })
     expect(list).toHaveLength(200)
