@@ -1,7 +1,8 @@
 // Textos e contas do email na tela (contrato 43): a hora da lista, os grupos por dia, a prévia de uma linha, as não
 // lidas de cada conta, o nome da conta na barra lateral, os destinatários do composer e o rascunho de Responder,
 // Responder a todos e Encaminhar. Sem DOM: testado em test/renderer/email-format.test.ts.
-import { EMAIL_ADDRESS_PATTERN, prefixedSubject, type EmailAccount, type EmailAccountState, type EmailAddress, type EmailBody, type EmailMessage, type EmailOutgoingAttachment, type EmailSendError } from '@shared/email'
+import { EMAIL_SIGNATURE_SEPARATOR, withSignature, type EmailSignature } from '@shared/email-signature'
+import { EMAIL_ADDRESS_PATTERN, isInbox, isSent, prefixedSubject, type EmailAccount, type EmailAccountState, type EmailAccountStatus, type EmailAddress, type EmailBody, type EmailMessage, type EmailOutgoingAttachment, type EmailSendError } from '@shared/email'
 import { htmlToText } from './sanitize'
 
 const two = (value: number): string => String(value).padStart(2, '0')
@@ -56,8 +57,8 @@ export function addressLabel(address: EmailAddress | undefined): string {
 }
 
 /** A linha forte da lista: quem mandou (na Caixa de Entrada) ou para quem foi (em Enviados). */
-export function rowTitle(message: Pick<EmailMessage, 'folder' | 'from' | 'to'>): string {
-  if (message.folder === 'sent') return message.to.length ? `Para: ${message.to.map(addressLabel).join(', ')}` : 'Sem destinatário'
+export function rowTitle(message: Pick<EmailMessage, 'mailbox' | 'from' | 'to'>, account: Pick<EmailAccountStatus, 'sentMailbox'>): string {
+  if (isSent(message, account)) return message.to.length ? `Para: ${message.to.map(addressLabel).join(', ')}` : 'Sem destinatário'
   return addressLabel(message.from[0])
 }
 
@@ -83,12 +84,12 @@ export function previewLine(body: Pick<EmailBody, 'text' | 'html'> | null | unde
 }
 
 /** Não lidas de uma lista (só a Caixa de Entrada conta). */
-export function unreadCount(messages: readonly Pick<EmailMessage, 'seen' | 'folder'>[] | undefined): number {
-  return (messages ?? []).reduce((total, message) => total + (message.folder === 'inbox' && !message.seen ? 1 : 0), 0)
+export function unreadCount(messages: readonly Pick<EmailMessage, 'seen' | 'mailbox'>[] | undefined): number {
+  return (messages ?? []).reduce((total, message) => total + (isInbox(message) && !message.seen ? 1 : 0), 0)
 }
 
 /** Não lidas por conta, para a barra lateral: `inboxes` é a Caixa de Entrada carregada de cada conta. */
-export function unreadByAccount(inboxes: Readonly<Record<string, readonly Pick<EmailMessage, 'seen' | 'folder'>[] | undefined>>): Record<string, number> {
+export function unreadByAccount(inboxes: Readonly<Record<string, readonly Pick<EmailMessage, 'seen' | 'mailbox'>[] | undefined>>): Record<string, number> {
   return Object.fromEntries(Object.entries(inboxes).map(([accountId, messages]) => [accountId, unreadCount(messages)]))
 }
 
@@ -209,13 +210,13 @@ function forwardText(message: EmailMessage, body: Pick<EmailBody, 'text' | 'html
  * "Re:" e a citação. Responder a todos: mais os outros de Para e Cc, sem a própria conta. Encaminhar: sem destinatário,
  * "Enc:" e a original inteira (o texto; os anexos não vão).
  */
-export function composeFrom(mode: Exclude<ComposeMode, 'new'>, message: EmailMessage, body: Pick<EmailBody, 'text' | 'html'> | null, account: Pick<EmailAccount, 'id' | 'address'>): ComposeDraft {
+export function composeFrom(mode: Exclude<ComposeMode, 'new'>, message: EmailMessage, body: Pick<EmailBody, 'text' | 'html'> | null, account: Pick<EmailAccount, 'id' | 'address'> & Pick<EmailAccountStatus, 'sentMailbox'>): ComposeDraft {
   const own = account.address.toLowerCase()
   const notOwn = (item: EmailAddress): boolean => item.address.toLowerCase() !== own
   if (mode === 'forward') {
     return { accountId: account.id, mode, to: [], cc: [], subject: prefixedSubject('Enc:', message.subject), text: forwardText(message, body), inReplyTo: null, attachments: [], skippedAttachments: [] }
   }
-  const sent = message.folder === 'sent'
+  const sent = isSent(message, account)
   const primary = sent ? message.to : message.from
   const to = mergeRecipients([], primary.map((item) => recipient(item.address)))
   const others = mode === 'replyAll' ? [...(sent ? [] : message.to), ...message.cc].filter(notOwn) : []
@@ -225,6 +226,34 @@ export function composeFrom(mode: Exclude<ComposeMode, 'new'>, message: EmailMes
 
 export function emptyDraft(accountId: string): ComposeDraft {
   return { accountId, mode: 'new', to: [], cc: [], subject: '', text: '', inReplyTo: null, attachments: [], skippedAttachments: [] }
+}
+
+/**
+ * Contrato 54 (CA4): o rascunho recém-aberto com a assinatura da conta, se ela vale para o modo. Na mensagem nova, depois
+ * do que já veio no texto; em Responder, Responder a todos e Encaminhar, acima da citação. Fica no campo, editável.
+ */
+export function signedDraft(draft: ComposeDraft, signature: EmailSignature | null): ComposeDraft {
+  if (!signature) return draft
+  if (draft.mode === 'new') return { ...draft, text: withSignature({ text: draft.text, quote: '' }, signature, 'new').text }
+  // O que vem antes da citação é o texto do rascunho: hoje só a assinatura, se ele já foi assinado (assim não duplica).
+  const head = `\n\n${EMAIL_SIGNATURE_SEPARATOR}\n${signature.text.replace(/\r\n?/g, '\n').replace(/\s+$/, '')}`
+  const text = draft.text.startsWith(head) ? head : ''
+  return { ...draft, text: withSignature({ text, quote: draft.text.slice(text.length) }, signature, draft.mode === 'forward' ? 'forward' : 'reply').text }
+}
+
+/**
+ * Contrato 54: só o último pedido de rascunho vale. Abrir um rascunho espera o main (o corpo, a assinatura); se nesse
+ * meio a pessoa pediu outro rascunho ou abriu outra mensagem, a resposta velha é descartada.
+ */
+export function createDraftRequests(): { start: () => number; cancel: () => void; current: (token: number) => boolean } {
+  let latest = 0
+  return {
+    start: () => ++latest,
+    cancel: () => {
+      latest++
+    },
+    current: (token) => token === latest,
+  }
 }
 
 /** O rascunho tem algo escrito (fechar pede para descartar). */

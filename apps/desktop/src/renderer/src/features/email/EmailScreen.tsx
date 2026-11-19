@@ -2,13 +2,14 @@ import { Mail, PenLine, SquarePen, TriangleAlert } from 'lucide-react'
 import { useEffect, useRef, useState, type RefObject } from 'react'
 import { Link, Navigate, useLocation, useNavigate, useParams } from 'react-router'
 import { EMAIL_FOLDER_SLUGS, emailPath, settingsPath, type EmailNavigationState } from '@shared/routes'
-import type { EmailAccount, EmailBody, EmailFolder, EmailMessage } from '@shared/email'
+import { isInbox, isSent, type EmailAccount, type EmailBody, type EmailFolder, type EmailMessage } from '@shared/email'
 import { Button } from '../../design/Button'
 import { Note, NOTE_ACTION_CLASS } from '../../design/Note'
 import { Avatar } from '../whatsapp/Avatar'
 import { Composer } from './Composer'
 import { bodyKey, folderKey, useEmail } from './emailStore'
-import { addressLabel, composeFrom, emailTimeLabel, emptyDraft, groupByDay, previewLine, parseRecipients, rowTitle, unreadCount, type ComposeMode, type Recipient } from './format'
+import type { EmailSignature } from '@shared/email-signature'
+import { addressLabel, composeFrom, createDraftRequests, emailTimeLabel, emptyDraft, groupByDay, previewLine, parseRecipients, rowTitle, signedDraft, unreadCount, type ComposeMode, type Recipient } from './format'
 import { ReadingPane } from './ReadingPane'
 
 const FOLDER_NAMES: Record<EmailFolder, string> = { inbox: 'Caixa de Entrada', sent: 'Enviados' }
@@ -37,11 +38,11 @@ function usePreview(accountId: string, id: string, target: RefObject<Element | n
 }
 
 /** Uma linha da lista, no desenho do Outlook: iniciais, quem mandou em peso forte, a hora à direita, o assunto e a prévia. */
-function MessageRow({ message, active, onOpen }: { message: EmailMessage; active: boolean; onOpen: () => void }) {
+function MessageRow({ message, sentMailbox, active, onOpen }: { message: EmailMessage; sentMailbox: string; active: boolean; onOpen: () => void }) {
   const ref = useRef<HTMLButtonElement | null>(null)
   const body = usePreview(message.accountId, message.id, ref)
-  const unread = message.folder === 'inbox' && !message.seen
-  const person = message.folder === 'sent' ? message.to[0] : message.from[0]
+  const unread = isInbox(message) && !message.seen
+  const person = isSent(message, { sentMailbox }) ? message.to[0] : message.from[0]
   return (
     <button
       ref={ref}
@@ -56,7 +57,7 @@ function MessageRow({ message, active, onOpen }: { message: EmailMessage; active
       <span className="flex min-w-0 flex-1 flex-col gap-0.5">
         <span className="flex items-center gap-2">
           <span data-email-row-from className="min-w-0 flex-1 truncate text-13 font-bold text-title">
-            {rowTitle(message)}
+            {rowTitle(message, { sentMailbox })}
           </span>
           <span className={`shrink-0 text-12 tabular ${unread ? 'font-medium text-accent' : 'text-text-faint'}`}>{emailTimeLabel(message.date)}</span>
         </span>
@@ -118,10 +119,10 @@ export function EmailScreen() {
       </div>
     )
   }
-  return <FolderView account={status.account} folder={folder} />
+  return <FolderView account={status.account} sentMailbox={status.sentMailbox} folder={folder} />
 }
 
-function FolderView({ account, folder }: { account: EmailAccount; folder: EmailFolder }) {
+function FolderView({ account, sentMailbox, folder }: { account: EmailAccount; sentMailbox: string; folder: EmailFolder }) {
   const location = useLocation()
   const navigate = useNavigate()
   const messages = useEmail((state) => state.folders[folderKey(account.id, folder)])
@@ -153,22 +154,42 @@ function FolderView({ account, folder }: { account: EmailAccount; folder: EmailF
     if (!openId) return
     useEmail.getState().requestBody(account.id, openId)
     const current = useEmail.getState().folders[folderKey(account.id, folder)]?.find((message) => message.id === openId)
-    if (current && current.folder === 'inbox' && !current.seen) void useEmail.getState().markRead(account.id, openId, true)
+    if (current && isInbox(current) && !current.seen) void useEmail.getState().markRead(account.id, openId, true)
   }, [account.id, folder, openId])
 
+  const [preparing, setPreparing] = useState(false)
+  // Contrato 54: o rascunho que espera o main só abre se ainda for o último pedido (nada de composer por cima da
+  // mensagem que a pessoa acabou de abrir, nem dois no clique duplo).
+  const [draftRequests] = useState(createDraftRequests)
+  useEffect(
+    () => () => {
+      draftRequests.cancel()
+      setPreparing(false)
+    },
+    [account.id, folder, draftRequests],
+  )
+
   const select = (id: string): void => {
+    draftRequests.cancel()
+    setPreparing(false)
     setSelected(id)
     useEmail.getState().closeDraft(false)
   }
 
+  // Contrato 54 (CA4): a assinatura da conta entra no rascunho ao abrir; sem resposta do main, o rascunho vem sem ela.
+  const signature = (): Promise<EmailSignature | null> =>
+    window.__scribeApi.invoke('scribe:email-signature-get', { accountId: account.id }).then(
+      (result) => (result.ok ? result.signature : null),
+      () => null,
+    )
   // Responder e Encaminhar esperam o corpo (a citação é da mensagem inteira) e, no Encaminhar, os anexos da original
   // (CA9), já nos limites do envio; os que passam ficam de fora e o composer diz quais.
-  const [preparing, setPreparing] = useState(false)
   const compose = (mode: Exclude<ComposeMode, 'new'>, message: EmailMessage): void => {
+    const token = draftRequests.start()
     setPreparing(true)
     void (async () => {
       const body = await useEmail.getState().loadBody(account.id, message.id)
-      const draft = composeFrom(mode, message, body, account)
+      const draft = signedDraft(composeFrom(mode, message, body, { ...account, sentMailbox }), await signature())
       if (mode === 'forward' && body && body.attachments.length > 0) {
         const found = await window.__scribeApi.invoke('scribe:email-attachments', { accountId: account.id, id: message.id }).catch(() => null)
         if (found?.ok) {
@@ -176,16 +197,24 @@ function FolderView({ account, folder }: { account: EmailAccount; folder: EmailF
           draft.skippedAttachments = found.skipped
         } else draft.skippedAttachments = body.attachments.map((item, index) => item.filename ?? `anexo-${index + 1}`)
       }
-      useEmail.getState().openDraft(draft)
-    })().finally(() => setPreparing(false))
+      if (draftRequests.current(token)) useEmail.getState().openDraft(draft)
+    })().finally(() => draftRequests.current(token) && setPreparing(false))
   }
 
   const newMessage = (to: Recipient[] = []): void => {
     if (ownDraft && !to.length) {
+      draftRequests.cancel()
+      setPreparing(false)
       useEmail.getState().showDraft()
       return
     }
-    useEmail.getState().openDraft({ ...emptyDraft(account.id), to })
+    const token = draftRequests.start()
+    setPreparing(true)
+    void signature()
+      .then((found) => {
+        if (draftRequests.current(token)) useEmail.getState().openDraft(signedDraft({ ...emptyDraft(account.id), to }, found))
+      })
+      .finally(() => draftRequests.current(token) && setPreparing(false))
   }
 
   const sent = (messageId: string): void => {
@@ -232,7 +261,7 @@ function FolderView({ account, folder }: { account: EmailAccount; folder: EmailF
                 <ul className="flex flex-col gap-0.5">
                   {group.items.map((message) => (
                     <li key={message.id}>
-                      <MessageRow message={message} active={!showComposer && message.id === selected} onOpen={() => select(message.id)} />
+                      <MessageRow message={message} sentMailbox={sentMailbox} active={!showComposer && message.id === selected} onOpen={() => select(message.id)} />
                     </li>
                   ))}
                 </ul>

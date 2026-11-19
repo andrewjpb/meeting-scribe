@@ -205,7 +205,7 @@ describe('cliente POP3 próprio (contrato 42, CA4)', () => {
     // As 3 continuam no servidor.
     expect(server.messages.map((message) => message.uidl)).toEqual(['uid-1', 'uid-2', 'uid-3'])
     expect(received.map((message) => message.id)).toEqual(['uid-2', 'uid-3'])
-    expect(received[0]).toMatchObject({ accountId: id, folder: 'inbox', subject: 'Assunto 2', from: [{ name: 'Remetente 2', address: 'r2@exemplo.com' }], messageId: '<m2@exemplo.com>' })
+    expect(received[0]).toMatchObject({ accountId: id, mailbox: 'INBOX', subject: 'Assunto 2', from: [{ name: 'Remetente 2', address: 'r2@exemplo.com' }], messageId: '<m2@exemplo.com>' })
 
     // No store, por conta: os 3 UIDLs vistos e as 3 mensagens; o corpo já veio no RETR, sem o ponto de escape.
     const stored = JSON.parse(readFileSync(join(userData, 'email', `${id}.json`), 'utf8')) as { seenUidls: string[]; inbox: EmailMessage[] }
