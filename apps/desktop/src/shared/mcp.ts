@@ -64,8 +64,9 @@ export const MCP_CLI_DESCRIPTION = 'Os servidores MCP do claude instalado neste 
 export const MCP_APP_DESCRIPTION = 'Servidores que valem só neste app.'
 export const MCP_FOUND_DESCRIPTION = 'Servidores de outras ferramentas (Claude Desktop). Importar não traz os segredos.'
 export const MCP_ADD_DESCRIPTION = 'Um comando local (stdio) ou um endereço (HTTP), no Claude CLI ou só neste app.'
-/** Contrato 57: a seção dos conectores do claude.ai, na tela e no índice da busca. */
-export const CLAUDE_CONNECTORS_DESCRIPTION = 'Os conectores da sua conta do claude.ai (Notion, Google Drive, Gmail…). Ligue um por um; o login fica no claude.ai.'
+/** Contrato 57: a seção dos conectores do claude.ai, na tela e no índice da busca (texto do contrato 58). */
+export const CLAUDE_CONNECTORS_DESCRIPTION =
+  'Os conectores ligados na sua conta do claude.ai (claude mcp list). O login de cada um fica no claude.ai: o app não vê nem guarda token. Ligado, vale no Assistente e no chat da reunião.'
 
 export const MCP_USE_LABELS: Readonly<Record<McpUse, string>> = { chat: 'Chat', analysis: 'Análise' }
 export const MCP_POLICY_LABELS: Readonly<Record<McpToolPolicy, string>> = { ask: 'Perguntar', allow: 'Permitir', deny: 'Negar' }
@@ -212,6 +213,8 @@ export type ClaudeConnectorsReason = 'no-subscription' | 'none'
  */
 export interface ClaudeConnectorPrefs {
   enabled: boolean
+  /** Contrato 58: já foi ligado alguma vez no app (ausente: nunca). Só decide o aviso do CA2. */
+  everEnabled?: boolean | undefined
   tools: Record<string, McpToolPolicy>
 }
 
@@ -223,6 +226,66 @@ export const CLAUDE_CONNECTORS_UNCHECKED_NOTICE = 'Os conectores ficaram desliga
 export function claudeConnectorPendingNotice(name: string): string {
   return `O ${name} ainda não conectou`
 }
+
+/** Contrato 58: o estado na linha do conector ("Conector do claude.ai · Conectado"). */
+export const CLAUDE_CONNECTOR_STATE_LABELS: Readonly<Record<ClaudeConnectorState, string>> = { connected: 'Conectado', 'needs-auth': 'Precisa autorizar', failed: 'Com problema' }
+/** Contrato 58: onde se autoriza um conector (o app não faz o login: abre no navegador). */
+export const CLAUDE_CONNECTORS_URL = 'https://claude.ai/settings/connectors'
+export const CLAUDE_CONNECTOR_AUTHORIZE_HINT = 'Autorize na sua conta para o app poder ligar.'
+export const CLAUDE_CONNECTORS_NO_SUBSCRIPTION = 'Os conectores do claude.ai só funcionam com o Claude logado pela assinatura.'
+/** Contrato 58 (CA5): ligar ou desligar vale na próxima pergunta. */
+export const CLAUDE_CONNECTOR_NEXT_QUESTION = 'Vale na próxima pergunta. A conversa aberta continua como estava.'
+/** Contrato 58 (CA3): a nota abaixo da lista de ferramentas. */
+export const CLAUDE_CONNECTOR_TOOLS_NOTE = 'Cada ferramenta: Perguntar, Permitir ou Negar. "Escrita" é só um aviso pelo nome da ferramenta; o padrão continua Perguntar.'
+
+/** Contrato 58 (CA2): o aviso de uma linha ao ligar um conector pela primeira vez. */
+export function claudeConnectorEnabledNotice(name: string): string {
+  return `O agente poderá usar o ${name} da sua conta do claude.ai. Cada ferramenta pergunta antes, até você mudar.`
+}
+
+/** Palavras do nome que sugerem escrita (CA3 do contrato 58). */
+const WRITE_WORDS = new Set(['send', 'create', 'delete', 'update'])
+
+/**
+ * Contrato 58 (CA3): o nome da ferramenta sugere escrita? Pelas palavras do nome (`create-pages`, `gmail_send_message`,
+ * `updatePage`). É só o rótulo "Escrita": a política continua "Perguntar" até a pessoa mudar.
+ */
+export function mcpToolSuggestsWrite(name: string): boolean {
+  return name
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .split(/[^A-Za-z0-9]+/)
+    .some((word) => WRITE_WORDS.has(word.toLowerCase()))
+}
+
+/**
+ * Contrato 58: `settings.claudeConnectors` com o conector ligado ou desligado (as regras dele ficam). Ligar marca
+ * `everEnabled`: ligar de novo não é "a primeira vez" (`connectorFirstEnable`).
+ */
+export function withConnectorEnabled(connectors: Readonly<Record<string, ClaudeConnectorPrefs>>, name: string, enabled: boolean): Record<string, ClaudeConnectorPrefs> {
+  const entry = connectors[name]
+  const ever = enabled || entry?.everEnabled === true
+  return { ...connectors, [name]: { enabled, ...(ever ? { everEnabled: true } : {}), tools: { ...(entry?.tools ?? {}) } } }
+}
+
+/**
+ * Contrato 58 (CA2): ligar agora é a primeira vez? Vale mesmo com a entrada já criada por uma regra escolhida com o
+ * conector desligado. Entrada ligada sem `everEnabled` (gravada antes do campo) também já foi ligada.
+ */
+export function connectorFirstEnable(connectors: Readonly<Record<string, ClaudeConnectorPrefs>>, name: string): boolean {
+  const entry = connectors[name]
+  return !entry || (entry.everEnabled !== true && !entry.enabled)
+}
+
+/** Contrato 58: `settings.claudeConnectors` com a regra de uma ferramenta ("Perguntar", o padrão, não fica guardado). */
+export function withConnectorPolicy(connectors: Readonly<Record<string, ClaudeConnectorPrefs>>, name: string, tool: string, policy: McpToolPolicy): Record<string, ClaudeConnectorPrefs> {
+  const entry = connectors[name]
+  const key = mcpToolKey(tool)
+  const { [key]: _previous, ...tools } = entry?.tools ?? {}
+  return { ...connectors, [name]: { enabled: entry?.enabled ?? false, ...(entry?.everEnabled ? { everEnabled: true } : {}), tools: policy === 'ask' ? tools : { ...tools, [key]: policy } } }
+}
+
+/** Contrato 58 (CA3): as ferramentas de um conector, lidas do `mcpServerStatus` do `claude`. */
+export type ClaudeConnectorTools = { ok: true; tools: McpToolInfo[] } | { ok: false; error: string }
 
 /** "claude.ai Notion": o nome do conector como a lista do `claude` e o cartão de aprovação mostram. */
 export function claudeConnectorLabel(name: string): string {

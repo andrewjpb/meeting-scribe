@@ -60,6 +60,8 @@ const connectorToolSchema = z.string().regex(new RegExp(`^[A-Za-z0-9_-]{1,${MCP_
 const connectorPrefsSchema = z
   .object({
     enabled: z.boolean(),
+    // Contrato 58: já foi ligado alguma vez (o aviso do CA2 só sai na primeira). Opcional: o arquivo antigo carrega igual.
+    everEnabled: z.boolean().optional(),
     tools: z.record(connectorToolSchema, z.enum(MCP_TOOL_POLICIES)).refine((tools) => Object.keys(tools).length <= MCP_TOOLS_MAX),
   })
   .strict()

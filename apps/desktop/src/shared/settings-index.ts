@@ -117,10 +117,10 @@ export function settingsIndex(agent: string): SettingsEntry[] {
     ]),
     // Contrato 21: as linhas fixas da aba "Conexões" (os servidores são itens da lista, não linhas de configuração).
     row('conexoes', 'Do Claude CLI', 'Servidores do Claude CLI', MCP_CLI_DESCRIPTION),
-    // Contrato 57: os conectores do claude.ai (a seção da tela vem no contrato 58).
-    row('conexoes', 'Conectores do claude.ai', 'Conectores do claude.ai', CLAUDE_CONNECTORS_DESCRIPTION),
     row('conexoes', 'Servidores do app', 'Adicionar servidor MCP', MCP_ADD_DESCRIPTION),
     row('conexoes', 'Encontrados neste Mac', 'Claude Desktop', MCP_FOUND_DESCRIPTION),
+    // Contrato 58: a seção dos conectores do claude.ai, por último.
+    row('conexoes', 'Conectores do claude.ai', 'Conectores da sua conta', CLAUDE_CONNECTORS_DESCRIPTION),
     row('sobre', 'Sobre', 'Versão', 'Versão instalada do app.'),
     row('sobre', 'Sobre', 'Electron', 'Base do app.'),
     row('sobre', 'Sobre', 'Chrome', 'Motor das telas.'),

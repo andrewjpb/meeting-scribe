@@ -284,8 +284,16 @@ describe('serviço (CA0 a CA4)', () => {
       ['remoto', true, false],
       ['plugin:design:slack', false, false],
     ])
-    // Contrato 57: o conector do claude.ai sai da lista do CLI (não é mais "não usável") e vai para a lista própria.
-    expect(overview.connectors).toEqual({ connectors: [{ name: 'Notion', toolServer: 'claude_ai_Notion', state: 'connected' }], reason: null })
+    // Contrato 57: os conectores do claude.ai saem da lista do CLI (não são mais "não usáveis") e vão para a lista própria
+    // (contrato 58: o `claude` falso tem três).
+    expect(overview.connectors).toEqual({
+      connectors: [
+        { name: 'Notion', toolServer: 'claude_ai_Notion', state: 'connected' },
+        { name: 'Google Drive', toolServer: 'claude_ai_Google_Drive', state: 'connected' },
+        { name: 'Gmail', toolServer: 'claude_ai_Gmail', state: 'needs-auth' },
+      ],
+      reason: null,
+    })
     expect(JSON.stringify(overview)).not.toContain(SECRET)
     expect(await mcp.sessionServers('chat', [])).toEqual([])
     await mcp.update({ key: 'cli:calculadora', enabled: true })

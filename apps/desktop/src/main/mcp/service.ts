@@ -43,6 +43,7 @@ import {
   type ClaudeConnectorList,
   type ClaudeConnectorPrefs,
   type ClaudeConnectorsReason,
+  type ClaudeConnectorTools,
   type McpChatServer,
   type McpCliDetails,
   type McpCliServerView,
@@ -60,6 +61,7 @@ import {
 import type { AcpConnectorSet, AcpMcpServer } from '../acp/profiles/types'
 import { EncryptionUnavailableError } from '../secrets'
 import { connectorsOf, isConnectorEntry, readServersFile, type CliDefinition, type CliListEntry, type McpCli } from './cli'
+import type { ConnectorStatus } from './connector-tools'
 import { testMcpServer, type McpConnectDefinition, type SpawnMcp } from './client'
 import type { CliServerPrefs, McpStore, StoredMcpServer, StoredPair } from './store'
 
@@ -116,6 +118,11 @@ export interface McpService {
    * ela espera uma lista nova.
    */
   invalidateConnectors(): void
+  /**
+   * Contrato 58 (CA3): "Ver ferramentas" de um conector conectado, do `mcpServerStatus` do `claude` (uma leitura serve
+   * todos os conectores por 5 min).
+   */
+  connectorTools(input: unknown): Promise<ClaudeConnectorTools>
 }
 
 const pairSchema = z
@@ -246,6 +253,9 @@ export function createMcpService(deps: McpServiceDeps): McpService {
   let listFailedAt: number | null = null
   /** Contrato 57: quando a lista em cache foi lida; `null` obriga a próxima sessão com conector a esperar uma nova. */
   let listedAt: number | null = null
+  /** Contrato 58: as ferramentas de cada conector conectado, da última leitura do `mcpServerStatus`, e a leitura em curso. */
+  const toolsByConnector = new Map<string, { tools: McpToolInfo[]; at: number }>()
+  let readingTools: { names: Set<string>; done: Promise<ConnectorStatus[]> } | null = null
   /** Teste dos servidores do CLI nesta execução do app (não vai para o disco). */
   const cliTests = new Map<string, { ok: true; tools: McpToolInfo[] } | { ok: false; error: string }>()
   const tested: string[] = []
@@ -273,6 +283,8 @@ export function createMcpService(deps: McpServiceDeps): McpService {
   async function readCli(refresh: boolean): Promise<void> {
     // Só a lista lida guarda: sem o `claude` (ou com erro), a próxima abertura da aba tenta de novo.
     if (cliList?.state === 'ok' && !refresh) return
+    // Contrato 58: lista relida ("Atualizar"), as ferramentas dos conectores também.
+    toolsByConnector.clear()
     const path = await claudePath()
     if (!path) {
       cliList = { state: 'not-found', entries: [] }
@@ -592,6 +604,41 @@ export function createMcpService(deps: McpServiceDeps): McpService {
       return { name: mcpText(parsed.data.name, 200), lines }
     },
 
+    connectorTools: async (input) => {
+      const parsed = detailsSchema.safeParse(input)
+      if (!parsed.success) return { ok: false, error: 'Pedido inválido.' }
+      const name = parsed.data.name
+      const connector = connectorList().connectors.find((entry) => entry.name === name)
+      if (!connector) return { ok: false, error: 'Conector não encontrado.' }
+      if (connector.state !== 'connected') return { ok: false, error: 'O conector não está conectado.' }
+      const cached = toolsByConnector.get(name)
+      if (cached && now() - cached.at <= LIST_STALE_MS) return { ok: true, tools: cached.tools }
+      const path = await claudePath()
+      if (!path) return { ok: false, error: 'O claude não foi encontrado neste Mac.' }
+      try {
+        // Uma leitura por vez: o conector pedido depois entra nos nomes que ela espera (até o mesmo prazo).
+        let reading = readingTools
+        if (reading) reading.names.add(name)
+        else {
+          const names = new Set([name])
+          reading = { names, done: deps.cli.connectorTools(path, names) }
+          readingTools = reading
+        }
+        const current = reading
+        const statuses = await current.done.finally(() => {
+          if (readingTools === current) readingTools = null
+        })
+        const at = now()
+        for (const status of statuses) if (status.status === 'connected') toolsByConnector.set(status.name, { tools: status.tools, at })
+        const found = statuses.find((status) => status.name === name)
+        if (found?.status === 'connected') return { ok: true, tools: found.tools }
+        return { ok: false, error: found?.status === 'pending' ? 'O conector ainda não conectou. Tente de novo.' : 'O conector não respondeu com as ferramentas.' }
+      } catch {
+        log('[mcp] as ferramentas do conector não foram lidas')
+        return { ok: false, error: 'Não foi possível ler as ferramentas do conector.' }
+      }
+    },
+
     importFound: async (input) => {
       const parsed = importSchema.safeParse(input)
       if (!parsed.success) return { ok: false, error: 'Pedido inválido.' }
@@ -659,6 +706,7 @@ export function createMcpService(deps: McpServiceDeps): McpService {
 
     invalidateConnectors: () => {
       listedAt = null
+      toolsByConnector.clear()
     },
 
     sessionConnectors: async () => {
