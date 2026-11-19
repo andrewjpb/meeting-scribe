@@ -556,3 +556,202 @@ def test_send_media_oversize_is_413(running, monkeypatch):
     monkeypatch.setattr(server, 'SEND_VIDEO_MAX', 64 * 1024 * 1024)
     assert send_media(port, ANA, None, 'video/mp4', length=64 * 1024 * 1024 + 1) == (413, {'error': 'too-big'})
     assert [item['type'] for item in bridge.backend.sent] == ['video']
+
+
+# Contrato 34: responder citando, reações e "digitando…".
+ATLAS = SEED_CHATS[1][0]
+THUMBS = '\U0001f44d'
+HEART = '❤️'
+
+
+def events_reader(port):
+    """`/events` aberto, já depois do primeiro `state`; devolve `(conn, próximo evento)`."""
+    conn = http.client.HTTPConnection(server.HOST, port, timeout=5)
+    conn.request('GET', '/events', headers={'Authorization': f'Bearer {TOKEN}'})
+    response = conn.getresponse()
+    for _ in range(3):
+        response.fp.readline()
+
+    def next_event(skip=('message', 'chats')):
+        while True:
+            event = response.fp.readline().decode().strip()[len('event: '):]
+            data = json.loads(response.fp.readline().decode()[len('data: '):])
+            response.fp.readline()
+            if event not in skip:
+                return event, data
+
+    return conn, next_event
+
+
+def test_old_database_gains_the_reply_columns_and_the_reactions_table(tmp_path):
+    import sqlite3
+
+    from bridge_store import Store
+
+    path = tmp_path / 'velho.db'
+    old = sqlite3.connect(path)
+    old.executescript(
+        '''
+        CREATE TABLE chats (id TEXT PRIMARY KEY, name TEXT NOT NULL DEFAULT '', kind TEXT NOT NULL DEFAULT 'person', unread INTEGER NOT NULL DEFAULT 0, last_at INTEGER NOT NULL DEFAULT 0);
+        CREATE TABLE messages (id TEXT NOT NULL, chat_id TEXT NOT NULL, author TEXT NOT NULL DEFAULT '', from_me INTEGER NOT NULL DEFAULT 0, at INTEGER NOT NULL, kind TEXT NOT NULL DEFAULT 'text', text TEXT NOT NULL DEFAULT '', media_mime TEXT, media_size INTEGER, media_name TEXT, PRIMARY KEY (chat_id, id));
+        INSERT INTO messages (id, chat_id, at, text) VALUES ('antiga', '5511944440000@s.whatsapp.net', 1000, 'de antes');
+        '''
+    )
+    old.commit()
+    old.close()
+    store = Store(str(path))
+    columns = {row[1] for row in store.db.execute('PRAGMA table_info(messages)').fetchall()}
+    assert {'reply_to_id', 'reply_preview', 'sender', 'media_proto', 'media_seconds'} <= columns
+    assert store.db.execute("SELECT name FROM sqlite_master WHERE name = 'reactions'").fetchone()
+    # A mensagem de antes continua, sem citação e sem reações.
+    assert store.messages('5511944440000@s.whatsapp.net') == [
+        {'id': 'antiga', 'chatId': '5511944440000@s.whatsapp.net', 'author': '', 'fromMe': False, 'at': 1000, 'type': 'text', 'text': 'de antes', 'media': None}
+    ]
+    store.close()
+
+
+def test_incoming_reply_keeps_the_quote_and_the_preview(running):
+    _, port, _ = running
+    call(port, 'POST', '/_fake/scan', {})
+    conn, next_event = events_reader(port)
+    threading.Timer(0.1, lambda: call(port, 'POST', '/_fake/incoming', {'chatId': ANA, 'text': 'Sobre isso: sim!', 'replyToId': 'm1'})).start()
+    event, data = next_event(skip=('chats',))
+    assert event == 'message' and data['replyToId'] == 'm1' and data['replyPreview'] == 'Oi! Conseguimos marcar a reunião de sexta?'
+    assert 'sender' not in data
+    conn.close()
+    last = call(port, 'GET', f'/chats/{ANA}/messages')[1]['messages'][-1]
+    assert last['replyToId'] == 'm1' and last['replyPreview'].startswith('Oi! Conseguimos')
+    # Sem citação, a mensagem não leva os campos.
+    assert 'replyToId' not in call(port, 'GET', f'/chats/{ANA}/messages')[1]['messages'][0]
+
+
+def test_reply_preview_is_one_line_up_to_120_or_the_media_label(tmp_path):
+    from bridge_store import Store, reply_preview_of
+
+    assert reply_preview_of('text', 'linha um\n\nlinha   dois') == 'linha um linha dois'
+    assert reply_preview_of('image', '') == 'Imagem' and reply_preview_of('audio', None) == 'Áudio'
+    assert reply_preview_of('image', 'com legenda') == 'com legenda'
+    assert len(reply_preview_of('text', 'x' * 500)) == 120
+    store = Store(str(tmp_path / 'm.db'))
+    chat = '5511944440000@s.whatsapp.net'
+    store.add_message({'id': 'A1', 'chatId': chat, 'author': 'Bia', 'fromMe': False, 'at': 1, 'type': 'audio', 'text': '', 'media': {'kind': 'audio', 'mime': 'audio/ogg', 'size': 10, 'name': None}})
+    store.add_message({'id': 'A2', 'chatId': chat, 'author': 'Bia', 'fromMe': False, 'at': 2, 'type': 'text', 'text': 'ouviu?', 'media': None, 'replyToId': 'A1'})
+    store.add_message({'id': 'A3', 'chatId': chat, 'author': 'Bia', 'fromMe': False, 'at': 3, 'type': 'text', 'text': 'e isto', 'media': None, 'replyToId': 'SUMIU'})
+    listed = {m['id']: m for m in store.messages(chat)}
+    assert listed['A2']['replyPreview'] == 'Áudio'
+    # A citada que não está guardada: o id fica, o trecho vazio.
+    assert listed['A3']['replyToId'] == 'SUMIU' and listed['A3']['replyPreview'] == ''
+    store.close()
+
+
+def test_send_reply_quotes_the_stored_message_and_falls_back_without_it(running):
+    bridge, port, _ = running
+    call(port, 'POST', '/_fake/scan', {})
+    status, body = call(port, 'POST', f'/chats/{ANA}/send', {'text': 'Conseguimos sim.', 'replyToId': 'm1'})
+    assert status == 200
+    assert bridge.backend.sent[-1] == {'id': body['id'], 'chatId': ANA, 'text': 'Conseguimos sim.', 'replyToId': 'm1'}
+    echo = call(port, 'GET', f'/chats/{ANA}/messages')[1]['messages'][-1]
+    assert echo['fromMe'] and echo['replyToId'] == 'm1' and echo['replyPreview'].startswith('Oi! Conseguimos')
+    # Id que não está guardado: sai sem citação (e o eco também).
+    status, body = call(port, 'POST', f'/chats/{ANA}/send', {'text': 'Sem citação.', 'replyToId': 'NAOEXISTE'})
+    assert status == 200 and bridge.backend.sent[-1] == {'id': body['id'], 'chatId': ANA, 'text': 'Sem citação.'}
+    assert 'replyToId' not in call(port, 'GET', f'/chats/{ANA}/messages')[1]['messages'][-1]
+    # Num grupo, a citada sem quem mandou (de antes desta versão) também sai sem citação; com, cita.
+    bridge.on_message({'id': 'velha', 'chatId': ATLAS, 'author': 'Carla', 'fromMe': False, 'at': 10, 'type': 'text', 'text': 'antiga', 'media': None})
+    call(port, 'POST', f'/chats/{ATLAS}/send', {'text': 'ok', 'replyToId': 'velha'})
+    assert 'replyToId' not in bridge.backend.sent[-1]
+    call(port, 'POST', f'/chats/{ATLAS}/send', {'text': 'ok', 'replyToId': 'm5'})
+    assert bridge.backend.sent[-1]['replyToId'] == 'm5'
+    # Id malformado é pedido inválido.
+    assert call(port, 'POST', f'/chats/{ANA}/send', {'text': 'oi', 'replyToId': 'a b'})[0] == 400
+    assert call(port, 'POST', f'/chats/{ANA}/send', {'text': 'oi', 'replyToId': 5})[0] == 400
+
+
+def test_reactions_upsert_remove_and_aggregate(tmp_path):
+    from bridge_store import REACTION_ME, Store, clean_emoji
+
+    store = Store(str(tmp_path / 'm.db'))
+    chat = '120363000000000009@g.us'
+    store.add_message({'id': 'R1', 'chatId': chat, 'author': 'Bia', 'fromMe': False, 'at': 1, 'type': 'text', 'text': 'oi', 'media': None})
+    assert store.set_reaction(chat, 'R1', 'a@s.whatsapp.net', THUMBS, 100) == [{'emoji': THUMBS, 'count': 1, 'mine': False}]
+    store.set_reaction(chat, 'R1', 'b@s.whatsapp.net', THUMBS, 101)
+    store.set_reaction(chat, 'R1', REACTION_ME, HEART, 102)
+    assert store.messages(chat)[0]['reactions'] == [{'emoji': THUMBS, 'count': 2, 'mine': False}, {'emoji': HEART, 'count': 1, 'mine': True}]
+    # A mesma pessoa troca o emoji (uma reação por pessoa); a mais velha que chega depois não vale.
+    store.set_reaction(chat, 'R1', 'a@s.whatsapp.net', HEART, 103)
+    store.set_reaction(chat, 'R1', 'a@s.whatsapp.net', THUMBS, 50)
+    assert store.messages(chat)[0]['reactions'] == [{'emoji': HEART, 'count': 2, 'mine': True}, {'emoji': THUMBS, 'count': 1, 'mine': False}]
+    # Emoji vazio tira a reação.
+    store.set_reaction(chat, 'R1', REACTION_ME, '', 104)
+    store.set_reaction(chat, 'R1', 'a@s.whatsapp.net', '', 105)
+    assert store.messages(chat)[0]['reactions'] == [{'emoji': THUMBS, 'count': 1, 'mine': False}]
+    store.set_reaction(chat, 'R1', 'b@s.whatsapp.net', '', 106)
+    assert 'reactions' not in store.messages(chat)[0]
+    # O que chega é só texto: sem caractere de controle, curto.
+    assert clean_emoji('\U0001f44d\n\x1b[31m') == '\U0001f44d[31m'[:16] and len(clean_emoji('x' * 99)) == 16 and clean_emoji(None) == ''
+    assert store.set_reactions([(chat, 'R1', 'c@s.whatsapp.net', THUMBS, 200), (chat, 'R1', 'd@s.whatsapp.net', THUMBS, 201)]) == 2
+    assert store.messages(chat)[0]['reactions'] == [{'emoji': THUMBS, 'count': 2, 'mine': False}]
+    store.close()
+
+
+def test_incoming_reaction_goes_to_events_not_as_a_message(running):
+    _, port, _ = running
+    call(port, 'POST', '/_fake/scan', {})
+    before = len(call(port, 'GET', f'/chats/{ANA}/messages')[1]['messages'])
+    conn, next_event = events_reader(port)
+    threading.Timer(0.1, lambda: call(port, 'POST', '/_fake/incoming', {'chatId': ANA, 'reaction': {'messageId': 'm2', 'emoji': HEART}})).start()
+    event, data = next_event()
+    assert event == 'reactions' and data == {'chatId': ANA, 'messageId': 'm2', 'reactions': [{'emoji': HEART, 'count': 1, 'mine': False}]}
+    threading.Timer(0.1, lambda: call(port, 'POST', '/_fake/incoming', {'chatId': ANA, 'reaction': {'messageId': 'm2', 'emoji': ''}})).start()
+    assert next_event() == ('reactions', {'chatId': ANA, 'messageId': 'm2', 'reactions': []})
+    conn.close()
+    assert len(call(port, 'GET', f'/chats/{ANA}/messages')[1]['messages']) == before
+
+
+def test_react_route_sends_only_the_fixed_emojis(running):
+    bridge, port, _ = running
+    path = f'/chats/{ANA}/messages/m1/react'
+    assert call(port, 'POST', path, {'emoji': THUMBS})[0] == 409
+    call(port, 'POST', '/_fake/scan', {})
+    status, body = call(port, 'POST', path, {'emoji': THUMBS})
+    assert status == 200 and body == {'reactions': [{'emoji': THUMBS, 'count': 1, 'mine': True}]}
+    assert bridge.backend.sent[-1] == {'type': 'reaction', 'chatId': ANA, 'messageId': 'm1', 'emoji': THUMBS}
+    assert call(port, 'GET', f'/chats/{ANA}/messages')[1]['messages'][-3]['reactions'] == [{'emoji': THUMBS, 'count': 1, 'mine': True}]
+    # Vazio tira a sua.
+    status, body = call(port, 'POST', path, {'emoji': ''})
+    assert status == 200 and body == {'reactions': []} and bridge.backend.sent[-1]['emoji'] == ''
+    # Fora da lista fixa, sem emoji ou para uma mensagem que não está guardada: nada sai.
+    sent = len(bridge.backend.sent)
+    assert call(port, 'POST', path, {'emoji': '\U0001f525'})[0] == 400
+    assert call(port, 'POST', path, {})[0] == 400
+    assert call(port, 'POST', path, {'emoji': 'x'})[0] == 400
+    assert call(port, 'POST', f'/chats/{ANA}/messages/NAOEXISTE/react', {'emoji': THUMBS})[0] == 404
+    assert call(port, 'POST', f'/chats/{ANA}/messages/a%20b/react', {'emoji': THUMBS})[0] == 400
+    assert call(port, 'POST', f'/chats/{ANA}/messages/m1/react', {'emoji': THUMBS}, token=None)[0] == 401
+    assert len(bridge.backend.sent) == sent
+    # Num grupo, com quem mandou guardado, a reação sai.
+    assert call(port, 'POST', f'/chats/{ATLAS}/messages/m5/react', {'emoji': HEART})[0] == 200
+    for emoji in server.REACTION_EMOJIS:
+        assert call(port, 'POST', path, {'emoji': emoji})[0] == 200
+
+
+def test_presence_goes_to_events_and_the_route_only_sends_composing_or_paused(running):
+    bridge, port, _ = running
+    call(port, 'POST', '/_fake/scan', {})
+    conn, next_event = events_reader(port)
+    threading.Timer(0.1, lambda: call(port, 'POST', '/_fake/incoming', {'chatId': ANA, 'presence': 'composing'})).start()
+    assert next_event() == ('presence', {'chatId': ANA, 'state': 'composing', 'author': None})
+    threading.Timer(0.1, lambda: call(port, 'POST', '/_fake/incoming', {'chatId': ATLAS, 'presence': 'composing', 'author': 'Carla Dias'})).start()
+    assert next_event() == ('presence', {'chatId': ATLAS, 'state': 'composing', 'author': 'Carla Dias'})
+    conn.close()
+    # Estado desconhecido ou conversa inválida não vão ao app.
+    bridge.on_presence(ANA, 'recording')
+    bridge.on_presence('nada', 'composing')
+    assert call(port, 'POST', f'/chats/{ANA}/presence', {'state': 'composing'}) == (200, {'ok': True})
+    assert call(port, 'POST', f'/chats/{ANA}/presence', {'state': 'paused'})[0] == 200
+    assert call(port, 'POST', f'/chats/{ANA}/presence', {'state': 'available'})[0] == 400
+    assert call(port, 'POST', '/chats/nada/presence', {'state': 'paused'})[0] == 400
+    assert call(port, 'POST', f'/chats/{ANA}/presence', {'state': 'paused'}, token=None)[0] == 401
+    assert call(port, 'POST', '/_fake/presences', {})[1] == {'presences': [{'chatId': ANA, 'state': 'composing'}, {'chatId': ANA, 'state': 'paused'}]}
+    # A presença não é mensagem: nada entra em `sent`.
+    assert all(item.get('type') != 'presence' for item in bridge.backend.sent)

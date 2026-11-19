@@ -34,6 +34,10 @@ import type {
   WhatsAppMeetingLink,
   WhatsAppMessage,
   WhatsAppPairing,
+  WhatsAppPresence,
+  WhatsAppReactRequest,
+  WhatsAppReactResult,
+  WhatsAppReaction,
   WhatsAppSearchHit,
   WhatsAppSendRequest,
   WhatsAppSendResult,
@@ -308,6 +312,16 @@ export interface InvokeChannels {
   'scribe:whatsapp-send-media': { request: WhatsAppSendMediaRequest; response: WhatsAppSendMediaResult }
   /** Contrato 39: o clipe do campo abre o seletor do macOS; o arquivo escolhido volta conferido (nada é enviado). */
   'scribe:whatsapp-attach-pick': { request: undefined; response: WhatsAppAttachPickResult }
+  /**
+   * Contrato 34: reagir a uma mensagem (um dos 6 emojis; vazio tira a sua). É envio: só com o token de clique do preload
+   * (`ScribeApi.whatsappReact`), gasto no mesmo guarda do texto.
+   */
+  'scribe:whatsapp-react': { request: WhatsAppReactRequest; response: WhatsAppReactResult }
+  /**
+   * Contrato 34: o "digitando…" da sua conta na conversa aberta. Não é mensagem (sem token de clique), mas o main só
+   * repassa com "Mostrar quando estou digitando" ligado; `false`: nada saiu.
+   */
+  'scribe:whatsapp-typing': { request: { chatId: string; state: 'composing' | 'paused' }; response: boolean }
   /** "Rascunho com o Claude": o texto volta para o campo; nada é enviado. */
   'scribe:whatsapp-draft': { request: WhatsAppDraftRequest; response: WhatsAppDraftResult }
   /** "Ligar conversa do WhatsApp" no detalhe da reunião. */
@@ -415,6 +429,10 @@ export interface MainEvents {
   'scribe:whatsapp-message': { message: WhatsAppMessage; chatName: string }
   /** Várias conversas mudaram de uma vez (histórico, nomes): relê a lista. Não chega com o app bloqueado. */
   'scribe:whatsapp-chats-changed': undefined
+  /** Contrato 34: as reações de uma mensagem mudaram (todas, juntas). Não chega com o app bloqueado. */
+  'scribe:whatsapp-reactions': { chatId: string; messageId: string; reactions: WhatsAppReaction[] }
+  /** Contrato 34: alguém digitando (ou parou) numa conversa. Não chega com o app bloqueado. */
+  'scribe:whatsapp-presence': WhatsAppPresence
   /** Automações (contrato 23): a resposta de uma execução crescendo ou terminada. Não chega com o app bloqueado. */
   'scribe:automation-event': AutomationEvent
   /** Tarefas, fila ou pausa mudaram: a tela relê. */
@@ -564,6 +582,8 @@ const INVOKE: Record<InvokeChannel, true> = {
   'scribe:whatsapp-send': true,
   'scribe:whatsapp-send-media': true,
   'scribe:whatsapp-attach-pick': true,
+  'scribe:whatsapp-react': true,
+  'scribe:whatsapp-typing': true,
   'scribe:whatsapp-draft': true,
   'scribe:whatsapp-link-get': true,
   'scribe:whatsapp-link-set': true,
@@ -619,6 +639,8 @@ const MAIN_EVENTS: Record<MainEvent, true> = {
   'scribe:whatsapp-state': true,
   'scribe:whatsapp-message': true,
   'scribe:whatsapp-chats-changed': true,
+  'scribe:whatsapp-reactions': true,
+  'scribe:whatsapp-presence': true,
   'scribe:automation-event': true,
   'scribe:automations-changed': true,
   'scribe:open-run': true,
@@ -799,6 +821,9 @@ export const WHEN_LOCKED: Readonly<Record<InvokeChannel, LockedPolicy>> = Object
   // Contrato 39: o envio do anexo e o seletor de arquivo, como o resto do WhatsApp.
   'scribe:whatsapp-send-media': 'refused',
   'scribe:whatsapp-attach-pick': 'refused',
+  // Contrato 34: a reação (um envio) e o "digitando…", como o resto do WhatsApp.
+  'scribe:whatsapp-react': 'refused',
+  'scribe:whatsapp-typing': 'refused',
   'scribe:whatsapp-draft': 'refused',
   'scribe:whatsapp-link-get': 'refused',
   'scribe:whatsapp-link-set': 'refused',
@@ -864,4 +889,6 @@ export interface ScribeApi {
   whatsappSend(request: Omit<WhatsAppSendRequest, 'clickToken'>): Promise<WhatsAppSendResult>
   /** Contrato 39: o "Enviar" com um anexo, pelo mesmo token de clique do `whatsappSend`. */
   whatsappSendMedia(request: Omit<WhatsAppSendMediaRequest, 'clickToken'>): Promise<WhatsAppSendMediaResult>
+  /** Contrato 34: reagir é envio: o mesmo token de clique do `whatsappSend`, gerado só com a ativação do usuário viva. */
+  whatsappReact(request: Omit<WhatsAppReactRequest, 'clickToken'>): Promise<WhatsAppReactResult>
 }

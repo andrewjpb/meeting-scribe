@@ -173,6 +173,9 @@ describe('canais com o app bloqueado (contrato 22, CA4)', () => {
       // Contrato 39: o envio do anexo e o seletor de arquivo.
       'scribe:whatsapp-send-media',
       'scribe:whatsapp-attach-pick',
+      // Contrato 34: a reação (um envio) e o "digitando…".
+      'scribe:whatsapp-react',
+      'scribe:whatsapp-typing',
       'scribe:settings-update',
       'scribe:lock-password-set',
       'scribe:lock-password-remove',

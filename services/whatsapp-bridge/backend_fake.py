@@ -14,6 +14,10 @@
 #
 # Contrato 39: o envio de imagem e vídeo fica em `sent` (tipo, nome, tamanho e legenda, nunca os bytes) e o eco volta
 # com as chaves falsas do tipo: baixar o eco devolve o PNG (ou o começo de MP4) acima, não o arquivo enviado.
+# Contrato 34: o envio com `quote` guarda o `replyToId`; a reação (`send_reaction`) entra em `sent` como `{'type':
+# 'reaction', ...}` e a presença (`send_presence`) fica em `presences` (`POST /_fake/presences`). `POST /_fake/incoming`
+# aceita `replyToId` (a mensagem nova responde outra), `reaction: {messageId, emoji}` (alguém reage, ou tira com emoji
+# vazio; nenhuma mensagem nova) e `presence: 'composing' | 'paused'` (alguém digitando; nenhuma mensagem nova).
 import base64
 import math
 import os
@@ -28,6 +32,7 @@ FAKE_QR = '2@smoke-qr-falso,AbCdEfGhIjKlMnOpQrStUvWxYz0123456789+/=,smoke-chave-
 FAKE_PAIR_CODE = 'SMKE-1234'
 FAKE_ME = {'name': 'Andrea Teste', 'phone': '+55 11 90000-0000'}
 PAIRED_MARK = 'fake-paired'
+FAKE_GROUP_SENDER = '5511944440000@s.whatsapp.net'
 
 SEED_CHATS = [
     ('5511911110000@s.whatsapp.net', 'Ana Souza', 'person'),
@@ -116,8 +121,8 @@ def seed_messages(base):
         {'id': 'm1', 'chatId': ana, 'author': 'Ana Souza', 'fromMe': False, 'at': base - 50 * minute, 'type': 'text', 'text': 'Oi! Conseguimos marcar a reunião de sexta?', 'media': None},
         {'id': 'm2', 'chatId': ana, 'author': 'Andrea Teste', 'fromMe': True, 'at': base - 48 * minute, 'type': 'text', 'text': 'Acho que sim, confirmo até amanhã.', 'media': None},
         {'id': 'm3', 'chatId': ana, 'author': 'Ana Souza', 'fromMe': False, 'at': base - 40 * minute, 'type': 'text', 'text': 'Combinado. <b>Não</b> esquece a pauta.', 'media': None},
-        {'id': 'm4', 'chatId': atlas, 'author': 'Carla Dias', 'fromMe': False, 'at': base - 30 * minute, 'type': 'image', 'text': 'Quadro do cronograma', 'media': {'kind': 'image', 'mime': 'image/jpeg', 'size': 122_880, 'name': None}},
-        {'id': 'm5', 'chatId': atlas, 'author': 'Bruno Lima', 'fromMe': False, 'at': base - 25 * minute, 'type': 'text', 'text': 'O prazo da entrega ficou para o dia 28.', 'media': None},
+        {'id': 'm4', 'chatId': atlas, 'author': 'Carla Dias', 'fromMe': False, 'at': base - 30 * minute, 'type': 'image', 'text': 'Quadro do cronograma', 'media': {'kind': 'image', 'mime': 'image/jpeg', 'size': 122_880, 'name': None}, 'sender': '5511933330000@s.whatsapp.net'},
+        {'id': 'm5', 'chatId': atlas, 'author': 'Bruno Lima', 'fromMe': False, 'at': base - 25 * minute, 'type': 'text', 'text': 'O prazo da entrega ficou para o dia 28.', 'media': None, 'sender': SEED_CHATS[2][0]},
         {'id': 'm6', 'chatId': bruno, 'author': 'Bruno Lima', 'fromMe': False, 'at': base - 90 * minute, 'type': 'text', 'text': 'Mandei o contrato revisado por e-mail.', 'media': None},
     ]
 
@@ -157,6 +162,7 @@ class FakeBackend:
         self.data_dir = data_dir
         self.bridge = None
         self.sent = []
+        self.presences = []
         self.lock = threading.Lock()
         self.counter = 0
 
@@ -187,12 +193,24 @@ class FakeBackend:
     def logout(self):
         pass
 
-    def send_text(self, chat_id, text):
+    def send_text(self, chat_id, text, quote=None):
         with self.lock:
             self.counter += 1
             message_id = f'enviada-{self.counter}'
-            self.sent.append({'id': message_id, 'chatId': chat_id, 'text': text})
+            item = {'id': message_id, 'chatId': chat_id, 'text': text}
+            if quote:
+                item['replyToId'] = quote['id']
+            self.sent.append(item)
         return message_id
+
+    def send_reaction(self, chat_id, target, emoji):
+        """Contrato 34: a reação fica só na memória (`emoji` vazio: tirou a sua)."""
+        with self.lock:
+            self.sent.append({'type': 'reaction', 'chatId': chat_id, 'messageId': target['id'], 'emoji': emoji})
+
+    def send_presence(self, chat_id, state):
+        with self.lock:
+            self.presences.append({'chatId': chat_id, 'state': state})
 
     def send_media(self, chat_id, kind, mime, data, caption, name):
         """Contrato 39: `(id, chaves do download)`; o envio só fica na memória, sem os bytes."""
@@ -225,6 +243,16 @@ class FakeBackend:
                 self.bridge.on_message(message)
             self.bridge.on_state('connected', dict(FAKE_ME))
             return {'ok': True}
+        if action == 'incoming' and (isinstance(body.get('reaction'), dict) or body.get('presence') in ('composing', 'paused')):
+            # Contrato 34: a reação de alguém ou o "digitando…", sem mensagem nova.
+            chat_id = str(body.get('chatId') or SEED_CHATS[0][0])
+            author = str(body.get('author') or 'Ana Souza')
+            if 'presence' in body:
+                self.bridge.on_presence(chat_id, body['presence'], author if chat_id.endswith('@g.us') else None)
+                return {'ok': True}
+            reaction = body['reaction']
+            self.bridge.on_reaction(chat_id, str(reaction.get('messageId') or ''), f'fake:{author}', str(reaction.get('emoji') or ''), now_ms())
+            return {'ok': True}
         if action == 'incoming':
             with self.lock:
                 self.counter += 1
@@ -253,6 +281,10 @@ class FakeBackend:
                 'text': str(body.get('text') or ''),
                 'media': media,
             }
+            # Contrato 34: quem mandou (num grupo, um número falso fixo), que a resposta e a reação citam.
+            message['sender'] = FAKE_GROUP_SENDER if message['chatId'].endswith('@g.us') else message['chatId']
+            if isinstance(body.get('replyToId'), str):
+                message['replyToId'] = body['replyToId']
             if kind in FAKE_MEDIA and body.get('downloadable') is not False:
                 message['mediaProto'] = b'fake:gone' if body.get('gone') else f'fake:{kind}'.encode()
             self.bridge.on_message(message)
@@ -260,6 +292,9 @@ class FakeBackend:
         if action == 'sent':
             with self.lock:
                 return {'sent': list(self.sent)}
+        if action == 'presences':
+            with self.lock:
+                return {'presences': list(self.presences)}
         if action == 'ban':
             self.bridge.on_state('banned')
             return {'ok': True}

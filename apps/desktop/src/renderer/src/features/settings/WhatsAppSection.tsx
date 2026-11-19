@@ -1,6 +1,6 @@
 import { KeyRound, TriangleAlert } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
-import { WHATSAPP_NOTIFICATIONS_DESCRIPTION, WHATSAPP_ONLY_PEOPLE_DESCRIPTION } from '@shared/settings-index'
+import { WHATSAPP_NOTIFICATIONS_DESCRIPTION, WHATSAPP_ONLY_PEOPLE_DESCRIPTION, WHATSAPP_TYPING_SIGNAL_DESCRIPTION } from '@shared/settings-index'
 import { WHATSAPP_FIXED_WARNING, WHATSAPP_PAIR_HINT, whatsappStateLabel, type WhatsAppPairing } from '@shared/whatsapp'
 import { useSettings } from '../../app/settingsStore'
 import { Button } from '../../design/Button'
@@ -120,6 +120,7 @@ export function WhatsAppSection() {
   const [panel, setPanel] = useState<Panel>(null)
   const notifications = useSettings((state) => state.settings.whatsappNotifications)
   const notifyGroups = useSettings((state) => state.settings.whatsappNotifyGroups)
+  const typingSignal = useSettings((state) => state.settings.whatsappTypingSignal)
   const update = useSettings((state) => state.update)
 
   const state = status?.state ?? 'not-installed'
@@ -256,6 +257,10 @@ export function WhatsAppSection() {
           <Switch checked={!notifyGroups} labelledBy="settings-whatsapp-only-people" onChange={(onlyPeople) => void update({ whatsappNotifyGroups: !onlyPeople })} />
         </SettingRow>
       )}
+      {/* Contrato 34: o "digitando…" da sua conta, só com este interruptor ligado (padrão desligado). */}
+      <SettingRow name="Mostrar quando estou digitando" nameId="settings-whatsapp-typing-signal" description={WHATSAPP_TYPING_SIGNAL_DESCRIPTION}>
+        <Switch checked={typingSignal} labelledBy="settings-whatsapp-typing-signal" onChange={(whatsappTypingSignal) => void update({ whatsappTypingSignal })} />
+      </SettingRow>
     </Section>
   )
 }

@@ -19,6 +19,14 @@
 # fora do WhatsApp). Aqui a duração e a miniatura saem do ffprobe e do ffmpeg locais, num arquivo temporário 0600 da pasta
 # de dados, e o VideoMessage é montado à mão com o `upload` do neonize; miniatura que falha vai sem miniatura, nunca pela
 # rede. Sem o ffmpeg ou o ffprobe, `MissingFfmpeg` (o app explica como instalar).
+#
+# Contrato 34: a mensagem que responde outra traz o id e o trecho da citada (o `contextInfo` do `waE2E.Message`) e o id de
+# quem mandou (`sender`). A reação chega como uma mensagem (`reactionMessage`, com o id da reagida; texto vazio é "tirou") e
+# vira `on_reaction`, nunca mensagem; no histórico, também pelas `reactions` de cada mensagem. "Digitando…" chega pelo
+# `ChatPresenceEv` e vira `on_presence`. Enviar: a resposta é um ExtendedTextMessage com o `contextInfo` montado aqui (o id,
+# quem mandou e a mensagem citada, refeita do que ficou guardado); a reação, pelo `build_reaction`; a presença, pelo
+# `send_chat_presence` (só quando o app pede, com o interruptor ligado). O "digitando…" dos outros pode não chegar enquanto a
+# conta não estiver marcada como disponível; o serviço não marca (isso muda o "online" e as notificações do celular).
 import base64
 import hashlib
 import json
@@ -31,7 +39,7 @@ import time
 from urllib.parse import urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
-from bridge_store import DOWNLOADABLE_KINDS, MediaGone, MissingFfmpeg, to_ms
+from bridge_store import DOWNLOADABLE_KINDS, REACTION_ME, MediaGone, MissingFfmpeg, reply_preview_of, to_ms
 
 # Motivos de `ConnectFailure` do whatsmeow: 402 é a suspensão temporária; 401, 403 e 406 são sessão encerrada.
 TEMP_BANNED = 402
@@ -188,6 +196,49 @@ def media_of(message):
     return 'other', '', {'kind': 'other', 'mime': None, 'size': None, 'name': None}
 
 
+def _present(message, field):
+    has = getattr(message, 'HasField', None)
+    try:
+        return bool(has and has(field))
+    except ValueError:
+        return False
+
+
+CONTEXT_FIELDS = ('extendedTextMessage', 'imageMessage', 'videoMessage', 'audioMessage', 'documentMessage', 'stickerMessage')
+
+
+def reply_of(message):
+    """Contrato 34: `(id da citada, trecho)` quando a mensagem responde outra; senão `(None, '')`."""
+    if message is None:
+        return None, ''
+    for field in CONTEXT_FIELDS:
+        if not _present(message, field):
+            continue
+        part = getattr(message, field)
+        if not _present(part, 'contextInfo'):
+            return None, ''
+        context = part.contextInfo
+        stanza = getattr(context, 'stanzaID', '') or ''
+        if not stanza:
+            return None, ''
+        quoted = context.quotedMessage if _present(context, 'quotedMessage') else None
+        kind, text, _media = media_of(quoted) if quoted is not None else ('text', '', None)
+        return stanza[:200], reply_preview_of(kind, text)
+    return None, ''
+
+
+def reaction_of(message):
+    """Contrato 34: `(id da mensagem reagida, emoji, hora em ms)` de um `reactionMessage`; senão `None`."""
+    if message is None or not _present(message, 'reactionMessage'):
+        return None
+    reaction = message.reactionMessage
+    target = getattr(getattr(reaction, 'key', None), 'ID', '') or ''
+    if not target:
+        return None
+    at = getattr(reaction, 'senderTimestampMS', 0) or 0
+    return target, getattr(reaction, 'text', '') or '', to_ms(at) if at else None
+
+
 def media_proto(kind, message):
     """Contrato 37: a mensagem serializada (as chaves do download) da imagem, do vídeo ou do áudio; senão `None`."""
     if kind not in DOWNLOADABLE_KINDS or message is None:
@@ -229,6 +280,7 @@ class NeonizeBackend:
     def start(self, bridge):
         from neonize.client import NewClient
         from neonize.events import (
+            ChatPresenceEv,
             ConnectedEv,
             ConnectFailureEv,
             DisconnectedEv,
@@ -279,19 +331,34 @@ class NeonizeBackend:
 
         @client.event(MessageEv)
         def on_message(_client, event):
+            # Contrato 34: a reação não é mensagem nova.
+            reaction = self.reaction_from_event(event)
+            if reaction is not None:
+                if hasattr(bridge, 'on_reaction'):
+                    bridge.on_reaction(*reaction)
+                return
             message = self.from_event(event)
             if message:
                 bridge.on_message(message)
 
         @client.event(HistorySyncEv)
         def on_history(_client, event):
-            messages = self.from_history(event)
+            reactions = []
+            messages = self.from_history(event, reactions)
             if hasattr(bridge, 'on_history'):
                 bridge.on_history(messages)
             else:
                 for message in messages:
                     bridge.on_message(message, count_unread=False)
+            if reactions and hasattr(bridge, 'on_reactions'):
+                bridge.on_reactions(reactions)
             self.later(3, self.refresh_names)
+
+        @client.event(ChatPresenceEv)
+        def on_presence(_client, event):
+            presence = self.presence_from_event(event)
+            if presence is not None and hasattr(bridge, 'on_presence'):
+                bridge.on_presence(*presence)
 
         bridge.on_state('pairing')
         # `connect` só volta quando o cliente para: roda numa linha à parte.
@@ -335,12 +402,62 @@ class NeonizeBackend:
         if self.client is not None:
             self.client.logout()
 
-    def send_text(self, chat_id, text):
+    def send_text(self, chat_id, text, quote=None):
+        """Envia o texto; com `quote` (contrato 34, a mensagem guardada), como resposta citando ela."""
         from neonize.utils import build_jid
 
         user, server = chat_id.split('@', 1)
-        response = self.client.send_message(build_jid(user, server), text)
+        message = self.reply_message(chat_id, text, quote) if quote else text
+        response = self.client.send_message(build_jid(user, server), message)
         return getattr(response, 'ID', '') or ''
+
+    def own_jid(self):
+        try:
+            return jid_text(getattr(self.client.get_me(), 'JID', None))
+        except Exception:  # noqa: BLE001
+            return ''
+
+    def author_jid(self, chat_id, target):
+        """Contrato 34: quem mandou a mensagem citada ou reagida: você, a outra pessoa (conversa a dois) ou o do grupo."""
+        if target.get('fromMe'):
+            return self.own_jid()
+        if chat_id.endswith('@g.us'):
+            return target.get('sender') or ''
+        return target.get('sender') or chat_id
+
+    def reply_message(self, chat_id, text, quote):
+        """Contrato 34: o ExtendedTextMessage que cita a mensagem guardada (o id, quem mandou e ela refeita)."""
+        from neonize.proto.waE2E.WAWebProtobufsE2E_pb2 import ContextInfo, ExtendedTextMessage, Message
+
+        quoted = None
+        if quote.get('proto'):
+            try:
+                quoted = Message.FromString(quote['proto'])
+            except Exception:  # noqa: BLE001 - sem a mídia refeita, cita o texto
+                quoted = None
+        if quoted is None:
+            quoted = Message(conversation=quote.get('text') or reply_preview_of(quote.get('kind'), ''))
+        context = ContextInfo(stanzaID=quote['id'], participant=self.author_jid(chat_id, quote), quotedMessage=quoted)
+        return Message(extendedTextMessage=ExtendedTextMessage(text=text, contextInfo=context))
+
+    def send_reaction(self, chat_id, target, emoji):
+        """Contrato 34: reage à mensagem guardada (emoji vazio tira a sua reação)."""
+        from neonize.utils import build_jid
+
+        user, server = chat_id.split('@', 1)
+        chat = build_jid(user, server)
+        sender_user, _, sender_server = self.author_jid(chat_id, target).partition('@')
+        message = self.client.build_reaction(chat, build_jid(sender_user, sender_server or 's.whatsapp.net'), target['id'], emoji)
+        self.client.send_message(chat, message)
+
+    def send_presence(self, chat_id, state):
+        """Contrato 34: "digitando…" (`composing`) ou "parou" (`paused`) na conversa. Não é mensagem."""
+        from neonize.utils import build_jid
+        from neonize.utils.enum import ChatPresence, ChatPresenceMedia
+
+        user, server = chat_id.split('@', 1)
+        value = ChatPresence.CHAT_PRESENCE_COMPOSING if state == 'composing' else ChatPresence.CHAT_PRESENCE_PAUSED
+        self.client.send_chat_presence(build_jid(user, server), value, ChatPresenceMedia.CHAT_PRESENCE_MEDIA_TEXT)
 
     def send_media(self, chat_id, kind, mime, data, caption, name):
         """Contrato 39: envia a imagem ou o vídeo com a legenda; `(id, mensagem serializada)`."""
@@ -522,11 +639,46 @@ class NeonizeBackend:
         if found:
             self.bridge.on_names(found)
 
+    def reaction_from_event(self, event):
+        """Contrato 34: `(conversa, mensagem reagida, autor, emoji, hora)` quando o evento é uma reação; senão `None`."""
+        found = reaction_of(getattr(event, 'Message', None))
+        if found is None:
+            return None
+        source = event.Info.MessageSource
+        chat_id = jid_text(source.Chat)
+        if not chat_id or chat_id.endswith('@broadcast'):
+            return None
+        target, emoji, at = found
+        author = REACTION_ME if source.IsFromMe else (jid_text(source.Sender) or chat_id)
+        return chat_id, target, author, emoji, at or to_ms(event.Info.Timestamp)
+
+    def presence_from_event(self, event):
+        """Contrato 34: `(conversa, 'composing' | 'paused', nome de quem digita num grupo ou None)`; o seu fica de fora."""
+        source = getattr(event, 'MessageSource', None)
+        if source is None or getattr(source, 'IsFromMe', False):
+            return None
+        chat_id = jid_text(source.Chat)
+        state = {1: 'composing', 2: 'paused'}.get(int(getattr(event, 'State', 0) or 0))
+        if not chat_id or state is None or chat_id.endswith('@broadcast'):
+            return None
+        author = None
+        if getattr(source, 'IsGroup', False):
+            sender = jid_text(source.Sender)
+            author = self.contacts.get(sender) or None
+            if author is None and sender:
+                try:
+                    author = contact_name(self.client.contact.get_contact(source.Sender)) or None
+                except Exception:  # noqa: BLE001 - sem o nome, só "digitando…"
+                    author = None
+        return chat_id, state, author
+
     def from_event(self, event):
         info = event.Info
         source = info.MessageSource
         chat_id = jid_text(source.Chat)
         if not chat_id or chat_id.endswith('@broadcast'):
+            return None
+        if reaction_of(event.Message) is not None:
             return None
         kind, text, media = media_of(event.Message)
         group = bool(source.IsGroup)
@@ -545,9 +697,18 @@ class NeonizeBackend:
             'text': text,
             'media': media,
         }
+        # Contrato 34: quem mandou e a citação, quando há.
+        sender = jid_text(source.Sender)
+        if sender:
+            message['sender'] = sender
+        reply_to, preview = reply_of(event.Message)
+        if reply_to:
+            message['replyToId'] = reply_to
+            message['replyPreview'] = preview
         return with_proto(message, kind, event.Message)
 
-    def from_history(self, event):
+    def from_history(self, event, reactions=None):
+        """As mensagens do histórico; com `reactions` (uma lista), junta nela as reações (contrato 34)."""
         data = getattr(event, 'Data', None)
         if data is None:
             return []
@@ -562,8 +723,22 @@ class NeonizeBackend:
                 self.names.setdefault(chat_id, name)
             for item in getattr(conversation, 'messages', []):
                 web = item.message
-                kind, text, media = media_of(web.message)
                 from_me = bool(web.key.fromMe)
+                participant = web.participant or web.key.participant or ''
+                # Contrato 34: a reação que veio como mensagem, e as reações guardadas em cada mensagem.
+                found = reaction_of(web.message)
+                if found is not None:
+                    if reactions is not None:
+                        target, emoji, at = found
+                        reactions.append((chat_id, target, REACTION_ME if from_me else (participant or chat_id), emoji, at or to_ms(web.messageTimestamp)))
+                    continue
+                if reactions is not None:
+                    for reaction in getattr(web, 'reactions', None) or []:
+                        key = reaction.key
+                        author = REACTION_ME if key.fromMe else (key.participant or key.remoteJID or chat_id)
+                        at = getattr(reaction, 'senderTimestampMS', 0) or 0
+                        reactions.append((chat_id, web.key.ID, author, reaction.text or '', to_ms(at) if at else None))
+                kind, text, media = media_of(web.message)
                 author = 'Você' if from_me else (web.pushName or (web.participant or web.key.participant or chat_id).split('@')[0])
                 message = {
                     'id': web.key.ID,
@@ -577,5 +752,11 @@ class NeonizeBackend:
                     'text': text,
                     'media': media,
                 }
+                if participant or not group:
+                    message['sender'] = participant or ('' if from_me else chat_id)
+                reply_to, preview = reply_of(web.message)
+                if reply_to:
+                    message['replyToId'] = reply_to
+                    message['replyPreview'] = preview
                 result.append(with_proto(message, kind, web.message))
         return result

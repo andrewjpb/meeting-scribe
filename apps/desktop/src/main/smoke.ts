@@ -276,7 +276,8 @@ const settingsTabIs = (tab: SettingsTab): string =>
 
 /** Contrato 18: troca de aba pelo clique, já em Configurações. */
 async function selectSettingsTab(contents: WebContents, tab: SettingsTab): Promise<boolean> {
-  await waitFor(contents, `document.querySelector('[role="tab"][data-tab="${tab}"]')`)
+  // 15 s: com a máquina carregada a troca de rota passa dos 5 s e o teste desistia cedo (flake da aba "geral").
+  await waitFor(contents, `document.querySelector('[role="tab"][data-tab="${tab}"]')`, 15_000)
   await clickSelector(contents, `[role="tab"][data-tab="${tab}"]`)
   return waitFor(contents, settingsTabIs(tab))
 }
@@ -288,7 +289,7 @@ const anchoredAt = (label: string): string =>
 /** Contrato 18: Configurações pela barra lateral e a aba pelo clique. */
 async function openSettingsTab(contents: WebContents, tab: SettingsTab): Promise<boolean> {
   await clickSelector(contents, '[data-nav="configuracoes"]')
-  await waitFor(contents, routeIs('configuracoes'))
+  await waitFor(contents, routeIs('configuracoes'), 15_000)
   return selectSettingsTab(contents, tab)
 }
 const probeJs = (expression: string): string => `window.__smokeProbe?.${expression}`
@@ -3910,8 +3911,9 @@ async function settingsTabsChecks(contents: WebContents, ctx: SmokeContext, shot
     !contas.includes('Em breve') &&
     // Contrato 24: o bloco "WhatsApp" (não instalado) com o "Instalar" e o aviso fixo.
     // Contrato 12: o bloco "Microsoft" sem cadastro e o bloco "Agenda" (dois interruptores e "Avisar antes").
-    // Contrato 40: os dois interruptores das notificações do WhatsApp, depois do "Instalar".
-    JSON.stringify(contasButtons) === JSON.stringify(['Configurar…', 'Configurar…', '', '1 min', '5 min', '10 min', '', 'Instalar', '', '']) &&
+    // Contrato 40: os dois interruptores das notificações do WhatsApp, depois do "Instalar". Contrato 34: e o de
+    // "Mostrar quando estou digitando".
+    JSON.stringify(contasButtons) === JSON.stringify(['Configurar…', 'Configurar…', '', '1 min', '5 min', '10 min', '', 'Instalar', '', '', '']) &&
     contas.includes('Conta Microsoft') &&
     contas.includes('Entre com a conta Google ou Microsoft acima para escolher as agendas.') &&
     contas.includes(WHATSAPP_FIXED_WARNING) &&
@@ -5278,7 +5280,7 @@ async function whatsappChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => 
         brunoInitials: row('${WA_BRUNO}')?.querySelector('[data-wa-avatar="initials"]')?.textContent ?? '',
         headerPhoto: Boolean(document.querySelector('[data-whatsapp-conversation="${WA_ANA}"] header img[data-wa-avatar="photo"]')),
         subtitle: document.querySelector('[data-whatsapp-chat-subtitle]')?.textContent ?? '',
-        myBubble: [...(document.querySelector('[data-whatsapp-message="m2"] > div')?.classList ?? [])].filter((name) => name === 'bg-accent' || name === 'text-on-accent').join(' '),
+        myBubble: [...(document.querySelector('[data-whatsapp-message="m2"] [data-wa-bubble]')?.classList ?? [])].filter((name) => name === 'bg-accent' || name === 'text-on-accent').join(' '),
       }
     })()`,
   )
@@ -5469,6 +5471,8 @@ async function whatsappChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => 
 
   // Contrato 39: imagem por arrastar e soltar (e pelo clipe), com a legenda; só o clique em "Enviar" envia.
   checks['attach'] = await whatsappAttachCheck(ctx, win, shots)
+  // Contrato 34: responder citando, reagir e o "digitando…" (o dos outros e o seu, só com o interruptor).
+  checks['interactions'] = await whatsappInteractionsCheck(ctx, win, shots)
 
   // "Só estas conversas" do Assistente (contrato 25; o "Perguntar" do 24) com a conversa da Ana: o `.md` dela na
   // pasta da conversa e no índice.
@@ -5729,6 +5733,194 @@ async function whatsappAttachCheck(ctx: SmokeContext, win: BrowserWindow, shots:
       cleared &&
       downloaded,
     detail: `sobreposição=${overlay} (saiu=${overlayGone}); PNG mentiroso recusado=${lying}; texto + PNG -> prévia do PNG=${dropped}, enviadas no soltar=${sentAfterDrop - sentBefore}; Esc=${escaped}; X=${again && discarded}; clipe=${picked}; legenda com "${placeholder}"; token inventado=${forged}; sem token=${noToken}; sem clique=${sentWithoutClick - sentBefore}; com o clique ${JSON.stringify(last ?? null)}; eco como mídia sua=${echoed}; prévia e campo limpos=${cleared}; eco baixa=${downloaded}`,
+  }
+}
+
+/** O que o serviço falso registrou (contrato 34): os textos, com a citação, e as reações. */
+interface WaSentItem {
+  id?: string
+  chatId: string
+  text?: string
+  replyToId?: string
+  type?: string
+  messageId?: string
+  emoji?: string
+}
+
+/**
+ * Contrato 34, na conversa da Ana: "Responder" na m1 abre a barra de citação (Esc e o X tiram); o envio com a barra sai
+ * citando (o serviço falso confirma o `replyToId`) e o balão enviado mostra a citação, que rola até a m1; a resposta da
+ * Ana a ela chega com a citação. Reagir sem o clique é recusado; 👍 pelo seletor dos 6 emojis vira o chip seu (o serviço
+ * confirma), o ❤️ da Ana chega pelo SSE e tocar de novo no 👍 tira. "digitando…" aparece no cabeçalho e na lista (no
+ * grupo, com o nome) e some sozinho em 10 s. O seu "digitando…": desligado (o padrão), nada sai; ligado, "digitando" e,
+ * ao limpar o campo, "parou".
+ */
+async function whatsappInteractionsCheck(ctx: SmokeContext, win: BrowserWindow, shots: Screenshot[]): Promise<Check> {
+  const contents = win.webContents
+  const conversation = `[data-whatsapp-conversation="${WA_ANA}"]`
+  const m1Text = 'Oi! Conseguimos marcar a reunião de sexta?'
+  const replyText = 'Conseguimos sim, sexta às 10h.'
+  const thumbs = '\u{1F44D}'
+  const heart = '❤️'
+  const sentNow = async (): Promise<WaSentItem[]> => (await waSent(ctx)) as WaSentItem[]
+  const presences = async (): Promise<{ chatId: string; state: string }[]> => ((await ctx.whatsapp.fake('presences')) as { presences?: { chatId: string; state: string }[] }).presences ?? []
+  const until = async (test: (items: WaSentItem[]) => boolean): Promise<WaSentItem[]> => {
+    let items = await sentNow()
+    for (let attempt = 0; attempt < 80 && !test(items); attempt++) {
+      await wait(100)
+      items = await sentNow()
+    }
+    return items
+  }
+  const bubble = (id: string): string => `document.querySelector(${JSON.stringify(`${conversation} [data-whatsapp-message="${id}"]`)})`
+  await waitFor(contents, `${bubble('m1')}`, 8000)
+  const before = (await sentNow()).length
+
+  // Responder: a barra com o trecho da m1, o foco no campo; Esc tira, o X também.
+  await clickSelector(contents, `${conversation} [data-wa-reply="m1"]`)
+  const bar = await waitFor(contents, `document.querySelector('[data-wa-reply-bar="m1"] [data-wa-reply-bar-text]')?.textContent === ${JSON.stringify(m1Text)} && document.activeElement?.matches('[data-whatsapp-composer]')`)
+  await evaluate(contents, `document.querySelector('[data-whatsapp-composer]')?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))`)
+  const escCancels = await waitFor(contents, `!document.querySelector('[data-wa-reply-bar]')`)
+  await clickSelector(contents, `${conversation} [data-wa-reply="m1"]`)
+  await waitFor(contents, `document.querySelector('[data-wa-reply-bar="m1"]')`)
+  await clickSelector(contents, '[data-wa-reply-cancel]')
+  const xCancels = await waitFor(contents, `!document.querySelector('[data-wa-reply-bar]')`)
+
+  // Com a barra, o clique em "Enviar" manda a resposta citando a m1.
+  await clickSelector(contents, `${conversation} [data-wa-reply="m1"]`)
+  await waitFor(contents, `document.querySelector('[data-wa-reply-bar="m1"]')`)
+  await setValue(contents, '[data-whatsapp-composer]', replyText)
+  await clickSelector(contents, '[data-action="whatsapp-send"]')
+  const afterReply = await until((items) => items.length > before)
+  const reply = afterReply.at(-1)
+  const replyId = reply?.id ?? 'x'
+  const quoted = await waitFor(
+    contents,
+    `${bubble(replyId)}?.dataset.fromMe === 'true' && ${bubble(replyId)}?.querySelector('[data-wa-quote="m1"] [data-wa-quote-text]')?.textContent === ${JSON.stringify(m1Text)}`,
+    8000,
+  )
+  const barGone = await evaluate<boolean>(contents, `!document.querySelector('[data-wa-reply-bar]') && (document.querySelector('[data-whatsapp-composer]')?.value ?? 'x') === ''`)
+  // A citação rola até a m1 (carregada): ela fica à vista na lista.
+  // O que importa é a m1 ficar à vista na lista (o balão dela cruza a área visível), não a suavidade da rolagem.
+  const m1Visible = `(() => { const list = document.querySelector('${conversation} [data-whatsapp-messages]')?.getBoundingClientRect(); const m = ${bubble('m1')}?.querySelector('[data-wa-bubble]')?.getBoundingClientRect(); return Boolean(list && m && m.bottom > list.top && m.top < list.bottom) })()`
+  await evaluate(contents, `(() => { const list = document.querySelector('${conversation} [data-whatsapp-messages]'); if (list) list.scrollTop = list.scrollHeight; return true })()`)
+  await settle(contents)
+  const hiddenBefore = !(await evaluate<boolean>(contents, m1Visible))
+  await clickSelector(contents, `${conversation} [data-whatsapp-message="${replyId}"] [data-wa-quote="m1"]`)
+  const scrolled = await waitFor(contents, m1Visible, 8000)
+  // A Ana responde à sua resposta: a citação chega com o trecho e "Você".
+  const answer = (await ctx.whatsapp.fake('incoming', { chatId: WA_ANA, text: 'Perfeito!', replyToId: replyId })) as { id?: string }
+  const incomingQuote = await waitFor(
+    contents,
+    `(() => { const q = ${bubble(answer.id ?? 'x')}?.querySelector('[data-wa-quote="${replyId}"]'); return q?.querySelector('[data-wa-quote-text]')?.textContent === ${JSON.stringify(replyText)} && (q?.textContent ?? '').includes('Você') })()`,
+    8000,
+  )
+
+  // Reagir sem o clique: token inventado e sem token, recusados; nada sai.
+  const forged = await evaluate<string>(contents, `window.__scribeApi.invoke('scribe:whatsapp-react', { chatId: '${WA_ANA}', messageId: 'm1', emoji: ${JSON.stringify(thumbs)}, clickToken: crypto.randomUUID() }).then((r) => JSON.stringify(r), (e) => 'erro ' + String(e?.message ?? e).slice(0, 60))`)
+  const noToken = await evaluate<string>(contents, `window.__scribeApi.invoke('scribe:whatsapp-react', { chatId: '${WA_ANA}', messageId: 'm1', emoji: ${JSON.stringify(thumbs)} }).then((r) => JSON.stringify(r), (e) => 'erro ' + String(e?.message ?? e).slice(0, 60))`)
+  const reactedWithoutClick = (await sentNow()).filter((item) => item.type === 'reaction').length
+
+  // 👍 pelo seletor: o chip seu, e o serviço falso confirma.
+  await clickSelector(contents, `${conversation} [data-wa-react-open="m1"]`)
+  const picker = await waitFor(contents, `document.querySelectorAll('[data-wa-react-picker="m1"] [data-wa-react-emoji]').length === 6`)
+  await clickSelector(contents, `[data-wa-react-picker="m1"] [data-wa-react-emoji="${thumbs}"]`)
+  const chip = await waitFor(contents, `${bubble('m1')}?.querySelector('[data-wa-reaction="${thumbs}"][data-mine="true"]')?.textContent === '${thumbs}1' && !document.querySelector('[data-wa-react-picker]')`, 8000)
+  const afterReact = await until((items) => items.some((item) => item.type === 'reaction'))
+  const reacted = afterReact.filter((item) => item.type === 'reaction')
+  // O ❤️ da Ana na sua resposta, pelo SSE.
+  await ctx.whatsapp.fake('incoming', { chatId: WA_ANA, reaction: { messageId: replyId, emoji: heart } })
+  const theirs = await waitFor(contents, `${bubble(replyId)}?.querySelector('[data-wa-reaction="${heart}"][data-mine="false"]')?.textContent === '${heart}1'`, 8000)
+  // O print do balão com a citação e a reação.
+  await settle(contents)
+  shots.push(await capture(win, ctx.outDir, 'whatsapp-interacoes-light'))
+  // Tocar de novo no 👍 tira a sua.
+  await clickSelector(contents, `${conversation} [data-whatsapp-message="m1"] [data-wa-reaction="${thumbs}"]`)
+  const removed = await waitFor(contents, `!${bubble('m1')}?.querySelector('[data-wa-reaction]')`, 8000)
+  const afterRemove = await until((items) => items.filter((item) => item.type === 'reaction').length >= 2)
+  const removal = afterRemove.filter((item) => item.type === 'reaction')[1]
+
+  // "digitando…" da Ana: no cabeçalho e na lista; some sozinho em 10 s. No grupo, com o nome de quem digita.
+  await ctx.whatsapp.fake('incoming', { chatId: WA_ANA, presence: 'composing' })
+  const typingShown = await waitFor(
+    contents,
+    `document.querySelector('${conversation} header [data-wa-typing]')?.textContent === 'digitando…' && document.querySelector('[data-whatsapp-chat="${WA_ANA}"] [data-wa-typing]')?.textContent === 'digitando…'`,
+  )
+  const typingAt = Date.now()
+  await ctx.whatsapp.fake('incoming', { chatId: WA_ATLAS, presence: 'composing', author: 'Carla Dias' })
+  const groupTyping = await waitFor(contents, `document.querySelector('[data-whatsapp-chat="${WA_ATLAS}"] [data-wa-typing]')?.textContent === 'Carla Dias está digitando…'`)
+  const typingExpired = await waitFor(contents, `!document.querySelector('${conversation} header [data-wa-typing]') && !document.querySelector('[data-whatsapp-chat="${WA_ANA}"] [data-wa-typing]')`, 14_000)
+  const typingLasted = Date.now() - typingAt
+  const subtitleBack = await waitFor(contents, `document.querySelector('${conversation} [data-whatsapp-chat-subtitle]')`)
+
+  // O seu "digitando…": desligado (o padrão), digitar não manda nada; ligado, "digitando" e, ao limpar, "parou".
+  const typingDefault = readSettings(ctx.userDataDir).whatsappTypingSignal
+  const presencesBefore = (await presences()).length
+  await setValue(contents, '[data-whatsapp-composer]', 'sem avisar')
+  await wait(600)
+  const silentWhenOff = (await presences()).length === presencesBefore
+  await setValue(contents, '[data-whatsapp-composer]', '')
+  await evaluate(contents, "window.__scribeApi.invoke('scribe:settings-update', { whatsappTypingSignal: true }).then(() => true)")
+  await wait(400)
+  await setValue(contents, '[data-whatsapp-composer]', 'avisando')
+  let own = await presences()
+  for (let attempt = 0; attempt < 40 && own.length < presencesBefore + 1; attempt++) {
+    await wait(100)
+    own = await presences()
+  }
+  await setValue(contents, '[data-whatsapp-composer]', '')
+  for (let attempt = 0; attempt < 40 && own.length < presencesBefore + 2; attempt++) {
+    await wait(100)
+    own = await presences()
+  }
+  await evaluate(contents, "window.__scribeApi.invoke('scribe:settings-update', { whatsappTypingSignal: false }).then(() => true)")
+  const ownStates = own.slice(presencesBefore).map((item) => `${item.chatId === WA_ANA ? 'ana' : item.chatId}:${item.state}`)
+
+  // A resposta da Ana ("Perfeito!") fica respondida pelo clique, como a conversa estava antes deste passo: o Assistente
+  // (contrato 25) confere depois que a Ana não está pendente.
+  const beforeClosing = (await sentNow()).length
+  await waitFor(contents, `document.querySelector('[data-whatsapp-composer]')?.value === ''`)
+  await setValue(contents, '[data-whatsapp-composer]', 'Até sexta!')
+  await clickSelector(contents, '[data-action="whatsapp-send"]')
+  const closing = (await until((items) => items.length > beforeClosing)).at(-1)
+  const closed = closing?.text === 'Até sexta!' && (await waitFor(contents, `[...document.querySelectorAll('${conversation} [data-whatsapp-message][data-from-me="true"] [data-whatsapp-text]')].some((el) => el.textContent === 'Até sexta!')`, 8000))
+
+  return {
+    ok:
+      bar &&
+      escCancels &&
+      xCancels &&
+      afterReply.length === before + 1 &&
+      reply?.chatId === WA_ANA &&
+      reply.text === replyText &&
+      reply.replyToId === 'm1' &&
+      quoted &&
+      barGone &&
+      scrolled &&
+      incomingQuote &&
+      forged === JSON.stringify({ ok: false, error: 'click' }) &&
+      noToken === JSON.stringify({ ok: false, error: 'click' }) &&
+      reactedWithoutClick === 0 &&
+      picker &&
+      chip &&
+      reacted.length >= 1 &&
+      reacted[0]?.messageId === 'm1' &&
+      reacted[0]?.emoji === thumbs &&
+      theirs &&
+      removed &&
+      removal?.messageId === 'm1' &&
+      removal.emoji === '' &&
+      typingShown &&
+      groupTyping &&
+      typingExpired &&
+      typingLasted >= 8000 &&
+      subtitleBack &&
+      typingDefault !== true &&
+      silentWhenOff &&
+      ownStates.join(',') === 'ana:composing,ana:paused' &&
+      readSettings(ctx.userDataDir).whatsappTypingSignal === false &&
+      closed,
+    detail: `barra de citação=${bar} (Esc=${escCancels}, X=${xCancels}); resposta ${JSON.stringify(reply ?? null)}; citação no balão=${quoted}, barra e campo limpos=${barGone}, rola até a m1=${scrolled} (fora de vista antes=${hiddenBefore}); resposta da Ana com a citação=${incomingQuote}; reação com token inventado=${forged}, sem token=${noToken}, sem clique=${reactedWithoutClick}; seletor com 6=${picker}; chip 👍 seu=${chip} (serviço ${JSON.stringify(reacted)}); ❤️ da Ana pelo SSE=${theirs}; tocar de novo tira=${removed} (${JSON.stringify(removal ?? null)}); "digitando…" no cabeçalho e na lista=${typingShown}, no grupo com o nome=${groupTyping}, sumiu sozinho=${typingExpired} em ${typingLasted} ms; o seu "digitando…": padrão desligado=${typingDefault !== true}, desligado não manda=${silentWhenOff}, ligado ${ownStates.join(' ')}; resposta final à Ana pelo clique=${closed}`,
   }
 }
 
@@ -7441,7 +7633,7 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
   // (contrato 12); a aba "Plugins" com o plugin salvo e o manual aberto, no claro (contrato 31); o painel Detalhes do
   // WhatsApp, no claro (contrato 32; no escuro ele sai no print da tela "WhatsApp"); o balão com a imagem, o player e
   // a transcrição do áudio, no claro (contrato 37); a prévia do anexo com a legenda, no claro (contrato 39).
-  const expectedShots = SCREENS.length * THEMES.length + 50
+  const expectedShots = SCREENS.length * THEMES.length + 51
   if (screenshots.length !== expectedShots) failures.push(`${screenshots.length} PNGs em vez de ${expectedShots}`)
   for (const shot of screenshots) {
     if (shot.width < 1120 || shot.height < 740) failures.push(`${shot.name}: ${shot.width}x${shot.height} abaixo de 1120x740`)

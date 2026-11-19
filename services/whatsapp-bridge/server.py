@@ -12,6 +12,12 @@
 # nome em `X-Media-Name` e a legenda em `X-Caption`, os dois com `encodeURIComponent`). Como o texto, só depois do clique
 # da pessoa no app. O tipo declarado tem de bater com os primeiros bytes; imagem até 16 MB, vídeo até 64 MB.
 #
+# Contrato 34: `POST /chats/:id/send` aceita `replyToId` (a resposta sai citando a mensagem; id que não está guardado sai sem
+# citação). `POST /chats/:id/messages/:msg/react {emoji}` reage com um dos 6 emojis fixos (vazio tira a sua reação), também só
+# depois do clique da pessoa. `POST /chats/:id/presence {state}` manda "digitando…" (`composing`) ou "parou" (`paused`): não é
+# mensagem, e o app só chama com o interruptor "Mostrar quando estou digitando" ligado. Em `/events`, `reactions` (as
+# reações juntas de uma mensagem) e `presence` (alguém digitando numa conversa; quem expira o aviso é o app).
+#
 # Ao subir, escreve uma linha JSON no stdout: {"event": "ready", "port": N, "version": "..."}. Logs vão para o
 # stderr e nunca levam texto de mensagem.
 import argparse
@@ -34,7 +40,7 @@ from urllib.parse import parse_qs, unquote, urlsplit
 # só da pasta deste arquivo.
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from bridge_store import MediaGone, MissingFfmpeg, Store, now_ms, public_message  # noqa: E402
+from bridge_store import REACTION_ME, MediaGone, MissingFfmpeg, Store, now_ms, public_message  # noqa: E402
 
 VERSION = '0.1.0'
 HOST = '127.0.0.1'
@@ -61,6 +67,9 @@ SEND_VIDEO_MAX = 64 * 1024 * 1024
 SEND_NAME_MAX = 200
 # Marcas (`ftyp`) de MP4 de vídeo; HEIF, AVIF e áudio M4A ficam de fora. MOV só com `ftyp qt  ` (o QuickTime antigo, sem
 # `ftyp`, não: pelo nome do átomo passaria um SVG ou HTML com "free" nos bytes 4 a 8).
+# Contrato 34: os únicos emojis que o app envia como reação (vazio tira a sua) e os estados de "digitando".
+REACTION_EMOJIS = ('\U0001f44d', '\u2764\ufe0f', '\U0001f602', '\U0001f62e', '\U0001f622', '\U0001f64f')
+PRESENCE_STATES = ('composing', 'paused')
 MP4_BRANDS = re.compile(rb'isom|iso[2-9]|mp4[12]|mp71|avc1|M4V[ HP]|mmp4|dash|MSNV|NDS[CHMPS]|NDX[CHMPS]|f4v |3gp[4-6]|3g2[abc]|XAVC')
 
 
@@ -125,7 +134,29 @@ class Bridge:
 
     def on_message(self, message, count_unread=True):
         if self.store.add_message(message, count_unread):
-            self.publish('message', dict(public_message(message), chatName=(self.store.chat(message['chatId']) or {}).get('name')))
+            public = public_message(message)
+            # Contrato 34: o trecho da citação como ficou guardado (o da mensagem citada, quando a resposta não trouxe).
+            if public.get('replyToId'):
+                public['replyPreview'] = self.store.reply_preview(message['chatId'], message['id'])
+            self.publish('message', dict(public, chatName=(self.store.chat(message['chatId']) or {}).get('name')))
+
+    def on_reaction(self, chat_id, message_id, author, emoji, at=None):
+        """Contrato 34: alguém reagiu (ou tirou a reação); `/events` recebe as reações juntas da mensagem."""
+        reactions = self.store.set_reaction(chat_id, message_id, author, emoji, at)
+        self.publish('reactions', {'chatId': chat_id, 'messageId': message_id, 'reactions': reactions})
+        return reactions
+
+    def on_reactions(self, items):
+        """As reações do histórico do celular, de uma vez (a conversa aberta relê com o aviso "as conversas mudaram")."""
+        if items and self.store.set_reactions(items):
+            self.publish('chats', {})
+
+    def on_presence(self, chat_id, state, author=None):
+        """Contrato 34: alguém está digitando (ou parou) numa conversa; o aviso some sozinho no app."""
+        if state not in PRESENCE_STATES or not CHAT_ID.match(chat_id or ''):
+            return
+        name = author[:200] if isinstance(author, str) and author else None
+        self.publish('presence', {'chatId': chat_id, 'state': state, 'author': name})
 
     def on_history(self, messages):
         """Histórico do celular: grava tudo de uma vez e avisa só "as conversas mudaram" (uma vez), em vez de uma
@@ -474,6 +505,38 @@ def make_handler(bridge, token, instance_id=''):
             bridge.on_message(message, count_unread=False)
             return self.send_json(200, {'id': message_id})
 
+        def react(self, chat_id, message_id, body):
+            """Contrato 34: a reação da pessoa (um dos 6 emojis; vazio tira a sua), só a uma mensagem guardada."""
+            emoji = body.get('emoji')
+            if not CHAT_ID.match(chat_id) or not MESSAGE_ID.fullmatch(message_id) or not isinstance(emoji, str) or (emoji and emoji not in REACTION_EMOJIS):
+                return self.send_json(400, {'error': 'react'})
+            if bridge.health()['state'] != 'connected':
+                return self.send_json(409, {'error': 'state'})
+            target = bridge.store.quoted(chat_id, message_id)
+            # A reação cita quem mandou a mensagem: num grupo, sem esse id (mensagem de antes desta versão), não dá.
+            if target is None or (chat_id.endswith('@g.us') and not target['fromMe'] and not target['sender']):
+                return self.send_json(404, {'error': 'message'})
+            try:
+                bridge.backend.send_reaction(chat_id, target, emoji)
+            except Exception as error:  # noqa: BLE001
+                log(f'reação falhou: {type(error).__name__}')
+                return self.send_json(502, {'error': 'react'})
+            return self.send_json(200, {'reactions': bridge.on_reaction(chat_id, message_id, REACTION_ME, emoji, now_ms())})
+
+        def presence(self, chat_id, body):
+            """Contrato 34: "digitando…" ou "parou" na conversa (não é mensagem; o app só chama com o interruptor ligado)."""
+            state = body.get('state')
+            if not CHAT_ID.match(chat_id) or state not in PRESENCE_STATES:
+                return self.send_json(400, {'error': 'presence'})
+            if bridge.health()['state'] != 'connected':
+                return self.send_json(409, {'error': 'state'})
+            try:
+                bridge.backend.send_presence(chat_id, state)
+            except Exception as error:  # noqa: BLE001
+                log(f'presença falhou: {type(error).__name__}')
+                return self.send_json(502, {'error': 'presence'})
+            return self.send_json(200, {'ok': True})
+
         def do_POST(self):
             if not self.authorized():
                 return
@@ -496,21 +559,35 @@ def make_handler(bridge, token, instance_id=''):
             if match:
                 chat_id = unquote(match.group(1))
                 text = body.get('text')
+                reply_to = body.get('replyToId')
                 if not CHAT_ID.match(chat_id) or not isinstance(text, str) or not text.strip() or len(text) > SEND_TEXT_MAX:
+                    return self.send_json(400, {'error': 'send'})
+                if reply_to is not None and (not isinstance(reply_to, str) or not MESSAGE_ID.fullmatch(reply_to)):
                     return self.send_json(400, {'error': 'send'})
                 if bridge.health()['state'] != 'connected':
                     return self.send_json(409, {'error': 'state'})
+                # Contrato 34: a citada tem de estar guardada (e, num grupo, com quem mandou); senão sai sem citação.
+                quote = bridge.store.quoted(chat_id, reply_to) if reply_to else None
+                if reply_to and (quote is None or (chat_id.endswith('@g.us') and not quote['fromMe'] and not quote['sender'])):
+                    log('resposta sem a mensagem citada guardada: sai sem citação')
+                    quote = None
                 try:
-                    message_id = bridge.backend.send_text(chat_id, text)
+                    message_id = bridge.backend.send_text(chat_id, text, quote) if quote else bridge.backend.send_text(chat_id, text)
                 except Exception as error:  # noqa: BLE001
                     log(f'envio falhou: {type(error).__name__}')
                     return self.send_json(502, {'error': 'send'})
                 me = bridge.health()['me'] or {}
-                bridge.on_message(
-                    {'id': message_id, 'chatId': chat_id, 'author': me.get('name') or 'Você', 'fromMe': True, 'at': now_ms(), 'type': 'text', 'text': text, 'media': None},
-                    count_unread=False,
-                )
+                echo = {'id': message_id, 'chatId': chat_id, 'author': me.get('name') or 'Você', 'fromMe': True, 'at': now_ms(), 'type': 'text', 'text': text, 'media': None}
+                if quote:
+                    echo['replyToId'] = quote['id']
+                bridge.on_message(echo, count_unread=False)
                 return self.send_json(200, {'id': message_id})
+            match = re.fullmatch(r'/chats/([^/]+)/messages/([^/]+)/react', path)
+            if match:
+                return self.react(unquote(match.group(1)), unquote(match.group(2)), body)
+            match = re.fullmatch(r'/chats/([^/]+)/presence', path)
+            if match:
+                return self.presence(unquote(match.group(1)), body)
             # Só o serviço falso (smoke e testes): ler o QR, receber uma mensagem.
             control = getattr(bridge.backend, 'control', None)
             if path.startswith('/_fake/') and control is not None:

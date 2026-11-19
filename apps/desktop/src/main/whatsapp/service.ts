@@ -18,6 +18,11 @@
 // Contrato 39: a imagem ou o vídeo anexado sai pelo mesmo guarda do texto (`sendMedia`): o token é gasto primeiro, o
 // tipo é conferido de novo pelos bytes (o que a tela diz é só dica) e a legenda vai como foi digitada, sem a correção do
 // contrato 35. Os bytes só passam por aqui a caminho do serviço; nada fica guardado no main.
+//
+// Contrato 34: responder citando sai pelo mesmo `send` (a mesma prova; a correção do 35 continua valendo no texto). Reagir
+// é envio: `react` gasta o seu próprio token de clique no mesmo guarda, e só com um dos 6 emojis fixos. O "digitando…" da
+// sua conta (`typing`) não é mensagem e não passa pelo guarda, mas só sai com "Mostrar quando estou digitando" ligado
+// (`typingEnabled`, lido a cada vez); desligado, nada vai ao serviço.
 import { randomBytes, randomUUID } from 'node:crypto'
 import { existsSync } from 'node:fs'
 import { chmod, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
@@ -33,6 +38,7 @@ import {
   WHATSAPP_CHAT_ID_PATTERN,
   WHATSAPP_DRAFT_INSTRUCTION_MAX,
   WHATSAPP_MESSAGE_ID_PATTERN,
+  WHATSAPP_REACTION_EMOJIS,
   WHATSAPP_SCOPE_CHATS_MAX,
   WHATSAPP_SEND_TEXT_MAX,
   type WhatsAppChat,
@@ -42,6 +48,9 @@ import {
   type WhatsAppMeetingLink,
   type WhatsAppMessage,
   type WhatsAppPairing,
+  type WhatsAppPresence,
+  type WhatsAppReactResult,
+  type WhatsAppReaction,
   type WhatsAppSearchHit,
   type WhatsAppSendResult,
   type WhatsAppStatus,
@@ -67,7 +76,13 @@ const searchSchema = z.object({ term: z.string().trim().min(2).max(100) }).stric
 const photoSchema = z.object({ chatId: chatIdSchema }).strict()
 const mediaSchema = z.object({ chatId: chatIdSchema, messageId: z.string().regex(WHATSAPP_MESSAGE_ID_PATTERN) }).strict()
 const transcribeSchema = mediaSchema.extend({ peek: z.boolean().optional() }).strict()
-const sendSchema = z.object({ chatId: chatIdSchema, text: z.string().max(WHATSAPP_SEND_TEXT_MAX).refine((value) => value.trim() !== ''), clickToken: z.string().max(100) }).strict()
+const messageIdSchema = z.string().regex(WHATSAPP_MESSAGE_ID_PATTERN)
+const sendSchema = z
+  .object({ chatId: chatIdSchema, text: z.string().max(WHATSAPP_SEND_TEXT_MAX).refine((value) => value.trim() !== ''), clickToken: z.string().max(100), replyToId: messageIdSchema.optional() })
+  .strict()
+/** Contrato 34: só os 6 emojis fixos (ou o vazio, que tira a sua). */
+const reactSchema = z.object({ chatId: chatIdSchema, messageId: messageIdSchema, emoji: z.enum([...WHATSAPP_REACTION_EMOJIS, '']), clickToken: z.string().max(100) }).strict()
+const typingSchema = z.object({ chatId: chatIdSchema, state: z.enum(['composing', 'paused']) }).strict()
 const sendMediaSchema = z
   .object({
     chatId: chatIdSchema,
@@ -127,6 +142,12 @@ export interface WhatsAppServiceDeps {
   onMessage: (message: WhatsAppMessage, chatName: string) => void
   /** Várias conversas mudaram de uma vez: o renderer relê a lista (no máximo uma vez por segundo). */
   onChatsChanged?: () => void
+  /** Contrato 34: as reações de uma mensagem mudaram. */
+  onReactions?: (update: { chatId: string; messageId: string; reactions: WhatsAppReaction[] }) => void
+  /** Contrato 34: alguém digitando (ou parou) numa conversa. */
+  onPresence?: (presence: WhatsAppPresence) => void
+  /** Contrato 34: "Mostrar quando estou digitando" (padrão desligado); sem ela, o "digitando…" da sua conta nunca sai. */
+  typingEnabled?: () => Promise<boolean>
   log?: (message: string) => void
   now?: () => number
 }
@@ -173,6 +194,10 @@ export interface WhatsAppService {
   send(senderId: number, request: unknown): Promise<WhatsAppSendResult>
   /** Contrato 39: a imagem ou o vídeo, com a mesma prova de clique do `send`; a legenda não passa pela correção. */
   sendMedia(senderId: number, request: unknown): Promise<WhatsAppSendMediaResult>
+  /** Contrato 34: reagir (um dos 6 emojis; vazio tira a sua), com o token de clique próprio, como um envio. */
+  react(senderId: number, request: unknown): Promise<WhatsAppReactResult>
+  /** Contrato 34: o "digitando…" da sua conta; só com o interruptor ligado. Nunca lança; `false` quando nada saiu. */
+  typing(request: unknown): Promise<boolean>
   forgetSender(senderId: number): void
   draft(request: unknown): Promise<WhatsAppDraftResult>
   link(meetingId: unknown): Promise<WhatsAppMeetingLink | null>
@@ -321,6 +346,8 @@ export function createWhatsAppService(deps: WhatsAppServiceDeps): WhatsAppServic
         if (client !== current) return
         if (event.type === 'state') onHealth(event.health)
         else if (event.type === 'chats') chatsChanged()
+        else if (event.type === 'reactions') deps.onReactions?.({ chatId: event.chatId, messageId: event.messageId, reactions: event.reactions })
+        else if (event.type === 'presence') deps.onPresence?.(event.presence)
         else {
           const chatName = event.chatName ?? chatNames.get(event.message.chatId) ?? event.message.chatId.split('@')[0] ?? ''
           deps.onMessage(event.message, chatName)
@@ -717,7 +744,8 @@ export function createWhatsAppService(deps: WhatsAppServiceDeps): WhatsAppServic
       // token). Qualquer falha devolve o original: o clique nunca se perde.
       const text = deps.correct ? await deps.correct(parsed.data.text).catch(() => parsed.data.text) : parsed.data.text
       try {
-        const id = await current.send(proof, parsed.data.chatId, text)
+        // Contrato 34: a resposta cita a mensagem; a que o serviço não tem sai sem citação.
+        const id = await current.send(proof, parsed.data.chatId, text, parsed.data.replyToId)
         deps.log?.('[whatsapp] mensagem enviada com o clique da pessoa')
         return { ok: true, id }
       } catch (failure) {
@@ -756,6 +784,47 @@ export function createWhatsAppService(deps: WhatsAppServiceDeps): WhatsAppServic
         if (failure instanceof WhatsAppServiceError && failure.code === 'timeout') return { ok: false, error: 'timeout' }
         if (failure instanceof WhatsAppServiceError && failure.status === 503 && failure.code === 'ffmpeg') return { ok: false, error: 'ffmpeg' }
         return { ok: false, error: 'failed' }
+      }
+    },
+
+    async react(senderId, request) {
+      const raw = (request ?? {}) as { clickToken?: unknown; chatId?: unknown }
+      const parsed = reactSchema.safeParse(request)
+      // Reagir é envio: o token deste clique é gasto primeiro, mesmo com o resto inválido.
+      const proof = guard.consume(senderId, raw.clickToken, typeof raw.chatId === 'string' ? raw.chatId : '')
+      if (!proof) {
+        deps.log?.('[whatsapp] reação recusada: sem clique')
+        return { ok: false, error: 'click' }
+      }
+      if (!parsed.success) return { ok: false, error: 'invalid' }
+      if (!client || health?.state !== 'connected') return { ok: false, error: 'state' }
+      const current = client
+      const { chatId, messageId, emoji } = parsed.data
+      const chat = (await current.chats().catch((): WhatsAppChat[] => [])).find((item) => item.id === chatId)
+      if (!chat) return { ok: false, error: 'invalid' }
+      try {
+        const reactions = await current.react(proof, chatId, messageId, emoji)
+        deps.log?.(`[whatsapp] ${emoji ? 'reação enviada' : 'reação tirada'} com o clique da pessoa`)
+        return { ok: true, reactions }
+      } catch (failure) {
+        if (failure instanceof WhatsAppServiceError && failure.status === 409) return { ok: false, error: 'state' }
+        if (failure instanceof WhatsAppServiceError && failure.status === 404) return { ok: false, error: 'missing' }
+        if (failure instanceof WhatsAppServiceError && failure.status === 400) return { ok: false, error: 'invalid' }
+        return { ok: false, error: 'failed' }
+      }
+    },
+
+    async typing(request) {
+      const parsed = typingSchema.safeParse(request)
+      if (!parsed.success || !client || health?.state !== 'connected' || !deps.typingEnabled) return false
+      const current = client
+      // O interruptor é lido a cada vez: desligado agora, nada sai (nem o "parou" de um "digitando…" de antes).
+      if (!(await deps.typingEnabled().catch(() => false))) return false
+      try {
+        await current.presence(parsed.data.chatId, parsed.data.state)
+        return true
+      } catch {
+        return false
       }
     },
 

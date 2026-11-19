@@ -836,6 +836,15 @@ function createAppServices(userData: string): AppServices {
       if (!lockService?.isLocked()) broadcast(BrowserWindow.getAllWindows(), 'scribe:whatsapp-chats-changed', undefined)
       refreshWhatsAppBadge()
     },
+    // Contrato 34: as reações e o "digitando…" dos outros, só com o app desbloqueado; o seu "digitando…" só com o
+    // interruptor ligado (lido a cada vez).
+    onReactions: (update) => {
+      if (!lockService?.isLocked()) broadcast(BrowserWindow.getAllWindows(), 'scribe:whatsapp-reactions', update)
+    },
+    onPresence: (presence) => {
+      if (!lockService?.isLocked()) broadcast(BrowserWindow.getAllWindows(), 'scribe:whatsapp-presence', presence)
+    },
+    typingEnabled: async () => (await settings.get()).whatsappTypingSignal,
     // Só estados, nunca texto de mensagem.
     ...(app.isPackaged ? {} : { log: (message: string) => console.log(message) }),
   })
@@ -1499,6 +1508,9 @@ function registerIpc(services: AppServices): void {
   handle('scribe:whatsapp-send', appOrigin, (event, request) => whatsapp.send(event.sender.id, request))
   // Contrato 39: o anexo, pelo mesmo guarda do clique; o clipe só devolve o arquivo conferido para a prévia.
   handle('scribe:whatsapp-send-media', appOrigin, (event, request) => whatsapp.sendMedia(event.sender.id, request))
+  // Contrato 34: a reação é envio (o token de clique desta janela, no mesmo guarda); o "digitando…" só com o interruptor.
+  handle('scribe:whatsapp-react', appOrigin, (event, request) => whatsapp.react(event.sender.id, request))
+  handle('scribe:whatsapp-typing', appOrigin, (_event, request) => whatsapp.typing(request).catch(() => false))
   handle('scribe:whatsapp-attach-pick', appOrigin, async () => {
     const path = await chooseWhatsAppAttachment()
     return path ? readAttachment(path).catch(() => ({ ok: false, error: 'type' }) as const) : null

@@ -96,6 +96,11 @@ export interface AppSettings {
   /** "Só pessoas (sem grupos)" desligado: as mensagens de grupo também notificam (contrato 40). */
   whatsappNotifyGroups: boolean
   /**
+   * "Mostrar quando estou digitando" (contrato 34, padrão desligado): ligado, quem está na conversa aberta vê o seu
+   * "digitando…" enquanto você escreve. Desligado, o app não manda nada disso ao WhatsApp.
+   */
+  whatsappTypingSignal: boolean
+  /**
    * Separa os participantes por voz ("Participante A", "B"…). Desligado (padrão desde 15/11/2026), o
    * áudio dos participantes vira "Participantes" e os trechos se dividem só pelas pausas.
    */
@@ -180,6 +185,7 @@ export const DEFAULT_SETTINGS: Readonly<AppSettings> = Object.freeze({
   whatsappAutoCorrect: false,
   whatsappNotifications: true,
   whatsappNotifyGroups: true,
+  whatsappTypingSignal: false,
   identifySpeakers: false,
   meetSpeakers: true,
   brandName: null,

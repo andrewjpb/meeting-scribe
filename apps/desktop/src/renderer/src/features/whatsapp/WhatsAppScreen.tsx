@@ -1,9 +1,18 @@
-import { Paperclip, PanelRight, Search, Sparkles, TriangleAlert } from 'lucide-react'
+import { Paperclip, PanelRight, Reply, Search, SmilePlus, Sparkles, TriangleAlert, X } from 'lucide-react'
 import { useEffect, useLayoutEffect, useRef, useState, type DragEvent, type KeyboardEvent, type RefObject, type UIEvent } from 'react'
 import { Link, useLocation } from 'react-router'
 import { settingsPath, type WhatsAppNavigationState } from '@shared/routes'
 import type { Meeting } from '@shared/meetings'
-import { WHATSAPP_DRAFT_INSTRUCTION_MAX, WHATSAPP_SEND_TEXT_MAX, type WhatsAppChat, type WhatsAppMessage, type WhatsAppSearchHit } from '@shared/whatsapp'
+import {
+  WHATSAPP_DRAFT_INSTRUCTION_MAX,
+  WHATSAPP_REACTION_EMOJIS,
+  WHATSAPP_SEND_TEXT_MAX,
+  type WhatsAppChat,
+  type WhatsAppMessage,
+  type WhatsAppReactionEmoji,
+  type WhatsAppReactResult,
+  type WhatsAppSearchHit,
+} from '@shared/whatsapp'
 import { attachErrorText, attachName, WHATSAPP_ATTACH_HEAD, type WhatsAppAttachment, type WhatsAppSendMediaResult } from '@shared/whatsapp-attach'
 import { useSettings } from '../../app/settingsStore'
 import { Button } from '../../design/Button'
@@ -16,6 +25,7 @@ import { DetailsPanel } from './DetailsPanel'
 import { toBlob } from './media'
 import { MessageMedia } from './MessageMedia'
 import { chatPhone, clockLabel, detailsStartOpen, messageTimeLabel, previewText, startsRun } from './format'
+import { createTypingSignal, quotedBlock, quoteFor, reactionToSend, typingLabel, type ReplyQuote, type TypingSignal } from './interactions'
 import { visibleMessages, visiblePending, type PendingSend } from './pending'
 import { useWhatsApp } from './whatsappStore'
 
@@ -36,6 +46,17 @@ const MEDIA_SEND_ERRORS: Record<Extract<WhatsAppSendMediaResult, { ok: false }>[
   ffmpeg: 'Instale o ffmpeg para enviar vídeos (brew install ffmpeg).',
   failed: 'O WhatsApp não aceitou o arquivo. Tente de novo.',
 }
+
+/** Contrato 34: a reação. */
+const REACT_ERRORS: Record<Extract<WhatsAppReactResult, { ok: false }>['error'], string> = {
+  click: 'A reação só sai com o seu clique. Clique de novo.',
+  state: SEND_ERRORS.state,
+  invalid: 'Essa reação não está disponível.',
+  missing: 'Não dá para reagir a esta mensagem (ela chegou antes desta versão do app).',
+  failed: 'O WhatsApp não aceitou a reação. Tente de novo.',
+}
+
+const isReactionEmoji = (emoji: string): emoji is WhatsAppReactionEmoji => (WHATSAPP_REACTION_EMOJIS as readonly string[]).includes(emoji)
 
 const DRAFT_ERRORS: Record<'not-found' | 'timeout' | 'failed' | 'agent' | 'chat', string> = {
   'not-found': 'O Claude não foi encontrado neste Mac. Confira em Configurações › Claude.',
@@ -72,6 +93,8 @@ function ChatRow({ chat, active, onOpen }: { chat: WhatsAppChat; active: boolean
   const ref = useRef<HTMLButtonElement | null>(null)
   const photo = usePhoto(chat.id, ref)
   const group = chat.kind === 'group'
+  // Contrato 34: "digitando…" no lugar da prévia enquanto a pessoa escreve (o aviso vence sozinho).
+  const typing = useWhatsApp((state) => typingLabel(state.typing, chat.id, group, Date.now()))
   return (
     <button
       ref={ref}
@@ -91,7 +114,13 @@ function ChatRow({ chat, active, onOpen }: { chat: WhatsAppChat; active: boolean
           <span className={`shrink-0 text-12 tabular ${chat.unread ? 'text-accent' : 'text-text-faint'}`}>{chat.lastMessage ? messageTimeLabel(chat.lastMessage.at) : ''}</span>
         </span>
         <span className="flex items-center gap-2">
-          <span className="min-w-0 flex-1 truncate text-12 text-text-muted">{previewText(chat.lastMessage)}</span>
+          {typing ? (
+            <span data-wa-typing className="min-w-0 flex-1 truncate text-12 text-accent">
+              {typing}
+            </span>
+          ) : (
+            <span className="min-w-0 flex-1 truncate text-12 text-text-muted">{previewText(chat.lastMessage)}</span>
+          )}
           {chat.unread > 0 && (
             <span data-whatsapp-unread className="shrink-0 rounded-[var(--radius-control)] bg-accent px-1.5 text-12 font-medium text-on-accent tabular">
               {chat.unread}
@@ -103,37 +132,145 @@ function ChatRow({ chat, active, onOpen }: { chat: WhatsAppChat; active: boolean
   )
 }
 
+interface MessageItemProps {
+  message: WhatsAppMessage
+  first: boolean
+  group: boolean
+  photo: string | null | undefined
+  swapped: boolean
+  /** Contrato 34: a mensagem citada carregada na tela (para o autor e o rolar até ela). */
+  loaded: readonly WhatsAppMessage[] | undefined
+  /** O seletor dos 6 emojis está aberto neste balão. */
+  picking: boolean
+  onReply: (message: WhatsAppMessage) => void
+  onPick: (messageId: string | null) => void
+  onReact: (message: WhatsAppMessage, emoji: WhatsAppReactionEmoji) => void
+  onQuote: (messageId: string) => void
+}
+
+const ACTION_BUTTON_CLASS =
+  'no-drag inline-flex size-7 shrink-0 items-center justify-center rounded-[var(--radius-control)] text-text-muted transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-bg-sunken hover:text-title'
+
+/** Contrato 34: "Responder" e "Reagir", à vista ao passar o mouse (ou com o foco) no balão. */
+function MessageActions({ message, picking, onReply, onPick }: Pick<MessageItemProps, 'message' | 'picking' | 'onReply' | 'onPick'>) {
+  return (
+    <span className={`flex shrink-0 items-center gap-0.5 self-center transition-opacity duration-[var(--duration-fast)] ${picking ? 'opacity-100' : 'opacity-0 group-hover:opacity-100 group-focus-within:opacity-100'}`}>
+      <button type="button" data-wa-reply={message.id} aria-label="Responder" title="Responder" onClick={() => onReply(message)} className={ACTION_BUTTON_CLASS}>
+        <Icon icon={Reply} size={16} />
+      </button>
+      <button type="button" data-wa-react-open={message.id} aria-label="Reagir" title="Reagir" aria-expanded={picking} onClick={() => onPick(picking ? null : message.id)} className={ACTION_BUTTON_CLASS}>
+        <Icon icon={SmilePlus} size={16} />
+      </button>
+    </span>
+  )
+}
+
 /**
  * Uma mensagem: o texto sempre como texto e a mídia como metadado (ícone do tipo, nome e tamanho) ou, no contrato 37,
  * o "Baixar" que a mostra no balão (`MessageMedia`), só no clique. As suas à
  * direita, em azul; as dos outros à esquerda, com a foto (ou as iniciais) e, num grupo, o autor, só na primeira de
- * uma sequência do mesmo autor.
+ * uma sequência do mesmo autor. Contrato 34: a citação em cima do texto (clicar rola até a citada, se carregada), as
+ * reações embaixo do balão e, no hover, "Responder" e "Reagir" (os 6 emojis fixos; tocar na sua de novo tira).
  */
-function MessageItem({ message, first, group, photo, swapped }: { message: WhatsAppMessage; first: boolean; group: boolean; photo: string | null | undefined; swapped: boolean }) {
+function MessageItem({ message, first, group, photo, swapped, loaded, picking, onReply, onPick, onReact, onQuote }: MessageItemProps) {
   const mine = message.fromMe
   const author = mine ? 'Você' : message.author
+  const quote = quotedBlock(message, loaded)
+  const reactions = message.reactions ?? []
   return (
     <li
       data-whatsapp-message={message.id}
       data-from-me={mine ? 'true' : 'false'}
-      className={`flex items-end gap-2 ${mine ? 'justify-end' : 'justify-start'} ${first ? 'mt-3 first:mt-0' : 'mt-1'}`}
+      className={`group flex items-end gap-2 ${mine ? 'justify-end' : 'justify-start'} ${first ? 'mt-3 first:mt-0' : 'mt-1'}`}
     >
       {!mine && (
         <span className="flex size-8 shrink-0" aria-hidden={first ? undefined : 'true'}>
           {first && <Avatar id={group ? `${message.chatId}:${message.author}` : message.chatId} name={message.author} photo={group ? null : photo} />}
         </span>
       )}
-      <div className={`flex max-w-[560px] min-w-0 flex-col gap-1 rounded-[var(--radius-panel)] px-3 py-2 text-15 whitespace-pre-wrap select-text ${mine ? 'bg-accent text-on-accent' : 'border border-line bg-bg-raised text-text'}`}>
-        {group && !mine && first ? <span className="text-12 font-bold text-accent">{author}</span> : <span className="sr-only">{author}: </span>}
-        {message.media && <MessageMedia message={message} mine={mine} />}
-        {/* Contrato 36: entrou no lugar do balão temporário; o texto (o corrigido) troca com um fade curto. */}
-        {message.text && (
-          <span data-whatsapp-text className={swapped ? 'wa-swap-in' : undefined}>
-            {message.text}
-          </span>
+      {mine && <MessageActions message={message} picking={picking} onReply={onReply} onPick={onPick} />}
+      <div className={`flex max-w-[560px] min-w-0 flex-col gap-1 ${mine ? 'items-end' : 'items-start'}`}>
+        <div data-wa-bubble className={`flex max-w-full min-w-0 flex-col gap-1 rounded-[var(--radius-panel)] px-3 py-2 text-15 whitespace-pre-wrap select-text ${mine ? 'bg-accent text-on-accent' : 'border border-line bg-bg-raised text-text'}`}>
+          {group && !mine && first ? <span className="text-12 font-bold text-accent">{author}</span> : <span className="sr-only">{author}: </span>}
+          {quote && (
+            <button
+              type="button"
+              data-wa-quote={quote.id}
+              disabled={!quote.loaded}
+              onClick={() => onQuote(quote.id)}
+              title={quote.loaded ? 'Ir para a mensagem respondida' : undefined}
+              className={`no-drag flex min-w-0 flex-col items-start rounded-[var(--radius-control)] border-l-2 px-2 py-1 text-left whitespace-normal disabled:cursor-default ${mine ? 'border-on-accent/60 bg-on-accent/10' : 'border-accent bg-bg-sunken'}`}
+            >
+              <span className="sr-only">Respondendo a </span>
+              {quote.author && <span className={`text-12 font-bold ${mine ? 'text-on-accent' : 'text-accent'}`}>{quote.author}</span>}
+              <span data-wa-quote-text className={`line-clamp-2 text-12 ${mine ? 'opacity-80' : 'text-text-muted'}`}>
+                {quote.preview}
+              </span>
+            </button>
+          )}
+          {message.media && <MessageMedia message={message} mine={mine} />}
+          {/* Contrato 36: entrou no lugar do balão temporário; o texto (o corrigido) troca com um fade curto. */}
+          {message.text && (
+            <span data-whatsapp-text className={swapped ? 'wa-swap-in' : undefined}>
+              {message.text}
+            </span>
+          )}
+          <span className={`self-end text-12 tabular ${mine ? 'opacity-80' : 'text-text-faint'}`}>{clockLabel(message.at)}</span>
+        </div>
+        {reactions.length > 0 && (
+          <ul data-wa-reactions aria-label="Reações" className="flex flex-wrap gap-1">
+            {reactions.map((reaction) => {
+              const label = `${reaction.emoji} ${reaction.count}${reaction.mine ? ', a sua' : ''}`
+              const chipClass = `inline-flex h-6 items-center gap-1 rounded-[var(--radius-control)] border px-1.5 text-12 tabular ${reaction.mine ? 'border-accent bg-bg-sunken font-medium text-title' : 'border-line bg-bg-raised text-text'}`
+              // Só os 6 fixos viram botão (tocar de novo tira a sua); os outros que chegam são só texto.
+              return (
+                <li key={reaction.emoji}>
+                  {isReactionEmoji(reaction.emoji) ? (
+                    <button
+                      type="button"
+                      data-wa-reaction={reaction.emoji}
+                      data-mine={reaction.mine ? 'true' : 'false'}
+                      aria-pressed={reaction.mine}
+                      aria-label={label}
+                      onClick={() => onReact(message, reaction.emoji as WhatsAppReactionEmoji)}
+                      className={`no-drag ${chipClass} hover:bg-bg-sunken`}
+                    >
+                      <span aria-hidden="true">{reaction.emoji}</span>
+                      <span aria-hidden="true">{reaction.count}</span>
+                    </button>
+                  ) : (
+                    <span data-wa-reaction={reaction.emoji} data-mine={reaction.mine ? 'true' : 'false'} aria-label={label} className={chipClass}>
+                      <span aria-hidden="true">{reaction.emoji}</span>
+                      <span aria-hidden="true">{reaction.count}</span>
+                    </span>
+                  )}
+                </li>
+              )
+            })}
+          </ul>
         )}
-        <span className={`self-end text-12 tabular ${mine ? 'opacity-80' : 'text-text-faint'}`}>{clockLabel(message.at)}</span>
+        {picking && (
+          <div role="group" aria-label="Reagir com" data-wa-react-picker={message.id} className="flex items-center gap-0.5 rounded-[var(--radius-control)] border border-line bg-bg-raised p-1">
+            {WHATSAPP_REACTION_EMOJIS.map((emoji) => {
+              const isMine = reactions.some((reaction) => reaction.mine && reaction.emoji === emoji)
+              return (
+                <button
+                  key={emoji}
+                  type="button"
+                  data-wa-react-emoji={emoji}
+                  aria-pressed={isMine}
+                  aria-label={isMine ? `Tirar a reação ${emoji}` : `Reagir com ${emoji}`}
+                  onClick={() => onReact(message, emoji)}
+                  className={`no-drag inline-flex size-8 items-center justify-center rounded-[var(--radius-control)] text-15 hover:bg-bg-sunken ${isMine ? 'bg-bg-sunken' : ''}`}
+                >
+                  {emoji}
+                </button>
+              )
+            })}
+          </div>
+        )}
       </div>
+      {!mine && <MessageActions message={message} picking={picking} onReply={onReply} onPick={onPick} />}
     </li>
   )
 }
@@ -180,12 +317,20 @@ function Conversation({ chat, initialText, detailsOpen, onDetails }: Conversatio
   const pendingAll = useWhatsApp((state) => state.pending[chat.id])
   const swapped = useWhatsApp((state) => state.swapped)
   const autoCorrect = useSettings((state) => state.settings.whatsappAutoCorrect)
+  const typingSignalOn = useSettings((state) => state.settings.whatsappTypingSignal)
   const pending = visiblePending(pendingAll, messages)
   const shown = visibleMessages(messages, pendingAll)
   const header = useRef<HTMLElement | null>(null)
   const photo = usePhoto(chat.id, header, true)
   const group = chat.kind === 'group'
   const phone = chatPhone(chat)
+  // Contrato 34: "digitando…" no cabeçalho, a citação do envio, o seletor de reação aberto e o erro da reação.
+  const typing = useWhatsApp((state) => typingLabel(state.typing, chat.id, group, Date.now()))
+  const [replyTo, setReplyTo] = useState<ReplyQuote | null>(null)
+  const [picking, setPicking] = useState<string | null>(null)
+  const [reactError, setReactError] = useState<string | null>(null)
+  const composer = useRef<HTMLTextAreaElement | null>(null)
+  const typingSignal = useRef<TypingSignal | null>(null)
   // Contrato 36: o envio otimista desta conversa falhou com ela fechada: o texto e o erro voltam ao abrir.
   const [restored] = useState(() => useWhatsApp.getState().restore[chat.id] ?? null)
   const [text, setText] = useState(() => joinRestored(restored?.text, initialText ?? ''))
@@ -241,6 +386,34 @@ function Conversation({ chat, initialText, detailsOpen, onDetails }: Conversatio
       setSendError(back.error)
     })
   }, [restored, chat.id])
+
+  // Contrato 34: o seu "digitando…" só existe com o interruptor ligado; trocar de conversa, sair ou desligar manda "parou".
+  useEffect(() => {
+    if (!typingSignalOn) return
+    const chatId = chat.id
+    const signal = createTypingSignal({
+      send: (state) => {
+        void window.__scribeApi.invoke('scribe:whatsapp-typing', { chatId, state }).catch(() => false)
+      },
+    })
+    typingSignal.current = signal
+    return () => {
+      signal.stop()
+      if (typingSignal.current === signal) typingSignal.current = null
+    }
+  }, [typingSignalOn, chat.id])
+
+  // Contrato 34: Esc fecha o seletor de reação aberto (antes de qualquer outra coisa).
+  useEffect(() => {
+    if (!picking) return
+    const onKey = (event: globalThis.KeyboardEvent): void => {
+      if (event.key !== 'Escape' || event.defaultPrevented) return
+      event.preventDefault()
+      setPicking(null)
+    }
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
+  }, [picking])
 
   // Contrato 39: o object URL da miniatura sai junto com a prévia (descartada, enviada ou a conversa fechada).
   useEffect(() => {
@@ -376,9 +549,47 @@ function Conversation({ chat, initialText, detailsOpen, onDetails }: Conversatio
     )
   }
 
+  /** Contrato 34: "Responder" num balão: a citação vai para a barra acima do campo, e o foco para o campo. */
+  const startReply = (message: WhatsAppMessage): void => {
+    setReplyTo(quoteFor(message))
+    setPicking(null)
+    composer.current?.focus()
+  }
+
+  /**
+   * Contrato 34: a citada carregada na tela: rola até ela, direto (a rolagem suave depende de quadros que a janela em
+   * segundo plano não pinta, e o que importa é a mensagem ficar à vista).
+   */
+  const scrollToMessage = (messageId: string): void => {
+    const target = [...(list.current?.querySelectorAll<HTMLElement>('[data-whatsapp-message]') ?? [])].find((el) => el.dataset['whatsappMessage'] === messageId)
+    if (!target) return
+    atBottom.current = false
+    target.scrollIntoView({ block: 'center' })
+  }
+
+  /**
+   * Contrato 34: reagir é envio, só daqui, no clique da pessoa: o preload confere a ativação e gera o token, e o main só
+   * envia com ele. Tocar na sua reação de novo tira (vai o emoji vazio).
+   */
+  const react = (message: WhatsAppMessage, emoji: WhatsAppReactionEmoji): void => {
+    const chatId = chat.id
+    setPicking(null)
+    setReactError(null)
+    void window.__scribeApi.whatsappReact({ chatId, messageId: message.id, emoji: reactionToSend(message.reactions, emoji) }).then(
+      (result) => {
+        if (result.ok) useWhatsApp.getState().setReactions(chatId, message.id, result.reactions)
+        else if (mounted.current) setReactError(REACT_ERRORS[result.error])
+      },
+      () => {
+        if (mounted.current) setReactError(REACT_ERRORS.failed)
+      },
+    )
+  }
+
   /**
    * O envio de verdade: só daqui, no clique (ou ⌘↵) da pessoa. O preload confere a ativação do usuário e o main só
-   * envia com o token desse clique (sem diálogo de confirmação desde o contrato 33).
+   * envia com o token desse clique (sem diálogo de confirmação desde o contrato 33). Contrato 34: com a barra de
+   * citação, o texto sai como resposta (a mídia não: responder com mídia fica de fora).
    */
   const sendNow = (): void => {
     if (preview) {
@@ -387,15 +598,18 @@ function Conversation({ chat, initialText, detailsOpen, onDetails }: Conversatio
     }
     const body = text
     if (!body.trim() || sending) return
+    const replyToId = replyTo?.id
+    typingSignal.current?.stop()
     if (autoCorrect) {
       // Contrato 36: com a correção ligada, o campo limpa na hora e o balão temporário entra com o texto digitado
       // enquanto a IA ajusta; o eco do serviço (com o `id` que o envio devolve) troca um pelo outro.
       const chatId = chat.id
       const key = useWhatsApp.getState().startPending(chatId, body)
       setText('')
+      setReplyTo(null)
       setSendError(null)
       atBottom.current = true
-      void window.__scribeApi.whatsappSend({ chatId, text: body }).then(
+      void window.__scribeApi.whatsappSend({ chatId, text: body, replyToId }).then(
         (result) => {
           const store = useWhatsApp.getState()
           if (result.ok) {
@@ -409,11 +623,12 @@ function Conversation({ chat, initialText, detailsOpen, onDetails }: Conversatio
     }
     setSending(true)
     setSendError(null)
-    void window.__scribeApi.whatsappSend({ chatId: chat.id, text: body }).then(
+    void window.__scribeApi.whatsappSend({ chatId: chat.id, text: body, replyToId }).then(
       (result) => {
         setSending(false)
         if (result.ok) {
           setText('')
+          setReplyTo(null)
           atBottom.current = true
           void useWhatsApp.getState().open(chat.id)
         } else setSendError(SEND_ERRORS[result.error])
@@ -426,6 +641,12 @@ function Conversation({ chat, initialText, detailsOpen, onDetails }: Conversatio
   }
 
   const onKey = (event: KeyboardEvent<HTMLTextAreaElement>): void => {
+    // Contrato 34: Esc no campo tira a citação (antes de descartar o anexo).
+    if (event.key === 'Escape' && replyTo && !preview && !event.defaultPrevented) {
+      event.preventDefault()
+      setReplyTo(null)
+      return
+    }
     // Enter só pula linha; ⌘↵ envia.
     if (event.key === 'Enter' && event.metaKey) {
       event.preventDefault()
@@ -475,9 +696,15 @@ function Conversation({ chat, initialText, detailsOpen, onDetails }: Conversatio
           <h2 data-whatsapp-chat-title className="truncate text-15 font-bold text-title">
             {chat.name}
           </h2>
-          <span data-whatsapp-chat-subtitle className="truncate text-12 text-text-muted tabular">
-            {group ? 'grupo' : (phone ?? 'pessoa')}
-          </span>
+          {typing ? (
+            <span data-wa-typing role="status" className="truncate text-12 text-accent">
+              {typing}
+            </span>
+          ) : (
+            <span data-whatsapp-chat-subtitle className="truncate text-12 text-text-muted tabular">
+              {group ? 'grupo' : (phone ?? 'pessoa')}
+            </span>
+          )}
         </div>
         <button
           type="button"
@@ -500,7 +727,20 @@ function Conversation({ chat, initialText, detailsOpen, onDetails }: Conversatio
         ) : shown?.length || pending.length ? (
           <ol className="flex flex-col">
             {shown?.map((message, index) => (
-              <MessageItem key={message.id} message={message} first={startsRun(message, shown[index - 1])} group={group} photo={photo} swapped={swapped[message.id] === true} />
+              <MessageItem
+                key={message.id}
+                message={message}
+                first={startsRun(message, shown[index - 1])}
+                group={group}
+                photo={photo}
+                swapped={swapped[message.id] === true}
+                loaded={messages}
+                picking={picking === message.id}
+                onReply={startReply}
+                onPick={setPicking}
+                onReact={react}
+                onQuote={scrollToMessage}
+              />
             ))}
             {pending.map((item) => (
               <PendingItem key={item.key} item={item} />
@@ -581,17 +821,51 @@ function Conversation({ chat, initialText, detailsOpen, onDetails }: Conversatio
             {attachError}
           </p>
         )}
+        {reactError && (
+          <p role="alert" data-wa-react-error className="text-12 text-rec">
+            {reactError}
+          </p>
+        )}
+        {/* Contrato 34: a barra de citação: quem mandou e o trecho; o X (ou Esc no campo) tira. */}
+        {replyTo && !preview && (
+          <div data-wa-reply-bar={replyTo.id} className="flex items-center gap-2 rounded-[var(--radius-control)] border-l-2 border-accent bg-bg-sunken py-1.5 pr-1 pl-3">
+            <span className="flex min-w-0 flex-1 flex-col">
+              <span className="text-12 font-bold text-accent">Respondendo a {replyTo.author}</span>
+              <span data-wa-reply-bar-text className="truncate text-12 text-text-muted">
+                {replyTo.preview}
+              </span>
+            </span>
+            <button
+              type="button"
+              data-wa-reply-cancel
+              aria-label="Não responder a esta mensagem"
+              title="Cancelar a resposta (Esc)"
+              onClick={() => {
+                setReplyTo(null)
+                composer.current?.focus()
+              }}
+              className="no-drag inline-flex size-8 shrink-0 items-center justify-center rounded-[var(--radius-control)] text-text-muted hover:bg-bg-raised hover:text-title"
+            >
+              <Icon icon={X} size={16} />
+            </button>
+          </div>
+        )}
         <label htmlFor="whatsapp-composer" className="sr-only">
           {preview ? `Legenda para ${chat.name}` : `Mensagem para ${chat.name}`}
         </label>
         <textarea
           id="whatsapp-composer"
+          ref={composer}
           data-whatsapp-composer
           value={text}
           rows={3}
           maxLength={WHATSAPP_SEND_TEXT_MAX}
           placeholder={preview ? 'Legenda (opcional)' : 'Escreva uma mensagem'}
-          onChange={(event) => setText(event.target.value)}
+          onChange={(event) => {
+            setText(event.target.value)
+            // Contrato 34: só a digitação da pessoa (não o rascunho do Claude) vira "digitando…", e só com o interruptor.
+            typingSignal.current?.input(event.target.value)
+          }}
           onKeyDown={onKey}
           className="no-drag min-h-[72px] resize-none rounded-[var(--radius-control)] border border-line-strong bg-bg-raised px-3 py-2 text-15 text-text select-text placeholder:text-text-faint"
         />
