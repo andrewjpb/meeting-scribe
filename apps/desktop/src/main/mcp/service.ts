@@ -8,6 +8,10 @@
 // - "Adicionar servidor MCP" (CA3): "Salvar" só vale depois de um "Testar conexão" que deu certo com a mesma definição
 //   (o main confere, não só a tela).
 // - A sessão (CA4): só os servidores ligados para aquele uso, menos os desligados na conversa (CA6).
+// - Contrato 57: os conectores do claude.ai saem da lista do CLI (não são "não usáveis": têm a lista própria). A sessão do
+//   chat recebe os ligados em `settings.claudeConnectors` que a lista mostra conectados, e o nome de todo o resto que o
+//   `claude` carregaria sem o modo estrito (os outros conectores, os servidores do escopo `user` e os de plugin), para o
+//   perfil bloquear.
 // Nenhum segredo sai daqui para o renderer nem para log.
 import { createHash, randomUUID } from 'node:crypto'
 import { access, constants, stat } from 'node:fs/promises'
@@ -16,6 +20,7 @@ import type * as acp from '@agentclientprotocol/sdk/unstable'
 import { z } from 'zod'
 import type { ClaudeLocateResult } from '../../shared/claude-cli'
 import {
+  claudeConnectorLabel,
   DEFAULT_MCP_USES,
   MCP_ARG_MAX,
   MCP_ARGS_MAX,
@@ -35,6 +40,9 @@ import {
   mcpToolKey,
   mcpToolServerName,
   mcpUrlAllowed,
+  type ClaudeConnectorList,
+  type ClaudeConnectorPrefs,
+  type ClaudeConnectorsReason,
   type McpChatServer,
   type McpCliDetails,
   type McpCliServerView,
@@ -49,11 +57,16 @@ import {
   type McpToolPolicy,
   type McpUse,
 } from '../../shared/mcp'
-import type { AcpMcpServer } from '../acp/profiles/types'
+import type { AcpConnectorSet, AcpMcpServer } from '../acp/profiles/types'
 import { EncryptionUnavailableError } from '../secrets'
-import { readServersFile, type CliDefinition, type CliListEntry, type McpCli } from './cli'
+import { connectorsOf, isConnectorEntry, readServersFile, type CliDefinition, type CliListEntry, type McpCli } from './cli'
 import { testMcpServer, type McpConnectDefinition, type SpawnMcp } from './client'
 import type { CliServerPrefs, McpStore, StoredMcpServer, StoredPair } from './store'
+
+/** Contrato 57: depois de uma falha do `claude mcp list`, a sessão espera isto para tentar de novo. */
+export const LIST_RETRY_MS = 60_000
+/** Contrato 57: lista em cache com mais que isto é renovada em segundo plano depois de abrir a sessão. */
+export const LIST_STALE_MS = 5 * 60_000
 
 /** Definições testadas com sucesso que ainda dão direito a "Salvar" (as mais recentes). */
 const TESTED_MAX = 20
@@ -72,6 +85,10 @@ export interface McpServiceDeps {
   newId?: () => string
   now?: () => number
   log?: (message: string) => void
+  /** Contrato 57: os conectores ligados e as regras deles (`settings.claudeConnectors`). Sem isto, nenhum. */
+  connectorPrefs?: () => Promise<Readonly<Record<string, ClaudeConnectorPrefs>>>
+  /** Contrato 57: "Sempre permitir esta ferramenta" de um conector: grava `allow` em `settings.claudeConnectors`. */
+  allowConnectorTool?: (name: string, tool: string) => Promise<void>
 }
 
 export interface McpService {
@@ -89,6 +106,16 @@ export interface McpService {
   sessionServers(use: McpUse, off: readonly string[]): Promise<AcpMcpServer[]>
   /** O que o agente disse que aceita no `initialize` (o comando local ele sempre aceita). */
   agentCapabilities(capabilities: { http: boolean; sse: boolean }): void
+  /**
+   * Contrato 57: os conectores da sessão do chat. `null` (nada muda na sessão) se nenhum ligado está conectado na lista;
+   * sem nenhum ligado, nem a lista é lida.
+   */
+  sessionConnectors(): Promise<AcpConnectorSet | null>
+  /**
+   * Contrato 57: a lista em cache não vale mais para a próxima sessão com conector (mudou o MCP ou `claudeConnectors`):
+   * ela espera uma lista nova.
+   */
+  invalidateConnectors(): void
 }
 
 const pairSchema = z
@@ -212,6 +239,13 @@ export function createMcpService(deps: McpServiceDeps): McpService {
   const newId = deps.newId ?? randomUUID
   const log = deps.log ?? (() => undefined)
   let cliList: { state: 'ok' | 'not-found' | 'error'; entries: CliListEntry[] } | null = null
+  /** Contrato 57: sem conector na lista, por quê (lido junto com a lista). */
+  let connectorsReason: ClaudeConnectorsReason | null = null
+  /** Contrato 57: a leitura em curso e quando a última falhou. */
+  let listing: Promise<void> | null = null
+  let listFailedAt: number | null = null
+  /** Contrato 57: quando a lista em cache foi lida; `null` obriga a próxima sessão com conector a esperar uma nova. */
+  let listedAt: number | null = null
   /** Teste dos servidores do CLI nesta execução do app (não vai para o disco). */
   const cliTests = new Map<string, { ok: true; tools: McpToolInfo[] } | { ok: false; error: string }>()
   const tested: string[] = []
@@ -222,7 +256,21 @@ export function createMcpService(deps: McpServiceDeps): McpService {
     return found.ok ? found.path : null
   }
 
-  async function loadCli(refresh: boolean): Promise<void> {
+  /**
+   * Lê o `claude mcp list`. Contrato 57: a sessão com conector relê sempre (`forSession`), aproveitando uma leitura que já
+   * esteja em curso, e depois de uma falha só tenta de novo passados 60 s (a aba tenta sempre).
+   */
+  function loadCli(refresh: boolean, forSession = false): Promise<void> {
+    if (forSession && cliList?.state === 'error' && listFailedAt !== null && now() - listFailedAt < LIST_RETRY_MS) return Promise.resolve()
+    if (forSession && listing) return listing
+    const run = readCli(refresh).finally(() => {
+      if (listing === run) listing = null
+    })
+    listing = run
+    return run
+  }
+
+  async function readCli(refresh: boolean): Promise<void> {
     // Só a lista lida guarda: sem o `claude` (ou com erro), a próxima abertura da aba tenta de novo.
     if (cliList?.state === 'ok' && !refresh) return
     const path = await claudePath()
@@ -233,6 +281,10 @@ export function createMcpService(deps: McpServiceDeps): McpService {
     try {
       const entries = await deps.cli.list(path)
       cliList = { state: 'ok', entries }
+      listFailedAt = null
+      listedAt = now()
+      // Contrato 57: lista sem conector; sem login por assinatura, a conta nem tem como ter.
+      connectorsReason = connectorsOf(entries).length ? null : (await deps.cli.subscription(path).catch(() => null)) === false ? 'no-subscription' : 'none'
       // Servidor que saiu do Claude CLI: o "Usar no app" e as regras dele saem também (um homônimo futuro começa do zero).
       const names = new Set(entries.map((entry) => entry.name))
       for (const name of Object.keys(await deps.store.cliEnabled())) {
@@ -243,6 +295,7 @@ export function createMcpService(deps: McpServiceDeps): McpService {
     } catch {
       log('[mcp] claude mcp list falhou')
       cliList = { state: 'error', entries: [] }
+      listFailedAt = now()
     }
   }
 
@@ -297,7 +350,7 @@ export function createMcpService(deps: McpServiceDeps): McpService {
   async function overview(withCli: boolean, refresh = false): Promise<McpOverview> {
     if (withCli) await loadCli(refresh)
     const [app, enabled, definitions, found] = await Promise.all([deps.store.list(), deps.store.cliEnabled(), deps.cli.definitions().catch(() => new Map<string, CliDefinition>()), foundServers().catch(() => [])])
-    const servers: McpCliServerView[] = (cliList?.entries ?? []).map((entry) => {
+    const servers: McpCliServerView[] = (cliList?.entries ?? []).filter((entry) => !isConnectorEntry(entry.name)).map((entry) => {
       const prefs = enabled[entry.name]
       const definition = definitions.get(entry.name)
       const usable = definition !== undefined && MCP_NAME_PATTERN.test(mcpToolServerName(entry.name)) && urlUsable(definition)
@@ -316,7 +369,14 @@ export function createMcpService(deps: McpServiceDeps): McpService {
         state,
       }
     })
-    return { cli: { state: cliList?.state ?? 'loading', servers }, app: app.map(appView), found }
+    return { cli: { state: cliList?.state ?? 'loading', servers }, app: app.map(appView), found, connectors: connectorList() }
+  }
+
+  /** Contrato 57: os conectores da última lista lida (sem lista, vazia e sem motivo). */
+  function connectorList(): ClaudeConnectorList {
+    if (cliList?.state !== 'ok') return { connectors: [], reason: null }
+    const connectors = connectorsOf(cliList.entries)
+    return { connectors, reason: connectors.length ? null : (connectorsReason ?? 'none') }
   }
 
   /** A definição do formulário, validada, com os segredos guardados quando a edição pede para manter. */
@@ -595,6 +655,45 @@ export function createMcpService(deps: McpServiceDeps): McpService {
 
     agentCapabilities: (next) => {
       capabilities = next
+    },
+
+    invalidateConnectors: () => {
+      listedAt = null
+    },
+
+    sessionConnectors: async () => {
+      const none: Readonly<Record<string, ClaudeConnectorPrefs>> = {}
+      const prefs = (await deps.connectorPrefs?.().catch(() => none)) ?? none
+      if (!Object.values(prefs).some((entry) => entry.enabled)) return null
+      // A lista em cache (o `claude mcp list` confere a saúde de cada servidor e leva uns 17 s): a sessão só espera por ela
+      // sem cache (a primeira vez na execução, ou depois de `invalidateConnectors`). Com mais de 5 min, renova em segundo
+      // plano, sem atrasar esta sessão. A segurança não depende da lista estar fresca: a sessão confere o que carregou
+      // pelo `/mcp` (`acp/connectors.ts`) e reabre ou cai no modo estrito.
+      if (cliList?.state !== 'ok' || listedAt === null) await loadCli(true, true)
+      else if (now() - listedAt > LIST_STALE_MS) void loadCli(true, true).catch(() => undefined)
+      const listed = connectorList().connectors
+      const enabled = listed.filter((connector) => connector.state === 'connected' && prefs[connector.name]?.enabled === true)
+      if (!enabled.length) return null
+      // Tudo o que o `claude` sobe sem o modo estrito: os conectores da lista, os servidores da lista (escopo `user`,
+      // plugins) e os do escopo `user` lidos agora do arquivo do CLI (um que entrou depois da lista também fica de fora).
+      const definitions = await deps.cli.definitions().catch(() => new Map<string, CliDefinition>())
+      const others = new Set<string>([
+        ...listed.filter((connector) => !enabled.includes(connector)).map((connector) => connector.toolServer),
+        ...(cliList?.entries ?? []).filter((entry) => !isConnectorEntry(entry.name)).map((entry) => mcpToolServerName(entry.name)),
+        ...[...definitions.keys()].map((name) => mcpToolServerName(name)),
+      ])
+      return {
+        enabled: enabled.map((connector) => ({
+          name: connector.name,
+          label: claudeConnectorLabel(connector.name),
+          toolServer: connector.toolServer,
+          toolPolicy: { ...(prefs[connector.name]?.tools ?? {}) },
+          allowAlways: (tool: string) => {
+            void deps.allowConnectorTool?.(connector.name, tool).catch(() => log('[mcp] a regra do conector não foi gravada'))
+          },
+        })),
+        others: [...others],
+      }
     },
   }
 

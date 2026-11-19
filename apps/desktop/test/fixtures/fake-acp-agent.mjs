@@ -38,6 +38,11 @@
 //   `mcp__<servidor>__apagar_tudo`, cada um pedindo permissão (o servidor é o primeiro com "calc" no nome, ou o primeiro);
 //   a "ferramenta" não roda de verdade (a soma é feita aqui). O `initialize` anuncia `mcpCapabilities` como o adaptador.
 //   No registro, os servidores vão sem os valores das variáveis e dos cabeçalhos (só o nome e o tamanho).
+// - conector do claude.ai (contrato 57), em qualquer chat: "use o conector <servidor> <ferramenta>" chama
+//   `mcp__<servidor>__<ferramenta>` pedindo permissão (o `claude` sobe o conector sozinho: ele não vem no `session/new`);
+//   com "direto", roda sem pedir permissão (o app tem de cancelar a resposta). Registra `{ event: 'connector', … }`.
+//   `/mcp` responde como o adaptador 0.107.0 (`formatMcpStatus`): os servidores passados no `session/new` conectados e,
+//   com `mcpStatus` (só nos testes), os que a função devolver para a sessão (conectores que demoram, servidor surpresa).
 // - navegador (contrato 47), com "navegue" no pedido: se o `session/new` trouxe o servidor MCP `navegador`, usa as 7
 //   ferramentas dele (`tool_call`/`tool_call_update` com `name: "mcp__navegador__navegador_*"`, sem pedir permissão, como o
 //   `claude` com `allowedTools`), com resultados inventados no `content` (sem falar MCP de verdade nem abrir nada), e
@@ -269,7 +274,21 @@ async function assistantAnswer(question, cwd, read) {
  * O agente. `log` recebe cada coisa que o cliente mandou ou respondeu; `pause` é a espera entre os passos do
  * chat (o teste usa 0).
  */
-export function fakeAcpAgent({ log = () => undefined, pause = 300 } = {}) {
+/** Contrato 57: a lista do `/mcp` no formato do adaptador 0.107.0 (`dist/mcp-command.js`, `formatMcpStatus`). */
+function formatStatus(servers) {
+  if (!servers.length) return 'No MCP servers are configured.'
+  const titles = { failed: 'Failed', 'needs-auth': 'Needs authentication', pending: 'Connecting', connected: 'Connected' }
+  const blocks = [`**MCP servers:** ${servers.length}`]
+  for (const [status, title] of Object.entries(titles)) {
+    const members = servers.filter((server) => server.status === status)
+    if (members.length) blocks.push([`**${title}**`, ...members.map((server) => (server.tools ? `- \`${server.name}\`: ${server.tools} tools` : `- \`${server.name}\``))].join('\n'))
+  }
+  const disabled = servers.filter((server) => server.status === 'disabled')
+  if (disabled.length) blocks.push(`**Disabled:** ${disabled.map((server) => `\`${server.name}\``).join(', ')}`)
+  return blocks.join('\n\n')
+}
+
+export function fakeAcpAgent({ log = () => undefined, pause = 300, mcpStatus = null } = {}) {
   const sessions = new Map()
   let next = 0
 
@@ -303,6 +322,11 @@ export function fakeAcpAgent({ log = () => undefined, pause = 300 } = {}) {
       // Contrato 21: os servidores da pessoa; o `navegador` (contrato 47) é o servidor local do app, à parte.
       const mcpServers = allServers.filter((server) => server.name !== 'navegador')
       const state = {
+        index: next,
+        openedAt: Date.now(),
+        strict: options.strictMcpConfig === true,
+        disallowedTools: Array.isArray(options.disallowedTools) ? options.disallowedTools : [],
+        passed: allServers.map((server) => server.name),
         cwd: ctx.params.cwd,
         systemPrompt: typeof options.systemPrompt === 'string' ? options.systemPrompt : '',
         purpose: purposeOf(options),
@@ -361,6 +385,15 @@ export function fakeAcpAgent({ log = () => undefined, pause = 300 } = {}) {
       const update = (body) => ctx.client.notify('session/update', { sessionId, update: body })
       const say = (text) => update({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text } })
       const modelId = MODEL_IDS[state.model] ?? MODEL_IDS.default
+
+      // Contrato 57: o `/mcp` (comando local: não conta como resposta do modelo).
+      if (content.trim() === '/mcp') {
+        const extra = mcpStatus ? mcpStatus({ index: state.index, strict: state.strict, disallowedTools: state.disallowedTools, elapsedMs: Date.now() - state.openedAt }) : []
+        const servers = [...state.passed.map((name) => ({ name, status: 'connected', tools: 2 })), ...extra]
+        log({ event: 'mcp-status', sessionId, servers: servers.map((server) => `${server.name}=${server.status}`) })
+        await say(formatStatus(servers))
+        return { stopReason: 'end_turn', usage: { totalTokens: 0, inputTokens: 0, outputTokens: 0 } }
+      }
 
       if (state.purpose === 'translate') {
         const text = /^<turn>([\s\S]*)<\/turn>$/.exec(content)?.[1] ?? content
@@ -478,6 +511,35 @@ export function fakeAcpAgent({ log = () => undefined, pause = 300 } = {}) {
           ...(allowed && result ? { content: [{ type: 'content', content: { type: 'text', text: result } }], _meta: { claudeCode: { toolName: name } } } : {}),
         })
         return allowed
+      }
+      // Contrato 57: a ferramenta de um conector do claude.ai.
+      const connector = /use o conector (\S+) (\S+)/i.exec(question)
+      if (connector) {
+        state.tools += 1
+        const toolCallId = `toolu_${sessionId}_${state.tools}`
+        const name = `mcp__${connector[1]}__${connector[2]}`
+        const rawInput = { query: 'orçamento' }
+        await update({ sessionUpdate: 'tool_call', toolCallId, name, kind: 'other', title: connector[2], status: 'pending', rawInput, content: [] })
+        await wait()
+        let allowed = true
+        if (!/\bdireto\b/i.test(question)) {
+          const response = await ctx.client.request('session/request_permission', {
+            sessionId,
+            toolCall: { toolCallId, title: connector[2], rawInput },
+            options: [
+              { optionId: 'allow', name: 'Allow', kind: 'allow_once' },
+              { optionId: 'reject', name: 'Reject', kind: 'reject_once' },
+            ],
+          })
+          allowed = response.outcome.outcome === 'selected' && response.outcome.optionId.startsWith('allow')
+        }
+        if (allowed) await update({ sessionUpdate: 'tool_call_update', toolCallId, status: 'in_progress' })
+        await wait()
+        await update({ sessionUpdate: 'tool_call_update', toolCallId, status: allowed ? 'completed' : 'failed', ...(allowed ? { content: [{ type: 'content', content: { type: 'text', text: 'achei 1 página' } }] } : {}) })
+        log({ event: 'connector', sessionId, name, outcome: allowed ? 'allow' : 'reject', cancelled: state.cancelled })
+        if (state.cancelled) return { stopReason: 'cancelled', usage: { totalTokens: 10, inputTokens: 5, outputTokens: 5 } }
+        await say(allowed ? 'Achei 1 página.' : `Não pude usar ${connector[2]}: o app negou.`)
+        return { stopReason: 'end_turn', usage: { totalTokens: 10, inputTokens: 5, outputTokens: 5 } }
       }
       // Contrato 21: as ferramentas MCP ("some" e "apague").
       if (state.mcpServers.length && /\bsome\b|\bapague\b/i.test(question)) {

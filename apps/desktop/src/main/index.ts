@@ -1001,7 +1001,11 @@ function createAppServices(userData: string): AppServices {
     mcp: {
       servers: async (use, off) => (mcpRef.current ? mcpRef.current.sessionServers(use, off) : []),
       capabilities: (capabilities) => mcpRef.current?.agentCapabilities(capabilities),
+      // Contrato 57: os conectores do claude.ai ligados, só para o chat.
+      connectors: async () => (mcpRef.current ? mcpRef.current.sessionConnectors() : null),
     },
+    // Contrato 57: bloqueado (contrato 22), a ferramenta de um conector é negada.
+    locked: () => lockService?.isLocked() ?? false,
     launch: processLauncher({
       execPath: process.execPath,
       entry: (profile) => agentFor(profile).entry(),
@@ -1043,6 +1047,14 @@ function createAppServices(userData: string): AppServices {
     baseEnv: process.env,
     // No smoke, sem o shell de login (o `PATH` do próprio processo).
     loginPath: smokeFixtures ? async () => process.env['PATH'] ?? '/usr/bin:/bin' : loginPathOnce(nodeExecFile, process.env),
+    // Contrato 57: os conectores do claude.ai ligados ficam em `settings.claudeConnectors`; "Sempre permitir" grava lá.
+    connectorPrefs: async () => (await settings.get()).claudeConnectors,
+    allowConnectorTool: async (name, tool) => {
+      await settings.mutate((current) => {
+        const entry = current.claudeConnectors[name]
+        return entry ? { claudeConnectors: { ...current.claudeConnectors, [name]: { ...entry, tools: { ...entry.tools, [tool]: 'allow' } } } } : null
+      })
+    },
     ...devLog,
   })
   mcpRef.current = mcp
@@ -1778,7 +1790,16 @@ function registerIpc(services: AppServices): void {
     return meetings.move(id, folderId)
   })
   handle('scribe:settings-get', appOrigin, () => settings.getSettings())
-  handle('scribe:settings-update', appOrigin, (_event, patch) => settings.updateSettings(patch))
+  handle('scribe:settings-update', appOrigin, async (_event, patch) => {
+    const next = await settings.updateSettings(patch)
+    // Contrato 57: ligar, desligar ou mudar a regra de um conector do claude.ai fecha as sessões de chat abertas (a
+    // próxima pergunta abre com o que vale agora), como a mudança de um servidor MCP.
+    if (typeof patch === 'object' && patch !== null && 'claudeConnectors' in patch) {
+      mcp.invalidateConnectors()
+      chat.mcpChanged()
+    }
+    return next
+  })
   handle('scribe:key-status', appOrigin, () => settings.keyStatus())
   handle('scribe:key-save', appOrigin, (_event, request) => settings.saveKey((request as { key?: unknown } | undefined)?.key))
   handle('scribe:key-verify', appOrigin, () => settings.verifyKey())
@@ -1887,6 +1908,8 @@ function registerIpc(services: AppServices): void {
     try {
       return await change
     } finally {
+      // Contrato 57: a próxima sessão com conector espera uma lista nova do `claude mcp list`.
+      mcp.invalidateConnectors()
       chat.mcpChanged()
     }
   }

@@ -6558,9 +6558,9 @@ async function smokeMcpHttp(script: string): Promise<{ url: string; stop: () => 
 }
 
 /**
- * Contrato 21 (CA0 a CA8), no claro: a aba "Conexões" com o aviso fixo e os servidores do `claude` falso (o conector do
- * claude.ai não dá para ligar); "Ver detalhes" mascarado; ligar `calculadora` para o chat, "Testar" e a regra "Negar" em
- * `apagar_tudo`; importar o do Claude Desktop falso só no app (sem o segredo); adicionar pelo formulário no Claude CLI
+ * Contrato 21 (CA0 a CA8), no claro: a aba "Conexões" com o aviso fixo e os servidores do `claude` falso (contrato 57: o
+ * conector do claude.ai sai da lista do CLI e vem na lista própria, desligado); "Ver detalhes" mascarado; ligar
+ * `calculadora` para o chat, "Testar" e a regra "Negar" em `apagar_tudo`; importar o do Claude Desktop falso só no app (sem o segredo); adicionar pelo formulário no Claude CLI
  * (grava no arquivo do `claude` falso) e por JSON colado só no app (HTTP local com o cabeçalho), com "Salvar" só depois
  * do teste; no Assistente, a linha "Conexões" com um servidor desligado na conversa, o cartão de aprovação ("Permitir uma
  * vez"), o passo concluído e a ferramenta negada pela regra; o `session/new` com a definição lida na hora; tradução e
@@ -6590,7 +6590,14 @@ async function mcpChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => void,
     const listed = await waitFor(contents, `document.querySelector('[data-mcp-cli-state="ok"]') && document.querySelector('${server('cli:calculadora')}')`, 15_000)
     const warning = await invoke<string>(`document.querySelector('[data-notice="mcp-warning"]')?.textContent ?? ''`)
     const cliNames = await invoke<string[]>(`[...document.querySelectorAll('[data-mcp-section="cli"] [data-mcp-server]')].map((el) => el.dataset.mcpServer)`)
-    const claudeAiLocked = await invoke<boolean>(`document.querySelector('${server('cli:claude.ai Notion')} [data-action="mcp-toggle"]')?.disabled === true`)
+    // Contrato 57: o conector não é mais um servidor "não usável" do CLI; vem na lista dos conectores, desligado.
+    const claudeAiGone = await invoke<boolean>(`document.querySelector('${server('cli:claude.ai Notion')}') === null`)
+    // O servidor de plugin do `claude` falso não dá para usar no app: o interruptor fica travado (contrato 21).
+    const pluginLocked = await invoke<boolean>(`document.querySelector('${server('cli:plugin:design:slack')} [data-action="mcp-toggle"]')?.disabled === true`)
+    const connectors = await invoke<{ names: string[]; reason: string | null; prefs: string }>(
+      "Promise.all([window.__scribeApi.invoke('scribe:mcp-overview', {}), window.__scribeApi.invoke('scribe:settings-get')]).then(([o, s]) => ({ names: o.connectors.connectors.map((c) => c.name + '|' + c.toolServer + '|' + c.state), reason: o.connectors.reason, prefs: JSON.stringify(s.claudeConnectors) }))",
+    )
+    const connectorsOk = JSON.stringify(connectors.names) === JSON.stringify(['Notion|claude_ai_Notion|connected']) && connectors.reason === null && connectors.prefs === '{}'
     const allOff = await invoke<boolean>(`[...document.querySelectorAll('[data-mcp-server]')].every((el) => el.dataset.mcpState === 'off')`)
     const foundCount = await invoke<string>(`document.querySelector('[data-mcp-found-count]')?.textContent ?? ''`)
     await clickSelector(contents, `${server('cli:calculadora')} [data-action="mcp-details"]`)
@@ -6604,13 +6611,15 @@ async function mcpChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => void,
         listed &&
         warning.includes(MCP_FIXED_WARNING) &&
         warning.includes('permissões separadas') &&
-        JSON.stringify(cliNames) === JSON.stringify(['cli:calculadora', 'cli:docs-remoto', 'cli:claude.ai Notion']) &&
-        claudeAiLocked &&
+        JSON.stringify(cliNames) === JSON.stringify(['cli:calculadora', 'cli:docs-remoto', 'cli:plugin:design:slack']) &&
+        claudeAiGone &&
+        pluginLocked &&
+        connectorsOk &&
         allOff &&
         foundCount === '1 servidor' &&
         detailsShown &&
         leakList.length === 0,
-      detail: `aba=${opened}; lista do CLI=${listed} ${JSON.stringify(cliNames)}; aviso "${warning.slice(0, 80)}…"; claude.ai travado=${claudeAiLocked}; tudo desligado=${allOff}; Claude Desktop "${foundCount}"; detalhes mascarados=${detailsShown}; segredos na tela=${leakList.length}`,
+      detail: `aba=${opened}; lista do CLI=${listed} ${JSON.stringify(cliNames)}; aviso "${warning.slice(0, 80)}…"; claude.ai fora do CLI=${claudeAiGone}, plugin travado=${pluginLocked}, conectores ${JSON.stringify(connectors)}; tudo desligado=${allOff}; Claude Desktop "${foundCount}"; detalhes mascarados=${detailsShown}; segredos na tela=${leakList.length}`,
     }
 
     // CA0 e CA5: ligar `calculadora` para o chat, "Testar" (as duas ferramentas) e "Negar" em `apagar_tudo`.

@@ -10,6 +10,7 @@
 import { z } from 'zod'
 import { isAbsolute } from 'node:path'
 import { BRAND_LOGO_PATTERN, BRAND_TEXT_MAX } from '../../shared/branding'
+import { CLAUDE_CONNECTOR_NAME_MAX, CLAUDE_CONNECTORS_MAX, MCP_TOOL_NAME_MAX, MCP_TOOL_POLICIES, MCP_TOOLS_MAX, type ClaudeConnectorPrefs } from '../../shared/mcp'
 import { EMAIL_ACCOUNT_ID_PATTERN, EMAIL_ADDRESS_PATTERN, EMAIL_HOST_PATTERN, EMAIL_POLL_MINUTES, EMAIL_PROTOCOLS, EMAIL_SECURITY, type EmailAccount } from '../../shared/email'
 import { AGENT_PROFILES, CALENDAR_IDS_MAX, CALENDAR_LEAD_MINUTES, CHAT_MODELS, CLAUDE_MODELS, CLAUDE_TRANSPORTS, CLOSE_BEHAVIORS, DAILY_RUN_LIMIT_OPTIONS, DEFAULT_SETTINGS, LANGUAGE_CODES, LOCK_AFTER_MINUTES, THEME_SETTINGS, TRANSLATION_ENGINES, type AppSettings, type SettingsPatch } from '../../shared/settings-defaults'
 
@@ -49,6 +50,32 @@ const calendarIdsSchema = z.object({ google: calendarIdList.nullable(), microsof
 
 /** Contrato 43: as contas de email recolhidas na barra lateral (só ids de conta). */
 const emailCollapsedSchema = z.array(z.string().regex(EMAIL_ACCOUNT_ID_PATTERN)).max(50)
+
+/**
+ * Contrato 57: os conectores do claude.ai, pelo nome (uma linha, sem caractere de controle), com a política de cada
+ * ferramenta pelo nome como o Claude a chama (`mcpToolKey`).
+ */
+const connectorNameSchema = z.string().min(1).max(CLAUDE_CONNECTOR_NAME_MAX).refine(hasNoControlChar)
+const connectorToolSchema = z.string().regex(new RegExp(`^[A-Za-z0-9_-]{1,${MCP_TOOL_NAME_MAX}}$`))
+const connectorPrefsSchema = z
+  .object({
+    enabled: z.boolean(),
+    tools: z.record(connectorToolSchema, z.enum(MCP_TOOL_POLICIES)).refine((tools) => Object.keys(tools).length <= MCP_TOOLS_MAX),
+  })
+  .strict()
+const claudeConnectorsSchema = z.record(connectorNameSchema, connectorPrefsSchema).refine((connectors) => Object.keys(connectors).length <= CLAUDE_CONNECTORS_MAX)
+/** No arquivo: um conector fora do formato sai sozinho, sem levar os outros (e sem ligar nada). */
+const lenientConnectorsSchema = z
+  .record(z.string(), z.unknown())
+  .transform((raw) => {
+    const connectors: Record<string, ClaudeConnectorPrefs> = {}
+    for (const [name, value] of Object.entries(raw).slice(0, CLAUDE_CONNECTORS_MAX)) {
+      const parsed = connectorPrefsSchema.safeParse(value)
+      if (connectorNameSchema.safeParse(name).success && parsed.success) connectors[name] = parsed.data
+    }
+    return connectors
+  })
+  .catch({})
 
 const D = DEFAULT_SETTINGS
 
@@ -102,6 +129,7 @@ const lenientSchema = z.object({
   emailPollMinutes: z.literal(EMAIL_POLL_MINUTES).catch(D.emailPollMinutes),
   emailNotifications: z.boolean().catch(D.emailNotifications),
   emailCollapsed: emailCollapsedSchema.catch([]),
+  claudeConnectors: lenientConnectorsSchema,
 })
 
 const patchSchema = z
@@ -148,6 +176,7 @@ const patchSchema = z
     emailPollMinutes: z.literal(EMAIL_POLL_MINUTES),
     emailNotifications: z.boolean(),
     emailCollapsed: emailCollapsedSchema,
+    claudeConnectors: claudeConnectorsSchema,
   })
   .partial()
   .strict()

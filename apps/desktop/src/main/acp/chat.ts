@@ -105,10 +105,13 @@ export function webStepOf(tool: 'WebSearch' | 'WebFetch', input: Record<string, 
   return { tool, label: domain ? `Abrindo ${domain.slice(0, 120)}` : 'Abrindo uma página', meetingId: null }
 }
 
-/** Contrato 21: "Usando <ferramenta> (<servidor>)", com o nome que veio do agente (texto puro, cortado). */
-export function mcpStepOf(input: Record<string, unknown>): Omit<ChatStep, 'id' | 'status'> {
+/**
+ * Contrato 21: "Usando <ferramenta> (<servidor>)", com o nome que veio do agente (texto puro, cortado). Contrato 57:
+ * `serverLabel` troca o servidor de um conector pelo nome dele ("claude.ai Notion").
+ */
+export function mcpStepOf(input: Record<string, unknown>, serverLabel: (server: string) => string = (server) => server): Omit<ChatStep, 'id' | 'status'> {
   const tool = typeof input['tool'] === 'string' ? oneLine(input['tool']).slice(0, 80) : 'ferramenta'
-  const server = typeof input['server'] === 'string' ? oneLine(input['server']).slice(0, 60) : 'servidor'
+  const server = typeof input['server'] === 'string' ? oneLine(serverLabel(input['server'])).slice(0, 60) : 'servidor'
   return { tool: 'Mcp', label: `Usando ${tool} (${server})`, meetingId: null }
 }
 
@@ -173,13 +176,20 @@ function outputOf(content: unknown): string | undefined {
  * ferramenta (escrita, shell) não vira passo: a negação aparece na contagem. `blocked`: a página que a política
  * recusou (contrato 26).
  */
-export function acpStepOf(profile: AgentProfile, id: string, call: KnownToolCall, titleOf: (meetingId: string) => string | null = () => null, blocked = false): ChatStep | null {
+export function acpStepOf(
+  profile: AgentProfile,
+  id: string,
+  call: KnownToolCall,
+  titleOf: (meetingId: string) => string | null = () => null,
+  blocked = false,
+  serverLabel?: (server: string) => string,
+): ChatStep | null {
   // O perfil diz que passo é (pelo nome da ferramenta dele) e normaliza a entrada.
   const mapped = profile.stepOf(call)
   if (!mapped) return null
   const step =
     mapped.tool === 'Mcp'
-      ? mcpStepOf(mapped.input)
+      ? mcpStepOf(mapped.input, serverLabel)
       : mapped.tool === 'WebSearch' || mapped.tool === 'WebFetch'
         ? webStepOf(mapped.tool, mapped.input, blocked)
         : isNavegadorFerramenta(mapped.tool)
@@ -254,6 +264,8 @@ export class AcpChat implements ChatEngine {
   private pending = false
   /** Custo acumulado da sessão, do último `usage_update`. */
   private cost = 0
+  /** Contrato 57: avisos de conector já mostrados nesta conversa (o id do passo). */
+  private notices = 0
   /** Modelo que respondeu, do `_meta` do `usage_update`. */
   private answeredBy = ''
 
@@ -422,6 +434,9 @@ export class AcpChat implements ChatEngine {
       }
       this.asking = asking
       this.arm(asking)
+      // Contrato 57: os avisos dos conectores desta sessão ("O Notion ainda não conectou", conectores desligados nesta
+      // conversa) aparecem como um passo, uma vez.
+      for (const label of session.takeNotices()) asking.onDetail({ type: 'step', step: { tool: 'Mcp', label: label.slice(0, CHAT_STEP_LABEL_MAX), meetingId: null, id: `aviso-conector-${++this.notices}`, status: 'failed' } })
       void session
         .prompt(content, {
           onUpdate: (update) => {
@@ -437,7 +452,7 @@ export class AcpChat implements ChatEngine {
             // A página recusada: o passo dela troca de rótulo na hora, com o estado de negado.
             asking.blocked.add(denial.toolCallId)
             const call = asking.tools.get(denial.toolCallId)
-            const step = call ? acpStepOf(asking.session.profile, denial.toolCallId, { ...call, status: 'failed' }, this.options.titleOf, true) : null
+            const step = call ? acpStepOf(asking.session.profile, denial.toolCallId, { ...call, status: 'failed' }, this.options.titleOf, true, (server) => asking.session.mcpServerLabel(server)) : null
             if (step) asking.onDetail({ type: 'step', step })
           },
           // Contrato 21: o cartão na conversa; a espera de 2 min fica com a sessão. Enquanto a pessoa decide, o relógio
@@ -546,14 +561,14 @@ export class AcpChat implements ChatEngine {
         }
         asking.tools.set(update.toolCallId, call)
         const blocked = asking.blocked.has(update.toolCallId)
-        const step = acpStepOf(asking.session.profile, update.toolCallId, blocked ? { ...call, status: 'failed' } : call, this.options.titleOf, blocked)
+        const step = acpStepOf(asking.session.profile, update.toolCallId, blocked ? { ...call, status: 'failed' } : call, this.options.titleOf, blocked, (server) => asking.session.mcpServerLabel(server))
         if (update.sessionUpdate === 'tool_call' && !asking.text) {
           asking.reading = true
           progress()
         }
         if (!step) return
         if (step.meetingId && !asking.consulted.includes(step.meetingId)) asking.consulted.push(step.meetingId)
-        const previous = before ? acpStepOf(asking.session.profile, update.toolCallId, blocked ? { ...before, status: 'failed' } : before, this.options.titleOf, blocked) : null
+        const previous = before ? acpStepOf(asking.session.profile, update.toolCallId, blocked ? { ...before, status: 'failed' } : before, this.options.titleOf, blocked, (server) => asking.session.mcpServerLabel(server)) : null
         // O mesmo passo só volta à tela quando o rótulo ou o estado mudaram.
         if (previous && previous.label === step.label && previous.status === step.status && previous.meetingId === step.meetingId) return
         asking.onDetail({ type: 'step', step })

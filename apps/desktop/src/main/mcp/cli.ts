@@ -7,11 +7,32 @@
 // A definição de um servidor (comando, argumentos, variáveis, endereço e cabeçalhos) é lida do arquivo do CLI
 // (`~/.claude.json`, chave `mcpServers`: o escopo `user`) só no main, na hora de abrir a sessão ou de testar: os
 // segredos vão do arquivo do CLI direto para o processo do agente, sem passar pelo renderer. Nada do arquivo vai para
-// log. Os conectores do claude.ai e os dos plugins aparecem na lista, mas não dão para usar no app (não estão no
-// arquivo; o app não tem como passar a definição deles ao agente).
+// log. Os dos plugins aparecem na lista, mas não dão para usar no app (não estão no arquivo; o app não tem como passar a
+// definição deles ao agente).
+//
+// Contrato 57: as linhas `claude.ai <Nome>` da mesma lista são os conectores do claude.ai (`connectorsOf`). Nada do
+// arquivo do CLI entra nessa conta e nenhum endereço do claude.ai é chamado; sem conector na lista, `claude auth status`
+// diz se o login é por assinatura (sem ela, não há conector).
 import { mkdir, readFile } from 'node:fs/promises'
 import { z } from 'zod'
-import { MCP_ARG_MAX, MCP_ARGS_MAX, MCP_COMMAND_MAX, MCP_PAIRS_MAX, MCP_SECRET_MASK, MCP_URL_MAX, MCP_VALUE_MAX, maskSecrets, mcpText, type McpCliHealth, type McpTransport } from '../../shared/mcp'
+import {
+  CLAUDE_CONNECTOR_NAME_MAX,
+  CLAUDE_CONNECTOR_PREFIX,
+  CLAUDE_CONNECTORS_MAX,
+  claudeConnectorToolServer,
+  MCP_ARG_MAX,
+  MCP_ARGS_MAX,
+  MCP_COMMAND_MAX,
+  MCP_PAIRS_MAX,
+  MCP_SECRET_MASK,
+  MCP_URL_MAX,
+  MCP_VALUE_MAX,
+  maskSecrets,
+  mcpText,
+  type ClaudeConnector,
+  type McpCliHealth,
+  type McpTransport,
+} from '../../shared/mcp'
 import { claudeEnv, LOGIN_SHELL, LOGIN_SHELL_TIMEOUT_MS, type ExecFile } from '../claude-cli/locate'
 
 /** `claude mcp list` confere a saúde de cada servidor (sobe os de comando local): pode demorar. */
@@ -59,6 +80,46 @@ export function parseMcpList(stdout: string): CliListEntry[] {
     if (!entries.some((entry) => entry.name === name)) entries.push({ name, transport, health })
   }
   return entries
+}
+
+/** Contrato 57: a linha é de um conector do claude.ai (`claude.ai Notion`)? */
+export const isConnectorEntry = (name: string): boolean => name.startsWith(CLAUDE_CONNECTOR_PREFIX)
+
+/**
+ * Contrato 57: os conectores do claude.ai das linhas `claude.ai <Nome>` de `claude mcp list`, na ordem da lista. O estado
+ * vem do símbolo ("✔ Connected", "! Needs authentication"; o resto é falha). Nome que não dá um servidor que o Claude
+ * consiga ler de volta no nome das ferramentas fica de fora.
+ */
+export function connectorsOf(entries: readonly CliListEntry[]): ClaudeConnector[] {
+  const connectors: ClaudeConnector[] = []
+  for (const entry of entries) {
+    if (!isConnectorEntry(entry.name)) continue
+    const name = mcpText(entry.name.slice(CLAUDE_CONNECTOR_PREFIX.length), CLAUDE_CONNECTOR_NAME_MAX)
+    const toolServer = claudeConnectorToolServer(name)
+    if (!name || name.endsWith('…') || !/^claude_ai_[A-Za-z0-9-]+(?:_[A-Za-z0-9-]+)*$/.test(toolServer)) continue
+    if (connectors.some((known) => known.name === name || known.toolServer === toolServer)) continue
+    connectors.push({ name, toolServer, state: entry.health === 'connected' ? 'connected' : entry.health === 'needs-auth' ? 'needs-auth' : 'failed' })
+    if (connectors.length >= CLAUDE_CONNECTORS_MAX) break
+  }
+  return connectors
+}
+
+/**
+ * Contrato 57: a saída de `claude auth status --json` diz que o login é por assinatura (`authMethod: "claude.ai"` com o
+ * provedor da Anthropic)? `null` se não dá para saber.
+ */
+export function subscriptionOf(stdout: string): boolean | null {
+  let data: unknown
+  try {
+    data = JSON.parse(stdout)
+  } catch {
+    return null
+  }
+  if (typeof data !== 'object' || data === null || Array.isArray(data)) return null
+  const status = data as Record<string, unknown>
+  if (status['loggedIn'] === false) return false
+  if (typeof status['authMethod'] !== 'string') return null
+  return status['authMethod'] === 'claude.ai' && (status['apiProvider'] === undefined || status['apiProvider'] === 'firstParty')
 }
 
 const stringRecord = z
@@ -159,6 +220,8 @@ export interface McpCliOptions {
 
 export interface McpCli {
   list(claudePath: string): Promise<CliListEntry[]>
+  /** Contrato 57: o `claude` está logado por assinatura (`claude auth status`)? `null` se não respondeu. */
+  subscription(claudePath: string): Promise<boolean | null>
   /** As definições do escopo `user`, lidas agora do arquivo do CLI. */
   definitions(): Promise<Map<string, CliDefinition>>
   details(claudePath: string, name: string): Promise<{ label: string; value: string }[]>
@@ -175,6 +238,7 @@ export function createMcpCli(options: McpCliOptions): McpCli {
   const definitions = (): Promise<Map<string, CliDefinition>> => readServersFile(options.configFile)
   return {
     list: async (claudePath) => parseMcpList(await run(claudePath, ['mcp', 'list'], MCP_LIST_TIMEOUT_MS)),
+    subscription: async (claudePath) => subscriptionOf(await run(claudePath, ['auth', 'status', '--json'], MCP_CLI_TIMEOUT_MS).catch(() => '')),
     definitions,
     details: async (claudePath, name) => {
       const [stdout, known] = await Promise.all([run(claudePath, ['mcp', 'get', name], MCP_CLI_TIMEOUT_MS).catch(() => ''), definitions()])

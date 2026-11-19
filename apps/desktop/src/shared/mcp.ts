@@ -4,6 +4,10 @@
 // nunca tradução nem resumo). Toda chamada de ferramenta MCP pede aprovação na conversa, a não ser a ferramenta marcada
 // "Sempre permitir". Segredo (variável ou cabeçalho marcado) nunca volta ao renderer: só "•••• definido".
 //
+// Contrato 57: os conectores do claude.ai (linhas `claude.ai <Nome>` do `claude mcp list`) são uma terceira fonte. O app
+// não tem a definição nem o login deles: liga e desliga cada um em `settings.claudeConnectors`, e a sessão do chat com
+// algum ligado abre sem o modo estrito, com o resto bloqueado.
+//
 // Tudo o que chega de um servidor MCP (nomes e descrições de ferramentas, mensagens de erro) é dado, nunca instrução:
 // passa por limites de tamanho e vai para a tela como texto puro.
 
@@ -60,6 +64,8 @@ export const MCP_CLI_DESCRIPTION = 'Os servidores MCP do claude instalado neste 
 export const MCP_APP_DESCRIPTION = 'Servidores que valem só neste app.'
 export const MCP_FOUND_DESCRIPTION = 'Servidores de outras ferramentas (Claude Desktop). Importar não traz os segredos.'
 export const MCP_ADD_DESCRIPTION = 'Um comando local (stdio) ou um endereço (HTTP), no Claude CLI ou só neste app.'
+/** Contrato 57: a seção dos conectores do claude.ai, na tela e no índice da busca. */
+export const CLAUDE_CONNECTORS_DESCRIPTION = 'Os conectores da sua conta do claude.ai (Notion, Google Drive, Gmail…). Ligue um por um; o login fica no claude.ai.'
 
 export const MCP_USE_LABELS: Readonly<Record<McpUse, string>> = { chat: 'Chat', analysis: 'Análise' }
 export const MCP_POLICY_LABELS: Readonly<Record<McpToolPolicy, string>> = { ask: 'Perguntar', allow: 'Permitir', deny: 'Negar' }
@@ -168,6 +174,70 @@ export interface McpOverview {
   cli: { state: 'ok' | 'not-found' | 'error' | 'loading'; servers: McpCliServerView[]; error?: string | undefined }
   app: McpServerView[]
   found: McpFoundServer[]
+  /** Contrato 57: os conectores do claude.ai, das linhas `claude.ai <Nome>` do mesmo `claude mcp list`. */
+  connectors: ClaudeConnectorList
+}
+
+/** Contrato 57: o começo do nome dos conectores do claude.ai em `claude mcp list` (`claude.ai Notion`). */
+export const CLAUDE_CONNECTOR_PREFIX = 'claude.ai '
+/** Conectores lidos da lista e tamanho do nome de cada um. */
+export const CLAUDE_CONNECTORS_MAX = 100
+export const CLAUDE_CONNECTOR_NAME_MAX = 200
+
+/** Estado do conector como o `claude mcp list` diz: conectado, precisa autorizar no claude.ai, ou falhou. */
+export type ClaudeConnectorState = 'connected' | 'needs-auth' | 'failed'
+
+/** Um conector do claude.ai (contrato 57). O login dele fica com o próprio Claude: o app só liga e desliga. */
+export interface ClaudeConnector {
+  /** O nome depois de `claude.ai ` ("Notion", "Google Drive", "Notion (2)"). */
+  name: string
+  /** O servidor no nome das ferramentas: `mcp__<toolServer>__<ferramenta>` (`claude_ai_Notion`). */
+  toolServer: string
+  state: ClaudeConnectorState
+}
+
+/**
+ * A lista de conectores. Vazia, com o motivo: `no-subscription` (o `claude` não está logado por assinatura, e sem ela não
+ * há conector) ou `none` (logado, mas a conta não tem conector). `null`: há conectores, ou a lista ainda não foi lida.
+ */
+export interface ClaudeConnectorList {
+  connectors: ClaudeConnector[]
+  reason: ClaudeConnectorsReason | null
+}
+export type ClaudeConnectorsReason = 'no-subscription' | 'none'
+
+/**
+ * O que o app guarda de cada conector (`settings.claudeConnectors`, pelo nome): ligado ou não e a política de cada
+ * ferramenta ("Perguntar" é o padrão e não fica guardado). Conector fora do registro está desligado.
+ */
+export interface ClaudeConnectorPrefs {
+  enabled: boolean
+  tools: Record<string, McpToolPolicy>
+}
+
+/** Contrato 57: a sessão carregou um servidor que o app não conhece (nem depois de reabrir): segue sem conector. */
+export const CLAUDE_CONNECTORS_UNKNOWN_NOTICE = 'Os conectores ficaram desligados nesta conversa: apareceu um servidor que o app não conhece.'
+/** Contrato 57: a lista de servidores da sessão não veio (o `/mcp` não respondeu com ela): segue sem conector. */
+export const CLAUDE_CONNECTORS_UNCHECKED_NOTICE = 'Os conectores ficaram desligados nesta conversa: não deu para conferir os servidores da sessão.'
+/** Contrato 57: o conector ligado não conectou nos 8 s de espera; a pergunta segue sem ele. */
+export function claudeConnectorPendingNotice(name: string): string {
+  return `O ${name} ainda não conectou`
+}
+
+/** "claude.ai Notion": o nome do conector como a lista do `claude` e o cartão de aprovação mostram. */
+export function claudeConnectorLabel(name: string): string {
+  return `${CLAUDE_CONNECTOR_PREFIX}${name}`
+}
+
+/**
+ * O servidor de um conector no nome das ferramentas, como o Claude Code 2.1.325 o monta: o que não for letra, número,
+ * `-` ou `_` vira `_`, e nos `claude.ai …` os `_` seguidos viram um só e saem das pontas ("claude.ai Notion (2)" →
+ * `claude_ai_Notion_2`).
+ */
+export function claudeConnectorToolServer(name: string): string {
+  return mcpToolServerName(claudeConnectorLabel(name))
+    .replace(/_+/g, '_')
+    .replace(/^_|_$/g, '')
 }
 
 /** O formulário de "Adicionar servidor MCP" (e o de editar um do app). */

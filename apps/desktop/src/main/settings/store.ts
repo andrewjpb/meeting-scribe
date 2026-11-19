@@ -7,7 +7,7 @@
 import { randomUUID } from 'node:crypto'
 import { readFile, rename, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { applySettingsPatch, DEFAULT_SETTINGS, type AppSettings } from '../../shared/settings-defaults'
+import { applySettingsPatch, DEFAULT_SETTINGS, type AppSettings, type SettingsPatch } from '../../shared/settings-defaults'
 import { audioFolderSchema, brandLogoSchema, checkEmailAccounts, claudePathSchema, modelIdSchema, parseEmailAccounts, parseSettings, parseSettingsPatch, SETTINGS_VERSION, type StoredEmailAccount } from './schema'
 
 export const SETTINGS_FILE = 'settings.json'
@@ -17,6 +17,11 @@ export interface SettingsStore {
   get(): Promise<AppSettings>
   /** Valida e aplica a mudança vinda do renderer; devolve o que foi gravado. Mudança inválida lança erro. */
   update(patch: unknown): Promise<AppSettings>
+  /**
+   * Só para o main: a mudança calculada a partir do valor gravado agora, na mesma fila das gravações (nenhuma outra
+   * mudança entra no meio). `null` não grava nada. Contrato 57: "Sempre permitir" de um conector.
+   */
+  mutate(change: (current: AppSettings) => SettingsPatch | null): Promise<AppSettings>
   /** Só para o main, depois de o gateway confirmar o modelo (`settings/service.ts`). */
   setTranslationModel(id: string): Promise<AppSettings>
   /** Só para o main, depois de o `claude` responder naquele caminho (`claude-cli/service.ts`); `null` volta a procurar sozinho. */
@@ -98,6 +103,12 @@ export function createFileSettingsStore({ dir, onChange, now = Date.now }: FileS
   return {
     get: () => serial(load),
     update: (input) => serial(async () => commit(applySettingsPatch(await load(), parseSettingsPatch(input)))),
+    mutate: (change) =>
+      serial(async () => {
+        const current = await load()
+        const patch = change(current)
+        return patch === null ? current : commit(applySettingsPatch(current, parseSettingsPatch(patch)))
+      }),
     setTranslationModel: (id) => serial(async () => commit({ ...(await load()), translationModel: modelIdSchema.parse(id) })),
     setClaudePath: (path) => serial(async () => commit({ ...(await load()), claudePath: path === null ? null : claudePathSchema.parse(path) })),
     setAudioFolder: (path) => serial(async () => commit({ ...(await load()), audioFolder: path === null ? null : audioFolderSchema.parse(path) })),

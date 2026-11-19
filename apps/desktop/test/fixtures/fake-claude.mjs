@@ -25,7 +25,11 @@
 //
 // Contrato 21: `mcp list | get | add-json | remove` (escopo `user`), com os servidores guardados no arquivo que a
 // variável `FAKE_CLAUDE_MCP_FILE` aponta (no formato do `~/.claude.json`). `list` imita a saída do Claude Code 2.1.325
-// ("nome: alvo - ✔ Connected"), com um conector do claude.ai que não está no arquivo; nada é conectado de verdade.
+// ("nome: alvo - ✔ Connected"), com um conector do claude.ai e um servidor de plugin que não estão no arquivo; nada é
+// conectado de verdade.
+//
+// Contrato 57: `auth status --json` responde como o Claude Code 2.1.325 logado por assinatura (`authMethod: "claude.ai"`);
+// com `FAKE_CLAUDE_AUTH=api-key`, como logado por chave de API.
 //
 // Uso: node fake-claude.mjs --version | node fake-claude.mjs -p --model haiku --input-format stream-json ...
 //      node fake-claude.mjs mcp list
@@ -66,6 +70,8 @@ function runMcp(command, rest) {
   if (command === 'list') {
     const lines = Object.entries(servers).map(([name, server]) => `${name}: ${target(server)} - ${server.type === 'http' || server.type === 'sse' ? '✘ Failed to connect' : '✔ Connected'}`)
     lines.push('claude.ai Notion: https://mcp.notion.com/mcp - ✔ Connected')
+    // Contrato 57: um servidor de plugin (não está no arquivo: não dá para usar no app, o interruptor fica travado).
+    lines.push('plugin:design:slack: https://mcp.slack.example/mcp (HTTP) - ! Needs authentication')
     return done(`Checking MCP server health…\n\n${lines.join('\n')}\n`)
   }
   if (command === 'get') {
@@ -111,6 +117,10 @@ const model = MODEL_IDS[args[args.indexOf('--model') + 1]] ?? MODEL_IDS.haiku
 
 if (args[0] === 'mcp') {
   runMcp(args[1], args.slice(2))
+} else if (args[0] === 'auth' && args[1] === 'status') {
+  const subscription = process.env.FAKE_CLAUDE_AUTH !== 'api-key'
+  const status = subscription ? { loggedIn: true, authMethod: 'claude.ai', apiProvider: 'firstParty' } : { loggedIn: true, authMethod: 'api_key', apiProvider: 'firstParty' }
+  process.stdout.write(`${JSON.stringify(status, null, 2)}\n`, () => process.exit(0))
 } else if (args.includes('--include-partial-messages')) {
   const emit = (message) => process.stdout.write(`${JSON.stringify(message)}\n`)
 

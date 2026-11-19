@@ -1,0 +1,523 @@
+{
+  "chat": {
+    "cwd": "/c",
+    "mcpServers": [],
+    "configOptions": [
+      {
+        "configId": "mode",
+        "value": "default"
+      },
+      {
+        "configId": "model",
+        "value": "sonnet"
+      }
+    ],
+    "_meta": {
+      "claudeCode": {
+        "options": {
+          "settingSources": [],
+          "tools": [
+            "Read",
+            "Grep",
+            "Glob"
+          ],
+          "disallowedTools": [
+            "Bash",
+            "Edit",
+            "Write",
+            "NotebookEdit",
+            "WebFetch",
+            "WebSearch",
+            "Task"
+          ],
+          "model": "sonnet",
+          "systemPrompt": "Instrução",
+          "strictMcpConfig": true,
+          "persistSession": false,
+          "promptSuggestions": false,
+          "allowDangerouslySkipPermissions": false,
+          "extraArgs": {
+            "restricted": null
+          }
+        }
+      }
+    }
+  },
+  "chat-pensar-mais": {
+    "cwd": "/c",
+    "mcpServers": [],
+    "configOptions": [
+      {
+        "configId": "mode",
+        "value": "default"
+      },
+      {
+        "configId": "model",
+        "value": "sonnet"
+      },
+      {
+        "configId": "effort",
+        "value": "high"
+      }
+    ],
+    "_meta": {
+      "claudeCode": {
+        "options": {
+          "settingSources": [],
+          "tools": [
+            "Read",
+            "Grep",
+            "Glob"
+          ],
+          "disallowedTools": [
+            "Bash",
+            "Edit",
+            "Write",
+            "NotebookEdit",
+            "WebFetch",
+            "WebSearch",
+            "Task"
+          ],
+          "model": "sonnet",
+          "systemPrompt": "Instrução",
+          "strictMcpConfig": true,
+          "persistSession": false,
+          "promptSuggestions": false,
+          "allowDangerouslySkipPermissions": false,
+          "extraArgs": {
+            "restricted": null
+          }
+        }
+      }
+    }
+  },
+  "chat-internet": {
+    "cwd": "/c",
+    "mcpServers": [],
+    "configOptions": [
+      {
+        "configId": "mode",
+        "value": "default"
+      },
+      {
+        "configId": "model",
+        "value": "sonnet"
+      }
+    ],
+    "_meta": {
+      "claudeCode": {
+        "options": {
+          "settingSources": [],
+          "tools": [
+            "Read",
+            "Grep",
+            "Glob",
+            "WebSearch",
+            "WebFetch"
+          ],
+          "disallowedTools": [
+            "Bash",
+            "Edit",
+            "Write",
+            "NotebookEdit",
+            "Task"
+          ],
+          "settings": {
+            "permissions": {
+              "ask": [
+                "WebSearch",
+                "WebFetch"
+              ]
+            }
+          },
+          "model": "sonnet",
+          "systemPrompt": "Instrução",
+          "strictMcpConfig": true,
+          "persistSession": false,
+          "promptSuggestions": false,
+          "allowDangerouslySkipPermissions": false,
+          "extraArgs": {
+            "restricted": null
+          }
+        }
+      }
+    }
+  },
+  "chat-mcp": {
+    "cwd": "/c",
+    "mcpServers": [
+      {
+        "name": "calculadora",
+        "command": "/bin/calc",
+        "args": [],
+        "env": [
+          {
+            "name": "CALC_TOKEN",
+            "value": "x"
+          }
+        ]
+      }
+    ],
+    "configOptions": [
+      {
+        "configId": "mode",
+        "value": "default"
+      },
+      {
+        "configId": "model",
+        "value": "sonnet"
+      }
+    ],
+    "_meta": {
+      "claudeCode": {
+        "options": {
+          "settingSources": [],
+          "tools": [
+            "Read",
+            "Grep",
+            "Glob"
+          ],
+          "disallowedTools": [
+            "Bash",
+            "Edit",
+            "Write",
+            "NotebookEdit",
+            "WebFetch",
+            "WebSearch",
+            "Task",
+            "mcp__calculadora__apagar_tudo"
+          ],
+          "settings": {
+            "permissions": {
+              "ask": [
+                "mcp__calculadora"
+              ]
+            }
+          },
+          "model": "sonnet",
+          "systemPrompt": "Instrução",
+          "strictMcpConfig": true,
+          "persistSession": false,
+          "promptSuggestions": false,
+          "allowDangerouslySkipPermissions": false,
+          "extraArgs": {
+            "restricted": null
+          }
+        }
+      }
+    }
+  },
+  "chat-navegador": {
+    "cwd": "/c",
+    "mcpServers": [
+      {
+        "type": "http",
+        "name": "navegador",
+        "url": "http://127.0.0.1:4545/mcp",
+        "headers": [
+          {
+            "name": "Authorization",
+            "value": "Bearer t0k3n"
+          }
+        ]
+      }
+    ],
+    "configOptions": [
+      {
+        "configId": "mode",
+        "value": "default"
+      },
+      {
+        "configId": "model",
+        "value": "sonnet"
+      }
+    ],
+    "_meta": {
+      "claudeCode": {
+        "options": {
+          "settingSources": [],
+          "tools": [
+            "Read",
+            "Grep",
+            "Glob"
+          ],
+          "disallowedTools": [
+            "Bash",
+            "Edit",
+            "Write",
+            "NotebookEdit",
+            "WebFetch",
+            "WebSearch",
+            "Task"
+          ],
+          "allowedTools": [
+            "mcp__navegador__navegador_abrir",
+            "mcp__navegador__navegador_abas",
+            "mcp__navegador__navegador_ler",
+            "mcp__navegador__navegador_clicar",
+            "mcp__navegador__navegador_digitar",
+            "mcp__navegador__navegador_aguardar",
+            "mcp__navegador__navegador_fechar"
+          ],
+          "settings": {
+            "permissions": {
+              "allow": [
+                "mcp__navegador__navegador_abrir",
+                "mcp__navegador__navegador_abas",
+                "mcp__navegador__navegador_ler",
+                "mcp__navegador__navegador_clicar",
+                "mcp__navegador__navegador_digitar",
+                "mcp__navegador__navegador_aguardar",
+                "mcp__navegador__navegador_fechar"
+              ]
+            }
+          },
+          "model": "sonnet",
+          "systemPrompt": "Instrução",
+          "strictMcpConfig": true,
+          "persistSession": false,
+          "promptSuggestions": false,
+          "allowDangerouslySkipPermissions": false,
+          "extraArgs": {
+            "restricted": null
+          }
+        }
+      }
+    }
+  },
+  "chat-tudo": {
+    "cwd": "/c",
+    "mcpServers": [
+      {
+        "name": "calculadora",
+        "command": "/bin/calc",
+        "args": [],
+        "env": [
+          {
+            "name": "CALC_TOKEN",
+            "value": "x"
+          }
+        ]
+      },
+      {
+        "type": "http",
+        "name": "navegador",
+        "url": "http://127.0.0.1:4545/mcp",
+        "headers": [
+          {
+            "name": "Authorization",
+            "value": "Bearer t0k3n"
+          }
+        ]
+      }
+    ],
+    "configOptions": [
+      {
+        "configId": "mode",
+        "value": "default"
+      },
+      {
+        "configId": "model",
+        "value": "sonnet"
+      }
+    ],
+    "_meta": {
+      "claudeCode": {
+        "options": {
+          "settingSources": [],
+          "tools": [
+            "Read",
+            "Grep",
+            "Glob",
+            "WebSearch",
+            "WebFetch"
+          ],
+          "disallowedTools": [
+            "Bash",
+            "Edit",
+            "Write",
+            "NotebookEdit",
+            "Task",
+            "mcp__calculadora__apagar_tudo"
+          ],
+          "allowedTools": [
+            "mcp__navegador__navegador_abrir",
+            "mcp__navegador__navegador_abas",
+            "mcp__navegador__navegador_ler",
+            "mcp__navegador__navegador_clicar",
+            "mcp__navegador__navegador_digitar",
+            "mcp__navegador__navegador_aguardar",
+            "mcp__navegador__navegador_fechar"
+          ],
+          "settings": {
+            "permissions": {
+              "ask": [
+                "WebSearch",
+                "WebFetch",
+                "mcp__calculadora"
+              ],
+              "allow": [
+                "mcp__navegador__navegador_abrir",
+                "mcp__navegador__navegador_abas",
+                "mcp__navegador__navegador_ler",
+                "mcp__navegador__navegador_clicar",
+                "mcp__navegador__navegador_digitar",
+                "mcp__navegador__navegador_aguardar",
+                "mcp__navegador__navegador_fechar"
+              ]
+            }
+          },
+          "model": "sonnet",
+          "systemPrompt": "Instrução",
+          "strictMcpConfig": true,
+          "persistSession": false,
+          "promptSuggestions": false,
+          "allowDangerouslySkipPermissions": false,
+          "extraArgs": {
+            "restricted": null
+          }
+        }
+      }
+    }
+  },
+  "analise-mcp": {
+    "cwd": "/c",
+    "mcpServers": [
+      {
+        "name": "calculadora",
+        "command": "/bin/calc",
+        "args": [],
+        "env": [
+          {
+            "name": "CALC_TOKEN",
+            "value": "x"
+          }
+        ]
+      }
+    ],
+    "configOptions": [
+      {
+        "configId": "mode",
+        "value": "default"
+      },
+      {
+        "configId": "model",
+        "value": "sonnet"
+      }
+    ],
+    "_meta": {
+      "claudeCode": {
+        "options": {
+          "settingSources": [],
+          "tools": [],
+          "disallowedTools": [
+            "Bash",
+            "Edit",
+            "Write",
+            "NotebookEdit",
+            "WebFetch",
+            "WebSearch",
+            "Task",
+            "mcp__calculadora__apagar_tudo"
+          ],
+          "settings": {
+            "permissions": {
+              "ask": [
+                "mcp__calculadora"
+              ]
+            }
+          },
+          "model": "sonnet",
+          "systemPrompt": "p",
+          "strictMcpConfig": true,
+          "persistSession": false,
+          "promptSuggestions": false,
+          "allowDangerouslySkipPermissions": false,
+          "extraArgs": {
+            "restricted": null
+          }
+        }
+      }
+    }
+  },
+  "traducao": {
+    "cwd": "/c",
+    "mcpServers": [],
+    "configOptions": [
+      {
+        "configId": "mode",
+        "value": "default"
+      },
+      {
+        "configId": "model",
+        "value": "haiku"
+      }
+    ],
+    "_meta": {
+      "claudeCode": {
+        "options": {
+          "settingSources": [],
+          "tools": [],
+          "disallowedTools": [
+            "Bash",
+            "Edit",
+            "Write",
+            "NotebookEdit",
+            "WebFetch",
+            "WebSearch",
+            "Task"
+          ],
+          "model": "haiku",
+          "systemPrompt": "p",
+          "strictMcpConfig": true,
+          "persistSession": false,
+          "promptSuggestions": false,
+          "allowDangerouslySkipPermissions": false,
+          "extraArgs": {
+            "restricted": null
+          }
+        }
+      }
+    }
+  },
+  "resumo": {
+    "cwd": "/c",
+    "mcpServers": [],
+    "configOptions": [
+      {
+        "configId": "mode",
+        "value": "default"
+      },
+      {
+        "configId": "model",
+        "value": "haiku"
+      }
+    ],
+    "_meta": {
+      "claudeCode": {
+        "options": {
+          "settingSources": [],
+          "tools": [],
+          "disallowedTools": [
+            "Bash",
+            "Edit",
+            "Write",
+            "NotebookEdit",
+            "WebFetch",
+            "WebSearch",
+            "Task"
+          ],
+          "model": "haiku",
+          "systemPrompt": "p",
+          "strictMcpConfig": true,
+          "persistSession": false,
+          "promptSuggestions": false,
+          "allowDangerouslySkipPermissions": false,
+          "extraArgs": {
+            "restricted": null
+          }
+        }
+      }
+    }
+  }
+}

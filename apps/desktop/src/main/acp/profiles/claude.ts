@@ -36,6 +36,13 @@
 // em `allowedTools` e em `settings.permissions.allow` (o `claude` não pergunta), e `strictMcpConfig` segue ligado. A
 // chamada chega como `tool_call` com `name: "mcp__navegador__<ferramenta>"`, `rawInput` com os argumentos e o
 // resultado no `content` do `tool_call_update`.
+//
+// Contrato 57 (conectores do claude.ai), conferido no `claude` 2.1.325: com `strictMcpConfig` a sessão fica "restrita"
+// e os conectores não carregam ("claude.ai connectors are not loaded in this session"). Por isso, só quando há conector
+// ligado, a sessão do chat abre sem o modo estrito, com `settingSources: []` e `--restricted` como sempre. Sem ele o
+// `claude` sobe também os servidores de `~/.claude.json`, os conectores desligados e os de plugin: cada um que a sessão
+// não passa entra em `disallowedTools` pelo servidor inteiro (`mcp__<servidor>`, que o `claude` compara com o nome exato
+// do servidor). Os ligados entram na regra `ask`, e as ferramentas com "Negar", uma a uma em `disallowedTools`.
 import { mcpToolKey, mcpToolOf } from '../../../shared/mcp'
 import { AGENT_PROFILE_LABELS } from '../../../shared/settings-defaults'
 import { claudeEnv } from '../../claude-cli/locate'
@@ -128,7 +135,14 @@ export const claudeProfile: AgentProfile = {
     const mcpDenied = mcp.flatMap((server) => Object.entries(server.toolPolicy).flatMap(([tool, policy]) => (policy === 'deny' ? [`mcp__${server.name}__${mcpToolKey(tool)}`] : [])))
     // Contrato 47: o navegador, só com a sessão pedindo e o servidor local aberto para ela.
     const navegador = navegadorRequested(request) ? (local.navegador ?? null) : null
-    const ask = [...(web ? CLAUDE_WEB_TOOLS : []), ...mcp.map((server) => `mcp__${server.name}`)]
+    // Contrato 57: os conectores ligados, só no chat; sem nenhum, a sessão continua com o modo estrito.
+    const connectors = request.purpose === 'chat' ? (request.connectors?.enabled ?? []) : []
+    const connectorDenied = connectors.flatMap((connector) => Object.entries(connector.toolPolicy).flatMap(([tool, policy]) => (policy === 'deny' ? [`mcp__${connector.toolServer}__${mcpToolKey(tool)}`] : [])))
+    // O que sobe sem o modo estrito e a sessão não passou: bloqueado pelo servidor inteiro. Nunca o do navegador quando a
+    // sessão abre com ele (é o do app), nem um nome que o `claude` não leria de volta numa regra (`a__b`).
+    const passed = new Set([...mcp.map((server) => server.name), ...connectors.map((connector) => connector.toolServer), ...(navegador ? [NAVEGADOR_MCP_SERVER] : [])])
+    const blocked = connectors.length ? [...new Set(request.connectors?.others ?? [])].filter((name) => !passed.has(name) && /^[A-Za-z0-9_-]{1,200}$/.test(name) && !name.includes('__')).map((name) => `mcp__${name}`) : []
+    const ask = [...(web ? CLAUDE_WEB_TOOLS : []), ...mcp.map((server) => `mcp__${server.name}`), ...connectors.map((connector) => `mcp__${connector.toolServer}`)]
     const permissions = {
       // Toda busca, toda página e toda ferramenta MCP pedem permissão ao app, inclusive as que o `claude` liberaria
       // sozinho; as 7 do navegador passam sem perguntar.
@@ -153,12 +167,12 @@ export const claudeProfile: AgentProfile = {
           options: {
             settingSources: [],
             tools: request.tools === 'read' ? [...CLAUDE_READ_TOOLS, ...(web ? CLAUDE_WEB_TOOLS : [])] : [],
-            disallowedTools: [...disallowed, ...mcpDenied],
+            disallowedTools: [...disallowed, ...mcpDenied, ...connectorDenied, ...blocked],
             ...(navegador ? { allowedTools: [...NAVEGADOR_MCP_TOOLS] } : {}),
             ...(ask.length || navegador ? { settings: { permissions } } : {}),
             model: request.model,
             systemPrompt: request.systemPrompt,
-            strictMcpConfig: true,
+            ...(connectors.length ? {} : { strictMcpConfig: true }),
             // Sem transcrição da conversa em `~/.claude/projects` (a linha de comando usa `--no-session-persistence`).
             persistSession: false,
             // Sem a próxima pergunta prevista a cada resposta (custa tokens e o app não mostra).

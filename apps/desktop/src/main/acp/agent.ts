@@ -20,6 +20,10 @@
 // política do servidor: "Negar" nega, "Permitir" libera, "Perguntar" (o padrão) abre o cartão na conversa e espera a
 // pessoa até 2 min (sem resposta, ou sem conversa para perguntar, nega). A leitura de arquivos segue a regra de antes.
 //
+// Contrato 57: a conversa do chat que pede `mcp` recebe também os conectores do claude.ai ligados (a fábrica pergunta à
+// fonte). A ferramenta de um conector passa pela mesma política, com o cartão "claude.ai <Nome>"; conector desligado ou
+// desconhecido é negado, e com o app bloqueado também.
+//
 // Contrato 47: a sessão do chat com `navegador` abre, antes do `session/new`, uma entrada no servidor MCP local do
 // navegador (url e token só dela) e libera as 7 ferramentas dele sem perguntar (`navegador.ts`); o token cai quando a
 // sessão fecha ou o processo sai. O nome `navegador` é desse servidor: um servidor MCP da pessoa com o mesmo nome fica
@@ -29,13 +33,14 @@ import { readFile, realpath, stat } from 'node:fs/promises'
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import { Readable, Writable } from 'node:stream'
 import * as acp from '@agentclientprotocol/sdk/unstable'
-import { MCP_APPROVAL_ARGS_MAX, MCP_APPROVAL_TIMEOUT_MS, maskSecrets, mcpToolKey, mcpToolOf, type McpApproval, type McpApprovalDecision, type McpUse } from '../../shared/mcp'
+import { CLAUDE_CONNECTORS_UNCHECKED_NOTICE, CLAUDE_CONNECTORS_UNKNOWN_NOTICE, claudeConnectorPendingNotice, MCP_APPROVAL_ARGS_MAX, MCP_APPROVAL_TIMEOUT_MS, maskSecrets, mcpToolKey, mcpToolOf, type McpApproval, type McpApprovalDecision, type McpToolPolicy, type McpUse } from '../../shared/mcp'
 import type { Timers } from '../claude-cli/translator'
+import { blockedServersOf, CONNECTOR_POLL_MS, CONNECTOR_WAIT_MS, connectorSettled, connectorVerdict, parseMcpStatus, type McpStatusEntry } from './connectors'
 import { NAVEGADOR_MCP_SERVER, navegadorRequested, navegadorToolOf } from './navegador'
-import type { AcpMcpServer, AcpPurpose, AcpSessionRequest, AgentProfile, KnownToolCall } from './profiles/types'
+import type { AcpConnector, AcpConnectorSet, AcpMcpServer, AcpPurpose, AcpSessionRequest, AgentProfile, KnownToolCall } from './profiles/types'
 import { AcpWebState, searchResultUrls, WEB_SEARCH_MAX, webDecision, webToolOf } from './web'
 
-export type { AcpMcpServer, AcpPurpose, AcpSessionRequest, AgentProfile, KnownToolCall } from './profiles/types'
+export type { AcpConnector, AcpConnectorSet, AcpMcpServer, AcpPurpose, AcpSessionRequest, AgentProfile, KnownToolCall } from './profiles/types'
 
 /** Contrato 47: uma entrada aberta no servidor MCP local do navegador, só de uma sessão. */
 export interface NavegadorMcpEntry {
@@ -190,6 +195,8 @@ export function processLauncher(options: ProcessLaunchOptions): LaunchAcp {
 export interface AcpMcpSource {
   servers(use: McpUse, off: readonly string[]): Promise<AcpMcpServer[]>
   capabilities?(capabilities: { http: boolean; sse: boolean }): void
+  /** Contrato 57: os conectores do claude.ai ligados, para o chat; `null` se nenhum. */
+  connectors?(): Promise<AcpConnectorSet | null>
 }
 
 export interface AcpOpenerOptions {
@@ -204,6 +211,10 @@ export interface AcpOpenerOptions {
   log?: (message: string) => void
   /** Contrato 47: o servidor MCP do navegador, para as sessões que pedem `navegador`. */
   navegadorMcp?: NavegadorMcpHost
+  /** Contrato 57: o app está bloqueado (contrato 22)? Bloqueado, a ferramenta de um conector é negada. */
+  locked?: () => boolean
+  /** Contrato 57: a espera pelos conectores ligados depois do `session/new` (padrão 8 s). */
+  connectorWaitMs?: number
 }
 
 /** A fábrica de sessões para o CLI do agente encontrado, como tradução, resumo e chat a recebem. */
@@ -212,8 +223,10 @@ export function acpOpener(options: AcpOpenerOptions): (claudePath: string) => (r
     const profile = await options.profile()
     const use: McpUse | null = request.purpose === 'chat' || request.purpose === 'analysis' ? request.purpose : null
     const mcpServers = request.mcp && use && options.mcp ? await options.mcp.servers(use, request.mcp.off ?? []).catch(() => []) : []
-    const { mcpServers: _ignored, ...rest } = request
-    return openAcpSession(mcpServers.length ? { ...rest, mcpServers } : rest, {
+    // Contrato 57: os conectores, só no chat que pede MCP (o Assistente e a conversa da reunião; nunca a análise).
+    const connectors = request.mcp && use === 'chat' && options.mcp?.connectors ? await options.mcp.connectors().catch(() => null) : null
+    const { mcpServers: _ignored, connectors: _asked, ...rest } = request
+    return openAcpSession({ ...rest, ...(mcpServers.length ? { mcpServers } : {}), ...(connectors?.enabled.length ? { connectors } : {}) }, {
       profile,
       launch: options.launch,
       env: profile.env(options.baseEnv, claudePath),
@@ -221,6 +234,8 @@ export function acpOpener(options: AcpOpenerOptions): (claudePath: string) => (r
       ...(options.timers ? { timers: options.timers } : {}),
       ...(options.log ? { log: options.log } : {}),
       ...(options.navegadorMcp ? { navegadorMcp: options.navegadorMcp } : {}),
+      ...(options.locked ? { locked: options.locked } : {}),
+      ...(options.connectorWaitMs !== undefined ? { connectorWaitMs: options.connectorWaitMs } : {}),
     })
   }
 }
@@ -354,11 +369,30 @@ export async function readTextFileInside(purpose: AcpPurpose, params: acp.ReadTe
   return { content: lines.slice(start, end).join('\n') }
 }
 
-/** Ferramenta MCP da chamada (contrato 21): o servidor da sessão e a ferramenta; `null` se não é MCP. */
-export function mcpCallOf(call: KnownToolCall, servers: readonly AcpMcpServer[]): { server: AcpMcpServer | null; tool: string } | null {
+/** Quem a política de uma ferramenta MCP confere: um servidor da sessão (contrato 21) ou um conector ligado (contrato 57). */
+export interface McpCallTarget {
+  /** O servidor no nome das ferramentas. */
+  name: string
+  /** O nome no cartão: o do servidor, ou "claude.ai <Nome>". */
+  label: string
+  connector: boolean
+  toolPolicy: Readonly<Record<string, McpToolPolicy>>
+  secrets: readonly string[]
+  allowAlways(tool: string): void
+}
+
+/**
+ * Ferramenta MCP da chamada (contrato 21): o servidor da sessão e a ferramenta; `null` se não é MCP. Contrato 57: ou o
+ * conector ligado daquele servidor (`mcp__claude_ai_<Nome>__…`).
+ */
+export function mcpCallOf(call: KnownToolCall, servers: readonly AcpMcpServer[], connectors: readonly AcpConnector[] = []): { server: McpCallTarget | null; tool: string } | null {
   const parsed = mcpToolOf(call.name)
   if (!parsed) return null
-  return { server: servers.find((server) => server.name === parsed.server) ?? null, tool: parsed.tool }
+  const server = servers.find((entry) => entry.name === parsed.server)
+  if (server) return { server: { name: server.name, label: server.name, connector: false, toolPolicy: server.toolPolicy, secrets: server.secrets, allowAlways: (tool) => server.allowAlways(tool) }, tool: parsed.tool }
+  const connector = connectors.find((entry) => entry.toolServer === parsed.server)
+  if (connector) return { server: { name: connector.toolServer, label: connector.label, connector: true, toolPolicy: connector.toolPolicy, secrets: [], allowAlways: (tool) => connector.allowAlways(tool) }, tool: parsed.tool }
+  return { server: null, tool: parsed.tool }
 }
 
 /** Argumentos do cartão de aprovação: JSON formatado, os segredos do cadastro mascarados, cortado. */
@@ -420,6 +454,12 @@ export interface AcpOpenDeps {
   log?: (message: string) => void
   /** Contrato 47: o servidor MCP do navegador; sem ele, a sessão que pede `navegador` abre sem as ferramentas. */
   navegadorMcp?: NavegadorMcpHost
+  /** Contrato 57: o app está bloqueado? Bloqueado, a ferramenta de um conector é negada. */
+  locked?: () => boolean
+  /** Contrato 57: a espera pelos conectores ligados (padrão `CONNECTOR_WAIT_MS`) e o intervalo das consultas. */
+  connectorWaitMs?: number
+  connectorPollMs?: number
+  now?: () => number
 }
 
 /** Promessa com tempo limite: estourou, rejeita. */
@@ -444,6 +484,52 @@ function within<T>(promise: Promise<T>, ms: number, timers: Timers, label: strin
  * `session/new`. Nunca rejeita.
  */
 export async function openAcpSession(asked: AcpSessionRequest, deps: AcpOpenDeps): Promise<AcpOpenResult> {
+  const first = await openAcpSessionOnce(asked, deps)
+  if (!first.ok || !first.session.connectors || !asked.connectors) return first
+  // Contrato 57: confere o que a sessão carregou. Um servidor que escapou do bloqueio: reabre uma vez com ele bloqueado;
+  // escapou de novo (ou não deu para conferir), a conversa segue no modo estrito, sem conector, com o aviso.
+  const checked = await verifyConnectors(first.session, deps)
+  if (checked.ok) return first
+  first.session.close()
+  let notice = checked.surprises.length ? CLAUDE_CONNECTORS_UNKNOWN_NOTICE : CLAUDE_CONNECTORS_UNCHECKED_NOTICE
+  if (checked.surprises.length) {
+    deps.log?.(`[acp] conectores: ${checked.surprises.length} servidor(es) fora do bloqueio; a sessão reabre com eles bloqueados`)
+    const retry = await openAcpSessionOnce({ ...asked, connectors: { ...asked.connectors, others: [...asked.connectors.others, ...checked.surprises] } }, deps)
+    if (!retry.ok || !retry.session.connectors) return retry
+    const again = await verifyConnectors(retry.session, deps)
+    if (again.ok) return retry
+    retry.session.close()
+    if (!again.surprises.length) notice = CLAUDE_CONNECTORS_UNCHECKED_NOTICE
+  }
+  deps.log?.('[acp] conectores: a conversa segue no modo estrito, sem conector')
+  const { connectors: _off, ...strict } = asked
+  const opened = await openAcpSessionOnce(strict, deps)
+  if (opened.ok) opened.session.notices.push(notice)
+  return opened
+}
+
+/**
+ * Contrato 57: espera os conectores ligados ficarem "Connected" (até `connectorWaitMs`) consultando o `/mcp` e confere
+ * a lista da sessão. Ligado que não conectou a tempo vira o aviso "O <Nome> ainda não conectou" na conversa.
+ */
+async function verifyConnectors(session: AcpSession, deps: AcpOpenDeps): Promise<{ ok: true } | { ok: false; surprises: string[] }> {
+  const timers = deps.timers ?? defaultTimers
+  const now = deps.now ?? Date.now
+  const enabled = session.connectors?.enabled ?? []
+  const deadline = now() + (deps.connectorWaitMs ?? CONNECTOR_WAIT_MS)
+  let entries = await session.mcpStatus()
+  while (entries && !enabled.every((connector) => connectorSettled(entries ?? [], connector)) && now() < deadline && session.alive) {
+    await new Promise<void>((resolve) => timers.setTimeout(resolve, deps.connectorPollMs ?? CONNECTOR_POLL_MS))
+    entries = await session.mcpStatus()
+  }
+  if (!entries || !session.alive) return { ok: false, surprises: [] }
+  const verdict = connectorVerdict(entries, enabled, session.passedMcpNames(), blockedServersOf(session.sentDisallowedTools))
+  if (verdict.surprises.length) return { ok: false, surprises: verdict.surprises }
+  for (const connector of verdict.pending) session.notices.push(claudeConnectorPendingNotice(connector.name))
+  return { ok: true }
+}
+
+async function openAcpSessionOnce(asked: AcpSessionRequest, deps: AcpOpenDeps): Promise<AcpOpenResult> {
   const timers = deps.timers ?? defaultTimers
   let cwdReal: string
   try {
@@ -465,7 +551,7 @@ export async function openAcpSession(asked: AcpSessionRequest, deps: AcpOpenDeps
     if (error instanceof AcpMissingError) return { ok: false, error: 'missing', reason: error.message }
     return { ok: false, error: 'agent', reason: `o adaptador não abriu: ${error instanceof Error ? error.message : String(error)}` }
   }
-  const session = new AcpSession(deps.profile, request, link, cwdReal, timers, deps.approvalTimeoutMs ?? MCP_APPROVAL_TIMEOUT_MS, navegador)
+  const session = new AcpSession(deps.profile, request, link, cwdReal, timers, deps.approvalTimeoutMs ?? MCP_APPROVAL_TIMEOUT_MS, navegador, deps.locked)
   const exited = new Promise<never>((_resolve, reject) => link.onExit(() => reject(new Error('o adaptador saiu'))))
   exited.catch(() => undefined)
   try {
@@ -478,6 +564,7 @@ export async function openAcpSession(asked: AcpSessionRequest, deps: AcpOpenDeps
     const mcp = { http: init.agentCapabilities?.mcpCapabilities?.http === true, sse: init.agentCapabilities?.mcpCapabilities?.sse === true }
     deps.onMcpCapabilities?.(mcp)
     session.useMcp((request.mcpServers ?? []).filter((server) => server.transport === 'stdio' || mcp[server.transport]))
+    session.useConnectors(request.connectors ?? null)
   } catch (error) {
     session.close()
     return { ok: false, error: 'agent', reason: error instanceof Error ? error.message : String(error) }
@@ -519,6 +606,12 @@ export class AcpSession {
   readonly web: AcpWebState | null
   /** Contrato 21: os servidores MCP que foram no `session/new`. */
   mcpServers: readonly AcpMcpServer[] = []
+  /** Contrato 57: os conectores ligados que foram no `session/new` (só o chat) e o resto que ele bloqueia. */
+  connectors: AcpConnectorSet | null = null
+  /** Contrato 57: o `disallowedTools` que foi no `session/new` (de onde sai o que ficou bloqueado). */
+  sentDisallowedTools: readonly string[] = []
+  /** Contrato 57: avisos dos conectores para a conversa mostrar na próxima resposta (`takeNotices`). */
+  readonly notices: string[] = []
   private approvals = 0
   /** Contrato 21: chamadas MCP que a política liberou (uma que roda sem ter passado por ela cancela a resposta). */
   private readonly mcpAllowed = new Set<string>()
@@ -532,6 +625,8 @@ export class AcpSession {
     private readonly approvalTimeoutMs: number = MCP_APPROVAL_TIMEOUT_MS,
     /** Contrato 47: a entrada do servidor do navegador desta sessão; `null` nega as ferramentas dele. */
     private readonly navegadorMcp: NavegadorMcpEntry | null = null,
+    /** Contrato 57: o app está bloqueado? */
+    private readonly locked: () => boolean = () => false,
   ) {
     this.web = request.web === true && request.purpose === 'chat' && request.tools === 'read' ? new AcpWebState() : null
     const app = acp
@@ -585,12 +680,46 @@ export class AcpSession {
     this.mcpServers = this.request.purpose === 'chat' || this.request.purpose === 'analysis' ? servers.filter((server) => server.name !== NAVEGADOR_MCP_SERVER) : []
   }
 
+  /** Contrato 57: os conectores do claude.ai que vão no `session/new` (só o chat; sem nenhum ligado, nenhum). */
+  useConnectors(connectors: AcpConnectorSet | null): void {
+    this.connectors = this.request.purpose === 'chat' && connectors?.enabled.length ? connectors : null
+  }
+
   async start(): Promise<void> {
-    const { mcpServers: _requested, ...request } = this.request
+    const { mcpServers: _requested, connectors: _connectors, ...request } = this.request
     const local = this.navegadorMcp ? { navegador: { url: this.navegadorMcp.url, token: this.navegadorMcp.token } } : {}
-    const response = await this.connection.agent.request('session/new', this.profile.newSession(this.mcpServers.length ? { ...request, mcpServers: this.mcpServers } : request, local))
+    const asked: AcpSessionRequest = { ...request, ...(this.mcpServers.length ? { mcpServers: this.mcpServers } : {}), ...(this.connectors ? { connectors: this.connectors } : {}) }
+    const params = this.profile.newSession(asked, local)
+    const options = isRecord(params._meta) && isRecord(params._meta['claudeCode']) && isRecord(params._meta['claudeCode']['options']) ? params._meta['claudeCode']['options'] : {}
+    this.sentDisallowedTools = Array.isArray(options['disallowedTools']) ? options['disallowedTools'].filter((tool): tool is string => typeof tool === 'string') : []
+    const response = await this.connection.agent.request('session/new', params)
     this.sessionId = response.sessionId
     this.configOptions = response.configOptions ?? []
+  }
+
+  /**
+   * Contrato 57: os servidores que a sessão carregou, pelo `/mcp` (local, sem chamar o modelo). `null` se a resposta
+   * não é a lista do adaptador.
+   */
+  async mcpStatus(): Promise<McpStatusEntry[] | null> {
+    let text = ''
+    const outcome = await this.prompt('/mcp', { onUpdate: (update) => void (update.sessionUpdate === 'agent_message_chunk' && update.content.type === 'text' ? (text += update.content.text) : undefined) })
+    return outcome.ok ? parseMcpStatus(text) : null
+  }
+
+  /** Contrato 57: os nomes dos servidores que o app passou no `session/new` (os do contrato 21 e o do navegador). */
+  passedMcpNames(): Set<string> {
+    return new Set([...this.mcpServers.map((server) => server.definition.name), ...(this.navegadorMcp ? [NAVEGADOR_MCP_SERVER] : [])])
+  }
+
+  /** Contrato 57: os avisos dos conectores que ainda não foram mostrados. */
+  takeNotices(): string[] {
+    return this.notices.splice(0)
+  }
+
+  /** Contrato 57: o nome do servidor para a tela: "claude.ai Notion" para um conector ligado, senão o do agente. */
+  mcpServerLabel(server: string): string {
+    return this.connectors?.enabled.find((connector) => connector.toolServer === server)?.label ?? server
   }
 
   /** Valor atual de uma opção de sessão (`model`, `effort`…). */
@@ -706,7 +835,7 @@ export class AcpSession {
   private async onPermission(params: acp.RequestPermissionRequest): Promise<acp.RequestPermissionResponse> {
     const call = mergeToolCall(this.tools.get(params.toolCall.toolCallId), params.toolCall)
     // Contrato 47: as do navegador seguem `permissionAllowed` (liberadas só na sessão que abriu com ele).
-    const mcp = navegadorToolOf(call) ? null : mcpCallOf(call, this.mcpServers)
+    const mcp = navegadorToolOf(call) ? null : mcpCallOf(call, this.mcpServers, this.connectors?.enabled ?? [])
     if (mcp) {
       const allow = await this.mcpDecision(mcp, call).catch(() => false)
       if (allow) this.mcpAllowed.add(params.toolCall.toolCallId)
@@ -726,17 +855,19 @@ export class AcpSession {
 
   /**
    * Contrato 21: a política da ferramenta MCP. Servidor que não é desta sessão: negado. "Perguntar": o cartão, até
-   * 2 min; "Sempre permitir esta ferramenta" grava `allow` e vale já para as próximas desta sessão.
+   * 2 min; "Sempre permitir esta ferramenta" grava `allow` e vale já para as próximas desta sessão. Contrato 57: o
+   * conector ligado segue a mesma política; com o app bloqueado, negado.
    */
-  private async mcpDecision(mcp: { server: AcpMcpServer | null; tool: string }, call: KnownToolCall): Promise<boolean> {
+  private async mcpDecision(mcp: { server: McpCallTarget | null; tool: string }, call: KnownToolCall): Promise<boolean> {
     const server = mcp.server
     if (!server) return false
+    if (server.connector && this.locked()) return false
     const policy = server.toolPolicy[mcpToolKey(mcp.tool)] ?? 'ask'
     if (policy !== 'ask') return policy === 'allow'
     const handlers = this.prompting?.handlers
     if (!handlers?.onApproval) return false
     const id = `mcp-${++this.approvals}`
-    const approval: McpApproval = { id, server: server.name, tool: mcp.tool, args: approvalArgs(call.rawInput, server.secrets) }
+    const approval: McpApproval = { id, server: server.label, tool: mcp.tool, args: approvalArgs(call.rawInput, server.secrets) }
     let timer: unknown = null
     const expired = new Promise<McpApprovalDecision>((resolve) => {
       timer = this.timers.setTimeout(() => resolve('deny'), this.approvalTimeoutMs)
@@ -748,7 +879,10 @@ export class AcpSession {
     if (decision === 'always') {
       const tool = mcpToolKey(mcp.tool)
       server.allowAlways(tool)
-      this.mcpServers = this.mcpServers.map((entry) => (entry === server ? { ...entry, toolPolicy: { ...entry.toolPolicy, [tool]: 'allow' } } : entry))
+      if (server.connector && this.connectors) {
+        const connectors = this.connectors
+        this.connectors = { ...connectors, enabled: connectors.enabled.map((entry) => (entry.toolServer === server.name ? { ...entry, toolPolicy: { ...entry.toolPolicy, [tool]: 'allow' } } : entry)) }
+      } else this.mcpServers = this.mcpServers.map((entry) => (entry.name === server.name ? { ...entry, toolPolicy: { ...entry.toolPolicy, [tool]: 'allow' } } : entry))
     }
     return decision !== 'deny'
   }

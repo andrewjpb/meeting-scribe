@@ -1,6 +1,6 @@
 // Índice estático da busca das Configurações (contrato 18): fica em `shared` porque o smoke (no main) confere
 // que toda linha da tela está nele.
-import { MCP_ADD_DESCRIPTION, MCP_CLI_DESCRIPTION, MCP_FOUND_DESCRIPTION } from './mcp'
+import { CLAUDE_CONNECTORS_DESCRIPTION, MCP_ADD_DESCRIPTION, MCP_CLI_DESCRIPTION, MCP_FOUND_DESCRIPTION } from './mcp'
 import { APP_PLUGINS, PLUGIN_INSTALL_DESCRIPTION, PLUGIN_SAVE_DESCRIPTION } from './plugins'
 import type { SettingsTab } from './routes'
 
@@ -117,6 +117,8 @@ export function settingsIndex(agent: string): SettingsEntry[] {
     ]),
     // Contrato 21: as linhas fixas da aba "Conexões" (os servidores são itens da lista, não linhas de configuração).
     row('conexoes', 'Do Claude CLI', 'Servidores do Claude CLI', MCP_CLI_DESCRIPTION),
+    // Contrato 57: os conectores do claude.ai (a seção da tela vem no contrato 58).
+    row('conexoes', 'Conectores do claude.ai', 'Conectores do claude.ai', CLAUDE_CONNECTORS_DESCRIPTION),
     row('conexoes', 'Servidores do app', 'Adicionar servidor MCP', MCP_ADD_DESCRIPTION),
     row('conexoes', 'Encontrados neste Mac', 'Claude Desktop', MCP_FOUND_DESCRIPTION),
     row('sobre', 'Sobre', 'Versão', 'Versão instalada do app.'),

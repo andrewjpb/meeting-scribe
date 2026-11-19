@@ -1,7 +1,7 @@
 ---
 status: especificado
 feature: desktop-shell
-contratos: [53, 54]
+contratos: [57, 58]
 data: 2026-11-19
 ---
 
@@ -18,7 +18,7 @@ O Andrew já tem conectores ligados na conta do claude.ai (Notion, Figma, Google
 - Os nomes são: servidor `claude.ai <Nome>` e ferramentas `mcp__claude_ai_<Nome>__<ferramenta>`. Essa forma já casa com o `mcpToolServerName` do app (`shared/mcp.ts:244`).
 - A lista vem de `claude mcp list`, que o app já roda: são as linhas `claude.ai …` com o estado (conectado ou precisa de autorização).
 - A aprovação do contrato 21 (`src/main/acp/agent.ts:706-754`) nega hoje porque o conector não está na lista da sessão (linha 733).
-- A ligar e desligar por conector se faz com `disallowedTools` por prefixo `mcp__<servidor>`. É inferência e precisa ser provada no contrato 53.
+- A ligar e desligar por conector se faz com `disallowedTools` por prefixo `mcp__<servidor>`. É inferência e precisa ser provada no contrato 57.
 
 ## Requisitos
 - R1 QUANDO o Claude está logado por assinatura, O SISTEMA DEVE listar em Configurações › Conexões cada conector do claude.ai, com o estado (Conectado ou Precisa autorizar) e um interruptor desligado por padrão.
@@ -26,7 +26,7 @@ O Andrew já tem conectores ligados na conta do claude.ai (Notion, Figma, Google
 - R3 QUANDO o agente chama uma ferramenta de conector, O SISTEMA DEVE aplicar a política daquela ferramenta (Perguntar, Permitir ou Negar). O padrão é **Perguntar**, com o mesmo cartão, o mesmo tempo limite de 2 min e "Sempre permitir esta ferramenta" do contrato 21.
 - R4 QUANDO nenhum conector está ligado, O SISTEMA DEVE abrir a sessão exatamente como hoje, com `strictMcpConfig: true`.
 - R5 QUANDO o login não é por assinatura ou o conector precisa de autorização, O SISTEMA DEVE dizer isso na linha do conector, com uma frase curta e o link para autorizar no claude.ai, sem erro na conversa.
-- R6 QUANDO um conector está ligado, O SISTEMA DEVE deixá-lo disponível onde os servidores MCP já são usados (Assistente e agentes das Automações, conforme o contrato 21). Na tradução, no resumo e na análise, nunca.
+- R6 QUANDO um conector está ligado, O SISTEMA DEVE deixá-lo disponível onde os servidores MCP do contrato 21 já valem: no Assistente e no chat da reunião. Na tradução, no resumo, na análise e nas Automações, nunca. (Corrigido em 19/11: o 21 não leva MCP às Automações, porque elas rodam sem ninguém para aprovar o cartão, e um "Perguntar" seria sempre negado.)
 
 ## Regras de negócio
 - N1 Bloqueio por padrão: nenhum conector liga sozinho, nem quando aparece um novo na conta.
