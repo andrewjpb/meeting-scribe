@@ -11,9 +11,9 @@ const ROW = 'flex h-10 min-w-0 items-center gap-2.5 rounded-[var(--radius-contro
 const linkClass = ({ isActive }: { isActive: boolean }): string => `${ROW} pl-8 ${isActive ? 'bg-side-active text-side-text' : 'text-side-muted hover:text-side-text'}`
 
 /**
- * Contas de email na barra lateral (contrato 43, CA1), logo abaixo da navegação principal e no mesmo desenho dela: cada
- * conta pelo nome, com a seta que abre e fecha as pastas "Caixa de Entrada" (com as não lidas) e "Enviados". As
- * recolhidas ficam gravadas nas configurações (`emailCollapsed`). Sem conta, nada aparece.
+ * Contas de email na barra lateral (contrato 43, CA1), no nível Email da pilha (contrato 65) e no mesmo desenho da
+ * navegação principal: cada conta pelo nome, com a seta que abre e fecha as pastas "Caixa de Entrada" (com as não lidas)
+ * e "Enviados". As recolhidas ficam gravadas nas configurações (`emailCollapsed`). Sem conta, nada aparece.
  */
 export function EmailNav() {
   const accounts = useEmail((state) => state.accounts)
@@ -30,32 +30,42 @@ export function EmailNav() {
   }
 
   return (
-    <nav aria-label="Email" data-email-nav className="mt-4 flex min-h-0 flex-col gap-0.5 overflow-y-auto">
+    <div data-email-nav className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto">
       {accounts.map(({ account, state, error }) => {
-        const open = !collapsed.includes(account.id)
+        // Contrato 65 (D1): com uma conta só, a linha dela fica sem a seta e as pastas aparecem sempre.
+        const single = accounts.length === 1
+        const open = single || !collapsed.includes(account.id)
         const label = accountLabel(list, account)
         const unread = unreadCount(folders[folderKey(account.id, 'inbox')])
         const groupId = `email-nav-${account.id}`
+        const errorMark = state === 'error' && (
+          <span data-email-account-error title={error ?? 'Com problema'} className="size-1.5 shrink-0 bg-side-rec">
+            <span className="sr-only">Com problema</span>
+          </span>
+        )
         return (
           <div key={account.id} data-email-account={account.id} className="flex flex-col gap-0.5">
-            <button
-              type="button"
-              data-email-account-toggle={account.id}
-              aria-expanded={open}
-              aria-controls={groupId}
-              title={account.address}
-              onClick={() => toggle(account.id)}
-              className={`${ROW} text-side-muted hover:text-side-text`}
-            >
-              <Icon icon={open ? ChevronDown : ChevronRight} className="shrink-0" />
-              <span className="min-w-0 flex-1 truncate text-left">{label}</span>
-              {state === 'error' && (
-                <span data-email-account-error title={error ?? 'Com problema'} className="size-1.5 shrink-0 bg-side-rec">
-                  <span className="sr-only">Com problema</span>
-                </span>
-              )}
-              {!open && unread > 0 && <span className="shrink-0 text-12 tabular text-side-text">{unreadBadge(unread)}</span>}
-            </button>
+            {single ? (
+              <div data-email-account-header={account.id} title={account.address} className={`${ROW} text-side-muted`}>
+                <span className="min-w-0 flex-1 truncate text-left">{label}</span>
+                {errorMark}
+              </div>
+            ) : (
+              <button
+                type="button"
+                data-email-account-toggle={account.id}
+                aria-expanded={open}
+                aria-controls={groupId}
+                title={account.address}
+                onClick={() => toggle(account.id)}
+                className={`${ROW} text-side-muted hover:text-side-text`}
+              >
+                <Icon icon={open ? ChevronDown : ChevronRight} className="shrink-0" />
+                <span className="min-w-0 flex-1 truncate text-left">{label}</span>
+                {errorMark}
+                {!open && unread > 0 && <span className="shrink-0 text-12 tabular text-side-text">{unreadBadge(unread)}</span>}
+              </button>
+            )}
             {open && (
               <div id={groupId} className="flex flex-col gap-0.5">
                 <NavLink to={emailPath(account.id, 'inbox')} data-email-folder="inbox" data-email-folder-account={account.id} draggable={false} className={linkClass}>
@@ -77,6 +87,6 @@ export function EmailNav() {
           </div>
         )
       })}
-    </nav>
+    </div>
   )
 }

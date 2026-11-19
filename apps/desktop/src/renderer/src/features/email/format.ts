@@ -92,6 +92,18 @@ export function unreadByAccount(inboxes: Readonly<Record<string, readonly Pick<E
   return Object.fromEntries(Object.entries(inboxes).map(([accountId, messages]) => [accountId, unreadCount(messages)]))
 }
 
+/**
+ * Contrato 65: o número do item "Email" na raiz da barra lateral, a soma das não lidas da Caixa de Entrada de todas as
+ * contas. Contas ainda não carregadas (`null`), zero. A chave repete a `folderKey` de emailStore.ts (importar de lá
+ * puxaria o store para os testes deste arquivo).
+ */
+export function totalUnread(
+  accounts: readonly { account: { id: string } }[] | null,
+  folders: Readonly<Record<string, readonly Pick<EmailMessage, 'seen' | 'folder'>[] | undefined>>,
+): number {
+  return (accounts ?? []).reduce((total, { account }) => total + unreadCount(folders[`${account.id}:inbox`]), 0)
+}
+
 /** O número ao lado de "Caixa de Entrada": nada sem não lidas, "999+" acima disso. */
 export function unreadBadge(count: number): string {
   if (count <= 0) return ''

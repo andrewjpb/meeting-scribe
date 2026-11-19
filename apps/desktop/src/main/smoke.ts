@@ -271,8 +271,9 @@ async function loadAndWait(win: BrowserWindow): Promise<void> {
 const currentRoute = (contents: WebContents): Promise<string> =>
   evaluate<string>(contents, "document.querySelector('main')?.dataset.route ?? ''")
 
+// Contrato 65: no nível Email a pasta aberta também tem `aria-current`; o item da raiz é o que tem `data-nav`.
 const activeNav = (contents: WebContents): Promise<string> =>
-  evaluate<string>(contents, `document.querySelector('[aria-current="page"]')?.dataset.nav ?? ''`)
+  evaluate<string>(contents, `document.querySelector('[data-nav][aria-current="page"]')?.dataset.nav ?? ''`)
 
 async function clickSelector(contents: WebContents, selector: string): Promise<void> {
   const found = await evaluate<boolean>(
@@ -280,6 +281,40 @@ async function clickSelector(contents: WebContents, selector: string): Promise<v
     `(() => { const el = document.querySelector(${JSON.stringify(selector)}); if (!el) return false; el.click(); return true })()`,
   )
   if (!found) throw new Error(`elemento não encontrado: ${selector}`)
+}
+
+/** Contrato 65: a barra lateral em pilha. O nível à mostra (o que está saindo no deslize não conta). */
+const SIDEBAR_ROOT = '[data-sidebar-level="root"]:not([data-sidebar-leaving])'
+const SIDEBAR_EMAIL = '[data-sidebar-level="email"]:not([data-sidebar-leaving])'
+const SIDEBAR_BACK = '[data-sidebar-level]:not([data-sidebar-leaving]) [data-sidebar-back]'
+
+/** A raiz da barra lateral à mostra: num nível de seção, o cabeçalho-voltar (que não navega). */
+async function showRoot(contents: WebContents): Promise<void> {
+  if (await evaluate<boolean>(contents, `Boolean(document.querySelector('${SIDEBAR_ROOT}'))`)) return
+  if (!(await waitFor(contents, `document.querySelector('${SIDEBAR_ROOT}') || document.querySelector('${SIDEBAR_BACK}')`, 8000))) throw new Error('barra lateral sem a raiz nem o cabeçalho-voltar')
+  if (await evaluate<boolean>(contents, `Boolean(document.querySelector('${SIDEBAR_ROOT}'))`)) return
+  await clickSelector(contents, SIDEBAR_BACK)
+  if (!(await waitFor(contents, `document.querySelector('${SIDEBAR_ROOT}')`))) throw new Error('a raiz da barra lateral não apareceu')
+}
+
+/**
+ * Um item da raiz da barra lateral pelo clique (antes, a raiz à mostra). Com a raiz já à mostra, o clique sai no mesmo
+ * script da procura, como o `clickSelector` de antes: um ida e volta a mais entre dois cliques seguidos em
+ * "Configurações" deixava a tela em branco (o segundo chega com o `<Navigate>` da aba ainda pendente).
+ */
+async function clickNav(contents: WebContents, id: string): Promise<void> {
+  const selector = `${SIDEBAR_ROOT} [data-nav="${id}"]`
+  const clicked = await evaluate<boolean>(contents, `(() => { const el = document.querySelector(${JSON.stringify(selector)}); if (!el) return false; el.click(); return true })()`)
+  if (clicked) return
+  await showRoot(contents)
+  await clickSelector(contents, selector)
+}
+
+/** O nível Email à mostra: senão, o item "Email" da raiz. */
+async function showEmailLevel(contents: WebContents): Promise<void> {
+  if (await evaluate<boolean>(contents, `Boolean(document.querySelector('${SIDEBAR_EMAIL}'))`)) return
+  await clickNav(contents, 'email')
+  if (!(await waitFor(contents, `document.querySelector('${SIDEBAR_EMAIL}')`, 8000))) throw new Error('o nível Email da barra lateral não apareceu')
 }
 
 /** Contrato 38: o trilho da direita do Assistente (conversas em cima, "Contexto" embaixo). */
@@ -305,7 +340,7 @@ const anchoredAt = (label: string): string =>
 
 /** Contrato 18: Configurações pela barra lateral e a aba pelo clique. */
 async function openSettingsTab(contents: WebContents, tab: SettingsTab): Promise<boolean> {
-  await clickSelector(contents, '[data-nav="configuracoes"]')
+  await clickNav(contents, 'configuracoes')
   if (!(await waitFor(contents, routeIs('configuracoes'), 5000))) {
     // Um <dialog> modal aberto deixa o resto da tela inerte e o click() programático some. Registra o
     // estado (para a flake da aba "geral" ter diagnóstico), fecha o que estiver aberto e tenta de novo.
@@ -315,7 +350,7 @@ async function openSettingsTab(contents: WebContents, tab: SettingsTab): Promise
     )
     console.log(`[smoke] configuracoes não abriu de primeira: ${stuck}`)
     await evaluate(contents, `(() => { for (const d of document.querySelectorAll('dialog[open]')) d.close(); return true })()`)
-    await clickSelector(contents, '[data-nav="configuracoes"]')
+    await clickNav(contents, 'configuracoes')
     await waitFor(contents, routeIs('configuracoes'), 15_000)
   }
   return selectSettingsTab(contents, tab)
@@ -535,7 +570,7 @@ async function chatScreenCheck(
   const meetings = readMeetings(ctx.userDataDir)
   const chatsBefore = readChatFiles(ctx.userDataDir).length
   const spawnsBefore = chatSpawns(ctx.fixtures).length
-  await clickSelector(contents, '[data-nav="assistente"]')
+  await clickNav(contents, 'assistente')
   // Contrato 16: 6 sugestões em cartões, em 3 grupos.
   const opened = await waitFor(
     contents,
@@ -1171,7 +1206,7 @@ async function meetingsFoldersCheck(contents: WebContents, userDataDir: string):
  * o clique no cartão volta para a gravação.
  */
 async function recordingNowCheck(contents: WebContents): Promise<Check> {
-  await clickSelector(contents, '[data-nav="reunioes"]')
+  await clickNav(contents, 'reunioes')
   const shown = await waitFor(contents, `${routeIs('reunioes')} && document.querySelector('main [data-recording-now]')`)
   const card = shown ? await text(contents, 'main [data-recording-now]') : ''
   const before = shown ? await text(contents, 'main [data-recording-now-elapsed]') : ''
@@ -2397,7 +2432,7 @@ async function updatesChecks(win: BrowserWindow, ctx: SmokeContext): Promise<{ c
   updates.wrongHash = false
 
   // "Atualizar" da barra lateral, a partir de Reuniões: abre Configurações no bloco e baixa.
-  await clickSelector(contents, '[data-nav="reunioes"]')
+  await clickNav(contents, 'reunioes')
   await waitFor(contents, routeIs('reunioes'))
   await clickSelector(contents, 'aside [data-action="update-now"]')
   // Contrato 18, CA2: abre a aba "Geral" e rola até o bloco.
@@ -2437,7 +2472,7 @@ async function updatesChecks(win: BrowserWindow, ctx: SmokeContext): Promise<{ c
   await waitFor(contents, `${routeIs('gravacao')} && document.querySelector('[data-action="end-recording"]')`)
   await clickSelector(contents, '[data-action="end-recording"]')
   await waitFor(contents, routeIs('detalhe'), 10_000)
-  await clickSelector(contents, '[data-nav="configuracoes"]')
+  await clickNav(contents, 'configuracoes')
   const unblocked = await waitFor(contents, `document.querySelector('[data-action="update-quit"]')?.disabled === false && !document.querySelector('[data-update-quit-blocked]')`)
   await clickSelector(contents, '[data-action="update-quit"]')
   for (let attempt = 0; attempt < 40 && updates.quitRequests === 0; attempt++) await wait(50)
@@ -2550,7 +2585,7 @@ async function acpChecks(win: BrowserWindow, ctx: SmokeContext, shot: () => Prom
   const fallbackOk = fallback.ok && fixtures.claudeSpawns.length === cliBefore + 1 && fixtures.acpSpawns.length === acpBefore && fixtures.registryCalls.length === 0
 
   // O chat sem o agente: "Instalar o agente do Claude" e "Usar a linha de comando"; o clique instala.
-  await clickSelector(contents, '[data-nav="assistente"]')
+  await clickNav(contents, 'assistente')
   await waitFor(contents, routeIs('assistente'))
   await clickSelector(contents, '[data-action="chat-new"]')
   await waitFor(contents, `document.querySelector('[data-chat-input]') && !document.querySelector('[data-chat-message]')`)
@@ -2871,7 +2906,8 @@ async function probeOrigin(contents: WebContents): Promise<{ origin: string; opf
 /** Tab até o item "Configurações" e Enter, com eventos de teclado reais do Chromium. */
 async function keyboardNavigation(contents: WebContents): Promise<Check> {
   await evaluate(contents, "document.activeElement instanceof HTMLElement && document.activeElement.blur(), true")
-  for (let i = 0; i < 6; i++) {
+  // Contrato 65: o item "Email" é mais uma parada antes de Configurações.
+  for (let i = 0; i < 8; i++) {
     contents.sendInputEvent({ type: 'keyDown', keyCode: 'Tab' })
     contents.sendInputEvent({ type: 'keyUp', keyCode: 'Tab' })
     await wait(60)
@@ -2999,7 +3035,7 @@ async function captureSystemNotice(
 async function detailLoadFailure(contents: WebContents, userDataDir: string): Promise<Check> {
   const file = join(userDataDir, MEETINGS_FILE)
   const backup = `${file}.smoke-backup`
-  await clickSelector(contents, '[data-nav="reunioes"]')
+  await clickNav(contents, 'reunioes')
   await waitFor(contents, "document.querySelectorAll('main a[data-meeting]').length > 0")
   renameSync(file, backup)
   mkdirSync(file)
@@ -3077,7 +3113,7 @@ async function recordingChecks(
   const contents = win.webContents
   const bothLive = `${probeJs('state()?.mic')} === 'live' && ${probeJs('state()?.system')} === 'live'`
 
-  await clickSelector(contents, '[data-nav="reunioes"]')
+  await clickNav(contents, 'reunioes')
   await waitFor(contents, "document.querySelectorAll('main a[data-meeting]').length > 0")
   await clickSelector(contents, 'main header [data-action="new-recording"]')
   const live = await waitFor(contents, bothLive)
@@ -3504,7 +3540,7 @@ async function settingsChecks(win: BrowserWindow, ctx: SmokeContext, checks: Rec
   // eco ligado e, com o microfone salvo sumido, o padrão (sem deviceId).
   await clickSelector(contents, '[role="switch"][aria-labelledby="settings-translate"]')
   await waitFor(contents, "document.querySelector('[aria-labelledby=\"settings-translate\"]')?.getAttribute('aria-checked') === 'false'")
-  await clickSelector(contents, '[data-nav="reunioes"]')
+  await clickNav(contents, 'reunioes')
   await waitFor(contents, `${routeIs('reunioes')} && document.querySelector('main [data-action="new-recording"]')`)
   await clickSelector(contents, 'main [data-action="new-recording"]')
   await waitFor(contents, `${routeIs('gravacao')} && ${probeJs('state()?.mic')} === 'live'`)
@@ -3609,7 +3645,7 @@ async function claudeChecks(win: BrowserWindow, ctx: SmokeContext): Promise<Chec
   const pathKept = readSettings(userDataDir).claudePath ?? null
 
   // CA11: gravação com o Claude CLI não encontrado mostra o aviso com o caminho para Configurações.
-  await clickSelector(contents, '[data-nav="reunioes"]')
+  await clickNav(contents, 'reunioes')
   await waitFor(contents, "document.querySelector('main header [data-action=\"new-recording\"]')")
   await clickSelector(contents, 'main header [data-action="new-recording"]')
   await waitFor(contents, `${routeIs('gravacao')} && ${probeJs('state()?.mic')} === 'live'`)
@@ -3619,7 +3655,7 @@ async function claudeChecks(win: BrowserWindow, ctx: SmokeContext): Promise<Chec
   await clickSelector(contents, '[data-action="open-settings-from-claude"]')
   // Contrato 18, CA2: abre a aba "Claude".
   const toSettings = await waitFor(contents, `${routeIs('configuracoes')} && ${settingsTabIs('claude')}`)
-  await clickSelector(contents, '[data-nav="reunioes"]')
+  await clickNav(contents, 'reunioes')
   await waitFor(contents, "document.querySelector('main header [data-action=\"new-recording\"]')")
   await clickSelector(contents, 'main header [data-action="new-recording"]')
   await waitFor(contents, routeIs('gravacao'))
@@ -3660,9 +3696,8 @@ async function claudeChecks(win: BrowserWindow, ctx: SmokeContext): Promise<Chec
  */
 async function transcriptionChecks(win: BrowserWindow, recording: Record<string, Check>): Promise<void> {
   const contents = win.webContents
-  const routeToReunioes = '[data-nav="reunioes"]'
   await evaluate(contents, "window.__scribeApi.invoke('scribe:key-remove').then(() => true)")
-  await clickSelector(contents, routeToReunioes)
+  await clickNav(contents, 'reunioes')
   await waitFor(contents, "document.querySelector('main header [data-action=\"new-recording\"]')")
   await clickSelector(contents, 'main header [data-action="new-recording"]')
   const live = await waitFor(contents, `${routeIs('gravacao')} && ${probeJs('state()?.mic')} === 'live'`)
@@ -3678,14 +3713,14 @@ async function transcriptionChecks(win: BrowserWindow, recording: Record<string,
   // Devolve a chave fictícia (o gateway de fixtures aceita) e encerra a gravação sem chave.
   const started = await captureState(contents)
   await evaluate(contents, `window.__scribeApi.invoke('scribe:key-save', { key: ${JSON.stringify(SMOKE_FAKE_KEY)} }).then(() => true)`)
-  await clickSelector(contents, routeToReunioes)
+  await clickNav(contents, 'reunioes')
   await waitFor(contents, "document.querySelector('main header [data-action=\"new-recording\"]')")
   await clickSelector(contents, 'main header [data-action="new-recording"]')
   await waitFor(contents, `${routeIs('gravacao')} && ${probeJs('state()?.mic')} === 'live'`)
   await clickSelector(contents, '[data-action="end-recording"]')
   await waitFor(contents, routeIs('detalhe'))
   // Com chave, uma gravação nova não mostra o estado sem chave nem o link de exemplo.
-  await clickSelector(contents, routeToReunioes)
+  await clickNav(contents, 'reunioes')
   await waitFor(contents, "document.querySelector('main header [data-action=\"new-recording\"]')")
   await clickSelector(contents, 'main header [data-action="new-recording"]')
   await waitFor(contents, `${routeIs('gravacao')} && ${probeJs('state()?.mic')} === 'live'`)
@@ -3713,7 +3748,7 @@ async function appearanceCheck(contents: WebContents, userDataDir: string): Prom
   const theme = (value: string): string => `document.documentElement.dataset.theme === '${value}'`
   // A opção só fica marcada quando o main devolve o que gravou: ler o arquivo antes disso é corrida.
   const pressed = (option: string): string => `document.querySelector('[data-theme-option="${option}"]')?.getAttribute('aria-pressed') === 'true'`
-  await clickSelector(contents, '[data-nav="configuracoes"]')
+  await clickNav(contents, 'configuracoes')
   await waitFor(contents, `${routeIs('configuracoes')} && ${pressed('system')}`)
   // Ponto de partida conhecido: o macOS claro já aplicado, qualquer que seja o tema da máquina.
   nativeTheme.themeSource = 'light'
@@ -3952,9 +3987,9 @@ async function settingsTabsChecks(contents: WebContents, ctx: SmokeContext, shot
 
   // Aba lembrada na sessão.
   await selectSettingsTab(contents, 'claude')
-  await clickSelector(contents, '[data-nav="reunioes"]')
+  await clickNav(contents, 'reunioes')
   await waitFor(contents, routeIs('reunioes'))
-  await clickSelector(contents, '[data-nav="configuracoes"]')
+  await clickNav(contents, 'configuracoes')
   const remembered = await waitFor(contents, `${routeIs('configuracoes')} && ${settingsTabIs('claude')}`)
 
   // Teclado: ⌘2, ⌘8 ("Sobre", desde que "Plugins" (contrato 31) e "Conexões" (contrato 21) entraram antes dela) e a seta
@@ -4219,7 +4254,7 @@ async function googleChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => vo
   // Uma gravação da fixture vai para o Drive.
   const segments = fixtureSegments(liveFixtureLines(readSessionFixture()))
   const idsBefore = new Set(readMeetings(ctx.userDataDir).map((meeting) => meeting.id))
-  await clickSelector(contents, '[data-nav="reunioes"]')
+  await clickNav(contents, 'reunioes')
   await waitFor(contents, `${routeIs('reunioes')} && document.querySelector('[data-action="new-recording"]')`)
   await clickSelector(contents, '[data-action="new-recording"]')
   await waitFor(contents, `${probeJs('state()?.mic')} === 'live' && ${probeJs('state()?.system')} === 'live'`)
@@ -4292,7 +4327,7 @@ async function googleChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => vo
   }
   const summaries = driveChildren(ctx, folder?.id).filter((file) => file.name.endsWith(' - resumo.md'))
   // Lista: a nuvem discreta na linha da reunião.
-  await clickSelector(contents, '[data-nav="reunioes"]')
+  await clickNav(contents, 'reunioes')
   const cloud = await waitFor(contents, `document.querySelector('main a[data-meeting="${recorded?.id ?? ''}"] [data-in-drive]')`)
   const cloudLabel = await evaluate<string>(contents, `document.querySelector('main a[data-meeting="${recorded?.id ?? ''}"] [data-in-drive]')?.getAttribute('aria-label') ?? ''`)
   checks['replaceSummary'] = {
@@ -4533,7 +4568,7 @@ async function calendarChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => 
   }
 
   // Reuniões: a faixa e "Próximas".
-  await clickSelector(contents, '[data-nav="reunioes"]')
+  await clickNav(contents, 'reunioes')
   const shown = await waitFor(contents, `${routeIs('reunioes')} && document.querySelector('[data-calendar-banner]') && document.querySelectorAll('[data-upcoming-event]').length === 3`, 8000)
   const titles = await evaluate<string[]>(contents, UPCOMING_TITLES)
   const firstTime = await text(contents, '[data-upcoming-time]')
@@ -4599,7 +4634,7 @@ async function calendarChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => 
   }
 
   // Reuniões depois: a cancelada saiu de "Próximas", a gravada não tem mais faixa e a linha mostra os participantes.
-  await clickSelector(contents, '[data-nav="reunioes"]')
+  await clickNav(contents, 'reunioes')
   const after = await waitFor(
     contents,
     `${routeIs('reunioes')} && JSON.stringify(${UPCOMING_TITLES}) === ${JSON.stringify(JSON.stringify(['Status da obra', 'Orçamento do trimestre']))} && !document.querySelector('[data-calendar-banner]')`,
@@ -4620,7 +4655,7 @@ async function calendarChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => 
   await clickSelector(contents, '[data-action="google-sign-out"]')
   const outBoth = await waitFor(contents, `${MICROSOFT_STATE} === 'signed-out' && ${GOOGLE_STATE} === 'signed-out'`)
   await ctx.calendar.refresh()
-  await clickSelector(contents, '[data-nav="reunioes"]')
+  await clickNav(contents, 'reunioes')
   const gone = await waitFor(contents, `${routeIs('reunioes')} && !document.querySelector('[data-upcoming]') && !document.querySelector('[data-calendar-banner]')`)
   checks['signOut'] = {
     ok: outBoth && gone && !existsSync(sessionFile) && !existsSync(join(ctx.userDataDir, 'calendar-cache.json')) && !ctx.calendar.view().connected,
@@ -4950,7 +4985,7 @@ async function lockChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => void
   // Bloquear nunca para a gravação: a fixture segue contando quadros e transcrevendo com o app bloqueado.
   const sessionFixture = readSessionFixture()
   const segments = fixtureSegments(liveFixtureLines(sessionFixture))
-  await clickSelector(contents, '[data-nav="reunioes"]')
+  await clickNav(contents, 'reunioes')
   await waitFor(contents, routeIs('reunioes'))
   await waitFor(contents, `document.querySelector('[data-action="new-recording"]')`)
   await clickSelector(contents, '[data-action="new-recording"]')
@@ -5216,7 +5251,8 @@ async function whatsappChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => 
   const notInstalled = await waitFor(contents, `${WA_STATE} === 'not-installed'`)
   const lineBefore = await text(contents, '[data-whatsapp-line]')
   const warning = await text(contents, '[data-notice="whatsapp-warning"]')
-  const navHidden = await evaluate<boolean>(contents, `!document.querySelector('[data-nav="whatsapp"]')`)
+  await showRoot(contents)
+  const navHidden = await evaluate<boolean>(contents, `Boolean(document.querySelector('${SIDEBAR_ROOT} [data-nav="reunioes"]')) && !document.querySelector('${SIDEBAR_ROOT} [data-nav="whatsapp"]')`)
   const nothingYet = !existsSync(join(root, 'venv')) && ctx.whatsapp.status().state === 'not-installed'
   checks['detect'] = {
     ok: notInstalled && lineBefore === 'Não instalado' && warning === WHATSAPP_FIXED_WARNING && navHidden && nothingYet,
@@ -5249,7 +5285,8 @@ async function whatsappChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => 
   // Ligar: o serviço falso sobe como processo filho e fica aguardando o pareamento.
   await clickSelector(contents, '[data-action="whatsapp-start"]')
   const started = await waitFor(contents, `${WA_STATE} === 'pairing'`, 30_000)
-  const navShown = await waitFor(contents, `document.querySelector('[data-nav="whatsapp"]')`)
+  await showRoot(contents)
+  const navShown = await waitFor(contents, `document.querySelector('${SIDEBAR_ROOT} [data-nav="whatsapp"]')`)
   const tokenGone = !existsSync(join(root, 'token'))
   const serviceBin = mode(join(root, 'service.bin'))
 
@@ -5311,7 +5348,7 @@ async function whatsappChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => 
   }
 
   // A tela "WhatsApp": conversas (grupo marcado, não lidas), a conversa aberta e a mensagem nova pelo SSE.
-  await clickSelector(contents, '[data-nav="whatsapp"]')
+  await clickNav(contents, 'whatsapp')
   const listed = await waitFor(contents, `${routeIs('whatsapp')} && document.querySelectorAll('[data-whatsapp-chat]').length === 3`, 8000)
   const rows = await evaluate<{ id: string; text: string; group: boolean; unread: string }[]>(
     contents,
@@ -5420,9 +5457,9 @@ async function whatsappChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => 
   // fecha o painel (a decisão é só ao abrir a tela).
   const [narrowWidth, narrowHeight] = win.getContentSize() as [number, number]
   win.setContentSize(1320, narrowHeight)
-  await clickSelector(contents, '[data-nav="reunioes"]')
+  await clickNav(contents, 'reunioes')
   await waitFor(contents, routeIs('reunioes'))
-  await clickSelector(contents, '[data-nav="whatsapp"]')
+  await clickNav(contents, 'whatsapp')
   await waitFor(contents, `${routeIs('whatsapp')} && window.innerWidth >= 1280 && document.querySelectorAll('[data-whatsapp-chat]').length === 3`, 8000)
   await clickSelector(contents, `[data-whatsapp-chat="${WA_ANA}"]`)
   const wideOpen = await waitFor(contents, `document.querySelector('[data-wa-details] [data-wa-summary]') && document.querySelector('[data-action="toggle-whatsapp-details"]')?.getAttribute('aria-pressed') === 'true'`)
@@ -5593,7 +5630,7 @@ async function whatsappChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => 
 
   // "Só estas conversas" do Assistente (contrato 25; o "Perguntar" do 24) com a conversa da Ana: o `.md` dela na
   // pasta da conversa e no índice.
-  await clickSelector(contents, '[data-nav="assistente"]')
+  await clickNav(contents, 'assistente')
   await waitFor(contents, routeIs('assistente'))
   await clickSelector(contents, '[data-action="chat-new"]')
   await waitFor(contents, `document.querySelector('[data-chat-input]') && !document.querySelector('[data-chat-message]')`)
@@ -5632,8 +5669,9 @@ async function whatsappChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => 
   const dark = ctx.openWindow({ theme: 'dark' })
   watch(dark)
   await loadAndWait(dark)
-  await waitFor(dark.webContents, `document.querySelector('[data-nav="whatsapp"]')`)
-  await clickSelector(dark.webContents, '[data-nav="whatsapp"]')
+  await showRoot(dark.webContents)
+  await waitFor(dark.webContents, `document.querySelector('${SIDEBAR_ROOT} [data-nav="whatsapp"]')`)
+  await clickNav(dark.webContents, 'whatsapp')
   await waitFor(dark.webContents, `document.querySelectorAll('[data-whatsapp-chat]').length === 3`, 8000)
   await clickSelector(dark.webContents, `[data-whatsapp-chat="${WA_ANA}"]`)
   const darkOpen = await waitFor(dark.webContents, `document.querySelectorAll('[data-whatsapp-conversation="${WA_ANA}"] [data-whatsapp-message]').length >= 5`)
@@ -6051,8 +6089,9 @@ async function whatsappLockCheck(ctx: SmokeContext, watch: (win: BrowserWindow) 
   watch(win)
   await loadAndWait(win)
   const contents = win.webContents
-  await waitFor(contents, `document.querySelector('[data-nav="whatsapp"]')`)
-  await clickSelector(contents, '[data-nav="whatsapp"]')
+  await showRoot(contents)
+  await waitFor(contents, `document.querySelector('${SIDEBAR_ROOT} [data-nav="whatsapp"]')`)
+  await clickNav(contents, 'whatsapp')
   await waitFor(contents, `document.querySelectorAll('[data-whatsapp-chat]').length === 3`, 8000)
   await clickSelector(contents, `[data-whatsapp-chat="${WA_ANA}"]`)
   await waitFor(contents, `document.querySelector('[data-whatsapp-conversation="${WA_ANA}"] [data-whatsapp-message]')`)
@@ -6131,8 +6170,9 @@ async function whatsappNotifyCheck(ctx: SmokeContext, watch: (win: BrowserWindow
   await loadAndWait(win)
   const contents = win.webContents
   const notify = ctx.fixtures.whatsappNotify
-  await waitFor(contents, `document.querySelector('[data-nav="whatsapp"]')`)
-  await clickSelector(contents, '[data-nav="whatsapp"]')
+  await showRoot(contents)
+  await waitFor(contents, `document.querySelector('${SIDEBAR_ROOT} [data-nav="whatsapp"]')`)
+  await clickNav(contents, 'whatsapp')
   await waitFor(contents, `document.querySelectorAll('[data-whatsapp-chat]').length === 3`, 8000)
   await clickSelector(contents, `[data-whatsapp-chat="${WA_ANA}"]`)
   await waitFor(contents, `document.querySelector('[data-whatsapp-conversation="${WA_ANA}"] [data-whatsapp-message]')`)
@@ -6242,9 +6282,10 @@ async function assistantChecks(ctx: SmokeContext, watch: (win: BrowserWindow) =>
   let chatIdNow = ''
 
   // CA1: o nome em toda a tela.
-  const navLabel = await evaluate<string>(contents, `document.querySelector('[data-nav="assistente"]')?.textContent ?? ''`)
-  const noOldName = await evaluate<boolean>(contents, `![...document.querySelectorAll('[data-nav]')].some((el) => el.textContent.includes('Perguntar'))`)
-  await clickSelector(contents, '[data-nav="assistente"]')
+  await showRoot(contents)
+  const navLabel = await evaluate<string>(contents, `document.querySelector('${SIDEBAR_ROOT} [data-nav="assistente"]')?.textContent ?? ''`)
+  const noOldName = await evaluate<boolean>(contents, `document.querySelectorAll('${SIDEBAR_ROOT} [data-nav]').length > 0 && ![...document.querySelectorAll('[data-nav]')].some((el) => el.textContent.includes('Perguntar'))`)
+  await clickNav(contents, 'assistente')
   await waitFor(contents, routeIs('assistente'))
   await clickSelector(contents, '[data-action="chat-new"]')
   await waitFor(contents, `document.querySelector('[data-chat-input]') && !document.querySelector('[data-chat-message]')`)
@@ -6334,7 +6375,7 @@ async function assistantChecks(ctx: SmokeContext, watch: (win: BrowserWindow) =>
       when.startsWith('Uma vez em '),
     detail: `cartão=${proposed} "${title}", 09:00 avisado=${defaultTime}, bloco escondido=${rawHidden}; nada antes do clique=${createdBeforeClick === tasksBefore}; criado=${created}, tarefa ${task ? `${task.name} (${task.schedule.kind}, agente "${task.agentId}")` : 'ausente'}; de novo -> ${JSON.stringify(again)}, tarefas ${tasksBefore} -> ${tasksAfter}; em Automações=${listed} "${when}"`,
   }
-  await clickSelector(contents, '[data-nav="assistente"]')
+  await clickNav(contents, 'assistente')
   await waitFor(contents, `${routeIs('assistente')} && document.querySelector('[data-chat-conversation="${chatIdNow}"]')`, 8000)
 
   // CA3 e CA5: a resposta no WhatsApp, com o nome e o número do app; "Enviar" pelo caminho do contrato 24.
@@ -6404,7 +6445,7 @@ async function internetChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => 
   const QUESTION = 'Pesquise o que está em alta sobre finanças no Instagram'
 
   // CA1: o formulário com o interruptor (desligado no agente novo) e o cartão com "Internet".
-  await clickSelector(contents, '[data-nav="automacoes"]')
+  await clickNav(contents, 'automacoes')
   await waitFor(contents, `document.querySelectorAll('[data-agent-card]').length >= 3`, 8000)
   await clickSelector(contents, '[data-action="agent-new"]')
   await waitFor(contents, `document.querySelector('[data-agent-form] #agent-name')`)
@@ -6491,7 +6532,7 @@ async function internetChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => 
   await waitFor(contents, `!document.querySelector('[data-ask-now] [data-run-answer]')`)
 
   // CA2 e CA4: o Assistente, com a fonte "Internet" ligada por padrão; o link abre no navegador do sistema.
-  await clickSelector(contents, '[data-nav="assistente"]')
+  await clickNav(contents, 'assistente')
   await waitFor(contents, routeIs('assistente'))
   await clickSelector(contents, '[data-action="chat-new"]')
   await waitFor(contents, `document.querySelector('[data-chat-input]') && !document.querySelector('[data-chat-message]')`)
@@ -6714,7 +6755,7 @@ async function mcpChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => void,
 
     // CA4 a CA6: o Assistente com as conexões; `calc-form` desligado só nesta conversa.
     const sessionsBefore = readAcpLog(ctx.userDataDir).filter((entry) => entry.method === 'session/new').length
-    await clickSelector(contents, '[data-nav="assistente"]')
+    await clickNav(contents, 'assistente')
     await waitFor(contents, routeIs('assistente'))
     await clickSelector(contents, '[data-action="chat-new"]')
     await waitFor(contents, `document.querySelector('[data-chat-input]') && !document.querySelector('[data-chat-message]')`)
@@ -6926,7 +6967,7 @@ async function connectorChecks(ctx: SmokeContext, watch: (win: BrowserWindow) =>
 
     // CA6 (e CA4 do contrato 57): a sessão do chat com o Notion ligado, sem o modo estrito e com o resto bloqueado.
     const sessionsBefore = readAcpLog(ctx.userDataDir).filter((entry) => entry.method === 'session/new').length
-    await clickSelector(contents, '[data-nav="assistente"]')
+    await clickNav(contents, 'assistente')
     await waitFor(contents, routeIs('assistente'))
     await clickSelector(contents, '[data-action="chat-new"]')
     await waitFor(contents, `document.querySelector('[data-chat-input]') && !document.querySelector('[data-chat-message]')`)
@@ -7045,11 +7086,12 @@ async function automationsChecks(ctx: SmokeContext, watch: (win: BrowserWindow) 
   if (acpStatus.state !== 'installed') await invoke("window.__scribeApi.invoke('scribe:acp-install').then(() => true)")
 
   // A tela, logo abaixo de "Perguntar", com "Pedir agora", as três abas e os agentes de exemplo.
-  await clickSelector(contents, '[data-nav="automacoes"]')
+  await clickNav(contents, 'automacoes')
   const cards = await waitFor(contents, `document.querySelectorAll('[data-agent-card]').length === 3`, 8000)
   const seeded = await invoke<string[]>(`[...document.querySelectorAll('[data-agent-card]')].map((card) => card.dataset.agentName)`)
   const tabs = await invoke<string[]>(`[...document.querySelectorAll('[data-automations] [role="tab"]')].map((tab) => tab.textContent)`)
-  const nav = await invoke<string[]>(`[...document.querySelectorAll('[data-nav]')].map((item) => item.dataset.nav)`)
+  await showRoot(contents)
+  const nav = await invoke<string[]>(`[...document.querySelectorAll('${SIDEBAR_ROOT} [data-nav]')].map((item) => item.dataset.nav)`)
   const askNowShown = await invoke<boolean>(`Boolean(document.querySelector('[data-ask-now] #ask-now-text'))`)
   const title = await text(contents, 'main h1')
   await settle(contents)
@@ -7059,7 +7101,9 @@ async function automationsChecks(ctx: SmokeContext, watch: (win: BrowserWindow) 
       cards &&
       JSON.stringify(seeded) === JSON.stringify(['Resumo da semana', 'Minhas tarefas', 'Pendências da reunião']) &&
       JSON.stringify(tabs) === JSON.stringify(['Agentes', 'Tarefas agendadas', 'Execuções']) &&
-      nav.indexOf('automacoes') === nav.indexOf('assistente') + 1 &&
+      // Contrato 65: "Email" entrou entre o "Assistente" e as "Automações".
+      nav.indexOf('automacoes') === nav.indexOf('email') + 1 &&
+      nav.indexOf('email') === nav.indexOf('assistente') + 1 &&
       askNowShown &&
       title === 'Automações' &&
       existsSync(join(ctx.userDataDir, AGENTS_FILE)),
@@ -7326,7 +7370,7 @@ async function automationsChecks(ctx: SmokeContext, watch: (win: BrowserWindow) 
   }
 
   // Configurações › Geral: "Ao fechar a janela" e "Abrir ao entrar no Mac" (só registrado); › Claude: o limite diário.
-  await clickSelector(contents, '[data-nav="configuracoes"]')
+  await clickNav(contents, 'configuracoes')
   await openSettingsTab(contents, 'geral')
   const closeRow = await waitFor(contents, `document.querySelector('[data-setting-name="Ao fechar a janela"] [data-close-behavior-option="tray"][aria-pressed="true"]')`)
   const loginBefore = auto.loginItems.length
@@ -7366,7 +7410,7 @@ async function automationsChecks(ctx: SmokeContext, watch: (win: BrowserWindow) 
   const dark = ctx.openWindow({ theme: 'dark' })
   watch(dark)
   await loadAndWait(dark)
-  await clickSelector(dark.webContents, '[data-nav="automacoes"]')
+  await clickNav(dark.webContents, 'automacoes')
   const darkCards = await waitFor(dark.webContents, `document.querySelectorAll('[data-agent-card]').length === 4`, 8000)
   await settle(dark.webContents)
   shots.push(await capture(dark, ctx.outDir, 'agentes-dark'))
@@ -7482,7 +7526,7 @@ async function meetChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => void
   // Gravação curta: o marcador vermelho antes do envio e verde depois (adendo 27c), e o nome no trecho do sistema.
   const livePort = ctx.meet.port()
   const idsBefore = new Set(readMeetings(ctx.userDataDir).map((meeting) => meeting.id))
-  await clickSelector(contents, '[data-nav="reunioes"]')
+  await clickNav(contents, 'reunioes')
   await waitFor(contents, `${routeIs('reunioes')} && document.querySelector('[data-action="new-recording"]')`)
   await clickSelector(contents, '[data-action="new-recording"]')
   const live = await waitFor(contents, `${probeJs('state()?.mic')} === 'live' && ${probeJs('state()?.system')} === 'live'`)
@@ -7710,7 +7754,7 @@ async function aiNotesChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => v
   const idsBefore = new Set(readMeetings(ctx.userDataDir).map((meeting) => meeting.id))
   const defaultOff = DEFAULT_SETTINGS.liveCards === false && readSettings(ctx.userDataDir).liveCards !== true
 
-  await clickSelector(contents, '[data-nav="reunioes"]')
+  await clickNav(contents, 'reunioes')
   await waitFor(contents, `${routeIs('reunioes')} && document.querySelector('[data-action="new-recording"]')`)
   await clickSelector(contents, '[data-action="new-recording"]')
   const live = await waitFor(contents, `${probeJs('state()?.mic')} === 'live' && ${probeJs('state()?.system')} === 'live'`)
@@ -7827,7 +7871,7 @@ async function aiNotesChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => v
   contents.reload()
   await loadAndWait(win)
   if (!(await waitFor(contents, routeIs('detalhe'), 3000))) {
-    await clickSelector(contents, '[data-nav="reunioes"]')
+    await clickNav(contents, 'reunioes')
     if (await waitFor(contents, `document.querySelector('main a[data-meeting="${saved?.id ?? ''}"]')`, 8000)) await clickSelector(contents, `main a[data-meeting="${saved?.id ?? ''}"]`)
     await waitFor(contents, routeIs('detalhe'), 8000)
   }
@@ -7860,6 +7904,66 @@ const EMAIL_INBOX_LINK = '[data-email-folder="inbox"]'
 const EMAIL_SENT_LINK = '[data-email-folder="sent"]'
 const EMAIL_ROWS = `document.querySelectorAll('[data-email-list] [data-email-message]')`
 const EMAIL_UNREAD = `(document.querySelector('[data-email-unread-count]')?.firstChild?.textContent ?? '')`
+/** Contrato 65: o número do item "Email" na raiz da barra lateral. */
+const NAV_BADGE = `(document.querySelector('[data-nav-badge]')?.firstChild?.textContent ?? '')`
+const SIDEBAR_LEVELS = `document.querySelectorAll('[data-sidebar-level]')`
+
+/**
+ * Contrato 65 (CA15, CA17): num mesmo script, o clique num item, o quadro seguinte (até 3) com os dois níveis, o que sai
+ * inerte e escondido do leitor de tela, e 400 ms depois um só; a marca, o "Bloquear", as permissões e a barra no mesmo
+ * lugar antes, no meio e depois.
+ */
+const slideScript = (selector: string, transition: 'push' | 'pop'): string => `(async () => {
+  const frame = () => new Promise((resolve) => requestAnimationFrame(() => resolve()))
+  const rect = (selector) => { const r = document.querySelector(selector)?.getBoundingClientRect(); return r ? [r.left, r.top, r.width, r.height].map(Math.round).join(',') : '' }
+  const fixed = () => [rect('[data-brand]'), rect('[data-action="lock-app"]'), rect('aside section[aria-label="Permissões"]'), rect('aside')].join(' ')
+  const sliding = () => document.querySelector('[data-sidebar-stack]')?.classList.contains('is-sliding') === true
+  const before = fixed()
+  document.querySelector(${JSON.stringify(selector)})?.click()
+  let levels = []
+  for (let i = 0; i < 3 && levels.length < 2; i++) {
+    await frame()
+    levels = [...${SIDEBAR_LEVELS}]
+  }
+  const leaving = levels.find((el) => el.hasAttribute('data-sidebar-leaving'))
+  const entering = levels.find((el) => !el.hasAttribute('data-sidebar-leaving'))
+  const middle = {
+    count: levels.length,
+    leaving: leaving?.dataset.sidebarLevel ?? '',
+    entering: entering?.dataset.sidebarLevel ?? '',
+    inert: leaving?.inert === true,
+    hidden: leaving?.getAttribute('aria-hidden') === 'true',
+    outClass: leaving?.classList.contains('side-level-${transition}-out') === true,
+    inClass: entering?.classList.contains('side-level-${transition}-in') === true,
+    sliding: sliding(),
+    fixed: fixed(),
+  }
+  await new Promise((resolve) => setTimeout(resolve, 400))
+  const left = [...${SIDEBAR_LEVELS}]
+  return { before, middle, after: { count: left.length, level: left[0]?.dataset.sidebarLevel ?? '', classes: left[0]?.className ?? '', sliding: sliding(), fixed: fixed() } }
+})()`
+
+interface SlideView {
+  before: string
+  middle: { count: number; leaving: string; entering: string; inert: boolean; hidden: boolean; outClass: boolean; inClass: boolean; sliding: boolean; fixed: string }
+  after: { count: number; level: string; classes: string; sliding: boolean; fixed: string }
+}
+
+const slideOk = (view: SlideView, from: string, to: string): boolean =>
+  view.middle.count === 2 &&
+  view.middle.leaving === from &&
+  view.middle.entering === to &&
+  view.middle.inert &&
+  view.middle.hidden &&
+  view.middle.outClass &&
+  view.middle.inClass &&
+  view.middle.sliding &&
+  view.after.count === 1 &&
+  view.after.level === to &&
+  !view.after.classes.includes('side-level-') &&
+  !view.after.sliding
+// O último retângulo é o da barra: 224 de largura.
+const stillOk = (view: SlideView): boolean => view.before !== '' && view.middle.fixed === view.before && view.after.fixed === view.before && view.before.split(' ').at(-1)?.split(',')[2] === '224'
 const emailRow = (subject: string): string => `[...${EMAIL_ROWS}].find((el) => el.querySelector('[data-email-row-subject]')?.textContent === ${JSON.stringify(subject)})`
 const EMAIL_HTML_SUBJECT = 'Proposta revisada do projeto de integração'
 
@@ -7871,7 +7975,9 @@ async function clickEmailRow(contents: WebContents, subject: string): Promise<bo
 
 /** Abre a Caixa de Entrada (ou Enviados) pela barra lateral e espera a lista. */
 async function openEmailFolder(contents: WebContents, folder: 'inbox' | 'sent', rows = 1): Promise<boolean> {
-  const link = folder === 'inbox' ? EMAIL_INBOX_LINK : EMAIL_SENT_LINK
+  // Contrato 65: as pastas ficam no nível Email da barra lateral.
+  await showEmailLevel(contents)
+  const link = `${SIDEBAR_EMAIL} ${folder === 'inbox' ? EMAIL_INBOX_LINK : EMAIL_SENT_LINK}`
   await waitFor(contents, `document.querySelector('${link}')`, 8000)
   await clickSelector(contents, link)
   return waitFor(contents, `${routeIs('email')} && document.querySelector('[data-email-folder-view="${folder}"]') && ${EMAIL_ROWS}.length >= ${rows}`, 8000)
@@ -7886,17 +7992,31 @@ async function openEmailFolder(contents: WebContents, folder: 'inbox' | 'sent', 
  * Enviados; o erro do SMTP mantendo o rascunho; a conta recolhida gravada nas configurações; apagar; e remover uma
  * conta com problema pela confirmação.
  */
-async function emailChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => void, checks: Record<string, Check>, shots: Screenshot[]): Promise<void> {
+async function emailChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => void, checks: Record<string, Check>, shots: Screenshot[], sidebarChecks: Record<string, Check>): Promise<void> {
   const fake = ctx.fixtures.email
   const win = ctx.openWindow({ theme: 'light' })
   watch(win)
   await loadAndWait(win)
   const contents = win.webContents
 
+  // Contrato 65 (CA4): sem conta, "Email" sem número leva à nota da tela, e o nível só com o cabeçalho e a frase.
+  await showRoot(contents)
+  const noBadge = await evaluate<boolean>(contents, `Boolean(document.querySelector('${SIDEBAR_ROOT} [data-nav="email"]')) && !document.querySelector('[data-nav-badge]')`)
+  await clickNav(contents, 'email')
+  const emptyLevel = await waitFor(
+    contents,
+    `${routeIs('email')} && document.querySelector('${SIDEBAR_EMAIL} [data-sidebar-back]') && document.querySelector('${SIDEBAR_EMAIL}')?.textContent.includes('Nenhuma conta de email ainda.') && document.querySelector('main')?.textContent.includes('Nenhuma conta de email ainda. Adicione')`,
+    8000,
+  )
+  const navHidden = await evaluate<boolean>(contents, `Boolean(document.querySelector('${SIDEBAR_EMAIL}')) && !document.querySelector('[data-email-nav]')`)
+  sidebarChecks['noAccount'] = {
+    ok: noBadge && emptyLevel && navHidden,
+    detail: `"Email" sem número=${noBadge}; a nota da tela e o nível com "Nenhuma conta de email ainda."=${emptyLevel}; sem contas no nível=${navHidden}`,
+  }
+
   // Configurações › Contas › Email: adicionar em dois passos.
   await openSettingsTab(contents, 'contas')
   await scrollToSection(contents, 'Email')
-  const navHidden = await evaluate<boolean>(contents, `!document.querySelector('[data-email-nav]')`)
   await clickSelector(contents, '[data-action="email-add-account"]')
   await waitFor(contents, `document.querySelector('[data-email-add-panel="credentials"]')`)
   await setValue(contents, '#email-add-address', 'fulano@gmail.com')
@@ -7921,10 +8041,30 @@ async function emailChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => voi
     detail: `sem conta, nada na barra=${navHidden}; dica do Gmail=${gmailHint} (some em outro domínio=${hintGone}); sem autoconfig cai no manual=${manual}; teste com a senha recusada=${testRefused}; teste ok=${testOk}; adicionada=${added} "${line}"`,
   }
 
-  // Barra lateral: a conta pelo nome, as pastas e as não lidas; a lista em duas colunas.
-  const sidebar = await waitFor(contents, `document.querySelector('[data-email-account-toggle]')?.textContent.includes('Andrew Teste') && document.querySelector('${EMAIL_INBOX_LINK}') && document.querySelector('${EMAIL_SENT_LINK}') && ${EMAIL_UNREAD} === '2'`, 8000)
+  // Contrato 65 (CA1, CA3): na raiz, ainda em Configurações, os itens na ordem e o número do Email. (CA6, CA12) Na
+  // primeira vez da sessão, "Email" abre a Caixa de Entrada da primeira conta, com o foco no cabeçalho-voltar.
+  await showRoot(contents)
   const navOrder = await evaluate<string[]>(contents, `[...document.querySelectorAll('aside nav[aria-label="Navegação principal"] [data-nav]')].map((el) => el.dataset.nav)`)
+  const rootBadge = await waitFor(contents, `${NAV_BADGE} === '2'`, 8000)
+  const badgeLabel = await evaluate<string>(contents, `document.querySelector('[data-nav-badge]')?.textContent ?? ''`)
+  sidebarChecks['rootItems'] = {
+    ok: JSON.stringify(navOrder) === JSON.stringify(['reunioes', 'assistente', 'email', 'automacoes', 'whatsapp', 'configuracoes']) && rootBadge && badgeLabel === '2 não lidas',
+    detail: `itens ${JSON.stringify(navOrder)}; número do Email "${badgeLabel}"`,
+  }
+  await clickNav(contents, 'email')
+  const firstTime = await waitFor(contents, `${routeIs('email')} && document.querySelector('[data-email-folder-view="inbox"]') && document.querySelector('${SIDEBAR_EMAIL} [data-email-folder="inbox"][data-email-folder-account="${accountId}"]')?.getAttribute('aria-current') === 'page'`, 8000)
+  const focusBack = await evaluate<boolean>(contents, `document.activeElement?.matches('${SIDEBAR_EMAIL} [data-sidebar-back]') === true`)
+  sidebarChecks['enterFirstTime'] = { ok: firstTime && focusBack, detail: `de Configurações, a Caixa de Entrada da primeira conta=${firstTime}; foco no cabeçalho-voltar=${focusBack}` }
+
+  // Barra lateral: com uma conta (D1 do contrato 65), a linha dela sem seta, as pastas sempre e as não lidas; a lista em
+  // duas colunas.
+  const sidebar = await waitFor(
+    contents,
+    `document.querySelector('${SIDEBAR_EMAIL} [data-email-account-header="${accountId}"]')?.textContent.includes('Andrew Teste') && !document.querySelector('[data-email-account-header]').hasAttribute('aria-expanded') && !document.querySelector('[data-email-account-toggle]') && document.querySelector('${EMAIL_INBOX_LINK}') && document.querySelector('${EMAIL_SENT_LINK}') && ${EMAIL_UNREAD} === '2'`,
+    8000,
+  )
   const listed = await openEmailFolder(contents, 'inbox', 4)
+  const agendaId = await evaluate<string>(contents, `${emailRow('Re: Agenda da apresentação')}?.dataset.emailMessage ?? ''`)
   const previews = await waitFor(contents, `[...${EMAIL_ROWS}].every((el) => el.querySelector('[data-email-row-preview]')?.textContent.trim().length > 3)`, 8000)
   const rows = await evaluate<{ from: string; unread: string; dot: boolean }[]>(contents, `[...${EMAIL_ROWS}].map((el) => ({ from: el.querySelector('[data-email-row-from]')?.textContent ?? '', unread: el.dataset.emailUnread, dot: Boolean(el.querySelector('[data-email-unread-dot]')) }))`)
   const groups = await evaluate<string[]>(contents, `[...document.querySelectorAll('[data-email-group]')].map((el) => el.dataset.emailGroup)`)
@@ -7937,7 +8077,7 @@ async function emailChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => voi
   checks['list'] = {
     ok:
       sidebar &&
-      JSON.stringify(navOrder) === JSON.stringify(['reunioes', 'assistente', 'automacoes', 'whatsapp', 'configuracoes']) &&
+      JSON.stringify(navOrder) === JSON.stringify(['reunioes', 'assistente', 'email', 'automacoes', 'whatsapp', 'configuracoes']) &&
       listed &&
       previews &&
       rows.length === 4 &&
@@ -7946,7 +8086,7 @@ async function emailChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => voi
       groups[0] === 'Hoje' &&
       newButton &&
       firstRead,
-    detail: `barra lateral com a conta, as pastas e 2 não lidas=${sidebar}; itens de sempre ${JSON.stringify(navOrder)}; lista=${listed} com prévias=${previews}; linhas ${JSON.stringify(rows)}; grupos ${JSON.stringify(groups)}; "Nova mensagem" no topo=${newButton}`,
+    detail: `barra lateral com a conta (sem seta), as pastas e 2 não lidas=${sidebar}; itens de sempre ${JSON.stringify(navOrder)}; lista=${listed} com prévias=${previews}; linhas ${JSON.stringify(rows)}; grupos ${JSON.stringify(groups)}; "Nova mensagem" no topo=${newButton}`,
   }
 
   // Leitura: o HTML sanitizado, a imagem só com o clique e o link pela confirmação.
@@ -8008,6 +8148,29 @@ async function emailChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => voi
     detail: `aberta=${opened}, corpo=${bodyShown}; marcas perigosas no HTML=${dangerous}, script rodou=${reading.xss}; imagem bloqueada=${reading.blocked} (${reading.img} img, ${requestsBefore} pedidos antes do clique); "Carregar imagens"=${imageLoaded} (${fake.imageRequests.length} pedido); link pela confirmação=${asked}, aberto no navegador=${linkOpened}; de "${reading.from}", Cc com o Paulo=${reading.cc.includes('paulo.nunes@cliente.example')}; ações ${JSON.stringify(reading.actions)} numa linha=${reading.oneLine}; lida ao abrir=${markedRead}`,
   }
 
+  // Contrato 65 (CA8, CA12): o cabeçalho-voltar mostra a raiz sem navegar: a mensagem continua aberta, "Email" marcado,
+  // com o número da Caixa de Entrada, e o foco no item. (CA7) "Email" de novo mostra o nível, sem navegar.
+  const sidebarView = (): Promise<{ route: string; subject: string; unread: string; badge: string; current: string; focus: string }> =>
+    evaluate(
+      contents,
+      `({ route: document.querySelector('main')?.dataset.route ?? '', subject: document.querySelector('[data-email-reading] [data-email-subject]')?.textContent ?? '', unread: ${EMAIL_UNREAD}, badge: ${NAV_BADGE}, current: document.querySelector('${SIDEBAR_ROOT} [data-nav="email"]')?.getAttribute('aria-current') ?? '', focus: document.activeElement?.matches('[data-sidebar-back]') ? 'back' : (document.activeElement?.dataset?.nav ?? document.activeElement?.tagName ?? '') })`,
+    )
+  const beforeBack = await sidebarView()
+  await clickSelector(contents, SIDEBAR_BACK)
+  const rootShown = await waitFor(contents, `document.querySelector('${SIDEBAR_ROOT}') && ${SIDEBAR_LEVELS}.length === 1`)
+  const afterBack = await sidebarView()
+  await clickNav(contents, 'email')
+  const levelAgain = await waitFor(contents, `document.querySelector('${SIDEBAR_EMAIL}') && ${SIDEBAR_LEVELS}.length === 1`)
+  const afterEnter = await sidebarView()
+  sidebarChecks['back'] = {
+    ok: rootShown && beforeBack.subject === EMAIL_HTML_SUBJECT && afterBack.route === 'email' && afterBack.subject === beforeBack.subject && afterBack.current === 'page' && afterBack.focus === 'email',
+    detail: `raiz=${rootShown}; rota ${beforeBack.route} -> ${afterBack.route}; mensagem "${beforeBack.subject}" -> "${afterBack.subject}"; "Email" com aria-current="${afterBack.current}"; foco em ${afterBack.focus}`,
+  }
+  sidebarChecks['enterInSection'] = {
+    ok: levelAgain && afterEnter.route === 'email' && afterEnter.subject === beforeBack.subject && afterEnter.focus === 'back',
+    detail: `nível Email sem navegar=${levelAgain}; rota ${afterEnter.route}; mensagem "${afterEnter.subject}"; foco em ${afterEnter.focus}`,
+  }
+
   // Responder: "Re:", a citação e um anexo local; Enviar sem diálogo, e a mensagem em Enviados.
   await clickSelector(contents, '[data-action="email-reply"]')
   const composer = await waitFor(contents, `document.querySelector('[data-email-composer="reply"]')`)
@@ -8060,18 +8223,98 @@ async function emailChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => voi
     detail: `composer=${composer}; para ${JSON.stringify(prefilled.to)}, "Re:"=${prefilled.subject.startsWith('Re: ')}, citação=${prefilled.quoted}; anexo=${attached}; enviado e aberto em Enviados=${toSent}; no SMTP falso=${sentOk} (${fake.sent.length} envio, ${fake.appended} APPEND); erro mantém o rascunho=${keptDraft}; descartado=${discarded}`,
   }
 
-  // Conta recolhida: some com as pastas, fica gravada e vale numa janela nova.
-  await clickSelector(contents, `[data-email-account-toggle="${accountId}"]`)
-  const collapsed = await waitFor(contents, `!document.querySelector('${EMAIL_INBOX_LINK}') && document.querySelector('[data-email-account-toggle]')?.getAttribute('aria-expanded') === 'false'`)
-  await wait(300)
-  const saved = (readSettings(ctx.userDataDir).emailCollapsed ?? []).includes(accountId)
-  const again = ctx.openWindow({ theme: 'light' })
-  watch(again)
-  await loadAndWait(again)
-  const stillCollapsed = await waitFor(again.webContents, `document.querySelector('[data-email-account-toggle]')?.getAttribute('aria-expanded') === 'false' && !document.querySelector('${EMAIL_INBOX_LINK}')`, 8000)
-  again.destroy()
-  await clickSelector(contents, `[data-email-account-toggle="${accountId}"]`)
-  const expanded = await waitFor(contents, `document.querySelector('${EMAIL_INBOX_LINK}')`)
+  // Contrato 65: em Reuniões, a raiz com o número do Email (o print). (CA6) "Email" volta à última pasta aberta na sessão
+  // (Enviados, do envio acima), (CA15, CA17) deslizando, com a marca e o rodapé parados.
+  await clickNav(contents, 'reunioes')
+  await waitFor(contents, `${routeIs('reunioes')} && ${SIDEBAR_LEVELS}.length === 1 && ${NAV_BADGE} === '1'`, 8000)
+  await settle(contents)
+  shots.push(await capture(win, ctx.outDir, 'sidebar-raiz-light'))
+  const push = await evaluate<SlideView>(contents, slideScript(`${SIDEBAR_ROOT} [data-nav="email"]`, 'push'))
+  const lastFolder = await waitFor(contents, `${routeIs('email')} && document.querySelector('[data-email-folder-view="sent"]') && document.querySelector('${SIDEBAR_EMAIL} ${EMAIL_SENT_LINK}')?.getAttribute('aria-current') === 'page'`, 8000)
+  sidebarChecks['enterLast'] = { ok: push.after.level === 'email' && lastFolder, detail: `de Reuniões, a última pasta aberta (Enviados)=${lastFolder}` }
+  const pop = await evaluate<SlideView>(contents, slideScript(SIDEBAR_BACK, 'pop'))
+  // Dois cliques seguidos (entrar e voltar): termina com um nível só, a raiz.
+  const twice = await evaluate<{ count: number; level: string; sliding: boolean }>(
+    contents,
+    `(async () => {
+      document.querySelector('${SIDEBAR_ROOT} [data-nav="email"]')?.click()
+      await new Promise((resolve) => requestAnimationFrame(() => resolve()))
+      document.querySelector('${SIDEBAR_BACK}')?.click()
+      await new Promise((resolve) => setTimeout(resolve, 400))
+      return { count: ${SIDEBAR_LEVELS}.length, level: document.querySelector('[data-sidebar-level]')?.dataset.sidebarLevel ?? '', sliding: document.querySelector('[data-sidebar-stack]')?.classList.contains('is-sliding') === true }
+    })()`,
+  )
+  sidebarChecks['slide'] = {
+    ok: slideOk(push, 'root', 'email') && slideOk(pop, 'email', 'root') && twice.count === 1 && twice.level === 'root' && !twice.sliding,
+    detail: `entrar: meio ${JSON.stringify(push.middle)}, depois ${JSON.stringify(push.after)}; voltar: meio ${JSON.stringify(pop.middle)}, depois ${JSON.stringify(pop.after)}; entrar e voltar seguidos: ${JSON.stringify(twice)}`,
+  }
+  sidebarChecks['still'] = {
+    ok: stillOk(push) && stillOk(pop),
+    detail: `marca, Bloquear, Permissões e barra (x,y,largura,altura): antes ${push.before}; no meio ${push.middle.fixed}; depois ${push.after.fixed}; voltando ${pop.middle.fixed} / ${pop.after.fixed}`,
+  }
+
+  // CA9 e CA12: o aviso de email (pelo main), com a raiz à mostra, leva ao nível Email sem mexer no foco. Primeiro com
+  // a raiz depois do "voltar" (rota de email) e o foco num botão da tela, que continua o mesmo elemento; depois em
+  // Reuniões com o foco num item da raiz, que sai: aí o foco só não pode ir para dentro da barra lateral.
+  const openNotice = async (): Promise<boolean> => {
+    contents.send('scribe:open-email', { accountId, id: agendaId })
+    return waitFor(
+      contents,
+      `${routeIs('email')} && document.querySelector('${SIDEBAR_EMAIL}') && ${SIDEBAR_LEVELS}.length === 1 && document.querySelector('[data-email-reading="${agendaId}"] [data-email-subject]')?.textContent === 'Re: Agenda da apresentação'`,
+      8000,
+    )
+  }
+  const mainFocused = await evaluate<boolean>(
+    contents,
+    `(() => { const el = document.querySelector('main [data-action="email-new"]'); el?.focus(); window.__smokeFocus = el; return Boolean(el) && document.activeElement === el && Boolean(document.querySelector('${SIDEBAR_ROOT}')) })()`,
+  )
+  const noticeFromBack = await openNotice()
+  const sameFocus = await evaluate<boolean>(contents, `document.activeElement === window.__smokeFocus && window.__smokeFocus?.isConnected === true`)
+
+  // CA9: ⌘, com o nível Email à mostra volta à raiz com Configurações marcada (sem passar por Reuniões).
+  const settingsItem = Menu.getApplicationMenu()?.getMenuItemById(MENU_IDS.settings)
+  settingsItem?.click()
+  const settingsRoot = await waitFor(contents, `${routeIs('configuracoes')} && document.querySelector('${SIDEBAR_ROOT} [data-nav="configuracoes"]')?.getAttribute('aria-current') === 'page' && ${SIDEBAR_LEVELS}.length === 1`, 8000)
+  const settingsNav = await activeNav(contents)
+
+  await clickNav(contents, 'reunioes')
+  await waitFor(contents, `${routeIs('reunioes')} && ${SIDEBAR_LEVELS}.length === 1`)
+  const rootFocused = await evaluate<boolean>(contents, `(() => { const el = document.querySelector('${SIDEBAR_ROOT} [data-nav="reunioes"]'); el?.focus(); return document.activeElement === el })()`)
+  const noticeFromRoot = await openNotice()
+  const rootFocus = await evaluate<{ inSidebar: boolean; tag: string }>(contents, `({ inSidebar: Boolean(document.activeElement?.closest('[data-sidebar-stack]')), tag: document.activeElement?.tagName ?? '' })`)
+  contents.send('scribe:navigate', 'gravacao')
+  const menuRoot = await waitFor(contents, `${routeIs('gravacao')} && document.querySelector('${SIDEBAR_ROOT}') && ${SIDEBAR_LEVELS}.length === 1`, 8000)
+  sidebarChecks['routeLevel'] = {
+    ok: Boolean(agendaId) && mainFocused && noticeFromBack && sameFocus && settingsRoot && settingsNav === 'configuracoes' && rootFocused && noticeFromRoot && !rootFocus.inSidebar && menuRoot,
+    detail: `aviso com a raiz do "voltar" -> nível Email com a mensagem=${noticeFromBack}, foco no "Nova mensagem" mantido=${mainFocused && sameFocus}; ⌘, no nível Email -> raiz com Configurações marcada=${settingsRoot} (${settingsNav}); aviso em Reuniões com o foco na raiz -> nível Email=${noticeFromRoot}, foco fora da barra lateral=${rootFocused && !rootFocus.inSidebar} (${rootFocus.tag}); menu "gravacao" -> raiz=${menuRoot}`,
+  }
+
+  // CA16: com movimento reduzido, a troca é instantânea: nunca dois níveis, do quadro do clique até 10 quadros depois.
+  const framesAfterClick = (selector: string): string => `(async () => {
+    document.querySelector(${JSON.stringify(selector)})?.click()
+    let most = 0
+    for (let i = 0; i < 10; i++) {
+      await new Promise((resolve) => requestAnimationFrame(() => resolve()))
+      most = Math.max(most, ${SIDEBAR_LEVELS}.length)
+    }
+    return most
+  })()`
+  const reduced = { enter: -1, entered: false, back: -1, backed: false }
+  contents.debugger.attach('1.3')
+  try {
+    await contents.debugger.sendCommand('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'reduce' }] })
+    reduced.enter = await evaluate<number>(contents, framesAfterClick(`${SIDEBAR_ROOT} [data-nav="email"]`))
+    reduced.entered = await waitFor(contents, `document.querySelector('${SIDEBAR_EMAIL}') && ${SIDEBAR_LEVELS}.length === 1`)
+    reduced.back = await evaluate<number>(contents, framesAfterClick(SIDEBAR_BACK))
+    reduced.backed = await waitFor(contents, `document.querySelector('${SIDEBAR_ROOT}') && ${SIDEBAR_LEVELS}.length === 1`)
+  } finally {
+    await contents.debugger.sendCommand('Emulation.setEmulatedMedia', { features: [] }).catch(() => undefined)
+    contents.debugger.detach()
+  }
+  sidebarChecks['reducedMotion'] = {
+    ok: reduced.enter === 1 && reduced.entered && reduced.back === 1 && reduced.backed,
+    detail: `no máximo ${reduced.enter} nível nos 10 quadros depois de entrar (nível Email=${reduced.entered}); ${reduced.back} depois de voltar (raiz=${reduced.backed})`,
+  }
 
   // Apagar, pela confirmação.
   await openEmailFolder(contents, 'inbox', 4)
@@ -8101,15 +8344,17 @@ async function emailChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => voi
   await waitFor(contents, `!document.querySelector('[data-email-composer]')`, 8000)
   const forwarded = fake.sent[sentBefore]
   const forwardOk = forwardOpen && forwarded?.subject === 'Enc: Fechamento de novembro: notas para conferir' && forwarded.attachments.map((item) => `${item.name}:${item.size}`).join() === `${SMOKE_EMAIL_ATTACHMENT.name}:${Buffer.byteLength(SMOKE_EMAIL_ATTACHMENT.content)}`
+  // Contrato 65 (CA3): a última não lida foi aberta acima; o número do Email some da raiz.
+  await showRoot(contents)
+  const badgeGone = await waitFor(contents, `document.querySelector('${SIDEBAR_ROOT} [data-nav="email"]') && !document.querySelector('[data-nav-badge]')`)
+  sidebarChecks['badge'] = {
+    ok: beforeBack.unread === '1' && afterBack.badge === beforeBack.unread && badgeGone,
+    detail: `Caixa de Entrada com ${beforeBack.unread} não lida e "Email" na raiz com ${afterBack.badge}; sem não lidas, o número some=${badgeGone}`,
+  }
   await openEmailFolder(contents, 'inbox', 3)
   checks['attachments'] = {
     ok: download && forwardOk,
     detail: `baixado=${downloadedShown}, conteúdo certo=${downloaded}, diálogo começa em Downloads com o nome=${dialogStart.endsWith(SMOKE_EMAIL_ATTACHMENT.name)}; encaminhar com o anexo=${forwardOpen}, no SMTP falso=${forwardOk}`,
-  }
-
-  checks['folders'] = {
-    ok: collapsed && saved && stillCollapsed && expanded && deleted,
-    detail: `recolhida=${collapsed}, gravada=${saved}, recolhida na janela nova=${stillCollapsed}, aberta de novo=${expanded}; apagada pela confirmação=${deleted}`,
   }
 
   // Conta com problema: o estado na lista e "Remover" pela confirmação.
@@ -8119,11 +8364,43 @@ async function emailChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => voi
   )
   await openSettingsTab(contents, 'contas')
   const errorLine = await waitFor(contents, `[...document.querySelectorAll('[data-email-settings-state="error"] [data-email-settings-line]')].some((el) => el.textContent === 'IMAP · Com problema: Usuário ou senha recusados.')`, 8000)
-  const errorInSidebar = await waitFor(contents, `document.querySelector('[data-email-account-error]')`)
+  // Contrato 65: as contas ficam no nível Email da barra lateral.
+  await showEmailLevel(contents)
+  const errorInSidebar = await waitFor(contents, `document.querySelector('${SIDEBAR_EMAIL} [data-email-account-error]')`, 8000)
+
+  // Conta recolhida, com as duas contas (com uma só não há seta, D1 do contrato 65): some com as pastas, fica gravada e
+  // vale numa janela nova.
+  const ownToggle = `[data-email-account-toggle="${accountId}"]`
+  const ownInbox = `${EMAIL_INBOX_LINK}[data-email-folder-account="${accountId}"]`
+  const twoToggles = await waitFor(contents, `document.querySelectorAll('${SIDEBAR_EMAIL} [data-email-account-toggle]').length === 2 && !document.querySelector('[data-email-account-header]')`)
+  await clickSelector(contents, `${SIDEBAR_EMAIL} ${ownToggle}`)
+  const collapsed = await waitFor(contents, `!document.querySelector('${ownInbox}') && document.querySelector('${ownToggle}')?.getAttribute('aria-expanded') === 'false'`)
+  await wait(300)
+  const saved = (readSettings(ctx.userDataDir).emailCollapsed ?? []).includes(accountId)
+  const again = ctx.openWindow({ theme: 'light' })
+  watch(again)
+  await loadAndWait(again)
+  await showEmailLevel(again.webContents)
+  const stillCollapsed = await waitFor(again.webContents, `document.querySelector('${ownToggle}')?.getAttribute('aria-expanded') === 'false' && !document.querySelector('${ownInbox}')`, 8000)
+  again.destroy()
+  await clickSelector(contents, `${SIDEBAR_EMAIL} ${ownToggle}`)
+  const expanded = await waitFor(contents, `document.querySelector('${ownInbox}')`)
+  checks['folders'] = {
+    ok: twoToggles && collapsed && saved && stillCollapsed && expanded && deleted,
+    detail: `duas contas com a seta=${twoToggles}; recolhida=${collapsed}, gravada=${saved}, recolhida na janela nova=${stillCollapsed}, aberta de novo=${expanded}; apagada pela confirmação=${deleted}`,
+  }
+  // O print do nível Email: as duas contas, a do servidor falso com a Caixa de Entrada aberta e a com problema.
+  await openEmailFolder(contents, 'inbox', 3)
+  await settle(contents)
+  shots.push(await capture(win, ctx.outDir, 'sidebar-email-light'))
+
+  await openSettingsTab(contents, 'contas')
   await clickSelector(contents, '[data-email-settings-state="error"] [data-action="email-remove-account"]')
   const confirmShown = await waitFor(contents, `document.querySelector('[data-notice="email-remove-confirm"]')?.textContent.includes('recusada@lap.example')`)
   await clickSelector(contents, '[data-action="email-remove-confirm"]')
-  const removed = await waitFor(contents, `document.querySelectorAll('[data-email-settings-account]').length === 1 && document.querySelectorAll('[data-email-account]').length === 1`, 8000)
+  const removedSettings = await waitFor(contents, `document.querySelectorAll('[data-email-settings-account]').length === 1`, 8000)
+  await showEmailLevel(contents)
+  const removed = removedSettings && (await waitFor(contents, `document.querySelectorAll('${SIDEBAR_EMAIL} [data-email-account]').length === 1`, 8000))
   checks['remove'] = {
     ok: errorLine && errorInSidebar && confirmShown && removed,
     detail: `estado com problema na lista=${errorLine} e na barra=${errorInSidebar}; confirmação=${confirmShown}; removida=${removed}`,
@@ -8135,8 +8412,15 @@ async function emailChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => voi
   watch(dark)
   await loadAndWait(dark)
   const darkContents = dark.webContents
+  // Contrato 65: a raiz e o nível Email com uma conta só (D1), no escuro.
+  await waitFor(darkContents, `${routeIs('reunioes')} && document.querySelector('${SIDEBAR_ROOT} [data-nav="email"]')`, 8000)
+  await settle(darkContents)
+  shots.push(await capture(dark, ctx.outDir, 'sidebar-raiz-dark'))
   const darkList = await openEmailFolder(darkContents, 'inbox', 3)
   await waitFor(darkContents, `[...${EMAIL_ROWS}].every((el) => el.querySelector('[data-email-row-preview]')?.textContent.trim().length > 3)`, 8000)
+  const darkSingle = await waitFor(darkContents, `document.querySelector('${SIDEBAR_EMAIL} [data-email-account-header="${accountId}"]') && !document.querySelector('[data-email-account-toggle]')`)
+  await settle(darkContents)
+  shots.push(await capture(dark, ctx.outDir, 'sidebar-email-dark'))
   const darkFirst = await clickEmailRow(darkContents, 'Re: Agenda da apresentação')
   await settle(darkContents)
   shots.push(await capture(dark, ctx.outDir, 'email-dark'))
@@ -8151,7 +8435,7 @@ async function emailChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => voi
   await clickSelector(darkContents, '[data-action="email-discard"]')
   await clickSelector(darkContents, '[data-action="email-discard-confirm"]')
   const darkTheme = await evaluate<string>(darkContents, 'document.documentElement.dataset.theme ?? ""')
-  checks['dark'] = { ok: darkList && darkFirst && darkReading && darkComposer && darkTheme === 'dark', detail: `lista=${darkList} (${darkFirst}), leitura=${darkReading}, composer=${darkComposer}, tema=${darkTheme}` }
+  checks['dark'] = { ok: darkList && darkSingle && darkFirst && darkReading && darkComposer && darkTheme === 'dark', detail: `lista=${darkList} (${darkFirst}), conta única sem seta=${darkSingle}, leitura=${darkReading}, composer=${darkComposer}, tema=${darkTheme}` }
   dark.destroy()
 }
 
@@ -8174,7 +8458,7 @@ async function emailAssistantChecks(ctx: SmokeContext, watch: (win: BrowserWindo
   const accountId = await evaluate<string>(contents, `window.__scribeApi.invoke('scribe:email-accounts').then((list) => list[0]?.account.id ?? '')`)
   const inbox = (): Promise<{ id: string; subject: string; seen: boolean; messageId: string | null }[]> =>
     evaluate(contents, `window.__scribeApi.invoke('scribe:email-messages', { accountId: '${accountId}' }).then((list) => list.map((item) => ({ id: item.id, subject: item.subject, seen: item.seen, messageId: item.messageId })))`)
-  await clickSelector(contents, '[data-nav="assistente"]')
+  await clickNav(contents, 'assistente')
   await waitFor(contents, routeIs('assistente'))
   await clickSelector(contents, '[data-action="chat-new"]')
   await waitFor(contents, `document.querySelector('[data-chat-input]') && !document.querySelector('[data-chat-message]')`)
@@ -8212,7 +8496,7 @@ async function emailAssistantChecks(ctx: SmokeContext, watch: (win: BrowserWindo
       opened,
     detail: `resposta=${pending.done} "${pending.answer.slice(0, 200)}"; pendentes no EMAILS.md=${pendingLines.length}; cartão=${cardShown} ${JSON.stringify(fromNames)} conta=${accountShown} hora=${timeShown}; servidor nas pendências=${fake.reader.searches - searchesBefore}; clique abriu "${firstSubject}"=${opened}`,
   }
-  await clickSelector(contents, '[data-nav="assistente"]')
+  await clickNav(contents, 'assistente')
   await waitFor(contents, `${routeIs('assistente')} && document.querySelector('[data-chat-conversation="${chatId}"]')`, 8000)
 
   // CA3: o rascunho, enviado só no clique, com o In-Reply-To da mensagem respondida.
@@ -8314,7 +8598,7 @@ async function emailTaskChecks(ctx: SmokeContext, watch: (win: BrowserWindow) =>
   const subject = 'o aviso do smoke'
 
   // CA1: o formulário, com a seção desligada por padrão; ligada, a conta, a lista e o teto.
-  await clickSelector(contents, '[data-nav="automacoes"]')
+  await clickNav(contents, 'automacoes')
   await waitFor(contents, routeIs('automacoes'), 8000)
   await clickSelector(contents, '#automations-tab-tarefas')
   await waitFor(contents, `document.querySelector('[data-tasks-tab]')`)
@@ -8549,6 +8833,8 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
   /** Contrato 27: quem fala no Meet. */
   const meet: Record<string, Check> = {}
   const email: Record<string, Check> = {}
+  // Contrato 65: a barra lateral em pilha (a raiz com o Email e o nível Email), nos passos do email.
+  const sidebar: Record<string, Check> = {}
   let analysisMeasured: AnalysisMeasured | null = null
 
   // A fixture da sessão real, reduzida pelo mesmo redutor do app: a mesma dos testes (CA4) e do smoke.
@@ -8712,15 +8998,15 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
 
       // 5. Lista com três reuniões semeadas.
       seedMeetings(ctx.userDataDir)
-      await clickSelector(contents, '[data-nav="reunioes"]')
+      await clickNav(contents, 'reunioes')
       await waitFor(contents, "document.querySelectorAll('main a[data-meeting]').length === 3")
       await shoot('reunioes-com-dados', 'reunioes')
 
       // Contrato 10: seis reuniões em dias diferentes, duas com resumo, e a busca.
       seedListMeetings(ctx.userDataDir)
-      await clickSelector(contents, '[data-nav="configuracoes"]')
+      await clickNav(contents, 'configuracoes')
       await waitFor(contents, routeIs('configuracoes'))
-      await clickSelector(contents, '[data-nav="reunioes"]')
+      await clickNav(contents, 'reunioes')
       await waitFor(contents, "document.querySelectorAll('main a[data-meeting]').length === 6 && document.querySelectorAll('main [data-summary-overview]').length === 2")
       meetingsList[themeName === 'light' ? 'list' : 'listDark'] = await meetingsListCheck(contents, ctx.userDataDir)
       await shoot('reunioes-lista', 'reunioes')
@@ -8815,7 +9101,7 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
         await transcriptionChecks(win, recording)
         await recordingChecks(win, ctx, navigation, recording, screenshots)
         await settingsChecks(win, ctx, settings)
-        await clickSelector(contents, '[data-nav="configuracoes"]')
+        await clickNav(contents, 'configuracoes')
         await waitFor(contents, routeIs('configuracoes'))
         settings['claudeCli'] = (await showClaudeSettings(contents)) ? await claudeChecks(win, ctx) : { ok: false, detail: 'Claude CLI falso não foi encontrado' }
         settings['meetingFiles'] = await meetingFilesSettings(win, ctx)
@@ -8830,21 +9116,21 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
         screenshots.push(branding.shot)
 
         // Barra lateral, menu ⌘, e teclado.
-        await clickSelector(contents, '[data-nav="reunioes"]')
+        await clickNav(contents, 'reunioes')
         await waitFor(contents, routeIs('reunioes'))
         navigation['sidebarReunioes'] = {
           ok: (await currentRoute(contents)) === 'reunioes' && (await activeNav(contents)) === 'reunioes',
           detail: `clique em Reuniões -> rota ${await currentRoute(contents)}, aria-current em ${await activeNav(contents)}`,
         }
 
-        await clickSelector(contents, '[data-nav="configuracoes"]')
+        await clickNav(contents, 'configuracoes')
         await waitFor(contents, routeIs('configuracoes'))
         navigation['sidebarConfiguracoes'] = {
           ok: (await currentRoute(contents)) === 'configuracoes' && (await activeNav(contents)) === 'configuracoes',
           detail: `clique em Configurações -> rota ${await currentRoute(contents)}, aria-current em ${await activeNav(contents)}`,
         }
 
-        await clickSelector(contents, '[data-nav="reunioes"]')
+        await clickNav(contents, 'reunioes')
         await waitFor(contents, routeIs('reunioes'))
         const settingsItem = Menu.getApplicationMenu()?.getMenuItemById(MENU_IDS.settings)
         settingsItem?.click()
@@ -8854,7 +9140,7 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
           detail: `menu "${settingsItem?.label ?? '?'}" (${settingsItem?.accelerator ?? '?'}) -> rota ${await currentRoute(contents)}`,
         }
 
-        await clickSelector(contents, '[data-nav="reunioes"]')
+        await clickNav(contents, 'reunioes')
         await waitFor(contents, routeIs('reunioes'))
         navigation['keyboard'] = await keyboardNavigation(contents)
 
@@ -8924,7 +9210,7 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
     await aiNotesChecks(ctx, watch, recording)
 
     // Contrato 43: as telas de email com o servidor falso; antes do bloqueio (que recusa os canais novos junto).
-    await emailChecks(ctx, watch, email, screenshots)
+    await emailChecks(ctx, watch, email, screenshots, sidebar)
 
     // Contrato 45: o email no Assistente, com a conta do servidor falso conectada; antes do bloqueio.
     await emailAssistantChecks(ctx, watch, email, screenshots)
@@ -9003,6 +9289,8 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
   for (const name of ['server', 'recording', 'setting', 'meetingPrompt', 'meetingPromptRecord', 'meetingPromptNever', 'micWatch']) if (!meet[name]) failures.push(`meet ${name}: não executado`)
   for (const [name, check] of Object.entries(email)) if (!check.ok) failures.push(`email ${name}: ${check.detail}`)
   for (const name of ['settings', 'list', 'reading', 'compose', 'folders', 'attachments', 'remove', 'dark', 'notify', 'assistantPending', 'assistantReply', 'assistantTask', 'assistantSearch', 'taskEmailForm', 'taskEmailRun']) if (!email[name]) failures.push(`email ${name}: não executado`)
+  for (const [name, check] of Object.entries(sidebar)) if (!check.ok) failures.push(`barra lateral ${name}: ${check.detail}`)
+  for (const name of ['noAccount', 'rootItems', 'enterFirstTime', 'back', 'enterInSection', 'enterLast', 'slide', 'still', 'routeLevel', 'reducedMotion', 'badge']) if (!sidebar[name]) failures.push(`barra lateral ${name}: não executado`)
   for (const [name, check] of Object.entries(lock)) if (!check.ok) failures.push(`bloqueio ${name}: ${check.detail}`)
   for (const name of ['password', 'layer', 'channels', 'unlock', 'shortcutAndTouchId', 'recordingContinues', 'leaveDialog', 'endWhileLocked', 'reopen', 'reopenFromDisk', 'dark']) if (!lock[name]) failures.push(`bloqueio ${name}: não executado`)
   if (!theme.ok) failures.push(`tema: ${theme.detail}`)
@@ -9027,8 +9315,8 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
   // temas (contrato 43); o cartão dos emails pendentes e o rascunho de resposta por email no Assistente, no claro
   // (contrato 45); o formulário da tarefa com "Pode enviar email" e a execução com os emails enviado e recusado, no
   // claro (contrato 51); a seção "Conectores do claude.ai" com o Notion ligado e as ferramentas, nos dois temas
-  // (contrato 58).
-  const expectedShots = SCREENS.length * THEMES.length + 68
+  // (contrato 58); a raiz da barra lateral com o número do Email e o nível Email, nos dois temas (contrato 65).
+  const expectedShots = SCREENS.length * THEMES.length + 72
   if (screenshots.length !== expectedShots) failures.push(`${screenshots.length} PNGs em vez de ${expectedShots}`)
   for (const shot of screenshots) {
     if (shot.name === MEETING_PROMPT_SHOT) {
@@ -9088,6 +9376,7 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
     meet,
     // Contrato 43: só os resultados (os endereços e assuntos são os inventados do servidor falso).
     email,
+    sidebar,
     // Contrato 23: os resultados, as notificações, o Dock e os itens de login substitutos; nenhum texto de reunião.
     automations,
     automationsFixtures: { notifications: ctx.fixtures.automations.notifications.map((notice) => notice.title), trayImages: ctx.fixtures.automations.trayImages, dock: ctx.fixtures.automations.dock, loginItems: ctx.fixtures.automations.loginItems, quitRequests: ctx.fixtures.automations.quitRequests },

@@ -411,6 +411,50 @@
   }
 }
 
+@layer components {
+  /*
+   * Barra lateral em pilha (contrato 65): a coluna do meio troca de nível deslizando, entre a marca e o rodapé, que
+   * ficam parados. Os dois níveis ocupam a mesma célula e só coexistem durante o deslize; com movimento reduzido a regra
+   * de tokens.css zera a animação e a troca é instantânea.
+   */
+  .side-stack {
+    display: grid;
+    grid-template: 1fr / 1fr;
+    min-height: 0;
+  }
+
+  .side-stack.is-sliding {
+    overflow: hidden;
+  }
+
+  .side-stack > [data-sidebar-level] {
+    grid-area: 1 / 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+  }
+
+  /*
+   * Entrar numa seção: o nível novo vem da direita e a raiz recua 30% sumindo; voltar faz o caminho inverso. O nível
+   * mede a coluna sem o recuo de 12 px (`--space-3`): o deslize soma o recuo para sair inteiro pela borda.
+   */
+  .side-level-push-in {
+    animation: side-push-in var(--duration-slow) var(--ease-out) both;
+  }
+
+  .side-level-push-out {
+    animation: side-push-out var(--duration-slow) var(--ease-out) both;
+  }
+
+  .side-level-pop-in {
+    animation: side-pop-in var(--duration-slow) var(--ease-out) both;
+  }
+
+  .side-level-pop-out {
+    animation: side-pop-out var(--duration-slow) var(--ease-out) both;
+  }
+}
+
 @keyframes note-enter {
   from {
     opacity: 0;
@@ -442,5 +486,31 @@
 @keyframes route-enter {
   from {
     opacity: 0;
+  }
+}
+
+@keyframes side-push-in {
+  from {
+    transform: translateX(calc(100% + var(--space-3)));
+  }
+}
+
+@keyframes side-push-out {
+  to {
+    transform: translateX(-30%);
+    opacity: 0;
+  }
+}
+
+@keyframes side-pop-in {
+  from {
+    transform: translateX(-30%);
+    opacity: 0;
+  }
+}
+
+@keyframes side-pop-out {
+  to {
+    transform: translateX(calc(100% + var(--space-3)));
   }
 }

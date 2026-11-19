@@ -35,6 +35,12 @@ export interface WhatsAppNavigationState {
 /** Pastas do email na URL (contrato 43): "Caixa de Entrada" e "Enviados". */
 export const EMAIL_FOLDER_SLUGS = { inbox: 'entrada', sent: 'enviados' } as const
 
+/**
+ * Destino do item "Email" da barra lateral (contrato 65) na primeira vez da sessão: sem conta e sem pasta, a tela abre a
+ * Caixa de Entrada da primeira conta (ou a nota de nenhuma conta). `ROUTE_PATHS.email` é o padrão do roteador.
+ */
+export const EMAIL_ROOT_PATH = '/email'
+
 /** Caminho da pasta de uma conta: `/email/<id>/entrada`. */
 export function emailPath(accountId: string, folder: 'inbox' | 'sent' = 'inbox'): string {
   return `/email/${encodeURIComponent(accountId)}/${EMAIL_FOLDER_SLUGS[folder]}`

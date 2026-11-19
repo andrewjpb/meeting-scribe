@@ -8,7 +8,7 @@ Cite este guia como [Guia].
 
 ## Barra lateral
 
-A barra lateral tem, de cima para baixo: Reuniões, Assistente, Automações, WhatsApp (só aparece com o WhatsApp instalado) e Configurações. No rodapé ficam o botão "Bloquear", o aviso de versão nova (quando há) e as permissões do microfone e do áudio do sistema.
+A barra lateral tem, de cima para baixo: Reuniões, Assistente, Email (com o número de emails não lidos de todas as contas), Automações, WhatsApp (só aparece com o WhatsApp instalado) e Configurações. Email abre um nível próprio da barra, que desliza por cima do menu: no topo, a seta "Email" volta ao menu sem sair da tela aberta; abaixo, as contas de email com as pastas. Qualquer tela de email aberta mostra esse nível; as outras telas mostram o menu. No rodapé ficam o botão "Bloquear", o aviso de versão nova (quando há) e as permissões do microfone e do áudio do sistema.
 
 <!-- tela: reunioes -->
 ## Reuniões
@@ -71,7 +71,7 @@ A tela lista as conversas e as mensagens. "Rascunho com o Claude" escreve uma re
 
 Contas de email IMAP ou POP3 (para receber) e SMTP (para enviar), adicionadas em Configurações › Contas › Email: o email e a senha (no Gmail, uma "senha de app" do Google), e o app descobre os servidores sozinho; "Configuração avançada" mostra os servidores para editar. "Testar conexão" confere antes de adicionar.
 
-Cada conta aparece na barra lateral, abaixo dos outros itens, pelo nome; a seta abre e fecha as pastas "Caixa de Entrada" (com o número de não lidas) e "Enviados", e o app lembra o que ficou aberto. A tela tem duas colunas: a lista das mensagens, com "Nova mensagem" no topo, e a leitura da mensagem escolhida, com Responder, Responder a todos, Encaminhar, Apagar e Marcar como lida ou não lida. As imagens de fora do email só aparecem com "Carregar imagens", e os links abrem no navegador depois da confirmação. Nada é enviado sem o seu clique em "Enviar". Cada email novo vira uma notificação do macOS (dá para desligar em Contas › Email).
+Email, na barra lateral, abre o nível Email: a última pasta aberta na sessão (na primeira vez, a Caixa de Entrada da primeira conta) e cada conta pelo nome, com as pastas "Caixa de Entrada" (com o número de não lidas) e "Enviados". Com duas contas ou mais, a seta ao lado de cada uma abre e fecha as pastas, e o app lembra o que ficou aberto; com uma conta só, as pastas ficam sempre à mostra. A seta "Email" no topo do nível volta ao menu sem fechar o email aberto. A tela tem duas colunas: a lista das mensagens, com "Nova mensagem" no topo, e a leitura da mensagem escolhida, com Responder, Responder a todos, Encaminhar, Apagar e Marcar como lida ou não lida. As imagens de fora do email só aparecem com "Carregar imagens", e os links abrem no navegador depois da confirmação. Nada é enviado sem o seu clique em "Enviar". Cada email novo vira uma notificação do macOS (dá para desligar em Contas › Email).
 
 <!-- tela: configuracoes -->
 ## Configurações
