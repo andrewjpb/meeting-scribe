@@ -124,7 +124,7 @@ export function settingsIndex(agent: string): SettingsEntry[] {
     row('sobre', 'Sobre', 'Versão', 'Versão instalada do app.'),
     row('sobre', 'Sobre', 'Electron', 'Base do app.'),
     row('sobre', 'Sobre', 'Chrome', 'Motor das telas.'),
-    row('sobre', 'Sobre', 'Licença', 'Código aberto, sob a licença MIT.'),
+    row('sobre', 'Sobre', 'Licença', 'Código aberto, sob a licença GPL-3.0.'),
     row('sobre', 'Sobre', 'Atualizações', 'Abre o bloco de atualizações, em Geral.'),
   ]
 }

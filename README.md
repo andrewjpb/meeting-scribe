@@ -200,4 +200,4 @@ Se o script falhar no meio, ele volta a versão no `package.json`. Se o commit j
 
 ## Licença
 
-[MIT](LICENSE) © LAP Software. O agente do Claude e o Claude Agent SDK, baixados pelo app na primeira vez, têm licenças próprias da Anthropic e dos seus autores. O neonize (Apache-2.0) e o whatsmeow (MPL-2.0), instalados pelo app só se você ligar o WhatsApp, também.
+[GPL-3.0-or-later](LICENSE) © LAP Software. Você pode usar, estudar, mudar e redistribuir o app. Quem distribuir uma versão modificada precisa mantê-la aberta, sob a mesma licença. Até a 0.15.0 o projeto era MIT, e quem já recebeu essas versões continua com os termos da MIT. O agente do Claude e o Claude Agent SDK, baixados pelo app na primeira vez, têm licenças próprias da Anthropic e dos seus autores. O neonize (Apache-2.0) e o whatsmeow (MPL-2.0), instalados pelo app só se você ligar o WhatsApp, também.

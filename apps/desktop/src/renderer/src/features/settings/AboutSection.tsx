@@ -14,7 +14,7 @@ function Value({ children }: { children: string }) {
 }
 
 /**
- * Aba "Sobre" (contrato 18, CA1): versão, Electron e Chrome (`scribe:app-info`), a licença MIT com o link do
+ * Aba "Sobre" (contrato 18, CA1): versão, Electron e Chrome (`scribe:app-info`), a licença (GPL-3.0 desde 19/11/2026) com o link do
  * repositório (o main só abre `https://`) e o atalho para o bloco "Atualizações" da aba "Geral".
  */
 export function AboutSection() {
@@ -45,7 +45,7 @@ export function AboutSection() {
       <SettingRow name="Chrome" description="Motor das telas.">
         <Value>{info?.chrome ?? '…'}</Value>
       </SettingRow>
-      <SettingRow name="Licença" description="Código aberto, sob a licença MIT.">
+      <SettingRow name="Licença" description="Código aberto, sob a licença GPL-3.0.">
         <Button action="open-repository" variant="secondary" icon={ExternalLink} onClick={() => window.__scribeApi.send('scribe:open-link', REPOSITORY_URL)}>
           Ver o repositório
         </Button>
