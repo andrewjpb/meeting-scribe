@@ -35,7 +35,8 @@ import {
   type ChatListItem,
   type ChatScope,
 } from '../../shared/chat'
-import { ACTIONS_PER_MESSAGE_MAX, CHAT_ACTION_STATUSES, OPEN_SCREENS, REMINDER_TEXT_MAX } from '../../shared/assistant'
+import { ACTIONS_PER_MESSAGE_MAX, CHAT_ACTION_STATUSES, EMAIL_CARD_ITEMS_MAX, OPEN_SCREENS, REMINDER_TEXT_MAX } from '../../shared/assistant'
+import { EMAIL_ACCOUNT_ID_PATTERN, EMAIL_RECIPIENTS_MAX, EMAIL_SUBJECT_MAX, EMAIL_TEXT_MAX } from '../../shared/email'
 import { scheduleSchema } from '../../shared/automations-schema'
 import { CHAT_MODELS } from '../../shared/settings-defaults'
 import { WHATSAPP_CHAT_ID_PATTERN, WHATSAPP_DEFAULT_SCOPE_DAYS, WHATSAPP_SCOPE_CHATS_MAX, WHATSAPP_SCOPE_DAYS, WHATSAPP_SEND_TEXT_MAX } from '../../shared/whatsapp'
@@ -107,6 +108,7 @@ const actionBase = {
   result: z.string().max(200).nullable(),
 }
 const chatIdOfWhatsApp = z.string().regex(WHATSAPP_CHAT_ID_PATTERN)
+const emailAccountId = z.string().regex(EMAIL_ACCOUNT_ID_PATTERN)
 
 /** Ação proposta gravada com a resposta (contrato 25), já validada e com o que o app leu (nomes, número). */
 export const chatActionSchema = z.discriminatedUnion('kind', [
@@ -119,6 +121,8 @@ export const chatActionSchema = z.discriminatedUnion('kind', [
       whatsappChatId: chatIdOfWhatsApp.nullable(),
       whatsappChatName: z.string().max(200).nullable(),
       defaultTime: z.boolean(),
+      // Contrato 45.
+      email: z.object({ accountId: emailAccountId, messageId: z.string().min(1).max(1000), label: z.string().max(300), mailbox: z.string().max(200).nullable().optional() }).strict().nullable().optional(),
     })
     .strict(),
   z
@@ -150,6 +154,47 @@ export const chatActionSchema = z.discriminatedUnion('kind', [
       screen: z.enum(OPEN_SCREENS),
       target: z.string().max(200).nullable(),
       label: z.string().max(300),
+    })
+    .strict(),
+  // Contrato 45: os cartões de email, com o que o app leu do cache quando a resposta terminou.
+  z
+    .object({
+      kind: z.literal('emails'),
+      ...actionBase,
+      items: z
+        .array(
+          z
+            .object({
+              accountId: emailAccountId,
+              messageId: z.string().min(1).max(1000),
+              account: z.string().max(320),
+              from: z.string().max(300),
+              fromAddress: z.string().max(320),
+              subject: z.string().max(500),
+              date: z.number(),
+              seen: z.boolean(),
+              pending: z.boolean(),
+              mailbox: z.string().max(200).nullable(),
+            })
+            .strict(),
+        )
+        .min(1)
+        .max(EMAIL_CARD_ITEMS_MAX),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal('email-resposta'),
+      ...actionBase,
+      accountId: emailAccountId,
+      account: z.string().max(320),
+      messageId: z.string().min(1).max(1000),
+      mailbox: z.string().max(200).nullable().default(null),
+      inReplyTo: z.string().max(1000).nullable(),
+      to: z.array(z.string().max(320)).min(1).max(EMAIL_RECIPIENTS_MAX),
+      toLabel: z.string().max(500),
+      subject: z.string().max(EMAIL_SUBJECT_MAX),
+      text: z.string().max(EMAIL_TEXT_MAX),
     })
     .strict(),
 ])

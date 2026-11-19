@@ -26,7 +26,9 @@
 //   com "pendente de resposta: sim", citando "[WhatsApp · <nome> · dd/mm hh:mm]"; "me lembre … <nome>" lê o estado e
 //   propõe um bloco `lap-acao` de lembrete para amanhã às 09:00 (sem hora no pedido) ligado à conversa; "responda
 //   <nome> dizendo <texto>" propõe o bloco de resposta no WhatsApp com o id da conversa do arquivo; "bloco inválido"
-//   devolve um bloco quebrado. O agente nunca executa nada: só escreve o bloco.
+//   devolve um bloco quebrado. O agente nunca executa nada: só escreve o bloco. Contrato 45: os pedidos de email
+//   (`emailAnswer`): pendentes pelo `EMAILS.md`, rascunho de resposta, lembrete de um email e a busca pelas
+//   ferramentas do app (`lap-ferramenta`: `buscar_emails` e, achado só no servidor, `ler_email`).
 // - internet (contrato 26), em qualquer chat (agente ou Assistente), com "pesquise" no pedido: `WebSearch` (pedindo
 //   permissão, como o adaptador) com resultados inventados no `tool_call_update` ("Título (url)", sem rede nenhuma);
 //   abre o primeiro resultado (`WebFetch`) e tenta abrir um endereço montado com o título da reunião na consulta (que o
@@ -112,6 +114,70 @@ function tomorrowNine() {
   return `${when.getFullYear()}-${two(when.getMonth() + 1)}-${two(when.getDate())}T09:00:00${offset >= 0 ? '+' : '-'}${two(Math.trunc(offset / 60))}:${two(offset % 60)}`
 }
 
+/** Contrato 45: as linhas do `EMAILS.md` (ou do `BUSCA-EMAILS.md`). */
+function emailLines(cwd, file) {
+  if (!readdirSync(cwd).includes(file)) return []
+  return readFileSync(join(cwd, file), 'utf8')
+    .split('\n')
+    .map((line) => ({ line, match: /^- ref: (em-[0-9a-f]{12}) · conta: (\S+) · (?:onde: (.+?) · )?de: (.+?) · (?:para: .+? · )?assunto: "(.*)" · (?:recebido|data): (\d{2}\/\d{2} \d{2}:\d{2}) /.exec(line) }))
+    .filter((item) => item.match)
+    .map(({ line, match }) => ({ ref: match[1], account: match[2], where: match[3] ?? null, from: match[4].replace(/ <.*>$/, ''), subject: match[5], at: match[6], pending: line.includes(' · pendente de resposta: sim') }))
+}
+
+/**
+ * Contrato 45: o email no Assistente falso. "email pendente" lê o `EMAILS.md` e lista as pendentes com a citação e o
+ * bloco `emails`; "responde … email d<nome> dizendo <texto>" propõe o rascunho; "tarefa … responder … email d<nome>"
+ * propõe o lembrete ligado ao email; "busque nos emails <termo> d<nome>" pede a ferramenta `buscar_emails`, depois
+ * `ler_email` do primeiro achado só no servidor e responde com o trecho lido. `null`: não é pergunta de email.
+ */
+async function emailAnswer(question, cwd, read, fence) {
+  const overview = 'EMAILS.md'
+  const tool = (json) => `\n\n\`\`\`lap-ferramenta\n${JSON.stringify(json)}\n\`\`\``
+  const byName = (lines, text) => lines.find((line) => text.toLowerCase().includes(line.from.split(' ')[0].toLowerCase()))
+  if (/^\[Resultado da ferramenta buscar_emails\]/.test(question)) {
+    await read('BUSCA-EMAILS.md')
+    const found = emailLines(cwd, 'BUSCA-EMAILS.md')
+    const remote = found.find((line) => line.where?.startsWith('servidor'))
+    if (!remote) return found.length ? `Achei ${found.length} email(s).${fence({ tipo: 'emails', mensagens: found.map((line) => line.ref) })}` : 'Não achei nenhum email com isso.'
+    return `Achei no servidor; vou abrir.${tool({ ferramenta: 'ler_email', email: remote.ref })}`
+  }
+  const opened = /^\[Resultado da ferramenta ler_email\] O resultado está no arquivo (.+?\.md), na pasta atual/.exec(question)
+  if (opened) {
+    await read(opened[1])
+    const text = readFileSync(join(cwd, opened[1]), 'utf8')
+    const ref = /^- Referência: (em-[0-9a-f]{12})$/m.exec(text)?.[1]
+    const cite = /^- Citar como: (\[Email · .+\])$/m.exec(text)?.[1] ?? ''
+    const body = text.split('\n').filter((line) => line.startsWith('> ')).map((line) => line.slice(2)).join(' ')
+    return `Encontrei: "${body}" ${cite}${ref ? fence({ tipo: 'emails', mensagens: [ref] }) : ''}`
+  }
+  if (!/e-?mail/i.test(question)) return null
+  const search = /busque nos emails (.+?) d[aoe] (\S+)/i.exec(question)
+  if (search) return `Vou procurar em todas as pastas.${tool({ ferramenta: 'buscar_emails', de: search[2], assunto: search[1] })}`
+  if (!readdirSync(cwd).includes(overview)) return 'O email não está na pasta desta conversa.'
+  await read(overview)
+  const lines = emailLines(cwd, overview)
+  if (/pendente/i.test(question)) {
+    const pending = lines.filter((line) => line.pending)
+    if (!pending.length) return 'Nenhum email pendente.'
+    return ['Emails esperando a sua resposta:', '', ...pending.map((line) => `- **${line.from}**: "${line.subject}" [Email · ${line.from} · ${line.at}]`)].join('\n') + fence({ tipo: 'emails', mensagens: pending.map((line) => line.ref) })
+  }
+  const reply = /responde (?:pro|para o|para a|pra) email d[aoe] (\S+) dizendo (.+)$/i.exec(question)
+  if (reply) {
+    const line = byName(lines, reply[1])
+    if (!line) return `Não achei o email de ${reply[1]}.`
+    const text = reply[2].replace(/[.!?]+$/, '').trim()
+    return `Proponho esta resposta para ${line.from}.${fence({ tipo: 'email-resposta', email: line.ref, texto: `${text.charAt(0).toUpperCase()}${text.slice(1)}.` })}`
+  }
+  const task = /tarefa .*responder o email d[aoe] (\S+)/i.exec(question)
+  if (task) {
+    await read('ESTADO.md')
+    const line = byName(lines, task[1])
+    if (!line) return `Não achei o email de ${task[1]}.`
+    return `Proponho o lembrete para amanhã às 09:00.${fence({ tipo: 'lembrete', quando: tomorrowNine(), texto: `Responder ${line.from}`, email: line.ref, horaPadrao: true })}`
+  }
+  return null
+}
+
 /**
  * Contrato 25: o Assistente falso. Lê os arquivos das fontes pela ferramenta (`read` pede a permissão como o
  * adaptador) e devolve o texto da resposta, ou `null` para seguir o chat de sempre.
@@ -129,6 +195,8 @@ async function assistantAnswer(question, cwd, read) {
       : []
   const byName = (text) => conversations().find((chat) => text.toLowerCase().includes(chat.name.split(' ')[0].toLowerCase()))
   const fence = (json) => `\n\n\`\`\`lap-acao\n${typeof json === 'string' ? json : JSON.stringify(json)}\n\`\`\``
+  const email = await emailAnswer(question, cwd, read, fence)
+  if (email !== null) return email
   if (/bloco inv[aá]lido/i.test(question)) return `Aqui vai um bloco quebrado.${fence('{"tipo": "lembrete", "quando": ')}`
   if (/pendente/i.test(question)) {
     if (!has(overviewFile)) return 'O WhatsApp não está na pasta desta conversa.'

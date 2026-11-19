@@ -17,6 +17,8 @@ Feature: desktop-shell · Wave: 4 · Depende de: 42, 43 · PRD: `docs/specs/desk
 - CA5 — Dado o app bloqueado, as ferramentas de email ficam indisponíveis ao Assistente (mesma regra dos canais do 42) e os cartões antigos não vazam conteúdo novo.
 - CA6 — Testes: regras de pendência (recebido sem resposta posterior minha conta como pendente; respondido não), montagem do rascunho (Re:/In-Reply-To), gate do clique (nenhum envio sem o evento do botão), ferramenta bloqueada com app bloqueado. Smoke: cenário fake com pergunta de pendências → cartão aparece; clique em Enviar no rascunho → fake SMTP recebe.
 
+- CA7 — (pedido do Andrew 19/11 10:10: "quero poder consultar todos os emails direto por ele") Busca além do cache: dado que o cache local (200 últimas da INBOX + Enviados) não tem o que foi pedido, a ferramenta de busca consulta o SERVIDOR IMAP só-leitura (`UID SEARCH` por remetente/destinatário/assunto/texto/período, em INBOX, Enviados e demais pastas listadas por `LIST`), devolvendo no máximo 50 resultados com envelope e permitindo ler o corpo de qualquer um sob demanda — sem marcar como lida (`BODY.PEEK`) e sem gravar no cache da INBOX. POP3: só o que já foi baixado (dizer isso na resposta). Ferramentas próprias do app, sem MCP. Teste com IMAP falso: busca devolve mensagem antiga fora do cache; nenhuma flag muda.
+
 ## Invariantes
 - Fluxos atuais do Assistente (WhatsApp, reuniões, lembretes) intactos — testes existentes verdes.
 - N1/N2 da PRD: nada sai sem clique; conteúdo só vai ao motor nas conversas, como já acontece com o WhatsApp.
@@ -26,3 +28,6 @@ Feature: desktop-shell · Wave: 4 · Depende de: 42, 43 · PRD: `docs/specs/desk
 
 ## Gates
 - `SMOKE_NO_SANDBOX=1 bash apps/desktop/scripts/gates.sh` verde.
+
+## Decisões registradas na implementação
+- CA7: a ferramenta `buscar_emails` consulta sempre o servidor IMAP (só leitura), além do cache, e não só quando o cache não tem resultado — pedido do Andrew de consultar todos os emails pelo Assistente (19/11/2026).

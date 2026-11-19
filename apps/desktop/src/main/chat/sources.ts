@@ -2,8 +2,9 @@
 // `ESTADO.md` (o que está acontecendo no app agora, sem segredo nenhum), o `GUIA-DO-APP.md` (o guia do app com a
 // versão instalada), o `AUTOMACOES.md` (agentes, tarefas e as últimas 20 execuções) e as conversas do WhatsApp (as
 // recentes, ou só as escolhidas). Cada fonte com interruptor no painel "Contexto"; desligada, o arquivo sai da
-// pasta. O texto que vem de mensagem, de execução ou de reunião é só material: tudo em uma linha, sem cerca de
-// código (um bloco de ação nunca nasce de uma mensagem copiada para cá).
+// pasta. Contrato 45: o email (o `EMAILS.md` e as mensagens já baixadas, do cache local). O texto que vem de
+// mensagem, de execução ou de reunião é só material: tudo em uma linha (o corpo do email, citado), sem cerca de código
+// (um bloco de ação nunca nasce de uma mensagem copiada para cá).
 import { randomUUID } from 'node:crypto'
 import { chmod, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -22,13 +23,16 @@ import {
   type ScheduledTask,
 } from '../../shared/automations'
 import { chatSourcesOf, chatWhatsAppModeOf, type ChatScope } from '../../shared/chat'
+import { EMAIL_EXPORT_PREFIX, EMAIL_OVERVIEW_FILE } from '../../shared/email'
 import { WHATSAPP_DEFAULT_SCOPE_DAYS, WHATSAPP_EXPORT_PREFIX, WHATSAPP_OVERVIEW_FILE } from '../../shared/whatsapp'
 
 export const STATE_FILE = 'ESTADO.md'
 export const GUIDE_FILE = 'GUIA-DO-APP.md'
 export const AUTOMATIONS_FILE = 'AUTOMACOES.md'
+/** Contrato 45 (CA7): o resultado da ferramenta `buscar_emails` (trocado a cada busca, apagado na pergunta seguinte). */
+export const EMAIL_SEARCH_FILE = 'BUSCA-EMAILS.md'
 /** Arquivos das fontes do app, na ordem em que o `INDICE.md` lista. */
-export const SOURCE_FILES = [STATE_FILE, GUIDE_FILE, AUTOMATIONS_FILE, WHATSAPP_OVERVIEW_FILE] as const
+export const SOURCE_FILES = [STATE_FILE, GUIDE_FILE, AUTOMATIONS_FILE, WHATSAPP_OVERVIEW_FILE, EMAIL_OVERVIEW_FILE, EMAIL_SEARCH_FILE] as const
 /** Execuções no `AUTOMACOES.md`. */
 export const AUTOMATION_RUNS_IN_SOURCE = 20
 /** Marca da versão no guia (`resources/assistente/guia-do-app.md`). */
@@ -45,6 +49,8 @@ export interface AssistantState {
   google: string
   /** A linha do estado do WhatsApp das Configurações ("Conectado como …", "Não instalado"). */
   whatsapp: string
+  /** Contrato 45: as contas de email ("ana@x.com (IMAP, conectada)"), sem senha nem servidor. */
+  email?: string | undefined
   /** "Pausadas pela pessoa", "pausadas pelo limite diário" ou `null`. */
   automationsPaused: string | null
   agents: readonly Pick<Agent, 'name'>[]
@@ -68,6 +74,7 @@ export function stateMarkdown(state: AssistantState): string {
     `- Gravação: ${state.recording ? `em andamento desde ${formatRunAt(state.recording.startedAt, state.timeZone)}` : 'nenhuma em andamento'}`,
     `- Conta Google: ${state.google}`,
     `- WhatsApp: ${state.whatsapp}`,
+    ...(state.email !== undefined ? [`- Email: ${state.email}`] : []),
     `- Automações: ${state.automationsPaused ?? 'rodando'}`,
     `- Agentes cadastrados: ${state.agents.length ? state.agents.map((agent) => oneLine(agent.name)).join(', ') : 'nenhum'}`,
     `- Tarefas ligadas: ${
@@ -161,6 +168,8 @@ export interface AssistantSourcesDeps {
     exportRecent(folder: string): Promise<string[]>
     exportChats(folder: string, chatIds: readonly string[], days: number): Promise<string[]>
   }
+  /** Contrato 45: o cache do email (`EMAILS.md` e as mensagens já baixadas). Só leitura, sem ir ao servidor. */
+  email?: { export(folder: string): Promise<string[]> }
   log?: (message: string) => void
 }
 
@@ -168,6 +177,8 @@ export interface AssistantSourcesDeps {
 export interface WrittenSources {
   files: string[]
   whatsapp: boolean
+  /** Contrato 45. */
+  email: boolean
 }
 
 /** Grava (atômico, 0600) só se o conteúdo mudou. */
@@ -180,7 +191,8 @@ async function writeAtomic(file: string, content: string): Promise<void> {
 }
 
 /** O arquivo é de uma fonte do app (e sai da pasta antes de escrever de novo)? */
-export const isSourceFile = (name: string): boolean => (SOURCE_FILES as readonly string[]).includes(name) || (name.startsWith(WHATSAPP_EXPORT_PREFIX) && name.endsWith('.md'))
+export const isSourceFile = (name: string): boolean =>
+  (SOURCE_FILES as readonly string[]).includes(name) || ((name.startsWith(WHATSAPP_EXPORT_PREFIX) || name.startsWith(EMAIL_EXPORT_PREFIX)) && name.endsWith('.md'))
 
 /**
  * Antes de cada pergunta: as fontes da conversa na pasta dela. Cada arquivo só é regravado se mudou (e o WhatsApp só
@@ -227,7 +239,14 @@ export async function writeSources(deps: AssistantSourcesDeps, folder: string, s
     whatsapp = written.length > 0
     files.push(...written)
   }
+  let email = false
+  if (sources.email && deps.email) {
+    const client = deps.email
+    const written = await attempt('email', () => client.export(folder))
+    email = written.length > 0
+    files.push(...written)
+  }
   const keep = new Set(files)
   for (const name of await readdir(folder).catch(() => [] as string[])) if (isSourceFile(name) && !keep.has(name)) await rm(join(folder, name), { force: true })
-  return { files, whatsapp }
+  return { files, whatsapp, email }
 }

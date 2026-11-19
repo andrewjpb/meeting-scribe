@@ -35,6 +35,7 @@ import {
 } from './automations'
 import { REMINDER_TEXT_MAX } from './assistant'
 import { CHAT_SCOPE_MEETINGS_MAX, CHAT_TEXT_MAX } from './chat'
+import { EMAIL_ACCOUNT_ID_PATTERN } from './email'
 import { AGENT_PROFILES } from './settings-defaults'
 
 export const automationIdSchema = z.string().regex(/^[\w-]{1,100}$/)
@@ -137,6 +138,12 @@ export const taskReminderSchema = z
     text: z.string().trim().min(1).max(REMINDER_TEXT_MAX),
     whatsappChatId: z.string().regex(REMINDER_CHAT_ID_PATTERN).nullable(),
     whatsappChatName: z.string().max(200).nullable(),
+    // Contrato 45: a mensagem de email do lembrete (a conta e o id dela no cache, e o rótulo lido do app).
+    email: z
+      .object({ accountId: z.string().regex(EMAIL_ACCOUNT_ID_PATTERN), messageId: z.string().min(1).max(1000), label: z.string().max(300), mailbox: z.string().max(200).nullable().optional() })
+      .strict()
+      .nullable()
+      .optional(),
   })
   .strict()
 

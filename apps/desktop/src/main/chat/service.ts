@@ -20,6 +20,9 @@
 // escopo), que a cada pergunta recebe de novo as fontes do app (estado, guia, automações, WhatsApp), com a
 // instrução do Assistente. Os blocos `lap-acao` do fim da resposta viram ações propostas, gravadas com ela; nenhuma
 // roda aqui. A conversa de uma reunião e as conversas criadas pelas automações não passam por isso.
+//
+// Contrato 45 (CA7): o Assistente também pode pedir uma ferramenta do app (só leitura: buscar e ler emails) com um
+// bloco `lap-ferramenta` no fim da resposta; ela roda aqui e a resposta continua na mesma sessão (`tools.ts`).
 import { randomUUID } from 'node:crypto'
 import { z } from 'zod'
 import { withoutActionBlocks, type ChatAction } from '../../shared/assistant'
@@ -37,6 +40,7 @@ import {
   type ChatMessage,
   type ChatMeta,
   type ChatPlanEntry,
+  type ChatProgress,
   type ChatScope,
   type ChatSendResult,
   type ChatStep,
@@ -52,8 +56,26 @@ import type { SpawnClaude, Timers } from '../claude-cli/translator'
 import type { MeetingsStore } from '../meetings/store'
 import type { SettingsStore } from '../settings/store'
 import { actionsHistory } from './actions'
+import { toolCallOf, toolFollowUp, TOOL_ROUNDS_MAX, toolsInstructions, withoutToolCalls, type AssistantTool, type ToolResult } from './tools'
 import { scopeMeetingIds, type ChatCorpus } from './corpus'
 import { chatIdSchema, chatScopeSchema, type ChatStore } from './store'
+
+/**
+ * Contrato 45 (CA7): os detalhes de duas rodadas da mesma resposta somados: custo, tokens, tempo e turnos; as reuniões
+ * consultadas sem repetir, na ordem; o modelo é o da última.
+ */
+export function sumMeta(a: ChatMeta, b: ChatMeta): ChatMeta {
+  return {
+    model: b.model || a.model,
+    durationMs: a.durationMs + b.durationMs,
+    inputTokens: a.inputTokens + b.inputTokens,
+    outputTokens: a.outputTokens + b.outputTokens,
+    cacheReadTokens: a.cacheReadTokens + b.cacheReadTokens,
+    costUsd: a.costUsd + b.costUsd,
+    turns: a.turns + b.turns,
+    consulted: [...new Set([...a.consulted, ...b.consulted])],
+  }
+}
 
 /** Fora da tela do chat por 5 min: o processo da conversa morre. */
 export const CHAT_LEAVE_MS = 5 * 60_000
@@ -74,6 +96,12 @@ export interface ChatServiceDeps {
   assistant?: {
     prepare(folder: string, scope: ChatScope): Promise<unknown>
     extract(text: string): Promise<{ text: string; actions: ChatAction[] }>
+    /**
+     * Contrato 45 (CA7): as ferramentas do app (só leitura) que a conversa do Assistente pode pedir no fim da
+     * resposta (`tools.ts`), pelo escopo (a fonte desligada não dá ferramenta). Relidas a cada pergunta; sem elas,
+     * nenhum pedido de ferramenta roda.
+     */
+    tools?: (scope: ChatScope) => readonly AssistantTool[]
   }
   settings: Pick<SettingsStore, 'get'>
   meetings: Pick<MeetingsStore, 'get' | 'list'>
@@ -314,7 +342,9 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
     // Contrato 26: a fonte "Internet" do Assistente (ligada por padrão) só vale pelo ACP, onde o app confere cada
     // página; pela linha de comando a busca e a página continuam negadas, e a instrução diz isso.
     const web = assistant && transport === 'acp' && chatSourcesOf(chat.scope).internet
-    const systemPrompt = assistant && folder !== 'meeting' ? { systemPrompt: assistantSystemPrompt(folder, transport === 'acp' ? web : 'cli') } : {}
+    // Contrato 45 (CA7): as ferramentas do app que esta conversa pode pedir, descritas na instrução.
+    const toolLines = assistant ? toolsInstructions(deps.assistant?.tools?.(chat.scope) ?? []) : []
+    const systemPrompt = assistant && folder !== 'meeting' ? { systemPrompt: assistantSystemPrompt(folder, transport === 'acp' ? web : 'cli', toolLines) } : {}
     const claude: ChatEngine =
       transport === 'acp' && deps.openAcp
         ? new AcpChat({
@@ -388,6 +418,11 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
     let denied = 0
     let meta: ChatMeta | null = null
     let plan: ChatPlanEntry[] = []
+    // Contrato 45 (CA7): com as rodadas de ferramenta, o que as rodadas anteriores já gastaram (o custo, os tokens, o
+    // tempo, as negações e as fontes) e o texto que elas escreveram antes do pedido, que entra na resposta final.
+    let spent: ChatMeta | null = null
+    let deniedBefore = 0
+    let earlier = ''
     const onDetail = (detail: ChatDetail): void => {
       if (detail.type === 'step') {
         // Pelo ACP o mesmo passo volta com estado novo: troca no lugar.
@@ -396,19 +431,41 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
         else steps[at] = detail.step
       } else if (detail.type === 'plan') plan = detail.entries
       else if (detail.type === 'thinking') thinking += detail.delta
-      else if (detail.type === 'denied') denied = detail.count
-      else meta = detail.meta
-      if (!session.cancelled) deps.onEvent({ chatId: chat.id, ...detail })
+      else if (detail.type === 'denied') denied = deniedBefore + detail.count
+      else meta = spent ? sumMeta(spent, detail.meta) : detail.meta
+      if (session.cancelled) return
+      if (detail.type === 'denied') deps.onEvent({ chatId: chat.id, type: 'denied', count: denied })
+      else if (detail.type === 'meta' && meta) deps.onEvent({ chatId: chat.id, type: 'meta', meta })
+      else deps.onEvent({ chatId: chat.id, ...detail })
     }
-    const result: ChatAnswer = await session.claude.ask(
-      question,
-      history,
-      (progress) => {
-        if (!session.cancelled) deps.onEvent({ type: 'answer', chatId: chat.id, ...progress })
-      },
-      onDetail,
-    )
+    const joined = (text: string): string => (earlier && text ? `${earlier}\n\n${text}` : earlier || text)
+    const onProgress = (progress: ChatProgress): void => {
+      if (!session.cancelled) deps.onEvent({ type: 'answer', chatId: chat.id, ...progress, text: joined(progress.text) })
+    }
+    let result: ChatAnswer = await session.claude.ask(question, history, onProgress, onDetail)
+    // Contrato 45 (CA7): o pedido de uma ferramenta do app no fim da resposta roda aqui (só leitura) e a resposta
+    // continua na mesma sessão, com o arquivo do resultado na pasta. Até `TOOL_ROUNDS_MAX` rodadas.
+    const tools = session.assistant ? (deps.assistant?.tools?.(chat.scope) ?? []) : []
+    for (let round = 1; session.assistant && tools.length && session.scope && result.ok && round <= TOOL_ROUNDS_MAX; round++) {
+      const call = toolCallOf(result.text, tools)
+      if (!call || session.cancelled) break
+      const stepId = `ferramenta-${round}`
+      onDetail({ type: 'step', step: { tool: call.tool.step, label: call.tool.pending, meetingId: null, id: stepId, status: 'in_progress' } })
+      const done: ToolResult = await call.tool.run(call.args, session.scope).catch((error: unknown) => {
+        deps.log?.(`[assistente] ferramenta ${call.tool.name} falhou: ${error instanceof Error ? error.message : String(error)}`)
+        return { file: null, label: `${call.tool.pending}: falhou`, note: 'A ferramenta falhou: responda com o que já tem.' }
+      })
+      onDetail({ type: 'step', step: { tool: call.tool.step, label: done.label, meetingId: null, id: stepId, status: done.file ? 'completed' : 'failed' } })
+      if (session.cancelled) return
+      // O texto e os blocos de ação antes do pedido ficam (os cartões das rodadas se juntam no fim).
+      earlier = joined(call.before)
+      spent = meta
+      deniedBefore = denied
+      result = await session.claude.ask(toolFollowUp(call.tool.name, done), [...history, { role: 'user', text: question }], onProgress, onDetail)
+    }
     if (session.cancelled) return
+    if (earlier) result = { ...result, text: joined(result.text) }
+    if (tools.length && result.ok) result = { ...result, text: withoutToolCalls(result.text) }
     // Contrato 25: os blocos `lap-acao` da resposta inteira viram ações propostas (nunca executadas aqui).
     let text = result.text
     let actions: ChatAction[] = []

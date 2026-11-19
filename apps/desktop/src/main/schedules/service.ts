@@ -50,6 +50,7 @@ import {
   type AutomationRunListItem,
   type AutomationsStatus,
   type NotifyPolicy,
+  type TaskReminder,
   type RunStartResult,
   type RunStatus,
   type RunTrigger,
@@ -62,6 +63,9 @@ import type { OutputRequest } from './outputs'
 import type { AgentRunner } from './runner'
 import type { RunsStore, SchedulesState, SchedulesStore } from './store'
 
+/** Contrato 45: a mensagem de email do lembrete, para o "Abrir" da notificação (só quando há). */
+const emailOf = (reminder: TaskReminder): Pick<AutomationNotice, 'email'> => (reminder.email ? { email: { accountId: reminder.email.accountId, messageId: reminder.email.messageId, mailbox: reminder.email.mailbox ?? null } } : {})
+
 /** Atraso a partir do qual a execução conta como "horário perdido" (o Mac dormiu, o app estava fechado). */
 const LATE_AFTER_MS = 2 * SCHEDULER_TICK_MS
 
@@ -72,6 +76,8 @@ export interface AutomationNotice {
   runId: string | null
   /** Contrato 25: o lembrete ligado a uma conversa do WhatsApp; "Abrir" leva a ela. */
   whatsappChatId?: string | null | undefined
+  /** Contrato 45: o lembrete de responder um email; "Abrir" leva à mensagem. */
+  email?: { accountId: string; messageId: string; mailbox: string | null } | null | undefined
   /** Contrato 25: é um lembrete (bloqueado, a notificação diz só "Você tem um lembrete."). */
   reminder?: boolean | undefined
 }
@@ -454,11 +460,12 @@ export function createAutomationsService(deps: AutomationsDeps): AutomationsServ
     const at = now()
     const scheduled = task.schedule.kind === 'once' ? Date.parse(task.schedule.at) : Number.NaN
     const was = Number.isNaN(scheduled) ? '' : formatRunAt(scheduled, task.timezone)
-    const text = previewOf(reminder.text, 200)
+    // Contrato 45 (CA7): o email só do servidor não está no app; a notificação diz onde ele está.
+    const text = `${previewOf(reminder.text, 200)}${reminder.email?.mailbox ? ` · o email está no servidor, na pasta ${previewOf(reminder.email.mailbox, 80)}` : ''}`
     deps.notify(
       late
-        ? { title: 'Lembrete atrasado', body: `Era ${was} · ${text}`, runId: null, whatsappChatId: reminder.whatsappChatId, reminder: true }
-        : { title: 'Lembrete', body: text, runId: null, whatsappChatId: reminder.whatsappChatId, reminder: true },
+        ? { title: 'Lembrete atrasado', body: `Era ${was} · ${text}`, runId: null, whatsappChatId: reminder.whatsappChatId, ...emailOf(reminder), reminder: true }
+        : { title: 'Lembrete', body: text, runId: null, whatsappChatId: reminder.whatsappChatId, ...emailOf(reminder), reminder: true },
     )
     await updateTask(task.id, (current) =>
       current.runOnce && current.runOnceAction === 'delete'

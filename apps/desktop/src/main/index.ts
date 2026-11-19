@@ -5,7 +5,8 @@ import { basename, join } from 'node:path'
 import { app, BrowserWindow, clipboard, dialog, Menu, nativeImage, net, Notification, powerMonitor, safeStorage, session, shell, systemPreferences, Tray, type NativeImage, type OpenDialogOptions, type SaveDialogOptions } from 'electron'
 import { DRIVE_FOLDER_URL_PREFIX } from '../shared/accounts'
 import { ASSEMBLYAI_DASHBOARD_URL } from '../shared/assemblyai'
-import { formatRunShort, type AutomationRun } from '../shared/automations'
+import { formatRunAt, formatRunShort, type AutomationRun } from '../shared/automations'
+import { chatSourcesOf } from '../shared/chat'
 import { brandTexts, DEFAULT_BRAND_NAME } from '../shared/branding'
 import { calendarNoticeText, safeJoinUrl, type CalendarNotice } from '../shared/calendar'
 import { lockedWindowTitle, type LockStatus } from '../shared/lock'
@@ -90,6 +91,8 @@ import { createWhatsAppNotifier, isGroupChat, shouldNotify, type NoticeHandle, t
 import { createWhatsAppService, type WhatsAppService } from './whatsapp/service'
 import { EMAIL_DIR } from './email/email-store'
 import { createEmailService, type EmailService } from './email/service'
+import { createEmailTools } from './email/assistant-tools'
+import { emailStateLabel, exportEmail } from './email/export'
 import { readEmailAttachments } from './email/attach'
 import { createEmailNotifier, type EmailNotice } from './email/notify'
 import { loadRemoteImages, readLimited, systemLookup, type HostLookup, type RemoteImageFetch } from './email/remote-images'
@@ -301,6 +304,9 @@ function showAutomationNotice(notice: AutomationNotice): void {
     liveNotices.delete(item)
     // Contrato 25: o lembrete de uma conversa do WhatsApp abre a conversa.
     if (notice.whatsappChatId) sendWhenLoaded(showMainWindow(), 'scribe:open-whatsapp', { chatId: notice.whatsappChatId })
+    // Contrato 45: o lembrete de responder um email abre a mensagem.
+    // Achado só no servidor (CA7): não está na INBOX do app; o "Abrir" vai ao lembrete, que diz a pasta.
+    else if (notice.email && !notice.email.mailbox) sendWhenLoaded(showMainWindow(), 'scribe:open-email', { accountId: notice.email.accountId, id: notice.email.messageId })
     else sendWhenLoaded(showMainWindow(), 'scribe:open-run', { runId: notice.runId })
   }
   item.on('click', open)
@@ -930,7 +936,7 @@ function createAppServices(userData: string): AppServices {
     settings,
     safeStorage: smokeFixtures ? memorySafeStorage() : safeStorage,
     // Contrato 43: no smoke, o servidor de email falso em memória (IMAP, SMTP e o teste de conexão).
-    ...(smokeFixtures ? { imap: smokeFixtures.email.imap, pop3: smokeFixtures.email.pop3, smtp: smokeFixtures.email.smtp, smtpVerify: smokeFixtures.email.smtpVerify } : {}),
+    ...(smokeFixtures ? { imap: smokeFixtures.email.imap, imapReader: smokeFixtures.email.imapReader, pop3: smokeFixtures.email.pop3, smtp: smokeFixtures.email.smtp, smtpVerify: smokeFixtures.email.smtpVerify } : {}),
     fetch: smokeFixtures
       ? () => Promise.reject(new TypeError('smoke: sem rede'))
       : (url, { signal }) => netFetch(url, { method: 'GET', headers: { accept: 'application/xml' }, signal, redirect: 'error' }),
@@ -985,6 +991,7 @@ function createAppServices(userData: string): AppServices {
       recording: recordingSessions.active() && recordingStartedAt !== null ? { startedAt: recordingStartedAt } : null,
       google: account.state === 'signed-in' && account.profile ? `conectada como ${account.profile.email}` : account.state === 'expired' ? 'sessão expirada (entrar de novo em Configurações › Contas)' : 'não conectada',
       whatsapp: whatsappStateLabel(whatsapp.status()),
+      email: emailStateLabel(email.accounts()),
       automationsPaused: status.paused ? (status.pauseReason === 'limit' ? 'pausadas pelo limite diário' : 'pausadas pela pessoa') : null,
       agents: agents.agents,
       tasks,
@@ -999,8 +1006,30 @@ function createAppServices(userData: string): AppServices {
       return { agents: agents.agents, tasks, runs: runs.filter((run): run is AutomationRun => run !== null) }
     },
     whatsapp: { exportRecent: (folder: string) => whatsapp.exportRecent(folder), exportChats: (folder: string, chatIds: readonly string[], days: number) => whatsapp.exportChats(folder, chatIds, days) },
+    // Contrato 45: o cache do email (só leitura do store; bloqueado, nada).
+    email: { export: (folder: string) => exportEmail(emailExport, folder) },
     ...devLog,
   }
+  // Contrato 45: o email do Assistente. O `EMAILS.md` e as mensagens já baixadas saem do cache (sem servidor); as
+  // ferramentas `buscar_emails` e `ler_email` (CA7) vão ao servidor IMAP só para leitura. Bloqueado (CA5), nada disso.
+  const emailLocked = (): boolean => lockService?.isLocked() ?? false
+  const emailExport = {
+    cached: () => email.cached(),
+    body: (accountId: string, message: EmailMessage) => email.cachedBody(accountId, message),
+    reminders: async () =>
+      (await automations.listTasks()).flatMap((task) => {
+        const next = task.nextRunAt ? Date.parse(task.nextRunAt) : Number.NaN
+        return task.enabled && task.reminder?.email && !Number.isNaN(next) ? [{ accountId: task.reminder.email.accountId, messageId: task.reminder.email.messageId, mailbox: task.reminder.email.mailbox ?? null, when: formatRunAt(next, task.timezone) }] : []
+      }),
+    locked: emailLocked,
+  }
+  const emailTools = createEmailTools({
+    cached: () => email.cached(),
+    body: (accountId, message) => email.cachedBody(accountId, message),
+    searchServer: (accountId, query, limit) => email.searchServer(accountId, query, limit),
+    peekServer: (accountId, mailbox, uid) => email.peekServer(accountId, mailbox, uid),
+    locked: emailLocked,
+  })
   const actionResolver = {
     whatsappChat: async (chatId: string) => {
       // A lista que a pergunta acabou de ler (uma chamada só ao serviço).
@@ -1009,6 +1038,7 @@ function createAppServices(userData: string): AppServices {
     },
     agents: async () => (await automations.listAgents()).agents,
     meeting: async (meetingId: string) => meetings.get(meetingId),
+    email: (ref: string) => emailTools.find(ref),
     now: Date.now,
     timeZone,
   }
@@ -1020,6 +1050,8 @@ function createAppServices(userData: string): AppServices {
     assistant: {
       prepare: (folder, scope) => writeSources(assistantSources, folder, scope),
       extract: (text) => extractActions(text, actionResolver),
+      // Contrato 45 (CA7): com conta de email e a fonte ligada, as ferramentas de busca e leitura.
+      tools: (scope) => (chatSourcesOf(scope).email && email.accounts().length > 0 && !emailLocked() ? emailTools.tools : []),
     },
     settings,
     meetings,

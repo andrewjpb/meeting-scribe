@@ -49,7 +49,7 @@ import { emailAddressSchema, emailIncomingSchema, emailNameSchema, emailServerSc
 import type { SettingsStore } from '../settings/store'
 import { addressDomain, autoconfigure, AUTOCONFIG_TIMEOUT_MS, type AutoconfigFetch } from './autoconfig'
 import { capInbox, createEmailStore, type EmailAccountData, type EmailStore } from './email-store'
-import { connectImap, messageIds, type ImapConnect, type ImapMessage, type ImapSession } from './imap-client'
+import { connectImap, connectImapReader, messageIds, type ImapConnect, type ImapMessage, type ImapReaderConnect, type ImapSearchQuery, type ImapSession } from './imap-client'
 import { connectPop3, Pop3Error, type Pop3Connect, type Pop3Session } from './pop3-client'
 import { createEmailSecrets } from './secrets'
 import { sendSmtp, SmtpError, verifySmtp, type OutgoingMail, type SmtpSend, type SmtpVerify } from './smtp-client'
@@ -296,6 +296,29 @@ function fromParsed(accountId: string, id: string, parsed: ParsedEmail, now: num
 
 type EmailServerInput = z.infer<typeof emailServerSchema>
 
+/**
+ * Contrato 45 (CA7): o id de uma mensagem achada no servidor: `servidor:<UIDVALIDITY>:<UID>:<pasta>`. Os ids do cache são o
+ * UID puro (INBOX), o UIDL (POP3) ou o Message-ID (`<…>`, enviados): este nunca se confunde com eles.
+ */
+export function serverMessageId(mailbox: string, uidValidity: string, uid: number): string {
+  return `servidor:${uidValidity}:${uid}:${mailbox}`.slice(0, 1000)
+}
+
+/** Contrato 45 (CA7): uma mensagem achada no servidor, com a pasta (o `id` dela é o de `serverMessageId`). */
+export interface EmailServerFound {
+  mailbox: string
+  uidValidity: string
+  /** `\Sent`, `\Trash`…, ou `null`. */
+  specialUse: string | null
+  message: EmailMessage
+}
+
+/** `pop3`: a conta não tem busca no servidor; `unavailable`: a conexão ou a busca falhou. */
+export type EmailServerSearchResult = { ok: true; found: EmailServerFound[]; skippedFolders: number } | { ok: false; error: 'missing' | 'pop3' | 'unavailable' }
+
+/** Pastas lidas numa busca no servidor (a INBOX e os enviados primeiro). */
+export const EMAIL_SEARCH_FOLDERS_MAX = 30
+
 const publicAccount = ({ password: _password, ...account }: StoredEmailAccount): EmailAccount => account
 
 /** Chave do corpo no store: a pasta e o id (o id do enviado é o Message-ID). */
@@ -309,6 +332,8 @@ export interface EmailServiceDeps {
   /** ISPDB do autoconfig (no smoke e nos testes, um HTTP falso). */
   fetch: AutoconfigFetch
   imap?: ImapConnect
+  /** Contrato 45 (CA7): a conexão só de leitura da busca do Assistente (no smoke e nos testes, o IMAP falso). */
+  imapReader?: ImapReaderConnect
   pop3?: Pop3Connect
   smtp?: SmtpSend
   /** Contrato 43: o "Testar conexão" do envio (no smoke, um substituto). */
@@ -341,6 +366,20 @@ export interface EmailService {
   removeAccount(request: unknown): Promise<boolean>
   /** INBOX (padrão) ou enviados, da mais nova para a mais antiga. Só o store, nada vai ao servidor. */
   messages(request: unknown): Promise<EmailMessage[]>
+  /**
+   * Contrato 45: o cache local de cada conta (a INBOX e os enviados guardados), para o Assistente. Só leitura do store:
+   * nada vai ao servidor.
+   */
+  cached(): Promise<{ status: EmailAccountStatus; inbox: EmailMessage[]; sent: EmailMessage[] }[]>
+  /** Contrato 45: o corpo de uma mensagem se já foi baixado; `null` se não (nunca baixa). */
+  cachedBody(accountId: string, message: Pick<EmailMessage, 'folder' | 'id'>): Promise<EmailBody | null>
+  /**
+   * Contrato 45 (CA7): `UID SEARCH` no servidor IMAP, em todas as pastas do `LIST` abertas só para leitura (`EXAMINE`),
+   * as `limit` mais recentes no total. Nada é gravado no cache e nenhuma flag muda. POP3 não tem busca no servidor.
+   */
+  searchServer(accountId: string, query: ImapSearchQuery, limit: number): Promise<EmailServerSearchResult>
+  /** Contrato 45 (CA7): o corpo de uma mensagem do servidor por `BODY.PEEK[]`, sem gravar no cache. */
+  peekServer(accountId: string, mailbox: string, uid: number): Promise<EmailBodyResult>
   /** Corpo: do store; senão (IMAP) baixa, passa pelo `mailparser` e guarda. */
   body(request: unknown): Promise<EmailBodyResult>
   markRead(request: unknown): Promise<boolean>
@@ -376,6 +415,7 @@ interface Runtime {
 export function createEmailService(deps: EmailServiceDeps): EmailService {
   const now = deps.now ?? Date.now
   const imap = deps.imap ?? connectImap
+  const imapReader = deps.imapReader ?? connectImapReader
   const pop3 = deps.pop3 ?? connectPop3
   const smtp = deps.smtp ?? sendSmtp
   const smtpVerify = deps.smtpVerify ?? verifySmtp
@@ -768,6 +808,69 @@ export function createEmailService(deps: EmailServiceDeps): EmailService {
       if (!parsed.success || !runtimes.has(parsed.data.accountId)) return []
       const data = await store.read(parsed.data.accountId)
       return [...(parsed.data.folder === 'sent' ? data.sent : data.inbox)].sort((a, b) => b.date - a.date)
+    },
+
+    async cached() {
+      const list: { status: EmailAccountStatus; inbox: EmailMessage[]; sent: EmailMessage[] }[] = []
+      for (const rt of runtimes.values()) {
+        const data = await store.read(rt.account.id).catch(() => null)
+        if (data && !rt.removed) list.push({ status: statusOf(rt), inbox: data.inbox, sent: data.sent })
+      }
+      return list
+    },
+
+    async cachedBody(accountId, message) {
+      if (!runtimes.has(accountId)) return null
+      return store.body(accountId, bodyKey(message)).catch(() => null)
+    },
+
+    async searchServer(accountId, query, limit) {
+      const rt = runtimes.get(accountId)
+      if (!rt) return { ok: false, error: 'missing' }
+      if (rt.account.incoming.protocol !== 'imap') return { ok: false, error: 'pop3' }
+      const pass = secrets.open(rt.account.password)
+      if (pass === null) return { ok: false, error: 'unavailable' }
+      let reader: Awaited<ReturnType<ImapReaderConnect>> | null = null
+      try {
+        reader = await imapReader(serverConfig(rt, pass, rt.account.incoming))
+        const rank = (box: { path: string; specialUse: string | null }): number => (box.path.toUpperCase() === 'INBOX' ? 0 : box.specialUse === '\\Sent' ? 1 : 2)
+        const all = (await reader.folders()).sort((a, b) => rank(a) - rank(b))
+        const folders = all.slice(0, EMAIL_SEARCH_FOLDERS_MAX)
+        const found: EmailServerFound[] = []
+        for (const box of folders) {
+          const { uidValidity, messages } = await reader.search(box.path, query, limit)
+          // O id leva a pasta e o UIDVALIDITY: nunca cai no espaço dos ids da INBOX do cache (o UID puro).
+          for (const message of messages)
+            found.push({ mailbox: box.path, uidValidity, specialUse: box.specialUse, message: { ...fromImap(accountId, message), id: serverMessageId(box.path, uidValidity, message.uid), folder: box.specialUse === '\\Sent' ? 'sent' : 'inbox' } })
+        }
+        log(`${tag(rt)}: busca no servidor em ${folders.length} pastas (${found.length} achadas)`)
+        return { ok: true, found: found.sort((a, b) => b.message.date - a.message.date).slice(0, limit), skippedFolders: all.length - folders.length }
+      } catch (error) {
+        log(`${tag(rt)}: busca no servidor falhou (${failureOf(error)})`)
+        return { ok: false, error: 'unavailable' }
+      } finally {
+        await reader?.close().catch(() => undefined)
+      }
+    },
+
+    async peekServer(accountId, mailbox, uid) {
+      const rt = runtimes.get(accountId)
+      if (!rt || rt.account.incoming.protocol !== 'imap') return { ok: false, error: 'not-found' }
+      const pass = secrets.open(rt.account.password)
+      if (pass === null) return { ok: false, error: 'unavailable' }
+      let reader: Awaited<ReturnType<ImapReaderConnect>> | null = null
+      try {
+        reader = await imapReader(serverConfig(rt, pass, rt.account.incoming))
+        const raw = await reader.peek(mailbox, uid)
+        if (raw === 'too-big') return { ok: false, error: 'too-big' }
+        if (raw === null) return { ok: false, error: 'not-found' }
+        return { ok: true, body: (await parse(raw)).body }
+      } catch (error) {
+        log(`${tag(rt)}: leitura no servidor falhou (${failureOf(error)})`)
+        return { ok: false, error: 'unavailable' }
+      } finally {
+        await reader?.close().catch(() => undefined)
+      }
     },
 
     async body(request) {

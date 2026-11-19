@@ -7,11 +7,17 @@
 //   "Descartar", "Enviar" (que já passou pelo envio do contrato 24, com o token de clique e o diálogo nativo) e a
 //   tarefa salva no formulário só gravam o estado. Cartão usado não roda de novo (recarregar a conversa não repete).
 // Nada daqui importa o serviço do WhatsApp: o nome das conversas chega por uma função de leitura injetada.
+// Contrato 45: os cartões de email (a lista e o rascunho de resposta) e o lembrete de responder um email. O que o cartão
+// mostra (quem mandou, o assunto, a conta, o destinatário, o Message-ID) vem do cache do app pela referência "em-…";
+// nada daqui importa o serviço do email nem envia: o "Enviar" do rascunho passa pelo `emailSend` do preload (o token de
+// clique do contrato 42) e aqui só grava "Enviado às hh:mm".
 import { randomUUID } from 'node:crypto'
 import { z } from 'zod'
 import {
   ACTION_FENCE,
   ACTIONS_PER_MESSAGE_MAX,
+  EMAIL_CARD_ITEMS_MAX,
+  emailSentText,
   AUTOMATIONS_TABS,
   DISMISSED_TEXT,
   openLabel,
@@ -24,8 +30,11 @@ import {
   WHATSAPP_CHOICES_MAX,
   type ChatAction,
   type ChatActionResult,
+  type EmailCardItem,
   type OpenScreen,
+  type ReminderEmail,
 } from '../../shared/assistant'
+import { EMAIL_REF_PATTERN, EMAIL_TEXT_MAX, prefixedSubject, type EmailAccountStatus, type EmailMessage } from '../../shared/email'
 import { describeSchedule, TASK_MESSAGE_MAX, TASK_NAME_MAX, type TaskReminder, type TaskSaveResult } from '../../shared/automations'
 import { scheduleSchema } from '../../shared/automations-schema'
 import type { Chat, ChatMessage } from '../../shared/chat'
@@ -43,6 +52,7 @@ const zonedIso = z
   .regex(/(Z|[+-]\d{2}:\d{2})$/)
   .refine((value) => !Number.isNaN(Date.parse(value)), 'data inválida')
 const whatsappChatId = z.string().regex(WHATSAPP_CHAT_ID_PATTERN)
+const emailRef = z.string().regex(EMAIL_REF_PATTERN)
 const line = (max: number) =>
   z
     .string()
@@ -53,10 +63,13 @@ const line = (max: number) =>
 
 /** O JSON que o Claude escreve, com os nomes do contrato. Campo a mais é ignorado. */
 const proposedSchema = z.discriminatedUnion('tipo', [
-  z.object({ tipo: z.literal('lembrete'), quando: zonedIso, texto: line(REMINDER_TEXT_MAX), conversaWhatsApp: whatsappChatId.nullable().optional(), horaPadrao: z.boolean().optional() }),
+  z.object({ tipo: z.literal('lembrete'), quando: zonedIso, texto: line(REMINDER_TEXT_MAX), conversaWhatsApp: whatsappChatId.nullable().optional(), horaPadrao: z.boolean().optional(), email: emailRef.nullable().optional() }),
   z.object({ tipo: z.literal('whatsapp-resposta'), chatId: whatsappChatId, texto: z.string().trim().min(1).max(WHATSAPP_SEND_TEXT_MAX) }),
   z.object({ tipo: z.literal('tarefa'), nome: line(TASK_NAME_MAX), agente: z.string().trim().min(1).max(100), mensagem: z.string().trim().min(1).max(TASK_MESSAGE_MAX), schedule: scheduleSchema }),
   z.object({ tipo: z.literal('abrir'), tela: z.enum(OPEN_SCREENS), alvo: z.string().trim().max(200).nullable().optional() }),
+  // Contrato 45.
+  z.object({ tipo: z.literal('emails'), mensagens: z.array(emailRef).min(1).max(EMAIL_CARD_ITEMS_MAX * 2) }),
+  z.object({ tipo: z.literal('email-resposta'), email: emailRef, texto: z.string().trim().min(1).max(EMAIL_TEXT_MAX) }),
 ])
 type Proposed = z.infer<typeof proposedSchema>
 
@@ -66,6 +79,8 @@ export interface ActionResolver {
   whatsappChat?: (chatId: string) => Promise<{ name: string; kind: WhatsAppChatKind; phone?: string | undefined } | null>
   agents?: () => Promise<readonly { id: string; name: string }[]>
   meeting?: (meetingId: string) => Promise<{ title: string } | null>
+  /** Contrato 45: o email de uma referência "em-…" (do cache, ou achado pela busca); `null` se não existe ou bloqueado. */
+  email?: (ref: string) => Promise<{ status: EmailAccountStatus; message: EmailMessage; mailbox: string | null; pending: boolean } | null>
   now: () => number
   timeZone: () => string
   newId?: () => string
@@ -98,6 +113,29 @@ async function openTarget(screen: OpenScreen, target: string | null, resolver: A
   return { target: null, name: null }
 }
 
+type FoundEmail = NonNullable<Awaited<ReturnType<NonNullable<ActionResolver['email']>>>>
+
+const nameOf = (address: { name: string | null; address: string } | undefined): string => (address ? (address.name ?? '').replace(/\s+/g, ' ').trim() || address.address : 'Remetente desconhecido')
+
+/** "Marina Rocha · Proposta revisada": o rótulo do lembrete de um email. */
+const emailLabel = (found: FoundEmail): string => `${nameOf(found.message.from[0])} · ${found.message.subject.replace(/\s+/g, ' ').trim() || '(sem assunto)'}`.slice(0, 300)
+
+function cardItem(found: FoundEmail): EmailCardItem {
+  const from = found.message.from[0]
+  return {
+    accountId: found.status.account.id,
+    messageId: found.message.id,
+    account: found.status.account.address,
+    from: nameOf(from).slice(0, 300),
+    fromAddress: (from?.address ?? '').slice(0, 320),
+    subject: found.message.subject.slice(0, 500),
+    date: found.message.date,
+    seen: found.message.seen,
+    pending: found.pending,
+    mailbox: found.mailbox ? found.mailbox.slice(0, 200) : null,
+  }
+}
+
 /** A ação validada, com o que o app leu; `null` se ela não vale (o bloco fica como texto). */
 async function resolve(proposed: Proposed, id: string, resolver: ActionResolver): Promise<ChatAction | null> {
   const base = { id, status: 'proposed' as const, result: null }
@@ -110,6 +148,12 @@ async function resolve(proposed: Proposed, id: string, resolver: ActionResolver)
         chat = (await resolver.whatsappChat?.(proposed.conversaWhatsApp).catch(() => null)) ?? null
         if (!chat) return null
       }
+      let email: ReminderEmail | null = null
+      if (proposed.email) {
+        const found = await resolver.email?.(proposed.email).catch(() => null)
+        if (!found) return null
+        email = { accountId: found.status.account.id, messageId: found.message.id, label: emailLabel(found), ...(found.mailbox ? { mailbox: found.mailbox.slice(0, 200) } : {}) }
+      }
       return {
         ...base,
         kind: 'lembrete',
@@ -118,6 +162,7 @@ async function resolve(proposed: Proposed, id: string, resolver: ActionResolver)
         whatsappChatId: chat ? (proposed.conversaWhatsApp ?? null) : null,
         whatsappChatName: chat?.name ?? null,
         defaultTime: proposed.horaPadrao === true,
+        ...(email ? { email } : {}),
       }
     }
     case 'whatsapp-resposta': {
@@ -138,6 +183,40 @@ async function resolve(proposed: Proposed, id: string, resolver: ActionResolver)
       const found = await openTarget(proposed.tela, proposed.alvo ?? null, resolver)
       if (!found) return null
       return { ...base, kind: 'abrir', screen: proposed.tela, target: found.target, label: openLabel(proposed.tela, found.name) }
+    }
+    case 'emails': {
+      // As referências que não existem ficam de fora; nenhuma que vale, o bloco fica como texto.
+      const items: EmailCardItem[] = []
+      for (const ref of [...new Set(proposed.mensagens)]) {
+        if (items.length >= EMAIL_CARD_ITEMS_MAX) break
+        const found = await resolver.email?.(ref).catch(() => null)
+        if (found) items.push(cardItem(found))
+      }
+      return items.length ? { ...base, kind: 'emails', items } : null
+    }
+    case 'email-resposta': {
+      const found = await resolver.email?.(proposed.email).catch(() => null)
+      if (!found) return null
+      const { message, status } = found
+      // Para quem mandou (ou, num enviado, os mesmos destinatários), sem a própria conta.
+      const own = status.account.address.toLowerCase()
+      const targets = (message.folder === 'sent' ? message.to : message.from).filter((item) => item.address.toLowerCase() !== own)
+      const to = [...new Set(targets.map((item) => item.address))].slice(0, 10)
+      if (!to.length) return null
+      const inReplyTo = message.messageId && /^<[^<>\s]{1,250}>$/.test(message.messageId) ? message.messageId : null
+      return {
+        ...base,
+        kind: 'email-resposta',
+        accountId: status.account.id,
+        account: status.account.address,
+        messageId: message.id,
+        mailbox: found.mailbox ? found.mailbox.slice(0, 200) : null,
+        inReplyTo,
+        to,
+        toLabel: targets.map((item) => (item.name ? `${nameOf(item)} <${item.address}>` : item.address)).join(', ').slice(0, 500),
+        subject: prefixedSubject('Re:', message.subject).slice(0, 998),
+        text: proposed.texto,
+      }
     }
   }
 }
@@ -184,13 +263,17 @@ export function actionsHistory(actions: readonly ChatAction[] | undefined): stri
     const state = action.status === 'proposed' ? 'esperando o clique' : (action.result ?? action.status)
     switch (action.kind) {
       case 'lembrete':
-        return `- lembrete "${action.text}" para ${action.at} (${state})`
+        return `- lembrete "${action.text}" para ${action.at}${action.email ? ` sobre o email ${action.email.label}` : ''} (${state})`
       case 'whatsapp-resposta':
         return `- resposta no WhatsApp para ${action.chatName}: "${action.text.replace(/\s+/g, ' ').slice(0, 200)}" (${state})`
       case 'tarefa':
         return `- tarefa "${action.name}" com o agente ${action.agentName} (${state})`
       case 'abrir':
         return `- botão "${action.label}"`
+      case 'emails':
+        return `- cartão com ${action.items.length} email(s): ${action.items.map((item) => `${item.from} · "${item.subject.replace(/\s+/g, ' ').slice(0, 80)}"`).join('; ')}`
+      case 'email-resposta':
+        return `- resposta por email para ${action.toLabel} ("${action.subject}"): "${action.text.replace(/\s+/g, ' ').slice(0, 200)}" (${state})`
     }
   })
   return ['[Cartões propostos nesta resposta:', ...lines, ']'].join('\n')
@@ -213,7 +296,7 @@ export interface ChatActions {
 
 const refFields = { chatId: chatIdSchema, index: z.number().int().min(0).max(10_000), actionId: z.string().regex(/^[\w-]{1,40}$/) }
 const reminderRequestSchema = z.object({ ...refFields, at: zonedIso.optional(), text: z.string().max(REMINDER_TEXT_MAX * 2).optional() }).strict()
-const stateRequestSchema = z.object({ ...refFields, state: z.enum(['dismissed', 'sent', 'task-created']), text: z.string().max(WHATSAPP_SEND_TEXT_MAX).optional() }).strict()
+const stateRequestSchema = z.object({ ...refFields, state: z.enum(['dismissed', 'sent', 'task-created']), text: z.string().max(Math.max(WHATSAPP_SEND_TEXT_MAX, EMAIL_TEXT_MAX)).optional() }).strict()
 
 type Ref = { chatId: string; index: number; actionId: string }
 
@@ -274,7 +357,7 @@ export function createChatActions(deps: ChatActionsDeps): ChatActions {
         const text = (parsed.data.text ?? current.text).replace(/\s+/g, ' ').trim()
         if (!text || text.length > REMINDER_TEXT_MAX) return { ok: false, error: 'invalid' }
         if (Date.parse(at) <= now()) return { ok: false, error: 'past' }
-        const created = await deps.createReminder({ at, reminder: { text, whatsappChatId: current.whatsappChatId, whatsappChatName: current.whatsappChatName } })
+        const created = await deps.createReminder({ at, reminder: { text, whatsappChatId: current.whatsappChatId, whatsappChatName: current.whatsappChatName, ...(current.email ? { email: current.email } : {}) } })
         if (!created.ok) return { ok: false, error: created.error === 'past' ? 'past' : created.error === 'full' ? 'full' : 'invalid' }
         return await write(ref, (action) => (action.kind === 'lembrete' ? { ...action, at, text, status: 'done', result: reminderCreatedText(at, deps.timeZone()) } : null))
       } finally {
@@ -288,11 +371,24 @@ export function createChatActions(deps: ChatActionsDeps): ChatActions {
       const { state, text } = parsed.data
       const ref = parsed.data
       if (busy.has(keyOf(ref))) return { ok: false, error: 'done' }
-      if (state === 'dismissed') return write(ref, (action) => (action.kind === 'abrir' ? null : { ...action, status: 'dismissed', result: DISMISSED_TEXT }))
+      if (state === 'dismissed') return write(ref, (action) => (action.kind === 'abrir' || action.kind === 'emails' ? null : { ...action, status: 'dismissed', result: DISMISSED_TEXT }))
       if (state === 'task-created') return write(ref, (action) => (action.kind === 'tarefa' ? { ...action, status: 'done', result: TASK_CREATED_TEXT } : null))
       // "Enviar" passou pelo contrato 24: grava o texto que foi e a hora; as outras escolhas "É esta conversa?" com o
       // mesmo texto saem.
       const sentAt = now()
+      // Contrato 45: o email já saiu pelo `emailSend` (o token de clique do contrato 42); aqui só o estado.
+      if ((await deps.store.get(ref.chatId).then((chat) => actionIn(chat, ref)))?.kind === 'email-resposta') {
+        if (text !== undefined && text.length > EMAIL_TEXT_MAX) return { ok: false, error: 'invalid' }
+        return write(
+          ref,
+          (action) => (action.kind === 'email-resposta' ? { ...action, text: text?.trim() ? text : action.text, status: 'done', result: emailSentText(sentAt) } : null),
+          (other, before) =>
+            other.kind === 'email-resposta' && other.status === 'proposed' && before.kind === 'email-resposta' && other.messageId !== before.messageId && other.text === before.text
+              ? { ...other, status: 'dismissed', result: DISMISSED_TEXT }
+              : other,
+        )
+      }
+      if (text !== undefined && text.length > WHATSAPP_SEND_TEXT_MAX) return { ok: false, error: 'invalid' }
       return write(
         ref,
         (action) => (action.kind === 'whatsapp-resposta' ? { ...action, text: text?.trim() ? text : action.text, status: 'done', result: sentText(sentAt) } : null),

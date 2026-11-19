@@ -64,7 +64,7 @@ export function ChatScreen() {
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="px-10 pt-7 pb-6">
-        <PageHeader title="Assistente" description="Pergunte ou peça qualquer coisa: reuniões, WhatsApp, automações e o próprio app." />
+        <PageHeader title="Assistente" description="Pergunte ou peça qualquer coisa: reuniões, WhatsApp, email, automações e o próprio app." />
       </div>
       <div className="flex min-h-0 flex-1 border-t border-line">
         <section aria-label="Conversa" className="flex min-w-0 flex-1 flex-col">

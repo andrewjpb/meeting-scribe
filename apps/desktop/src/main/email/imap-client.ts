@@ -163,3 +163,97 @@ export const connectImap: ImapConnect = async (config) => {
     },
   }
 }
+
+// Contrato 45 (CA7): a busca do Assistente além do cache. Uma conexão à parte (a da INBOX fica no IDLE), que abre cada
+// pasta só para leitura (`EXAMINE`, `readOnly`): nenhuma flag muda. O corpo vem por `BODY.PEEK[]` (o `source` do
+// `imapflow`), que também não marca como lida. Nada daqui grava no cache.
+
+/** Uma pasta do `LIST` que dá para abrir. */
+export interface ImapFolder {
+  path: string
+  name: string
+  /** `\Sent`, `\Trash`, `\Junk`…, ou `null`. */
+  specialUse: string | null
+}
+
+/** Os critérios da busca, juntos (todos valem). `text` procura no cabeçalho e no corpo. */
+export interface ImapSearchQuery {
+  from?: string | undefined
+  to?: string | undefined
+  subject?: string | undefined
+  text?: string | undefined
+  since?: Date | undefined
+  before?: Date | undefined
+}
+
+export interface ImapReader {
+  /** As pastas do `LIST` que dá para abrir (sem `\Noselect`). */
+  folders(): Promise<ImapFolder[]>
+  /**
+   * `UID SEARCH` numa pasta aberta só para leitura: as `limit` mais recentes, com o envelope, e o `UIDVALIDITY` da pasta
+   * (o UID só vale junto com a pasta e ele).
+   */
+  search(path: string, query: ImapSearchQuery, limit: number): Promise<{ uidValidity: string; messages: ImapMessage[] }>
+  /** A mensagem inteira por `BODY.PEEK[]`; `null` se sumiu, `too-big` se passa do limite. */
+  peek(path: string, uid: number): Promise<Buffer | 'too-big' | null>
+  close(): Promise<void>
+}
+
+export type ImapReaderConnect = (config: ImapConfig) => Promise<ImapReader>
+
+export const connectImapReader: ImapReaderConnect = async (config) => {
+  const { ImapFlow: Client } = await import('imapflow')
+  const client: ImapFlow = new Client({
+    host: config.host,
+    port: config.port,
+    secure: config.security === 'tls',
+    doSTARTTLS: config.security === 'starttls' ? true : config.security === 'none' ? false : undefined,
+    auth: { user: config.user, pass: config.pass },
+    logger: false,
+    ...(config.tls ? { tls: config.tls } : {}),
+  })
+  client.on('error', () => undefined)
+  await client.connect()
+  let open: { path: string; uidValidity: string } | null = null
+  // Sempre `EXAMINE`: a pasta nunca fica aberta para escrita nesta conexão.
+  const examine = async (path: string): Promise<string> => {
+    if (open?.path === path) return open.uidValidity
+    const box = await client.mailboxOpen(path, { readOnly: true })
+    open = { path, uidValidity: String(box.uidValidity) }
+    return open.uidValidity
+  }
+  return {
+    async folders() {
+      const boxes = await client.list()
+      return boxes.filter((box) => !box.flags.has('\\Noselect') && !box.flags.has('\\NonExistent')).map((box) => ({ path: box.path, name: box.name, specialUse: box.specialUse ?? null }))
+    },
+
+    async search(path, query, limit) {
+      const uidValidity = await examine(path)
+      const criteria: Record<string, unknown> = {}
+      if (query.from) criteria['from'] = query.from
+      if (query.to) criteria['to'] = query.to
+      if (query.subject) criteria['subject'] = query.subject
+      if (query.text) criteria['text'] = query.text
+      if (query.since) criteria['since'] = query.since
+      if (query.before) criteria['before'] = query.before
+      const found = await client.search(Object.keys(criteria).length ? criteria : { all: true }, { uid: true })
+      const uids = (Array.isArray(found) ? found : []).sort((a, b) => b - a).slice(0, limit)
+      if (!uids.length) return { uidValidity, messages: [] }
+      return { uidValidity, messages: (await client.fetchAll(uids.join(','), QUERY, { uid: true })).map(toImapMessage).sort((a, b) => b.uid - a.uid) }
+    },
+
+    async peek(path, uid) {
+      await examine(path)
+      const found = await client.fetchOne(String(uid), { uid: true, size: true }, { uid: true })
+      if (!found) return null
+      if ((found.size ?? 0) > EMAIL_RAW_MAX_BYTES) return 'too-big'
+      const full = await client.fetchOne(String(uid), { uid: true, source: true }, { uid: true })
+      return full && full.source ? full.source : null
+    },
+
+    async close() {
+      await client.logout().catch(() => client.close())
+    },
+  }
+}

@@ -107,8 +107,8 @@ export interface ChatScope {
 export const CHAT_WHATSAPP_MODES = ['recent', 'chosen'] as const
 export type ChatWhatsAppMode = (typeof CHAT_WHATSAPP_MODES)[number]
 
-/** Fontes do Assistente com interruptor (o estado atual vai sempre). `internet`: contrato 26. */
-export const CHAT_SOURCE_KINDS = ['whatsapp', 'automations', 'guide', 'internet'] as const
+/** Fontes do Assistente com interruptor (o estado atual vai sempre). `internet`: contrato 26; `email`: contrato 45. */
+export const CHAT_SOURCE_KINDS = ['whatsapp', 'email', 'automations', 'guide', 'internet'] as const
 export type ChatSourceKind = (typeof CHAT_SOURCE_KINDS)[number]
 export type ChatSources = Record<ChatSourceKind, boolean>
 
@@ -116,6 +116,7 @@ export type ChatSources = Record<ChatSourceKind, boolean>
 export function chatSourcesOf(scope: Pick<ChatScope, 'sources'>): ChatSources {
   return {
     whatsapp: scope.sources?.whatsapp !== false,
+    email: scope.sources?.email !== false,
     automations: scope.sources?.automations !== false,
     guide: scope.sources?.guide !== false,
     internet: scope.sources?.internet !== false,

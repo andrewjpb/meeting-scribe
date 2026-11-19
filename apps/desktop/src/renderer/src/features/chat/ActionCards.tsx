@@ -3,17 +3,35 @@
 // "Enviar" usa só `window.__scribeApi.whatsappSend` (o token de clique do preload do contrato 24; sem diálogo
 // nativo desde o contrato 33); "Criar tarefa" abre o formulário das Automações preenchido para revisar; "Abrir" leva à
 // tela. Depois do clique, o cartão mostra o estado, que fica gravado na conversa. Contrato 26: numa resposta que usou a
-// internet, cada cartão vem com o aviso de conferir antes.
-import { Bell, Check, ExternalLink, Globe, ListChecks, MessageSquare, Pencil, Send, X } from 'lucide-react'
+// internet, cada cartão vem com o aviso de conferir antes. Contrato 45: os cartões de email. A lista mostra o que o main
+// leu do cache quando a resposta terminou (nada é buscado de novo ao desenhar) e o clique abre a tela Email na
+// mensagem; o rascunho de resposta só sai pelo `window.__scribeApi.emailSend` (o token de clique do contrato 42), sem
+// diálogo, e vira "Enviado às hh:mm".
+import { Bell, Check, ExternalLink, Globe, ListChecks, Mail, MessageSquare, Pencil, Send, X } from 'lucide-react'
 import { useState } from 'react'
 import { useNavigate } from 'react-router'
-import { reminderTitle, REMINDER_TEXT_MAX, sentText, type ChatAction, type ChatActionRef, type OpenAction, type ReminderAction, type TaskAction, type WhatsAppReplyAction } from '@shared/assistant'
+import {
+  emailSentText,
+  reminderTitle,
+  REMINDER_TEXT_MAX,
+  sentText,
+  type ChatAction,
+  type ChatActionRef,
+  type EmailListAction,
+  type EmailReplyAction,
+  type OpenAction,
+  type ReminderAction,
+  type TaskAction,
+  type WhatsAppReplyAction,
+} from '@shared/assistant'
+import { EMAIL_TEXT_MAX } from '@shared/email'
 import { describeSchedule, TASK_TIMEOUT_DEFAULT_S } from '@shared/automations'
-import { meetingPath, ROUTE_PATHS, settingsPath, isSettingsTab, type WhatsAppNavigationState } from '@shared/routes'
+import { emailPath, meetingPath, ROUTE_PATHS, settingsPath, isSettingsTab, type EmailNavigationState, type WhatsAppNavigationState } from '@shared/routes'
 import { WHATSAPP_SEND_TEXT_MAX } from '@shared/whatsapp'
 import { Button } from '../../design/Button'
 import { Icon } from '../../design/Icon'
 import { useAutomations, type AutomationsTab } from '../agents/automationsStore'
+import { emailTimeLabel, sendErrorText } from '../email/format'
 import { macTimeZone } from '../schedules/TaskForm'
 import { QUIET_BUTTON } from './ChatMessages'
 import { useChat } from './chatStore'
@@ -89,6 +107,12 @@ function ReminderCard({ action, actionRef }: { action: ReminderAction; actionRef
         <span data-chat-action-title>{reminderTitle(shown, new Date().getTime(), timeZone)}</span>
       </p>
       {action.whatsappChatName && <p className="text-12 text-text-muted">Conversa do WhatsApp: {action.whatsappChatName}</p>}
+      {action.email && (
+        <p data-chat-action-email-label className="text-12 text-text-muted">
+          Email: {action.email.label}
+          {action.email.mailbox ? ` (no servidor, pasta ${action.email.mailbox})` : ''}
+        </p>
+      )}
       {proposed && action.defaultTime && !editing && <p data-chat-action-default-time className="text-12 text-text-muted">O pedido não disse a hora: ficou para as 09:00.</p>}
       {proposed && editing && (
         <div className="flex flex-col gap-2">
@@ -321,11 +345,189 @@ function OpenCard({ action }: { action: OpenAction }) {
   )
 }
 
+/** Contrato 45 (CA2): os emails da resposta, cada um clicável (abre a tela Email na mensagem). */
+function EmailListCard({ action }: { action: EmailListAction }) {
+  const navigate = useNavigate()
+  const open = (accountId: string, messageId: string): void => {
+    const state: EmailNavigationState = { messageId }
+    void navigate(emailPath(accountId, 'inbox'), { state })
+  }
+  return (
+    <div data-chat-action="emails" className={CARD}>
+      <p className="flex items-center gap-2 text-12 font-medium text-text-muted">
+        <Icon icon={Mail} size={14} className="shrink-0" />
+        {action.items.length === 1 ? '1 email' : `${action.items.length} emails`}
+      </p>
+      <ul className="flex flex-col">
+        {action.items.map((item) => {
+          const body = (
+            <>
+              <span className="flex min-w-0 items-baseline gap-2">
+                {!item.seen && <span aria-label="Não lida" className="size-1.5 shrink-0 self-center bg-accent" />}
+                <span data-chat-email-from className={`truncate text-13 ${item.seen ? 'text-text' : 'font-bold text-title'}`}>
+                  {item.from}
+                </span>
+                <span data-chat-email-time className="ml-auto shrink-0 text-12 text-text-muted tabular">
+                  {emailTimeLabel(item.date)}
+                </span>
+              </span>
+              <span data-chat-email-subject className="truncate text-13 text-text">
+                {item.subject || '(sem assunto)'}
+              </span>
+              <span data-chat-email-account className="truncate text-12 text-text-faint">
+                {item.account}
+                {item.pending ? ' · pendente de resposta' : ''}
+                {item.mailbox ? ` · só no servidor (pasta ${item.mailbox})` : ''}
+              </span>
+            </>
+          )
+          return (
+            <li key={`${item.accountId}:${item.mailbox ?? ''}:${item.messageId}`} className="border-t border-line first:border-t-0">
+              {item.mailbox === null ? (
+                <button
+                  type="button"
+                  data-action="chat-email-open"
+                  data-chat-email-item={item.messageId}
+                  onClick={() => open(item.accountId, item.messageId)}
+                  className="no-drag flex w-full min-w-0 flex-col gap-0.5 rounded-[var(--radius-control)] px-1 py-2 text-left hover:bg-bg-sunken"
+                >
+                  {body}
+                </button>
+              ) : (
+                <div data-chat-email-item={item.messageId} className="flex min-w-0 flex-col gap-0.5 px-1 py-2">
+                  {body}
+                </div>
+              )}
+            </li>
+          )
+        })}
+      </ul>
+    </div>
+  )
+}
+
+/**
+ * Contrato 45 (CA3): o rascunho da resposta por email. Destinatário, assunto e conta vêm do app; o corpo é editável. O
+ * envio só acontece no clique em "Enviar", pelo `emailSend` do preload, com o `In-Reply-To` da mensagem respondida.
+ */
+function EmailReplyCard({ action, actionRef }: { action: EmailReplyAction; actionRef: ChatActionRef }) {
+  const navigate = useNavigate()
+  const [text, setText] = useState(action.text)
+  const [sending, setSending] = useState(false)
+  const [failure, setFailure] = useState<string | null>(null)
+  // Enviado, mas o estado do cartão ainda não foi gravado: a tela já mostra "Enviado" e nunca oferece "Enviar" de novo.
+  const [sentHere, setSentHere] = useState<{ text: string; result: string } | null>(null)
+  const proposed = action.status === 'proposed' && !sentHere
+
+  const persistSent = (body: string, attempt = 0): void => {
+    void useChat
+      .getState()
+      .setActionState(actionRef, 'sent', body)
+      .then((result) => {
+        if (!result.ok && result.error !== 'done' && result.error !== 'missing' && attempt < 20) setTimeout(() => persistSent(body, attempt + 1), 3000)
+      })
+  }
+
+  // O envio de verdade: só daqui, no clique da pessoa, pelo mesmo caminho do composer da tela Email (contrato 42).
+  const send = (): void => {
+    const body = text
+    if (!body.trim() || sending) return
+    setSending(true)
+    setFailure(null)
+    void window.__scribeApi.emailSend({ accountId: action.accountId, to: action.to, subject: action.subject, text: body, inReplyTo: action.inReplyTo ?? undefined }).then(
+      (result) => {
+        setSending(false)
+        if (result.ok) {
+          setSentHere({ text: body, result: emailSentText(new Date().getTime()) })
+          persistSent(body)
+        } else setFailure(sendErrorText(result.error))
+      },
+      () => {
+        setSending(false)
+        setFailure(sendErrorText('failed'))
+      },
+    )
+  }
+  const openOriginal = (): void => {
+    const state: EmailNavigationState = { messageId: action.messageId }
+    void navigate(emailPath(action.accountId, 'inbox'), { state })
+  }
+  const shownStatus = sentHere && action.status === 'proposed' ? 'done' : action.status
+
+  return (
+    <div data-chat-action="email-resposta" data-chat-action-status={shownStatus} className={CARD}>
+      <p className="flex items-center gap-2 text-12 font-medium text-text-muted">
+        <Icon icon={Mail} size={14} className="shrink-0" />
+        Responder por email
+      </p>
+      <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-13">
+        <dt className="text-text-muted">Para</dt>
+        <dd data-chat-email-to className="min-w-0 truncate font-bold text-title">
+          {action.toLabel}
+        </dd>
+        <dt className="text-text-muted">Assunto</dt>
+        <dd data-chat-email-subject className="min-w-0 truncate text-text">
+          {action.subject}
+        </dd>
+        <dt className="text-text-muted">De</dt>
+        <dd data-chat-email-account className="min-w-0 truncate text-text-muted">
+          {action.account}
+        </dd>
+      </dl>
+      {proposed ? (
+        <>
+          <label className="sr-only" htmlFor={`chat-action-email-${action.id}`}>
+            Resposta para {action.toLabel}
+          </label>
+          <textarea
+            id={`chat-action-email-${action.id}`}
+            data-chat-action-message
+            value={text}
+            rows={5}
+            maxLength={EMAIL_TEXT_MAX}
+            onChange={(event) => setText(event.target.value)}
+            className={`${FIELD} min-h-24 resize-y py-1.5 text-15`}
+          />
+          <div className="flex flex-wrap items-center gap-2">
+            <Button action="chat-action-email-send" icon={Send} onClick={send} disabled={sending || !text.trim()}>
+              {sending ? 'Enviando…' : 'Enviar'}
+            </Button>
+            {action.mailbox === null && (
+              <Button action="chat-action-email-open" variant="secondary" icon={ExternalLink} onClick={openOriginal}>
+                Abrir o email
+              </Button>
+            )}
+            <DismissButton actionRef={actionRef} disabled={sending} />
+          </div>
+          {action.mailbox !== null && (
+            <p data-chat-email-server className="text-12 text-text-muted">
+              O email respondido está no servidor, na pasta {action.mailbox} (fora da Caixa de Entrada do app).
+            </p>
+          )}
+          <p className="text-12 text-text-faint">Só sai com o seu clique em "Enviar".</p>
+        </>
+      ) : (
+        <>
+          <p className="max-w-[72ch] text-13 whitespace-pre-wrap text-text-muted select-text">{sentHere && action.status === 'proposed' ? sentHere.text : action.text}</p>
+          <Outcome action={sentHere && action.status === 'proposed' ? { ...action, status: 'done', result: sentHere.result } : action} />
+        </>
+      )}
+      {failure && (
+        <p role="alert" data-chat-action-failure className="text-12 text-rec">
+          {failure}
+        </p>
+      )}
+    </div>
+  )
+}
+
 /** O cartão de uma ação, pelo tipo. */
 function ActionCard({ action, actionRef, choice }: { action: ChatAction; actionRef: ChatActionRef; choice: boolean }) {
   if (action.kind === 'lembrete') return <ReminderCard action={action} actionRef={actionRef} />
   if (action.kind === 'whatsapp-resposta') return <WhatsAppCard action={action} actionRef={actionRef} choice={choice} />
   if (action.kind === 'tarefa') return <TaskCard action={action} actionRef={actionRef} />
+  if (action.kind === 'emails') return <EmailListCard action={action} />
+  if (action.kind === 'email-resposta') return <EmailReplyCard action={action} actionRef={actionRef} />
   return <OpenCard action={action} />
 }
 

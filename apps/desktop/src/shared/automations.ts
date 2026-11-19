@@ -164,6 +164,8 @@ export interface TaskReminder {
   text: string
   whatsappChatId: string | null
   whatsappChatName: string | null
+  /** Contrato 45: o lembrete de responder um email; "Abrir" da notificação leva à mensagem. */
+  email?: { accountId: string; messageId: string; label: string; mailbox?: string | null | undefined } | null | undefined
 }
 
 /** O que o formulário manda: sem o estado das execuções. */

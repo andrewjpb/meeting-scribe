@@ -131,6 +131,12 @@ function TaskRow({ task, agentName, onEdit, onDuplicate }: { task: ScheduledTask
           {task.name}
         </span>
         {task.reminder?.whatsappChatName && <p className="mt-1 text-12 text-text-muted">Conversa do WhatsApp: {task.reminder.whatsappChatName}</p>}
+        {task.reminder?.email && (
+          <p className="mt-1 text-12 text-text-muted">
+            Email: {task.reminder.email.label}
+            {task.reminder.email.mailbox ? ` (no servidor, pasta ${task.reminder.email.mailbox})` : ''}
+          </p>
+        )}
         {notice && <p className="mt-1 text-12 text-text-muted">{notice}</p>}
       </td>
       <td className="py-3 pr-4 text-text-muted">{agentName}</td>

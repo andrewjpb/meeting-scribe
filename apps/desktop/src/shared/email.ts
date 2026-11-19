@@ -192,3 +192,32 @@ export type EmailAttachmentSaveResult = { ok: true; name: string } | { ok: false
  * em `skipped`, pelo nome.
  */
 export type EmailAttachmentsResult = { ok: true; attachments: EmailOutgoingAttachment[]; skipped: string[] } | { ok: false; error: 'not-found' | 'unavailable' }
+
+/** "Re: Assunto" sem repetir o prefixo ("Re:", "RE:", "Res:", "Enc:", "Fwd:" de quem respondeu antes ficam). */
+export function prefixedSubject(prefix: 'Re:' | 'Enc:', subject: string): string {
+  const clean = subject.replace(/[\r\n]+/g, ' ').trim()
+  const already = prefix === 'Re:' ? /^(re|res)\s*:/i : /^(enc|fwd?|tr)\s*:/i
+  return already.test(clean) ? clean : `${prefix} ${clean}`.trim()
+}
+
+// Contrato 45: o email no Assistente, no desenho do WhatsApp (contrato 25). A cada pergunta, o cache local do contrato
+// 42 vira o `EMAILS.md` (uma linha por mensagem recebida, com a conta, a idade e "pendente de resposta") e um `.md` por
+// mensagem com o corpo já baixado. Nada vai ao servidor dentro da pergunta.
+
+/** Uma linha por mensagem recebida nos últimos dias, de todas as contas. */
+export const EMAIL_OVERVIEW_FILE = 'EMAILS.md'
+/** Um arquivo por mensagem com o corpo já baixado: `Email - <assunto> - <referência>.md`. */
+export const EMAIL_EXPORT_PREFIX = 'Email - '
+/** Mensagens recebidas nos últimos 30 dias entram no `EMAILS.md`. */
+export const EMAIL_RECENT_DAYS = 30
+/** Linhas do `EMAILS.md` por conta (as mais recentes). */
+export const EMAIL_RECENT_PER_ACCOUNT_MAX = 150
+/** Arquivos de mensagem na pasta (as pendentes primeiro, depois as mais recentes). */
+export const EMAIL_EXPORT_BODIES_MAX = 60
+/** Corpo de cada arquivo de mensagem, em caracteres. */
+export const EMAIL_EXPORT_TEXT_MAX = 8_000
+/**
+ * Referência de uma mensagem para o Assistente: curta, sem os caracteres do UIDL ou do Message-ID, e a mesma em toda
+ * pergunta (o hash da conta e do id). O cartão é montado pelo main a partir dela, com o que está no cache.
+ */
+export const EMAIL_REF_PATTERN = /^em-[0-9a-f]{12}$/

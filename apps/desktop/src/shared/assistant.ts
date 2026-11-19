@@ -3,12 +3,15 @@
 // comum), lê do app o que o cartão mostra (o nome e o número da conversa, o nome do agente) e grava a ação com a
 // resposta. Nada roda sem o clique da pessoa no cartão: o lembrete vira uma tarefa "uma vez" das Automações (23),
 // a resposta no WhatsApp passa pelo envio do contrato 24 (token de clique e diálogo nativo) e a tarefa abre o
-// formulário do 23 preenchido. Sem zod e sem Node: o renderer usa as frases.
+// formulário do 23 preenchido. Sem zod e sem Node: o renderer usa as frases. Contrato 45: os cartões de email (a lista
+// que abre a tela Email e o rascunho de resposta, que só sai pelo envio com o token de clique do contrato 42).
 import { formatRunAt, wallTime, type Schedule } from './automations'
 import type { Chat } from './chat'
 
 /** Linguagem da cerca do bloco de ação: ```lap-acao ... ```. */
 export const ACTION_FENCE = 'lap-acao'
+/** Contrato 45 (CA7): o pedido de uma ferramenta do app (`src/main/chat/tools.ts`): ```lap-ferramenta ... ```. */
+export const TOOL_FENCE = 'lap-ferramenta'
 /** Cartões numa resposta; os blocos a mais viram texto. */
 export const ACTIONS_PER_MESSAGE_MAX = 6
 /** "É esta conversa?": no máximo 3 cartões de resposta no WhatsApp numa resposta. */
@@ -34,7 +37,7 @@ export const AUTOMATIONS_TABS = ['agentes', 'tarefas', 'execucoes'] as const
 /** `proposed`: o cartão espera o clique; `done`: feito (criado, enviado); `dismissed`: "Descartar". */
 export const CHAT_ACTION_STATUSES = ['proposed', 'done', 'dismissed'] as const
 export type ChatActionStatus = (typeof CHAT_ACTION_STATUSES)[number]
-export const CHAT_ACTION_KINDS = ['lembrete', 'whatsapp-resposta', 'tarefa', 'abrir'] as const
+export const CHAT_ACTION_KINDS = ['lembrete', 'whatsapp-resposta', 'tarefa', 'abrir', 'emails', 'email-resposta'] as const
 export type ChatActionKind = (typeof CHAT_ACTION_KINDS)[number]
 
 interface ActionBase {
@@ -57,6 +60,18 @@ export interface ReminderAction extends ActionBase {
   whatsappChatName: string | null
   /** O pedido não disse a hora: 09:00. */
   defaultTime: boolean
+  /** Contrato 45: o lembrete de responder um email; "Abrir" da notificação leva à mensagem. */
+  email?: ReminderEmail | null | undefined
+}
+
+/** Contrato 45: a mensagem de um lembrete, lida do cache do app ("Marina Rocha · Proposta revisada"). */
+export interface ReminderEmail {
+  accountId: string
+  /** O id da mensagem na conta (`EmailMessage.id`; achada no servidor, o id composto com a pasta). */
+  messageId: string
+  label: string
+  /** CA7: achada só no servidor, nesta pasta: o "Abrir" não procura na INBOX do app. `null`/ausente: no app. */
+  mailbox?: string | null | undefined
 }
 
 /** `whatsapp-resposta`: o texto editável e "Enviar", pelo caminho do contrato 24. */
@@ -90,7 +105,56 @@ export interface OpenAction extends ActionBase {
   label: string
 }
 
-export type ChatAction = ReminderAction | WhatsAppReplyAction | TaskAction | OpenAction
+/** Contrato 45: uma mensagem num cartão de email, como estava no cache quando a resposta terminou. */
+export interface EmailCardItem {
+  accountId: string
+  /** O id da mensagem na conta (`EmailMessage.id`): o clique abre a tela Email nela. */
+  messageId: string
+  /** O endereço da conta, lido do app. */
+  account: string
+  /** Quem mandou: o nome, ou o endereço. */
+  from: string
+  fromAddress: string
+  subject: string
+  /** Milissegundos desde 1970. */
+  date: number
+  seen: boolean
+  /** Recebida sem resposta posterior sua. */
+  pending: boolean
+  /** CA7: achada só no servidor, nesta pasta (fora do cache do app, a tela Email não a mostra); `null`: no app. */
+  mailbox: string | null
+}
+
+/** Contrato 45: `emails`, a lista de mensagens que a resposta cita (pendências, busca). Só abre a tela Email. */
+export interface EmailListAction extends ActionBase {
+  kind: 'emails'
+  items: EmailCardItem[]
+}
+
+/**
+ * Contrato 45: `email-resposta`, o rascunho da resposta. Destinatário, assunto ("Re:") e o Message-ID respondido são
+ * lidos do cache do app, nunca do texto do modelo; o corpo é editável e só sai com o clique em "Enviar" (o
+ * `emailSend` do preload, com o token de clique do contrato 42).
+ */
+export interface EmailReplyAction extends ActionBase {
+  kind: 'email-resposta'
+  accountId: string
+  /** O endereço da conta que envia. */
+  account: string
+  /** A mensagem respondida (`EmailMessage.id`). */
+  messageId: string
+  /** CA7: a respondida está só no servidor, nesta pasta ("Abrir o email" não existe para ela); `null`: no app. */
+  mailbox: string | null
+  /** O Message-ID dela, para o `In-Reply-To`; `null` se ela não tinha um. */
+  inReplyTo: string | null
+  to: string[]
+  /** "Marina Rocha <marina@x>". */
+  toLabel: string
+  subject: string
+  text: string
+}
+
+export type ChatAction = ReminderAction | WhatsAppReplyAction | TaskAction | OpenAction | EmailListAction | EmailReplyAction
 
 /** Qual cartão de qual resposta. */
 export interface ChatActionRef {
@@ -108,7 +172,8 @@ export interface ChatActionReminderRequest extends ChatActionRef {
 
 /**
  * Estado depois do clique que não cria nada no main: "Descartar"; "Enviar" que já passou pelo contrato 24 (`sent`,
- * com o texto que foi); a tarefa salva no formulário das Automações (`task-created`).
+ * com o texto que foi; contrato 45: também o email, depois do `emailSend`); a tarefa salva no formulário das
+ * Automações (`task-created`).
  */
 export interface ChatActionStateRequest extends ChatActionRef {
   state: 'dismissed' | 'sent' | 'task-created'
@@ -155,6 +220,15 @@ export function sentText(at: number): string {
   return `Enviada às ${two(date.getHours())}:${two(date.getMinutes())}`
 }
 
+/** Contrato 45: "Enviado às 19:40" (o email), na hora local. */
+export function emailSentText(at: number): string {
+  const date = new Date(at)
+  return `Enviado às ${two(date.getHours())}:${two(date.getMinutes())}`
+}
+
+/** Contrato 45: mensagens num cartão `emails`; as a mais ficam de fora do cartão. */
+export const EMAIL_CARD_ITEMS_MAX = 10
+
 export const DISMISSED_TEXT = 'Descartado'
 export const TASK_CREATED_TEXT = 'Tarefa criada'
 
@@ -185,14 +259,19 @@ export function openLabel(screen: OpenScreen, targetName: string | null): string
  * inteiro nem pela metade (o cartão só nasce de uma resposta que terminou).
  */
 export function withoutActionBlocks(text: string): string {
-  const whole = new RegExp(`(^|\\n)[ \\t]*\`\`\`${ACTION_FENCE}[ \\t]*\\n[\\s\\S]*?\\n[ \\t]*\`\`\`[ \\t]*(?=\\n|$)`, 'g')
-  return withoutPendingActions(text.replace(whole, '$1'))
+  let rest = text
+  // Contrato 45: o pedido de ferramenta também nunca fica no texto gravado.
+  for (const fence of [ACTION_FENCE, TOOL_FENCE]) {
+    const whole = new RegExp(`(^|\\n)[ \\t]*\`\`\`${fence}[ \\t]*\\n[\\s\\S]*?\\n[ \\t]*\`\`\`[ \\t]*(?=\\n|$)`, 'g')
+    rest = rest.replace(whole, '$1')
+  }
+  return withoutPendingActions(rest)
     .replace(/\n{3,}/g, '\n\n')
     .trim()
 }
 
-/** Na resposta em curso, o bloco de ação ainda pela metade não aparece: o texto para no começo da cerca. */
+/** Na resposta em curso, o bloco de ação (ou o pedido de ferramenta) ainda pela metade não aparece: o texto para no começo da cerca. */
 export function withoutPendingActions(text: string): string {
-  const at = text.indexOf(`\`\`\`${ACTION_FENCE}`)
-  return at === -1 ? text : text.slice(0, at).trimEnd()
+  const found = [ACTION_FENCE, TOOL_FENCE].map((fence) => text.indexOf(`\`\`\`${fence}`)).filter((at) => at !== -1)
+  return found.length ? text.slice(0, Math.min(...found)).trimEnd() : text
 }

@@ -1,7 +1,7 @@
 // Textos e contas do email na tela (contrato 43): a hora da lista, os grupos por dia, a prévia de uma linha, as não
 // lidas de cada conta, o nome da conta na barra lateral, os destinatários do composer e o rascunho de Responder,
 // Responder a todos e Encaminhar. Sem DOM: testado em test/renderer/email-format.test.ts.
-import { EMAIL_ADDRESS_PATTERN, type EmailAccount, type EmailAccountState, type EmailAddress, type EmailBody, type EmailMessage, type EmailOutgoingAttachment, type EmailSendError } from '@shared/email'
+import { EMAIL_ADDRESS_PATTERN, prefixedSubject, type EmailAccount, type EmailAccountState, type EmailAddress, type EmailBody, type EmailMessage, type EmailOutgoingAttachment, type EmailSendError } from '@shared/email'
 import { htmlToText } from './sanitize'
 
 const two = (value: number): string => String(value).padStart(2, '0')
@@ -170,12 +170,8 @@ export interface ComposeDraft {
 
 const recipient = (address: string): Recipient => ({ address, valid: EMAIL_ADDRESS_PATTERN.test(address) })
 
-/** "Re: Assunto" sem repetir o prefixo ("Re:", "RE:", "Res:", "Enc:", "Fwd:" de quem respondeu antes ficam). */
-export function prefixedSubject(prefix: 'Re:' | 'Enc:', subject: string): string {
-  const clean = subject.replace(/[\r\n]+/g, ' ').trim()
-  const already = prefix === 'Re:' ? /^(re|res)\s*:/i : /^(enc|fwd?|tr)\s*:/i
-  return already.test(clean) ? clean : `${prefix} ${clean}`.trim()
-}
+/** "Re: Assunto" sem repetir o prefixo: em `@shared/email` desde o contrato 45 (o rascunho do Assistente usa o mesmo). */
+export { prefixedSubject }
 
 /** O texto citado: "Em qua., 19/11/2026 14:05, Fulano <x@y> escreveu:" e cada linha com "> ". */
 export function quoteText(message: Pick<EmailMessage, 'date' | 'from'>, body: Pick<EmailBody, 'text' | 'html'> | null): string {

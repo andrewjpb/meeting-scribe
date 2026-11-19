@@ -3,11 +3,13 @@ import { chatSourcesOf, chatWhatsAppModeOf, type ChatScope, type ChatSourceKind 
 import { WHATSAPP_RECENT_CHATS_MAX, WHATSAPP_RECENT_DAYS } from '@shared/whatsapp'
 import { useSettings } from '../../app/settingsStore'
 import { Switch } from '../../design/Switch'
+import { useEmail } from '../email/emailStore'
 import { useWhatsApp } from '../whatsapp/whatsappStore'
 import { WhatsAppScopeSection } from './WhatsAppScopeSection'
 
 const SOURCE_TEXT: Readonly<Record<ChatSourceKind, { name: string; description: string }>> = {
   whatsapp: { name: 'WhatsApp', description: `As conversas com mensagem nos últimos ${WHATSAPP_RECENT_DAYS} dias (até ${WHATSAPP_RECENT_CHATS_MAX}), com o que está pendente de resposta.` },
+  email: { name: 'Email', description: 'Os emails recebidos nos últimos 30 dias, com o que está pendente de resposta, e a busca em todas as pastas do servidor.' },
   automations: { name: 'Automações', description: 'Agentes, tarefas agendadas e as últimas 20 execuções.' },
   guide: { name: 'Guia do app', description: 'Cada tela, cada aba de Configurações, os atalhos e o que cada recurso faz.' },
   internet: { name: 'Internet', description: 'Busca na web quando a pergunta pedir. Os links aparecem na resposta.' },
@@ -30,7 +32,7 @@ function SourceRow({ kind, checked, onChange, unavailable }: { kind: ChatSourceK
 
 /**
  * "Fontes" do painel "Contexto" do Assistente (contrato 25, CA2): além das reuniões, o WhatsApp (só com ele conectado
- * ou com conversas já escolhidas), as Automações, o Guia do app e (contrato 26) a Internet, cada um com interruptor,
+ * ou com conversas já escolhidas), o Email (contrato 45, só com conta de email), as Automações, o Guia do app e (contrato 26) a Internet, cada um com interruptor,
  * todos ligados por padrão.
  * No WhatsApp, "Conversas recentes" (o padrão) ou "Só estas conversas" (a escolha manual do contrato 24). O estado
  * atual (data, hora, fuso e conexões) vai sempre. A troca vale a partir da próxima pergunta.
@@ -42,6 +44,8 @@ export function SourcesSection({ scope, onScope }: { scope: ChatScope; onScope: 
   const sources = chatSourcesOf(scope)
   const mode = chatWhatsAppModeOf(scope)
   const showWhatsApp = connected || (scope.whatsappChats?.length ?? 0) > 0
+  // Contrato 45: o email só aparece com conta de email.
+  const hasEmail = useEmail((state) => (state.accounts?.length ?? 0) > 0)
 
   useEffect(() => {
     if (connected) void useWhatsApp.getState().loadChats()
@@ -90,6 +94,7 @@ export function SourcesSection({ scope, onScope }: { scope: ChatScope; onScope: 
           {sources.whatsapp && mode === 'chosen' && <WhatsAppScopeSection scope={scope} onScope={onScope} />}
         </>
       )}
+      {hasEmail && <SourceRow kind="email" checked={sources.email} onChange={(on) => toggle('email', on)} />}
       <SourceRow kind="automations" checked={sources.automations} onChange={(on) => toggle('automations', on)} />
       <SourceRow kind="guide" checked={sources.guide} onChange={(on) => toggle('guide', on)} />
       <SourceRow kind="internet" checked={sources.internet} onChange={(on) => toggle('internet', on)} unavailable={cli ? 'Só com o motor ACP (Configurações › Claude)' : undefined} />

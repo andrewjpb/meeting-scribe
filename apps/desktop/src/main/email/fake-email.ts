@@ -2,7 +2,7 @@
 // `.example`), o SMTP que só registra o que sairia e as imagens remotas do "Carregar imagens". Nada sai da máquina e
 // nenhuma senha de verdade é usada: a senha `SMOKE_EMAIL_WRONG_PASSWORD` faz o servidor recusar o login.
 import type { EmailAddress } from '../../shared/email'
-import type { ImapConnect, ImapMessage, ImapSession } from './imap-client'
+import type { ImapConnect, ImapMessage, ImapReaderConnect, ImapSession } from './imap-client'
 import type { Pop3Connect } from './pop3-client'
 import { SmtpError, type OutgoingMail, type SmtpSend, type SmtpVerify } from './smtp-client'
 
@@ -72,6 +72,19 @@ const SEEDS: Seed[] = [
   },
 ]
 
+/**
+ * Contrato 45 (CA7): uma mensagem antiga só no servidor, na pasta "Arquivo" (fora da INBOX e do cache do app), para a
+ * busca do Assistente achar.
+ */
+export const SMOKE_EMAIL_ARCHIVED: Seed = {
+  from: { name: 'Juliana Prado', address: 'juliana.prado@parceiro.example' },
+  subject: 'Contrato de parceria assinado',
+  minutesAgo: 60 * 24 * 400,
+  seen: true,
+  text: 'Segue o contrato de parceria assinado pelas duas partes. Vigência de 24 meses.',
+}
+export const SMOKE_EMAIL_ARCHIVE_FOLDER = 'Arquivo'
+
 function rfc822(seed: Seed, date: Date, messageId: string): Buffer {
   const address = (item: EmailAddress): string => (item.name ? `"${item.name}" <${item.address}>` : item.address)
   const encode = (value: string): string => `=?UTF-8?B?${Buffer.from(value, 'utf8').toString('base64')}?=`
@@ -95,6 +108,10 @@ function rfc822(seed: Seed, date: Date, messageId: string): Buffer {
 
 export interface FakeEmail {
   imap: ImapConnect
+  /** Contrato 45 (CA7): a conexão só de leitura da busca do Assistente (INBOX, "Enviados" e "Arquivo"). */
+  imapReader: ImapReaderConnect
+  /** As buscas e as leituras dessa conexão (o smoke confere que houve e que nada mudou de flag). */
+  reader: { searches: number; peeks: number }
   pop3: Pop3Connect
   smtp: SmtpSend
   smtpVerify: SmtpVerify
@@ -125,12 +142,61 @@ export function createFakeEmail(now: () => number = Date.now): FakeEmail {
     })
   }
   for (const seed of [...SEEDS].reverse()) add(seed, now() - seed.minutesAgo * 60_000)
+  // A pasta "Arquivo" do servidor, com UIDs próprios.
+  const archivedAt = new Date(now() - SMOKE_EMAIL_ARCHIVED.minutesAgo * 60_000)
+  const archived = [
+    {
+      message: { uid: 7, flags: ['\\Seen'], date: archivedAt.getTime(), subject: SMOKE_EMAIL_ARCHIVED.subject, from: [SMOKE_EMAIL_ARCHIVED.from], to: [ANDREW], cc: [], messageId: '<arquivo-7@parceiro.example>', inReplyTo: null, references: [] },
+      raw: rfc822(SMOKE_EMAIL_ARCHIVED, archivedAt, '<arquivo-7@parceiro.example>'),
+    },
+  ]
+  const boxes = (): Record<string, { message: ImapMessage; raw: Buffer }[]> => ({ INBOX: inbox, Enviados: [], [SMOKE_EMAIL_ARCHIVE_FOLDER]: archived })
+  const matches = (item: { message: ImapMessage; raw: Buffer }, query: Parameters<Awaited<ReturnType<ImapReaderConnect>>['search']>[1]): boolean => {
+    const has = (value: string, needle: string | undefined): boolean => !needle || value.toLowerCase().includes(needle.toLowerCase())
+    const people = (list: EmailAddress[]): string => list.map((one) => `${one.name ?? ''} ${one.address}`).join(' ')
+    return (
+      has(people(item.message.from), query.from) &&
+      has(people(item.message.to), query.to) &&
+      has(item.message.subject, query.subject) &&
+      (!query.text || has(`${item.message.subject} ${item.raw.toString('utf8')}`, query.text) || has(Buffer.from(item.raw.toString('utf8').split('\r\n\r\n').slice(1).join(''), 'base64').toString('utf8'), query.text)) &&
+      (!query.since || item.message.date >= query.since.getTime()) &&
+      (!query.before || item.message.date < query.before.getTime())
+    )
+  }
 
   const login = (pass: string): void => {
     if (pass === SMOKE_EMAIL_WRONG_PASSWORD) throw Object.assign(new Error('falso: login recusado'), { authenticationFailed: true })
   }
 
   const fake: FakeEmail = {
+    reader: { searches: 0, peeks: 0 },
+    async imapReader(config) {
+      login(config.pass)
+      return {
+        folders: async () => [
+          { path: 'INBOX', name: 'INBOX', specialUse: null },
+          { path: 'Enviados', name: 'Enviados', specialUse: '\\Sent' },
+          { path: SMOKE_EMAIL_ARCHIVE_FOLDER, name: SMOKE_EMAIL_ARCHIVE_FOLDER, specialUse: '\\Archive' },
+        ],
+        search: async (path, query, limit) => {
+          fake.reader.searches++
+          return {
+            uidValidity: '1',
+            messages: (boxes()[path] ?? [])
+              .filter((item) => matches(item, query))
+              .sort((a, b) => b.message.uid - a.message.uid)
+              .slice(0, limit)
+              .map((item) => ({ ...item.message, flags: [...item.message.flags] })),
+          }
+        },
+        // `BODY.PEEK[]`: devolve a mensagem sem mexer nas flags.
+        peek: async (path, uid) => {
+          fake.reader.peeks++
+          return (boxes()[path] ?? []).find((item) => item.message.uid === uid)?.raw ?? null
+        },
+        close: async () => undefined,
+      }
+    },
     sent: [],
     appended: 0,
     failNextSend: false,

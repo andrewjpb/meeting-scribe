@@ -96,7 +96,7 @@ import { BRANDING_DIR } from './branding/service'
 import { summaryInput, summaryLines } from './claude-cli/summary'
 import { MENU_IDS } from './menu'
 import { CHAT_CORPUS_DIR, CHAT_INDEX_FILE, CHAT_SCOPE_DIR, corpusFileSuffix } from './chat/corpus'
-import { AUTOMATIONS_FILE, GUIDE_FILE, isSourceFile, STATE_FILE } from './chat/sources'
+import { AUTOMATIONS_FILE, EMAIL_SEARCH_FILE, GUIDE_FILE, isSourceFile, STATE_FILE } from './chat/sources'
 import { CHATS_DIR } from './chat/store'
 import type { FakeDriveFile } from './google/fake-google'
 import { RECORDING_LEAVE_MESSAGE } from './lock/recording-session'
@@ -118,7 +118,7 @@ import { APP_PLUGINS, pluginFolderName } from '../shared/plugins'
 import { MEET_PATH, MEET_PORTS, type MeetServer } from './meet/server'
 import { MEETINGS_DIR } from './meetings/transcripts'
 import { SETTINGS_VERSION } from './settings/schema'
-import { SMOKE_EMAIL_ADDRESS, SMOKE_EMAIL_ATTACHMENT, SMOKE_EMAIL_PASSWORD, SMOKE_EMAIL_WRONG_PASSWORD } from './email/fake-email'
+import { SMOKE_EMAIL_ADDRESS, SMOKE_EMAIL_ARCHIVED, SMOKE_EMAIL_ATTACHMENT, SMOKE_EMAIL_PASSWORD, SMOKE_EMAIL_WRONG_PASSWORD } from './email/fake-email'
 import { CLAUDE_DISALLOWED_TOOLS, CLAUDE_READ_TOOLS, CLAUDE_WEB_TOOLS } from './acp/profiles/claude'
 import { LATEST_RELEASE_URL, RELEASE_DOWNLOAD_PREFIX, RELEASE_REDIRECT_HOSTS } from './updates/release'
 import {
@@ -5944,7 +5944,7 @@ async function assistantChecks(ctx: SmokeContext, watch: (win: BrowserWindow) =>
   const header = await evaluate<string>(contents, `document.querySelector('main h1')?.parentElement?.textContent ?? ''`)
   const placeholder = await evaluate<string>(contents, `document.querySelector('[data-chat-input]')?.placeholder ?? ''`)
   checks['name'] = {
-    ok: navLabel === 'Assistente' && noOldName && header.includes('Assistente') && header.includes('Pergunte ou peça qualquer coisa: reuniões, WhatsApp, automações e o próprio app.') && placeholder === 'Pergunte ou peça algo…',
+    ok: navLabel === 'Assistente' && noOldName && header.includes('Assistente') && header.includes('Pergunte ou peça qualquer coisa: reuniões, WhatsApp, email, automações e o próprio app.') && placeholder === 'Pergunte ou peça algo…',
     detail: `barra lateral "${navLabel}", sem "Perguntar"=${noOldName}; cabeçalho "${header.slice(0, 120)}"; campo "${placeholder}"`,
   }
 
@@ -7239,6 +7239,145 @@ async function emailChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => voi
   dark.destroy()
 }
 
+/**
+ * Contrato 45 (CA2 a CA4, CA7), com a conta do servidor falso já conectada e o agente ACP falso: "o que tenho de email
+ * pendente?" lê o `EMAILS.md` (só o cache) e mostra o cartão com os emails, que abre a tela Email na mensagem; "responde
+ * pro email da Marina dizendo …" vira o rascunho com "Re:", e só o clique em "Enviar" faz o SMTP falso receber, com o
+ * In-Reply-To dela; "cria uma tarefa pra responder o email da Juliana amanhã" vira o lembrete ligado ao email, que
+ * aparece nas pendências seguintes; "busque nos emails contrato da Juliana" pede as ferramentas do app, que acham no
+ * servidor (pasta "Arquivo", fora do cache) e leem por PEEK, sem mudar a lida de nenhuma mensagem.
+ */
+async function emailAssistantChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => void, checks: Record<string, Check>, shots: Screenshot[]): Promise<void> {
+  const fake = ctx.fixtures.email
+  const win = ctx.openWindow({ theme: 'light' })
+  watch(win)
+  await loadAndWait(win)
+  const contents = win.webContents
+  const transportBefore = readSettings(ctx.userDataDir).claudeTransport
+  await evaluate(contents, "window.__scribeApi.invoke('scribe:settings-update', { claudeTransport: 'acp' }).then(() => true)")
+  const accountId = await evaluate<string>(contents, `window.__scribeApi.invoke('scribe:email-accounts').then((list) => list[0]?.account.id ?? '')`)
+  const inbox = (): Promise<{ id: string; subject: string; seen: boolean; messageId: string | null }[]> =>
+    evaluate(contents, `window.__scribeApi.invoke('scribe:email-messages', { accountId: '${accountId}' }).then((list) => list.map((item) => ({ id: item.id, subject: item.subject, seen: item.seen, messageId: item.messageId })))`)
+  await clickSelector(contents, '[data-nav="assistente"]')
+  await waitFor(contents, routeIs('assistente'))
+  await clickSelector(contents, '[data-action="chat-new"]')
+  await waitFor(contents, `document.querySelector('[data-chat-input]') && !document.querySelector('[data-chat-message]')`)
+
+  // CA2: as pendências, com o cartão dos emails.
+  const searchesBefore = fake.reader.searches
+  const pending = await askChat(contents, 'O que tenho de email pendente?')
+  const chatId = await evaluate<string>(contents, `document.querySelector('[data-chat-conversation]')?.getAttribute('data-chat-conversation') ?? ''`)
+  const scopeDir = join(ctx.userDataDir, CHAT_SCOPE_DIR, chatId)
+  const overviewOf = (): string => (existsSync(join(scopeDir, 'EMAILS.md')) ? readFileSync(join(scopeDir, 'EMAILS.md'), 'utf8') : '')
+  const overview = overviewOf()
+  const pendingLines = overview.split('\n').filter((line) => line.startsWith('- ref: ') && line.includes(' · pendente de resposta: sim'))
+  const card = `[...document.querySelectorAll('[data-chat-action="emails"]')].at(-1)`
+  const cardShown = await waitFor(contents, `${card}?.querySelectorAll('[data-chat-email-item]').length === ${pendingLines.length}`)
+  const fromNames = await evaluate<string[]>(contents, `[...(${card}?.querySelectorAll('[data-chat-email-from]') ?? [])].map((el) => el.textContent)`)
+  const accountShown = await evaluate<boolean>(contents, `[...(${card}?.querySelectorAll('[data-chat-email-account]') ?? [])].every((el) => el.textContent.startsWith('${SMOKE_EMAIL_ADDRESS}'))`)
+  const timeShown = await evaluate<boolean>(contents, `[...(${card}?.querySelectorAll('[data-chat-email-time]') ?? [])].every((el) => el.textContent.trim().length > 0)`)
+  await settle(contents)
+  shots.push(await capture(win, ctx.outDir, 'assistente-email-light'))
+  const firstSubject = await evaluate<string>(contents, `${card}?.querySelector('[data-chat-email-subject]')?.textContent ?? ''`)
+  await evaluate(contents, `${card}?.querySelector('[data-action="chat-email-open"]')?.click()`)
+  const opened = await waitFor(contents, `${routeIs('email')} && document.querySelector('[data-email-reading]')?.getAttribute('aria-label') === ${JSON.stringify(firstSubject)}`, 8000)
+  checks['assistantPending'] = {
+    ok:
+      pending.done &&
+      pendingLines.length > 0 &&
+      cardShown &&
+      fromNames.length === pendingLines.length &&
+      accountShown &&
+      timeShown &&
+      pending.answer.includes('[Email · ') &&
+      !pending.answer.includes('lap-acao') &&
+      fake.reader.searches === searchesBefore &&
+      mode(join(scopeDir, 'EMAILS.md')) === '600' &&
+      opened,
+    detail: `resposta=${pending.done} "${pending.answer.slice(0, 200)}"; pendentes no EMAILS.md=${pendingLines.length}; cartão=${cardShown} ${JSON.stringify(fromNames)} conta=${accountShown} hora=${timeShown}; servidor nas pendências=${fake.reader.searches - searchesBefore}; clique abriu "${firstSubject}"=${opened}`,
+  }
+  await clickSelector(contents, '[data-nav="assistente"]')
+  await waitFor(contents, `${routeIs('assistente')} && document.querySelector('[data-chat-conversation="${chatId}"]')`, 8000)
+
+  // CA3: o rascunho, enviado só no clique, com o In-Reply-To da mensagem respondida.
+  const marina = (await inbox()).find((item) => item.subject.startsWith('Proposta revisada'))
+  const reply = await askChat(contents, 'Responde pro email da Marina dizendo que recebi a proposta')
+  const replyCard = `[...document.querySelectorAll('[data-chat-action="email-resposta"]')].at(-1)`
+  const replyShown = await waitFor(contents, `${replyCard}?.dataset.chatActionStatus === 'proposed'`)
+  const to = await evaluate<string>(contents, `${replyCard}?.querySelector('[data-chat-email-to]')?.textContent ?? ''`)
+  const subject = await evaluate<string>(contents, `${replyCard}?.querySelector('[data-chat-email-subject]')?.textContent ?? ''`)
+  const sentBefore = fake.sent.length
+  await wait(300)
+  const nothingBeforeClick = fake.sent.length === sentBefore
+  await setValue(contents, '[data-chat-action="email-resposta"][data-chat-action-status="proposed"] [data-chat-action-message]', 'Recebi a proposta, obrigado. Respondo até sexta.')
+  await settle(contents)
+  shots.push(await capture(win, ctx.outDir, 'assistente-email-rascunho-light'))
+  await evaluate(contents, `${replyCard}?.querySelector('[data-action="chat-action-email-send"]')?.click()`)
+  for (let attempt = 0; attempt < 50 && fake.sent.length <= sentBefore; attempt++) await wait(100)
+  const sentDone = await waitFor(contents, `${replyCard}?.dataset.chatActionStatus === 'done' && (${replyCard}?.querySelector('[data-chat-action-result]')?.textContent ?? '').startsWith('Enviado às ')`)
+  const last = fake.sent.at(-1)
+  const savedReply = chatFile(ctx.userDataDir, chatId)?.messages.at(-1)?.actions?.[0]
+  checks['assistantReply'] = {
+    ok:
+      reply.done &&
+      replyShown &&
+      to.includes('marina.rocha@cliente.example') &&
+      subject === 'Re: Proposta revisada do projeto de integração' &&
+      nothingBeforeClick &&
+      fake.sent.length === sentBefore + 1 &&
+      last?.to.join(',') === 'marina.rocha@cliente.example' &&
+      last.subject === subject &&
+      last.inReplyTo === (marina?.messageId ?? '?') &&
+      last.text === 'Recebi a proposta, obrigado. Respondo até sexta.' &&
+      sentDone &&
+      savedReply?.status === 'done',
+    detail: `cartão=${replyShown} para "${to}" assunto "${subject}"; nada antes do clique=${nothingBeforeClick}; SMTP ${sentBefore} -> ${fake.sent.length} ${JSON.stringify(last ?? null)}; In-Reply-To esperado ${marina?.messageId ?? '?'}; "Enviado"=${sentDone}`,
+  }
+
+  // CA4: a tarefa de responder, ligada ao email, e ela nas pendências seguintes.
+  const reminder = await askChat(contents, 'Cria uma tarefa pra responder o email da Juliana amanhã')
+  const reminderCard = `[...document.querySelectorAll('[data-chat-action="lembrete"]')].at(-1)`
+  const reminderShown = await waitFor(contents, `${reminderCard}?.dataset.chatActionStatus === 'proposed' && ${reminderCard}?.querySelector('[data-chat-action-email-label]')`)
+  const label = await evaluate<string>(contents, `${reminderCard}?.querySelector('[data-chat-action-email-label]')?.textContent ?? ''`)
+  await evaluate(contents, `${reminderCard}?.querySelector('[data-action="chat-action-reminder-create"]')?.click()`)
+  const created = await waitFor(contents, `${reminderCard}?.dataset.chatActionStatus === 'done'`)
+  const task = (await ctx.automations.listTasks()).find((item) => item.reminder?.email?.accountId === accountId)
+  await askChat(contents, 'O que tenho de email pendente?')
+  const julianaLine = overviewOf()
+    .split('\n')
+    .find((line) => line.includes('de: Juliana Prado'))
+  checks['assistantTask'] = {
+    ok: reminder.done && reminderShown && label.startsWith('Email: Juliana Prado · ') && created && task !== undefined && task.schedule.kind === 'once' && task.agentId === '' && (julianaLine?.includes(' · lembrete marcado: ') ?? false),
+    detail: `cartão=${reminderShown} "${label}"; criado=${created}; tarefa ${task ? `${task.name} (${task.schedule.kind})` : 'ausente'}; linha seguinte "${julianaLine ?? ''}"`,
+  }
+
+  // CA7: a busca além do cache, pelas ferramentas do app; nada muda de lida.
+  const seenBefore = JSON.stringify((await inbox()).map((item) => [item.id, item.seen]))
+  const peeksBefore = fake.reader.peeks
+  const searchBefore = fake.reader.searches
+  const found = await askChat(contents, 'Busque nos emails contrato da Juliana')
+  const searchFile = existsSync(join(scopeDir, EMAIL_SEARCH_FILE)) ? readFileSync(join(scopeDir, EMAIL_SEARCH_FILE), 'utf8') : ''
+  const archivedCard = await waitFor(contents, `[...(${LAST_ASSISTANT}?.querySelectorAll('[data-chat-email-account]') ?? [])].some((el) => el.textContent.includes('só no servidor (pasta Arquivo)'))`)
+  const steps = await evaluate<string[]>(contents, `[...(${LAST_ASSISTANT}?.querySelectorAll('[data-chat-step]') ?? [])].map((el) => el.textContent)`)
+  const seenAfter = JSON.stringify((await inbox()).map((item) => [item.id, item.seen]))
+  checks['assistantSearch'] = {
+    ok:
+      found.done &&
+      found.answer.includes('Vigência de 24 meses') &&
+      !found.answer.includes('lap-ferramenta') &&
+      searchFile.includes('onde: servidor, pasta Arquivo') &&
+      searchFile.includes(SMOKE_EMAIL_ARCHIVED.subject) &&
+      fake.reader.searches > searchBefore &&
+      fake.reader.peeks === peeksBefore + 1 &&
+      archivedCard &&
+      seenAfter === seenBefore,
+    detail: `resposta=${found.done} "${found.answer.slice(0, 200)}"; busca ${fake.reader.searches - searchBefore} pastas, PEEK ${fake.reader.peeks - peeksBefore}; cartão da pasta Arquivo=${archivedCard}; passos ${JSON.stringify(steps.slice(-4))}; lidas iguais=${seenAfter === seenBefore}`,
+  }
+
+  await evaluate(contents, `window.__scribeApi.invoke('scribe:settings-update', { claudeTransport: '${transportBefore === 'acp' ? 'acp' : 'cli'}' }).then(() => true)`)
+  win.destroy()
+}
+
 type EmailNoticeRecord = SmokeFixtures['emailNotify']['notifications'][number]
 
 /** A primeira notificação de email registrada depois de `from` que passa no filtro (até `ms`). */
@@ -7740,6 +7879,9 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
     // Contrato 43: as telas de email com o servidor falso; antes do bloqueio (que recusa os canais novos junto).
     await emailChecks(ctx, watch, email, screenshots)
 
+    // Contrato 45: o email no Assistente, com a conta do servidor falso conectada; antes do bloqueio.
+    await emailAssistantChecks(ctx, watch, email, screenshots)
+
     // Contrato 22: bloqueio do app, por último (a senha criada vale para o userData inteiro).
     await lockChecks(ctx, watch, lock, screenshots)
 
@@ -7808,7 +7950,7 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
   for (const [name, check] of Object.entries(meet)) if (!check.ok) failures.push(`meet ${name}: ${check.detail}`)
   for (const name of ['server', 'recording', 'setting']) if (!meet[name]) failures.push(`meet ${name}: não executado`)
   for (const [name, check] of Object.entries(email)) if (!check.ok) failures.push(`email ${name}: ${check.detail}`)
-  for (const name of ['settings', 'list', 'reading', 'compose', 'folders', 'attachments', 'remove', 'dark', 'notify']) if (!email[name]) failures.push(`email ${name}: não executado`)
+  for (const name of ['settings', 'list', 'reading', 'compose', 'folders', 'attachments', 'remove', 'dark', 'notify', 'assistantPending', 'assistantReply', 'assistantTask', 'assistantSearch']) if (!email[name]) failures.push(`email ${name}: não executado`)
   for (const [name, check] of Object.entries(lock)) if (!check.ok) failures.push(`bloqueio ${name}: ${check.detail}`)
   for (const name of ['password', 'layer', 'channels', 'unlock', 'shortcutAndTouchId', 'recordingContinues', 'leaveDialog', 'endWhileLocked', 'reopen', 'reopenFromDisk', 'dark']) if (!lock[name]) failures.push(`bloqueio ${name}: não executado`)
   if (!theme.ok) failures.push(`tema: ${theme.detail}`)
@@ -7828,8 +7970,9 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
   // (contrato 12); a aba "Plugins" com o plugin salvo e o manual aberto, no claro (contrato 31); o painel Detalhes do
   // WhatsApp, no claro (contrato 32; no escuro ele sai no print da tela "WhatsApp"); o balão com a imagem, o player e
   // a transcrição do áudio, no claro (contrato 37); a prévia do anexo com a legenda, no claro (contrato 39); a lista, a
-  // leitura e o composer do email, nos dois temas (contrato 43).
-  const expectedShots = SCREENS.length * THEMES.length + 56
+  // leitura e o composer do email, nos dois temas (contrato 43); o cartão dos emails pendentes e o rascunho de resposta
+  // por email no Assistente, no claro (contrato 45).
+  const expectedShots = SCREENS.length * THEMES.length + 58
   if (screenshots.length !== expectedShots) failures.push(`${screenshots.length} PNGs em vez de ${expectedShots}`)
   for (const shot of screenshots) {
     if (shot.width < 1120 || shot.height < 740) failures.push(`${shot.name}: ${shot.width}x${shot.height} abaixo de 1120x740`)

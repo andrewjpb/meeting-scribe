@@ -21,6 +21,7 @@ import { noteContextText, notesInOrder, type MeetingNote } from '../../shared/me
 import { escapeHeadings, taskLine, type MeetingSummary } from '../../shared/meeting-summary'
 import type { Meeting } from '../../shared/meetings'
 import { firstSentence } from '../../shared/meetings-overview'
+import { EMAIL_EXPORT_PREFIX, EMAIL_OVERVIEW_FILE, EMAIL_RECENT_DAYS } from '../../shared/email'
 import { WHATSAPP_EXPORT_PREFIX, WHATSAPP_OVERVIEW_FILE, WHATSAPP_RECENT_DAYS } from '../../shared/whatsapp'
 import { durationLabel } from '../../shared/transcript-markdown'
 import { formatClock, type TranscriptDocument } from '../../shared/transcription'
@@ -30,7 +31,7 @@ import type { NotesStore } from '../meetings/notes'
 import type { MeetingsStore } from '../meetings/store'
 import type { SummaryStore } from '../meetings/summaries'
 import type { TranscriptStore } from '../meetings/transcripts'
-import { AUTOMATIONS_FILE, GUIDE_FILE, isSourceFile, STATE_FILE } from './sources'
+import { AUTOMATIONS_FILE, EMAIL_SEARCH_FILE, GUIDE_FILE, isSourceFile, STATE_FILE } from './sources'
 
 export const CHAT_CORPUS_DIR = 'chat-corpus'
 export const CHAT_INDEX_FILE = 'INDICE.md'
@@ -118,13 +119,21 @@ const SOURCE_DESCRIPTIONS: Readonly<Record<string, string>> = {
   [GUIDE_FILE]: 'o guia do app: cada tela, cada aba de Configurações, os atalhos e o que cada recurso faz e não faz.',
   [AUTOMATIONS_FILE]: 'os agentes, as tarefas agendadas (próxima e última execução) e as últimas 20 execuções.',
   [WHATSAPP_OVERVIEW_FILE]: `uma linha por conversa do WhatsApp com mensagem nos últimos ${WHATSAPP_RECENT_DAYS} dias, com as não lidas, quem mandou a última e "pendente de resposta".`,
+  // Contrato 45.
+  [EMAIL_OVERVIEW_FILE]: `uma linha por email recebido nos últimos ${EMAIL_RECENT_DAYS} dias, por conta, com a referência, quem mandou, o assunto, a idade, se foi lido, "pendente de resposta" e o arquivo com o corpo (quando já baixado).`,
+  [EMAIL_SEARCH_FILE]: 'o resultado da última busca de emails (ferramenta buscar_emails).',
 }
 
 /**
- * `INDICE.md`: uma linha por reunião, da mais recente para a mais antiga; depois, as fontes do app (contrato 25) e as
- * conversas do WhatsApp da pasta (contrato 24).
+ * `INDICE.md`: uma linha por reunião, da mais recente para a mais antiga; depois, as fontes do app (contrato 25), as
+ * conversas do WhatsApp da pasta (contrato 24) e os emails já baixados (contrato 45).
  */
-export function corpusIndexMarkdown(entries: readonly { meeting: Meeting; summary: MeetingSummary | null }[], whatsappFiles: readonly string[] = [], sourceFiles: readonly string[] = []): string {
+export function corpusIndexMarkdown(
+  entries: readonly { meeting: Meeting; summary: MeetingSummary | null }[],
+  whatsappFiles: readonly string[] = [],
+  sourceFiles: readonly string[] = [],
+  emailFiles: readonly string[] = [],
+): string {
   const sorted = [...entries].sort((a, b) => Date.parse(b.meeting.startedAt) - Date.parse(a.meeting.startedAt))
   const recent = sourceFiles.includes(WHATSAPP_OVERVIEW_FILE)
   const lines = [
@@ -144,6 +153,7 @@ export function corpusIndexMarkdown(entries: readonly { meeting: Meeting; summar
           ...whatsappFiles.map((file) => `- arquivo: ${file}`),
         ]
       : []),
+    ...(emailFiles.length ? ['', '## Emails', '', 'Um arquivo por email com o corpo já baixado (a referência no fim do nome é a mesma do EMAILS.md).', '', ...emailFiles.map((file) => `- arquivo: ${file}`)] : []),
   ]
   return `${lines.join('\n')}\n`
 }
@@ -298,7 +308,9 @@ export function createChatCorpus(deps: ChatCorpusDeps): ChatCorpus {
     const dated = await Promise.all(whatsappNames.map(async (name) => ({ name, last: await lastOf(name) })))
     const whatsappFiles = dated.sort((a, b) => b.last.localeCompare(a.last) || a.name.localeCompare(b.name)).map((entry) => entry.name)
     const sourceFiles = SOURCE_ORDER.filter((name) => names.includes(name))
-    const content = corpusIndexMarkdown(entries, whatsappFiles, sourceFiles)
+    // Contrato 45: os emails com o corpo já baixado.
+    const emailFiles = names.filter((name) => name.startsWith(EMAIL_EXPORT_PREFIX) && name.endsWith('.md')).sort()
+    const content = corpusIndexMarkdown(entries, whatsappFiles, sourceFiles, emailFiles)
     // Igual ao que está lá: nada é regravado.
     if ((await readFile(file, 'utf8').catch(() => null)) === content) return
     await writeAtomic(file, content)
