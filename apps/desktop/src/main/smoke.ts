@@ -7378,6 +7378,124 @@ async function emailAssistantChecks(ctx: SmokeContext, watch: (win: BrowserWindo
   win.destroy()
 }
 
+/**
+ * Contrato 46 (CA1 a CA3, CA6), com a conta do servidor falso conectada e o agente ACP falso: a tarefa nova com "Pode
+ * enviar email" ligada pelo formulário (a conta e `@cliente.example`), gravada com a data e com o ícone de envio na
+ * lista; "Rodar agora" com o pedido de envio para um endereço da lista e outro de fora: o SMTP falso recebe só o
+ * primeiro, o segundo é recusado, a execução mostra os dois, o enviado está em Enviados e sai o aviso do fim.
+ */
+async function emailTaskChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => void, checks: Record<string, Check>, shots: Screenshot[]): Promise<void> {
+  const fake = ctx.fixtures.email
+  const auto = ctx.fixtures.automations
+  const win = ctx.openWindow({ theme: 'light' })
+  watch(win)
+  await loadAndWait(win)
+  const contents = win.webContents
+  const invoke = <T>(script: string): Promise<T> => evaluate<T>(contents, script)
+  const accountId = await invoke<string>(`window.__scribeApi.invoke('scribe:email-accounts').then((list) => list[0]?.account.id ?? '')`)
+  const agentId = await invoke<string>(`window.__scribeApi.invoke('scribe:agents-list').then((list) => list.agents[0]?.id ?? '')`)
+  const name = 'Aviso por email do smoke'
+  const subject = 'o aviso do smoke'
+
+  // CA1: o formulário, com a seção desligada por padrão; ligada, a conta, a lista e o teto.
+  await clickSelector(contents, '[data-nav="automacoes"]')
+  await waitFor(contents, routeIs('automacoes'), 8000)
+  await clickSelector(contents, '#automations-tab-tarefas')
+  await waitFor(contents, `document.querySelector('[data-tasks-tab]')`)
+  await clickSelector(contents, '[data-action="task-new"]')
+  await waitFor(contents, `document.querySelector('[data-task-form]')`)
+  const offByDefault = await waitFor(contents, `document.querySelector('[data-task-email="off"]') && !document.querySelector('#task-email-allow') && document.querySelector('[data-action="task-email-toggle"]')?.disabled === false`)
+  await setValue(contents, '#task-name', name)
+  await setValue(contents, '#task-agent', agentId, 'change')
+  await setValue(contents, '#task-message', `Envie ${subject} para marina.rocha@cliente.example e fora@outro.example`)
+  await setValue(contents, '#task-frequency', 'daily', 'change')
+  await waitFor(contents, `document.querySelector('[data-task-frequency="daily"] [data-task-time]')`)
+  await setValue(contents, '[data-task-time]', '23:30')
+  await clickSelector(contents, '[data-action="task-email-toggle"]')
+  await waitFor(contents, `document.querySelector('[data-task-email="on"] #task-email-allow')`)
+  await setValue(contents, '#task-email-account', accountId, 'change')
+  // Lista vazia: não salva.
+  const emptyBlocked = await waitFor(contents, `document.querySelector('[data-task-email-error]') && document.querySelector('[data-action="task-save"]')?.disabled === true`)
+  await setValue(contents, '#task-email-allow', '@Cliente.example')
+  const maxDefault = await invoke<string>(`document.querySelector('#task-email-max')?.value ?? ''`)
+  const ready = await waitFor(contents, `!document.querySelector('[data-task-email-error]') && document.querySelector('[data-action="task-save"]')?.disabled === false`)
+  await invoke(`(() => { document.querySelector('[data-task-email]')?.scrollIntoView({ block: 'center' }); return true })()`)
+  await settle(contents)
+  shots.push(await capture(win, ctx.outDir, 'tarefa-email-light'))
+  await clickSelector(contents, '[data-action="task-save"]')
+  const row = await waitFor(contents, `document.querySelector('[data-task-row][data-task-name=${JSON.stringify(name)}][data-task-email] [data-task-email-icon]')`)
+  const line = await invoke<string>(`document.querySelector('[data-task-row][data-task-name=${JSON.stringify(name)}] [data-task-email-line]')?.textContent ?? ''`)
+  const saved = (await ctx.automations.listTasks()).find((task) => task.name === name)
+  const otherTasks = (await ctx.automations.listTasks()).filter((task) => task.name !== name && !task.reminder)
+  checks['taskEmailForm'] = {
+    ok:
+      offByDefault &&
+      emptyBlocked &&
+      maxDefault === '5' &&
+      ready &&
+      row &&
+      line.startsWith('Pode enviar email · permitido em ') &&
+      saved?.email?.accountId === accountId &&
+      JSON.stringify(saved.email.allow) === JSON.stringify(['@cliente.example']) &&
+      saved.email.maxPerRun === 5 &&
+      !Number.isNaN(Date.parse(saved.email.grantedAt)) &&
+      otherTasks.every((task) => task.email === null),
+    detail: `desligada por padrão=${offByDefault}; lista vazia bloqueia=${emptyBlocked}; teto padrão "${maxDefault}"; ícone na lista=${row} "${line}"; gravada ${JSON.stringify(saved?.email ?? null)}; outras sem permissão=${otherTasks.every((task) => task.email === null)}`,
+  }
+
+  // CA2, CA3 e CA6: "Rodar agora": um envio para a lista chega no SMTP falso, o de fora é recusado.
+  const sentBefore = fake.sent.length
+  const noticesBefore = auto.notifications.length
+  const started = await invoke<{ ok: boolean; runId?: string }>(`window.__scribeApi.invoke('scribe:tasks-run-now', { id: ${JSON.stringify(saved?.id ?? '')} })`)
+  await automationsIdle(ctx)
+  for (let attempt = 0; attempt < 50 && readRunFiles(ctx.userDataDir).find((run) => run.id === started.runId)?.status === 'running'; attempt++) await wait(100)
+  await automationsIdle(ctx)
+  const run = readRunFiles(ctx.userDataDir).find((item) => item.id === started.runId) as (SmokeRunFile & { emails?: { to: string[]; ok: boolean; messageId: string | null; error: string | null; subject: string }[] }) | undefined
+  const delivered = fake.sent.slice(sentBefore)
+  const emails = run?.emails ?? []
+  const sentFolder = await invoke<{ subject: string; to: string[] }[]>(
+    `window.__scribeApi.invoke('scribe:email-messages', { accountId: '${accountId}', folder: 'sent' }).then((list) => list.map((item) => ({ subject: item.subject, to: item.to.map((entry) => entry.address) })))`,
+  )
+  const notice = auto.notifications.slice(noticesBefore).find((item) => item.title === `Tarefa: ${name}` && item.body === `Tarefa ${name} enviou 1 email`)
+
+  // A execução mostra os dois.
+  await clickSelector(contents, '#automations-tab-execucoes')
+  await waitFor(contents, `document.querySelector('[data-run-row="${started.runId ?? ''}"]')`, 8000)
+  await clickSelector(contents, `[data-run-row="${started.runId ?? ''}"] [data-action="run-open"]`)
+  const shown = await waitFor(contents, `document.querySelectorAll('[data-run-detail] [data-run-email]').length === 2`, 8000)
+  const view = await invoke<{ kind: string; to: string; extra: string }[]>(
+    `[...document.querySelectorAll('[data-run-detail] [data-run-email]')].map((item) => ({ kind: item.dataset.runEmail, to: item.querySelector('[data-run-email-to]')?.textContent ?? '', extra: (item.querySelector('[data-run-email-id]') ?? item.querySelector('[data-run-email-error]'))?.textContent ?? '' }))`,
+  )
+  await invoke(`(() => { document.querySelector('[data-run-emails]')?.scrollIntoView({ block: 'center' }); return true })()`)
+  await settle(contents)
+  shots.push(await capture(win, ctx.outDir, 'execucao-emails-light'))
+  checks['taskEmailRun'] = {
+    ok:
+      started.ok &&
+      run?.status === 'ok' &&
+      delivered.length === 1 &&
+      delivered[0]?.to.join(',') === 'marina.rocha@cliente.example' &&
+      delivered[0].subject === subject &&
+      emails.length === 2 &&
+      emails[0]?.ok === true &&
+      (emails[0].messageId ?? '').startsWith('<') &&
+      emails[1]?.ok === false &&
+      emails[1].error === 'destinatário fora da lista: fora@outro.example' &&
+      sentFolder.some((item) => item.subject === subject && item.to.join(',') === 'marina.rocha@cliente.example') &&
+      notice !== undefined &&
+      shown &&
+      view[0]?.kind === 'sent' &&
+      view[0].extra.startsWith('Message-ID <') &&
+      view[1]?.kind === 'refused' &&
+      view[1].to.includes('fora@outro.example') &&
+      view[1].extra.includes('fora da lista'),
+    detail: `rodou=${JSON.stringify(started)} ${run?.status ?? '?'}; SMTP ${JSON.stringify(delivered.map((item) => ({ to: item.to, subject: item.subject })))}; na execução ${JSON.stringify(emails.map((item) => `${item.ok ? 'ok' : 'recusado'}:${item.to.join(',')}:${item.error ?? item.messageId ?? ''}`))}; em Enviados=${sentFolder.some((item) => item.subject === subject)}; aviso=${notice ? notice.body : 'nenhum'}; na tela ${JSON.stringify(view)}`,
+  }
+  // A tarefa sai: o resto do smoke não vê a permissão.
+  await invoke(`window.__scribeApi.invoke('scribe:tasks-delete', { id: ${JSON.stringify(saved?.id ?? '')} })`)
+  win.destroy()
+}
+
 type EmailNoticeRecord = SmokeFixtures['emailNotify']['notifications'][number]
 
 /** A primeira notificação de email registrada depois de `from` que passa no filtro (até `ms`). */
@@ -7882,6 +8000,9 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
     // Contrato 45: o email no Assistente, com a conta do servidor falso conectada; antes do bloqueio.
     await emailAssistantChecks(ctx, watch, email, screenshots)
 
+    // Contrato 46: a tarefa com "Pode enviar email", com a mesma conta do servidor falso; antes do bloqueio.
+    await emailTaskChecks(ctx, watch, email, screenshots)
+
     // Contrato 22: bloqueio do app, por último (a senha criada vale para o userData inteiro).
     await lockChecks(ctx, watch, lock, screenshots)
 
@@ -7950,7 +8071,7 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
   for (const [name, check] of Object.entries(meet)) if (!check.ok) failures.push(`meet ${name}: ${check.detail}`)
   for (const name of ['server', 'recording', 'setting']) if (!meet[name]) failures.push(`meet ${name}: não executado`)
   for (const [name, check] of Object.entries(email)) if (!check.ok) failures.push(`email ${name}: ${check.detail}`)
-  for (const name of ['settings', 'list', 'reading', 'compose', 'folders', 'attachments', 'remove', 'dark', 'notify', 'assistantPending', 'assistantReply', 'assistantTask', 'assistantSearch']) if (!email[name]) failures.push(`email ${name}: não executado`)
+  for (const name of ['settings', 'list', 'reading', 'compose', 'folders', 'attachments', 'remove', 'dark', 'notify', 'assistantPending', 'assistantReply', 'assistantTask', 'assistantSearch', 'taskEmailForm', 'taskEmailRun']) if (!email[name]) failures.push(`email ${name}: não executado`)
   for (const [name, check] of Object.entries(lock)) if (!check.ok) failures.push(`bloqueio ${name}: ${check.detail}`)
   for (const name of ['password', 'layer', 'channels', 'unlock', 'shortcutAndTouchId', 'recordingContinues', 'leaveDialog', 'endWhileLocked', 'reopen', 'reopenFromDisk', 'dark']) if (!lock[name]) failures.push(`bloqueio ${name}: não executado`)
   if (!theme.ok) failures.push(`tema: ${theme.detail}`)
@@ -7971,8 +8092,9 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
   // WhatsApp, no claro (contrato 32; no escuro ele sai no print da tela "WhatsApp"); o balão com a imagem, o player e
   // a transcrição do áudio, no claro (contrato 37); a prévia do anexo com a legenda, no claro (contrato 39); a lista, a
   // leitura e o composer do email, nos dois temas (contrato 43); o cartão dos emails pendentes e o rascunho de resposta
-  // por email no Assistente, no claro (contrato 45).
-  const expectedShots = SCREENS.length * THEMES.length + 58
+  // por email no Assistente, no claro (contrato 45); o formulário da tarefa com "Pode enviar email" e a execução com os
+  // emails enviado e recusado, no claro (contrato 46).
+  const expectedShots = SCREENS.length * THEMES.length + 60
   if (screenshots.length !== expectedShots) failures.push(`${screenshots.length} PNGs em vez de ${expectedShots}`)
   for (const shot of screenshots) {
     if (shot.width < 1120 || shot.height < 740) failures.push(`${shot.name}: ${shot.width}x${shot.height} abaixo de 1120x740`)

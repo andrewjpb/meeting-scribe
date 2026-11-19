@@ -52,10 +52,10 @@ Internet: com a fonte "Internet" ligada no Contexto (vem ligada), o Assistente b
 Agentes que leem as suas reuniões e, se você deixar, a internet, e respondem na hora ou no horário que você escolher. No topo, "Pedir agora": escolha um agente, escreva o pedido e ele responde na hora. Abaixo, três abas:
 
 - Agentes: cada agente tem nome, instruções, modelo, escopo de reuniões, saída (conversa no Assistente, post-it na reunião, arquivo .md na pasta ou notificação do macOS) e o interruptor "Pode pesquisar na internet" (vem desligado). Ligado, o agente busca na web e abre as páginas que encontrar, com a mesma regra do Assistente: só endereços que vieram da busca daquela mesma execução ou que você escreveu no pedido ou nas instruções (numa tarefa agendada, o formulário mostra "O agente poderá abrir: …" com os endereços da mensagem), até 10 buscas e 15 páginas por execução; o cartão do agente mostra "Internet". "Pedir agora" e as tarefas agendadas usam o que está no agente. "Testar agora" roda sem gravar.
-- Tarefas agendadas: um agente, uma mensagem e a frequência (todo dia, toda semana, todo mês, uma vez, a cada N minutos, cron ou depois de cada reunião). Os lembretes do Assistente aparecem aqui como "Lembrete", sem agente.
-- Execuções: o histórico das últimas 500 execuções, com o pedido e a resposta.
+- Tarefas agendadas: um agente, uma mensagem e a frequência (todo dia, toda semana, todo mês, uma vez, a cada N minutos, cron ou depois de cada reunião). Os lembretes do Assistente aparecem aqui como "Lembrete", sem agente. A seção "Pode enviar email" (vem desligada) deixa a tarefa enviar email sem pedir o seu clique: você escolhe a conta, a lista de destinatários permitidos (endereços exatos ou domínios como @empresa.com, que não valem para subdomínios; de 1 a 50) e o teto por execução (padrão 5, até 20). Ligar e salvar é a permissão, gravada com a data; a tarefa aparece na lista com o ícone de envio. Nas execuções dela, o agente também lê o email. Envio fora da lista, de outra conta ou acima do teto é recusado, e o que um email lido pedir nunca muda a lista. Desligar a seção, excluir a tarefa, "Pausar todas as tarefas" ou o app bloqueado cortam os envios na hora, mesmo no meio de uma execução.
+- Execuções: o histórico das últimas 500 execuções, com o pedido e a resposta. Na execução de uma tarefa com "Pode enviar email", os emails enviados (para quem, assunto, hora e Message-ID) e os recusados (com o motivo); os enviados ficam também na pasta Enviados, e no fim sai a notificação "Tarefa X enviou 2 emails".
 
-"Pausar todas as tarefas" para tudo o que é automático. Uma tarefa que falha 3 vezes seguidas pausa sozinha. As tarefas rodam com o app aberto, mesmo só com o ícone na barra de menus. Os agentes só leem (as reuniões e, se você deixar, a internet): não enviam nada a ninguém.
+"Pausar todas as tarefas" para tudo o que é automático. Uma tarefa que falha 3 vezes seguidas pausa sozinha. As tarefas rodam com o app aberto, mesmo só com o ícone na barra de menus. Os agentes só leem (as reuniões e, se você deixar, a internet): não enviam nada a ninguém, a não ser o email de uma tarefa com "Pode enviar email" ligada, dentro do que você permitiu.
 
 <!-- tela: whatsapp -->
 ## WhatsApp
@@ -130,7 +130,7 @@ A versão instalada, a versão do Electron e do Chrome e a licença (código abe
 
 ## Privacidade
 
-As reuniões, as transcrições, as conversas do Assistente e as mensagens do WhatsApp ficam neste Mac. A transcrição usa a AssemblyAI; o resumo, a tradução e o Assistente usam o Claude da sua conta. Nada vai para o Google Drive sem a conta conectada e a opção ligada. As agendas Google e Microsoft são só lidas, pelo próprio app; a última leitura fica guardada neste Mac para funcionar sem internet. Nenhuma IA envia mensagem a ninguém.
+As reuniões, as transcrições, as conversas do Assistente e as mensagens do WhatsApp ficam neste Mac. A transcrição usa a AssemblyAI; o resumo, a tradução e o Assistente usam o Claude da sua conta. Nada vai para o Google Drive sem a conta conectada e a opção ligada. As agendas Google e Microsoft são só lidas, pelo próprio app; a última leitura fica guardada neste Mac para funcionar sem internet. Nenhuma IA envia mensagem a ninguém, a não ser o email das tarefas em que você ligou "Pode enviar email", só para os destinatários que você permitiu.
 
 ## Bloqueio
 

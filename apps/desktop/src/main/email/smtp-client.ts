@@ -19,6 +19,8 @@ export interface OutgoingMail {
   to: string[]
   /** Contrato 43: "Responder a todos" e o campo "Cc". */
   cc?: string[] | undefined
+  /** Contrato 46: o "Cco" do envio das tarefas; só vai no envelope do SMTP, nunca no cabeçalho. */
+  bcc?: string[] | undefined
   subject: string
   text: string
   /** Contrato 43: anexos locais (o tipo sai da extensão do nome). */
@@ -109,7 +111,7 @@ export const sendSmtp: SmtpSend = async (config, mail) => {
   const raw = await buildMessage(mail)
   const transport = await transportFor(config)
   try {
-    await transport.sendMail({ envelope: { from: mail.from.address, to: [...mail.to, ...(mail.cc ?? [])] }, raw })
+    await transport.sendMail({ envelope: { from: mail.from.address, to: [...mail.to, ...(mail.cc ?? []), ...(mail.bcc ?? [])] }, raw })
     return raw
   } catch (error) {
     throw new SmtpError(smtpErrorKind(error))

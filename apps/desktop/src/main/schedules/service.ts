@@ -10,14 +10,19 @@
 // - "Rodar uma vez só" exclui ou desliga a tarefa depois de rodar;
 // - o limite diário conta as execuções automáticas do dia; ao passar, pausa tudo e avisa.
 // Cada execução é uma sessão ACP própria (`runner.ts`); o resultado vai para o histórico de qualquer jeito e para
-// a saída escolhida (`outputs.ts`). Nada aqui envia coisa alguma para fora do Mac. Sem Electron: relógio,
-// intervalos, notificação e eventos chegam injetados.
+// a saída escolhida (`outputs.ts`). Nada aqui envia coisa alguma para fora do Mac, salvo o email da tarefa com a
+// permissão do contrato 46 (abaixo). Sem Electron: relógio, intervalos, notificação e eventos chegam injetados.
 //
 // Contrato 25: o lembrete do Assistente é uma tarefa "uma vez" sem agente (`reminder`): no horário, só a
 // notificação do macOS com o texto (o "Abrir" leva à conversa do WhatsApp, quando há); nenhum Claude roda, nada
 // entra no histórico de execuções nem conta no limite diário. Só nasce do clique em "Criar lembrete". O lembrete roda
 // também com as tarefas pausadas (pela pessoa ou pelo limite); perdido (app fechado, Mac dormindo, religado depois da
 // data), avisa atrasado assim que o app confere, com qualquer atraso, e desliga.
+//
+// Contrato 46: a tarefa com "Pode enviar email" (a permissão gravada nela ao salvar, com a data) roda com as ferramentas
+// de leitura do email e `enviar_email`, montadas só para aquela execução (`email-send.ts`); cada envio confere a
+// permissão de agora (revogada, pausada, app bloqueado), a conta, os destinatários e o teto. Os envios e as recusas ficam
+// na execução, e a execução que enviou avisa no fim ("Tarefa X enviou 2 emails"). Sem a seção, nada muda.
 import { randomUUID } from 'node:crypto'
 import { z } from 'zod'
 import {
@@ -58,9 +63,12 @@ import {
   type TaskSaveResult,
 } from '../../shared/automations'
 import { agentInputSchema, automationIdSchema, taskInputSchema, taskReminderSchema } from '../../shared/automations-schema'
+import { emailsLabel, TASK_EMAIL_MAX_PER_RUN_MAX, type RunEmail, type TaskEmailInput, type TaskEmailPermission } from '../../shared/task-email'
 import type { AgentsStore } from '../agents/store'
+import { TOOL_ROUNDS_MAX } from '../chat/tools'
+import { createSendTool, type TaskEmailDeps } from './email-send'
 import type { OutputRequest } from './outputs'
-import type { AgentRunner } from './runner'
+import type { AgentRunner, AgentRunTools } from './runner'
 import type { RunsStore, SchedulesState, SchedulesStore } from './store'
 
 /** Contrato 45: a mensagem de email do lembrete, para o "Abrir" da notificação (só quando há). */
@@ -108,6 +116,11 @@ export interface AutomationsDeps {
   newId?: () => string
   timers?: IntervalTimers
   log?: (message: string) => void
+  /**
+   * Contrato 46: o envio das tarefas com "Pode enviar email" (o caminho interno do main e as ferramentas de leitura).
+   * Sem ele, nenhuma execução ganha ferramenta e a seção não pode ser salva.
+   */
+  email?: TaskEmailDeps | undefined
 }
 
 export interface AutomationsService {
@@ -359,15 +372,19 @@ export function createAutomationsService(deps: AutomationsDeps): AutomationsServ
       outputResult: null,
     }
     let run: AutomationRun
+    // Contrato 46: os envios e as recusas desta execução (só a tarefa com "Pode enviar email").
+    const emails: RunEmail[] = []
+    const sends = { count: () => 0 }
     try {
       if (job.persist) await deps.runs.save(base)
       if (job.task) await updateTask(job.task.id, (task) => ({ ...task, lastStatus: 'running', updatedAt: iso(started) }))
       changed()
-      const result = await deps.runner.run({ runId: job.runId, agent: job.agent, prompt, meetingId: job.meetingId, timeoutS: job.timeoutS }, (event) => {
+      const tools = job.task && job.persist ? await emailToolsFor(job.task.id, emails, sends) : undefined
+      const result = await deps.runner.run({ runId: job.runId, agent: job.agent, prompt, meetingId: job.meetingId, timeoutS: job.timeoutS, ...(tools ? { tools } : {}) }, (event) => {
         if (!disposed) deps.onEvent({ ...event, runId: job.runId })
       })
       const ended = now()
-      run = { ...base, status: result.status, endedAt: iso(ended), durationMs: Math.max(0, ended - started), costUsd: result.costUsd, answer: result.answer, error: result.error ? clipError(result.error) : null }
+      run = { ...base, status: result.status, endedAt: iso(ended), durationMs: Math.max(0, ended - started), costUsd: result.costUsd, answer: result.answer, error: result.error ? clipError(result.error) : null, ...(emails.length ? { emails: [...emails] } : {}) }
       // A saída só com resposta; o histórico guarda de qualquer jeito.
       if (job.persist && job.output && result.status === 'ok' && result.answer.text.trim()) {
         const title = job.task ? `Tarefa: ${job.task.name}` : `Pedir agora: ${job.agent.name}`
@@ -379,13 +396,16 @@ export function createAutomationsService(deps: AutomationsDeps): AutomationsServ
       }
     } catch (error) {
       const ended = now()
-      run = { ...base, status: 'error', endedAt: iso(ended), durationMs: Math.max(0, ended - started), error: clipError(error instanceof Error ? error.message : 'A execução falhou.') }
+      run = { ...base, status: 'error', endedAt: iso(ended), durationMs: Math.max(0, ended - started), error: clipError(error instanceof Error ? error.message : 'A execução falhou.'), ...(emails.length ? { emails: [...emails] } : {}) }
     }
     try {
       if (job.persist) await deps.runs.save(run)
       // Pausada agora pelas falhas: o aviso da pausa já diz que falhou (um aviso só).
       const pausedNow = job.task ? await finishTask(job, run) : false
       if (job.persist && !pausedNow) notifyRun(job, run)
+      // Contrato 46: a execução que enviou avisa, com qualquer política de avisos.
+      const sent = sends.count()
+      if (job.task && sent > 0) deps.notify({ title: `Tarefa: ${job.task.name}`, body: `Tarefa ${job.task.name} enviou ${emailsLabel(sent)}`, runId: run.id })
     } catch (error) {
       deps.log?.(`[automações] não foi possível gravar a execução: ${error instanceof Error ? error.message : String(error)}`)
     } finally {
@@ -432,6 +452,44 @@ export function createAutomationsService(deps: AutomationsDeps): AutomationsServ
     const title = job.task ? `Tarefa: ${job.task.name}` : job.agent.name
     const body = ok ? previewOf(run.answer?.text ?? '', 120) : `Não terminou: ${run.error ?? 'erro'}`
     deps.notify({ title, body, runId: run.id })
+  }
+
+  /**
+   * Contrato 46: as ferramentas de uma execução da tarefa com "Pode enviar email": as de leitura do email e o envio, que
+   * relê a tarefa e a pausa a cada pedido. `undefined`: a tarefa não tem a seção (ou o app não tem email): nenhuma.
+   */
+  async function emailToolsFor(taskId: string, emails: RunEmail[], sends: { count: () => number }): Promise<AgentRunTools | undefined> {
+    const email = deps.email
+    if (!email) return undefined
+    // A permissão de agora (a desligada entre a fila e a vez não dá ferramenta).
+    const gate = async (): Promise<{ paused: boolean; permission: TaskEmailPermission | null }> => {
+      const state = await deps.schedules.read()
+      return { paused: state.paused, permission: state.tasks.find((current) => current.id === taskId)?.email ?? null }
+    }
+    const permission = (await gate()).permission
+    if (!permission) return undefined
+    const send = createSendTool({
+      deps: email,
+      start: permission,
+      gate,
+      record: (entry) => emails.push(entry),
+      now,
+      ...(deps.log ? { log: deps.log } : {}),
+    })
+    sends.count = send.sent
+    return {
+      list: [...email.readTools(), send.tool],
+      // Uma rodada por envio permitido, mais as da leitura.
+      rounds: TOOL_ROUNDS_MAX + permission.maxPerRun,
+      email: { account: email.accountAddress(permission.accountId) ?? 'a conta da permissão', allow: permission.allow, maxPerRun: permission.maxPerRun },
+    }
+  }
+
+  /** A permissão do formulário com a data: a de antes se nada mudou, a de agora se a seção foi ligada ou mudou. */
+  function permissionOf(input: TaskEmailInput | null | undefined, current: TaskEmailPermission | null, at: number): TaskEmailPermission | null {
+    if (!input) return null
+    const same = current !== null && current.accountId === input.accountId && current.maxPerRun === input.maxPerRun && current.allow.join('\n') === input.allow.join('\n')
+    return { accountId: input.accountId, allow: [...input.allow], maxPerRun: Math.min(input.maxPerRun, TASK_EMAIL_MAX_PER_RUN_MAX), grantedAt: same ? current.grantedAt : iso(at) }
   }
 
   function jobFor(task: ScheduledTask, agent: Agent, trigger: RunTrigger, meetingId: string | null = null): Job {
@@ -680,8 +738,10 @@ export function createAutomationsService(deps: AutomationsDeps): AutomationsServ
         if (kind === 'cron' && issues.some((path) => path.startsWith('schedule'))) return { ok: false, error: 'cron' }
         return { ok: false, error: 'invalid' }
       }
-      const { id, ...fields } = parsed.data
+      const { id, email: emailInput, ...fields } = parsed.data
       if (!(await deps.agents.get(fields.agentId))) return { ok: false, error: 'agent' }
+      // Contrato 46: a conta de "Pode enviar email" tem que existir neste app.
+      if (emailInput && (!deps.email || deps.email.accountAddress(emailInput.accountId) === null)) return { ok: false, error: 'email' }
       const at = now()
       // "Uma vez em" com a data no passado nunca rodaria.
       if (fields.enabled && fields.schedule.kind === 'once' && Date.parse(fields.schedule.at) <= at) return { ok: false, error: 'past' }
@@ -698,6 +758,7 @@ export function createAutomationsService(deps: AutomationsDeps): AutomationsServ
             ...fields,
             id: newId(),
             reminder: null,
+            email: permissionOf(emailInput, null, at),
             lastRunAt: null,
             nextRunAt: fields.enabled ? nextFor(fields, at) : null,
             lastStatus: null,
@@ -722,6 +783,7 @@ export function createAutomationsService(deps: AutomationsDeps): AutomationsServ
         const task: ScheduledTask = {
           ...current,
           ...fields,
+          email: permissionOf(emailInput, current.email, at),
           autoPaused: reenabled ? false : current.autoPaused,
           consecutiveFailures: reenabled ? 0 : current.consecutiveFailures,
           nextRunAt: fields.enabled ? nextFor(fields, at) : null,
@@ -813,6 +875,7 @@ export function createAutomationsService(deps: AutomationsDeps): AutomationsServ
           notify: 'always',
           output: null,
           reminder: { ...reminder, text: reminder.text.trim() },
+          email: null,
           lastRunAt: null,
           nextRunAt: new Date(when).toISOString(),
           lastStatus: null,

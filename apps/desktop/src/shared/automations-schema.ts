@@ -35,8 +35,9 @@ import {
 } from './automations'
 import { REMINDER_TEXT_MAX } from './assistant'
 import { CHAT_SCOPE_MEETINGS_MAX, CHAT_TEXT_MAX } from './chat'
-import { EMAIL_ACCOUNT_ID_PATTERN } from './email'
+import { EMAIL_ACCOUNT_ID_PATTERN, EMAIL_SUBJECT_MAX } from './email'
 import { AGENT_PROFILES } from './settings-defaults'
+import { allowEntryValid, normalizeAllowEntry, RUN_EMAILS_MAX, TASK_EMAIL_ALLOW_MAX, TASK_EMAIL_ALLOW_MIN, TASK_EMAIL_MAX_PER_RUN_MAX, type RunEmail, type TaskEmailInput, type TaskEmailPermission } from './task-email'
 
 export const automationIdSchema = z.string().regex(/^[\w-]{1,100}$/)
 const meetingIdSchema = z.string().regex(/^[\w-]{1,200}$/)
@@ -147,7 +148,23 @@ export const taskReminderSchema = z
   })
   .strict()
 
-export const taskInputSchema = z.object({ id: automationIdSchema.nullable(), ...taskFields }).strict()
+/**
+ * Contrato 46: "Pode enviar email". A conta, de 1 a 50 destinatários permitidos (endereços exatos e domínios
+ * `@empresa.com`, gravados em minúsculas, sem repetir) e o teto de envios por execução (1 a 20).
+ */
+const taskEmailFields = {
+  accountId: z.string().regex(EMAIL_ACCOUNT_ID_PATTERN),
+  allow: z
+    .array(z.string().max(320).refine(allowEntryValid, 'destinatário inválido').transform(normalizeAllowEntry))
+    .min(TASK_EMAIL_ALLOW_MIN)
+    .max(TASK_EMAIL_ALLOW_MAX)
+    .refine((list) => new Set(list).size === list.length, 'destinatário repetido'),
+  maxPerRun: z.number().int().min(1).max(TASK_EMAIL_MAX_PER_RUN_MAX),
+}
+export const taskEmailInputSchema = z.object(taskEmailFields).strict()
+export const taskEmailSchema = z.object({ ...taskEmailFields, grantedAt: isoDate }).strict()
+
+export const taskInputSchema = z.object({ id: automationIdSchema.nullable(), ...taskFields, email: taskEmailInputSchema.nullable().optional() }).strict()
 export const taskSchema = z
   .object({
     id: automationIdSchema,
@@ -155,6 +172,8 @@ export const taskSchema = z
     // O lembrete (contrato 25) não tem agente: `agentId` vazio.
     agentId: z.union([automationIdSchema, z.literal('')]),
     reminder: taskReminderSchema.nullable().default(null),
+    // Contrato 46: tarefa salva antes (sem o campo) não envia nada.
+    email: taskEmailSchema.nullable().default(null),
     lastRunAt: isoDate.nullable(),
     nextRunAt: isoDate.nullable(),
     lastStatus: z.enum(RUN_STATUSES).nullable(),
@@ -164,6 +183,20 @@ export const taskSchema = z
     autoPaused: z.boolean(),
     createdAt: isoDate,
     updatedAt: isoDate,
+  })
+  .strict()
+
+const runAddress = z.string().max(320)
+const runEmailSchema = z
+  .object({
+    at: isoDate,
+    to: z.array(runAddress).max(100),
+    cc: z.array(runAddress).max(100),
+    bcc: z.array(runAddress).max(100),
+    subject: z.string().max(EMAIL_SUBJECT_MAX),
+    ok: z.boolean(),
+    messageId: z.string().max(400).nullable(),
+    error: z.string().max(TASK_ERROR_MAX).nullable(),
   })
   .strict()
 
@@ -189,6 +222,8 @@ export const runSchema = z
     error: z.string().max(TASK_ERROR_MAX).nullable(),
     meetingId: meetingIdSchema.nullable(),
     outputResult: z.string().max(500).nullable(),
+    // Contrato 46: os envios e as recusas da execução.
+    emails: z.array(runEmailSchema).max(RUN_EMAILS_MAX).optional(),
   })
   .strict()
 
@@ -198,10 +233,16 @@ const agentMatches: Same<z.infer<typeof agentSchema>, Agent> = true
 const agentInputMatches: Same<z.infer<typeof agentInputSchema>, AgentInput> = true
 const taskMatches: Same<z.infer<typeof taskSchema>, ScheduledTask> = true
 const taskInputMatches: Same<z.infer<typeof taskInputSchema>, TaskInput> = true
+const taskEmailMatches: Same<z.infer<typeof taskEmailSchema>, TaskEmailPermission> = true
+const taskEmailInputMatches: Same<z.infer<typeof taskEmailInputSchema>, TaskEmailInput> = true
+const runEmailMatches: Same<z.infer<typeof runEmailSchema>, RunEmail> = true
 void agentMatches
 void agentInputMatches
 void taskMatches
 void taskInputMatches
+void taskEmailMatches
+void taskEmailInputMatches
+void runEmailMatches
 /** A execução lida do disco: a resposta passa como veio (já foi gravada pelo próprio app). */
 export const parseRun = (raw: unknown): AutomationRun | null => {
   const parsed = runSchema.safeParse(raw)

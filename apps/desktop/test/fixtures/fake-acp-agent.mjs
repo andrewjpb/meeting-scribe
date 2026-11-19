@@ -34,6 +34,9 @@
 //   abre o primeiro resultado (`WebFetch`) e tenta abrir um endereço montado com o título da reunião na consulta (que o
 //   app tem de negar); responde com os links `[Web · <domínio> · <título>](url)`. Com a busca negada (sem internet),
 //   responde com a frase "Para isso, ligue …" da instrução de sistema. Com "me lembre", termina com um bloco de lembrete.
+// - tarefa que pode enviar email (contrato 46: a instrução tem a ferramenta `enviar_email`): "envie <assunto> para
+//   <endereço> e <endereço>…" pede `enviar_email` para cada endereço, um por rodada (o app responde "Enviado" ou
+//   "ERRO: … recusado"), e termina contando os enviados e os recusados. O agente nunca envia: só escreve o bloco.
 //
 // Uso: node fake-acp-agent.mjs [--log <arquivo.jsonl>] | node fake-acp-agent.mjs --version
 import { appendFileSync, readdirSync, readFileSync } from 'node:fs'
@@ -176,6 +179,32 @@ async function emailAnswer(question, cwd, read, fence) {
     return `Proponho o lembrete para amanhã às 09:00.${fence({ tipo: 'lembrete', quando: tomorrowNine(), texto: `Responder ${line.from}`, email: line.ref, horaPadrao: true })}`
   }
   return null
+}
+
+/**
+ * Contrato 46: a tarefa falsa que envia email. "envie <assunto> para a@x e b@y" guarda os endereços e pede o primeiro;
+ * cada "[Resultado da ferramenta enviar_email]" conta o resultado e pede o próximo; no fim, a contagem. `null`: não é
+ * pedido de envio.
+ */
+function taskSendAnswer(question, state) {
+  const tool = (json) => `\n\n\`\`\`lap-ferramenta\n${JSON.stringify(json)}\n\`\`\``
+  const next = () => {
+    const to = state.sendQueue.shift()
+    return to ? `Vou enviar para ${to}.${tool({ ferramenta: 'enviar_email', para: [to], assunto: state.sendSubject, texto: 'Mensagem automática da tarefa do smoke.' })}` : `Pronto: ${state.sendOk} enviado(s) e ${state.sendRefused} recusado(s).`
+  }
+  if (/^\[Resultado da ferramenta enviar_email\]/.test(question)) {
+    if (!state.sendQueue) return null
+    if (/ERRO/.test(question)) state.sendRefused += 1
+    else state.sendOk += 1
+    return next()
+  }
+  const asked = /envie (.+?) para (.+)$/i.exec(question)
+  if (!asked) return null
+  state.sendQueue = asked[2].match(/[^\s,;<>]+@[^\s,;<>]+\.[a-z]+/gi) ?? []
+  state.sendSubject = asked[1].trim()
+  state.sendOk = 0
+  state.sendRefused = 0
+  return next()
 }
 
 /**
@@ -478,6 +507,16 @@ export function fakeAcpAgent({ log = () => undefined, pause = 300 } = {}) {
         state.cost += 0.012
         await update({ sessionUpdate: 'usage_update', used: 2400, size: 200000, cost: { amount: state.cost, currency: 'USD' }, _meta: { '_claude/model': modelId } })
         return { stopReason: 'end_turn', usage: { totalTokens: 1000, inputTokens: 880, outputTokens: 120 } }
+      }
+      // Contrato 46: a tarefa com "Pode enviar email": um `enviar_email` por endereço do pedido, um por rodada.
+      if (state.purpose === 'chat' && state.systemPrompt.includes('enviar_email')) {
+        const answer = taskSendAnswer(question, state)
+        if (answer !== null) {
+          for (let at = 0; at < answer.length; at += 60) await say(answer.slice(at, at + 60))
+          state.cost += 0.002
+          await update({ sessionUpdate: 'usage_update', used: 900, size: 200000, cost: { amount: state.cost, currency: 'USD' }, _meta: { '_claude/model': modelId } })
+          return { stopReason: 'end_turn', usage: { totalTokens: 300, inputTokens: 250, outputTokens: 50 } }
+        }
       }
       // Contrato 25: os pedidos do Assistente.
       if (state.purpose === 'chat' && readdirSync(state.cwd).includes('ESTADO.md')) {

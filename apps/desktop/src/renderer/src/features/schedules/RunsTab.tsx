@@ -1,9 +1,13 @@
 // Aba "Execuções" (contrato 23, CA7): o histórico (as últimas 500) com data, tarefa, agente, estado, duração,
 // custo nominal e modelo, e os filtros por tarefa e estado. Abrir uma mostra o pedido enviado, a resposta com
 // raciocínio, passos e rodapé (componentes do chat 16) e o erro, se houve; "Rodar de novo".
-import { ArrowLeft, RotateCcw } from 'lucide-react'
+//
+// Contrato 46: a execução de uma tarefa com "Pode enviar email" mostra os emails enviados e os recusados (para, assunto,
+// hora, Message-ID ou o motivo).
+import { ArrowLeft, Ban, RotateCcw, Send } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { AGENT_MODEL_LABELS, durationLabel, RUN_STATUS_LABELS, RUN_STATUSES, RUN_TRIGGER_LABELS, type AutomationRun, type AutomationRunListItem, type RunStatus } from '@shared/automations'
+import type { RunEmail } from '@shared/task-email'
 import { Button } from '../../design/Button'
 import { Select } from '../../design/Field'
 import { Icon } from '../../design/Icon'
@@ -178,6 +182,7 @@ function RunDetail({ runId, meetings }: { runId: string; meetings: ChatMeetings 
           )}
         </p>
       </header>
+      {shown.emails && shown.emails.length > 0 && <RunEmails emails={shown.emails} />}
       {shown.status === 'skipped' ? (
         <p data-run-error className="text-13 text-text-muted">
           {shown.error ?? 'Pulada.'}
@@ -192,5 +197,41 @@ function RunDetail({ runId, meetings }: { runId: string; meetings: ChatMeetings 
         </section>
       )}
     </div>
+  )
+}
+
+/** Contrato 46: os emails da execução, enviados e recusados, na ordem. */
+function RunEmails({ emails }: { emails: readonly RunEmail[] }) {
+  const sent = emails.filter((item) => item.ok).length
+  const refused = emails.length - sent
+  return (
+    <section aria-label="Emails desta execução" data-run-emails className="flex flex-col gap-3 rounded-[var(--radius-panel)] border border-line-strong bg-bg-raised p-4">
+      <h3 className="text-13 font-medium text-text">
+        Emails desta execução{' '}
+        <span className="font-normal text-text-muted tabular">
+          · {sent === 1 ? '1 enviado' : `${sent} enviados`} · {refused === 1 ? '1 recusado' : `${refused} recusados`}
+        </span>
+      </h3>
+      <ol className="flex flex-col gap-3">
+        {emails.map((item, index) => {
+          const at = new Date(item.at)
+          const recipients = [item.to.join(', '), item.cc.length ? `cc ${item.cc.join(', ')}` : '', item.bcc.length ? `cco ${item.bcc.join(', ')}` : ''].filter(Boolean).join(' · ')
+          return (
+            <li key={`${item.at}-${index}`} data-run-email={item.ok ? 'sent' : 'refused'} className="flex items-start gap-2 text-13">
+              <Icon icon={item.ok ? Send : Ban} size={14} className={`mt-0.5 shrink-0 ${item.ok ? 'text-text-muted' : 'text-rec'}`} />
+              <div className="flex min-w-0 flex-col gap-0.5">
+                <p className="break-all text-text">
+                  <span className={item.ok ? 'font-medium' : 'font-medium text-rec'}>{item.ok ? 'Enviado' : 'Recusado'}</span> · para <span data-run-email-to>{recipients || '—'}</span>
+                </p>
+                <p className="text-12 text-text-muted">
+                  <span data-run-email-subject>{item.subject || '(sem assunto)'}</span> · <span className="tabular">{timeLabel(at)}</span>
+                </p>
+                <p className="break-all text-12 text-text-muted">{item.ok ? <span data-run-email-id>Message-ID {item.messageId}</span> : <span data-run-email-error>{item.error}</span>}</p>
+              </div>
+            </li>
+          )
+        })}
+      </ol>
+    </section>
   )
 }

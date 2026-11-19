@@ -1219,8 +1219,8 @@ function createAppServices(userData: string): AppServices {
   })
   if (smokeLock) smokeLock.refresh = () => void lock.refresh().catch(() => undefined)
   // Automações (contrato 23): cada execução é uma sessão ACP própria, com a política do chat (só leitura dentro
-  // da pasta); as saídas ficam neste Mac. O WhatsApp não entra aqui: nenhum agente alcança o envio. No smoke, o
-  // relógio do agendador é o que o smoke adianta.
+  // da pasta); as saídas ficam neste Mac. O WhatsApp não entra aqui: nenhum agente alcança o envio dele. O email só
+  // com a permissão do contrato 46. No smoke, o relógio do agendador é o que o smoke adianta.
   const smokeAutomations = smokeFixtures?.automations
   const automations = createAutomationsService({
     agents: createFileAgentsStore({ dir: userData }),
@@ -1258,6 +1258,14 @@ function createAppServices(userData: string): AppServices {
       if (!lockService?.isLocked()) broadcast(BrowserWindow.getAllWindows(), 'scribe:automation-event', event)
     },
     ...(smokeAutomations ? { now: () => Date.now() + smokeAutomations.skewMs } : {}),
+    // Contrato 46: só a tarefa com "Pode enviar email" envia, sem clique, pelo caminho interno do email (nunca pelo IPC),
+    // depois das regras da permissão a cada envio; e lê o email com as mesmas ferramentas do Assistente. Bloqueado, nada.
+    email: {
+      send: (request) => email.sendForTask(request),
+      accountAddress: (accountId) => email.accounts().find((status) => status.account.id === accountId)?.account.address ?? null,
+      locked: emailLocked,
+      readTools: () => emailTools.tools,
+    },
     ...devLog,
   })
   // Agendas e avisos (contrato 12): só lê; rede só pelo `net.fetch` do main. No smoke, o Google e a Microsoft falsos.

@@ -418,6 +418,33 @@ describe('envio por SMTP (contrato 42, CA5)', () => {
   })
 })
 
+describe('envio de uma tarefa com permissão (contrato 46)', () => {
+  it('o caminho interno sai sem token de clique, com o Cco só no envelope, e fica em Enviados; pedido fora do formato não sai', async () => {
+    const smtp = await startFakeSmtp()
+    cleanups.push(() => smtp.close())
+    const { service, accountId, imap, logs } = await setup(smtp.port)
+    // Campo a mais (um token, um anexo) ou sem destinatário: recusado antes do SMTP.
+    expect(await service.sendForTask({ accountId, to: ['bruno@cliente.com'], subject: 'x', text: 'y', clickToken: CLICK[0] })).toEqual({ ok: false, error: 'invalid' })
+    expect(await service.sendForTask({ accountId, to: [], subject: 'x', text: 'y' })).toEqual({ ok: false, error: 'invalid' })
+    expect(await service.sendForTask({ accountId: '00000000-0000-4000-8000-000000000000', to: ['bruno@cliente.com'], subject: 'x', text: 'y' })).toEqual({ ok: false, error: 'account' })
+    expect(smtp.deliveries).toEqual([])
+
+    const result = await service.sendForTask({ accountId, to: ['bruno@cliente.com'], cc: ['carol@cliente.com'], bcc: ['diretoria@cliente.com'], subject: 'Resumo da semana', text: 'Segue o resumo.' })
+    if (!result.ok) throw new Error(`envio falhou: ${result.error}`)
+    expect(smtp.deliveries).toHaveLength(1)
+    const delivery = smtp.deliveries[0] as Delivery
+    expect(delivery.to.sort()).toEqual(['bruno@cliente.com', 'carol@cliente.com', 'diretoria@cliente.com'])
+    const parsed = await simpleParser(delivery.data)
+    expect(parsed.messageId).toBe(result.messageId)
+    expect(parsed.subject).toBe('Resumo da semana')
+    expect(delivery.data).not.toMatch(/^Bcc:/im)
+    expect(delivery.data).not.toContain('diretoria@cliente.com')
+    expect(imap.appended).toHaveLength(1)
+    expect((await service.messages({ accountId, folder: 'sent' }))[0]).toMatchObject({ id: result.messageId, subject: 'Resumo da semana' })
+    expect(logs.some((line) => line.includes('enviada por uma tarefa com permissão'))).toBe(true)
+  })
+})
+
 describe('nenhum caminho fora do clique alcança o envio do email', () => {
   it('o canal só é chamado pelo preload, com a ativação do usuário e o token de clique, e registrado só no main', () => {
     const SRC = resolve(import.meta.dirname, '../src')

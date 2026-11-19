@@ -4,9 +4,12 @@
 //
 // Contrato 25: o lembrete criado pelo Assistente aparece aqui como "Lembrete" (sem agente): só liga, desliga, roda
 // agora (a notificação) e exclui. "Criar tarefa" num cartão do Assistente abre o formulário já preenchido.
-import { Bell, Copy, Pencil, Play, Plus, Trash2 } from 'lucide-react'
+//
+// Contrato 46: a tarefa com "Pode enviar email" mostra o ícone de envio ao lado do nome e a linha com a data da
+// permissão e quantos destinatários ela tem.
+import { Bell, Copy, Pencil, Play, Plus, Send, Trash2 } from 'lucide-react'
 import { useState } from 'react'
-import { agoLabel, durationLabel, RUN_STATUS_LABELS, scheduleLine, TASK_NAME_MAX, type ScheduledTask, type TaskInput } from '@shared/automations'
+import { agoLabel, durationLabel, formatRunAt, isValidTimeZone, RUN_STATUS_LABELS, scheduleLine, TASK_NAME_MAX, type ScheduledTask, type TaskInput } from '@shared/automations'
 import { Button } from '../../design/Button'
 import { Icon } from '../../design/Icon'
 import { Switch } from '../../design/Switch'
@@ -29,7 +32,17 @@ const inputOf = (task: ScheduledTask): TaskInput => ({
   timeoutS: task.timeoutS,
   notify: task.notify,
   output: task.output,
+  email: task.email ? { accountId: task.email.accountId, allow: task.email.allow, maxPerRun: task.email.maxPerRun } : null,
 })
+
+/** Contrato 46: "Pode enviar email · permitido em sex 20/11 10:12 · 3 destinatários". */
+function emailLine(task: ScheduledTask): string | null {
+  if (!task.email) return null
+  const at = Date.parse(task.email.grantedAt)
+  const when = Number.isNaN(at) || !isValidTimeZone(task.timezone) ? '' : ` · permitido em ${formatRunAt(at, task.timezone)}`
+  const count = task.email.allow.length === 1 ? '1 destinatário' : `${task.email.allow.length} destinatários`
+  return `Pode enviar email${when} · ${count} · até ${task.email.maxPerRun} por execução`
+}
 
 export function SchedulesTab({ meetings }: { meetings: ChatMeetings }) {
   const tasks = useAutomations((state) => state.tasks)
@@ -115,6 +128,7 @@ function TaskRow({ task, agentName, onEdit, onDuplicate }: { task: ScheduledTask
     setConfirming(false)
     await useAutomations.getState().load()
   }
+  const permission = emailLine(task)
   const last = (() => {
     if (task.autoPaused) return 'Pausada depois de 3 falhas'
     if (!task.lastStatus) return 'Ainda não rodou'
@@ -124,12 +138,23 @@ function TaskRow({ task, agentName, onEdit, onDuplicate }: { task: ScheduledTask
     return parts.join(' · ')
   })()
   return (
-    <tr data-task-row={task.id} data-task-name={task.name} data-task-reminder={task.reminder ? '' : undefined} data-task-status={task.lastStatus ?? ''} data-task-paused={task.autoPaused ? 'auto' : undefined} className="border-b border-line align-top text-13">
+    <tr data-task-row={task.id} data-task-name={task.name} data-task-reminder={task.reminder ? '' : undefined} data-task-status={task.lastStatus ?? ''} data-task-paused={task.autoPaused ? 'auto' : undefined} data-task-email={task.email ? '' : undefined} className="border-b border-line align-top text-13">
       <td className="py-3 pr-4">
         <span id={switchId} className="inline-flex items-center gap-1.5 font-medium text-text">
           {task.reminder && <Icon icon={Bell} size={14} className="shrink-0 text-text-muted" />}
           {task.name}
+          {permission && (
+            <span data-task-email-icon title={permission} className="inline-flex shrink-0 text-text-muted">
+              <Icon icon={Send} size={14} />
+              <span className="sr-only">Pode enviar email</span>
+            </span>
+          )}
         </span>
+        {permission && (
+          <p data-task-email-line className="mt-1 text-12 text-text-muted tabular">
+            {permission}
+          </p>
+        )}
         {task.reminder?.whatsappChatName && <p className="mt-1 text-12 text-text-muted">Conversa do WhatsApp: {task.reminder.whatsappChatName}</p>}
         {task.reminder?.email && (
           <p className="mt-1 text-12 text-text-muted">

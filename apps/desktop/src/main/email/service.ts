@@ -11,6 +11,8 @@
 // Envio (R4): só com um token de clique (a mesma regra do WhatsApp: o preload gera o token no clique da pessoa e só o
 // registro do IPC chama `registerClick` e `send`), sem diálogo de confirmação. Os bytes enviados vão também ao `APPEND` da pasta de
 // enviados (IMAP) e o enviado fica guardado no app (as duas modalidades).
+// Contrato 46: a única saída sem clique é `sendForTask`, o envio de uma tarefa agendada com "Pode enviar email", chamado
+// só pela montagem das automações no main (nunca pelo IPC), depois das regras da permissão de `schedules/email-send.ts`.
 //
 // Erro de conexão (N4) nunca derruba o app: a conta fica `error` com uma mensagem curta e as outras seguem. Usuário ou
 // senha recusados não tentam de novo sozinhos (para o servidor não bloquear a conta); o resto tenta de novo em 1 min
@@ -155,6 +157,33 @@ const sendSchema = z
     clickToken: z.string().max(100),
   })
   .strict()
+/**
+ * Contrato 46: o envio de uma tarefa agendada com "Pode enviar email" (sem token de clique, sem anexo, sem resposta).
+ * As regras da permissão (conta, destinatários, teto, revogação, bloqueio, pausa) são conferidas antes, a cada envio,
+ * em `schedules/email-send.ts`; aqui só o formato.
+ */
+const taskSendSchema = z
+  .object({
+    accountId: accountIdSchema,
+    to: z.array(emailAddressSchema).min(1).max(EMAIL_RECIPIENTS_MAX),
+    cc: z.array(emailAddressSchema).max(EMAIL_RECIPIENTS_MAX).optional(),
+    bcc: z.array(emailAddressSchema).max(EMAIL_RECIPIENTS_MAX).optional(),
+    subject: z.string().max(EMAIL_SUBJECT_MAX).refine((value) => !/[\r\n]/.test(value)),
+    text: z.string().max(EMAIL_TEXT_MAX),
+  })
+  .strict()
+
+/** O que sai pelo SMTP, já validado: o envio do clique e o da tarefa. */
+interface Delivery {
+  accountId: string
+  to: string[]
+  cc: string[]
+  bcc: string[]
+  subject: string
+  text: string
+  inReplyTo: string | undefined
+  attachments: { name: string; bytes: Uint8Array }[]
+}
 
 /** O que sai do `mailparser`: cabeçalho e corpo. */
 export interface ParsedEmail {
@@ -388,6 +417,12 @@ export interface EmailService {
   registerClick(senderId: number, token: unknown): void
   /** Só com o token de clique (uso único, 10 s) da mesma janela. */
   send(senderId: number, request: unknown): Promise<EmailSendResult>
+  /**
+   * Contrato 46: o envio sem clique de uma tarefa agendada com "Pode enviar email", depois das regras da permissão
+   * (`schedules/email-send.ts`). Caminho interno do main: nunca registrado no IPC; só a montagem das automações em
+   * `index.ts` chama (teste estático em `email-automations.test.ts`).
+   */
+  sendForTask(request: unknown): Promise<EmailSendResult>
   forgetSender(senderId: number): void
   /** Contrato 43 (CA8): um anexo recebido, com os bytes (do servidor no IMAP, da mensagem guardada no POP3 e nos enviados). */
   attachment(request: unknown): Promise<{ ok: true; name: string; bytes: Uint8Array } | { ok: false; error: 'not-found' | 'unavailable' }>
@@ -713,6 +748,75 @@ export function createEmailService(deps: EmailServiceDeps): EmailService {
     }
   }
 
+  /** O envio já validado (o do clique ou o da tarefa): SMTP, a cópia em Enviados no app e o `APPEND` no IMAP. */
+  async function deliver(delivery: Delivery, sentLog: string): Promise<EmailSendResult> {
+    const { accountId, to, cc, bcc, subject, text, inReplyTo, attachments } = delivery
+    const rt = runtimes.get(accountId)
+    const pass = rt ? secrets.open(rt.account.password) : null
+    if (!rt || pass === null) return { ok: false, error: 'account' }
+    const domain = addressDomain(rt.account.address) ?? 'localhost'
+    const messageId = `<${randomUUID()}@${domain}>`
+    const data = await store.read(accountId)
+    const parent = inReplyTo ? data.inbox.find((item) => item.messageId === inReplyTo) : undefined
+    // References: as da mensagem respondida e o Message-ID dela por último (RFC 5322, 3.6.4).
+    const references = inReplyTo ? [...(parent?.references ?? []).filter((value) => value !== inReplyTo), inReplyTo].slice(-50) : []
+    const date = now()
+    const mail: OutgoingMail = { from: { name: rt.account.name, address: rt.account.address }, to, cc, ...(bcc.length > 0 ? { bcc } : {}), subject, text, attachments, messageId, inReplyTo: inReplyTo ?? null, references, date: new Date(date) }
+    let bytes: Buffer
+    try {
+      bytes = await smtp(serverConfig(rt, pass, rt.account.outgoing), mail)
+    } catch (error) {
+      const kind = error instanceof SmtpError ? error.kind : 'failed'
+      log(`${tag(rt)}: envio falhou (${kind})`)
+      return { ok: false, error: kind }
+    }
+    log(`${tag(rt)}: ${sentLog}`)
+    const sent: EmailMessage = {
+      id: messageId,
+      accountId,
+      folder: 'sent',
+      uid: null,
+      seen: true,
+      flagged: false,
+      answered: false,
+      from: [{ name: rt.account.name, address: rt.account.address }],
+      to: to.map((address) => ({ name: null, address })),
+      cc: cc.map((address) => ({ name: null, address })),
+      subject,
+      date,
+      messageId,
+      inReplyTo: inReplyTo ?? null,
+      references,
+    }
+    // O envio já saiu: falhar ao guardar ou no APPEND não vira erro para a tela.
+    try {
+      if (rt.removed) throw new Error('conta removida')
+      await store.update(accountId, (current) => ({
+        ...current,
+        sent: [sent, ...current.sent].slice(0, EMAIL_SENT_MAX),
+        inbox: parent ? current.inbox.map((item) => (item.id === parent.id ? { ...item, answered: true } : item)) : current.inbox,
+      }))
+      await store.setBody(accountId, bodyKey(sent), { text, html: null, attachments: attachments.map((item) => ({ filename: item.name, contentType: 'application/octet-stream', size: item.bytes.byteLength })) })
+      // Contrato 43: os bytes enviados, para baixar ou encaminhar os anexos depois.
+      if (attachments.length > 0) await store.setRaw(accountId, bodyKey(sent), bytes)
+    } catch (error) {
+      log(`${tag(rt)}: enviado não guardado (${failureOf(error)})`)
+    }
+    if (rt.account.incoming.protocol === 'imap') {
+      const session = rt.session
+      if (!session) log(`${tag(rt)}: enviado fora da pasta de enviados (IMAP desconectado)`)
+      else
+        await session.appendSent(bytes).then(
+          (ok) => {
+            if (!ok) log(`${tag(rt)}: servidor sem pasta de enviados`)
+          },
+          (error: unknown) => log(`${tag(rt)}: APPEND nos enviados falhou (${failureOf(error)})`),
+        )
+    }
+    changed(accountId)
+    return { ok: true, messageId }
+  }
+
   return {
     async init() {
       const saved = await deps.settings.getEmailAccounts()
@@ -955,72 +1059,14 @@ export function createEmailService(deps: EmailServiceDeps): EmailService {
       }
       if (!parsed.success) return { ok: false, error: 'invalid' }
       const { accountId, to, subject, text, inReplyTo } = parsed.data
-      const cc = parsed.data.cc ?? []
-      const attachments = parsed.data.attachments ?? []
-      const rt = runtimes.get(accountId)
-      const pass = rt ? secrets.open(rt.account.password) : null
-      if (!rt || pass === null) return { ok: false, error: 'account' }
-      const domain = addressDomain(rt.account.address) ?? 'localhost'
-      const messageId = `<${randomUUID()}@${domain}>`
-      const data = await store.read(accountId)
-      const parent = inReplyTo ? data.inbox.find((item) => item.messageId === inReplyTo) : undefined
-      // References: as da mensagem respondida e o Message-ID dela por último (RFC 5322, 3.6.4).
-      const references = inReplyTo ? [...(parent?.references ?? []).filter((value) => value !== inReplyTo), inReplyTo].slice(-50) : []
-      const date = now()
-      const mail: OutgoingMail = { from: { name: rt.account.name, address: rt.account.address }, to, cc, subject, text, attachments, messageId, inReplyTo: inReplyTo ?? null, references, date: new Date(date) }
-      let bytes: Buffer
-      try {
-        bytes = await smtp(serverConfig(rt, pass, rt.account.outgoing), mail)
-      } catch (error) {
-        const kind = error instanceof SmtpError ? error.kind : 'failed'
-        log(`${tag(rt)}: envio falhou (${kind})`)
-        return { ok: false, error: kind }
-      }
-      log(`${tag(rt)}: mensagem enviada com o clique da pessoa`)
-      const sent: EmailMessage = {
-        id: messageId,
-        accountId,
-        folder: 'sent',
-        uid: null,
-        seen: true,
-        flagged: false,
-        answered: false,
-        from: [{ name: rt.account.name, address: rt.account.address }],
-        to: to.map((address) => ({ name: null, address })),
-        cc: cc.map((address) => ({ name: null, address })),
-        subject,
-        date,
-        messageId,
-        inReplyTo: inReplyTo ?? null,
-        references,
-      }
-      // O envio já saiu: falhar ao guardar ou no APPEND não vira erro para a tela.
-      try {
-        if (rt.removed) throw new Error('conta removida')
-        await store.update(accountId, (current) => ({
-          ...current,
-          sent: [sent, ...current.sent].slice(0, EMAIL_SENT_MAX),
-          inbox: parent ? current.inbox.map((item) => (item.id === parent.id ? { ...item, answered: true } : item)) : current.inbox,
-        }))
-        await store.setBody(accountId, bodyKey(sent), { text, html: null, attachments: attachments.map((item) => ({ filename: item.name, contentType: 'application/octet-stream', size: item.bytes.byteLength })) })
-        // Contrato 43: os bytes enviados, para baixar ou encaminhar os anexos depois.
-        if (attachments.length > 0) await store.setRaw(accountId, bodyKey(sent), bytes)
-      } catch (error) {
-        log(`${tag(rt)}: enviado não guardado (${failureOf(error)})`)
-      }
-      if (rt.account.incoming.protocol === 'imap') {
-        const session = rt.session
-        if (!session) log(`${tag(rt)}: enviado fora da pasta de enviados (IMAP desconectado)`)
-        else
-          await session.appendSent(bytes).then(
-            (ok) => {
-              if (!ok) log(`${tag(rt)}: servidor sem pasta de enviados`)
-            },
-            (error: unknown) => log(`${tag(rt)}: APPEND nos enviados falhou (${failureOf(error)})`),
-          )
-      }
-      changed(accountId)
-      return { ok: true, messageId }
+      return deliver({ accountId, to, cc: parsed.data.cc ?? [], bcc: [], subject, text, inReplyTo, attachments: parsed.data.attachments ?? [] }, 'mensagem enviada com o clique da pessoa')
+    },
+
+    async sendForTask(request) {
+      const parsed = taskSendSchema.safeParse(request)
+      if (!parsed.success) return { ok: false, error: 'invalid' }
+      const { accountId, to, subject, text } = parsed.data
+      return deliver({ accountId, to, cc: parsed.data.cc ?? [], bcc: parsed.data.bcc ?? [], subject, text, inReplyTo: undefined, attachments: [] }, 'mensagem enviada por uma tarefa com permissão')
     },
 
     forgetSender(senderId) {

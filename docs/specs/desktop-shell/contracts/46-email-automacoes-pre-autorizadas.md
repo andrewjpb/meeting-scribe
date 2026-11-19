@@ -30,3 +30,12 @@ Pedido do Andrew (19/11/2026 10:10): "se eu criar um agendamento posso permitir 
 - Lista de tarefas: ícone de envio.
 - Execuções: lista dos emails enviados ou recusados.
 - Notificação ao fim da execução.
+
+## Decisões registradas na implementação (19/11/2026)
+- Tarefa com "Pode enviar email" ligada também recebe as ferramentas de LEITURA do contrato 45 (`buscar_emails`, `ler_email`) em todas as contas: sem leitura o CA5 não faz sentido. Ligar o envio concede leitura do email àquela tarefa.
+- Rodadas de ferramenta por execução: `TOOL_ROUNDS_MAX (4) + teto` (máx. 24), para o teto ser alcançável.
+- O teto conta cada envio que chegou ao SMTP, inclusive os que falharam; recusas não contam.
+- Cco só no envelope SMTP, só no caminho interno; a cópia em Enviados não guarda o Cco (fica na execução).
+- Desligar o interruptor da tarefa não revoga ("Rodar agora" roda tarefa desligada); revoga desligar a seção ou excluir a tarefa. A pausa do limite diário também bloqueia.
+- A tarefa permitida roda numa pasta de escopo própria da execução.
+- Endereços validados crus antes de normalizar: sem nome, grupo, aspas, CR/LF ou IDN unicode; `@dominio` não casa subdomínio.

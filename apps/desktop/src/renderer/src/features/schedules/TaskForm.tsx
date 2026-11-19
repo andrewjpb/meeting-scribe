@@ -1,8 +1,12 @@
 // Formulário de tarefa agendada (contrato 23, CA4): nome, agente, mensagem, frequência por seletores simples
 // (com "Avançado: expressão cron"), fuso, saída, avisos, tempo máximo, "Rodar uma vez só" e a prévia "Próximas 5
 // execuções". Na tarefa nova, as sugestões prontas preenchem o formulário (a pessoa ainda salva).
-import { ArrowLeft, Lightbulb } from 'lucide-react'
-import { useState } from 'react'
+//
+// Contrato 46: a seção "Pode enviar email", desligada por padrão. Ligada, pede a conta que envia, a lista de
+// destinatários permitidos (endereços exatos e/ou domínios `@empresa.com`, de 1 a 50) e o teto por execução (padrão 5,
+// até 20). Ligar e salvar é a permissão; o main grava a data.
+import { ArrowLeft, Lightbulb, Send } from 'lucide-react'
+import { useEffect, useState } from 'react'
 import {
   AGENT_OUTPUT_KINDS,
   describeSchedule,
@@ -25,6 +29,8 @@ import {
   type ScheduleKind,
   type TaskInput,
 } from '@shared/automations'
+import type { EmailAccountStatus } from '@shared/email'
+import { allowEntryValid, parseAllowList, TASK_EMAIL_ALLOW_MAX, TASK_EMAIL_ALLOW_MIN, TASK_EMAIL_MAX_PER_RUN_DEFAULT, TASK_EMAIL_MAX_PER_RUN_MAX, type TaskEmailInput } from '@shared/task-email'
 import { urlsIn } from '@shared/web-urls'
 import { Button } from '../../design/Button'
 import { Select, TextField } from '../../design/Field'
@@ -89,7 +95,32 @@ const TASK_ERRORS: Record<string, string> = {
   missing: 'Esta tarefa não existe mais.',
   full: 'Limite de tarefas atingido.',
   past: 'A data de “Uma vez em” já passou. Escolha um horário no futuro.',
+  email: 'A conta de email escolhida em “Pode enviar email” não está mais no app.',
   invalid: 'Confira os campos da tarefa.',
+}
+
+/** Contrato 46: o rascunho da seção "Pode enviar email" (a lista como foi digitada). */
+interface EmailDraft {
+  on: boolean
+  accountId: string
+  allowText: string
+  maxPerRun: number
+}
+
+const emailDraftOf = (email: TaskEmailInput | null | undefined): EmailDraft =>
+  email ? { on: true, accountId: email.accountId, allowText: email.allow.join('\n'), maxPerRun: email.maxPerRun } : { on: false, accountId: '', allowText: '', maxPerRun: TASK_EMAIL_MAX_PER_RUN_DEFAULT }
+
+/** A seção validada: a permissão para salvar, ou o que falta. */
+function emailOf(draft: EmailDraft, accounts: readonly EmailAccountStatus[]): { email: TaskEmailInput | null } | { error: string } {
+  if (!draft.on) return { email: null }
+  if (!accounts.some((status) => status.account.id === draft.accountId)) return { error: 'Escolha a conta que envia.' }
+  const allow = parseAllowList(draft.allowText)
+  const wrong = allow.filter((entry) => !allowEntryValid(entry))
+  if (wrong.length) return { error: `Não é endereço nem domínio: ${wrong.slice(0, 3).join(', ')}${wrong.length > 3 ? '…' : ''}` }
+  if (allow.length < TASK_EMAIL_ALLOW_MIN) return { error: 'Digite pelo menos um destinatário permitido.' }
+  if (allow.length > TASK_EMAIL_ALLOW_MAX) return { error: `No máximo ${TASK_EMAIL_ALLOW_MAX} destinatários (são ${allow.length}).` }
+  if (!Number.isInteger(draft.maxPerRun) || draft.maxPerRun < 1 || draft.maxPerRun > TASK_EMAIL_MAX_PER_RUN_MAX) return { error: `O teto vai de 1 a ${TASK_EMAIL_MAX_PER_RUN_MAX} envios.` }
+  return { email: { accountId: draft.accountId, allow, maxPerRun: draft.maxPerRun } }
 }
 
 export function TaskForm({ initial, meetings, onClose, onSaved }: { initial: TaskInput; meetings: ChatMeetings; onClose: () => void; onSaved?: (() => void) | undefined }) {
@@ -98,6 +129,21 @@ export function TaskForm({ initial, meetings, onClose, onSaved }: { initial: Tas
   const [frequency, setFrequency] = useState<FrequencyDraft>(() => draftOf(initial.schedule, Date.now(), initial.timezone))
   const [failure, setFailure] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
+  const [emailDraft, setEmailDraft] = useState<EmailDraft>(() => emailDraftOf(initial.email))
+  const [emailAccounts, setEmailAccounts] = useState<EmailAccountStatus[] | null>(null)
+  const grantedAt = useAutomations((state) => (initial.id ? (state.tasks.find((known) => known.id === initial.id)?.email?.grantedAt ?? null) : null))
+  useEffect(() => {
+    let alive = true
+    void window.__scribeApi.invoke('scribe:email-accounts').then(
+      (list) => {
+        if (alive) setEmailAccounts(list)
+      },
+      () => alive && setEmailAccounts([]),
+    )
+    return () => {
+      alive = false
+    }
+  }, [])
   const patch = (next: Partial<TaskInput>): void => setTask((current) => ({ ...current, ...next }))
   const patchFrequency = (next: Partial<FrequencyDraft>): void => setFrequency((current) => ({ ...current, ...next }))
 
@@ -108,13 +154,14 @@ export function TaskForm({ initial, meetings, onClose, onSaved }: { initial: Tas
   const preview = schedule && timeZoneOk ? nextRuns(schedule, task.timezone, now, 5) : []
   const agent = agents.find((candidate) => candidate.id === task.agentId)
   const webUrls = urlsIn(task.message)
-  const valid = schedule !== null && task.name.trim() !== '' && task.message.trim() !== '' && agent !== undefined && task.timeoutS >= TASK_TIMEOUT_MIN_S && task.timeoutS <= TASK_TIMEOUT_MAX_S
+  const email = emailOf(emailDraft, emailAccounts ?? [])
+  const valid = schedule !== null && task.name.trim() !== '' && task.message.trim() !== '' && agent !== undefined && task.timeoutS >= TASK_TIMEOUT_MIN_S && task.timeoutS <= TASK_TIMEOUT_MAX_S && 'email' in email
 
   const save = async (): Promise<void> => {
-    if (!schedule) return
+    if (!schedule || !('email' in email)) return
     setSaving(true)
     setFailure(null)
-    const result = await window.__scribeApi.invoke('scribe:tasks-save', { ...task, name: task.name.trim(), schedule })
+    const result = await window.__scribeApi.invoke('scribe:tasks-save', { ...task, name: task.name.trim(), schedule, email: email.email })
     setSaving(false)
     if (!result.ok) {
       setFailure(TASK_ERRORS[result.error] ?? TASK_ERRORS['invalid'] ?? '')
@@ -129,6 +176,7 @@ export function TaskForm({ initial, meetings, onClose, onSaved }: { initial: Tas
     const target = agents.find((candidate) => candidate.name === suggestion.agent) ?? agents[0]
     const next = { ...suggestion.build(target?.id ?? ''), id: null, agentId: target?.id ?? '', timezone: task.timezone }
     setTask(next)
+    setEmailDraft(emailDraftOf(null))
     setFrequency(draftOf(next.schedule, new Date().getTime(), next.timezone))
   }
 
@@ -220,6 +268,8 @@ export function TaskForm({ initial, meetings, onClose, onSaved }: { initial: Tas
         </FormField>
       )}
 
+      <EmailSection draft={emailDraft} accounts={emailAccounts} grantedAt={grantedAt} timeZone={task.timezone} error={'error' in email ? email.error : null} onChange={(next) => setEmailDraft((current) => ({ ...current, ...next }))} />
+
       <div className="flex flex-wrap items-center gap-6">
         <div className="flex items-center gap-3">
           <Switch checked={task.enabled} labelledBy="task-enabled" onChange={(enabled) => patch({ enabled })} />
@@ -278,6 +328,87 @@ export function TaskForm({ initial, meetings, onClose, onSaved }: { initial: Tas
         </Button>
       </div>
     </div>
+  )
+}
+
+/**
+ * Contrato 46: "Pode enviar email". Desligada por padrão; sem conta de email no app, não liga. Ligada, a conta, a lista
+ * de destinatários permitidos e o teto por execução.
+ */
+function EmailSection({
+  draft,
+  accounts,
+  grantedAt,
+  timeZone,
+  error,
+  onChange,
+}: {
+  draft: EmailDraft
+  accounts: EmailAccountStatus[] | null
+  grantedAt: string | null
+  timeZone: string
+  error: string | null
+  onChange: (patch: Partial<EmailDraft>) => void
+}) {
+  const none = accounts !== null && accounts.length === 0
+  const turn = (on: boolean): void => onChange(on && !draft.accountId && accounts?.length === 1 ? { on, accountId: accounts[0]?.account.id ?? '' } : { on })
+  const accountOptions = [{ value: '', label: 'Escolha a conta' }, ...(accounts ?? []).map((status) => ({ value: status.account.id, label: status.account.name ? `${status.account.name} (${status.account.address})` : status.account.address }))]
+  const count = parseAllowList(draft.allowText).length
+  const granted = grantedAt ? Date.parse(grantedAt) : Number.NaN
+  const zone = Number.isNaN(granted) || !isValidTimeZone(timeZone) ? null : formatRunAt(granted, timeZone)
+  return (
+    <section aria-label="Pode enviar email" data-task-email={draft.on ? 'on' : 'off'} className="flex flex-col gap-4 rounded-[var(--radius-panel)] border border-line-strong bg-bg-raised p-4">
+      <div className="flex items-start gap-3">
+        <Switch checked={draft.on} labelledBy="task-email" action="task-email-toggle" disabled={none && !draft.on} onChange={turn} />
+        <div className="flex min-w-0 flex-col gap-1">
+          <span id="task-email" className="inline-flex items-center gap-1.5 text-13 font-medium text-text">
+            <Icon icon={Send} size={14} className="text-text-muted" />
+            Pode enviar email
+          </span>
+          <p className="text-12 text-text-muted">
+            {none
+              ? 'Conecte uma conta de email em Configurações › Contas para ligar.'
+              : 'Ligar e salvar é a sua permissão: nas execuções desta tarefa, o agente envia email sem pedir o seu clique, só desta conta e só para a lista abaixo. Desligar ou excluir a tarefa corta na hora.'}
+          </p>
+          {draft.on && zone && (
+            <p data-task-email-granted className="text-12 text-text-muted tabular">
+              Permitido em {zone}
+            </p>
+          )}
+        </div>
+      </div>
+      {draft.on && (
+        <>
+          <FormField label="Conta que envia" htmlFor="task-email-account">
+            <Select id="task-email-account" value={draft.accountId} options={accountOptions} onChange={(accountId) => onChange({ accountId })} />
+          </FormField>
+          <FormField
+            label="Destinatários permitidos"
+            htmlFor="task-email-allow"
+            hint={`Endereços exatos (ana@cliente.com) e/ou domínios (@cliente.com), um por linha; de ${TASK_EMAIL_ALLOW_MIN} a ${TASK_EMAIL_ALLOW_MAX}. O domínio não vale para subdomínios. ${count === 1 ? '1 destinatário' : `${count} destinatários`}.`}
+          >
+            <textarea id="task-email-allow" rows={4} value={draft.allowText} spellCheck={false} onChange={(event) => onChange({ allowText: event.target.value })} className={`${AREA_CLASS} font-mono`} />
+          </FormField>
+          <FormField label="Teto de envios por execução" htmlFor="task-email-max" hint={`De 1 a ${TASK_EMAIL_MAX_PER_RUN_MAX}. Acima disso, o envio é recusado.`}>
+            <input
+              id="task-email-max"
+              type="number"
+              min={1}
+              max={TASK_EMAIL_MAX_PER_RUN_MAX}
+              step={1}
+              value={draft.maxPerRun}
+              onChange={(event) => onChange({ maxPerRun: Number(event.target.value) })}
+              className={`${INPUT_CLASS} w-24`}
+            />
+          </FormField>
+          {error && (
+            <p data-task-email-error className="text-12 text-rec">
+              {error}
+            </p>
+          )}
+        </>
+      )}
+    </section>
   )
 }
 
