@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<title>Configurações · Conexões</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0}
+button{font:inherit}
+input::placeholder{color:#7f8da6}
+a{color:#1e5bb8}a:hover{color:#0a2a5e}
+</style>
+</helmet>
+<div style="display: flex; width: 1120px; height: 740px; overflow: hidden; background: #ffffff; color: #061a3d; font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; font-size: 13px; line-height: 20px; -webkit-font-smoothing: antialiased">
+<dc-import name="SidebarConfig" aba="conexoes" hint-size="224px,740px"></dc-import>
+<main style="flex: 1 1 0; min-width: 0; height: 740px; display: flex; flex-direction: column; background: #ffffff">
+<div aria-hidden="true" style="flex: 0 0 52px; height: 52px"></div>
+
+<div style="flex: 0 0 auto; padding: 28px 40px 0">
+<div style="max-width: 760px; margin: 0 auto; display: flex; align-items: center; justify-content: space-between; gap: 24px">
+<h1 style="margin: 0; font-size: 20px; line-height: 26px; font-weight: 700; color: #0a2a5e">Conexões</h1>
+<div style="flex: 0 0 280px; width: 280px; height: 40px; box-sizing: border-box; display: flex; align-items: center; gap: 8px; padding: 0 12px; border: 1px solid #c9d4e5; border-radius: 4px; background: #ffffff; color: #7f8da6">
+<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><path d="m20 20-4-4"></path></svg>
+<label for="busca-config-conexoes" style="position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0)">Buscar configuração</label>
+<input id="busca-config-conexoes" type="search" placeholder="Buscar configuração" style="flex: 1 1 0; min-width: 0; border: 0; background: transparent; font: inherit; font-size: 13px; color: #061a3d; outline: none">
+<span aria-hidden="true" style="font-size: 11px; line-height: 16px; color: #7f8da6">⌘F</span>
+</div>
+</div>
+</div>
+
+<div style="flex: 1 1 0; min-height: 0; overflow: hidden; padding: 32px 40px 48px">
+<div style="max-width: 760px; margin: 0 auto; display: flex; flex-direction: column; gap: 32px">
+
+<section aria-label="Conectores do claude.ai" style="display: flex; flex-direction: column">
+<h2 style="margin: 0; font-size: 10px; line-height: 14px; font-weight: 500; letter-spacing: 0.14em; text-transform: uppercase; color: #5b6b85">Conectores do claude.ai</h2>
+<div style="margin-top: 12px; display: flex; flex-direction: column; border: 1px solid #c9d4e5; border-radius: 6px; background: #ffffff; overflow: hidden">
+<div style="display: grid; grid-template-columns: minmax(0, 1fr) 340px; column-gap: 24px; align-items: center; min-height: 64px; box-sizing: border-box; padding: 12px 16px; border-bottom: 1px solid #e3e9f2">
+<div style="display: flex; flex-direction: column; gap: 2px; min-width: 0"><p style="margin: 0; font-size: 13px; font-weight: 500; color: #061a3d">Conectores da sua conta</p><p style="margin: 0; font-size: 12px; line-height: 16px; color: #5b6b85">Os conectores ligados na sua conta do claude.ai (claude mcp list). O login de cada um fica no claude.ai: o app não vê nem guarda token. Ligado, vale no Assistente e no chat da reunião.</p></div>
+<span style="font-size: 13px; color: #5b6b85">3 conectores</span>
+</div>
+
+<div style="display: flex; flex-direction: column; gap: 12px; padding: 16px; border-bottom: 1px solid #e3e9f2">
+<div style="display: flex; align-items: flex-start; justify-content: space-between; gap: 16px">
+<div style="display: flex; flex-direction: column; gap: 2px; min-width: 0"><p id="con-notion" style="margin: 0; font-size: 13px; font-weight: 500; color: #061a3d">Notion</p><p style="margin: 0; font-size: 12px; line-height: 16px; color: #5b6b85">Conector do claude.ai · <span style="color: #1f7a45">Conectado</span></p></div>
+<button type="button" role="switch" aria-checked="true" aria-labelledby="con-notion" style="flex: 0 0 44px; display: flex; align-items: center; justify-content: flex-end; width: 44px; height: 24px; box-sizing: border-box; padding: 3px; border: 1px solid #1e5bb8; border-radius: 4px; background: #1e5bb8; cursor: pointer"><span style="width: 16px; height: 16px; border-radius: 2px; background: #ffffff"></span></button>
+</div>
+<div style="display: flex; gap: 8px"><button type="button" aria-expanded="false" style="display: flex; align-items: center; gap: 6px; height: 32px; padding: 0 10px; border: 1px solid #c9d4e5; border-radius: 4px; background: #ffffff; color: #0a2a5e; font-size: 12px; font-weight: 500; cursor: pointer"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><path d="m6 9 6 6 6-6"></path></svg>Ver ferramentas</button></div>
+</div>
+
+<div style="display: flex; flex-direction: column; gap: 12px; padding: 16px; border-bottom: 1px solid #e3e9f2">
+<div style="display: flex; align-items: flex-start; justify-content: space-between; gap: 16px">
+<div style="display: flex; flex-direction: column; gap: 2px; min-width: 0"><p id="con-drive" style="margin: 0; font-size: 13px; font-weight: 500; color: #061a3d">Google Drive</p><p style="margin: 0; font-size: 12px; line-height: 16px; color: #5b6b85">Conector do claude.ai · <span style="color: #1f7a45">Conectado</span></p></div>
+<button type="button" role="switch" aria-checked="false" aria-labelledby="con-drive" style="flex: 0 0 44px; display: flex; align-items: center; width: 44px; height: 24px; box-sizing: border-box; padding: 3px; border: 1px solid #c9d4e5; border-radius: 4px; background: #eef2f9; cursor: pointer"><span style="width: 16px; height: 16px; border-radius: 2px; background: #5b6b85"></span></button>
+</div>
+<div style="display: flex; gap: 8px"><button type="button" aria-expanded="false" style="display: flex; align-items: center; gap: 6px; height: 32px; padding: 0 10px; border: 1px solid #c9d4e5; border-radius: 4px; background: #ffffff; color: #0a2a5e; font-size: 12px; font-weight: 500; cursor: pointer"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><path d="m6 9 6 6 6-6"></path></svg>Ver ferramentas</button></div>
+</div>
+
+<div style="display: flex; flex-direction: column; gap: 12px; padding: 16px">
+<div style="display: flex; align-items: flex-start; justify-content: space-between; gap: 16px">
+<div style="display: flex; flex-direction: column; gap: 2px; min-width: 0"><p id="con-gmail" style="margin: 0; font-size: 13px; font-weight: 500; color: #061a3d">Gmail</p><p style="margin: 0; font-size: 12px; line-height: 16px; color: #5b6b85">Conector do claude.ai · <span>Precisa autorizar</span></p><p style="margin: 0; font-size: 12px; line-height: 16px; color: #5b6b85">Autorize na sua conta para o app poder ligar. <a href="https://claude.ai/settings/connectors" style="font-weight: 500; text-decoration: underline; text-underline-offset: 3px">Autorizar no claude.ai</a></p></div>
+<button type="button" role="switch" aria-checked="false" aria-labelledby="con-gmail" disabled style="flex: 0 0 44px; display: flex; align-items: center; width: 44px; height: 24px; box-sizing: border-box; padding: 3px; border: 1px solid #c9d4e5; border-radius: 4px; background: #eef2f9; opacity: 0.5"><span style="width: 16px; height: 16px; border-radius: 2px; background: #5b6b85"></span></button>
+</div>
+</div>
+</div>
+</section>
+
+<div role="note" style="display: flex; align-items: flex-start; gap: 12px; padding: 12px 16px; border-left: 3px solid #0a2a5e; background: #eef2f9">
+<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#5b6b85" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true" style="flex: 0 0 16px; margin-top: 2px"><path d="M12 3l7 3v6c0 4-3 7-7 9-4-2-7-5-7-9V6z"></path><path d="M12 8v5M12 16v.5"></path></svg>
+<p style="margin: 0; font-size: 13px; line-height: 20px; color: #061a3d">Servidores MCP dão ao Claude acesso a outros sistemas. Ligue só os que você confia. Texto de reunião pode tentar pedir ações: confira cada pedido. A fonte "Internet" do Assistente e os servidores MCP são permissões separadas: ligar uma não liga a outra.</p>
+</div>
+
+<section aria-label="Do Claude CLI" style="display: flex; flex-direction: column">
+<h2 style="margin: 0; font-size: 10px; line-height: 14px; font-weight: 500; letter-spacing: 0.14em; text-transform: uppercase; color: #5b6b85">Do Claude CLI</h2>
+<div style="margin-top: 12px; display: flex; flex-direction: column; border: 1px solid #c9d4e5; border-radius: 6px; background: #ffffff; overflow: hidden">
+<div style="display: grid; grid-template-columns: minmax(0, 1fr) 340px; column-gap: 24px; align-items: center; min-height: 64px; box-sizing: border-box; padding: 12px 16px; border-bottom: 1px solid #e3e9f2">
+<div style="display: flex; flex-direction: column; gap: 2px; min-width: 0"><p style="margin: 0; font-size: 13px; font-weight: 500; color: #061a3d">Servidores do Claude CLI</p><p style="margin: 0; font-size: 12px; line-height: 16px; color: #5b6b85">Os servidores MCP do claude instalado neste Mac (claude mcp list). Ligue os que o app pode usar.</p></div>
+<div><button type="button" style="display: flex; align-items: center; gap: 8px; height: 40px; padding: 0 14px; border: 1px solid #c9d4e5; border-radius: 4px; background: #ffffff; color: #0a2a5e; font-size: 13px; font-weight: 500; cursor: pointer"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><path d="M21 12a9 9 0 0 0-15-6.7L3 8"></path><path d="M3 3v5h5"></path><path d="M3 12a9 9 0 0 0 15 6.7L21 16"></path><path d="M16 16h5v5"></path></svg>Atualizar</button></div>
+</div>
+<div style="display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding: 16px">
+<div style="display: flex; flex-direction: column; gap: 2px; min-width: 0"><p id="srv-files" style="margin: 0; font-size: 13px; font-weight: 500; color: #061a3d">filesystem</p><p style="margin: 0; font-size: 12px; line-height: 16px; color: #5b6b85">Comando local · <span style="color: #1f7a45">Conectado</span></p></div>
+<button type="button" role="switch" aria-checked="false" aria-labelledby="srv-files" style="flex: 0 0 44px; display: flex; align-items: center; width: 44px; height: 24px; box-sizing: border-box; padding: 3px; border: 1px solid #c9d4e5; border-radius: 4px; background: #eef2f9; cursor: pointer"><span style="width: 16px; height: 16px; border-radius: 2px; background: #5b6b85"></span></button>
+</div>
+</div>
+</section>
+
+<section aria-label="Servidores do app" style="display: flex; flex-direction: column">
+<h2 style="margin: 0; font-size: 10px; line-height: 14px; font-weight: 500; letter-spacing: 0.14em; text-transform: uppercase; color: #5b6b85">Servidores do app</h2>
+<div style="margin-top: 12px; display: flex; flex-direction: column; border: 1px solid #c9d4e5; border-radius: 6px; background: #ffffff; overflow: hidden">
+<div style="display: grid; grid-template-columns: minmax(0, 1fr) 340px; column-gap: 24px; align-items: center; min-height: 64px; box-sizing: border-box; padding: 12px 16px; border-bottom: 1px solid #e3e9f2">
+<div style="display: flex; flex-direction: column; gap: 2px; min-width: 0"><p style="margin: 0; font-size: 13px; font-weight: 500; color: #061a3d">Adicionar servidor MCP</p><p style="margin: 0; font-size: 12px; line-height: 16px; color: #5b6b85">Um comando local (stdio) ou um endereço (HTTP), no Claude CLI ou só neste app.</p></div>
+<div><button type="button" style="display: flex; align-items: center; gap: 8px; height: 40px; padding: 0 14px; border: 1px solid #c9d4e5; border-radius: 4px; background: #ffffff; color: #0a2a5e; font-size: 13px; font-weight: 500; cursor: pointer"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><path d="M5 12h14"></path><path d="M12 5v14"></path></svg>Adicionar servidor MCP</button></div>
+</div>
+<p style="margin: 0; padding: 16px; font-size: 12px; line-height: 16px; color: #5b6b85">Nenhum servidor só deste app.</p>
+</div>
+</section>
+
+<section aria-label="Encontrados neste Mac" style="display: flex; flex-direction: column">
+<h2 style="margin: 0; font-size: 10px; line-height: 14px; font-weight: 500; letter-spacing: 0.14em; text-transform: uppercase; color: #5b6b85">Encontrados neste Mac</h2>
+<div style="margin-top: 12px; display: flex; flex-direction: column; border: 1px solid #c9d4e5; border-radius: 6px; background: #ffffff; overflow: hidden">
+<div style="display: grid; grid-template-columns: minmax(0, 1fr) 340px; column-gap: 24px; align-items: center; min-height: 64px; box-sizing: border-box; padding: 12px 16px">
+<div style="display: flex; flex-direction: column; gap: 2px; min-width: 0"><p style="margin: 0; font-size: 13px; font-weight: 500; color: #061a3d">Claude Desktop</p><p style="margin: 0; font-size: 12px; line-height: 16px; color: #5b6b85">Servidores de outras ferramentas (Claude Desktop). Importar não traz os segredos.</p></div>
+<span style="font-size: 13px; color: #5b6b85">1 servidor</span>
+</div>
+</div>
+</section>
+
+</div>
+</div>
+</main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1120,"height":740}}'>
+class Component extends DCLogic {
+  renderVals() {
+    return {};
+  }
+}
+</script>
+</body>
+</html>

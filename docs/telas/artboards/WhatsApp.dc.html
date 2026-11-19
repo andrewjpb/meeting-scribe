@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<title>WhatsApp · conversa</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0}
+button{font:inherit}
+textarea::placeholder,input::placeholder{color:#7f8da6}
+</style>
+</helmet>
+<div style="display: flex; width: 1120px; height: 740px; overflow: hidden; background: #ffffff; color: #061a3d; font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; font-size: 13px; line-height: 20px; -webkit-font-smoothing: antialiased">
+<dc-import name="SidebarRaiz" ativo="whatsapp" nao-lidas="{{naoLidas}}" hint-size="224px,740px"></dc-import>
+<main style="flex: 1 1 0; min-width: 0; height: 740px; display: flex; flex-direction: column; background: #ffffff">
+<div aria-hidden="true" style="flex: 0 0 52px; height: 52px"></div>
+
+<div style="flex: 1 1 0; min-height: 0; display: flex">
+
+<aside aria-label="Conversas do WhatsApp" style="flex: 0 0 300px; width: 300px; display: flex; flex-direction: column; border-right: 1px solid #e3e9f2">
+<div style="padding: 12px">
+<div style="display: flex; align-items: center; gap: 8px; height: 32px; box-sizing: border-box; padding: 0 8px; border: 1px solid #c9d4e5; border-radius: 4px; background: #ffffff; color: #7f8da6">
+<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><path d="m20 20-4-4"></path></svg>
+<label for="busca-wa" style="position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0)">Buscar conversas e mensagens</label>
+<input id="busca-wa" type="search" placeholder="Buscar conversas e mensagens" style="flex: 1 1 0; min-width: 0; border: 0; background: transparent; font: inherit; font-size: 12px; color: #061a3d; outline: none">
+</div>
+</div>
+<ul style="margin: 0; padding: 0 8px 12px; list-style: none; display: flex; flex-direction: column; gap: 2px">
+<li><button type="button" aria-current="true" style="display: flex; align-items: center; gap: 12px; width: 100%; padding: 8px 10px; border: 0; border-radius: 4px; background: #eef2f9; text-align: left; cursor: pointer">
+<span aria-hidden="true" style="flex: 0 0 36px; width: 36px; height: 36px; display: flex; align-items: center; justify-content: center; border-radius: 4px; background: #fce1ec; color: #5c1a35; font-size: 13px; font-weight: 700">AL</span>
+<span style="flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; gap: 2px">
+<span style="display: flex; align-items: center; gap: 8px"><span style="flex: 1 1 0; min-width: 0; font-size: 13px; font-weight: 500; color: #061a3d; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">Ana Lima</span><span style="font-size: 12px; line-height: 16px; color: #7f8da6; font-variant-numeric: tabular-nums">14:46</span></span>
+<span style="font-size: 12px; line-height: 16px; color: #5b6b85; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">O orçamento sai até sexta? Preciso fechar…</span>
+</span>
+</button></li>
+<li><button type="button" style="display: flex; align-items: center; gap: 12px; width: 100%; padding: 8px 10px; border: 0; border-radius: 4px; background: transparent; text-align: left; cursor: pointer">
+<span aria-hidden="true" style="flex: 0 0 36px; width: 36px; height: 36px; display: flex; align-items: center; justify-content: center; border-radius: 4px; background: #dceafb; color: #0e2f5c; font-size: 13px; font-weight: 700">BC</span>
+<span style="flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; gap: 2px">
+<span style="display: flex; align-items: center; gap: 8px"><span style="flex: 1 1 0; min-width: 0; font-size: 13px; font-weight: 500; color: #061a3d; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">Bruno Costa</span><span style="font-size: 12px; line-height: 16px; color: #7f8da6; font-variant-numeric: tabular-nums">14:40</span></span>
+<span style="font-size: 12px; line-height: 16px; color: #1e5bb8">digitando…</span>
+</span>
+</button></li>
+<li><button type="button" style="display: flex; align-items: center; gap: 12px; width: 100%; padding: 8px 10px; border: 0; border-radius: 4px; background: transparent; text-align: left; cursor: pointer">
+<span title="Grupo" style="flex: 0 0 36px; width: 36px; height: 36px; display: flex; align-items: center; justify-content: center; border-radius: 4px; background: #eef2f9; color: #5b6b85"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><circle cx="9" cy="8" r="4"></circle><path d="M2 21v-1a5 5 0 0 1 5-5h4a5 5 0 0 1 5 5v1"></path><path d="M16 4a4 4 0 0 1 0 8"></path><path d="M22 21v-1a5 5 0 0 0-3-4.6"></path></svg><span style="position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0)">Grupo:</span></span>
+<span style="flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; gap: 2px">
+<span style="display: flex; align-items: center; gap: 8px"><span style="flex: 1 1 0; min-width: 0; font-size: 13px; font-weight: 700; color: #0a2a5e; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">Equipe Produto</span><span style="font-size: 12px; line-height: 16px; color: #1e5bb8; font-variant-numeric: tabular-nums">13:58</span></span>
+<span style="display: flex; align-items: center; gap: 8px"><span style="flex: 1 1 0; min-width: 0; font-size: 12px; line-height: 16px; color: #5b6b85; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">Carla: subi a versão nova da pauta</span><span style="padding: 0 6px; border-radius: 4px; background: #1e5bb8; color: #ffffff; font-size: 12px; line-height: 16px; font-weight: 500; font-variant-numeric: tabular-nums">3</span></span>
+</span>
+</button></li>
+<li><button type="button" style="display: flex; align-items: center; gap: 12px; width: 100%; padding: 8px 10px; border: 0; border-radius: 4px; background: transparent; text-align: left; cursor: pointer">
+<span aria-hidden="true" style="flex: 0 0 36px; width: 36px; height: 36px; display: flex; align-items: center; justify-content: center; border-radius: 4px; background: #ddf3e1; color: #173f22; font-size: 13px; font-weight: 700">CM</span>
+<span style="flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; gap: 2px">
+<span style="display: flex; align-items: center; gap: 8px"><span style="flex: 1 1 0; min-width: 0; font-size: 13px; font-weight: 500; color: #061a3d; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">Carla Mendes</span><span style="font-size: 12px; line-height: 16px; color: #7f8da6">Ontem</span></span>
+<span style="font-size: 12px; line-height: 16px; color: #5b6b85; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">Fechado, obrigada!</span>
+</span>
+</button></li>
+<li><button type="button" style="display: flex; align-items: center; gap: 12px; width: 100%; padding: 8px 10px; border: 0; border-radius: 4px; background: transparent; text-align: left; cursor: pointer">
+<span aria-hidden="true" style="flex: 0 0 36px; width: 36px; height: 36px; display: flex; align-items: center; justify-content: center; border-radius: 4px; background: #eae1f8; color: #33205a; font-size: 13px; font-weight: 700">DR</span>
+<span style="flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; gap: 2px">
+<span style="display: flex; align-items: center; gap: 8px"><span style="flex: 1 1 0; min-width: 0; font-size: 13px; font-weight: 500; color: #061a3d; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">Diego Rocha</span><span style="font-size: 12px; line-height: 16px; color: #7f8da6">Terça</span></span>
+<span style="font-size: 12px; line-height: 16px; color: #5b6b85; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">Áudio · 0:42</span>
+</span>
+</button></li>
+</ul>
+</aside>
+
+<section aria-label="Conversa com Ana Lima" style="flex: 1 1 0; min-width: 0; display: flex; flex-direction: column">
+<header style="flex: 0 0 56px; height: 56px; box-sizing: border-box; display: flex; align-items: center; gap: 12px; padding: 0 24px; border-bottom: 1px solid #e3e9f2">
+<span aria-hidden="true" style="flex: 0 0 40px; width: 40px; height: 40px; display: flex; align-items: center; justify-content: center; border-radius: 4px; background: #fce1ec; color: #5c1a35; font-size: 13px; font-weight: 700">AL</span>
+<div style="flex: 1 1 0; min-width: 0; display: flex; flex-direction: column">
+<h2 style="margin: 0; font-size: 15px; line-height: 20px; font-weight: 700; color: #0a2a5e; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">Ana Lima</h2>
+<span style="font-size: 12px; line-height: 16px; color: #5b6b85; font-variant-numeric: tabular-nums; white-space: nowrap">+55 11 90000-0000</span>
+</div>
+<button type="button" aria-pressed="true" style="flex: 0 0 auto; display: flex; align-items: center; gap: 6px; height: 28px; padding: 0 8px; border: 1px solid #c9d4e5; border-radius: 4px; background: #eef2f9; color: #0a2a5e; font-size: 12px; font-weight: 500; cursor: pointer"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><rect x="3" y="3" width="18" height="18"></rect><path d="M15 3v18"></path></svg>Detalhes</button>
+</header>
+
+<ol aria-label="Mensagens" style="flex: 1 1 0; min-height: 0; overflow: hidden; margin: 0; padding: 16px 24px; list-style: none; display: flex; flex-direction: column; justify-content: flex-end; gap: 12px">
+<li style="display: flex; justify-content: flex-start"><div style="max-width: 560px; display: flex; flex-direction: column; gap: 4px; padding: 8px 12px; border: 1px solid #e3e9f2; border-radius: 6px; background: #ffffff; font-size: 15px; line-height: 22px; color: #061a3d"><span>Oi! Tudo certo para a Daily amanhã?</span><span style="align-self: flex-end; font-size: 11px; line-height: 14px; color: #7f8da6; font-variant-numeric: tabular-nums">14:12</span></div></li>
+<li style="display: flex; justify-content: flex-end"><div style="max-width: 560px; display: flex; flex-direction: column; gap: 4px; padding: 8px 12px; border-radius: 6px; background: #1e5bb8; font-size: 15px; line-height: 22px; color: #ffffff"><span>Tudo certo, às 10:00.</span><span style="align-self: flex-end; font-size: 11px; line-height: 14px; color: #dceafb; font-variant-numeric: tabular-nums">14:15</span></div></li>
+<li style="display: flex; justify-content: flex-end"><div style="max-width: 560px; display: flex; flex-direction: column; gap: 4px; padding: 8px 12px; border-radius: 6px; background: #1e5bb8; font-size: 15px; line-height: 22px; color: #ffffff"><span>Mandei a pauta do Planejamento Q1 por email.</span><span style="align-self: flex-end; font-size: 11px; line-height: 14px; color: #dceafb; font-variant-numeric: tabular-nums">14:20</span></div></li>
+<li style="display: flex; justify-content: flex-start"><div style="max-width: 560px; display: flex; flex-direction: column; gap: 4px; padding: 8px 12px; border: 1px solid #e3e9f2; border-radius: 6px; background: #ffffff; font-size: 15px; line-height: 22px; color: #061a3d"><span>Recebi, obrigada!</span><span style="align-self: flex-end; font-size: 11px; line-height: 14px; color: #7f8da6; font-variant-numeric: tabular-nums">14:31</span></div></li>
+<li style="display: flex; justify-content: flex-start"><div style="max-width: 560px; display: flex; flex-direction: column; gap: 4px; padding: 8px 12px; border: 1px solid #e3e9f2; border-radius: 6px; background: #ffffff; font-size: 15px; line-height: 22px; color: #061a3d"><span>O orçamento sai até sexta? Preciso fechar com o financeiro.</span><span style="align-self: flex-end; font-size: 11px; line-height: 14px; color: #7f8da6; font-variant-numeric: tabular-nums">14:46</span></div></li>
+</ol>
+
+<div style="flex: 0 0 auto; display: flex; flex-direction: column; gap: 8px; padding: 16px 24px; border-top: 1px solid #e3e9f2">
+<label for="msg-wa" style="position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0)">Mensagem para Ana Lima</label>
+<textarea id="msg-wa" rows="3" placeholder="Escreva uma mensagem" style="min-height: 72px; box-sizing: border-box; resize: none; padding: 8px 12px; border: 1px solid #c9d4e5; border-radius: 4px; background: #ffffff; color: #061a3d; font: inherit; font-size: 15px; line-height: 22px"></textarea>
+<div style="display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px">
+<div style="display: flex; align-items: center; gap: 8px">
+<button type="button" aria-label="Anexar imagem ou vídeo" style="flex: 0 0 40px; width: 40px; height: 40px; display: flex; align-items: center; justify-content: center; border: 1px solid #c9d4e5; border-radius: 4px; background: #ffffff; color: #0a2a5e; cursor: pointer"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><path d="m21 11-9 9a5 5 0 0 1-7-7l9-9a3.5 3.5 0 0 1 5 5l-9 9a2 2 0 0 1-3-3l8-8"></path></svg></button>
+<button type="button" style="display: flex; align-items: center; gap: 8px; height: 40px; padding: 0 14px; border: 1px solid #c9d4e5; border-radius: 4px; background: #ffffff; color: #0a2a5e; font-size: 13px; font-weight: 500; white-space: nowrap; cursor: pointer"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><path d="M12 3l2 6 6 2-6 2-2 6-2-6-6-2 6-2z"></path></svg>Rascunho com o Claude</button>
+</div>
+<div style="display: flex; align-items: center; gap: 12px; margin-left: auto">
+<span style="font-size: 12px; line-height: 16px; color: #7f8da6">Enter pula linha</span>
+<button type="button" disabled style="display: flex; align-items: center; gap: 8px; height: 40px; padding: 0 16px; border: 0; border-radius: 4px; background: #1e5bb8; color: #ffffff; font-size: 13px; font-weight: 500; opacity: 0.5">Enviar<span style="font-size: 12px; opacity: 0.8">⌘↵</span></button>
+</div>
+</div>
+</div>
+</section>
+
+<aside aria-label="Detalhes" style="flex: 0 0 300px; width: 300px; display: flex; flex-direction: column; border-left: 1px solid #e3e9f2; background: #ffffff; overflow: hidden">
+<div style="flex: 0 0 48px; height: 48px; box-sizing: border-box; display: flex; align-items: center; justify-content: space-between; padding: 0 8px 0 16px; border-bottom: 1px solid #e3e9f2">
+<h2 style="margin: 0; font-size: 13px; font-weight: 700; color: #0a2a5e">Detalhes</h2>
+<button type="button" aria-label="Fechar o painel Detalhes" style="width: 32px; height: 32px; display: flex; align-items: center; justify-content: center; border: 0; border-radius: 4px; background: transparent; color: #5b6b85; cursor: pointer"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"></path></svg></button>
+</div>
+
+<section aria-label="Resumo" style="display: flex; flex-direction: column; gap: 8px; padding: 16px; border-bottom: 1px solid #e3e9f2">
+<h3 style="margin: 0; font-size: 12px; line-height: 16px; font-weight: 700; color: #5b6b85">Resumo</h3>
+<div style="display: flex; align-items: center; gap: 8px">
+<button type="button" style="display: flex; align-items: center; gap: 8px; height: 40px; padding: 0 14px; border: 1px solid #c9d4e5; border-radius: 4px; background: #ffffff; color: #0a2a5e; font-size: 13px; font-weight: 500; cursor: pointer"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><path d="M21 12a9 9 0 0 0-15-6.7L3 8"></path><path d="M3 3v5h5"></path><path d="M3 12a9 9 0 0 0 15 6.7L21 16"></path><path d="M16 16h5v5"></path></svg>Atualizar</button>
+</div>
+<p style="margin: 0; font-size: 13px; line-height: 20px; color: #061a3d">Combinaram a Daily de amanhã às 10:00. Você mandou a pauta do Planejamento Q1 e a Ana quer saber do orçamento até sexta.</p>
+</section>
+
+<section aria-label="Pontos importantes" style="display: flex; flex-direction: column; gap: 8px; padding: 16px; border-bottom: 1px solid #e3e9f2">
+<h3 style="margin: 0; font-size: 12px; line-height: 16px; font-weight: 700; color: #5b6b85">Pontos importantes</h3>
+<ul style="margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 4px; font-size: 13px; line-height: 20px; color: #061a3d">
+<li style="display: flex; gap: 8px"><span aria-hidden="true" style="flex: 0 0 6px; width: 6px; height: 6px; margin-top: 7px; background: #1e5bb8"></span><span>Daily confirmada para amanhã, 10:00</span></li>
+<li style="display: flex; gap: 8px"><span aria-hidden="true" style="flex: 0 0 6px; width: 6px; height: 6px; margin-top: 7px; background: #1e5bb8"></span><span>Pauta do Planejamento Q1 enviada por email</span></li>
+<li style="display: flex; gap: 8px"><span aria-hidden="true" style="flex: 0 0 6px; width: 6px; height: 6px; margin-top: 7px; background: #1e5bb8"></span><span>Orçamento precisa sair até sexta</span></li>
+</ul>
+</section>
+
+<section aria-label="Pendências" style="display: flex; flex-direction: column; gap: 8px; padding: 16px">
+<h3 style="margin: 0; font-size: 12px; line-height: 16px; font-weight: 700; color: #5b6b85">Pendências</h3>
+<h4 style="margin: 0; font-size: 12px; line-height: 16px; font-weight: 500; color: #061a3d">Minhas</h4>
+<ul style="margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 4px; font-size: 13px; line-height: 20px; color: #061a3d">
+<li style="display: flex; gap: 8px"><span aria-hidden="true" style="flex: 0 0 6px; width: 6px; height: 6px; margin-top: 7px; background: #1e5bb8"></span><span>Responder sobre o orçamento</span></li>
+</ul>
+<h4 style="margin: 0; font-size: 12px; line-height: 16px; font-weight: 500; color: #061a3d">Deles</h4>
+<ul style="margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 4px; font-size: 13px; line-height: 20px; color: #061a3d">
+<li style="display: flex; gap: 8px"><span aria-hidden="true" style="flex: 0 0 6px; width: 6px; height: 6px; margin-top: 7px; background: #1e5bb8"></span><span>Fechar o valor com o financeiro</span></li>
+</ul>
+</section>
+</aside>
+</div>
+</main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1120,"height":740}}'>
+class Component extends DCLogic {
+  renderVals() {
+    return { naoLidas: 3 };
+  }
+}
+</script>
+</body>
+</html>

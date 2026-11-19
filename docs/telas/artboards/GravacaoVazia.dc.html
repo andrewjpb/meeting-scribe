@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<title>Gravação, nenhuma em andamento</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0}
+</style>
+</helmet>
+<div style="display: flex; width: 1120px; height: 740px; overflow: hidden; background: #ffffff; color: #061a3d; font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; font-size: 13px; line-height: 20px; -webkit-font-smoothing: antialiased">
+
+<div style="flex: 0 0 224px; width: 224px; height: 740px">
+<dc-import name="SidebarRaiz" ativo="nenhum" nao-lidas="{{duas}}" hint-size="224px,740px"></dc-import>
+</div>
+
+<main style="flex: 1 1 0; min-width: 0; height: 740px; display: flex; flex-direction: column; overflow: hidden">
+<div aria-hidden="true" style="flex: none; height: 52px"></div>
+
+<div style="flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; padding: 28px 40px 40px">
+<div aria-hidden="true" style="flex: 3 1 0"></div>
+
+<section aria-label="Nenhuma gravação em andamento" style="flex: none; display: flex; flex-direction: column; align-items: center; text-align: center">
+<div aria-hidden="true" style="width: 320px; margin-bottom: 28px">
+<div style="display: flex; align-items: center; gap: 12px; height: 36px">
+<span style="flex: none; font-size: 10px; line-height: 14px; font-weight: 500; letter-spacing: 0.14em; color: #1e5bb8">VOCÊ<span style="margin-left: 6px; letter-spacing: normal; color: #7f8da6">sem sinal</span></span>
+<svg height="1" aria-hidden="true" style="flex: 1 1 auto; min-width: 0; display: block"><line x1="0" x2="100%" y1="0.5" y2="0.5" stroke="#c9d4e5" stroke-width="1" stroke-dasharray="6 6"></line></svg>
+</div>
+<div style="height: 1px; background: #c9d4e5"></div>
+<div style="display: flex; align-items: center; gap: 12px; height: 36px">
+<span style="flex: none; font-size: 10px; line-height: 14px; font-weight: 500; letter-spacing: 0.14em; color: #5b6b85">PARTICIPANTES<span style="margin-left: 6px; letter-spacing: normal; color: #7f8da6">sem sinal</span></span>
+<svg height="1" aria-hidden="true" style="flex: 1 1 auto; min-width: 0; display: block"><line x1="0" x2="100%" y1="0.5" y2="0.5" stroke="#c9d4e5" stroke-width="1" stroke-dasharray="6 6"></line></svg>
+</div>
+</div>
+<h2 style="margin: 0; font-size: 20px; line-height: 26px; font-weight: 700; letter-spacing: -0.3px; color: #0a2a5e">Nenhuma gravação em andamento</h2>
+<p style="margin: 12px 0 0; max-width: 400px; font-size: 13px; line-height: 20px; color: #5b6b85; text-wrap: pretty">Comece uma gravação para ver aqui o nível da sua voz e o dos participantes.</p>
+<div style="margin-top: 24px">
+<a href="GravacaoAnalise.dc.html" aria-keyshortcuts="Meta+N" style="display: inline-flex; align-items: center; gap: 10px; height: 40px; box-sizing: border-box; padding: 0 16px; border-radius: 4px; background: #1e5bb8; color: #ffffff; text-decoration: none; font-size: 13px; font-weight: 500; white-space: nowrap">
+<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true" style="flex: none; display: block"><path d="M5 12h14M12 5v14"></path></svg>
+<span>Nova gravação</span>
+<kbd aria-hidden="true" style="font-family: inherit; font-size: 12px; font-weight: 400; opacity: 0.8">⌘N</kbd>
+</a>
+</div>
+</section>
+
+<div aria-hidden="true" style="flex: 7 1 0"></div>
+</div>
+</main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1120,"height":740}}'>
+class Component extends DCLogic {
+  renderVals() {
+    return { duas: 3 };
+  }
+}
+</script>
+</body>
+</html>
