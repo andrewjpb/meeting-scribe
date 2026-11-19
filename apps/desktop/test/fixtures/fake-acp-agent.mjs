@@ -28,7 +28,9 @@
 //   <nome> dizendo <texto>" propõe o bloco de resposta no WhatsApp com o id da conversa do arquivo; "bloco inválido"
 //   devolve um bloco quebrado. O agente nunca executa nada: só escreve o bloco. Contrato 45: os pedidos de email
 //   (`emailAnswer`): pendentes pelo `EMAILS.md`, rascunho de resposta, lembrete de um email e a busca pelas
-//   ferramentas do app (`lap-ferramenta`: `buscar_emails` e, achado só no servidor, `ler_email`).
+//   ferramentas do app (`lap-ferramenta`: `buscar_emails` e, achado só no servidor, `ler_email`). Contrato 56: "organiza
+//   … em Resolvidos" pede `listar_pastas`, depois `criar_pasta` "Resolvidos" e `mover_emails` do email do assunto pedido
+//   (ou do primeiro do `EMAILS.md`) para lá, e responde contando.
 // - internet (contrato 26), em qualquer chat (agente ou Assistente), com "pesquise" no pedido: `WebSearch` (pedindo
 //   permissão, como o adaptador) com resultados inventados no `tool_call_update` ("Título (url)", sem rede nenhuma);
 //   abre o primeiro resultado (`WebFetch`) e tenta abrir um endereço montado com o título da reunião na consulta (que o
@@ -140,6 +142,9 @@ function emailLines(cwd, file) {
     .map(({ line, match }) => ({ ref: match[1], account: match[2], where: match[3] ?? null, from: match[4].replace(/ <.*>$/, ''), subject: match[5], at: match[6], pending: line.includes(' · pendente de resposta: sim') }))
 }
 
+/** Contrato 56: o assunto do email que o pedido de organizar quer mover (entre as rodadas do mesmo pedido). */
+let organizeSubject = null
+
 /**
  * Contrato 45: o email no Assistente falso. "email pendente" lê o `EMAILS.md` e lista as pendentes com a citação e o
  * bloco `emails`; "responde … email d<nome> dizendo <texto>" propõe o rascunho; "tarefa … responder … email d<nome>"
@@ -150,6 +155,29 @@ async function emailAnswer(question, cwd, read, fence) {
   const overview = 'EMAILS.md'
   const tool = (json) => `\n\n\`\`\`lap-ferramenta\n${JSON.stringify(json)}\n\`\`\``
   const byName = (lines, text) => lines.find((line) => text.toLowerCase().includes(line.from.split(' ')[0].toLowerCase()))
+  // Contrato 56: organizar (pastas → criar Resolvidos → mover um email → contar).
+  if (/^\[Resultado da ferramenta listar_pastas\]/.test(question)) {
+    await read('PASTAS-EMAIL.md')
+    return `Vou criar a pasta.${tool({ ferramenta: 'criar_pasta', nome: 'Resolvidos' })}`
+  }
+  if (/^\[Resultado da ferramenta criar_pasta\]/.test(question)) {
+    await read(overview)
+    const lines = emailLines(cwd, overview)
+    const wanted = organizeSubject ? lines.find((line) => line.subject.toLowerCase().includes(organizeSubject)) : null
+    const line = wanted ?? lines[0]
+    if (!line) return 'Não achei email para mover.'
+    return `Vou mover.${tool({ ferramenta: 'mover_emails', destino: 'Resolvidos', assuntos: [{ emails: [line.ref], assunto: line.subject, veredito: 'resolvido', motivo: 'Aviso automático, nada a responder.', evidencia: 'É um aviso do sistema.' }] })}`
+  }
+  if (/^\[Resultado da ferramenta mover_emails\]/.test(question)) {
+    await read('MOVER-EMAILS.md')
+    const moved = /(\d+) movida\(s\)/.exec(readFileSync(join(cwd, 'MOVER-EMAILS.md'), 'utf8'))?.[1] ?? '0'
+    return `Pronto: movi ${moved} email(s) para Resolvidos. Dá para desfazer pelo cartão.`
+  }
+  const organize = /organiza.*resolvidos(?:.*assunto "(.+?)")?/i.exec(question)
+  if (organize) {
+    organizeSubject = organize[1]?.toLowerCase() ?? null
+    return `Vou ver as pastas.${tool({ ferramenta: 'listar_pastas' })}`
+  }
   if (/^\[Resultado da ferramenta buscar_emails\]/.test(question)) {
     await read('BUSCA-EMAILS.md')
     const found = emailLines(cwd, 'BUSCA-EMAILS.md')

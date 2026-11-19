@@ -31,6 +31,14 @@ export const GUIDE_FILE = 'GUIA-DO-APP.md'
 export const AUTOMATIONS_FILE = 'AUTOMACOES.md'
 /** Contrato 45 (CA7): o resultado da ferramenta `buscar_emails` (trocado a cada busca, apagado na pergunta seguinte). */
 export const EMAIL_SEARCH_FILE = 'BUSCA-EMAILS.md'
+/**
+ * Contrato 56: os resultados das ferramentas de organizar o email (trocados a cada chamada, apagados na pergunta
+ * seguinte, como a busca). Fora do `INDICE.md`.
+ */
+export const EMAIL_CONVERSATIONS_FILE = 'CONVERSAS-EMAIL.md'
+export const EMAIL_FOLDERS_FILE = 'PASTAS-EMAIL.md'
+export const EMAIL_MOVE_FILE = 'MOVER-EMAILS.md'
+const EMAIL_TOOL_FILES: readonly string[] = [EMAIL_CONVERSATIONS_FILE, EMAIL_FOLDERS_FILE, EMAIL_MOVE_FILE]
 /** Arquivos das fontes do app, na ordem em que o `INDICE.md` lista. */
 export const SOURCE_FILES = [STATE_FILE, GUIDE_FILE, AUTOMATIONS_FILE, WHATSAPP_OVERVIEW_FILE, EMAIL_OVERVIEW_FILE, EMAIL_SEARCH_FILE] as const
 /** Execuções no `AUTOMACOES.md`. */
@@ -192,7 +200,7 @@ async function writeAtomic(file: string, content: string): Promise<void> {
 
 /** O arquivo é de uma fonte do app (e sai da pasta antes de escrever de novo)? */
 export const isSourceFile = (name: string): boolean =>
-  (SOURCE_FILES as readonly string[]).includes(name) || ((name.startsWith(WHATSAPP_EXPORT_PREFIX) || name.startsWith(EMAIL_EXPORT_PREFIX)) && name.endsWith('.md'))
+  (SOURCE_FILES as readonly string[]).includes(name) || EMAIL_TOOL_FILES.includes(name) || ((name.startsWith(WHATSAPP_EXPORT_PREFIX) || name.startsWith(EMAIL_EXPORT_PREFIX)) && name.endsWith('.md'))
 
 /**
  * Antes de cada pergunta: as fontes da conversa na pasta dela. Cada arquivo só é regravado se mudou (e o WhatsApp só

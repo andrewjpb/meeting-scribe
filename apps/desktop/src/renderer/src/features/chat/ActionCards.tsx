@@ -35,6 +35,7 @@ import { emailTimeLabel, sendErrorText } from '../email/format'
 import { macTimeZone } from '../schedules/TaskForm'
 import { QUIET_BUTTON } from './ChatMessages'
 import { useChat } from './chatStore'
+import { EmailBatchCard } from './EmailBatchCard'
 
 const CARD = 'flex max-w-[72ch] flex-col gap-2 rounded-[var(--radius-panel)] border border-line-strong bg-bg-raised p-3'
 const FIELD = 'no-drag rounded-[var(--radius-control)] border border-line-strong bg-bg px-2 text-13 text-text select-text'
@@ -528,6 +529,8 @@ function ActionCard({ action, actionRef, choice }: { action: ChatAction; actionR
   if (action.kind === 'tarefa') return <TaskCard action={action} actionRef={actionRef} />
   if (action.kind === 'emails') return <EmailListCard action={action} />
   if (action.kind === 'email-resposta') return <EmailReplyCard action={action} actionRef={actionRef} />
+  // Contrato 56: o cartão do lote que o Assistente moveu (`EmailBatchCard.tsx`).
+  if (action.kind === 'email-lote') return <EmailBatchCard action={action} />
   return <OpenCard action={action} />
 }
 

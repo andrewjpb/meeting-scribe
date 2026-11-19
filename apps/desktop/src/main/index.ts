@@ -32,7 +32,7 @@ import { applyBrandName, applyDockIcon, type DockIconTarget } from './branding/a
 import { createBrandingService, type BrandingService, type ImageDialog } from './branding/service'
 import { registerDisplayMediaHandler } from './capture/display-media'
 import { createChatCorpus, type ChatCorpus } from './chat/corpus'
-import { createChatActions, extractActions, type ChatActions } from './chat/actions'
+import { createChatActions, extractActions, markEmailBatchCard, type ChatActions } from './chat/actions'
 import { createChatService, type ChatService } from './chat/service'
 import { AUTOMATION_RUNS_IN_SOURCE, writeSources, type AssistantState } from './chat/sources'
 import { createFileChatStore } from './chat/store'
@@ -101,6 +101,8 @@ import { createInsightsService, type InsightsService } from './whatsapp/insights
 import { createWhatsAppNotifier, isGroupChat, shouldNotify, type NoticeHandle, type WhatsAppNotice } from './whatsapp/notify'
 import { createWhatsAppService, type WhatsAppService } from './whatsapp/service'
 import { EMAIL_DIR } from './email/email-store'
+import { createEmailBatchStore } from './email/batches'
+import type { EmailOrganizer } from './email/organize'
 import { createEmailService, type EmailService } from './email/service'
 import { createEmailTools } from './email/assistant-tools'
 import { emailStateLabel, exportEmail } from './email/export'
@@ -850,6 +852,8 @@ interface AppServices {
   whatsappInsights: InsightsService
   /** Contas de email IMAP, POP3 e SMTP (contrato 42). */
   email: EmailService
+  /** Contrato 56: os lotes do Assistente que organiza o email (o estado, o cartão e o Desfazer). */
+  emailOrganizer: EmailOrganizer | null
   /** Agentes, tarefas agendadas e execuções (contrato 23). */
   automations: AutomationsService
   /** Servidor local da extensão do Meet (contrato 27). */
@@ -1168,6 +1172,8 @@ function createAppServices(userData: string): AppServices {
     onMessagesChanged: (accountId) => {
       if (!lockService?.isLocked()) broadcast(appWindows(), 'scribe:email-changed', { accountId })
     },
+    // Contrato 56: a conta removida leva os lotes do Assistente.
+    onAccountRemoved: (accountId) => void emailTools.organizer?.forgetAccount(accountId).catch(() => undefined),
     // Só estados e tipos de erro, nunca senha, endereço ou texto de mensagem.
     ...(app.isPackaged ? {} : { log: (message: string) => console.log(message) }),
   })
@@ -1245,7 +1251,29 @@ function createAppServices(userData: string): AppServices {
     searchServer: (accountId, query, limit) => email.searchServer(accountId, query, limit),
     peekServer: (accountId, mailbox, uid) => email.peekServer(accountId, mailbox, uid),
     locked: emailLocked,
+    // Contrato 56: organizar o email (só o Assistente interativo); os lotes com o Desfazer em `email/batches.json`.
+    organize: {
+      store: createEmailBatchStore(join(userData, EMAIL_DIR)),
+      accounts: () => email.accounts(),
+      listFolders: (accountId, options) => email.listFolders(accountId, options),
+      openFolder: (accountId, path) => email.openFolder(accountId, path),
+      createFolder: (accountId, parentPath, name) => email.createFolder(accountId, parentPath, name),
+      moveMessages: (accountId, fromPath, uids, toPath, options) => email.moveMessages(accountId, fromPath, uids, toPath, options),
+      locateMessages: (accountId, path, uids, messageIds) => email.locateMessages(accountId, path, uids, messageIds),
+      // Bloqueado, nada do email vai às janelas (como os outros eventos do email).
+      emit: (event) => {
+        if (!lockService?.isLocked()) broadcast(appWindows(), 'scribe:email-organize', event)
+      },
+      // O cartão do lote fica `done` com a frase do Desfazer, na conversa que o tem.
+      cardDone: async (batch, result) => {
+        const saved = await markEmailBatchCard(chatStore, batch.chatId, batch.id, result)
+        if (saved && !lockService?.isLocked()) broadcast(appWindows(), 'scribe:chat-event', { type: 'done', chatId: saved.id, chat: saved })
+      },
+      ...devLog,
+    },
   })
+  // Contrato 56 (CA11): o lote que ficou `running` (o app caiu no meio) vira `stopped`.
+  void emailTools.organizer?.init().catch(() => undefined)
   const actionResolver = {
     whatsappChat: async (chatId: string) => {
       // A lista que a pergunta acabou de ler (uma chamada só ao serviço).
@@ -1266,8 +1294,10 @@ function createAppServices(userData: string): AppServices {
     assistant: {
       prepare: (folder, scope) => writeSources(assistantSources, folder, scope),
       extract: (text) => extractActions(text, actionResolver),
-      // Contrato 45 (CA7): com conta de email e a fonte ligada, as ferramentas de busca e leitura.
-      tools: (scope) => (chatSourcesOf(scope).email && email.accounts().length > 0 && !emailLocked() ? emailTools.tools : []),
+      // Contrato 45 (CA7): com conta de email e a fonte ligada, as ferramentas de busca e leitura. Contrato 56: e as de
+      // organizar (só aqui, no Assistente interativo; as automações recebem só as de leitura).
+      tools: (scope) => (chatSourcesOf(scope).email && email.accounts().length > 0 && !emailLocked() ? [...emailTools.tools, ...emailTools.organizeTools] : []),
+      endTurn: (turn, outcome) => emailTools.organizer?.endTurn(turn, outcome) ?? Promise.resolve(),
     },
     settings,
     meetings,
@@ -1607,6 +1637,7 @@ function createAppServices(userData: string): AppServices {
     whatsapp,
     whatsappInsights,
     email,
+    emailOrganizer: emailTools.organizer,
     automations,
     meet,
     meetingPrompt,
@@ -1727,7 +1758,7 @@ function openExternal(url: string): void {
 }
 
 function registerIpc(services: AppServices): void {
-  const { settings, meetings, meetingsService, meetingsIndex, tokenClient, translation, claude, files, summary, analysis, aiNotes, download, branding, updates, chat, chatActions, corpus, acp, lock, google, drive, microsoft, calendar, whatsapp, whatsappInsights, email, automations, meet, meetingPrompt, pluginSave, mcp } = services
+  const { settings, meetings, meetingsService, meetingsIndex, tokenClient, translation, claude, files, summary, analysis, aiNotes, download, branding, updates, chat, chatActions, corpus, acp, lock, google, drive, microsoft, calendar, whatsapp, whatsappInsights, email, emailOrganizer, automations, meet, meetingPrompt, pluginSave, mcp } = services
   /** Reunião salva, renomeada ou com anotações novas: o `.md` dela no acervo do chat é reescrito. */
   const touched = (meetingId: string): void => void corpus.sync(meetingId).catch(() => undefined)
   /**
@@ -2076,6 +2107,11 @@ function registerIpc(services: AppServices): void {
   handle('scribe:email-rules-preview', appOrigin, (_event, request) => email.rulesPreview(request).catch(() => ({ ok: false, error: 'unavailable' }) as const))
   handle('scribe:email-rules-run', appOrigin, (_event, request) => email.rulesRun(request).catch(() => ({ ok: false, error: 'unavailable' }) as const))
   onEvent('scribe:email-folder-watch', appOrigin, (event, request) => email.watchFolder(event.sender.id, request))
+  // Contrato 56: o lote do Assistente (o estado, o cartão e o Desfazer). Nenhum envia email; o Desfazer só devolve o que
+  // o agente moveu, sem token de clique.
+  handle('scribe:email-organize-state', appOrigin, () => emailOrganizer?.state().catch(() => ({ ok: false, error: 'unavailable' }) as const) ?? ({ ok: false, error: 'unavailable' } as const))
+  handle('scribe:email-batch-get', appOrigin, (_event, request) => emailOrganizer?.batch(request).catch(() => ({ ok: false, error: 'unavailable' }) as const) ?? ({ ok: false, error: 'unavailable' } as const))
+  handle('scribe:email-batch-undo', appOrigin, (_event, request) => emailOrganizer?.undo(request).catch(() => ({ ok: false, error: 'unavailable' }) as const) ?? ({ ok: false, error: 'unavailable' } as const))
   onEvent('scribe:email-viewing', appOrigin, (event, request) => {
     const viewing = request as { accountId?: unknown; folder?: unknown } | null | undefined
     const accountId = viewing?.accountId

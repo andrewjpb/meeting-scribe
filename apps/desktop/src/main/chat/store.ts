@@ -205,6 +205,16 @@ export const chatActionSchema = z.discriminatedUnion('kind', [
       text: z.string().max(EMAIL_TEXT_MAX),
     })
     .strict(),
+  // Contrato 56: o lote que o Assistente moveu (o cartão lê o resto do `batches.json`).
+  z
+    .object({
+      kind: z.literal('email-lote'),
+      ...actionBase,
+      batchId: z.string().uuid(),
+      accountId: emailAccountId,
+      account: z.string().max(320),
+    })
+    .strict(),
 ])
 
 const messageSchema = z.object({

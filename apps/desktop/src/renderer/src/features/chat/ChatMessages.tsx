@@ -4,10 +4,11 @@ import { useNavigate } from 'react-router'
 import { withoutPendingActions } from '@shared/assistant'
 import { chatErrorText, chatWebUsage, chatWebUsageLabel, type ChatMessage, type ChatMeta, type ChatPlanEntry, type ChatStep, type ChatStepStatus } from '@shared/chat'
 import { acpReady } from '@shared/acp'
+import { EMAIL_ORGANIZE_STEP_ID } from '@shared/email-organize'
 import { useAcp } from '../../app/acpStore'
 import { useAgentLabel } from '../../app/agentLabel'
 import { useSettings } from '../../app/settingsStore'
-import { meetingPath } from '@shared/routes'
+import { meetingPath, ROUTE_PATHS } from '@shared/routes'
 import { Icon } from '../../design/Icon'
 import { dayLabel, timeLabel } from '../meetings/format'
 import { ActionCards } from './ActionCards'
@@ -315,7 +316,10 @@ export function AssistantMessage({ message, meetings, onCopy, onRedo, chatId = n
  * cartões de aprovação das ferramentas MCP, logo abaixo dos passos.
  */
 export function LiveAssistantMessage({ answer, card = false, chatId = null }: { answer: LiveAnswer; card?: boolean; chatId?: string | null }) {
+  const navigate = useNavigate()
   const status = answer.steps.at(-1)?.label ?? 'Pensando…'
+  // Contrato 56 (D13 do mockup): enquanto o Assistente organiza o email, sem cartão; só o passo e o link para a tela Email.
+  const organizing = answer.steps.some((step) => step.id === EMAIL_ORGANIZE_STEP_ID && step.status === 'in_progress')
   // Contrato 25: o bloco de ação ainda sendo escrito não aparece; vira cartão quando a resposta termina.
   const text = withoutPendingActions(answer.text)
   return (
@@ -332,6 +336,13 @@ export function LiveAssistantMessage({ answer, card = false, chatId = null }: { 
           {/* Quadrado do logo, pulsando; parado com movimento reduzido (regra de tokens.css). No cartão, ele pulsa no cabeçalho. */}
           {!card && <span aria-hidden="true" className="rec-pulse size-1.5 shrink-0 bg-accent" />}
           {status}
+        </p>
+      )}
+      {organizing && (
+        <p className="flex items-center gap-2 text-12">
+          <button type="button" data-action="chat-email-organize-follow" onClick={() => void navigate(ROUTE_PATHS.email.replace('/:conta?/:pasta?', ''))} className="no-drag font-medium text-accent hover:underline">
+            Acompanhar no Email
+          </button>
         </p>
       )}
     </li>

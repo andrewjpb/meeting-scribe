@@ -36,6 +36,7 @@ import {
 import { REMINDER_TEXT_MAX } from './assistant'
 import { CHAT_SCOPE_MEETINGS_MAX, CHAT_TEXT_MAX } from './chat'
 import { EMAIL_ACCOUNT_ID_PATTERN, EMAIL_SUBJECT_MAX } from './email'
+import { RUN_ORGANIZE_REFUSED_MAX } from './email-organize'
 import { AGENT_PROFILES } from './settings-defaults'
 import { allowEntryValid, normalizeAllowEntry, RUN_EMAILS_MAX, TASK_EMAIL_ALLOW_MAX, TASK_EMAIL_ALLOW_MIN, TASK_EMAIL_MAX_PER_RUN_MAX, type RunEmail, type TaskEmailInput, type TaskEmailPermission } from './task-email'
 
@@ -224,6 +225,11 @@ export const runSchema = z
     outputResult: z.string().max(500).nullable(),
     // Contrato 51: os envios e as recusas da execução.
     emails: z.array(runEmailSchema).max(RUN_EMAILS_MAX).optional(),
+    // Contrato 56 (D19): os pedidos de organizar o email recusados.
+    organizeRefused: z
+      .array(z.object({ at: isoDate, request: z.string().max(300) }).strict())
+      .max(RUN_ORGANIZE_REFUSED_MAX)
+      .optional(),
   })
   .strict()
 

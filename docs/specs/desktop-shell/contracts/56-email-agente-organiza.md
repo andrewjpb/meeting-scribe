@@ -1,8 +1,10 @@
 # Contrato 56 — O agente organiza o email: pastas, mover em lote, Desfazer, progresso ao vivo e Parar
 
+> Aprovado pelo Andrew em 19/11/2026: D1 (manter lap-ferramenta, sem MCP), D2 (listar_conversas, informar_progresso e ler_email com até 20 referências), D3 (40 rodadas no turno de organizar), D5 (sem confirmação para lote grande; teto de 200 + Desfazer), D9 (o cartão do lote no chat entra no mockup EmailOrganizacao.dc.html e só vira código depois do ok do desenho); demais decisões como propostas.
+> Cartão do lote: desenho APROVADO em 19/11/2026 — mockup `EmailOrganizacao.dc.html`, quadros 13–17 (16b, 16c) e decisões D13–D19, que valem como critério do CA12. **D17 substitui o CA12** no Desfazer parcial: o botão vira "Tentar de novo as N" para os que falharam e só some quando todos voltaram.
+
 Feature: email-organizacao · Wave: 3 · Depende de: 52, 54 (só por arquivo) · Spec: `docs/specs/email-organizacao/spec.md` (R9, R10, R11, R12, N4, N7, F4) · Plan: `docs/specs/email-organizacao/plan.md`
 
-> RASCUNHO (19/11/2026). Falta o ok do Andrew nas decisões marcadas **[decidir]** antes de ir ao implementador.
 
 Pedido do Andrew (19/11/2026 13:00): "organiza meus emails", "separa o que já foi resolvido". Este contrato é o main,
 o preload, o IPC, os testes **e o cartão do lote no chat**. O painel "Organizando" da tela de email (telas 07 e 08 do
@@ -134,7 +136,7 @@ registro de `assistant-tools.ts`, como o plan pede: funciona no transporte CLI e
 - CA14 — IPC no padrão do `service.ts` (zod `.strict()`, erros tipados `missing | pop3 | invalid | busy | unavailable |
   server`): `scribe:email-organize-state`, `scribe:email-batch-get { batchId }`, `scribe:email-batch-undo { batchId }`;
   evento `scribe:email-organize`. Os três invoke entram no mapa de canais e no `WHEN_LOCKED` como `'refused'`; o evento
-  em `RENDERER_EVENTS` do jeito dos outros do email. Nenhum envia email; o Desfazer não usa token de clique (não envia
+  em `MAIN_EVENTS` (main → renderer) do jeito dos outros do email. Nenhum envia email; o Desfazer não usa token de clique (não envia
   nada e só devolve o que o agente moveu).
 - CA15 — `fake-email.ts` ganha `SEARCH HEADER Message-ID` e o que faltar (UIDVALIDITY trocado no destino, pasta apagada
   por fora no meio do teste).

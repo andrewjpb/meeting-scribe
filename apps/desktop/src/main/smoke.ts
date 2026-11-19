@@ -6210,6 +6210,8 @@ interface SmokeActionFile {
   kind: string
   status: string
   result: string | null
+  /** Contrato 56: o lote do cartão `email-lote`. */
+  batchId?: string
   chatId?: string
   chatName?: string
   phone?: string | null
@@ -8290,6 +8292,85 @@ async function emailAssistantChecks(ctx: SmokeContext, watch: (win: BrowserWindo
     detail: `resposta=${found.done} "${found.answer.slice(0, 200)}"; busca ${fake.reader.searches - searchBefore} pastas, PEEK ${fake.reader.peeks - peeksBefore}; cartão da pasta Arquivo=${archivedCard}; passos ${JSON.stringify(steps.slice(-4))}; lidas iguais=${seenAfter === seenBefore}`,
   }
 
+  // Contrato 56 (CA17): "organiza … em Resolvidos": o agente falso pede `listar_pastas`, `criar_pasta` "Resolvidos" e
+  // `mover_emails` de um email da INBOX; ele vai para Resolvidos no servidor falso, a resposta termina com o cartão do lote
+  // ("Desfazer as 1") e o clique devolve o email à INBOX. Depois, o desfeito em parte: o email sai de Resolvidos por fora
+  // (outro cliente o põe noutra pasta) e o Desfazer mostra "Tentar de novo as 1". Prints em claro e escuro.
+  const target = (await inbox())[0]
+  const targetId = target?.messageId ?? '?'
+  const boxesBefore = fake.mailboxes()
+  const ask = `Organiza meus emails em Resolvidos, assunto "${(target?.subject ?? '').replace(/"/g, "'")}"`
+  const organized = await askChat(contents, ask)
+  const inResolved = (): boolean => fake.messageIdsIn('Resolvidos').includes(targetId)
+  const movedThere = inResolved() && !fake.messageIdsIn('INBOX').includes(targetId)
+  const lote = `[...document.querySelectorAll('[data-chat-action="email-lote"]')].at(-1)`
+  const loteShown = await waitFor(contents, `${lote}?.dataset.emailBatchState === 'done' && ${lote}?.querySelector('[data-action="chat-email-batch-undo"]')?.textContent.trim() === 'Desfazer as 1'`)
+  const batchId = await evaluate<string>(contents, `${lote}?.dataset.emailBatch ?? ''`)
+  const cardText = await evaluate<string>(contents, `${lote}?.textContent ?? ''`)
+  const savedCard = chatFile(ctx.userDataDir, chatId)?.messages.at(-1)?.actions?.find((action) => action.kind === 'email-lote')
+  const showCard = async (wc: WebContents): Promise<void> => {
+    await evaluate(wc, `(() => { ${lote}?.scrollIntoView({ block: 'center' }); return true })()`)
+    await settle(wc)
+  }
+  /** O mesmo cartão numa janela escura (a conversa aberta pelo trilho). */
+  const darkShot = async (name: string, state: string): Promise<boolean> => {
+    const dark = ctx.openWindow({ theme: 'dark' })
+    watch(dark)
+    await loadAndWait(dark)
+    const dc = dark.webContents
+    await clickSelector(dc, '[data-nav="assistente"]')
+    await waitFor(dc, routeIs('assistente'))
+    await waitFor(dc, `document.querySelector('[data-chat-item="${chatId}"]')`, 8000)
+    await evaluate(dc, `(() => { const item = document.querySelector('[data-chat-item="${chatId}"]'); (item?.querySelector('button, a') ?? item)?.click(); return true })()`)
+    const ready = await waitFor(dc, `${lote}?.dataset.emailBatchState === '${state}'`, 8000)
+    await showCard(dc)
+    shots.push(await capture(dark, ctx.outDir, name))
+    dark.destroy()
+    return ready
+  }
+  await showCard(contents)
+  shots.push(await capture(win, ctx.outDir, 'assistente-email-lote-light'))
+  const darkDone = await darkShot('assistente-email-lote-dark', 'done')
+  await evaluate(contents, `${lote}?.querySelector('[data-action="chat-email-batch-undo"]')?.click()`)
+  const undoneShown = await waitFor(contents, `${lote}?.dataset.emailBatchState === 'undone' && ${lote}?.dataset.chatActionStatus === 'done' && (${lote}?.querySelector('[data-chat-action-result]')?.textContent ?? '').includes('a mensagem voltou para a Caixa de Entrada') && !${lote}?.querySelector('[data-action="chat-email-batch-undo"]')`, 8000)
+  const backHome = fake.messageIdsIn('INBOX').includes(targetId) && !inResolved()
+  // Desfeito em parte: de novo, e o email sai de Resolvidos por fora antes do Desfazer.
+  for (let attempt = 0; attempt < 80 && !(await inbox()).some((item) => item.messageId === targetId); attempt++) await wait(100)
+  const again = await askChat(contents, ask)
+  const partialCard = await waitFor(contents, `${lote}?.dataset.emailBatch !== '${batchId}' && ${lote}?.dataset.emailBatchState === 'done'`)
+  const uid = fake.mailboxes()['Resolvidos']?.uids[0] ?? 0
+  const outside = fake.take('Resolvidos', uid)
+  if (outside) fake.put('Pasta de outro cliente', { from: outside.from[0] ?? { name: null, address: 'x@x.example' }, subject: outside.subject, date: outside.date, messageId: outside.messageId, seen: outside.flags.includes('\\Seen') })
+  await evaluate(contents, `${lote}?.querySelector('[data-action="chat-email-batch-undo"]')?.click()`)
+  const partialShown = await waitFor(contents, `${lote}?.dataset.emailBatchState === 'partial-undo' && ${lote}?.querySelector('[data-action="chat-email-batch-undo"]')?.textContent.trim() === 'Tentar de novo as 1' && (${lote}?.querySelector('[data-email-batch-failures]')?.textContent ?? '').includes('não estava mais em Resolvidos')`, 8000)
+  await showCard(contents)
+  shots.push(await capture(win, ctx.outDir, 'assistente-email-lote-parcial-light'))
+  const darkPartial = await darkShot('assistente-email-lote-parcial-dark', 'partial-undo')
+  checks['assistantOrganize'] = {
+    ok:
+      organized.done &&
+      target !== undefined &&
+      boxesBefore['Resolvidos'] === undefined &&
+      organized.answer.includes('movi 1 email(s) para Resolvidos') &&
+      !organized.answer.includes('lap-ferramenta') &&
+      movedThere &&
+      loteShown &&
+      cardText.includes(`Organização do email · ${SMOKE_EMAIL_ADDRESS}`) &&
+      cardText.includes('1 em Resolvidos') &&
+      savedCard?.kind === 'email-lote' &&
+      savedCard.batchId === batchId &&
+      darkDone &&
+      undoneShown &&
+      backHome &&
+      again.done &&
+      partialCard &&
+      outside !== null &&
+      partialShown &&
+      darkPartial &&
+      fake.messageIdsIn('Pasta de outro cliente').includes(targetId),
+    detail: `resposta=${organized.done} "${organized.answer.slice(0, 160)}"; "${target?.subject ?? '?'}" em Resolvidos=${movedThere}; cartão=${loteShown} "${cardText.slice(0, 160)}" gravado=${savedCard?.kind ?? 'nada'}; escuro=${darkDone}; desfeito=${undoneShown} de volta=${backHome}; segundo lote=${again.done}/${partialCard} tirado por fora=${outside !== null}; em parte=${partialShown} escuro=${darkPartial}`,
+  }
+
   await evaluate(contents, `window.__scribeApi.invoke('scribe:settings-update', { claudeTransport: '${transportBefore === 'acp' ? 'acp' : 'cli'}' }).then(() => true)`)
   win.destroy()
 }
@@ -9040,7 +9121,7 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
   for (const [name, check] of Object.entries(meet)) if (!check.ok) failures.push(`meet ${name}: ${check.detail}`)
   for (const name of ['server', 'recording', 'setting', 'meetingPrompt', 'meetingPromptRecord', 'meetingPromptNever', 'micWatch']) if (!meet[name]) failures.push(`meet ${name}: não executado`)
   for (const [name, check] of Object.entries(email)) if (!check.ok) failures.push(`email ${name}: ${check.detail}`)
-  for (const name of ['settings', 'list', 'reading', 'compose', 'folders', 'attachments', 'remove', 'dark', 'notify', 'assistantPending', 'assistantReply', 'assistantTask', 'assistantSearch', 'taskEmailForm', 'taskEmailRun']) if (!email[name]) failures.push(`email ${name}: não executado`)
+  for (const name of ['settings', 'list', 'reading', 'compose', 'folders', 'attachments', 'remove', 'dark', 'notify', 'assistantPending', 'assistantReply', 'assistantTask', 'assistantSearch', 'assistantOrganize', 'taskEmailForm', 'taskEmailRun']) if (!email[name]) failures.push(`email ${name}: não executado`)
   for (const [name, check] of Object.entries(lock)) if (!check.ok) failures.push(`bloqueio ${name}: ${check.detail}`)
   for (const name of ['password', 'layer', 'channels', 'unlock', 'shortcutAndTouchId', 'recordingContinues', 'leaveDialog', 'endWhileLocked', 'reopen', 'reopenFromDisk', 'dark']) if (!lock[name]) failures.push(`bloqueio ${name}: não executado`)
   if (!theme.ok) failures.push(`tema: ${theme.detail}`)
@@ -9065,8 +9146,8 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
   // temas (contrato 43); o cartão dos emails pendentes e o rascunho de resposta por email no Assistente, no claro
   // (contrato 45); o formulário da tarefa com "Pode enviar email" e a execução com os emails enviado e recusado, no
   // claro (contrato 51); a seção "Conectores do claude.ai" com o Notion ligado e as ferramentas, nos dois temas
-  // (contrato 58).
-  const expectedShots = SCREENS.length * THEMES.length + 68
+  // (contrato 58); o cartão do lote do Assistente concluído e desfeito em parte, nos dois temas (contrato 56).
+  const expectedShots = SCREENS.length * THEMES.length + 72
   if (screenshots.length !== expectedShots) failures.push(`${screenshots.length} PNGs em vez de ${expectedShots}`)
   for (const shot of screenshots) {
     if (shot.name === MEETING_PROMPT_SHOT) {

@@ -10,6 +10,9 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import type { ChatEngine } from '../src/main/acp/chat'
 import { createFileAgentsStore } from '../src/main/agents/store'
 import type { AssistantTool } from '../src/main/chat/tools'
+import { createEmailTools } from '../src/main/email/assistant-tools'
+import { EMAIL_ORGANIZE_TOOL_NAMES, emailOrganizeRequests } from '../src/shared/email-organize'
+import { runSchema } from '../src/shared/automations-schema'
 import { createSendTool, sendRefusal, type SendGate, type TaskEmailDeps, type TaskEmailRequest } from '../src/main/schedules/email-send'
 import { agentSystemPrompt, createAgentRunner } from '../src/main/schedules/runner'
 import { createAutomationsService, type AutomationNotice, type AutomationsService } from '../src/main/schedules/service'
@@ -21,6 +24,8 @@ import { allowEntryValid, parseAllowList, recipientAllowed, type RunEmail, type 
 const SP = 'America/Sao_Paulo'
 const ACCOUNT = '0f0e0d0c-0b0a-4908-8706-050403020100'
 const ADDRESS = 'eu@lap.example'
+/** A execução gravada passa no esquema do disco (com o campo novo). */
+const taskRunSchemaCheck = (run: unknown): boolean => runSchema.safeParse(run).success
 const fence = (json: unknown): string => `\n\n\`\`\`lap-ferramenta\n${JSON.stringify(json)}\n\`\`\``
 const sendCall = (para: string[], extra: Record<string, unknown> = {}): string => `Vou enviar.${fence({ ferramenta: 'enviar_email', para, assunto: 'Resumo', texto: 'Segue o resumo.', ...extra })}`
 
@@ -166,6 +171,8 @@ let prompts: string[]
 let locked: boolean
 /** O que o motor responde a cada pergunta (o pedido ou a volta de uma ferramenta), com a pasta da execução. */
 let respond: (question: string, cwd: string) => Promise<string>
+/** As ferramentas de leitura que a execução recebe (`readTools` do contrato 51). */
+let readTools: () => readonly AssistantTool[]
 
 /** `ler_email` falso: grava o email pedido na pasta (o texto é o de um email malicioso). */
 const readTool: AssistantTool = {
@@ -197,6 +204,7 @@ beforeEach(() => {
   prompts = []
   locked = false
   respond = () => Promise.resolve('Feito.')
+  readTools = () => [readTool]
   const email: TaskEmailDeps = {
     send: (request) => {
       sent.push(request)
@@ -204,7 +212,7 @@ beforeEach(() => {
     },
     accountAddress: (id) => (id === ACCOUNT ? ADDRESS : null),
     locked: () => locked,
-    readTools: () => [readTool],
+    readTools: () => readTools(),
   }
   const runner = createAgentRunner({
     locate: () => Promise.resolve({ ok: true, path: '/bin/claude', version: '2.0.0' }),
@@ -432,6 +440,64 @@ describe('sem a seção, tudo como antes (invariantes)', () => {
   it('a instrução sem ferramentas é a mesma de antes', () => {
     expect(agentSystemPrompt('all', 'Resuma.')).toBe(agentSystemPrompt('all', 'Resuma.', false, undefined))
     expect(agentSystemPrompt('all', 'Resuma.')).not.toContain('lap-ferramenta')
+  })
+})
+
+describe('contrato 56: a tarefa agendada nunca organiza o email (CA13, N4, F4)', () => {
+  it('com e sem "Pode enviar email", a execução não tem as ferramentas de organizar: o pedido fica como texto e nada move', async () => {
+    const calls: string[] = []
+    const stub = (name: string) => () => (calls.push(name), Promise.reject(new Error('não pode ser chamado')))
+    // As ferramentas de verdade, montadas como no `index.ts`: `tools` (leitura) e `organizeTools` à parte.
+    const emailTools = createEmailTools({
+      cached: () => Promise.resolve([]),
+      body: () => Promise.resolve(null),
+      searchServer: () => Promise.resolve({ ok: false, error: 'unavailable' }),
+      peekServer: () => Promise.resolve({ ok: false, error: 'not-found' }),
+      locked: () => false,
+      organize: {
+        store: { list: stub('list'), get: stub('get'), mutate: stub('mutate'), foldersCreated: stub('foldersCreated'), addFolderCreated: stub('addFolderCreated') },
+        accounts: () => [],
+        listFolders: stub('listFolders'),
+        openFolder: stub('openFolder'),
+        createFolder: stub('createFolder'),
+        moveMessages: stub('moveMessages'),
+        locateMessages: stub('locateMessages'),
+        emit: () => undefined,
+      },
+    })
+    expect(emailTools.tools.map((tool) => tool.name)).toEqual(['buscar_emails', 'ler_email'])
+    expect(emailTools.organizeTools.map((tool) => tool.name)).toEqual(['listar_conversas', 'listar_pastas', 'criar_pasta', 'mover_emails', 'informar_progresso'])
+    readTools = () => emailTools.tools
+    const moveCall = `Vou organizar.${fence({ ferramenta: 'mover_emails', destino: 'Resolvidos', assuntos: [{ emails: ['em-000000000001'], assunto: 'x', veredito: 'resolvido', motivo: 'x', evidencia: 'y' }] })}`
+    const organize = ['listar_conversas', 'listar_pastas', 'criar_pasta', 'mover_emails', 'informar_progresso']
+    for (const email of [allowed(), null]) {
+      const id = await createTask({ ...(email ? { email } : {}), name: `Organizar ${email ? 'com envio' : 'comum'}` })
+      script([() => moveCall, () => 'Fim.'])
+      const run = await runTask(id)
+      const prompt = prompts.at(-1) ?? ''
+      for (const name of organize) expect(prompt, name).not.toContain(name)
+      if (email) expect(prompt).toContain('ler_email')
+      // O pedido não é de ferramenta nenhuma desta execução: nada roda e não há passo.
+      expect(run.answer?.steps).toBeUndefined()
+      expect(run.answer?.text).toMatch(/^Vou organizar\./)
+      // D19: o pedido fica registrado como recusado, para a tela da execução (sem cartão, sem botão).
+      expect(run.organizeRefused).toEqual([{ at: expect.any(String), request: 'mover 1 email para Resolvidos' }])
+      expect(taskRunSchemaCheck(run)).toBe(true)
+    }
+    expect(calls).toEqual([])
+    // E, chamada sem a conversa do Assistente (como a execução chamaria), a ferramenta recusa.
+    const mover = emailTools.organizeTools.find((tool) => tool.name === 'mover_emails') as AssistantTool
+    expect(await mover.run({ destino: 'Resolvidos', assuntos: [] }, dir)).toMatchObject({ file: null, note: expect.stringContaining('Recusado (agendada)') })
+    expect(calls).toEqual([])
+  })
+})
+
+describe('contrato 56 (D19): os pedidos de organizar numa resposta', () => {
+  it('reconhece só os blocos das ferramentas de organizar, com a frase da tela', () => {
+    const text = ['Antes.', fence({ ferramenta: 'criar_pasta', nome: 'Pendentes' }), fence({ ferramenta: 'mover_emails', destino: 'Resolvidos', assuntos: [{ emails: ['a', 'b'] }, { emails: ['c'] }] }), fence({ ferramenta: 'ler_email', email: 'x' }), '```lap-ferramenta\n{quebrado\n```'].join('\n')
+    expect(emailOrganizeRequests(text)).toEqual(['criar a pasta Pendentes', 'mover 3 emails para Resolvidos'])
+    expect(emailOrganizeRequests('Sem pedido nenhum.')).toEqual([])
+    expect([...EMAIL_ORGANIZE_TOOL_NAMES]).toEqual(['listar_conversas', 'listar_pastas', 'criar_pasta', 'mover_emails', 'informar_progresso'])
   })
 })
 

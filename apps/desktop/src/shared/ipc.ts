@@ -10,6 +10,7 @@ import type { LockResponse, LockStatus } from './lock'
 import type { EmailAccountInput, EmailAccountStatus, EmailAddResult, EmailAttachmentRequest, EmailAttachmentSaveResult, EmailAttachmentsResult, EmailAttachPickResult, EmailAutoconfig, EmailBodyResult, EmailFolder, EmailFolderDeleteResult, EmailFolderPathResult, EmailFoldersResult, EmailMessage, EmailMoveResult, EmailOpenFolderResult, EmailSendRequest, EmailSendResult, EmailTestResult } from './email'
 import type { EmailSignature, EmailSignatureResult } from './email-signature'
 import type { EmailRule, EmailRulePreviewResult, EmailRuleRunResult, EmailRulesGetResult, EmailRulesSetResult } from './email-rules'
+import type { EmailBatchGetResult, EmailBatchUndoResult, EmailOrganizeEvent, EmailOrganizeStateResult } from './email-organize'
 import type { KeySaveResult, KeyStatus, MicAccess, ModelCheck, ModelsResult } from './assemblyai'
 import type { Chat, ChatApprovalAnswer, ChatEvent, ChatListItem, ChatRedoRequest, ChatSendRequest, ChatSendResult, ChatUpdateRequest } from './chat'
 import type { ClaudeLocateResult, ClaudeRunState, ClaudeStartResult, ClaudeTranslateRequest, ClaudeTranslateResult } from './claude-cli'
@@ -438,6 +439,12 @@ export interface InvokeChannels {
   'scribe:email-rules-preview': { request: { accountId: string; ruleId: string }; response: EmailRulePreviewResult }
   /** Segundo passo: só com o token do preview. */
   'scribe:email-rules-run': { request: { accountId: string; ruleId: string; token: string }; response: EmailRuleRunResult }
+  /** Contrato 56 (CA10): o lote `running` mais recente e os de hoje (o painel e a faixa abrem no meio ou depois de reiniciar). */
+  'scribe:email-organize-state': { request: undefined; response: EmailOrganizeStateResult }
+  /** Contrato 56 (CA12): um lote do Assistente, para o cartão do chat. */
+  'scribe:email-batch-get': { request: { batchId: string }; response: EmailBatchGetResult }
+  /** Contrato 56 (CA9): devolve à pasta de antes o que o Assistente moveu; nada é enviado nem apagado. */
+  'scribe:email-batch-undo': { request: { batchId: string }; response: EmailBatchUndoResult }
   /** Automações (contrato 23): os agentes, quantas tarefas usam cada um e os modelos que o perfil oferece. */
   'scribe:agents-list': { request: undefined; response: AgentsList }
   /** Criar (`id: null`) ou trocar um agente. */
@@ -577,6 +584,8 @@ export interface MainEvents {
   'scribe:email-message': EmailMessage
   /** As mensagens de uma conta mudaram (sincronismo, lida, apagada, enviada): a tela relê. Não chega bloqueado. */
   'scribe:email-changed': { accountId: string }
+  /** Contrato 56 (CA10): o estado inteiro de um lote do Assistente a cada mudança. Não chega bloqueado. */
+  'scribe:email-organize': EmailOrganizeEvent
   /** Contrato 43: o clique na notificação de email: a Caixa de Entrada da conta com a mensagem aberta. */
   'scribe:open-email': { accountId: string; id: string }
 }
@@ -761,6 +770,9 @@ const INVOKE: Record<InvokeChannel, true> = {
   'scribe:email-rules-set': true,
   'scribe:email-rules-preview': true,
   'scribe:email-rules-run': true,
+  'scribe:email-organize-state': true,
+  'scribe:email-batch-get': true,
+  'scribe:email-batch-undo': true,
   'scribe:agents-list': true,
   'scribe:agents-save': true,
   'scribe:agents-delete': true,
@@ -827,6 +839,7 @@ const MAIN_EVENTS: Record<MainEvent, true> = {
   'scribe:email-state': true,
   'scribe:email-message': true,
   'scribe:email-changed': true,
+  'scribe:email-organize': true,
   'scribe:open-email': true,
 }
 
@@ -1060,6 +1073,10 @@ export const WHEN_LOCKED: Readonly<Record<InvokeChannel, LockedPolicy>> = Object
   'scribe:email-rules-set': 'refused',
   'scribe:email-rules-preview': 'refused',
   'scribe:email-rules-run': 'refused',
+  // Contrato 56: o lote do Assistente, como o resto do email.
+  'scribe:email-organize-state': 'refused',
+  'scribe:email-batch-get': 'refused',
+  'scribe:email-batch-undo': 'refused',
   // Automações (contrato 23, CA10): gerenciar agentes e tarefas, testar, pedir e ver o histórico, tudo recusado com
   // o app bloqueado. O agendador não depende de canal: roda no main e as tarefas continuam rodando bloqueado.
   'scribe:agents-list': 'refused',

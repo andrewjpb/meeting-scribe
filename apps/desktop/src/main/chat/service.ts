@@ -27,9 +27,14 @@
 // Contrato 47: a sessão ACP do Assistente abre com as ferramentas do navegador só se "Ativar ponte" (`navegadorPlugin`)
 // estiver ligado e a extensão conectada naquele momento; sem isso, abre como antes. A conversa já aberta segue como
 // abriu: a ponte que cai no meio vira erro da ferramenta, explicado ao agente.
+//
+// Contrato 56: a ferramenta recebe o turno (a conversa, o pedido e o sinal do "Parar"). O turno que usa uma ferramenta de
+// organizar o email tem até 40 rodadas; "Parar" também aborta a ferramenta em curso (e conta como parada mesmo sem o
+// motor responder); os cartões que a ferramenta monta (o lote) entram no fim da resposta; e o fim do turno (parado ou
+// não) é avisado a `assistant.endTurn`, antes de a resposta ser gravada.
 import { randomUUID } from 'node:crypto'
 import { z } from 'zod'
-import { withoutActionBlocks, type ChatAction } from '../../shared/assistant'
+import { ACTIONS_PER_MESSAGE_MAX, withoutActionBlocks, type ChatAction } from '../../shared/assistant'
 import {
   CHAT_SOURCE_KINDS,
   CHAT_TEXT_MAX,
@@ -107,6 +112,8 @@ export interface ChatServiceDeps {
      * nenhum pedido de ferramenta roda.
      */
     tools?: (scope: ChatScope) => readonly AssistantTool[]
+    /** Contrato 56: o turno terminou (`stopped`: "Parar", conversa excluída ou erro no meio); antes de gravar a resposta. */
+    endTurn?: (turn: { chatId: string; turnId: string }, outcome: 'done' | 'stopped') => Promise<void>
   }
   settings: Pick<SettingsStore, 'get'>
   meetings: Pick<MeetingsStore, 'get' | 'list'>
@@ -246,6 +253,8 @@ interface Session {
   titles: Map<string, string>
   /** Contrato 25: conversa do Assistente (fontes antes de cada pergunta, ações no fim da resposta). */
   assistant: boolean
+  /** Contrato 56: o turno em curso: o "Parar" aborta a ferramenta que estiver rodando. */
+  turn: { abort: AbortController; stopped: boolean; toolRunning: boolean } | null
 }
 
 const defaultTimers: Timers = {
@@ -422,6 +431,7 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
       thinkMore: chat.thinkMore,
       titles,
       assistant,
+      turn: null,
     }
     sessions.set(chat.id, session)
     return session
@@ -476,58 +486,97 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
     const onProgress = (progress: ChatProgress): void => {
       if (!session.cancelled) deps.onEvent({ type: 'answer', chatId: chat.id, ...progress, text: joined(progress.text) })
     }
-    let result: ChatAnswer = await session.claude.ask(question, history, onProgress, onDetail)
-    // Contrato 45 (CA7): o pedido de uma ferramenta do app no fim da resposta roda aqui (só leitura) e a resposta
-    // continua na mesma sessão, com o arquivo do resultado na pasta. Até `TOOL_ROUNDS_MAX` rodadas.
-    const tools = session.assistant ? (deps.assistant?.tools?.(chat.scope) ?? []) : []
-    for (let round = 1; session.assistant && tools.length && session.scope && result.ok && round <= TOOL_ROUNDS_MAX; round++) {
-      const call = toolCallOf(result.text, tools)
-      if (!call || session.cancelled) break
-      const stepId = `ferramenta-${round}`
-      onDetail({ type: 'step', step: { tool: call.tool.step, label: call.tool.pending, meetingId: null, id: stepId, status: 'in_progress' } })
-      const done: ToolResult = await call.tool.run(call.args, session.scope).catch((error: unknown) => {
-        deps.log?.(`[assistente] ferramenta ${call.tool.name} falhou: ${error instanceof Error ? error.message : String(error)}`)
-        return { file: null, label: `${call.tool.pending}: falhou`, note: 'A ferramenta falhou: responda com o que já tem.' }
-      })
-      onDetail({ type: 'step', step: { tool: call.tool.step, label: done.label, meetingId: null, id: stepId, status: done.file ? 'completed' : 'failed' } })
+    // Contrato 56: o turno, com o sinal do "Parar" para a ferramenta em curso e o aviso de fim (uma vez só).
+    const turn = { abort: new AbortController(), stopped: false, toolRunning: false }
+    session.turn = turn
+    const turnId = randomUUID()
+    let ended = false
+    const endTurn = async (outcome: 'done' | 'stopped'): Promise<void> => {
+      if (ended) return
+      ended = true
+      await deps.assistant?.endTurn?.({ chatId: chat.id, turnId }, outcome).catch((error: unknown) => deps.log?.(`[assistente] fim do turno: ${error instanceof Error ? error.message : String(error)}`))
+    }
+    try {
+      await respond()
+    } finally {
+      if (session.turn === turn) session.turn = null
+      // Saída antes da hora (conversa excluída, erro no meio): o lote não fica `running`.
+      await endTurn('stopped')
+    }
+
+    async function respond(): Promise<void> {
+      let result: ChatAnswer = await session.claude.ask(question, history, onProgress, onDetail)
+      // Contrato 45 (CA7): o pedido de uma ferramenta do app no fim da resposta roda aqui (só leitura) e a resposta
+      // continua na mesma sessão, com o arquivo do resultado na pasta. Até `TOOL_ROUNDS_MAX` rodadas; contrato 56: o turno
+      // que chama uma ferramenta com `rounds` (organizar o email) passa a ter até essas.
+      const tools = session.assistant ? (deps.assistant?.tools?.(chat.scope) ?? []) : []
+      let roundsMax = TOOL_ROUNDS_MAX
+      /** Contrato 56: os cartões que as ferramentas montaram, sem repetir. */
+      const toolActions: ChatAction[] = []
+      for (let round = 1; session.assistant && tools.length && session.scope && result.ok && round <= roundsMax; round++) {
+        const call = toolCallOf(result.text, tools)
+        if (!call || session.cancelled || turn.stopped) break
+        roundsMax = Math.max(roundsMax, call.tool.rounds ?? 0)
+        const stepId = call.tool.stepId ?? `ferramenta-${round}`
+        const shown = steps.find((step) => step.id === stepId)
+        onDetail({ type: 'step', step: { tool: call.tool.step, label: shown?.label ?? call.tool.pending, meetingId: null, id: stepId, status: 'in_progress' } })
+        turn.toolRunning = true
+        const done: ToolResult = await call.tool.run(call.args, session.scope, { chatId: chat.id, turnId, request: question, signal: turn.abort.signal }).catch((error: unknown) => {
+          deps.log?.(`[assistente] ferramenta ${call.tool.name} falhou: ${error instanceof Error ? error.message : String(error)}`)
+          return { file: null, label: `${call.tool.pending}: falhou`, note: 'A ferramenta falhou: responda com o que já tem.' }
+        })
+        turn.toolRunning = false
+        onDetail({ type: 'step', step: { tool: call.tool.step, label: done.label, meetingId: null, id: stepId, status: done.file || done.ok ? 'completed' : 'failed' } })
+        for (const action of done.actions ?? []) if (!toolActions.some((known) => known.id === action.id)) toolActions.push(action)
+        if (session.cancelled) return
+        // O texto e os blocos de ação antes do pedido ficam (os cartões das rodadas se juntam no fim).
+        earlier = joined(call.before)
+        spent = meta
+        deniedBefore = denied
+        // Contrato 56: "Parar" no meio da ferramenta: o que ela já fez fica, e a resposta para aqui.
+        if (turn.stopped) {
+          result = { ok: false, error: 'stopped', text: '' }
+          break
+        }
+        result = await session.claude.ask(toolFollowUp(call.tool.name, done), [...history, { role: 'user', text: question }], onProgress, onDetail)
+      }
       if (session.cancelled) return
-      // O texto e os blocos de ação antes do pedido ficam (os cartões das rodadas se juntam no fim).
-      earlier = joined(call.before)
-      spent = meta
-      deniedBefore = denied
-      result = await session.claude.ask(toolFollowUp(call.tool.name, done), [...history, { role: 'user', text: question }], onProgress, onDetail)
+      if (earlier) result = { ...result, text: joined(result.text) }
+      if (tools.length && result.ok) result = { ...result, text: withoutToolCalls(result.text) }
+      // Contrato 25: os blocos `lap-acao` da resposta inteira viram ações propostas (nunca executadas aqui).
+      let text = result.text
+      let actions: ChatAction[] = []
+      if (session.assistant && result.ok && deps.assistant) {
+        const extracted = await deps.assistant.extract(result.text).catch(() => ({ text: result.text, actions: [] as ChatAction[] }))
+        text = extracted.text
+        actions = extracted.actions
+      } else if (session.assistant) text = withoutActionBlocks(result.text)
+      // Contrato 56: os cartões das ferramentas (o lote do email) primeiro, também na resposta parada.
+      if (toolActions.length) actions = [...toolActions, ...actions].slice(0, ACTIONS_PER_MESSAGE_MAX)
+      if (session.cancelled) return
+      // Contrato 56: o lote fecha (`done` ou `stopped`) antes de a resposta com o cartão ser gravada.
+      await endTurn(turn.stopped || (!result.ok && result.error === 'stopped') ? 'stopped' : 'done')
+      if (session.cancelled) return
+      const message: ChatMessage = {
+        role: 'assistant',
+        text,
+        at: stamp(),
+        ...(result.ok ? {} : { error: result.error }),
+        ...(steps.length ? { steps } : {}),
+        ...(thinking ? { thinking } : {}),
+        ...(denied ? { denied } : {}),
+        ...(plan.length ? { plan } : {}),
+        ...(meta ? { meta } : {}),
+        model: session.model,
+        ...(actions.length ? { actions } : {}),
+      }
+      // Lida e gravada na mesma vez da fila: o que outra janela ou um "Renomear" gravou no meio fica.
+      const saved = await deps.store.mutate(chat.id, (current) => {
+        const base = current ?? chat
+        return { ...base, messages: [...base.messages, message] }
+      })
+      if (saved && !session.cancelled) deps.onEvent({ type: 'done', chatId: chat.id, chat: saved })
     }
-    if (session.cancelled) return
-    if (earlier) result = { ...result, text: joined(result.text) }
-    if (tools.length && result.ok) result = { ...result, text: withoutToolCalls(result.text) }
-    // Contrato 25: os blocos `lap-acao` da resposta inteira viram ações propostas (nunca executadas aqui).
-    let text = result.text
-    let actions: ChatAction[] = []
-    if (session.assistant && result.ok && deps.assistant) {
-      const extracted = await deps.assistant.extract(result.text).catch(() => ({ text: result.text, actions: [] as ChatAction[] }))
-      text = extracted.text
-      actions = extracted.actions
-    } else if (session.assistant) text = withoutActionBlocks(result.text)
-    if (session.cancelled) return
-    const message: ChatMessage = {
-      role: 'assistant',
-      text,
-      at: stamp(),
-      ...(result.ok ? {} : { error: result.error }),
-      ...(steps.length ? { steps } : {}),
-      ...(thinking ? { thinking } : {}),
-      ...(denied ? { denied } : {}),
-      ...(plan.length ? { plan } : {}),
-      ...(meta ? { meta } : {}),
-      model: session.model,
-      ...(actions.length ? { actions } : {}),
-    }
-    // Lida e gravada na mesma vez da fila: o que outra janela ou um "Renomear" gravou no meio fica.
-    const saved = await deps.store.mutate(chat.id, (current) => {
-      const base = current ?? chat
-      return { ...base, messages: [...base.messages, message] }
-    })
-    if (saved && !session.cancelled) deps.onEvent({ type: 'done', chatId: chat.id, chat: saved })
   }
 
   /** Pergunta gravada: começa a responder e marca a conversa ocupada até a resposta ser gravada. */
@@ -687,8 +736,16 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
       const id = idOf(input)
       const session = id ? sessions.get(id) : undefined
       if (!session?.answering) return false
-      // Só `true` se o motor de fato tinha o que parar (contrato 17).
-      return session.claude.stop()
+      // Só `true` se o motor de fato tinha o que parar (contrato 17) ou, no contrato 56, uma ferramenta rodando: o turno
+      // fica parado e a ferramenta em curso é abortada.
+      const engine = session.claude.stop()
+      const turn = session.turn
+      const tool = turn?.toolRunning ?? false
+      if (turn && (engine || tool)) {
+        turn.stopped = true
+        turn.abort.abort()
+      }
+      return engine || tool
     },
 
     close(input) {

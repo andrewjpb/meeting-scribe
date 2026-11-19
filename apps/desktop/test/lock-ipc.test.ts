@@ -224,6 +224,9 @@ describe('canais com o app bloqueado (contrato 22, CA4)', () => {
       'scribe:email-attachment-save',
       'scribe:email-attachments',
       'scribe:email-autoconfig',
+      // Contrato 56: o lote do Assistente (o cartão e o Desfazer).
+      'scribe:email-batch-get',
+      'scribe:email-batch-undo',
       'scribe:email-delete',
       // Contrato 52: as pastas.
       'scribe:email-folder-create',
@@ -235,6 +238,7 @@ describe('canais com o app bloqueado (contrato 22, CA4)', () => {
       'scribe:email-messages',
       'scribe:email-move',
       'scribe:email-open-folder',
+      'scribe:email-organize-state',
       'scribe:email-remote-images',
       'scribe:email-remove-account',
       // Contrato 53: as regras.
