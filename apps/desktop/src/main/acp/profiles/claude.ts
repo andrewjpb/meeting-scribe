@@ -20,9 +20,18 @@
 // dois passam pelo `session/request_permission`, a não ser o `WebFetch` de uns sites de documentação que o `claude`
 // abre sem perguntar ("preapproved hosts"); uma regra `ask` em `settings.permissions` é conferida antes dessa lista e
 // faz ele perguntar sempre.
+//
+// Contrato 47 (plugin-navegador), conferido no adaptador 0.107.0: o `initialize` dele anuncia `mcpCapabilities: { http:
+// true, sse: true }` e o `sdkMcpServers` (`dist/mcp-servers.js`) passa uma entrada `{ type: "http", name, url, headers }`
+// do `session/new` ao Agent SDK com a url e os cabeçalhos; por isso o servidor local do navegador vai direto por HTTP,
+// sem proxy stdio. `tools` é só o conjunto das ferramentas próprias do `claude` (o MCP vem à parte), então as 7 entram
+// em `allowedTools` e em `settings.permissions.allow` (o `claude` não pergunta), e `strictMcpConfig` segue ligado. A
+// chamada chega como `tool_call` com `name: "mcp__navegador__<ferramenta>"`, `rawInput` com os argumentos e o
+// resultado no `content` do `tool_call_update`.
 import { AGENT_PROFILE_LABELS } from '../../../shared/settings-defaults'
 import { claudeEnv } from '../../claude-cli/locate'
 import type { AcpPackage } from '../install'
+import { NAVEGADOR_MCP_SERVER, NAVEGADOR_MCP_TOOLS, navegadorRequested, navegadorToolOf } from '../navegador'
 import { webToolOf } from '../web'
 import type { AgentProfile, KnownToolCall, StepTool } from './types'
 
@@ -87,6 +96,8 @@ const isRecord = (value: unknown): value is Record<string, unknown> => typeof va
 function toolName(call: KnownToolCall): StepTool | null {
   const web = webToolOf(call)
   if (web) return web
+  const navegador = navegadorToolOf(call)
+  if (navegador) return navegador
   const name = call.name ?? (call.kind === 'read' ? 'Read' : call.kind === 'search' ? (call.title?.startsWith('Find') ? 'Glob' : 'Grep') : null)
   return name === 'Read' || name === 'Grep' || name === 'Glob' ? name : null
 }
@@ -98,12 +109,19 @@ export const claudeProfile: AgentProfile = {
   bundledPackage: '@agentclientprotocol/claude-agent-acp',
   // `claudeEnv` (sem nada do app) e o `claude` que o adaptador deve rodar.
   env: (baseEnv, cliPath) => ({ ...claudeEnv(baseEnv, cliPath), CLAUDE_CODE_EXECUTABLE: cliPath }),
-  newSession: (request) => {
+  newSession: (request, local = {}) => {
     // Contrato 26: só o chat com as ferramentas de leitura recebe a internet.
     const web = request.web === true && request.purpose === 'chat' && request.tools === 'read'
+    // Contrato 47: o navegador, só com a sessão pedindo e o servidor local aberto para ela.
+    const navegador = navegadorRequested(request) ? (local.navegador ?? null) : null
+    const permissions = {
+      // Toda busca e toda página pedem permissão ao app, inclusive as que o `claude` abriria sozinho.
+      ...(web ? { ask: [...CLAUDE_WEB_TOOLS] } : {}),
+      ...(navegador ? { allow: [...NAVEGADOR_MCP_TOOLS] } : {}),
+    }
     return {
       cwd: request.cwd,
-      mcpServers: [],
+      mcpServers: navegador ? [{ type: 'http' as const, name: NAVEGADOR_MCP_SERVER, url: navegador.url, headers: [{ name: 'Authorization', value: `Bearer ${navegador.token}` }] }] : [],
       // Aplicadas na criação, em ordem; valor que o adaptador não oferece é ignorado por ele.
       configOptions: [
         { configId: 'mode', value: 'default' },
@@ -116,8 +134,8 @@ export const claudeProfile: AgentProfile = {
             settingSources: [],
             tools: request.tools === 'read' ? [...CLAUDE_READ_TOOLS, ...(web ? CLAUDE_WEB_TOOLS : [])] : [],
             disallowedTools: web ? CLAUDE_DISALLOWED_TOOLS.filter((tool) => !(CLAUDE_WEB_TOOLS as readonly string[]).includes(tool)) : [...CLAUDE_DISALLOWED_TOOLS],
-            // Toda busca e toda página pedem permissão ao app, inclusive as que o `claude` abriria sozinho.
-            ...(web ? { settings: { permissions: { ask: [...CLAUDE_WEB_TOOLS] } } } : {}),
+            ...(navegador ? { allowedTools: [...NAVEGADOR_MCP_TOOLS] } : {}),
+            ...(web || navegador ? { settings: { permissions } } : {}),
             model: request.model,
             systemPrompt: request.systemPrompt,
             strictMcpConfig: true,

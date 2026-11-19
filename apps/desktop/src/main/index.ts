@@ -38,6 +38,7 @@ import { createGoogleAccount, type GoogleAccountService } from './google/account
 import { createMicrosoftAccount, type MicrosoftAccountService } from './microsoft/account'
 import { createCalendarService, type CalendarService } from './calendar/service'
 import { createMeetServer, type MeetServer } from './meet/server'
+import { createNavegadorMcpServer, type NavegadorMcpServer } from './navegador/mcp'
 import { createNavegadorServer, parseNavegadorSet, type NavegadorServer } from './navegador/server'
 import { createPluginSave } from './plugins/save'
 import { createDriveSync, createEndOfRecordingHooks, type DriveSyncService } from './google/drive-sync'
@@ -643,6 +644,8 @@ interface AppServices {
   pluginSave: (input: unknown) => Promise<PluginSaveResult>
   /** Ponte do "Controle do navegador" (contrato 46). */
   navegador: NavegadorServer
+  /** Servidor MCP das ferramentas do navegador do Assistente (contrato 47). */
+  navegadorMcp: NavegadorMcpServer
 }
 
 /**
@@ -768,7 +771,11 @@ function createAppServices(userData: string): AppServices {
   }
   const currentProfile = async (): Promise<AgentProfile> => agentProfile((await settings.get()).agentProfile)
   const acpAgent = { current: async (): Promise<AcpAgentService> => agentFor(await currentProfile()) }
+  // Contrato 47: o servidor MCP local com as ferramentas do navegador, para a sessão do Assistente que abre com a ponte
+  // ligada e a extensão conectada. Sobe na primeira dessas sessões; cada uma tem o próprio token.
+  const navegadorMcp = createNavegadorMcpServer({ ponte: () => navegadorServer, ...devLog })
   const openAcp = acpOpener({
+    navegadorMcp,
     profile: currentProfile,
     launch: processLauncher({
       execPath: process.execPath,
@@ -949,6 +956,8 @@ function createAppServices(userData: string): AppServices {
     locate: () => claude.locate(),
     spawn: smokeClaude?.spawn ?? nodeSpawnClaude,
     openAcp,
+    // Contrato 47: a ponte do navegador conectada agora (a sessão do Assistente abre com as ferramentas dela).
+    navegador: { connected: () => navegadorServer?.connected() ?? false },
     baseEnv: process.env,
     onEvent: (event) => broadcast(BrowserWindow.getAllWindows(), 'scribe:chat-event', event),
     clipboard: appClipboard,
@@ -1217,6 +1226,7 @@ function createAppServices(userData: string): AppServices {
     meet,
     pluginSave,
     navegador,
+    navegadorMcp,
   }
 }
 
@@ -1722,6 +1732,7 @@ void app.whenReady().then(async () => {
     void services.whatsapp.dispose()
     void services.meet.stop()
     void services.navegador.close()
+    void services.navegadorMcp.close()
     disposeWhatsAppBadge()
   })
   installMenu()
@@ -1806,6 +1817,7 @@ void app.whenReady().then(async () => {
     disposeWhatsAppBadge()
     await services.meet.stop()
     await services.navegador.close()
+    await services.navegadorMcp.close()
     app.exit(code)
     return
   }

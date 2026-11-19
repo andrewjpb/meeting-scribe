@@ -4,6 +4,7 @@
 // resposta. Contrato 25: a pasta da conversa do Assistente leva também o WhatsApp, as automações, o guia do app e o
 // estado atual, e a resposta pode trazer ações propostas (`ChatAction`), que só rodam com o clique da pessoa.
 import type { ChatAction } from './assistant'
+import { NAVEGADOR_FERRAMENTAS } from './navegador-ferramentas'
 import type { ChatModel } from './settings-defaults'
 
 /** Até 200 mensagens por conversa; acima disso as mais antigas saem. */
@@ -33,8 +34,11 @@ export const CHAT_PLAN_MAX = 50
 /** Texto de cada item do plano. */
 export const CHAT_PLAN_TEXT_MAX = 500
 
-/** Ferramentas que viram passo na tela: as de leitura e (contrato 26) a busca na web e a página aberta. */
-export const CHAT_STEP_TOOLS = ['Read', 'Grep', 'Glob', 'WebSearch', 'WebFetch'] as const
+/**
+ * Ferramentas que viram passo na tela: as de leitura, (contrato 26) a busca na web e a página aberta e (contrato 47)
+ * as do navegador do Assistente.
+ */
+export const CHAT_STEP_TOOLS = ['Read', 'Grep', 'Glob', 'WebSearch', 'WebFetch', ...NAVEGADOR_FERRAMENTAS] as const
 export type ChatStepTool = (typeof CHAT_STEP_TOOLS)[number]
 
 /**

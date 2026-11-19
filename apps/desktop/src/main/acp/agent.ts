@@ -14,16 +14,35 @@
 // Contrato 26: a sessão do chat com `web` também libera `WebSearch` (consulta curta, até 10 por execução) e
 // `WebFetch` (só endereço visto num resultado de busca desta execução ou digitado pela pessoa, até 15 por execução);
 // a regra está em `web.ts`. Uma página que termina sem ter passado por esta política cancela a resposta.
+//
+// Contrato 47: a sessão do chat com `navegador` abre, antes do `session/new`, uma entrada no servidor MCP local do
+// navegador (url e token só dela) e libera as 7 ferramentas dele sem perguntar (`navegador.ts`); o token cai quando a
+// sessão fecha ou o processo sai.
 import { spawn as nodeSpawn } from 'node:child_process'
 import { readFile, realpath, stat } from 'node:fs/promises'
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import { Readable, Writable } from 'node:stream'
 import * as acp from '@agentclientprotocol/sdk/unstable'
 import type { Timers } from '../claude-cli/translator'
+import { navegadorRequested, navegadorToolOf } from './navegador'
 import type { AcpPurpose, AcpSessionRequest, AgentProfile, KnownToolCall } from './profiles/types'
 import { AcpWebState, searchResultUrls, WEB_SEARCH_MAX, webDecision, webToolOf } from './web'
 
 export type { AcpPurpose, AcpSessionRequest, AgentProfile, KnownToolCall } from './profiles/types'
+
+/** Contrato 47: uma entrada aberta no servidor MCP local do navegador, só de uma sessão. */
+export interface NavegadorMcpEntry {
+  url: string
+  token: string
+  /** Revoga o token (sem efeito na segunda vez). */
+  close(): void
+}
+
+/** Contrato 47: quem abre as entradas do servidor MCP do navegador (`navegador/mcp.ts`). */
+export interface NavegadorMcpHost {
+  /** `null` se o servidor não subiu: a sessão abre sem o navegador. */
+  open(): Promise<NavegadorMcpEntry | null>
+}
 
 /** `fs/read_text_file` lê até isto. */
 export const ACP_READ_MAX_BYTES = 2 * 1024 * 1024
@@ -168,6 +187,8 @@ export interface AcpOpenerOptions {
   baseEnv: NodeJS.ProcessEnv
   timers?: Timers
   log?: (message: string) => void
+  /** Contrato 47: o servidor MCP do navegador, para as sessões que pedem `navegador`. */
+  navegadorMcp?: NavegadorMcpHost
 }
 
 /** A fábrica de sessões para o CLI do agente encontrado, como tradução, resumo e chat a recebem. */
@@ -180,6 +201,7 @@ export function acpOpener(options: AcpOpenerOptions): (claudePath: string) => (r
       env: profile.env(options.baseEnv, claudePath),
       ...(options.timers ? { timers: options.timers } : {}),
       ...(options.log ? { log: options.log } : {}),
+      ...(options.navegadorMcp ? { navegadorMcp: options.navegadorMcp } : {}),
     })
   }
 }
@@ -255,6 +277,9 @@ export function patternLeaves(pattern: unknown): boolean {
  *
  * Contrato 26: com `web` (a sessão com internet), `WebSearch` e `WebFetch` seguem `webDecision`, e a liberação
  * conta na execução. Sem `web`, as duas são negadas como qualquer outra.
+ *
+ * Contrato 47: com `navegador` (a sessão que abriu com o servidor do navegador), as 7 ferramentas dele passam sem
+ * conferência (quem confere os argumentos é o servidor MCP). Sem `navegador`, são negadas como qualquer outra.
  */
 export async function permissionAllowed(
   purpose: AcpPurpose,
@@ -263,8 +288,10 @@ export async function permissionAllowed(
   cwdReal: string,
   readTools: AgentProfile['readTools'],
   web: AcpWebState | null = null,
+  navegador = false,
 ): Promise<boolean> {
   if (purpose !== 'chat') return false
+  if (call.name?.startsWith('mcp__')) return navegador && navegadorToolOf(call) !== null
   const tool = webToolOf(call)
   if (tool) {
     if (!web || webDecision(tool, call, web) !== 'allow') return false
@@ -342,6 +369,8 @@ export interface AcpOpenDeps {
   initializeTimeoutMs?: number
   sessionTimeoutMs?: number
   log?: (message: string) => void
+  /** Contrato 47: o servidor MCP do navegador; sem ele, a sessão que pede `navegador` abre sem as ferramentas. */
+  navegadorMcp?: NavegadorMcpHost
 }
 
 /** Promessa com tempo limite: estourou, rejeita. */
@@ -365,22 +394,29 @@ function within<T>(promise: Promise<T>, ms: number, timers: Timers, label: strin
  * Fábrica de sessões (CA4d): abre o processo, faz o `initialize` (com a versão do protocolo conferida) e o
  * `session/new`. Nunca rejeita.
  */
-export async function openAcpSession(request: AcpSessionRequest, deps: AcpOpenDeps): Promise<AcpOpenResult> {
+export async function openAcpSession(asked: AcpSessionRequest, deps: AcpOpenDeps): Promise<AcpOpenResult> {
   const timers = deps.timers ?? defaultTimers
   let cwdReal: string
   try {
-    cwdReal = await realpath(request.cwd)
+    cwdReal = await realpath(asked.cwd)
   } catch {
     return { ok: false, error: 'failed', reason: 'pasta da sessão não existe' }
   }
+  // Contrato 47: a entrada do navegador antes do processo; servidor que não sobe deixa a sessão sem ele, com a
+  // instrução sem o navegador (a pedida não fala de ferramentas que a sessão não tem).
+  const navegador = navegadorRequested(asked) && deps.navegadorMcp ? await deps.navegadorMcp.open().catch(() => null) : null
+  const { systemPromptSemNavegador, ...base } = asked
+  const request: AcpSessionRequest = navegadorRequested(asked) && !navegador ? { ...base, navegador: false, systemPrompt: systemPromptSemNavegador ?? base.systemPrompt } : base
+  if (navegadorRequested(asked) && !navegador) deps.log?.('[acp] o servidor do navegador não abriu: a sessão segue sem ele')
   let link: AcpLink
   try {
     link = deps.launch(deps.env, deps.profile)
   } catch (error) {
+    navegador?.close()
     if (error instanceof AcpMissingError) return { ok: false, error: 'missing', reason: error.message }
     return { ok: false, error: 'agent', reason: `o adaptador não abriu: ${error instanceof Error ? error.message : String(error)}` }
   }
-  const session = new AcpSession(deps.profile, request, link, cwdReal)
+  const session = new AcpSession(deps.profile, request, link, cwdReal, navegador)
   const exited = new Promise<never>((_resolve, reject) => link.onExit(() => reject(new Error('o adaptador saiu'))))
   exited.catch(() => undefined)
   try {
@@ -434,6 +470,8 @@ export class AcpSession {
     readonly request: AcpSessionRequest,
     private readonly link: AcpLink,
     private readonly cwdReal: string,
+    /** Contrato 47: a entrada do servidor do navegador desta sessão; `null` nega as ferramentas dele. */
+    private readonly navegadorMcp: NavegadorMcpEntry | null = null,
   ) {
     this.web = request.web === true && request.purpose === 'chat' && request.tools === 'read' ? new AcpWebState() : null
     const app = acp
@@ -444,6 +482,7 @@ export class AcpSession {
     this.connection = app.connect(link.stream)
     link.onExit(() => {
       this.gone = true
+      this.navegadorMcp?.close()
       this.connection.close()
       for (const listener of this.exitListeners.splice(0)) listener()
     })
@@ -452,6 +491,11 @@ export class AcpSession {
   /** Chamadas de ferramenta vistas nesta sessão (diagnóstico e teste real; caminhos ficam no main). */
   knownToolCalls(): ReadonlyMap<string, KnownToolCall> {
     return this.tools
+  }
+
+  /** Contrato 47: a sessão abriu com as ferramentas do navegador. */
+  get navegador(): boolean {
+    return this.navegadorMcp !== null
   }
 
   /** O processo ainda está vivo e a sessão não foi fechada. */
@@ -474,7 +518,8 @@ export class AcpSession {
   }
 
   async start(): Promise<void> {
-    const response = await this.connection.agent.request('session/new', this.profile.newSession(this.request))
+    const local = this.navegadorMcp ? { navegador: { url: this.navegadorMcp.url, token: this.navegadorMcp.token } } : {}
+    const response = await this.connection.agent.request('session/new', this.profile.newSession(this.request, local))
     this.sessionId = response.sessionId
     this.configOptions = response.configOptions ?? []
   }
@@ -535,6 +580,7 @@ export class AcpSession {
   close(): void {
     if (this.closed) return
     this.closed = true
+    this.navegadorMcp?.close()
     this.connection.close()
     this.link.kill()
   }
@@ -579,7 +625,7 @@ export class AcpSession {
   private async onPermission(params: acp.RequestPermissionRequest): Promise<acp.RequestPermissionResponse> {
     const call = mergeToolCall(this.tools.get(params.toolCall.toolCallId), params.toolCall)
     if (webToolOf(call) === 'WebSearch' && isRecord(call.rawInput)) this.web?.addQuery(call.rawInput['query'])
-    const allow = await permissionAllowed(this.request.purpose, call, this.request.cwd, this.cwdReal, this.profile.readTools, this.web).catch(() => false)
+    const allow = await permissionAllowed(this.request.purpose, call, this.request.cwd, this.cwdReal, this.profile.readTools, this.web, this.navegador).catch(() => false)
     const tool = webToolOf(call)
     if (allow && tool) this.web?.allowed.add(params.toolCall.toolCallId)
     if (!allow) {
