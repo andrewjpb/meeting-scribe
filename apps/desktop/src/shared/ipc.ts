@@ -8,6 +8,7 @@ import type { CalendarListResult, CalendarView } from './calendar'
 import type { BrandingInfo, BrandLogoChoice } from './branding'
 import type { LockResponse, LockStatus } from './lock'
 import type { EmailAccountInput, EmailAccountStatus, EmailAddResult, EmailAttachmentRequest, EmailAttachmentSaveResult, EmailAttachmentsResult, EmailAttachPickResult, EmailAutoconfig, EmailBodyResult, EmailFolder, EmailFolderDeleteResult, EmailFolderPathResult, EmailFoldersResult, EmailMessage, EmailMoveResult, EmailOpenFolderResult, EmailSendRequest, EmailSendResult, EmailTestResult } from './email'
+import type { EmailSignature, EmailSignatureResult } from './email-signature'
 import type { KeySaveResult, KeyStatus, MicAccess, ModelCheck, ModelsResult } from './assemblyai'
 import type { Chat, ChatApprovalAnswer, ChatEvent, ChatListItem, ChatRedoRequest, ChatSendRequest, ChatSendResult, ChatUpdateRequest } from './chat'
 import type { ClaudeLocateResult, ClaudeRunState, ClaudeStartResult, ClaudeTranslateRequest, ClaudeTranslateResult } from './claude-cli'
@@ -422,6 +423,10 @@ export interface InvokeChannels {
   'scribe:email-folder-rename': { request: { accountId: string; path: string; newName: string }; response: EmailFolderPathResult }
   /** Contrato 52 (CA5): pasta com mensagens ou subpastas só sai com `force`. */
   'scribe:email-folder-delete': { request: { accountId: string; path: string; force?: boolean }; response: EmailFolderDeleteResult }
+  /** Contrato 54 (CA2): a assinatura da conta (a padrão se nunca foi gravada). Nada é enviado. */
+  'scribe:email-signature-get': { request: { accountId: string }; response: EmailSignatureResult }
+  /** Contrato 54 (CA2): grava a assinatura da conta (texto até 2000 caracteres e os dois interruptores). */
+  'scribe:email-signature-set': { request: { accountId: string; signature: EmailSignature }; response: EmailSignatureResult }
   /** Automações (contrato 23): os agentes, quantas tarefas usam cada um e os modelos que o perfil oferece. */
   'scribe:agents-list': { request: undefined; response: AgentsList }
   /** Criar (`id: null`) ou trocar um agente. */
@@ -738,6 +743,8 @@ const INVOKE: Record<InvokeChannel, true> = {
   'scribe:email-folder-create': true,
   'scribe:email-folder-rename': true,
   'scribe:email-folder-delete': true,
+  'scribe:email-signature-get': true,
+  'scribe:email-signature-set': true,
   'scribe:agents-list': true,
   'scribe:agents-save': true,
   'scribe:agents-delete': true,
@@ -1028,6 +1035,9 @@ export const WHEN_LOCKED: Readonly<Record<InvokeChannel, LockedPolicy>> = Object
   'scribe:email-folder-create': 'refused',
   'scribe:email-folder-rename': 'refused',
   'scribe:email-folder-delete': 'refused',
+  // Contrato 54: a assinatura, como o resto do email.
+  'scribe:email-signature-get': 'refused',
+  'scribe:email-signature-set': 'refused',
   // Automações (contrato 23, CA10): gerenciar agentes e tarefas, testar, pedir e ver o histórico, tudo recusado com
   // o app bloqueado. O agendador não depende de canal: roda no main e as tarefas continuam rodando bloqueado.
   'scribe:agents-list': 'refused',

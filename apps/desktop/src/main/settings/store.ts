@@ -3,12 +3,14 @@
 // assinou (o main repassa a todas as janelas). Arquivo ausente ou corrompido vale como os padrões; o
 // corrompido é guardado como `settings.json.corrupt-<timestamp>` na primeira gravação seguinte.
 // Contrato 42: as contas de email vão no mesmo arquivo, em `emailAccounts` (fora de `settings`, sem aviso às janelas),
-// e só aparecem no arquivo quando há alguma.
+// e só aparecem no arquivo quando há alguma. Contrato 54: as assinaturas também, em `emailSignatures` (por id de conta);
+// gravar a lista de contas tira a assinatura de quem saiu.
 import { randomUUID } from 'node:crypto'
 import { readFile, rename, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { applySettingsPatch, DEFAULT_SETTINGS, type AppSettings } from '../../shared/settings-defaults'
-import { audioFolderSchema, brandLogoSchema, checkEmailAccounts, claudePathSchema, modelIdSchema, parseEmailAccounts, parseSettings, parseSettingsPatch, SETTINGS_VERSION, type StoredEmailAccount } from './schema'
+import type { EmailSignature } from '../../shared/email-signature'
+import { audioFolderSchema, brandLogoSchema, checkEmailAccounts, claudePathSchema, emailSignatureSchema, modelIdSchema, parseEmailAccounts, parseEmailSignatures, parseSettings, parseSettingsPatch, SETTINGS_VERSION, type StoredEmailAccount } from './schema'
 
 export const SETTINGS_FILE = 'settings.json'
 
@@ -29,6 +31,10 @@ export interface SettingsStore {
   getEmailAccounts(): Promise<StoredEmailAccount[]>
   /** Só para o main: grava a lista inteira de contas; conta fora do formato lança erro e nada é gravado. */
   setEmailAccounts(accounts: readonly StoredEmailAccount[]): Promise<StoredEmailAccount[]>
+  /** Contrato 54, só para o main: as assinaturas gravadas, por id de conta (conta sem assinatura fica de fora). */
+  getEmailSignatures(): Promise<Record<string, EmailSignature>>
+  /** Grava a assinatura de uma conta; conta inexistente devolve `false` e nada é gravado. Fora do formato lança erro. */
+  setEmailSignature(accountId: string, signature: EmailSignature): Promise<boolean>
 }
 
 export interface FileSettingsStoreOptions {
@@ -42,6 +48,7 @@ export function createFileSettingsStore({ dir, onChange, now = Date.now }: FileS
   const file = join(dir, SETTINGS_FILE)
   let cached: AppSettings | null = null
   let emailAccounts: StoredEmailAccount[] = []
+  let emailSignatures: Record<string, EmailSignature> = {}
   let corrupt = false
   let queue: Promise<unknown> = Promise.resolve()
 
@@ -54,6 +61,7 @@ export function createFileSettingsStore({ dir, onChange, now = Date.now }: FileS
   async function load(): Promise<AppSettings> {
     if (cached) return cached
     emailAccounts = []
+    emailSignatures = {}
     let raw: string
     try {
       raw = await readFile(file, 'utf8')
@@ -72,17 +80,28 @@ export function createFileSettingsStore({ dir, onChange, now = Date.now }: FileS
     const data = typeof parsed === 'object' && parsed !== null && 'settings' in parsed ? (parsed as { settings: unknown }).settings : undefined
     cached = parseSettings(data)
     if (typeof parsed === 'object' && parsed !== null && 'emailAccounts' in parsed) emailAccounts = parseEmailAccounts((parsed as { emailAccounts: unknown }).emailAccounts)
+    if (typeof parsed === 'object' && parsed !== null && 'emailSignatures' in parsed) {
+      emailSignatures = parseEmailSignatures(
+        (parsed as { emailSignatures: unknown }).emailSignatures,
+        emailAccounts.map((account) => account.id),
+      )
+    }
     return cached
   }
 
-  async function write(settings: AppSettings, accounts: readonly StoredEmailAccount[] = emailAccounts): Promise<void> {
+  async function write(settings: AppSettings, accounts: readonly StoredEmailAccount[] = emailAccounts, signatures: Record<string, EmailSignature> = emailSignatures): Promise<void> {
     if (corrupt) {
       const stamp = new Date(now()).toISOString().replace(/[:.]/g, '-')
       await rename(file, `${file}.corrupt-${stamp}`).catch(() => undefined)
       corrupt = false
     }
     const temp = `${file}.tmp-${process.pid}-${randomUUID()}`
-    const content = accounts.length > 0 ? { version: SETTINGS_VERSION, settings, emailAccounts: accounts } : { version: SETTINGS_VERSION, settings }
+    const content = {
+      version: SETTINGS_VERSION,
+      settings,
+      ...(accounts.length > 0 ? { emailAccounts: accounts } : {}),
+      ...(Object.keys(signatures).length > 0 ? { emailSignatures: signatures } : {}),
+    }
     await writeFile(temp, `${JSON.stringify(content, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 })
     await rename(temp, file)
   }
@@ -110,9 +129,27 @@ export function createFileSettingsStore({ dir, onChange, now = Date.now }: FileS
     setEmailAccounts: (accounts) =>
       serial(async () => {
         const next = checkEmailAccounts(accounts)
-        await write(await load(), next)
+        const settings = await load()
+        const signatures = Object.fromEntries(Object.entries(emailSignatures).filter(([id]) => next.some((account) => account.id === id)))
+        await write(settings, next, signatures)
         emailAccounts = next
+        emailSignatures = signatures
         return next.map((account) => ({ ...account }))
+      }),
+    getEmailSignatures: () =>
+      serial(async () => {
+        await load()
+        return Object.fromEntries(Object.entries(emailSignatures).map(([id, signature]) => [id, { ...signature }]))
+      }),
+    setEmailSignature: (accountId, signature) =>
+      serial(async () => {
+        const settings = await load()
+        const value = emailSignatureSchema.parse(signature)
+        if (!emailAccounts.some((account) => account.id === accountId)) return false
+        const next = { ...emailSignatures, [accountId]: value }
+        await write(settings, emailAccounts, next)
+        emailSignatures = next
+        return true
       }),
   }
 }

@@ -22,6 +22,9 @@
 // fila da conta (a mesma do sincronismo da INBOX e do IDLE), e o que chega à INBOX por ele não vira aviso de email novo.
 // Nenhum pedido de pastas faz login numa conta com a senha recusada; a pasta vigiada só é relida com a conta conectada.
 //
+// Contrato 54: a assinatura de cada conta, lida e gravada no `settings.json` (sai junto quando a conta sai). Quem a põe no
+// texto é o rascunho da tela, antes do envio; o envio (o do clique e o da tarefa agendada) não acrescenta nada.
+//
 // Erro de conexão (N4) nunca derruba o app: a conta fica `error` com uma mensagem curta e as outras seguem. Usuário ou
 // senha recusados não tentam de novo sozinhos (para o servidor não bloquear a conta); o resto tenta de novo em 1 min
 // (IMAP) ou no próximo poll (POP3).
@@ -70,8 +73,9 @@ import {
   type EmailTestResult,
   isInbox,
 } from '../../shared/email'
+import { DEFAULT_EMAIL_SIGNATURE, type EmailSignature, type EmailSignatureResult } from '../../shared/email-signature'
 import type { SafeStorageLike } from '../secrets'
-import { emailAddressSchema, emailIncomingSchema, emailNameSchema, emailServerSchema, emailUsernameSchema, type StoredEmailAccount } from '../settings/schema'
+import { emailAddressSchema, emailIncomingSchema, emailNameSchema, emailServerSchema, emailSignatureSchema, emailUsernameSchema, type StoredEmailAccount } from '../settings/schema'
 import type { SettingsStore } from '../settings/store'
 import { addressDomain, autoconfigure, AUTOCONFIG_TIMEOUT_MS, type AutoconfigFetch } from './autoconfig'
 import { capInbox, createEmailStore, type EmailAccountData, type EmailCachedFolder, type EmailStore } from './email-store'
@@ -183,6 +187,7 @@ const folderRenameSchema = z.object({ accountId: accountIdSchema, path: folderPa
 const folderDeleteSchema = z.object({ accountId: accountIdSchema, path: folderPathSchema, force: z.boolean().optional() }).strict()
 const messageRequestSchema = z.object({ accountId: accountIdSchema, id: messageIdSchema }).strict()
 const markReadSchema = messageRequestSchema.extend({ seen: z.boolean() }).strict()
+const signatureSetSchema = z.object({ accountId: accountIdSchema, signature: emailSignatureSchema }).strict()
 /** Contrato 43: o nome do anexo, sem caminho nem caractere de controle. */
 const attachmentSchema = z
   .object({
@@ -463,7 +468,7 @@ const folderFailure = (error: EmailFolderFailure['error']): EmailFolderFailure =
 export interface EmailServiceDeps {
   /** `userData/email`. */
   root: string
-  settings: Pick<SettingsStore, 'get' | 'getEmailAccounts' | 'setEmailAccounts'>
+  settings: Pick<SettingsStore, 'get' | 'getEmailAccounts' | 'setEmailAccounts' | 'getEmailSignatures' | 'setEmailSignature'>
   safeStorage: SafeStorageLike
   /** ISPDB do autoconfig (no smoke e nos testes, um HTTP falso). */
   fetch: AutoconfigFetch
@@ -564,6 +569,9 @@ export interface EmailService {
   folderDelete(request: unknown): Promise<EmailFolderDeleteResult>
   /** A pasta aberta na tela desta janela (só uma por janela): fora a INBOX, relida a cada 5 min; `null` para. */
   watchFolder(senderId: number, request: unknown): void
+  /** Contrato 54 (CA2): a assinatura da conta (a padrão, vazia e com os dois interruptores ligados, se nunca foi gravada). */
+  signatureGet(request: unknown): Promise<EmailSignatureResult>
+  signatureSet(request: unknown): Promise<EmailSignatureResult>
   /** Sair do app: fecha as conexões e para os relógios. */
   dispose(): Promise<void>
 }
@@ -1638,6 +1646,36 @@ export function createEmailService(deps: EmailServiceDeps): EmailService {
       const timer = setInterval(() => void refreshWatch(senderId), folderRefreshMs)
       timer.unref?.()
       folderWatches.set(senderId, { accountId, path, timer, failures: 0 })
+    },
+
+    async signatureGet(request) {
+      const parsed = accountRequestSchema.safeParse(request)
+      if (!parsed.success) return { ok: false, error: 'invalid' }
+      if (!runtimes.has(parsed.data.accountId)) return { ok: false, error: 'missing' }
+      let saved: EmailSignature | undefined
+      try {
+        saved = (await deps.settings.getEmailSignatures())[parsed.data.accountId]
+      } catch {
+        return { ok: false, error: 'storage' }
+      }
+      return { ok: true, signature: saved ?? { ...DEFAULT_EMAIL_SIGNATURE } }
+    },
+
+    async signatureSet(request) {
+      const parsed = signatureSetSchema.safeParse(request)
+      if (!parsed.success) return { ok: false, error: 'invalid' }
+      const { accountId, signature } = parsed.data
+      if (!runtimes.has(accountId)) return { ok: false, error: 'missing' }
+      // Na mesma fila de adicionar e remover conta: a assinatura nunca fica de uma conta que acabou de sair.
+      let saved: boolean
+      try {
+        saved = await accountsSerial(() => deps.settings.setEmailSignature(accountId, signature))
+      } catch {
+        // O formato já foi conferido acima: o que sobra é o disco (gravar o `settings.json`).
+        log('assinatura: não foi possível gravar o settings.json')
+        return { ok: false, error: 'storage' }
+      }
+      return saved ? { ok: true, signature: { ...signature } } : { ok: false, error: 'missing' }
     },
 
     async poll(accountId) {

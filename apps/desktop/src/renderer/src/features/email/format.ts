@@ -1,6 +1,7 @@
 // Textos e contas do email na tela (contrato 43): a hora da lista, os grupos por dia, a prévia de uma linha, as não
 // lidas de cada conta, o nome da conta na barra lateral, os destinatários do composer e o rascunho de Responder,
 // Responder a todos e Encaminhar. Sem DOM: testado em test/renderer/email-format.test.ts.
+import { EMAIL_SIGNATURE_SEPARATOR, withSignature, type EmailSignature } from '@shared/email-signature'
 import { EMAIL_ADDRESS_PATTERN, isInbox, isSent, prefixedSubject, type EmailAccount, type EmailAccountState, type EmailAccountStatus, type EmailAddress, type EmailBody, type EmailMessage, type EmailOutgoingAttachment, type EmailSendError } from '@shared/email'
 import { htmlToText } from './sanitize'
 
@@ -225,6 +226,34 @@ export function composeFrom(mode: Exclude<ComposeMode, 'new'>, message: EmailMes
 
 export function emptyDraft(accountId: string): ComposeDraft {
   return { accountId, mode: 'new', to: [], cc: [], subject: '', text: '', inReplyTo: null, attachments: [], skippedAttachments: [] }
+}
+
+/**
+ * Contrato 54 (CA4): o rascunho recém-aberto com a assinatura da conta, se ela vale para o modo. Na mensagem nova, depois
+ * do que já veio no texto; em Responder, Responder a todos e Encaminhar, acima da citação. Fica no campo, editável.
+ */
+export function signedDraft(draft: ComposeDraft, signature: EmailSignature | null): ComposeDraft {
+  if (!signature) return draft
+  if (draft.mode === 'new') return { ...draft, text: withSignature({ text: draft.text, quote: '' }, signature, 'new').text }
+  // O que vem antes da citação é o texto do rascunho: hoje só a assinatura, se ele já foi assinado (assim não duplica).
+  const head = `\n\n${EMAIL_SIGNATURE_SEPARATOR}\n${signature.text.replace(/\r\n?/g, '\n').replace(/\s+$/, '')}`
+  const text = draft.text.startsWith(head) ? head : ''
+  return { ...draft, text: withSignature({ text, quote: draft.text.slice(text.length) }, signature, draft.mode === 'forward' ? 'forward' : 'reply').text }
+}
+
+/**
+ * Contrato 54: só o último pedido de rascunho vale. Abrir um rascunho espera o main (o corpo, a assinatura); se nesse
+ * meio a pessoa pediu outro rascunho ou abriu outra mensagem, a resposta velha é descartada.
+ */
+export function createDraftRequests(): { start: () => number; cancel: () => void; current: (token: number) => boolean } {
+  let latest = 0
+  return {
+    start: () => ++latest,
+    cancel: () => {
+      latest++
+    },
+    current: (token) => token === latest,
+  }
 }
 
 /** O rascunho tem algo escrito (fechar pede para descartar). */

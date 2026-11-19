@@ -238,6 +238,9 @@ describe('canais com o app bloqueado (contrato 22, CA4)', () => {
       'scribe:email-remote-images',
       'scribe:email-remove-account',
       'scribe:email-send',
+      // Contrato 54: a assinatura.
+      'scribe:email-signature-get',
+      'scribe:email-signature-set',
       'scribe:email-test',
     ])
     for (const channel of channels) expect(WHEN_LOCKED[channel], channel).toBe('refused')

@@ -2034,6 +2034,10 @@ function registerIpc(services: AppServices): void {
   handle('scribe:email-folder-create', appOrigin, (_event, request) => email.folderCreate(request).catch(() => ({ ok: false, error: 'unavailable' }) as const))
   handle('scribe:email-folder-rename', appOrigin, (_event, request) => email.folderRename(request).catch(() => ({ ok: false, error: 'unavailable' }) as const))
   handle('scribe:email-folder-delete', appOrigin, (_event, request) => email.folderDelete(request).catch(() => ({ ok: false, error: 'unavailable' }) as const))
+  // Contrato 54: a assinatura da conta (quem a põe no texto é o rascunho da tela; o envio não muda). O pedido fora do
+  // formato já volta `invalid` do serviço; exceção que sobra é do `settings.json`.
+  handle('scribe:email-signature-get', appOrigin, (_event, request) => email.signatureGet(request).catch(() => ({ ok: false, error: 'storage' }) as const))
+  handle('scribe:email-signature-set', appOrigin, (_event, request) => email.signatureSet(request).catch(() => ({ ok: false, error: 'storage' }) as const))
   onEvent('scribe:email-folder-watch', appOrigin, (event, request) => email.watchFolder(event.sender.id, request))
   onEvent('scribe:email-viewing', appOrigin, (event, request) => {
     const viewing = request as { accountId?: unknown; folder?: unknown } | null | undefined
