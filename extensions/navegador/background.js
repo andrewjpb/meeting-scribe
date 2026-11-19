@@ -388,7 +388,8 @@ async function pedir(candidate, init, timeoutMs) {
   try {
     const response = await fetch(`http://127.0.0.1:${candidate}${init.path}`, {
       method: init.method,
-      headers: init.body === undefined ? undefined : { 'content-type': 'application/json' },
+      // O Chrome não põe Origin no GET de service worker: este cabeçalho prova que o pedido é da extensão.
+      headers: init.body === undefined ? { 'x-lap-navegador': '1' } : { 'x-lap-navegador': '1', 'content-type': 'application/json' },
       body: init.body,
       signal: controller.signal,
       credentials: 'omit',

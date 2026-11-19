@@ -46,10 +46,21 @@ export function parseNavegadorSet(raw: unknown): boolean | null {
   return parsed.success ? parsed.data.ativo : null
 }
 
-/** Só a extensão: método e caminho conhecidos, origem `chrome-extension://` e, no POST, JSON. */
+/**
+ * Cabeçalho que a extensão manda em todo pedido. O Chrome não põe `Origin` no GET de um service worker com
+ * `host_permissions` (o pedido não é CORS), então o GET chega sem origem. Uma página da web não consegue mandar
+ * este cabeçalho para 127.0.0.1 sem um preflight OPTIONS, que aqui recebe 404 — o navegador barra o pedido.
+ */
+export const NAVEGADOR_HEADER = 'x-lap-navegador'
+
+/**
+ * Só a extensão: método e caminho conhecidos, o cabeçalho {@link NAVEGADOR_HEADER} e, se vier `Origin`, só
+ * `chrome-extension://`; no POST, JSON.
+ */
 export function acceptsNavegadorRequest(request: Pick<IncomingMessage, 'method' | 'url' | 'headers'>): 'comandos' | 'resultados' | null {
+  if (request.headers[NAVEGADOR_HEADER] !== '1') return null
   const origin = request.headers.origin
-  if (typeof origin !== 'string' || !origin.startsWith('chrome-extension://')) return null
+  if (origin !== undefined && !origin.startsWith('chrome-extension://')) return null
   const path = (request.url ?? '').split('?')[0]
   if (request.method === 'GET' && path === NAVEGADOR_COMANDOS_PATH) return 'comandos'
   const type = request.headers['content-type']
