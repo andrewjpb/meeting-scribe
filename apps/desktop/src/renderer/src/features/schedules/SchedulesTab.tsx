@@ -5,7 +5,7 @@
 // Contrato 25: o lembrete criado pelo Assistente aparece aqui como "Lembrete" (sem agente): só liga, desliga, roda
 // agora (a notificação) e exclui. "Criar tarefa" num cartão do Assistente abre o formulário já preenchido.
 //
-// Contrato 46: a tarefa com "Pode enviar email" mostra o ícone de envio ao lado do nome e a linha com a data da
+// Contrato 51: a tarefa com "Pode enviar email" mostra o ícone de envio ao lado do nome e a linha com a data da
 // permissão e quantos destinatários ela tem.
 import { Bell, Copy, Pencil, Play, Plus, Send, Trash2 } from 'lucide-react'
 import { useState } from 'react'
@@ -35,7 +35,7 @@ const inputOf = (task: ScheduledTask): TaskInput => ({
   email: task.email ? { accountId: task.email.accountId, allow: task.email.allow, maxPerRun: task.email.maxPerRun } : null,
 })
 
-/** Contrato 46: "Pode enviar email · permitido em sex 20/11 10:12 · 3 destinatários". */
+/** Contrato 51: "Pode enviar email · permitido em sex 20/11 10:12 · 3 destinatários". */
 function emailLine(task: ScheduledTask): string | null {
   if (!task.email) return null
   const at = Date.parse(task.email.grantedAt)

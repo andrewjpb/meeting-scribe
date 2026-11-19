@@ -483,6 +483,35 @@ describe('nenhum caminho fora do clique alcança o envio (CA4)', () => {
     expect(sendMedia).not.toContain('correct')
   })
 
+  it('contrato 34: reagir usa o mesmo clique e o mesmo guarda; o "digitando…" só com o interruptor, e a IA não alcança nenhum', () => {
+    // O canal da reação: chamado só pelo preload (com a ativação do usuário) e registrado no main.
+    const users = all.filter(({ text }) => text.includes("'scribe:whatsapp-react'")).map(({ file }) => file)
+    expect(users.sort()).toEqual(['main/index.ts', 'main/smoke.ts', 'preload/index.ts', 'shared/ipc.ts'].sort())
+    const index = all.find(({ file }) => file === 'main/index.ts')?.text ?? ''
+    expect(index).toContain("handle('scribe:whatsapp-react', appOrigin, (event, request) => whatsapp.react(event.sender.id, request))")
+    expect(all.flatMap(({ file, text }) => (text.match(/\bwhatsapp\.react\([^\n]*/g) ?? []).map((call) => `${file}: ${call}`))).toEqual(['main/index.ts: whatsapp.react(event.sender.id, request))'])
+    const preload = all.find(({ file }) => file === 'preload/index.ts')?.text ?? ''
+    const reactPath = preload.slice(preload.indexOf('whatsappReact('), preload.indexOf("'scribe:whatsapp-react'"))
+    expect(reactPath).toContain('navigator.userActivation.isActive')
+    expect(reactPath).toContain("ipcRenderer.send('scribe:whatsapp-click', clickToken)")
+    // Na tela, só o clique num emoji (o seletor ou um chip) da conversa aberta reage.
+    expect(all.filter(({ file, text }) => file.startsWith('renderer/') && text.includes('whatsappReact(')).map(({ file }) => file)).toEqual(['renderer/src/features/whatsapp/WhatsAppScreen.tsx'])
+    // O serviço gasta o token antes de tudo, e o cliente só reage com a prova.
+    const service = all.find(({ file }) => file === 'main/whatsapp/service.ts')?.text ?? ''
+    const react = service.slice(service.indexOf('async react('), service.indexOf('async typing('))
+    expect(react).toContain('guard.consume(senderId, raw.clickToken')
+    expect(react.indexOf('guard.consume')).toBeLessThan(react.indexOf('current.react(proof'))
+    expect(all.filter(({ text }) => /\.react\(proof/.test(text)).map(({ file }) => file)).toEqual(['main/whatsapp/service.ts'])
+    // O "digitando…" lê o interruptor a cada vez, e o main o liga à configuração.
+    const typing = service.slice(service.indexOf('async typing('), service.indexOf('forgetSender(senderId) {'))
+    expect(typing).toContain('deps.typingEnabled()')
+    expect(index).toContain('typingEnabled: async () => (await settings.get()).whatsappTypingSignal')
+    // Insights, correção, chat, agentes e a IA das notas não chegam a nenhum dos dois.
+    const ai = all.filter(({ file }) => /^main\/(whatsapp\/(insights|correct)|chat|meetings|acp|claude-cli|agents|tasks)/.test(file) || /^renderer\/src\/features\/(chat|notes|recording)\//.test(file))
+    expect(ai.length).toBeGreaterThan(10)
+    for (const { file, text } of ai) expect(`${file}: ${/whatsapp-react|whatsappReact|whatsapp-typing|\.react\(|\.typing\(/.test(text)}`).toBe(`${file}: false`)
+  })
+
   it('o guarda do clique e o envio do cliente só existem no serviço do WhatsApp', () => {
     const guardUsers = all.filter(({ text }) => /createSendGuard|send-guard'/.test(text)).map(({ file }) => file)
     expect(guardUsers.sort()).toEqual(['main/whatsapp/client.ts', 'main/whatsapp/send-guard.ts', 'main/whatsapp/service.ts'].sort())
@@ -512,8 +541,9 @@ describe('nenhum caminho fora do clique alcança o envio (CA4)', () => {
 
   it('o envio também passa pelo bloqueio: todo canal do WhatsApp é recusado com o app bloqueado', () => {
     const channels = INVOKE_CHANNELS.filter((channel) => channel.startsWith('scribe:whatsapp-'))
-    // Contrato 37: a mídia e a transcrição; contrato 39: o envio do anexo e o clipe (22 no total).
-    expect(channels).toHaveLength(22)
+    // Contrato 37: a mídia e a transcrição; contrato 39: o envio do anexo e o clipe; contrato 34: a reação e o
+    // "digitando…" (24 no total).
+    expect(channels).toHaveLength(24)
     for (const channel of channels) expect(WHEN_LOCKED[channel]).toBe('refused')
     expect(RENDERER_EVENTS_WHEN_LOCKED['scribe:whatsapp-click']).toBe('ignored')
     expect(PRELOAD_ONLY_EVENTS).toEqual(['scribe:whatsapp-click'])

@@ -2,7 +2,7 @@
 import { readFileSync } from 'node:fs'
 import { readFile, writeFile } from 'node:fs/promises'
 import { basename, join } from 'node:path'
-import { app, BrowserWindow, clipboard, dialog, Menu, nativeImage, net, Notification, powerMonitor, safeStorage, session, shell, systemPreferences, Tray, type NativeImage, type OpenDialogOptions, type SaveDialogOptions } from 'electron'
+import { app, BrowserWindow, clipboard, dialog, Menu, nativeImage, net, Notification, powerMonitor, safeStorage, screen, session, shell, systemPreferences, Tray, type MenuItemConstructorOptions, type NativeImage, type OpenDialogOptions, type SaveDialogOptions } from 'electron'
 import { DRIVE_FOLDER_URL_PREFIX } from '../shared/accounts'
 import { ASSEMBLYAI_DASHBOARD_URL } from '../shared/assemblyai'
 import { formatRunAt, formatRunShort, type AutomationRun } from '../shared/automations'
@@ -10,9 +10,10 @@ import { chatSourcesOf } from '../shared/chat'
 import { brandTexts, DEFAULT_BRAND_NAME } from '../shared/branding'
 import { calendarNoticeText, safeJoinUrl, type CalendarNotice } from '../shared/calendar'
 import { lockedWindowTitle, type LockStatus } from '../shared/lock'
+import type { NavegadorState } from '../shared/navegador'
 import type { AppPluginId, PluginSaveResult } from '../shared/plugins'
 import { privacyPaneUrl } from '../shared/privacy'
-import type { RouteId } from '../shared/routes'
+import type { MainEvents } from '../shared/ipc'
 import type { AgentProfileId, AppSettings } from '../shared/settings-defaults'
 import type { TranscriptDocument } from '../shared/transcription'
 import { WHATSAPP_CHAT_ID_PATTERN, whatsappStateLabel, type WhatsAppMessage } from '../shared/whatsapp'
@@ -38,10 +39,16 @@ import { createGoogleAccount, type GoogleAccountService } from './google/account
 import { createMicrosoftAccount, type MicrosoftAccountService } from './microsoft/account'
 import { createCalendarService, type CalendarService } from './calendar/service'
 import { createMeetServer, type MeetServer } from './meet/server'
+import { createMeetingPromptController, type MeetingPromptController, type MeetingPromptSettings } from './meeting-prompt/controller'
+import { createMeetingPromptWindow } from './meeting-prompt/window'
+import { createMicWatchService, locateMicWatch, type MicWatchService } from './mic-watch/process'
+import { recordingTitleFor } from '../shared/meeting-prompt'
+import { createNavegadorMcpServer, type NavegadorMcpServer } from './navegador/mcp'
+import { createNavegadorServer, parseNavegadorSet, type NavegadorServer } from './navegador/server'
 import { createPluginSave } from './plugins/save'
 import { createDriveSync, createEndOfRecordingHooks, type DriveSyncService } from './google/drive-sync'
 import { nodeExecFile } from './claude-cli/locate'
-import { createClaudeService, type ClaudeService } from './claude-cli/service'
+import { CLAUDE_CWD_DIR, createClaudeService, type ClaudeService } from './claude-cli/service'
 import { nodeSpawnSummary } from './claude-cli/summary'
 import { nodeSpawnClaude } from './claude-cli/translator'
 import { broadcast, handle, onEvent, sendTo, setLockGate } from './ipc'
@@ -62,11 +69,14 @@ import { aboutPanelOptions, buildMenuTemplate, MENU_IDS } from './menu'
 import { createMicPermissions } from './permissions'
 import { handleAppScheme, registerAppScheme } from './protocol'
 import { createSecretStore, memorySafeStorage } from './secrets'
+import { createMcpCli, loginPathOnce } from './mcp/cli'
+import { createMcpService, type McpService } from './mcp/service'
+import { createMcpStore } from './mcp/store'
 import { APP_ORIGIN, applySessionSecurity, originOf } from './security'
 import { createSettingsService, type SettingsService } from './settings/service'
 import { createFileSettingsStore } from './settings/store'
-import { isSmokeRun, prepareSmokeEnvironment, runSmoke, SMOKE_MEET_PORTS } from './smoke'
-import { createSmokeAcp, createSmokeClaude, createSmokeFixtures, SMOKE_FAKE_KEY, type SmokeFixtures } from './smoke-fixtures'
+import { isSmokeRun, prepareSmokeEnvironment, runSmoke, SMOKE_MEET_PORTS, SMOKE_NAVEGADOR_PORTS } from './smoke'
+import { createSmokeAcp, createSmokeClaude, createSmokeFixtures, SMOKE_FAKE_KEY, writeSmokeMcpFixtures, type SmokeFixtures } from './smoke-fixtures'
 import { acpOpener, processLauncher } from './acp/agent'
 import { bundledAdapterEntry, bundledAgent, installedAgent, type AcpAgentService } from './acp/entry'
 import { createAcpInstaller } from './acp/install'
@@ -75,7 +85,7 @@ import { applyOutput } from './schedules/outputs'
 import { createAgentRunner } from './schedules/runner'
 import { createAutomationsService, type AutomationNotice, type AutomationsService } from './schedules/service'
 import { createFileRunsStore, createFileSchedulesStore } from './schedules/store'
-import { createTrayController, createWindowLifecycle, type TrayController, type TrayIcon, type TrayLike } from './tray/menu'
+import { createTrayController, createWindowLifecycle, todayMeetings, TRAY_LIST_MAX, trayJoinUrl, type TrayController, type TrayIcon, type TrayLike, type TrayRecent } from './tray/menu'
 import { createUpdateService, type UpdateService } from './updates/service'
 import { netDownload, netDownloadTarball, netFetch } from './updates/transport'
 import { createMainWindow } from './window'
@@ -138,8 +148,12 @@ let quitAfterRecording = false
 const recordingSessions = createRecordingSessions(() => {
   // Contrato 12: a gravação acabou; os avisos de "não está gravando" voltam a valer para outras reuniões.
   calendarService?.recordingEnded()
+  // Contrato 48: o título que veio do aviso de reunião vale só para esta gravação.
+  meetingPromptController?.recordingEnded()
   // Contrato 23: a gravação terminou de salvar (ou a janela que gravava sumiu).
   onRecordingFinished?.()
+  // Contrato 50: o tempo some da barra de menus e o menu volta a "Nova gravação".
+  trayController?.refresh()
   if (!quitAfterRecording) return
   quitAfterRecording = false
   app.quit()
@@ -160,6 +174,24 @@ let emailService: EmailService | null = null
 let readSettings: (() => Promise<AppSettings>) | null = null
 /** Servidor local da extensão do Meet (contrato 27): sobe e para com "Quem fala no Meet". */
 let meetServer: MeetServer | null = null
+/** Aviso "Começar a transcrever" ao entrar numa reunião (contrato 48). */
+let meetingPromptController: MeetingPromptController | null = null
+/** O `lap-mic-watch` (contrato 49): sobe e para com "Avisar quando uma reunião começar". */
+let micWatchService: MicWatchService | null = null
+/**
+ * Janelas do aviso de reunião (contrato 48): ficam fora de `appWindows()`, então não recebem os eventos do app, não
+ * levam o título da marca e fechar uma delas nunca conta como "fechar a última janela".
+ */
+const meetingPromptWindows = new WeakSet<BrowserWindow>()
+
+/** As janelas do app (a principal e as do smoke), sem a do aviso de reunião. */
+function appWindows(): BrowserWindow[] {
+  return BrowserWindow.getAllWindows().filter((win) => !meetingPromptWindows.has(win))
+}
+/** Ponte do "Controle do navegador" (contrato 46): sobe e para com "Ativar ponte" (`navegadorPlugin`). */
+let navegadorServer: NavegadorServer | null = null
+/** Última configuração vista de "Ativar ponte", para o estado que vai às janelas. */
+let navegadorAtivo = false
 /** Ícone da barra de menus (contrato 23, CA8): aparece sempre que o app está aberto. */
 let trayController: TrayController | null = null
 /** Último estado do bloqueio, para o menu do ícone ("Bloquear" só com senha ou Touch ID). */
@@ -195,7 +227,7 @@ async function confirmLeave(win: BrowserWindow | null): Promise<void> {
     }
     if (choice === 1 && !locked && recordingSessions.active()) {
       quitAfterRecording = true
-      broadcast(BrowserWindow.getAllWindows(), 'scribe:recording-end-and-quit', undefined)
+      broadcast(appWindows(), 'scribe:recording-end-and-quit', undefined)
     }
   } finally {
     leaveAsked = false
@@ -212,19 +244,24 @@ function windowTitle(): string {
 
 /** Cada mudança do bloqueio: título das janelas, item "Bloquear" do menu e o aviso às janelas. */
 function applyLockStatus(status: LockStatus): void {
+  const wasLocked = lastLockStatus?.locked ?? false
   lastLockStatus = status
+  // Contrato 48: bloqueado, o aviso de reunião (que mostra o título dela) fecha.
+  if (status.locked) meetingPromptController?.close()
+  // Contrato 49: desbloqueado, a reunião (da extensão ou de um app) que não avisou por causa do bloqueio avisa agora.
+  else if (wasLocked) void meetingPromptController?.recheck()
   trayController?.refresh()
   const title = windowTitle()
-  for (const win of BrowserWindow.getAllWindows()) win.setTitle(title)
+  for (const win of appWindows()) win.setTitle(title)
   const item = Menu.getApplicationMenu()?.getMenuItemById(MENU_IDS.lock)
   if (item) item.enabled = status.canLock && !status.locked
-  broadcast(BrowserWindow.getAllWindows(), 'scribe:lock-state', status)
+  broadcast(appWindows(), 'scribe:lock-state', status)
   // Contrato 24: bloqueado, nada do WhatsApp chega às janelas; ao desbloquear, o estado de agora.
-  if (!status.locked && whatsappService) broadcast(BrowserWindow.getAllWindows(), 'scribe:whatsapp-state', whatsappService.status())
+  if (!status.locked && whatsappService) broadcast(appWindows(), 'scribe:whatsapp-state', whatsappService.status())
   // Contrato 42: o mesmo para as contas de email.
-  if (!status.locked && emailService) broadcast(BrowserWindow.getAllWindows(), 'scribe:email-state', emailService.accounts())
+  if (!status.locked && emailService) broadcast(appWindows(), 'scribe:email-state', emailService.accounts())
   // Contrato 12: o mesmo para as próximas reuniões e a faixa da agenda.
-  if (!status.locked && calendarService) broadcast(BrowserWindow.getAllWindows(), 'scribe:calendar-state', calendarService.view())
+  if (!status.locked && calendarService) broadcast(appWindows(), 'scribe:calendar-state', calendarService.view())
 }
 
 /** "Bloquear" pelo menu ou ⌘⇧L, pelo `powerMonitor` ou por falta de uso; só bloqueia com senha ou Touch ID. */
@@ -250,7 +287,7 @@ function openMainWindow(query?: Record<string, string>, invisible = false): Brow
     // No macOS o app segue aberto sem janela: as conversas do chat morrem em 5 min, como ao sair da tela.
     chatService?.leaveAll()
     // Contrato 23 (CA9): sem janela, o app fica só no ícone da barra de menus (sem Dock) ou sai, como a pessoa escolheu.
-    if (!BrowserWindow.getAllWindows().some((other) => other !== win && !other.isDestroyed())) void windowLifecycle?.lastWindowClosed()
+    if (!appWindows().some((other) => other !== win && !other.isDestroyed())) void windowLifecycle?.lastWindowClosed()
   })
   mainWindow = win
   return win
@@ -272,13 +309,13 @@ function showMainWindow(): BrowserWindow {
 }
 
 /** Manda ao renderer depois que a página carregou (janela recém-aberta). */
-function sendWhenLoaded<C extends 'scribe:navigate' | 'scribe:open-run' | 'scribe:open-whatsapp' | 'scribe:open-email'>(
+function sendWhenLoaded<C extends 'scribe:navigate' | 'scribe:open-run' | 'scribe:open-whatsapp' | 'scribe:open-meeting' | 'scribe:open-settings' | 'scribe:open-email'>(
   win: BrowserWindow,
   channel: C,
-  payload: C extends 'scribe:navigate' ? RouteId : C extends 'scribe:open-run' ? { runId: string | null } : C extends 'scribe:open-email' ? { accountId: string; id: string } : { chatId: string },
+  payload: MainEvents[C],
 ): void {
   const contents = win.webContents
-  const send = (): void => sendTo(contents, channel, payload as never)
+  const send = (): void => sendTo(contents, channel, payload)
   if (contents.isLoading()) contents.once('did-finish-load', send)
   else send()
 }
@@ -325,6 +362,30 @@ function recordFromCalendar(key: string): void {
   if (lockService?.isLocked() || recordingSessions.active()) return
   calendarService?.pick(key)
   startRecordingFromMenu().catch((error: unknown) => console.error('[agenda] gravar:', error))
+}
+
+/**
+ * "Começar a transcrever" do aviso de reunião (contrato 48): o mesmo caminho do "Gravar" da agenda. O app vem para a
+ * frente e começa a gravação; já gravando, ou com o app bloqueado, só vem para a frente. O título da reunião chega à
+ * gravação por `scribe:calendar-recording` (o controlador do aviso guarda até a sessão abrir).
+ */
+function recordFromMeetingPrompt(): void {
+  showMainWindow()
+  if (lockService?.isLocked() || recordingSessions.active()) return
+  startRecordingFromMenu().catch((error: unknown) => console.error('[aviso] gravar:', error))
+}
+
+/**
+ * Janela do aviso de reunião (contrato 48), na tela do cursor e no tema das Configurações. Fica fora de
+ * `appWindows()`; no smoke, invisível e registrada nas fixtures.
+ */
+function openMeetingPromptWindow(settings: MeetingPromptSettings): BrowserWindow {
+  const display = screen.getDisplayNearestPoint(screen.getCursorScreenPoint())
+  const theme = smoke ? 'light' : settings.theme === 'system' ? null : settings.theme
+  const win = createMeetingPromptWindow({ url: appUrl, appOrigin, workArea: display.workArea, theme, invisible: smoke })
+  meetingPromptWindows.add(win)
+  if (smokeFixtures) smokeFixtures.meetingPrompt.windows.push(win)
+  return win
 }
 
 /**
@@ -552,47 +613,112 @@ function trayImage(icon: TrayIcon): NativeImage {
   return image
 }
 
-/** Ícone da barra de menus. No smoke, um substituto que registra as imagens; o `Tray` de verdade nunca é criado. */
-function installTray(automations: AutomationsService): void {
+/**
+ * O que o menu do ícone lê de forma assíncrona (contrato 50), relido antes de cada montagem: as 3 reuniões gravadas
+ * mais recentes e as configurações que ele mostra.
+ */
+let trayRecent: TrayRecent[] = []
+let traySettings: Pick<AppSettings, 'meetingPrompt' | 'meetSpeakers' | 'navegadorPlugin'> | null = null
+/** Último "Meet conectado" visto: os eventos de fala chegam a todo instante e só a conexão muda o menu. */
+let trayMeetConnected = false
+
+/** Ícone da barra de menus. No smoke, um substituto que registra os itens; o `Tray` de verdade nunca é criado. */
+function installTray(services: AppServices): void {
+  const { automations, calendar, meetings, meet, meetingPrompt, settings } = services
   const fixtures = smokeFixtures
   const smokeTray = (image: unknown): TrayLike => {
     fixtures?.automations.trayImages.push(String(image))
     return {
       setImage: (next) => void fixtures?.automations.trayImages.push(String(next)),
       setToolTip: () => undefined,
-      on: () => undefined,
-      popUpContextMenu: () => undefined,
+      setContextMenu: () => undefined,
+      setTitle: (title) => void fixtures?.automations.trayTitles.push(title),
       destroy: () => undefined,
     }
   }
+  /** O item do menu montado: no Electron, pelo id; no smoke, o menu é o próprio template. */
+  const smokeItem = (items: MenuItemConstructorOptions[], id: string): MenuItemConstructorOptions | null => {
+    for (const item of items) {
+      if (item.id === id) return item
+      const found = Array.isArray(item.submenu) ? smokeItem(item.submenu, id) : null
+      if (found) return found
+    }
+    return null
+  }
   const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone
+  const locked = (): boolean => lockService?.isLocked() ?? false
   trayController = createTrayController({
     create: (image) => (fixtures ? smokeTray(image) : new Tray(image as NativeImage)),
     image: (icon) => (fixtures ? icon : trayImage(icon)),
     buildMenu: (template) => (fixtures ? template : Menu.buildFromTemplate(template)),
+    setLabel: (menu, id, label) => {
+      const item = fixtures ? smokeItem(menu as MenuItemConstructorOptions[], id) : (menu as Menu).getMenuItemById(id)
+      if (item) item.label = label
+    },
+    prepare: async () => {
+      traySettings = await settings.getSettings()
+      trayRecent = (await meetings.list()).slice(0, TRAY_LIST_MAX).map((meeting) => ({ id: meeting.id, title: meeting.title }))
+    },
     running: () => automations.snapshot().running.length > 0,
     state: () => {
       const status = automations.snapshot()
+      const isLocked = locked()
+      const startedAt = recordingSessions.active() !== null ? recordingStartedAt : null
+      const current = traySettings
       return {
         brandName,
-        locked: lockService?.isLocked() ?? false,
+        locked: isLocked,
         canLock: lastLockStatus?.canLock ?? false,
-        recording: recordingSessions.active() !== null && recordingStartedAt !== null ? { elapsedMs: Date.now() - recordingStartedAt } : null,
+        recording: startedAt !== null ? { elapsedMs: Date.now() - startedAt, title: isLocked ? null : (meetingPrompt.recordingTitle() ?? calendar.recordingCalendar()?.title ?? null) } : null,
         paused: status.paused,
         next: status.next.slice(0, 3).map((task) => ({ name: task.name, when: formatRunShort(Date.parse(task.at), timeZone) })),
+        // Bloqueado, nada da agenda nem das reuniões chega ao menu (o template também não mostra).
+        meetings: isLocked ? [] : todayMeetings(calendar.view().upcoming, Date.now()),
+        recent: isLocked ? [] : trayRecent,
+        meetingPrompt: current?.meetingPrompt ?? false,
+        plugins: [
+          ...(current?.meetSpeakers ? [{ name: 'Meet', connected: meet.status().connected }] : []),
+          ...(current?.navegadorPlugin ? [{ name: 'Navegador', connected: navegadorServer?.connected() ?? false }] : []),
+        ],
       }
     },
     handlers: {
       open: () => void showMainWindow(),
       newRecording: () => {
-        if (lockService?.isLocked()) return
+        if (locked()) return
         windowLifecycle?.reopened()
         startRecordingFromMenu().catch((error: unknown) => console.error('[barra de menus] nova gravação:', error))
       },
-      stopRecording: () => broadcast(BrowserWindow.getAllWindows(), 'scribe:recording-end', undefined),
+      openRecording: () => {
+        if (locked()) return
+        sendWhenLoaded(showMainWindow(), 'scribe:navigate', 'gravacao')
+      },
+      stopRecording: () => broadcast(appWindows(), 'scribe:recording-end', undefined),
+      // O mesmo caminho do "Gravar" da notificação da agenda (bloqueado ou já gravando, só mostra a janela).
+      recordEvent: (key) => recordFromCalendar(key),
+      joinEvent: (key) => {
+        if (locked()) return
+        const url = trayJoinUrl(calendar.joinUrl(key))
+        if (url) openExternal(url)
+      },
+      openMeeting: (id) => {
+        if (locked()) return
+        sendWhenLoaded(showMainWindow(), 'scribe:open-meeting', { meetingId: id })
+      },
+      toggleMeetingPrompt: () => {
+        if (locked()) return
+        void settings
+          .getSettings()
+          .then((current) => settings.updateSettings({ meetingPrompt: !current.meetingPrompt }))
+          .catch(() => undefined)
+      },
+      openPlugins: () => {
+        if (locked()) return
+        sendWhenLoaded(showMainWindow(), 'scribe:open-settings', { tab: 'plugins' })
+      },
       lock: () => lockApp('menu'),
       automations: () => {
-        if (lockService?.isLocked()) return
+        if (locked()) return
         sendWhenLoaded(showMainWindow(), 'scribe:navigate', 'automacoes')
       },
       togglePause: () => void automations.setPaused({ paused: !automations.snapshot().paused }).catch(() => undefined),
@@ -604,9 +730,23 @@ function installTray(automations: AutomationsService): void {
   })
 }
 
+/** Estado da ponte do navegador (contrato 46) para a tela. */
+function navegadorState(): NavegadorState {
+  return { ativo: navegadorAtivo, conectado: navegadorServer?.connected() ?? false }
+}
+
+/** Contrato 46: a ponte do navegador segue "Ativar ponte"; ligar ou desligar vai às janelas. */
+function applyNavegador(ativo: boolean): void {
+  if (ativo) void navegadorServer?.start().catch(() => null)
+  else void navegadorServer?.close().catch(() => undefined)
+  if (ativo === navegadorAtivo) return
+  navegadorAtivo = ativo
+  broadcast(appWindows(), 'scribe:navegador-changed', navegadorState())
+}
+
 /** Mudança de configuração vai para todas as janelas abertas; a marca vai para o título, o "Sobre" e o Dock. */
 function broadcastSettings(settings: AppSettings): void {
-  broadcast(BrowserWindow.getAllWindows(), 'scribe:settings-changed', settings)
+  broadcast(appWindows(), 'scribe:settings-changed', settings)
   applyBrand(settings)
   applyLoginItem(settings.openAtLogin)
   trayController?.refresh()
@@ -620,6 +760,12 @@ function broadcastSettings(settings: AppSettings): void {
   // Contrato 27: "Quem fala no Meet" desligado para o servidor local; ligado, ele sobe (se já não estiver no ar).
   if (settings.meetSpeakers) void meetServer?.start().catch(() => null)
   else void meetServer?.stop().catch(() => undefined)
+  // Contrato 48: "Avisar quando uma reunião começar" desligado fecha o aviso aberto.
+  if (!settings.meetingPrompt) meetingPromptController?.close()
+  // Contrato 49: e liga ou desliga o observador do microfone dos outros apps.
+  micWatchService?.apply(settings.meetingPrompt)
+  // Contrato 46: "Ativar ponte" ligado sobe a ponte do navegador; desligado, para (e recusa o comando em curso).
+  applyNavegador(settings.navegadorPlugin)
   // Contrato 40: o número do Dock segue "Notificações do WhatsApp" e "Só pessoas".
   refreshWhatsAppBadge()
 }
@@ -636,9 +782,9 @@ function applyBrand(settings: AppSettings): void {
   const { name } = brandTexts(settings)
   if (name !== brandName) {
     brandName = name
-    applyBrandName({ setAboutPanelOptions: (options) => app.setAboutPanelOptions(options), windows: BrowserWindow.getAllWindows(), version: app.getVersion() }, name)
+    applyBrandName({ setAboutPanelOptions: (options) => app.setAboutPanelOptions(options), windows: appWindows(), version: app.getVersion() }, name)
     // Bloqueado, o título segue com "— bloqueado".
-    if (lockService?.isLocked()) for (const win of BrowserWindow.getAllWindows()) win.setTitle(windowTitle())
+    if (lockService?.isLocked()) for (const win of appWindows()) win.setTitle(windowTitle())
   }
   updateDockIcon(settings.brandLogo)
 }
@@ -706,8 +852,18 @@ interface AppServices {
   automations: AutomationsService
   /** Servidor local da extensão do Meet (contrato 27). */
   meet: MeetServer
+  /** Aviso "Começar a transcrever" ao entrar numa reunião (contrato 48). */
+  meetingPrompt: MeetingPromptController
+  /** Microfone ligado por outro app, para o mesmo aviso (contrato 49). */
+  micWatch: MicWatchService
   /** "Salvar plugin…" da aba Plugins (contrato 31). */
   pluginSave: (input: unknown) => Promise<PluginSaveResult>
+  /** Servidores MCP do agente: a aba "Conexões" e as sessões (contrato 21). */
+  mcp: McpService
+  /** Ponte do "Controle do navegador" (contrato 46). */
+  navegador: NavegadorServer
+  /** Servidor MCP das ferramentas do navegador do Assistente (contrato 47). */
+  navegadorMcp: NavegadorMcpServer
 }
 
 /**
@@ -720,12 +876,12 @@ function bridgeSourceDir(): string {
 }
 
 /**
- * Pasta embutida de um plugin (contrato 31): o empacotado leva em `resources/meet-extension` dentro do `app.asar`
- * (pack.sh); em desenvolvimento e no smoke, a `extensions/meet` do repositório.
+ * Pasta embutida de um plugin (contrato 31): o empacotado leva em `resources/<id>-extension` dentro do `app.asar`
+ * (pack.sh); em desenvolvimento e no smoke, a `extensions/<id>` do repositório. Contrato 46: e o do navegador.
  */
 function pluginSourceDir(id: AppPluginId): string {
-  const packaged: Record<AppPluginId, string> = { meet: 'meet-extension' }
-  const repo: Record<AppPluginId, string> = { meet: 'meet' }
+  const packaged: Record<AppPluginId, string> = { meet: 'meet-extension', navegador: 'navegador-extension' }
+  const repo: Record<AppPluginId, string> = { meet: 'meet', navegador: 'navegador' }
   return app.isPackaged ? join(app.getAppPath(), 'resources', packaged[id]) : join(app.getAppPath(), '..', '..', 'extensions', repo[id])
 }
 
@@ -766,7 +922,7 @@ function createAppServices(userData: string): AppServices {
     openExternal: openBrowser,
     photoToDataUrl,
     onStatus: (status) => {
-      broadcast(BrowserWindow.getAllWindows(), 'scribe:google-state', status)
+      broadcast(appWindows(), 'scribe:google-state', status)
       calendarService?.accountsChanged()
     },
     onSignedIn: (email) => drive.signedIn(email),
@@ -780,7 +936,7 @@ function createAppServices(userData: string): AppServices {
     openExternal: openBrowser,
     photoToDataUrl,
     onStatus: (status) => {
-      broadcast(BrowserWindow.getAllWindows(), 'scribe:microsoft-state', status)
+      broadcast(appWindows(), 'scribe:microsoft-state', status)
       calendarService?.accountsChanged()
     },
   })
@@ -790,7 +946,7 @@ function createAppServices(userData: string): AppServices {
     enabled: async () => (await settings.get()).saveToDrive,
     files: { meetings, transcripts, summaries, notes, analyses },
     fetch: googleFetch,
-    onStatus: (meetingId, status) => broadcast(BrowserWindow.getAllWindows(), 'scribe:drive-state', { meetingId, status }),
+    onStatus: (meetingId, status) => broadcast(appWindows(), 'scribe:drive-state', { meetingId, status }),
     ...(app.isPackaged ? {} : { log: (message: string) => console.log(message) }),
   })
   driveService = drive
@@ -822,7 +978,7 @@ function createAppServices(userData: string): AppServices {
               version: profile.install.version,
               entry: profile.install.entry,
               label: profile.label,
-              onStatus: (status) => broadcast(BrowserWindow.getAllWindows(), 'scribe:acp-state', status),
+              onStatus: (status) => broadcast(appWindows(), 'scribe:acp-state', status),
               ...devLog,
             }),
             smokeAcp ? () => smokeAcp.entry : undefined,
@@ -833,8 +989,19 @@ function createAppServices(userData: string): AppServices {
   }
   const currentProfile = async (): Promise<AgentProfile> => agentProfile((await settings.get()).agentProfile)
   const acpAgent = { current: async (): Promise<AcpAgentService> => agentFor(await currentProfile()) }
+  // Contrato 21: os servidores MCP entram só nas sessões que pedem (chat das conversas e análise); o serviço nasce depois
+  // do `claude` (precisa achar o binário), então a fábrica lê por aqui.
+  const mcpRef: { current: McpService | null } = { current: null }
+  // Contrato 47: o servidor MCP local com as ferramentas do navegador, para a sessão do Assistente que abre com a ponte
+  // ligada e a extensão conectada. Sobe na primeira dessas sessões; cada uma tem o próprio token.
+  const navegadorMcp = createNavegadorMcpServer({ ponte: () => navegadorServer, ...devLog })
   const openAcp = acpOpener({
+    navegadorMcp,
     profile: currentProfile,
+    mcp: {
+      servers: async (use, off) => (mcpRef.current ? mcpRef.current.sessionServers(use, off) : []),
+      capabilities: (capabilities) => mcpRef.current?.agentCapabilities(capabilities),
+    },
     launch: processLauncher({
       execPath: process.execPath,
       entry: (profile) => agentFor(profile).entry(),
@@ -854,10 +1021,31 @@ function createAppServices(userData: string): AppServices {
     openAcp,
     acpAvailable: async () => (await acpAgent.current()).available(),
     ...(smokeClaude ? { candidates: smokeClaude.candidates, loginShell: false } : {}),
-    onState: (state) => broadcast(BrowserWindow.getAllWindows(), 'scribe:claude-state', state),
+    onState: (state) => broadcast(appWindows(), 'scribe:claude-state', state),
     // Custo nominal e trocas de processo só nos logs de desenvolvimento.
     ...(app.isPackaged ? {} : { log: (message: string) => console.log(message) }),
   })
+  // Contrato 21: os servidores MCP. Os do Claude CLI vêm do `claude mcp` (no smoke, do `claude` falso, que guarda tudo num
+  // arquivo do userData) e do arquivo dele (`~/.claude.json`); os do app, de `userData/mcp-servers.json`, com os segredos
+  // cifrados pelo Chaveiro (no smoke, o substituto em memória). Nada disso vai para log.
+  const smokeMcp = smokeFixtures ? writeSmokeMcpFixtures(userData, join(app.getAppPath(), 'test', 'fixtures', 'fake-mcp-server.mjs')) : null
+  const mcp = createMcpService({
+    store: createMcpStore({ dir: userData, safeStorage: smokeFixtures ? memorySafeStorage() : safeStorage, ...devLog }),
+    cli: createMcpCli({
+      exec: smokeClaude?.exec ?? nodeExecFile,
+      baseEnv: process.env,
+      configFile: smokeMcp?.cliFile ?? join(app.getPath('home'), '.claude.json'),
+      cwd: join(userData, CLAUDE_CWD_DIR, 'mcp'),
+      ...(smokeMcp ? { extraEnv: smokeMcp.env } : {}),
+    }),
+    locate: () => claude.locate(),
+    desktopConfig: smokeMcp?.desktopFile ?? join(app.getPath('appData'), 'Claude', 'claude_desktop_config.json'),
+    baseEnv: process.env,
+    // No smoke, sem o shell de login (o `PATH` do próprio processo).
+    loginPath: smokeFixtures ? async () => process.env['PATH'] ?? '/usr/bin:/bin' : loginPathOnce(nodeExecFile, process.env),
+    ...devLog,
+  })
+  mcpRef.current = mcp
   // WhatsApp pessoal (contrato 24): desligado por padrão; o serviço é processo filho, só depois de "Instalar" e
   // "Ligar". No smoke, o cliente falso (`backend_fake.py`) e um índice de pacotes falso numa pasta local: nenhum
   // neonize, nenhuma rede, nenhum número de verdade.
@@ -912,19 +1100,28 @@ function createAppServices(userData: string): AppServices {
     transcribe: (bytes) => fileTranscriber.transcribe(bytes),
     // Bloqueado (contrato 22), nada do WhatsApp vai às janelas; o serviço segue conectado.
     onStatus: (status) => {
-      if (!lockService?.isLocked()) broadcast(BrowserWindow.getAllWindows(), 'scribe:whatsapp-state', status)
+      if (!lockService?.isLocked()) broadcast(appWindows(), 'scribe:whatsapp-state', status)
       refreshWhatsAppBadge()
     },
     // Contrato 40: a notificação sai também com o app bloqueado (sem o texto); o número do Dock é relido.
     onMessage: (message, chatName) => {
-      if (!lockService?.isLocked()) broadcast(BrowserWindow.getAllWindows(), 'scribe:whatsapp-message', { message, chatName })
+      if (!lockService?.isLocked()) broadcast(appWindows(), 'scribe:whatsapp-message', { message, chatName })
       notifyWhatsApp(message, chatName).catch((error: unknown) => console.error('[whatsapp] notificação:', error))
       refreshWhatsAppBadge()
     },
     onChatsChanged: () => {
-      if (!lockService?.isLocked()) broadcast(BrowserWindow.getAllWindows(), 'scribe:whatsapp-chats-changed', undefined)
+      if (!lockService?.isLocked()) broadcast(appWindows(), 'scribe:whatsapp-chats-changed', undefined)
       refreshWhatsAppBadge()
     },
+    // Contrato 34: as reações e o "digitando…" dos outros, só com o app desbloqueado; o seu "digitando…" só com o
+    // interruptor ligado (lido a cada vez).
+    onReactions: (update) => {
+      if (!lockService?.isLocked()) broadcast(appWindows(), 'scribe:whatsapp-reactions', update)
+    },
+    onPresence: (presence) => {
+      if (!lockService?.isLocked()) broadcast(appWindows(), 'scribe:whatsapp-presence', presence)
+    },
+    typingEnabled: async () => (await settings.get()).whatsappTypingSignal,
     // Só estados, nunca texto de mensagem.
     ...(app.isPackaged ? {} : { log: (message: string) => console.log(message) }),
   })
@@ -942,15 +1139,15 @@ function createAppServices(userData: string): AppServices {
       : (url, { signal }) => netFetch(url, { method: 'GET', headers: { accept: 'application/xml' }, signal, redirect: 'error' }),
     // Bloqueado (contrato 22), nada do email vai às janelas; as contas seguem conectadas.
     onStatus: (statuses) => {
-      if (!lockService?.isLocked()) broadcast(BrowserWindow.getAllWindows(), 'scribe:email-state', statuses)
+      if (!lockService?.isLocked()) broadcast(appWindows(), 'scribe:email-state', statuses)
     },
     // Contrato 43: a notificação sai também com o app bloqueado (sem o assunto).
     onMessage: (message) => {
-      if (!lockService?.isLocked()) broadcast(BrowserWindow.getAllWindows(), 'scribe:email-message', message)
+      if (!lockService?.isLocked()) broadcast(appWindows(), 'scribe:email-message', message)
       notifyEmail(message).catch((error: unknown) => console.error('[email] notificação:', error))
     },
     onMessagesChanged: (accountId) => {
-      if (!lockService?.isLocked()) broadcast(BrowserWindow.getAllWindows(), 'scribe:email-changed', { accountId })
+      if (!lockService?.isLocked()) broadcast(appWindows(), 'scribe:email-changed', { accountId })
     },
     // Só estados e tipos de erro, nunca senha, endereço ou texto de mensagem.
     ...(app.isPackaged ? {} : { log: (message: string) => console.log(message) }),
@@ -1058,8 +1255,10 @@ function createAppServices(userData: string): AppServices {
     locate: () => claude.locate(),
     spawn: smokeClaude?.spawn ?? nodeSpawnClaude,
     openAcp,
+    // Contrato 47: a ponte do navegador conectada agora (a sessão do Assistente abre com as ferramentas dela).
+    navegador: { connected: () => navegadorServer?.connected() ?? false },
     baseEnv: process.env,
-    onEvent: (event) => broadcast(BrowserWindow.getAllWindows(), 'scribe:chat-event', event),
+    onEvent: (event) => broadcast(appWindows(), 'scribe:chat-event', event),
     clipboard: appClipboard,
     // Custo nominal e ferramentas negadas só nos logs de desenvolvimento; nunca o texto das reuniões.
     ...(app.isPackaged ? {} : { log: (message: string) => console.log(message) }),
@@ -1087,7 +1286,7 @@ function createAppServices(userData: string): AppServices {
         void corpus.sync(meetingId).catch(() => undefined)
         void drive.enqueue(meetingId, ['summary']).catch(() => undefined)
       }
-      broadcast(BrowserWindow.getAllWindows(), 'scribe:summary-state', { meetingId, status })
+      broadcast(appWindows(), 'scribe:summary-state', { meetingId, status })
     },
     ...(app.isPackaged ? {} : { log: (message: string) => console.log(message) }),
   })
@@ -1106,7 +1305,7 @@ function createAppServices(userData: string): AppServices {
     userData,
     baseEnv: process.env,
     clipboard: appClipboard,
-    onChange: (meetingId) => broadcast(BrowserWindow.getAllWindows(), 'scribe:analyses-changed', { meetingId }),
+    onChange: (meetingId) => broadcast(appWindows(), 'scribe:analyses-changed', { meetingId }),
     ...(app.isPackaged ? {} : { log: (message: string) => console.log(message) }),
   })
   // IA anotando ao vivo (contrato 30): o mesmo motor, um ciclo a cada 5 min com o interruptor da gravação ligado.
@@ -1191,7 +1390,7 @@ function createAppServices(userData: string): AppServices {
       : (path) => shell.openPath(path),
     quit: smokeFixtures ? () => void smokeFixtures.updates.quitRequests++ : () => app.quit(),
     autoCheck: async () => (await settings.get()).autoCheckUpdates,
-    onState: (state) => broadcast(BrowserWindow.getAllWindows(), 'scribe:update-state', state),
+    onState: (state) => broadcast(appWindows(), 'scribe:update-state', state),
     ...(app.isPackaged ? {} : { log: (message: string) => console.log(message) }),
   })
   // Bloqueio do app (contrato 22). No smoke, Touch ID substituto e relógio que o smoke adianta (a espera de
@@ -1220,7 +1419,7 @@ function createAppServices(userData: string): AppServices {
   if (smokeLock) smokeLock.refresh = () => void lock.refresh().catch(() => undefined)
   // Automações (contrato 23): cada execução é uma sessão ACP própria, com a política do chat (só leitura dentro
   // da pasta); as saídas ficam neste Mac. O WhatsApp não entra aqui: nenhum agente alcança o envio dele. O email só
-  // com a permissão do contrato 46. No smoke, o relógio do agendador é o que o smoke adianta.
+  // com a permissão do contrato 51. No smoke, o relógio do agendador é o que o smoke adianta.
   const smokeAutomations = smokeFixtures?.automations
   const automations = createAutomationsService({
     agents: createFileAgentsStore({ dir: userData }),
@@ -1239,7 +1438,7 @@ function createAppServices(userData: string): AppServices {
             pending.add(noteId)
             agentNotes.set(meetingId, pending)
             void corpus.sync(meetingId).catch(() => undefined)
-            if (!lockService?.isLocked()) broadcast(BrowserWindow.getAllWindows(), 'scribe:notes-changed', { meetingId })
+            if (!lockService?.isLocked()) broadcast(appWindows(), 'scribe:notes-changed', { meetingId })
           },
           ...(smokeAutomations ? { now: () => Date.now() + smokeAutomations.skewMs } : {}),
         },
@@ -1250,15 +1449,15 @@ function createAppServices(userData: string): AppServices {
     timeZone,
     onChange: (status) => {
       trayController?.refresh()
-      if (!lockService?.isLocked()) broadcast(BrowserWindow.getAllWindows(), 'scribe:automations-changed', status)
+      if (!lockService?.isLocked()) broadcast(appWindows(), 'scribe:automations-changed', status)
     },
     // Bloqueado, nada da resposta vai às janelas; a execução continua e fica no histórico.
     onEvent: (event) => {
       if (event.type === 'done') trayController?.refresh()
-      if (!lockService?.isLocked()) broadcast(BrowserWindow.getAllWindows(), 'scribe:automation-event', event)
+      if (!lockService?.isLocked()) broadcast(appWindows(), 'scribe:automation-event', event)
     },
     ...(smokeAutomations ? { now: () => Date.now() + smokeAutomations.skewMs } : {}),
-    // Contrato 46: só a tarefa com "Pode enviar email" envia, sem clique, pelo caminho interno do email (nunca pelo IPC),
+    // Contrato 51: só a tarefa com "Pode enviar email" envia, sem clique, pelo caminho interno do email (nunca pelo IPC),
     // depois das regras da permissão a cada envio; e lê o email com as mesmas ferramentas do Assistente. Bloqueado, nada.
     email: {
       send: (request) => email.sendForTask(request),
@@ -1278,20 +1477,87 @@ function createAppServices(userData: string): AppServices {
     notify: showCalendarNotice,
     // Bloqueado (contrato 22), nada da agenda vai às janelas; ao desbloquear, o estado de agora.
     onView: (view) => {
-      if (!lockService?.isLocked()) broadcast(BrowserWindow.getAllWindows(), 'scribe:calendar-state', view)
+      // Contrato 50: as reuniões de hoje no menu do ícone (que não mostra nada bloqueado).
+      trayController?.refresh()
+      if (!lockService?.isLocked()) broadcast(appWindows(), 'scribe:calendar-state', view)
     },
     ...devLog,
   })
   calendarService = calendar
   // Contrato 27: a extensão do Meet manda nomes e eventos de fala. Vai às janelas também com o app bloqueado: a
   // gravação continua no bloqueio e o renderer carimba cada evento quando ele chega. Nada volta à extensão.
+  // Contrato 48: cada mudança também passa pelo aviso "Começar a transcrever" (a janela dele não recebe o evento).
+  const meetingPrompt = createMeetingPromptController({
+    settings: () => settings.get(),
+    recording: () => recordingSessions.active() !== null,
+    locked: () => lockService?.isLocked() ?? false,
+    openWindow: (current) => {
+      const win = openMeetingPromptWindow(current)
+      const contentsId = win.webContents.id
+      return {
+        // Pelo id do `webContents` (único por página), como o WhatsApp confere o clique da janela.
+        isSender: (sender) => !win.isDestroyed() && typeof sender === 'object' && sender !== null && (sender as { id?: unknown }).id === contentsId,
+        close: () => {
+          if (!win.isDestroyed()) win.destroy()
+        },
+        onClosed: (listener) => void win.once('closed', listener),
+        // Só para esta janela: o `broadcast` nunca a alcança.
+        update: (state) => sendTo(win.webContents, 'scribe:meeting-prompt-changed', state),
+      }
+    },
+    record: recordFromMeetingPrompt,
+    disable: () => settings.update({ meetingPrompt: false }),
+  })
+  meetingPromptController = meetingPrompt
+  // Contrato 49: o microfone ligado por outro app (Zoom, FaceTime…) também passa pelo aviso. No smoke, o binário falso
+  // (test/fixtures/fake-mic-watch.mjs), que repete as linhas que o smoke escreve no arquivo das fixtures.
+  const micWatch = createMicWatchService({
+    command: smokeFixtures
+      ? async () => ({ file: process.execPath, args: [join(app.getAppPath(), 'test', 'fixtures', 'fake-mic-watch.mjs')], env: { ELECTRON_RUN_AS_NODE: '1', FAKE_MIC_WATCH_FILE: smokeFixtures.micWatch.file } })
+      : async () => {
+          const file = await locateMicWatch({
+            platform: process.platform,
+            arch: process.arch,
+            systemVersion: process.getSystemVersion(),
+            packaged: app.isPackaged,
+            resourcesPath: process.resourcesPath,
+            appPath: app.getAppPath(),
+            log: (message) => console.warn(message),
+          })
+          return file ? { file, args: [], env: { PATH: '/usr/bin:/bin' } } : null
+        },
+    onState: (state) => void meetingPrompt.micChanged(state),
+    log: (message) => console.warn(message),
+  })
+  micWatchService = micWatch
   const meet = createMeetServer({
     // Smoke: portas fora da faixa da extensão, para o Chrome de verdade nunca falar com ele.
     ...(smoke ? { ports: SMOKE_MEET_PORTS } : {}),
-    onChange: (state) => broadcast(BrowserWindow.getAllWindows(), 'scribe:meet-changed', state),
+    onChange: (state) => {
+      broadcast(appWindows(), 'scribe:meet-changed', state)
+      void meetingPrompt.meetChanged(state)
+      // Contrato 50: "Meet: conectado" no menu do ícone; só a conexão muda o menu.
+      if (state.connected !== trayMeetConnected) {
+        trayMeetConnected = state.connected
+        trayController?.refresh()
+      }
+    },
     ...devLog,
   })
   meetServer = meet
+  // Contrato 46: a ponte do "Controle do navegador". Conectar e desconectar vai às janelas; os comandos só saem do
+  // main (neste contrato, nenhum consumidor ainda).
+  const navegador = createNavegadorServer({
+    // Smoke: portas fora da faixa da extensão, como no Meet.
+    ...(smoke ? { ports: SMOKE_NAVEGADOR_PORTS } : {}),
+    onChange: () => {
+      broadcast(appWindows(), 'scribe:navegador-changed', navegadorState())
+      // Contrato 50: "Navegador: conectado" no menu do ícone.
+      trayController?.refresh()
+    },
+    ...devLog,
+  })
+  navegadorServer = navegador
   // Contrato 25: o clique nos cartões do Assistente. O lembrete é a tarefa "uma vez" sem agente das Automações.
   const chatActions = createChatActions({ store: chatStore, createReminder: (input) => automations.createReminder(input), timeZone })
   return {
@@ -1324,7 +1590,12 @@ function createAppServices(userData: string): AppServices {
     email,
     automations,
     meet,
+    meetingPrompt,
+    micWatch,
     pluginSave,
+    mcp,
+    navegador,
+    navegadorMcp,
   }
 }
 
@@ -1437,7 +1708,7 @@ function openExternal(url: string): void {
 }
 
 function registerIpc(services: AppServices): void {
-  const { settings, meetings, meetingsService, meetingsIndex, tokenClient, translation, claude, files, summary, analysis, aiNotes, download, branding, updates, chat, chatActions, corpus, acp, lock, google, drive, microsoft, calendar, whatsapp, whatsappInsights, email, automations, meet, pluginSave } = services
+  const { settings, meetings, meetingsService, meetingsIndex, tokenClient, translation, claude, files, summary, analysis, aiNotes, download, branding, updates, chat, chatActions, corpus, acp, lock, google, drive, microsoft, calendar, whatsapp, whatsappInsights, email, automations, meet, meetingPrompt, pluginSave, mcp } = services
   /** Reunião salva, renomeada ou com anotações novas: o `.md` dela no acervo do chat é reescrito. */
   const touched = (meetingId: string): void => void corpus.sync(meetingId).catch(() => undefined)
   /**
@@ -1474,11 +1745,14 @@ function registerIpc(services: AppServices): void {
     // Contrato 12 (CA9): a reunião da gravação em curso leva o evento da agenda, que o main decidiu ao começar.
     const meeting = await meetings.create(input, { calendar: recordingSessions.active() ? calendar.recordingCalendar() : null })
     touched(meeting.id)
+    // Contrato 50: "Recentes" no menu do ícone.
+    trayController?.refresh()
     return meeting
   })
   handle('scribe:meetings-rename', appOrigin, async (_event, { id, title }) => {
     const meeting = await meetings.rename(id, title)
     if (meeting) touched(meeting.id)
+    trayController?.refresh()
     return meeting
   })
   // Excluir a reunião apaga também a transcrição, o resumo e as anotações internos dela; os arquivos da pasta ficam.
@@ -1486,6 +1760,7 @@ function registerIpc(services: AppServices): void {
     const deleted = await meetingsService.deleteMeeting(id)
     // Contrato 24: a conversa do WhatsApp ligada a ela sai junto.
     if (deleted) await whatsapp.removeMeeting(id).catch(() => undefined)
+    trayController?.refresh()
     return deleted
   })
   handle('scribe:meetings-overview', appOrigin, () => meetingsIndex.overview())
@@ -1602,6 +1877,24 @@ function registerIpc(services: AppServices): void {
   // Assistente (contrato 25): o cartão só grava o clique; o envio segue só por `scribe:whatsapp-send`.
   handle('scribe:chat-action-reminder', appOrigin, (_event, request) => chatActions.reminder(request))
   handle('scribe:chat-action-state', appOrigin, (_event, request) => chatActions.setState(request))
+  // Contrato 21: o cartão de aprovação de uma ferramenta MCP e a aba "Conexões". Nenhum segredo volta por aqui.
+  handle('scribe:chat-approval', appOrigin, (_event, request) => chat.answerApproval(request))
+  handle('scribe:mcp-chat-servers', appOrigin, () => mcp.chatServers())
+  handle('scribe:mcp-overview', appOrigin, (_event, request) => mcp.overview(request))
+  handle('scribe:mcp-test', appOrigin, (_event, request) => mcp.test(request))
+  // Mudou o que vale para o MCP: as sessões de chat abertas fecham e a próxima pergunta abre com o que vale agora.
+  const mcpChanging = async <T>(change: Promise<T>): Promise<T> => {
+    try {
+      return await change
+    } finally {
+      chat.mcpChanged()
+    }
+  }
+  handle('scribe:mcp-save', appOrigin, (_event, request) => mcpChanging(mcp.save(request)))
+  handle('scribe:mcp-update', appOrigin, (_event, request) => mcpChanging(mcp.update(request)))
+  handle('scribe:mcp-remove', appOrigin, (_event, request) => mcpChanging(mcp.remove(request)))
+  handle('scribe:mcp-details', appOrigin, (_event, request) => mcp.details(request))
+  handle('scribe:mcp-import', appOrigin, (_event, request) => mcpChanging(mcp.importFound(request)))
   // Bloqueio (contrato 22): a senha só passa por aqui até o serviço, que confere com o hash.
   handle('scribe:lock-status', appOrigin, () => lock.status())
   handle('scribe:lock-now', appOrigin, () => lock.lock('button'))
@@ -1635,11 +1928,23 @@ function registerIpc(services: AppServices): void {
     return true
   })
   handle('scribe:calendar-recording', appOrigin, () => {
-    const event = recordingSessions.active() ? calendar.recordingCalendar() : null
-    return event?.title ? { title: event.title } : null
+    if (!recordingSessions.active()) return null
+    // Contrato 48: começou pelo aviso, o título da reunião dele vence o da agenda; senão, o da agenda.
+    const title = recordingTitleFor(meetingPrompt.recordingTitle(), calendar.recordingCalendar()?.title)
+    return title ? { title } : null
   })
   handle('scribe:meet-status', appOrigin, () => meet.status())
+  // Contrato 48: os dois canais do aviso de reunião; o controlador confere que quem pede é a janela do aviso.
+  handle('scribe:meeting-prompt-state', appOrigin, (event) => meetingPrompt.state(event.sender))
+  handle('scribe:meeting-prompt-act', appOrigin, (event, request) => meetingPrompt.act(event.sender, request))
   handle('scribe:plugin-save', appOrigin, (_event, request) => pluginSave(request))
+  // Contrato 46: o estado da ponte do navegador e o "Ativar ponte" (grava a configuração; o servidor segue ela).
+  handle('scribe:navegador-status', appOrigin, () => navegadorState())
+  handle('scribe:navegador-set', appOrigin, async (_event, request) => {
+    const ativo = parseNavegadorSet(request)
+    if (ativo !== null) await settings.updateSettings({ navegadorPlugin: ativo })
+    return navegadorState()
+  })
   handle('scribe:drive-status', appOrigin, (_event, request) => drive.status((request as { meetingId?: unknown } | undefined)?.meetingId))
   handle('scribe:drive-retry', appOrigin, (_event, request) => drive.retry((request as { meetingId?: unknown } | undefined)?.meetingId))
   handle('scribe:drive-open', appOrigin, (_event, request) => {
@@ -1669,6 +1974,9 @@ function registerIpc(services: AppServices): void {
   handle('scribe:whatsapp-send', appOrigin, (event, request) => whatsapp.send(event.sender.id, request))
   // Contrato 39: o anexo, pelo mesmo guarda do clique; o clipe só devolve o arquivo conferido para a prévia.
   handle('scribe:whatsapp-send-media', appOrigin, (event, request) => whatsapp.sendMedia(event.sender.id, request))
+  // Contrato 34: a reação é envio (o token de clique desta janela, no mesmo guarda); o "digitando…" só com o interruptor.
+  handle('scribe:whatsapp-react', appOrigin, (event, request) => whatsapp.react(event.sender.id, request))
+  handle('scribe:whatsapp-typing', appOrigin, (_event, request) => whatsapp.typing(request).catch(() => false))
   handle('scribe:whatsapp-attach-pick', appOrigin, async () => {
     const path = await chooseWhatsAppAttachment()
     return path ? readAttachment(path).catch(() => ({ ok: false, error: 'type' }) as const) : null
@@ -1736,6 +2044,10 @@ function registerIpc(services: AppServices): void {
     const token = recordingSessions.open(event.sender)
     // Contrato 12 (CA9): o evento da agenda desta gravação (o do "Gravar" ou o que está acontecendo).
     calendar.recordingStarted()
+    // Contrato 48: o aviso de reunião fecha e o título dele (se a gravação veio do aviso) fica para esta gravação.
+    meetingPrompt.recordingStarted()
+    // Contrato 50: o tempo aparece ao lado do ícone e o menu ganha "Gravando".
+    trayController?.refresh()
     return token
   })
   handle('scribe:recording-session-close', appOrigin, (_event, request) => recordingSessions.close((request as { token?: unknown } | undefined)?.token))
@@ -1810,7 +2122,7 @@ function installMenu(): void {
 // para "(incompleto)" ao abrir. Ela sai e a primeira vem para a frente.
 if (!whatsappInstallTest && !app.requestSingleInstanceLock()) app.quit()
 app.on('second-instance', () => {
-  const window = BrowserWindow.getAllWindows()[0]
+  const window = appWindows()[0]
   // Contrato 23: só no ícone da barra de menus (sem janela), abrir o app de novo traz a janela.
   if (!window) {
     if (app.isReady() && !smoke) showMainWindow()
@@ -1846,6 +2158,10 @@ void app.whenReady().then(async () => {
   void services.email.init().catch(() => undefined)
   // Contrato 27: o servidor da extensão do Meet, com "Quem fala no Meet" ligado (padrão).
   if ((await services.settings.getSettings()).meetSpeakers) void services.meet.start().catch(() => null)
+  // Contrato 49: o observador do microfone, com "Avisar quando uma reunião começar" ligado (padrão).
+  services.micWatch.apply((await services.settings.getSettings()).meetingPrompt)
+  // Contrato 46: a ponte do navegador, só com "Ativar ponte" ligado (padrão desligado).
+  applyNavegador((await services.settings.getSettings()).navegadorPlugin)
   // Marca gravada: título da primeira janela, "Sobre" e ícone do Dock antes de abrir.
   applyBrand(await services.settings.getSettings())
   // Fila do Drive deixada por uma execução anterior (contrato 11): continua sozinha, também bloqueado.
@@ -1879,6 +2195,9 @@ void app.whenReady().then(async () => {
     void services.whatsapp.dispose()
     void services.email.dispose()
     void services.meet.stop()
+    void services.micWatch.dispose()
+    void services.navegador.close()
+    void services.navegadorMcp.close()
     disposeWhatsAppBadge()
   })
   installMenu()
@@ -1905,7 +2224,7 @@ void app.whenReady().then(async () => {
     },
   })
   applyLoginItem((await services.settings.getSettings()).openAtLogin)
-  installTray(services.automations)
+  installTray(services)
   applyLockStatus(lockAtLaunch)
   // Agendador (CA5): confere já (horários perdidos com o app fechado) e a cada 30 s.
   services.automations.start()
@@ -1945,6 +2264,7 @@ void app.whenReady().then(async () => {
       tray: () => trayController,
       calendar: services.calendar,
       meet: services.meet,
+      navegador: services.navegador,
     })
     // `app.exit` não passa por `will-quit`.
     services.calendar.dispose()
@@ -1962,6 +2282,9 @@ void app.whenReady().then(async () => {
     await services.email.dispose()
     disposeWhatsAppBadge()
     await services.meet.stop()
+    await services.micWatch.dispose()
+    await services.navegador.close()
+    await services.navegadorMcp.close()
     app.exit(code)
     return
   }
@@ -1973,7 +2296,7 @@ void app.whenReady().then(async () => {
   // Primeira consulta 30 s depois de abrir e a cada 6 h. O smoke não agenda: só o botão consulta.
   services.updates.start()
   app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) showMainWindow()
+    if (appWindows().length === 0) showMainWindow()
   })
 })
 

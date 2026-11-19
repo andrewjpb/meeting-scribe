@@ -149,7 +149,7 @@ export const taskReminderSchema = z
   .strict()
 
 /**
- * Contrato 46: "Pode enviar email". A conta, de 1 a 50 destinatários permitidos (endereços exatos e domínios
+ * Contrato 51: "Pode enviar email". A conta, de 1 a 50 destinatários permitidos (endereços exatos e domínios
  * `@empresa.com`, gravados em minúsculas, sem repetir) e o teto de envios por execução (1 a 20).
  */
 const taskEmailFields = {
@@ -172,7 +172,7 @@ export const taskSchema = z
     // O lembrete (contrato 25) não tem agente: `agentId` vazio.
     agentId: z.union([automationIdSchema, z.literal('')]),
     reminder: taskReminderSchema.nullable().default(null),
-    // Contrato 46: tarefa salva antes (sem o campo) não envia nada.
+    // Contrato 51: tarefa salva antes (sem o campo) não envia nada.
     email: taskEmailSchema.nullable().default(null),
     lastRunAt: isoDate.nullable(),
     nextRunAt: isoDate.nullable(),
@@ -222,7 +222,7 @@ export const runSchema = z
     error: z.string().max(TASK_ERROR_MAX).nullable(),
     meetingId: meetingIdSchema.nullable(),
     outputResult: z.string().max(500).nullable(),
-    // Contrato 46: os envios e as recusas da execução.
+    // Contrato 51: os envios e as recusas da execução.
     emails: z.array(runEmailSchema).max(RUN_EMAILS_MAX).optional(),
   })
   .strict()

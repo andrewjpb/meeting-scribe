@@ -20,9 +20,27 @@
 // dois passam pelo `session/request_permission`, a não ser o `WebFetch` de uns sites de documentação que o `claude`
 // abre sem perguntar ("preapproved hosts"); uma regra `ask` em `settings.permissions` é conferida antes dessa lista e
 // faz ele perguntar sempre.
+//
+// Contrato 21 (MCP), conferido no adaptador 0.107.0: os `mcpServers` do `session/new` viram o `mcpServers` do Agent SDK
+// (stdio `{ command, args, env }`; HTTP e SSE `{ type, url, headers }`; outro transporte fica de fora) e vão ao `claude`
+// por `--mcp-config`; com `strictMcpConfig: true`, só esses valem (nem os do `~/.claude.json` nem os de `.mcp.json`), e
+// `settingSources: []` continua deixando as configurações pessoais de fora. O `initialize` anuncia
+// `mcpCapabilities: { http: true, sse: true }`. `tools` só escolhe as ferramentas embutidas: as do MCP chegam pelos
+// servidores, com o nome `mcp__<servidor>__<ferramenta>`, e passam pelo `session/request_permission` (regra `ask` por
+// servidor); as de política "Negar" vão também em `disallowedTools`.
+//
+// Contrato 47 (plugin-navegador), conferido no adaptador 0.107.0: o `initialize` dele anuncia `mcpCapabilities: { http:
+// true, sse: true }` e o `sdkMcpServers` (`dist/mcp-servers.js`) passa uma entrada `{ type: "http", name, url, headers }`
+// do `session/new` ao Agent SDK com a url e os cabeçalhos; por isso o servidor local do navegador vai direto por HTTP,
+// sem proxy stdio. `tools` é só o conjunto das ferramentas próprias do `claude` (o MCP vem à parte), então as 7 entram
+// em `allowedTools` e em `settings.permissions.allow` (o `claude` não pergunta), e `strictMcpConfig` segue ligado. A
+// chamada chega como `tool_call` com `name: "mcp__navegador__<ferramenta>"`, `rawInput` com os argumentos e o
+// resultado no `content` do `tool_call_update`.
+import { mcpToolKey, mcpToolOf } from '../../../shared/mcp'
 import { AGENT_PROFILE_LABELS } from '../../../shared/settings-defaults'
 import { claudeEnv } from '../../claude-cli/locate'
 import type { AcpPackage } from '../install'
+import { NAVEGADOR_MCP_SERVER, NAVEGADOR_MCP_TOOLS, navegadorRequested, navegadorToolOf } from '../navegador'
 import { webToolOf } from '../web'
 import type { AgentProfile, KnownToolCall, StepTool } from './types'
 
@@ -87,6 +105,8 @@ const isRecord = (value: unknown): value is Record<string, unknown> => typeof va
 function toolName(call: KnownToolCall): StepTool | null {
   const web = webToolOf(call)
   if (web) return web
+  const navegador = navegadorToolOf(call)
+  if (navegador) return navegador
   const name = call.name ?? (call.kind === 'read' ? 'Read' : call.kind === 'search' ? (call.title?.startsWith('Find') ? 'Glob' : 'Grep') : null)
   return name === 'Read' || name === 'Grep' || name === 'Glob' ? name : null
 }
@@ -98,12 +118,30 @@ export const claudeProfile: AgentProfile = {
   bundledPackage: '@agentclientprotocol/claude-agent-acp',
   // `claudeEnv` (sem nada do app) e o `claude` que o adaptador deve rodar.
   env: (baseEnv, cliPath) => ({ ...claudeEnv(baseEnv, cliPath), CLAUDE_CODE_EXECUTABLE: cliPath }),
-  newSession: (request) => {
+  newSession: (request, local = {}) => {
     // Contrato 26: só o chat com as ferramentas de leitura recebe a internet.
     const web = request.web === true && request.purpose === 'chat' && request.tools === 'read'
+    // Contrato 21: os servidores MCP só no chat e na análise; sem nenhum, a sessão é a mesma do contrato 17. O nome
+    // `navegador` é do servidor local do contrato 47: um servidor da pessoa com esse nome fica de fora (a sessão já o
+    // tira em `useMcp`; aqui de novo porque as ferramentas dele cairiam na regra `allow` do navegador).
+    const mcp = (request.purpose === 'chat' || request.purpose === 'analysis' ? (request.mcpServers ?? []) : []).filter((server) => server.name !== NAVEGADOR_MCP_SERVER)
+    const mcpDenied = mcp.flatMap((server) => Object.entries(server.toolPolicy).flatMap(([tool, policy]) => (policy === 'deny' ? [`mcp__${server.name}__${mcpToolKey(tool)}`] : [])))
+    // Contrato 47: o navegador, só com a sessão pedindo e o servidor local aberto para ela.
+    const navegador = navegadorRequested(request) ? (local.navegador ?? null) : null
+    const ask = [...(web ? CLAUDE_WEB_TOOLS : []), ...mcp.map((server) => `mcp__${server.name}`)]
+    const permissions = {
+      // Toda busca, toda página e toda ferramenta MCP pedem permissão ao app, inclusive as que o `claude` liberaria
+      // sozinho; as 7 do navegador passam sem perguntar.
+      ...(ask.length ? { ask } : {}),
+      ...(navegador ? { allow: [...NAVEGADOR_MCP_TOOLS] } : {}),
+    }
+    const disallowed = web ? CLAUDE_DISALLOWED_TOOLS.filter((tool) => !(CLAUDE_WEB_TOOLS as readonly string[]).includes(tool)) : [...CLAUDE_DISALLOWED_TOOLS]
     return {
       cwd: request.cwd,
-      mcpServers: [],
+      mcpServers: [
+        ...mcp.map((server) => server.definition),
+        ...(navegador ? [{ type: 'http' as const, name: NAVEGADOR_MCP_SERVER, url: navegador.url, headers: [{ name: 'Authorization', value: `Bearer ${navegador.token}` }] }] : []),
+      ],
       // Aplicadas na criação, em ordem; valor que o adaptador não oferece é ignorado por ele.
       configOptions: [
         { configId: 'mode', value: 'default' },
@@ -115,9 +153,9 @@ export const claudeProfile: AgentProfile = {
           options: {
             settingSources: [],
             tools: request.tools === 'read' ? [...CLAUDE_READ_TOOLS, ...(web ? CLAUDE_WEB_TOOLS : [])] : [],
-            disallowedTools: web ? CLAUDE_DISALLOWED_TOOLS.filter((tool) => !(CLAUDE_WEB_TOOLS as readonly string[]).includes(tool)) : [...CLAUDE_DISALLOWED_TOOLS],
-            // Toda busca e toda página pedem permissão ao app, inclusive as que o `claude` abriria sozinho.
-            ...(web ? { settings: { permissions: { ask: [...CLAUDE_WEB_TOOLS] } } } : {}),
+            disallowedTools: [...disallowed, ...mcpDenied],
+            ...(navegador ? { allowedTools: [...NAVEGADOR_MCP_TOOLS] } : {}),
+            ...(ask.length || navegador ? { settings: { permissions } } : {}),
             model: request.model,
             systemPrompt: request.systemPrompt,
             strictMcpConfig: true,
@@ -135,6 +173,10 @@ export const claudeProfile: AgentProfile = {
   unsafeMode: (session) => (session.option('mode') === 'default' ? null : `o agente não confirmou o modo de permissão "default" (${String(session.option('mode'))})`),
   readTools: { Read: 'read', Grep: 'search', Glob: 'search' },
   stepOf: (call) => {
+    // Contrato 21: ferramenta de um servidor MCP ("Usando <ferramenta> (<servidor>)"); as do navegador (contrato 47),
+    // que também têm o nome `mcp__…`, viram o passo delas.
+    const mcp = navegadorToolOf(call) ? null : mcpToolOf(call.name)
+    if (mcp) return { tool: 'Mcp', input: { server: mcp.server, tool: mcp.tool } }
     const tool = toolName(call)
     if (!tool) return null
     const input: Record<string, unknown> = isRecord(call.rawInput) ? { ...call.rawInput } : {}

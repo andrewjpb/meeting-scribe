@@ -4,6 +4,8 @@
 // resposta. Contrato 25: a pasta da conversa do Assistente leva também o WhatsApp, as automações, o guia do app e o
 // estado atual, e a resposta pode trazer ações propostas (`ChatAction`), que só rodam com o clique da pessoa.
 import type { ChatAction } from './assistant'
+import type { McpApproval, McpApprovalDecision } from './mcp'
+import { NAVEGADOR_FERRAMENTAS } from './navegador-ferramentas'
 import type { ChatModel } from './settings-defaults'
 
 /** Até 200 mensagens por conversa; acima disso as mais antigas saem. */
@@ -33,8 +35,11 @@ export const CHAT_PLAN_MAX = 50
 /** Texto de cada item do plano. */
 export const CHAT_PLAN_TEXT_MAX = 500
 
-/** Ferramentas que viram passo na tela: as de leitura e (contrato 26) a busca na web e a página aberta. */
-export const CHAT_STEP_TOOLS = ['Read', 'Grep', 'Glob', 'WebSearch', 'WebFetch'] as const
+/**
+ * Ferramentas que viram passo na tela: as de leitura, (contrato 26) a busca na web e a página aberta, (contrato 21) as
+ * dos servidores MCP ("Usando <ferramenta> (<servidor>)") e (contrato 47) as do navegador do Assistente.
+ */
+export const CHAT_STEP_TOOLS = ['Read', 'Grep', 'Glob', 'WebSearch', 'WebFetch', 'Mcp', ...NAVEGADOR_FERRAMENTAS] as const
 export type ChatStepTool = (typeof CHAT_STEP_TOOLS)[number]
 
 /**
@@ -102,6 +107,11 @@ export interface ChatScope {
   whatsappMode?: ChatWhatsAppMode | undefined
   /** Contrato 25 (CA2): fontes desligadas no painel "Contexto". Ausente = ligada. */
   sources?: Partial<ChatSources> | undefined
+  /**
+   * Contrato 21 (CA6): servidores MCP desligados nesta conversa (as chaves `app:<id>` e `cli:<nome>`). Ausente = os
+   * ligados para o chat nas Configurações. Vale também na conversa de uma reunião (o resto do escopo não).
+   */
+  mcpOff?: string[] | undefined
 }
 
 export const CHAT_WHATSAPP_MODES = ['recent', 'chosen'] as const
@@ -211,6 +221,13 @@ export interface ChatUpdateRequest {
   thinkMore?: boolean | undefined
 }
 
+/** Contrato 21: a resposta da pessoa ao cartão de aprovação de uma ferramenta MCP. */
+export interface ChatApprovalAnswer {
+  chatId: string
+  id: string
+  decision: McpApprovalDecision
+}
+
 /**
  * "Refazer" e "Tentar de novo": a última resposta sai e a mesma pergunta vai de novo, num processo novo. Com
  * `text`, a última pergunta é trocada antes (↑ no campo vazio edita a última pergunta).
@@ -237,6 +254,10 @@ export type ChatDetail =
   /** Ferramentas negadas até agora nesta resposta. */
   | { type: 'denied'; count: number }
   | { type: 'meta'; meta: ChatMeta }
+  /** Contrato 21: o Claude pede uma ferramenta MCP com a política "Perguntar" (o cartão na conversa). */
+  | { type: 'approval'; approval: McpApproval }
+  /** O cartão saiu: respondido, vencido em 2 min ou a resposta acabou. */
+  | { type: 'approval-done'; id: string; decision: McpApprovalDecision }
 
 /**
  * main -> renderer: a resposta cresceu (`answer`), o raciocínio, um passo, uma negação ou os detalhes

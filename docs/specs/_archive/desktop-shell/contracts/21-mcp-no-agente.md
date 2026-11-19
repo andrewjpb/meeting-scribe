@@ -52,3 +52,22 @@ Feature: desktop-shell  ·  Wave: 19  ·  Depende de: 17 (motor via ACP, perfis)
 - Os purposes ACP hoje são `summary|analysis|draft|ai-notes|whatsapp-insights|whatsapp-correct|chat`; MCP entra SÓ em `chat` e `analysis` (os demais continuam `mcpServers: []`). O smoke usa `SMOKE_MEET_PORTS` e fakes de ACP/claude já existentes (`test/fixtures/fake-acp-agent.mjs`, `fake-claude.mjs`) — estender, não duplicar.
 - A chave/segredos: o padrão `safeStorage` já existe em `src/main/secrets.ts` (AssemblyAI) — seguir o mesmo desenho para os campos `secret`.
 - O aviso de segurança do CA7 permanece integral; acrescentar que fontes de Internet (contrato 26) e MCP são permissões independentes.
+
+## Adendo da revisão e dos gates (19/11/2026)
+
+Revisão cega: uma devolução, corrigida na mesma rodada. Itens: mudança de MCP agora fecha
+as sessões de chat abertas (revogação vale na hora); servidor novo nasce DESLIGADO nos dois
+destinos; maskSecrets também na mensagem de erro gravada; regra de URL vale na sessão e no
+importar para o CLI; entrada órfã do mcp-cli-enabled.json sai quando o servidor some da
+lista; nome não começa nem termina com `_`; chave de política normalizada como o Claude
+Code (`mcpToolKey`); setas no radiogroup; Contexto relê após desbloqueio; atalho sem
+servidor ligado (sessão idêntica, sem ler ~/.claude.json nem zsh -lc).
+
+Aceitos como limitação (desenho do CLI): segredos na linha de comando do `claude mcp
+add-json` (visíveis no `ps` por um instante) e em texto puro no ~/.claude.json; segredo em
+ARGUMENTO não é mascarado (a tela avisa: use variável marcada como segredo); sem arquivo
+"do projeto" (o app não tem conceito de projeto).
+
+Gates: smoke completo verde (87 PNGs, mcpChecks inclusos), pack.sh ok, vitest 1415, pytest
+58, typecheck/lint/shapes ok. Robustez do smoke: reclique na navegação quando a troca de
+rota se perde (corrida vista na aba "geral") e esperas de 15 s nas trocas de aba.

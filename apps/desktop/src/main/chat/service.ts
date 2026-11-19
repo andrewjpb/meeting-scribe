@@ -23,6 +23,10 @@
 //
 // Contrato 45 (CA7): o Assistente também pode pedir uma ferramenta do app (só leitura: buscar e ler emails) com um
 // bloco `lap-ferramenta` no fim da resposta; ela roda aqui e a resposta continua na mesma sessão (`tools.ts`).
+//
+// Contrato 47: a sessão ACP do Assistente abre com as ferramentas do navegador só se "Ativar ponte" (`navegadorPlugin`)
+// estiver ligado e a extensão conectada naquele momento; sem isso, abre como antes. A conversa já aberta segue como
+// abriu: a ponte que cai no meio vira erro da ferramenta, explicado ao agente.
 import { randomUUID } from 'node:crypto'
 import { z } from 'zod'
 import { withoutActionBlocks, type ChatAction } from '../../shared/assistant'
@@ -47,6 +51,7 @@ import {
 } from '../../shared/chat'
 import type { ClaudeLocateResult } from '../../shared/claude-cli'
 import { CHAT_MODELS, type ChatModel, type ClaudeTransport } from '../../shared/settings-defaults'
+import { MCP_APPROVAL_DECISIONS } from '../../shared/mcp'
 import { WHATSAPP_DEFAULT_SCOPE_DAYS } from '../../shared/whatsapp'
 import type { AcpOpenResult, AcpSessionRequest } from '../acp/agent'
 import { AcpChat, type ChatEngine } from '../acp/chat'
@@ -116,6 +121,8 @@ export interface ChatServiceDeps {
    * linha de comando.
    */
   openAcp?: (claudePath: string) => (request: AcpSessionRequest) => Promise<AcpOpenResult>
+  /** Contrato 47: a ponte do navegador (contrato 46); a extensão conectada agora. Sem ela, nunca há navegador. */
+  navegador?: { connected(): boolean }
   /** Resposta crescendo ou terminada, para todas as janelas. */
   onEvent: (event: ChatEvent) => void
   log?: (message: string) => void
@@ -157,6 +164,13 @@ export interface ChatService {
   sessions(): string[]
   /** Sair do app: mata todos os processos. */
   dispose(): void
+  /** Contrato 21: a resposta ao cartão de aprovação de uma ferramenta MCP; `false` se ele já saiu. */
+  answerApproval(request: unknown): boolean
+  /**
+   * Contrato 21: os servidores MCP mudaram (ligar, desligar, regra, salvar, remover): toda sessão aberta fecha (a em curso,
+   * depois da resposta) e a próxima pergunta abre outra com o que vale agora.
+   */
+  mcpChanged(): void
 }
 
 const listSchema = z.object({ meetingId: z.string().min(1).max(200).nullable() }).strict()
@@ -189,6 +203,7 @@ const updateSchema = z
   .strict()
 const redoSchema = z.object({ id: chatIdSchema, text: questionSchema.optional() }).strict()
 const copySchema = z.object({ id: chatIdSchema, index: z.number().int().min(0).max(10_000) }).strict()
+const approvalSchema = z.object({ chatId: chatIdSchema, id: z.string().regex(/^mcp-\d{1,9}$/), decision: z.enum(MCP_APPROVAL_DECISIONS) }).strict()
 
 const sameScope = (a: ChatScope, b: ChatScope): boolean =>
   a.kind === b.kind &&
@@ -196,7 +211,19 @@ const sameScope = (a: ChatScope, b: ChatScope): boolean =>
   (a.whatsappChats ?? []).join(',') === (b.whatsappChats ?? []).join(',') &&
   (a.whatsappDays ?? null) === (b.whatsappDays ?? null) &&
   chatWhatsAppModeOf(a) === chatWhatsAppModeOf(b) &&
-  CHAT_SOURCE_KINDS.every((kind) => chatSourcesOf(a)[kind] === chatSourcesOf(b)[kind])
+  CHAT_SOURCE_KINDS.every((kind) => chatSourcesOf(a)[kind] === chatSourcesOf(b)[kind]) &&
+  [...(a.mcpOff ?? [])].sort().join('\n') === [...(b.mcpOff ?? [])].sort().join('\n')
+
+/**
+ * O escopo depois de uma troca: a conversa de uma reunião é sempre só dela e, do escopo, só guarda os servidores MCP
+ * desligados (contrato 21, CA6).
+ */
+function nextScopeOf(chat: Chat, scope: ChatScope | undefined): ChatScope {
+  if (!scope) return chat.scope
+  if (!chat.meetingId) return scope
+  const { mcpOff: _previous, ...rest } = chat.scope
+  return scope.mcpOff?.length ? { ...rest, mcpOff: scope.mcpOff } : rest
+}
 
 interface Session {
   claude: ChatEngine
@@ -296,7 +323,7 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
   }
 
   async function openSession(chat: Chat, binaryPath: string): Promise<Session | null> {
-    const { claudeTransport } = await deps.settings.get()
+    const { claudeTransport, navegadorPlugin } = await deps.settings.get()
     const transport: ClaudeTransport = claudeTransport === 'acp' && deps.openAcp ? 'acp' : 'cli'
     const existing = sessions.get(chat.id)
     if (existing && existing.transport === transport) return existing
@@ -344,7 +371,10 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
     const web = assistant && transport === 'acp' && chatSourcesOf(chat.scope).internet
     // Contrato 45 (CA7): as ferramentas do app que esta conversa pode pedir, descritas na instrução.
     const toolLines = assistant ? toolsInstructions(deps.assistant?.tools?.(chat.scope) ?? []) : []
-    const systemPrompt = assistant && folder !== 'meeting' ? { systemPrompt: assistantSystemPrompt(folder, transport === 'acp' ? web : 'cli', toolLines) } : {}
+    // Contrato 47: o navegador, só pelo ACP, com a ponte ligada e a extensão conectada agora.
+    const navegador = assistant && transport === 'acp' && folder !== 'meeting' && navegadorPlugin && deps.navegador?.connected() === true
+    const systemPrompt =
+      assistant && folder !== 'meeting' ? { systemPrompt: assistantSystemPrompt(folder, transport === 'acp' ? web : 'cli', navegador, toolLines) } : {}
     const claude: ChatEngine =
       transport === 'acp' && deps.openAcp
         ? new AcpChat({
@@ -355,6 +385,10 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
             whatsapp,
             ...systemPrompt,
             ...(web ? { web: true } : {}),
+            // Contrato 21: os servidores MCP ligados para o chat, menos os desligados nesta conversa.
+            mcp: { off: chat.scope.mcpOff ?? [] },
+            // Servidor do navegador que não abre: a sessão segue sem ele e com a instrução sem ele.
+            ...(navegador && folder !== 'meeting' ? { navegador: true, systemPromptSemNavegador: assistantSystemPrompt(folder, web, false, toolLines) } : {}),
             cwd,
             titleOf,
             now,
@@ -432,7 +466,7 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
       } else if (detail.type === 'plan') plan = detail.entries
       else if (detail.type === 'thinking') thinking += detail.delta
       else if (detail.type === 'denied') denied = deniedBefore + detail.count
-      else meta = spent ? sumMeta(spent, detail.meta) : detail.meta
+      else if (detail.type === 'meta') meta = spent ? sumMeta(spent, detail.meta) : detail.meta
       if (session.cancelled) return
       if (detail.type === 'denied') deps.onEvent({ chatId: chat.id, type: 'denied', count: denied })
       else if (detail.type === 'meta' && meta) deps.onEvent({ chatId: chat.id, type: 'meta', meta })
@@ -546,7 +580,7 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
           chat = { id, meetingId, title: chatTitle(question), createdAt: stamp(), messages: [], scope: { kind: 'all' }, model: null, thinkMore: false }
         }
         // Escopo e modelo da barra do campo; trocados, o processo da conversa é refeito.
-        const nextScope = scope && !chat.meetingId ? scope : chat.scope
+        const nextScope = nextScopeOf(chat, scope)
         const currentModel = await modelOf(chat)
         const nextModel = model ?? currentModel
         const nextThinkMore = thinkMore ?? chat.thinkMore
@@ -587,7 +621,7 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
       // Leitura, mudança e gravação na mesma vez da fila (a resposta que termina no meio fica).
       const saved = await deps.store.mutate(id, (chat) => {
         if (!chat) return null
-        const nextScope = scope && !chat.meetingId ? scope : chat.scope
+        const nextScope = nextScopeOf(chat, scope)
         scopeChanged = !sameScope(nextScope, chat.scope)
         return {
           ...chat,
@@ -704,6 +738,16 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
 
     dispose() {
       for (const [id, session] of [...sessions]) end(id, session)
+    },
+
+    mcpChanged() {
+      for (const id of [...sessions.keys()]) restart(id)
+    },
+
+    answerApproval(request) {
+      const parsed = approvalSchema.safeParse(request)
+      if (!parsed.success) return false
+      return sessions.get(parsed.data.chatId)?.claude.answerApproval?.(parsed.data.id, parsed.data.decision) ?? false
     },
   }
 }

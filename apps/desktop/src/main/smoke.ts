@@ -52,7 +52,7 @@
 // uma "depois de cada reunião" (saídas `chat`, `file` e a notificação substituta), `skipped` com a anterior rodando,
 // `autoPaused` depois de 3 falhas, um horário perdido rodando uma vez só, "Pedir agora", o histórico com o detalhe, o
 // menu do ícone da barra de menus (substituto que registra os itens) e fechar a janela mantendo o app (Dock escondido,
-// substituto) e reabrir pelo ícone. Não há ferramenta MCP para negar: o contrato 21 ainda não existe.
+// substituto) e reabrir pelo ícone. Não há ferramenta MCP para negar: o contrato 21 não dá MCP às automações.
 //
 // Contrato 12: depois do Google e antes do WhatsApp, as agendas (`calendarChecks`) com o Google e a Microsoft falsos em
 // memória: o cadastro e o login da Microsoft, o Google com a agenda, o bloco "Agenda", as notificações substitutas
@@ -63,11 +63,18 @@
 // devolve resultados de busca inventados (domínios `.example`, sem rede): o agente com "Pode pesquisar na internet",
 // "Pedir agora" com a busca, a página aberta e a página montada negada, o agente sem internet e o Assistente com a
 // fonte "Internet".
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
+//
+// Contrato 21: depois da internet e antes do Meet, os servidores MCP (`mcpChecks`) com o `claude` falso (`mcp list | get |
+// add-json | remove` sobre um arquivo do userData), o servidor MCP falso (stdio e HTTP em 127.0.0.1) e o agente ACP falso:
+// a aba "Conexões", ligar um do CLI para o chat, importar do Claude Desktop falso sem o segredo, adicionar pelo
+// formulário (no CLI) e por JSON colado (só no app), "Testar conexão", o cartão de aprovação com "Permitir uma vez" e a
+// ferramenta negada pela política. Termina com tudo desligado. Nenhum segredo vai para a tela, o log ou o relatório.
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { spawn as spawnChild } from 'node:child_process'
 import { request as httpRequest } from 'node:http'
 import { tmpdir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
-import { app, BrowserWindow, ipcMain, Menu, nativeTheme, session, type MenuItem, type WebContents } from 'electron'
+import { app, BrowserWindow, ipcMain, Menu, nativeTheme, session, type MenuItem, type MenuItemConstructorOptions, type WebContents } from 'electron'
 import { DRIVE_ROOT_FOLDER_NAME } from '../shared/accounts'
 import { WHATSAPP_EXPORT_PREFIX, WHATSAPP_FIXED_WARNING, WHATSAPP_PAIR_HINT, WHATSAPP_RISK_CHECKBOX, WHATSAPP_RISK_TEXT, WHATSAPP_RISK_TITLE } from '../shared/whatsapp'
 import { INSIGHTS_MOOD_NOTE } from '../shared/whatsapp-insights'
@@ -116,6 +123,11 @@ import type { CalendarService } from './calendar/service'
 import { MEET_DISCONNECTED_LABEL } from '../shared/meet'
 import { APP_PLUGINS, pluginFolderName } from '../shared/plugins'
 import { MEET_PATH, MEET_PORTS, type MeetServer } from './meet/server'
+import { MEETING_PROMPT_SIZE } from './meeting-prompt/window'
+import { MIC_PROMPT_MIN_MS } from '../shared/meeting-prompt'
+import { MCP_CLI_ENABLED_FILE, MCP_SERVERS_FILE } from './mcp/store'
+import { MCP_FIXED_WARNING } from '../shared/mcp'
+import { NAVEGADOR_COMANDOS_PATH, NAVEGADOR_HEADER, NAVEGADOR_PORTS, type NavegadorServer } from './navegador/server'
 import { MEETINGS_DIR } from './meetings/transcripts'
 import { SETTINGS_VERSION } from './settings/schema'
 import { SMOKE_EMAIL_ADDRESS, SMOKE_EMAIL_ARCHIVED, SMOKE_EMAIL_ATTACHMENT, SMOKE_EMAIL_PASSWORD, SMOKE_EMAIL_WRONG_PASSWORD } from './email/fake-email'
@@ -126,6 +138,7 @@ import {
   SMOKE_FAKE_KEY,
   SMOKE_GOOGLE_CLIENT_ID,
   SMOKE_GOOGLE_CLIENT_SECRET,
+  SMOKE_MCP_SECRETS,
   SMOKE_MICROSOFT_CLIENT_ID,
   SMOKE_NOT_ALLOWED_MODEL,
   SMOKE_OFFLINE_KEY,
@@ -182,6 +195,8 @@ export interface SmokeContext {
   calendar: Pick<CalendarService, 'refresh' | 'view'>
   /** Contrato 27: o servidor local do Meet (a porta em que subiu e o estado). */
   meet: Pick<MeetServer, 'port' | 'status'>
+  /** Contrato 46: a ponte do "Controle do navegador" (a porta em que subiu e se a extensão está conectada). */
+  navegador: Pick<NavegadorServer, 'port' | 'connected'>
 }
 
 interface Check {
@@ -278,7 +293,8 @@ const settingsTabIs = (tab: SettingsTab): string =>
 
 /** Contrato 18: troca de aba pelo clique, já em Configurações. */
 async function selectSettingsTab(contents: WebContents, tab: SettingsTab): Promise<boolean> {
-  await waitFor(contents, `document.querySelector('[role="tab"][data-tab="${tab}"]')`)
+  // 15 s: com a máquina carregada a troca de rota passa dos 5 s e o teste desistia cedo (flake da aba "geral").
+  await waitFor(contents, `document.querySelector('[role="tab"][data-tab="${tab}"]')`, 15_000)
   await clickSelector(contents, `[role="tab"][data-tab="${tab}"]`)
   return waitFor(contents, settingsTabIs(tab))
 }
@@ -290,7 +306,18 @@ const anchoredAt = (label: string): string =>
 /** Contrato 18: Configurações pela barra lateral e a aba pelo clique. */
 async function openSettingsTab(contents: WebContents, tab: SettingsTab): Promise<boolean> {
   await clickSelector(contents, '[data-nav="configuracoes"]')
-  await waitFor(contents, routeIs('configuracoes'))
+  if (!(await waitFor(contents, routeIs('configuracoes'), 5000))) {
+    // Um <dialog> modal aberto deixa o resto da tela inerte e o click() programático some. Registra o
+    // estado (para a flake da aba "geral" ter diagnóstico), fecha o que estiver aberto e tenta de novo.
+    const stuck = await evaluate<string>(
+      contents,
+      `JSON.stringify({ rota: location.hash || location.pathname, dialogs: [...document.querySelectorAll('dialog[open]')].map((d) => d.id || d.className).slice(0, 3), foco: document.activeElement?.tagName })`,
+    )
+    console.log(`[smoke] configuracoes não abriu de primeira: ${stuck}`)
+    await evaluate(contents, `(() => { for (const d of document.querySelectorAll('dialog[open]')) d.close(); return true })()`)
+    await clickSelector(contents, '[data-nav="configuracoes"]')
+    await waitFor(contents, routeIs('configuracoes'), 15_000)
+  }
   return selectSettingsTab(contents, tab)
 }
 const probeJs = (expression: string): string => `window.__smokeProbe?.${expression}`
@@ -1960,9 +1987,12 @@ async function pluginsSettings(win: BrowserWindow, ctx: SmokeContext): Promise<{
   )
   await settle(contents)
   const shot = await capture(win, ctx.outDir, 'configuracoes-plugins-light')
+  // Contrato 46: depois do PNG, para ele não mudar: o cartão do navegador, "Ativar ponte" e o cliente falso.
+  const navegador = await navegadorPluginChecks(contents, ctx)
   return {
     check: {
       ok:
+        navegador.ok &&
         opened &&
         plugin !== undefined &&
         state === expectedState &&
@@ -1980,9 +2010,93 @@ async function pluginsSettings(win: BrowserWindow, ctx: SmokeContext): Promise<{
         manual.text.includes('Carregar sem compactação') &&
         manual.text.includes('picture-in-picture') &&
         manual.text.includes('Tudo fica neste computador: o plugin só fala com o app.'),
-      detail: `aba aberta=${opened}; estado "${stateText}" (${state}, esperado ${expectedState}); cancelado sem nada=${canceledQuiet}; salvo=${saved} "${feedback}"; arquivos ${JSON.stringify(files)}; manual aberto=${manualOpen} (aria-expanded=${manual.expanded}, ${manual.steps} passos)`,
+      detail: `aba aberta=${opened}; estado "${stateText}" (${state}, esperado ${expectedState}); cancelado sem nada=${canceledQuiet}; salvo=${saved} "${feedback}"; arquivos ${JSON.stringify(files)}; manual aberto=${manualOpen} (aria-expanded=${manual.expanded}, ${manual.steps} passos); navegador: ${navegador.detail}`,
     },
     shot,
+  }
+}
+
+/**
+ * Portas da ponte do navegador no smoke (contrato 46): fora da faixa da extensão (47672–47681), para o Chrome de
+ * verdade, com a extensão instalada, nunca falar com o smoke.
+ */
+export const SMOKE_NAVEGADOR_PORTS: readonly number[] = Array.from({ length: 10 }, (_, index) => 47692 + index)
+
+/**
+ * GET de um cliente falso na ponte do navegador (contrato 46), fora da sessão do Electron. Como o Chrome real, a
+ * "extensão" (`chrome-extension://…`) manda o cabeçalho da ponte e nenhum `Origin`; a página manda `Origin` e não
+ * consegue mandar o cabeçalho.
+ */
+function navegadorGet(port: number, origin: string): Promise<{ status: number; body: string }> {
+  const headers: Record<string, string> = origin.startsWith('chrome-extension://') ? { [NAVEGADOR_HEADER]: '1' } : { origin }
+  return new Promise((resolve) => {
+    const req = httpRequest({ agent: false, host: '127.0.0.1', port, method: 'GET', path: NAVEGADOR_COMANDOS_PATH, headers }, (res) => {
+      const chunks: Buffer[] = []
+      res.on('data', (chunk: Buffer) => chunks.push(chunk))
+      res.on('end', () => resolve({ status: res.statusCode ?? 0, body: Buffer.concat(chunks).toString('utf8') }))
+    })
+    // Porta fechada ou conexão cortada ao desligar: vale como sem resposta.
+    req.on('error', () => resolve({ status: 0, body: '' }))
+    req.end()
+  })
+}
+
+/**
+ * Contrato 46, na aba Plugins: o cartão "Controle do navegador" começa desligado e "Desconectado"; "Ativar ponte"
+ * grava `navegadorPlugin` e sobe a ponte numa porta do smoke; a origem de página é recusada (404) e um cliente
+ * falso com origem `chrome-extension://` (o GET do long-poll, que fica pendurado) deixa o cartão "Conectado";
+ * desligar fecha a porta, solta o GET e o cartão volta a "Desconectado".
+ */
+async function navegadorPluginChecks(contents: WebContents, ctx: SmokeContext): Promise<Check> {
+  const card = '[data-plugin="navegador"]'
+  const toggle = '[data-action="navegador-ponte"]'
+  const cardState = (): Promise<{ state: string; text: string; checked: string }> =>
+    evaluate(
+      contents,
+      `({ state: document.querySelector('${card}')?.dataset.pluginState ?? '', text: document.querySelector('${card} [data-setting-control]')?.textContent ?? '', checked: document.querySelector('${toggle}')?.getAttribute('aria-checked') ?? '' })`,
+    )
+  const present = await waitFor(contents, `document.querySelector('${card}') && document.querySelector('${toggle}')`)
+  const before = await cardState()
+  if (!present) return { ok: false, detail: 'cartão ou "Ativar ponte" não apareceu' }
+
+  await clickSelector(contents, toggle)
+  let port: number | null = null
+  for (let attempt = 0; attempt < 100 && port === null; attempt++) {
+    port = ctx.navegador.port()
+    if (port === null) await wait(50)
+  }
+  const inRange = port !== null && SMOKE_NAVEGADOR_PORTS.includes(port) && !NAVEGADOR_PORTS.includes(port)
+  const saved = readSettings(ctx.userDataDir).navegadorPlugin === true
+  const refused = port === null ? { status: -1, body: '' } : await navegadorGet(port, 'https://mau.example')
+  const quietAfterRefused = !ctx.navegador.connected()
+  // O GET do long-poll fica pendurado até 25 s; o cartão vira "Conectado" assim que ele chega.
+  const poll = port === null ? Promise.resolve({ status: -1, body: '' }) : navegadorGet(port, 'chrome-extension://abc')
+  const connected = await waitFor(contents, `document.querySelector('${card}')?.dataset.pluginState === 'on'`)
+  const on = await cardState()
+
+  await clickSelector(contents, toggle)
+  const disconnected = await waitFor(contents, `document.querySelector('${card}')?.dataset.pluginState === 'off' && document.querySelector('${toggle}')?.getAttribute('aria-checked') === 'false'`)
+  const released = await poll
+  const after = await cardState()
+  const closed = ctx.navegador.port() === null && readSettings(ctx.userDataDir).navegadorPlugin === false
+  return {
+    ok:
+      before.state === 'off' &&
+      before.text.startsWith('Desconectado') &&
+      before.checked === 'false' &&
+      inRange &&
+      saved &&
+      refused.status === 404 &&
+      refused.body === '' &&
+      quietAfterRefused &&
+      connected &&
+      on.text.startsWith('Conectado') &&
+      on.checked === 'true' &&
+      disconnected &&
+      released.status !== -1 &&
+      after.text.startsWith('Desconectado') &&
+      closed,
+    detail: `antes ${before.state} "${before.text}" (ponte ${before.checked}); ligada: porta ${port ?? 'nenhuma'} na faixa do smoke=${inRange}, gravada=${saved}; https://mau.example → ${refused.status} "${refused.body}", conectado=${!quietAfterRefused}; chrome-extension://abc → ${on.state} "${on.text}"; desligada: ${after.state} "${after.text}", GET solto com ${released.status} "${released.body}", porta fechada e gravada=${closed}`,
   }
 }
 
@@ -3803,7 +3917,7 @@ async function settingsLayoutMetrics(contents: WebContents): Promise<Record<stri
 
 /**
  * Contrato 18, no claro: "Contas" vazia e sem botões; "Sobre" com versão, Electron e Chrome, o repositório
- * aberto no navegador e o atalho para "Atualizações"; a aba lembrada ao voltar; ⌘2/⌘7 e as setas; ⌘F e a
+ * aberto no navegador e o atalho para "Atualizações"; a aba lembrada ao voltar; ⌘2/⌘8 e as setas; ⌘F e a
  * busca sem acento nem maiúscula, agrupada por aba, com o clique que leva à linha e a destaca por 2 s; Esc limpa.
  */
 async function settingsTabsChecks(contents: WebContents, ctx: SmokeContext, shot: (name: string) => Promise<void>): Promise<Check> {
@@ -3843,15 +3957,16 @@ async function settingsTabsChecks(contents: WebContents, ctx: SmokeContext, shot
   await clickSelector(contents, '[data-nav="configuracoes"]')
   const remembered = await waitFor(contents, `${routeIs('configuracoes')} && ${settingsTabIs('claude')}`)
 
-  // Teclado: ⌘2, ⌘7 ("Sobre", desde que "Plugins" entrou antes dela no contrato 31) e a seta para a direita na lista de abas (da última, volta à primeira).
+  // Teclado: ⌘2, ⌘8 ("Sobre", desde que "Plugins" (contrato 31) e "Conexões" (contrato 21) entraram antes dela) e a seta
+  // para a direita na lista de abas (da última, volta à primeira).
   const press = (key: string, meta: boolean): Promise<unknown> =>
     evaluate(contents, `window.dispatchEvent(new KeyboardEvent('keydown', { key: ${JSON.stringify(key)}, metaKey: ${meta}, bubbles: true, cancelable: true })), true`)
   await press('2', true)
   const cmd2 = await waitFor(contents, settingsTabIs('gravacao'))
   const activeTab = `document.activeElement?.getAttribute('role') === 'tab' ? document.activeElement.dataset.tab : ''`
   const cmd2Focus = await evaluate<string>(contents, activeTab)
-  await press('7', true)
-  const cmd7 = await waitFor(contents, settingsTabIs('sobre'))
+  await press('8', true)
+  const cmd8 = await waitFor(contents, settingsTabIs('sobre'))
   await evaluate(contents, `document.querySelector('[role="tab"][data-tab="geral"]').dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true })), true`)
   const arrow = await waitFor(contents, settingsTabIs('geral'))
 
@@ -3912,8 +4027,9 @@ async function settingsTabsChecks(contents: WebContents, ctx: SmokeContext, shot
     !contas.includes('Em breve') &&
     // Contrato 24: o bloco "WhatsApp" (não instalado) com o "Instalar" e o aviso fixo.
     // Contrato 12: o bloco "Microsoft" sem cadastro e o bloco "Agenda" (dois interruptores e "Avisar antes").
-    // Contrato 40: os dois interruptores das notificações do WhatsApp, depois do "Instalar".
-    JSON.stringify(contasButtons) === JSON.stringify(['Configurar…', 'Configurar…', '', '1 min', '5 min', '10 min', '', 'Instalar', '', '', 'Adicionar conta', '']) &&
+    // Contrato 40: os dois interruptores das notificações do WhatsApp, depois do "Instalar". Contrato 34: e o de
+    // "Mostrar quando estou digitando". Contrato 43: o "Adicionar conta" e o interruptor das notificações de email.
+    JSON.stringify(contasButtons) === JSON.stringify(['Configurar…', 'Configurar…', '', '1 min', '5 min', '10 min', '', 'Instalar', '', '', '', 'Adicionar conta', '']) &&
     contas.includes('Conta Microsoft') &&
     contas.includes('Entre com a conta Google ou Microsoft acima para escolher as agendas.') &&
     contas.includes(WHATSAPP_FIXED_WARNING) &&
@@ -3930,7 +4046,7 @@ async function settingsTabsChecks(contents: WebContents, ctx: SmokeContext, shot
     remembered &&
     cmd2 &&
     cmd2Focus === 'gravacao' &&
-    cmd7 &&
+    cmd8 &&
     arrow &&
     focused &&
     JSON.stringify(groups) === JSON.stringify(['Gravação', 'Claude']) &&
@@ -3952,7 +4068,7 @@ async function settingsTabsChecks(contents: WebContents, ctx: SmokeContext, shot
     missing.length === 0
   return {
     ok,
-    detail: `Contas "${contas.replace(/\s+/g, ' ').trim()}" (botões ${JSON.stringify(contasButtons)}, ${ctx.fixtures.google.calls.length} pedidos ao Google); Sobre "${sobre.replace(/\s+/g, ' ').slice(0, 160)}", repositório -> ${opened || 'nada'}, "Procurar atualização" -> Geral=${toUpdates}, bloco visível=${updatesVisible}; aba lembrada=${remembered}; ⌘2=${cmd2}, ⌘7=${cmd7}, seta=${arrow}; ⌘F foca=${focused}; "TRADUCAO" -> grupos ${JSON.stringify(groups)}, itens ${JSON.stringify(items)}, painéis escondidos=${panelsHidden}; clique em "Modelo do chat" -> aba Claude e destaque=${jumped}, à vista=${inView}, busca limpa=${cleared}, destaque some em 2 s=${unhighlighted}; Esc limpa=${escaped}; foco: ⌘2 -> aba ${cmd2Focus || 'nenhuma'}, resultado -> ${resultFocus || 'fora da linha'}, Esc -> aba ${escFocus || 'nenhuma'}; durante a busca nenhuma aba marcada=${noneSelected}, região viva "${live}"; "haiku" acha "Modelo" escondido=${hiddenFound}, aviso=${hintShown}; "pasta"=${pastaFound}; ${rows.length} linhas na tela, fora do índice: ${JSON.stringify(missing)}`,
+    detail: `Contas "${contas.replace(/\s+/g, ' ').trim()}" (botões ${JSON.stringify(contasButtons)}, ${ctx.fixtures.google.calls.length} pedidos ao Google); Sobre "${sobre.replace(/\s+/g, ' ').slice(0, 160)}", repositório -> ${opened || 'nada'}, "Procurar atualização" -> Geral=${toUpdates}, bloco visível=${updatesVisible}; aba lembrada=${remembered}; ⌘2=${cmd2}, ⌘8=${cmd8}, seta=${arrow}; ⌘F foca=${focused}; "TRADUCAO" -> grupos ${JSON.stringify(groups)}, itens ${JSON.stringify(items)}, painéis escondidos=${panelsHidden}; clique em "Modelo do chat" -> aba Claude e destaque=${jumped}, à vista=${inView}, busca limpa=${cleared}, destaque some em 2 s=${unhighlighted}; Esc limpa=${escaped}; foco: ⌘2 -> aba ${cmd2Focus || 'nenhuma'}, resultado -> ${resultFocus || 'fora da linha'}, Esc -> aba ${escFocus || 'nenhuma'}; durante a busca nenhuma aba marcada=${noneSelected}, região viva "${live}"; "haiku" acha "Modelo" escondido=${hiddenFound}, aviso=${hintShown}; "pasta"=${pastaFound}; ${rows.length} linhas na tela, fora do índice: ${JSON.stringify(missing)}`,
   }
 }
 
@@ -5280,7 +5396,7 @@ async function whatsappChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => 
         brunoInitials: row('${WA_BRUNO}')?.querySelector('[data-wa-avatar="initials"]')?.textContent ?? '',
         headerPhoto: Boolean(document.querySelector('[data-whatsapp-conversation="${WA_ANA}"] header img[data-wa-avatar="photo"]')),
         subtitle: document.querySelector('[data-whatsapp-chat-subtitle]')?.textContent ?? '',
-        myBubble: [...(document.querySelector('[data-whatsapp-message="m2"] > div')?.classList ?? [])].filter((name) => name === 'bg-accent' || name === 'text-on-accent').join(' '),
+        myBubble: [...(document.querySelector('[data-whatsapp-message="m2"] [data-wa-bubble]')?.classList ?? [])].filter((name) => name === 'bg-accent' || name === 'text-on-accent').join(' '),
       }
     })()`,
   )
@@ -5471,6 +5587,8 @@ async function whatsappChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => 
 
   // Contrato 39: imagem por arrastar e soltar (e pelo clipe), com a legenda; só o clique em "Enviar" envia.
   checks['attach'] = await whatsappAttachCheck(ctx, win, shots)
+  // Contrato 34: responder citando, reagir e o "digitando…" (o dos outros e o seu, só com o interruptor).
+  checks['interactions'] = await whatsappInteractionsCheck(ctx, win, shots)
 
   // "Só estas conversas" do Assistente (contrato 25; o "Perguntar" do 24) com a conversa da Ana: o `.md` dela na
   // pasta da conversa e no índice.
@@ -5731,6 +5849,194 @@ async function whatsappAttachCheck(ctx: SmokeContext, win: BrowserWindow, shots:
       cleared &&
       downloaded,
     detail: `sobreposição=${overlay} (saiu=${overlayGone}); PNG mentiroso recusado=${lying}; texto + PNG -> prévia do PNG=${dropped}, enviadas no soltar=${sentAfterDrop - sentBefore}; Esc=${escaped}; X=${again && discarded}; clipe=${picked}; legenda com "${placeholder}"; token inventado=${forged}; sem token=${noToken}; sem clique=${sentWithoutClick - sentBefore}; com o clique ${JSON.stringify(last ?? null)}; eco como mídia sua=${echoed}; prévia e campo limpos=${cleared}; eco baixa=${downloaded}`,
+  }
+}
+
+/** O que o serviço falso registrou (contrato 34): os textos, com a citação, e as reações. */
+interface WaSentItem {
+  id?: string
+  chatId: string
+  text?: string
+  replyToId?: string
+  type?: string
+  messageId?: string
+  emoji?: string
+}
+
+/**
+ * Contrato 34, na conversa da Ana: "Responder" na m1 abre a barra de citação (Esc e o X tiram); o envio com a barra sai
+ * citando (o serviço falso confirma o `replyToId`) e o balão enviado mostra a citação, que rola até a m1; a resposta da
+ * Ana a ela chega com a citação. Reagir sem o clique é recusado; 👍 pelo seletor dos 6 emojis vira o chip seu (o serviço
+ * confirma), o ❤️ da Ana chega pelo SSE e tocar de novo no 👍 tira. "digitando…" aparece no cabeçalho e na lista (no
+ * grupo, com o nome) e some sozinho em 10 s. O seu "digitando…": desligado (o padrão), nada sai; ligado, "digitando" e,
+ * ao limpar o campo, "parou".
+ */
+async function whatsappInteractionsCheck(ctx: SmokeContext, win: BrowserWindow, shots: Screenshot[]): Promise<Check> {
+  const contents = win.webContents
+  const conversation = `[data-whatsapp-conversation="${WA_ANA}"]`
+  const m1Text = 'Oi! Conseguimos marcar a reunião de sexta?'
+  const replyText = 'Conseguimos sim, sexta às 10h.'
+  const thumbs = '\u{1F44D}'
+  const heart = '❤️'
+  const sentNow = async (): Promise<WaSentItem[]> => (await waSent(ctx)) as WaSentItem[]
+  const presences = async (): Promise<{ chatId: string; state: string }[]> => ((await ctx.whatsapp.fake('presences')) as { presences?: { chatId: string; state: string }[] }).presences ?? []
+  const until = async (test: (items: WaSentItem[]) => boolean): Promise<WaSentItem[]> => {
+    let items = await sentNow()
+    for (let attempt = 0; attempt < 80 && !test(items); attempt++) {
+      await wait(100)
+      items = await sentNow()
+    }
+    return items
+  }
+  const bubble = (id: string): string => `document.querySelector(${JSON.stringify(`${conversation} [data-whatsapp-message="${id}"]`)})`
+  await waitFor(contents, `${bubble('m1')}`, 8000)
+  const before = (await sentNow()).length
+
+  // Responder: a barra com o trecho da m1, o foco no campo; Esc tira, o X também.
+  await clickSelector(contents, `${conversation} [data-wa-reply="m1"]`)
+  const bar = await waitFor(contents, `document.querySelector('[data-wa-reply-bar="m1"] [data-wa-reply-bar-text]')?.textContent === ${JSON.stringify(m1Text)} && document.activeElement?.matches('[data-whatsapp-composer]')`)
+  await evaluate(contents, `document.querySelector('[data-whatsapp-composer]')?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))`)
+  const escCancels = await waitFor(contents, `!document.querySelector('[data-wa-reply-bar]')`)
+  await clickSelector(contents, `${conversation} [data-wa-reply="m1"]`)
+  await waitFor(contents, `document.querySelector('[data-wa-reply-bar="m1"]')`)
+  await clickSelector(contents, '[data-wa-reply-cancel]')
+  const xCancels = await waitFor(contents, `!document.querySelector('[data-wa-reply-bar]')`)
+
+  // Com a barra, o clique em "Enviar" manda a resposta citando a m1.
+  await clickSelector(contents, `${conversation} [data-wa-reply="m1"]`)
+  await waitFor(contents, `document.querySelector('[data-wa-reply-bar="m1"]')`)
+  await setValue(contents, '[data-whatsapp-composer]', replyText)
+  await clickSelector(contents, '[data-action="whatsapp-send"]')
+  const afterReply = await until((items) => items.length > before)
+  const reply = afterReply.at(-1)
+  const replyId = reply?.id ?? 'x'
+  const quoted = await waitFor(
+    contents,
+    `${bubble(replyId)}?.dataset.fromMe === 'true' && ${bubble(replyId)}?.querySelector('[data-wa-quote="m1"] [data-wa-quote-text]')?.textContent === ${JSON.stringify(m1Text)}`,
+    8000,
+  )
+  const barGone = await evaluate<boolean>(contents, `!document.querySelector('[data-wa-reply-bar]') && (document.querySelector('[data-whatsapp-composer]')?.value ?? 'x') === ''`)
+  // A citação rola até a m1 (carregada): ela fica à vista na lista.
+  // O que importa é a m1 ficar à vista na lista (o balão dela cruza a área visível), não a suavidade da rolagem.
+  const m1Visible = `(() => { const list = document.querySelector('${conversation} [data-whatsapp-messages]')?.getBoundingClientRect(); const m = ${bubble('m1')}?.querySelector('[data-wa-bubble]')?.getBoundingClientRect(); return Boolean(list && m && m.bottom > list.top && m.top < list.bottom) })()`
+  await evaluate(contents, `(() => { const list = document.querySelector('${conversation} [data-whatsapp-messages]'); if (list) list.scrollTop = list.scrollHeight; return true })()`)
+  await settle(contents)
+  const hiddenBefore = !(await evaluate<boolean>(contents, m1Visible))
+  await clickSelector(contents, `${conversation} [data-whatsapp-message="${replyId}"] [data-wa-quote="m1"]`)
+  const scrolled = await waitFor(contents, m1Visible, 8000)
+  // A Ana responde à sua resposta: a citação chega com o trecho e "Você".
+  const answer = (await ctx.whatsapp.fake('incoming', { chatId: WA_ANA, text: 'Perfeito!', replyToId: replyId })) as { id?: string }
+  const incomingQuote = await waitFor(
+    contents,
+    `(() => { const q = ${bubble(answer.id ?? 'x')}?.querySelector('[data-wa-quote="${replyId}"]'); return q?.querySelector('[data-wa-quote-text]')?.textContent === ${JSON.stringify(replyText)} && (q?.textContent ?? '').includes('Você') })()`,
+    8000,
+  )
+
+  // Reagir sem o clique: token inventado e sem token, recusados; nada sai.
+  const forged = await evaluate<string>(contents, `window.__scribeApi.invoke('scribe:whatsapp-react', { chatId: '${WA_ANA}', messageId: 'm1', emoji: ${JSON.stringify(thumbs)}, clickToken: crypto.randomUUID() }).then((r) => JSON.stringify(r), (e) => 'erro ' + String(e?.message ?? e).slice(0, 60))`)
+  const noToken = await evaluate<string>(contents, `window.__scribeApi.invoke('scribe:whatsapp-react', { chatId: '${WA_ANA}', messageId: 'm1', emoji: ${JSON.stringify(thumbs)} }).then((r) => JSON.stringify(r), (e) => 'erro ' + String(e?.message ?? e).slice(0, 60))`)
+  const reactedWithoutClick = (await sentNow()).filter((item) => item.type === 'reaction').length
+
+  // 👍 pelo seletor: o chip seu, e o serviço falso confirma.
+  await clickSelector(contents, `${conversation} [data-wa-react-open="m1"]`)
+  const picker = await waitFor(contents, `document.querySelectorAll('[data-wa-react-picker="m1"] [data-wa-react-emoji]').length === 6`)
+  await clickSelector(contents, `[data-wa-react-picker="m1"] [data-wa-react-emoji="${thumbs}"]`)
+  const chip = await waitFor(contents, `${bubble('m1')}?.querySelector('[data-wa-reaction="${thumbs}"][data-mine="true"]')?.textContent === '${thumbs}1' && !document.querySelector('[data-wa-react-picker]')`, 8000)
+  const afterReact = await until((items) => items.some((item) => item.type === 'reaction'))
+  const reacted = afterReact.filter((item) => item.type === 'reaction')
+  // O ❤️ da Ana na sua resposta, pelo SSE.
+  await ctx.whatsapp.fake('incoming', { chatId: WA_ANA, reaction: { messageId: replyId, emoji: heart } })
+  const theirs = await waitFor(contents, `${bubble(replyId)}?.querySelector('[data-wa-reaction="${heart}"][data-mine="false"]')?.textContent === '${heart}1'`, 8000)
+  // O print do balão com a citação e a reação.
+  await settle(contents)
+  shots.push(await capture(win, ctx.outDir, 'whatsapp-interacoes-light'))
+  // Tocar de novo no 👍 tira a sua.
+  await clickSelector(contents, `${conversation} [data-whatsapp-message="m1"] [data-wa-reaction="${thumbs}"]`)
+  const removed = await waitFor(contents, `!${bubble('m1')}?.querySelector('[data-wa-reaction]')`, 8000)
+  const afterRemove = await until((items) => items.filter((item) => item.type === 'reaction').length >= 2)
+  const removal = afterRemove.filter((item) => item.type === 'reaction')[1]
+
+  // "digitando…" da Ana: no cabeçalho e na lista; some sozinho em 10 s. No grupo, com o nome de quem digita.
+  await ctx.whatsapp.fake('incoming', { chatId: WA_ANA, presence: 'composing' })
+  const typingShown = await waitFor(
+    contents,
+    `document.querySelector('${conversation} header [data-wa-typing]')?.textContent === 'digitando…' && document.querySelector('[data-whatsapp-chat="${WA_ANA}"] [data-wa-typing]')?.textContent === 'digitando…'`,
+  )
+  const typingAt = Date.now()
+  await ctx.whatsapp.fake('incoming', { chatId: WA_ATLAS, presence: 'composing', author: 'Carla Dias' })
+  const groupTyping = await waitFor(contents, `document.querySelector('[data-whatsapp-chat="${WA_ATLAS}"] [data-wa-typing]')?.textContent === 'Carla Dias está digitando…'`)
+  const typingExpired = await waitFor(contents, `!document.querySelector('${conversation} header [data-wa-typing]') && !document.querySelector('[data-whatsapp-chat="${WA_ANA}"] [data-wa-typing]')`, 14_000)
+  const typingLasted = Date.now() - typingAt
+  const subtitleBack = await waitFor(contents, `document.querySelector('${conversation} [data-whatsapp-chat-subtitle]')`)
+
+  // O seu "digitando…": desligado (o padrão), digitar não manda nada; ligado, "digitando" e, ao limpar, "parou".
+  const typingDefault = readSettings(ctx.userDataDir).whatsappTypingSignal
+  const presencesBefore = (await presences()).length
+  await setValue(contents, '[data-whatsapp-composer]', 'sem avisar')
+  await wait(600)
+  const silentWhenOff = (await presences()).length === presencesBefore
+  await setValue(contents, '[data-whatsapp-composer]', '')
+  await evaluate(contents, "window.__scribeApi.invoke('scribe:settings-update', { whatsappTypingSignal: true }).then(() => true)")
+  await wait(400)
+  await setValue(contents, '[data-whatsapp-composer]', 'avisando')
+  let own = await presences()
+  for (let attempt = 0; attempt < 40 && own.length < presencesBefore + 1; attempt++) {
+    await wait(100)
+    own = await presences()
+  }
+  await setValue(contents, '[data-whatsapp-composer]', '')
+  for (let attempt = 0; attempt < 40 && own.length < presencesBefore + 2; attempt++) {
+    await wait(100)
+    own = await presences()
+  }
+  await evaluate(contents, "window.__scribeApi.invoke('scribe:settings-update', { whatsappTypingSignal: false }).then(() => true)")
+  const ownStates = own.slice(presencesBefore).map((item) => `${item.chatId === WA_ANA ? 'ana' : item.chatId}:${item.state}`)
+
+  // A resposta da Ana ("Perfeito!") fica respondida pelo clique, como a conversa estava antes deste passo: o Assistente
+  // (contrato 25) confere depois que a Ana não está pendente.
+  const beforeClosing = (await sentNow()).length
+  await waitFor(contents, `document.querySelector('[data-whatsapp-composer]')?.value === ''`)
+  await setValue(contents, '[data-whatsapp-composer]', 'Até sexta!')
+  await clickSelector(contents, '[data-action="whatsapp-send"]')
+  const closing = (await until((items) => items.length > beforeClosing)).at(-1)
+  const closed = closing?.text === 'Até sexta!' && (await waitFor(contents, `[...document.querySelectorAll('${conversation} [data-whatsapp-message][data-from-me="true"] [data-whatsapp-text]')].some((el) => el.textContent === 'Até sexta!')`, 8000))
+
+  return {
+    ok:
+      bar &&
+      escCancels &&
+      xCancels &&
+      afterReply.length === before + 1 &&
+      reply?.chatId === WA_ANA &&
+      reply.text === replyText &&
+      reply.replyToId === 'm1' &&
+      quoted &&
+      barGone &&
+      scrolled &&
+      incomingQuote &&
+      forged === JSON.stringify({ ok: false, error: 'click' }) &&
+      noToken === JSON.stringify({ ok: false, error: 'click' }) &&
+      reactedWithoutClick === 0 &&
+      picker &&
+      chip &&
+      reacted.length >= 1 &&
+      reacted[0]?.messageId === 'm1' &&
+      reacted[0]?.emoji === thumbs &&
+      theirs &&
+      removed &&
+      removal?.messageId === 'm1' &&
+      removal.emoji === '' &&
+      typingShown &&
+      groupTyping &&
+      typingExpired &&
+      typingLasted >= 8000 &&
+      subtitleBack &&
+      typingDefault !== true &&
+      silentWhenOff &&
+      ownStates.join(',') === 'ana:composing,ana:paused' &&
+      readSettings(ctx.userDataDir).whatsappTypingSignal === false &&
+      closed,
+    detail: `barra de citação=${bar} (Esc=${escCancels}, X=${xCancels}); resposta ${JSON.stringify(reply ?? null)}; citação no balão=${quoted}, barra e campo limpos=${barGone}, rola até a m1=${scrolled} (fora de vista antes=${hiddenBefore}); resposta da Ana com a citação=${incomingQuote}; reação com token inventado=${forged}, sem token=${noToken}, sem clique=${reactedWithoutClick}; seletor com 6=${picker}; chip 👍 seu=${chip} (serviço ${JSON.stringify(reacted)}); ❤️ da Ana pelo SSE=${theirs}; tocar de novo tira=${removed} (${JSON.stringify(removal ?? null)}); "digitando…" no cabeçalho e na lista=${typingShown}, no grupo com o nome=${groupTyping}, sumiu sozinho=${typingExpired} em ${typingLasted} ms; o seu "digitando…": padrão desligado=${typingDefault !== true}, desligado não manda=${silentWhenOff}, ligado ${ownStates.join(' ')}; resposta final à Ana pelo clique=${closed}`,
   }
 }
 
@@ -6226,6 +6532,286 @@ async function internetChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => 
 }
 
 // ---------------------------------------------------------------------------------------------------------
+// Contrato 21: os servidores MCP do agente, com o `claude` falso, o servidor MCP falso e o agente ACP falso.
+
+interface SmokeMcpSession {
+  method?: string
+  purpose?: string
+  mcpServers?: { name: string; type?: string; command?: string; args?: string[]; url?: string; env?: { name: string; length: number }[]; headers?: { name: string; length: number }[] }[]
+  options?: { disallowedTools?: string[]; settings?: { permissions?: { ask?: string[] } } }
+}
+
+/** O servidor MCP falso por HTTP, numa porta livre de 127.0.0.1, exigindo o cabeçalho com o segredo inventado. */
+async function smokeMcpHttp(script: string): Promise<{ url: string; stop: () => void }> {
+  const child = spawnChild(process.execPath, [script, '--http', '--token', SMOKE_MCP_SECRETS.http], { env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' }, stdio: ['ignore', 'pipe', 'ignore'] })
+  const port = await new Promise<number>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('o servidor MCP falso por HTTP não abriu')), 10_000)
+    child.stdout?.setEncoding('utf8')
+    child.stdout?.on('data', (chunk: string) => {
+      const match = /PORT (\d+)/.exec(chunk)
+      if (!match) return
+      clearTimeout(timer)
+      resolve(Number(match[1]))
+    })
+  })
+  return { url: `http://127.0.0.1:${port}/mcp`, stop: () => void child.kill() }
+}
+
+/**
+ * Contrato 21 (CA0 a CA8), no claro: a aba "Conexões" com o aviso fixo e os servidores do `claude` falso (o conector do
+ * claude.ai não dá para ligar); "Ver detalhes" mascarado; ligar `calculadora` para o chat, "Testar" e a regra "Negar" em
+ * `apagar_tudo`; importar o do Claude Desktop falso só no app (sem o segredo); adicionar pelo formulário no Claude CLI
+ * (grava no arquivo do `claude` falso) e por JSON colado só no app (HTTP local com o cabeçalho), com "Salvar" só depois
+ * do teste; no Assistente, a linha "Conexões" com um servidor desligado na conversa, o cartão de aprovação ("Permitir uma
+ * vez"), o passo concluído e a ferramenta negada pela regra; o `session/new` com a definição lida na hora; tradução e
+ * resumo sem MCP; "Remover" do CLI com a confirmação. PNGs `configuracoes-conexoes-light`/`-dark`,
+ * `conexoes-adicionar-light` e `perguntar-aprovacao-mcp-light`. Termina com tudo desligado.
+ */
+async function mcpChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => void, checks: Record<string, Check>, shots: Screenshot[]): Promise<void> {
+  const script = join(app.getAppPath(), 'test', 'fixtures', 'fake-mcp-server.mjs')
+  const cliFile = join(ctx.userDataDir, 'smoke-mcp', 'claude.json')
+  const http = await smokeMcpHttp(script)
+  const win = ctx.openWindow({ theme: 'light' })
+  watch(win)
+  await loadAndWait(win)
+  const contents = win.webContents
+  const invoke = <T>(js: string): Promise<T> => evaluate<T>(contents, js)
+  const secrets = Object.values(SMOKE_MCP_SECRETS)
+  const leakOnScreen = async (): Promise<string[]> => {
+    const html = await invoke<string>('document.documentElement.outerHTML')
+    return secrets.filter((secret) => html.includes(secret))
+  }
+  const transportBefore = readSettings(ctx.userDataDir).claudeTransport
+  await invoke("window.__scribeApi.invoke('scribe:settings-update', { claudeTransport: 'acp' }).then(() => true)")
+  const server = (key: string): string => `[data-mcp-server=${JSON.stringify(key)}]`
+  try {
+    // CA0, CA2 e CA7: a aba, o aviso, a lista do CLI lida na hora e o encontrado no Claude Desktop.
+    const opened = await openSettingsTab(contents, 'conexoes')
+    const listed = await waitFor(contents, `document.querySelector('[data-mcp-cli-state="ok"]') && document.querySelector('${server('cli:calculadora')}')`, 15_000)
+    const warning = await invoke<string>(`document.querySelector('[data-notice="mcp-warning"]')?.textContent ?? ''`)
+    const cliNames = await invoke<string[]>(`[...document.querySelectorAll('[data-mcp-section="cli"] [data-mcp-server]')].map((el) => el.dataset.mcpServer)`)
+    const claudeAiLocked = await invoke<boolean>(`document.querySelector('${server('cli:claude.ai Notion')} [data-action="mcp-toggle"]')?.disabled === true`)
+    const allOff = await invoke<boolean>(`[...document.querySelectorAll('[data-mcp-server]')].every((el) => el.dataset.mcpState === 'off')`)
+    const foundCount = await invoke<string>(`document.querySelector('[data-mcp-found-count]')?.textContent ?? ''`)
+    await clickSelector(contents, `${server('cli:calculadora')} [data-action="mcp-details"]`)
+    const detailsShown = await waitFor(contents, `document.querySelector('${server('cli:calculadora')} [data-mcp-details]')?.textContent.includes('CALC_TOKEN=••••')`)
+    await settle(contents)
+    shots.push(await capture(win, ctx.outDir, 'configuracoes-conexoes-light'))
+    const leakList = await leakOnScreen()
+    checks['tab'] = {
+      ok:
+        opened &&
+        listed &&
+        warning.includes(MCP_FIXED_WARNING) &&
+        warning.includes('permissões separadas') &&
+        JSON.stringify(cliNames) === JSON.stringify(['cli:calculadora', 'cli:docs-remoto', 'cli:claude.ai Notion']) &&
+        claudeAiLocked &&
+        allOff &&
+        foundCount === '1 servidor' &&
+        detailsShown &&
+        leakList.length === 0,
+      detail: `aba=${opened}; lista do CLI=${listed} ${JSON.stringify(cliNames)}; aviso "${warning.slice(0, 80)}…"; claude.ai travado=${claudeAiLocked}; tudo desligado=${allOff}; Claude Desktop "${foundCount}"; detalhes mascarados=${detailsShown}; segredos na tela=${leakList.length}`,
+    }
+
+    // CA0 e CA5: ligar `calculadora` para o chat, "Testar" (as duas ferramentas) e "Negar" em `apagar_tudo`.
+    await clickSelector(contents, `${server('cli:calculadora')} [data-action="mcp-toggle"]`)
+    const on = await waitFor(contents, `document.querySelector('${server('cli:calculadora')} [data-action="mcp-toggle"]')?.getAttribute('aria-checked') === 'true'`)
+    await clickSelector(contents, `${server('cli:calculadora')} [data-action="mcp-test"]`)
+    const tested = await waitFor(contents, `document.querySelector('${server('cli:calculadora')} [data-mcp-test="ok"]') && document.querySelector('${server('cli:calculadora')} [data-mcp-policy="apagar_tudo"]')`, 20_000)
+    const tools = await invoke<string[]>(`[...document.querySelectorAll('${server('cli:calculadora')} [data-mcp-tool]')].map((el) => el.dataset.mcpTool)`)
+    const state = await invoke<string>(`document.querySelector('${server('cli:calculadora')}')?.dataset.mcpState ?? ''`)
+    await setValue(contents, `${server('cli:calculadora')} [data-mcp-policy="apagar_tudo"]`, 'deny', 'change')
+    let prefs: unknown = null
+    for (let attempt = 0; attempt < 40; attempt++) {
+      prefs = existsSync(join(ctx.userDataDir, MCP_CLI_ENABLED_FILE)) ? (JSON.parse(readFileSync(join(ctx.userDataDir, MCP_CLI_ENABLED_FILE), 'utf8')) as { servers: unknown }).servers : null
+      if (JSON.stringify(prefs).includes('deny')) break
+      await wait(50)
+    }
+    checks['cliEnable'] = {
+      ok: on && tested && JSON.stringify(tools) === JSON.stringify(['soma', 'apagar_tudo']) && state === 'connected' && JSON.stringify(prefs) === JSON.stringify({ calculadora: { uses: ['chat'], toolPolicy: { apagar_tudo: 'deny' } } }),
+      detail: `ligado=${on}; teste=${tested} ${JSON.stringify(tools)}; estado ${state}; mcp-cli-enabled.json ${JSON.stringify(prefs)}`,
+    }
+
+    // CA2: importar do Claude Desktop só no app, desligado e sem o segredo.
+    await clickSelector(contents, '[data-mcp-found="claude-desktop:arquivos-desktop"] [data-action="mcp-import-app"]')
+    const imported = await waitFor(contents, `[...document.querySelectorAll('[data-mcp-section="app"] [data-mcp-server]')].some((el) => el.textContent.includes('arquivos-desktop') && el.dataset.mcpState === 'off')`)
+    const appFile = (): string => (existsSync(join(ctx.userDataDir, MCP_SERVERS_FILE)) ? readFileSync(join(ctx.userDataDir, MCP_SERVERS_FILE), 'utf8') : '')
+    const importedFile = appFile()
+    const importedEnv = (JSON.parse(importedFile || '{"servers":[]}') as { servers: { name: string; env: { key: string; cipher?: string | null }[] }[] }).servers.find((entry) => entry.name === 'arquivos-desktop')?.env
+    checks['import'] = {
+      ok: imported && !importedFile.includes(SMOKE_MCP_SECRETS.desktop) && JSON.stringify(importedEnv?.find((pair) => pair.key === 'API_KEY')) === JSON.stringify({ key: 'API_KEY', secret: true, cipher: null }),
+      detail: `importado desligado=${imported}; segredo no arquivo=${importedFile.includes(SMOKE_MCP_SECRETS.desktop)}; API_KEY ${JSON.stringify(importedEnv)}`,
+    }
+
+    // CA3: pelo formulário, comando local, salvo no Claude CLI (o padrão); "Salvar" só depois do teste.
+    await clickSelector(contents, '[data-action="mcp-add"]')
+    await waitFor(contents, `document.querySelector('[data-mcp-form="new"] #mcp-form-name')`)
+    await setValue(contents, '#mcp-form-name', 'calc-form')
+    await setValue(contents, '#mcp-form-command', process.execPath)
+    await setValue(contents, '#mcp-form-args', script)
+    await clickSelector(contents, '[data-action="mcp-form-add-env"]')
+    await setValue(contents, '[data-mcp-form] [data-mcp-pair="env"] [data-mcp-pair-key]', 'ELECTRON_RUN_AS_NODE')
+    await setValue(contents, '[data-mcp-form] [data-mcp-pair="env"] [data-mcp-pair-value]', '1')
+    const saveLockedBefore = await invoke<boolean>(`document.querySelector('[data-action="mcp-form-save"]')?.disabled === true`)
+    const targetCli = await invoke<string | null>(`document.querySelector('[data-mcp-form-target="cli"]')?.getAttribute('aria-checked') ?? null`)
+    await clickSelector(contents, '[data-action="mcp-form-test"]')
+    const formTested = await waitFor(contents, `document.querySelector('[data-mcp-form-result="ok"] [data-mcp-tool="soma"]') && document.querySelector('[data-action="mcp-form-save"]')?.disabled === false`, 20_000)
+    await settle(contents)
+    shots.push(await capture(win, ctx.outDir, 'conexoes-adicionar-light'))
+    await clickSelector(contents, '[data-action="mcp-form-save"]')
+    const formSaved = await waitFor(contents, `!document.querySelector('[data-mcp-form]') && document.querySelector('${server('cli:calc-form')}')`, 20_000)
+    // Nasce desligado para o app (CA0); o smoke liga para o chat.
+    const formOff = await invoke<string | null>(`document.querySelector('${server('cli:calc-form')} [data-action="mcp-toggle"]')?.getAttribute('aria-checked') ?? null`)
+    await clickSelector(contents, `${server('cli:calc-form')} [data-action="mcp-toggle"]`)
+    const formOn = await waitFor(contents, `document.querySelector('${server('cli:calc-form')} [data-action="mcp-toggle"]')?.getAttribute('aria-checked') === 'true'`)
+    const cliAfter = JSON.parse(readFileSync(cliFile, 'utf8')) as { mcpServers: Record<string, { command?: string; args?: string[] }> }
+    checks['addForm'] = {
+      ok: saveLockedBefore && targetCli === 'true' && formTested && formSaved && formOff === 'false' && formOn && cliAfter.mcpServers['calc-form']?.command === process.execPath && JSON.stringify(cliAfter.mcpServers['calc-form']?.args) === JSON.stringify([script]),
+      detail: `"Salvar" travado antes do teste=${saveLockedBefore}; "Salvar no Claude CLI" marcado=${targetCli}; teste=${formTested}; salvo=${formSaved}; desligado ao nascer=${formOff}, ligado=${formOn}; no CLI falso ${JSON.stringify(cliAfter.mcpServers['calc-form'] ?? null).replace(process.execPath, '<electron>')}`,
+    }
+
+    // CA3: por JSON colado (HTTP local com o cabeçalho), só neste app.
+    await clickSelector(contents, '[data-action="mcp-add"]')
+    await waitFor(contents, `document.querySelector('[data-mcp-form="new"]')`)
+    await clickSelector(contents, '[data-action="mcp-form-json"]')
+    await waitFor(contents, `document.querySelector('#mcp-form-json')`)
+    await setValue(contents, '#mcp-form-json', JSON.stringify({ mcpServers: { 'calc-http': { type: 'http', url: http.url, headers: { Authorization: `Bearer ${SMOKE_MCP_SECRETS.http}` } } } }))
+    await clickSelector(contents, '[data-action="mcp-form-paste"]')
+    const pasted = await waitFor(contents, `document.querySelector('#mcp-form-url')?.value === ${JSON.stringify(http.url)} && document.querySelector('#mcp-form-name')?.value === 'calc-http'`)
+    const headerSecret = await invoke<boolean>(`document.querySelector('[data-mcp-form] [data-mcp-pair="header"] [data-mcp-pair-secret]')?.checked === true`)
+    await clickSelector(contents, '[data-mcp-form-target="app"]')
+    await clickSelector(contents, '[data-action="mcp-form-test"]')
+    const jsonTested = await waitFor(contents, `document.querySelector('[data-mcp-form-result="ok"] [data-mcp-tool="apagar_tudo"]')`, 20_000)
+    await clickSelector(contents, '[data-action="mcp-form-save"]')
+    const httpItem = `[...document.querySelectorAll('[data-mcp-section="app"] [data-mcp-server]')].find((el) => el.textContent.includes('calc-http'))`
+    // Nasce desligado (CA1); o smoke liga e o estado mostra o último teste.
+    const jsonSavedOff = await waitFor(contents, `${httpItem}?.dataset.mcpState === 'off'`, 20_000)
+    await invoke(`${httpItem}?.querySelector('[data-action="mcp-toggle"]')?.click()`)
+    const jsonSaved = jsonSavedOff && (await waitFor(contents, `${httpItem}?.dataset.mcpState === 'connected'`))
+    const savedFile = appFile()
+    checks['addJson'] = {
+      ok: pasted && headerSecret && jsonTested && jsonSaved && !savedFile.includes(SMOKE_MCP_SECRETS.http) && savedFile.includes('calc-http'),
+      detail: `formulário preenchido=${pasted}; cabeçalho como segredo=${headerSecret}; teste=${jsonTested}; salvo desligado=${jsonSavedOff}, ligado e conectado=${jsonSaved}; segredo em texto no arquivo=${savedFile.includes(SMOKE_MCP_SECRETS.http)}`,
+    }
+    const leakForms = await leakOnScreen()
+
+    // CA0: a definição é lida na hora: muda no CLI depois de ligar e a sessão vê a de agora.
+    const cliNow = JSON.parse(readFileSync(cliFile, 'utf8')) as { mcpServers: Record<string, { args?: string[] }> }
+    cliNow.mcpServers['calculadora']?.args?.push('--rodada-2')
+    writeFileSync(cliFile, JSON.stringify(cliNow, null, 2))
+
+    // CA4 a CA6: o Assistente com as conexões; `calc-form` desligado só nesta conversa.
+    const sessionsBefore = readAcpLog(ctx.userDataDir).filter((entry) => entry.method === 'session/new').length
+    await clickSelector(contents, '[data-nav="assistente"]')
+    await waitFor(contents, routeIs('assistente'))
+    await clickSelector(contents, '[data-action="chat-new"]')
+    await waitFor(contents, `document.querySelector('[data-chat-input]') && !document.querySelector('[data-chat-message]')`)
+    await clickSelector(contents, '[data-action="toggle-context"]')
+    const row = await waitFor(contents, `document.querySelectorAll('[data-chat-connections] [data-chat-connection]').length === 3`, 8000)
+    const rowKeys = await invoke<string[]>(`[...document.querySelectorAll('[data-chat-connection]')].map((el) => el.dataset.chatConnection)`)
+    await clickSelector(contents, `[data-chat-connection="cli:calc-form"] [role="switch"]`)
+    const offInChat = await waitFor(contents, `document.querySelector('[data-chat-connection="cli:calc-form"] [role="switch"]')?.getAttribute('aria-checked') === 'false'`)
+    await clickSelector(contents, '[data-action="close-context"]')
+    await setValue(contents, '[data-chat-input]', 'Calculadora: some 2 e 3 e depois apague tudo')
+    await pressEnterIn(contents, '[data-chat-input]')
+    const card = await waitFor(contents, `document.querySelector('[data-mcp-approval]')?.textContent.includes('O Claude quer usar soma de calculadora')`, 15_000)
+    const cardArgs = await invoke<string>(`document.querySelector('[data-mcp-approval-args]')?.textContent ?? ''`)
+    const cardButtons = await invoke<string[]>(`[...document.querySelectorAll('[data-mcp-approval] button')].map((el) => el.textContent)`)
+    await settle(contents)
+    shots.push(await capture(win, ctx.outDir, 'perguntar-aprovacao-mcp-light'))
+    await clickSelector(contents, '[data-mcp-approval] [data-action="mcp-allow-once"]')
+    const done = await waitFor(contents, `${CHAT_DONE} && (${LAST_ASSISTANT}?.textContent ?? '').includes('A soma deu 5.')`, 15_000)
+    const answerText = await invoke<string>(`${LAST_ASSISTANT}?.querySelector('[data-chat-markdown]')?.textContent ?? ''`)
+    await invoke(`${LAST_ASSISTANT}?.querySelector('[data-action="toggle-reasoning"]')?.click()`)
+    await waitFor(contents, `${LAST_ASSISTANT}?.querySelector('[data-chat-steps]')`)
+    const steps = await invoke<{ tool: string; label: string; status: string }[]>(
+      `[...(${LAST_ASSISTANT}?.querySelectorAll('[data-chat-step]') ?? [])].map((el) => ({ tool: el.dataset.chatStep, label: el.querySelector('span.min-w-0')?.textContent ?? '', status: el.dataset.chatStepStatus }))`,
+    )
+    const cardGone = await invoke<boolean>(`!document.querySelector('[data-mcp-approval]')`)
+    const log = readAcpLog(ctx.userDataDir)
+    const chatSession = (log.filter((entry) => entry.method === 'session/new').slice(sessionsBefore) as SmokeMcpSession[]).find((entry) => entry.purpose === 'chat')
+    const servers = chatSession?.mcpServers ?? []
+    const calc = servers.find((entry) => entry.name === 'calculadora')
+    const httpServer = servers.find((entry) => entry.name === 'calc-http')
+    const mcpEvents = log.filter((entry) => (entry as { event?: string }).event === 'mcp').map((entry) => `${String((entry as { tool?: string }).tool)}:${String((entry as { outcome?: string }).outcome)}`)
+    checks['chat'] = {
+      ok:
+        row &&
+        JSON.stringify(rowKeys) === JSON.stringify(['cli:calculadora', 'cli:calc-form', `app:${(JSON.parse(appFile()) as { servers: { id: string; name: string }[] }).servers.find((entry) => entry.name === 'calc-http')?.id ?? ''}`]) &&
+        offInChat &&
+        card &&
+        cardArgs === '{\n  "a": 2,\n  "b": 3\n}' &&
+        JSON.stringify(cardButtons) === JSON.stringify(['Permitir uma vez', 'Sempre permitir esta ferramenta', 'Negar']) &&
+        done &&
+        answerText.includes('A soma deu 5.') &&
+        answerText.includes('Não pude usar apagar_tudo: o app negou.') &&
+        steps.some((step) => step.tool === 'Mcp' && step.label === 'Usando soma (calculadora)' && step.status === 'completed') &&
+        steps.some((step) => step.tool === 'Mcp' && step.label === 'Usando apagar_tudo (calculadora)' && step.status === 'failed') &&
+        cardGone &&
+        JSON.stringify(mcpEvents.slice(-2)) === JSON.stringify(['soma:allow', 'apagar_tudo:reject']),
+      detail: `linha Conexões=${row} ${JSON.stringify(rowKeys)}; desligado na conversa=${offInChat}; cartão=${card} args ${JSON.stringify(cardArgs)} botões ${JSON.stringify(cardButtons)}; resposta=${done} "${answerText}"; passos ${JSON.stringify(steps)}; cartão saiu=${cardGone}; agente ${JSON.stringify(mcpEvents)}`,
+    }
+    checks['session'] = {
+      ok:
+        JSON.stringify(servers.map((entry) => entry.name)) === JSON.stringify(['calculadora', 'calc-http']) &&
+        (calc?.args ?? []).includes('--rodada-2') &&
+        calc?.env?.some((pair) => pair.name === 'CALC_TOKEN' && pair.length === SMOKE_MCP_SECRETS.cli.length) === true &&
+        httpServer?.type === 'http' &&
+        httpServer.url === http.url &&
+        httpServer.headers?.some((pair) => pair.name === 'Authorization' && pair.length === `Bearer ${SMOKE_MCP_SECRETS.http}`.length) === true &&
+        (chatSession?.options?.disallowedTools ?? []).includes('mcp__calculadora__apagar_tudo') &&
+        JSON.stringify(chatSession?.options?.settings?.permissions?.ask ?? []) === JSON.stringify(['WebSearch', 'WebFetch', 'mcp__calculadora', 'mcp__calc-http']),
+      detail: `servidores ${JSON.stringify(servers.map((entry) => entry.name))}; calculadora lida na hora (--rodada-2)=${(calc?.args ?? []).includes('--rodada-2')}; CALC_TOKEN com o tamanho do segredo=${String(calc?.env?.some((pair) => pair.name === 'CALC_TOKEN' && pair.length === SMOKE_MCP_SECRETS.cli.length))}; HTTP ${httpServer?.type ?? '-'}; negadas ${JSON.stringify((chatSession?.options?.disallowedTools ?? []).filter((tool) => tool.startsWith('mcp__')))}; ask ${JSON.stringify(chatSession?.options?.settings?.permissions?.ask ?? [])}`,
+    }
+
+    // CA4: tradução, resumo e os outros usos nunca recebem servidor MCP (em todo o roteiro do smoke).
+    const others = (readAcpLog(ctx.userDataDir) as SmokeMcpSession[]).filter((entry) => entry.method === 'session/new' && entry.purpose !== 'chat' && entry.purpose !== 'analysis')
+    const withMcp = others.filter((entry) => (entry.mcpServers ?? []).length > 0)
+    checks['otherUses'] = {
+      ok: others.some((entry) => entry.purpose === 'translate') && others.some((entry) => entry.purpose === 'summary') && withMcp.length === 0,
+      detail: `${others.length} sessões de outros usos (${[...new Set(others.map((entry) => entry.purpose))].join(', ')}); com MCP: ${withMcp.length}`,
+    }
+
+    // CA0: "Remover" do CLI com a confirmação roda `claude mcp remove -s user`.
+    await openSettingsTab(contents, 'conexoes')
+    await waitFor(contents, `document.querySelector('${server('cli:calc-form')}')`, 15_000)
+    await clickSelector(contents, `${server('cli:calc-form')} [data-action="mcp-remove"]`)
+    const confirmText = await invoke<string>(`document.querySelector('${server('cli:calc-form')} [data-mcp-remove-confirm]')?.textContent ?? ''`)
+    await clickSelector(contents, `${server('cli:calc-form')} [data-action="mcp-remove-confirm"]`)
+    const removed = await waitFor(contents, `!document.querySelector('${server('cli:calc-form')}')`, 15_000)
+    const cliRemoved = !(JSON.parse(readFileSync(cliFile, 'utf8')) as { mcpServers: Record<string, unknown> }).mcpServers['calc-form']
+    const leakEnd = await leakOnScreen()
+    checks['remove'] = {
+      ok: confirmText.includes('Remover também do Claude CLI do terminal?') && removed && cliRemoved,
+      detail: `confirmação "${confirmText}"; saiu da lista=${removed}; saiu do CLI falso=${cliRemoved}`,
+    }
+    checks['secrets'] = {
+      ok: leakList.length + leakForms.length + leakEnd.length === 0 && !appFile().includes(SMOKE_MCP_SECRETS.http) && !JSON.stringify(readAcpLog(ctx.userDataDir)).includes(SMOKE_MCP_SECRETS.cli),
+      detail: `segredos na tela: ${leakList.length + leakForms.length + leakEnd.length}; em texto no mcp-servers.json=${appFile().includes(SMOKE_MCP_SECRETS.http)}; no registro do agente falso=${JSON.stringify(readAcpLog(ctx.userDataDir)).includes(SMOKE_MCP_SECRETS.cli)}`,
+    }
+
+    // No escuro, a aba com os servidores ligados.
+    const dark = ctx.openWindow({ theme: 'dark' })
+    watch(dark)
+    await loadAndWait(dark)
+    await openSettingsTab(dark.webContents, 'conexoes')
+    const darkListed = await waitFor(dark.webContents, `document.querySelector('[data-mcp-cli-state="ok"]') && document.querySelector('${server('cli:calculadora')}')?.dataset.mcpState !== 'off'`, 15_000)
+    await settle(dark.webContents)
+    shots.push(await capture(dark, ctx.outDir, 'configuracoes-conexoes-dark'))
+    checks['dark'] = { ok: darkListed, detail: `lista no escuro=${darkListed}` }
+    dark.destroy()
+  } finally {
+    // Tudo desligado: o resto do roteiro segue sem MCP.
+    await invoke(
+      `window.__scribeApi.invoke('scribe:mcp-overview', {}).then((overview) => Promise.all([...overview.cli.servers, ...overview.app].filter((entry) => entry.enabled).map((entry) => window.__scribeApi.invoke('scribe:mcp-update', { key: entry.key, enabled: false })))).then(() => true)`,
+    ).catch(() => undefined)
+    await invoke(`window.__scribeApi.invoke('scribe:settings-update', { claudeTransport: '${transportBefore === 'acp' ? 'acp' : 'cli'}' }).then(() => true)`).catch(() => undefined)
+    http.stop()
+    win.destroy()
+  }
+}
+
+// ---------------------------------------------------------------------------------------------------------
 // Contrato 23: Automações (agentes, tarefas agendadas, execuções) com o agente ACP falso e o relógio do
 // agendador adiantado pelo smoke; o ícone da barra de menus, as notificações, o Dock e o "abrir ao entrar" são
 // substitutos que só registram. Nada sai da máquina e nenhum agente alcança o WhatsApp.
@@ -6272,10 +6858,12 @@ async function automationsIdle(ctx: SmokeContext): Promise<void> {
   await wait(100)
 }
 
-const trayLabels = (ctx: SmokeContext): string[] => (ctx.tray()?.template() ?? []).map((item) => (item.type === 'separator' ? '—' : String(item.label ?? '')))
+/** Contrato 50: os itens dos submenus (Automações, Recentes, cada reunião) entram logo depois do item pai. */
+const trayItems = (items: readonly MenuItemConstructorOptions[]): MenuItemConstructorOptions[] => items.flatMap((item) => [item, ...(Array.isArray(item.submenu) ? trayItems(item.submenu) : [])])
+const trayLabels = (ctx: SmokeContext): string[] => trayItems(ctx.tray()?.template() ?? []).map((item) => (item.type === 'separator' ? '—' : String(item.label ?? '')))
 
 function trayClick(ctx: SmokeContext, id: string): boolean {
-  const item = ctx.tray()?.template().find((entry) => entry.id === id)
+  const item = trayItems(ctx.tray()?.template() ?? []).find((entry) => entry.id === id)
   if (!item?.click) return false
   ;(item.click as () => void)()
   return true
@@ -6459,11 +7047,29 @@ async function automationsChecks(ctx: SmokeContext, watch: (win: BrowserWindow) 
   await wait(300)
   const second = await invoke<{ ok: boolean; error?: string }>(`window.__scribeApi.invoke('scribe:tasks-run-now', { id: ${JSON.stringify(slowId)} })`)
   const runningIcon = ctx.tray()?.icon()
+  // Contrato 50: o menu montado com o que é assíncrono (configurações, reuniões gravadas) lido agora.
+  await ctx.tray()?.rebuild()
+  const top = ctx.tray()?.template() ?? []
+  const all = trayItems(top)
+  const automationsMenu = top.find((item) => item.id === 'tray-automations-menu')
+  const promptItem = top.find((item) => item.id === 'tray-meeting-prompt')
+  const structure =
+    top.some((item) => item.id === 'tray-recent' && Array.isArray(item.submenu)) &&
+    Array.isArray(automationsMenu?.submenu) &&
+    automationsMenu.submenu.some((item) => item.id === 'tray-pause') &&
+    automationsMenu.submenu.some((item) => item.id === 'tray-automations') &&
+    promptItem?.type === 'checkbox' &&
+    promptItem.checked === (readSettings(ctx.userDataDir).meetingPrompt ?? DEFAULT_SETTINGS.meetingPrompt) &&
+    all.some((item) => item.id === 'tray-event-none' || item.id === 'tray-event-0')
   const menu = trayLabels(ctx)
+  // No relatório, sem os títulos da agenda e das reuniões gravadas (o relatório não leva dado da agenda).
+  const reportLabels = (items: MenuItemConstructorOptions[]): string[] => items.filter((item) => !/^tray-(event|recent)-/.test(item.id ?? '')).map((item) => (item.type === 'separator' ? '—' : String(item.label ?? '')))
+  const shownMenu = reportLabels(all)
   const nextLine = menu.find((label) => label.startsWith('Resumo diário do smoke · '))
   const pauseClicked = trayClick(ctx, 'tray-pause')
   await wait(200)
   const pausedMenu = trayLabels(ctx)
+  const shownPaused = reportLabels(trayItems(ctx.tray()?.template() ?? []))
   trayClick(ctx, 'tray-pause')
   await wait(200)
   await automationsIdle(ctx)
@@ -6475,13 +7081,14 @@ async function automationsChecks(ctx: SmokeContext, watch: (win: BrowserWindow) 
   checks['tray'] = {
     ok:
       runningIcon === 'running' &&
+      structure &&
       (menu[0] ?? '').startsWith('Abrir ') &&
       ['Nova gravação', 'Bloquear', 'Automações', 'Pausar todas as tarefas', 'Sair'].every((label) => menu.includes(label)) &&
       nextLine !== undefined &&
       pauseClicked &&
       pausedMenu.includes('Retomar') &&
       trayLabels(ctx).includes('Pausar todas as tarefas'),
-    detail: `ícone rodando=${runningIcon}; menu ${JSON.stringify(menu)}; próxima "${nextLine ?? ''}"; pausado ${JSON.stringify(pausedMenu)}`,
+    detail: `ícone rodando=${runningIcon}; estrutura do contrato 50=${structure} (ids ${JSON.stringify(all.map((item) => item.id).filter(Boolean))}); menu ${JSON.stringify(shownMenu)}; próxima "${nextLine ?? ''}"; pausado ${JSON.stringify(shownPaused)}`,
   }
 
   // 3 falhas seguidas: a tarefa pausa sozinha e avisa.
@@ -6625,6 +7232,9 @@ function meetPost(port: number, origin: string, body: unknown): Promise<{ status
 }
 
 const MEET_MARKER = `(document.querySelector('[data-meet-marker]')?.textContent ?? '')`
+
+/** O PNG do aviso de reunião (contrato 48): o único no tamanho da janela dele, não no de 1120×740. */
+const MEETING_PROMPT_SHOT = 'aviso-reuniao-light'
 
 /**
  * Contrato 27 (CA8), numa janela clara, sem PNG novo: o servidor local do Meet no ar numa das portas 47632–47641;
@@ -6771,6 +7381,148 @@ async function meetChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => void
   }
 
   win.destroy()
+}
+
+/**
+ * Contrato 48 (aviso-reuniao), numa janela clara, com "Quem fala no Meet" ligado (como `meetChecks` deixa): um envio
+ * de reunião nova abre a janela do aviso (invisível no smoke, sem foco, sempre na frente, 460×88) com o título da
+ * página; outro envio da mesma reunião não abre outra, nem depois do "x"; "Começar a transcrever" fecha o aviso e
+ * começa a gravação com o título da reunião, e durante ela outra reunião não avisa; sem título, "Reunião no Meet";
+ * "Nunca perguntar" desliga "Avisar quando uma reunião começar" e, desligado, nada abre. Um PNG do aviso, no claro.
+ */
+/**
+ * Clique que fecha a própria janela (os botões do aviso): o clique sai depois que o `executeJavaScript` responde, senão
+ * a janela some no meio do pedido ("Render frame was disposed").
+ */
+async function clickThenClose(contents: WebContents, selector: string): Promise<boolean> {
+  return evaluate<boolean>(contents, `(() => { const el = document.querySelector(${JSON.stringify(selector)}); if (!el) return false; setTimeout(() => el.click(), 0); return true })()`)
+}
+
+async function meetingPromptChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => void, checks: Record<string, Check>, shots: Screenshot[]): Promise<void> {
+  const win = ctx.openWindow({ theme: 'light' })
+  watch(win)
+  await loadAndWait(win)
+  const contents = win.webContents
+  const opened = ctx.fixtures.meetingPrompt.windows
+  const before = opened.length
+  const port = ctx.meet.port()
+  const post = async (reuniao: string, titulo?: string): Promise<number> =>
+    port === null ? -1 : (await meetPost(port, 'chrome-extension://abc', { reuniao, participantes: ['Ana', 'Bruno'], eventos: [], plataforma: 'meet', ...(titulo ? { titulo } : {}) })).status
+  // A janela número `count` do aviso (contando desde o começo desta checagem), quando o app abrir.
+  const nth = async (count: number): Promise<BrowserWindow | null> => {
+    for (let attempt = 0; attempt < 100 && opened.length < before + count; attempt++) await wait(50)
+    const prompt = opened[before + count - 1] ?? null
+    if (prompt) watch(prompt)
+    return prompt
+  }
+  const gone = async (prompt: BrowserWindow | null): Promise<boolean> => {
+    for (let attempt = 0; attempt < 100 && prompt && !prompt.isDestroyed(); attempt++) await wait(50)
+    return prompt !== null && prompt.isDestroyed()
+  }
+  const PROMPT_TITLE = `(document.querySelector('[data-meeting-prompt-title]')?.textContent ?? '')`
+
+  // Reunião nova: o aviso abre, sem foco e na frente, com o título; a mesma reunião não abre outro, nem depois do "x".
+  const posted = await post('smk-aviso-uma', 'Revisão do contrato')
+  const first = await nth(1)
+  const titled = first ? await waitFor(first.webContents, `${PROMPT_TITLE} === 'Revisão do contrato' && document.querySelector('[data-action="meeting-prompt-record"]')`, 8000) : false
+  const bounds = first?.getBounds()
+  const sized = bounds?.width === MEETING_PROMPT_SIZE.width && bounds.height === MEETING_PROMPT_SIZE.height
+  const unfocused = first !== null && !first.isFocusable() && !first.isFocused() && first.isAlwaysOnTop()
+  if (first) {
+    await settle(first.webContents)
+    shots.push(await capture(first, ctx.outDir, MEETING_PROMPT_SHOT))
+  }
+  await post('smk-aviso-uma', 'Revisão do contrato')
+  await wait(300)
+  const kept = opened.length === before + 1 && first !== null && !first.isDestroyed()
+  if (first) await clickThenClose(first.webContents, '[data-action="meeting-prompt-close"]')
+  const closedByX = await gone(first)
+  await post('smk-aviso-uma', 'Revisão do contrato')
+  await wait(300)
+  const notAgain = opened.length === before + 1
+  checks['meetingPrompt'] = {
+    ok: posted === 200 && titled && sized && unfocused && kept && closedByX && notAgain,
+    detail: `envio=${posted}; aviso aberto com "Revisão do contrato"=${titled}, ${bounds ? `${bounds.width}x${bounds.height}` : 'sem janela'}, sem foco e na frente=${unfocused}; mesma reunião não abre outro=${kept}; "x" fechou=${closedByX}; de novo a mesma reunião, nada=${notAgain}`,
+  }
+
+  // "Começar a transcrever": o aviso fecha e a gravação começa com o título; gravando, outra reunião não avisa.
+  const idsBefore = new Set(readMeetings(ctx.userDataDir).map((meeting) => meeting.id))
+  await post('smk-aviso-duas', 'Planejamento do trimestre')
+  const second = await nth(2)
+  if (second && (await waitFor(second.webContents, `document.querySelector('[data-action="meeting-prompt-record"]')`, 8000))) await clickThenClose(second.webContents, '[data-action="meeting-prompt-record"]')
+  const secondClosed = await gone(second)
+  const recording = await waitFor(contents, `${routeIs('gravacao')} && ${probeJs('state()?.mic')} === 'live' && ${LIVE_TITLE} === 'Planejamento do trimestre'`, 8000)
+  await post('smk-aviso-tres')
+  await wait(300)
+  const quietWhileRecording = opened.length === before + 2
+  const saved = await endCalendarRecording(contents, ctx, idsBefore)
+  checks['meetingPromptRecord'] = {
+    ok: second !== null && secondClosed && recording && quietWhileRecording && saved?.title === 'Planejamento do trimestre',
+    detail: `aviso da segunda reunião=${second !== null}, fechou no clique=${secondClosed}; gravando com o título da reunião=${recording}; outra reunião durante a gravação não avisou=${quietWhileRecording}; reunião salva como "${saved?.title ?? 'nenhuma'}"`,
+  }
+
+  // Sem título, "Reunião no Meet"; "Nunca perguntar" desliga a configuração e, desligada, nada abre.
+  await post('smk-aviso-quatro')
+  const third = await nth(3)
+  const fallback = third ? await waitFor(third.webContents, `${PROMPT_TITLE} === 'Reunião no Meet'`, 8000) : false
+  if (third) {
+    await clickSelector(third.webContents, '[data-action="meeting-prompt-more"]')
+    if (await waitFor(third.webContents, `document.querySelector('[data-action="meeting-prompt-never"]') && document.querySelector('[data-meeting-prompt-where]')`)) {
+      await clickThenClose(third.webContents, '[data-action="meeting-prompt-never"]')
+    }
+  }
+  const thirdClosed = await gone(third)
+  let off = false
+  for (let attempt = 0; attempt < 100 && !off; attempt++) {
+    off = readSettings(ctx.userDataDir).meetingPrompt === false
+    if (!off) await wait(50)
+  }
+  await post('smk-aviso-cinco')
+  await wait(500)
+  const quietWhenOff = opened.length === before + 3
+  await evaluate(contents, `window.__scribeApi.invoke('scribe:settings-update', { meetingPrompt: true })`)
+  checks['meetingPromptNever'] = {
+    ok: fallback && thirdClosed && off && quietWhenOff,
+    detail: `sem título, "Reunião no Meet"=${fallback}; "Nunca perguntar" fechou=${thirdClosed} e desligou a configuração=${off}; desligada, reunião nova não abriu nada=${quietWhenOff}`,
+  }
+
+  win.destroy()
+}
+
+/**
+ * Contrato 49 (aviso-reuniao), com o `lap-mic-watch` falso (test/fixtures/fake-mic-watch.mjs), que repete as linhas
+ * que o smoke acrescenta no arquivo das fixtures: o microfone só do navegador não avisa; o do Zoom, depois de 3 s,
+ * abre o aviso "Reunião no Zoom" (sem foco, sempre na frente); o Zoom desligar o microfone fecha o aviso.
+ */
+async function micWatchChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => void, checks: Record<string, Check>): Promise<void> {
+  const opened = ctx.fixtures.meetingPrompt.windows
+  const before = opened.length
+  const line = (mic: boolean, apps: string[], names: Record<string, string> = {}): void => appendFileSync(ctx.fixtures.micWatch.file, `${JSON.stringify({ v: 1, mic, apps, names, camera: false })}\n`)
+  // O observador subiu de novo quando `meetingPromptChecks` religou a configuração: espera o falso ler o arquivo.
+  await wait(500)
+  line(true, ['com.google.Chrome.helper'], { 'com.google.Chrome.helper': 'Google Chrome Helper' })
+  await wait(MIC_PROMPT_MIN_MS + 800)
+  const browserQuiet = opened.length === before
+  line(true, ['com.google.Chrome.helper', 'us.zoom.xos'], { 'us.zoom.xos': 'zoom.us' })
+  const startedAt = Date.now()
+  for (let attempt = 0; attempt < 200 && opened.length === before; attempt++) await wait(50)
+  const elapsed = Date.now() - startedAt
+  const prompt = opened[before] ?? null
+  if (prompt) watch(prompt)
+  const titled = prompt ? await waitFor(prompt.webContents, `(document.querySelector('[data-meeting-prompt-title]')?.textContent ?? '') === 'Reunião no Zoom'`, 8000) : false
+  const unfocused = prompt !== null && !prompt.isFocusable() && !prompt.isFocused() && prompt.isAlwaysOnTop()
+  const single = opened.length === before + 1
+  line(false, [])
+  for (let attempt = 0; attempt < 100 && prompt && !prompt.isDestroyed(); attempt++) await wait(50)
+  const closedWhenOff = prompt !== null && prompt.isDestroyed()
+  // Fechado o aviso do Zoom, a última reunião da extensão (a que `meetingPromptChecks` mandou com o aviso desligado)
+  // pode avisar agora, se a extensão ainda constar como conectada: esse aviso não é desta checagem e fecha aqui.
+  await wait(300)
+  for (const extra of opened.slice(before + 1)) if (!extra.isDestroyed()) extra.destroy()
+  checks['micWatch'] = {
+    ok: browserQuiet && prompt !== null && elapsed >= MIC_PROMPT_MIN_MS - 500 && titled && unfocused && single && closedWhenOff,
+    detail: `só o navegador com o microfone, nada abriu=${browserQuiet}; Zoom: aviso aberto=${prompt !== null} depois de ${elapsed} ms, "Reunião no Zoom"=${titled}, sem foco e na frente=${unfocused}, um aviso só=${single}; Zoom desligou o microfone, o aviso fechou=${closedWhenOff}`,
+  }
 }
 
 /** Títulos que `test/fixtures/fake-ai-notes.mjs` cria no primeiro e no segundo ciclo (contrato 30). */
@@ -7379,7 +8131,7 @@ async function emailAssistantChecks(ctx: SmokeContext, watch: (win: BrowserWindo
 }
 
 /**
- * Contrato 46 (CA1 a CA3, CA6), com a conta do servidor falso conectada e o agente ACP falso: a tarefa nova com "Pode
+ * Contrato 51 (CA1 a CA3, CA6), com a conta do servidor falso conectada e o agente ACP falso: a tarefa nova com "Pode
  * enviar email" ligada pelo formulário (a conta e `@cliente.example`), gravada com a data e com o ícone de envio na
  * lista; "Rodar agora" com o pedido de envio para um endereço da lista e outro de fora: o SMTP falso recebe só o
  * primeiro, o segundo é recusado, a execução mostra os dois, o enviado está em Enviados e sai o aviso do fim.
@@ -7629,6 +8381,7 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
   const assistant: Record<string, Check> = {}
   const automations: Record<string, Check> = {}
   const internet: Record<string, Check> = {}
+  const mcp: Record<string, Check> = {}
   /** Contrato 27: quem fala no Meet. */
   const meet: Record<string, Check> = {}
   const email: Record<string, Check> = {}
@@ -7988,8 +8741,17 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
     // Contrato 26: a internet nos agentes, no "Pedir agora" e no Assistente, com o agente ACP falso (sem rede).
     await internetChecks(ctx, watch, internet, screenshots)
 
+    // Contrato 21: os servidores MCP (Claude CLI falso, servidor MCP falso e o agente ACP falso); termina desligado.
+    await mcpChecks(ctx, watch, mcp, screenshots)
+
     // Contrato 27: quem fala no Meet, com um cliente falso no servidor local; antes do bloqueio.
     await meetChecks(ctx, watch, meet)
+
+    // Contrato 48: o aviso de reunião, com o servidor do Meet no ar (como `meetChecks` deixa); antes do bloqueio.
+    await meetingPromptChecks(ctx, watch, meet, screenshots)
+
+    // Contrato 49: o mesmo aviso pelo microfone de outro app, com o `lap-mic-watch` falso.
+    await micWatchChecks(ctx, watch, meet)
 
     // Contrato 30: IA anotando ao vivo e o quadro de post-its, numa gravação à parte; antes do bloqueio.
     await aiNotesChecks(ctx, watch, recording)
@@ -8000,7 +8762,7 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
     // Contrato 45: o email no Assistente, com a conta do servidor falso conectada; antes do bloqueio.
     await emailAssistantChecks(ctx, watch, email, screenshots)
 
-    // Contrato 46: a tarefa com "Pode enviar email", com a mesma conta do servidor falso; antes do bloqueio.
+    // Contrato 51: a tarefa com "Pode enviar email", com a mesma conta do servidor falso; antes do bloqueio.
     await emailTaskChecks(ctx, watch, email, screenshots)
 
     // Contrato 22: bloqueio do app, por último (a senha criada vale para o userData inteiro).
@@ -8068,8 +8830,10 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
   for (const name of ['screen', 'testNow', 'agentForm', 'tasks', 'scheduled', 'afterMeeting', 'skipped', 'tray', 'autoPaused', 'missed', 'askNow', 'runs', 'settings', 'closeKeepsApp', 'dark']) if (!automations[name]) failures.push(`automações ${name}: não executado`)
   for (const [name, check] of Object.entries(internet)) if (!check.ok) failures.push(`internet ${name}: ${check.detail}`)
   for (const name of ['agent', 'askNow', 'noInternet', 'assistant']) if (!internet[name]) failures.push(`internet ${name}: não executado`)
+  for (const [name, check] of Object.entries(mcp)) if (!check.ok) failures.push(`mcp ${name}: ${check.detail}`)
+  for (const name of ['tab', 'cliEnable', 'import', 'addForm', 'addJson', 'chat', 'session', 'otherUses', 'remove', 'secrets', 'dark']) if (!mcp[name]) failures.push(`mcp ${name}: não executado`)
   for (const [name, check] of Object.entries(meet)) if (!check.ok) failures.push(`meet ${name}: ${check.detail}`)
-  for (const name of ['server', 'recording', 'setting']) if (!meet[name]) failures.push(`meet ${name}: não executado`)
+  for (const name of ['server', 'recording', 'setting', 'meetingPrompt', 'meetingPromptRecord', 'meetingPromptNever', 'micWatch']) if (!meet[name]) failures.push(`meet ${name}: não executado`)
   for (const [name, check] of Object.entries(email)) if (!check.ok) failures.push(`email ${name}: ${check.detail}`)
   for (const name of ['settings', 'list', 'reading', 'compose', 'folders', 'attachments', 'remove', 'dark', 'notify', 'assistantPending', 'assistantReply', 'assistantTask', 'assistantSearch', 'taskEmailForm', 'taskEmailRun']) if (!email[name]) failures.push(`email ${name}: não executado`)
   for (const [name, check] of Object.entries(lock)) if (!check.ok) failures.push(`bloqueio ${name}: ${check.detail}`)
@@ -8090,14 +8854,18 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
   // com o link, no claro (contrato 26); o bloco "Agenda", a faixa "não está sendo gravada" e "Próximas", no claro
   // (contrato 12); a aba "Plugins" com o plugin salvo e o manual aberto, no claro (contrato 31); o painel Detalhes do
   // WhatsApp, no claro (contrato 32; no escuro ele sai no print da tela "WhatsApp"); o balão com a imagem, o player e
-  // a transcrição do áudio, no claro (contrato 37); a prévia do anexo com a legenda, no claro (contrato 39); a lista, a
-  // leitura e o composer do email, nos dois temas (contrato 43); o cartão dos emails pendentes e o rascunho de resposta
-  // por email no Assistente, no claro (contrato 45); o formulário da tarefa com "Pode enviar email" e a execução com os
-  // emails enviado e recusado, no claro (contrato 46).
-  const expectedShots = SCREENS.length * THEMES.length + 60
+  // a transcrição do áudio, no claro (contrato 37); a prévia do anexo com a legenda, no claro (contrato 39); a aba
+  // "Conexões" nos dois temas, o formulário testado e o cartão de aprovação da ferramenta MCP, no claro (contrato 21);
+  // o aviso de reunião, no claro e no tamanho dele (contrato 48); a lista, a leitura e o composer do email, nos dois
+  // temas (contrato 43); o cartão dos emails pendentes e o rascunho de resposta por email no Assistente, no claro
+  // (contrato 45); o formulário da tarefa com "Pode enviar email" e a execução com os emails enviado e recusado, no
+  // claro (contrato 51).
+  const expectedShots = SCREENS.length * THEMES.length + 66
   if (screenshots.length !== expectedShots) failures.push(`${screenshots.length} PNGs em vez de ${expectedShots}`)
   for (const shot of screenshots) {
-    if (shot.width < 1120 || shot.height < 740) failures.push(`${shot.name}: ${shot.width}x${shot.height} abaixo de 1120x740`)
+    if (shot.name === MEETING_PROMPT_SHOT) {
+      if (shot.width !== MEETING_PROMPT_SIZE.width || shot.height !== MEETING_PROMPT_SIZE.height) failures.push(`${shot.name}: ${shot.width}x${shot.height} em vez de ${MEETING_PROMPT_SIZE.width}x${MEETING_PROMPT_SIZE.height}`)
+    } else if (shot.width < 1120 || shot.height < 740) failures.push(`${shot.name}: ${shot.width}x${shot.height} abaixo de 1120x740`)
     if (shot.distinctColors <= 50) failures.push(`${shot.name}: só ${shot.distinctColors} cores distintas`)
   }
 
@@ -8146,6 +8914,8 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
     assistant,
     // Contrato 26: só os resultados (os endereços são os inventados do agente falso).
     internet,
+    // Contrato 21: só os resultados; nenhum valor de variável ou cabeçalho dos servidores MCP falsos.
+    mcp,
     // Contrato 27: só os resultados (os nomes são os inventados do cliente falso).
     meet,
     // Contrato 43: só os resultados (os endereços e assuntos são os inventados do servidor falso).
@@ -8171,6 +8941,9 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
   const secrets = [SMOKE_GOOGLE_CLIENT_SECRET, ...ctx.fixtures.google.accessTokens(), ...ctx.fixtures.google.refreshTokens(), 'token-acesso-falso-', 'token-renovacao-falso-']
   const leaked = secrets.filter((secret) => JSON.stringify(report).includes(secret))
   if (leaked.length) failures.push(`${leaked.length} segredo(s) do Google no relatório`)
+  // Contrato 21 (CA7): nenhum segredo dos servidores MCP falsos no relatório.
+  const mcpLeaked = Object.values(SMOKE_MCP_SECRETS).filter((secret) => JSON.stringify(report).includes(secret))
+  if (mcpLeaked.length) failures.push(`${mcpLeaked.length} segredo(s) dos servidores MCP no relatório`)
   // Contrato 12 (CA11): nenhum token da Microsoft e nenhum dado da agenda (título, participante, link) no relatório.
   const calendarData = [...ctx.fixtures.microsoft.accessTokens(), ...ctx.fixtures.microsoft.refreshTokens(), 'token-ms-', 'Alinhamento com o jurídico', 'Status da obra', 'Orçamento do trimestre', 'Carla Dias', 'ana.lima@example.com', 'meet.google.com/smk', 'teams.microsoft.com/l/meetup-join/smoke']
   const calendarLeaked = calendarData.filter((value) => JSON.stringify(report).includes(value))

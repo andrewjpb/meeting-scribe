@@ -38,7 +38,8 @@ const api: ScribeApi = {
     if (!navigator.userActivation.isActive) return Promise.resolve({ ok: false, error: 'click' })
     const clickToken = crypto.randomUUID()
     ipcRenderer.send('scribe:whatsapp-click', clickToken)
-    return ipcRenderer.invoke('scribe:whatsapp-send', { chatId: request.chatId, text: request.text, clickToken })
+    // Contrato 34: a resposta leva o id da mensagem citada.
+    return ipcRenderer.invoke('scribe:whatsapp-send', { chatId: request.chatId, text: request.text, ...(request.replyToId ? { replyToId: request.replyToId } : {}), clickToken })
   },
   // Contrato 39: o anexo sai pelo mesmo caminho: a mesma ativação viva, o mesmo token e o mesmo guarda no main.
   whatsappSendMedia(request) {
@@ -47,6 +48,13 @@ const api: ScribeApi = {
     ipcRenderer.send('scribe:whatsapp-click', clickToken)
     const { chatId, name, mime, bytes, caption } = request
     return ipcRenderer.invoke('scribe:whatsapp-send-media', { chatId, name, mime, bytes, ...(caption ? { caption } : {}), clickToken })
+  },
+  // Contrato 34: reagir é envio: a mesma ativação viva, um token novo e o mesmo guarda no main.
+  whatsappReact(request) {
+    if (!navigator.userActivation.isActive) return Promise.resolve({ ok: false, error: 'click' })
+    const clickToken = crypto.randomUUID()
+    ipcRenderer.send('scribe:whatsapp-click', clickToken)
+    return ipcRenderer.invoke('scribe:whatsapp-react', { chatId: request.chatId, messageId: request.messageId, emoji: request.emoji, clickToken })
   },
   // Contrato 42: o envio do email pelo mesmo caminho: a mesma ativação viva e um token de clique próprio.
   emailSend(request) {

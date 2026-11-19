@@ -1,6 +1,6 @@
 // Janela principal: barra de título embutida, barra lateral opaca (sem vibrancy) e webPreferences fechadas.
 import { join } from 'node:path'
-import { BrowserWindow, nativeTheme } from 'electron'
+import { BrowserWindow, nativeTheme, type WebPreferences } from 'electron'
 import { DEFAULT_BRAND_NAME } from '../shared/branding'
 import { guardWebContents } from './security'
 
@@ -27,6 +27,24 @@ export function rendererUrl(base: string, query: Record<string, string> = {}): s
   return url.toString()
 }
 
+/**
+ * `webPreferences` da janela principal, também usadas pela janela do aviso de reunião (contrato 48): sandbox,
+ * contextIsolation e o mesmo preload.
+ */
+export function appWebPreferences(): WebPreferences {
+  return {
+    preload: join(__dirname, '../preload/index.js'),
+    contextIsolation: true,
+    sandbox: true,
+    nodeIntegration: false,
+    webSecurity: true,
+    spellcheck: false,
+    // A gravação continua com a janela atrás de outras: timers do detector e do cronômetro não
+    // podem ser estrangulados (mesma escolha de prova/main.js).
+    backgroundThrottling: false,
+  }
+}
+
 export function createMainWindow(options: MainWindowOptions): BrowserWindow {
   const win = new BrowserWindow({
     ...WINDOW_SIZE,
@@ -37,17 +55,7 @@ export function createMainWindow(options: MainWindowOptions): BrowserWindow {
     trafficLightPosition: { x: 18, y: 18 },
     // Fundo opaco no `--bg` do tema, para a janela não piscar outra cor antes do primeiro quadro.
     backgroundColor: nativeTheme.shouldUseDarkColors ? '#061A3D' : '#FFFFFF',
-    webPreferences: {
-      preload: join(__dirname, '../preload/index.js'),
-      contextIsolation: true,
-      sandbox: true,
-      nodeIntegration: false,
-      webSecurity: true,
-      spellcheck: false,
-      // A gravação continua com a janela atrás de outras: timers do detector e do cronômetro não
-      // podem ser estrangulados (mesma escolha de prova/main.js).
-      backgroundThrottling: false,
-    },
+    webPreferences: appWebPreferences(),
   })
 
   guardWebContents(win.webContents, options.appOrigin)

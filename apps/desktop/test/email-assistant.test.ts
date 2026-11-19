@@ -567,7 +567,7 @@ describe('ferramentas pedidas pela resposta (CA7)', () => {
     for (let i = 0; i < 400 && children.length === 0; i++) await new Promise((resolve) => setImmediate(resolve))
     const child = children[0] as FakeChild
     expect(child.args[child.args.indexOf('--system-prompt') + 1]).toContain('- buscar_emails: procura emails.')
-    expect(child.args[child.args.indexOf('--system-prompt') + 1]).toBe(assistantSystemPrompt('all', 'cli', toolsInstructions([tool])))
+    expect(child.args[child.args.indexOf('--system-prompt') + 1]).toBe(assistantSystemPrompt('all', 'cli', false, toolsInstructions([tool])))
     for (let i = 0; i < 400 && child.written.length === 0; i++) await new Promise((resolve) => setImmediate(resolve))
     child.answer('Vou procurar.\n\n```lap-ferramenta\n{"ferramenta": "buscar_emails", "de": "Juliana"}\n```')
     for (let i = 0; i < 400 && child.written.length < 2; i++) await new Promise((resolve) => setImmediate(resolve))

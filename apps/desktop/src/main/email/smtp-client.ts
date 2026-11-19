@@ -19,7 +19,7 @@ export interface OutgoingMail {
   to: string[]
   /** Contrato 43: "Responder a todos" e o campo "Cc". */
   cc?: string[] | undefined
-  /** Contrato 46: o "Cco" do envio das tarefas; só vai no envelope do SMTP, nunca no cabeçalho. */
+  /** Contrato 51: o "Cco" do envio das tarefas; só vai no envelope do SMTP, nunca no cabeçalho. */
   bcc?: string[] | undefined
   subject: string
   text: string

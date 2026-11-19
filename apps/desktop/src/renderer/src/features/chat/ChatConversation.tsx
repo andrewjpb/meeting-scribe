@@ -97,7 +97,8 @@ export function ChatConversation({ chatId, meetingId, meetings, contextOpen, onC
   const [pendingScope, setPendingScope] = useState<ChatScope | null>(null)
   const [scopeNotice, setScopeNotice] = useState<string | null>(null)
   const scopeTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const scope: ChatScope = pendingScope ?? (chat ? chat.scope : meetingId ? DEFAULT_CHAT_SCOPE : draft.scope)
+  // Contrato 21: na conversa nova de uma reunião, do rascunho só valem os servidores MCP desligados.
+  const scope: ChatScope = pendingScope ?? (chat ? chat.scope : meetingId ? (draft.scope.mcpOff?.length ? { ...DEFAULT_CHAT_SCOPE, mcpOff: draft.scope.mcpOff } : DEFAULT_CHAT_SCOPE) : draft.scope)
   const exists = meetings.list ? (id: string): boolean => meetings.byId.has(id) : null
   /** "Reuniões escolhidas" sem nenhuma (que ainda exista): nada é enviado. */
   const noneChosen = !meetingId && scope.kind === 'meetings' && chosenMeetings(scope, exists).length === 0
@@ -115,7 +116,7 @@ export function ChatConversation({ chatId, meetingId, meetings, contextOpen, onC
     if (!node) return
     if (atBottom.current) node.scrollTop = node.scrollHeight
     else setShowJump(true)
-  }, [messages.length, answer?.text, answer?.steps.length, answer?.thinking, pending])
+  }, [messages.length, answer?.text, answer?.steps.length, answer?.thinking, answer?.approvals.length, pending])
 
   const onScroll = (): void => {
     const node = scroller.current
@@ -381,7 +382,7 @@ export function ChatConversation({ chatId, meetingId, meetings, contextOpen, onC
                     )
                   })}
                   {pending !== undefined && <UserMessage text={pending || (messages[lastUser]?.text ?? '')} card={cards} />}
-                  {answer && <LiveAssistantMessage answer={answer} card={cards} />}
+                  {answer && <LiveAssistantMessage answer={answer} card={cards} chatId={chatId} />}
                 </ol>
               )}
               {failure && (

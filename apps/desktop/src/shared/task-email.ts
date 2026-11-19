@@ -1,4 +1,4 @@
-// Contrato 46: a tarefa agendada que pode enviar email, com a permissão dada antes (na criação ou na edição da tarefa).
+// Contrato 51: a tarefa agendada que pode enviar email, com a permissão dada antes (na criação ou na edição da tarefa).
 // Exceção controlada à regra "nenhum agente envia a terceiros" (contrato 23) e ao N1 da PRD do email: a permissão é o
 // "Salvar" com a seção "Pode enviar email" ligada, e vale só para a conta escolhida, os destinatários da lista e o teto
 // de envios por execução. As regras de quem pode receber ficam aqui (o renderer valida o formulário com elas e o main

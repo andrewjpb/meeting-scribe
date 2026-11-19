@@ -1,10 +1,17 @@
 // Índice estático da busca das Configurações (contrato 18): fica em `shared` porque o smoke (no main) confere
 // que toda linha da tela está nele.
+import { MCP_ADD_DESCRIPTION, MCP_CLI_DESCRIPTION, MCP_FOUND_DESCRIPTION } from './mcp'
 import { APP_PLUGINS, PLUGIN_INSTALL_DESCRIPTION, PLUGIN_SAVE_DESCRIPTION } from './plugins'
 import type { SettingsTab } from './routes'
 
-/** Descrição do interruptor "Quem fala no Meet" (contrato 27), a mesma na tela e na busca. */
-export const MEET_SPEAKERS_DESCRIPTION = 'Com a extensão do LAP Reuniões no Chrome, cada fala do Meet ganha o nome de quem falou. Tudo fica neste computador.'
+/** Descrição do interruptor "Quem fala no Meet" (contratos 27 e 41), a mesma na tela e na busca. */
+export const MEET_SPEAKERS_DESCRIPTION = 'Com a extensão do LAP Reuniões no Chrome, cada fala do Meet e do Teams ganha o nome de quem falou. Tudo fica neste computador.'
+
+/** Descrição de "Avisar quando uma reunião começar" (contratos 48 e 49), a mesma na tela e na busca. */
+export const MEETING_PROMPT_DESCRIPTION = 'Mostra um aviso no topo da tela quando você entra numa reunião: Meet e Teams no navegador (com o plugin) ou apps como Zoom e FaceTime.'
+
+/** Descrição de "Ativar ponte" do plugin "Controle do navegador" (contrato 46), a mesma na tela e na busca. */
+export const NAVEGADOR_BRIDGE_DESCRIPTION = 'Liga a conexão local que a extensão usa para receber os comandos do app. Desligada, nada chega ao Chrome.'
 
 /** Descrição de "IA anotando ao vivo" (contrato 30), a mesma na tela e na busca. */
 export const LIVE_CARDS_DESCRIPTION = 'Durante a gravação, a cada 5 minutos o Claude local lê o trecho novo da conversa e cria e resolve post-its. Vale como padrão do interruptor "IA anotando" de cada gravação.'
@@ -18,6 +25,8 @@ export const WHATSAPP_AUTO_CORRECT_DESCRIPTION = 'Ao clicar em Enviar, o Claude 
 /** Descrições das notificações do WhatsApp (contrato 40), as mesmas na tela e na busca. */
 export const WHATSAPP_NOTIFICATIONS_DESCRIPTION = 'Uma notificação do macOS a cada mensagem recebida, menos da conversa que está aberta na frente. Com o app bloqueado, sem o texto.'
 export const WHATSAPP_ONLY_PEOPLE_DESCRIPTION = 'Mensagens de grupo não geram notificação.'
+/** Descrição de "Mostrar quando estou digitando" (contrato 34), a mesma na tela e na busca. */
+export const WHATSAPP_TYPING_SIGNAL_DESCRIPTION = 'Quem está na conversa aberta vê "digitando…" enquanto você escreve. Desligado, ninguém vê.'
 
 /** Descrição de "Buscar emails novos a cada" (contrato 42, `emailPollMinutes`), a mesma na tela e na busca. */
 export const EMAIL_POLL_DESCRIPTION = 'Só nas contas POP3: de quantos em quantos minutos o app procura email novo. As contas IMAP recebem na hora.'
@@ -65,6 +74,7 @@ export function settingsIndex(agent: string): SettingsEntry[] {
     row('gravacao', 'Transcrição', 'Remover eco do alto-falante', 'Some com a fala dos participantes que vaza para o seu microfone quando você não usa fone.'),
     row('gravacao', 'Transcrição', 'Identificar quem fala', 'Separa os participantes por voz. Mais lento; desligado, as falas se dividem pelas pausas.'),
     row('gravacao', 'Transcrição', 'Quem fala no Meet', MEET_SPEAKERS_DESCRIPTION),
+    row('gravacao', 'Transcrição', 'Avisar quando uma reunião começar', MEETING_PROMPT_DESCRIPTION),
     row('gravacao', 'Idiomas', 'Idioma falado', 'O idioma da reunião.'),
     row('gravacao', 'Idiomas', 'Traduzir ao vivo', 'A tradução aparece abaixo de cada fala.'),
     row('gravacao', 'Idiomas', 'Traduzir para', 'Idioma da tradução.'),
@@ -91,17 +101,24 @@ export function settingsIndex(agent: string): SettingsEntry[] {
     row('contas', 'WhatsApp', 'WhatsApp', 'Ler as suas conversas e enviar mensagens só com o seu clique. Experimental.'),
     row('contas', 'WhatsApp', 'Notificações do WhatsApp', WHATSAPP_NOTIFICATIONS_DESCRIPTION),
     row('contas', 'WhatsApp', 'Só pessoas (sem grupos)', WHATSAPP_ONLY_PEOPLE_DESCRIPTION, '"Notificações do WhatsApp" está ligado'),
+    row('contas', 'WhatsApp', 'Mostrar quando estou digitando', WHATSAPP_TYPING_SIGNAL_DESCRIPTION),
     // Contrato 43: as contas de email, as notificações e o intervalo do POP3.
     row('contas', 'Email', 'Contas de email', EMAIL_ACCOUNTS_DESCRIPTION),
     row('contas', 'Email', 'Notificações de email', EMAIL_NOTIFICATIONS_DESCRIPTION),
     row('contas', 'Email', 'Buscar emails novos a cada', EMAIL_POLL_DESCRIPTION),
     row('contas', 'Google', 'Guardar no Google Drive', 'Depois de cada reunião, o áudio, a transcrição e o resumo vão para a pasta "LAP Reuniões" do seu Drive.', 'a conta Google está conectada'),
-    // Contrato 31: um cartão por plugin, com o nome (e o estado), "Salvar plugin" e "Como instalar".
+    // Contrato 31: um cartão por plugin, com o nome (e o estado), "Salvar plugin" e "Como instalar". Contrato 46: o
+    // do navegador tem também "Ativar ponte".
     ...APP_PLUGINS.flatMap((plugin) => [
       row('plugins', plugin.nome, plugin.nome, `${plugin.navegador}. ${plugin.descricao}`),
+      ...(plugin.id === 'navegador' ? [row('plugins', plugin.nome, 'Ativar ponte', NAVEGADOR_BRIDGE_DESCRIPTION)] : []),
       row('plugins', plugin.nome, 'Salvar plugin', PLUGIN_SAVE_DESCRIPTION),
       row('plugins', plugin.nome, 'Como instalar', PLUGIN_INSTALL_DESCRIPTION),
     ]),
+    // Contrato 21: as linhas fixas da aba "Conexões" (os servidores são itens da lista, não linhas de configuração).
+    row('conexoes', 'Do Claude CLI', 'Servidores do Claude CLI', MCP_CLI_DESCRIPTION),
+    row('conexoes', 'Servidores do app', 'Adicionar servidor MCP', MCP_ADD_DESCRIPTION),
+    row('conexoes', 'Encontrados neste Mac', 'Claude Desktop', MCP_FOUND_DESCRIPTION),
     row('sobre', 'Sobre', 'Versão', 'Versão instalada do app.'),
     row('sobre', 'Sobre', 'Electron', 'Base do app.'),
     row('sobre', 'Sobre', 'Chrome', 'Motor das telas.'),

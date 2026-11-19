@@ -1,4 +1,4 @@
-// Contrato 46: a tarefa agendada que envia email com a permissão dada antes. As regras de quem pode receber (endereço,
+// Contrato 51: a tarefa agendada que envia email com a permissão dada antes. As regras de quem pode receber (endereço,
 // domínio, maiúsculas, subdomínio), o formato gravado, as recusas a cada envio (teto, revogação no meio, app bloqueado,
 // pausa), o conteúdo de um email lido que não muda a lista (CA5), as tarefas sem a seção como antes e o caminho interno
 // do envio, que só a montagem das automações chama (teste estático). Serviço, agendador e execução de verdade, com o

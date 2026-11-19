@@ -11,7 +11,7 @@
 // Envio (R4): só com um token de clique (a mesma regra do WhatsApp: o preload gera o token no clique da pessoa e só o
 // registro do IPC chama `registerClick` e `send`), sem diálogo de confirmação. Os bytes enviados vão também ao `APPEND` da pasta de
 // enviados (IMAP) e o enviado fica guardado no app (as duas modalidades).
-// Contrato 46: a única saída sem clique é `sendForTask`, o envio de uma tarefa agendada com "Pode enviar email", chamado
+// Contrato 51: a única saída sem clique é `sendForTask`, o envio de uma tarefa agendada com "Pode enviar email", chamado
 // só pela montagem das automações no main (nunca pelo IPC), depois das regras da permissão de `schedules/email-send.ts`.
 //
 // Erro de conexão (N4) nunca derruba o app: a conta fica `error` com uma mensagem curta e as outras seguem. Usuário ou
@@ -158,7 +158,7 @@ const sendSchema = z
   })
   .strict()
 /**
- * Contrato 46: o envio de uma tarefa agendada com "Pode enviar email" (sem token de clique, sem anexo, sem resposta).
+ * Contrato 51: o envio de uma tarefa agendada com "Pode enviar email" (sem token de clique, sem anexo, sem resposta).
  * As regras da permissão (conta, destinatários, teto, revogação, bloqueio, pausa) são conferidas antes, a cada envio,
  * em `schedules/email-send.ts`; aqui só o formato.
  */
@@ -418,7 +418,7 @@ export interface EmailService {
   /** Só com o token de clique (uso único, 10 s) da mesma janela. */
   send(senderId: number, request: unknown): Promise<EmailSendResult>
   /**
-   * Contrato 46: o envio sem clique de uma tarefa agendada com "Pode enviar email", depois das regras da permissão
+   * Contrato 51: o envio sem clique de uma tarefa agendada com "Pode enviar email", depois das regras da permissão
    * (`schedules/email-send.ts`). Caminho interno do main: nunca registrado no IPC; só a montagem das automações em
    * `index.ts` chama (teste estático em `email-automations.test.ts`).
    */

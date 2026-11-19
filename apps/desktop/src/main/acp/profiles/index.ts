@@ -9,4 +9,4 @@ export function agentProfile(id: AgentProfileId): AgentProfile {
   return AGENT_PROFILE_LIST[id]
 }
 
-export type { AcpPurpose, AcpSessionRequest, AgentProfile, KnownToolCall, StepTool, UsageReading } from './types'
+export type { AcpLocalMcp, AcpMcpServer, AcpPurpose, AcpSessionRequest, AgentProfile, KnownToolCall, StepTool, UsageReading } from './types'

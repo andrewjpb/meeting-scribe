@@ -17,6 +17,9 @@ VERSAO=$(node -p "require('./package.json').version")
 ELECTRON=$(node -p "require('electron/package.json').version")
 ZOD=$(node -p "require('zod/package.json').version")
 PACKAGER="../../prova/node_modules/.bin/electron-packager"
+# Contrato 49: o lap-mic-watch é compilado aqui. O /usr/bin/swiftc sempre existe (é um atalho do xcrun); quem diz se
+# há ferramentas de linha de comando do Xcode por trás dele é o `xcode-select -p`, como no dev.
+xcode-select -p >/dev/null 2>&1 || { echo "pack.sh: sem as ferramentas de linha de comando do Xcode, o swiftc não compila o lap-mic-watch (instale com: xcode-select --install)" >&2; exit 1; }
 
 pnpm build
 
@@ -40,6 +43,11 @@ mkdir -p "$STAGE/resources/meet-extension"
 for f in manifest.json content.js background.js README.md; do
   cp "../../extensions/meet/$f" "$STAGE/resources/meet-extension/$f"
 done
+# Contrato 46: a extensão do Chrome "Controle do navegador" (idem, pela aba Plugins).
+mkdir -p "$STAGE/resources/navegador-extension"
+for f in manifest.json background.js README.md; do
+  cp "../../extensions/navegador/$f" "$STAGE/resources/navegador-extension/$f"
+done
 cp -RL node_modules/zod "$STAGE/node_modules/zod"
 cat > "$STAGE/package.json" <<JSON
 { "name": "lap-reunioes", "productName": "$NOME", "version": "$VERSAO", "main": "out/main/index.js", "private": true, "dependencies": { "zod": "$ZOD" } }
@@ -57,6 +65,12 @@ rm -rf dist
   --no-prune
 
 APP="dist/$NOME-darwin-$ARCH/$NOME.app"
+# Contrato 49: o observador do microfone dos outros apps, fora do app.asar (um binário não roda de dentro dele), em
+# Contents/Resources/bin. Assinado antes do app, com a mesma identidade e os mesmos entitlements.
+MIC_WATCH="$APP/Contents/Resources/bin/lap-mic-watch"
+mkdir -p "$(dirname "$MIC_WATCH")"
+swiftc -O -target arm64-apple-macos14.4 native/mic-watch/main.swift -o "$MIC_WATCH"
+codesign --force --sign - --entitlements build/entitlements.plist "$MIC_WATCH"
 codesign --force --deep --sign - --entitlements build/entitlements.plist "$APP"
 codesign --verify --deep --strict "$APP" && echo "assinatura ok"
 npx -y @electron/asar list "$APP/Contents/Resources/app.asar" | grep -q "^/node_modules/zod/package.json" && echo "zod ok"
@@ -67,6 +81,9 @@ grep -q "^/resources/assistente/guia-do-app.md$" <<<"$ASAR_LIST" || { echo "pack
 echo "guia do Assistente ok"
 grep -q "^/resources/meet-extension/manifest.json$" <<<"$ASAR_LIST" || { echo "pack.sh: o pacote não leva a extensão do Meet" >&2; exit 1; }
 echo "extensão do Meet ok"
+codesign --verify --strict "$MIC_WATCH" || { echo "pack.sh: o lap-mic-watch não está assinado" >&2; exit 1; }
+"$MIC_WATCH" --version </dev/null | grep -q "^lap-mic-watch " || { echo "pack.sh: o lap-mic-watch não roda" >&2; exit 1; }
+echo "lap-mic-watch ok"
 if grep -qiE "backend_fake|neonize-|\.dylib$" <<<"$ASAR_LIST"; then
   echo "pack.sh: o pacote leva o cliente falso do WhatsApp ou o neonize" >&2
   exit 1

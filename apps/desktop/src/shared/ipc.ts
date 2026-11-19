@@ -9,18 +9,21 @@ import type { BrandingInfo, BrandLogoChoice } from './branding'
 import type { LockResponse, LockStatus } from './lock'
 import type { EmailAccountInput, EmailAccountStatus, EmailAddResult, EmailAttachmentRequest, EmailAttachmentSaveResult, EmailAttachmentsResult, EmailAttachPickResult, EmailAutoconfig, EmailBodyResult, EmailFolder, EmailMessage, EmailSendRequest, EmailSendResult, EmailTestResult } from './email'
 import type { KeySaveResult, KeyStatus, MicAccess, ModelCheck, ModelsResult } from './assemblyai'
-import type { Chat, ChatEvent, ChatListItem, ChatRedoRequest, ChatSendRequest, ChatSendResult, ChatUpdateRequest } from './chat'
+import type { Chat, ChatApprovalAnswer, ChatEvent, ChatListItem, ChatRedoRequest, ChatSendRequest, ChatSendResult, ChatUpdateRequest } from './chat'
 import type { ClaudeLocateResult, ClaudeRunState, ClaudeStartResult, ClaudeTranslateRequest, ClaudeTranslateResult } from './claude-cli'
 import type { AudioBeginResult, AudioExtension, AudioFinishResult, AudioFolderInfo, MeetingDownloadKind, MeetingDownloadResult, MeetingFileKind, MeetingFilesInfo } from './meeting-files'
 import type { MeetState } from './meet'
+import type { MeetingPromptAction, MeetingPromptState } from './meeting-prompt'
+import type { NavegadorState } from './navegador'
 import type { AppPluginId, PluginSaveResult } from './plugins'
+import type { McpChatServer, McpCliDetails, McpOverview, McpSaveResult, McpServerInput, McpTestResult, McpToolPolicy, McpUse } from './mcp'
 import type { AiNotesRunRequest, AiNotesRunResult } from './ai-notes'
 import type { AnalysisRunRequest, AnalysisRunResult, MeetingAnalysis } from './meeting-analysis'
 import type { MeetingNote } from './meeting-notes'
 import type { SummaryStatus } from './meeting-summary'
 import type { Meeting, MeetingFolder, NewMeeting } from './meetings'
 import type { MeetingOverview, MeetingSearchResult } from './meetings-overview'
-import type { RouteId } from './routes'
+import type { RouteId, SettingsTab } from './routes'
 import type { AppSettings, SettingsPatch } from './settings-defaults'
 import type { TranscriptCopyResult, TranscriptDocument, TranslateTurnResult, TranscriptionTokenResult } from './transcription'
 import type { UpdateState } from './updates'
@@ -35,6 +38,10 @@ import type {
   WhatsAppMeetingLink,
   WhatsAppMessage,
   WhatsAppPairing,
+  WhatsAppPresence,
+  WhatsAppReactRequest,
+  WhatsAppReactResult,
+  WhatsAppReaction,
   WhatsAppSearchHit,
   WhatsAppSendRequest,
   WhatsAppSendResult,
@@ -221,6 +228,27 @@ export interface InvokeChannels {
    * pelo `scribe:whatsapp-send` (o único caminho de envio); e a tarefa salva no formulário das Automações.
    */
   'scribe:chat-action-state': { request: ChatActionStateRequest; response: ChatActionResult }
+  /** Contrato 21: "Permitir uma vez", "Sempre permitir esta ferramenta" ou "Negar" no cartão de uma ferramenta MCP. */
+  'scribe:chat-approval': { request: ChatApprovalAnswer; response: boolean }
+  /** Contrato 21: a linha "Conexões" do painel Contexto (os servidores MCP ligados para o chat). */
+  'scribe:mcp-chat-servers': { request: undefined; response: McpChatServer[] }
+  /**
+   * Contrato 21: a aba "Conexões". Com `cli`, espera o `claude mcp list` (lido na hora; `refresh` relê). Nenhum valor de
+   * segredo vem: só "•••• definido".
+   */
+  'scribe:mcp-overview': { request: { cli?: boolean; refresh?: boolean }; response: McpOverview }
+  /** "Testar conexão" do formulário (`draft`) ou de um servidor da lista (`key`): `initialize` e `tools/list`, até 15 s. */
+  'scribe:mcp-test': { request: { draft: McpServerInput } | { key: string }; response: McpTestResult }
+  /** "Salvar" do formulário: no Claude CLI (`claude mcp add-json -s user`) ou só no app. Só depois de testar. */
+  'scribe:mcp-save': { request: McpServerInput; response: McpSaveResult }
+  /** Interruptor, usos e a política de uma ferramenta de um servidor (`app:<id>` ou `cli:<nome>`). */
+  'scribe:mcp-update': { request: { key: string; enabled?: boolean; uses?: McpUse[]; tool?: string; policy?: McpToolPolicy }; response: McpOverview | null }
+  /** "Remover": do app, ou do Claude CLI (`claude mcp remove -s user`) depois da confirmação na tela. */
+  'scribe:mcp-remove': { request: { key: string }; response: McpSaveResult }
+  /** "Ver detalhes" de um servidor do CLI (`claude mcp get`), com variáveis e cabeçalhos mascarados. */
+  'scribe:mcp-details': { request: { name: string }; response: McpCliDetails | null }
+  /** "Importar" um servidor do Claude Desktop: para o Claude CLI ou só no app (sem os segredos). */
+  'scribe:mcp-import': { request: { id: string; target: 'cli' | 'app' }; response: McpSaveResult }
   /** Bloqueio do app (contrato 22): estado, sem nada da senha. */
   'scribe:lock-status': { request: undefined; response: LockStatus }
   /** "Bloquear" (barra lateral, barra da gravação, ⌘⇧L): só bloqueia se houver senha ou Touch ID. */
@@ -271,8 +299,16 @@ export interface InvokeChannels {
   'scribe:calendar-recording': { request: undefined; response: { title: string } | null }
   /** Quem fala no Meet (contrato 27): o estado da extensão agora, para a tela ao abrir (`events` vem vazio). */
   'scribe:meet-status': { request: undefined; response: MeetState }
+  /** Aviso de reunião (contrato 48), só a janela do aviso: o título e a plataforma que ela mostra. */
+  'scribe:meeting-prompt-state': { request: undefined; response: MeetingPromptState }
+  /** Um botão do aviso; falso se o pedido não veio da janela do aviso. */
+  'scribe:meeting-prompt-act': { request: { acao: MeetingPromptAction }; response: boolean }
   /** "Salvar plugin…" (contrato 31): diálogo de pasta no main e cópia da extensão embutida; `null` se cancelado. */
   'scribe:plugin-save': { request: { id: AppPluginId }; response: PluginSaveResult }
+  /** Controle do navegador (contrato 46): a ponte ligada na configuração e a extensão conectada agora. */
+  'scribe:navegador-status': { request: undefined; response: NavegadorState }
+  /** "Ativar ponte": grava a configuração (o servidor sobe ou para junto) e devolve o estado. */
+  'scribe:navegador-set': { request: { ativo: boolean }; response: NavegadorState }
   /** Estado da reunião no Google Drive (aba "Áudio" do detalhe). */
   'scribe:drive-status': { request: { meetingId: string }; response: DriveMeetingStatus }
   /** "Tentar de novo". */
@@ -309,6 +345,16 @@ export interface InvokeChannels {
   'scribe:whatsapp-send-media': { request: WhatsAppSendMediaRequest; response: WhatsAppSendMediaResult }
   /** Contrato 39: o clipe do campo abre o seletor do macOS; o arquivo escolhido volta conferido (nada é enviado). */
   'scribe:whatsapp-attach-pick': { request: undefined; response: WhatsAppAttachPickResult }
+  /**
+   * Contrato 34: reagir a uma mensagem (um dos 6 emojis; vazio tira a sua). É envio: só com o token de clique do preload
+   * (`ScribeApi.whatsappReact`), gasto no mesmo guarda do texto.
+   */
+  'scribe:whatsapp-react': { request: WhatsAppReactRequest; response: WhatsAppReactResult }
+  /**
+   * Contrato 34: o "digitando…" da sua conta na conversa aberta. Não é mensagem (sem token de clique), mas o main só
+   * repassa com "Mostrar quando estou digitando" ligado; `false`: nada saiu.
+   */
+  'scribe:whatsapp-typing': { request: { chatId: string; state: 'composing' | 'paused' }; response: boolean }
   /** "Rascunho com o Claude": o texto volta para o campo; nada é enviado. */
   'scribe:whatsapp-draft': { request: WhatsAppDraftRequest; response: WhatsAppDraftResult }
   /** "Ligar conversa do WhatsApp" no detalhe da reunião. */
@@ -460,6 +506,10 @@ export interface MainEvents {
   'scribe:whatsapp-message': { message: WhatsAppMessage; chatName: string }
   /** Várias conversas mudaram de uma vez (histórico, nomes): relê a lista. Não chega com o app bloqueado. */
   'scribe:whatsapp-chats-changed': undefined
+  /** Contrato 34: as reações de uma mensagem mudaram (todas, juntas). Não chega com o app bloqueado. */
+  'scribe:whatsapp-reactions': { chatId: string; messageId: string; reactions: WhatsAppReaction[] }
+  /** Contrato 34: alguém digitando (ou parou) numa conversa. Não chega com o app bloqueado. */
+  'scribe:whatsapp-presence': WhatsAppPresence
   /** Automações (contrato 23): a resposta de uma execução crescendo ou terminada. Não chega com o app bloqueado. */
   'scribe:automation-event': AutomationEvent
   /** Tarefas, fila ou pausa mudaram: a tela relê. */
@@ -470,6 +520,10 @@ export interface MainEvents {
   'scribe:open-whatsapp': { chatId: string }
   /** "Encerrar" no menu do ícone da barra de menus: o renderer encerra a gravação em curso. */
   'scribe:recording-end': undefined
+  /** "Recentes" no menu do ícone da barra de menus (contrato 50): o detalhe da reunião. Ignorado com o app bloqueado. */
+  'scribe:open-meeting': { meetingId: string }
+  /** A linha dos plugins no menu do ícone (contrato 50): uma aba de Configurações. Ignorado com o app bloqueado. */
+  'scribe:open-settings': { tab: SettingsTab }
   /** Um agente acrescentou um post-it à reunião (contrato 23): o detalhe aberto relê as anotações. */
   'scribe:notes-changed': { meetingId: string }
   /**
@@ -477,6 +531,13 @@ export interface MainEvents {
    * também com o app bloqueado: a gravação continua no bloqueio e cada evento vale pelo horário em que chega.
    */
   'scribe:meet-changed': MeetState
+  /**
+   * Contrato 48: o título (ou a plataforma) da reunião do aviso aberto mudou; vai só à janela do aviso (nunca pelo
+   * `broadcast`) e nunca com o app bloqueado (o aviso fecha ao bloquear).
+   */
+  'scribe:meeting-prompt-changed': MeetingPromptState
+  /** A ponte do "Controle do navegador" (contrato 46) ligou, desligou, conectou ou desconectou. */
+  'scribe:navegador-changed': NavegadorState
   /** Contrato 42: uma conta de email mudou de estado (ou entrou, ou saiu); vai a lista inteira. Não chega bloqueado. */
   'scribe:email-state': EmailAccountStatus[]
   /** Email novo na INBOX (IDLE do IMAP ou poll do POP3). Não chega com o app bloqueado. */
@@ -573,6 +634,15 @@ const INVOKE: Record<InvokeChannel, true> = {
   'scribe:chat-copy': true,
   'scribe:chat-action-reminder': true,
   'scribe:chat-action-state': true,
+  'scribe:chat-approval': true,
+  'scribe:mcp-chat-servers': true,
+  'scribe:mcp-overview': true,
+  'scribe:mcp-test': true,
+  'scribe:mcp-save': true,
+  'scribe:mcp-update': true,
+  'scribe:mcp-remove': true,
+  'scribe:mcp-details': true,
+  'scribe:mcp-import': true,
   'scribe:lock-status': true,
   'scribe:lock-now': true,
   'scribe:lock-unlock': true,
@@ -599,7 +669,11 @@ const INVOKE: Record<InvokeChannel, true> = {
   'scribe:calendar-join': true,
   'scribe:calendar-recording': true,
   'scribe:meet-status': true,
+  'scribe:meeting-prompt-state': true,
+  'scribe:meeting-prompt-act': true,
   'scribe:plugin-save': true,
+  'scribe:navegador-status': true,
+  'scribe:navegador-set': true,
   'scribe:drive-status': true,
   'scribe:drive-retry': true,
   'scribe:drive-open': true,
@@ -617,6 +691,8 @@ const INVOKE: Record<InvokeChannel, true> = {
   'scribe:whatsapp-send': true,
   'scribe:whatsapp-send-media': true,
   'scribe:whatsapp-attach-pick': true,
+  'scribe:whatsapp-react': true,
+  'scribe:whatsapp-typing': true,
   'scribe:whatsapp-draft': true,
   'scribe:whatsapp-link-get': true,
   'scribe:whatsapp-link-set': true,
@@ -688,13 +764,19 @@ const MAIN_EVENTS: Record<MainEvent, true> = {
   'scribe:whatsapp-state': true,
   'scribe:whatsapp-message': true,
   'scribe:whatsapp-chats-changed': true,
+  'scribe:whatsapp-reactions': true,
+  'scribe:whatsapp-presence': true,
   'scribe:automation-event': true,
   'scribe:automations-changed': true,
   'scribe:open-run': true,
   'scribe:open-whatsapp': true,
   'scribe:recording-end': true,
+  'scribe:open-meeting': true,
+  'scribe:open-settings': true,
   'scribe:notes-changed': true,
   'scribe:meet-changed': true,
+  'scribe:meeting-prompt-changed': true,
+  'scribe:navegador-changed': true,
   'scribe:email-state': true,
   'scribe:email-message': true,
   'scribe:email-changed': true,
@@ -828,6 +910,16 @@ export const WHEN_LOCKED: Readonly<Record<InvokeChannel, LockedPolicy>> = Object
   // Assistente (contrato 25, CA5): os cartões de ação, recusados com o app bloqueado.
   'scribe:chat-action-reminder': 'refused',
   'scribe:chat-action-state': 'refused',
+  // Contrato 21: as conexões MCP não aparecem nem mudam com o app bloqueado; o cartão sem resposta nega em 2 min.
+  'scribe:chat-approval': 'refused',
+  'scribe:mcp-chat-servers': 'refused',
+  'scribe:mcp-overview': 'refused',
+  'scribe:mcp-test': 'refused',
+  'scribe:mcp-save': 'refused',
+  'scribe:mcp-update': 'refused',
+  'scribe:mcp-remove': 'refused',
+  'scribe:mcp-details': 'refused',
+  'scribe:mcp-import': 'refused',
   // Conta Google e Drive (contrato 11): tudo é de Configurações e do detalhe, recusado bloqueado. A fila de envio
   // não depende de canal: roda no main e continua com o app bloqueado.
   'scribe:google-status': 'refused',
@@ -851,7 +943,12 @@ export const WHEN_LOCKED: Readonly<Record<InvokeChannel, LockedPolicy>> = Object
   'scribe:calendar-recording': 'refused',
   // Contrato 27: o estado do Meet não aparece com o app bloqueado; o servidor continua coletando para a gravação.
   'scribe:meet-status': 'refused',
+  // Contrato 48: bloqueado, o aviso nem abre (e fecha se estava aberto); os botões dele também ficam recusados.
+  'scribe:meeting-prompt-state': 'refused',
+  'scribe:meeting-prompt-act': 'refused',
   'scribe:plugin-save': 'refused',
+  'scribe:navegador-status': 'refused',
+  'scribe:navegador-set': 'refused',
   'scribe:drive-status': 'refused',
   'scribe:drive-retry': 'refused',
   'scribe:drive-open': 'refused',
@@ -872,6 +969,9 @@ export const WHEN_LOCKED: Readonly<Record<InvokeChannel, LockedPolicy>> = Object
   // Contrato 39: o envio do anexo e o seletor de arquivo, como o resto do WhatsApp.
   'scribe:whatsapp-send-media': 'refused',
   'scribe:whatsapp-attach-pick': 'refused',
+  // Contrato 34: a reação (um envio) e o "digitando…", como o resto do WhatsApp.
+  'scribe:whatsapp-react': 'refused',
+  'scribe:whatsapp-typing': 'refused',
   'scribe:whatsapp-draft': 'refused',
   'scribe:whatsapp-link-get': 'refused',
   'scribe:whatsapp-link-set': 'refused',
@@ -958,6 +1058,8 @@ export interface ScribeApi {
   whatsappSend(request: Omit<WhatsAppSendRequest, 'clickToken'>): Promise<WhatsAppSendResult>
   /** Contrato 39: o "Enviar" com um anexo, pelo mesmo token de clique do `whatsappSend`. */
   whatsappSendMedia(request: Omit<WhatsAppSendMediaRequest, 'clickToken'>): Promise<WhatsAppSendMediaResult>
+  /** Contrato 34: reagir é envio: o mesmo token de clique do `whatsappSend`, gerado só com a ativação do usuário viva. */
+  whatsappReact(request: Omit<WhatsAppReactRequest, 'clickToken'>): Promise<WhatsAppReactResult>
   /** Contrato 42: o "Enviar" do email, com o mesmo desenho do `whatsappSend` (ativação viva, token de clique). */
   emailSend(request: Omit<EmailSendRequest, 'clickToken'>): Promise<EmailSendResult>
 }

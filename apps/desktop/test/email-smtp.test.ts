@@ -418,7 +418,7 @@ describe('envio por SMTP (contrato 42, CA5)', () => {
   })
 })
 
-describe('envio de uma tarefa com permissão (contrato 46)', () => {
+describe('envio de uma tarefa com permissão (contrato 51)', () => {
   it('o caminho interno sai sem token de clique, com o Cco só no envelope, e fica em Enviados; pedido fora do formato não sai', async () => {
     const smtp = await startFakeSmtp()
     cleanups.push(() => smtp.close())

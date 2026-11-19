@@ -2,7 +2,7 @@
 // (com "Avançado: expressão cron"), fuso, saída, avisos, tempo máximo, "Rodar uma vez só" e a prévia "Próximas 5
 // execuções". Na tarefa nova, as sugestões prontas preenchem o formulário (a pessoa ainda salva).
 //
-// Contrato 46: a seção "Pode enviar email", desligada por padrão. Ligada, pede a conta que envia, a lista de
+// Contrato 51: a seção "Pode enviar email", desligada por padrão. Ligada, pede a conta que envia, a lista de
 // destinatários permitidos (endereços exatos e/ou domínios `@empresa.com`, de 1 a 50) e o teto por execução (padrão 5,
 // até 20). Ligar e salvar é a permissão; o main grava a data.
 import { ArrowLeft, Lightbulb, Send } from 'lucide-react'
@@ -99,7 +99,7 @@ const TASK_ERRORS: Record<string, string> = {
   invalid: 'Confira os campos da tarefa.',
 }
 
-/** Contrato 46: o rascunho da seção "Pode enviar email" (a lista como foi digitada). */
+/** Contrato 51: o rascunho da seção "Pode enviar email" (a lista como foi digitada). */
 interface EmailDraft {
   on: boolean
   accountId: string
@@ -332,7 +332,7 @@ export function TaskForm({ initial, meetings, onClose, onSaved }: { initial: Tas
 }
 
 /**
- * Contrato 46: "Pode enviar email". Desligada por padrão; sem conta de email no app, não liga. Ligada, a conta, a lista
+ * Contrato 51: "Pode enviar email". Desligada por padrão; sem conta de email no app, não liga. Ligada, a conta, a lista
  * de destinatários permitidos e o teto por execução.
  */
 function EmailSection({

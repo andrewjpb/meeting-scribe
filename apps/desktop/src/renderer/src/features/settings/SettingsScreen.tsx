@@ -10,7 +10,7 @@ import {
   type SettingsNavigationState,
   type SettingsTab,
 } from '@shared/routes'
-import { LIVE_CARDS_DESCRIPTION, MEET_SPEAKERS_DESCRIPTION, WHATSAPP_AUTO_CORRECT_DESCRIPTION, WHATSAPP_INSIGHTS_DESCRIPTION } from '@shared/settings-index'
+import { LIVE_CARDS_DESCRIPTION, MEET_SPEAKERS_DESCRIPTION, MEETING_PROMPT_DESCRIPTION, WHATSAPP_AUTO_CORRECT_DESCRIPTION, WHATSAPP_INSIGHTS_DESCRIPTION } from '@shared/settings-index'
 import { DAILY_RUN_LIMIT_OPTIONS, LANGUAGE_CODES, type ChatModel, type ClaudeModel, type ClaudeTransport, type CloseBehavior, type DailyRunLimitOption, type LanguageCode, type ThemeSetting, type TranslationEngine } from '@shared/settings-defaults'
 import { useAgentLabel } from '../../app/agentLabel'
 import { useSettings } from '../../app/settingsStore'
@@ -26,6 +26,7 @@ import { SearchField } from '../meetings/SearchField'
 import { AboutSection } from './AboutSection'
 import { AccountsSection } from './AccountsSection'
 import { CalendarSection } from './CalendarSection'
+import { ConnectionsSection } from './ConnectionsSection'
 import { MicrosoftSection } from './MicrosoftSection'
 import { WhatsAppSection } from './WhatsAppSection'
 import { EmailSection } from './EmailSection'
@@ -46,6 +47,7 @@ import {
   rememberSettingsTab,
   resultsLabel,
   searchSettings,
+  settingsResultLabel,
   settingsIndex,
   SETTINGS_TAB_LABELS,
   tabForShortcut,
@@ -109,7 +111,7 @@ const TABS_ID = 'settings'
 const CONTROL = 'input, select, textarea, button, a[href], [tabindex]:not([tabindex="-1"])'
 
 /**
- * Configurações (contrato 18): título e busca no topo, as sete abas logo abaixo (fixas; só o conteúdo rola) e
+ * Configurações (contrato 18): título e busca no topo, as oito abas logo abaixo (fixas; só o conteúdo rola) e
  * a coluna de leitura de até 760 px, centralizada. A aba aberta fica na URL; sem ela, abre a última aberta
  * nesta sessão. Cada mudança grava na hora, como antes.
  */
@@ -140,7 +142,7 @@ function SettingsTabs({ tab }: { tab: SettingsTab }) {
   const rootRef = useRef<HTMLDivElement>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
   // Depois da próxima navegação: a linha achada pela busca (com o bloco dela, se a linha não aparece) ou a aba
-  // que deve receber o foco (⌘1…⌘7 e Esc).
+  // que deve receber o foco (⌘1…⌘8 e Esc).
   const pendingRef = useRef<{ row: HTMLElement | null; block: Element | null } | null>(null)
   const focusTabRef = useRef(false)
   const queryRef = useRef('')
@@ -157,7 +159,7 @@ function SettingsTabs({ tab }: { tab: SettingsTab }) {
 
   useEffect(() => rememberSettingsTab(tab), [tab])
 
-  // ⌘1…⌘7 abrem a aba N enquanto Configurações está aberta.
+  // ⌘1…⌘8 abrem a aba N enquanto Configurações está aberta.
   useEffect(() => {
     const onKey = (event: KeyboardEvent): void => {
       // Esc que limpou a busca (o campo já tratou o evento): o foco volta para a aba aberta.
@@ -228,8 +230,11 @@ function SettingsTabs({ tab }: { tab: SettingsTab }) {
     const entry = entries[index]
     if (!entry) return
     const panelEl = rootRef.current?.querySelector(`[data-settings-panel="${entry.tab}"]`)
-    const row = [...(panelEl?.querySelectorAll<HTMLElement>('[data-setting-row]') ?? [])].find((el) => matchesRow(entry, el.dataset.settingName ?? '')) ?? null
     const block = panelEl?.querySelector(`section[aria-label="${CSS.escape(entry.section)}"]`) ?? null
+    // Contrato 46: com dois cartões de plugin, "Salvar plugin" se repete na aba; vale a linha do bloco da entrada.
+    const rowIn = (root: Element | null | undefined): HTMLElement | null =>
+      [...(root?.querySelectorAll<HTMLElement>('[data-setting-row]') ?? [])].find((el) => matchesRow(entry, el.dataset.settingName ?? '')) ?? null
+    const row = rowIn(block) ?? rowIn(panelEl)
     pendingRef.current = { row, block }
     setHint(row ? null : entry)
     setQuery('')
@@ -337,6 +342,10 @@ function SettingsTabs({ tab }: { tab: SettingsTab }) {
                 </SettingRow>
                 <SettingRow name="Quem fala no Meet" nameId="settings-meet-speakers" description={MEET_SPEAKERS_DESCRIPTION}>
                   <Switch checked={settings.meetSpeakers} labelledBy="settings-meet-speakers" onChange={(meetSpeakers) => void update({ meetSpeakers })} />
+                </SettingRow>
+                {/* Contrato 48: o aviso no topo da tela ao entrar numa reunião (depende do servidor do Meet acima). */}
+                <SettingRow name="Avisar quando uma reunião começar" nameId="settings-meeting-prompt" description={MEETING_PROMPT_DESCRIPTION}>
+                  <Switch checked={settings.meetingPrompt} labelledBy="settings-meeting-prompt" action="meeting-prompt" onChange={(meetingPrompt) => void update({ meetingPrompt })} />
                 </SettingRow>
               </Section>
 
@@ -455,6 +464,9 @@ function SettingsTabs({ tab }: { tab: SettingsTab }) {
           {/* Contrato 31: as extensões de navegador que vêm no app. */}
           {panel('plugins', <PluginsSection />)}
 
+          {/* Contrato 21: os servidores MCP do Claude CLI e do app. O `claude mcp list` só roda com a aba aberta. */}
+          {panel('conexoes', <ConnectionsSection active={!searching && tab === 'conexoes'} />)}
+
           {panel('sobre', <AboutSection />)}
 
           {searching && <SearchResults query={query} entries={entries} groups={groups} onOpen={open} />}
@@ -500,9 +512,7 @@ function SearchResults({ query, entries, groups, onOpen }: SearchResultsProps) {
                     onClick={() => onOpen(index)}
                     className="no-drag flex w-full flex-col items-start gap-0.5 px-4 py-3 text-left transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-bg-sunken focus-visible:outline-offset-[-2px]"
                   >
-                    <span className="text-13 font-medium text-text">
-                      {group.label} › {entry.name}
-                    </span>
+                    <span className="text-13 font-medium text-text">{settingsResultLabel(entries, entry)}</span>
                     {entry.description && <span className="text-12 text-text-muted">{entry.description}</span>}
                   </button>
                 </li>

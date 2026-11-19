@@ -253,9 +253,26 @@ describe('store do chat (CA3)', () => {
     emit?.({ type: 'denied', chatId: 'c1', count: 1 })
     const meta = { model: 'claude-sonnet-5-5', durationMs: 1, inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, costUsd: 0, turns: 1, consulted: [] }
     emit?.({ type: 'meta', chatId: 'c1', meta })
-    expect(useChat.getState().answers['c1']).toEqual({ text: '', reading: false, thinking: 'Vou ler', steps: [{ tool: 'Read', label: 'Lendo o índice das reuniões', meetingId: null }, { tool: 'Grep', label: 'Procurando "x"', meetingId: null }], denied: 1, plan: [], meta })
+    expect(useChat.getState().answers['c1']).toEqual({ text: '', reading: false, thinking: 'Vou ler', steps: [{ tool: 'Read', label: 'Lendo o índice das reuniões', meetingId: null }, { tool: 'Grep', label: 'Procurando "x"', meetingId: null }], denied: 1, plan: [], meta, approvals: [] })
     emit?.({ type: 'done', chatId: 'c1', chat: { ...chat, messages: [...chat.messages, { role: 'assistant', text: 'Olá.', at: AT, meta }] } })
     expect(useChat.getState().answers['c1']).toBeUndefined()
+  })
+
+  it('o cartão de aprovação MCP chega pelo evento, a escolha vai ao main e o cartão sai quando ele avisa (contrato 21)', async () => {
+    await useChat.getState().send(null, null, 'Oi?')
+    const approval = { id: 'mcp-1', server: 'calculadora', tool: 'soma', args: '{"a": 2}' }
+    emit?.({ type: 'approval', chatId: 'c1', approval })
+    expect(useChat.getState().answers['c1']?.approvals).toEqual([approval])
+    await useChat.getState().answerApproval('c1', 'mcp-1', 'once')
+    expect(invoke).toHaveBeenCalledWith('scribe:chat-approval', { chatId: 'c1', id: 'mcp-1', decision: 'once' })
+    emit?.({ type: 'approval-done', chatId: 'c1', id: 'mcp-1', decision: 'once' })
+    expect(useChat.getState().answers['c1']?.approvals).toEqual([])
+  })
+
+  it('a conversa nova de uma reunião leva do rascunho só os servidores MCP desligados (contrato 21)', async () => {
+    useChat.getState().setDraft('m1', { scope: { kind: '7d', mcpOff: ['cli:calc'] } })
+    await useChat.getState().send(null, 'm1', 'Oi?')
+    expect(invoke).toHaveBeenCalledWith('scribe:chat-send', { chatId: null, meetingId: 'm1', text: 'Oi?', scope: { kind: 'all', mcpOff: ['cli:calc'] } })
   })
 
   it('a conversa nova leva o escopo e o modelo do rascunho, que volta ao padrão depois', async () => {

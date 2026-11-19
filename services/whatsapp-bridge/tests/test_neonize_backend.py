@@ -69,7 +69,7 @@ class FakeClient:
         return Obj(get_contact=lambda chat: Obj(FullName='Ana Souza', PushName='Ana'))
 
 
-EVENTS = ['ConnectedEv', 'ConnectFailureEv', 'DisconnectedEv', 'HistorySyncEv', 'LoggedOutEv', 'MessageEv', 'PairStatusEv', 'TemporaryBanEv']
+EVENTS = ['ChatPresenceEv', 'ConnectedEv', 'ConnectFailureEv', 'DisconnectedEv', 'HistorySyncEv', 'LoggedOutEv', 'MessageEv', 'PairStatusEv', 'TemporaryBanEv']
 
 
 @pytest.fixture()
@@ -157,6 +157,8 @@ def test_message_event_becomes_a_message(fake_neonize, tmp_path):
         'type': 'image',
         'text': 'Quadro',
         'media': {'kind': 'image', 'mime': 'image/jpeg', 'size': 122_880, 'name': None},
+        # Contrato 34: quem mandou (a resposta e a reação citam).
+        'sender': '5511922220000@s.whatsapp.net',
     }
     # Status (broadcast) fica de fora.
     status = Obj(MessageSource=Obj(Chat=jid('status', 'broadcast'), Sender=jid('1', 's.whatsapp.net'), IsFromMe=False, IsGroup=False), ID='S', Pushname='', Timestamp=1)
@@ -559,3 +561,162 @@ def test_video_details_with_the_real_ffmpeg(tmp_path):
     subprocess.run([ffmpeg, '-v', 'error', '-f', 'lavfi', '-i', 'testsrc=duration=2:size=160x120:rate=10', '-pix_fmt', 'yuv420p', str(out)], check=True, timeout=60)
     seconds, thumb = backend_neonize.video_details(out.read_bytes(), str(tmp_path))
     assert seconds == 2 and thumb[:3] == b'\xff\xd8\xff'
+
+
+class ReactionBridge(BatchBridge):
+    """Contrato 34: a bridge com as reações e a presença."""
+
+    def __init__(self):
+        super().__init__()
+        self.reactions = []
+        self.presences = []
+
+    def on_reaction(self, *reaction):
+        self.reactions.append(reaction)
+
+    def on_reactions(self, items):
+        self.reactions.extend(items)
+
+    def on_presence(self, *presence):
+        self.presences.append(presence)
+
+
+def started_with(tmp_path, bridge):
+    backend = NeonizeBackend(str(tmp_path))
+    backend.start(bridge)
+    return backend, FakeClient.instances[-1]
+
+
+def test_reply_comes_from_the_context_info(fake_neonize, tmp_path):
+    # Contrato 34: o id e o trecho da citada saem do `contextInfo` (texto, legenda ou o rótulo da mídia).
+    _, bridge, client = started(tmp_path)
+    source = Obj(Chat=jid('5511911110000', 's.whatsapp.net'), Sender=jid('5511911110000', 's.whatsapp.net'), IsFromMe=False, IsGroup=False)
+    quoted = Obj(conversation='Conseguimos marcar a reunião de sexta?')
+    reply = Obj(conversation='', extendedTextMessage=Obj(text='Sim!', contextInfo=Obj(stanzaID='Q1', participant='5511900000000@s.whatsapp.net', quotedMessage=quoted)))
+    client.handlers['MessageEv'](client, Obj(Info=Obj(MessageSource=source, ID='R1', Pushname='Ana', Timestamp=1), Message=reply))
+    message = bridge.messages[-1][0]
+    assert (message['text'], message['replyToId'], message['replyPreview']) == ('Sim!', 'Q1', 'Conseguimos marcar a reunião de sexta?')
+    # A legenda de uma imagem que responde um áudio: o rótulo do áudio.
+    image = Obj(caption='olha', mimetype='image/jpeg', fileLength=1, contextInfo=Obj(stanzaID='Q2', quotedMessage=Obj(conversation='', audioMessage=Obj(mimetype='audio/ogg', fileLength=1))))
+    client.handlers['MessageEv'](client, Obj(Info=Obj(MessageSource=source, ID='R2', Pushname='Ana', Timestamp=1), Message=Obj(conversation='', imageMessage=image)))
+    assert bridge.messages[-1][0]['replyPreview'] == 'Áudio'
+    # Sem `stanzaID` (o `contextInfo` das menções, por exemplo), não é resposta.
+    plain = Obj(conversation='', extendedTextMessage=Obj(text='@Ana oi', contextInfo=Obj(stanzaID='')))
+    client.handlers['MessageEv'](client, Obj(Info=Obj(MessageSource=source, ID='R3', Pushname='Ana', Timestamp=1), Message=plain))
+    assert 'replyToId' not in bridge.messages[-1][0]
+    assert backend_neonize.reply_of(None) == (None, '')
+
+
+def test_reaction_events_become_reactions_not_messages(fake_neonize, tmp_path):
+    bridge = ReactionBridge()
+    _backend, client = started_with(tmp_path, bridge)
+    group = Obj(Chat=jid('120363000000000001', 'g.us'), Sender=jid('5511922220000', 's.whatsapp.net'), IsFromMe=False, IsGroup=True)
+    reaction = Obj(reactionMessage=Obj(key=Obj(ID='ALVO1'), text='\U0001f44d', senderTimestampMS=1_763_300_000_123))
+    client.handlers['MessageEv'](client, Obj(Info=Obj(MessageSource=group, ID='X1', Pushname='Bruno', Timestamp=1_763_300_000), Message=reaction))
+    assert bridge.messages == []
+    assert bridge.reactions == [('120363000000000001@g.us', 'ALVO1', '5511922220000@s.whatsapp.net', '\U0001f44d', 1_763_300_000_123)]
+    # A sua (de outro aparelho) tem o autor `me`; texto vazio é tirar.
+    mine = Obj(Chat=jid('5511911110000', 's.whatsapp.net'), Sender=jid('5511900000000', 's.whatsapp.net'), IsFromMe=True, IsGroup=False)
+    removal = Obj(reactionMessage=Obj(key=Obj(ID='ALVO2'), text='', senderTimestampMS=0))
+    client.handlers['MessageEv'](client, Obj(Info=Obj(MessageSource=mine, ID='X2', Pushname='Andrea', Timestamp=1_763_300_001), Message=removal))
+    assert bridge.reactions[-1] == ('5511911110000@s.whatsapp.net', 'ALVO2', 'me', '', 1_763_300_001_000)
+    assert bridge.messages == []
+
+
+def test_history_reactions_go_in_one_batch(fake_neonize, tmp_path):
+    bridge = ReactionBridge()
+    _backend, client = started_with(tmp_path, bridge)
+    reacted = Obj(
+        key=Obj(ID='H1', fromMe=False, participant='5511922220000@s.whatsapp.net'),
+        message=Obj(conversation='Prazo dia 28'),
+        messageTimestamp=1_763_000_000,
+        pushName='Bruno',
+        participant='5511922220000@s.whatsapp.net',
+        reactions=[Obj(key=Obj(fromMe=True, participant='', remoteJID='120363000000000001@g.us'), text='❤️', senderTimestampMS=1_763_000_100_000)],
+    )
+    as_message = Obj(key=Obj(ID='H2', fromMe=False, participant='5511933330000@s.whatsapp.net'), message=Obj(reactionMessage=Obj(key=Obj(ID='H1'), text='\U0001f602', senderTimestampMS=0)), messageTimestamp=1_763_000_200, pushName='Carla', participant='')
+    conversation = Obj(ID='120363000000000001@g.us', name='Projeto Atlas', displayName='', messages=[Obj(message=reacted), Obj(message=as_message)])
+    client.handlers['HistorySyncEv'](client, Obj(Data=Obj(conversations=[conversation])))
+    assert [m['id'] for m in bridge.batches[0]] == ['H1'] and bridge.batches[0][0]['sender'] == '5511922220000@s.whatsapp.net'
+    assert bridge.reactions == [
+        ('120363000000000001@g.us', 'H1', 'me', '❤️', 1_763_000_100_000),
+        ('120363000000000001@g.us', 'H1', '5511933330000@s.whatsapp.net', '\U0001f602', 1_763_000_200_000),
+    ]
+
+
+def test_chat_presence_becomes_typing_with_the_group_author(fake_neonize, tmp_path):
+    bridge = ReactionBridge()
+    backend, client = started_with(tmp_path, bridge)
+    backend.contacts['5511922220000@s.whatsapp.net'] = 'Bruno Lima'
+    group = Obj(Chat=jid('120363000000000001', 'g.us'), Sender=jid('5511922220000', 's.whatsapp.net'), IsFromMe=False, IsGroup=True)
+    client.handlers['ChatPresenceEv'](client, Obj(MessageSource=group, State=1, Media=1))
+    person = Obj(Chat=jid('5511911110000', 's.whatsapp.net'), Sender=jid('5511911110000', 's.whatsapp.net'), IsFromMe=False, IsGroup=False)
+    client.handlers['ChatPresenceEv'](client, Obj(MessageSource=person, State=2, Media=1))
+    # A sua presença e um estado desconhecido ficam de fora.
+    client.handlers['ChatPresenceEv'](client, Obj(MessageSource=Obj(Chat=jid('5511911110000', 's.whatsapp.net'), Sender=jid('1', 's'), IsFromMe=True, IsGroup=False), State=1, Media=1))
+    client.handlers['ChatPresenceEv'](client, Obj(MessageSource=person, State=9, Media=1))
+    assert bridge.presences == [('120363000000000001@g.us', 'composing', 'Bruno Lima'), ('5511911110000@s.whatsapp.net', 'paused', None)]
+
+
+@pytest.fixture()
+def fake_proto(monkeypatch, fake_neonize):
+    """Contrato 34: o `waE2E` (Message, ExtendedTextMessage, ContextInfo) e o `ChatPresence` sem neonize."""
+
+    class Proto:
+        def __init__(self, **fields):
+            self.fields = fields
+
+        @classmethod
+        def FromString(cls, data):  # noqa: N802 - nome do protobuf
+            return cls(refeita=data)
+
+    names = ['neonize.proto', 'neonize.proto.waE2E', 'neonize.proto.waE2E.WAWebProtobufsE2E_pb2', 'neonize.utils.enum']
+    for name in names:
+        monkeypatch.setitem(sys.modules, name, types.ModuleType(name))
+    pb = sys.modules['neonize.proto.waE2E.WAWebProtobufsE2E_pb2']
+    pb.Message = type('Message', (Proto,), {})
+    pb.ExtendedTextMessage = type('ExtendedTextMessage', (Proto,), {})
+    pb.ContextInfo = type('ContextInfo', (Proto,), {})
+    sys.modules['neonize.utils.enum'].ChatPresence = types.SimpleNamespace(CHAT_PRESENCE_COMPOSING='composing', CHAT_PRESENCE_PAUSED='paused')
+    sys.modules['neonize.utils.enum'].ChatPresenceMedia = types.SimpleNamespace(CHAT_PRESENCE_MEDIA_TEXT='text')
+    return pb
+
+
+def test_send_text_with_a_quote_builds_the_context_info(fake_proto, tmp_path):
+    backend, _bridge, client = started(tmp_path)
+    group = '120363000000000001@g.us'
+    backend.send_text(group, 'Combinado', {'id': 'Q1', 'fromMe': False, 'sender': '5511922220000@s.whatsapp.net', 'kind': 'text', 'text': 'Prazo dia 28', 'proto': None})
+    to, message = client.sent[-1]
+    assert (to.User, to.Server) == ('120363000000000001', 'g.us')
+    extended = message.fields['extendedTextMessage'].fields
+    context = extended['contextInfo'].fields
+    assert extended['text'] == 'Combinado'
+    assert context['stanzaID'] == 'Q1' and context['participant'] == '5511922220000@s.whatsapp.net'
+    assert context['quotedMessage'].fields == {'conversation': 'Prazo dia 28'}
+    # A sua mensagem citada leva o seu id; a mídia é refeita da mensagem guardada; na conversa a dois, a outra pessoa.
+    backend.send_text('5511911110000@s.whatsapp.net', 'ok', {'id': 'Q2', 'fromMe': True, 'sender': '', 'kind': 'image', 'text': '', 'proto': b'imagem'})
+    context = client.sent[-1][1].fields['extendedTextMessage'].fields['contextInfo'].fields
+    assert context['participant'] == '5511900000000@s.whatsapp.net' and context['quotedMessage'].fields == {'refeita': b'imagem'}
+    backend.send_text('5511911110000@s.whatsapp.net', 'ok', {'id': 'Q3', 'fromMe': False, 'sender': '', 'kind': 'text', 'text': 'oi', 'proto': None})
+    assert client.sent[-1][1].fields['extendedTextMessage'].fields['contextInfo'].fields['participant'] == '5511911110000@s.whatsapp.net'
+    # Sem citação, o texto puro de antes.
+    backend.send_text('5511911110000@s.whatsapp.net', 'simples')
+    assert client.sent[-1][1] == 'simples'
+
+
+def test_send_reaction_and_presence(fake_proto, tmp_path):
+    backend, _bridge, client = started(tmp_path)
+    built = []
+    client.build_reaction = lambda chat, sender, message_id, emoji: built.append((f'{chat.User}@{chat.Server}', f'{sender.User}@{sender.Server}', message_id, emoji)) or 'reacao'
+    backend.send_reaction('120363000000000001@g.us', {'id': 'M5', 'fromMe': False, 'sender': '5511922220000@s.whatsapp.net'}, '\U0001f44d')
+    backend.send_reaction('5511911110000@s.whatsapp.net', {'id': 'M2', 'fromMe': True, 'sender': ''}, '')
+    assert built == [
+        ('120363000000000001@g.us', '5511922220000@s.whatsapp.net', 'M5', '\U0001f44d'),
+        ('5511911110000@s.whatsapp.net', '5511900000000@s.whatsapp.net', 'M2', ''),
+    ]
+    assert [message for _to, message in client.sent[-2:]] == ['reacao', 'reacao']
+    presences = []
+    client.send_chat_presence = lambda chat, state, media: presences.append((chat.User, state, media))
+    backend.send_presence('5511911110000@s.whatsapp.net', 'composing')
+    backend.send_presence('5511911110000@s.whatsapp.net', 'paused')
+    assert presences == [('5511911110000', 'composing', 'text'), ('5511911110000', 'paused', 'text')]

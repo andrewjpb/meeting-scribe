@@ -1,6 +1,6 @@
 import { useEffect } from 'react'
 import { useNavigate } from 'react-router'
-import { emailPath, ROUTE_PATHS, type EmailNavigationState, type WhatsAppNavigationState } from '@shared/routes'
+import { emailPath, isSettingsTab, meetingPath, ROUTE_PATHS, settingsPath, type EmailNavigationState, type WhatsAppNavigationState } from '@shared/routes'
 import { useAutomations } from '../features/agents/automationsStore'
 import { useRecording } from '../features/live/recordingStore'
 import { useStartRecording } from '../features/live/useStartRecording'
@@ -59,6 +59,26 @@ export function useMainNavigation(): void {
         if (useLock.getState().status.locked) return
         const state: EmailNavigationState = { messageId: id }
         void navigate(emailPath(accountId, 'inbox'), { state })
+      }),
+    [navigate],
+  )
+
+  // Contrato 50: "Recentes" no menu do ícone da barra de menus abre o detalhe da reunião.
+  useEffect(
+    () =>
+      window.__scribeApi.on('scribe:open-meeting', ({ meetingId }) => {
+        if (useLock.getState().status.locked || typeof meetingId !== 'string' || !meetingId) return
+        void navigate(meetingPath(meetingId))
+      }),
+    [navigate],
+  )
+
+  // Contrato 50: a linha dos plugins no menu do ícone leva a Configurações › Plugins.
+  useEffect(
+    () =>
+      window.__scribeApi.on('scribe:open-settings', ({ tab }) => {
+        if (useLock.getState().status.locked || !isSettingsTab(tab)) return
+        void navigate(settingsPath(tab))
       }),
     [navigate],
   )

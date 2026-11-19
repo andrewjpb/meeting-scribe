@@ -173,6 +173,9 @@ describe('canais com o app bloqueado (contrato 22, CA4)', () => {
       // Contrato 39: o envio do anexo e o seletor de arquivo.
       'scribe:whatsapp-send-media',
       'scribe:whatsapp-attach-pick',
+      // Contrato 34: a reação (um envio) e o "digitando…".
+      'scribe:whatsapp-react',
+      'scribe:whatsapp-typing',
       // Contrato 42: contas, mensagens, corpo, lida, apagar, autoconfig e envio do email.
       'scribe:email-accounts',
       'scribe:email-autoconfig',
@@ -239,6 +242,17 @@ describe('canais com o app bloqueado (contrato 22, CA4)', () => {
   it('contrato 43: a pasta aberta na tela do email é ignorada bloqueado (o main não muda a regra da notificação)', () => {
     expect(RENDERER_EVENTS_WHEN_LOCKED['scribe:email-viewing']).toBe('ignored')
     expect(EMAIL_PRELOAD_ONLY_EVENTS).not.toContain('scribe:email-viewing')
+  })
+
+  it('contrato 48: os dois canais do aviso de reunião são recusados bloqueado, antes do handler', async () => {
+    locked = true
+    for (const channel of ['scribe:meeting-prompt-state', 'scribe:meeting-prompt-act'] as const) {
+      expect(WHEN_LOCKED[channel], channel).toBe('refused')
+      await expect(Promise.resolve().then(() => invokeHandlers.get(channel)?.(trusted, { acao: 'gravar' }))).rejects.toThrow(/^locked$/)
+    }
+    expect(calls).toEqual([])
+    locked = false
+    await expect(invoke('scribe:meeting-prompt-state')).resolves.toBe('resposta')
   })
 
   it('contrato 40: a conversa aberta no WhatsApp é ignorada bloqueado (o main não muda a regra da notificação)', () => {

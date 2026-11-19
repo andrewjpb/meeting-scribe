@@ -3,9 +3,11 @@
 // 47632 a 47641 (a extensão tenta na mesma ordem). Aceita só `POST /v1/eventos` vindo de `chrome-extension://`,
 // em JSON, até 64 KB; qualquer outra coisa é 404 sem corpo. A resposta é sempre `{ ok: true }`: o app nunca
 // devolve dado nenhum à extensão. Tudo que chega é dado (zod estrito, nomes cortados), nunca instrução.
+// Contrato 48: o id da reunião segue para o estado, com a plataforma e o título que a página mostra (campos
+// opcionais: a extensão antiga, sem eles, continua aceita).
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import { z } from 'zod'
-import type { MeetSpeakingEvent, MeetState } from '../../shared/meet'
+import type { MeetPlatform, MeetSpeakingEvent, MeetState } from '../../shared/meet'
 
 /** Portas que a extensão tenta, em ordem. */
 export const MEET_PORTS: readonly number[] = Array.from({ length: 10 }, (_, index) => 47632 + index)
@@ -14,11 +16,22 @@ export const MEET_BODY_MAX_BYTES = 64 * 1024
 export const MEET_NAME_MAX = 80
 export const MEET_PARTICIPANTS_MAX = 100
 export const MEET_EVENTS_MAX = 200
+/** Título da reunião (contrato 48): só texto, numa linha, cortado em 120 caracteres. */
+export const MEET_TITLE_MAX = 120
 /** Sem envio há mais que isto, a extensão conta como desconectada. */
 export const MEET_CONNECTED_MS = 15_000
 
 /** Nome numa linha só, sem espaço sobrando, cortado em 80 caracteres. */
 const nameSchema = z.string().transform((value) => value.replace(/\s+/g, ' ').trim().slice(0, MEET_NAME_MAX).trim())
+
+/** Caractere de controle (abaixo do espaço e o DEL) vira espaço. */
+const withoutControls = (value: string): string => Array.from(value, (char) => (char.charCodeAt(0) < 32 || char.charCodeAt(0) === 127 ? ' ' : char)).join('')
+
+/** Título numa linha só, sem caractere de controle, cortado em 120; vazio vira `null`. */
+const titleSchema = z
+  .string()
+  .max(1000)
+  .transform((value) => withoutControls(value).replace(/\s+/g, ' ').trim().slice(0, MEET_TITLE_MAX).trim() || null)
 
 const bodySchema = z
   .object({
@@ -27,6 +40,9 @@ const bodySchema = z
     eventos: z
       .array(z.object({ nome: nameSchema, falando: z.boolean(), ts: z.number().finite() }).strict())
       .max(MEET_EVENTS_MAX),
+    // Contrato 48: opcionais, a extensão de antes não manda.
+    plataforma: z.enum(['meet', 'teams']).optional(),
+    titulo: titleSchema.optional(),
   })
   .strict()
 
@@ -34,6 +50,18 @@ export interface MeetPost {
   meeting: string
   participants: string[]
   events: MeetSpeakingEvent[]
+  plataforma: MeetPlatform | null
+  titulo: string | null
+}
+
+/**
+ * Plataforma pelo id, para a extensão antiga (sem `plataforma`): o Meet usa `abc-defg-hij`; o leitor do Teams
+ * (contrato 41) manda `19:meeting_…@thread.v2`, `teams-live-<número>` ou `teams-<hash>`. Outro formato: `null`.
+ */
+export function platformOfMeeting(meeting: string): MeetPlatform | null {
+  if (/^[a-z]{3,4}-[a-z]{4}-[a-z]{3,4}$/.test(meeting)) return 'meet'
+  if (meeting.startsWith('19:meeting_') || meeting.startsWith('teams-')) return 'teams'
+  return null
 }
 
 /** Corpo de um envio já lido como JSON; `null` se não for o formato. Nome vazio sai; participante repetido também. */
@@ -46,7 +74,8 @@ export function parseMeetPost(raw: unknown): MeetPost | null {
     .map((event) => ({ name: event.nome, speaking: event.falando, ts: event.ts }))
     // Estável: eventos com o mesmo `ts` ficam na ordem em que vieram.
     .sort((a, b) => a.ts - b.ts)
-  return { meeting: parsed.data.reuniao, participants, events }
+  const meeting = parsed.data.reuniao
+  return { meeting, participants, events, plataforma: parsed.data.plataforma ?? platformOfMeeting(meeting), titulo: parsed.data.titulo ?? null }
 }
 
 /** Só a extensão: método, caminho, origem `chrome-extension://` e JSON. */
@@ -107,9 +136,13 @@ export function createMeetServer(deps: MeetServerDeps): MeetServer {
   let starting: Promise<number | null> | null = null
   let connected = false
   let participants: string[] = []
+  let meeting: string | null = null
+  let plataforma: MeetPlatform | null = null
+  let titulo: string | null = null
   let expiry: ReturnType<typeof setTimeout> | null = null
 
-  const emit = (events: MeetSpeakingEvent[]): void => deps.onChange({ connected, participants: [...participants], events })
+  const snapshot = (events: MeetSpeakingEvent[]): MeetState => ({ connected, participants: [...participants], events, meeting, plataforma, titulo })
+  const emit = (events: MeetSpeakingEvent[]): void => deps.onChange(snapshot(events))
 
   const clearExpiry = (): void => {
     if (expiry) clearTimeout(expiry)
@@ -118,16 +151,22 @@ export function createMeetServer(deps: MeetServerDeps): MeetServer {
 
   const disconnect = (): void => {
     clearExpiry()
-    if (!connected && !participants.length) return
+    if (!connected && !participants.length && meeting === null) return
     connected = false
     participants = []
+    meeting = null
+    plataforma = null
+    titulo = null
     emit([])
   }
 
   const receive = (post: MeetPost): void => {
-    const changed = !connected || !sameList(participants, post.participants)
+    const changed = !connected || !sameList(participants, post.participants) || meeting !== post.meeting || plataforma !== post.plataforma || titulo !== post.titulo
     connected = true
     participants = post.participants
+    meeting = post.meeting
+    plataforma = post.plataforma
+    titulo = post.titulo
     clearExpiry()
     expiry = setTimeout(disconnect, connectedMs)
     expiry.unref?.()
@@ -219,7 +258,7 @@ export function createMeetServer(deps: MeetServerDeps): MeetServer {
       deps.log?.('[meet] parado')
     },
 
-    status: () => ({ connected, participants: [...participants], events: [] }),
+    status: () => snapshot([]),
 
     port: () => port,
   }

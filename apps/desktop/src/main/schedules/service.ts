@@ -11,7 +11,7 @@
 // - o limite diário conta as execuções automáticas do dia; ao passar, pausa tudo e avisa.
 // Cada execução é uma sessão ACP própria (`runner.ts`); o resultado vai para o histórico de qualquer jeito e para
 // a saída escolhida (`outputs.ts`). Nada aqui envia coisa alguma para fora do Mac, salvo o email da tarefa com a
-// permissão do contrato 46 (abaixo). Sem Electron: relógio, intervalos, notificação e eventos chegam injetados.
+// permissão do contrato 51 (abaixo). Sem Electron: relógio, intervalos, notificação e eventos chegam injetados.
 //
 // Contrato 25: o lembrete do Assistente é uma tarefa "uma vez" sem agente (`reminder`): no horário, só a
 // notificação do macOS com o texto (o "Abrir" leva à conversa do WhatsApp, quando há); nenhum Claude roda, nada
@@ -19,7 +19,7 @@
 // também com as tarefas pausadas (pela pessoa ou pelo limite); perdido (app fechado, Mac dormindo, religado depois da
 // data), avisa atrasado assim que o app confere, com qualquer atraso, e desliga.
 //
-// Contrato 46: a tarefa com "Pode enviar email" (a permissão gravada nela ao salvar, com a data) roda com as ferramentas
+// Contrato 51: a tarefa com "Pode enviar email" (a permissão gravada nela ao salvar, com a data) roda com as ferramentas
 // de leitura do email e `enviar_email`, montadas só para aquela execução (`email-send.ts`); cada envio confere a
 // permissão de agora (revogada, pausada, app bloqueado), a conta, os destinatários e o teto. Os envios e as recusas ficam
 // na execução, e a execução que enviou avisa no fim ("Tarefa X enviou 2 emails"). Sem a seção, nada muda.
@@ -117,7 +117,7 @@ export interface AutomationsDeps {
   timers?: IntervalTimers
   log?: (message: string) => void
   /**
-   * Contrato 46: o envio das tarefas com "Pode enviar email" (o caminho interno do main e as ferramentas de leitura).
+   * Contrato 51: o envio das tarefas com "Pode enviar email" (o caminho interno do main e as ferramentas de leitura).
    * Sem ele, nenhuma execução ganha ferramenta e a seção não pode ser salva.
    */
   email?: TaskEmailDeps | undefined
@@ -372,7 +372,7 @@ export function createAutomationsService(deps: AutomationsDeps): AutomationsServ
       outputResult: null,
     }
     let run: AutomationRun
-    // Contrato 46: os envios e as recusas desta execução (só a tarefa com "Pode enviar email").
+    // Contrato 51: os envios e as recusas desta execução (só a tarefa com "Pode enviar email").
     const emails: RunEmail[] = []
     const sends = { count: () => 0 }
     try {
@@ -403,7 +403,7 @@ export function createAutomationsService(deps: AutomationsDeps): AutomationsServ
       // Pausada agora pelas falhas: o aviso da pausa já diz que falhou (um aviso só).
       const pausedNow = job.task ? await finishTask(job, run) : false
       if (job.persist && !pausedNow) notifyRun(job, run)
-      // Contrato 46: a execução que enviou avisa, com qualquer política de avisos.
+      // Contrato 51: a execução que enviou avisa, com qualquer política de avisos.
       const sent = sends.count()
       if (job.task && sent > 0) deps.notify({ title: `Tarefa: ${job.task.name}`, body: `Tarefa ${job.task.name} enviou ${emailsLabel(sent)}`, runId: run.id })
     } catch (error) {
@@ -455,7 +455,7 @@ export function createAutomationsService(deps: AutomationsDeps): AutomationsServ
   }
 
   /**
-   * Contrato 46: as ferramentas de uma execução da tarefa com "Pode enviar email": as de leitura do email e o envio, que
+   * Contrato 51: as ferramentas de uma execução da tarefa com "Pode enviar email": as de leitura do email e o envio, que
    * relê a tarefa e a pausa a cada pedido. `undefined`: a tarefa não tem a seção (ou o app não tem email): nenhuma.
    */
   async function emailToolsFor(taskId: string, emails: RunEmail[], sends: { count: () => number }): Promise<AgentRunTools | undefined> {
@@ -740,7 +740,7 @@ export function createAutomationsService(deps: AutomationsDeps): AutomationsServ
       }
       const { id, email: emailInput, ...fields } = parsed.data
       if (!(await deps.agents.get(fields.agentId))) return { ok: false, error: 'agent' }
-      // Contrato 46: a conta de "Pode enviar email" tem que existir neste app.
+      // Contrato 51: a conta de "Pode enviar email" tem que existir neste app.
       if (emailInput && (!deps.email || deps.email.accountAddress(emailInput.accountId) === null)) return { ok: false, error: 'email' }
       const at = now()
       // "Uma vez em" com a data no passado nunca rodaria.

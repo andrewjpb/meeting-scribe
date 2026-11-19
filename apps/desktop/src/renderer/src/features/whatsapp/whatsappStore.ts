@@ -6,9 +6,13 @@
 // sem segurar nada (a lista mostra as iniciais até a foto chegar).
 //
 // Contrato 36: os balões temporários do envio com "Corrigir ao enviar" ligado, por conversa (`pending.ts`).
+//
+// Contrato 34: as reações que mudam (as do serviço e as que a resposta do "reagir" traz) e quem está digitando em cada
+// conversa, com o aviso vencendo sozinho 10 s depois do último (`interactions.ts`).
 import { useEffect } from 'react'
 import { create } from 'zustand'
-import type { WhatsAppChat, WhatsAppMessage, WhatsAppStatus } from '@shared/whatsapp'
+import type { WhatsAppChat, WhatsAppMessage, WhatsAppPresence, WhatsAppReaction, WhatsAppStatus } from '@shared/whatsapp'
+import { applyPresence, pruneTyping, stopTyping, withReactions, type TypingByChat } from './interactions'
 import { sessionBlobs, sessionTranscripts } from './media'
 import { addPending, confirmPending, failPending, markPendingSent, PENDING_ECHO_WAIT_MS, settledIds, settlePending, type PendingByChat } from './pending'
 
@@ -50,6 +54,11 @@ interface WhatsAppState {
   failPending: (chatId: string, key: string, error: string) => void
   /** O campo da conversa pegou o texto que voltou. */
   takeRestore: (chatId: string) => { text: string; error: string } | null
+  /** Contrato 34: quem está digitando, por conversa (o aviso vence sozinho). */
+  typing: TypingByChat
+  receivePresence: (presence: WhatsAppPresence) => void
+  /** Contrato 34: as reações de uma mensagem mudaram (todas, juntas por emoji). */
+  setReactions: (chatId: string, messageId: string, reactions: readonly WhatsAppReaction[]) => void
 }
 
 /** Fotos pedidas ao mesmo tempo. */
@@ -59,6 +68,8 @@ const photoAsked = new Set<string>()
 let photoRunning = 0
 const photoRunningIds = new Set<string>()
 let pendingCount = 0
+/** Contrato 34: o próximo vencimento de um "digitando…". */
+let typingTimer: ReturnType<typeof setTimeout> | null = null
 
 const byTime = (a: WhatsAppMessage, b: WhatsAppMessage): number => a.at - b.at || a.id.localeCompare(b.id)
 
@@ -88,6 +99,35 @@ export const useWhatsApp = create<WhatsAppState>()((set, get) => ({
   pending: {},
   swapped: {},
   restore: {},
+  typing: {},
+
+  receivePresence: (presence) => {
+    set((state) => ({ typing: applyPresence(pruneTyping(state.typing, Date.now()), presence, Date.now()) }))
+    // Um só relógio: vence o aviso mais próximo e se arma de novo para o seguinte.
+    const arm = (): void => {
+      if (typingTimer) clearTimeout(typingTimer)
+      typingTimer = null
+      const entries = Object.values(get().typing)
+      if (!entries.length) return
+      const next = Math.min(...entries.map((entry) => entry.until))
+      typingTimer = setTimeout(
+        () => {
+          set((state) => ({ typing: pruneTyping(state.typing, Date.now()) }))
+          arm()
+        },
+        Math.max(0, next - Date.now()) + 50,
+      )
+    }
+    arm()
+  },
+
+  setReactions: (chatId, messageId, reactions) =>
+    set((state) => {
+      const current = state.messages[chatId]
+      const next = withReactions(current, messageId, reactions)
+      if (!next || next === current) return {}
+      return { messages: { ...state.messages, [chatId]: next } }
+    }),
 
   startPending: (chatId, text) => {
     const key = `pendente-${++pendingCount}`
@@ -224,7 +264,9 @@ export const useWhatsApp = create<WhatsAppState>()((set, get) => ({
       }
       for (const [chatId, incoming] of byChat) messages[chatId] = merge(messages[chatId] ?? [], incoming)
       if (chats) chats = chats.sort((a, b) => (b.lastMessage?.at ?? 0) - (a.lastMessage?.at ?? 0))
-      return { chats, messages, ...settleChats(state, messages, byChat.keys()) }
+      // Contrato 34: a mensagem de alguém chegou: o "digitando…" daquela conversa sai.
+      const typing = stopTyping(state.typing, items.filter(({ message }) => !message.fromMe).map(({ message }) => message.chatId))
+      return { chats, messages, typing, ...settleChats(state, messages, byChat.keys()) }
     }),
 }))
 
@@ -237,6 +279,7 @@ export function watchWhatsApp(): () => void {
       useWhatsApp.getState().forgetPhotos()
       sessionBlobs.clear()
       sessionTranscripts.clear()
+      useWhatsApp.setState({ typing: {} })
     }
     useWhatsApp.setState({ status })
   })
@@ -258,11 +301,16 @@ export function watchWhatsApp(): () => void {
     const state = useWhatsApp.getState()
     if (state.chats) void state.loadChats()
   })
+  // Contrato 34: as reações e o "digitando…" chegam do serviço como dados (conferidos no main).
+  const offReactions = window.__scribeApi.on('scribe:whatsapp-reactions', ({ chatId, messageId, reactions }) => useWhatsApp.getState().setReactions(chatId, messageId, reactions))
+  const offPresence = window.__scribeApi.on('scribe:whatsapp-presence', (presence) => useWhatsApp.getState().receivePresence(presence))
   return () => {
     if (timer) clearTimeout(timer)
     offState()
     offMessage()
     offChats()
+    offReactions()
+    offPresence()
   }
 }
 

@@ -4,6 +4,8 @@
 // conferência do modo seguro, os modelos e o "Pensar mais", os nomes das ferramentas de leitura e a leitura
 // de uso e custo.
 import type * as acp from '@agentclientprotocol/sdk/unstable'
+import type { McpToolPolicy, McpTransport } from '../../../shared/mcp'
+import type { NavegadorFerramenta } from '../../../shared/navegador-ferramentas'
 import type { AgentProfileId } from '../../../shared/settings-defaults'
 import type { AcpPackage } from '../install'
 
@@ -26,10 +28,49 @@ export interface AcpSessionRequest {
    * política de permissão confere cada chamada (`web.ts`). Tradução, resumo e análise nunca recebem.
    */
   web?: boolean
+  /**
+   * Contrato 21: a sessão pode receber os servidores MCP ligados nas Configurações (só o chat das conversas e a análise;
+   * as automações, a tradução e o resumo nunca pedem). `off`: os desligados nesta conversa.
+   */
+  mcp?: { off?: readonly string[] | undefined } | undefined
+  /** Contrato 21: os servidores MCP desta sessão, resolvidos pela fábrica (o chamador não preenche). */
+  mcpServers?: readonly AcpMcpServer[] | undefined
+  /**
+   * Contrato 47: as ferramentas do navegador (o servidor MCP local `navegador`), só no chat com as ferramentas de
+   * leitura. Quem liga é o Assistente, com "Ativar ponte" ligado e a extensão conectada ao abrir a sessão.
+   */
+  navegador?: boolean
+  /** Contrato 47: a instrução sem o navegador, que vale se o servidor MCP do navegador não abrir para esta sessão. */
+  systemPromptSemNavegador?: string
 }
 
-/** Tipo de passo que a tela mostra (o vocabulário do app, não o do agente). */
-export type StepTool = 'Read' | 'Grep' | 'Glob' | 'WebSearch' | 'WebFetch'
+/**
+ * Um servidor MCP de uma sessão (contrato 21), já com a definição do `session/new` (com os segredos, só no main), a
+ * política de cada ferramenta e os valores a mascarar no cartão de aprovação.
+ */
+export interface AcpMcpServer {
+  /** `app:<id>` ou `cli:<nome>`. */
+  key: string
+  /** Nome no agente: o das ferramentas `mcp__<nome>__<ferramenta>`. */
+  name: string
+  transport: McpTransport
+  definition: acp.McpServer
+  toolPolicy: Readonly<Record<string, McpToolPolicy>>
+  secrets: readonly string[]
+  /** "Sempre permitir esta ferramenta": grava a política `allow`. */
+  allowAlways(tool: string): void
+}
+
+/** Contrato 47: o servidor MCP local do navegador desta sessão, com o token dela. */
+export interface AcpLocalMcp {
+  navegador?: { url: string; token: string }
+}
+
+/**
+ * Tipo de passo que a tela mostra (o vocabulário do app, não o do agente). `Mcp`: ferramenta de um servidor MCP;
+ * contrato 47: as do navegador.
+ */
+export type StepTool = 'Read' | 'Grep' | 'Glob' | 'WebSearch' | 'WebFetch' | 'Mcp' | NavegadorFerramenta
 
 /** O que se sabe de uma chamada de ferramenta pelos `tool_call`/`tool_call_update` da sessão. */
 export interface KnownToolCall {
@@ -39,6 +80,8 @@ export interface KnownToolCall {
   status?: string | undefined
   locations: string[]
   rawInput?: unknown
+  /** Contrato 47: o começo do texto do resultado (a aba que o `navegador_abrir` abriu, o rótulo do clique). */
+  output?: string | undefined
 }
 
 /** Opções da sessão aberta, como o perfil as confere. */
@@ -67,8 +110,11 @@ export interface AgentProfile {
   bundledPackage: string
   /** Ambiente do agente: o do main filtrado e o executável do CLI que ele deve rodar. */
   env(baseEnv: NodeJS.ProcessEnv, cliPath: string): NodeJS.ProcessEnv
-  /** `session/new` com o isolamento: sem configurações pessoais, só leitura (ou nada), sem MCP. */
-  newSession(request: AcpSessionRequest): acp.NewSessionRequest
+  /**
+   * `session/new` com o isolamento: sem configurações pessoais, só leitura (ou nada), só os MCP do app (contrato 21).
+   * Contrato 47: e o servidor local do navegador (`local`), quando a sessão pede e o app abriu um.
+   */
+  newSession(request: AcpSessionRequest, local?: AcpLocalMcp): acp.NewSessionRequest
   /** Depois de abrir: `null` se a sessão está no modo seguro; senão, o motivo. */
   unsafeMode(session: SessionOptionsView): string | null
   /** Ferramentas de leitura do agente pelo nome, com o tipo (`read` ou `search`). */

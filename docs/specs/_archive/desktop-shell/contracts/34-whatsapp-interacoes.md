@@ -33,3 +33,44 @@ Feature: desktop-shell · Wave: 34 · Depende de: 32/37 · Pedido do Andrew (18/
 
 ## Telas de impacto no usuário
 - WhatsApp: responder com citação, reações nos balões, "digitando…" ao vivo; interruptor do sinal de digitação.
+
+## Decisões registradas na implementação (18/11/2026)
+- Coluna a mais além das duas do CA1: `sender` (o id de quem mandou). A resposta de verdade cita a mensagem com o `participant` dela e a reação do whatsmeow (`build_reaction`) exige o remetente; o banco não guardava isso. Mensagem de grupo de antes desta versão (sem `sender`): a resposta sai sem citação (com log) e a reação responde 404 (`missing` no app). Conversa a dois não depende dele.
+- A citada é refeita do que ficou guardado: texto vira `conversation`; imagem, vídeo e áudio usam a mensagem serializada do contrato 37. O trecho (`reply_preview`) vem do `contextInfo.quotedMessage`; sem ele, da citada guardada no banco.
+- Reação não é evento à parte no neonize 0.10.0: chega como `MessageEv` com `reactionMessage` (e no histórico, também em `WebMessageInfo.reactions`). Vira `on_reaction`, nunca mensagem. Autor da sua reação = `me`. Fora de ordem, a mais nova vale.
+- SSE: evento próprio `reactions` (`{chatId, messageId, reactions}`, as reações juntas) e `presence` (`{chatId, state, author}`). A expiração de 10 s fica no app (o serviço só repassa).
+- `/_fake/incoming` aceita `replyToId`, `reaction: {messageId, emoji}` e `presence`; `/_fake/presences` devolve o "digitando…" enviado. O falso grava `sender` nas mensagens novas (grupo: número fixo) e nas do Atlas.
+- O seu "digitando…": "digitando" no primeiro caractere e de novo no máximo a cada 3 s enquanto digita; "parou" depois de 3 s sem digitar, ao limpar o campo, ao enviar e ao sair da conversa. Só o texto digitado (o rascunho do Claude não). O interruptor fica em Contas › WhatsApp, abaixo das notificações; o main relê a configuração a cada pedido.
+- Limite conhecido: o "digitando…" dos outros pode não chegar enquanto a conta não estiver marcada como disponível no WhatsApp; o serviço não marca (mudaria o "online" e as notificações do celular).
+- Barra de citação some com um anexo na prévia (responder com mídia está fora de escopo); com a correção do 35 ligada, a citação sai do campo no clique, como o texto.
+
+## Adendo da revisão (18/11/2026)
+
+Revisão cega: aprovado com ressalvas, sem bloqueador. As 7 regras de segurança conferidas
+(reação com clickToken+SendProof; presença só composing/paused com o interruptor lido a cada
+pedido; schemas lenientes; nada sai da máquina; lock recusa os canais novos; só os 6 emojis
+viram botão; logout apaga reactions e colunas novas).
+
+Aplicado após a revisão: o limite zod de `replyPreview` subiu para 2× (a bridge corta em
+pontos de código Python; com emoji isso pode dar o dobro em UTF-16).
+
+Ressalvas que só uma conta real do WhatsApp confirma (pendências declaradas):
+- Autor da reação pode vir como `@lid` ao vivo e `@s.whatsapp.net` no histórico — a mesma
+  reação contaria duas vezes na agregação.
+- O "digitando…" dos outros pode não chegar sem marcar a conta como disponível
+  (`send_presence(AVAILABLE)`), o que mudaria o "online" visto pelos contatos — decisão de
+  produto, por ora não fazemos.
+- A prévia da citação usa o trecho que o remetente manda (igual ao WhatsApp oficial);
+  um remetente pode citar com texto adulterado.
+- Mensagens de grupo recebidas antes desta versão não têm `sender`: respondê-las sai sem
+  citação e reagir devolve "Não dá para reagir a esta mensagem…".
+
+## Gates (19/11/2026)
+
+Smoke completo verde (83 PNGs, todos os checks ok) após uma rodada de correção do gate:
+`data-wa-bubble` no balão (o wrapper novo do MessageItem tinha quebrado o seletor do smoke),
+rolagem até a citada sem animação (a janela do smoke não pinta quadros da rolagem suave),
+lista de botões esperada em Contas com o interruptor novo, e o passo do smoke devolvendo a
+conversa da Ana ao estado respondido. Também: espera de 15 s em selectSettingsTab/openSettingsTab
+(flake antiga da aba "geral" com a máquina carregada) e contagem esperada de prints 82→83.
+vitest 1375 ok, pytest da bridge 58 ok, typecheck/lint ok.

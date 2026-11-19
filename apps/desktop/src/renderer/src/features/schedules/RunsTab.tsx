@@ -2,7 +2,7 @@
 // custo nominal e modelo, e os filtros por tarefa e estado. Abrir uma mostra o pedido enviado, a resposta com
 // raciocínio, passos e rodapé (componentes do chat 16) e o erro, se houve; "Rodar de novo".
 //
-// Contrato 46: a execução de uma tarefa com "Pode enviar email" mostra os emails enviados e os recusados (para, assunto,
+// Contrato 51: a execução de uma tarefa com "Pode enviar email" mostra os emails enviados e os recusados (para, assunto,
 // hora, Message-ID ou o motivo).
 import { ArrowLeft, Ban, RotateCcw, Send } from 'lucide-react'
 import { useEffect, useState } from 'react'
@@ -145,7 +145,7 @@ function RunDetail({ runId, meetings }: { runId: string; meetings: ChatMeetings 
     const result = await window.__scribeApi.invoke('scribe:runs-rerun', { id: shown.id })
     if (result.ok) {
       setRerun(result.runId)
-      useAutomations.setState((state) => (state.finished[result.runId] || state.live[result.runId] ? {} : { live: { ...state.live, [result.runId]: { text: '', reading: false, thinking: '', steps: [], denied: 0, plan: [], meta: null } } }))
+      useAutomations.setState((state) => (state.finished[result.runId] || state.live[result.runId] ? {} : { live: { ...state.live, [result.runId]: { text: '', reading: false, thinking: '', steps: [], denied: 0, plan: [], meta: null, approvals: [] } } }))
     }
   }
   return (
@@ -200,7 +200,7 @@ function RunDetail({ runId, meetings }: { runId: string; meetings: ChatMeetings 
   )
 }
 
-/** Contrato 46: os emails da execução, enviados e recusados, na ordem. */
+/** Contrato 51: os emails da execução, enviados e recusados, na ordem. */
 function RunEmails({ emails }: { emails: readonly RunEmail[] }) {
   const sent = emails.filter((item) => item.ok).length
   const refused = emails.length - sent

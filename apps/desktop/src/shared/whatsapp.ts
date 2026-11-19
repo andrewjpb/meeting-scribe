@@ -67,6 +67,13 @@ export interface WhatsAppMedia {
   seconds?: number | undefined
 }
 
+/** Contrato 34: as reações de uma mensagem, juntas por emoji (`mine`: a sua está entre elas). */
+export interface WhatsAppReaction {
+  emoji: string
+  count: number
+  mine: boolean
+}
+
 export interface WhatsAppMessage {
   id: string
   chatId: string
@@ -77,6 +84,11 @@ export interface WhatsAppMessage {
   type: WhatsAppMessageType
   text: string
   media: WhatsAppMedia | null
+  /** Contrato 34: a mensagem responde outra: o id da citada e um trecho dela (até 120, o texto ou o rótulo da mídia). */
+  replyToId?: string | undefined
+  replyPreview?: string | undefined
+  /** Contrato 34: as reações, quando há. */
+  reactions?: WhatsAppReaction[] | undefined
 }
 
 export interface WhatsAppChat {
@@ -106,9 +118,40 @@ export interface WhatsAppSendRequest {
   chatId: string
   text: string
   clickToken: string
+  /** Contrato 34: a resposta cita esta mensagem (a que não está guardada no serviço sai sem citação). */
+  replyToId?: string | undefined
 }
 
 export type WhatsAppSendResult = { ok: true; id: string } | { ok: false; error: 'click' | 'state' | 'invalid' | 'failed' }
+
+/** Contrato 34: os únicos emojis de reação que o app envia (o vazio tira a sua). */
+export const WHATSAPP_REACTION_EMOJIS = ['\u{1F44D}', '\u2764\uFE0F', '\u{1F602}', '\u{1F62E}', '\u{1F622}', '\u{1F64F}'] as const
+export type WhatsAppReactionEmoji = (typeof WHATSAPP_REACTION_EMOJIS)[number]
+
+/** Contrato 34: reagir é envio: só com o token de clique, como o texto. `emoji: ''` tira a sua reação. */
+export interface WhatsAppReactRequest {
+  chatId: string
+  messageId: string
+  emoji: WhatsAppReactionEmoji | ''
+  clickToken: string
+}
+
+/** `missing`: a mensagem não está guardada no serviço (ou, num grupo, sem quem mandou). */
+export type WhatsAppReactResult = { ok: true; reactions: WhatsAppReaction[] } | { ok: false; error: 'click' | 'state' | 'invalid' | 'missing' | 'failed' }
+
+/** Contrato 34: alguém digitando (ou parou) numa conversa; num grupo, o nome de quem, quando o serviço sabe. */
+export interface WhatsAppPresence {
+  chatId: string
+  state: 'composing' | 'paused'
+  author: string | null
+}
+
+/** Contrato 34: o "digitando…" some 10 s depois do último aviso (o WhatsApp nem sempre manda o "parou"). */
+export const WHATSAPP_TYPING_TTL_MS = 10_000
+/** Contrato 34: o "digitando…" da sua conta: "parou" depois de 3 s sem digitar. */
+export const WHATSAPP_TYPING_IDLE_MS = 3_000
+/** Contrato 34: o trecho da mensagem citada. */
+export const WHATSAPP_REPLY_PREVIEW_MAX = 120
 
 /** Validade do token de clique do envio. */
 export const WHATSAPP_CLICK_TTL_MS = 10_000

@@ -10,13 +10,23 @@
 //
 // Contrato 26: com `web`, a sessão abre com a busca e a página (a política fica no `AcpSession`); os passos mostram
 // "Pesquisando: <consulta>", "Abrindo <domínio>" e, para a página recusada, "Endereço bloqueado: não veio da busca".
+//
+// Contrato 21: com `mcp`, a sessão abre com os servidores MCP ligados para o chat (menos os desligados na conversa); a
+// ferramenta com a política "Perguntar" vira o cartão de aprovação (`approval`), que espera `answerApproval`; o passo
+// mostra "Usando <ferramenta> (<servidor>)" com o estado.
+//
+// Contrato 47: com `navegador`, a sessão abre com as ferramentas do navegador; cada chamada vira um passo curto
+// ("Abriu exemplo.com (aba 2)", "Leu a página", "Clicou no elemento 3"…), com o domínio e nunca o endereço inteiro.
 import type { ChatDetail, ChatError, ChatMeta, ChatPlanEntry, ChatProgress, ChatStep, ChatStepStatus } from '../../shared/chat'
 import { CHAT_PLAN_MAX, CHAT_PLAN_TEXT_MAX, CHAT_STEP_LABEL_MAX, CHAT_STEP_STATUSES, CHAT_TEXT_MAX, CHAT_THINKING_MAX, WEB_BLOCKED_LABEL } from '../../shared/chat'
+import type { McpApprovalDecision } from '../../shared/mcp'
 import type { ChatModel } from '../../shared/settings-defaults'
 import { CHAT_IDLE_TIMEOUT_MS, chatQuestionContent, chatStepOf, chatSystemPrompt, type ChatAnswer, type ChatFolder, type ChatTurn } from '../claude-cli/chat'
 import { escapeTurnText } from '../claude-cli/prompt'
 import type { Timers } from '../claude-cli/translator'
 import { contentText, type AcpOpenResult, type AcpSession, type AcpSessionRequest, type KnownToolCall, type SessionUpdate, type Usage } from './agent'
+import { isNavegadorFerramenta, type NavegadorFerramenta } from '../../shared/navegador-ferramentas'
+import { navegadorAbaOf, navegadorRotuloOf } from './navegador'
 import type { AgentProfile } from './profiles/types'
 import { webDomain } from './web'
 
@@ -36,6 +46,8 @@ export interface ChatEngine {
    * `true`; sem isso (linha de comando), o serviço refaz o processo.
    */
   configure?(model: ChatModel, thinkMore: boolean): boolean
+  /** Contrato 21: a resposta da pessoa ao cartão de aprovação; `false` se o cartão já saiu. */
+  answerApproval?(id: string, decision: McpApprovalDecision): boolean
 }
 
 export interface AcpChatOptions {
@@ -52,6 +64,12 @@ export interface AcpChatOptions {
   web?: boolean
   /** Contrato 26: mais texto escrito pela pessoa (as instruções do agente), de onde saem endereços que ela deixou abrir. */
   webTyped?: string
+  /** Contrato 21: a conversa recebe os servidores MCP ligados para o chat; `off`: os desligados nela. */
+  mcp?: { off: readonly string[] }
+  /** Contrato 47: a sessão abre com as ferramentas do navegador (Assistente com a ponte ligada e a extensão conectada). */
+  navegador?: boolean
+  /** Contrato 47: a instrução sem o navegador, para a sessão cujo servidor do navegador não abriu. */
+  systemPromptSemNavegador?: string
   cwd: string
   titleOf?: (meetingId: string) => string | null
   timers?: Timers
@@ -87,6 +105,68 @@ export function webStepOf(tool: 'WebSearch' | 'WebFetch', input: Record<string, 
   return { tool, label: domain ? `Abrindo ${domain.slice(0, 120)}` : 'Abrindo uma página', meetingId: null }
 }
 
+/** Contrato 21: "Usando <ferramenta> (<servidor>)", com o nome que veio do agente (texto puro, cortado). */
+export function mcpStepOf(input: Record<string, unknown>): Omit<ChatStep, 'id' | 'status'> {
+  const tool = typeof input['tool'] === 'string' ? oneLine(input['tool']).slice(0, 80) : 'ferramenta'
+  const server = typeof input['server'] === 'string' ? oneLine(input['server']).slice(0, 60) : 'servidor'
+  return { tool: 'Mcp', label: `Usando ${tool} (${server})`, meetingId: null }
+}
+
+/** Inteiro positivo da entrada, ou `null`. */
+const positive = (value: unknown): number | null => (typeof value === 'number' && Number.isInteger(value) && value > 0 ? value : null)
+
+/**
+ * Passo do navegador (contrato 47): "Abriu <domínio> (aba N)", "Listou as abas", "Leu a página", "Clicou em «<rótulo>»",
+ * "Digitou em «<rótulo>»", "Aguardou N s", "Fechou a aba N". Só o domínio do endereço vai à tela, nunca o texto digitado
+ * nem o da página; o rótulo do elemento é o que a extensão devolve no resultado (`output`), e sem ele vale o número
+ * ("Clicou no elemento N"). A aba aberta também sai do resultado, quando ele já chegou.
+ */
+export function navegadorStepOf(tool: NavegadorFerramenta, input: Record<string, unknown>, output?: string): Omit<ChatStep, 'id' | 'status'> {
+  const step = (label: string): Omit<ChatStep, 'id' | 'status'> => ({ tool, label: label.length > CHAT_STEP_LABEL_MAX ? `${label.slice(0, CHAT_STEP_LABEL_MAX - 1)}…` : label, meetingId: null })
+  const aba = positive(input['aba'])
+  switch (tool) {
+    case 'navegador_abrir': {
+      const domain = webDomain(input['url'])
+      const opened = navegadorAbaOf(output)
+      return step(`Abriu ${domain ? domain.slice(0, 120) : 'um site'}${opened ? ` (aba ${opened})` : ''}`)
+    }
+    case 'navegador_abas':
+      return step('Listou as abas')
+    case 'navegador_ler':
+      return step('Leu a página')
+    case 'navegador_clicar': {
+      const ref = positive(input['ref'])
+      const rotulo = navegadorRotuloOf(output)
+      return step(rotulo ? `Clicou em «${rotulo}»` : ref ? `Clicou no elemento ${ref}` : 'Clicou na página')
+    }
+    case 'navegador_digitar': {
+      const ref = positive(input['ref'])
+      const rotulo = navegadorRotuloOf(output)
+      return step(rotulo ? `Digitou em «${rotulo}»` : ref ? `Digitou no campo ${ref}` : 'Digitou na página')
+    }
+    case 'navegador_aguardar': {
+      const segundos = positive(input['segundos'])
+      return step(segundos ? `Aguardou ${segundos} s` : 'Aguardou a página')
+    }
+    case 'navegador_fechar':
+      return step(aba ? `Fechou a aba ${aba}` : 'Fechou a aba')
+  }
+}
+
+/** Começo do texto do resultado de uma chamada (o `content` do `tool_call_update`), só para o rótulo do passo. */
+function outputOf(content: unknown): string | undefined {
+  if (!Array.isArray(content)) return undefined
+  for (const block of content as unknown[]) {
+    const inner = typeof block === 'object' && block !== null ? (block as { content?: unknown }).content : undefined
+    if (typeof inner === 'object' && inner !== null && (inner as { type?: unknown }).type === 'text') {
+      const text = (inner as { text?: unknown }).text
+      // O resultado de `clicar` (título, endereço e rótulo) cabe com folga; o do `ler`, cortado, só não dá rótulo.
+      if (typeof text === 'string') return text.slice(0, 8_192)
+    }
+  }
+  return undefined
+}
+
 /**
  * Passo em português a partir de uma chamada de ferramenta do ACP (CA4): "Lendo o índice das reuniões",
  * "Abrindo «<título>»", "Procurando "<termo>"", "Listando arquivos", com o id da chamada e o estado. Outra
@@ -97,7 +177,14 @@ export function acpStepOf(profile: AgentProfile, id: string, call: KnownToolCall
   // O perfil diz que passo é (pelo nome da ferramenta dele) e normaliza a entrada.
   const mapped = profile.stepOf(call)
   if (!mapped) return null
-  const step = mapped.tool === 'WebSearch' || mapped.tool === 'WebFetch' ? webStepOf(mapped.tool, mapped.input, blocked) : chatStepOf(mapped.tool, mapped.input, titleOf)
+  const step =
+    mapped.tool === 'Mcp'
+      ? mcpStepOf(mapped.input)
+      : mapped.tool === 'WebSearch' || mapped.tool === 'WebFetch'
+        ? webStepOf(mapped.tool, mapped.input, blocked)
+        : isNavegadorFerramenta(mapped.tool)
+          ? navegadorStepOf(mapped.tool, mapped.input, call.output)
+          : chatStepOf(mapped.tool, mapped.input, titleOf)
   if (!step) return null
   const status = (CHAT_STEP_STATUSES as readonly string[]).includes(call.status ?? '') ? (call.status as ChatStepStatus) : 'pending'
   return { ...step, id, status }
@@ -143,6 +230,8 @@ interface Asking {
   stopping: boolean
   /** "Parar" enquanto a sessão abria: aplicado assim que ela abrir. */
   stopRequested?: boolean
+  /** Contrato 21: cartões de aprovação abertos, esperando a pessoa. */
+  approvals?: Map<string, (decision: McpApprovalDecision) => void>
   onUpdate: (progress: ChatProgress) => void
   onDetail: (detail: ChatDetail) => void
   resolve: (answer: ChatAnswer) => void
@@ -225,6 +314,9 @@ export class AcpChat implements ChatEngine {
           tools: 'read',
           thinkMore: this.thinkMore,
           ...(this.options.web ? { web: true } : {}),
+          ...(this.options.mcp ? { mcp: { off: [...this.options.mcp.off] } } : {}),
+          ...(this.options.navegador ? { navegador: true } : {}),
+          ...(this.options.navegador && this.options.systemPromptSemNavegador !== undefined ? { systemPromptSemNavegador: this.options.systemPromptSemNavegador } : {}),
         })
         if (!opened.ok) {
           this.options.log?.(`[acp] chat: a sessão não abriu (${opened.reason.slice(0, 200)})`)
@@ -253,6 +345,14 @@ export class AcpChat implements ChatEngine {
     // Contrato 26: o texto que a pessoa escreveu (a pergunta, as anteriores e as instruções do agente), sem escape.
     const typed = [question, ...history.filter((turn) => turn.role === 'user').map((turn) => turn.text), this.options.webTyped ?? ''].join('\n')
     return this.run(session, content, onUpdate, onDetail, typed)
+  }
+
+  /** Contrato 21: "Permitir uma vez", "Sempre permitir esta ferramenta" ou "Negar" num cartão aberto. */
+  answerApproval(id: string, decision: McpApprovalDecision): boolean {
+    const resolve = this.asking?.approvals?.get(id)
+    if (!resolve) return false
+    resolve(decision)
+    return true
   }
 
   /** "Parar": `session/cancel`; se o agente não fechar a resposta em 5 s, o processo morre. */
@@ -315,6 +415,7 @@ export class AcpChat implements ChatEngine {
         startedAt: this.now(),
         timer: null,
         stopping: false,
+        approvals: new Map(),
         onUpdate,
         onDetail,
         resolve,
@@ -338,6 +439,25 @@ export class AcpChat implements ChatEngine {
             const call = asking.tools.get(denial.toolCallId)
             const step = call ? acpStepOf(asking.session.profile, denial.toolCallId, { ...call, status: 'failed' }, this.options.titleOf, true) : null
             if (step) asking.onDetail({ type: 'step', step })
+          },
+          // Contrato 21: o cartão na conversa; a espera de 2 min fica com a sessão. Enquanto a pessoa decide, o relógio
+          // de 3 min sem evento não conta.
+          onApproval: (approval) =>
+            new Promise<McpApprovalDecision>((resolveDecision) => {
+              if (this.asking !== asking) {
+                resolveDecision('deny')
+                return
+              }
+              if (asking.timer !== null) this.timers.clearTimeout(asking.timer)
+              asking.timer = null
+              asking.approvals?.set(approval.id, resolveDecision)
+              asking.onDetail({ type: 'approval', approval })
+            }),
+          onApprovalDone: (id, decision) => {
+            asking.approvals?.delete(id)
+            if (this.asking !== asking) return
+            asking.onDetail({ type: 'approval-done', id, decision })
+            this.arm(asking)
           },
         }, typed)
         .then((outcome) => {
@@ -380,6 +500,12 @@ export class AcpChat implements ChatEngine {
   private finish(asking: Asking, result: { ok: true; text: string } | { ok: false; error: Exclude<ChatError, 'not-found'> }): void {
     if (this.asking !== asking) return
     this.asking = null
+    // Cartões ainda abertos quando a resposta acaba: negados.
+    for (const [id, resolveDecision] of asking.approvals ?? []) {
+      resolveDecision('deny')
+      asking.onDetail({ type: 'approval-done', id, decision: 'deny' })
+    }
+    asking.approvals?.clear()
     if (asking.timer !== null) this.timers.clearTimeout(asking.timer)
     asking.timer = null
     asking.resolve(result.ok ? { ok: true, text: clip(result.text) } : { ok: false, error: result.error, text: clip(asking.text) })
@@ -407,6 +533,7 @@ export class AcpChat implements ChatEngine {
       case 'tool_call':
       case 'tool_call_update': {
         const before = asking.tools.get(update.toolCallId)
+        const output = outputOf(update.content)
         const call: KnownToolCall = {
           ...(before ?? { locations: [] }),
           ...(typeof update.name === 'string' ? { name: update.name } : {}),
@@ -415,6 +542,7 @@ export class AcpChat implements ChatEngine {
           ...(typeof update.status === 'string' ? { status: update.status } : {}),
           ...(Array.isArray(update.locations) ? { locations: update.locations.map((location) => location.path) } : {}),
           ...(update.rawInput !== undefined && update.rawInput !== null ? { rawInput: update.rawInput } : {}),
+          ...(output !== undefined ? { output } : {}),
         }
         asking.tools.set(update.toolCallId, call)
         const blocked = asking.blocked.has(update.toolCallId)

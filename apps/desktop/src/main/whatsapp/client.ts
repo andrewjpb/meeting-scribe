@@ -8,9 +8,27 @@
 //
 // Contrato 39: o envio de imagem ou vídeo é um POST com os bytes no corpo e o tipo, o nome e a legenda nos cabeçalhos
 // (`X-Media-Mime`, `X-Media-Name`, `X-Caption`, os dois últimos com `encodeURIComponent`), só com a prova de clique.
+//
+// Contrato 34: a resposta (`send` com `replyToId`) e a reação (`react`) só com a prova de clique; a presença
+// ("digitando…", `presence`) não é mensagem e não leva prova (o serviço do main só chama com o interruptor ligado). A
+// citação, as reações e o "digitando…" que chegam são dados conferidos aqui: emoji só como texto curto, sem controle.
 import { request as httpRequest, type IncomingMessage } from 'node:http'
 import { z } from 'zod'
-import { WHATSAPP_MEDIA_MAX, WHATSAPP_SERVICE_STATES, type WhatsAppChat, type WhatsAppMe, type WhatsAppMessage, type WhatsAppSearchHit, type WhatsAppServiceState } from '../../shared/whatsapp'
+import {
+  WHATSAPP_MEDIA_MAX,
+  WHATSAPP_MESSAGE_ID_PATTERN,
+  WHATSAPP_REPLY_PREVIEW_MAX,
+  WHATSAPP_SERVICE_STATES,
+  WHATSAPP_CHAT_ID_PATTERN,
+  type WhatsAppChat,
+  type WhatsAppMe,
+  type WhatsAppMessage,
+  type WhatsAppPresence,
+  type WhatsAppReaction,
+  type WhatsAppReactionEmoji,
+  type WhatsAppSearchHit,
+  type WhatsAppServiceState,
+} from '../../shared/whatsapp'
 import { isSendProof, type SendProof } from './send-guard'
 
 export const WHATSAPP_HOST = '127.0.0.1'
@@ -40,6 +58,10 @@ const mediaSchema = z.object({
   downloadable: z.boolean().optional().catch(undefined),
   seconds: z.number().int().positive().max(86_400).optional().catch(undefined),
 })
+/** Contrato 34: o emoji recebido é texto curto, sem caractere de controle (nunca marcação nem instrução). */
+const EMOJI_TEXT = /^[^\p{Cc}\p{Zl}\p{Zp}]{1,16}$/u
+const reactionSchema: z.ZodType<WhatsAppReaction> = z.object({ emoji: z.string().regex(EMOJI_TEXT), count: z.number().int().positive().max(100_000), mine: z.boolean() })
+export const reactionsSchema = z.array(reactionSchema).max(50)
 export const messageSchema = z.object({
   id: z.string().min(1).max(200),
   chatId: z.string().min(1).max(200),
@@ -49,6 +71,11 @@ export const messageSchema = z.object({
   type: z.enum(['text', 'image', 'video', 'audio', 'document', 'sticker', 'other']),
   text: z.string().max(20_000),
   media: mediaSchema.nullable(),
+  // Contrato 34: a citação e as reações; fora do formato, a mensagem chega sem elas.
+  replyToId: z.string().regex(WHATSAPP_MESSAGE_ID_PATTERN).optional().catch(undefined),
+  // A bridge corta em WHATSAPP_REPLY_PREVIEW_MAX pontos de código (Python); em UTF-16 isso pode dar o dobro.
+  replyPreview: z.string().max(WHATSAPP_REPLY_PREVIEW_MAX * 2).optional().catch(undefined),
+  reactions: reactionsSchema.optional().catch(undefined),
 })
 const chatSchema = z.object({
   id: z.string().min(1).max(200),
@@ -72,6 +99,11 @@ export const PHOTO_DATA_URL = /^data:image\/(?:jpeg|png|webp);base64,[A-Za-z0-9+
 export const PHOTO_URL_MAX = 700_000
 const photoSchema = z.object({ photo: z.string().max(PHOTO_URL_MAX).regex(PHOTO_DATA_URL).nullable().catch(null) })
 const eventMessageSchema = messageSchema.extend({ chatName: z.string().max(200).nullable().optional() })
+const chatIdText = z.string().regex(WHATSAPP_CHAT_ID_PATTERN)
+const reactSchema = z.object({ reactions: reactionsSchema })
+const okSchema = z.object({ ok: z.literal(true) })
+const eventReactionsSchema = z.object({ chatId: chatIdText, messageId: z.string().regex(WHATSAPP_MESSAGE_ID_PATTERN), reactions: reactionsSchema })
+const eventPresenceSchema: z.ZodType<WhatsAppPresence> = z.object({ chatId: chatIdText, state: z.enum(['composing', 'paused']), author: z.string().max(200).nullable().catch(null) })
 
 export type WhatsAppHealth = z.infer<typeof healthSchema>
 
@@ -89,6 +121,10 @@ export type BridgeEvent =
   | { type: 'message'; message: WhatsAppMessage; chatName: string | null }
   /** As conversas mudaram de uma vez (histórico do celular, nomes achados depois): relê a lista. */
   | { type: 'chats' }
+  /** Contrato 34: as reações de uma mensagem mudaram (todas, juntas por emoji). */
+  | { type: 'reactions'; chatId: string; messageId: string; reactions: WhatsAppReaction[] }
+  /** Contrato 34: alguém digitando (ou parou) numa conversa. */
+  | { type: 'presence'; presence: WhatsAppPresence }
 
 export interface BridgeClient {
   readonly port: number
@@ -103,8 +139,12 @@ export interface BridgeClient {
   photo(chatId: string): Promise<string | null>
   /** Contrato 37: os bytes da mídia de uma mensagem (até 64 MB). Lança `WhatsAppServiceError` (404, 410, 413…). */
   media(chatId: string, messageId: string): Promise<{ mime: string; bytes: Buffer }>
-  /** Só com a prova de um clique de verdade, para a mesma conversa. */
-  send(proof: SendProof, chatId: string, text: string): Promise<string>
+  /** Só com a prova de um clique de verdade, para a mesma conversa. Contrato 34: com `replyToId`, como resposta. */
+  send(proof: SendProof, chatId: string, text: string, replyToId?: string): Promise<string>
+  /** Contrato 34: reagir (emoji vazio tira a sua), com a mesma prova de clique. Devolve as reações da mensagem. */
+  react(proof: SendProof, chatId: string, messageId: string, emoji: WhatsAppReactionEmoji | ''): Promise<WhatsAppReaction[]>
+  /** Contrato 34: "digitando…" ou "parou" da sua conta. Não é mensagem (sem prova); só com o interruptor ligado. */
+  presence(chatId: string, state: 'composing' | 'paused'): Promise<void>
   /** Contrato 39: a imagem ou o vídeo, com a mesma prova. Lança `WhatsAppServiceError` (400, 409, 413, 502…). */
   sendMedia(proof: SendProof, chatId: string, media: { name: string; mime: string; bytes: Uint8Array; caption?: string | undefined }): Promise<string>
   /** SSE de `/events`; `onClose` quando a conexão cai. Devolve o que fecha. */
@@ -259,9 +299,16 @@ export function createBridgeClient(port: number, token: string): BridgeClient {
     search: async (term) => (await call('GET', `/search?q=${encodeURIComponent(term)}`, searchSchema)).messages,
     photo: async (chatId) => (await call('GET', `/chats/${chatPath(chatId)}/photo`, photoSchema)).photo,
     media: (chatId, messageId) => callBinary(`/chats/${chatPath(chatId)}/messages/${encodeURIComponent(messageId)}/media`),
-    send: async (proof, chatId, text) => {
+    send: async (proof, chatId, text, replyToId) => {
       if (!isSendProof(proof) || proof.chatId !== chatId) throw new WhatsAppServiceError(0, 'click')
-      return (await call('POST', `/chats/${chatPath(chatId)}/send`, sendSchema, { text })).id
+      return (await call('POST', `/chats/${chatPath(chatId)}/send`, sendSchema, replyToId ? { text, replyToId } : { text })).id
+    },
+    react: async (proof, chatId, messageId, emoji) => {
+      if (!isSendProof(proof) || proof.chatId !== chatId) throw new WhatsAppServiceError(0, 'click')
+      return (await call('POST', `/chats/${chatPath(chatId)}/messages/${encodeURIComponent(messageId)}/react`, reactSchema, { emoji })).reactions
+    },
+    presence: async (chatId, state) => {
+      await call('POST', `/chats/${chatPath(chatId)}/presence`, okSchema, { state })
     },
     sendMedia: async (proof, chatId, media) => {
       if (!isSendProof(proof) || proof.chatId !== chatId) throw new WhatsAppServiceError(0, 'click')
@@ -363,6 +410,14 @@ export function parseSseBlock(block: string): BridgeEvent | null {
     return health.success ? { type: 'state', health: health.data } : null
   }
   if (event === 'chats') return { type: 'chats' }
+  if (event === 'reactions') {
+    const reactions = eventReactionsSchema.safeParse(payload)
+    return reactions.success ? { type: 'reactions', ...reactions.data } : null
+  }
+  if (event === 'presence') {
+    const presence = eventPresenceSchema.safeParse(payload)
+    return presence.success ? { type: 'presence', presence: presence.data } : null
+  }
   if (event === 'message') {
     const message = eventMessageSchema.safeParse(payload)
     if (!message.success) return null

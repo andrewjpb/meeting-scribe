@@ -97,6 +97,11 @@ export interface AppSettings {
   /** "Só pessoas (sem grupos)" desligado: as mensagens de grupo também notificam (contrato 40). */
   whatsappNotifyGroups: boolean
   /**
+   * "Mostrar quando estou digitando" (contrato 34, padrão desligado): ligado, quem está na conversa aberta vê o seu
+   * "digitando…" enquanto você escreve. Desligado, o app não manda nada disso ao WhatsApp.
+   */
+  whatsappTypingSignal: boolean
+  /**
    * Separa os participantes por voz ("Participante A", "B"…). Desligado (padrão desde 15/11/2026), o
    * áudio dos participantes vira "Participantes" e os trechos se dividem só pelas pausas.
    */
@@ -106,6 +111,17 @@ export interface AppSettings {
    * Desligado, o servidor local para e nada é coletado.
    */
   meetSpeakers: boolean
+  /**
+   * "Avisar quando uma reunião começar" (contrato 48, padrão ligado): com "Quem fala no Meet" ligado e a extensão
+   * instalada, entrar numa reunião do Meet ou do Teams mostra um aviso no topo da tela com "Começar a transcrever".
+   * Contrato 49: também quando outro app (Zoom, FaceTime…) liga o microfone; ligado, o `lap-mic-watch` fica no ar.
+   */
+  meetingPrompt: boolean
+  /**
+   * "Ativar ponte" do plugin "Controle do navegador" (contrato 46): sobe o servidor local que a extensão do Chrome
+   * usa para receber comandos do app. Desligado por padrão; desligado, o servidor para.
+   */
+  navegadorPlugin: boolean
   /** Nome do app na barra lateral, no título da janela e nos avisos (contrato 09); `null` é "LAP Reuniões". */
   brandName: string | null
   /** Linha abaixo do nome; `null` é "LAP Software" e texto vazio tira a linha. */
@@ -194,8 +210,11 @@ export const DEFAULT_SETTINGS: Readonly<AppSettings> = Object.freeze({
   whatsappAutoCorrect: false,
   whatsappNotifications: true,
   whatsappNotifyGroups: true,
+  whatsappTypingSignal: false,
   identifySpeakers: false,
   meetSpeakers: true,
+  meetingPrompt: true,
+  navegadorPlugin: false,
   brandName: null,
   brandSubtitle: null,
   brandLogo: null,

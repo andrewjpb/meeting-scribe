@@ -7,9 +7,11 @@ import type { EmailNotice } from './email/notify'
 import { execFile, spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { EventEmitter } from 'node:events'
+import { mkdirSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:http'
 import { join } from 'node:path'
 import { gzipSync } from 'node:zlib'
+import type { BrowserWindow } from 'electron'
 import { updateAssetName } from '../shared/updates'
 import type { FetchInit, FetchLike, FetchResponse } from './assemblyai/gateway'
 import type { ExecFile } from './claude-cli/locate'
@@ -192,6 +194,10 @@ export interface SmokeFixtures {
   microsoft: FakeMicrosoft
   /** Agendas (contrato 12): as notificações substitutas. */
   calendar: SmokeCalendar
+  /** Aviso de reunião (contrato 48): cada janela do aviso que o app abriu, na ordem. */
+  meetingPrompt: { windows: BrowserWindow[] }
+  /** Contrato 49: o arquivo de onde o `lap-mic-watch` falso tira as linhas que escreve (o smoke acrescenta nele). */
+  micWatch: { file: string }
   /** Notificações do WhatsApp (contrato 40): as substitutas, o foco fingido e o número do Dock. */
   whatsappNotify: SmokeWhatsAppNotify
   /** Contrato 43: o servidor de email falso (IMAP, SMTP e imagens remotas em memória). */
@@ -228,6 +234,8 @@ export interface SmokeAutomations {
   notifications: { title: string; body: string; runId: string | null }[]
   /** Cada troca da imagem do ícone da barra de menus (o `Tray` de verdade nunca é criado no smoke). */
   trayImages: string[]
+  /** Contrato 50: cada texto posto ao lado do ícone (o tempo da gravação; vazio, nenhum). */
+  trayTitles: string[]
   /** `app.dock.hide()` / `show()` pedidos ao fechar a última janela e ao reabrir (o Dock de verdade fica intacto). */
   dock: { hides: number; shows: number }
   /** `app.setLoginItemSettings` pedidos (nada entra nos itens de login do Mac). */
@@ -360,9 +368,11 @@ export function createSmokeFixtures(currentVersion: string, userDataDir: string)
     leaveChoice: 0,
     google: createFakeGoogle({ clientId: SMOKE_GOOGLE_CLIENT_ID, clientSecret: SMOKE_GOOGLE_CLIENT_SECRET, profile: { name: 'Andrea Teste', email: 'andrea.teste@example.com' } }),
     whatsapp: writeFakeIndex(join(userDataDir, 'whatsapp-indice-falso')),
-    automations: { skewMs: 0, notifications: [], trayImages: [], dock: { hides: 0, shows: 0 }, loginItems: [], quitRequests: 0 },
+    automations: { skewMs: 0, notifications: [], trayImages: [], trayTitles: [], dock: { hides: 0, shows: 0 }, loginItems: [], quitRequests: 0 },
     microsoft: createFakeMicrosoft({ clientId: SMOKE_MICROSOFT_CLIENT_ID, profile: { name: 'Bruno Teste', email: 'bruno.teste@example.com' } }),
     calendar: { notifications: [] },
+    meetingPrompt: { windows: [] },
+    micWatch: { file: join(userDataDir, 'mic-watch-falso.jsonl') },
     whatsappNotify: { notifications: [], focusedContentsId: null, badges: [] },
     email: createFakeEmail(),
     emailNotify: { notifications: [], focusedContentsId: null },
@@ -517,4 +527,38 @@ export function createSmokeAcp(
     return data
   }
   return { entry: scriptPath, args: ['--log', logPath], spawn: spawnAcp, packagesFor, download, close: () => server.close() }
+}
+
+/** Contrato 21: os segredos inventados dos servidores MCP falsos (o smoke confere que nenhum chega à tela nem ao relatório). */
+export const SMOKE_MCP_SECRETS = { cli: 'segredo-do-cli-1234', http: 'segredo-http-5678', desktop: 'segredo-desktop-9012' } as const
+
+/**
+ * Contrato 21: o arquivo do `claude` falso com os servidores do escopo `user` (no formato do `~/.claude.json`) e o
+ * `claude_desktop_config.json` falso, no userData do smoke. O servidor de comando local é o `fake-mcp-server.mjs` com o
+ * Node do Electron; o HTTP do CLI aponta para um endereço `.example` que nunca é aberto. Devolve os caminhos e a
+ * variável que diz ao `claude` falso onde está o arquivo dele.
+ */
+export function writeSmokeMcpFixtures(userData: string, serverScript: string): { cliFile: string; desktopFile: string; env: NodeJS.ProcessEnv } {
+  const dir = join(userData, 'smoke-mcp')
+  mkdirSync(dir, { recursive: true })
+  const cliFile = join(dir, 'claude.json')
+  const desktopFile = join(dir, 'claude_desktop_config.json')
+  writeFileSync(
+    cliFile,
+    `${JSON.stringify(
+      {
+        mcpServers: {
+          calculadora: { type: 'stdio', command: process.execPath, args: [serverScript], env: { ELECTRON_RUN_AS_NODE: '1', CALC_TOKEN: SMOKE_MCP_SECRETS.cli } },
+          'docs-remoto': { type: 'http', url: 'https://docs.example/mcp', headers: { Authorization: `Bearer ${SMOKE_MCP_SECRETS.http}` } },
+        },
+      },
+      null,
+      2,
+    )}\n`,
+  )
+  writeFileSync(
+    desktopFile,
+    `${JSON.stringify({ mcpServers: { 'arquivos-desktop': { command: process.execPath, args: [serverScript], env: { ELECTRON_RUN_AS_NODE: '1', API_KEY: SMOKE_MCP_SECRETS.desktop } } } }, null, 2)}\n`,
+  )
+  return { cliFile, desktopFile, env: { FAKE_CLAUDE_MCP_FILE: cliFile } }
 }

@@ -12,6 +12,9 @@
 //
 // Contrato 25: os cartões de ação da resposta ("Criar lembrete", "Descartar", "Enviada") passam pelo main, que
 // devolve a conversa gravada com o estado novo do cartão.
+//
+// Contrato 21: os cartões de aprovação das ferramentas MCP ficam com a resposta em curso (nunca gravados); a escolha vai
+// ao main, que avisa quando o cartão sai.
 import { create } from 'zustand'
 import type { ChatActionRef, ChatActionResult, ChatActionStateRequest } from '@shared/assistant'
 import {
@@ -25,6 +28,7 @@ import {
   type ChatSendResult,
   type ChatStep,
 } from '@shared/chat'
+import type { McpApproval, McpApprovalDecision } from '@shared/mcp'
 import type { ChatModel } from '@shared/settings-defaults'
 import { rereadWhenUnlocked } from '../../app/lockStore'
 
@@ -43,9 +47,11 @@ export interface LiveAnswer extends ChatProgress {
   /** "Plano" do agente (ACP). */
   plan: ChatPlanEntry[]
   meta: ChatMeta | null
+  /** Contrato 21: cartões de aprovação de ferramentas MCP esperando a pessoa. */
+  approvals: McpApproval[]
 }
 
-export const emptyAnswer = (): LiveAnswer => ({ text: '', reading: false, thinking: '', steps: [], denied: 0, plan: [], meta: null })
+export const emptyAnswer = (): LiveAnswer => ({ text: '', reading: false, thinking: '', steps: [], denied: 0, plan: [], meta: null, approvals: [] })
 
 /** Passo novo no fim; o mesmo passo (mesmo id, pelo ACP) troca no lugar. */
 export function upsertStep(steps: readonly ChatStep[], step: ChatStep): ChatStep[] {
@@ -98,6 +104,8 @@ interface ChatState {
   createReminder: (ref: ChatActionRef, edit?: { at?: string; text?: string }) => Promise<ChatActionResult>
   /** Contrato 25: "Descartar", "Enviada" (depois do envio do WhatsApp) e "Tarefa criada". */
   setActionState: (ref: ChatActionRef, state: ChatActionStateRequest['state'], text?: string) => Promise<ChatActionResult>
+  /** Contrato 21: "Permitir uma vez", "Sempre permitir esta ferramenta" ou "Negar" num cartão de aprovação. */
+  answerApproval: (chatId: string, id: string, decision: McpApprovalDecision) => Promise<boolean>
 }
 
 let listening = false
@@ -125,6 +133,8 @@ function listen(): void {
         else if (event.type === 'step') next = { ...current, steps: upsertStep(current.steps, event.step) }
         else if (event.type === 'plan') next = { ...current, plan: event.entries }
         else if (event.type === 'denied') next = { ...current, denied: event.count }
+        else if (event.type === 'approval') next = { ...current, approvals: [...current.approvals.filter((entry) => entry.id !== event.approval.id), event.approval] }
+        else if (event.type === 'approval-done') next = { ...current, approvals: current.approvals.filter((entry) => entry.id !== event.id) }
         else next = { ...current, meta: event.meta }
         return { answers: { ...state.answers, [event.chatId]: next } }
       })
@@ -243,9 +253,11 @@ export const useChat = create<ChatState>()((set, get) => {
       try {
         // A conversa nova leva o escopo e o modelo da barra do campo.
         const draft = draftOf(get(), meetingId)
+        // Contrato 21: a conversa de uma reunião leva do escopo só os servidores MCP desligados nela.
+        const meetingScope = draft.scope.mcpOff?.length ? { scope: { kind: 'all' as const, mcpOff: draft.scope.mcpOff } } : {}
         const extra = chatId
           ? {}
-          : { ...(meetingId ? {} : { scope: draft.scope }), ...(draft.model ? { model: draft.model } : {}), ...(draft.thinkMore ? { thinkMore: true } : {}) }
+          : { ...(meetingId ? meetingScope : { scope: draft.scope }), ...(draft.model ? { model: draft.model } : {}), ...(draft.thinkMore ? { thinkMore: true } : {}) }
         const result = await window.__scribeApi.invoke('scribe:chat-send', { chatId, meetingId, text, ...extra })
         return accept(result, key, meetingId, chatId ? chatId : selectedBefore)
       } catch {
@@ -339,6 +351,14 @@ export const useChat = create<ChatState>()((set, get) => {
         return result
       } catch {
         return { ok: false, error: 'invalid' }
+      }
+    },
+
+    answerApproval: async (chatId, id, decision) => {
+      try {
+        return await window.__scribeApi.invoke('scribe:chat-approval', { chatId, id, decision })
+      } catch {
+        return false
       }
     },
 

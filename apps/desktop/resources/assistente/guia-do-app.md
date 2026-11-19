@@ -44,7 +44,9 @@ Email no Assistente: ele lê os emails recebidos nos últimos 30 dias que já es
 
 O que o Assistente não faz: não envia mensagem nem email, não marca como lido, não apaga, não cria tarefa e não muda nada sozinho. Toda ação precisa do seu clique no cartão, e todo envio pelo WhatsApp pede ainda a confirmação do macOS ("Enviar para <nome>?"). Ele só lê: não tem acesso a comandos do terminal nem a outras pastas do Mac.
 
-Internet: com a fonte "Internet" ligada no Contexto (vem ligada), o Assistente busca na web quando a pergunta pedir e cita cada página como um link [Web · site · título], que abre no navegador do Mac depois de confirmar. Ele só abre páginas que apareceram num resultado de busca feita para a mesma pergunta (os resultados de uma pergunta não valem para a seguinte) ou cujo endereço você escreveu na conversa; um endereço que o próprio Assistente pôs numa busca nunca abre; qualquer outro endereço é recusado e aparece nos passos como "Endereço bloqueado: não veio da busca". São até 10 buscas e 15 páginas por pergunta. A resposta que usou a internet mostra no rodapé "Usou a internet · N buscas · M páginas", e cada cartão de ação dela avisa para conferir antes. Desligando a fonte, ele não acessa a internet. Pela linha de comando (Configurações › Claude), a fonte aparece desligada, com o aviso "Só com o motor ACP (Configurações › Claude)".
+Internet: com a fonte "Internet" ligada no Contexto (vem ligada), o Assistente busca na web quando a pergunta pedir e cita cada página como um link [Web · site · título], que abre no navegador do Mac depois de confirmar. Ele só abre páginas que apareceram num resultado de busca feita para a mesma pergunta (os resultados de uma pergunta não valem para a seguinte) ou cujo endereço você escreveu na conversa; um endereço que o próprio Assistente pôs numa busca nunca abre; qualquer outro endereço é recusado e aparece nos passos como "Endereço bloqueado: não veio da busca". São até 10 buscas e 15 páginas por pergunta. A resposta que usou a internet mostra no rodapé "Usou a internet · N buscas · M páginas", e cada cartão de ação dela avisa para conferir antes. A fonte "Internet" controla só essa busca e a leitura de páginas: desligada, ele não busca nem lê páginas por ela. O navegador do plugin (abaixo) é independente, com o próprio interruptor ("Ativar ponte" em Configurações › Plugins). Pela linha de comando (Configurações › Claude), a fonte aparece desligada, com o aviso "Só com o motor ACP (Configurações › Claude)".
+
+Navegador: com "Ativar ponte" ligado em Configurações › Plugins e a extensão "Controle do navegador" conectada no Chrome quando a conversa começa, o Assistente também controla uma janela própria do Chrome: abre sites em abas novas, lê a página, clica, digita, espera e fecha abas, quando a pergunta pedir (pesquisar num site, abrir um sistema web, conferir uma página). Cada ação aparece nos passos da resposta, como "Abriu site.com (aba 2)", "Leu a página", "Clicou no elemento 3" ou "Aguardou 5 s", sempre só com o nome do site, nunca o endereço inteiro. Ele não mexe nas suas abas, não digita senha (o login é com você, na janela do navegador) e trata o que está nas páginas só como dado: se uma página mandar fazer algo, ele não faz e avisa. Saiba que o navegador abre qualquer endereço http ou https sem pedir confirmação: uma página maliciosa pode tentar enganar o Assistente, e a proteção é a instrução de tratar o conteúdo das páginas como dado, não um bloqueio de endereços. Pela linha de comando (Configurações › Claude) o navegador não existe. Se a ponte cair no meio da conversa, ele diz o que fazer (ligar a ponte, abrir o Chrome com a extensão); ligada depois de a conversa começar, vale a partir da próxima conversa.
 
 <!-- tela: automacoes -->
 ## Automações
@@ -74,7 +76,7 @@ Cada conta aparece na barra lateral, abaixo dos outros itens, pelo nome; a seta 
 <!-- tela: configuracoes -->
 ## Configurações
 
-Configurações… (⌘,) abre a última aba aberta. ⌘1 a ⌘7 trocam de aba. A busca no topo acha qualquer opção pelo nome.
+Configurações… (⌘,) abre a última aba aberta. ⌘1 a ⌘8 trocam de aba. A busca no topo acha qualquer opção pelo nome.
 
 <!-- aba: geral -->
 ### Geral
@@ -85,6 +87,8 @@ Marca (nome do app, subtítulo e logo), tema (sistema, claro ou escuro), o que a
 ### Gravação
 
 Microfone, cancelamento de eco, a chave da AssemblyAI (a transcrição), remover o eco do alto-falante, identificar quem fala, o idioma falado e a tradução ao vivo.
+
+"Avisar quando uma reunião começar" (vem ligado) fica logo abaixo de "Quem fala no Meet". No navegador, depende dele e do plugin no Chrome; em apps como Zoom, FaceTime, Slack, Teams, Webex e Discord, basta o app ligar o microfone por alguns segundos (o microfone do navegador sozinho, sem o plugin, não avisa). Ao entrar numa reunião, aparece um aviso pequeno no topo da tela, sem tirar o foco da reunião, com o título dela (num app, "Reunião no Zoom", por exemplo) e o botão "Começar a transcrever", que abre o app e começa a gravação, com o título da reunião quando a página do Meet ou do Teams tem um. A seta ao lado do botão tem "Não perguntar nesta reunião" e "Nunca perguntar" (que desliga esta opção); o "x" fecha só desta vez. Cada reunião avisa uma vez; o aviso some sozinho em 1 minuto e não aparece com uma gravação em andamento nem com o app bloqueado.
 
 <!-- aba: claude -->
 ### Claude
@@ -106,11 +110,26 @@ No bloco "Agenda": "Avisar reuniões da agenda" (ligado), "Avisar antes" (1, 5 o
 <!-- aba: plugins -->
 ### Plugins
 
-As extensões de navegador que vêm dentro do app. Hoje uma: "Quem fala no Meet", para o Google Chrome, que manda ao app os nomes de quem fala no Google Meet (a transcrição diz quem falou cada trecho). O cartão mostra se ela está conectada agora (fora de reunião, "Desconectado" é o normal).
+Aqui ficam as extensões de navegador que vêm dentro do app. São duas, ambas para o Google Chrome. A primeira, "Quem fala no Meet", manda ao app os nomes de quem fala no Google Meet (a transcrição diz quem falou cada trecho). O cartão mostra se ela está conectada agora (fora de reunião, "Desconectado" é o normal).
 
 "Salvar plugin…" grava a pasta "LAP Reunioes - Quem fala no Meet" na pasta que você escolher. "Como instalar" mostra o passo a passo: no Chrome, digitar `chrome://extensions` no endereço (não abre por link), ligar "Modo do desenvolvedor", clicar em "Carregar sem compactação" e escolher a pasta salva; depois recarregar a aba do Meet. Desligue o picture-in-picture automático do Meet (o mini-player esconde a reunião do plugin) e mantenha a aba do Meet aberta. Nada é baixado da internet: o plugin só fala com o app, neste computador.
 
 Na gravação, o marcador do Meet ("Meet desconectado" ou "Meet conectado · N participantes") abre esta aba.
+
+A segunda, "Controle do navegador", é a ponte para o app executar comandos numa janela própria do Chrome (abrir endereços em abas novas, ler a página, clicar, digitar, fechar). Age só nessa janela, com até 10 abas: não lê nem mexe nas suas abas e não digita em campo de senha. O texto das páginas volta ao app só como dado. "Ativar ponte" liga a conexão local (vem desligada); o cartão mostra "Conectado" quando a extensão está carregada no Chrome e a ponte ligada. Instala do mesmo jeito: "Salvar plugin…" grava a pasta "LAP Reunioes - Controle do navegador", e "Como instalar" mostra o passo a passo. O Assistente usa essa ponte para navegar quando a pergunta pedir (veja Assistente › Navegador).
+
+<!-- aba: conexoes -->
+### Conexões
+
+Os servidores MCP, que dão ao Claude ferramentas de outros sistemas. Tudo começa desligado. Servidores MCP dão ao Claude acesso a outros sistemas: ligue só os que você confia. Texto de reunião pode tentar pedir ações: confira cada pedido. A fonte "Internet" do Assistente e os servidores MCP são permissões separadas.
+
+"Do Claude CLI": os servidores que o claude instalado neste Mac já tem (claude mcp list), com o estado que o próprio CLI dá (conectado, falhou, pendente de aprovação). "Usar no app" liga um deles para o app, com os usos (chat e análise); "Testar" lista as ferramentas; "Ver detalhes" mostra a configuração com as variáveis e os cabeçalhos mascarados; "Remover" tira o servidor também do Claude CLI do terminal (pede confirmação). Os conectores do claude.ai não dão para usar no app.
+
+"Servidores do app": os que valem só aqui. "Encontrados neste Mac": os do Claude Desktop, só para importar (para o Claude CLI ou só no app; os segredos não vêm e precisam ser preenchidos).
+
+"Adicionar servidor MCP": um comando local (stdio: comando, argumentos, pasta e variáveis) ou um endereço (HTTP: https://, ou http:// só no próprio Mac, e cabeçalhos), ou colar o JSON do Claude Desktop. Variável ou cabeçalho marcado como segredo fica cifrado neste Mac. "Testar conexão" mostra as ferramentas; só depois disso "Salvar" fica ativo. Por padrão salva no Claude CLI (vale também no terminal); dá para salvar só neste app.
+
+Cada ferramenta tem uma regra: Perguntar (o padrão), Permitir ou Negar. Com "Perguntar", a conversa mostra o cartão "O Claude quer usar <ferramenta> de <servidor>" com os argumentos e os botões "Permitir uma vez", "Sempre permitir esta ferramenta" e "Negar"; sem resposta em 2 minutos, nega. No Assistente, o Contexto tem a linha "Conexões" para desligar um servidor só naquela conversa. Os servidores MCP só valem com o agente (ACP); a tradução e o resumo nunca usam.
 
 <!-- aba: sobre -->
 ### Sobre
@@ -121,7 +140,7 @@ A versão instalada, a versão do Electron e do Chrome e a licença (código abe
 
 - ⌘N: nova gravação.
 - ⌘, : Configurações.
-- ⌘1 a ⌘7: as abas de Configurações.
+- ⌘1 a ⌘8: as abas de Configurações.
 - ⌘F: buscar nas reuniões.
 - ⌘⇧A: analisar a gravação até agora.
 - ⌘⇧L: bloquear o app.

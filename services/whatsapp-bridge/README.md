@@ -26,17 +26,23 @@ WhatsApp e as mensagens ficam em `~/Library/Application Support/Meeting Scribe/w
 | `GET /pair` | QR code em texto; com `?phone=5511…`, o código de pareamento por número |
 | `POST /logout` | sai da conta e apaga a sessão |
 | `GET /chats` | conversas: id, nome, pessoa ou grupo, última mensagem, não lidas |
-| `GET /chats/:id/messages?before&limit` | mensagens (texto, autor, hora, tipo; mídia como metadado, com `downloadable` e, no áudio, `seconds`) |
+| `GET /chats/:id/messages?before&limit` | mensagens (texto, autor, hora, tipo; mídia como metadado, com `downloadable` e, no áudio, `seconds`; contrato 34: `replyToId` e `replyPreview` na resposta, `reactions: [{emoji, count, mine}]` na reagida) |
 | `GET /chats/:id/messages/:msg/media` | os bytes da imagem, do vídeo ou do áudio (até 64 MB, guardados 7 dias em `media/`); 404 sem as chaves do download, 410 quando o WhatsApp não tem mais o arquivo, 413 acima do limite |
 | `GET /chats/:id/photo` | foto de perfil como data URL (até 512 KB, guardada 7 dias em `photos/`), ou `null` |
 | `GET /search?q` | busca no texto das mensagens guardadas |
-| `POST /chats/:id/send` | envia um texto; responde com o id da mensagem |
+| `POST /chats/:id/send` | envia um texto; responde com o id da mensagem. Contrato 34: com `replyToId`, sai como resposta citando a mensagem guardada (id que não está guardado, ou de grupo sem quem mandou, sai sem citação) |
+| `POST /chats/:id/messages/:msg/react` | contrato 34: `{emoji}` com um dos 6 fixos (👍 ❤️ 😂 😮 😢 🙏); vazio tira a sua. Responde com as reações juntas da mensagem; 404 se ela não estiver guardada |
+| `POST /chats/:id/presence` | contrato 34: `{state: "composing" \| "paused"}`, o "digitando…" da sua conta. Não é mensagem; o app só chama com "Mostrar quando estou digitando" ligado |
 | `POST /chats/:id/send-media` | contrato 39: envia uma imagem (JPEG/PNG/WebP/GIF, até 16 MB) ou um vídeo (MP4/MOV, até 64 MB); os bytes no corpo, o tipo em `X-Media-Mime`, o nome em `X-Media-Name` e a legenda em `X-Caption` (os dois com `encodeURIComponent`). O tipo declarado tem de bater com os primeiros bytes (400); acima do limite, 413; falha do WhatsApp, 502. O eco entra na conversa como mídia baixável |
-| `GET /events` | SSE com as mensagens novas e as mudanças de estado |
+| `GET /events` | SSE com as mensagens novas e as mudanças de estado; contrato 34: `reactions` (as reações juntas de uma mensagem) e `presence` (`{chatId, state, author}`, alguém digitando; o app apaga o aviso depois de 10 s sem novo evento) |
 
 O serviço nunca envia nada sozinho, não baixa mídia sozinho (só quando o app pede, no clique da pessoa) e não
 manda recibo de leitura. Mensagens gravadas antes do contrato 37 não têm as chaves do download e não baixam. Logs não levam texto de
 mensagem.
+
+O "digitando…" dos outros (contrato 34) pode não chegar enquanto o WhatsApp não tratar a conta como disponível; o
+serviço não marca a conta como disponível sozinho, porque isso muda o "online" que os contatos veem e as notificações do
+celular.
 
 ## Desenvolvimento
 

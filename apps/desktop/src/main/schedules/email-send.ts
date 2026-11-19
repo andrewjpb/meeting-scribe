@@ -1,4 +1,4 @@
-// Contrato 46: a ferramenta `enviar_email` de uma execução de tarefa agendada com "Pode enviar email" ligada. Ela só
+// Contrato 51: a ferramenta `enviar_email` de uma execução de tarefa agendada com "Pode enviar email" ligada. Ela só
 // existe naquela execução (o serviço das automações monta uma por execução) e envia sem clique pelo caminho interno do
 // main (`email.sendForTask`, nunca pelo IPC). Antes de cada envio, as regras são conferidas de novo com o estado de agora:
 // - o app bloqueado (contrato 22) não envia e registra "app bloqueado";

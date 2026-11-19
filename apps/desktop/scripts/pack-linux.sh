@@ -34,6 +34,10 @@ mkdir -p "$STAGE/resources/meet-extension"
 for f in manifest.json content.js background.js README.md; do
   cp "../../extensions/meet/$f" "$STAGE/resources/meet-extension/$f"
 done
+mkdir -p "$STAGE/resources/navegador-extension"
+for f in manifest.json background.js README.md; do
+  cp "../../extensions/navegador/$f" "$STAGE/resources/navegador-extension/$f"
+done
 cp -RL node_modules/zod "$STAGE/node_modules/zod"
 cat > "$STAGE/package.json" <<JSON
 { "name": "lap-reunioes", "productName": "$NOME", "version": "$VERSAO", "main": "out/main/index.js", "private": true, "dependencies": { "zod": "$ZOD" } }

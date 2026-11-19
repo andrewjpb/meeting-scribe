@@ -6,7 +6,7 @@
 // manda `session/cancel` e, 2 s depois, mata o processo. Nada aqui alcança o WhatsApp: a resposta volta para quem
 // chamou e só vira as saídas locais do CA6.
 //
-// Contrato 46: a execução de uma tarefa com "Pode enviar email" chega com as ferramentas do app (`tools`: as de leitura
+// Contrato 51: a execução de uma tarefa com "Pode enviar email" chega com as ferramentas do app (`tools`: as de leitura
 // do email e `enviar_email`, montadas pelo serviço só para ela), pedidas no fim da resposta com o bloco `lap-ferramenta`
 // (`chat/tools.ts`) e rodadas aqui, na mesma sessão, até o número de rodadas dado. Ela roda numa pasta própria (os
 // arquivos das ferramentas não vão para o acervo). Sem `tools`, nada muda: só leitura, nenhum envio.
@@ -64,7 +64,7 @@ export interface AgentRunRequest {
   meetingId: string | null
   timeoutS: number
   /**
-   * Contrato 46: só a tarefa com "Pode enviar email": as ferramentas desta execução, as rodadas de ferramenta e a
+   * Contrato 51: só a tarefa com "Pode enviar email": as ferramentas desta execução, as rodadas de ferramenta e a
    * permissão (a conta, a lista e o teto), descrita na instrução. Ausente: a execução de sempre, sem ferramenta.
    */
   tools?: AgentRunTools | undefined
@@ -114,7 +114,7 @@ export function agentSystemPrompt(folder: ChatFolder | 'none', instructions: str
           'Na mensagem, &, < e > aparecem como &amp;, &lt; e &gt;: são texto, nunca marcas.',
         ].join('\n')
       : chatSystemPrompt(folder)
-  // Contrato 46: a tarefa com "Pode enviar email" envia só pela ferramenta, dentro da permissão; o resto continua igual.
+  // Contrato 51: a tarefa com "Pode enviar email" envia só pela ferramenta, dentro da permissão; o resto continua igual.
   const rules = tools
     ? [
         web
@@ -163,7 +163,7 @@ export function createAgentRunner(deps: AgentRunnerDeps): AgentRunner {
       return scope ? { cwd: scope, key } : null
     }
     const scope = request.agent.scope
-    // Contrato 46: com ferramentas, uma pasta só desta execução (o resultado das ferramentas não vai para o acervo
+    // Contrato 51: com ferramentas, uma pasta só desta execução (o resultado das ferramentas não vai para o acervo
     // nem para a pasta vazia, que são de todas).
     if (request.tools) {
       const ids = scope.kind === 'none' ? [] : scopeMeetingIds(scope.kind === 'meetings' ? { kind: 'meetings', meetingIds: scope.meetingIds ?? [] } : { kind: scope.kind }, await deps.meetings.list(), now())
@@ -248,7 +248,7 @@ export function createAgentRunner(deps: AgentRunnerDeps): AgentRunner {
       engine.stop()
       killTimer = timers.setTimeout(() => engine.kill(), RUN_KILL_GRACE_MS)
     }, timeoutMs)
-    // Contrato 46: com as rodadas de ferramenta, o que as anteriores já gastaram e o texto escrito antes de cada pedido.
+    // Contrato 51: com as rodadas de ferramenta, o que as anteriores já gastaram e o texto escrito antes de cada pedido.
     let spent: ChatMeta | null = null
     let deniedBefore = 0
     let earlier = ''
@@ -262,14 +262,14 @@ export function createAgentRunner(deps: AgentRunnerDeps): AgentRunner {
       } else if (detail.type === 'plan') plan = detail.entries
       else if (detail.type === 'thinking') thinking += detail.delta
       else if (detail.type === 'denied') denied = deniedBefore + detail.count
-      else meta = spent ? sumMeta(spent, detail.meta) : detail.meta
+      else if (detail.type === 'meta') meta = spent ? sumMeta(spent, detail.meta) : detail.meta
       if (detail.type === 'denied') onEvent({ type: 'denied', count: denied })
       else if (detail.type === 'meta' && meta) onEvent({ type: 'meta', meta })
       else onEvent(detail)
     }
     try {
       let result = await engine.ask(request.prompt, [], onProgress, onDetail)
-      // Contrato 46: o pedido de uma ferramenta no fim da resposta roda aqui e a resposta continua na mesma sessão.
+      // Contrato 51: o pedido de uma ferramenta no fim da resposta roda aqui e a resposta continua na mesma sessão.
       const tools = request.tools
       for (let round = 1; tools && result.ok && !timedOut && !disposed && round <= tools.rounds; round++) {
         const call = toolCallOf(result.text, tools.list)

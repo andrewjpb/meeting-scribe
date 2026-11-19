@@ -6,7 +6,7 @@
 // Modelo de referência (KiroCrew, só os nomes dos campos): agente = nome, descrição, instruções, modelo,
 // ferramentas e MCP; tarefa = nome, agente, mensagem, frequência, fuso, ligada, uma vez só, tempo máximo e o
 // estado da última execução. Nenhum agente envia nada a ninguém: as saídas são só as quatro de
-// `AGENT_OUTPUT_KINDS`, todas dentro deste Mac. A exceção é o contrato 46: a tarefa com "Pode enviar email" ligada
+// `AGENT_OUTPUT_KINDS`, todas dentro deste Mac. A exceção é o contrato 51: a tarefa com "Pode enviar email" ligada
 // envia email, só da conta e para os destinatários que a pessoa permitiu antes (`task-email.ts`).
 import type { ChatDetail, ChatMessage } from './chat'
 import { NOTE_COLORS, type NoteColor } from './meeting-notes'
@@ -159,7 +159,7 @@ export interface ScheduledTask {
    */
   reminder: TaskReminder | null
   /**
-   * Contrato 46: "Pode enviar email", a permissão dada antes (a conta, os destinatários permitidos e o teto por
+   * Contrato 51: "Pode enviar email", a permissão dada antes (a conta, os destinatários permitidos e o teto por
    * execução). `null`: a tarefa não envia nada, como no contrato 23.
    */
   email: TaskEmailPermission | null
@@ -178,7 +178,7 @@ export interface TaskReminder {
 /** O que o formulário manda: sem o estado das execuções. */
 export type TaskInput = Pick<ScheduledTask, 'name' | 'agentId' | 'message' | 'schedule' | 'timezone' | 'enabled' | 'runOnce' | 'runOnceAction' | 'timeoutS' | 'notify' | 'output'> & {
   id: string | null
-  /** Contrato 46: a seção "Pode enviar email" ligada; ausente ou `null`, desligada. */
+  /** Contrato 51: a seção "Pode enviar email" ligada; ausente ou `null`, desligada. */
   email?: TaskEmailInput | null | undefined
 }
 
@@ -218,7 +218,7 @@ export interface AutomationRun {
   meetingId: string | null
   /** O que a saída fez: "Conversa criada", "Post-it na reunião", "Arquivo …", "Notificação", ou o erro dela. */
   outputResult: string | null
-  /** Contrato 46: os emails que a execução enviou ou que foram recusados, na ordem. Ausente: nenhum pedido de envio. */
+  /** Contrato 51: os emails que a execução enviou ou que foram recusados, na ordem. Ausente: nenhum pedido de envio. */
   emails?: RunEmail[] | undefined
 }
 
@@ -254,7 +254,7 @@ export interface AgentsList {
 export type AgentSaveResult = { ok: true; agent: Agent } | { ok: false; error: 'invalid' | 'duplicate' | 'missing' | 'model' | 'full' }
 export type AgentDeleteResult = { ok: true } | { ok: false; error: 'in-use'; tasks: string[] } | { ok: false; error: 'missing' }
 /** `past`: "Uma vez em" com a data que já passou. */
-/** `email`: a conta escolhida em "Pode enviar email" não existe (contrato 46). */
+/** `email`: a conta escolhida em "Pode enviar email" não existe (contrato 51). */
 export type TaskSaveResult = { ok: true; task: ScheduledTask } | { ok: false; error: 'invalid' | 'agent' | 'cron' | 'timezone' | 'missing' | 'full' | 'past' | 'email' }
 /** `busy`: a tarefa já roda (a vez vira `skipped`); `not-found`: sem o `claude`; `paused`: tudo pausado. */
 export type RunStartResult = { ok: true; runId: string } | { ok: false; error: 'missing' | 'busy' | 'invalid' }

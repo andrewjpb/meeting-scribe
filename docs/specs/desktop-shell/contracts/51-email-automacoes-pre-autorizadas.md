@@ -1,4 +1,4 @@
-# Contrato 46 — Tarefas agendadas que enviam email com permissão dada antes
+# Contrato 51 — Tarefas agendadas que enviam email com permissão dada antes
 Feature: desktop-shell · Wave: 4 · Depende de: 23, 42, 45 · PRD: `docs/specs/desktop-shell/prd-email.md`
 
 Pedido do Andrew (19/11/2026 10:10): "se eu criar um agendamento posso permitir com antecedência e ele envia sem minha permissão depois". Exceção controlada à regra N1 da PRD e à regra do contrato 23 ("nenhum agente envia a terceiros"): a permissão é o clique dado na criação da tarefa, com limite de alcance.

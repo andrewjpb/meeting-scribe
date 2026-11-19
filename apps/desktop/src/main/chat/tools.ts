@@ -5,7 +5,7 @@
 // `TOOL_ROUNDS_MAX` rodadas por pergunta; depois disso, ou com um bloco inválido, a resposta fica como veio.
 //
 // Cada conjunto de ferramentas é dado por quem monta a conversa: o Assistente interativo recebe as do email (buscar e
-// ler, só leitura). Contrato 46: só a execução de uma tarefa agendada com "Pode enviar email" recebe também
+// ler, só leitura). Contrato 51: só a execução de uma tarefa agendada com "Pode enviar email" recebe também
 // `enviar_email` (`schedules/email-send.ts`), que envia sem clique dentro da permissão dada antes; as outras execuções
 // agendadas não recebem nenhuma, e o Assistente nunca recebe o envio.
 import { z } from 'zod'
@@ -22,7 +22,7 @@ export interface ToolResult {
   label: string
   /** O que vai na mensagem de volta, quando não há arquivo ("O app está bloqueado."). */
   note?: string | undefined
-  /** Contrato 46: deu certo sem arquivo (o envio); sem arquivo e sem isto, o passo fica como falha. */
+  /** Contrato 51: deu certo sem arquivo (o envio); sem arquivo e sem isto, o passo fica como falha. */
   ok?: boolean | undefined
 }
 
@@ -71,7 +71,7 @@ export function toolFollowUp(name: string, result: ToolResult): string {
 }
 
 /**
- * As regras e as ferramentas, para a instrução do sistema. Contrato 46: com `sends`, uma delas envia (o envio de uma
+ * As regras e as ferramentas, para a instrução do sistema. Contrato 51: com `sends`, uma delas envia (o envio de uma
  * tarefa com a permissão dada antes) e `rounds` é o número de rodadas daquela execução.
  */
 export function toolsInstructions(tools: readonly AssistantTool[], options: { rounds?: number; sends?: boolean } = {}): string[] {
