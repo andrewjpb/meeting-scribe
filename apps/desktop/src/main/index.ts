@@ -1,4 +1,5 @@
 // Processo principal: esquema do app, segurança da sessão, IPC, menu e janela.
+import { resolveMx } from 'node:dns/promises'
 import { readFileSync } from 'node:fs'
 import { readFile, writeFile } from 'node:fs/promises'
 import { basename, join } from 'node:path'
@@ -1152,6 +1153,8 @@ function createAppServices(userData: string): AppServices {
     fetch: smokeFixtures
       ? () => Promise.reject(new TypeError('smoke: sem rede'))
       : (url, { signal }) => netFetch(url, { method: 'GET', headers: { accept: 'application/xml' }, signal, redirect: 'error' }),
+    // O MX do domínio (só o domínio vai ao DNS), para reconhecer Zoho, Google Workspace e Microsoft 365 em domínio próprio.
+    ...(smokeFixtures ? {} : { resolveMx: (domain: string) => resolveMx(domain).then((records) => records.sort((a, b) => a.priority - b.priority).map((record) => record.exchange)) }),
     // Bloqueado (contrato 22), nada do email vai às janelas; as contas seguem conectadas.
     onStatus: (statuses) => {
       if (!lockService?.isLocked()) broadcast(appWindows(), 'scribe:email-state', statuses)

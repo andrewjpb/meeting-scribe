@@ -83,8 +83,8 @@ export interface EmailAccountStatus {
 export type EmailAddResult = { ok: true; status: EmailAccountStatus } | { ok: false; error: 'invalid' | 'duplicate' | 'encryption' }
 
 export interface EmailAutoconfig {
-  /** `preset`: lista embutida (sem rede); `ispdb`: base do Thunderbird. */
-  source: 'preset' | 'ispdb'
+  /** `preset`: lista embutida (sem rede); `ispdb`: base do Thunderbird; `mx`: provedor reconhecido pelo MX do domínio. */
+  source: 'preset' | 'ispdb' | 'mx'
   username: string
   incoming: EmailIncomingServer
   outgoing: EmailServer

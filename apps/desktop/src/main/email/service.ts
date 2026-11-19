@@ -98,7 +98,7 @@ import {
 import type { SafeStorageLike } from '../secrets'
 import { emailAddressSchema, emailIncomingSchema, emailNameSchema, emailServerSchema, emailSignatureSchema, emailUsernameSchema, type StoredEmailAccount } from '../settings/schema'
 import type { SettingsStore } from '../settings/store'
-import { addressDomain, autoconfigure, AUTOCONFIG_TIMEOUT_MS, type AutoconfigFetch } from './autoconfig'
+import { addressDomain, autoconfigure, AUTOCONFIG_TIMEOUT_MS, type AutoconfigFetch, type MxResolver } from './autoconfig'
 import { capInbox, createEmailStore, type EmailAccountData, type EmailCachedFolder, type EmailStore } from './email-store'
 import {
   connectImap,
@@ -501,6 +501,8 @@ export interface EmailServiceDeps {
   safeStorage: SafeStorageLike
   /** ISPDB do autoconfig (no smoke e nos testes, um HTTP falso). */
   fetch: AutoconfigFetch
+  /** O MX do domínio, para reconhecer quem hospeda um domínio próprio; sem ele, essa etapa não roda (smoke). */
+  resolveMx?: MxResolver
   imap?: ImapConnect
   /** Contrato 45 (CA7): a conexão só de leitura da busca do Assistente (no smoke e nos testes, o IMAP falso). */
   imapReader?: ImapReaderConnect
@@ -1844,7 +1846,7 @@ export function createEmailService(deps: EmailServiceDeps): EmailService {
     async autoconfig(request) {
       const parsed = autoconfigSchema.safeParse(request)
       if (!parsed.success) return null
-      return autoconfigure(parsed.data.address, { fetch: deps.fetch, timeoutMs: deps.autoconfigTimeoutMs ?? AUTOCONFIG_TIMEOUT_MS })
+      return autoconfigure(parsed.data.address, { fetch: deps.fetch, ...(deps.resolveMx ? { resolveMx: deps.resolveMx } : {}), timeoutMs: deps.autoconfigTimeoutMs ?? AUTOCONFIG_TIMEOUT_MS })
     },
 
     async addAccount(request) {
