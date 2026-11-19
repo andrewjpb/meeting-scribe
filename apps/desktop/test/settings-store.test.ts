@@ -55,6 +55,7 @@ describe('esquema de configurações (CA1)', () => {
       emailPollMinutes: 5,
       emailNotifications: true,
       emailCollapsed: [],
+      claudeConnectors: {},
     })
     expect(parseSettings(undefined)).toEqual(DEFAULT_SETTINGS)
     expect(parseSettings({})).toEqual(DEFAULT_SETTINGS)
@@ -120,6 +121,7 @@ describe('esquema de configurações (CA1)', () => {
       emailPollMinutes: 15,
       emailNotifications: false,
       emailCollapsed: ['0b6f2c1e-3a4d-4c5b-8e9f-0a1b2c3d4e5f'],
+      claudeConnectors: { Notion: { enabled: true, tools: { 'notion-search': 'allow', 'notion-create-pages': 'deny' } }, 'Google Drive': { enabled: false, tools: {} } },
     }
     expect(parseSettings(saved)).toEqual(saved)
     // Contrato 12: minutos fora da lista e uma lista de agendas inválida voltam ao padrão, sem perder a outra conta.
@@ -163,7 +165,7 @@ describe('esquema de configurações (CA1)', () => {
   it('Claude CLI (contrato 05, CA1): motor, modelo e caminho com padrão próprio cada um', () => {
     // `settings.json` do contrato 04, sem os campos novos: carrega com os padrões deles e mantém o resto.
     const old = { translationEnabled: false, translationModel: 'gpt-oss-120b', sourceLanguage: 'es', targetLanguage: 'ja', echoCancellation: true, theme: 'dark', micDeviceId: null }
-    expect(parseSettings(old)).toEqual({ ...old, removeEcho: true, translationEngine: 'assemblyai', claudeModel: 'haiku', chatModel: 'sonnet', claudePath: null, claudeTransport: 'acp', agentProfile: 'claude', saveToFolder: true, audioFolder: null, summarizeOnStop: true, liveCards: false, whatsappInsights: true, whatsappAutoCorrect: false, whatsappNotifications: true, whatsappNotifyGroups: true, whatsappTypingSignal: false, identifySpeakers: false, meetSpeakers: true, meetingPrompt: true, navegadorPlugin: false, brandName: null, brandSubtitle: null, brandLogo: null, autoCheckUpdates: true, lockUseTouchId: false, lockAfterMinutes: 0, lockOnSystemLock: true, lockOnLaunch: false, saveToDrive: true, closeBehavior: 'tray', openAtLogin: false, scheduledRunsDailyLimit: 50, calendarAlerts: true, calendarLeadMinutes: 5, calendarNotRecordingAlert: true, calendarIds: { google: null, microsoft: null }, emailPollMinutes: 5, emailNotifications: true, emailCollapsed: [] })
+    expect(parseSettings(old)).toEqual({ ...old, removeEcho: true, translationEngine: 'assemblyai', claudeModel: 'haiku', chatModel: 'sonnet', claudePath: null, claudeTransport: 'acp', agentProfile: 'claude', saveToFolder: true, audioFolder: null, summarizeOnStop: true, liveCards: false, whatsappInsights: true, whatsappAutoCorrect: false, whatsappNotifications: true, whatsappNotifyGroups: true, whatsappTypingSignal: false, identifySpeakers: false, meetSpeakers: true, meetingPrompt: true, navegadorPlugin: false, brandName: null, brandSubtitle: null, brandLogo: null, autoCheckUpdates: true, lockUseTouchId: false, lockAfterMinutes: 0, lockOnSystemLock: true, lockOnLaunch: false, saveToDrive: true, closeBehavior: 'tray', openAtLogin: false, scheduledRunsDailyLimit: 50, calendarAlerts: true, calendarLeadMinutes: 5, calendarNotRecordingAlert: true, calendarIds: { google: null, microsoft: null }, emailPollMinutes: 5, emailNotifications: true, emailCollapsed: [], claudeConnectors: {} })
     expect(parseSettings({ translationEngine: 'claude-cli', claudeModel: 'sonnet' })).toMatchObject({ translationEngine: 'claude-cli', claudeModel: 'sonnet' })
     // Fora da lista cai no padrão: só `haiku` e `sonnet`, só os dois motores.
     expect(parseSettings({ translationEngine: 'openai' }).translationEngine).toBe('assemblyai')
@@ -292,6 +294,35 @@ describe('esquema de configurações (CA1)', () => {
     expect(() => parseSettingsPatch({ emailCollapsed: ['conta'] })).toThrow()
   })
 
+  it('Conectores do claude.ai (contrato 57, CA2): vazio por padrão; arquivo antigo carrega igual; entrada inválida sai sozinha', () => {
+    expect(DEFAULT_SETTINGS.claudeConnectors).toEqual({})
+    // `settings.json` de antes do contrato 57: os mesmos valores, com os conectores desligados.
+    const old = { ...DEFAULT_SETTINGS, theme: 'dark', chatModel: 'opus' } as Record<string, unknown>
+    delete old['claudeConnectors']
+    expect(parseSettings(old)).toEqual({ ...DEFAULT_SETTINGS, theme: 'dark', chatModel: 'opus', claudeConnectors: {} })
+    // Um conector fora do formato sai sem levar o outro (e nunca vira ligado).
+    expect(
+      parseSettings({
+        claudeConnectors: {
+          Notion: { enabled: true, tools: { 'notion-search': 'allow' } },
+          Figma: { enabled: 'sim', tools: {} },
+          Gmail: { enabled: true, tools: { 'envia.email': 'allow' } },
+          'Linha\nquebrada': { enabled: true, tools: {} },
+          'Google Drive': { enabled: false, tools: {}, extra: 1 },
+        },
+      }).claudeConnectors,
+    ).toEqual({ Notion: { enabled: true, tools: { 'notion-search': 'allow' } } })
+    expect(parseSettings({ claudeConnectors: 'tudo' }).claudeConnectors).toEqual({})
+    expect(parseSettings({ claudeConnectors: [1] }).claudeConnectors).toEqual({})
+    // Pelo renderer: estrito, recusa em vez de corrigir.
+    const patch = { claudeConnectors: { 'Notion (2)': { enabled: true, tools: { 'notion-fetch': 'deny' } }, 'Ação Café': { enabled: false, tools: {} } } }
+    expect(parseSettingsPatch(patch)).toEqual(patch)
+    expect(() => parseSettingsPatch({ claudeConnectors: { Notion: { enabled: true } } })).toThrow()
+    expect(() => parseSettingsPatch({ claudeConnectors: { Notion: { enabled: true, tools: { soma: 'sempre' } } } })).toThrow()
+    expect(() => parseSettingsPatch({ claudeConnectors: { '': { enabled: true, tools: {} } } })).toThrow()
+    expect(() => parseSettingsPatch({ claudeConnectors: Object.fromEntries(Array.from({ length: 101 }, (_, n) => [`c${n}`, { enabled: false, tools: {} }])) })).toThrow()
+  })
+
   it('Marca (contrato 09, CA1): padrões nulos; arquivo antigo carrega com os padrões; inválido volta ao padrão', () => {
     // `settings.json` do contrato 08, sem os campos novos.
     const old = { ...DEFAULT_SETTINGS, theme: 'dark', identifySpeakers: true } as Record<string, unknown>
@@ -387,6 +418,22 @@ describe('store de configurações (CA2)', () => {
     dir = mkdtempSync(join(tmpdir(), 'settings-store-'))
   })
   afterEach(() => rmSync(dir, { recursive: true, force: true }))
+
+  it('mutate (contrato 57): a mudança sai do valor gravado agora, na fila; duas ao mesmo tempo não se perdem', async () => {
+    const store = createFileSettingsStore({ dir })
+    await store.update({ claudeConnectors: { Notion: { enabled: true, tools: {} }, Gmail: { enabled: true, tools: {} } } })
+    const allow = (name: string, tool: string) =>
+      store.mutate((current) => {
+        const entry = current.claudeConnectors[name]
+        return entry ? { claudeConnectors: { ...current.claudeConnectors, [name]: { ...entry, tools: { ...entry.tools, [tool]: 'allow' } } } } : null
+      })
+    await Promise.all([allow('Notion', 'notion-search'), allow('Gmail', 'search'), allow('Notion', 'notion-fetch'), store.update({ theme: 'dark' })])
+    expect(onDisk().settings.claudeConnectors).toEqual({ Notion: { enabled: true, tools: { 'notion-search': 'allow', 'notion-fetch': 'allow' } }, Gmail: { enabled: true, tools: { search: 'allow' } } })
+    expect(onDisk().settings.theme).toBe('dark')
+    // `null` não grava; mudança inválida lança.
+    expect((await allow('Figma', 'x')).claudeConnectors['Figma']).toBeUndefined()
+    await expect(store.mutate(() => ({ theme: 'sepia' }) as never)).rejects.toThrow()
+  })
 
   it('sem arquivo valem os padrões e nada é criado', async () => {
     const store = createFileSettingsStore({ dir })

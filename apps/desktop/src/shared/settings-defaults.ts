@@ -1,6 +1,7 @@
 // Configurações do app: tipos, padrões (N5 da spec) e a regra de troca de idiomas. O esquema que valida
 // o arquivo e o store que grava ficam no main (`main/settings/`); o renderer lê pelo `settingsStore`.
 import type { EmailPollMinutes } from './email'
+import type { ClaudeConnectorPrefs } from './mcp'
 
 export const LANGUAGE_CODES = ['pt', 'en', 'es', 'ja', 'ko', 'zh'] as const
 export const THEME_SETTINGS = ['system', 'light', 'dark'] as const
@@ -177,6 +178,11 @@ export interface AppSettings {
   emailNotifications: boolean
   /** Contrato 43: as contas de email recolhidas na barra lateral (as outras aparecem abertas, com as pastas). */
   emailCollapsed: string[]
+  /**
+   * Contrato 57: os conectores do claude.ai que o agente do chat pode usar, pelo nome ("Notion"), com a política de cada
+   * ferramenta. Vazio por padrão: conector fora daqui (inclusive o que aparecer depois na conta) está desligado.
+   */
+  claudeConnectors: Record<string, ClaudeConnectorPrefs>
 }
 
 /**
@@ -234,6 +240,7 @@ export const DEFAULT_SETTINGS: Readonly<AppSettings> = Object.freeze({
   emailPollMinutes: 5,
   emailNotifications: true,
   emailCollapsed: Object.freeze([]) as unknown as string[],
+  claudeConnectors: Object.freeze({}) as Record<string, ClaudeConnectorPrefs>,
 })
 
 /** Prefixo do modelo gravado na reunião quando a tradução veio do Claude CLI (`claude-cli:haiku`). */

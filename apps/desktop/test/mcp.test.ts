@@ -282,8 +282,18 @@ describe('serviço (CA0 a CA4)', () => {
     expect(overview.cli.servers.map((server) => [server.name, server.usable, server.enabled])).toEqual([
       ['calculadora', true, false],
       ['remoto', true, false],
-      ['claude.ai Notion', false, false],
+      ['plugin:design:slack', false, false],
     ])
+    // Contrato 57: os conectores do claude.ai saem da lista do CLI (não são mais "não usáveis") e vão para a lista própria
+    // (contrato 58: o `claude` falso tem três).
+    expect(overview.connectors).toEqual({
+      connectors: [
+        { name: 'Notion', toolServer: 'claude_ai_Notion', state: 'connected' },
+        { name: 'Google Drive', toolServer: 'claude_ai_Google_Drive', state: 'connected' },
+        { name: 'Gmail', toolServer: 'claude_ai_Gmail', state: 'needs-auth' },
+      ],
+      reason: null,
+    })
     expect(JSON.stringify(overview)).not.toContain(SECRET)
     expect(await mcp.sessionServers('chat', [])).toEqual([])
     await mcp.update({ key: 'cli:calculadora', enabled: true })
@@ -405,7 +415,7 @@ describe('serviço (CA0 a CA4)', () => {
     await mcp.overview({ cli: true })
     await mcp.update({ key: 'cli:calculadora', enabled: true })
     const removed = await mcp.remove({ key: 'cli:calculadora' })
-    expect(removed.ok && removed.overview.cli.servers.map((server) => server.name)).toEqual(['remoto', 'claude.ai Notion'])
+    expect(removed.ok && removed.overview.cli.servers.map((server) => server.name)).toEqual(['remoto', 'plugin:design:slack'])
     expect((JSON.parse(readFileSync(cliFile, 'utf8')) as { mcpServers: Record<string, unknown> }).mcpServers['calculadora']).toBeUndefined()
     expect(await mcp.sessionServers('chat', [])).toEqual([])
   })

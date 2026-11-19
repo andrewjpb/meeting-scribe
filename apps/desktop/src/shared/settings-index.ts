@@ -1,6 +1,6 @@
 // Índice estático da busca das Configurações (contrato 18): fica em `shared` porque o smoke (no main) confere
 // que toda linha da tela está nele.
-import { MCP_ADD_DESCRIPTION, MCP_CLI_DESCRIPTION, MCP_FOUND_DESCRIPTION } from './mcp'
+import { CLAUDE_CONNECTORS_DESCRIPTION, MCP_ADD_DESCRIPTION, MCP_CLI_DESCRIPTION, MCP_FOUND_DESCRIPTION } from './mcp'
 import { APP_PLUGINS, PLUGIN_INSTALL_DESCRIPTION, PLUGIN_SAVE_DESCRIPTION } from './plugins'
 import type { SettingsTab } from './routes'
 
@@ -119,10 +119,12 @@ export function settingsIndex(agent: string): SettingsEntry[] {
     row('conexoes', 'Do Claude CLI', 'Servidores do Claude CLI', MCP_CLI_DESCRIPTION),
     row('conexoes', 'Servidores do app', 'Adicionar servidor MCP', MCP_ADD_DESCRIPTION),
     row('conexoes', 'Encontrados neste Mac', 'Claude Desktop', MCP_FOUND_DESCRIPTION),
+    // Contrato 58: a seção dos conectores do claude.ai, por último.
+    row('conexoes', 'Conectores do claude.ai', 'Conectores da sua conta', CLAUDE_CONNECTORS_DESCRIPTION),
     row('sobre', 'Sobre', 'Versão', 'Versão instalada do app.'),
     row('sobre', 'Sobre', 'Electron', 'Base do app.'),
     row('sobre', 'Sobre', 'Chrome', 'Motor das telas.'),
-    row('sobre', 'Sobre', 'Licença', 'Código aberto, sob a licença MIT.'),
+    row('sobre', 'Sobre', 'Licença', 'Código aberto, sob a licença GPL-3.0.'),
     row('sobre', 'Sobre', 'Atualizações', 'Abre o bloco de atualizações, em Geral.'),
   ]
 }

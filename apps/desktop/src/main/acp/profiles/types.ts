@@ -36,6 +36,11 @@ export interface AcpSessionRequest {
   /** Contrato 21: os servidores MCP desta sessão, resolvidos pela fábrica (o chamador não preenche). */
   mcpServers?: readonly AcpMcpServer[] | undefined
   /**
+   * Contrato 57: os conectores do claude.ai desta sessão, resolvidos pela fábrica (o chamador não preenche). Só no chat
+   * que pede `mcp`; sem nenhum, a sessão é a mesma de antes (com o modo estrito).
+   */
+  connectors?: AcpConnectorSet | undefined
+  /**
    * Contrato 47: as ferramentas do navegador (o servidor MCP local `navegador`), só no chat com as ferramentas de
    * leitura. Quem liga é o Assistente, com "Ativar ponte" ligado e a extensão conectada ao abrir a sessão.
    */
@@ -59,6 +64,28 @@ export interface AcpMcpServer {
   secrets: readonly string[]
   /** "Sempre permitir esta ferramenta": grava a política `allow`. */
   allowAlways(tool: string): void
+}
+
+/** Contrato 57: um conector do claude.ai ligado. O `claude` sobe o conector sozinho (o login é dele); o app só aprova. */
+export interface AcpConnector {
+  /** "Notion". */
+  name: string
+  /** "claude.ai Notion": o nome no cartão de aprovação. */
+  label: string
+  /** O servidor no nome das ferramentas (`claude_ai_Notion`). */
+  toolServer: string
+  toolPolicy: Readonly<Record<string, McpToolPolicy>>
+  /** "Sempre permitir esta ferramenta": grava a política `allow`. */
+  allowAlways(tool: string): void
+}
+
+/**
+ * Contrato 57: os conectores de uma sessão. Sem o modo estrito o `claude` sobe também o que o app não ligou: `others` são
+ * os servidores (como no nome das ferramentas) que o perfil bloqueia, menos os que a sessão passa em `mcpServers`.
+ */
+export interface AcpConnectorSet {
+  enabled: readonly AcpConnector[]
+  others: readonly string[]
 }
 
 /** Contrato 47: o servidor MCP local do navegador desta sessão, com o token dela. */

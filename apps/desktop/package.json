@@ -3,6 +3,7 @@
   "productName": "Meeting Scribe",
   "version": "0.15.0",
   "private": true,
+  "license": "GPL-3.0-or-later",
   "description": "App desktop do Meeting Scribe (Electron + React)",
   "main": "out/main/index.js",
   "scripts": {

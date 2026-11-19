@@ -2,6 +2,15 @@ import { ClipboardPaste, Plus, RefreshCw, ShieldAlert, Trash2, X } from 'lucide-
 import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router'
 import {
+  CLAUDE_CONNECTOR_AUTHORIZE_HINT,
+  CLAUDE_CONNECTOR_NEXT_QUESTION,
+  CLAUDE_CONNECTOR_STATE_LABELS,
+  CLAUDE_CONNECTOR_TOOLS_NOTE,
+  CLAUDE_CONNECTORS_DESCRIPTION,
+  CLAUDE_CONNECTORS_NO_SUBSCRIPTION,
+  CLAUDE_CONNECTORS_URL,
+  claudeConnectorEnabledNotice,
+  connectorFirstEnable,
   MCP_ADD_DESCRIPTION,
   MCP_CLI_DESCRIPTION,
   MCP_CLI_HEALTH_LABELS,
@@ -16,7 +25,14 @@ import {
   MCP_USES,
   mcpStateLabel,
   mcpToolKey,
+  mcpToolSuggestsWrite,
   parseMcpJson,
+  withConnectorEnabled,
+  withConnectorPolicy,
+  type ClaudeConnector,
+  type ClaudeConnectorPrefs,
+  type ClaudeConnectorState,
+  type ClaudeConnectorTools,
   type McpCliDetails,
   type McpCliServerView,
   type McpFoundServer,
@@ -32,6 +48,7 @@ import {
   type McpUse,
 } from '@shared/mcp'
 import { settingsPath } from '@shared/routes'
+import { useSettings } from '../../app/settingsStore'
 import { Button } from '../../design/Button'
 import { TextField } from '../../design/Field'
 import { Icon } from '../../design/Icon'
@@ -85,15 +102,39 @@ function UsesPicker({ uses, onChange, disabled = false }: { uses: readonly McpUs
   )
 }
 
-/** As ferramentas do último teste, com a regra de cada uma. Nome e descrição vêm do servidor: só texto. */
-function ToolsList({ tools, policy, onPolicy }: { tools: readonly McpToolInfo[]; policy: Readonly<Record<string, McpToolPolicy>>; onPolicy?: ((tool: string, policy: McpToolPolicy) => void) | undefined }) {
+/**
+ * As ferramentas do último teste, com a regra de cada uma. Nome e descrição vêm do servidor: só texto. Contrato 58: com
+ * `markWrite` (conectores do claude.ai), o rótulo "Escrita" quando o nome sugere escrita; a regra não muda por isso.
+ */
+function ToolsList({
+  tools,
+  policy,
+  onPolicy,
+  markWrite = false,
+}: {
+  tools: readonly McpToolInfo[]
+  policy: Readonly<Record<string, McpToolPolicy>>
+  onPolicy?: ((tool: string, policy: McpToolPolicy) => void) | undefined
+  markWrite?: boolean
+}) {
   if (!tools.length) return null
   return (
     <ul data-mcp-tools className="flex flex-col divide-y divide-line rounded-[var(--radius-control)] border border-line">
       {tools.map((tool) => (
         <li key={tool.name} data-mcp-tool={tool.name} className="flex items-center gap-3 px-3 py-2">
           <div className="flex min-w-0 flex-1 flex-col">
-            <span className="truncate font-mono text-12 text-text">{tool.name}</span>
+            {markWrite ? (
+              <span className="flex min-w-0 items-center gap-2">
+                <span className="truncate font-mono text-12 text-text">{tool.name}</span>
+                {mcpToolSuggestsWrite(tool.name) && (
+                  <span data-mcp-tool-write className="inline-flex h-[18px] shrink-0 items-center rounded-[var(--radius-control)] border border-line-strong px-1.5 text-11 font-medium text-text-muted">
+                    Escrita
+                  </span>
+                )}
+              </span>
+            ) : (
+              <span className="truncate font-mono text-12 text-text">{tool.name}</span>
+            )}
             {tool.description && <span className="truncate text-12 text-text-muted">{tool.description}</span>}
           </div>
           {onPolicy && (
@@ -191,7 +232,7 @@ function ServerItem({ index, kind, server, onOverview, onEdit }: ServerItemProps
           <p className="text-12 text-text-muted">
             {subtitle} · <StateText state={server.state} />
           </p>
-          {!usable && <p className="text-12 text-text-faint">Não dá para usar no app: este servidor não está no escopo user do Claude CLI (conectores do claude.ai e de plugins).</p>}
+          {!usable && <p className="text-12 text-text-faint">Não dá para usar no app: este servidor não está no escopo user do Claude CLI (de plugins).</p>}
         </div>
         <Switch checked={server.enabled} labelledBy={nameId} action="mcp-toggle" disabled={!usable} onChange={(enabled) => update({ enabled })} />
       </div>
@@ -655,10 +696,165 @@ function FoundItem({ server, onOverview }: { server: McpFoundServer; onOverview:
   )
 }
 
+/** Contrato 58: o estado do conector na linha, com a cor: conectado em --live, com problema em --rec. */
+function ConnectorStateText({ state }: { state: ClaudeConnectorState }) {
+  return <span className={state === 'connected' ? 'text-live' : state === 'failed' ? 'text-rec' : 'text-text-muted'}>{CLAUDE_CONNECTOR_STATE_LABELS[state]}</span>
+}
+
+/**
+ * Contrato 58: um conector do claude.ai. Interruptor (desligado por padrão; só liga conectado), o estado, o link para
+ * autorizar no claude.ai, "Ver ferramentas" com a regra de cada uma e, depois de ligar ou desligar, o aviso de que vale na
+ * próxima pergunta (CA5); ao ligar pela primeira vez, o aviso de uma linha do CA2. Tudo grava em
+ * `settings.claudeConnectors`, que o main valida.
+ */
+function ConnectorItem({ index, connector }: { index: number; connector: ClaudeConnector }) {
+  const nameId = `claude-connector-${index}`
+  const prefs = useSettings((state) => state.settings.claudeConnectors[connector.name])
+  const update = useSettings((state) => state.update)
+  const enabled = prefs?.enabled === true
+  const connected = connector.state === 'connected'
+  const [changed, setChanged] = useState<'first' | 'again' | null>(null)
+  const [tools, setTools] = useState<ClaudeConnectorTools | 'loading' | null>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  const save = (next: (current: Readonly<Record<string, ClaudeConnectorPrefs>>) => Record<string, ClaudeConnectorPrefs>): Promise<boolean> =>
+    update({ claudeConnectors: next(useSettings.getState().settings.claudeConnectors) }).then((ok) => {
+      setError(ok ? null : 'Não foi possível gravar.')
+      return ok
+    })
+  const toggle = (on: boolean): void => {
+    // "Primeira vez": o conector nunca foi ligado (uma regra escolhida antes, desligado, não conta).
+    const first = on && connectorFirstEnable(useSettings.getState().settings.claudeConnectors, connector.name)
+    void save((current) => withConnectorEnabled(current, connector.name, on)).then((ok) => {
+      if (ok) setChanged(first ? 'first' : 'again')
+    })
+  }
+  const showTools = (): void => {
+    if (tools !== null) {
+      setTools(null)
+      return
+    }
+    setTools('loading')
+    void window.__scribeApi.invoke('scribe:mcp-connector-tools', { name: connector.name }).then(setTools, () => setTools({ ok: false, error: 'Não foi possível ler as ferramentas do conector.' }))
+  }
+
+  return (
+    <div data-connector={connector.name} data-connector-state={connector.state} data-connector-enabled={enabled} className="flex flex-col gap-3 py-4">
+      <div className="flex items-start justify-between gap-4">
+        <div className="flex min-w-0 flex-col gap-0.5">
+          <p id={nameId} className="truncate text-13 font-medium text-text">
+            {connector.name}
+          </p>
+          <p className="text-12 text-text-muted">
+            Conector do claude.ai · <ConnectorStateText state={connector.state} />
+          </p>
+          {connector.state === 'needs-auth' && (
+            <p className="text-12 text-text-muted">
+              {CLAUDE_CONNECTOR_AUTHORIZE_HINT}{' '}
+              <a
+                href={CLAUDE_CONNECTORS_URL}
+                data-action="connector-authorize"
+                onClick={(event) => {
+                  event.preventDefault()
+                  window.__scribeApi.send('scribe:open-link', CLAUDE_CONNECTORS_URL)
+                }}
+                className="no-drag rounded-[var(--radius-control)] font-medium text-accent underline decoration-1 underline-offset-3 transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:text-title"
+              >
+                Autorizar no claude.ai
+              </a>
+            </p>
+          )}
+          {changed && (
+            <p data-connector-next role="status" className="text-12 text-text-muted">
+              {CLAUDE_CONNECTOR_NEXT_QUESTION}
+            </p>
+          )}
+        </div>
+        {/* Só liga conectado; ligado antes, desliga em qualquer estado. */}
+        <Switch checked={enabled} labelledBy={nameId} action="connector-toggle" disabled={!connected && !enabled} onChange={toggle} />
+      </div>
+      {changed === 'first' && enabled && (
+        <div data-notice="connector-enabled" role="status" className="border-l-3 border-title bg-bg-sunken px-3 py-2 text-12">
+          <p className="text-pretty text-text">{claudeConnectorEnabledNotice(connector.name)}</p>
+        </div>
+      )}
+      {connected && (
+        <div className="flex flex-wrap items-center gap-2">
+          <button type="button" data-action="connector-tools" aria-expanded={tools !== null} disabled={tools === 'loading'} onClick={showTools} className={SMALL}>
+            {tools === 'loading' ? 'Lendo…' : tools !== null ? 'Ocultar ferramentas' : 'Ver ferramentas'}
+          </button>
+        </div>
+      )}
+      {connected && tools !== null && tools !== 'loading' && !tools.ok && (
+        <p data-connector-tools="error" role="status" className="text-12 text-rec">
+          {tools.error}
+        </p>
+      )}
+      {connected && tools !== null && tools !== 'loading' && tools.ok && (
+        <>
+          {tools.tools.length ? (
+            <ToolsList tools={tools.tools} policy={prefs?.tools ?? {}} markWrite onPolicy={(tool, policy) => void save((current) => withConnectorPolicy(current, connector.name, tool, policy))} />
+          ) : (
+            <p className="text-12 text-text-muted">Nenhuma ferramenta neste conector.</p>
+          )}
+          <p className="text-12 text-text-faint">{CLAUDE_CONNECTOR_TOOLS_NOTE}</p>
+        </>
+      )}
+      {error && (
+        <p data-mcp-feedback="error" role="alert" className="text-12 text-rec">
+          {error}
+        </p>
+      )}
+    </div>
+  )
+}
+
+/**
+ * Contrato 58: "Conectores do claude.ai", por último na aba. A lista vem do mesmo `claude mcp list` da seção "Do Claude
+ * CLI" (linhas `claude.ai <Nome>`); sem login por assinatura, só a frase do CA4 e o atalho para Configurações › Claude.
+ */
+function ConnectorsSection({ overview }: { overview: McpOverview | null }) {
+  const navigate = useNavigate()
+  const cli = overview?.cli.state ?? 'loading'
+  const list = overview?.connectors ?? { connectors: [], reason: null }
+  const count = list.connectors.length
+  const state = cli !== 'ok' ? cli : list.reason ?? 'ok'
+  return (
+    <Section title="Conectores do claude.ai">
+      <SettingRow name="Conectores da sua conta" description={CLAUDE_CONNECTORS_DESCRIPTION}>
+        {cli === 'ok' && list.reason !== 'no-subscription' && (
+          <span data-connectors-count className="text-13 text-text-muted">
+            {count === 0 ? 'Nenhum conector' : count === 1 ? '1 conector' : `${count} conectores`}
+          </span>
+        )}
+      </SettingRow>
+      <div data-connectors-section={state} className="flex flex-col divide-y divide-line">
+        {cli === 'loading' && <p className="py-4 text-12 text-text-muted">Lendo o claude mcp list…</p>}
+        {cli === 'not-found' && <p className="py-4 text-12 text-text-muted">O claude não foi encontrado neste Mac.</p>}
+        {cli === 'error' && <p className="py-4 text-12 text-rec">Não foi possível ler os conectores do claude.ai.</p>}
+        {cli === 'ok' && list.reason === 'no-subscription' && (
+          <div data-connectors-no-subscription className="flex flex-wrap items-center gap-3 py-4">
+            <p className="min-w-0 flex-[1_1_320px] text-13 text-text">{CLAUDE_CONNECTORS_NO_SUBSCRIPTION}</p>
+            <button type="button" data-action="connectors-open-claude-settings" onClick={() => void navigate(settingsPath('claude'))} className={SMALL}>
+              Abrir Configurações › Claude
+            </button>
+          </div>
+        )}
+        {cli === 'ok' && list.reason === 'none' && <p className="py-4 text-12 text-text-muted">Nenhum conector na sua conta do claude.ai.</p>}
+        {cli === 'ok' &&
+          list.connectors.map((connector, index) => (
+            <ConnectorItem key={connector.name} index={index} connector={connector} />
+          ))}
+      </div>
+    </Section>
+  )
+}
+
 /**
  * Aba "Conexões" (contrato 21): o aviso fixo, os servidores do Claude CLI (CA0), os do app (CA1, CA2) com
  * "Adicionar servidor MCP" (CA3) e os encontrados no Claude Desktop (CA2). O `claude mcp list` (que sobe os servidores
- * para conferir a saúde) só roda com a aba aberta; "Atualizar" lê de novo.
+ * para conferir a saúde) só roda com a aba aberta; "Atualizar" lê de novo. Contrato 58: os conectores do claude.ai, por
+ * último, da mesma lista.
  */
 export function ConnectionsSection({ active }: { active: boolean }) {
   const navigate = useNavigate()
@@ -756,6 +952,8 @@ export function ConnectionsSection({ active }: { active: boolean }) {
           </div>
         )}
       </Section>
+
+      <ConnectorsSection overview={overview} />
     </>
   )
 }

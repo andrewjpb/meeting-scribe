@@ -25,7 +25,16 @@
 //
 // Contrato 21: `mcp list | get | add-json | remove` (escopo `user`), com os servidores guardados no arquivo que a
 // variável `FAKE_CLAUDE_MCP_FILE` aponta (no formato do `~/.claude.json`). `list` imita a saída do Claude Code 2.1.325
-// ("nome: alvo - ✔ Connected"), com um conector do claude.ai que não está no arquivo; nada é conectado de verdade.
+// ("nome: alvo - ✔ Connected"), com um conector do claude.ai e um servidor de plugin que não estão no arquivo; nada é
+// conectado de verdade.
+//
+// Contrato 57: `auth status --json` responde como o Claude Code 2.1.325 logado por assinatura (`authMethod: "claude.ai"`);
+// com `FAKE_CLAUDE_AUTH=api-key`, como logado por chave de API (e aí a lista não tem conector, como no real).
+//
+// Contrato 58: três conectores na lista (Notion e Google Drive conectados, Gmail precisa autorizar). Sem `-p` e com
+// `--input-format stream-json`, o modo de controle do Claude Code 2.1.325: responde `initialize` e `mcp_status` (o
+// primeiro com os conectores "pending", os seguintes conectados e com as ferramentas, sem descrição se não houver),
+// como o `mcpServerStatus`; nada vai a modelo nenhum.
 //
 // Uso: node fake-claude.mjs --version | node fake-claude.mjs -p --model haiku --input-format stream-json ...
 //      node fake-claude.mjs mcp list
@@ -47,6 +56,33 @@ if (args.includes('--version')) {
   process.exit(0)
 }
 
+/** Contrato 58: os conectores da conta falsa, com as ferramentas que o `mcpServerStatus` mostra. */
+const FAKE_CONNECTORS = [
+  {
+    name: 'Notion',
+    url: 'https://mcp.notion.com/mcp',
+    status: 'connected',
+    tools: [
+      { name: 'search', description: 'Busca páginas e bancos de dados no seu Notion.' },
+      { name: 'fetch', description: 'Lê o conteúdo de uma página ou banco.' },
+      { name: 'create-pages', description: 'Cria páginas novas.' },
+      { name: 'update-page', description: 'Muda o conteúdo ou as propriedades de uma página.' },
+      { name: 'delete-comment', description: 'Apaga um comentário.' },
+    ],
+  },
+  {
+    name: 'Google Drive',
+    url: 'https://drivemcp.googleapis.com/mcp/v1',
+    status: 'connected',
+    tools: [
+      { name: 'search_files', description: 'Busca arquivos no seu Drive.' },
+      { name: 'read_file_content', description: 'Lê o conteúdo de um arquivo.' },
+      { name: 'create_file', description: 'Cria um arquivo novo.' },
+    ],
+  },
+  { name: 'Gmail', url: 'https://gmail.mcp.claude.com/mcp', status: 'needs-auth', tools: [] },
+]
+
 /** Contrato 21: os subcomandos `claude mcp`, sobre o arquivo do `claude` falso. */
 function runMcp(command, rest) {
   const file = process.env.FAKE_CLAUDE_MCP_FILE
@@ -65,7 +101,9 @@ function runMcp(command, rest) {
   const positional = rest.filter((arg, index) => arg !== '-s' && rest[index - 1] !== '-s')
   if (command === 'list') {
     const lines = Object.entries(servers).map(([name, server]) => `${name}: ${target(server)} - ${server.type === 'http' || server.type === 'sse' ? '✘ Failed to connect' : '✔ Connected'}`)
-    lines.push('claude.ai Notion: https://mcp.notion.com/mcp - ✔ Connected')
+    if (process.env.FAKE_CLAUDE_AUTH !== 'api-key') lines.push(...FAKE_CONNECTORS.map((connector) => `claude.ai ${connector.name}: ${connector.url} - ${connector.status === 'connected' ? '✔ Connected' : '! Needs authentication'}`))
+    // Contrato 57: um servidor de plugin (não está no arquivo: não dá para usar no app, o interruptor fica travado).
+    lines.push('plugin:design:slack: https://mcp.slack.example/mcp (HTTP) - ! Needs authentication')
     return done(`Checking MCP server health…\n\n${lines.join('\n')}\n`)
   }
   if (command === 'get') {
@@ -111,6 +149,38 @@ const model = MODEL_IDS[args[args.indexOf('--model') + 1]] ?? MODEL_IDS.haiku
 
 if (args[0] === 'mcp') {
   runMcp(args[1], args.slice(2))
+} else if (args[0] === 'auth' && args[1] === 'status') {
+  const subscription = process.env.FAKE_CLAUDE_AUTH !== 'api-key'
+  const status = subscription ? { loggedIn: true, authMethod: 'claude.ai', apiProvider: 'firstParty' } : { loggedIn: true, authMethod: 'api_key', apiProvider: 'firstParty' }
+  process.stdout.write(`${JSON.stringify(status, null, 2)}\n`, () => process.exit(0))
+} else if (args.includes('--input-format') && !args.includes('-p')) {
+  // Contrato 58: o modo de controle (só `initialize` e `mcp_status`); sai quando o stdin fecha.
+  let statusReads = 0
+  const reply = (requestId, response) => process.stdout.write(`${JSON.stringify({ type: 'control_response', response: { request_id: requestId, subtype: 'success', response } })}\n`)
+  createInterface({ input: process.stdin }).on('line', (line) => {
+    let message
+    try {
+      message = JSON.parse(line)
+    } catch {
+      return
+    }
+    if (message.type !== 'control_request') return
+    if (message.request?.subtype === 'initialize') reply(message.request_id, { commands: [], models: [] })
+    else if (message.request?.subtype === 'mcp_status') {
+      statusReads += 1
+      // Com `FAKE_CLAUDE_SLOW_CONNECTOR`, esse conector só conecta na 4ª leitura (os outros, na 2ª).
+      const slow = process.env.FAKE_CLAUDE_SLOW_CONNECTOR
+      const connectors = process.env.FAKE_CLAUDE_AUTH === 'api-key' ? [] : FAKE_CONNECTORS
+      reply(message.request_id, {
+        mcpServers: connectors.map((connector) =>
+          (statusReads === 1 || (connector.name === slow && statusReads < 4)) && connector.status === 'connected'
+            ? { name: `claude.ai ${connector.name}`, status: 'pending', scope: 'claudeai' }
+            : { name: `claude.ai ${connector.name}`, status: connector.status, scope: 'claudeai', ...(connector.status === 'connected' ? { tools: connector.tools } : {}) },
+        ),
+      })
+    } else process.stdout.write(`${JSON.stringify({ type: 'control_response', response: { request_id: message.request_id, subtype: 'error', error: 'não suportado' } })}\n`)
+  })
+  process.stdin.on('end', () => process.exit(0))
 } else if (args.includes('--include-partial-messages')) {
   const emit = (message) => process.stdout.write(`${JSON.stringify(message)}\n`)
 

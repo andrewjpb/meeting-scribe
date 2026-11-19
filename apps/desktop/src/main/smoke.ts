@@ -126,7 +126,7 @@ import { MEET_PATH, MEET_PORTS, type MeetServer } from './meet/server'
 import { MEETING_PROMPT_SIZE } from './meeting-prompt/window'
 import { MIC_PROMPT_MIN_MS } from '../shared/meeting-prompt'
 import { MCP_CLI_ENABLED_FILE, MCP_SERVERS_FILE } from './mcp/store'
-import { MCP_FIXED_WARNING } from '../shared/mcp'
+import { CLAUDE_CONNECTOR_AUTHORIZE_HINT, CLAUDE_CONNECTOR_NEXT_QUESTION, CLAUDE_CONNECTORS_URL, claudeConnectorEnabledNotice, MCP_FIXED_WARNING } from '../shared/mcp'
 import { NAVEGADOR_COMANDOS_PATH, NAVEGADOR_HEADER, NAVEGADOR_PORTS, type NavegadorServer } from './navegador/server'
 import { MEETINGS_DIR } from './meetings/transcripts'
 import { SETTINGS_VERSION } from './settings/schema'
@@ -4039,7 +4039,8 @@ async function settingsTabsChecks(contents: WebContents, ctx: SmokeContext, shot
     sobre.includes(app.getVersion()) &&
     sobre.includes(process.versions.electron) &&
     sobre.includes(process.versions.chrome) &&
-    sobre.includes('MIT') &&
+    // A licença mudou para GPL-3.0 em 19/11/2026 (commit 60d9751, que não ajustou o smoke).
+    sobre.includes('GPL-3.0') &&
     opened === REPOSITORY_URL &&
     toUpdates &&
     updatesVisible &&
@@ -6558,9 +6559,9 @@ async function smokeMcpHttp(script: string): Promise<{ url: string; stop: () => 
 }
 
 /**
- * Contrato 21 (CA0 a CA8), no claro: a aba "Conexões" com o aviso fixo e os servidores do `claude` falso (o conector do
- * claude.ai não dá para ligar); "Ver detalhes" mascarado; ligar `calculadora` para o chat, "Testar" e a regra "Negar" em
- * `apagar_tudo`; importar o do Claude Desktop falso só no app (sem o segredo); adicionar pelo formulário no Claude CLI
+ * Contrato 21 (CA0 a CA8), no claro: a aba "Conexões" com o aviso fixo e os servidores do `claude` falso (contrato 57: o
+ * conector do claude.ai sai da lista do CLI e vem na lista própria, desligado); "Ver detalhes" mascarado; ligar
+ * `calculadora` para o chat, "Testar" e a regra "Negar" em `apagar_tudo`; importar o do Claude Desktop falso só no app (sem o segredo); adicionar pelo formulário no Claude CLI
  * (grava no arquivo do `claude` falso) e por JSON colado só no app (HTTP local com o cabeçalho), com "Salvar" só depois
  * do teste; no Assistente, a linha "Conexões" com um servidor desligado na conversa, o cartão de aprovação ("Permitir uma
  * vez"), o passo concluído e a ferramenta negada pela regra; o `session/new` com a definição lida na hora; tradução e
@@ -6590,7 +6591,16 @@ async function mcpChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => void,
     const listed = await waitFor(contents, `document.querySelector('[data-mcp-cli-state="ok"]') && document.querySelector('${server('cli:calculadora')}')`, 15_000)
     const warning = await invoke<string>(`document.querySelector('[data-notice="mcp-warning"]')?.textContent ?? ''`)
     const cliNames = await invoke<string[]>(`[...document.querySelectorAll('[data-mcp-section="cli"] [data-mcp-server]')].map((el) => el.dataset.mcpServer)`)
-    const claudeAiLocked = await invoke<boolean>(`document.querySelector('${server('cli:claude.ai Notion')} [data-action="mcp-toggle"]')?.disabled === true`)
+    // Contrato 57: o conector não é mais um servidor "não usável" do CLI; vem na lista dos conectores, desligado.
+    const claudeAiGone = await invoke<boolean>(`document.querySelector('${server('cli:claude.ai Notion')}') === null`)
+    // O servidor de plugin do `claude` falso não dá para usar no app: o interruptor fica travado (contrato 21).
+    const pluginLocked = await invoke<boolean>(`document.querySelector('${server('cli:plugin:design:slack')} [data-action="mcp-toggle"]')?.disabled === true`)
+    const connectors = await invoke<{ names: string[]; reason: string | null; prefs: string }>(
+      "Promise.all([window.__scribeApi.invoke('scribe:mcp-overview', {}), window.__scribeApi.invoke('scribe:settings-get')]).then(([o, s]) => ({ names: o.connectors.connectors.map((c) => c.name + '|' + c.toolServer + '|' + c.state), reason: o.connectors.reason, prefs: JSON.stringify(s.claudeConnectors) }))",
+    )
+    // Contrato 58: o `claude` falso tem três conectores (dois conectados e um que precisa autorizar).
+    const connectorsOk =
+      JSON.stringify(connectors.names) === JSON.stringify(['Notion|claude_ai_Notion|connected', 'Google Drive|claude_ai_Google_Drive|connected', 'Gmail|claude_ai_Gmail|needs-auth']) && connectors.reason === null && connectors.prefs === '{}'
     const allOff = await invoke<boolean>(`[...document.querySelectorAll('[data-mcp-server]')].every((el) => el.dataset.mcpState === 'off')`)
     const foundCount = await invoke<string>(`document.querySelector('[data-mcp-found-count]')?.textContent ?? ''`)
     await clickSelector(contents, `${server('cli:calculadora')} [data-action="mcp-details"]`)
@@ -6604,13 +6614,15 @@ async function mcpChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => void,
         listed &&
         warning.includes(MCP_FIXED_WARNING) &&
         warning.includes('permissões separadas') &&
-        JSON.stringify(cliNames) === JSON.stringify(['cli:calculadora', 'cli:docs-remoto', 'cli:claude.ai Notion']) &&
-        claudeAiLocked &&
+        JSON.stringify(cliNames) === JSON.stringify(['cli:calculadora', 'cli:docs-remoto', 'cli:plugin:design:slack']) &&
+        claudeAiGone &&
+        pluginLocked &&
+        connectorsOk &&
         allOff &&
         foundCount === '1 servidor' &&
         detailsShown &&
         leakList.length === 0,
-      detail: `aba=${opened}; lista do CLI=${listed} ${JSON.stringify(cliNames)}; aviso "${warning.slice(0, 80)}…"; claude.ai travado=${claudeAiLocked}; tudo desligado=${allOff}; Claude Desktop "${foundCount}"; detalhes mascarados=${detailsShown}; segredos na tela=${leakList.length}`,
+      detail: `aba=${opened}; lista do CLI=${listed} ${JSON.stringify(cliNames)}; aviso "${warning.slice(0, 80)}…"; claude.ai fora do CLI=${claudeAiGone}, plugin travado=${pluginLocked}, conectores ${JSON.stringify(connectors)}; tudo desligado=${allOff}; Claude Desktop "${foundCount}"; detalhes mascarados=${detailsShown}; segredos na tela=${leakList.length}`,
     }
 
     // CA0 e CA5: ligar `calculadora` para o chat, "Testar" (as duas ferramentas) e "Negar" em `apagar_tudo`.
@@ -6807,6 +6819,158 @@ async function mcpChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => void,
     ).catch(() => undefined)
     await invoke(`window.__scribeApi.invoke('scribe:settings-update', { claudeTransport: '${transportBefore === 'acp' ? 'acp' : 'cli'}' }).then(() => true)`).catch(() => undefined)
     http.stop()
+    win.destroy()
+  }
+}
+
+/**
+ * Contrato 58 (CA1 a CA6), depois do contrato 21 (que termina com tudo desligado): a seção "Conectores do claude.ai", por
+ * último na aba, com os três conectores do `claude` falso (Notion e Google Drive conectados, Gmail precisa autorizar),
+ * tudo desligado; o link "Autorizar no claude.ai" pelo `scribe:open-link`; ligar o Notion (o aviso de uma linha e o "vale
+ * na próxima pergunta"); "Ver ferramentas" pelo `mcpServerStatus` do `claude` falso, com o rótulo "Escrita", e "Negar"
+ * em `delete-comment`; no Assistente, o `session/new` do chat com as opções do CA4 do contrato 57. PNGs
+ * `conexoes-conectores-light` e `-dark`. Termina com `claudeConnectors` vazio.
+ */
+async function connectorChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => void, checks: Record<string, Check>, shots: Screenshot[]): Promise<void> {
+  const win = ctx.openWindow({ theme: 'light' })
+  watch(win)
+  await loadAndWait(win)
+  const contents = win.webContents
+  const invoke = <T>(js: string): Promise<T> => evaluate<T>(contents, js)
+  const transportBefore = readSettings(ctx.userDataDir).claudeTransport
+  await invoke("window.__scribeApi.invoke('scribe:settings-update', { claudeTransport: 'acp' }).then(() => true)")
+  const item = (name: string): string => `[data-connector=${JSON.stringify(name)}]`
+  // Só a coluna das Configurações rola: o título da seção no alto.
+  const scrollToConnectors = (target: WebContents): Promise<unknown> =>
+    evaluate(
+      target,
+      `(() => { const scroll = document.querySelector('[data-settings-panel="conexoes"]')?.closest('[data-settings-scroll]') ?? document.querySelector('[data-settings-scroll]'); const section = document.querySelector('section[aria-label="Conectores do claude.ai"]'); if (scroll && section) scroll.scrollTop += section.getBoundingClientRect().top - scroll.getBoundingClientRect().top - 16; return true })()`,
+    )
+  try {
+    // CA1 e CA4: a seção por último, os três conectores desligados, o Gmail travado com o link; o plugin sem o "conectores".
+    const opened = await openSettingsTab(contents, 'conexoes')
+    const listed = await waitFor(contents, `document.querySelector('[data-connectors-section="ok"]') && document.querySelectorAll('[data-connector]').length === 3`, 15_000)
+    const sections = await invoke<string[]>(`[...document.querySelectorAll('[data-settings-panel="conexoes"] section[aria-label]')].map((el) => el.getAttribute('aria-label'))`)
+    const rows = await invoke<{ name: string; state: string; checked: string | null; disabled: boolean; text: string }[]>(
+      `[...document.querySelectorAll('[data-connector]')].map((el) => ({ name: el.dataset.connector, state: el.dataset.connectorState, checked: el.querySelector('[data-action="connector-toggle"]')?.getAttribute('aria-checked') ?? null, disabled: el.querySelector('[data-action="connector-toggle"]')?.disabled === true, text: el.innerText }))`,
+    )
+    const stateColors = await invoke<string[]>(`[...document.querySelectorAll('[data-connector] p:nth-of-type(2) span')].map((el) => el.className)`)
+    const count = await invoke<string>(`document.querySelector('[data-connectors-count]')?.textContent ?? ''`)
+    const toolsButtons = await invoke<string[]>(`[...document.querySelectorAll('[data-action="connector-tools"]')].map((el) => el.closest('[data-connector]').dataset.connector)`)
+    const pluginText = await invoke<string>(`document.querySelector('[data-mcp-server="cli:plugin:design:slack"]')?.innerText ?? ''`)
+    const openedBefore = ctx.fixtures.openedUrls.length
+    await clickSelector(contents, `${item('Gmail')} [data-action="connector-authorize"]`)
+    await wait(100)
+    const authorizeOpened = ctx.fixtures.openedUrls.slice(openedBefore).join()
+    checks['connectorsList'] = {
+      ok:
+        opened &&
+        listed &&
+        sections.at(-1) === 'Conectores do claude.ai' &&
+        JSON.stringify(sections.slice(0, 3)) === JSON.stringify(['Do Claude CLI', 'Servidores do app', 'Encontrados neste Mac']) &&
+        JSON.stringify(rows.map((row) => `${row.name}|${row.state}|${String(row.checked)}|${String(row.disabled)}`)) === JSON.stringify(['Notion|connected|false|false', 'Google Drive|connected|false|false', 'Gmail|needs-auth|false|true']) &&
+        rows.every((row) => !row.text.includes('Não dá para usar no app') && !row.text.includes('claude.ai Notion')) &&
+        rows[0]?.text.includes('Conector do claude.ai · Conectado') === true &&
+        rows[2]?.text.includes('Conector do claude.ai · Precisa autorizar') === true &&
+        rows[2]?.text.includes(`${CLAUDE_CONNECTOR_AUTHORIZE_HINT} Autorizar no claude.ai`) === true &&
+        JSON.stringify(stateColors) === JSON.stringify(['text-live', 'text-live', 'text-text-muted']) &&
+        count === '3 conectores' &&
+        JSON.stringify(toolsButtons) === JSON.stringify(['Notion', 'Google Drive']) &&
+        pluginText.includes('Não dá para usar no app') &&
+        pluginText.includes('(de plugins)') &&
+        !pluginText.includes('conectores do claude.ai') &&
+        authorizeOpened === CLAUDE_CONNECTORS_URL,
+      detail: `aba=${opened}; lista=${listed}; seções ${JSON.stringify(sections)}; linhas ${JSON.stringify(rows.map((row) => `${row.name}|${row.state}|${String(row.checked)}|${String(row.disabled)}`))}; cores ${JSON.stringify(stateColors)}; contagem "${count}"; "Ver ferramentas" em ${JSON.stringify(toolsButtons)}; plugin "${pluginText.replace(/\s+/g, ' ').slice(0, 160)}"; link aberto "${authorizeOpened}"`,
+    }
+
+    // CA2 e CA5: ligar o Notion pela primeira vez.
+    await clickSelector(contents, `${item('Notion')} [data-action="connector-toggle"]`)
+    const on = await waitFor(contents, `document.querySelector('${item('Notion')} [data-action="connector-toggle"]')?.getAttribute('aria-checked') === 'true'`)
+    const notice = await invoke<string>(`document.querySelector('${item('Notion')} [data-notice="connector-enabled"]')?.textContent ?? ''`)
+    const next = await invoke<string>(`document.querySelector('${item('Notion')} [data-connector-next]')?.textContent ?? ''`)
+    const dialogs = await invoke<number>(`document.querySelectorAll('dialog[open], [role="dialog"], [role="alertdialog"]').length`)
+    const prefsOn = JSON.stringify(readSettings(ctx.userDataDir).claudeConnectors ?? null)
+    checks['connectorsEnable'] = {
+      ok: on && notice === claudeConnectorEnabledNotice('Notion') && next === CLAUDE_CONNECTOR_NEXT_QUESTION && dialogs === 0 && prefsOn === JSON.stringify({ Notion: { enabled: true, everEnabled: true, tools: {} } }),
+      detail: `ligado=${on}; aviso "${notice}"; próxima pergunta "${next}"; diálogos ${dialogs}; settings ${prefsOn}`,
+    }
+
+    // CA3: "Ver ferramentas" do Notion, do `mcpServerStatus` do `claude` falso; "Escrita" pelo nome; "Negar" em `delete-comment`.
+    await clickSelector(contents, `${item('Notion')} [data-action="connector-tools"]`)
+    const toolsShown = await waitFor(contents, `document.querySelectorAll('${item('Notion')} [data-mcp-tool]').length === 5`, 25_000)
+    const tools = await invoke<{ name: string; write: boolean; policy: string }[]>(
+      `[...document.querySelectorAll('${item('Notion')} [data-mcp-tool]')].map((el) => ({ name: el.dataset.mcpTool, write: Boolean(el.querySelector('[data-mcp-tool-write]')), policy: el.querySelector('[data-mcp-policy]')?.value ?? '' }))`,
+    )
+    const hideLabel = await invoke<string>(`document.querySelector('${item('Notion')} [data-action="connector-tools"]')?.textContent ?? ''`)
+    await setValue(contents, `${item('Notion')} [data-mcp-policy="delete-comment"]`, 'deny', 'change')
+    let prefsPolicy = ''
+    for (let attempt = 0; attempt < 40; attempt++) {
+      prefsPolicy = JSON.stringify(readSettings(ctx.userDataDir).claudeConnectors ?? null)
+      if (prefsPolicy.includes('deny')) break
+      await wait(50)
+    }
+    const policyShown = await invoke<string>(`document.querySelector('${item('Notion')} [data-mcp-policy="delete-comment"]')?.value ?? ''`)
+    await scrollToConnectors(contents)
+    await settle(contents)
+    shots.push(await capture(win, ctx.outDir, 'conexoes-conectores-light'))
+    checks['connectorsTools'] = {
+      ok:
+        toolsShown &&
+        JSON.stringify(tools.map((tool) => `${tool.name}|${String(tool.write)}|${tool.policy}`)) ===
+          JSON.stringify(['search|false|ask', 'fetch|false|ask', 'create-pages|true|ask', 'update-page|true|ask', 'delete-comment|true|ask']) &&
+        hideLabel === 'Ocultar ferramentas' &&
+        prefsPolicy === JSON.stringify({ Notion: { enabled: true, everEnabled: true, tools: { 'delete-comment': 'deny' } } }) &&
+        policyShown === 'deny',
+      detail: `ferramentas=${toolsShown} ${JSON.stringify(tools)}; botão "${hideLabel}"; settings ${prefsPolicy}; regra na tela ${policyShown}`,
+    }
+
+    // CA6 (e CA4 do contrato 57): a sessão do chat com o Notion ligado, sem o modo estrito e com o resto bloqueado.
+    const sessionsBefore = readAcpLog(ctx.userDataDir).filter((entry) => entry.method === 'session/new').length
+    await clickSelector(contents, '[data-nav="assistente"]')
+    await waitFor(contents, routeIs('assistente'))
+    await clickSelector(contents, '[data-action="chat-new"]')
+    await waitFor(contents, `document.querySelector('[data-chat-input]') && !document.querySelector('[data-chat-message]')`)
+    await setValue(contents, '[data-chat-input]', 'O que tenho no Notion sobre o orçamento?')
+    await pressEnterIn(contents, '[data-chat-input]')
+    const answered = await waitFor(contents, CHAT_DONE, 30_000)
+    const chatSession = (readAcpLog(ctx.userDataDir).filter((entry) => entry.method === 'session/new').slice(sessionsBefore) as (SmokeMcpSession & { options?: Record<string, unknown> })[]).find((entry) => entry.purpose === 'chat')
+    const options = (chatSession?.options ?? {}) as { strictMcpConfig?: unknown; settingSources?: unknown; extraArgs?: Record<string, unknown>; disallowedTools?: string[]; settings?: { permissions?: { ask?: string[] } } }
+    const disallowed = options.disallowedTools ?? []
+    const ask = options.settings?.permissions?.ask ?? []
+    checks['connectorsSession'] = {
+      ok:
+        answered &&
+        chatSession !== undefined &&
+        !('strictMcpConfig' in options) &&
+        JSON.stringify(options.settingSources) === '[]' &&
+        options.extraArgs !== undefined &&
+        'restricted' in options.extraArgs &&
+        ask.includes('mcp__claude_ai_Notion') &&
+        !ask.includes('mcp__claude_ai_Google_Drive') &&
+        disallowed.includes('mcp__claude_ai_Google_Drive') &&
+        disallowed.includes('mcp__claude_ai_Gmail') &&
+        disallowed.includes('mcp__calculadora') &&
+        disallowed.includes('mcp__claude_ai_Notion__delete-comment') &&
+        !disallowed.includes('mcp__claude_ai_Notion'),
+      detail: `resposta=${answered}; sessão de chat=${chatSession !== undefined}; strict=${String(options.strictMcpConfig)}; settingSources ${JSON.stringify(options.settingSources)}; extraArgs ${JSON.stringify(options.extraArgs)}; ask ${JSON.stringify(ask)}; negadas mcp ${JSON.stringify(disallowed.filter((tool) => tool.startsWith('mcp__')))}`,
+    }
+
+    // No escuro, a seção com o Notion ligado e as ferramentas abertas.
+    const dark = ctx.openWindow({ theme: 'dark' })
+    watch(dark)
+    await loadAndWait(dark)
+    await openSettingsTab(dark.webContents, 'conexoes')
+    const darkListed = await waitFor(dark.webContents, `document.querySelector('${item('Notion')} [data-action="connector-toggle"]')?.getAttribute('aria-checked') === 'true'`, 15_000)
+    await clickSelector(dark.webContents, `${item('Notion')} [data-action="connector-tools"]`)
+    const darkTools = await waitFor(dark.webContents, `document.querySelectorAll('${item('Notion')} [data-mcp-tool]').length === 5`, 25_000)
+    await scrollToConnectors(dark.webContents)
+    await settle(dark.webContents)
+    shots.push(await capture(dark, ctx.outDir, 'conexoes-conectores-dark'))
+    checks['connectorsDark'] = { ok: darkListed && darkTools, detail: `Notion ligado no escuro=${darkListed}; ferramentas=${darkTools}` }
+    dark.destroy()
+  } finally {
+    // Tudo desligado: o resto do roteiro segue sem conector.
+    await invoke(`window.__scribeApi.invoke('scribe:settings-update', { claudeConnectors: {}, claudeTransport: '${transportBefore === 'acp' ? 'acp' : 'cli'}' }).then(() => true)`).catch(() => undefined)
     win.destroy()
   }
 }
@@ -8779,6 +8943,9 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
     // Contrato 21: os servidores MCP (Claude CLI falso, servidor MCP falso e o agente ACP falso); termina desligado.
     await mcpChecks(ctx, watch, mcp, screenshots)
 
+    // Contrato 58: os conectores do claude.ai na aba Conexões e na sessão do chat; termina com todos desligados.
+    await connectorChecks(ctx, watch, mcp, screenshots)
+
     // Contrato 27: quem fala no Meet, com um cliente falso no servidor local; antes do bloqueio.
     await meetChecks(ctx, watch, meet)
 
@@ -8897,8 +9064,9 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
   // o aviso de reunião, no claro e no tamanho dele (contrato 48); a lista, a leitura e o composer do email, nos dois
   // temas (contrato 43); o cartão dos emails pendentes e o rascunho de resposta por email no Assistente, no claro
   // (contrato 45); o formulário da tarefa com "Pode enviar email" e a execução com os emails enviado e recusado, no
-  // claro (contrato 51).
-  const expectedShots = SCREENS.length * THEMES.length + 66
+  // claro (contrato 51); a seção "Conectores do claude.ai" com o Notion ligado e as ferramentas, nos dois temas
+  // (contrato 58).
+  const expectedShots = SCREENS.length * THEMES.length + 68
   if (screenshots.length !== expectedShots) failures.push(`${screenshots.length} PNGs em vez de ${expectedShots}`)
   for (const shot of screenshots) {
     if (shot.name === MEETING_PROMPT_SHOT) {
