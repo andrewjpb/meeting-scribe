@@ -8,11 +8,13 @@ import { join, relative, resolve } from 'node:path'
 import { simpleParser } from 'mailparser'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { ImapConnect, ImapMessage, ImapSession } from '../src/main/email/imap-client'
+import type { Pop3Connect } from '../src/main/email/pop3-client'
 import { createEmailService, safeAttachmentName, type EmailService, type EmailServiceDeps } from '../src/main/email/service'
 import { smtpErrorKind } from '../src/main/email/smtp-client'
 import { createFileSettingsStore } from '../src/main/settings/store'
 import type { SafeStorageLike } from '../src/main/secrets'
 import type { EmailAccountStatus } from '../src/shared/email'
+import { buildReply, parseInvite, type InvitePart } from '../src/shared/invite'
 
 const PASSWORD = 'smtp-senha-99'
 const CLICK = ['11111111-2222-4333-8444-555555555555', '21111111-2222-4333-8444-555555555555', '31111111-2222-4333-8444-555555555555', '41111111-2222-4333-8444-555555555555']
@@ -271,7 +273,8 @@ describe('envio por SMTP (contrato 42, CA5)', () => {
     // E no app: enviados guardados e a original marcada como respondida.
     const sent = await service.messages({ accountId, folder: 'sent' })
     expect(sent).toMatchObject([{ id: result.messageId, mailbox: 'Sent', subject: 'Re: Proposta', inReplyTo: '<orig@cliente.com>' }])
-    expect(await service.body({ accountId, id: result.messageId })).toEqual({ ok: true, body: { text: 'Pode ser na quinta.', html: null, attachments: [] } })
+    // Contrato 61 (CA7): o enviado é gravado com `invite: null` (nunca é relido atrás de convite).
+    expect(await service.body({ accountId, id: result.messageId })).toEqual({ ok: true, body: { text: 'Pode ser na quinta.', html: null, attachments: [], invite: null } })
     expect((await service.messages({ accountId }))[0]?.answered).toBe(true)
   })
 
@@ -460,5 +463,145 @@ describe('nenhum caminho fora do clique alcança o envio do email', () => {
     const emailSend = preload.slice(preload.indexOf('emailSend('), preload.indexOf("'scribe:email-send'"))
     expect(emailSend).toContain('navigator.userActivation.isActive')
     expect(emailSend).toContain("ipcRenderer.send('scribe:email-click', clickToken)")
+  })
+})
+
+describe('o REPLY de convite pelo nodemailer de verdade (contrato 61, CA6 e CA11)', () => {
+  const REPLY_NOW = Date.parse('2026-11-19T18:30:00.000Z')
+  const INVITE_RAW = readFileSync(resolve(import.meta.dirname, 'fixtures/invites/google-request.eml'))
+  const INVITE: ImapMessage = { ...PARENT, uid: 20, flags: [], subject: 'Convite: Revisão do projeto', from: [{ name: 'Ana Organizadora', address: 'ana@example.com' }], to: [{ name: null, address: 'andrew.teste@example.org' }], messageId: '<0000000000004f2a9b0645exampleid@example.com>', inReplyTo: null, references: [] }
+
+  /** As partes como no CA3 (o `emlParts` de `invite.test.ts`). */
+  async function partsOf(data: string): Promise<InvitePart[]> {
+    const parsed = await simpleParser(data)
+    return parsed.attachments.map((item) => {
+      const params = (item.headers.get('content-type') as { params?: Record<string, string> } | undefined)?.params
+      return { contentType: item.contentType, filename: item.filename ?? null, method: params?.method ?? null, content: item.content }
+    })
+  }
+
+  async function inviteSetup(smtpPort: number, protocol: 'imap' | 'pop3') {
+    const appended: Buffer[] = []
+    const session: ImapSession = {
+      uidValidity: '1',
+      recent: () => Promise.resolve([INVITE]),
+      since: () => Promise.resolve([]),
+      source: () => Promise.resolve(INVITE_RAW),
+      setSeen: () => Promise.resolve(),
+      setFlagged: () => Promise.resolve(),
+      remove: () => Promise.resolve(),
+      appendSent: (raw) => {
+        appended.push(raw)
+        return Promise.resolve(true)
+      },
+      onNew: () => undefined,
+      onClose: () => undefined,
+      close: () => Promise.resolve(),
+    }
+    const pop3: Pop3Connect = async () => ({
+      uidl: async () => new Map([[1, 'convite-1']]),
+      sizes: async () => new Map([[1, INVITE_RAW.length]]),
+      retr: async () => INVITE_RAW,
+      dele: async () => undefined,
+      quit: async () => undefined,
+      close: () => undefined,
+    })
+    const userData = mkdtempSync(join(tmpdir(), 'scribe-smtp-convite-'))
+    const service = createEmailService({
+      root: join(userData, 'email'),
+      settings: createFileSettingsStore({ dir: userData }),
+      safeStorage: fakeSafeStorage(),
+      fetch: () => Promise.reject(new Error('sem rede no teste')),
+      imap: () => Promise.resolve(session),
+      pop3,
+      onStatus: () => undefined,
+      onMessage: () => undefined,
+      timeZone: () => 'America/Sao_Paulo',
+      // Relógio fixo: o teste remonta o REPLY com o mesmo DTSTAMP.
+      now: () => REPLY_NOW,
+      retryMs: 3_600_000,
+    })
+    cleanups.push(async () => {
+      await service.dispose()
+      rmSync(userData, { recursive: true, force: true })
+    })
+    const added = await service.addAccount({
+      address: 'andrew.teste@example.org',
+      password: PASSWORD,
+      name: 'Andrew Teste',
+      incoming: { protocol, host: '127.0.0.1', port: 993, security: 'tls' },
+      outgoing: { host: '127.0.0.1', port: smtpPort, security: 'none' },
+    })
+    if (!added.ok) throw new Error('conta não entrou')
+    const accountId = added.status.account.id
+    await vi.waitFor(() => expect(service.accounts().find((status: EmailAccountStatus) => status.account.id === accountId)?.state).toBe('connected'))
+    const id = protocol === 'imap' ? '20' : 'convite-1'
+    const body = await service.body({ accountId, id })
+    expect(body.ok && body.body.invite?.method).toBe('REQUEST')
+    return { service, accountId, id, appended, invite: body.ok ? body.body.invite : null }
+  }
+
+  it('a mensagem tem a parte text/calendar com method=REPLY e o anexo invite.ics; vai só ao organizador; o envio comum não tem calendário', async () => {
+    const smtp = await startFakeSmtp()
+    cleanups.push(() => smtp.close())
+    const { service, accountId, id, appended, invite } = await inviteSetup(smtp.port, 'imap')
+    service.registerClick(SENDER, CLICK[0])
+    const result = await service.sendInviteReply(SENDER, { accountId, id, partstat: 'ACCEPTED', clickToken: CLICK[0] })
+    if (!result.ok) throw new Error(`REPLY falhou: ${result.error}`)
+    expect(smtp.deliveries).toHaveLength(1)
+    const delivery = smtp.deliveries[0] as Delivery
+    expect(delivery.to).toEqual(['ana@example.com'])
+    const parts = await partsOf(delivery.data)
+    expect(parts.map((part) => [part.contentType, part.filename, part.method])).toEqual([
+      ['text/calendar', null, 'REPLY'],
+      ['application/ics', 'invite.ics', null],
+    ])
+    expect(delivery.data).toMatch(/Content-Type: text\/calendar; charset=utf-8; method=REPLY/i)
+    // A parte e o anexo levam, byte a byte, o VCALENDAR que o `buildReply` montou (só o fim de linha normalizado, se o
+    // transporte o trocar).
+    if (!invite) throw new Error('sem convite')
+    const built = buildReply(invite, { partstat: 'ACCEPTED', self: ['andrew.teste@example.org'], now: new Date(REPLY_NOW) })
+    if (!built.ok) throw new Error(`buildReply falhou: ${built.error}`)
+    const crlf = (bytes: string | Uint8Array): Buffer => Buffer.from(Buffer.from(bytes).toString('utf8').replace(/\r?\n/g, '\r\n'), 'utf8')
+    expect(crlf(parts[0]?.content ?? '').equals(Buffer.from(built.ics, 'utf8'))).toBe(true)
+    expect(crlf(parts[1]?.content ?? '').equals(Buffer.from(built.ics, 'utf8'))).toBe(true)
+    const answer = parseInvite(parts, { self: ['andrew.teste@example.org'], localTimeZone: 'America/Sao_Paulo' })
+    if (!answer.ok) throw new Error(`REPLY ilegível: ${answer.error}`)
+    expect(answer.invite.method).toBe('REPLY')
+    expect(answer.invite.uid).toBe('7kq2m9v0c3exampleuid@google.com')
+    expect(answer.invite.attendees).toHaveLength(1)
+    const parsed = await simpleParser(delivery.data)
+    expect(parsed.messageId).toBe(result.messageId)
+    expect(parsed.inReplyTo).toBe(INVITE.messageId)
+    // CA7: o REPLY não foi ao APPEND nem aos enviados.
+    expect(appended).toEqual([])
+    expect(await service.messages({ accountId, folder: 'sent' })).toEqual([])
+
+    // Regressão: o "Enviar" comum sai sem nenhuma parte de calendário e vai ao APPEND.
+    service.registerClick(SENDER, CLICK[1])
+    expect((await service.send(SENDER, { accountId, to: ['bruno@cliente.com'], subject: 'Oi', text: 'Tudo bem?', clickToken: CLICK[1] })).ok).toBe(true)
+    const plain = smtp.deliveries[1] as Delivery
+    expect(plain.data).not.toMatch(/text\/calendar/i)
+    expect((await simpleParser(plain.data)).attachments).toEqual([])
+    expect(appended).toHaveLength(1)
+  })
+
+  it('POP3: o REPLY sai pelo SMTP da conta; com a porta do SMTP já fechada, connection e nada gravado', async () => {
+    const smtp = await startFakeSmtp()
+    cleanups.push(() => smtp.close())
+    const ok = await inviteSetup(smtp.port, 'pop3')
+    ok.service.registerClick(SENDER, CLICK[2])
+    expect((await ok.service.sendInviteReply(SENDER, { accountId: ok.accountId, id: ok.id, partstat: 'DECLINED', clickToken: CLICK[2] })).ok).toBe(true)
+    expect(smtp.deliveries).toHaveLength(1)
+    expect(smtp.deliveries[0]?.to).toEqual(['ana@example.com'])
+    expect(await ok.service.messages({ accountId: ok.accountId, folder: 'sent' })).toEqual([])
+
+    const off = await startFakeSmtp()
+    const offPort = off.port
+    await off.close()
+    const down = await inviteSetup(offPort, 'pop3')
+    down.service.registerClick(SENDER, CLICK[3])
+    expect(await down.service.sendInviteReply(SENDER, { accountId: down.accountId, id: down.id, partstat: 'ACCEPTED', clickToken: CLICK[3] })).toEqual({ ok: false, error: 'connection' })
+    expect(await down.service.messages({ accountId: down.accountId, folder: 'sent' })).toEqual([])
   })
 })

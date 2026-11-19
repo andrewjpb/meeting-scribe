@@ -2065,6 +2065,7 @@ function registerIpc(services: AppServices): void {
   handle('scribe:email-mark-read', appOrigin, (_event, request) => email.markRead(request).catch(() => false))
   handle('scribe:email-delete', appOrigin, (_event, request) => email.remove(request).catch(() => false))
   handle('scribe:email-send', appOrigin, (event, request) => email.send(event.sender.id, request).catch(() => ({ ok: false, error: 'failed' }) as const))
+  handle('scribe:invite-reply', appOrigin, (event, request) => email.sendInviteReply(event.sender.id, request).catch(() => ({ ok: false, error: 'failed' }) as const))
   onEvent('scribe:email-click', appOrigin, (event, token) => email.registerClick(event.sender.id, token))
   // Contrato 43: o teste da conta, o clipe do composer, as imagens remotas e a pasta aberta na tela.
   handle('scribe:email-test', appOrigin, (_event, request) => email.test(request).catch(() => ({ ok: false, stage: 'incoming', error: 'Erro ao falar com o servidor.' }) as const))

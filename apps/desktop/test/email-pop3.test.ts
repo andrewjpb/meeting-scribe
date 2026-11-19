@@ -225,7 +225,7 @@ describe('cliente POP3 próprio (contrato 42, CA4)', () => {
     server.messages.push({ uidl: 'boa-1', raw: rawMessage(1) })
     const { userData, service, received, logs } = setup({
       // O `mailparser` de verdade, mas a mensagem marcada como quebrada falha (MIME que não se lê).
-      parse: (raw) => (raw.toString('latin1').includes('QUEBRADA') ? Promise.reject(new Error('MIME inválido')) : parseEmail(raw)),
+      parse: (raw, context) => (raw.toString('latin1').includes('QUEBRADA') ? Promise.reject(new Error('MIME inválido')) : parseEmail(raw, context)),
     })
     const added = await service.addAccount(pop3Account(server.port, 'starttls'))
     if (!added.ok) throw new Error('conta não entrou')

@@ -179,12 +179,14 @@ export interface FakeEmail {
   pop3: Pop3Connect
   smtp: SmtpSend
   smtpVerify: SmtpVerify
-  /** O que o SMTP falso recebeu (sem anexo em bytes: só nome e tamanho). */
-  sent: { to: string[]; cc: string[]; subject: string; text: string; inReplyTo: string | null; attachments: { name: string; size: number }[] }[]
+  /** O que o SMTP falso recebeu (sem anexo em bytes: só nome e tamanho). Contrato 61: o REPLY de convite (`null` nos outros). */
+  sent: { to: string[]; cc: string[]; subject: string; text: string; inReplyTo: string | null; attachments: { name: string; size: number }[]; icalEvent: { method: 'REPLY'; filename: string; content: string } | null }[]
   /** `APPEND` na pasta de enviados. */
   appended: number
   /** O SMTP recusa o próximo envio (o composer mantém o rascunho com o aviso). */
   failNextSend: boolean
+  /** Contrato 61: posto, o SMTP espera essa promessa antes de registrar em `sent` e de responder (o "Enviando"). */
+  smtpHold: (() => Promise<void>) | null
   /** Um email novo na INBOX, avisado pelo "IDLE". */
   deliver(input: { from: EmailAddress; subject: string; text: string; cc?: EmailAddress[]; attachments?: Seed['attachments'] }): Promise<void>
   /** Imagens remotas pedidas pelo "Carregar imagens". */
@@ -412,6 +414,7 @@ export function createFakeEmail(now: () => number = Date.now, options: FakeEmail
     sent: [],
     appended: 0,
     failNextSend: false,
+    smtpHold: null,
     imageRequests: [],
     async imap(config) {
       login(config.pass)
@@ -463,7 +466,16 @@ export function createFakeEmail(now: () => number = Date.now, options: FakeEmail
         fake.failNextSend = false
         throw new SmtpError('rejected')
       }
-      fake.sent.push({ to: mail.to, cc: mail.cc ?? [], subject: mail.subject, text: mail.text, inReplyTo: mail.inReplyTo, attachments: (mail.attachments ?? []).map((item) => ({ name: item.name, size: item.bytes.byteLength })) })
+      if (fake.smtpHold) await fake.smtpHold()
+      fake.sent.push({
+        to: mail.to,
+        cc: mail.cc ?? [],
+        subject: mail.subject,
+        text: mail.text,
+        inReplyTo: mail.inReplyTo,
+        attachments: (mail.attachments ?? []).map((item) => ({ name: item.name, size: item.bytes.byteLength })),
+        icalEvent: mail.icalEvent ? { method: mail.icalEvent.method, filename: mail.icalEvent.filename, content: mail.icalEvent.content } : null,
+      })
       return Buffer.from(`Subject: ${mail.subject}\r\n\r\n${mail.text}`)
     },
     async smtpVerify(config) {

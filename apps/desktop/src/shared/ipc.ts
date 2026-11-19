@@ -7,7 +7,7 @@ import type { DriveMeetingStatus, GoogleAccountStatus, GoogleClientSaveResult, M
 import type { CalendarListResult, CalendarView } from './calendar'
 import type { BrandingInfo, BrandLogoChoice } from './branding'
 import type { LockResponse, LockStatus } from './lock'
-import type { EmailAccountInput, EmailAccountStatus, EmailAddResult, EmailAttachmentRequest, EmailAttachmentSaveResult, EmailAttachmentsResult, EmailAttachPickResult, EmailAutoconfig, EmailBodyResult, EmailFolder, EmailFolderDeleteResult, EmailFolderPathResult, EmailFoldersResult, EmailMessage, EmailMoveResult, EmailOpenFolderResult, EmailSendRequest, EmailSendResult, EmailTestResult } from './email'
+import type { EmailAccountInput, EmailAccountStatus, EmailAddResult, EmailAttachmentRequest, EmailAttachmentSaveResult, EmailAttachmentsResult, EmailAttachPickResult, EmailAutoconfig, EmailBodyResult, EmailFolder, EmailFolderDeleteResult, EmailFolderPathResult, EmailFoldersResult, EmailMessage, EmailMoveResult, EmailOpenFolderResult, EmailSendRequest, EmailSendResult, EmailTestResult, InviteReplySendRequest, InviteReplySendResult } from './email'
 import type { EmailSignature, EmailSignatureResult } from './email-signature'
 import type { EmailRule, EmailRulePreviewResult, EmailRuleRunResult, EmailRulesGetResult, EmailRulesSetResult } from './email-rules'
 import type { EmailBatchGetResult, EmailBatchUndoResult, EmailOrganizeEvent, EmailOrganizeStateResult } from './email-organize'
@@ -399,6 +399,11 @@ export interface InvokeChannels {
    * único e com validade de 10 s, como no WhatsApp; sem diálogo de confirmação. Falha volta tipada, sem exceção.
    */
   'scribe:email-send': { request: EmailSendRequest; response: EmailSendResult }
+  /**
+   * "Aceitar", "Talvez" ou "Recusar" de um convite: o REPLY ao organizador, só com o token de clique do email (contrato
+   * 61); nunca regra, tarefa ou Assistente. Não fica em Enviados. Falha volta tipada, sem exceção.
+   */
+  'scribe:invite-reply': { request: InviteReplySendRequest; response: InviteReplySendResult }
   /** Contrato 43: "Testar conexão" com os dados do formulário (recebimento e envio); nada é gravado. */
   'scribe:email-test': { request: EmailAccountInput; response: EmailTestResult }
   /** Contrato 43: o clipe do composer abre o seletor do macOS; os arquivos voltam para a lista de anexos (nada é enviado). */
@@ -753,6 +758,7 @@ const INVOKE: Record<InvokeChannel, true> = {
   'scribe:email-mark-read': true,
   'scribe:email-delete': true,
   'scribe:email-send': true,
+  'scribe:invite-reply': true,
   'scribe:email-test': true,
   'scribe:email-attach-pick': true,
   'scribe:email-remote-images': true,
@@ -1052,6 +1058,8 @@ export const WHEN_LOCKED: Readonly<Record<InvokeChannel, LockedPolicy>> = Object
   'scribe:email-mark-read': 'refused',
   'scribe:email-delete': 'refused',
   'scribe:email-send': 'refused',
+  // Contrato 61: a resposta de convite é envio, como o "Enviar".
+  'scribe:invite-reply': 'refused',
   // Contrato 43: o teste da conta, o clipe do composer e as imagens remotas, como o resto do email.
   'scribe:email-test': 'refused',
   'scribe:email-attach-pick': 'refused',
@@ -1143,4 +1151,6 @@ export interface ScribeApi {
   whatsappReact(request: Omit<WhatsAppReactRequest, 'clickToken'>): Promise<WhatsAppReactResult>
   /** Contrato 42: o "Enviar" do email, com o mesmo desenho do `whatsappSend` (ativação viva, token de clique). */
   emailSend(request: Omit<EmailSendRequest, 'clickToken'>): Promise<EmailSendResult>
+  /** Contrato 61: "Aceitar", "Talvez" ou "Recusar" de um convite, pelo mesmo token de clique do `emailSend`. */
+  inviteReply(request: Omit<InviteReplySendRequest, 'clickToken'>): Promise<InviteReplySendResult>
 }

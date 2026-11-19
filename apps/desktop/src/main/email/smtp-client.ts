@@ -25,6 +25,11 @@ export interface OutgoingMail {
   text: string
   /** Contrato 43: anexos locais (o tipo sai da extensão do nome). */
   attachments?: { name: string; bytes: Uint8Array }[] | undefined
+  /**
+   * Contrato 61: o REPLY de um convite. Vai como a parte `text/calendar; method=REPLY` e, com o mesmo VCALENDAR, o anexo
+   * `invite.ics` (o `MailComposer` põe os dois).
+   */
+  icalEvent?: { method: 'REPLY'; filename: 'invite.ics'; content: string } | undefined
   /** Com os `<` e `>`. */
   messageId: string
   inReplyTo: string | null
@@ -58,6 +63,7 @@ export async function buildMessage(mail: OutgoingMail): Promise<Buffer> {
     ...(mail.inReplyTo ? { inReplyTo: mail.inReplyTo } : {}),
     ...(mail.references.length > 0 ? { references: mail.references } : {}),
     ...(mail.attachments && mail.attachments.length > 0 ? { attachments: mail.attachments.map((item) => ({ filename: item.name, content: Buffer.from(item.bytes) })) } : {}),
+    ...(mail.icalEvent ? { icalEvent: { method: mail.icalEvent.method, filename: mail.icalEvent.filename, content: mail.icalEvent.content } } : {}),
   })
     .compile()
     .build()
