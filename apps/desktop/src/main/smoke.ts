@@ -127,7 +127,7 @@ import { MEETING_PROMPT_SIZE } from './meeting-prompt/window'
 import { MIC_PROMPT_MIN_MS } from '../shared/meeting-prompt'
 import { MCP_CLI_ENABLED_FILE, MCP_SERVERS_FILE } from './mcp/store'
 import { MCP_FIXED_WARNING } from '../shared/mcp'
-import { NAVEGADOR_COMANDOS_PATH, NAVEGADOR_PORTS, type NavegadorServer } from './navegador/server'
+import { NAVEGADOR_COMANDOS_PATH, NAVEGADOR_HEADER, NAVEGADOR_PORTS, type NavegadorServer } from './navegador/server'
 import { MEETINGS_DIR } from './meetings/transcripts'
 import { SETTINGS_VERSION } from './settings/schema'
 import { CLAUDE_DISALLOWED_TOOLS, CLAUDE_READ_TOOLS, CLAUDE_WEB_TOOLS } from './acp/profiles/claude'
@@ -2020,10 +2020,15 @@ async function pluginsSettings(win: BrowserWindow, ctx: SmokeContext): Promise<{
  */
 export const SMOKE_NAVEGADOR_PORTS: readonly number[] = Array.from({ length: 10 }, (_, index) => 47692 + index)
 
-/** GET de um cliente falso na ponte do navegador (contrato 46), fora da sessão do Electron. */
+/**
+ * GET de um cliente falso na ponte do navegador (contrato 46), fora da sessão do Electron. Como o Chrome real, a
+ * "extensão" (`chrome-extension://…`) manda o cabeçalho da ponte e nenhum `Origin`; a página manda `Origin` e não
+ * consegue mandar o cabeçalho.
+ */
 function navegadorGet(port: number, origin: string): Promise<{ status: number; body: string }> {
+  const headers: Record<string, string> = origin.startsWith('chrome-extension://') ? { [NAVEGADOR_HEADER]: '1' } : { origin }
   return new Promise((resolve) => {
-    const req = httpRequest({ agent: false, host: '127.0.0.1', port, method: 'GET', path: NAVEGADOR_COMANDOS_PATH, headers: { origin } }, (res) => {
+    const req = httpRequest({ agent: false, host: '127.0.0.1', port, method: 'GET', path: NAVEGADOR_COMANDOS_PATH, headers }, (res) => {
       const chunks: Buffer[] = []
       res.on('data', (chunk: Buffer) => chunks.push(chunk))
       res.on('end', () => resolve({ status: res.statusCode ?? 0, body: Buffer.concat(chunks).toString('utf8') }))

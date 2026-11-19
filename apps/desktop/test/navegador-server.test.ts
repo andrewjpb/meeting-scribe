@@ -10,6 +10,7 @@ import {
   createNavegadorServer,
   NAVEGADOR_BODY_MAX_BYTES,
   NAVEGADOR_COMANDOS_PATH,
+  NAVEGADOR_HEADER,
   NAVEGADOR_PORTS,
   NAVEGADOR_RESULTADOS_PATH,
   NavegadorErro,
@@ -38,7 +39,10 @@ function send(port: number, options: { method?: string; path?: string; headers?:
   })
 }
 
-const ORIGIN = { origin: 'chrome-extension://abcdefghijklmnop' }
+// O Chrome real: o POST traz `Origin: chrome-extension://…`, o GET do service worker não traz origem nenhuma.
+// Os dois levam o cabeçalho da ponte.
+const ORIGIN = { [NAVEGADOR_HEADER]: '1', origin: 'chrome-extension://abcdefghijklmnop' }
+const CHROME_GET = { [NAVEGADOR_HEADER]: '1' }
 const JSON_POST = { ...ORIGIN, 'content-type': 'application/json' }
 const poll = (port: number, headers: Record<string, string> = ORIGIN): Promise<Reply> => send(port, { headers })
 const postResult = (port: number, value: unknown, headers: Record<string, string> = JSON_POST): Promise<Reply> =>
@@ -89,6 +93,12 @@ describe('ponte do navegador', () => {
     expect(Date.now() - started).toBeGreaterThanOrEqual(150)
     expect(server?.connected()).toBe(true)
     expect(changes).toEqual([true])
+  })
+
+  it('GET do service worker sem Origin (como o Chrome manda), só com o cabeçalho da ponte: aceito e conecta', async () => {
+    const port = await start()
+    expect(await poll(port, CHROME_GET)).toEqual({ status: 200, body: '{}' })
+    expect(server?.connected()).toBe(true)
   })
 
   it('o GET pendurado recebe o comando com id; o resultado resolve a Promise com os dados conferidos', async () => {
@@ -200,7 +210,12 @@ describe('ponte do navegador', () => {
     const changes: boolean[] = []
     const port = await start({ onChange: (conectado) => changes.push(conectado) })
     expect(refused(await poll(port, { origin: 'https://mau.example' }))).toBe(true)
+    // Página que conseguisse mandar o cabeçalho (sem preflight não consegue) ainda cai pela origem.
+    expect(refused(await poll(port, { [NAVEGADOR_HEADER]: '1', origin: 'https://mau.example' }))).toBe(true)
     expect(refused(await poll(port, {}))).toBe(true)
+    // Origem de extensão sem o cabeçalho da ponte: recusado.
+    expect(refused(await poll(port, { origin: 'chrome-extension://abcdefghijklmnop' }))).toBe(true)
+    expect(refused(await poll(port, { [NAVEGADOR_HEADER]: 'sim' }))).toBe(true)
     expect(refused(await send(port, { method: 'DELETE', headers: ORIGIN }))).toBe(true)
     expect(refused(await send(port, { path: '/v1/navegador/outro', headers: ORIGIN }))).toBe(true)
     expect(refused(await send(port, { method: 'POST', path: NAVEGADOR_COMANDOS_PATH, headers: JSON_POST, body: '{}' }))).toBe(true)
