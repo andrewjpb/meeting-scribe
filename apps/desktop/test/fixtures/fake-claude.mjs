@@ -23,8 +23,13 @@
 // Bash e recebe a negação, e fecha com o `result` com tokens, custo nominal e número de turnos. Cada passo
 // espera um pouco: dá tempo de a tela mostrar "Pensando…" e depois o passo.
 //
+// Contrato 21: `mcp list | get | add-json | remove` (escopo `user`), com os servidores guardados no arquivo que a
+// variável `FAKE_CLAUDE_MCP_FILE` aponta (no formato do `~/.claude.json`). `list` imita a saída do Claude Code 2.1.325
+// ("nome: alvo - ✔ Connected"), com um conector do claude.ai que não está no arquivo; nada é conectado de verdade.
+//
 // Uso: node fake-claude.mjs --version | node fake-claude.mjs -p --model haiku --input-format stream-json ...
-import { readdirSync, readFileSync } from 'node:fs'
+//      node fake-claude.mjs mcp list
+import { readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import process from 'node:process'
 import { createInterface } from 'node:readline'
@@ -42,10 +47,71 @@ if (args.includes('--version')) {
   process.exit(0)
 }
 
+/** Contrato 21: os subcomandos `claude mcp`, sobre o arquivo do `claude` falso. */
+function runMcp(command, rest) {
+  const file = process.env.FAKE_CLAUDE_MCP_FILE
+  const done = (text, code = 0) => (code ? process.stderr : process.stdout).write(text, () => process.exit(code))
+  if (!file) return done('sem FAKE_CLAUDE_MCP_FILE\n', 1)
+  let data = {}
+  try {
+    data = JSON.parse(readFileSync(file, 'utf8'))
+  } catch {
+    data = {}
+  }
+  let servers = data.mcpServers ?? {}
+  const save = () => writeFileSync(file, `${JSON.stringify({ ...data, mcpServers: servers }, null, 2)}\n`)
+  const target = (server) => (server.type === 'http' || server.type === 'sse' ? `${server.url} (${server.type.toUpperCase()})` : [server.command, ...(server.args ?? [])].join(' '))
+  const scope = rest.includes('-s') ? rest[rest.indexOf('-s') + 1] : 'local'
+  const positional = rest.filter((arg, index) => arg !== '-s' && rest[index - 1] !== '-s')
+  if (command === 'list') {
+    const lines = Object.entries(servers).map(([name, server]) => `${name}: ${target(server)} - ${server.type === 'http' || server.type === 'sse' ? '✘ Failed to connect' : '✔ Connected'}`)
+    lines.push('claude.ai Notion: https://mcp.notion.com/mcp - ✔ Connected')
+    return done(`Checking MCP server health…\n\n${lines.join('\n')}\n`)
+  }
+  if (command === 'get') {
+    const name = positional[0]
+    const server = servers[name]
+    if (!server) return done(`No MCP server found with name: ${name}\n`, 1)
+    const http = server.type === 'http' || server.type === 'sse'
+    const lines = [`${name}:`, '  Scope: User config (available in all your projects)', `  Status: ${http ? '✘ Failed to connect' : '✔ Connected'}`, `  Type: ${server.type ?? 'stdio'}`]
+    if (http) {
+      lines.push(`  URL: ${server.url}`, '  Headers:', ...Object.entries(server.headers ?? {}).map(([key, value]) => `    ${key}: ${value}`))
+    } else {
+      lines.push(`  Command: ${server.command}`, `  Args: ${(server.args ?? []).join(' ')}`, '  Environment:', ...Object.entries(server.env ?? {}).map(([key, value]) => `    ${key}=${value}`))
+    }
+    lines.push('', `To remove this server, run: claude mcp remove "${name}" -s user`)
+    return done(`${lines.join('\n')}\n`)
+  }
+  if (command === 'add-json') {
+    const [name, json] = positional
+    if (scope !== 'user') return done('o falso só guarda o escopo user\n', 1)
+    if (servers[name]) return done(`MCP server ${name} already exists in user config\n`, 1)
+    let server
+    try {
+      server = JSON.parse(json)
+    } catch {
+      return done('Invalid JSON\n', 1)
+    }
+    servers[name] = server
+    save()
+    return done(`Added ${server.type ?? 'stdio'} MCP server ${name} to user config\n`)
+  }
+  if (command === 'remove') {
+    const name = positional[0]
+    if (!servers[name]) return done(`No MCP server found with name: "${name}"\n`, 1)
+    servers = Object.fromEntries(Object.entries(servers).filter(([known]) => known !== name))
+    save()
+    return done(`Removed MCP server "${name}" from user config\n`)
+  }
+  return done(`comando desconhecido: mcp ${command}\n`, 1)
+}
+
 const MODEL_IDS = { haiku: 'claude-haiku-5-5', sonnet: 'claude-sonnet-5-5', opus: 'claude-opus-5-5' }
 const model = MODEL_IDS[args[args.indexOf('--model') + 1]] ?? MODEL_IDS.haiku
 
-if (args.includes('--include-partial-messages')) {
+if (args[0] === 'mcp') {
+  runMcp(args[1], args.slice(2))
+} else if (args.includes('--include-partial-messages')) {
   const emit = (message) => process.stdout.write(`${JSON.stringify(message)}\n`)
 
   /** A reunião mais recente que a pasta mostra: do índice ou do único `.md`. */

@@ -141,7 +141,7 @@ function RunDetail({ runId, meetings }: { runId: string; meetings: ChatMeetings 
     const result = await window.__scribeApi.invoke('scribe:runs-rerun', { id: shown.id })
     if (result.ok) {
       setRerun(result.runId)
-      useAutomations.setState((state) => (state.finished[result.runId] || state.live[result.runId] ? {} : { live: { ...state.live, [result.runId]: { text: '', reading: false, thinking: '', steps: [], denied: 0, plan: [], meta: null } } }))
+      useAutomations.setState((state) => (state.finished[result.runId] || state.live[result.runId] ? {} : { live: { ...state.live, [result.runId]: { text: '', reading: false, thinking: '', steps: [], denied: 0, plan: [], meta: null, approvals: [] } } }))
     }
   }
   return (

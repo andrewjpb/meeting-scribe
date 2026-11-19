@@ -20,6 +20,15 @@
 // dois passam pelo `session/request_permission`, a não ser o `WebFetch` de uns sites de documentação que o `claude`
 // abre sem perguntar ("preapproved hosts"); uma regra `ask` em `settings.permissions` é conferida antes dessa lista e
 // faz ele perguntar sempre.
+//
+// Contrato 21 (MCP), conferido no adaptador 0.107.0: os `mcpServers` do `session/new` viram o `mcpServers` do Agent SDK
+// (stdio `{ command, args, env }`; HTTP e SSE `{ type, url, headers }`; outro transporte fica de fora) e vão ao `claude`
+// por `--mcp-config`; com `strictMcpConfig: true`, só esses valem (nem os do `~/.claude.json` nem os de `.mcp.json`), e
+// `settingSources: []` continua deixando as configurações pessoais de fora. O `initialize` anuncia
+// `mcpCapabilities: { http: true, sse: true }`. `tools` só escolhe as ferramentas embutidas: as do MCP chegam pelos
+// servidores, com o nome `mcp__<servidor>__<ferramenta>`, e passam pelo `session/request_permission` (regra `ask` por
+// servidor); as de política "Negar" vão também em `disallowedTools`.
+import { mcpToolKey, mcpToolOf } from '../../../shared/mcp'
 import { AGENT_PROFILE_LABELS } from '../../../shared/settings-defaults'
 import { claudeEnv } from '../../claude-cli/locate'
 import type { AcpPackage } from '../install'
@@ -101,9 +110,14 @@ export const claudeProfile: AgentProfile = {
   newSession: (request) => {
     // Contrato 26: só o chat com as ferramentas de leitura recebe a internet.
     const web = request.web === true && request.purpose === 'chat' && request.tools === 'read'
+    // Contrato 21: os servidores MCP só no chat e na análise; sem nenhum, a sessão é a mesma do contrato 17.
+    const mcp = request.purpose === 'chat' || request.purpose === 'analysis' ? (request.mcpServers ?? []) : []
+    const mcpDenied = mcp.flatMap((server) => Object.entries(server.toolPolicy).flatMap(([tool, policy]) => (policy === 'deny' ? [`mcp__${server.name}__${mcpToolKey(tool)}`] : [])))
+    const ask = [...(web ? CLAUDE_WEB_TOOLS : []), ...mcp.map((server) => `mcp__${server.name}`)]
+    const disallowed = web ? CLAUDE_DISALLOWED_TOOLS.filter((tool) => !(CLAUDE_WEB_TOOLS as readonly string[]).includes(tool)) : [...CLAUDE_DISALLOWED_TOOLS]
     return {
       cwd: request.cwd,
-      mcpServers: [],
+      mcpServers: mcp.map((server) => server.definition),
       // Aplicadas na criação, em ordem; valor que o adaptador não oferece é ignorado por ele.
       configOptions: [
         { configId: 'mode', value: 'default' },
@@ -115,9 +129,9 @@ export const claudeProfile: AgentProfile = {
           options: {
             settingSources: [],
             tools: request.tools === 'read' ? [...CLAUDE_READ_TOOLS, ...(web ? CLAUDE_WEB_TOOLS : [])] : [],
-            disallowedTools: web ? CLAUDE_DISALLOWED_TOOLS.filter((tool) => !(CLAUDE_WEB_TOOLS as readonly string[]).includes(tool)) : [...CLAUDE_DISALLOWED_TOOLS],
-            // Toda busca e toda página pedem permissão ao app, inclusive as que o `claude` abriria sozinho.
-            ...(web ? { settings: { permissions: { ask: [...CLAUDE_WEB_TOOLS] } } } : {}),
+            disallowedTools: [...disallowed, ...mcpDenied],
+            // Toda busca, toda página e toda ferramenta MCP pedem permissão ao app, inclusive as que o `claude` liberaria sozinho.
+            ...(ask.length ? { settings: { permissions: { ask } } } : {}),
             model: request.model,
             systemPrompt: request.systemPrompt,
             strictMcpConfig: true,
@@ -135,6 +149,9 @@ export const claudeProfile: AgentProfile = {
   unsafeMode: (session) => (session.option('mode') === 'default' ? null : `o agente não confirmou o modo de permissão "default" (${String(session.option('mode'))})`),
   readTools: { Read: 'read', Grep: 'search', Glob: 'search' },
   stepOf: (call) => {
+    // Contrato 21: ferramenta de um servidor MCP ("Usando <ferramenta> (<servidor>)").
+    const mcp = mcpToolOf(call.name)
+    if (mcp) return { tool: 'Mcp', input: { server: mcp.server, tool: mcp.tool } }
     const tool = toolName(call)
     if (!tool) return null
     const input: Record<string, unknown> = isRecord(call.rawInput) ? { ...call.rawInput } : {}

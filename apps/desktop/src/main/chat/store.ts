@@ -9,6 +9,7 @@
 // "Plano" do agente; a conversa guarda "Pensar mais" (padrão desligado).
 // Contrato 25: o escopo guarda as fontes desligadas e o modo do WhatsApp; a resposta guarda as ações propostas
 // com o estado de cada cartão. Arquivo sem esses campos carrega com tudo ligado e sem cartões.
+// Contrato 21: o escopo guarda os servidores MCP desligados na conversa; cada passo pode ser de uma ferramenta MCP.
 import { randomUUID } from 'node:crypto'
 import { chmod, mkdir, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -37,6 +38,7 @@ import {
 } from '../../shared/chat'
 import { ACTIONS_PER_MESSAGE_MAX, CHAT_ACTION_STATUSES, OPEN_SCREENS, REMINDER_TEXT_MAX } from '../../shared/assistant'
 import { scheduleSchema } from '../../shared/automations-schema'
+import { MCP_SERVERS_MAX } from '../../shared/mcp'
 import { CHAT_MODELS } from '../../shared/settings-defaults'
 import { WHATSAPP_CHAT_ID_PATTERN, WHATSAPP_DEFAULT_SCOPE_DAYS, WHATSAPP_SCOPE_CHATS_MAX, WHATSAPP_SCOPE_DAYS, WHATSAPP_SEND_TEXT_MAX } from '../../shared/whatsapp'
 
@@ -86,6 +88,11 @@ export const chatScopeSchema = z
     // Contrato 25: o modo do WhatsApp e as fontes desligadas.
     whatsappMode: z.enum(CHAT_WHATSAPP_MODES).optional(),
     sources: z.partialRecord(z.enum(CHAT_SOURCE_KINDS), z.boolean()).optional(),
+    // Contrato 21: os servidores MCP desligados nesta conversa.
+    mcpOff: z
+      .array(z.string().regex(/^(app:[\w-]{1,64}|cli:[^\n]{1,200})$/))
+      .max(MCP_SERVERS_MAX * 2)
+      .optional(),
   })
   .strict()
   // Só "Reuniões escolhidas" leva a lista; as conversas do WhatsApp vão em qualquer escopo. "Só estas conversas"
@@ -98,7 +105,8 @@ export const chatScopeSchema = z
     const days = scope.whatsappDays ?? WHATSAPP_DEFAULT_SCOPE_DAYS
     const whatsapp: Partial<ChatScope> = mode === 'recent' ? {} : chats.length ? { whatsappChats: chats, whatsappDays: days } : { whatsappMode: 'chosen', whatsappDays: days }
     const off = CHAT_SOURCE_KINDS.filter((kind) => scope.sources?.[kind] === false)
-    return { ...base, ...whatsapp, ...(off.length ? { sources: Object.fromEntries(off.map((kind) => [kind, false])) } : {}) }
+    const mcpOff = [...new Set(scope.mcpOff ?? [])]
+    return { ...base, ...whatsapp, ...(off.length ? { sources: Object.fromEntries(off.map((kind) => [kind, false])) } : {}), ...(mcpOff.length ? { mcpOff } : {}) }
   })
 
 const actionBase = {

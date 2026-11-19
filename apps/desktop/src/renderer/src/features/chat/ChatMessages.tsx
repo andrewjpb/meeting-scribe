@@ -1,4 +1,4 @@
-import { Check, ChevronDown, ChevronRight, Copy, Download, FileText, FolderSearch, Globe, ListTree, RotateCcw, Search, ShieldOff, Square, SquareCheck, SquareDot, Terminal, type LucideIcon } from 'lucide-react'
+import { Check, ChevronDown, ChevronRight, Copy, Download, FileText, FolderSearch, Globe, ListTree, Plug, RotateCcw, Search, ShieldOff, Square, SquareCheck, SquareDot, Terminal, type LucideIcon } from 'lucide-react'
 import { useState } from 'react'
 import { useNavigate } from 'react-router'
 import { withoutPendingActions } from '@shared/assistant'
@@ -13,6 +13,7 @@ import { dayLabel, timeLabel } from '../meetings/format'
 import { ActionCards } from './ActionCards'
 import type { LiveAnswer } from './chatStore'
 import { ChatMarkdown } from './ChatMarkdown'
+import { McpApprovalCard } from './McpApprovalCard'
 import { answerTimeLabel, answerTokens, consultedLabel, COST_HINT, costLabel, modelLabel, tokensLabel } from './format'
 import type { ChatMeetings } from './useChatMeetings'
 
@@ -20,8 +21,9 @@ import type { ChatMeetings } from './useChatMeetings'
 export const QUIET_BUTTON =
   'no-drag inline-flex h-7 items-center gap-1.5 rounded-[var(--radius-control)] px-2 text-12 text-text-muted transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-bg-sunken hover:text-title disabled:pointer-events-none disabled:opacity-50'
 
-/** Ícone de cada passo: o índice, uma reunião, uma busca, a lista de arquivos, a internet (contrato 26). */
+/** Ícone de cada passo: o índice, uma reunião, uma busca, a lista de arquivos, a internet (contrato 26), o MCP (contrato 21). */
 function stepIcon(step: ChatStep): LucideIcon {
+  if (step.tool === 'Mcp') return step.status === 'failed' ? ShieldOff : Plug
   if (step.tool === 'WebFetch' && step.status === 'failed') return ShieldOff
   if (step.tool === 'WebSearch' || step.tool === 'WebFetch') return Globe
   if (step.tool === 'Grep') return Search
@@ -309,9 +311,10 @@ export function AssistantMessage({ message, meetings, onCopy, onRedo, chatId = n
 
 /**
  * Resposta em curso (contrato 16, CA2): enquanto o texto não começa, uma linha com o estado ("Pensando…",
- * depois o último passo); o bloco "Raciocínio e passos" aberto; o texto aparecendo enquanto é escrito.
+ * depois o último passo); o bloco "Raciocínio e passos" aberto; o texto aparecendo enquanto é escrito. Contrato 21: os
+ * cartões de aprovação das ferramentas MCP, logo abaixo dos passos.
  */
-export function LiveAssistantMessage({ answer, card = false }: { answer: LiveAnswer; card?: boolean }) {
+export function LiveAssistantMessage({ answer, card = false, chatId = null }: { answer: LiveAnswer; card?: boolean; chatId?: string | null }) {
   const status = answer.steps.at(-1)?.label ?? 'Pensando…'
   // Contrato 25: o bloco de ação ainda sendo escrito não aparece; vira cartão quando a resposta termina.
   const text = withoutPendingActions(answer.text)
@@ -319,6 +322,7 @@ export function LiveAssistantMessage({ answer, card = false }: { answer: LiveAns
     <li data-chat-message="assistant" data-chat-streaming="" className={`flex flex-col gap-2 ${card ? `${CARD} chat-card-enter` : ''}`}>
       <AssistantHeader at="" pulse={card} />
       <Reasoning steps={answer.steps} thinking={answer.thinking} denied={answer.denied} plan={answer.plan} live />
+      {chatId && answer.approvals.map((approval) => <McpApprovalCard key={approval.id} chatId={chatId} approval={approval} />)}
       {text ? (
         <div className="max-w-[72ch] text-15 text-text">
           <ChatMarkdown text={text} />

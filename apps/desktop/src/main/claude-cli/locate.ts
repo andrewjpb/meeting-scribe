@@ -14,15 +14,17 @@ export const LOGIN_SHELL = '/bin/zsh'
 export interface ExecOptions {
   timeoutMs: number
   env: NodeJS.ProcessEnv
+  /** Pasta do processo (contrato 21: o `claude mcp` roda numa pasta vazia do app). */
+  cwd?: string | undefined
 }
 
 /** Executa sem shell e devolve a saída; rejeita em erro, código diferente de 0 ou tempo esgotado. */
 export type ExecFile = (file: string, args: readonly string[], options: ExecOptions) => Promise<{ stdout: string }>
 
 /** Implementação real: `execFile` com tempo limite, saída pequena e `SIGKILL` ao estourar. */
-export const nodeExecFile: ExecFile = (file, args, { timeoutMs, env }) =>
+export const nodeExecFile: ExecFile = (file, args, { timeoutMs, env, cwd }) =>
   new Promise((resolve, reject) => {
-    execFile(file, [...args], { timeout: timeoutMs, killSignal: 'SIGKILL', env, maxBuffer: 64 * 1024, encoding: 'utf8' }, (error, stdout) => {
+    execFile(file, [...args], { timeout: timeoutMs, killSignal: 'SIGKILL', env, ...(cwd ? { cwd } : {}), maxBuffer: 256 * 1024, encoding: 'utf8' }, (error, stdout) => {
       if (error) reject(error)
       else resolve({ stdout })
     })

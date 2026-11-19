@@ -22,9 +22,9 @@ const key = (key: string, mods: Partial<Record<'metaKey' | 'ctrlKey' | 'altKey' 
 })
 
 describe('abas de Configurações (contrato 18)', () => {
-  it('sete abas, nesta ordem, com os rótulos da tela', () => {
-    expect(SETTINGS_TABS).toEqual(['geral', 'gravacao', 'claude', 'arquivos', 'contas', 'plugins', 'sobre'])
-    expect(SETTINGS_TABS.map((tab) => SETTINGS_TAB_LABELS[tab])).toEqual(['Geral', 'Gravação', 'Claude', 'Arquivos', 'Contas', 'Plugins', 'Sobre'])
+  it('oito abas, nesta ordem, com os rótulos da tela', () => {
+    expect(SETTINGS_TABS).toEqual(['geral', 'gravacao', 'claude', 'arquivos', 'contas', 'plugins', 'conexoes', 'sobre'])
+    expect(SETTINGS_TABS.map((tab) => SETTINGS_TAB_LABELS[tab])).toEqual(['Geral', 'Gravação', 'Claude', 'Arquivos', 'Contas', 'Plugins', 'Conexões', 'Sobre'])
   })
 
   it('aba na URL, com a âncora do bloco', () => {
@@ -43,12 +43,13 @@ describe('abas de Configurações (contrato 18)', () => {
     rememberSettingsTab('geral')
   })
 
-  it('⌘1…⌘7 abrem a aba N; outras teclas e modificadores não', () => {
+  it('⌘1…⌘8 abrem a aba N; outras teclas e modificadores não', () => {
     expect(tabForShortcut(key('1'))).toBe('geral')
     expect(tabForShortcut(key('3'))).toBe('claude')
     expect(tabForShortcut(key('6'))).toBe('plugins')
-    expect(tabForShortcut(key('7'))).toBe('sobre')
-    expect(tabForShortcut(key('8'))).toBeNull()
+    expect(tabForShortcut(key('7'))).toBe('conexoes')
+    expect(tabForShortcut(key('8'))).toBe('sobre')
+    expect(tabForShortcut(key('9'))).toBeNull()
     expect(tabForShortcut(key('1', {}))).toBeNull()
     expect(tabForShortcut(key('1', { metaKey: true, shiftKey: true }))).toBeNull()
     expect(tabForShortcut(key('1', { ctrlKey: true }))).toBeNull()

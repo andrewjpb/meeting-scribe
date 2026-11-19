@@ -94,7 +94,8 @@ function listen(): void {
       else if (event.type === 'step') next = { ...current, steps: upsertStep(current.steps, event.step) }
       else if (event.type === 'plan') next = { ...current, plan: event.entries }
       else if (event.type === 'denied') next = { ...current, denied: event.count }
-      else next = { ...current, meta: event.meta }
+      else if (event.type === 'meta') next = { ...current, meta: event.meta }
+      else return state
       return { live: { ...state.live, [event.runId]: next } }
     })
   })

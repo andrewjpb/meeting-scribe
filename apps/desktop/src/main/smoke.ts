@@ -52,7 +52,7 @@
 // uma "depois de cada reunião" (saídas `chat`, `file` e a notificação substituta), `skipped` com a anterior rodando,
 // `autoPaused` depois de 3 falhas, um horário perdido rodando uma vez só, "Pedir agora", o histórico com o detalhe, o
 // menu do ícone da barra de menus (substituto que registra os itens) e fechar a janela mantendo o app (Dock escondido,
-// substituto) e reabrir pelo ícone. Não há ferramenta MCP para negar: o contrato 21 ainda não existe.
+// substituto) e reabrir pelo ícone. Não há ferramenta MCP para negar: o contrato 21 não dá MCP às automações.
 //
 // Contrato 12: depois do Google e antes do WhatsApp, as agendas (`calendarChecks`) com o Google e a Microsoft falsos em
 // memória: o cadastro e o login da Microsoft, o Google com a agenda, o bloco "Agenda", as notificações substitutas
@@ -63,7 +63,14 @@
 // devolve resultados de busca inventados (domínios `.example`, sem rede): o agente com "Pode pesquisar na internet",
 // "Pedir agora" com a busca, a página aberta e a página montada negada, o agente sem internet e o Assistente com a
 // fonte "Internet".
+//
+// Contrato 21: depois da internet e antes do Meet, os servidores MCP (`mcpChecks`) com o `claude` falso (`mcp list | get |
+// add-json | remove` sobre um arquivo do userData), o servidor MCP falso (stdio e HTTP em 127.0.0.1) e o agente ACP falso:
+// a aba "Conexões", ligar um do CLI para o chat, importar do Claude Desktop falso sem o segredo, adicionar pelo
+// formulário (no CLI) e por JSON colado (só no app), "Testar conexão", o cartão de aprovação com "Permitir uma vez" e a
+// ferramenta negada pela política. Termina com tudo desligado. Nenhum segredo vai para a tela, o log ou o relatório.
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { spawn as spawnChild } from 'node:child_process'
 import { request as httpRequest } from 'node:http'
 import { tmpdir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
@@ -116,6 +123,8 @@ import type { CalendarService } from './calendar/service'
 import { MEET_DISCONNECTED_LABEL } from '../shared/meet'
 import { APP_PLUGINS, pluginFolderName } from '../shared/plugins'
 import { MEET_PATH, MEET_PORTS, type MeetServer } from './meet/server'
+import { MCP_CLI_ENABLED_FILE, MCP_SERVERS_FILE } from './mcp/store'
+import { MCP_FIXED_WARNING } from '../shared/mcp'
 import { MEETINGS_DIR } from './meetings/transcripts'
 import { SETTINGS_VERSION } from './settings/schema'
 import { CLAUDE_DISALLOWED_TOOLS, CLAUDE_READ_TOOLS, CLAUDE_WEB_TOOLS } from './acp/profiles/claude'
@@ -125,6 +134,7 @@ import {
   SMOKE_FAKE_KEY,
   SMOKE_GOOGLE_CLIENT_ID,
   SMOKE_GOOGLE_CLIENT_SECRET,
+  SMOKE_MCP_SECRETS,
   SMOKE_MICROSOFT_CLIENT_ID,
   SMOKE_NOT_ALLOWED_MODEL,
   SMOKE_OFFLINE_KEY,
@@ -288,8 +298,12 @@ const anchoredAt = (label: string): string =>
 
 /** Contrato 18: Configurações pela barra lateral e a aba pelo clique. */
 async function openSettingsTab(contents: WebContents, tab: SettingsTab): Promise<boolean> {
+  // O clique às vezes se perde numa corrida com o que acabou de rodar na tela; clicar de novo é inofensivo.
   await clickSelector(contents, '[data-nav="configuracoes"]')
-  await waitFor(contents, routeIs('configuracoes'), 15_000)
+  if (!(await waitFor(contents, routeIs('configuracoes'), 5000))) {
+    await clickSelector(contents, '[data-nav="configuracoes"]')
+    await waitFor(contents, routeIs('configuracoes'), 15_000)
+  }
   return selectSettingsTab(contents, tab)
 }
 const probeJs = (expression: string): string => `window.__smokeProbe?.${expression}`
@@ -3802,7 +3816,7 @@ async function settingsLayoutMetrics(contents: WebContents): Promise<Record<stri
 
 /**
  * Contrato 18, no claro: "Contas" vazia e sem botões; "Sobre" com versão, Electron e Chrome, o repositório
- * aberto no navegador e o atalho para "Atualizações"; a aba lembrada ao voltar; ⌘2/⌘7 e as setas; ⌘F e a
+ * aberto no navegador e o atalho para "Atualizações"; a aba lembrada ao voltar; ⌘2/⌘8 e as setas; ⌘F e a
  * busca sem acento nem maiúscula, agrupada por aba, com o clique que leva à linha e a destaca por 2 s; Esc limpa.
  */
 async function settingsTabsChecks(contents: WebContents, ctx: SmokeContext, shot: (name: string) => Promise<void>): Promise<Check> {
@@ -3842,15 +3856,16 @@ async function settingsTabsChecks(contents: WebContents, ctx: SmokeContext, shot
   await clickSelector(contents, '[data-nav="configuracoes"]')
   const remembered = await waitFor(contents, `${routeIs('configuracoes')} && ${settingsTabIs('claude')}`)
 
-  // Teclado: ⌘2, ⌘7 ("Sobre", desde que "Plugins" entrou antes dela no contrato 31) e a seta para a direita na lista de abas (da última, volta à primeira).
+  // Teclado: ⌘2, ⌘8 ("Sobre", desde que "Plugins" (contrato 31) e "Conexões" (contrato 21) entraram antes dela) e a seta
+  // para a direita na lista de abas (da última, volta à primeira).
   const press = (key: string, meta: boolean): Promise<unknown> =>
     evaluate(contents, `window.dispatchEvent(new KeyboardEvent('keydown', { key: ${JSON.stringify(key)}, metaKey: ${meta}, bubbles: true, cancelable: true })), true`)
   await press('2', true)
   const cmd2 = await waitFor(contents, settingsTabIs('gravacao'))
   const activeTab = `document.activeElement?.getAttribute('role') === 'tab' ? document.activeElement.dataset.tab : ''`
   const cmd2Focus = await evaluate<string>(contents, activeTab)
-  await press('7', true)
-  const cmd7 = await waitFor(contents, settingsTabIs('sobre'))
+  await press('8', true)
+  const cmd8 = await waitFor(contents, settingsTabIs('sobre'))
   await evaluate(contents, `document.querySelector('[role="tab"][data-tab="geral"]').dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true })), true`)
   const arrow = await waitFor(contents, settingsTabIs('geral'))
 
@@ -3930,7 +3945,7 @@ async function settingsTabsChecks(contents: WebContents, ctx: SmokeContext, shot
     remembered &&
     cmd2 &&
     cmd2Focus === 'gravacao' &&
-    cmd7 &&
+    cmd8 &&
     arrow &&
     focused &&
     JSON.stringify(groups) === JSON.stringify(['Gravação', 'Claude']) &&
@@ -3952,7 +3967,7 @@ async function settingsTabsChecks(contents: WebContents, ctx: SmokeContext, shot
     missing.length === 0
   return {
     ok,
-    detail: `Contas "${contas.replace(/\s+/g, ' ').trim()}" (botões ${JSON.stringify(contasButtons)}, ${ctx.fixtures.google.calls.length} pedidos ao Google); Sobre "${sobre.replace(/\s+/g, ' ').slice(0, 160)}", repositório -> ${opened || 'nada'}, "Procurar atualização" -> Geral=${toUpdates}, bloco visível=${updatesVisible}; aba lembrada=${remembered}; ⌘2=${cmd2}, ⌘7=${cmd7}, seta=${arrow}; ⌘F foca=${focused}; "TRADUCAO" -> grupos ${JSON.stringify(groups)}, itens ${JSON.stringify(items)}, painéis escondidos=${panelsHidden}; clique em "Modelo do chat" -> aba Claude e destaque=${jumped}, à vista=${inView}, busca limpa=${cleared}, destaque some em 2 s=${unhighlighted}; Esc limpa=${escaped}; foco: ⌘2 -> aba ${cmd2Focus || 'nenhuma'}, resultado -> ${resultFocus || 'fora da linha'}, Esc -> aba ${escFocus || 'nenhuma'}; durante a busca nenhuma aba marcada=${noneSelected}, região viva "${live}"; "haiku" acha "Modelo" escondido=${hiddenFound}, aviso=${hintShown}; "pasta"=${pastaFound}; ${rows.length} linhas na tela, fora do índice: ${JSON.stringify(missing)}`,
+    detail: `Contas "${contas.replace(/\s+/g, ' ').trim()}" (botões ${JSON.stringify(contasButtons)}, ${ctx.fixtures.google.calls.length} pedidos ao Google); Sobre "${sobre.replace(/\s+/g, ' ').slice(0, 160)}", repositório -> ${opened || 'nada'}, "Procurar atualização" -> Geral=${toUpdates}, bloco visível=${updatesVisible}; aba lembrada=${remembered}; ⌘2=${cmd2}, ⌘8=${cmd8}, seta=${arrow}; ⌘F foca=${focused}; "TRADUCAO" -> grupos ${JSON.stringify(groups)}, itens ${JSON.stringify(items)}, painéis escondidos=${panelsHidden}; clique em "Modelo do chat" -> aba Claude e destaque=${jumped}, à vista=${inView}, busca limpa=${cleared}, destaque some em 2 s=${unhighlighted}; Esc limpa=${escaped}; foco: ⌘2 -> aba ${cmd2Focus || 'nenhuma'}, resultado -> ${resultFocus || 'fora da linha'}, Esc -> aba ${escFocus || 'nenhuma'}; durante a busca nenhuma aba marcada=${noneSelected}, região viva "${live}"; "haiku" acha "Modelo" escondido=${hiddenFound}, aviso=${hintShown}; "pasta"=${pastaFound}; ${rows.length} linhas na tela, fora do índice: ${JSON.stringify(missing)}`,
   }
 }
 
@@ -6416,6 +6431,286 @@ async function internetChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => 
 }
 
 // ---------------------------------------------------------------------------------------------------------
+// Contrato 21: os servidores MCP do agente, com o `claude` falso, o servidor MCP falso e o agente ACP falso.
+
+interface SmokeMcpSession {
+  method?: string
+  purpose?: string
+  mcpServers?: { name: string; type?: string; command?: string; args?: string[]; url?: string; env?: { name: string; length: number }[]; headers?: { name: string; length: number }[] }[]
+  options?: { disallowedTools?: string[]; settings?: { permissions?: { ask?: string[] } } }
+}
+
+/** O servidor MCP falso por HTTP, numa porta livre de 127.0.0.1, exigindo o cabeçalho com o segredo inventado. */
+async function smokeMcpHttp(script: string): Promise<{ url: string; stop: () => void }> {
+  const child = spawnChild(process.execPath, [script, '--http', '--token', SMOKE_MCP_SECRETS.http], { env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' }, stdio: ['ignore', 'pipe', 'ignore'] })
+  const port = await new Promise<number>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('o servidor MCP falso por HTTP não abriu')), 10_000)
+    child.stdout?.setEncoding('utf8')
+    child.stdout?.on('data', (chunk: string) => {
+      const match = /PORT (\d+)/.exec(chunk)
+      if (!match) return
+      clearTimeout(timer)
+      resolve(Number(match[1]))
+    })
+  })
+  return { url: `http://127.0.0.1:${port}/mcp`, stop: () => void child.kill() }
+}
+
+/**
+ * Contrato 21 (CA0 a CA8), no claro: a aba "Conexões" com o aviso fixo e os servidores do `claude` falso (o conector do
+ * claude.ai não dá para ligar); "Ver detalhes" mascarado; ligar `calculadora` para o chat, "Testar" e a regra "Negar" em
+ * `apagar_tudo`; importar o do Claude Desktop falso só no app (sem o segredo); adicionar pelo formulário no Claude CLI
+ * (grava no arquivo do `claude` falso) e por JSON colado só no app (HTTP local com o cabeçalho), com "Salvar" só depois
+ * do teste; no Assistente, a linha "Conexões" com um servidor desligado na conversa, o cartão de aprovação ("Permitir uma
+ * vez"), o passo concluído e a ferramenta negada pela regra; o `session/new` com a definição lida na hora; tradução e
+ * resumo sem MCP; "Remover" do CLI com a confirmação. PNGs `configuracoes-conexoes-light`/`-dark`,
+ * `conexoes-adicionar-light` e `perguntar-aprovacao-mcp-light`. Termina com tudo desligado.
+ */
+async function mcpChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => void, checks: Record<string, Check>, shots: Screenshot[]): Promise<void> {
+  const script = join(app.getAppPath(), 'test', 'fixtures', 'fake-mcp-server.mjs')
+  const cliFile = join(ctx.userDataDir, 'smoke-mcp', 'claude.json')
+  const http = await smokeMcpHttp(script)
+  const win = ctx.openWindow({ theme: 'light' })
+  watch(win)
+  await loadAndWait(win)
+  const contents = win.webContents
+  const invoke = <T>(js: string): Promise<T> => evaluate<T>(contents, js)
+  const secrets = Object.values(SMOKE_MCP_SECRETS)
+  const leakOnScreen = async (): Promise<string[]> => {
+    const html = await invoke<string>('document.documentElement.outerHTML')
+    return secrets.filter((secret) => html.includes(secret))
+  }
+  const transportBefore = readSettings(ctx.userDataDir).claudeTransport
+  await invoke("window.__scribeApi.invoke('scribe:settings-update', { claudeTransport: 'acp' }).then(() => true)")
+  const server = (key: string): string => `[data-mcp-server=${JSON.stringify(key)}]`
+  try {
+    // CA0, CA2 e CA7: a aba, o aviso, a lista do CLI lida na hora e o encontrado no Claude Desktop.
+    const opened = await openSettingsTab(contents, 'conexoes')
+    const listed = await waitFor(contents, `document.querySelector('[data-mcp-cli-state="ok"]') && document.querySelector('${server('cli:calculadora')}')`, 15_000)
+    const warning = await invoke<string>(`document.querySelector('[data-notice="mcp-warning"]')?.textContent ?? ''`)
+    const cliNames = await invoke<string[]>(`[...document.querySelectorAll('[data-mcp-section="cli"] [data-mcp-server]')].map((el) => el.dataset.mcpServer)`)
+    const claudeAiLocked = await invoke<boolean>(`document.querySelector('${server('cli:claude.ai Notion')} [data-action="mcp-toggle"]')?.disabled === true`)
+    const allOff = await invoke<boolean>(`[...document.querySelectorAll('[data-mcp-server]')].every((el) => el.dataset.mcpState === 'off')`)
+    const foundCount = await invoke<string>(`document.querySelector('[data-mcp-found-count]')?.textContent ?? ''`)
+    await clickSelector(contents, `${server('cli:calculadora')} [data-action="mcp-details"]`)
+    const detailsShown = await waitFor(contents, `document.querySelector('${server('cli:calculadora')} [data-mcp-details]')?.textContent.includes('CALC_TOKEN=••••')`)
+    await settle(contents)
+    shots.push(await capture(win, ctx.outDir, 'configuracoes-conexoes-light'))
+    const leakList = await leakOnScreen()
+    checks['tab'] = {
+      ok:
+        opened &&
+        listed &&
+        warning.includes(MCP_FIXED_WARNING) &&
+        warning.includes('permissões separadas') &&
+        JSON.stringify(cliNames) === JSON.stringify(['cli:calculadora', 'cli:docs-remoto', 'cli:claude.ai Notion']) &&
+        claudeAiLocked &&
+        allOff &&
+        foundCount === '1 servidor' &&
+        detailsShown &&
+        leakList.length === 0,
+      detail: `aba=${opened}; lista do CLI=${listed} ${JSON.stringify(cliNames)}; aviso "${warning.slice(0, 80)}…"; claude.ai travado=${claudeAiLocked}; tudo desligado=${allOff}; Claude Desktop "${foundCount}"; detalhes mascarados=${detailsShown}; segredos na tela=${leakList.length}`,
+    }
+
+    // CA0 e CA5: ligar `calculadora` para o chat, "Testar" (as duas ferramentas) e "Negar" em `apagar_tudo`.
+    await clickSelector(contents, `${server('cli:calculadora')} [data-action="mcp-toggle"]`)
+    const on = await waitFor(contents, `document.querySelector('${server('cli:calculadora')} [data-action="mcp-toggle"]')?.getAttribute('aria-checked') === 'true'`)
+    await clickSelector(contents, `${server('cli:calculadora')} [data-action="mcp-test"]`)
+    const tested = await waitFor(contents, `document.querySelector('${server('cli:calculadora')} [data-mcp-test="ok"]') && document.querySelector('${server('cli:calculadora')} [data-mcp-policy="apagar_tudo"]')`, 20_000)
+    const tools = await invoke<string[]>(`[...document.querySelectorAll('${server('cli:calculadora')} [data-mcp-tool]')].map((el) => el.dataset.mcpTool)`)
+    const state = await invoke<string>(`document.querySelector('${server('cli:calculadora')}')?.dataset.mcpState ?? ''`)
+    await setValue(contents, `${server('cli:calculadora')} [data-mcp-policy="apagar_tudo"]`, 'deny', 'change')
+    let prefs: unknown = null
+    for (let attempt = 0; attempt < 40; attempt++) {
+      prefs = existsSync(join(ctx.userDataDir, MCP_CLI_ENABLED_FILE)) ? (JSON.parse(readFileSync(join(ctx.userDataDir, MCP_CLI_ENABLED_FILE), 'utf8')) as { servers: unknown }).servers : null
+      if (JSON.stringify(prefs).includes('deny')) break
+      await wait(50)
+    }
+    checks['cliEnable'] = {
+      ok: on && tested && JSON.stringify(tools) === JSON.stringify(['soma', 'apagar_tudo']) && state === 'connected' && JSON.stringify(prefs) === JSON.stringify({ calculadora: { uses: ['chat'], toolPolicy: { apagar_tudo: 'deny' } } }),
+      detail: `ligado=${on}; teste=${tested} ${JSON.stringify(tools)}; estado ${state}; mcp-cli-enabled.json ${JSON.stringify(prefs)}`,
+    }
+
+    // CA2: importar do Claude Desktop só no app, desligado e sem o segredo.
+    await clickSelector(contents, '[data-mcp-found="claude-desktop:arquivos-desktop"] [data-action="mcp-import-app"]')
+    const imported = await waitFor(contents, `[...document.querySelectorAll('[data-mcp-section="app"] [data-mcp-server]')].some((el) => el.textContent.includes('arquivos-desktop') && el.dataset.mcpState === 'off')`)
+    const appFile = (): string => (existsSync(join(ctx.userDataDir, MCP_SERVERS_FILE)) ? readFileSync(join(ctx.userDataDir, MCP_SERVERS_FILE), 'utf8') : '')
+    const importedFile = appFile()
+    const importedEnv = (JSON.parse(importedFile || '{"servers":[]}') as { servers: { name: string; env: { key: string; cipher?: string | null }[] }[] }).servers.find((entry) => entry.name === 'arquivos-desktop')?.env
+    checks['import'] = {
+      ok: imported && !importedFile.includes(SMOKE_MCP_SECRETS.desktop) && JSON.stringify(importedEnv?.find((pair) => pair.key === 'API_KEY')) === JSON.stringify({ key: 'API_KEY', secret: true, cipher: null }),
+      detail: `importado desligado=${imported}; segredo no arquivo=${importedFile.includes(SMOKE_MCP_SECRETS.desktop)}; API_KEY ${JSON.stringify(importedEnv)}`,
+    }
+
+    // CA3: pelo formulário, comando local, salvo no Claude CLI (o padrão); "Salvar" só depois do teste.
+    await clickSelector(contents, '[data-action="mcp-add"]')
+    await waitFor(contents, `document.querySelector('[data-mcp-form="new"] #mcp-form-name')`)
+    await setValue(contents, '#mcp-form-name', 'calc-form')
+    await setValue(contents, '#mcp-form-command', process.execPath)
+    await setValue(contents, '#mcp-form-args', script)
+    await clickSelector(contents, '[data-action="mcp-form-add-env"]')
+    await setValue(contents, '[data-mcp-form] [data-mcp-pair="env"] [data-mcp-pair-key]', 'ELECTRON_RUN_AS_NODE')
+    await setValue(contents, '[data-mcp-form] [data-mcp-pair="env"] [data-mcp-pair-value]', '1')
+    const saveLockedBefore = await invoke<boolean>(`document.querySelector('[data-action="mcp-form-save"]')?.disabled === true`)
+    const targetCli = await invoke<string | null>(`document.querySelector('[data-mcp-form-target="cli"]')?.getAttribute('aria-checked') ?? null`)
+    await clickSelector(contents, '[data-action="mcp-form-test"]')
+    const formTested = await waitFor(contents, `document.querySelector('[data-mcp-form-result="ok"] [data-mcp-tool="soma"]') && document.querySelector('[data-action="mcp-form-save"]')?.disabled === false`, 20_000)
+    await settle(contents)
+    shots.push(await capture(win, ctx.outDir, 'conexoes-adicionar-light'))
+    await clickSelector(contents, '[data-action="mcp-form-save"]')
+    const formSaved = await waitFor(contents, `!document.querySelector('[data-mcp-form]') && document.querySelector('${server('cli:calc-form')}')`, 20_000)
+    // Nasce desligado para o app (CA0); o smoke liga para o chat.
+    const formOff = await invoke<string | null>(`document.querySelector('${server('cli:calc-form')} [data-action="mcp-toggle"]')?.getAttribute('aria-checked') ?? null`)
+    await clickSelector(contents, `${server('cli:calc-form')} [data-action="mcp-toggle"]`)
+    const formOn = await waitFor(contents, `document.querySelector('${server('cli:calc-form')} [data-action="mcp-toggle"]')?.getAttribute('aria-checked') === 'true'`)
+    const cliAfter = JSON.parse(readFileSync(cliFile, 'utf8')) as { mcpServers: Record<string, { command?: string; args?: string[] }> }
+    checks['addForm'] = {
+      ok: saveLockedBefore && targetCli === 'true' && formTested && formSaved && formOff === 'false' && formOn && cliAfter.mcpServers['calc-form']?.command === process.execPath && JSON.stringify(cliAfter.mcpServers['calc-form']?.args) === JSON.stringify([script]),
+      detail: `"Salvar" travado antes do teste=${saveLockedBefore}; "Salvar no Claude CLI" marcado=${targetCli}; teste=${formTested}; salvo=${formSaved}; desligado ao nascer=${formOff}, ligado=${formOn}; no CLI falso ${JSON.stringify(cliAfter.mcpServers['calc-form'] ?? null).replace(process.execPath, '<electron>')}`,
+    }
+
+    // CA3: por JSON colado (HTTP local com o cabeçalho), só neste app.
+    await clickSelector(contents, '[data-action="mcp-add"]')
+    await waitFor(contents, `document.querySelector('[data-mcp-form="new"]')`)
+    await clickSelector(contents, '[data-action="mcp-form-json"]')
+    await waitFor(contents, `document.querySelector('#mcp-form-json')`)
+    await setValue(contents, '#mcp-form-json', JSON.stringify({ mcpServers: { 'calc-http': { type: 'http', url: http.url, headers: { Authorization: `Bearer ${SMOKE_MCP_SECRETS.http}` } } } }))
+    await clickSelector(contents, '[data-action="mcp-form-paste"]')
+    const pasted = await waitFor(contents, `document.querySelector('#mcp-form-url')?.value === ${JSON.stringify(http.url)} && document.querySelector('#mcp-form-name')?.value === 'calc-http'`)
+    const headerSecret = await invoke<boolean>(`document.querySelector('[data-mcp-form] [data-mcp-pair="header"] [data-mcp-pair-secret]')?.checked === true`)
+    await clickSelector(contents, '[data-mcp-form-target="app"]')
+    await clickSelector(contents, '[data-action="mcp-form-test"]')
+    const jsonTested = await waitFor(contents, `document.querySelector('[data-mcp-form-result="ok"] [data-mcp-tool="apagar_tudo"]')`, 20_000)
+    await clickSelector(contents, '[data-action="mcp-form-save"]')
+    const httpItem = `[...document.querySelectorAll('[data-mcp-section="app"] [data-mcp-server]')].find((el) => el.textContent.includes('calc-http'))`
+    // Nasce desligado (CA1); o smoke liga e o estado mostra o último teste.
+    const jsonSavedOff = await waitFor(contents, `${httpItem}?.dataset.mcpState === 'off'`, 20_000)
+    await invoke(`${httpItem}?.querySelector('[data-action="mcp-toggle"]')?.click()`)
+    const jsonSaved = jsonSavedOff && (await waitFor(contents, `${httpItem}?.dataset.mcpState === 'connected'`))
+    const savedFile = appFile()
+    checks['addJson'] = {
+      ok: pasted && headerSecret && jsonTested && jsonSaved && !savedFile.includes(SMOKE_MCP_SECRETS.http) && savedFile.includes('calc-http'),
+      detail: `formulário preenchido=${pasted}; cabeçalho como segredo=${headerSecret}; teste=${jsonTested}; salvo desligado=${jsonSavedOff}, ligado e conectado=${jsonSaved}; segredo em texto no arquivo=${savedFile.includes(SMOKE_MCP_SECRETS.http)}`,
+    }
+    const leakForms = await leakOnScreen()
+
+    // CA0: a definição é lida na hora: muda no CLI depois de ligar e a sessão vê a de agora.
+    const cliNow = JSON.parse(readFileSync(cliFile, 'utf8')) as { mcpServers: Record<string, { args?: string[] }> }
+    cliNow.mcpServers['calculadora']?.args?.push('--rodada-2')
+    writeFileSync(cliFile, JSON.stringify(cliNow, null, 2))
+
+    // CA4 a CA6: o Assistente com as conexões; `calc-form` desligado só nesta conversa.
+    const sessionsBefore = readAcpLog(ctx.userDataDir).filter((entry) => entry.method === 'session/new').length
+    await clickSelector(contents, '[data-nav="assistente"]')
+    await waitFor(contents, routeIs('assistente'))
+    await clickSelector(contents, '[data-action="chat-new"]')
+    await waitFor(contents, `document.querySelector('[data-chat-input]') && !document.querySelector('[data-chat-message]')`)
+    await clickSelector(contents, '[data-action="toggle-context"]')
+    const row = await waitFor(contents, `document.querySelectorAll('[data-chat-connections] [data-chat-connection]').length === 3`, 8000)
+    const rowKeys = await invoke<string[]>(`[...document.querySelectorAll('[data-chat-connection]')].map((el) => el.dataset.chatConnection)`)
+    await clickSelector(contents, `[data-chat-connection="cli:calc-form"] [role="switch"]`)
+    const offInChat = await waitFor(contents, `document.querySelector('[data-chat-connection="cli:calc-form"] [role="switch"]')?.getAttribute('aria-checked') === 'false'`)
+    await clickSelector(contents, '[data-action="close-context"]')
+    await setValue(contents, '[data-chat-input]', 'Calculadora: some 2 e 3 e depois apague tudo')
+    await pressEnterIn(contents, '[data-chat-input]')
+    const card = await waitFor(contents, `document.querySelector('[data-mcp-approval]')?.textContent.includes('O Claude quer usar soma de calculadora')`, 15_000)
+    const cardArgs = await invoke<string>(`document.querySelector('[data-mcp-approval-args]')?.textContent ?? ''`)
+    const cardButtons = await invoke<string[]>(`[...document.querySelectorAll('[data-mcp-approval] button')].map((el) => el.textContent)`)
+    await settle(contents)
+    shots.push(await capture(win, ctx.outDir, 'perguntar-aprovacao-mcp-light'))
+    await clickSelector(contents, '[data-mcp-approval] [data-action="mcp-allow-once"]')
+    const done = await waitFor(contents, `${CHAT_DONE} && (${LAST_ASSISTANT}?.textContent ?? '').includes('A soma deu 5.')`, 15_000)
+    const answerText = await invoke<string>(`${LAST_ASSISTANT}?.querySelector('[data-chat-markdown]')?.textContent ?? ''`)
+    await invoke(`${LAST_ASSISTANT}?.querySelector('[data-action="toggle-reasoning"]')?.click()`)
+    await waitFor(contents, `${LAST_ASSISTANT}?.querySelector('[data-chat-steps]')`)
+    const steps = await invoke<{ tool: string; label: string; status: string }[]>(
+      `[...(${LAST_ASSISTANT}?.querySelectorAll('[data-chat-step]') ?? [])].map((el) => ({ tool: el.dataset.chatStep, label: el.querySelector('span.min-w-0')?.textContent ?? '', status: el.dataset.chatStepStatus }))`,
+    )
+    const cardGone = await invoke<boolean>(`!document.querySelector('[data-mcp-approval]')`)
+    const log = readAcpLog(ctx.userDataDir)
+    const chatSession = (log.filter((entry) => entry.method === 'session/new').slice(sessionsBefore) as SmokeMcpSession[]).find((entry) => entry.purpose === 'chat')
+    const servers = chatSession?.mcpServers ?? []
+    const calc = servers.find((entry) => entry.name === 'calculadora')
+    const httpServer = servers.find((entry) => entry.name === 'calc-http')
+    const mcpEvents = log.filter((entry) => (entry as { event?: string }).event === 'mcp').map((entry) => `${String((entry as { tool?: string }).tool)}:${String((entry as { outcome?: string }).outcome)}`)
+    checks['chat'] = {
+      ok:
+        row &&
+        JSON.stringify(rowKeys) === JSON.stringify(['cli:calculadora', 'cli:calc-form', `app:${(JSON.parse(appFile()) as { servers: { id: string; name: string }[] }).servers.find((entry) => entry.name === 'calc-http')?.id ?? ''}`]) &&
+        offInChat &&
+        card &&
+        cardArgs === '{\n  "a": 2,\n  "b": 3\n}' &&
+        JSON.stringify(cardButtons) === JSON.stringify(['Permitir uma vez', 'Sempre permitir esta ferramenta', 'Negar']) &&
+        done &&
+        answerText.includes('A soma deu 5.') &&
+        answerText.includes('Não pude usar apagar_tudo: o app negou.') &&
+        steps.some((step) => step.tool === 'Mcp' && step.label === 'Usando soma (calculadora)' && step.status === 'completed') &&
+        steps.some((step) => step.tool === 'Mcp' && step.label === 'Usando apagar_tudo (calculadora)' && step.status === 'failed') &&
+        cardGone &&
+        JSON.stringify(mcpEvents.slice(-2)) === JSON.stringify(['soma:allow', 'apagar_tudo:reject']),
+      detail: `linha Conexões=${row} ${JSON.stringify(rowKeys)}; desligado na conversa=${offInChat}; cartão=${card} args ${JSON.stringify(cardArgs)} botões ${JSON.stringify(cardButtons)}; resposta=${done} "${answerText}"; passos ${JSON.stringify(steps)}; cartão saiu=${cardGone}; agente ${JSON.stringify(mcpEvents)}`,
+    }
+    checks['session'] = {
+      ok:
+        JSON.stringify(servers.map((entry) => entry.name)) === JSON.stringify(['calculadora', 'calc-http']) &&
+        (calc?.args ?? []).includes('--rodada-2') &&
+        calc?.env?.some((pair) => pair.name === 'CALC_TOKEN' && pair.length === SMOKE_MCP_SECRETS.cli.length) === true &&
+        httpServer?.type === 'http' &&
+        httpServer.url === http.url &&
+        httpServer.headers?.some((pair) => pair.name === 'Authorization' && pair.length === `Bearer ${SMOKE_MCP_SECRETS.http}`.length) === true &&
+        (chatSession?.options?.disallowedTools ?? []).includes('mcp__calculadora__apagar_tudo') &&
+        JSON.stringify(chatSession?.options?.settings?.permissions?.ask ?? []) === JSON.stringify(['WebSearch', 'WebFetch', 'mcp__calculadora', 'mcp__calc-http']),
+      detail: `servidores ${JSON.stringify(servers.map((entry) => entry.name))}; calculadora lida na hora (--rodada-2)=${(calc?.args ?? []).includes('--rodada-2')}; CALC_TOKEN com o tamanho do segredo=${String(calc?.env?.some((pair) => pair.name === 'CALC_TOKEN' && pair.length === SMOKE_MCP_SECRETS.cli.length))}; HTTP ${httpServer?.type ?? '-'}; negadas ${JSON.stringify((chatSession?.options?.disallowedTools ?? []).filter((tool) => tool.startsWith('mcp__')))}; ask ${JSON.stringify(chatSession?.options?.settings?.permissions?.ask ?? [])}`,
+    }
+
+    // CA4: tradução, resumo e os outros usos nunca recebem servidor MCP (em todo o roteiro do smoke).
+    const others = (readAcpLog(ctx.userDataDir) as SmokeMcpSession[]).filter((entry) => entry.method === 'session/new' && entry.purpose !== 'chat' && entry.purpose !== 'analysis')
+    const withMcp = others.filter((entry) => (entry.mcpServers ?? []).length > 0)
+    checks['otherUses'] = {
+      ok: others.some((entry) => entry.purpose === 'translate') && others.some((entry) => entry.purpose === 'summary') && withMcp.length === 0,
+      detail: `${others.length} sessões de outros usos (${[...new Set(others.map((entry) => entry.purpose))].join(', ')}); com MCP: ${withMcp.length}`,
+    }
+
+    // CA0: "Remover" do CLI com a confirmação roda `claude mcp remove -s user`.
+    await openSettingsTab(contents, 'conexoes')
+    await waitFor(contents, `document.querySelector('${server('cli:calc-form')}')`, 15_000)
+    await clickSelector(contents, `${server('cli:calc-form')} [data-action="mcp-remove"]`)
+    const confirmText = await invoke<string>(`document.querySelector('${server('cli:calc-form')} [data-mcp-remove-confirm]')?.textContent ?? ''`)
+    await clickSelector(contents, `${server('cli:calc-form')} [data-action="mcp-remove-confirm"]`)
+    const removed = await waitFor(contents, `!document.querySelector('${server('cli:calc-form')}')`, 15_000)
+    const cliRemoved = !(JSON.parse(readFileSync(cliFile, 'utf8')) as { mcpServers: Record<string, unknown> }).mcpServers['calc-form']
+    const leakEnd = await leakOnScreen()
+    checks['remove'] = {
+      ok: confirmText.includes('Remover também do Claude CLI do terminal?') && removed && cliRemoved,
+      detail: `confirmação "${confirmText}"; saiu da lista=${removed}; saiu do CLI falso=${cliRemoved}`,
+    }
+    checks['secrets'] = {
+      ok: leakList.length + leakForms.length + leakEnd.length === 0 && !appFile().includes(SMOKE_MCP_SECRETS.http) && !JSON.stringify(readAcpLog(ctx.userDataDir)).includes(SMOKE_MCP_SECRETS.cli),
+      detail: `segredos na tela: ${leakList.length + leakForms.length + leakEnd.length}; em texto no mcp-servers.json=${appFile().includes(SMOKE_MCP_SECRETS.http)}; no registro do agente falso=${JSON.stringify(readAcpLog(ctx.userDataDir)).includes(SMOKE_MCP_SECRETS.cli)}`,
+    }
+
+    // No escuro, a aba com os servidores ligados.
+    const dark = ctx.openWindow({ theme: 'dark' })
+    watch(dark)
+    await loadAndWait(dark)
+    await openSettingsTab(dark.webContents, 'conexoes')
+    const darkListed = await waitFor(dark.webContents, `document.querySelector('[data-mcp-cli-state="ok"]') && document.querySelector('${server('cli:calculadora')}')?.dataset.mcpState !== 'off'`, 15_000)
+    await settle(dark.webContents)
+    shots.push(await capture(dark, ctx.outDir, 'configuracoes-conexoes-dark'))
+    checks['dark'] = { ok: darkListed, detail: `lista no escuro=${darkListed}` }
+    dark.destroy()
+  } finally {
+    // Tudo desligado: o resto do roteiro segue sem MCP.
+    await invoke(
+      `window.__scribeApi.invoke('scribe:mcp-overview', {}).then((overview) => Promise.all([...overview.cli.servers, ...overview.app].filter((entry) => entry.enabled).map((entry) => window.__scribeApi.invoke('scribe:mcp-update', { key: entry.key, enabled: false })))).then(() => true)`,
+    ).catch(() => undefined)
+    await invoke(`window.__scribeApi.invoke('scribe:settings-update', { claudeTransport: '${transportBefore === 'acp' ? 'acp' : 'cli'}' }).then(() => true)`).catch(() => undefined)
+    http.stop()
+    win.destroy()
+  }
+}
+
+// ---------------------------------------------------------------------------------------------------------
 // Contrato 23: Automações (agentes, tarefas agendadas, execuções) com o agente ACP falso e o relógio do
 // agendador adiantado pelo smoke; o ícone da barra de menus, as notificações, o Dock e o "abrir ao entrar" são
 // substitutos que só registram. Nada sai da máquina e nenhum agente alcança o WhatsApp.
@@ -7186,6 +7481,7 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
   const assistant: Record<string, Check> = {}
   const automations: Record<string, Check> = {}
   const internet: Record<string, Check> = {}
+  const mcp: Record<string, Check> = {}
   /** Contrato 27: quem fala no Meet. */
   const meet: Record<string, Check> = {}
   let analysisMeasured: AnalysisMeasured | null = null
@@ -7544,6 +7840,9 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
     // Contrato 26: a internet nos agentes, no "Pedir agora" e no Assistente, com o agente ACP falso (sem rede).
     await internetChecks(ctx, watch, internet, screenshots)
 
+    // Contrato 21: os servidores MCP (Claude CLI falso, servidor MCP falso e o agente ACP falso); termina desligado.
+    await mcpChecks(ctx, watch, mcp, screenshots)
+
     // Contrato 27: quem fala no Meet, com um cliente falso no servidor local; antes do bloqueio.
     await meetChecks(ctx, watch, meet)
 
@@ -7612,6 +7911,8 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
   for (const name of ['screen', 'testNow', 'agentForm', 'tasks', 'scheduled', 'afterMeeting', 'skipped', 'tray', 'autoPaused', 'missed', 'askNow', 'runs', 'settings', 'closeKeepsApp', 'dark']) if (!automations[name]) failures.push(`automações ${name}: não executado`)
   for (const [name, check] of Object.entries(internet)) if (!check.ok) failures.push(`internet ${name}: ${check.detail}`)
   for (const name of ['agent', 'askNow', 'noInternet', 'assistant']) if (!internet[name]) failures.push(`internet ${name}: não executado`)
+  for (const [name, check] of Object.entries(mcp)) if (!check.ok) failures.push(`mcp ${name}: ${check.detail}`)
+  for (const name of ['tab', 'cliEnable', 'import', 'addForm', 'addJson', 'chat', 'session', 'otherUses', 'remove', 'secrets', 'dark']) if (!mcp[name]) failures.push(`mcp ${name}: não executado`)
   for (const [name, check] of Object.entries(meet)) if (!check.ok) failures.push(`meet ${name}: ${check.detail}`)
   for (const name of ['server', 'recording', 'setting']) if (!meet[name]) failures.push(`meet ${name}: não executado`)
   for (const [name, check] of Object.entries(lock)) if (!check.ok) failures.push(`bloqueio ${name}: ${check.detail}`)
@@ -7632,8 +7933,9 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
   // com o link, no claro (contrato 26); o bloco "Agenda", a faixa "não está sendo gravada" e "Próximas", no claro
   // (contrato 12); a aba "Plugins" com o plugin salvo e o manual aberto, no claro (contrato 31); o painel Detalhes do
   // WhatsApp, no claro (contrato 32; no escuro ele sai no print da tela "WhatsApp"); o balão com a imagem, o player e
-  // a transcrição do áudio, no claro (contrato 37); a prévia do anexo com a legenda, no claro (contrato 39).
-  const expectedShots = SCREENS.length * THEMES.length + 51
+  // a transcrição do áudio, no claro (contrato 37); a prévia do anexo com a legenda, no claro (contrato 39); a aba
+  // "Conexões" nos dois temas, o formulário testado e o cartão de aprovação da ferramenta MCP, no claro (contrato 21).
+  const expectedShots = SCREENS.length * THEMES.length + 55
   if (screenshots.length !== expectedShots) failures.push(`${screenshots.length} PNGs em vez de ${expectedShots}`)
   for (const shot of screenshots) {
     if (shot.width < 1120 || shot.height < 740) failures.push(`${shot.name}: ${shot.width}x${shot.height} abaixo de 1120x740`)
@@ -7685,6 +7987,8 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
     assistant,
     // Contrato 26: só os resultados (os endereços são os inventados do agente falso).
     internet,
+    // Contrato 21: só os resultados; nenhum valor de variável ou cabeçalho dos servidores MCP falsos.
+    mcp,
     // Contrato 27: só os resultados (os nomes são os inventados do cliente falso).
     meet,
     // Contrato 23: os resultados, as notificações, o Dock e os itens de login substitutos; nenhum texto de reunião.
@@ -7708,6 +8012,9 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
   const secrets = [SMOKE_GOOGLE_CLIENT_SECRET, ...ctx.fixtures.google.accessTokens(), ...ctx.fixtures.google.refreshTokens(), 'token-acesso-falso-', 'token-renovacao-falso-']
   const leaked = secrets.filter((secret) => JSON.stringify(report).includes(secret))
   if (leaked.length) failures.push(`${leaked.length} segredo(s) do Google no relatório`)
+  // Contrato 21 (CA7): nenhum segredo dos servidores MCP falsos no relatório.
+  const mcpLeaked = Object.values(SMOKE_MCP_SECRETS).filter((secret) => JSON.stringify(report).includes(secret))
+  if (mcpLeaked.length) failures.push(`${mcpLeaked.length} segredo(s) dos servidores MCP no relatório`)
   // Contrato 12 (CA11): nenhum token da Microsoft e nenhum dado da agenda (título, participante, link) no relatório.
   const calendarData = [...ctx.fixtures.microsoft.accessTokens(), ...ctx.fixtures.microsoft.refreshTokens(), 'token-ms-', 'Alinhamento com o jurídico', 'Status da obra', 'Orçamento do trimestre', 'Carla Dias', 'ana.lima@example.com', 'meet.google.com/smk', 'teams.microsoft.com/l/meetup-join/smoke']
   const calendarLeaked = calendarData.filter((value) => JSON.stringify(report).includes(value))

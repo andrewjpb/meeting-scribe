@@ -40,7 +40,7 @@ import { createMeetServer, type MeetServer } from './meet/server'
 import { createPluginSave } from './plugins/save'
 import { createDriveSync, createEndOfRecordingHooks, type DriveSyncService } from './google/drive-sync'
 import { nodeExecFile } from './claude-cli/locate'
-import { createClaudeService, type ClaudeService } from './claude-cli/service'
+import { CLAUDE_CWD_DIR, createClaudeService, type ClaudeService } from './claude-cli/service'
 import { nodeSpawnSummary } from './claude-cli/summary'
 import { nodeSpawnClaude } from './claude-cli/translator'
 import { broadcast, handle, onEvent, sendTo, setLockGate } from './ipc'
@@ -61,11 +61,14 @@ import { aboutPanelOptions, buildMenuTemplate, MENU_IDS } from './menu'
 import { createMicPermissions } from './permissions'
 import { handleAppScheme, registerAppScheme } from './protocol'
 import { createSecretStore, memorySafeStorage } from './secrets'
+import { createMcpCli, loginPathOnce } from './mcp/cli'
+import { createMcpService, type McpService } from './mcp/service'
+import { createMcpStore } from './mcp/store'
 import { APP_ORIGIN, applySessionSecurity, originOf } from './security'
 import { createSettingsService, type SettingsService } from './settings/service'
 import { createFileSettingsStore } from './settings/store'
 import { isSmokeRun, prepareSmokeEnvironment, runSmoke, SMOKE_MEET_PORTS } from './smoke'
-import { createSmokeAcp, createSmokeClaude, createSmokeFixtures, SMOKE_FAKE_KEY, type SmokeFixtures } from './smoke-fixtures'
+import { createSmokeAcp, createSmokeClaude, createSmokeFixtures, SMOKE_FAKE_KEY, writeSmokeMcpFixtures, type SmokeFixtures } from './smoke-fixtures'
 import { acpOpener, processLauncher } from './acp/agent'
 import { bundledAdapterEntry, bundledAgent, installedAgent, type AcpAgentService } from './acp/entry'
 import { createAcpInstaller } from './acp/install'
@@ -619,6 +622,8 @@ interface AppServices {
   meet: MeetServer
   /** "Salvar plugin…" da aba Plugins (contrato 31). */
   pluginSave: (input: unknown) => Promise<PluginSaveResult>
+  /** Servidores MCP do agente: a aba "Conexões" e as sessões (contrato 21). */
+  mcp: McpService
 }
 
 /**
@@ -744,8 +749,15 @@ function createAppServices(userData: string): AppServices {
   }
   const currentProfile = async (): Promise<AgentProfile> => agentProfile((await settings.get()).agentProfile)
   const acpAgent = { current: async (): Promise<AcpAgentService> => agentFor(await currentProfile()) }
+  // Contrato 21: os servidores MCP entram só nas sessões que pedem (chat das conversas e análise); o serviço nasce depois
+  // do `claude` (precisa achar o binário), então a fábrica lê por aqui.
+  const mcpRef: { current: McpService | null } = { current: null }
   const openAcp = acpOpener({
     profile: currentProfile,
+    mcp: {
+      servers: async (use, off) => (mcpRef.current ? mcpRef.current.sessionServers(use, off) : []),
+      capabilities: (capabilities) => mcpRef.current?.agentCapabilities(capabilities),
+    },
     launch: processLauncher({
       execPath: process.execPath,
       entry: (profile) => agentFor(profile).entry(),
@@ -769,6 +781,27 @@ function createAppServices(userData: string): AppServices {
     // Custo nominal e trocas de processo só nos logs de desenvolvimento.
     ...(app.isPackaged ? {} : { log: (message: string) => console.log(message) }),
   })
+  // Contrato 21: os servidores MCP. Os do Claude CLI vêm do `claude mcp` (no smoke, do `claude` falso, que guarda tudo num
+  // arquivo do userData) e do arquivo dele (`~/.claude.json`); os do app, de `userData/mcp-servers.json`, com os segredos
+  // cifrados pelo Chaveiro (no smoke, o substituto em memória). Nada disso vai para log.
+  const smokeMcp = smokeFixtures ? writeSmokeMcpFixtures(userData, join(app.getAppPath(), 'test', 'fixtures', 'fake-mcp-server.mjs')) : null
+  const mcp = createMcpService({
+    store: createMcpStore({ dir: userData, safeStorage: smokeFixtures ? memorySafeStorage() : safeStorage, ...devLog }),
+    cli: createMcpCli({
+      exec: smokeClaude?.exec ?? nodeExecFile,
+      baseEnv: process.env,
+      configFile: smokeMcp?.cliFile ?? join(app.getPath('home'), '.claude.json'),
+      cwd: join(userData, CLAUDE_CWD_DIR, 'mcp'),
+      ...(smokeMcp ? { extraEnv: smokeMcp.env } : {}),
+    }),
+    locate: () => claude.locate(),
+    desktopConfig: smokeMcp?.desktopFile ?? join(app.getPath('appData'), 'Claude', 'claude_desktop_config.json'),
+    baseEnv: process.env,
+    // No smoke, sem o shell de login (o `PATH` do próprio processo).
+    loginPath: smokeFixtures ? async () => process.env['PATH'] ?? '/usr/bin:/bin' : loginPathOnce(nodeExecFile, process.env),
+    ...devLog,
+  })
+  mcpRef.current = mcp
   // WhatsApp pessoal (contrato 24): desligado por padrão; o serviço é processo filho, só depois de "Instalar" e
   // "Ligar". No smoke, o cliente falso (`backend_fake.py`) e um índice de pacotes falso numa pasta local: nenhum
   // neonize, nenhuma rede, nenhum número de verdade.
@@ -1183,6 +1216,7 @@ function createAppServices(userData: string): AppServices {
     automations,
     meet,
     pluginSave,
+    mcp,
   }
 }
 
@@ -1276,7 +1310,7 @@ function openExternal(url: string): void {
 }
 
 function registerIpc(services: AppServices): void {
-  const { settings, meetings, meetingsService, meetingsIndex, tokenClient, translation, claude, files, summary, analysis, aiNotes, download, branding, updates, chat, chatActions, corpus, acp, lock, google, drive, microsoft, calendar, whatsapp, whatsappInsights, automations, meet, pluginSave } = services
+  const { settings, meetings, meetingsService, meetingsIndex, tokenClient, translation, claude, files, summary, analysis, aiNotes, download, branding, updates, chat, chatActions, corpus, acp, lock, google, drive, microsoft, calendar, whatsapp, whatsappInsights, automations, meet, pluginSave, mcp } = services
   /** Reunião salva, renomeada ou com anotações novas: o `.md` dela no acervo do chat é reescrito. */
   const touched = (meetingId: string): void => void corpus.sync(meetingId).catch(() => undefined)
   /**
@@ -1441,6 +1475,24 @@ function registerIpc(services: AppServices): void {
   // Assistente (contrato 25): o cartão só grava o clique; o envio segue só por `scribe:whatsapp-send`.
   handle('scribe:chat-action-reminder', appOrigin, (_event, request) => chatActions.reminder(request))
   handle('scribe:chat-action-state', appOrigin, (_event, request) => chatActions.setState(request))
+  // Contrato 21: o cartão de aprovação de uma ferramenta MCP e a aba "Conexões". Nenhum segredo volta por aqui.
+  handle('scribe:chat-approval', appOrigin, (_event, request) => chat.answerApproval(request))
+  handle('scribe:mcp-chat-servers', appOrigin, () => mcp.chatServers())
+  handle('scribe:mcp-overview', appOrigin, (_event, request) => mcp.overview(request))
+  handle('scribe:mcp-test', appOrigin, (_event, request) => mcp.test(request))
+  // Mudou o que vale para o MCP: as sessões de chat abertas fecham e a próxima pergunta abre com o que vale agora.
+  const mcpChanging = async <T>(change: Promise<T>): Promise<T> => {
+    try {
+      return await change
+    } finally {
+      chat.mcpChanged()
+    }
+  }
+  handle('scribe:mcp-save', appOrigin, (_event, request) => mcpChanging(mcp.save(request)))
+  handle('scribe:mcp-update', appOrigin, (_event, request) => mcpChanging(mcp.update(request)))
+  handle('scribe:mcp-remove', appOrigin, (_event, request) => mcpChanging(mcp.remove(request)))
+  handle('scribe:mcp-details', appOrigin, (_event, request) => mcp.details(request))
+  handle('scribe:mcp-import', appOrigin, (_event, request) => mcpChanging(mcp.importFound(request)))
   // Bloqueio (contrato 22): a senha só passa por aqui até o serviço, que confere com o hash.
   handle('scribe:lock-status', appOrigin, () => lock.status())
   handle('scribe:lock-now', appOrigin, () => lock.lock('button'))

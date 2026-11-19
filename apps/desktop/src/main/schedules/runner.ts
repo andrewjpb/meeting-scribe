@@ -224,7 +224,7 @@ export function createAgentRunner(deps: AgentRunnerDeps): AgentRunner {
           } else if (detail.type === 'plan') plan = detail.entries
           else if (detail.type === 'thinking') thinking += detail.delta
           else if (detail.type === 'denied') denied = detail.count
-          else meta = detail.meta
+          else if (detail.type === 'meta') meta = detail.meta
           onEvent(detail)
         },
       )

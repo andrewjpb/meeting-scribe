@@ -65,7 +65,7 @@ A tela lista as conversas e as mensagens. "Rascunho com o Claude" escreve uma re
 <!-- tela: configuracoes -->
 ## Configurações
 
-Configurações… (⌘,) abre a última aba aberta. ⌘1 a ⌘7 trocam de aba. A busca no topo acha qualquer opção pelo nome.
+Configurações… (⌘,) abre a última aba aberta. ⌘1 a ⌘8 trocam de aba. A busca no topo acha qualquer opção pelo nome.
 
 <!-- aba: geral -->
 ### Geral
@@ -103,6 +103,19 @@ As extensões de navegador que vêm dentro do app. Hoje uma: "Quem fala no Meet"
 
 Na gravação, o marcador do Meet ("Meet desconectado" ou "Meet conectado · N participantes") abre esta aba.
 
+<!-- aba: conexoes -->
+### Conexões
+
+Os servidores MCP, que dão ao Claude ferramentas de outros sistemas. Tudo começa desligado. Servidores MCP dão ao Claude acesso a outros sistemas: ligue só os que você confia. Texto de reunião pode tentar pedir ações: confira cada pedido. A fonte "Internet" do Assistente e os servidores MCP são permissões separadas.
+
+"Do Claude CLI": os servidores que o claude instalado neste Mac já tem (claude mcp list), com o estado que o próprio CLI dá (conectado, falhou, pendente de aprovação). "Usar no app" liga um deles para o app, com os usos (chat e análise); "Testar" lista as ferramentas; "Ver detalhes" mostra a configuração com as variáveis e os cabeçalhos mascarados; "Remover" tira o servidor também do Claude CLI do terminal (pede confirmação). Os conectores do claude.ai não dão para usar no app.
+
+"Servidores do app": os que valem só aqui. "Encontrados neste Mac": os do Claude Desktop, só para importar (para o Claude CLI ou só no app; os segredos não vêm e precisam ser preenchidos).
+
+"Adicionar servidor MCP": um comando local (stdio: comando, argumentos, pasta e variáveis) ou um endereço (HTTP: https://, ou http:// só no próprio Mac, e cabeçalhos), ou colar o JSON do Claude Desktop. Variável ou cabeçalho marcado como segredo fica cifrado neste Mac. "Testar conexão" mostra as ferramentas; só depois disso "Salvar" fica ativo. Por padrão salva no Claude CLI (vale também no terminal); dá para salvar só neste app.
+
+Cada ferramenta tem uma regra: Perguntar (o padrão), Permitir ou Negar. Com "Perguntar", a conversa mostra o cartão "O Claude quer usar <ferramenta> de <servidor>" com os argumentos e os botões "Permitir uma vez", "Sempre permitir esta ferramenta" e "Negar"; sem resposta em 2 minutos, nega. No Assistente, o Contexto tem a linha "Conexões" para desligar um servidor só naquela conversa. Os servidores MCP só valem com o agente (ACP); a tradução e o resumo nunca usam.
+
 <!-- aba: sobre -->
 ### Sobre
 
@@ -112,7 +125,7 @@ A versão instalada, a versão do Electron e do Chrome e a licença (código abe
 
 - ⌘N: nova gravação.
 - ⌘, : Configurações.
-- ⌘1 a ⌘7: as abas de Configurações.
+- ⌘1 a ⌘8: as abas de Configurações.
 - ⌘F: buscar nas reuniões.
 - ⌘⇧A: analisar a gravação até agora.
 - ⌘⇧L: bloquear o app.

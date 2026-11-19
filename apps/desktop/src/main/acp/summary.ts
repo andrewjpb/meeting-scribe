@@ -67,7 +67,9 @@ export async function runAcpOneShot<T>(options: RunAcpOneShotOptions<T>): Promis
   options.signal?.addEventListener('abort', onAbort, { once: true })
 
   void (async () => {
-    const opened = await options.open({ purpose: options.purpose, cwd: options.cwd, model: options.model, systemPrompt: options.systemPrompt, tools: 'none' })
+    // Contrato 21: a análise pode receber os servidores MCP ligados para ela (com "Perguntar", a ferramenta é negada:
+    // não há conversa para o cartão). Resumo, rascunho e o resto nunca.
+    const opened = await options.open({ purpose: options.purpose, cwd: options.cwd, model: options.model, systemPrompt: options.systemPrompt, tools: 'none', ...(options.purpose === 'analysis' ? { mcp: {} } : {}) })
     if (!opened.ok) {
       options.log?.(`[acp] ${options.label}: a sessão não abriu (${opened.reason.slice(0, 200)})`)
       settle({ ok: false, error: opened.error === 'failed' ? 'failed' : 'agent' })

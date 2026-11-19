@@ -11,6 +11,7 @@ import { dayLabel, timeLabel } from '../meetings/format'
 import { useMeetingsSearch } from '../meetings/useMeetingsOverview'
 import { answerTimeLabel, CHAT_MODEL_LABELS, chatTotals, chosenMeetings, consultedIn, COST_HINT, costLabel, modelLabel, scopeLabel, tokensLabel, withWhatsApp } from './format'
 import type { ChatMeetings } from './useChatMeetings'
+import { ConnectionsContext } from './ConnectionsContext'
 import { SourcesSection } from './SourcesSection'
 
 const SCOPE_OPTIONS: readonly { kind: ChatScopeKind; label: (total: number | null) => string }[] = [
@@ -299,6 +300,8 @@ function ContextSections({ meetingId, scope, model, messages, meetings, onScope,
         )}
       </PanelSection>
       {!meetingId && <SourcesSection scope={scope} onScope={onScope} />}
+      {/* Contrato 21: os servidores MCP desta conversa (também na de uma reunião). */}
+      <ConnectionsContext scope={scope} onScope={onScope} />
       <PanelSection title="Consultadas nesta conversa">
         {consulted.length ? (
           <ul data-chat-context-consulted className="-mx-1 flex flex-col">

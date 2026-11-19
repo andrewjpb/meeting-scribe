@@ -8,11 +8,12 @@ import type { CalendarListResult, CalendarView } from './calendar'
 import type { BrandingInfo, BrandLogoChoice } from './branding'
 import type { LockResponse, LockStatus } from './lock'
 import type { KeySaveResult, KeyStatus, MicAccess, ModelCheck, ModelsResult } from './assemblyai'
-import type { Chat, ChatEvent, ChatListItem, ChatRedoRequest, ChatSendRequest, ChatSendResult, ChatUpdateRequest } from './chat'
+import type { Chat, ChatApprovalAnswer, ChatEvent, ChatListItem, ChatRedoRequest, ChatSendRequest, ChatSendResult, ChatUpdateRequest } from './chat'
 import type { ClaudeLocateResult, ClaudeRunState, ClaudeStartResult, ClaudeTranslateRequest, ClaudeTranslateResult } from './claude-cli'
 import type { AudioBeginResult, AudioExtension, AudioFinishResult, AudioFolderInfo, MeetingDownloadKind, MeetingDownloadResult, MeetingFileKind, MeetingFilesInfo } from './meeting-files'
 import type { MeetState } from './meet'
 import type { AppPluginId, PluginSaveResult } from './plugins'
+import type { McpChatServer, McpCliDetails, McpOverview, McpSaveResult, McpServerInput, McpTestResult, McpToolPolicy, McpUse } from './mcp'
 import type { AiNotesRunRequest, AiNotesRunResult } from './ai-notes'
 import type { AnalysisRunRequest, AnalysisRunResult, MeetingAnalysis } from './meeting-analysis'
 import type { MeetingNote } from './meeting-notes'
@@ -224,6 +225,27 @@ export interface InvokeChannels {
    * pelo `scribe:whatsapp-send` (o único caminho de envio); e a tarefa salva no formulário das Automações.
    */
   'scribe:chat-action-state': { request: ChatActionStateRequest; response: ChatActionResult }
+  /** Contrato 21: "Permitir uma vez", "Sempre permitir esta ferramenta" ou "Negar" no cartão de uma ferramenta MCP. */
+  'scribe:chat-approval': { request: ChatApprovalAnswer; response: boolean }
+  /** Contrato 21: a linha "Conexões" do painel Contexto (os servidores MCP ligados para o chat). */
+  'scribe:mcp-chat-servers': { request: undefined; response: McpChatServer[] }
+  /**
+   * Contrato 21: a aba "Conexões". Com `cli`, espera o `claude mcp list` (lido na hora; `refresh` relê). Nenhum valor de
+   * segredo vem: só "•••• definido".
+   */
+  'scribe:mcp-overview': { request: { cli?: boolean; refresh?: boolean }; response: McpOverview }
+  /** "Testar conexão" do formulário (`draft`) ou de um servidor da lista (`key`): `initialize` e `tools/list`, até 15 s. */
+  'scribe:mcp-test': { request: { draft: McpServerInput } | { key: string }; response: McpTestResult }
+  /** "Salvar" do formulário: no Claude CLI (`claude mcp add-json -s user`) ou só no app. Só depois de testar. */
+  'scribe:mcp-save': { request: McpServerInput; response: McpSaveResult }
+  /** Interruptor, usos e a política de uma ferramenta de um servidor (`app:<id>` ou `cli:<nome>`). */
+  'scribe:mcp-update': { request: { key: string; enabled?: boolean; uses?: McpUse[]; tool?: string; policy?: McpToolPolicy }; response: McpOverview | null }
+  /** "Remover": do app, ou do Claude CLI (`claude mcp remove -s user`) depois da confirmação na tela. */
+  'scribe:mcp-remove': { request: { key: string }; response: McpSaveResult }
+  /** "Ver detalhes" de um servidor do CLI (`claude mcp get`), com variáveis e cabeçalhos mascarados. */
+  'scribe:mcp-details': { request: { name: string }; response: McpCliDetails | null }
+  /** "Importar" um servidor do Claude Desktop: para o Claude CLI ou só no app (sem os segredos). */
+  'scribe:mcp-import': { request: { id: string; target: 'cli' | 'app' }; response: McpSaveResult }
   /** Bloqueio do app (contrato 22): estado, sem nada da senha. */
   'scribe:lock-status': { request: undefined; response: LockStatus }
   /** "Bloquear" (barra lateral, barra da gravação, ⌘⇧L): só bloqueia se houver senha ou Touch ID. */
@@ -538,6 +560,15 @@ const INVOKE: Record<InvokeChannel, true> = {
   'scribe:chat-copy': true,
   'scribe:chat-action-reminder': true,
   'scribe:chat-action-state': true,
+  'scribe:chat-approval': true,
+  'scribe:mcp-chat-servers': true,
+  'scribe:mcp-overview': true,
+  'scribe:mcp-test': true,
+  'scribe:mcp-save': true,
+  'scribe:mcp-update': true,
+  'scribe:mcp-remove': true,
+  'scribe:mcp-details': true,
+  'scribe:mcp-import': true,
   'scribe:lock-status': true,
   'scribe:lock-now': true,
   'scribe:lock-unlock': true,
@@ -777,6 +808,16 @@ export const WHEN_LOCKED: Readonly<Record<InvokeChannel, LockedPolicy>> = Object
   // Assistente (contrato 25, CA5): os cartões de ação, recusados com o app bloqueado.
   'scribe:chat-action-reminder': 'refused',
   'scribe:chat-action-state': 'refused',
+  // Contrato 21: as conexões MCP não aparecem nem mudam com o app bloqueado; o cartão sem resposta nega em 2 min.
+  'scribe:chat-approval': 'refused',
+  'scribe:mcp-chat-servers': 'refused',
+  'scribe:mcp-overview': 'refused',
+  'scribe:mcp-test': 'refused',
+  'scribe:mcp-save': 'refused',
+  'scribe:mcp-update': 'refused',
+  'scribe:mcp-remove': 'refused',
+  'scribe:mcp-details': 'refused',
+  'scribe:mcp-import': 'refused',
   // Conta Google e Drive (contrato 11): tudo é de Configurações e do detalhe, recusado bloqueado. A fila de envio
   // não depende de canal: roda no main e continua com o app bloqueado.
   'scribe:google-status': 'refused',

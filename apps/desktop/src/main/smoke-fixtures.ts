@@ -5,6 +5,7 @@
 import { execFile, spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { EventEmitter } from 'node:events'
+import { mkdirSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:http'
 import { join } from 'node:path'
 import { gzipSync } from 'node:zlib'
@@ -501,4 +502,38 @@ export function createSmokeAcp(
     return data
   }
   return { entry: scriptPath, args: ['--log', logPath], spawn: spawnAcp, packagesFor, download, close: () => server.close() }
+}
+
+/** Contrato 21: os segredos inventados dos servidores MCP falsos (o smoke confere que nenhum chega à tela nem ao relatório). */
+export const SMOKE_MCP_SECRETS = { cli: 'segredo-do-cli-1234', http: 'segredo-http-5678', desktop: 'segredo-desktop-9012' } as const
+
+/**
+ * Contrato 21: o arquivo do `claude` falso com os servidores do escopo `user` (no formato do `~/.claude.json`) e o
+ * `claude_desktop_config.json` falso, no userData do smoke. O servidor de comando local é o `fake-mcp-server.mjs` com o
+ * Node do Electron; o HTTP do CLI aponta para um endereço `.example` que nunca é aberto. Devolve os caminhos e a
+ * variável que diz ao `claude` falso onde está o arquivo dele.
+ */
+export function writeSmokeMcpFixtures(userData: string, serverScript: string): { cliFile: string; desktopFile: string; env: NodeJS.ProcessEnv } {
+  const dir = join(userData, 'smoke-mcp')
+  mkdirSync(dir, { recursive: true })
+  const cliFile = join(dir, 'claude.json')
+  const desktopFile = join(dir, 'claude_desktop_config.json')
+  writeFileSync(
+    cliFile,
+    `${JSON.stringify(
+      {
+        mcpServers: {
+          calculadora: { type: 'stdio', command: process.execPath, args: [serverScript], env: { ELECTRON_RUN_AS_NODE: '1', CALC_TOKEN: SMOKE_MCP_SECRETS.cli } },
+          'docs-remoto': { type: 'http', url: 'https://docs.example/mcp', headers: { Authorization: `Bearer ${SMOKE_MCP_SECRETS.http}` } },
+        },
+      },
+      null,
+      2,
+    )}\n`,
+  )
+  writeFileSync(
+    desktopFile,
+    `${JSON.stringify({ mcpServers: { 'arquivos-desktop': { command: process.execPath, args: [serverScript], env: { ELECTRON_RUN_AS_NODE: '1', API_KEY: SMOKE_MCP_SECRETS.desktop } } } }, null, 2)}\n`,
+  )
+  return { cliFile, desktopFile, env: { FAKE_CLAUDE_MCP_FILE: cliFile } }
 }

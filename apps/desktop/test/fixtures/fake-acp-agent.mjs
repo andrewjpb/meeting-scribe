@@ -32,6 +32,10 @@
 //   abre o primeiro resultado (`WebFetch`) e tenta abrir um endereço montado com o título da reunião na consulta (que o
 //   app tem de negar); responde com os links `[Web · <domínio> · <título>](url)`. Com a busca negada (sem internet),
 //   responde com a frase "Para isso, ligue …" da instrução de sistema. Com "me lembre", termina com um bloco de lembrete.
+// - MCP (contrato 21), no chat com servidores no `session/new`: "some" chama `mcp__<servidor>__soma` e "apague" chama
+//   `mcp__<servidor>__apagar_tudo`, cada um pedindo permissão (o servidor é o primeiro com "calc" no nome, ou o primeiro);
+//   a "ferramenta" não roda de verdade (a soma é feita aqui). O `initialize` anuncia `mcpCapabilities` como o adaptador.
+//   No registro, os servidores vão sem os valores das variáveis e dos cabeçalhos (só o nome e o tamanho).
 //
 // Uso: node fake-acp-agent.mjs [--log <arquivo.jsonl>] | node fake-acp-agent.mjs --version
 import { appendFileSync, readdirSync, readFileSync } from 'node:fs'
@@ -186,7 +190,7 @@ export function fakeAcpAgent({ log = () => undefined, pause = 300 } = {}) {
       log({ method: 'initialize', protocolVersion: ctx.params.protocolVersion, clientCapabilities: ctx.params.clientCapabilities })
       return {
         protocolVersion: acp.PROTOCOL_VERSION,
-        agentCapabilities: { promptCapabilities: { image: false, embeddedContext: true }, loadSession: false },
+        agentCapabilities: { promptCapabilities: { image: false, embeddedContext: true }, loadSession: false, mcpCapabilities: { http: true, sse: true } },
         agentInfo: { name: '@agentclientprotocol/claude-agent-acp', title: 'Claude Agent (falso)', version: FAKE_ACP_VERSION },
         authMethods: [],
       }
@@ -194,7 +198,8 @@ export function fakeAcpAgent({ log = () => undefined, pause = 300 } = {}) {
     .onRequest('session/new', (ctx) => {
       const options = ctx.params._meta?.claudeCode?.options ?? {}
       const sessionId = `sessao-${++next}`
-      const state = { cwd: ctx.params.cwd, systemPrompt: typeof options.systemPrompt === 'string' ? options.systemPrompt : '', purpose: purposeOf(options), mode: 'auto', model: 'default', effort: 'default', cancelled: false, cost: 0, turns: 0, tools: 0 }
+      const mcpServers = Array.isArray(ctx.params.mcpServers) ? ctx.params.mcpServers : []
+      const state = { cwd: ctx.params.cwd, systemPrompt: typeof options.systemPrompt === 'string' ? options.systemPrompt : '', purpose: purposeOf(options), mode: 'auto', model: 'default', effort: 'default', cancelled: false, cost: 0, turns: 0, tools: 0, mcpServers }
       for (const entry of ctx.params.configOptions ?? []) if (entry.configId in { mode: 1, model: 1, effort: 1 }) state[entry.configId] = entry.value
       sessions.set(sessionId, state)
       log({
@@ -202,7 +207,14 @@ export function fakeAcpAgent({ log = () => undefined, pause = 300 } = {}) {
         sessionId,
         purpose: state.purpose,
         cwd: ctx.params.cwd,
-        mcpServers: ctx.params.mcpServers,
+        // Contrato 21: sem os valores (podem ser segredo): o nome e o tamanho de cada um.
+        mcpServers: Array.isArray(ctx.params.mcpServers)
+          ? ctx.params.mcpServers.map((server) => ({
+              ...server,
+              ...(Array.isArray(server.env) ? { env: server.env.map((entry) => ({ name: entry.name, length: String(entry.value ?? '').length })) } : {}),
+              ...(Array.isArray(server.headers) ? { headers: server.headers.map((entry) => ({ name: entry.name, length: String(entry.value ?? '').length })) } : {}),
+            }))
+          : ctx.params.mcpServers,
         configOptions: ctx.params.configOptions ?? [],
         options: { ...options, systemPrompt: typeof options.systemPrompt === 'string' ? options.systemPrompt.split('\n')[0] : options.systemPrompt },
       })
@@ -349,6 +361,41 @@ export function fakeAcpAgent({ log = () => undefined, pause = 300 } = {}) {
           ...(allowed && result ? { content: [{ type: 'content', content: { type: 'text', text: result } }], _meta: { claudeCode: { toolName: name } } } : {}),
         })
         return allowed
+      }
+      // Contrato 21: as ferramentas MCP ("some" e "apague").
+      if (state.mcpServers.length && /\bsome\b|\bapague\b/i.test(question)) {
+        const server = state.mcpServers.find((entry) => /calc/i.test(entry.name)) ?? state.mcpServers[0]
+        const results = []
+        const call = async (tool, rawInput) => {
+          state.tools += 1
+          const toolCallId = `toolu_${sessionId}_${state.tools}`
+          const name = `mcp__${server.name}__${tool}`
+          await update({ sessionUpdate: 'tool_call', toolCallId, name, kind: 'other', title: tool, status: 'pending', rawInput, content: [] })
+          await wait()
+          const response = await ctx.client.request('session/request_permission', {
+            sessionId,
+            toolCall: { toolCallId, title: tool, rawInput },
+            options: [
+              { optionId: 'allow', name: 'Allow', kind: 'allow_once' },
+              { optionId: 'allow_always', name: 'Always allow', kind: 'allow_always' },
+              { optionId: 'reject', name: 'Reject', kind: 'reject_once' },
+            ],
+          })
+          const allowed = response.outcome.outcome === 'selected' && response.outcome.optionId.startsWith('allow')
+          log({ event: 'mcp', sessionId, server: server.name, tool, outcome: allowed ? 'allow' : 'reject' })
+          if (allowed) await update({ sessionUpdate: 'tool_call_update', toolCallId, status: 'in_progress' })
+          await wait()
+          const text = tool === 'soma' ? String(Number(rawInput.a) + Number(rawInput.b)) : 'nada foi apagado'
+          await update({ sessionUpdate: 'tool_call_update', toolCallId, status: allowed ? 'completed' : 'failed', ...(allowed ? { content: [{ type: 'content', content: { type: 'text', text } }], _meta: { claudeCode: { toolName: name } } } : {}) })
+          results.push({ tool, allowed, text })
+        }
+        if (/\bsome\b/i.test(question)) await call('soma', { a: 2, b: 3 })
+        if (/\bapague\b/i.test(question)) await call('apagar_tudo', {})
+        const answer = results.map((result) => (result.allowed ? (result.tool === 'soma' ? `A soma deu ${result.text}.` : 'Apaguei tudo.') : `Não pude usar ${result.tool}: o app negou.`)).join('\n\n')
+        for (let at = 0; at < answer.length; at += 60) await say(answer.slice(at, at + 60))
+        state.cost += 0.004
+        await update({ sessionUpdate: 'usage_update', used: 1200, size: 200000, cost: { amount: state.cost, currency: 'USD' }, _meta: { '_claude/model': modelId } })
+        return { stopReason: 'end_turn', usage: { totalTokens: 400, inputTokens: 320, outputTokens: 80 } }
       }
       // Contrato 26: abrir o resultado de uma busca de outra execução (o app tem de negar).
       if (/abra o primeiro resultado/i.test(question)) {
