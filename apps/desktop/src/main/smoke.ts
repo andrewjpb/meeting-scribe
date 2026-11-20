@@ -96,6 +96,7 @@ import { REPOSITORY_URL, UPDATE_HASH_MISMATCH_MESSAGE, UPDATE_INSTALL_INSTRUCTIO
 import { TRANSCRIPT_VERSION, type RuntimeSegment, type TranscriptDocument } from '../shared/transcription'
 import { applyMessage, emptyTranscriptState, persistableSegments, type StreamEnvelope } from '../renderer/src/transcription/reducer'
 import { encodeQr } from '../renderer/src/features/whatsapp/qr'
+import { inviteWhen, macTimeZone, whenDiff } from '../renderer/src/features/email/inviteFormat'
 import { CALLBACK_DONE_TEXT } from './accounts/oauth'
 import { DEFAULT_FOLDER_NAME } from './audio-files/service'
 import { SUMMARY_FILE_SUFFIX, summaryFileTarget } from './audio-files/summary-file'
@@ -3957,15 +3958,17 @@ async function settingsTabsChecks(contents: WebContents, ctx: SmokeContext, shot
   await clickSelector(contents, '[data-nav="configuracoes"]')
   const remembered = await waitFor(contents, `${routeIs('configuracoes')} && ${settingsTabIs('claude')}`)
 
-  // Teclado: ⌘2, ⌘8 ("Sobre", desde que "Plugins" (contrato 31) e "Conexões" (contrato 21) entraram antes dela) e a seta
-  // para a direita na lista de abas (da última, volta à primeira).
+  // Teclado: ⌘2, ⌘6 ("Email", contrato 55), ⌘9 ("Sobre", desde que "Email", "Plugins" (contrato 31) e "Conexões"
+  // (contrato 21) entraram antes dela) e a seta para a direita na lista de abas (da última, volta à primeira).
   const press = (key: string, meta: boolean): Promise<unknown> =>
     evaluate(contents, `window.dispatchEvent(new KeyboardEvent('keydown', { key: ${JSON.stringify(key)}, metaKey: ${meta}, bubbles: true, cancelable: true })), true`)
   await press('2', true)
   const cmd2 = await waitFor(contents, settingsTabIs('gravacao'))
   const activeTab = `document.activeElement?.getAttribute('role') === 'tab' ? document.activeElement.dataset.tab : ''`
   const cmd2Focus = await evaluate<string>(contents, activeTab)
-  await press('8', true)
+  await press('6', true)
+  const cmd6 = await waitFor(contents, settingsTabIs('email'))
+  await press('9', true)
   const cmd8 = await waitFor(contents, settingsTabIs('sobre'))
   await evaluate(contents, `document.querySelector('[role="tab"][data-tab="geral"]').dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true })), true`)
   const arrow = await waitFor(contents, settingsTabIs('geral'))
@@ -4028,8 +4031,8 @@ async function settingsTabsChecks(contents: WebContents, ctx: SmokeContext, shot
     // Contrato 24: o bloco "WhatsApp" (não instalado) com o "Instalar" e o aviso fixo.
     // Contrato 12: o bloco "Microsoft" sem cadastro e o bloco "Agenda" (dois interruptores e "Avisar antes").
     // Contrato 40: os dois interruptores das notificações do WhatsApp, depois do "Instalar". Contrato 34: e o de
-    // "Mostrar quando estou digitando". Contrato 43: o "Adicionar conta" e o interruptor das notificações de email.
-    JSON.stringify(contasButtons) === JSON.stringify(['Configurar…', 'Configurar…', '', '1 min', '5 min', '10 min', '', 'Instalar', '', '', '', 'Adicionar conta', '']) &&
+    // "Mostrar quando estou digitando". Contrato 55: o bloco do email saiu de Contas (foi para a aba Email).
+    JSON.stringify(contasButtons) === JSON.stringify(['Configurar…', 'Configurar…', '', '1 min', '5 min', '10 min', '', 'Instalar', '', '', '']) &&
     contas.includes('Conta Microsoft') &&
     contas.includes('Entre com a conta Google ou Microsoft acima para escolher as agendas.') &&
     contas.includes(WHATSAPP_FIXED_WARNING) &&
@@ -4047,6 +4050,7 @@ async function settingsTabsChecks(contents: WebContents, ctx: SmokeContext, shot
     remembered &&
     cmd2 &&
     cmd2Focus === 'gravacao' &&
+    cmd6 &&
     cmd8 &&
     arrow &&
     focused &&
@@ -4069,7 +4073,7 @@ async function settingsTabsChecks(contents: WebContents, ctx: SmokeContext, shot
     missing.length === 0
   return {
     ok,
-    detail: `Contas "${contas.replace(/\s+/g, ' ').trim()}" (botões ${JSON.stringify(contasButtons)}, ${ctx.fixtures.google.calls.length} pedidos ao Google); Sobre "${sobre.replace(/\s+/g, ' ').slice(0, 160)}", repositório -> ${opened || 'nada'}, "Procurar atualização" -> Geral=${toUpdates}, bloco visível=${updatesVisible}; aba lembrada=${remembered}; ⌘2=${cmd2}, ⌘8=${cmd8}, seta=${arrow}; ⌘F foca=${focused}; "TRADUCAO" -> grupos ${JSON.stringify(groups)}, itens ${JSON.stringify(items)}, painéis escondidos=${panelsHidden}; clique em "Modelo do chat" -> aba Claude e destaque=${jumped}, à vista=${inView}, busca limpa=${cleared}, destaque some em 2 s=${unhighlighted}; Esc limpa=${escaped}; foco: ⌘2 -> aba ${cmd2Focus || 'nenhuma'}, resultado -> ${resultFocus || 'fora da linha'}, Esc -> aba ${escFocus || 'nenhuma'}; durante a busca nenhuma aba marcada=${noneSelected}, região viva "${live}"; "haiku" acha "Modelo" escondido=${hiddenFound}, aviso=${hintShown}; "pasta"=${pastaFound}; ${rows.length} linhas na tela, fora do índice: ${JSON.stringify(missing)}`,
+    detail: `Contas "${contas.replace(/\s+/g, ' ').trim()}" (botões ${JSON.stringify(contasButtons)}, ${ctx.fixtures.google.calls.length} pedidos ao Google); Sobre "${sobre.replace(/\s+/g, ' ').slice(0, 160)}", repositório -> ${opened || 'nada'}, "Procurar atualização" -> Geral=${toUpdates}, bloco visível=${updatesVisible}; aba lembrada=${remembered}; ⌘2=${cmd2}, ⌘6=${cmd6}, ⌘9=${cmd8}, seta=${arrow}; ⌘F foca=${focused}; "TRADUCAO" -> grupos ${JSON.stringify(groups)}, itens ${JSON.stringify(items)}, painéis escondidos=${panelsHidden}; clique em "Modelo do chat" -> aba Claude e destaque=${jumped}, à vista=${inView}, busca limpa=${cleared}, destaque some em 2 s=${unhighlighted}; Esc limpa=${escaped}; foco: ⌘2 -> aba ${cmd2Focus || 'nenhuma'}, resultado -> ${resultFocus || 'fora da linha'}, Esc -> aba ${escFocus || 'nenhuma'}; durante a busca nenhuma aba marcada=${noneSelected}, região viva "${live}"; "haiku" acha "Modelo" escondido=${hiddenFound}, aviso=${hintShown}; "pasta"=${pastaFound}; ${rows.length} linhas na tela, fora do índice: ${JSON.stringify(missing)}`,
   }
 }
 
@@ -6210,6 +6214,8 @@ interface SmokeActionFile {
   kind: string
   status: string
   result: string | null
+  /** Contrato 56: o lote do cartão `email-lote`. */
+  batchId?: string
   chatId?: string
   chatName?: string
   phone?: string | null
@@ -7893,9 +7899,9 @@ async function emailChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => voi
   await loadAndWait(win)
   const contents = win.webContents
 
-  // Configurações › Contas › Email: adicionar em dois passos.
-  await openSettingsTab(contents, 'contas')
-  await scrollToSection(contents, 'Email')
+  // Configurações › Email (contrato 55: a aba própria, ⌘6): adicionar em dois passos.
+  await openSettingsTab(contents, 'email')
+  await scrollToSection(contents, 'Contas')
   const navHidden = await evaluate<boolean>(contents, `!document.querySelector('[data-email-nav]')`)
   await clickSelector(contents, '[data-action="email-add-account"]')
   await waitFor(contents, `document.querySelector('[data-email-add-panel="credentials"]')`)
@@ -7914,10 +7920,10 @@ async function emailChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => voi
   const testOk = await waitFor(contents, `document.querySelector('[data-notice="email-test-ok"]')`, 8000)
   await clickSelector(contents, '[data-action="email-add-confirm"]')
   const added = await waitFor(contents, `document.querySelector('[data-email-settings-state="connected"]') && !document.querySelector('[data-email-add-panel]')`, 8000)
-  const line = await text(contents, '[data-email-settings-line]')
+  const line = `${await text(contents, '[data-email-settings-line]')} · ${await text(contents, '[data-email-settings-status]')}`
   const accountId = await evaluate<string>(contents, `document.querySelector('[data-email-settings-account]')?.dataset.emailSettingsAccount ?? ''`)
   checks['settings'] = {
-    ok: navHidden && gmailHint && hintGone && manual && testRefused && testOk && added && line === 'IMAP · Conectada' && accountId !== '',
+    ok: navHidden && gmailHint && hintGone && manual && testRefused && testOk && added && line === 'IMAP · imap.lap.example · Conectada' && accountId !== '',
     detail: `sem conta, nada na barra=${navHidden}; dica do Gmail=${gmailHint} (some em outro domínio=${hintGone}); sem autoconfig cai no manual=${manual}; teste com a senha recusada=${testRefused}; teste ok=${testOk}; adicionada=${added} "${line}"`,
   }
 
@@ -8002,7 +8008,7 @@ async function emailChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => voi
       linkOpened &&
       reading.from === 'Marina Rocha' &&
       reading.cc.includes('paulo.nunes@cliente.example') &&
-      JSON.stringify(reading.actions) === JSON.stringify(['Responder', 'Responder a todos', 'Encaminhar', 'Marcar como não lida', 'Apagar']) &&
+      JSON.stringify(reading.actions) === JSON.stringify(['Responder', 'Responder a todos', 'Encaminhar', 'Marcar como não lida', 'Apagar', 'Mais']) &&
       reading.oneLine &&
       markedRead,
     detail: `aberta=${opened}, corpo=${bodyShown}; marcas perigosas no HTML=${dangerous}, script rodou=${reading.xss}; imagem bloqueada=${reading.blocked} (${reading.img} img, ${requestsBefore} pedidos antes do clique); "Carregar imagens"=${imageLoaded} (${fake.imageRequests.length} pedido); link pela confirmação=${asked}, aberto no navegador=${linkOpened}; de "${reading.from}", Cc com o Paulo=${reading.cc.includes('paulo.nunes@cliente.example')}; ações ${JSON.stringify(reading.actions)} numa linha=${reading.oneLine}; lida ao abrir=${markedRead}`,
@@ -8117,8 +8123,8 @@ async function emailChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => voi
     contents,
     `window.__scribeApi.invoke('scribe:email-add-account', { address: 'recusada@lap.example', password: ${JSON.stringify(SMOKE_EMAIL_WRONG_PASSWORD)}, incoming: { protocol: 'imap', host: 'imap.lap.example', port: 993, security: 'tls' }, outgoing: { host: 'smtp.lap.example', port: 465, security: 'tls' } }).then(() => true)`,
   )
-  await openSettingsTab(contents, 'contas')
-  const errorLine = await waitFor(contents, `[...document.querySelectorAll('[data-email-settings-state="error"] [data-email-settings-line]')].some((el) => el.textContent === 'IMAP · Com problema: Usuário ou senha recusados.')`, 8000)
+  await openSettingsTab(contents, 'email')
+  const errorLine = await waitFor(contents, `[...document.querySelectorAll('[data-email-settings-state="error"] [data-email-settings-status]')].some((el) => el.textContent === 'Com problema: Usuário ou senha recusados.')`, 8000)
   const errorInSidebar = await waitFor(contents, `document.querySelector('[data-email-account-error]')`)
   await clickSelector(contents, '[data-email-settings-state="error"] [data-action="email-remove-account"]')
   const confirmShown = await waitFor(contents, `document.querySelector('[data-notice="email-remove-confirm"]')?.textContent.includes('recusada@lap.example')`)
@@ -8288,6 +8294,85 @@ async function emailAssistantChecks(ctx: SmokeContext, watch: (win: BrowserWindo
       archivedCard &&
       seenAfter === seenBefore,
     detail: `resposta=${found.done} "${found.answer.slice(0, 200)}"; busca ${fake.reader.searches - searchBefore} pastas, PEEK ${fake.reader.peeks - peeksBefore}; cartão da pasta Arquivo=${archivedCard}; passos ${JSON.stringify(steps.slice(-4))}; lidas iguais=${seenAfter === seenBefore}`,
+  }
+
+  // Contrato 56 (CA17): "organiza … em Resolvidos": o agente falso pede `listar_pastas`, `criar_pasta` "Resolvidos" e
+  // `mover_emails` de um email da INBOX; ele vai para Resolvidos no servidor falso, a resposta termina com o cartão do lote
+  // ("Desfazer as 1") e o clique devolve o email à INBOX. Depois, o desfeito em parte: o email sai de Resolvidos por fora
+  // (outro cliente o põe noutra pasta) e o Desfazer mostra "Tentar de novo as 1". Prints em claro e escuro.
+  const target = (await inbox())[0]
+  const targetId = target?.messageId ?? '?'
+  const boxesBefore = fake.mailboxes()
+  const ask = `Organiza meus emails em Resolvidos, assunto "${(target?.subject ?? '').replace(/"/g, "'")}"`
+  const organized = await askChat(contents, ask)
+  const inResolved = (): boolean => fake.messageIdsIn('Resolvidos').includes(targetId)
+  const movedThere = inResolved() && !fake.messageIdsIn('INBOX').includes(targetId)
+  const lote = `[...document.querySelectorAll('[data-chat-action="email-lote"]')].at(-1)`
+  const loteShown = await waitFor(contents, `${lote}?.dataset.emailBatchState === 'done' && ${lote}?.querySelector('[data-action="chat-email-batch-undo"]')?.textContent.trim() === 'Desfazer as 1'`)
+  const batchId = await evaluate<string>(contents, `${lote}?.dataset.emailBatch ?? ''`)
+  const cardText = await evaluate<string>(contents, `${lote}?.textContent ?? ''`)
+  const savedCard = chatFile(ctx.userDataDir, chatId)?.messages.at(-1)?.actions?.find((action) => action.kind === 'email-lote')
+  const showCard = async (wc: WebContents): Promise<void> => {
+    await evaluate(wc, `(() => { ${lote}?.scrollIntoView({ block: 'center' }); return true })()`)
+    await settle(wc)
+  }
+  /** O mesmo cartão numa janela escura (a conversa aberta pelo trilho). */
+  const darkShot = async (name: string, state: string): Promise<boolean> => {
+    const dark = ctx.openWindow({ theme: 'dark' })
+    watch(dark)
+    await loadAndWait(dark)
+    const dc = dark.webContents
+    await clickSelector(dc, '[data-nav="assistente"]')
+    await waitFor(dc, routeIs('assistente'))
+    await waitFor(dc, `document.querySelector('[data-chat-item="${chatId}"]')`, 8000)
+    await evaluate(dc, `(() => { const item = document.querySelector('[data-chat-item="${chatId}"]'); (item?.querySelector('button, a') ?? item)?.click(); return true })()`)
+    const ready = await waitFor(dc, `${lote}?.dataset.emailBatchState === '${state}'`, 8000)
+    await showCard(dc)
+    shots.push(await capture(dark, ctx.outDir, name))
+    dark.destroy()
+    return ready
+  }
+  await showCard(contents)
+  shots.push(await capture(win, ctx.outDir, 'assistente-email-lote-light'))
+  const darkDone = await darkShot('assistente-email-lote-dark', 'done')
+  await evaluate(contents, `${lote}?.querySelector('[data-action="chat-email-batch-undo"]')?.click()`)
+  const undoneShown = await waitFor(contents, `${lote}?.dataset.emailBatchState === 'undone' && ${lote}?.dataset.chatActionStatus === 'done' && (${lote}?.querySelector('[data-chat-action-result]')?.textContent ?? '').includes('a mensagem voltou para a Caixa de Entrada') && !${lote}?.querySelector('[data-action="chat-email-batch-undo"]')`, 8000)
+  const backHome = fake.messageIdsIn('INBOX').includes(targetId) && !inResolved()
+  // Desfeito em parte: de novo, e o email sai de Resolvidos por fora antes do Desfazer.
+  for (let attempt = 0; attempt < 80 && !(await inbox()).some((item) => item.messageId === targetId); attempt++) await wait(100)
+  const again = await askChat(contents, ask)
+  const partialCard = await waitFor(contents, `${lote}?.dataset.emailBatch !== '${batchId}' && ${lote}?.dataset.emailBatchState === 'done'`)
+  const uid = fake.mailboxes()['Resolvidos']?.uids[0] ?? 0
+  const outside = fake.take('Resolvidos', uid)
+  if (outside) fake.put('Pasta de outro cliente', { from: outside.from[0] ?? { name: null, address: 'x@x.example' }, subject: outside.subject, date: outside.date, messageId: outside.messageId, seen: outside.flags.includes('\\Seen') })
+  await evaluate(contents, `${lote}?.querySelector('[data-action="chat-email-batch-undo"]')?.click()`)
+  const partialShown = await waitFor(contents, `${lote}?.dataset.emailBatchState === 'partial-undo' && ${lote}?.querySelector('[data-action="chat-email-batch-undo"]')?.textContent.trim() === 'Tentar de novo as 1' && (${lote}?.querySelector('[data-email-batch-failures]')?.textContent ?? '').includes('não estava mais em Resolvidos')`, 8000)
+  await showCard(contents)
+  shots.push(await capture(win, ctx.outDir, 'assistente-email-lote-parcial-light'))
+  const darkPartial = await darkShot('assistente-email-lote-parcial-dark', 'partial-undo')
+  checks['assistantOrganize'] = {
+    ok:
+      organized.done &&
+      target !== undefined &&
+      boxesBefore['Resolvidos'] === undefined &&
+      organized.answer.includes('movi 1 email(s) para Resolvidos') &&
+      !organized.answer.includes('lap-ferramenta') &&
+      movedThere &&
+      loteShown &&
+      cardText.includes(`Organização do email · ${SMOKE_EMAIL_ADDRESS}`) &&
+      cardText.includes('1 em Resolvidos') &&
+      savedCard?.kind === 'email-lote' &&
+      savedCard.batchId === batchId &&
+      darkDone &&
+      undoneShown &&
+      backHome &&
+      again.done &&
+      partialCard &&
+      outside !== null &&
+      partialShown &&
+      darkPartial &&
+      fake.messageIdsIn('Pasta de outro cliente').includes(targetId),
+    detail: `resposta=${organized.done} "${organized.answer.slice(0, 160)}"; "${target?.subject ?? '?'}" em Resolvidos=${movedThere}; cartão=${loteShown} "${cardText.slice(0, 160)}" gravado=${savedCard?.kind ?? 'nada'}; escuro=${darkDone}; desfeito=${undoneShown} de volta=${backHome}; segundo lote=${again.done}/${partialCard} tirado por fora=${outside !== null}; em parte=${partialShown} escuro=${darkPartial}`,
   }
 
   await evaluate(contents, `window.__scribeApi.invoke('scribe:settings-update', { claudeTransport: '${transportBefore === 'acp' ? 'acp' : 'cli'}' }).then(() => true)`)
@@ -8521,6 +8606,821 @@ async function emailRulesCheck(ctx: SmokeContext, watch: (win: BrowserWindow) =>
   win.destroy()
 }
 
+/**
+ * Contrato 55 (CA26), numa janela que troca de tema no lugar (cada print em claro e escuro, no mesmo estado): a árvore
+ * de pastas do servidor falso na ordem D1, com a contagem; ⌘ clique em 3 mensagens ("3 selecionadas" e o resumo), o
+ * alvo de arrastar, o "Mover para…" por ⇧⌘M com Enter levando as 3 para "Arquivo"; arrastar uma para "Pendentes"; o erro
+ * do servidor devolvendo a linha; o menu "Mais" com as recentes; o seletor com a busca; o clique direito na mensagem e na
+ * pasta (Nova subpasta, Renomear, Apagar com a confirmação D11; a do sistema com os dois desligados); Configurações ›
+ * Email (a assinatura gravada e no Composer da resposta, acima da citação, com a linha de apoio; a regra criada pelo
+ * editor levando o email novo para "Arquivo"; "Executar agora" com a contagem antes; o "último erro" de uma regra com a
+ * pasta apagada; a conta POP3; a busca "assinatura"); e o painel "Organizando" do "Claude" falso, com Parar, o resumo,
+ * a faixa e o Desfazer devolvendo as mensagens à INBOX.
+ */
+async function emailFoldersUiChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => void, checks: Record<string, Check>, shots: Screenshot[]): Promise<void> {
+  const fake = ctx.fixtures.email
+  const themeBefore = readSettings(ctx.userDataDir).theme ?? 'system'
+  nativeTheme.themeSource = 'light'
+  const win = ctx.openWindow({})
+  watch(win)
+  await loadAndWait(win)
+  const contents = win.webContents
+  if (themeBefore !== 'system') await evaluate(contents, "window.__scribeApi.invoke('scribe:settings-update', { theme: 'system' }).then(() => true)")
+  const api = <T>(channel: string, request?: unknown): Promise<T> => evaluate<T>(contents, `window.__scribeApi.invoke(${JSON.stringify(channel)}${request === undefined ? '' : `, ${JSON.stringify(request)}`})`)
+  const accountId = await evaluate<string>(contents, `window.__scribeApi.invoke('scribe:email-accounts').then((list) => list[0]?.account.id ?? '')`)
+  /** O mesmo estado nos dois temas: claro, escuro (no lugar, sem recarregar) e de volta ao claro. */
+  const both = async (name: string): Promise<void> => {
+    await settle(contents)
+    shots.push(await capture(win, ctx.outDir, `${name}-light`))
+    nativeTheme.themeSource = 'dark'
+    await waitFor(contents, "document.documentElement.dataset.theme === 'dark'")
+    await settle(contents)
+    shots.push(await capture(win, ctx.outDir, `${name}-dark`))
+    nativeTheme.themeSource = 'light'
+    await waitFor(contents, "document.documentElement.dataset.theme === 'light'")
+  }
+  const rowsWith = (prefix: string): string => `[...${EMAIL_ROWS}].filter((el) => !el.dataset.emailLeaving && (el.querySelector('[data-email-row-subject]')?.textContent ?? '').startsWith(${JSON.stringify(prefix)}))`
+  const folderLink = (path: string): string => `[data-email-folder-account="${accountId}"][data-email-folder-path=${JSON.stringify(path)}]`
+  const count = (path: string): number => fake.mailboxes()[path]?.uids.length ?? 0
+  const pressKey = (selector: string, key: string, mods: { meta?: boolean; shift?: boolean } = {}): Promise<unknown> =>
+    evaluate(contents, `(document.querySelector(${JSON.stringify(selector)}) ?? document.body).dispatchEvent(new KeyboardEvent('keydown', { key: ${JSON.stringify(key)}, metaKey: ${mods.meta === true}, shiftKey: ${mods.shift === true}, bubbles: true, cancelable: true })), true`)
+  const closeMenus = (): Promise<unknown> => evaluate(contents, "document.body.dispatchEvent(new MouseEvent('mousedown', { bubbles: true })), true")
+  const contextMenu = (selector: string): Promise<unknown> =>
+    evaluate(contents, `(() => { const el = ${selector}; const box = el.getBoundingClientRect(); el.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: box.left + 60, clientY: box.top + 12 })); return true })()`)
+  const drag = (source: string, target: string, drop: boolean): Promise<unknown> =>
+    evaluate(
+      contents,
+      `(() => {
+        const from = ${source}
+        const to = document.querySelector(${JSON.stringify(target)})
+        const dt = new DataTransfer()
+        from.dispatchEvent(new DragEvent('dragstart', { bubbles: true, cancelable: true, dataTransfer: dt }))
+        to.dispatchEvent(new DragEvent('dragenter', { bubbles: true, cancelable: true, dataTransfer: dt }))
+        to.dispatchEvent(new DragEvent('dragover', { bubbles: true, cancelable: true, dataTransfer: dt }))
+        if (${drop}) {
+          to.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: dt }))
+          from.dispatchEvent(new DragEvent('dragend', { bubbles: true, dataTransfer: dt }))
+        }
+        return true
+      })()`,
+    )
+
+  // As pastas da pessoa, criadas pelo app (o `LIST` guardado é relido), e as mensagens da tela (dados fictícios).
+  for (const [parentPath, name] of [
+    [null, 'Clientes'],
+    ['Clientes', 'ABF'],
+    ['Clientes', 'Fluxopay'],
+    ['Clientes', 'GBS'],
+  ] as const)
+    await api('scribe:email-folder-create', { accountId, parentPath, name })
+  fake.put('Clientes/ABF', { from: { name: 'Carla Nogueira', address: 'carla.nogueira@exemplo.org' }, subject: 'Re: Renovação do contrato de 2027', date: Date.now() - 2 * 86_400_000, seen: false })
+  await api('scribe:email-folder-create', { accountId, parentPath: null, name: 'Pendentes' })
+  const seeds = [
+    { from: { name: 'Marina Duarte', address: 'marina.duarte@exemplo.org' }, subject: 'Re: Ajuste no app, tela de agenda', text: 'Testei no iPhone e a agenda já abre no dia certo. Falta só o Android.' },
+    { from: { name: 'Fluxopay Financeiro', address: 'financeiro@fluxopay.example' }, subject: 'Fatura de novembro, vencimento 25/11', text: 'Sua fatura de novembro já está disponível.' },
+    { from: { name: 'Carla Nogueira', address: 'carla.nogueira@exemplo.org' }, subject: 'Credenciamento da feira: lista final', text: 'Segue a planilha com os nomes confirmados até ontem à noite.' },
+    { from: { name: 'Rodrigo Mendes', address: 'rodrigo.mendes@exemplo.org' }, subject: 'VPN: rotas dos dois servidores', text: 'Subi as rotas dos dois servidores. Testa aí e me avisa.' },
+  ]
+  for (const seed of seeds) await fake.deliver(seed)
+
+  // CA2: a árvore na ordem D1, com a contagem.
+  await waitFor(contents, `document.querySelector('${EMAIL_INBOX_LINK}')`, 8000)
+  await clickSelector(contents, EMAIL_INBOX_LINK)
+  const listed = await waitFor(contents, `${routeIs('email')} && ${rowsWith('VPN:')}.length === 1 && document.querySelector(${JSON.stringify(folderLink('Clientes/ABF'))})`, 8000)
+  // As faixas de lotes de antes (contrato 56) saem, para os prints.
+  await evaluate(contents, "[...document.querySelectorAll('[data-action=\"email-organize-banner-close\"]')].forEach((el) => el.click()), true")
+  const tree = await evaluate<string[]>(contents, `[...document.querySelectorAll('[data-email-tree="${accountId}"] [data-email-folder-path]')].map((el) => el.dataset.emailFolderPath)`)
+  const wanted = ['INBOX', 'Enviados', 'Arquivo', 'Clientes', 'Clientes/ABF', 'Clientes/Fluxopay', 'Clientes/GBS', 'Pendentes', 'Resolvidos']
+  const positions = wanted.map((path) => tree.indexOf(path))
+  const ordered = positions.every((at, index) => at !== -1 && (index === 0 || at > (positions[index - 1] ?? -1)))
+  const abfCount = await waitFor(contents, `document.querySelector(${JSON.stringify(`${folderLink('Clientes/ABF')} [data-email-folder-unseen]`)})?.firstChild?.textContent === '1'`, 5000)
+  checks['foldersTree'] = { ok: listed && ordered && abfCount, detail: `lista=${listed}; árvore ${JSON.stringify(tree)}; ordem D1=${ordered}; ABF com 1 não lida=${abfCount}` }
+
+  // CA4 e CA5: ⌘ clique em 3, o resumo e o alvo de arrastar (o print); ⇧⌘M e Enter levam as 3 para "Arquivo".
+  const subjects = ['Credenciamento da feira', 'Fatura de novembro', 'Re: Ajuste no app']
+  await evaluate(contents, `${rowsWith('VPN:')}[0].click(), true`)
+  for (const subject of subjects) await evaluate(contents, `${rowsWith(subject)}[0].dispatchEvent(new MouseEvent('click', { bubbles: true, metaKey: true })), true`)
+  await evaluate(contents, `${rowsWith('VPN:')}[0].dispatchEvent(new MouseEvent('click', { bubbles: true, metaKey: true })), true`)
+  const three = await waitFor(contents, `document.querySelector('[data-email-selected-count]')?.textContent === '3 selecionadas' && document.querySelector('[data-email-selection-summary="3"]') && document.querySelectorAll('[data-email-row-checkbox][aria-checked="true"]').length === 3`)
+  await drag(`${rowsWith('Fatura de novembro')}[0]`, folderLink('Clientes/ABF'), false)
+  const target = await waitFor(contents, `document.querySelector(${JSON.stringify(folderLink('Clientes/ABF'))})?.dataset.emailDropTarget === 'true' && document.querySelector('[data-email-drop-label]')?.textContent === 'Mover 3 mensagens para ABF'`)
+  await both('email-pastas')
+  await evaluate(contents, `(() => { const dt = new DataTransfer(); document.querySelector(${JSON.stringify(folderLink('Clientes/ABF'))}).dispatchEvent(new DragEvent('dragleave', { bubbles: true, dataTransfer: dt })); ${rowsWith('Fatura de novembro')}[0].dispatchEvent(new DragEvent('dragend', { bubbles: true, dataTransfer: dt })); return true })()`)
+  const archivedBefore = count('Arquivo')
+  await pressKey('[data-email-list]', 'M', { meta: true, shift: true })
+  const picker = await waitFor(contents, `document.querySelector('[data-email-picker]')?.textContent.includes('3 mensagens')`)
+  // M1: sem destino escolhido de saída ("Mover" desligado); Rascunhos/Enviados/Lixeira/Spam não são destino.
+  const noTarget = await waitFor(contents, `document.querySelector('[data-action="email-picker-move"]')?.disabled === true && !document.querySelector('[data-email-picker] [aria-selected="true"]') && document.querySelector('[data-email-picker-folder="Enviados"]')?.getAttribute('aria-disabled') === 'true' && document.querySelector('[data-action="email-picker-new-folder"]')`)
+  await setValue(contents, '[data-email-picker-search]', 'arq')
+  await pressKey('[data-email-picker-search]', 'ArrowDown')
+  const picked = noTarget && (await waitFor(contents, `document.querySelector('[data-email-picker-folder="Arquivo"]')?.getAttribute('aria-selected') === 'true' && document.querySelector('[data-action="email-picker-move"]')?.disabled === false`))
+  await pressKey('[data-email-picker-search]', 'Enter')
+  const movedThree = await waitFor(contents, `!document.querySelector('[data-email-picker]') && ${subjects.map((subject) => `${rowsWith(subject)}.length === 0`).join(' && ')}`, 8000)
+  for (const stop = Date.now() + 3000; count('Arquivo') < archivedBefore + 3 && Date.now() < stop; ) await wait(50)
+  const inArchive = count('Arquivo') === archivedBefore + 3
+  // Arrastar uma para "Pendentes".
+  const pendingBefore = count('Pendentes')
+  await drag(`${rowsWith('VPN:')}[0]`, folderLink('Pendentes'), true)
+  const dragged = await waitFor(contents, `${rowsWith('VPN:')}.length === 0`, 5000)
+  for (const stop = Date.now() + 3000; count('Pendentes') < pendingBefore + 1 && Date.now() < stop; ) await wait(50)
+  const inPending = count('Pendentes') === pendingBefore + 1
+  // Erro do servidor: a linha volta, com a frase.
+  fake.failNext = 'MOVE'
+  await drag(`${rowsWith('Proposta revisada')}[0] ?? [...${EMAIL_ROWS}][0]`, folderLink('Pendentes'), true)
+  const refused = await waitFor(contents, `document.querySelector('[data-notice="email-move-error"]')?.textContent.includes('O servidor recusou. Nada foi movido.')`, 5000)
+  const back = await waitFor(contents, `[...${EMAIL_ROWS}].filter((el) => !el.dataset.emailLeaving).length >= 1 && !document.querySelector('[data-email-leaving]')`, 3000)
+  fake.failNext = null
+  checks['foldersMove'] = {
+    ok: three && target && picker && picked && movedThree && inArchive && dragged && inPending && refused && back,
+    detail: `3 selecionadas e o resumo=${three}; alvo "Mover 3 mensagens para ABF"=${target}; ⇧⌘M abre o seletor=${picker}, "arq" escolhe Arquivo=${picked}; Enter moveu=${movedThree}, no Arquivo=${inArchive}; arrastar para Pendentes=${dragged}/${inPending}; erro do servidor=${refused}, a linha voltou=${back}`,
+  }
+
+  // CA6 e CA7 (telas 02 e 03): "Mais" com as recentes e o seletor com a busca.
+  await clickSelector(contents, '[data-action="email-move-error"] button, [data-notice="email-move-error"] button')
+  const opened = await clickEmailRow(contents, 'Re: Agenda da apresentação')
+  await clickSelector(contents, '[data-action="email-more"]')
+  const recents = await waitFor(contents, `(() => { const items = [...document.querySelectorAll('[data-email-more-menu] [data-email-recent]')].map((el) => el.dataset.emailRecent); return items[0] === 'Pendentes' && items.includes('Arquivo') })()`)
+  await both('email-mais')
+  await clickSelector(contents, '[data-action="email-more-move"]')
+  const fromMore = await waitFor(contents, `document.querySelector('[data-email-picker]')?.textContent.includes('1 mensagem')`)
+  await setValue(contents, '[data-email-picker-search]', 'cli')
+  const filtered = await waitFor(contents, `(() => { const items = [...document.querySelectorAll('[data-email-picker-folder]')].map((el) => el.dataset.emailPickerFolder); return items.includes('Clientes') && items.includes('Clientes/ABF') && !items.includes('Pendentes') && document.querySelector('[data-email-picker-match]')?.textContent === 'Cli' })()`)
+  await both('email-mover')
+  await pressKey('[data-email-picker-search]', 'Escape')
+  const pickerClosed = await waitFor(contents, `!document.querySelector('[data-email-picker]')`)
+  checks['foldersMore'] = { ok: opened && recents && fromMore && filtered && pickerClosed, detail: `leitura=${opened}; recentes=${recents}; seletor do "Mais"=${fromMore}; busca "cli"=${filtered}; Esc fecha=${pickerClosed}` }
+
+  // CA8 (tela 04): clique direito na mensagem, com o submenu "Mover para ›" (a atual desligada).
+  await contextMenu(`${rowsWith('Re: Agenda da apresentação')}[0]`)
+  const messageMenu = await waitFor(contents, `document.querySelector('[data-email-context-menu="message"]')`)
+  await clickSelector(contents, '[data-email-context-menu="message"] [data-action="email-menu-move"]')
+  const submenu = await waitFor(contents, `document.querySelector('[data-email-context-submenu="move"] [data-email-menu-folder="INBOX"]')?.getAttribute('aria-disabled') === 'true' && document.querySelector('[data-email-context-submenu="move"] [data-email-menu-folder="Clientes/ABF"]') && !document.querySelector('[data-email-context-submenu="move"] [data-email-menu-folder="Enviados"]') && document.querySelector('[data-email-context-submenu="move"] [data-action="email-menu-other"]')`)
+  await both('email-menu-mensagem')
+  await closeMenus()
+
+  // CA9 (tela 05): clique direito na pasta: Nova subpasta, Renomear e Apagar (com mensagens, D11); a do sistema, desligados.
+  await clickSelector(contents, folderLink('Clientes'))
+  await waitFor(contents, `document.querySelector('[data-email-folder-view-path="Clientes"]') && document.querySelector('[data-email-folder-title]')?.textContent === 'Clientes'`, 8000)
+  await contextMenu(`document.querySelector(${JSON.stringify(folderLink('Clientes'))})`)
+  const folderMenu = await waitFor(contents, `document.querySelector('[data-email-context-menu="folder"] [data-action="email-folder-new"]')`)
+  await both('email-menu-pasta')
+  await clickSelector(contents, '[data-email-context-menu="folder"] [data-action="email-folder-new"]')
+  await waitFor(contents, `document.querySelector('[data-email-folder-input="create"] input')`)
+  await setValue(contents, '[data-email-folder-input="create"] input', 'Contratos')
+  await pressEnterIn(contents, '[data-email-folder-input="create"] input')
+  const created = await waitFor(contents, `document.querySelector(${JSON.stringify(folderLink('Clientes/Contratos'))})`, 8000)
+  await contextMenu(`document.querySelector(${JSON.stringify(folderLink('Clientes/Contratos'))})`)
+  await clickSelector(contents, '[data-email-context-menu="folder"] [data-action="email-folder-rename"]')
+  await waitFor(contents, `document.querySelector('[data-email-folder-input="rename"] input')`)
+  await setValue(contents, '[data-email-folder-input="rename"] input', 'Contratos 2027')
+  await pressEnterIn(contents, '[data-email-folder-input="rename"] input')
+  const renamed = await waitFor(contents, `document.querySelector(${JSON.stringify(folderLink('Clientes/Contratos 2027'))}) && !document.querySelector(${JSON.stringify(folderLink('Clientes/Contratos'))})`, 8000)
+  await contextMenu(`document.querySelector(${JSON.stringify(folderLink('Clientes/ABF'))})`)
+  await clickSelector(contents, '[data-email-context-menu="folder"] [data-action="email-folder-delete"]')
+  // B3: o primeiro clique pede sem `force`; o 52 diz o conteúdo real e só então vem a confirmação D11 (o segundo clique).
+  const askedShort = await waitFor(contents, `(document.querySelector('[data-email-folder-delete-confirm]')?.textContent ?? '').includes('Apagar a pasta “ABF”?')`)
+  await clickSelector(contents, '[data-action="email-folder-delete-confirm"]')
+  const askedDelete = askedShort && (await waitFor(contents, `(document.querySelector('[data-email-folder-delete-confirm]')?.textContent ?? '').includes('Apagar a pasta “ABF” e a mensagem dela?') && document.querySelector('[data-email-folder-delete-confirm]').textContent.includes('sem passar pela Lixeira')`, 8000)) && fake.mailboxes()['Clientes/ABF'] !== undefined
+  await clickSelector(contents, '[data-action="email-folder-delete-confirm"]')
+  const deletedFolder = await waitFor(contents, `!document.querySelector(${JSON.stringify(folderLink('Clientes/ABF'))}) && !document.querySelector('[data-email-folder-delete-confirm]')`, 8000)
+  await contextMenu(`document.querySelector(${JSON.stringify(folderLink('INBOX'))})`)
+  const locked = await waitFor(contents, `document.querySelector('[data-email-context-menu="folder"] [data-action="email-folder-rename"]')?.getAttribute('aria-disabled') === 'true' && document.querySelector('[data-email-context-menu="folder"] [data-action="email-folder-delete"]')?.getAttribute('aria-disabled') === 'true' && document.querySelector('[data-email-context-menu="folder"]').textContent.includes('Pasta do sistema')`)
+  await closeMenus()
+  const server = fake.mailboxes()
+  checks['foldersMenus'] = {
+    ok: messageMenu && submenu && folderMenu && created && renamed && askedDelete && deletedFolder && locked && server['Clientes/Contratos 2027'] !== undefined && server['Clientes/ABF'] === undefined,
+    detail: `menu da mensagem=${messageMenu}, submenu=${submenu}; menu da pasta=${folderMenu}; nova subpasta=${created}; renomear=${renamed}; confirmação D11=${askedDelete}; apagada=${deletedFolder}; sistema com cadeado=${locked}; no servidor ${JSON.stringify(Object.keys(server))}`,
+  }
+
+  // CA14 a CA16: a aba Email; a assinatura gravada entra na resposta, acima da citação, com a linha de apoio (tela 06).
+  await openSettingsTab(contents, 'email')
+  await waitFor(contents, `document.querySelector('[data-email-signature-text]') && !document.querySelector('[data-email-signature-text]').disabled`, 8000)
+  const signatureText = 'Andrew Teste\nLAP Software & Consultoria\n(11) 98765-4321 · https://lap.example'
+  await setValue(contents, '[data-email-signature-text]', signatureText)
+  await leaveField(contents, '[data-email-signature-text]')
+  let signatureSaved = false
+  for (const stop = Date.now() + 3000; !signatureSaved && Date.now() < stop; await wait(100)) signatureSaved = (await api<{ ok: boolean; signature?: { text: string } }>('scribe:email-signature-get', { accountId })).signature?.text === signatureText
+  const counter = await waitFor(contents, `document.querySelector('#settings-email-signature-count')?.textContent === '${signatureText.length} de 2000'`)
+  await clickSelector(contents, EMAIL_INBOX_LINK)
+  await waitFor(contents, `${routeIs('email')} && document.querySelector('[data-email-folder-view="inbox"]')`, 8000)
+  await clickEmailRow(contents, 'Re: Agenda da apresentação')
+  await clickSelector(contents, '[data-action="email-reply"]')
+  const signedReply = await waitFor(
+    contents,
+    `(() => { const text = document.querySelector('#email-compose-text')?.value ?? ''; const sig = text.indexOf('-- \\nAndrew Teste'); return sig !== -1 && sig < text.indexOf('escreveu:') })() && document.querySelector('[data-email-signature-hint]')?.textContent.includes('Configurações › Email')`,
+    8000,
+  )
+  await both('email-composer-assinatura')
+  await clickSelector(contents, '[data-action="email-discard"]')
+  await clickSelector(contents, '[data-action="email-discard-confirm"]')
+  checks['signature'] = { ok: signatureSaved && counter && signedReply, detail: `gravada=${signatureSaved}; contador=${counter}; na resposta, acima da citação, com a linha de apoio=${signedReply}` }
+
+  // CA17 a CA19 (telas 09 e 10): as regras. Os avisos chegam antes da regra que os marca; a regra do GBS perde a pasta.
+  for (const subject of ['Backup diário concluído', 'Certificado renovado']) await fake.deliver({ from: { name: 'Servidor', address: 'avisos@servidor-ui.example' }, subject, text: 'Tudo certo.' })
+  const noticesRule = { id: '5c0f1d7e-53aa-4c53-9b1e-000000000551', name: 'Avisos do servidor', enabled: true, match: 'all', conditions: [{ field: 'from', value: '@servidor-ui.example' }], actions: { moveTo: null, markRead: true, flag: false, delete: false, silent: true }, stopHere: false }
+  const gbsRule = { id: '5c0f1d7e-53aa-4c53-9b1e-000000000552', name: 'GBS', enabled: true, match: 'all', conditions: [{ field: 'from', value: '@gbs.example' }], actions: { moveTo: 'Clientes/GBS', markRead: false, flag: false, delete: false, silent: false }, stopHere: false }
+  const rulesSaved = await api<{ ok: boolean }>('scribe:email-rules-set', { accountId, rules: [noticesRule, gbsRule] })
+  fake.dropFolder('Clientes/GBS')
+  await fake.deliver({ from: { name: 'Diego GBS', address: 'diego@gbs.example' }, subject: 'Acesso novo', text: 'Criado.' })
+  let ruleError = false
+  for (const stop = Date.now() + 5000; !ruleError && Date.now() < stop; await wait(100)) ruleError = (await api<{ ok: boolean; state?: Record<string, { lastError: unknown }> }>('scribe:email-rules-get', { accountId })).state?.[gbsRule.id]?.lastError != null
+  // Sair e voltar remonta a aba (as regras são lidas ao abrir).
+  await clickSelector(contents, '[data-nav="reunioes"]')
+  await waitFor(contents, routeIs('reunioes'))
+  await openSettingsTab(contents, 'email')
+  const listedRules = await waitFor(contents, `document.querySelectorAll('[data-email-rule]').length === 2 && document.querySelector('[data-email-rule="${gbsRule.id}"] [data-email-rule-error]')?.textContent.includes('Último erro')`, 8000)
+  const summaryOk = await waitFor(contents, `document.querySelector('[data-email-rule="${noticesRule.id}"] [data-email-rule-summary]')?.textContent === 'Se o remetente contém “@servidor-ui.example” Marcar como lida · não avisar'`)
+  // A regra nova pelo editor: "assunto contém" e "mover para a pasta" Arquivo, pelo seletor.
+  await clickSelector(contents, '[data-action="email-rule-new"]')
+  await waitFor(contents, `document.querySelector('[data-email-rule="new"] [data-email-rule-editor]')`)
+  const editor = '[data-email-rule="new"]'
+  await setValue(contents, `${editor} [data-email-rule-name-input]`, 'Faturas para o Arquivo')
+  await setValue(contents, `${editor} [data-email-rule-condition="0"] select`, 'subject', 'change')
+  await setValue(contents, `${editor} [data-email-rule-value]`, 'Fatura-ui')
+  const blocked = await waitFor(contents, `document.querySelector('${editor} [data-action="email-rule-save"]')?.disabled === true && document.querySelector('${editor} [data-email-rule-problem]')?.textContent === 'Escolha ao menos uma ação.'`)
+  await clickSelector(contents, `${editor} [data-action="email-rule-add-action"]`)
+  await clickSelector(contents, `${editor} [data-action="email-rule-pick-folder"]`)
+  await waitFor(contents, `document.querySelector('[data-email-picker]')`)
+  await setValue(contents, '[data-email-picker-search]', 'arq')
+  await pressKey('[data-email-picker-search]', 'ArrowDown')
+  await waitFor(contents, `document.querySelector('[data-email-picker-folder="Arquivo"]')?.getAttribute('aria-selected') === 'true'`)
+  await pressKey('[data-email-picker-search]', 'Enter')
+  const chosen = await waitFor(contents, `document.querySelector('${editor} [data-email-rule-folder]')?.textContent === 'Arquivo' && document.querySelector('${editor} [data-action="email-rule-save"]')?.disabled === false`)
+  await clickSelector(contents, `${editor} [data-action="email-rule-save"]`)
+  const ruleCreated = await waitFor(contents, `document.querySelectorAll('[data-email-rule]').length === 3 && !document.querySelector('[data-email-rule-editor]')`, 8000)
+  const archivedRule = count('Arquivo')
+  await fake.deliver({ from: { name: 'Financeiro', address: 'financeiro@fluxopay.example' }, subject: 'Fatura-ui de dezembro', text: 'Segue a fatura.' })
+  for (const stop = Date.now() + 5000; count('Arquivo') === archivedRule && Date.now() < stop; ) await wait(50)
+  const ruleMoved = count('Arquivo') === archivedRule + 1
+  await scrollToSection(contents, 'Contas')
+  await both('configuracoes-email')
+  // "Executar agora": a contagem antes (com o editor de outra regra aberto: o print da tela 10), depois executa.
+  const runRow = `[data-email-rule="${noticesRule.id}"]`
+  await clickSelector(contents, `${runRow} [data-action="email-rule-run"]`)
+  const inboxSize = (await api<unknown[]>('scribe:email-messages', { accountId })).length
+  const preview = await waitFor(contents, `document.querySelector('${runRow} [data-email-rule-preview]')?.textContent === '2 das ${inboxSize} mensagens da Caixa de Entrada atendem à regra e serão marcadas como lidas. “Não avisar” não muda nada em email que já chegou.'`, 8000)
+  await clickSelector(contents, `[data-email-rule="${gbsRule.id}"] [data-action="email-rule-menu"]`)
+  await clickSelector(contents, `[data-email-rule="${gbsRule.id}"] [data-action="email-rule-edit"]`)
+  await waitFor(contents, `document.querySelector('[data-email-rule="${gbsRule.id}"] [data-email-rule-editor]')`)
+  await scrollToSection(contents, 'Regras')
+  await both('configuracoes-email-regra')
+  await clickSelector(contents, `[data-email-rule="${gbsRule.id}"] [data-action="email-rule-cancel"]`)
+  await clickSelector(contents, `${runRow} [data-action="email-rule-execute"]`)
+  const executed = await waitFor(contents, `document.querySelector('${runRow} [data-email-rule-done]')?.textContent === 'Feito em 2 mensagens.'`, 8000)
+  const marked = (await api<{ subject: string; seen: boolean }[]>('scribe:email-messages', { accountId })).filter((item) => ['Backup diário concluído', 'Certificado renovado'].includes(item.subject)).every((item) => item.seen)
+  await api('scribe:email-rules-set', { accountId, rules: [] })
+  checks['rulesUi'] = {
+    ok: rulesSaved.ok && ruleError && listedRules && summaryOk && blocked && chosen && ruleCreated && ruleMoved && preview && executed && marked,
+    detail: `regras gravadas=${rulesSaved.ok}; último erro da GBS=${ruleError}, na tela=${listedRules}; resumo=${summaryOk}; Salvar desligado sem ação=${blocked}; destino pelo seletor=${chosen}; criada=${ruleCreated}; email novo no Arquivo=${ruleMoved}; contagem "2 das ${inboxSize}"=${preview}; executada=${executed}, marcadas=${marked}`,
+  }
+
+  // CA23 (tela 12): a busca "assinatura" acha as três linhas da aba Email.
+  await setValue(contents, '[data-settings-search] input', 'assinatura')
+  const found = await waitFor(
+    contents,
+    `JSON.stringify([...document.querySelectorAll('[data-settings-result]')].map((el) => el.innerText.split('\\n')[0])) === JSON.stringify(['Email › Assinatura', 'Email › Assinatura em mensagens novas', 'Email › Assinatura em respostas e encaminhamentos'])`,
+  )
+  await both('configuracoes-busca-email')
+  await pressKey('[data-settings-search] input', 'Escape')
+  const searchCleared = await waitFor(contents, `!document.querySelector('[data-settings-results]')`)
+  checks['settingsSearch'] = { ok: found && searchCleared, detail: `"assinatura" acha as 3 linhas da aba Email=${found}; Esc limpa=${searchCleared}` }
+
+  // CA21 (tela 11): a conta POP3 no seletor (adicionada só para isto e tirada depois).
+  const pop3 = await api<{ ok: boolean; status?: { account: { id: string } } }>('scribe:email-add-account', {
+    address: 'contato@loja.example',
+    password: SMOKE_EMAIL_PASSWORD,
+    name: 'Loja',
+    incoming: { protocol: 'pop3', host: 'pop.loja.example', port: 995, security: 'tls' },
+    outgoing: { host: 'smtp.loja.example', port: 465, security: 'tls' },
+  })
+  const pop3Id = pop3.status?.account.id ?? ''
+  await waitFor(contents, `document.querySelector('[data-email-settings-account-select] option[value="${pop3Id}"]')`, 8000)
+  await setValue(contents, '[data-email-settings-account-select]', pop3Id, 'change')
+  const pop3Shown = await waitFor(contents, `document.querySelector('[data-email-settings-account-address]')?.textContent === 'contato@loja.example · POP3' && document.querySelector('[data-notice="email-rules-pop3"]') && document.querySelector('[data-email-settings-folders-pop3]')`, 8000)
+  await scrollToSection(contents, 'Assinatura')
+  await both('configuracoes-email-pop3')
+  await setValue(contents, '[data-email-settings-account-select]', accountId, 'change')
+  await api('scribe:email-remove-account', { accountId: pop3Id })
+  checks['pop3Settings'] = { ok: pop3.ok && pop3Shown, detail: `conta POP3=${pop3.ok}; notas das regras e das pastas, "· POP3"=${pop3Shown}` }
+
+  // CA12 e CA13 (telas 07 e 08): o painel "Organizando" com o "Claude" falso; Parar; o resumo, a faixa e o Desfazer.
+  const transportBefore = readSettings(ctx.userDataDir).claudeTransport
+  await evaluate(contents, "window.__scribeApi.invoke('scribe:settings-update', { claudeTransport: 'acp' }).then(() => true)")
+  for (const seed of [
+    { from: { name: 'Carla Nogueira', address: 'carla.nogueira@exemplo.org' }, subject: 'Painel: lista final do credenciamento', text: 'A lista está confirmada. Obrigada!' },
+    { from: { name: 'Fluxopay Financeiro', address: 'financeiro@fluxopay.example' }, subject: 'Painel: fatura de dezembro', text: 'Pagamento até dia 25.' },
+    { from: { name: 'Paulo Siqueira', address: 'paulo.siqueira@exemplo.org' }, subject: 'Painel: proposta da integração', text: 'Consegue aprovar até sexta?' },
+  ])
+    await fake.deliver(seed)
+  const panelIds = (): (string | null)[] => fake.messageIdsIn('INBOX').filter((id, index, list) => list.indexOf(id) === index)
+  const before = panelIds().length
+  await clickSelector(contents, '[data-nav="assistente"]')
+  await waitFor(contents, routeIs('assistente'))
+  await clickSelector(contents, '[data-action="chat-new"]')
+  await waitFor(contents, `document.querySelector('[data-chat-input]') && !document.querySelector('[data-chat-message]')`)
+  await setValue(contents, '[data-chat-input]', 'Organiza a caixa de entrada em Resolvidos, Pendentes e Clientes')
+  await pressEnterIn(contents, '[data-chat-input]')
+  await waitFor(contents, `document.querySelector('[data-chat-streaming]')`, 8000)
+  await clickSelector(contents, EMAIL_INBOX_LINK)
+  const running = await waitFor(
+    contents,
+    `document.querySelector('[data-email-organize="running"]') && document.querySelector('[data-email-organize-count="moved"] dd')?.textContent === '3' && document.querySelectorAll('[data-email-organize-topic]').length === 3 && ${rowsWith('Painel')}.length === 0`,
+    15000,
+  )
+  const panel = await evaluate<{ title: string; verdicts: string[]; counts: string[]; progress: string | null }>(
+    contents,
+    `({ title: document.querySelector('[data-email-organize-title]')?.textContent ?? '', verdicts: [...document.querySelectorAll('[data-email-organize-topic]')].map((el) => el.dataset.emailOrganizeTopic), counts: [...document.querySelectorAll('[data-email-organize-count] dd:first-of-type')].map((el) => el.textContent), progress: document.querySelector('[role="progressbar"]')?.getAttribute('aria-valuenow') ?? null })`,
+  )
+  await both('email-organizando')
+  await clickSelector(contents, '[data-action="email-organize-stop"]')
+  const stopped = await waitFor(contents, `document.querySelector('[data-email-organize="stopped"]') && document.querySelector('[data-action="email-organize-undo"]')?.textContent.includes('Desfazer as 3') && document.querySelector('[data-email-organize-banner]')`, 15000)
+  await both('email-organizando-parado')
+  // B1: o Desfazer pela faixa; a frase do resultado fica na faixa (o lote já é `undone`) e some depois de 5 s.
+  await clickSelector(contents, '[data-action="email-organize-banner-undo"]')
+  const bannerText = `(document.querySelector('[data-email-organize-banner-result]')?.textContent ?? '')`
+  const undone = await waitFor(contents, `${bannerText} === 'Desfeito: 3 mensagens voltaram para a Caixa de Entrada.' && ${rowsWith('Painel')}.length === 3 && document.querySelector('[data-email-organize="undone"]')`, 15000)
+  await wait(2000)
+  const kept = await evaluate<boolean>(contents, `${bannerText}.startsWith('Desfeito: 3 mensagens voltaram')`)
+  const gone = await waitFor(contents, `!document.querySelector('[data-email-organize-banner]')`, 6000)
+  const home = panelIds().length === before
+  await evaluate(contents, `window.__scribeApi.invoke('scribe:settings-update', { claudeTransport: '${transportBefore === 'acp' ? 'acp' : 'cli'}' }).then(() => true)`)
+  checks['organizePanel'] = {
+    ok: running && panel.title === 'Organizando a Caixa de Entrada' && JSON.stringify(panel.verdicts) === JSON.stringify(['resolvido', 'pendente', 'outra']) && stopped && undone && kept && gone && home,
+    detail: `ao vivo=${running} "${panel.title}" ${JSON.stringify(panel.verdicts)} contadores ${JSON.stringify(panel.counts)} barra=${panel.progress}; parado com "Desfazer as 3" e a faixa=${stopped}; desfeito pela faixa=${undone}, a frase fica=${kept} e some em 5 s=${gone}; de volta à INBOX=${home}`,
+  }
+
+  if (themeBefore !== 'system') await evaluate(contents, `window.__scribeApi.invoke('scribe:settings-update', { theme: '${themeBefore}' }).then(() => true)`)
+  nativeTheme.themeSource = 'system'
+  win.destroy()
+}
+
+// ---------------------------------------------------------------------------------------------------------
+// Contrato 63: as telas dos convites com o IMAP/SMTP falso do email e o `lap-calendar` falso (62, CA24).
+
+/** Um convite das fixtures do 59 e do 62 (dados fictícios), com o convidado trocado pelo endereço da conta. */
+function inviteFixture(name: string, patch: { uid?: string; title?: string; attendee?: string | null } = {}): string {
+  let text = readFileSync(join(app.getAppPath(), 'test', 'fixtures', 'invites', name), 'utf8')
+  // Desdobra as linhas (o convidado vem quebrado no meio do endereço) antes de trocar.
+  text = text.replace(/\r?\n[ \t]/g, '')
+  if (patch.attendee !== null) text = text.replace(/mailto:andrew\.teste@example\.org/gi, `mailto:${patch.attendee ?? SMOKE_EMAIL_ADDRESS}`)
+  if (patch.uid) text = text.replace(/^UID:.*$/m, `UID:${patch.uid}`)
+  if (patch.title) text = text.replace(/^SUMMARY:.*$/m, `SUMMARY:${patch.title}`)
+  return text.replace(/\r?\n/g, '\r\n')
+}
+
+const INVITE_CARD = `document.querySelector('[data-invite-card]')`
+const inviteCardIs = (kind: string): string => `document.querySelector('[data-invite-card][data-invite-state="${kind}"]')`
+const inviteText = (selector: string): string => `(document.querySelector(${JSON.stringify(selector)})?.textContent ?? '')`
+
+/**
+ * Contrato 63 (CA25): os passos 1 a 11 da verificação da spec e os estados sem passo, cada print em claro e escuro no
+ * mesmo estado (a janela troca de tema no lugar). Fala só com o SMTP, o IMAP e o helper falsos: nenhuma conta nem agenda
+ * de verdade. Roda por último, com a senha do bloqueio já criada (o passo 11 bloqueia e desbloqueia).
+ */
+async function inviteChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => void, checks: Record<string, Check>, shots: Screenshot[]): Promise<void> {
+  const fake = ctx.fixtures.email
+  const cal = ctx.fixtures.macCalendar
+  const themeBefore = readSettings(ctx.userDataDir).theme ?? 'system'
+  nativeTheme.themeSource = 'light'
+  const win = ctx.openWindow({})
+  watch(win)
+  await loadAndWait(win)
+  const contents = win.webContents
+  if (themeBefore !== 'system') await evaluate(contents, "window.__scribeApi.invoke('scribe:settings-update', { theme: 'system' }).then(() => true)")
+  const api = <T>(channel: string, request?: unknown): Promise<T> => evaluate<T>(contents, `window.__scribeApi.invoke(${JSON.stringify(channel)}${request === undefined ? '' : `, ${JSON.stringify(request)}`})`)
+  const both = async (name: string): Promise<void> => {
+    await settle(contents)
+    shots.push(await capture(win, ctx.outDir, `${name}-light`))
+    nativeTheme.themeSource = 'dark'
+    await waitFor(contents, "document.documentElement.dataset.theme === 'dark'")
+    await settle(contents)
+    shots.push(await capture(win, ctx.outDir, `${name}-dark`))
+    nativeTheme.themeSource = 'light'
+    await waitFor(contents, "document.documentElement.dataset.theme === 'light'")
+  }
+  /** O estado do helper falso: lido, mudado e regravado (o falso relê a cada pedido). */
+  const helperState = (): Record<string, unknown> & { events: Record<string, unknown>[] } => {
+    const raw = existsSync(cal.statePath) ? (JSON.parse(readFileSync(cal.statePath, 'utf8')) as Record<string, unknown>) : {}
+    return { ...raw, events: Array.isArray(raw['events']) ? (raw['events'] as Record<string, unknown>[]) : [] }
+  }
+  const writeHelper = (patch: Record<string, unknown>): void => writeFileSync(cal.statePath, `${JSON.stringify({ ...helperState(), ...patch }, null, 2)}\n`)
+  const logOf = (cmd: string, from = 0): Record<string, unknown>[] => cal.log().slice(from).filter((item) => item['cmd'] === cmd)
+  const argsOf = (item: Record<string, unknown> | undefined): Record<string, unknown> => (item?.['args'] as Record<string, unknown> | undefined) ?? {}
+  const carla = { name: 'Carla Fictícia', address: 'carla.ficticia@example.com' }
+  const deliver = (subject: string, method: 'REQUEST' | 'CANCEL' | 'REPLY', content: string, from = carla): Promise<void> => fake.deliver({ from, subject, text: `${subject}. Mensagem fictícia do smoke.`, calendar: { method, content } })
+
+  const lapId = await evaluate<string>(contents, `window.__scribeApi.invoke('scribe:email-accounts').then((list) => list.find((item) => item.account.address === ${JSON.stringify(SMOKE_EMAIL_ADDRESS)})?.account.id ?? '')`)
+  /** Abre a mensagem pela Caixa de Entrada da conta e espera o cartão (ou só a leitura, com `card` falso). */
+  const openInvite = async (accountId: string, subject: string, card = true): Promise<boolean> => {
+    const link = `[data-email-folder="inbox"][data-email-folder-account="${accountId}"]`
+    await waitFor(contents, `document.querySelector('${link}')`, 8000)
+    await clickSelector(contents, link)
+    if (!(await waitFor(contents, `${routeIs('email')} && ${emailRow(subject)}`, 10_000))) return false
+    if (!(await clickEmailRow(contents, subject))) return false
+    return card ? waitFor(contents, `${INVITE_CARD} && ${INVITE_CARD}.dataset.inviteState !== 'loading'`, 8000) : true
+  }
+  /** Reabre: outra mensagem e de volta (o cartão monta de novo e relê o estado). */
+  const reopen = async (accountId: string, subject: string, other: string): Promise<boolean> => {
+    await clickEmailRow(contents, other)
+    return openInvite(accountId, subject)
+  }
+  const stateOf = (accountId: string, subject: string): Promise<{ ok: boolean; state?: { kind: string; calendar: { status: string }; actions: { remove: boolean } } }> =>
+    evaluate(
+      contents,
+      `(async () => { const list = await window.__scribeApi.invoke('scribe:email-messages', { accountId: ${JSON.stringify(accountId)} }); const m = list.find((item) => item.subject === ${JSON.stringify(subject)}); return m ? window.__scribeApi.invoke('scribe:invite-state', { accountId: ${JSON.stringify(accountId)}, id: m.id }) : { ok: false } })()`,
+    )
+  const setAddBox = (checked: boolean): Promise<unknown> =>
+    evaluate(contents, `(() => { const box = document.querySelector('[data-invite-add]'); if (box && box.checked !== ${checked}) box.click(); return true })()`)
+  const tz = macTimeZone()
+  const nyWhen = (start: string, end: string) => ({ start, end, allDay: false, timeZone: 'America/New_York' })
+
+  // Passo 1: REQUEST com Meet em America/New_York, a hora no fuso do Mac e o link pela confirmação.
+  const subject1 = 'Convite: Planejamento fictício do trimestre'
+  await deliver(subject1, 'REQUEST', inviteFixture('servico-request-v1.ics'))
+  const opened1 = await openInvite(lapId, subject1)
+  const when1 = inviteWhen(nyWhen('2026-11-20T18:00:00.000Z', '2026-11-20T19:00:00.000Z'), tz)
+  const card1 = await evaluate<{ count: number; state: string; time: string; origin: string | null; service: string; before: boolean }>(
+    contents,
+    `(() => {
+      const card = ${INVITE_CARD}
+      const body = document.querySelector('[data-email-body]')
+      return {
+        count: document.querySelectorAll('[data-invite-card]').length,
+        state: card?.dataset.inviteState ?? '',
+        time: card?.querySelector('[data-invite-time] > div > span:first-child')?.textContent ?? '',
+        origin: card?.querySelector('[data-invite-origin-time]')?.textContent ?? null,
+        service: card?.querySelector('[data-invite-join-service]')?.textContent ?? '',
+        before: Boolean(card && body && (card.compareDocumentPosition(body) & Node.DOCUMENT_POSITION_FOLLOWING)),
+      }
+    })()`,
+  )
+  await waitFor(contents, `[...document.querySelectorAll('[data-email-attachment]')].some((el) => el.textContent.includes('invite.ics'))`, 8000)
+  const attachment1 = await evaluate<boolean>(contents, `[...document.querySelectorAll('[data-email-attachment]')].some((el) => el.textContent.includes('invite.ics'))`)
+  const openedBefore = ctx.fixtures.openedUrls.length
+  await clickSelector(contents, '[data-invite-join-link]')
+  const askedJoin = await waitFor(contents, `document.querySelector('[data-notice="email-external-link"]')?.textContent.includes('Abrir https://meet.google.com/fic-tici-aaa no navegador?')`)
+  const notOpened = ctx.fixtures.openedUrls.length === openedBefore
+  await both('email-convite-novo')
+  await clickSelector(contents, '[data-action="email-cancel-link"]')
+  checks['convite-1'] = {
+    ok: opened1 && card1.count === 1 && card1.state === 'new' && card1.time === when1.main && card1.origin === when1.origin && (when1.origin === null || when1.origin.includes('no horário de Nova York (America/New_York)')) && card1.service === 'Google Meet' && card1.before && attachment1 && askedJoin && notOpened,
+    detail: `aberto=${opened1}; ${card1.count} cartão, estado ${card1.state}; hora "${card1.time}" (esperada "${when1.main}"), origem "${card1.origin}" (esperada "${when1.origin}"); serviço "${card1.service}"; antes do corpo=${card1.before}; invite.ics nos anexos=${attachment1}; link pela confirmação=${askedJoin}, nada aberto antes de "Abrir"=${notOpened}`,
+  }
+
+  // Passo 2: Aceitar com a caixa ligada; o "Enviando" com o SMTP segurando; um REPLY, depois o `create`.
+  let release: () => void = () => undefined
+  const held = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  fake.smtpHold = () => held
+  const sentBefore2 = fake.sent.length
+  const logBefore2 = cal.log().length
+  await setAddBox(true)
+  await clickSelector(contents, '[data-action="invite-accept"]')
+  const sending = await waitFor(contents, `document.querySelector('[data-invite-card][aria-busy="true"] [data-invite-sending]')?.textContent.startsWith('Enviando “Aceito” a Carla Fictícia pela conta') && document.querySelector('[data-invite-sending-mark]')`)
+  const noCreateYet = logOf('create', logBefore2).length === 0
+  await both('email-convite-enviando')
+  release()
+  fake.smtpHold = null
+  const inCalendar2 = await waitFor(contents, `${inviteCardIs('in-calendar')} && ${inviteText('[data-invite-status-line]')}.includes('Na agenda Trabalho')`, 10_000)
+  const reply2 = fake.sent.slice(sentBefore2)
+  const content2 = reply2[0]?.icalEvent?.content.replace(/\r?\n[ \t]/g, '') ?? ''
+  const create2 = logOf('create', logBefore2)
+  const createArgs2 = argsOf(create2[0])
+  const state2 = await stateOf(lapId, subject1)
+  await both('email-convite-na-agenda')
+  checks['convite-2'] = {
+    ok:
+      sending &&
+      noCreateYet &&
+      reply2.length === 1 &&
+      reply2[0]?.icalEvent?.method === 'REPLY' &&
+      content2.includes('PARTSTAT=ACCEPTED') &&
+      content2.toLowerCase().includes(`mailto:${SMOKE_EMAIL_ADDRESS}`) &&
+      content2.includes('UID:servico-reuniao-0001@example.com') &&
+      create2.length === 1 &&
+      ['title', 'start', 'end', 'timeZone', 'url', 'notes'].every((field) => field in createArgs2) &&
+      state2.state?.kind === 'in-calendar' &&
+      inCalendar2,
+    detail: `"Enviando" com aria-busy=${sending}; nada gravado antes do REPLY=${noCreateYet}; ${reply2.length} REPLY (${reply2[0]?.icalEvent?.method ?? '-'}, ACCEPTED=${content2.includes('PARTSTAT=ACCEPTED')}, mesmo UID=${content2.includes('UID:servico-reuniao-0001@example.com')}); ${create2.length} create com ${JSON.stringify(Object.keys(createArgs2))}; estado ${state2.state?.kind ?? '-'}; "Na agenda Trabalho"=${inCalendar2}`,
+  }
+
+  // Passo 3: o mesmo UID com SEQUENCE 2 e outro horário; "Atualizar na agenda" → `update`.
+  const subject3 = 'Convite atualizado: Planejamento fictício do trimestre'
+  await deliver(subject3, 'REQUEST', inviteFixture('servico-request-v2.ics'))
+  const opened3 = await openInvite(lapId, subject3)
+  const pending3 = await waitFor(contents, inviteCardIs('update-pending'), 8000)
+  const diff3 = whenDiff(inviteWhen(nyWhen('2026-11-20T18:00:00.000Z', '2026-11-20T19:00:00.000Z'), tz), inviteWhen(nyWhen('2026-11-20T19:30:00.000Z', '2026-11-20T20:30:00.000Z'), tz))
+  const changed3 = diff3.map((piece) => piece.text).join('')
+  const time3 = await evaluate<string>(contents, inviteText('[data-invite-time]'))
+  const marked3 = await evaluate<boolean>(contents, `Boolean(document.querySelector('[data-invite-time][data-invite-changed] [data-invite-old]') && document.querySelector('[data-invite-time] [data-invite-new]'))`)
+  await both('email-convite-atualizado')
+  const logBefore3 = cal.log().length
+  await clickSelector(contents, '[data-action="invite-update"]')
+  const updated3 = await waitFor(contents, `!${inviteCardIs('update-pending')} && ${INVITE_CARD}`, 8000)
+  const update3 = logOf('update', logBefore3)
+  checks['convite-3'] = {
+    ok: opened3 && pending3 && time3.includes(changed3) && marked3 && update3.length === 1 && updated3,
+    detail: `aberto=${opened3}; update-pending=${pending3}; hora "${time3}" com "${changed3}"=${time3.includes(changed3)}; riscado → novo=${marked3}; ${update3.length} update; cartão saiu de pendente=${updated3}`,
+  }
+
+  // Passo 4: CANCEL; "Tirar da agenda" → `remove` com span "future"; o estado relido sem o evento do app.
+  const subject4 = 'Convite cancelado: Planejamento fictício do trimestre'
+  await deliver(subject4, 'CANCEL', inviteFixture('servico-cancel.ics'))
+  const opened4 = await openInvite(lapId, subject4)
+  const cancelled4 = await waitFor(contents, `${inviteCardIs('cancelled')} && ${inviteText('[data-invite-status-line]')}.includes('Cancelado pelo organizador') && document.querySelector('[data-action="invite-remove"]')`, 8000)
+  const logBefore4 = cal.log().length
+  await clickSelector(contents, '[data-action="invite-remove"]')
+  const removedShown4 = await waitFor(contents, `${inviteText('[data-invite-status-line]')}.includes('Tirado da agenda Trabalho.') && !document.querySelector('[data-action="invite-remove"]')`, 8000)
+  const remove4 = logOf('remove', logBefore4)
+  const state4 = await stateOf(lapId, subject4)
+  await both('email-convite-cancelado')
+  checks['convite-4'] = {
+    ok: opened4 && cancelled4 && remove4.length === 1 && argsOf(remove4[0])['span'] === 'future' && state4.state?.calendar.status === 'skipped' && state4.state.actions.remove === false && removedShown4,
+    detail: `aberto=${opened4}; cancelado com "Tirar da agenda"=${cancelled4}; ${remove4.length} remove (span ${String(argsOf(remove4[0])['span'])}); estado relido ${state4.state?.calendar.status ?? '-'}, remove=${String(state4.state?.actions.remove)}; "Tirado da agenda Trabalho."=${removedShown4}`,
+  }
+
+  // A conta "Gmail" (passos 5 e 7) no mesmo IMAP falso: só o servidor de entrada diz que a conta põe sozinha (R5b).
+  const gmailAddress = 'andrew.convites@lap.example'
+  const gmail = await api<{ ok: boolean; status?: { account: { id: string } } }>('scribe:email-add-account', {
+    address: gmailAddress,
+    password: SMOKE_EMAIL_PASSWORD,
+    incoming: { protocol: 'imap', host: 'imap.gmail.com', port: 993, security: 'tls' },
+    outgoing: { host: 'smtp.gmail.com', port: 465, security: 'tls' },
+  })
+  const gmailId = gmail.status?.account.id ?? ''
+
+  // Passo 7: conta Gmail sem o evento na agenda: a caixa desmarcada, o seletor desligado e a frase do R5b.
+  const subject7 = 'Convite: Revisão fictícia de contrato'
+  await deliver(subject7, 'REQUEST', inviteFixture('servico-request-v1.ics', { uid: 'smoke-gmail-0007@example.com', title: 'Revisão fictícia de contrato', attendee: gmailAddress }))
+  const opened7 = await openInvite(gmailId, subject7)
+  const gmail7 = await waitFor(
+    contents,
+    `document.querySelector('[data-invite-add]')?.checked === false && document.querySelector('[data-invite-calendar]')?.disabled === true && ${inviteText('[data-invite-account-adds]')} === 'Sua conta já põe os convites na agenda dela.'`,
+    8000,
+  )
+  await both('email-convite-gmail')
+  checks['convite-7'] = { ok: gmail.ok && opened7 && gmail7, detail: `conta Gmail=${gmail.ok}; aberto=${opened7}; caixa desmarcada, seletor desligado e a frase=${gmail7}` }
+
+  // Passo 5: o UID já está na agenda pela conta (origin "account"): "Já está na agenda"; Aceitar manda um REPLY e nenhum `create`.
+  const uid5 = 'smoke-gmail-0005@example.com'
+  writeHelper({
+    events: [
+      ...helperState().events,
+      { eventIdentifier: 'conta-ev-5', calendarItemIdentifier: 'conta-item-5', externalIdentifier: uid5, calendarId: 'cal-trabalho', title: 'Alinhamento fictício com o jurídico', start: '2026-11-20T18:00:00Z', end: '2026-11-20T19:00:00Z', timeZone: 'America/New_York', origin: 'account' },
+    ],
+  })
+  const subject5 = 'Convite: Alinhamento fictício com o jurídico'
+  await deliver(subject5, 'REQUEST', inviteFixture('servico-request-v1.ics', { uid: uid5, title: 'Alinhamento fictício com o jurídico', attendee: gmailAddress }))
+  const opened5 = await openInvite(gmailId, subject5)
+  const already5 = await waitFor(contents, `${inviteCardIs('already-in-calendar')} && ${inviteText('[data-invite-status-line]')}.includes('Já está na agenda') && ${inviteText('[data-invite-status-line]')}.includes('A sua conta já pôs na agenda.')`, 8000)
+  await both('email-convite-ja-na-agenda')
+  const sentBefore5 = fake.sent.length
+  const logBefore5 = cal.log().length
+  await clickSelector(contents, '[data-action="invite-accept"]')
+  const answered5 = await waitFor(contents, `document.querySelector('[data-invite-card] [data-invite-response]')`, 10_000)
+  checks['convite-5'] = {
+    ok: opened5 && already5 && answered5 && fake.sent.length - sentBefore5 === 1 && logOf('create', logBefore5).length === 0,
+    detail: `aberto=${opened5}; "Já está na agenda" com a frase=${already5}; respondido=${answered5}; ${fake.sent.length - sentBefore5} REPLY, ${logOf('create', logBefore5).length} create`,
+  }
+
+  // Passo 6: o app cria; a cópia da conta aparece depois; reabrir junta (remove do evento do app) e mostra a nota uma vez.
+  const uid6 = 'smoke-lap-0006@example.com'
+  const subject6 = 'Convite: Comitê fictício de produto'
+  await deliver(subject6, 'REQUEST', inviteFixture('servico-request-v1.ics', { uid: uid6, title: 'Comitê fictício de produto' }))
+  const opened6 = await openInvite(lapId, subject6)
+  await setAddBox(true)
+  const logBefore6 = cal.log().length
+  await clickSelector(contents, '[data-action="invite-accept"]')
+  const created6 = await waitFor(contents, inviteCardIs('in-calendar'), 10_000)
+  const appEvent6 = helperState().events.find((event) => event['title'] === 'Comitê fictício de produto' && event['origin'] === 'app')
+  // A cópia da conta direto nos eventos: o `refresh` do serviço é de no máximo 1 por minuto, e o smoke não espera.
+  writeHelper({
+    events: [
+      ...helperState().events,
+      { eventIdentifier: 'conta-ev-6', calendarItemIdentifier: 'conta-item-6', externalIdentifier: uid6, calendarId: 'cal-trabalho', title: 'Comitê fictício de produto', start: '2026-11-20T18:00:00Z', end: '2026-11-20T19:00:00Z', timeZone: 'America/New_York', origin: 'account' },
+    ],
+  })
+  const merged6 = await reopen(lapId, subject6, subject1)
+  const noted6 = await waitFor(contents, `${inviteText('[data-invite-reconciled]')} === 'Juntei com o evento que a sua conta pôs na agenda.'`, 8000)
+  const remove6 = logOf('remove', logBefore6)
+  const removedApp6 = remove6.some((item) => JSON.stringify(argsOf(item)['ids'] ?? {}).includes(String(appEvent6?.['calendarItemIdentifier'] ?? 'x')))
+  await both('email-convite-juntado')
+  await reopen(lapId, subject6, subject1)
+  const gone6 = await waitFor(contents, `${inviteCardIs('in-calendar')} && !document.querySelector('[data-invite-reconciled]')`, 8000)
+  checks['convite-6'] = {
+    ok: opened6 && created6 && merged6 && noted6 && removedApp6 && gone6,
+    detail: `aberto=${opened6}; criado=${created6} (${String(appEvent6?.['calendarItemIdentifier'] ?? '-')}); reaberto=${merged6}; nota=${noted6}; remove do evento do app=${removedApp6} (${remove6.length}); a nota some na leitura seguinte=${gone6}`,
+  }
+
+  // Passo 8: uma série gravada pelo app e o CANCEL de uma ocorrência: `remove` com o recurrenceId e span "this".
+  const subject8a = 'Convite: Alinhamento semanal fictício'
+  await deliver(subject8a, 'REQUEST', inviteFixture('servico-weekly.ics'))
+  await openInvite(lapId, subject8a)
+  await setAddBox(true)
+  await clickSelector(contents, '[data-action="invite-accept"]')
+  const series8 = await waitFor(contents, inviteCardIs('in-calendar'), 10_000)
+  const subject8 = 'Convite cancelado: Alinhamento semanal fictício (17/12)'
+  await deliver(subject8, 'CANCEL', inviteFixture('servico-cancel-occurrence.ics'))
+  const opened8 = await openInvite(lapId, subject8)
+  const occurrence8 = await waitFor(contents, `${inviteCardIs('cancelled')} && ${inviteText('[data-invite-status-line]')}.startsWith('A ocorrência de') && document.querySelector('[data-action="invite-remove"]')`, 8000)
+  const logBefore8 = cal.log().length
+  await clickSelector(contents, '[data-action="invite-remove"]')
+  await waitFor(contents, `!document.querySelector('[data-action="invite-remove"]')`, 8000)
+  const remove8 = logOf('remove', logBefore8)
+  const seriesKept8 = helperState().events.some((event) => event['title'] === 'Alinhamento semanal fictício' && event['origin'] === 'app')
+  checks['convite-8'] = {
+    ok: series8 && opened8 && occurrence8 && remove8.length === 1 && argsOf(remove8[0])['span'] === 'this' && typeof argsOf(remove8[0])['recurrenceId'] === 'string' && seriesKept8,
+    detail: `série gravada=${series8}; aberto=${opened8}; "A ocorrência de …"=${occurrence8}; ${remove8.length} remove (span ${String(argsOf(remove8[0])['span'])}, recurrenceId ${String(argsOf(remove8[0])['recurrenceId'])}); série continua=${seriesKept8}`,
+  }
+
+  // Passo 9: dois cliques no mesmo tick em Aceitar e um terceiro 50 ms depois: um REPLY só.
+  const subject9 = 'Convite: Revisão fictícia do orçamento'
+  await deliver(subject9, 'REQUEST', inviteFixture('servico-request-v1.ics', { uid: 'smoke-lap-0009@example.com', title: 'Revisão fictícia do orçamento' }))
+  const opened9 = await openInvite(lapId, subject9)
+  await setAddBox(false)
+  const sentBefore9 = fake.sent.length
+  await evaluate(contents, `(() => { const button = document.querySelector('[data-action="invite-accept"]'); button?.click(); button?.click(); return true })()`)
+  await wait(50)
+  await evaluate(contents, `document.querySelector('[data-action="invite-accept"]')?.click(), true`)
+  const answered9 = await waitFor(contents, `document.querySelector('[data-invite-card] [data-invite-response]')`, 10_000)
+  await wait(300)
+  // Respondido sem a caixa: "Pôr na agenda" secundário com o seletor; o clique só grava (nenhum REPLY novo).
+  const addAfter9 = await waitFor(contents, `document.querySelector('[data-invite-add-after] [data-action="invite-add-after"]') && document.querySelector('[data-invite-add-after] [data-invite-calendar]') && !document.querySelector('[data-invite-add-row]')`, 8000)
+  const logBefore9 = cal.log().length
+  const sentAfter9 = fake.sent.length
+  await clickSelector(contents, '[data-action="invite-add-after"]')
+  const added9 = await waitFor(contents, `${inviteCardIs('in-calendar')} && !document.querySelector('[data-invite-add-after]')`, 10_000)
+  checks['convite-9'] = {
+    ok: opened9 && answered9 && sentAfter9 - sentBefore9 === 1 && addAfter9 && added9 && logOf('create', logBefore9).length === 1 && fake.sent.length === sentAfter9,
+    detail: `aberto=${opened9}; respondido=${answered9}; ${sentAfter9 - sentBefore9} REPLY; "Pôr na agenda" depois de responder=${addAfter9}, gravado=${added9} (${logOf('create', logBefore9).length} create, ${fake.sent.length - sentAfter9} REPLY a mais)`,
+  }
+
+  // Passo 10: acesso negado: a nota com "Abrir Ajustes" e "Abrir no app de agenda"; Aceitar manda o REPLY e não grava.
+  writeHelper({ access: 'denied' })
+  const subject10 = 'Convite: Treinamento fictício da equipe'
+  await deliver(subject10, 'REQUEST', inviteFixture('servico-request-v1.ics', { uid: 'smoke-lap-0010@example.com', title: 'Treinamento fictício da equipe' }))
+  const opened10 = await openInvite(lapId, subject10)
+  const note10 = await waitFor(contents, `document.querySelector('[data-invite-no-access] [data-action="invite-open-settings"]') && document.querySelector('[data-invite-no-access] [data-action="invite-open-ics"]') && !document.querySelector('[data-invite-add-row]')`, 8000)
+  const sentBefore10 = fake.sent.length
+  const logBefore10 = cal.log().length
+  await clickSelector(contents, '[data-action="invite-accept"]')
+  const answered10 = await waitFor(contents, `document.querySelector('[data-invite-card] [data-invite-response]') && ${inviteText('[data-invite-status-line]')}.startsWith('Você aceitou')`, 10_000)
+  await both('email-convite-sem-acesso')
+  const urlsBefore10 = ctx.fixtures.openedUrls.length
+  await clickSelector(contents, '[data-action="invite-open-settings"]')
+  await wait(200)
+  const settings10 = ctx.fixtures.openedUrls.slice(urlsBefore10).includes(PRIVACY_PANE_URLS.calendars)
+  writeHelper({ access: 'full' })
+  checks['convite-10'] = {
+    ok: opened10 && note10 && answered10 && fake.sent.length - sentBefore10 === 1 && logOf('create', logBefore10).length === 0 && settings10,
+    detail: `aberto=${opened10}; nota com os dois botões e sem a caixa=${note10}; respondido=${answered10} (${fake.sent.length - sentBefore10} REPLY, ${logOf('create', logBefore10).length} create); "Abrir Ajustes" → Privacy_Calendars=${settings10}`,
+  }
+
+  // Sem passo na spec: "não é para você", resposta recebida, RDATE e "não encontrei".
+  const subjectNot = 'Convite: Oficina fictícia de design'
+  await deliver(subjectNot, 'REQUEST', inviteFixture('servico-request-v1.ics', { uid: 'smoke-lap-0011@example.com', title: 'Oficina fictícia de design', attendee: 'outra.pessoa@example.net' }))
+  const openedNot = await openInvite(lapId, subjectNot)
+  const notFor = await waitFor(contents, `${inviteText('[data-invite-not-for]')}.includes('Este convite não é para ${SMOKE_EMAIL_ADDRESS}') && !document.querySelector('[data-action="invite-accept"]') && document.querySelector('[data-action="invite-add"]')`, 8000)
+  await both('email-convite-nao-e-para-voce')
+
+  const subjectReply = 'Aceito: Revisão do projeto'
+  await deliver(subjectReply, 'REPLY', inviteFixture('reply-received.ics'), { name: 'Bruno Exemplo', address: 'bruno@example.net' })
+  const openedReply = await openInvite(lapId, subjectReply)
+  const replied = await waitFor(contents, `${inviteCardIs('reply-received')} && ${inviteText('[data-invite-replier]')}.includes('Bruno Exemplo aceitou') && !document.querySelector('[data-invite-details]') && !document.querySelector('[data-invite-card] button')`, 8000)
+  await both('email-convite-resposta-recebida')
+
+  const subjectRdate = 'Convite: Fechamento do mês'
+  await deliver(subjectRdate, 'REQUEST', inviteFixture('rdate.ics'), { name: 'Fernanda Exemplo', address: 'fernanda@example.com' })
+  const openedRdate = await openInvite(lapId, subjectRdate)
+  const rdate = await waitFor(contents, `document.querySelector('[data-invite-not-storable] [data-action="invite-open-ics"]') && !document.querySelector('[data-invite-add-row]') && document.querySelector('[data-action="invite-accept"]') && ${inviteText('[data-invite-recurrence]')}.includes('Repetição por datas (RDATE)')`, 8000)
+  await both('email-convite-repeticao')
+
+  const subjectMissing = 'Convite: Visita fictícia ao cliente'
+  await deliver(subjectMissing, 'REQUEST', inviteFixture('servico-request-v1.ics', { uid: 'smoke-lap-0014@example.com', title: 'Visita fictícia ao cliente' }))
+  await openInvite(lapId, subjectMissing)
+  await setAddBox(true)
+  await clickSelector(contents, '[data-action="invite-accept"]')
+  const createdMissing = await waitFor(contents, inviteCardIs('in-calendar'), 10_000)
+  writeHelper({ events: helperState().events.filter((event) => event['title'] !== 'Visita fictícia ao cliente') })
+  const openedMissing = await reopen(lapId, subjectMissing, subject1)
+  const missing = await waitFor(contents, `${inviteText('[data-invite-missing]')}.includes('Não encontrei este evento na agenda') && document.querySelector('[data-action="invite-readd"]') && document.querySelector('[data-invite-card] [data-invite-response]')`, 8000)
+  await both('email-convite-nao-encontrado')
+  const logBeforeMissing = cal.log().length
+  await clickSelector(contents, '[data-action="invite-readd"]')
+  const readded = await waitFor(contents, inviteCardIs('in-calendar'), 10_000)
+  checks['convite-estados'] = {
+    ok: openedNot && notFor && openedReply && replied && openedRdate && rdate && createdMissing && openedMissing && missing && readded && logOf('create', logBeforeMissing).length === 1,
+    detail: `não é para você (sem Aceitar, com "Pôr na agenda")=${openedNot && notFor}; resposta recebida compacta=${openedReply && replied}; RDATE sem a caixa e com a nota=${openedRdate && rdate}; não encontrei=${createdMissing && openedMissing && missing}, "Pôr de novo" → ${logOf('create', logBeforeMissing).length} create (${readded})`,
+  }
+
+  // A lista: o calendário nas linhas com convite, com X no cancelamento; nada nas linhas sem convite ou sem o corpo.
+  await clickSelector(contents, `[data-email-folder="inbox"][data-email-folder-account="${lapId}"]`)
+  await waitFor(contents, `${emailRow(subject4)} && ${emailRow(subject1)}`, 8000)
+  const listIcons = await waitFor(contents, `${emailRow(subject4)}?.querySelector('[data-email-row-invite="cancel"]') && ${emailRow(subject1)}?.querySelector('[data-email-row-invite="invite"]')`, 8000)
+  await clickEmailRow(contents, subject1)
+  const rows = await evaluate<{ subject: string; icon: string | null; preview: string }[]>(
+    contents,
+    `[...${EMAIL_ROWS}].map((el) => ({ subject: el.querySelector('[data-email-row-subject]')?.textContent ?? '', icon: el.querySelector('[data-email-row-invite]')?.dataset.emailRowInvite ?? null, preview: (el.querySelector('[data-email-row-preview]')?.textContent ?? '').trim() }))`,
+  )
+  const plainNoIcon = rows.filter((row) => !/^(Convite|Aceito)/.test(row.subject)).every((row) => row.icon === null)
+  const unloadedNoIcon = rows.filter((row) => row.preview === '').every((row) => row.icon === null)
+  await both('email-convite-lista')
+  checks['convite-lista'] = { ok: listIcons && plainNoIcon && unloadedNoIcon, detail: `convite e cancelado com o ícone=${listIcons}; sem convite, sem ícone=${plainNoIcon}; corpo não baixado, sem ícone=${unloadedNoIcon}` }
+
+  // Configurações › Email › Convites: permitido, o seletor aberto e "não pedido" → "Pedir acesso" → permitido.
+  writeHelper({
+    calendars: [
+      { id: 'cal-trabalho', title: 'Trabalho', sourceId: 'src-icloud', sourceTitle: 'iCloud', sourceType: 'caldav', writable: true, availabilities: ['busy', 'tentative', 'free'], color: null, isDefault: true },
+      { id: 'cal-pessoal', title: 'Pessoal', sourceId: 'src-icloud', sourceTitle: 'iCloud', sourceType: 'caldav', writable: true, availabilities: ['busy', 'tentative', 'free'], color: null, isDefault: false },
+      { id: 'cal-google', title: 'Agenda fictícia', sourceId: 'src-google', sourceTitle: 'andrew.convites@lap.example', sourceType: 'caldav', writable: true, availabilities: ['busy', 'free'], color: null, isDefault: false },
+      { id: 'cal-feriados', title: 'Feriados', sourceId: 'src-assinadas', sourceTitle: 'Assinadas', sourceType: 'subscribed', writable: false, availabilities: ['busy', 'free'], color: null, isDefault: false },
+    ],
+  })
+  await openSettingsTab(contents, 'email')
+  await waitFor(contents, `document.querySelector('section[aria-label="Convites"]')`, 8000)
+  await scrollToSection(contents, 'Convites')
+  const rowNames = await evaluate<string[]>(contents, `[...document.querySelectorAll('section[aria-label="Convites"] [data-setting-row]')].map((el) => el.dataset.settingName)`)
+  const allowed = await waitFor(contents, `document.querySelector('[data-invite-access="full"]')?.textContent === 'permitido' && document.querySelector('#invite-default-calendar')?.textContent.includes('Trabalho')`, 8000)
+  const lastSection = await evaluate<boolean>(contents, `(() => { const sections = [...document.querySelectorAll('[data-settings-panel="email"] section[aria-label]')]; return sections.at(-1)?.getAttribute('aria-label') === 'Convites' })()`)
+  await both('email-convite-configuracoes')
+  await clickSelector(contents, '#invite-default-calendar')
+  const menuOpen = await waitFor(contents, `[...document.querySelectorAll('[data-invite-calendar-menu] [data-invite-calendar-group]')].map((el) => el.textContent).join('|') === 'iCloud|andrew.convites@lap.example' && !document.querySelector('[data-invite-calendar-option="cal-feriados"]')`)
+  await both('email-convite-configuracoes-agendas')
+  await clickSelector(contents, '[data-invite-calendar-option="cal-pessoal"]')
+  await wait(300)
+  const savedCalendar = readSettings(ctx.userDataDir).inviteCalendarId === 'cal-pessoal'
+  const addBefore = readSettings(ctx.userDataDir).inviteAddOnAccept ?? true
+  await clickSelector(contents, '[data-action="invite-add-on-accept"]')
+  await wait(300)
+  const toggled = (readSettings(ctx.userDataDir).inviteAddOnAccept ?? true) === !addBefore
+  await clickSelector(contents, '[data-action="invite-add-on-accept"]')
+  await evaluate(contents, "window.__scribeApi.invoke('scribe:settings-update', { inviteCalendarId: null }).then(() => true)")
+  writeHelper({ access: 'notDetermined', onRequest: 'full' })
+  // Sair de Configurações e voltar: o bloco monta de novo e relê as agendas.
+  await clickSelector(contents, '[data-nav="reunioes"]')
+  await waitFor(contents, routeIs('reunioes'), 8000)
+  await openSettingsTab(contents, 'email')
+  await waitFor(contents, `document.querySelector('section[aria-label="Convites"]')`, 8000)
+  await scrollToSection(contents, 'Convites')
+  const notAsked = await waitFor(contents, `document.querySelector('[data-invite-access="notDetermined"]')?.textContent === 'não pedido' && document.querySelector('[data-action="invite-request-access"]') && document.querySelector('#invite-default-calendar')?.disabled === true`, 8000)
+  await both('email-convite-configuracoes-sem-acesso')
+  await clickSelector(contents, '[data-action="invite-request-access"]')
+  const granted = await waitFor(contents, `document.querySelector('[data-invite-access="full"]')?.textContent === 'permitido'`, 8000)
+  // CA23: a busca acha "Email › Convites" por convite, agenda, calendário e sugerir.
+  const inviteRows = ['Agenda padrão', 'Pôr na agenda ao aceitar', 'Acesso ao Calendário do Mac', 'Sugerir evento quando o email não tem convite'].map((name) => `Email › ${name}`)
+  const found: Record<string, boolean> = {}
+  for (const term of ['convite', 'agenda', 'calendário', 'sugerir']) {
+    await setValue(contents, '[data-settings-search] input', term)
+    found[term] = await waitFor(contents, `[...document.querySelectorAll('[data-settings-result]')].some((el) => ${JSON.stringify(inviteRows)}.includes(el.innerText.split('\\n')[0]))`)
+  }
+  await setValue(contents, '[data-settings-search] input', '')
+  checks['convite-configuracoes'] = {
+    ok:
+      JSON.stringify(rowNames) === JSON.stringify(['Agenda padrão', 'Pôr na agenda ao aceitar', 'Acesso ao Calendário do Mac', 'Sugerir evento quando o email não tem convite']) &&
+      allowed &&
+      lastSection &&
+      menuOpen &&
+      savedCalendar &&
+      toggled &&
+      notAsked &&
+      granted &&
+      Object.values(found).every(Boolean),
+    detail: `linhas ${JSON.stringify(rowNames)}; o último bloco da aba=${lastSection}; permitido=${allowed}; seletor por conta sem Feriados=${menuOpen}; escolha gravada=${savedCalendar}; "Pôr na agenda ao aceitar" grava=${toggled}; não pedido com "Pedir acesso"=${notAsked}; depois, permitido=${granted}; busca ${JSON.stringify(found)}`,
+  }
+
+  // Passo 11: bloqueado, o cartão some e os oito canais recusam; desbloqueado, o cartão volta.
+  const opened11 = await openInvite(lapId, subject1)
+  await evaluate(contents, "window.__scribeApi.invoke('scribe:lock-now').then(() => true)")
+  await waitFor(contents, LOCK_LAYER)
+  const hidden11 = await waitFor(contents, `${INVITE_CARD} === null`)
+  // Os oito deste contrato: o `invite-reply` do 61 e os sete do 62 (os do 64 entram no passo dele).
+  const channels11 = ['scribe:invite-reply', 'scribe:invite-state', 'scribe:invite-add', 'scribe:invite-update', 'scribe:invite-remove', 'scribe:invite-calendars', 'scribe:invite-request-access', 'scribe:invite-open-ics']
+  const refused11 = await evaluate<number>(
+    contents,
+    `(async () => {
+      let refused = 0
+      for (const channel of ${JSON.stringify(channels11)}) {
+        try {
+          await window.__scribeApi.invoke(channel, {})
+        } catch (error) {
+          if (String(error?.message ?? error).endsWith('Error: ${LOCKED_ERROR}')) refused++
+        }
+      }
+      return refused
+    })()`,
+  )
+  await typeLockPassword(contents, LOCK_PASSWORD)
+  const back11 = await waitFor(contents, `!${LOCK_LAYER} && ${INVITE_CARD}`, 8000)
+  checks['convite-11'] = { ok: opened11 && hidden11 && refused11 === channels11.length && back11, detail: `aberto=${opened11}; bloqueado sem o cartão=${hidden11}; ${refused11}/${channels11.length} canais recusados; desbloqueado, o cartão volta=${back11}` }
+
+  // A conta "Gmail" sai (o resto do smoke não a vê).
+  if (gmailId) await api('scribe:email-remove-account', { accountId: gmailId })
+  if (themeBefore !== 'system') await evaluate(contents, `window.__scribeApi.invoke('scribe:settings-update', { theme: '${themeBefore}' }).then(() => true)`)
+  nativeTheme.themeSource = 'system'
+  win.destroy()
+}
+
 export async function runSmoke(ctx: SmokeContext): Promise<number> {
   const timer = setTimeout(() => {
     console.error(`[smoke] tempo esgotado (${TIMEOUT_MS} ms)`)
@@ -8584,6 +9484,8 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
   /** Contrato 27: quem fala no Meet. */
   const meet: Record<string, Check> = {}
   const email: Record<string, Check> = {}
+  /** Contrato 63: os convites. */
+  const invite: Record<string, Check> = {}
   let analysisMeasured: AnalysisMeasured | null = null
 
   // A fixture da sessão real, reduzida pelo mesmo redutor do app: a mesma dos testes (CA4) e do smoke.
@@ -8967,6 +9869,9 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
     // Contrato 51: a tarefa com "Pode enviar email", com a mesma conta do servidor falso; antes do bloqueio.
     await emailTaskChecks(ctx, watch, email, screenshots)
 
+    // Contrato 55: as telas de pastas, mover, assinatura, regras e o painel "Organizando"; antes do bloqueio.
+    await emailFoldersUiChecks(ctx, watch, email, screenshots)
+
     // Contrato 22: bloqueio do app, por último (a senha criada vale para o userData inteiro).
     await lockChecks(ctx, watch, lock, screenshots)
 
@@ -8981,6 +9886,9 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
 
     // Contrato 53 (CA15): uma regra de mover, no email novo do servidor falso (o app já desbloqueado).
     await emailRulesCheck(ctx, watch, email)
+
+    // Contrato 63: os convites, por último (o passo 11 bloqueia e desbloqueia com a senha já criada).
+    await inviteChecks(ctx, watch, invite, screenshots)
   } catch (error) {
     failures.push(`erro: ${error instanceof Error ? (error.stack ?? error.message) : String(error)}`)
   }
@@ -9040,7 +9948,9 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
   for (const [name, check] of Object.entries(meet)) if (!check.ok) failures.push(`meet ${name}: ${check.detail}`)
   for (const name of ['server', 'recording', 'setting', 'meetingPrompt', 'meetingPromptRecord', 'meetingPromptNever', 'micWatch']) if (!meet[name]) failures.push(`meet ${name}: não executado`)
   for (const [name, check] of Object.entries(email)) if (!check.ok) failures.push(`email ${name}: ${check.detail}`)
-  for (const name of ['settings', 'list', 'reading', 'compose', 'folders', 'attachments', 'remove', 'dark', 'notify', 'assistantPending', 'assistantReply', 'assistantTask', 'assistantSearch', 'taskEmailForm', 'taskEmailRun']) if (!email[name]) failures.push(`email ${name}: não executado`)
+  for (const [name, check] of Object.entries(invite)) if (!check.ok) failures.push(`convites ${name}: ${check.detail}`)
+  for (const name of ['convite-1', 'convite-2', 'convite-3', 'convite-4', 'convite-5', 'convite-6', 'convite-7', 'convite-8', 'convite-9', 'convite-10', 'convite-11', 'convite-estados', 'convite-lista', 'convite-configuracoes']) if (!invite[name]) failures.push(`convites ${name}: não executado`)
+  for (const name of ['settings', 'list', 'reading', 'compose', 'folders', 'attachments', 'remove', 'dark', 'notify', 'assistantPending', 'assistantReply', 'assistantTask', 'assistantSearch', 'assistantOrganize', 'taskEmailForm', 'taskEmailRun']) if (!email[name]) failures.push(`email ${name}: não executado`)
   for (const [name, check] of Object.entries(lock)) if (!check.ok) failures.push(`bloqueio ${name}: ${check.detail}`)
   for (const name of ['password', 'layer', 'channels', 'unlock', 'shortcutAndTouchId', 'recordingContinues', 'leaveDialog', 'endWhileLocked', 'reopen', 'reopenFromDisk', 'dark']) if (!lock[name]) failures.push(`bloqueio ${name}: não executado`)
   if (!theme.ok) failures.push(`tema: ${theme.detail}`)
@@ -9065,8 +9975,10 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
   // temas (contrato 43); o cartão dos emails pendentes e o rascunho de resposta por email no Assistente, no claro
   // (contrato 45); o formulário da tarefa com "Pode enviar email" e a execução com os emails enviado e recusado, no
   // claro (contrato 51); a seção "Conectores do claude.ai" com o Notion ligado e as ferramentas, nos dois temas
-  // (contrato 58).
-  const expectedShots = SCREENS.length * THEMES.length + 68
+  // (contrato 58); o cartão do lote do Assistente concluído e desfeito em parte, nos dois temas (contrato 56); as 12
+  // telas de pastas, mover, assinatura, regras e o painel "Organizando", nos dois temas (contrato 55); os 17 quadros dos
+  // convites, nos dois temas (contrato 63).
+  const expectedShots = SCREENS.length * THEMES.length + 130
   if (screenshots.length !== expectedShots) failures.push(`${screenshots.length} PNGs em vez de ${expectedShots}`)
   for (const shot of screenshots) {
     if (shot.name === MEETING_PROMPT_SHOT) {
@@ -9126,6 +10038,7 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
     meet,
     // Contrato 43: só os resultados (os endereços e assuntos são os inventados do servidor falso).
     email,
+    invite,
     // Contrato 23: os resultados, as notificações, o Dock e os itens de login substitutos; nenhum texto de reunião.
     automations,
     automationsFixtures: { notifications: ctx.fixtures.automations.notifications.map((notice) => notice.title), trayImages: ctx.fixtures.automations.trayImages, dock: ctx.fixtures.automations.dock, loginItems: ctx.fixtures.automations.loginItems, quitRequests: ctx.fixtures.automations.quitRequests },

@@ -345,7 +345,8 @@ describe('IMAP com o cliente falso (contrato 42, CA3)', () => {
     const id = await addConnected(service)
     expect(imap.sources).toEqual([])
     const first = await service.body({ accountId: id, id: '1' })
-    expect(first).toEqual({ ok: true, body: { text: 'Olá, corpo 1.', html: '<p>Olá, <b>corpo 1</b>.</p>', attachments: [] } })
+    // Contrato 61: o corpo lido diz que não há convite (`invite: null`).
+    expect(first).toEqual({ ok: true, body: { text: 'Olá, corpo 1.', html: '<p>Olá, <b>corpo 1</b>.</p>', attachments: [], invite: null } })
     const again = await service.body({ accountId: id, id: '1' })
     expect(again).toEqual(first)
     expect(imap.sources).toEqual([1])

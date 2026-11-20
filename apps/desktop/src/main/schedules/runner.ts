@@ -12,7 +12,8 @@
 // arquivos das ferramentas não vão para o acervo). Sem `tools`, nada muda: só leitura, nenhum envio.
 import { mkdir } from 'node:fs/promises'
 import { chatErrorText, type ChatDetail, type ChatMessage, type ChatMeta, type ChatPlanEntry, type ChatProgress, type ChatStep } from '../../shared/chat'
-import type { Agent, AgentScope } from '../../shared/automations'
+import type { Agent, AgentScope, RunOrganizeRefused } from '../../shared/automations'
+import { emailOrganizeRequests, RUN_ORGANIZE_REFUSED_MAX } from '../../shared/email-organize'
 import type { ClaudeLocateResult } from '../../shared/claude-cli'
 import { AGENT_PROFILE_LABELS, CHAT_MODELS, type ChatModel } from '../../shared/settings-defaults'
 import type { AcpOpenResult, AcpSessionRequest } from '../acp/agent'
@@ -81,6 +82,8 @@ export interface AgentRunResult {
   answer: ChatMessage
   error: string | null
   costUsd: number
+  /** Contrato 56 (D19): os pedidos de organizar o email que o modelo fez (nenhuma execução tem essas ferramentas). */
+  organizeRefused?: RunOrganizeRefused[] | undefined
 }
 
 export type AgentRunEvent = ({ type: 'answer' } & ChatProgress) | ChatDetail
@@ -287,6 +290,11 @@ export function createAgentRunner(deps: AgentRunnerDeps): AgentRunner {
         deniedBefore = denied
         result = await engine.ask(toolFollowUp(call.tool.name, done), [{ role: 'user', text: request.prompt }], onProgress, onDetail)
       }
+      // Contrato 56 (D19): o pedido de organizar o email não roda aqui (a execução não tem as ferramentas): fica registrado
+      // como recusado, para a tela da execução mostrar.
+      const asked = emailOrganizeRequests(result.text)
+        .slice(0, RUN_ORGANIZE_REFUSED_MAX)
+        .map((line) => ({ at: new Date(now()).toISOString(), request: line }))
       if (earlier) result = { ...result, text: joined(result.text) }
       if (tools && result.ok) result = { ...result, text: withoutToolCalls(result.text) }
       const finalMeta = meta as ChatMeta | null
@@ -303,9 +311,10 @@ export function createAgentRunner(deps: AgentRunnerDeps): AgentRunner {
         model,
       }
       const costUsd = finalMeta?.costUsd ?? 0
-      if (result.ok) return { status: 'ok', answer, error: null, costUsd }
-      if (timedOut || result.error === 'timeout') return { status: 'timeout', answer, error: `Passou do tempo máximo de ${request.timeoutS} s.`, costUsd }
-      return { status: 'error', answer, error: chatErrorText(result.error, label), costUsd }
+      const refused = asked.length ? { organizeRefused: asked } : {}
+      if (result.ok) return { status: 'ok', answer, error: null, costUsd, ...refused }
+      if (timedOut || result.error === 'timeout') return { status: 'timeout', answer, error: `Passou do tempo máximo de ${request.timeoutS} s.`, costUsd, ...refused }
+      return { status: 'error', answer, error: chatErrorText(result.error, label), costUsd, ...refused }
     } finally {
       timers.clearTimeout(timer)
       if (killTimer !== null) timers.clearTimeout(killTimer)

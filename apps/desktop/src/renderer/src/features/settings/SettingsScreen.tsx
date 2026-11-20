@@ -29,7 +29,7 @@ import { CalendarSection } from './CalendarSection'
 import { ConnectionsSection } from './ConnectionsSection'
 import { MicrosoftSection } from './MicrosoftSection'
 import { WhatsAppSection } from './WhatsAppSection'
-import { EmailSection } from './EmailSection'
+import { EmailSettingsTab } from './EmailSettingsTab'
 import { AcpAgentField } from './AcpAgentField'
 import { ApiKeyField } from './ApiKeyField'
 import { BrandSection } from './BrandSection'
@@ -111,7 +111,7 @@ const TABS_ID = 'settings'
 const CONTROL = 'input, select, textarea, button, a[href], [tabindex]:not([tabindex="-1"])'
 
 /**
- * Configurações (contrato 18): título e busca no topo, as oito abas logo abaixo (fixas; só o conteúdo rola) e
+ * Configurações (contrato 18): título e busca no topo, as nove abas logo abaixo (fixas; só o conteúdo rola) e
  * a coluna de leitura de até 760 px, centralizada. A aba aberta fica na URL; sem ela, abre a última aberta
  * nesta sessão. Cada mudança grava na hora, como antes.
  */
@@ -142,7 +142,7 @@ function SettingsTabs({ tab }: { tab: SettingsTab }) {
   const rootRef = useRef<HTMLDivElement>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
   // Depois da próxima navegação: a linha achada pela busca (com o bloco dela, se a linha não aparece) ou a aba
-  // que deve receber o foco (⌘1…⌘8 e Esc).
+  // que deve receber o foco (⌘1…⌘9 e Esc).
   const pendingRef = useRef<{ row: HTMLElement | null; block: Element | null } | null>(null)
   const focusTabRef = useRef(false)
   const queryRef = useRef('')
@@ -159,7 +159,7 @@ function SettingsTabs({ tab }: { tab: SettingsTab }) {
 
   useEffect(() => rememberSettingsTab(tab), [tab])
 
-  // ⌘1…⌘8 abrem a aba N enquanto Configurações está aberta.
+  // ⌘1…⌘9 abrem a aba N enquanto Configurações está aberta.
   useEffect(() => {
     const onKey = (event: KeyboardEvent): void => {
       // Esc que limpou a busca (o campo já tratou o evento): o foco volta para a aba aberta.
@@ -456,10 +456,11 @@ function SettingsTabs({ tab }: { tab: SettingsTab }) {
               <MicrosoftSection />
               <CalendarSection />
               <WhatsAppSection />
-              {/* Contrato 43: as contas de email, as notificações e o intervalo do POP3. */}
-              <EmailSection />
             </>,
           )}
+
+          {/* Contrato 55: o email numa aba própria (as contas vieram de Contas), com a assinatura, as regras, as pastas e os avisos. */}
+          {panel('email', <EmailSettingsTab />)}
 
           {/* Contrato 31: as extensões de navegador que vêm no app. */}
           {panel('plugins', <PluginsSection />)}

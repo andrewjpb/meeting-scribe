@@ -32,7 +32,7 @@ import { applyBrandName, applyDockIcon, type DockIconTarget } from './branding/a
 import { createBrandingService, type BrandingService, type ImageDialog } from './branding/service'
 import { registerDisplayMediaHandler } from './capture/display-media'
 import { createChatCorpus, type ChatCorpus } from './chat/corpus'
-import { createChatActions, extractActions, type ChatActions } from './chat/actions'
+import { createChatActions, extractActions, markEmailBatchCard, type ChatActions } from './chat/actions'
 import { createChatService, type ChatService } from './chat/service'
 import { AUTOMATION_RUNS_IN_SOURCE, writeSources, type AssistantState } from './chat/sources'
 import { createFileChatStore } from './chat/store'
@@ -101,7 +101,12 @@ import { createInsightsService, type InsightsService } from './whatsapp/insights
 import { createWhatsAppNotifier, isGroupChat, shouldNotify, type NoticeHandle, type WhatsAppNotice } from './whatsapp/notify'
 import { createWhatsAppService, type WhatsAppService } from './whatsapp/service'
 import { EMAIL_DIR } from './email/email-store'
+import { createEmailBatchStore } from './email/batches'
+import type { EmailOrganizer } from './email/organize'
 import { createEmailService, type EmailService } from './email/service'
+import { createMacCalendar, locateMacCalendar, type MacCalendar } from './mac-calendar/process'
+import { createInviteService, type InviteService } from './invites/service'
+import { INVITE_ERROR_MESSAGES } from '../shared/invite-state'
 import { createEmailTools } from './email/assistant-tools'
 import { emailStateLabel, exportEmail } from './email/export'
 import { readEmailAttachments } from './email/attach'
@@ -502,7 +507,8 @@ function emailFocusedInbox(): string | null {
 
 /** Notificação de um email (contrato 43), local; o clique abre o app na mensagem. No smoke, o substituto registra. */
 function showEmailNotice(notice: EmailNotice): NoticeHandle {
-  const open = (): void => sendWhenLoaded(showMainWindow(), 'scribe:open-email', { accountId: notice.accountId, id: notice.id })
+  // Contrato 55 (CA24): a movida por uma regra abre a pasta de destino (e a mensagem, se o servidor disse o UID novo).
+  const open = (): void => sendWhenLoaded(showMainWindow(), 'scribe:open-email', { accountId: notice.accountId, id: notice.id, ...(notice.mailbox ? { mailbox: notice.mailbox.path, found: notice.mailbox.found } : {}) })
   if (smokeFixtures) {
     const entry = { ...notice, closed: false, open }
     smokeFixtures.emailNotify.notifications.push(entry)
@@ -850,6 +856,8 @@ interface AppServices {
   whatsappInsights: InsightsService
   /** Contas de email IMAP, POP3 e SMTP (contrato 42). */
   email: EmailService
+  /** Contrato 56: os lotes do Assistente que organiza o email (o estado, o cartão e o Desfazer). */
+  emailOrganizer: EmailOrganizer | null
   /** Agentes, tarefas agendadas e execuções (contrato 23). */
   automations: AutomationsService
   /** Servidor local da extensão do Meet (contrato 27). */
@@ -858,6 +866,10 @@ interface AppServices {
   meetingPrompt: MeetingPromptController
   /** Microfone ligado por outro app, para o mesmo aviso (contrato 49). */
   micWatch: MicWatchService
+  /** Contrato 60: o `lap-calendar` (Calendário do Mac), sob demanda. */
+  macCalendar: MacCalendar
+  /** Contrato 62: os convites do email no Calendário do Mac (registro, estado do cartão e as gravações no clique). */
+  invites: InviteService
   /** "Salvar plugin…" da aba Plugins (contrato 31). */
   pluginSave: (input: unknown) => Promise<PluginSaveResult>
   /** Servidores MCP do agente: a aba "Conexões" e as sessões (contrato 21). */
@@ -1142,6 +1154,9 @@ function createAppServices(userData: string): AppServices {
     ...(app.isPackaged ? {} : { log: (message: string) => console.log(message) }),
   })
   whatsappService = whatsapp
+  // Contrato 62: o serviço de convites depende do `inviteSource` do email, e o email avisa o serviço quando um REPLY sai
+  // (CA16): o aviso fecha sobre esta variável, preenchida logo depois do email.
+  let invites: InviteService | null = null
   // Email (contrato 42): as contas conectam direto do main (IMAP/POP3/SMTP), com a senha cifrada no `settings.json`.
   // O autoconfig só manda o domínio ao ISPDB do Thunderbird; no smoke, nenhuma rede (a tela cai no manual).
   const email = createEmailService({
@@ -1168,10 +1183,63 @@ function createAppServices(userData: string): AppServices {
     onMessagesChanged: (accountId) => {
       if (!lockService?.isLocked()) broadcast(appWindows(), 'scribe:email-changed', { accountId })
     },
+    // Contrato 56: a conta removida leva os lotes do Assistente. Contrato 62: e as linhas dela no registro de convites
+    // (os eventos que estão na agenda ficam).
+    onAccountRemoved: (accountId) => {
+      void emailTools.organizer?.forgetAccount(accountId).catch(() => undefined)
+      void invites?.forgetAccount(accountId)
+    },
+    // Contrato 62 (CA16): o REPLY saiu; a resposta vai para o registro (um caminho só: o `reply` do resultado não é usado).
+    onInviteReplied: (event) => void invites?.recordReply(event).catch(() => undefined),
     // Só estados e tipos de erro, nunca senha, endereço ou texto de mensagem.
     ...(app.isPackaged ? {} : { log: (message: string) => console.log(message) }),
   })
   emailService = email
+  // Contrato 60: o Calendário do Mac pelo `lap-calendar`, sob demanda (nada sobe até o primeiro pedido). No smoke, o
+  // falso (test/fixtures/fake-lap-calendar.mjs, CA24 do 62), com o estado e o log no userData do smoke.
+  const macCalendarFixture = smokeFixtures?.macCalendar
+  const macCalendar = createMacCalendar({
+    platform: process.platform,
+    arch: process.arch,
+    systemVersion: process.getSystemVersion(),
+    // No smoke, como empacotado: o `request-access` do falso responde (no `pnpm dev` de verdade, `unavailable`/`dev`).
+    packaged: macCalendarFixture ? true : app.isPackaged,
+    command: macCalendarFixture
+      ? async () => ({
+          file: process.execPath,
+          args: [join(app.getAppPath(), 'test', 'fixtures', 'fake-lap-calendar.mjs')],
+          env: { ELECTRON_RUN_AS_NODE: '1', FAKE_LAP_CALENDAR_STATE: macCalendarFixture.statePath, FAKE_LAP_CALENDAR_LOG: macCalendarFixture.logPath, TZ: process.env['TZ'] },
+        })
+      : async () => {
+          const file = await locateMacCalendar({
+            platform: process.platform,
+            arch: process.arch,
+            systemVersion: process.getSystemVersion(),
+            packaged: app.isPackaged,
+            resourcesPath: process.resourcesPath,
+            appPath: app.getAppPath(),
+            ...devLog,
+          })
+          return file ? { file, args: [], env: { PATH: '/usr/bin:/bin' } } : null
+        },
+    ...devLog,
+  })
+  // Contrato 62: o convite sai sempre do corpo guardado (`inviteSource`, sem rede); o `.ics` do "Abrir no app de agenda"
+  // vai para `userData/tmp` e, no smoke, nada abre de verdade.
+  const inviteService = createInviteService({
+    root: userData,
+    calendar: macCalendar,
+    settings: () => settings.get(),
+    source: (accountId, id) => email.inviteSource(accountId, id),
+    openPath: smokeFixtures
+      ? (path) => {
+          smokeFixtures.openedFiles.push({ action: 'open', path })
+          return Promise.resolve('')
+        }
+      : (path) => shell.openPath(path),
+    ...devLog,
+  })
+  invites = inviteService
   // Contrato 32: os Detalhes da conversa (resumo, humor, pendências) pelo mesmo motor, numa execução curta sem
   // ferramenta nenhuma. Só lê as mensagens; o resultado fica em `whatsapp/insights.json`.
   const whatsappInsights = createInsightsService({
@@ -1245,7 +1313,29 @@ function createAppServices(userData: string): AppServices {
     searchServer: (accountId, query, limit) => email.searchServer(accountId, query, limit),
     peekServer: (accountId, mailbox, uid) => email.peekServer(accountId, mailbox, uid),
     locked: emailLocked,
+    // Contrato 56: organizar o email (só o Assistente interativo); os lotes com o Desfazer em `email/batches.json`.
+    organize: {
+      store: createEmailBatchStore(join(userData, EMAIL_DIR)),
+      accounts: () => email.accounts(),
+      listFolders: (accountId, options) => email.listFolders(accountId, options),
+      openFolder: (accountId, path) => email.openFolder(accountId, path),
+      createFolder: (accountId, parentPath, name) => email.createFolder(accountId, parentPath, name),
+      moveMessages: (accountId, fromPath, uids, toPath, options) => email.moveMessages(accountId, fromPath, uids, toPath, options),
+      locateMessages: (accountId, path, uids, messageIds) => email.locateMessages(accountId, path, uids, messageIds),
+      // Bloqueado, nada do email vai às janelas (como os outros eventos do email).
+      emit: (event) => {
+        if (!lockService?.isLocked()) broadcast(appWindows(), 'scribe:email-organize', event)
+      },
+      // O cartão do lote fica `done` com a frase do Desfazer, na conversa que o tem.
+      cardDone: async (batch, result) => {
+        const saved = await markEmailBatchCard(chatStore, batch.chatId, batch.id, result)
+        if (saved && !lockService?.isLocked()) broadcast(appWindows(), 'scribe:chat-event', { type: 'done', chatId: saved.id, chat: saved })
+      },
+      ...devLog,
+    },
   })
+  // Contrato 56 (CA11): o lote que ficou `running` (o app caiu no meio) vira `stopped`.
+  void emailTools.organizer?.init().catch(() => undefined)
   const actionResolver = {
     whatsappChat: async (chatId: string) => {
       // A lista que a pergunta acabou de ler (uma chamada só ao serviço).
@@ -1266,8 +1356,10 @@ function createAppServices(userData: string): AppServices {
     assistant: {
       prepare: (folder, scope) => writeSources(assistantSources, folder, scope),
       extract: (text) => extractActions(text, actionResolver),
-      // Contrato 45 (CA7): com conta de email e a fonte ligada, as ferramentas de busca e leitura.
-      tools: (scope) => (chatSourcesOf(scope).email && email.accounts().length > 0 && !emailLocked() ? emailTools.tools : []),
+      // Contrato 45 (CA7): com conta de email e a fonte ligada, as ferramentas de busca e leitura. Contrato 56: e as de
+      // organizar (só aqui, no Assistente interativo; as automações recebem só as de leitura).
+      tools: (scope) => (chatSourcesOf(scope).email && email.accounts().length > 0 && !emailLocked() ? [...emailTools.tools, ...emailTools.organizeTools] : []),
+      endTurn: (turn, outcome) => emailTools.organizer?.endTurn(turn, outcome) ?? Promise.resolve(),
     },
     settings,
     meetings,
@@ -1498,6 +1590,9 @@ function createAppServices(userData: string): AppServices {
     onView: (view) => {
       // Contrato 50: as reuniões de hoje no menu do ícone (que não mostra nada bloqueado).
       trayController?.refresh()
+      // Contrato 62 (R5c): a cada leitura de agenda, a cópia da conta que apareceu toma o lugar da que o app criou (o
+      // intervalo fica no serviço; sem evento gravado pelo app, nada sobe).
+      void inviteService.reconcileAll()
       if (!lockService?.isLocked()) broadcast(appWindows(), 'scribe:calendar-state', view)
     },
     ...devLog,
@@ -1607,10 +1702,13 @@ function createAppServices(userData: string): AppServices {
     whatsapp,
     whatsappInsights,
     email,
+    emailOrganizer: emailTools.organizer,
     automations,
     meet,
     meetingPrompt,
     micWatch,
+    macCalendar,
+    invites: inviteService,
     pluginSave,
     mcp,
     navegador,
@@ -1727,7 +1825,7 @@ function openExternal(url: string): void {
 }
 
 function registerIpc(services: AppServices): void {
-  const { settings, meetings, meetingsService, meetingsIndex, tokenClient, translation, claude, files, summary, analysis, aiNotes, download, branding, updates, chat, chatActions, corpus, acp, lock, google, drive, microsoft, calendar, whatsapp, whatsappInsights, email, automations, meet, meetingPrompt, pluginSave, mcp } = services
+  const { settings, meetings, meetingsService, meetingsIndex, tokenClient, translation, claude, files, summary, analysis, aiNotes, download, branding, updates, chat, chatActions, corpus, acp, lock, google, drive, microsoft, calendar, whatsapp, whatsappInsights, email, emailOrganizer, automations, meet, meetingPrompt, pluginSave, mcp, invites } = services
   /** Reunião salva, renomeada ou com anotações novas: o `.md` dela no acervo do chat é reescrito. */
   const touched = (meetingId: string): void => void corpus.sync(meetingId).catch(() => undefined)
   /**
@@ -2034,7 +2132,17 @@ function registerIpc(services: AppServices): void {
   handle('scribe:email-mark-read', appOrigin, (_event, request) => email.markRead(request).catch(() => false))
   handle('scribe:email-delete', appOrigin, (_event, request) => email.remove(request).catch(() => false))
   handle('scribe:email-send', appOrigin, (event, request) => email.send(event.sender.id, request).catch(() => ({ ok: false, error: 'failed' }) as const))
+  handle('scribe:invite-reply', appOrigin, (event, request) => email.sendInviteReply(event.sender.id, request).catch(() => ({ ok: false, error: 'failed' }) as const))
   onEvent('scribe:email-click', appOrigin, (event, token) => email.registerClick(event.sender.id, token))
+  // Contrato 62: o cartão do convite e o Calendário do Mac. O serviço valida cada pedido; falha vira resposta tipada.
+  const inviteFailed = { ok: false, error: 'failed', message: INVITE_ERROR_MESSAGES.failed, state: null } as const
+  handle('scribe:invite-state', appOrigin, (_event, request) => invites.state(request).catch(() => ({ ok: false, error: 'unavailable' }) as const))
+  handle('scribe:invite-add', appOrigin, (_event, request) => invites.add(request).catch(() => inviteFailed))
+  handle('scribe:invite-update', appOrigin, (_event, request) => invites.update(request).catch(() => inviteFailed))
+  handle('scribe:invite-remove', appOrigin, (_event, request) => invites.remove(request).catch(() => inviteFailed))
+  handle('scribe:invite-calendars', appOrigin, () => invites.calendars().catch(() => ({ ok: false, error: 'unavailable', reason: 'failed' }) as const))
+  handle('scribe:invite-request-access', appOrigin, () => invites.requestAccess().catch(() => ({ ok: false, error: 'unavailable', reason: 'failed' }) as const))
+  handle('scribe:invite-open-ics', appOrigin, (_event, request) => invites.openIcs(request).catch(() => ({ ok: false, error: 'failed' }) as const))
   // Contrato 43: o teste da conta, o clipe do composer, as imagens remotas e a pasta aberta na tela.
   handle('scribe:email-test', appOrigin, (_event, request) => email.test(request).catch(() => ({ ok: false, stage: 'incoming', error: 'Erro ao falar com o servidor.' }) as const))
   handle('scribe:email-attach-pick', appOrigin, async () => {
@@ -2076,6 +2184,11 @@ function registerIpc(services: AppServices): void {
   handle('scribe:email-rules-preview', appOrigin, (_event, request) => email.rulesPreview(request).catch(() => ({ ok: false, error: 'unavailable' }) as const))
   handle('scribe:email-rules-run', appOrigin, (_event, request) => email.rulesRun(request).catch(() => ({ ok: false, error: 'unavailable' }) as const))
   onEvent('scribe:email-folder-watch', appOrigin, (event, request) => email.watchFolder(event.sender.id, request))
+  // Contrato 56: o lote do Assistente (o estado, o cartão e o Desfazer). Nenhum envia email; o Desfazer só devolve o que
+  // o agente moveu, sem token de clique.
+  handle('scribe:email-organize-state', appOrigin, () => emailOrganizer?.state().catch(() => ({ ok: false, error: 'unavailable' }) as const) ?? ({ ok: false, error: 'unavailable' } as const))
+  handle('scribe:email-batch-get', appOrigin, (_event, request) => emailOrganizer?.batch(request).catch(() => ({ ok: false, error: 'unavailable' }) as const) ?? ({ ok: false, error: 'unavailable' } as const))
+  handle('scribe:email-batch-undo', appOrigin, (_event, request) => emailOrganizer?.undo(request).catch(() => ({ ok: false, error: 'unavailable' }) as const) ?? ({ ok: false, error: 'unavailable' } as const))
   onEvent('scribe:email-viewing', appOrigin, (event, request) => {
     const viewing = request as { accountId?: unknown; folder?: unknown } | null | undefined
     const accountId = viewing?.accountId
@@ -2245,6 +2358,9 @@ void app.whenReady().then(async () => {
     void services.email.dispose()
     void services.meet.stop()
     void services.micWatch.dispose()
+    // Contrato 62: os `.ics` temporários saem; o `lap-calendar` fecha.
+    void services.invites.dispose()
+    void services.macCalendar.dispose()
     void services.navegador.close()
     void services.navegadorMcp.close()
     disposeWhatsAppBadge()
@@ -2332,6 +2448,8 @@ void app.whenReady().then(async () => {
     disposeWhatsAppBadge()
     await services.meet.stop()
     await services.micWatch.dispose()
+    await services.invites.dispose()
+    await services.macCalendar.dispose()
     await services.navegador.close()
     await services.navegadorMcp.close()
     app.exit(code)

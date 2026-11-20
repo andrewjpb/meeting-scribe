@@ -7,9 +7,11 @@ import type { DriveMeetingStatus, GoogleAccountStatus, GoogleClientSaveResult, M
 import type { CalendarListResult, CalendarView } from './calendar'
 import type { BrandingInfo, BrandLogoChoice } from './branding'
 import type { LockResponse, LockStatus } from './lock'
-import type { EmailAccountInput, EmailAccountStatus, EmailAddResult, EmailAttachmentRequest, EmailAttachmentSaveResult, EmailAttachmentsResult, EmailAttachPickResult, EmailAutoconfig, EmailBodyResult, EmailFolder, EmailFolderDeleteResult, EmailFolderPathResult, EmailFoldersResult, EmailMessage, EmailMoveResult, EmailOpenFolderResult, EmailSendRequest, EmailSendResult, EmailTestResult } from './email'
+import type { EmailAccountInput, EmailAccountStatus, EmailAddResult, EmailAttachmentRequest, EmailAttachmentSaveResult, EmailAttachmentsResult, EmailAttachPickResult, EmailAutoconfig, EmailBodyResult, EmailFolder, EmailFolderDeleteResult, EmailFolderPathResult, EmailFoldersResult, EmailMessage, EmailMoveResult, EmailOpenFolderResult, EmailSendRequest, EmailSendResult, EmailTestResult, InviteReplySendRequest, InviteReplySendResult } from './email'
 import type { EmailSignature, EmailSignatureResult } from './email-signature'
+import type { InviteAccessResult, InviteActionResult, InviteAddRequest, InviteCalendarsResult, InviteMessageRequest, InviteOpenIcsResult, InviteStateResult } from './invite-state'
 import type { EmailRule, EmailRulePreviewResult, EmailRuleRunResult, EmailRulesGetResult, EmailRulesSetResult } from './email-rules'
+import type { EmailBatchGetResult, EmailBatchUndoResult, EmailOrganizeEvent, EmailOrganizeStateResult } from './email-organize'
 import type { KeySaveResult, KeyStatus, MicAccess, ModelCheck, ModelsResult } from './assemblyai'
 import type { Chat, ChatApprovalAnswer, ChatEvent, ChatListItem, ChatRedoRequest, ChatSendRequest, ChatSendResult, ChatUpdateRequest } from './chat'
 import type { ClaudeLocateResult, ClaudeRunState, ClaudeStartResult, ClaudeTranslateRequest, ClaudeTranslateResult } from './claude-cli'
@@ -73,7 +75,7 @@ export interface CspViolation {
 export type CaptureMode = 'real' | 'synthetic'
 
 /** Painéis de privacidade dos Ajustes do Sistema que o app abre. */
-export type PrivacyPane = 'microphone' | 'audio-capture'
+export type PrivacyPane = 'microphone' | 'audio-capture' | 'calendars'
 
 /** renderer -> main, com resposta (`__scribeApi.invoke` / `ipcMain.handle`). */
 export interface InvokeChannels {
@@ -398,6 +400,22 @@ export interface InvokeChannels {
    * único e com validade de 10 s, como no WhatsApp; sem diálogo de confirmação. Falha volta tipada, sem exceção.
    */
   'scribe:email-send': { request: EmailSendRequest; response: EmailSendResult }
+  /**
+   * "Aceitar", "Talvez" ou "Recusar" de um convite: o REPLY ao organizador, só com o token de clique do email (contrato
+   * 61); nunca regra, tarefa ou Assistente. Não fica em Enviados. Falha volta tipada, sem exceção.
+   */
+  'scribe:invite-reply': { request: InviteReplySendRequest; response: InviteReplySendResult }
+  /**
+   * Contrato 62: o estado do cartão do convite e o Calendário do Mac. O renderer manda só a conta e a mensagem; o
+   * convite sai do corpo guardado no main. Gravar é local e o app só mexe no evento que ele criou (sem token de clique).
+   */
+  'scribe:invite-state': { request: InviteMessageRequest; response: InviteStateResult }
+  'scribe:invite-add': { request: InviteAddRequest; response: InviteActionResult }
+  'scribe:invite-update': { request: InviteMessageRequest; response: InviteActionResult }
+  'scribe:invite-remove': { request: InviteMessageRequest; response: InviteActionResult }
+  'scribe:invite-calendars': { request: undefined; response: InviteCalendarsResult }
+  'scribe:invite-request-access': { request: undefined; response: InviteAccessResult }
+  'scribe:invite-open-ics': { request: InviteMessageRequest; response: InviteOpenIcsResult }
   /** Contrato 43: "Testar conexão" com os dados do formulário (recebimento e envio); nada é gravado. */
   'scribe:email-test': { request: EmailAccountInput; response: EmailTestResult }
   /** Contrato 43: o clipe do composer abre o seletor do macOS; os arquivos voltam para a lista de anexos (nada é enviado). */
@@ -438,6 +456,12 @@ export interface InvokeChannels {
   'scribe:email-rules-preview': { request: { accountId: string; ruleId: string }; response: EmailRulePreviewResult }
   /** Segundo passo: só com o token do preview. */
   'scribe:email-rules-run': { request: { accountId: string; ruleId: string; token: string }; response: EmailRuleRunResult }
+  /** Contrato 56 (CA10): o lote `running` mais recente e os de hoje (o painel e a faixa abrem no meio ou depois de reiniciar). */
+  'scribe:email-organize-state': { request: undefined; response: EmailOrganizeStateResult }
+  /** Contrato 56 (CA12): um lote do Assistente, para o cartão do chat. */
+  'scribe:email-batch-get': { request: { batchId: string }; response: EmailBatchGetResult }
+  /** Contrato 56 (CA9): devolve à pasta de antes o que o Assistente moveu; nada é enviado nem apagado. */
+  'scribe:email-batch-undo': { request: { batchId: string }; response: EmailBatchUndoResult }
   /** Automações (contrato 23): os agentes, quantas tarefas usam cada um e os modelos que o perfil oferece. */
   'scribe:agents-list': { request: undefined; response: AgentsList }
   /** Criar (`id: null`) ou trocar um agente. */
@@ -577,8 +601,13 @@ export interface MainEvents {
   'scribe:email-message': EmailMessage
   /** As mensagens de uma conta mudaram (sincronismo, lida, apagada, enviada): a tela relê. Não chega bloqueado. */
   'scribe:email-changed': { accountId: string }
-  /** Contrato 43: o clique na notificação de email: a Caixa de Entrada da conta com a mensagem aberta. */
-  'scribe:open-email': { accountId: string; id: string }
+  /** Contrato 56 (CA10): o estado inteiro de um lote do Assistente a cada mudança. Não chega bloqueado. */
+  'scribe:email-organize': EmailOrganizeEvent
+  /**
+   * Contrato 43: o clique na notificação de email: a Caixa de Entrada da conta com a mensagem aberta. Contrato 55: a que
+   * uma regra moveu vem com a pasta (`mailbox`) e, sem o UID novo (`found: false`), abre só a pasta.
+   */
+  'scribe:open-email': { accountId: string; id: string; mailbox?: string; found?: boolean }
 }
 
 export type InvokeChannel = keyof InvokeChannels
@@ -744,6 +773,14 @@ const INVOKE: Record<InvokeChannel, true> = {
   'scribe:email-mark-read': true,
   'scribe:email-delete': true,
   'scribe:email-send': true,
+  'scribe:invite-reply': true,
+  'scribe:invite-state': true,
+  'scribe:invite-add': true,
+  'scribe:invite-update': true,
+  'scribe:invite-remove': true,
+  'scribe:invite-calendars': true,
+  'scribe:invite-request-access': true,
+  'scribe:invite-open-ics': true,
   'scribe:email-test': true,
   'scribe:email-attach-pick': true,
   'scribe:email-remote-images': true,
@@ -761,6 +798,9 @@ const INVOKE: Record<InvokeChannel, true> = {
   'scribe:email-rules-set': true,
   'scribe:email-rules-preview': true,
   'scribe:email-rules-run': true,
+  'scribe:email-organize-state': true,
+  'scribe:email-batch-get': true,
+  'scribe:email-batch-undo': true,
   'scribe:agents-list': true,
   'scribe:agents-save': true,
   'scribe:agents-delete': true,
@@ -827,6 +867,7 @@ const MAIN_EVENTS: Record<MainEvent, true> = {
   'scribe:email-state': true,
   'scribe:email-message': true,
   'scribe:email-changed': true,
+  'scribe:email-organize': true,
   'scribe:open-email': true,
 }
 
@@ -1039,6 +1080,16 @@ export const WHEN_LOCKED: Readonly<Record<InvokeChannel, LockedPolicy>> = Object
   'scribe:email-mark-read': 'refused',
   'scribe:email-delete': 'refused',
   'scribe:email-send': 'refused',
+  // Contrato 61: a resposta de convite é envio, como o "Enviar".
+  'scribe:invite-reply': 'refused',
+  // Contrato 62 (N6): o cartão não aparece bloqueado, e a agenda também não muda.
+  'scribe:invite-state': 'refused',
+  'scribe:invite-add': 'refused',
+  'scribe:invite-update': 'refused',
+  'scribe:invite-remove': 'refused',
+  'scribe:invite-calendars': 'refused',
+  'scribe:invite-request-access': 'refused',
+  'scribe:invite-open-ics': 'refused',
   // Contrato 43: o teste da conta, o clipe do composer e as imagens remotas, como o resto do email.
   'scribe:email-test': 'refused',
   'scribe:email-attach-pick': 'refused',
@@ -1060,6 +1111,10 @@ export const WHEN_LOCKED: Readonly<Record<InvokeChannel, LockedPolicy>> = Object
   'scribe:email-rules-set': 'refused',
   'scribe:email-rules-preview': 'refused',
   'scribe:email-rules-run': 'refused',
+  // Contrato 56: o lote do Assistente, como o resto do email.
+  'scribe:email-organize-state': 'refused',
+  'scribe:email-batch-get': 'refused',
+  'scribe:email-batch-undo': 'refused',
   // Automações (contrato 23, CA10): gerenciar agentes e tarefas, testar, pedir e ver o histórico, tudo recusado com
   // o app bloqueado. O agendador não depende de canal: roda no main e as tarefas continuam rodando bloqueado.
   'scribe:agents-list': 'refused',
@@ -1126,4 +1181,6 @@ export interface ScribeApi {
   whatsappReact(request: Omit<WhatsAppReactRequest, 'clickToken'>): Promise<WhatsAppReactResult>
   /** Contrato 42: o "Enviar" do email, com o mesmo desenho do `whatsappSend` (ativação viva, token de clique). */
   emailSend(request: Omit<EmailSendRequest, 'clickToken'>): Promise<EmailSendResult>
+  /** Contrato 61: "Aceitar", "Talvez" ou "Recusar" de um convite, pelo mesmo token de clique do `emailSend`. */
+  inviteReply(request: Omit<InviteReplySendRequest, 'clickToken'>): Promise<InviteReplySendResult>
 }

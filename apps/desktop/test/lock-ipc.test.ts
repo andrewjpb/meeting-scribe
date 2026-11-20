@@ -186,6 +186,8 @@ describe('canais com o app bloqueado (contrato 22, CA4)', () => {
       'scribe:email-mark-read',
       'scribe:email-delete',
       'scribe:email-send',
+      // Contrato 61: a resposta de convite (um envio).
+      'scribe:invite-reply',
       // Contrato 43: o teste da conta, o clipe do composer e as imagens remotas.
       'scribe:email-test',
       'scribe:email-attach-pick',
@@ -224,6 +226,9 @@ describe('canais com o app bloqueado (contrato 22, CA4)', () => {
       'scribe:email-attachment-save',
       'scribe:email-attachments',
       'scribe:email-autoconfig',
+      // Contrato 56: o lote do Assistente (o cartão e o Desfazer).
+      'scribe:email-batch-get',
+      'scribe:email-batch-undo',
       'scribe:email-delete',
       // Contrato 52: as pastas.
       'scribe:email-folder-create',
@@ -235,6 +240,7 @@ describe('canais com o app bloqueado (contrato 22, CA4)', () => {
       'scribe:email-messages',
       'scribe:email-move',
       'scribe:email-open-folder',
+      'scribe:email-organize-state',
       'scribe:email-remote-images',
       'scribe:email-remove-account',
       // Contrato 53: as regras.
@@ -252,6 +258,15 @@ describe('canais com o app bloqueado (contrato 22, CA4)', () => {
     expect(RENDERER_EVENTS_WHEN_LOCKED['scribe:email-click']).toBe('ignored')
     expect(EMAIL_PRELOAD_ONLY_EVENTS).toEqual(['scribe:email-click'])
     expect(PRELOAD_ONLY_EVENTS).not.toContain('scribe:email-click')
+  })
+
+  it('contrato 61: a resposta de convite é recusada bloqueada, antes do handler', async () => {
+    expect(WHEN_LOCKED['scribe:invite-reply']).toBe('refused')
+    locked = true
+    await expect(Promise.resolve().then(() => invokeHandlers.get('scribe:invite-reply')?.(trusted, { accountId: 'x', id: '1', partstat: 'ACCEPTED', clickToken: 'y' }))).rejects.toThrow(/^locked$/)
+    expect(calls).toEqual([])
+    locked = false
+    await expect(invoke('scribe:invite-reply')).resolves.toBe('resposta')
   })
 
   it('contrato 43: a pasta aberta na tela do email é ignorada bloqueado (o main não muda a regra da notificação)', () => {

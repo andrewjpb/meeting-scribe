@@ -1,0 +1,28 @@
+BEGIN:VCALENDAR
+PRODID:-//zoom.us//iCalendar Event//EN
+VERSION:2.0
+CALSCALE:GREGORIAN
+METHOD:REQUEST
+BEGIN:VEVENT
+DTSTART;TZID=America/Sao_Paulo:20261126T090000
+DTEND;TZID=America/Sao_Paulo:20261126T100000
+DTSTAMP:20261119T110000Z
+ORGANIZER;CN=Zoom Organizador:mailto:zoom.organizador@example.com
+UID:ZOOM81234567890EXAMPLE
+ATTENDEE;CN=andrew.teste@example.org;CUTYPE=INDIVIDUAL;ROLE=REQ-PARTICIPANT
+ ;PARTSTAT=NEEDS-ACTION;RSVP=TRUE:mailto:andrew.teste@example.org
+TZID:America/Sao_Paulo
+SEQUENCE:0
+SUMMARY:Alinhamento com o fornecedor
+LOCATION:https://us02web.zoom.us/j/81234567890?pwd=ExAmPlE123
+STATUS:CONFIRMED
+DESCRIPTION:Zoom Organizador convidou você para uma reunião Zoom agendada
+ .\n\nEntrar na reunião Zoom\nhttps://us02web.zoom.us/j/81234567890?pwd=Ex
+ AmPlE123\n\nID da reunião: 812 3456 7890\nSenha: 135790\n
+BEGIN:VALARM
+TRIGGER:-PT10M
+ACTION:DISPLAY
+DESCRIPTION:Reminder
+END:VALARM
+END:VEVENT
+END:VCALENDAR

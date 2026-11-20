@@ -550,3 +550,29 @@ describe('achados da revisão do contrato 52', () => {
     expect((await second.messages({ accountId })).map((message) => message.uid)).not.toContain(1)
   })
 })
+
+describe('contrato 56 (CA7): mover com o UIDVALIDITY da referência e os Message-IDs que voltam à INBOX', () => {
+  it('pasta nunca aberta: sem `options` é invalid (como no 52); com o UIDVALIDITY dela, move e diz o do destino', async () => {
+    const { service, fake } = setup({ folders: [{ path: 'Resolvidos' }] })
+    const id = await connected(service)
+    expect(await service.moveMessages(id, 'Arquivo', [7], 'Resolvidos')).toEqual({ ok: false, error: 'invalid' })
+    // O UIDVALIDITY errado não move nada.
+    expect(await service.moveMessages(id, 'Arquivo', [7], 'Resolvidos', { uidValidity: '99' })).toEqual({ ok: false, error: 'invalid' })
+    const moved = await service.moveMessages(id, 'Arquivo', [7], 'Resolvidos', { uidValidity: '1' })
+    expect(moved).toMatchObject({ ok: true, moved: [{ fromUid: 7, toUid: 1 }], uidValidity: expect.stringMatching(/^\d+$/) })
+    expect(fake.mailboxes()['Resolvidos']?.uids).toEqual([1])
+    expect(await service.moveMessages(id, 'Arquivo', [7], 'Resolvidos', { uidValidity: 'abc' })).toEqual({ ok: false, error: 'invalid' })
+  })
+
+  it('a volta à INBOX de uma pasta fora do store não avisa email novo (os Message-IDs vão para `movedIn`)', async () => {
+    const { service, fake, received } = setup({ folders: [{ path: 'Resolvidos' }] })
+    const id = await connected(service)
+    const uid = fake.put('Resolvidos', { from: { name: 'Ana', address: 'ana@cliente.example' }, subject: 'Volta', date: NOW, messageId: '<volta@cliente.example>' })
+    const located = await service.locateMessages(id, 'Resolvidos', [uid, 999], ['<volta@cliente.example>', '<nada@x>'])
+    expect(located).toMatchObject({ ok: true, existing: [uid], byMessageId: { '<volta@cliente.example>': [uid], '<nada@x>': [] } })
+    const uidValidity = located.ok ? located.uidValidity : ''
+    expect(await service.moveMessages(id, 'Resolvidos', [uid], 'INBOX', { uidValidity, messageIds: ['<volta@cliente.example>'] })).toMatchObject({ ok: true })
+    await vi.waitFor(async () => expect((await service.messages({ accountId: id })).map((message) => message.subject)).toContain('Volta'))
+    expect(received).toEqual([])
+  })
+})

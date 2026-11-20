@@ -6,6 +6,9 @@
 // `capabilities.uidplus`), `CREATE`, `RENAME` e `DELETE`. Os comandos ficam em `folderLog`.
 // Contrato 53: `STORE \Flagged` na conexão da INBOX, a pasta "Lixeira" (`\Trash`, com `trash: true`) e o registro dos
 // comandos da conexão da INBOX (`sessionLog`: as marcas e o `EXPUNGE` do "Apagar").
+// Contrato 56: o `UID SEARCH UID` e o `UID SEARCH HEADER Message-ID` da conexão de leitura (`locate`, com o
+// `UIDVALIDITY` de verdade da pasta), mensagens postas direto numa pasta (`put`, com `References`/`In-Reply-To`), a
+// pasta apagada por fora (`dropFolder`) e a mensagem tirada por fora (`take`).
 import type { EmailAddress } from '../../shared/email'
 import { ImapFolderError, movedList, type ImapConnect, type ImapFolderConnect, type ImapFolderEntry, type ImapMessage, type ImapReaderConnect, type ImapSession } from './imap-client'
 import type { Pop3Connect } from './pop3-client'
@@ -29,6 +32,13 @@ interface Seed {
   cc?: EmailAddress[]
   /** Contrato 43 (CA8 e CA9): anexos (nome e conteúdo em texto). */
   attachments?: { name: string; type: string; content: string }[]
+  /** Contrato 62 (CA24): o convite, como o Google manda (N10): a parte `text/calendar; method=…` e o anexo `invite.ics`. */
+  calendar?: FakeInviteCalendar
+}
+
+export interface FakeInviteCalendar {
+  method: 'REQUEST' | 'CANCEL' | 'REPLY'
+  content: string
 }
 
 /** O anexo da mensagem do Financeiro: o smoke confere que o arquivo salvo tem exatamente isto. */
@@ -103,6 +113,12 @@ function rfc822(seed: Seed, date: Date, messageId: string): Buffer {
     'MIME-Version: 1.0',
   ]
   const part = (type: string, body: string): string => `Content-Type: ${type}; charset=utf-8\r\nContent-Transfer-Encoding: base64\r\n\r\n${Buffer.from(body, 'utf8').toString('base64')}`
+  if (seed.calendar) {
+    const base64 = Buffer.from(seed.calendar.content, 'utf8').toString('base64')
+    const calendar = `--m1\r\nContent-Type: text/calendar; charset=utf-8; method=${seed.calendar.method}\r\nContent-Transfer-Encoding: base64\r\n\r\n${base64}\r\n`
+    const file = `--m1\r\nContent-Type: application/ics; name="invite.ics"\r\nContent-Disposition: attachment; filename="invite.ics"\r\nContent-Transfer-Encoding: base64\r\n\r\n${base64}\r\n`
+    return Buffer.from(`${head.join('\r\n')}\r\nContent-Type: multipart/mixed; boundary="m1"\r\n\r\n--m1\r\n${part('text/plain', seed.text)}\r\n${calendar}${file}--m1--\r\n`)
+  }
   if (seed.attachments?.length) {
     const files = seed.attachments.map((item) => `--m1\r\nContent-Type: ${item.type}; name="${item.name}"\r\nContent-Disposition: attachment; filename="${item.name}"\r\nContent-Transfer-Encoding: base64\r\n\r\n${Buffer.from(item.content, 'utf8').toString('base64')}\r\n`)
     return Buffer.from(`${head.join('\r\n')}\r\nContent-Type: multipart/mixed; boundary="m1"\r\n\r\n--m1\r\n${part('text/plain', seed.text)}\r\n${files.join('')}--m1--\r\n`)
@@ -129,6 +145,19 @@ export interface FakeEmailOptions {
   trash?: boolean
 }
 
+/** Contrato 56: uma mensagem posta direto numa pasta do servidor falso. */
+export interface FakePut {
+  from: EmailAddress
+  to?: EmailAddress[]
+  subject: string
+  date: number
+  messageId?: string | null
+  inReplyTo?: string | null
+  references?: string[]
+  seen?: boolean
+  text?: string
+}
+
 /** Contrato 53: a Lixeira do servidor falso (com `trash: true`). */
 export const SMOKE_EMAIL_TRASH_FOLDER = 'Lixeira'
 
@@ -148,6 +177,14 @@ export interface FakeEmail {
   resetUidValidity(path: string): void
   /** Contrato 52: as pastas como estão (path → UIDs e flags). */
   mailboxes(): Record<string, { uids: number[]; unseen: number; specialUse: string | null; noselect: boolean }>
+  /** Contrato 56: uma mensagem posta direto na pasta (criada se faltar), sem aviso do IDLE; devolve o UID. */
+  put(path: string, input: FakePut): number
+  /** Contrato 56: a pasta some do servidor por fora do app (apagada ou renomeada noutro cliente). */
+  dropFolder(path: string): void
+  /** Contrato 56: a mensagem sai da pasta por fora do app (a pessoa a moveu noutro cliente); devolve a que saiu. */
+  take(path: string, uid: number): ImapMessage | null
+  /** Contrato 56: os Message-IDs de uma pasta, na ordem dos UIDs. */
+  messageIdsIn(path: string): (string | null)[]
   /** Contrato 45 (CA7): a conexão só de leitura da busca do Assistente (INBOX, "Enviados" e "Arquivo"). */
   imapReader: ImapReaderConnect
   /** As buscas e as leituras dessa conexão (o smoke confere que houve e que nada mudou de flag). */
@@ -155,14 +192,16 @@ export interface FakeEmail {
   pop3: Pop3Connect
   smtp: SmtpSend
   smtpVerify: SmtpVerify
-  /** O que o SMTP falso recebeu (sem anexo em bytes: só nome e tamanho). */
-  sent: { to: string[]; cc: string[]; subject: string; text: string; inReplyTo: string | null; attachments: { name: string; size: number }[] }[]
+  /** O que o SMTP falso recebeu (sem anexo em bytes: só nome e tamanho). Contrato 61: o REPLY de convite (`null` nos outros). */
+  sent: { to: string[]; cc: string[]; subject: string; text: string; inReplyTo: string | null; attachments: { name: string; size: number }[]; icalEvent: { method: 'REPLY'; filename: string; content: string } | null }[]
   /** `APPEND` na pasta de enviados. */
   appended: number
   /** O SMTP recusa o próximo envio (o composer mantém o rascunho com o aviso). */
   failNextSend: boolean
+  /** Contrato 61: posto, o SMTP espera essa promessa antes de registrar em `sent` e de responder (o "Enviando"). */
+  smtpHold: (() => Promise<void>) | null
   /** Um email novo na INBOX, avisado pelo "IDLE". */
-  deliver(input: { from: EmailAddress; subject: string; text: string; cc?: EmailAddress[]; attachments?: Seed['attachments'] }): Promise<void>
+  deliver(input: { from: EmailAddress; subject: string; text: string; cc?: EmailAddress[]; attachments?: Seed['attachments']; calendar?: FakeInviteCalendar }): Promise<void>
   /** Imagens remotas pedidas pelo "Carregar imagens". */
   imageRequests: string[]
   fetchImage(url: string): Promise<{ type: string; bytes: Uint8Array } | null>
@@ -249,6 +288,30 @@ export function createFakeEmail(now: () => number = Date.now, options: FakeEmail
       Object.fromEntries(
         [...folders].map(([path, box]) => [path, { uids: box.items.map((item) => item.message.uid), unseen: box.items.filter((item) => !item.message.flags.includes('\\Seen')).length, specialUse: box.specialUse, noselect: box.noselect }]),
       ),
+    put(path, input) {
+      ensure(path)
+      const box = selectable(path)
+      const uid = box.nextUid++
+      const messageId = input.messageId === undefined ? `<put-${path.replace(/[^\w]/g, '')}-${uid}@cliente.example>` : input.messageId
+      const to = input.to ?? [ANDREW]
+      const date = new Date(input.date)
+      const seed: Seed = { from: input.from, subject: input.subject, minutesAgo: 0, seen: input.seen ?? true, text: input.text ?? `Mensagem ${uid}.` }
+      box.items.push({
+        message: { uid, flags: input.seen === false ? [] : ['\\Seen'], date: date.getTime(), subject: input.subject, from: [input.from], to, cc: [], messageId, inReplyTo: input.inReplyTo ?? null, references: input.references ?? [] },
+        raw: rfc822(seed, date, messageId ?? ''),
+      })
+      return uid
+    },
+    dropFolder(path) {
+      if (path !== 'INBOX') folders.delete(path)
+    },
+    take(path, uid) {
+      const box = folders.get(path)
+      const index = box ? box.items.findIndex((item) => item.message.uid === uid) : -1
+      if (!box || index < 0) return null
+      return box.items.splice(index, 1)[0]?.message ?? null
+    },
+    messageIdsIn: (path) => [...(folders.get(path)?.items ?? [])].sort((a, b) => a.message.uid - b.message.uid).map((item) => item.message.messageId),
     async imapFolders(config) {
       login(config.pass)
       return {
@@ -291,6 +354,10 @@ export function createFakeEmail(now: () => number = Date.now, options: FakeEmail
             target.items.push({ message: { ...item.message, uid: toUid }, raw: item.raw })
             map.set(uid, toUid)
           }
+          // Contrato 56: como no servidor de verdade, o IDLE da INBOX avisa o que chegou a ela por outra conexão.
+          if (to === 'INBOX' && map.size) queueMicrotask(() => {
+            for (const listener of listeners) listener()
+          })
           return movedList(uids, fake.capabilities.uidplus ? map : undefined, fake.capabilities.uidplus ? target.uidValidity : null)
         },
         create: async (path) => {
@@ -345,12 +412,22 @@ export function createFakeEmail(now: () => number = Date.now, options: FakeEmail
           fake.reader.peeks++
           return (boxes()[path] ?? []).find((item) => item.message.uid === uid)?.raw ?? null
         },
+        // Contrato 56: `EXAMINE` + `UID SEARCH UID` + `UID SEARCH HEADER Message-ID`, com o `UIDVALIDITY` da pasta.
+        locate: async (path, uids, messageIds) => {
+          const box = selectable(path)
+          fake.folderLog.push(`UID SEARCH HEADER Message-ID ${path} (${messageIds.length})`)
+          const present = new Set(box.items.map((item) => item.message.uid))
+          const byMessageId: Record<string, number[]> = {}
+          for (const id of messageIds) byMessageId[id] = box.items.filter((item) => item.message.messageId === id).map((item) => item.message.uid)
+          return { uidValidity: box.uidValidity, existing: uids.filter((uid) => present.has(uid)), byMessageId }
+        },
         close: async () => undefined,
       }
     },
     sent: [],
     appended: 0,
     failNextSend: false,
+    smtpHold: null,
     imageRequests: [],
     async imap(config) {
       login(config.pass)
@@ -402,14 +479,23 @@ export function createFakeEmail(now: () => number = Date.now, options: FakeEmail
         fake.failNextSend = false
         throw new SmtpError('rejected')
       }
-      fake.sent.push({ to: mail.to, cc: mail.cc ?? [], subject: mail.subject, text: mail.text, inReplyTo: mail.inReplyTo, attachments: (mail.attachments ?? []).map((item) => ({ name: item.name, size: item.bytes.byteLength })) })
+      if (fake.smtpHold) await fake.smtpHold()
+      fake.sent.push({
+        to: mail.to,
+        cc: mail.cc ?? [],
+        subject: mail.subject,
+        text: mail.text,
+        inReplyTo: mail.inReplyTo,
+        attachments: (mail.attachments ?? []).map((item) => ({ name: item.name, size: item.bytes.byteLength })),
+        icalEvent: mail.icalEvent ? { method: mail.icalEvent.method, filename: mail.icalEvent.filename, content: mail.icalEvent.content } : null,
+      })
       return Buffer.from(`Subject: ${mail.subject}\r\n\r\n${mail.text}`)
     },
     async smtpVerify(config) {
       if (config.pass === SMOKE_EMAIL_WRONG_PASSWORD) throw new SmtpError('auth')
     },
     async deliver(input) {
-      add({ from: input.from, subject: input.subject, text: input.text, minutesAgo: 0, seen: false, ...(input.cc ? { cc: input.cc } : {}), ...(input.attachments ? { attachments: input.attachments } : {}) }, now())
+      add({ from: input.from, subject: input.subject, text: input.text, minutesAgo: 0, seen: false, ...(input.cc ? { cc: input.cc } : {}), ...(input.attachments ? { attachments: input.attachments } : {}), ...(input.calendar ? { calendar: input.calendar } : {}) }, now())
       for (const listener of listeners) listener()
     },
     async fetchImage(url) {

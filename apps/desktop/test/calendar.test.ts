@@ -151,6 +151,10 @@ describe('evento normalizado (CA5)', () => {
     expect(safeJoinUrl('https://user:senha@meet.google.com/x')).toBeNull()
     expect(findJoinUrl('Sala 3', 'Link: https://teams.live.com/meet/9876543210')).toBe('https://teams.live.com/meet/9876543210')
   })
+
+  it('Teams no formato novo (contrato 59): teams.microsoft.com/meet/<número>?p=<senha>', () => {
+    expect(findJoinUrl('Entrar: https://teams.microsoft.com/meet/2468013579123?p=AbCdEfGh12345.')).toBe('https://teams.microsoft.com/meet/2468013579123?p=AbCdEfGh12345')
+  })
 })
 
 describe('evento da gravação (CA9) e "Próximas" (CA10)', () => {

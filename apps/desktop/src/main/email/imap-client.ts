@@ -215,7 +215,19 @@ export interface ImapReader {
   search(path: string, query: ImapSearchQuery, limit: number): Promise<{ uidValidity: string; messages: ImapMessage[] }>
   /** A mensagem inteira por `BODY.PEEK[]`; `null` se sumiu, `too-big` se passa do limite. */
   peek(path: string, uid: number): Promise<Buffer | 'too-big' | null>
+  /**
+   * Contrato 56 (CA9): onde estão as mensagens numa pasta aberta só para leitura: o `UIDVALIDITY` dela, quais dos `uids`
+   * ainda existem (`UID SEARCH UID`) e os UIDs de cada Message-ID (`UID SEARCH HEADER Message-ID`).
+   */
+  locate(path: string, uids: readonly number[], messageIds: readonly string[]): Promise<ImapLocated>
   close(): Promise<void>
+}
+
+/** Contrato 56: o resultado de `ImapReader.locate`. */
+export interface ImapLocated {
+  uidValidity: string
+  existing: number[]
+  byMessageId: Record<string, number[]>
 }
 
 export type ImapReaderConnect = (config: ImapConfig) => Promise<ImapReader>
@@ -269,6 +281,17 @@ export const connectImapReader: ImapReaderConnect = async (config) => {
       if ((found.size ?? 0) > EMAIL_RAW_MAX_BYTES) return 'too-big'
       const full = await client.fetchOne(String(uid), { uid: true, source: true }, { uid: true })
       return full && full.source ? full.source : null
+    },
+
+    async locate(path, uids, wanted) {
+      const uidValidity = await examine(path)
+      const existing = uids.length ? await client.search({ uid: uids.join(',') }, { uid: true }) : []
+      const byMessageId: Record<string, number[]> = {}
+      for (const messageId of wanted) {
+        const found = await client.search({ header: { 'message-id': messageId } }, { uid: true })
+        byMessageId[messageId] = Array.isArray(found) ? found : []
+      }
+      return { uidValidity, existing: Array.isArray(existing) ? existing : [], byMessageId }
     },
 
     async close() {

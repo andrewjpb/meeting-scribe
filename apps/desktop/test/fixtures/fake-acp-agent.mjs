@@ -28,7 +28,9 @@
 //   <nome> dizendo <texto>" propõe o bloco de resposta no WhatsApp com o id da conversa do arquivo; "bloco inválido"
 //   devolve um bloco quebrado. O agente nunca executa nada: só escreve o bloco. Contrato 45: os pedidos de email
 //   (`emailAnswer`): pendentes pelo `EMAILS.md`, rascunho de resposta, lembrete de um email e a busca pelas
-//   ferramentas do app (`lap-ferramenta`: `buscar_emails` e, achado só no servidor, `ler_email`).
+//   ferramentas do app (`lap-ferramenta`: `buscar_emails` e, achado só no servidor, `ler_email`). Contrato 56: "organiza
+//   … em Resolvidos" pede `listar_pastas`, depois `criar_pasta` "Resolvidos" e `mover_emails` do email do assunto pedido
+//   (ou do primeiro do `EMAILS.md`) para lá, e responde contando.
 // - internet (contrato 26), em qualquer chat (agente ou Assistente), com "pesquise" no pedido: `WebSearch` (pedindo
 //   permissão, como o adaptador) com resultados inventados no `tool_call_update` ("Título (url)", sem rede nenhuma);
 //   abre o primeiro resultado (`WebFetch`) e tenta abrir um endereço montado com o título da reunião na consulta (que o
@@ -140,6 +142,17 @@ function emailLines(cwd, file) {
     .map(({ line, match }) => ({ ref: match[1], account: match[2], where: match[3] ?? null, from: match[4].replace(/ <.*>$/, ''), subject: match[5], at: match[6], pending: line.includes(' · pendente de resposta: sim') }))
 }
 
+/** Contrato 56: o assunto do email que o pedido de organizar quer mover (entre as rodadas do mesmo pedido). */
+let organizeSubject = null
+/**
+ * Contrato 55 (CA26): "organiza a caixa de entrada" alimenta o painel "Organizando": progresso, um mover de cada veredito
+ * (Resolvidos, Pendentes e a pasta "Clientes") com os emails de assunto "Painel", progresso de novo e a resposta final
+ * devagar, até o "Parar". `null` fora desse pedido.
+ */
+let organizePanel = null
+/** Começo da resposta que o laço do chat manda devagar, parando no `session/cancel`. */
+export const SLOW_ANSWER = '\u0001devagar\u0001'
+
 /**
  * Contrato 45: o email no Assistente falso. "email pendente" lê o `EMAILS.md` e lista as pendentes com a citação e o
  * bloco `emails`; "responde … email d<nome> dizendo <texto>" propõe o rascunho; "tarefa … responder … email d<nome>"
@@ -150,6 +163,49 @@ async function emailAnswer(question, cwd, read, fence) {
   const overview = 'EMAILS.md'
   const tool = (json) => `\n\n\`\`\`lap-ferramenta\n${JSON.stringify(json)}\n\`\`\``
   const byName = (lines, text) => lines.find((line) => text.toLowerCase().includes(line.from.split(' ')[0].toLowerCase()))
+  // Contrato 55: o painel "Organizando" (progresso → mover Resolvidos → Pendentes → Clientes → progresso → fim devagar).
+  if (organizePanel && /^\[Resultado da ferramenta (informar_progresso|mover_emails)\]/.test(question)) {
+    const [resolved, pending, other] = organizePanel.lines
+    const decision = (line, veredito, motivo, evidencia) => ({ emails: [line.ref], assunto: line.subject, veredito, motivo, evidencia })
+    organizePanel.step++
+    if (organizePanel.step === 1) return `Movendo os resolvidos.${tool({ ferramenta: 'mover_emails', destino: 'Resolvidos', assuntos: [decision(resolved, 'resolvido', 'A conversa foi encerrada.', 'você respondeu e ela agradeceu')] })}`
+    if (organizePanel.step === 2) return `Agora os pendentes.${tool({ ferramenta: 'mover_emails', destino: 'Pendentes', assuntos: [decision(pending, 'pendente', 'Pede uma resposta sua.', 'nenhuma resposta sua no fio')] })}`
+    if (organizePanel.step === 3) return `E os de cliente.${tool({ ferramenta: 'mover_emails', destino: 'Clientes', assuntos: [decision(other, 'outra', 'Você pediu os de cliente na pasta Clientes.', 'remetente de cliente')] })}`
+    if (organizePanel.step === 4) return `Quase lá.${tool({ ferramenta: 'informar_progresso', etapa: 'movendo', lidos: organizePanel.lines.length, total: organizePanel.lines.length })}`
+    organizePanel = null
+    return `${SLOW_ANSWER}Pronto: organizei a Caixa de Entrada em Resolvidos, Pendentes e Clientes.`
+  }
+  if (/organiza a caixa de entrada/i.test(question)) {
+    await read(overview)
+    const lines = emailLines(cwd, overview).filter((line) => line.subject.startsWith('Painel'))
+    if (lines.length < 3) return 'Não achei os emails do painel.'
+    organizePanel = { step: 0, lines: lines.slice(0, 3) }
+    const [first] = lines
+    return `Lendo a Caixa de Entrada.${tool({ ferramenta: 'informar_progresso', etapa: 'decidindo', lidos: 3, total: 3, decisoes: [{ emails: [first.ref], assunto: first.subject, veredito: 'resolvido', motivo: 'A conversa foi encerrada.', evidencia: 'você respondeu e ela agradeceu' }] })}`
+  }
+  // Contrato 56: organizar (pastas → criar Resolvidos → mover um email → contar).
+  if (/^\[Resultado da ferramenta listar_pastas\]/.test(question)) {
+    await read('PASTAS-EMAIL.md')
+    return `Vou criar a pasta.${tool({ ferramenta: 'criar_pasta', nome: 'Resolvidos' })}`
+  }
+  if (/^\[Resultado da ferramenta criar_pasta\]/.test(question)) {
+    await read(overview)
+    const lines = emailLines(cwd, overview)
+    const wanted = organizeSubject ? lines.find((line) => line.subject.toLowerCase().includes(organizeSubject)) : null
+    const line = wanted ?? lines[0]
+    if (!line) return 'Não achei email para mover.'
+    return `Vou mover.${tool({ ferramenta: 'mover_emails', destino: 'Resolvidos', assuntos: [{ emails: [line.ref], assunto: line.subject, veredito: 'resolvido', motivo: 'Aviso automático, nada a responder.', evidencia: 'É um aviso do sistema.' }] })}`
+  }
+  if (/^\[Resultado da ferramenta mover_emails\]/.test(question)) {
+    await read('MOVER-EMAILS.md')
+    const moved = /(\d+) movida\(s\)/.exec(readFileSync(join(cwd, 'MOVER-EMAILS.md'), 'utf8'))?.[1] ?? '0'
+    return `Pronto: movi ${moved} email(s) para Resolvidos. Dá para desfazer pelo cartão.`
+  }
+  const organize = /organiza.*resolvidos(?:.*assunto "(.+?)")?/i.exec(question)
+  if (organize) {
+    organizeSubject = organize[1]?.toLowerCase() ?? null
+    return `Vou ver as pastas.${tool({ ferramenta: 'listar_pastas' })}`
+  }
   if (/^\[Resultado da ferramenta buscar_emails\]/.test(question)) {
     await read('BUSCA-EMAILS.md')
     const found = emailLines(cwd, 'BUSCA-EMAILS.md')
@@ -698,7 +754,16 @@ export function fakeAcpAgent({ log = () => undefined, pause = 300, mcpStatus = n
       }
       // Contrato 25: os pedidos do Assistente.
       if (state.purpose === 'chat' && readdirSync(state.cwd).includes('ESTADO.md')) {
-        const answer = await assistantAnswer(question, state.cwd, (name) => use('Read', 'read', `Read ${name}`, { file_path: join(state.cwd, name) }, [{ path: join(state.cwd, name), line: 1 }]))
+        let answer = await assistantAnswer(question, state.cwd, (name) => use('Read', 'read', `Read ${name}`, { file_path: join(state.cwd, name) }, [{ path: join(state.cwd, name), line: 1 }]))
+        // Contrato 55: a resposta final do painel fica no ar (até 30 s) para a pessoa ver o andamento e clicar em "Parar".
+        if (answer?.startsWith(SLOW_ANSWER)) {
+          answer = answer.slice(SLOW_ANSWER.length)
+          for (let at = 0; at < 120 && !state.cancelled; at++) await sleep(250)
+          if (state.cancelled) {
+            log({ event: 'cancelled', sessionId })
+            return { stopReason: 'cancelled', usage: { totalTokens: 100, inputTokens: 80, outputTokens: 20 } }
+          }
+        }
         if (answer !== null) {
           for (let at = 0; at < answer.length; at += 60) await say(answer.slice(at, at + 60))
           state.cost += 0.01

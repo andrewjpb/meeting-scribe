@@ -167,6 +167,8 @@ export interface ComposeDraft {
   attachments: EmailOutgoingAttachment[]
   /** Contrato 43 (CA9): anexos da original que passaram dos limites e ficaram de fora do "Encaminhar". */
   skippedAttachments: string[]
+  /** Contrato 55 (CA11): a assinatura da conta entrou no texto ao abrir (o rodapé do composer diz de onde ela vem). */
+  signed?: boolean | undefined
 }
 
 const recipient = (address: string): Recipient => ({ address, valid: EMAIL_ADDRESS_PATTERN.test(address) })
@@ -241,6 +243,12 @@ export function signedDraft(draft: ComposeDraft, signature: EmailSignature | nul
   return { ...draft, text: withSignature({ text, quote: draft.text.slice(text.length) }, signature, draft.mode === 'forward' ? 'forward' : 'reply').text }
 }
 
+/** Contrato 55 (CA11): a assinatura entra neste rascunho (texto não vazio e o interruptor do tipo ligado). */
+export function signatureEntered(signature: EmailSignature | null, mode: ComposeMode): boolean {
+  if (!signature?.text.trim()) return false
+  return mode === 'new' ? signature.onNew : signature.onReply
+}
+
 /**
  * Contrato 54: só o último pedido de rascunho vale. Abrir um rascunho espera o main (o corpo, a assinatura); se nesse
  * meio a pessoa pediu outro rascunho ou abriu outra mensagem, a resposta velha é descartada.
@@ -269,7 +277,7 @@ export function sendErrorText(error: EmailSendError): string {
     case 'invalid':
       return 'Confira os destinatários, o assunto e o tamanho dos anexos.'
     case 'account':
-      return 'A conta não está pronta para enviar. Confira em Configurações › Contas › Email.'
+      return 'A conta não está pronta para enviar. Confira em Configurações › Email.'
     case 'auth':
       return 'O servidor de envio recusou o usuário ou a senha.'
     case 'connection':
