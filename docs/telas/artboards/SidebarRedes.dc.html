@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<title>Sidebar, nível Redes</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0}
+</style>
+</helmet>
+<aside style="display: flex; flex-direction: column; width: 224px; height: 740px; box-sizing: border-box; padding: 0 12px; background: #0a2a5e; color: #ffffff; font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; font-size: 13px; line-height: 20px; -webkit-font-smoothing: antialiased; overflow: hidden">
+
+<div style="flex: none; height: 52px; box-sizing: border-box; padding: 18px 0 0 6px">
+<svg width="52" height="12" viewBox="0 0 52 12" aria-hidden="true" style="display: block"><circle cx="6" cy="6" r="6" fill="rgba(255,255,255,0.22)"></circle><circle cx="26" cy="6" r="6" fill="rgba(255,255,255,0.22)"></circle><circle cx="46" cy="6" r="6" fill="rgba(255,255,255,0.22)"></circle></svg>
+</div>
+
+<div style="flex: none; display: flex; align-items: center; gap: 10px; height: 36px; padding: 0 8px">
+<svg width="28" height="28" viewBox="0 0 100 100" role="img" aria-label="LAP" style="flex: none; display: block"><rect x="0" y="0" width="100" height="100" rx="6" fill="#ffffff"></rect><path d="M 20 25 L 20 75 L 55 75" fill="none" stroke="#0a2a5e" stroke-width="8" stroke-linecap="square" stroke-linejoin="miter"></path><rect x="62" y="58" width="22" height="22" fill="#3b82f6"></rect></svg>
+<p style="margin: 0; display: flex; flex-direction: column; gap: 2px; min-width: 0">
+<span style="font-size: 15px; line-height: 20px; font-weight: 700; letter-spacing: -0.2px; white-space: nowrap">LAP Reuniões</span>
+<span style="font-size: 10px; line-height: 14px; font-weight: 500; letter-spacing: 0.14em; color: #a8b5cc; white-space: nowrap">LAP SOFTWARE</span>
+</p>
+</div>
+
+<nav aria-label="Redes" style="flex: 1 1 auto; min-height: 0; margin-top: 16px; display: flex; flex-direction: column; overflow: hidden">
+<button type="button" aria-label="Redes: voltar ao menu" style="flex: none; display: flex; align-items: center; gap: 8px; height: 32px; padding: 0 10px; border: 0; border-radius: 4px; background: transparent; color: #ffffff; font: inherit; font-size: 13px; font-weight: 500; text-align: left; cursor: pointer">
+<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true" style="flex: none; display: block"><path d="m15 18-6-6 6-6"></path></svg>
+<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true" style="flex: none; display: block"><circle cx="12" cy="12" r="4"></circle><path d="M16 8v5a3 3 0 0 0 6 0v-1a10 10 0 1 0-4 8"></path></svg>
+<span style="flex: 1 1 auto; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">Redes</span>
+</button>
+<div aria-hidden="true" style="flex: none; height: 4px"></div>
+
+<div style="flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; gap: 2px; overflow: hidden">
+<div title="@lap.software" style="flex: none; display: flex; align-items: center; gap: 8px; height: 28px; padding: 0 10px; border-radius: 4px; color: #a8b5cc; font-size: 13px">
+<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true" style="flex: none; display: block"><rect x="2.75" y="2.75" width="18.5" height="18.5" rx="5"></rect><circle cx="12" cy="12" r="4.25"></circle><path d="M17.5 6.5h.01"></path></svg>
+<span style="flex: 1 1 auto; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">@lap.software</span>
+</div>
+<ul style="margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 2px">
+<li style="display: flex; flex-direction: column"><a href="RedesPublicacoes.dc.html" aria-current="{{publicacoesCurrent}}" style="display: flex; align-items: center; gap: 8px; height: 28px; padding: 0 10px 0 28px; border-radius: 4px; text-decoration: none; font-size: 13px; background: {{publicacoesBg}}; color: {{publicacoesFg}}; font-weight: {{publicacoesWeight}}">
+<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true" style="flex: none; display: block"><path d="m22 11-1.296-1.296a2.4 2.4 0 0 0-3.408 0L11 16"></path><path d="M4 8a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2"></path><circle cx="13" cy="7" r="1" fill="currentColor"></circle><rect x="8" y="2" width="14" height="14" rx="2"></rect></svg>
+<span style="flex: 1 1 auto; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">Publicações</span>
+</a></li>
+<li style="display: flex; flex-direction: column"><a href="RedesComentarios.dc.html" aria-current="{{comentariosCurrent}}" style="display: flex; align-items: center; gap: 8px; height: 28px; padding: 0 10px 0 28px; border-radius: 4px; text-decoration: none; font-size: 13px; background: {{comentariosBg}}; color: {{comentariosFg}}; font-weight: {{comentariosWeight}}">
+<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true" style="flex: none; display: block"><path d="M2.992 16.342a2 2 0 0 1 .094 1.167l-1.065 3.29a1 1 0 0 0 1.236 1.168l3.413-.998a2 2 0 0 1 1.099.092 10 10 0 1 0-4.777-4.719"></path></svg>
+<span style="flex: 1 1 auto; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">Comentários</span>
+<span hidden="{{comentariosHidden}}" style="flex: none; font-size: 12px; line-height: 16px; font-weight: 500; color: #ffffff; font-variant-numeric: tabular-nums">{{naoLidosComentarios}}</span>
+</a></li>
+<li style="display: flex; flex-direction: column"><a href="RedesMensagens.dc.html" aria-current="{{mensagensCurrent}}" style="display: flex; align-items: center; gap: 8px; height: 28px; padding: 0 10px 0 28px; border-radius: 4px; text-decoration: none; font-size: 13px; background: {{mensagensBg}}; color: {{mensagensFg}}; font-weight: {{mensagensWeight}}">
+<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true" style="flex: none; display: block"><path d="M14.536 21.686a.5.5 0 0 0 .937-.024l6.5-19a.496.496 0 0 0-.635-.635l-19 6.5a.5.5 0 0 0-.024.937l7.93 3.18a2 2 0 0 1 1.112 1.11z"></path><path d="m21.854 2.147-10.94 10.939"></path></svg>
+<span style="flex: 1 1 auto; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">Mensagens</span>
+<span hidden="{{mensagensHidden}}" style="flex: none; font-size: 12px; line-height: 16px; font-weight: 500; color: #ffffff; font-variant-numeric: tabular-nums">{{naoLidosMensagens}}</span>
+</a></li>
+<li style="display: flex; flex-direction: column"><a href="RedesMetricas.dc.html" aria-current="{{metricasCurrent}}" style="display: flex; align-items: center; gap: 8px; height: 28px; padding: 0 10px 0 28px; border-radius: 4px; text-decoration: none; font-size: 13px; background: {{metricasBg}}; color: {{metricasFg}}; font-weight: {{metricasWeight}}">
+<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true" style="flex: none; display: block"><path d="M5 21v-6"></path><path d="M12 21V3"></path><path d="M19 21V9"></path></svg>
+<span style="flex: 1 1 auto; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">Métricas</span>
+</a></li>
+</ul>
+</div>
+
+<button type="button" style="flex: none; display: flex; align-items: center; gap: 8px; height: 28px; margin-top: 4px; padding: 0 10px; border: 0; border-radius: 4px; background: transparent; color: #a8b5cc; font: inherit; font-size: 13px; text-align: left; cursor: pointer">
+<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true" style="flex: none; display: block"><path d="M5 12h14"></path><path d="M12 5v14"></path></svg>
+<span style="flex: 1 1 auto; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">Conectar conta…</span>
+</button>
+</nav>
+
+<div style="flex: none; display: flex; flex-direction: column; margin-top: 4px; padding-top: 4px; border-top: 1px solid rgba(255,255,255,0.2)">
+<div style="display: flex; margin-bottom: 4px">
+<button type="button" aria-keyshortcuts="Meta+Shift+L" style="flex: 1 1 auto; display: flex; align-items: center; gap: 8px; height: 28px; padding: 0 10px; border: 0; border-radius: 4px; background: transparent; color: #a8b5cc; font: inherit; font-size: 13px; text-align: left; cursor: pointer">
+<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true" style="flex: none; display: block"><rect width="18" height="11" x="3" y="11" rx="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>
+<span style="flex: 1 1 auto">Bloquear</span>
+<kbd aria-hidden="true" style="font-family: inherit; font-size: 12px; opacity: 0.8; font-variant-numeric: tabular-nums">⌘⇧L</kbd>
+</button>
+</div>
+<section aria-label="Permissões" style="display: flex; flex-direction: column; padding: 4px; border-top: 1px solid rgba(255,255,255,0.12)">
+<p style="margin: 0; padding-top: 4px; font-size: 11px; line-height: 16px; font-weight: 500; color: #a8b5cc">Permissões</p>
+<div style="display: flex; align-items: center; gap: 8px; height: 28px; font-size: 12px; line-height: 16px">
+<span aria-hidden="true" style="flex: none; width: 6px; height: 6px; background: #3b82f6"></span>
+<span style="flex: 1 1 auto; min-width: 0; white-space: nowrap">Microfone</span>
+<span style="color: #a8b5cc; white-space: nowrap">concedido</span>
+</div>
+<div style="display: flex; align-items: center; gap: 8px; height: 28px; font-size: 12px; line-height: 16px">
+<span aria-hidden="true" style="flex: none; width: 6px; height: 6px; background: #3b82f6"></span>
+<span style="flex: 1 1 auto; min-width: 0; white-space: nowrap">Áudio do sistema</span>
+<span style="color: #a8b5cc; white-space: nowrap">ok</span>
+</div>
+</section>
+</div>
+
+</aside>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"secao":{"editor":"enum","options":["publicacoes","comentarios","mensagens","metricas"],"default":"publicacoes"},"naoLidosComentarios":{"editor":"number","default":3},"naoLidosMensagens":{"editor":"number","default":1},"$preview":{"width":224,"height":740}}'>
+class Component extends DCLogic {
+  renderVals() {
+    var secao = this.props.secao ?? 'publicacoes';
+    var c = Number(this.props.naoLidosComentarios ?? 3);
+    var m = Number(this.props.naoLidosMensagens ?? 1);
+    var badge = function (n) { return n > 999 ? '999+' : String(n); };
+    var vals = {
+      naoLidosComentarios: badge(c), comentariosHidden: c > 0 ? undefined : '',
+      naoLidosMensagens: badge(m), mensagensHidden: m > 0 ? undefined : ''
+    };
+    ['publicacoes', 'comentarios', 'mensagens', 'metricas'].forEach(function (k) {
+      var on = k === secao;
+      vals[k + 'Bg'] = on ? 'rgba(255,255,255,0.12)' : 'transparent';
+      vals[k + 'Fg'] = on ? '#ffffff' : '#a8b5cc';
+      vals[k + 'Weight'] = on ? '500' : '400';
+      vals[k + 'Current'] = on ? 'page' : undefined;
+    });
+    return vals;
+  }
+}
+</script>
+</body>
+</html>

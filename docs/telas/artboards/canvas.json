@@ -55,7 +55,15 @@
     "PrintAssistenteContexto.dc.html": { "x": 4800, "y": 8800, "w": 1120, "h": 740, "title": "Print · Assistente, Contexto" },
     "PrintAssistenteLembrete.dc.html": { "x": 6000, "y": 8800, "w": 1120, "h": 740, "title": "Print · Assistente, lembrete" },
     "PrintAssistenteWhatsApp.dc.html": { "x": 7200, "y": 8800, "w": 1120, "h": 740, "title": "Print · Assistente, WhatsApp" },
-    "PrintConfigClaude.dc.html": { "x": 8400, "y": 8800, "w": 1120, "h": 740, "title": "Print · Configurações, Claude" }
+    "PrintConfigClaude.dc.html": { "x": 8400, "y": 8800, "w": 1120, "h": 740, "title": "Print · Configurações, Claude" },
+
+    "SidebarRedes.dc.html": { "x": 0, "y": 9890, "w": 224, "h": 740, "title": "Sidebar · nível Redes" },
+    "RedesPublicacoes.dc.html": { "x": 304, "y": 9890, "w": 1120, "h": 740, "title": "Redes · Publicações" },
+    "RedesEditor.dc.html": { "x": 1504, "y": 9890, "w": 1120, "h": 740, "title": "Redes · Publicações, editor" },
+    "RedesComentarios.dc.html": { "x": 2704, "y": 9890, "w": 1120, "h": 740, "title": "Redes · Comentários" },
+    "RedesMensagens.dc.html": { "x": 3904, "y": 9890, "w": 1120, "h": 740, "title": "Redes · Mensagens" },
+    "RedesMetricas.dc.html": { "x": 5104, "y": 9890, "w": 1120, "h": 740, "title": "Redes · Métricas" },
+    "ContasInstagram.dc.html": { "x": 6304, "y": 9890, "w": 1120, "h": 740, "title": "Configurações · Contas, Instagram e S3" }
   },
   "order": [
     "Main.dc.html",
@@ -63,6 +71,7 @@
     "SidebarEmail.dc.html",
     "SidebarConfig.dc.html",
     "SidebarAssistente.dc.html",
+    "SidebarRedes.dc.html",
     "ReunioesVazia.dc.html",
     "GravacaoAnalise.dc.html",
     "GravacaoAnotacoes.dc.html",
@@ -82,9 +91,15 @@
     "Email.dc.html",
     "EmailLeitura.dc.html",
     "EmailCompor.dc.html",
+    "RedesPublicacoes.dc.html",
+    "RedesEditor.dc.html",
+    "RedesComentarios.dc.html",
+    "RedesMensagens.dc.html",
+    "RedesMetricas.dc.html",
     "ConfigGeral.dc.html",
     "ConfigClaude.dc.html",
     "ConfigContas.dc.html",
+    "ContasInstagram.dc.html",
     "ConfigConexoes.dc.html",
     "ConfigGravacao.dc.html",
     "ConfigArquivos.dc.html",
@@ -112,7 +127,8 @@
     "t-config": { "x": 0, "y": 6370, "text": "Configurações (nível no sidebar, sem abas): as nove abas", "kind": "title1", "maxW": 4800 },
     "t-bloqueio": { "x": 0, "y": 7470, "text": "Bloqueio e janela auxiliar", "kind": "title1", "maxW": 4800 },
     "t-prints": { "x": 0, "y": 8570, "text": "Prints reais do README (20/11/2026, densidade)", "kind": "title1", "maxW": 4800 },
-    "s-sobre": { "x": 1216, "y": 0, "w": 420, "fill": "blue", "text": "Telas recriadas do código em 19/11/2026 e adensadas em 20/11/2026 (feature densidade: controles de 32, linhas de 44, títulos de página de 20, rótulos de seção de 11 em caixa normal), conferidas contra os prints do smoke. Sidebar em pilha com os níveis Email, Configurações e Assistente. Última linha: prints reais do README." }
+    "t-redes": { "x": 0, "y": 9660, "text": "Redes (Instagram)", "kind": "title1", "maxW": 4800 },
+    "s-sobre": { "x": 1216, "y": 0, "w": 420, "fill": "blue", "text": "Telas recriadas do código em 19/11/2026 e adensadas em 20/11/2026 (feature densidade: controles de 32, linhas de 44, títulos de página de 20, rótulos de seção de 11 em caixa normal), conferidas contra os prints do smoke. Sidebar em pilha com os níveis Email, Configurações e Assistente (o nível Redes fica na última linha). Penúltima linha: prints reais do README. Última linha: Redes (Instagram), contrato 77." }
   },
   "designSystems": [
     {

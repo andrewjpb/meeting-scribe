@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<title>Configurações · Contas, Instagram e armazenamento de mídia</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0}
+button{font:inherit}
+input::placeholder,textarea::placeholder{color:#7f8da6}
+</style>
+</helmet>
+<div style="display: flex; width: 1120px; height: 740px; overflow: hidden; background: #ffffff; color: #061a3d; font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; font-size: 13px; line-height: 20px; -webkit-font-smoothing: antialiased">
+<dc-import name="SidebarConfig" aba="contas" hint-size="224px,740px"></dc-import>
+<main style="flex: 1 1 0; min-width: 0; height: 740px; display: flex; flex-direction: column; background: #ffffff">
+<div style="flex: 0 0 auto; padding: 20px 32px 8px; border-bottom: 1px solid #e3e9f2">
+<div style="max-width: 760px; margin: 0 auto; display: flex; align-items: center; justify-content: space-between; gap: 24px">
+<h1 style="margin: 0; font-size: 15px; line-height: 20px; font-weight: 700; color: #0a2a5e">Contas</h1>
+<div style="flex: 0 0 240px; width: 240px; height: 32px; box-sizing: border-box; display: flex; align-items: center; gap: 8px; padding: 0 10px; border: 1px solid #c9d4e5; border-radius: 4px; background: #ffffff; color: #7f8da6">
+<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><path d="m21 21-4.34-4.34"></path><circle cx="11" cy="11" r="8"></circle></svg>
+<input type="search" aria-label="Buscar configuração" placeholder="Buscar configuração" style="flex: 1 1 0; min-width: 0; border: 0; background: transparent; font: inherit; font-size: 13px; color: #061a3d; outline: none">
+<span aria-hidden="true" style="font-size: 11px; line-height: 16px; color: #7f8da6">⌘F</span>
+</div>
+</div>
+</div>
+<div style="flex: 1 1 0; min-height: 0; overflow: hidden; padding: 12px 32px 32px">
+<div style="max-width: 760px; margin: 0 auto; display: flex; flex-direction: column; gap: 24px">
+<section aria-label="Instagram" style="display: flex; flex-direction: column">
+<h2 style="margin: 0 0 4px; font-size: 11px; line-height: 16px; font-weight: 500; color: #5b6b85">Instagram</h2>
+<p style="margin: 2px 0 0; font-size: 12px; line-height: 16px; color: #5b6b85">Contas profissionais conectadas por token, para publicar, responder e ver métricas daqui. O token fica cifrado neste Mac.</p>
+<div style="margin-top: 8px; display: flex; flex-direction: column; overflow: hidden; border: 1px solid #c9d4e5; border-radius: 6px; background: #ffffff">
+<div style="display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px 24px; padding: 16px 12px; border-bottom: 1px solid #e3e9f2">
+<div style="flex: 1 1 240px; min-width: 0; display: flex; flex-direction: column; gap: 2px">
+<label for="token" style="font-size: 13px; font-weight: 500; color: #061a3d">Token de acesso</label>
+<p style="margin: 0; font-size: 12px; line-height: 16px; color: #5b6b85">Gerado no painel da Meta; começa com IGAA. Vale 60 dias e o app renova sozinho enquanto estiver em uso.</p>
+</div>
+<div style="flex: 1 1 380px; min-width: 0; display: flex; align-items: center; gap: 8px">
+<input id="token" type="password" placeholder="Cole o token aqui" style="height: 32px; box-sizing: border-box; padding: 0 10px; border: 1px solid #c9d4e5; border-radius: 4px; background: #ffffff; color: #061a3d; font: inherit; font-size: 13px; flex: 1 1 0; min-width: 0">
+<button type="button" style="flex: 0 0 auto; display: flex; align-items: center; gap: 8px; height: 32px; box-sizing: border-box; padding: 0 12px; border: 0; background: #1e5bb8; color: #ffffff; border-radius: 4px; font-size: 13px; font-weight: 500; white-space: nowrap; cursor: pointer; opacity: 0.5">Conectar</button>
+</div>
+</div>
+<div style="display: flex; flex-direction: column; gap: 12px; padding: 16px 12px; background: #eef2f9; border-bottom: 1px solid #e3e9f2">
+<div style="display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 8px 12px; border-left: 3px solid #0a2a5e; background: #eef2f9; font-size: 13px; line-height: 20px; background: transparent">
+<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true" style="flex: none; color: #5b6b85"><path d="M2.586 17.414A2 2 0 0 0 2 18.828V21a1 1 0 0 0 1 1h3a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h1a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h.172a2 2 0 0 0 1.414-.586l.814-.814a6.5 6.5 0 1 0-4-4z"></path><circle cx="16.5" cy="7.5" r=".5" fill="currentColor"></circle></svg>
+<p style="margin: 0; flex: 1 1 0; min-width: 0; color: #061a3d">A conta precisa ser profissional (Business ou Creator) e pública.</p>
+</div>
+<p style="margin: 0; font-size: 13px; line-height: 20px; font-weight: 500; color: #061a3d">Como gerar o token</p>
+<ol style="margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 8px">
+<li style="display: flex; gap: 12px; font-size: 13px; line-height: 20px; color: #061a3d"><span aria-hidden="true" style="flex: 0 0 20px; width: 20px; height: 20px; box-sizing: border-box; display: flex; align-items: center; justify-content: center; border: 1px solid #c9d4e5; border-radius: 4px; background: #ffffff; font-size: 12px; font-weight: 500; color: #0a2a5e">1</span><span style="min-width: 0">Em <b style="font-weight: 500; color: #0a2a5e">developers.facebook.com</b>, abra o seu app do tipo Business e adicione o produto <b style="font-weight: 500; color: #0a2a5e">Instagram</b>.</span></li>
+<li style="display: flex; gap: 12px; font-size: 13px; line-height: 20px; color: #061a3d"><span aria-hidden="true" style="flex: 0 0 20px; width: 20px; height: 20px; box-sizing: border-box; display: flex; align-items: center; justify-content: center; border: 1px solid #c9d4e5; border-radius: 4px; background: #ffffff; font-size: 12px; font-weight: 500; color: #0a2a5e">2</span><span style="min-width: 0">Em <b style="font-weight: 500; color: #0a2a5e">Funções do app › Testadores do Instagram</b>, adicione a conta e aceite o convite no Instagram (Configurações › Apps e sites).</span></li>
+<li style="display: flex; gap: 12px; font-size: 13px; line-height: 20px; color: #061a3d"><span aria-hidden="true" style="flex: 0 0 20px; width: 20px; height: 20px; box-sizing: border-box; display: flex; align-items: center; justify-content: center; border: 1px solid #c9d4e5; border-radius: 4px; background: #ffffff; font-size: 12px; font-weight: 500; color: #0a2a5e">3</span><span style="min-width: 0">Em <b style="font-weight: 500; color: #0a2a5e">Instagram › API setup with Instagram login › Generate token</b>, clique em Generate token ao lado da conta e entre com ela.</span></li>
+<li style="display: flex; gap: 12px; font-size: 13px; line-height: 20px; color: #061a3d"><span aria-hidden="true" style="flex: 0 0 20px; width: 20px; height: 20px; box-sizing: border-box; display: flex; align-items: center; justify-content: center; border: 1px solid #c9d4e5; border-radius: 4px; background: #ffffff; font-size: 12px; font-weight: 500; color: #0a2a5e">4</span><span style="min-width: 0">Copie o token (começa com IGAA) e cole acima. Ele vale 60 dias; o app renova sozinho enquanto estiver em uso.</span></li>
+</ol>
+</div>
+<div style="display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px 24px; padding: 16px 12px; border-bottom: 1px solid #e3e9f2">
+<div style="min-width: 0; display: flex; align-items: center; gap: 12px">
+<svg width="40" height="40" viewBox="0 0 100 100" aria-hidden="true" style="flex: none; display: block"><path d="M 20 25 L 20 75 L 55 75" fill="none" stroke="#0a2a5e" stroke-width="8" stroke-linecap="square" stroke-linejoin="miter"></path><rect x="62" y="58" width="22" height="22" fill="#3b82f6"></rect></svg>
+<div style="min-width: 0; display: flex; flex-direction: column; gap: 2px">
+<p style="margin: 0; font-size: 13px; color: #061a3d; white-space: nowrap"><span style="font-weight: 500">LAP Software </span><span style="color: #5b6b85">@lap.software</span></p>
+<p style="margin: 0; font-size: 12px; line-height: 16px; color: #5b6b85; white-space: nowrap">Conta Business · 1.284 seguidores · Token válido até 19/01/2027</p>
+</div>
+</div>
+<div style="flex: 0 0 auto; display: flex; align-items: center; gap: 8px">
+<span style="font-size: 13px; font-weight: 500; color: #1f7a45">Conectada</span>
+<button type="button" style="flex: 0 0 auto; display: flex; align-items: center; gap: 8px; height: 32px; box-sizing: border-box; padding: 0 12px; border: 1px solid #c9d4e5; background: #ffffff; color: #0a2a5e; border-radius: 4px; font-size: 13px; font-weight: 500; white-space: nowrap; cursor: pointer">Renovar agora</button><button type="button" style="flex: 0 0 auto; display: flex; align-items: center; gap: 8px; height: 32px; box-sizing: border-box; padding: 0 12px; border: 0; background: transparent; color: #c62f34; border-radius: 4px; font-size: 13px; font-weight: 500; white-space: nowrap; cursor: pointer">Remover</button>
+</div>
+</div>
+<div style="display: grid; grid-template-columns: minmax(0, 1fr) 340px; column-gap: 20px; align-items: center; min-height: 44px; box-sizing: border-box; padding: 8px 12px">
+<div style="display: flex; flex-direction: column; gap: 2px; min-width: 0"><p style="margin: 0; font-size: 13px; font-weight: 500; color: #061a3d">Atualizar comentários e mensagens a cada</p><p style="margin: 0; font-size: 12px; line-height: 16px; color: #5b6b85">De quantos em quantos minutos o app lê os comentários e as mensagens do Instagram. Também atualiza ao abrir a seção.</p></div>
+<div><select aria-label="Atualizar comentários e mensagens a cada" style="height: 32px; box-sizing: border-box; padding: 0 10px; border: 1px solid #c9d4e5; border-radius: 4px; background: #ffffff; color: #061a3d; font: inherit; font-size: 13px; width: 240px"><option>5 min</option><option>10 min</option><option>15 min</option><option>30 min</option></select></div>
+</div>
+</div>
+</section>
+<section aria-label="Armazenamento de mídia (S3)" style="display: flex; flex-direction: column">
+<h2 style="margin: 0 0 4px; font-size: 11px; line-height: 16px; font-weight: 500; color: #5b6b85">Armazenamento de mídia (S3)</h2>
+<p style="margin: 2px 0 0; font-size: 12px; line-height: 16px; color: #5b6b85">Imagens e carrosséis precisam de um endereço público para o Instagram buscar. Compatível com Cloudflare R2 e qualquer S3. Vídeos não precisam.</p>
+<div style="margin-top: 8px; display: flex; flex-direction: column; overflow: hidden; border: 1px solid #c9d4e5; border-radius: 6px; background: #ffffff">
+<div style="display: grid; grid-template-columns: minmax(0, 1fr) 340px; column-gap: 20px; align-items: center; min-height: 44px; box-sizing: border-box; padding: 8px 12px; border-bottom: 1px solid #e3e9f2">
+<div style="display: flex; flex-direction: column; gap: 2px; min-width: 0"><label for="s3-0" style="font-size: 13px; font-weight: 500; color: #061a3d">Endpoint</label><p style="margin: 0; font-size: 12px; line-height: 16px; color: #5b6b85">Endereço S3 do provedor, com https://.</p></div>
+<div><input id="s3-0" type="text" value="https://3f2c….r2.cloudflarestorage.com" style="height: 32px; box-sizing: border-box; padding: 0 10px; border: 1px solid #c9d4e5; border-radius: 4px; background: #ffffff; color: #061a3d; font: inherit; font-size: 13px; width: 100%"></div>
+</div>
+<div style="display: grid; grid-template-columns: minmax(0, 1fr) 340px; column-gap: 20px; align-items: center; min-height: 44px; box-sizing: border-box; padding: 8px 12px; border-bottom: 1px solid #e3e9f2">
+<div style="display: flex; flex-direction: column; gap: 2px; min-width: 0"><label for="s3-1" style="font-size: 13px; font-weight: 500; color: #061a3d">Região</label><p style="margin: 0; font-size: 12px; line-height: 16px; color: #5b6b85">No Cloudflare R2, “auto”.</p></div>
+<div><input id="s3-1" type="text" value="auto" style="height: 32px; box-sizing: border-box; padding: 0 10px; border: 1px solid #c9d4e5; border-radius: 4px; background: #ffffff; color: #061a3d; font: inherit; font-size: 13px; width: 100%"></div>
+</div>
+<div style="display: grid; grid-template-columns: minmax(0, 1fr) 340px; column-gap: 20px; align-items: center; min-height: 44px; box-sizing: border-box; padding: 8px 12px; border-bottom: 1px solid #e3e9f2">
+<div style="display: flex; flex-direction: column; gap: 2px; min-width: 0"><label for="s3-2" style="font-size: 13px; font-weight: 500; color: #061a3d">Bucket</label><p style="margin: 0; font-size: 12px; line-height: 16px; color: #5b6b85">Onde os arquivos sobem, em instagram/&lt;conta&gt;/.</p></div>
+<div><input id="s3-2" type="text" value="lap-midia" style="height: 32px; box-sizing: border-box; padding: 0 10px; border: 1px solid #c9d4e5; border-radius: 4px; background: #ffffff; color: #061a3d; font: inherit; font-size: 13px; width: 100%"></div>
+</div>
+<div style="display: grid; grid-template-columns: minmax(0, 1fr) 340px; column-gap: 20px; align-items: center; min-height: 44px; box-sizing: border-box; padding: 8px 12px; border-bottom: 1px solid #e3e9f2">
+<div style="display: flex; flex-direction: column; gap: 2px; min-width: 0"><label for="s3-3" style="font-size: 13px; font-weight: 500; color: #061a3d">Chave de acesso</label><p style="margin: 0; font-size: 12px; line-height: 16px; color: #5b6b85">O ID da chave de API do armazenamento.</p></div>
+<div><input id="s3-3" type="text" value="7d1e0c9a4b…" style="height: 32px; box-sizing: border-box; padding: 0 10px; border: 1px solid #c9d4e5; border-radius: 4px; background: #ffffff; color: #061a3d; font: inherit; font-size: 13px; width: 100%"></div>
+</div>
+<div style="display: grid; grid-template-columns: minmax(0, 1fr) 340px; column-gap: 20px; align-items: center; min-height: 44px; box-sizing: border-box; padding: 8px 12px; border-bottom: 1px solid #e3e9f2">
+<div style="display: flex; flex-direction: column; gap: 2px; min-width: 0"><label for="s3-4" style="font-size: 13px; font-weight: 500; color: #061a3d">Chave secreta</label><p style="margin: 0; font-size: 12px; line-height: 16px; color: #5b6b85">Fica cifrada neste Mac e nunca aparece de novo.</p></div>
+<div><input id="s3-4" type="text" placeholder="••••• guardada" style="height: 32px; box-sizing: border-box; padding: 0 10px; border: 1px solid #c9d4e5; border-radius: 4px; background: #ffffff; color: #061a3d; font: inherit; font-size: 13px; width: 100%"></div>
+</div>
+<div style="display: grid; grid-template-columns: minmax(0, 1fr) 340px; column-gap: 20px; align-items: center; min-height: 44px; box-sizing: border-box; padding: 8px 12px; border-bottom: 1px solid #e3e9f2">
+<div style="display: flex; flex-direction: column; gap: 2px; min-width: 0"><label for="s3-5" style="font-size: 13px; font-weight: 500; color: #061a3d">URL pública base</label><p style="margin: 0; font-size: 12px; line-height: 16px; color: #5b6b85">De onde o Instagram baixa a imagem.</p></div>
+<div><input id="s3-5" type="text" value="https://midia.lap.software" style="height: 32px; box-sizing: border-box; padding: 0 10px; border: 1px solid #c9d4e5; border-radius: 4px; background: #ffffff; color: #061a3d; font: inherit; font-size: 13px; width: 100%"></div>
+</div>
+<div style="display: grid; grid-template-columns: minmax(0, 1fr) 340px; column-gap: 20px; align-items: center; min-height: 44px; box-sizing: border-box; padding: 8px 12px; border-bottom: 1px solid #e3e9f2">
+<div style="display: flex; flex-direction: column; gap: 2px; min-width: 0"><p style="margin: 0; font-size: 13px; font-weight: 500; color: #061a3d">Endereço no caminho (path-style)</p><p style="margin: 0; font-size: 12px; line-height: 16px; color: #5b6b85">Ligado: endpoint/bucket/arquivo, como o R2 pede. Desligado: bucket.endpoint/arquivo.</p></div>
+<div><button type="button" role="switch" aria-checked="true" aria-label="Endereço no caminho (path-style)" style="display: flex; align-items: center; justify-content: flex-end; width: 36px; height: 20px; box-sizing: border-box; padding: 2px; border: 1px solid #1e5bb8; border-radius: 4px; background: #1e5bb8; cursor: pointer"><span style="width: 14px; height: 14px; border-radius: 2px; background: #ffffff"></span></button></div>
+</div>
+<div style="display: flex; flex-direction: column; gap: 12px; padding: 12px">
+<div style="display: flex; align-items: center; gap: 8px"><button type="button" style="flex: 0 0 auto; display: flex; align-items: center; gap: 8px; height: 32px; box-sizing: border-box; padding: 0 12px; border: 0; background: #1e5bb8; color: #ffffff; border-radius: 4px; font-size: 13px; font-weight: 500; white-space: nowrap; cursor: pointer">Salvar</button><button type="button" style="flex: 0 0 auto; display: flex; align-items: center; gap: 8px; height: 32px; box-sizing: border-box; padding: 0 12px; border: 1px solid #c9d4e5; background: #ffffff; color: #0a2a5e; border-radius: 4px; font-size: 13px; font-weight: 500; white-space: nowrap; cursor: pointer">Testar</button><button type="button" style="flex: 0 0 auto; display: flex; align-items: center; gap: 8px; height: 32px; box-sizing: border-box; padding: 0 12px; border: 0; background: transparent; color: #c62f34; border-radius: 4px; font-size: 13px; font-weight: 500; white-space: nowrap; cursor: pointer">Remover</button></div>
+<div style="display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 8px 12px; border-left: 3px solid #0a2a5e; background: #eef2f9; font-size: 13px; line-height: 20px">
+<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true" style="flex: none; color: #5b6b85"><circle cx="12" cy="12" r="10"></circle><path d="m16 9-5.5 5.5L8 12"></path></svg>
+<p style="margin: 0; flex: 1 1 0; min-width: 0; color: #061a3d">Upload e leitura pública ok · 20/11/2026, 17:28</p>
+</div>
+</div>
+</div>
+</section>
+</div>
+</div>
+</main>
+</div>
+</x-dc>
+</body>
+</html>

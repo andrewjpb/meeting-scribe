@@ -1,5 +1,5 @@
 ---
-status: em-aprovacao
+status: arquivado
 feature: redes-instagram
 data: 2026-11-20
 semana: 2026-W47
