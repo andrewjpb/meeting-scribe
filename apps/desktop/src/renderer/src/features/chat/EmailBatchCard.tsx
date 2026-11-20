@@ -141,8 +141,9 @@ export function EmailBatchCard({ action }: { action: EmailBatchAction }) {
 
   const openEmail = (topic: EmailOrganizeTopic): void => {
     if (!topic.open) return
+    // Contrato 55: a tela abre qualquer pasta; a mensagem abre onde ela está agora (a INBOX por path é a Caixa de Entrada).
     const state: EmailNavigationState = { messageId: topic.open.id }
-    void navigate(emailPath(topic.open.accountId, 'inbox'), { state })
+    void navigate(emailPath(topic.open.accountId, { path: topic.open.mailbox }), { state })
   }
 
   const stopped = batch?.state === 'stopped'

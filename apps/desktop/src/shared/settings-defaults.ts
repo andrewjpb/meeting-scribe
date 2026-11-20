@@ -179,6 +179,13 @@ export interface AppSettings {
   /** Contrato 43: as contas de email recolhidas na barra lateral (as outras aparecem abertas, com as pastas). */
   emailCollapsed: string[]
   /**
+   * Contrato 55: as subárvores de pasta recolhidas na barra lateral, como `<conta>\n<path>` (as outras aparecem
+   * abertas). Saem quando a conta sai, como em `emailCollapsed`.
+   */
+  emailFoldersCollapsed: string[]
+  /** Contrato 55: as até 3 pastas usadas por último para mover, por conta (a mais nova primeiro), no menu "Mais". */
+  emailRecentFolders: Record<string, string[]>
+  /**
    * Contrato 57: os conectores do claude.ai que o agente do chat pode usar, pelo nome ("Notion"), com a política de cada
    * ferramenta. Vazio por padrão: conector fora daqui (inclusive o que aparecer depois na conta) está desligado.
    */
@@ -240,6 +247,8 @@ export const DEFAULT_SETTINGS: Readonly<AppSettings> = Object.freeze({
   emailPollMinutes: 5,
   emailNotifications: true,
   emailCollapsed: Object.freeze([]) as unknown as string[],
+  emailFoldersCollapsed: Object.freeze([]) as unknown as string[],
+  emailRecentFolders: Object.freeze({}) as Record<string, string[]>,
   claudeConnectors: Object.freeze({}) as Record<string, ClaudeConnectorPrefs>,
 })
 

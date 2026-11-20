@@ -97,7 +97,7 @@ describe('política da internet (CA3)', () => {
       'http://localhost:8080/a',
       'http://127.0.0.1/a',
       'http://0x7f.1/a',
-      'http://10.2.1.20/a',
+      'http://10.10.0.20/a',
       'http://192.168.15.60/a',
       'http://172.16.0.1/a',
       'http://192.0.0.8/a',

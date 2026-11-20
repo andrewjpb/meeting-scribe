@@ -31,9 +31,17 @@ export const WHATSAPP_TYPING_SIGNAL_DESCRIPTION = 'Quem está na conversa aberta
 /** Descrição de "Buscar emails novos a cada" (contrato 42, `emailPollMinutes`), a mesma na tela e na busca. */
 export const EMAIL_POLL_DESCRIPTION = 'Só nas contas POP3: de quantos em quantos minutos o app procura email novo. As contas IMAP recebem na hora.'
 
-/** Descrições do bloco "Email" de Configurações › Contas (contrato 43), as mesmas na tela e na busca. */
-export const EMAIL_ACCOUNTS_DESCRIPTION = 'Ler e enviar email por IMAP, POP3 e SMTP. A senha fica cifrada neste Mac e nada sai sem o seu clique.'
-export const EMAIL_NOTIFICATIONS_DESCRIPTION = 'Uma notificação do macOS a cada email novo, menos da Caixa de Entrada que está aberta na frente. Com o app bloqueado, sem o assunto.'
+/**
+ * Descrições da aba "Email" de Configurações (contrato 43; contrato 55: saíram de Contas para a aba própria), as mesmas na
+ * tela e na busca.
+ */
+export const EMAIL_ACCOUNTS_DESCRIPTION = 'Contas de email IMAP ou POP3, com envio por SMTP. A senha fica cifrada neste Mac.'
+export const EMAIL_NOTIFICATIONS_DESCRIPTION = 'Notificação do macOS para email novo na Caixa de Entrada. Uma regra com “não avisar” vale mais.'
+export const EMAIL_SIGNATURE_DESCRIPTION = 'Texto que entra no fim das mensagens da conta. Um por conta.'
+export const EMAIL_SIGNATURE_NEW_DESCRIPTION = 'Põe a assinatura ao abrir “Nova mensagem”.'
+export const EMAIL_SIGNATURE_REPLY_DESCRIPTION = 'Põe a assinatura acima do texto citado.'
+export const EMAIL_RULES_DESCRIPTION = 'As regras são do app: agem no email que chega, na ordem da lista, só enquanto o Meeting Scribe está aberto. “Parar aqui” impede as regras de baixo.'
+export const EMAIL_FOLDERS_DESCRIPTION = 'As pastas da conta no servidor. Para mover mensagens, arraste para a pasta na tela de email.'
 
 /** Uma linha de configuração no índice da busca. */
 export interface SettingsEntry {
@@ -45,6 +53,8 @@ export interface SettingsEntry {
   section: string
   /** Linha que só aparece em certa condição: completa "Esta opção aparece quando …". */
   when?: string
+  /** Contrato 55: palavras a mais que a busca acha, sem aparecer na tela ("avisos", "executar"). */
+  keywords?: string
 }
 
 /**
@@ -52,8 +62,14 @@ export interface SettingsEntry {
  * condição. Linha nova em Configurações entra aqui também; o smoke confere que toda linha da tela está nele.
  */
 export function settingsIndex(agent: string): SettingsEntry[] {
-  const row = (tab: SettingsTab, section: string, name: string, description = '', when?: string): SettingsEntry =>
-    when ? { tab, section, name, description, when } : { tab, section, name, description }
+  const row = (tab: SettingsTab, section: string, name: string, description = '', when?: string, keywords?: string): SettingsEntry => ({
+    tab,
+    section,
+    name,
+    description,
+    ...(when ? { when } : {}),
+    ...(keywords ? { keywords } : {}),
+  })
   return [
     row('geral', 'Marca', 'Nome do app', 'Aparece na barra lateral, no título da janela e no ícone do Dock.'),
     row('geral', 'Marca', 'Subtítulo', 'Abaixo do nome, na barra lateral.'),
@@ -102,11 +118,17 @@ export function settingsIndex(agent: string): SettingsEntry[] {
     row('contas', 'WhatsApp', 'Notificações do WhatsApp', WHATSAPP_NOTIFICATIONS_DESCRIPTION),
     row('contas', 'WhatsApp', 'Só pessoas (sem grupos)', WHATSAPP_ONLY_PEOPLE_DESCRIPTION, '"Notificações do WhatsApp" está ligado'),
     row('contas', 'WhatsApp', 'Mostrar quando estou digitando', WHATSAPP_TYPING_SIGNAL_DESCRIPTION),
-    // Contrato 43: as contas de email, as notificações e o intervalo do POP3.
-    row('contas', 'Email', 'Contas de email', EMAIL_ACCOUNTS_DESCRIPTION),
-    row('contas', 'Email', 'Notificações de email', EMAIL_NOTIFICATIONS_DESCRIPTION),
-    row('contas', 'Email', 'Buscar emails novos a cada', EMAIL_POLL_DESCRIPTION),
     row('contas', 'Google', 'Guardar no Google Drive', 'Depois de cada reunião, o áudio, a transcrição e o resumo vão para a pasta "LAP Reuniões" do seu Drive.', 'a conta Google está conectada'),
+    // Contrato 43: as contas de email, os avisos e o intervalo do POP3. Contrato 55: na aba "Email", com a assinatura,
+    // as regras e as pastas da conta escolhida.
+    row('email', 'Contas', 'Contas de email', EMAIL_ACCOUNTS_DESCRIPTION),
+    row('email', 'Contas', 'Buscar emails novos a cada', EMAIL_POLL_DESCRIPTION),
+    row('email', 'Assinatura', 'Assinatura', EMAIL_SIGNATURE_DESCRIPTION, 'há uma conta de email'),
+    row('email', 'Assinatura', 'Assinatura em mensagens novas', EMAIL_SIGNATURE_NEW_DESCRIPTION, 'há uma conta de email'),
+    row('email', 'Assinatura', 'Assinatura em respostas e encaminhamentos', EMAIL_SIGNATURE_REPLY_DESCRIPTION, 'há uma conta de email'),
+    row('email', 'Regras', 'Regras', EMAIL_RULES_DESCRIPTION, 'há uma conta de email', 'regra executar agora mover marcar apagar não avisar'),
+    row('email', 'Pastas', 'Pastas', EMAIL_FOLDERS_DESCRIPTION, 'há uma conta de email', 'pasta criar renomear apagar mover'),
+    row('email', 'Avisos', 'Avisar quando chega email', EMAIL_NOTIFICATIONS_DESCRIPTION, undefined, 'avisos notificação'),
     // Contrato 31: um cartão por plugin, com o nome (e o estado), "Salvar plugin" e "Como instalar". Contrato 46: o
     // do navegador tem também "Ativar ponte".
     ...APP_PLUGINS.flatMap((plugin) => [

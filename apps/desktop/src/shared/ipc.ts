@@ -586,8 +586,11 @@ export interface MainEvents {
   'scribe:email-changed': { accountId: string }
   /** Contrato 56 (CA10): o estado inteiro de um lote do Assistente a cada mudança. Não chega bloqueado. */
   'scribe:email-organize': EmailOrganizeEvent
-  /** Contrato 43: o clique na notificação de email: a Caixa de Entrada da conta com a mensagem aberta. */
-  'scribe:open-email': { accountId: string; id: string }
+  /**
+   * Contrato 43: o clique na notificação de email: a Caixa de Entrada da conta com a mensagem aberta. Contrato 55: a que
+   * uma regra moveu vem com a pasta (`mailbox`) e, sem o UID novo (`found: false`), abre só a pasta.
+   */
+  'scribe:open-email': { accountId: string; id: string; mailbox?: string; found?: boolean }
 }
 
 export type InvokeChannel = keyof InvokeChannels

@@ -1,7 +1,7 @@
 import { CircleCheck, Info, KeyRound, TriangleAlert } from 'lucide-react'
 import { useState } from 'react'
-import { EMAIL_POLL_MINUTES, EMAIL_SECURITY, type EmailAccountInput, type EmailAccountStatus, type EmailPollMinutes, type EmailProtocol, type EmailSecurity, type EmailTestResult } from '@shared/email'
-import { EMAIL_ACCOUNTS_DESCRIPTION, EMAIL_NOTIFICATIONS_DESCRIPTION, EMAIL_POLL_DESCRIPTION } from '@shared/settings-index'
+import { EMAIL_POLL_MINUTES, EMAIL_SECURITY, type EmailAccountInput, type EmailAccountStatus, type EmailPollMinutes, type EmailProtocol, type EmailSecurity, type EmailTestResult, type EmailAutoconfig } from '@shared/email'
+import { EMAIL_ACCOUNTS_DESCRIPTION, EMAIL_POLL_DESCRIPTION } from '@shared/settings-index'
 import { useSettings } from '../../app/settingsStore'
 import { Button } from '../../design/Button'
 import { CONTROL_CLASS, Select, TextField } from '../../design/Field'
@@ -11,7 +11,7 @@ import { Segmented } from '../../design/Segmented'
 import { SettingRow } from '../../design/SettingRow'
 import { Switch } from '../../design/Switch'
 import { useEmail } from '../email/emailStore'
-import { accountStateLabel, isGmailAddress } from '../email/format'
+import { accountLabel, accountStateLabel, isGmailAddress } from '../email/format'
 
 const POLL_OPTIONS = EMAIL_POLL_MINUTES.map((value) => ({ value: String(value) as `${EmailPollMinutes}`, label: value === 60 ? '1 hora' : `${value} min` }))
 const SECURITY_LABELS: Record<EmailSecurity, string> = { tls: 'TLS', starttls: 'STARTTLS', none: 'Nenhuma' }
@@ -90,9 +90,15 @@ function ServerFields({ prefix, title, host, port, security, onChange }: { prefi
   )
 }
 
-function AccountLine({ status }: { status: EmailAccountStatus }) {
+/** "IMAP · imap.gmail.com" ou "POP3 · a cada 5 min" (contrato 55, CA15). */
+export function accountServerLine(account: EmailAccountStatus['account'], pollMinutes: EmailPollMinutes): string {
+  return account.incoming.protocol === 'pop3' ? `POP3 · a cada ${pollMinutes === 60 ? '1 hora' : `${pollMinutes} min`}` : `IMAP · ${account.incoming.host}`
+}
+
+function AccountLine({ status, label }: { status: EmailAccountStatus; label: string }) {
   const [confirm, setConfirm] = useState(false)
   const [busy, setBusy] = useState(false)
+  const pollMinutes = useSettings((state) => state.settings.emailPollMinutes)
   const { account, state, error } = status
   const remove = (): void => {
     setBusy(true)
@@ -104,17 +110,27 @@ function AccountLine({ status }: { status: EmailAccountStatus }) {
   return (
     <li data-email-settings-account={account.id} data-email-settings-state={state} className="flex flex-col gap-2 border-b border-line py-3 last:border-b-0">
       <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-2">
-        <div className="flex min-w-0 flex-col gap-0.5">
-          <p className="truncate text-13 font-medium text-text">{account.name ? `${account.name} <${account.address}>` : account.address}</p>
-          <p data-email-settings-line className={`truncate text-12 ${state === 'error' ? 'text-rec' : 'text-text-muted'}`} aria-live="polite">
-            {account.incoming.protocol.toUpperCase()} · {accountStateLabel(state, error)}
-          </p>
+        <div className="flex min-w-0 flex-1 items-start gap-3">
+          <span aria-hidden="true" className={`mt-1.5 size-1.5 shrink-0 ${state === 'error' ? 'bg-rec' : state === 'connected' ? 'bg-accent' : 'bg-text-faint'}`} />
+          <div className="flex min-w-0 flex-col gap-0.5">
+            <p className="truncate text-13 text-text">
+              <span className="font-bold">{label}</span> {account.address}
+            </p>
+            <p data-email-settings-line className="truncate text-12 text-text-muted">
+              {accountServerLine(account, pollMinutes)}
+            </p>
+          </div>
         </div>
-        {!confirm && (
-          <Button action="email-remove-account" variant="danger" onClick={() => setConfirm(true)}>
-            Remover
-          </Button>
-        )}
+        <div className="flex shrink-0 items-center gap-3">
+          <span data-email-settings-status className={`text-12 ${state === 'error' ? 'text-rec' : 'text-text-muted'}`} aria-live="polite">
+            {accountStateLabel(state, error)}
+          </span>
+          {!confirm && (
+            <Button action="email-remove-account" variant="danger" onClick={() => setConfirm(true)}>
+              Remover
+            </Button>
+          )}
+        </div>
       </div>
       {confirm && (
         <Note
@@ -142,20 +158,19 @@ function AccountLine({ status }: { status: EmailAccountStatus }) {
 type Step = 'closed' | 'credentials' | 'servers'
 
 /**
- * Configurações › Contas › Email (contrato 43, CA5): as contas com o estado de cada uma e "Remover" (com confirmação);
- * "Adicionar conta" em dois passos: o email e a senha (no Gmail, a dica da senha de app) e, depois do autoconfig, os
- * servidores encontrados, com "Configuração avançada" para editar e "Testar conexão" antes de adicionar. Mais as
- * notificações e o intervalo do POP3.
+ * Configurações › Email › Contas (contrato 43, CA5; contrato 55, CA15: saiu da aba Contas para a aba Email): as contas
+ * com o servidor e o estado de cada uma e "Remover" (com confirmação); "Adicionar conta" em dois passos: o email e a
+ * senha (no Gmail, a dica da senha de app) e, depois do autoconfig, os servidores encontrados, com "Configuração
+ * avançada" para editar e "Testar conexão" antes de adicionar. Mais o intervalo do POP3.
  */
 export function EmailSection() {
   const accounts = useEmail((state) => state.accounts)
-  const notifications = useSettings((state) => state.settings.emailNotifications)
   const pollMinutes = useSettings((state) => state.settings.emailPollMinutes)
   const update = useSettings((state) => state.update)
   const [step, setStep] = useState<Step>('closed')
   const [form, setForm] = useState<Form>(emptyForm)
   const [advanced, setAdvanced] = useState(false)
-  const [found, setFound] = useState<'preset' | 'ispdb' | null>(null)
+  const [found, setFound] = useState<EmailAutoconfig['source'] | null>(null)
   const [busy, setBusy] = useState<'autoconfig' | 'test' | 'add' | null>(null)
   const [test, setTest] = useState<EmailTestResult | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -249,7 +264,7 @@ export function EmailSection() {
   const summary = `${form.protocol.toUpperCase()} ${form.inHost}:${form.inPort} (${SECURITY_LABELS[form.inSecurity]}) e SMTP ${form.outHost}:${form.outPort} (${SECURITY_LABELS[form.outSecurity]})`
 
   return (
-    <Section title="Email">
+    <Section title="Contas">
       <div className="flex flex-col gap-3 py-4" data-setting-row data-setting-name="Contas de email" data-setting-description={EMAIL_ACCOUNTS_DESCRIPTION} data-email-settings>
         <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-3">
           <div className="flex min-w-0 flex-col gap-0.5">
@@ -268,7 +283,7 @@ export function EmailSection() {
         {accounts && accounts.length > 0 && (
           <ul data-email-settings-accounts className="flex flex-col rounded-[var(--radius-panel)] border border-line px-4">
             {accounts.map((status) => (
-              <AccountLine key={status.account.id} status={status} />
+              <AccountLine key={status.account.id} status={status} label={accountLabel(accounts.map((item) => item.account), status.account)} />
             ))}
           </ul>
         )}
@@ -390,9 +405,6 @@ export function EmailSection() {
           </div>
         )}
       </div>
-      <SettingRow name="Notificações de email" nameId="settings-email-notifications" description={EMAIL_NOTIFICATIONS_DESCRIPTION}>
-        <Switch checked={notifications} labelledBy="settings-email-notifications" onChange={(emailNotifications) => void update({ emailNotifications })} />
-      </SettingRow>
       <SettingRow name="Buscar emails novos a cada" description={EMAIL_POLL_DESCRIPTION} htmlFor="settings-email-poll">
         <Select id="settings-email-poll" value={String(pollMinutes) as `${EmailPollMinutes}`} options={POLL_OPTIONS} onChange={(value) => void update({ emailPollMinutes: Number(value) as EmailPollMinutes })} />
       </SettingRow>

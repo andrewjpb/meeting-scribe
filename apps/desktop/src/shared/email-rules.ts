@@ -7,12 +7,9 @@
 import { z } from 'zod'
 import { EMAIL_FOLDER_PATH_MAX, EMAIL_INBOX_MAILBOX } from './email'
 
-/** Regras por conta. */
-export const EMAIL_RULES_MAX = 50
-export const EMAIL_RULE_NAME_MAX = 100
-export const EMAIL_RULE_CONDITIONS_MAX = 10
-/** Caracteres do valor de uma condição. */
-export const EMAIL_RULE_VALUE_MAX = 200
+import { EMAIL_RULE_CONDITIONS_MAX, EMAIL_RULE_NAME_MAX, EMAIL_RULE_VALUE_MAX, EMAIL_RULES_MAX } from './email-rules-limits'
+
+export { EMAIL_RULE_CONDITIONS_MAX, EMAIL_RULE_NAME_MAX, EMAIL_RULE_VALUE_MAX, EMAIL_RULES_MAX } from './email-rules-limits'
 /** O token do "Executar agora" vale 2 min (D10). */
 export const EMAIL_RULE_TOKEN_TTL_MS = 2 * 60_000
 

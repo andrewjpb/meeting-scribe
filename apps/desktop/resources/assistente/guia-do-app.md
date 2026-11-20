@@ -69,14 +69,20 @@ A tela lista as conversas e as mensagens. "Rascunho com o Claude" escreve uma re
 <!-- tela: email -->
 ## Email
 
-Contas de email IMAP ou POP3 (para receber) e SMTP (para enviar), adicionadas em Configurações › Contas › Email: o email e a senha (no Gmail, uma "senha de app" do Google), e o app descobre os servidores sozinho; "Configuração avançada" mostra os servidores para editar. "Testar conexão" confere antes de adicionar.
+Contas de email IMAP ou POP3 (para receber) e SMTP (para enviar), adicionadas em Configurações › Email (⌘6): o email e a senha (no Gmail e na Zoho com verificação em duas etapas, uma "senha de app" gerada no provedor), e o app descobre os servidores sozinho, inclusive de domínio próprio hospedado na Zoho, no Google Workspace ou no Microsoft 365, pelo MX do domínio; "Configuração avançada" mostra os servidores para editar. "Testar conexão" confere antes de adicionar.
 
-Cada conta aparece na barra lateral, abaixo dos outros itens, pelo nome; a seta abre e fecha as pastas "Caixa de Entrada" (com o número de não lidas) e "Enviados", e o app lembra o que ficou aberto. A tela tem duas colunas: a lista das mensagens, com "Nova mensagem" no topo, e a leitura da mensagem escolhida, com Responder, Responder a todos, Encaminhar, Apagar e Marcar como lida ou não lida. As imagens de fora do email só aparecem com "Carregar imagens", e os links abrem no navegador depois da confirmação. Nada é enviado sem o seu clique em "Enviar". Cada email novo vira uma notificação do macOS (dá para desligar em Contas › Email).
+Cada conta aparece na barra lateral, abaixo dos outros itens, pelo nome; a seta abre e fecha as pastas, e o app lembra o que ficou aberto. Numa conta IMAP, a barra mostra a árvore de pastas do servidor: Caixa de Entrada, Rascunhos e Enviados no topo, as suas pastas em ordem alfabética (com as subpastas, que abrem e fecham) e Spam e Lixeira no fim, cada uma com o número de não lidas; no Gmail, "Todos os e-mails" e "Com estrela" não aparecem na barra (só no "Mover para…"). Numa conta POP3, só Caixa de Entrada e Enviados (o POP3 não tem pastas no servidor). O clique direito numa pasta tem "Nova subpasta…", "Renomear…" e "Apagar pasta…"; as pastas do sistema não se renomeiam nem se apagam (aparecem com cadeado). Apagar uma pasta com mensagens pede confirmação e apaga as mensagens no servidor, sem passar pela Lixeira.
+
+A tela tem duas colunas: a lista das mensagens da pasta aberta, com "Nova mensagem" no topo, e a leitura da mensagem escolhida, com Responder, Responder a todos, Encaminhar, Apagar, Marcar como lida ou não lida e "Mais" (com "Mover para…" e as 3 pastas usadas por último). Para mover: arraste a mensagem para uma pasta da barra lateral, use "Mover para…" (⇧⌘M), que busca a pasta pelo nome e cria uma pasta nova ali mesmo, ou o clique direito na mensagem ("Mover para ›"). ⌘ clique escolhe várias mensagens uma a uma, ⇧ clique escolhe um intervalo e Esc limpa; com duas ou mais, a leitura vira o resumo da seleção, com Mover, Marcar como lidas e Apagar. Mover não passa pelo Assistente e não tem Desfazer; se o servidor recusar, as mensagens voltam para a lista e a tela diz por quê. As imagens de fora do email só aparecem com "Carregar imagens", e os links abrem no navegador depois da confirmação. Nada é enviado sem o seu clique em "Enviar". Cada email novo vira uma notificação do macOS (dá para desligar em Configurações › Email › Avisos); o de um email que uma regra moveu abre a pasta para onde ele foi.
+
+A assinatura da conta entra sozinha ao escrever (depois de "-- ", acima do texto citado, nas respostas e nos encaminhamentos). Ela é texto comum do campo: dá para editar ou apagar antes de enviar; a padrão fica em Configurações › Email › Assinatura.
+
+Quando você pede ao Assistente para organizar o email ("organiza meus emails em resolvidos e pendentes"), a área da leitura da conta vira o painel "Organizando": o pedido, Parar, as etapas (Lendo, Decidindo, Movendo), quantas mensagens ele leu e moveu, quantas foram para Resolvidos, Pendentes e outras pastas e uma linha por assunto com o veredito, o motivo e a evidência. Clicar numa linha abre o email, e "Voltar ao andamento" traz o painel de volta. As mensagens movidas somem da lista na hora. Ele lê as 200 mensagens mais recentes da pasta; na dúvida, manda para Pendentes. Ao parar ou terminar, o painel mostra o resumo, "Desfazer as N" (devolve tudo à pasta de origem) e "Abrir no Assistente", e o topo da lista ganha a faixa "O Assistente moveu N mensagens" com Desfazer, que fica até o fim do dia ou até você fechar.
 
 <!-- tela: configuracoes -->
 ## Configurações
 
-Configurações… (⌘,) abre a última aba aberta. ⌘1 a ⌘8 trocam de aba. A busca no topo acha qualquer opção pelo nome.
+Configurações… (⌘,) abre a última aba aberta. ⌘1 a ⌘9 trocam de aba (⌘6 é Email; Plugins, Conexões e Sobre ficam em ⌘7, ⌘8 e ⌘9). A busca no topo acha qualquer opção pelo nome.
 
 <!-- aba: geral -->
 ### Geral
@@ -103,9 +109,22 @@ A conexão com o Claude (pelo agente ou pela linha de comando), o caminho do cla
 <!-- aba: contas -->
 ### Contas
 
-A conta Google (para guardar o áudio, a transcrição e o resumo no Google Drive, na pasta "LAP Reuniões", e para ler a agenda), a conta Microsoft (para ler a agenda do Outlook; pede só o "ID do aplicativo (cliente)" registrado no Microsoft Entra), o bloco "Agenda", o WhatsApp (experimental) e as contas de email. Quem conectou o Google antes da agenda vê "Permitir acesso à agenda".
+A conta Google (para guardar o áudio, a transcrição e o resumo no Google Drive, na pasta "LAP Reuniões", e para ler a agenda), a conta Microsoft (para ler a agenda do Outlook; pede só o "ID do aplicativo (cliente)" registrado no Microsoft Entra), o bloco "Agenda" e o WhatsApp (experimental). As contas de email ficam na aba Email. Quem conectou o Google antes da agenda vê "Permitir acesso à agenda".
 
 No bloco "Agenda": "Avisar reuniões da agenda" (ligado), "Avisar antes" (1, 5 ou 10 minutos; o padrão é 5), "Avisar se a reunião não estiver sendo gravada" (ligado) e quais agendas de cada conta o app lê (o padrão é a principal). O app só lê as agendas: não responde convites, não cria eventos e não manda nada a ninguém.
+
+<!-- aba: email -->
+### Email
+
+Nesta ordem: Contas (as contas de email IMAP ou POP3, com o servidor e o estado de cada uma, "Adicionar conta", "Remover" e "Buscar emails novos a cada", que vale só para as POP3), a escolha da conta ("Assinatura, regras e pastas de …", que vale para as três seções abaixo), Assinatura, Regras, Pastas e Avisos.
+
+Assinatura: o texto (até 2000 caracteres; links e emails viram link) e dois interruptores, "Em mensagens novas" e "Em respostas e encaminhamentos". Grava sozinho.
+
+Regras: até 50 por conta, na ordem da lista. Cada regra tem condições (remetente, destinatário ou Cc, assunto ou corpo contém um texto, ou tem anexo; todas ou qualquer uma) e ações (mover para a pasta, marcar como lida, marcar com estrela, apagar, que leva à Lixeira, e não avisar); "Parar aqui" impede as regras de baixo. As regras são do app: agem no email que chega à Caixa de Entrada só enquanto o app está aberto. Cada regra liga e desliga sem apagar; a ordem muda arrastando pela alça ou por Subir e Descer no menu ⋯. "Executar agora" conta antes quantas mensagens da Caixa de Entrada a regra pega e só age depois do seu clique em "Executar em N mensagens". Quando uma regra não consegue agir (a pasta de destino sumiu, sem conexão), a linha mostra o último erro. Numa conta POP3, as regras só marcam como lida e não avisam.
+
+Pastas: "Nova pasta" e a lista das pastas da conta, com o total e as não lidas, "Renomear" e "Apagar" (as do sistema não mudam). É a mesma árvore da barra lateral.
+
+Avisos: "Avisar quando chega email" (a notificação do macOS; uma regra com "não avisar" vale mais).
 
 <!-- aba: plugins -->
 ### Plugins
@@ -142,7 +161,8 @@ A versão instalada, a versão do Electron e do Chrome e a licença (código abe
 
 - ⌘N: nova gravação.
 - ⌘, : Configurações.
-- ⌘1 a ⌘8: as abas de Configurações.
+- ⌘1 a ⌘9: as abas de Configurações.
+- No Email: ⇧⌘M move a mensagem aberta (ou as escolhidas) para outra pasta; ⌘ clique e ⇧ clique escolhem várias; Esc limpa.
 - ⌘F: buscar nas reuniões.
 - ⌘⇧A: analisar a gravação até agora.
 - ⌘⇧L: bloquear o app.

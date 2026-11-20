@@ -1,4 +1,5 @@
 // Processo principal: esquema do app, segurança da sessão, IPC, menu e janela.
+import { resolveMx } from 'node:dns/promises'
 import { readFileSync } from 'node:fs'
 import { readFile, writeFile } from 'node:fs/promises'
 import { basename, join } from 'node:path'
@@ -503,7 +504,8 @@ function emailFocusedInbox(): string | null {
 
 /** Notificação de um email (contrato 43), local; o clique abre o app na mensagem. No smoke, o substituto registra. */
 function showEmailNotice(notice: EmailNotice): NoticeHandle {
-  const open = (): void => sendWhenLoaded(showMainWindow(), 'scribe:open-email', { accountId: notice.accountId, id: notice.id })
+  // Contrato 55 (CA24): a movida por uma regra abre a pasta de destino (e a mensagem, se o servidor disse o UID novo).
+  const open = (): void => sendWhenLoaded(showMainWindow(), 'scribe:open-email', { accountId: notice.accountId, id: notice.id, ...(notice.mailbox ? { mailbox: notice.mailbox.path, found: notice.mailbox.found } : {}) })
   if (smokeFixtures) {
     const entry = { ...notice, closed: false, open }
     smokeFixtures.emailNotify.notifications.push(entry)
@@ -1156,6 +1158,8 @@ function createAppServices(userData: string): AppServices {
     fetch: smokeFixtures
       ? () => Promise.reject(new TypeError('smoke: sem rede'))
       : (url, { signal }) => netFetch(url, { method: 'GET', headers: { accept: 'application/xml' }, signal, redirect: 'error' }),
+    // O MX do domínio (só o domínio vai ao DNS), para reconhecer Zoho, Google Workspace e Microsoft 365 em domínio próprio.
+    ...(smokeFixtures ? {} : { resolveMx: (domain: string) => resolveMx(domain).then((records) => records.sort((a, b) => a.priority - b.priority).map((record) => record.exchange)) }),
     // Bloqueado (contrato 22), nada do email vai às janelas; as contas seguem conectadas.
     onStatus: (statuses) => {
       if (!lockService?.isLocked()) broadcast(appWindows(), 'scribe:email-state', statuses)

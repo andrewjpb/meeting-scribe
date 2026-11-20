@@ -55,8 +55,14 @@ export function useMainNavigation(): void {
   // Contrato 43: o clique na notificação de email: a Caixa de Entrada da conta com a mensagem aberta.
   useEffect(
     () =>
-      window.__scribeApi.on('scribe:open-email', ({ accountId, id }) => {
+      window.__scribeApi.on('scribe:open-email', ({ accountId, id, mailbox, found }) => {
         if (useLock.getState().status.locked) return
+        // Contrato 55 (CA24): a que uma regra moveu abre na pasta de destino; sem o UID novo, só a pasta, com a nota.
+        if (mailbox) {
+          const state: EmailNavigationState = found === false ? { mailbox, movedByRule: true } : { messageId: id, mailbox, movedByRule: true }
+          void navigate(emailPath(accountId, { path: mailbox }), { state })
+          return
+        }
         const state: EmailNavigationState = { messageId: id }
         void navigate(emailPath(accountId, 'inbox'), { state })
       }),

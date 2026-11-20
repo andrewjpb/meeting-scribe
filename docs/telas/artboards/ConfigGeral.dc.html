@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<title>Configurações · Geral</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0}
+button{font:inherit}
+input::placeholder{color:#7f8da6}
+</style>
+</helmet>
+<div style="display: flex; width: 1120px; height: 740px; overflow: hidden; background: #ffffff; color: #061a3d; font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; font-size: 13px; line-height: 20px; -webkit-font-smoothing: antialiased">
+<dc-import name="SidebarConfig" aba="geral" hint-size="224px,740px"></dc-import>
+<main style="flex: 1 1 0; min-width: 0; height: 740px; display: flex; flex-direction: column; background: #ffffff">
+<div aria-hidden="true" style="flex: 0 0 52px; height: 52px"></div>
+
+<div style="flex: 0 0 auto; padding: 28px 40px 0">
+<div style="max-width: 760px; margin: 0 auto; display: flex; align-items: center; justify-content: space-between; gap: 24px">
+<h1 style="margin: 0; font-size: 20px; line-height: 26px; font-weight: 700; color: #0a2a5e">Geral</h1>
+<div style="flex: 0 0 280px; width: 280px; height: 40px; box-sizing: border-box; display: flex; align-items: center; gap: 8px; padding: 0 12px; border: 1px solid #c9d4e5; border-radius: 4px; background: #ffffff; color: #7f8da6">
+<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><path d="m20 20-4-4"></path></svg>
+<label for="busca-config-geral" style="position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0)">Buscar configuração</label>
+<input id="busca-config-geral" type="search" placeholder="Buscar configuração" style="flex: 1 1 0; min-width: 0; border: 0; background: transparent; font: inherit; font-size: 13px; color: #061a3d; outline: none">
+<span aria-hidden="true" style="font-size: 11px; line-height: 16px; color: #7f8da6; font-variant-numeric: tabular-nums">⌘F</span>
+</div>
+</div>
+</div>
+
+<div style="flex: 1 1 0; min-height: 0; overflow: hidden; padding: 32px 40px 48px">
+<div style="max-width: 760px; margin: 0 auto; display: flex; flex-direction: column; gap: 32px">
+
+<section aria-label="Marca" style="display: flex; flex-direction: column">
+<h2 style="margin: 0; font-size: 10px; line-height: 14px; font-weight: 500; letter-spacing: 0.14em; text-transform: uppercase; color: #5b6b85">Marca</h2>
+<p style="margin: 4px 0 0; font-size: 12px; line-height: 16px; color: #5b6b85">Aparece na barra lateral, no título da janela e no ícone do Dock. O nome no Finder e na pasta Aplicativos não muda.</p>
+<div style="margin-top: 12px; display: flex; flex-direction: column; border: 1px solid #c9d4e5; border-radius: 6px; background: #ffffff; overflow: hidden">
+<div style="display: grid; grid-template-columns: minmax(0, 1fr) 340px; column-gap: 24px; align-items: center; min-height: 64px; box-sizing: border-box; padding: 12px 16px; border-bottom: 1px solid #e3e9f2">
+<label for="nome-app" style="font-size: 13px; font-weight: 500; color: #061a3d">Nome do app</label>
+<input id="nome-app" type="text" value="LAP Reuniões" style="height: 40px; box-sizing: border-box; padding: 0 12px; border: 1px solid #c9d4e5; border-radius: 4px; background: #ffffff; color: #061a3d; font: inherit; font-size: 13px">
+</div>
+<div style="display: grid; grid-template-columns: minmax(0, 1fr) 340px; column-gap: 24px; align-items: center; min-height: 64px; box-sizing: border-box; padding: 12px 16px; border-bottom: 1px solid #e3e9f2">
+<label for="subtitulo-app" style="font-size: 13px; font-weight: 500; color: #061a3d">Subtítulo</label>
+<input id="subtitulo-app" type="text" value="LAP Software" style="height: 40px; box-sizing: border-box; padding: 0 12px; border: 1px solid #c9d4e5; border-radius: 4px; background: #ffffff; color: #061a3d; font: inherit; font-size: 13px">
+</div>
+<div style="display: grid; grid-template-columns: minmax(0, 1fr) 340px; column-gap: 24px; align-items: center; min-height: 64px; box-sizing: border-box; padding: 12px 16px">
+<p style="margin: 0; font-size: 13px; font-weight: 500; color: #061a3d">Logo</p>
+<div style="display: flex; align-items: center; gap: 8px">
+<span style="flex: 0 0 40px; width: 40px; height: 40px; display: flex; align-items: center; justify-content: center; border-radius: 4px; background: #0a2a5e"><svg width="28" height="28" viewBox="0 0 100 100" role="img" aria-label="Logo atual"><rect x="0" y="0" width="100" height="100" rx="6" fill="#ffffff"></rect><path d="M 20 25 L 20 75 L 55 75" fill="none" stroke="#0a2a5e" stroke-width="8" stroke-linecap="square" stroke-linejoin="miter"></path><rect x="62" y="58" width="22" height="22" fill="#3b82f6"></rect></svg></span>
+<button type="button" style="height: 40px; padding: 0 14px; border: 1px solid #c9d4e5; border-radius: 4px; background: #ffffff; color: #0a2a5e; font-size: 13px; font-weight: 500; cursor: pointer">Escolher…</button>
+</div>
+</div>
+</div>
+</section>
+
+<section aria-label="Aparência" style="display: flex; flex-direction: column">
+<h2 style="margin: 0; font-size: 10px; line-height: 14px; font-weight: 500; letter-spacing: 0.14em; text-transform: uppercase; color: #5b6b85">Aparência</h2>
+<div style="margin-top: 12px; display: flex; flex-direction: column; border: 1px solid #c9d4e5; border-radius: 6px; background: #ffffff; overflow: hidden">
+<div style="display: grid; grid-template-columns: minmax(0, 1fr) 340px; column-gap: 24px; align-items: center; min-height: 64px; box-sizing: border-box; padding: 12px 16px">
+<p id="tema-nome" style="margin: 0; font-size: 13px; font-weight: 500; color: #061a3d">Tema</p>
+<div role="group" aria-labelledby="tema-nome" style="display: flex; align-self: center; justify-self: start; border: 1px solid #c9d4e5; border-radius: 4px; overflow: hidden">
+<button type="button" aria-pressed="true" style="height: 38px; padding: 0 16px; border: 0; background: #0a2a5e; color: #ffffff; font-size: 13px; font-weight: 500; cursor: pointer">Sistema</button>
+<button type="button" aria-pressed="false" style="height: 38px; padding: 0 16px; border: 0; border-left: 1px solid #c9d4e5; background: #ffffff; color: #061a3d; font-size: 13px; cursor: pointer">Claro</button>
+<button type="button" aria-pressed="false" style="height: 38px; padding: 0 16px; border: 0; border-left: 1px solid #c9d4e5; background: #ffffff; color: #061a3d; font-size: 13px; cursor: pointer">Escuro</button>
+</div>
+</div>
+</div>
+</section>
+
+<section aria-label="Janela" style="display: flex; flex-direction: column">
+<h2 style="margin: 0; font-size: 10px; line-height: 14px; font-weight: 500; letter-spacing: 0.14em; text-transform: uppercase; color: #5b6b85">Janela</h2>
+<div style="margin-top: 12px; display: flex; flex-direction: column; border: 1px solid #c9d4e5; border-radius: 6px; background: #ffffff; overflow: hidden">
+<div style="display: grid; grid-template-columns: minmax(0, 1fr) 340px; column-gap: 24px; align-items: center; min-height: 64px; box-sizing: border-box; padding: 12px 16px; border-bottom: 1px solid #e3e9f2">
+<div style="display: flex; flex-direction: column; gap: 2px; min-width: 0"><p id="fechar-nome" style="margin: 0; font-size: 13px; font-weight: 500; color: #061a3d">Ao fechar a janela</p><p style="margin: 0; font-size: 12px; line-height: 16px; color: #5b6b85">Na barra de menus, as tarefas agendadas continuam rodando.</p></div>
+<div role="group" aria-labelledby="fechar-nome" style="display: flex; justify-self: start; border: 1px solid #c9d4e5; border-radius: 4px; overflow: hidden">
+<button type="button" aria-pressed="true" style="height: 38px; padding: 0 14px; border: 0; background: #0a2a5e; color: #ffffff; font-size: 13px; font-weight: 500; white-space: nowrap; cursor: pointer">Continuar na barra de menus</button>
+<button type="button" aria-pressed="false" style="height: 38px; padding: 0 14px; border: 0; border-left: 1px solid #c9d4e5; background: #ffffff; color: #061a3d; font-size: 13px; white-space: nowrap; cursor: pointer">Sair do app</button>
+</div>
+</div>
+<div style="display: grid; grid-template-columns: minmax(0, 1fr) 340px; column-gap: 24px; align-items: center; min-height: 64px; box-sizing: border-box; padding: 12px 16px">
+<div style="display: flex; flex-direction: column; gap: 2px; min-width: 0"><p id="login-nome" style="margin: 0; font-size: 13px; font-weight: 500; color: #061a3d">Abrir ao entrar no Mac</p><p style="margin: 0; font-size: 12px; line-height: 16px; color: #5b6b85">Abre direto na barra de menus, sem janela.</p></div>
+<div><button type="button" role="switch" aria-checked="false" aria-labelledby="login-nome" style="display: flex; align-items: center; width: 44px; height: 24px; box-sizing: border-box; padding: 3px; border: 1px solid #c9d4e5; border-radius: 4px; background: #eef2f9; cursor: pointer"><span style="width: 16px; height: 16px; border-radius: 2px; background: #5b6b85"></span></button></div>
+</div>
+</div>
+</section>
+
+<section aria-label="Bloqueio" style="display: flex; flex-direction: column">
+<h2 style="margin: 0; font-size: 10px; line-height: 14px; font-weight: 500; letter-spacing: 0.14em; text-transform: uppercase; color: #5b6b85">Bloqueio</h2>
+<p style="margin: 4px 0 0; font-size: 12px; line-height: 16px; color: #5b6b85">Cobre a janela com uma tela fosca. A gravação, a transcrição e as análises continuam.</p>
+<div style="margin-top: 12px; display: flex; flex-direction: column; border: 1px solid #c9d4e5; border-radius: 6px; background: #ffffff; overflow: hidden">
+<div style="display: grid; grid-template-columns: minmax(0, 1fr) 340px; column-gap: 24px; align-items: center; min-height: 64px; box-sizing: border-box; padding: 12px 16px; border-bottom: 1px solid #e3e9f2">
+<div style="display: flex; flex-direction: column; gap: 2px; min-width: 0"><p style="margin: 0; font-size: 13px; font-weight: 500; color: #061a3d">Senha do app</p><p style="margin: 0; font-size: 12px; line-height: 16px; color: #5b6b85">Pedida para desbloquear. Fica só neste Mac, guardada como hash.</p></div>
+<div><button type="button" style="height: 40px; padding: 0 14px; border: 1px solid #c9d4e5; border-radius: 4px; background: #ffffff; color: #0a2a5e; font-size: 13px; font-weight: 500; cursor: pointer">Trocar senha</button></div>
+</div>
+<div style="display: grid; grid-template-columns: minmax(0, 1fr) 340px; column-gap: 24px; align-items: center; min-height: 64px; box-sizing: border-box; padding: 12px 16px; border-bottom: 1px solid #e3e9f2">
+<div style="display: flex; flex-direction: column; gap: 2px; min-width: 0"><p id="touch-nome" style="margin: 0; font-size: 13px; font-weight: 500; color: #061a3d">Usar Touch ID</p><p style="margin: 0; font-size: 12px; line-height: 16px; color: #5b6b85">Desbloquear com a digital, sem digitar a senha.</p></div>
+<div><button type="button" role="switch" aria-checked="true" aria-labelledby="touch-nome" style="display: flex; align-items: center; justify-content: flex-end; width: 44px; height: 24px; box-sizing: border-box; padding: 3px; border: 1px solid #1e5bb8; border-radius: 4px; background: #1e5bb8; cursor: pointer"><span style="width: 16px; height: 16px; border-radius: 2px; background: #ffffff"></span></button></div>
+</div>
+<div style="display: grid; grid-template-columns: minmax(0, 1fr) 340px; column-gap: 24px; align-items: center; min-height: 64px; box-sizing: border-box; padding: 12px 16px">
+<div style="display: flex; flex-direction: column; gap: 2px; min-width: 0"><label for="bloquear-depois" style="font-size: 13px; font-weight: 500; color: #061a3d">Bloquear sozinho</label><p style="margin: 0; font-size: 12px; line-height: 16px; color: #5b6b85">Depois de um tempo sem uso do app.</p></div>
+<select id="bloquear-depois" style="min-width: 240px; justify-self: start; height: 40px; padding: 0 10px; border: 1px solid #c9d4e5; border-radius: 4px; background: #ffffff; color: #061a3d; font: inherit; font-size: 13px"><option>Depois de 15 minutos</option><option>Nunca</option></select>
+</div>
+</div>
+</section>
+
+<section aria-label="Atualizações" style="display: flex; flex-direction: column">
+<h2 style="margin: 0; font-size: 10px; line-height: 14px; font-weight: 500; letter-spacing: 0.14em; text-transform: uppercase; color: #5b6b85">Atualizações</h2>
+<div style="margin-top: 12px; display: flex; flex-direction: column; border: 1px solid #c9d4e5; border-radius: 6px; background: #ffffff; overflow: hidden">
+<div style="display: grid; grid-template-columns: minmax(0, 1fr) 340px; column-gap: 24px; align-items: center; min-height: 64px; box-sizing: border-box; padding: 12px 16px; border-bottom: 1px solid #e3e9f2">
+<div style="display: flex; flex-direction: column; gap: 2px; min-width: 0"><p style="margin: 0; font-size: 13px; font-weight: 500; color: #061a3d">Versão 0.15.0</p><p style="margin: 0; font-size: 12px; line-height: 16px; color: #5b6b85">Última verificação: hoje às 12:40</p></div>
+<div><button type="button" style="height: 40px; padding: 0 14px; border: 1px solid #c9d4e5; border-radius: 4px; background: #ffffff; color: #0a2a5e; font-size: 13px; font-weight: 500; cursor: pointer">Procurar atualização</button></div>
+</div>
+<div style="display: grid; grid-template-columns: minmax(0, 1fr) 340px; column-gap: 24px; align-items: center; min-height: 64px; box-sizing: border-box; padding: 12px 16px">
+<div style="display: flex; flex-direction: column; gap: 2px; min-width: 0"><p id="auto-nome" style="margin: 0; font-size: 13px; font-weight: 500; color: #061a3d">Procurar atualizações automaticamente</p><p style="margin: 0; font-size: 12px; line-height: 16px; color: #5b6b85">Ao abrir o app e a cada 6 horas.</p></div>
+<div><button type="button" role="switch" aria-checked="true" aria-labelledby="auto-nome" style="display: flex; align-items: center; justify-content: flex-end; width: 44px; height: 24px; box-sizing: border-box; padding: 3px; border: 1px solid #1e5bb8; border-radius: 4px; background: #1e5bb8; cursor: pointer"><span style="width: 16px; height: 16px; border-radius: 2px; background: #ffffff"></span></button></div>
+</div>
+</div>
+</section>
+
+</div>
+</div>
+</main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1120,"height":740}}'>
+class Component extends DCLogic {
+  renderVals() {
+    return {};
+  }
+}
+</script>
+</body>
+</html>

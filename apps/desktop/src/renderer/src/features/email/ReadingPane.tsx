@@ -1,12 +1,14 @@
-import { ArrowLeft, Download, ExternalLink, Forward, ImageOff, Mail, MailOpen, Paperclip, Reply, ReplyAll, Trash2, TriangleAlert } from 'lucide-react'
+import { ArrowLeft, Download, ExternalLink, Folder, FolderInput, Forward, ImageOff, Mail, MailOpen, MoreHorizontal, Paperclip, Reply, ReplyAll, Sparkles, Trash2, TriangleAlert } from 'lucide-react'
 import { Component, useMemo, useState, type MouseEvent, type ReactNode } from 'react'
 import { isInbox, type EmailAccount, type EmailMessage } from '@shared/email'
 import { Button } from '../../design/Button'
 import { Icon } from '../../design/Icon'
 import { Note } from '../../design/Note'
+import { MENU_ITEM, useInlineMenu } from '../meetings/menu'
 import { Avatar } from '../whatsapp/Avatar'
 import { bodyKey, useEmail } from './emailStore'
 import { addressLabel, addressLine, emailFullDate, sizeLabel, type ComposeMode } from './format'
+import type { FolderItem } from './folderTree'
 import { linkify, sanitizeEmailHtml } from './sanitize'
 import type { LucideIcon } from 'lucide-react'
 
@@ -67,6 +69,83 @@ interface ReadingPaneProps {
   onDeleted: () => void
   /** Janela estreita: volta para a lista. */
   onBack: () => void
+  /**
+   * Contrato 55 (CA6): o menu "Mais", com "Mover para…" (o seletor, embaixo do botão) e as até 3 pastas recentes; sem
+   * isto (POP3, Enviados do app), o botão não aparece.
+   */
+  move?: { recents: FolderItem[]; onPick: (anchor: DOMRect | null) => void; onMoveTo: (path: string) => void } | undefined
+  /** Contrato 55: Apagar só onde o main apaga (Caixa de Entrada e Enviados). */
+  canDelete?: boolean
+  /** Contrato 55 (CA12): aberta durante a organização, o botão que volta ao painel. */
+  onBackToOrganize?: (() => void) | undefined
+}
+
+/** "Mais" da barra da leitura (contrato 55, CA6, tela 02), no padrão dos menus em linha. */
+function MoreMenu({ recents, onPick, onMoveTo }: NonNullable<ReadingPaneProps['move']>) {
+  const [open, setOpen] = useState(false)
+  const { button, menu, onBlur, onKeyDown } = useInlineMenu(open, () => setOpen(false))
+  return (
+    <div onBlur={onBlur} onKeyDown={open ? onKeyDown : undefined} className="relative shrink-0">
+      <button
+        ref={button}
+        type="button"
+        data-action="email-more"
+        aria-label="Mais"
+        title="Mais"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        onClick={() => setOpen(!open)}
+        className={`no-drag inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-[var(--radius-control)] border border-line-strong text-title transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-bg-sunken ${open ? 'bg-bg-sunken' : ''}`}
+      >
+        <Icon icon={MoreHorizontal} size={14} />
+      </button>
+      {open && (
+        <div ref={menu} role="menu" aria-label="Mais" data-email-more-menu className="absolute top-full right-0 z-10 mt-1 flex w-60 flex-col overflow-hidden rounded-[var(--radius-control)] border border-line-strong bg-bg-raised py-1">
+          <button
+            type="button"
+            role="menuitem"
+            tabIndex={-1}
+            data-action="email-more-move"
+            aria-keyshortcuts="Shift+Meta+M"
+            onClick={() => {
+              setOpen(false)
+              onPick(button.current?.getBoundingClientRect() ?? null)
+            }}
+            className={`${MENU_ITEM} gap-2.5 text-text`}
+          >
+            <Icon icon={FolderInput} />
+            <span className="flex-1">Mover para…</span>
+            <span className="text-12 text-text-faint">⇧⌘M</span>
+          </button>
+          {recents.length > 0 && (
+            <>
+              <div role="separator" className="my-1 h-px bg-line" />
+              <p aria-hidden="true" className="caps px-3 pt-1 pb-1 text-text-muted">
+                Recentes
+              </p>
+              {recents.map((folder) => (
+                <button
+                  key={folder.path}
+                  type="button"
+                  role="menuitem"
+                  tabIndex={-1}
+                  data-email-recent={folder.path}
+                  onClick={() => {
+                    setOpen(false)
+                    onMoveTo(folder.path)
+                  }}
+                  className={`${MENU_ITEM} gap-2.5 text-text`}
+                >
+                  <Icon icon={Folder} />
+                  <span className="truncate">{folder.label}</span>
+                </button>
+              ))}
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  )
 }
 
 /**
@@ -74,7 +153,7 @@ interface ReadingPaneProps {
  * Marcar como lida ou não lida), o cabeçalho (assunto, remetente, Para, Cc e data) e o corpo. HTML só sanitizado,
  * com as imagens de fora bloqueadas até "Carregar imagens"; texto puro com os links clicáveis.
  */
-export function ReadingPane({ account, message, onCompose, composing, onMailto, onDeleted, onBack }: ReadingPaneProps) {
+export function ReadingPane({ account, message, onCompose, composing, onMailto, onDeleted, onBack, move, canDelete = true, onBackToOrganize }: ReadingPaneProps) {
   const state = useEmail((store) => store.bodies[bodyKey(account.id, message.id)])
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [actionError, setActionError] = useState<string | null>(null)
@@ -123,6 +202,7 @@ export function ReadingPane({ account, message, onCompose, composing, onMailto, 
         <button type="button" data-action="email-back" onClick={onBack} aria-label="Voltar para a lista" className={`${BACK_BUTTON} ${NARROW_ONLY}`}>
           <Icon icon={ArrowLeft} />
         </button>
+        {onBackToOrganize && <ActionButton icon={Sparkles} label="Voltar ao andamento" action="email-back-to-organize" onClick={onBackToOrganize} />}
         <ActionButton icon={Reply} label="Responder" action="email-reply" disabled={composing} onClick={() => onCompose('reply')} />
         <ActionButton icon={ReplyAll} label="Responder a todos" action="email-reply-all" disabled={composing} onClick={() => onCompose('replyAll')} />
         <ActionButton icon={Forward} label="Encaminhar" action="email-forward" disabled={composing} onClick={() => onCompose('forward')} />
@@ -130,7 +210,8 @@ export function ReadingPane({ account, message, onCompose, composing, onMailto, 
         {isInbox(message) && (
           <ActionButton icon={message.seen ? Mail : MailOpen} label={message.seen ? 'Marcar como não lida' : 'Marcar como lida'} action="email-toggle-seen" iconOnly onClick={toggleSeen} />
         )}
-        <ActionButton icon={Trash2} label="Apagar" action="email-delete" tone="danger" iconOnly onClick={() => setConfirmDelete(true)} />
+        {canDelete && <ActionButton icon={Trash2} label="Apagar" action="email-delete" tone="danger" iconOnly onClick={() => setConfirmDelete(true)} />}
+        {move && <MoreMenu {...move} />}
       </div>
       <div data-email-reading-scroll className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
         <div className="mx-auto flex w-full max-w-[760px] flex-col gap-4">

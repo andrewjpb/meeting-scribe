@@ -14,7 +14,7 @@ import { BRAND_LOGO_PATTERN, BRAND_TEXT_MAX } from '../../shared/branding'
 import { EMAIL_SIGNATURE_MAX, type EmailSignature } from '../../shared/email-signature'
 import { EMAIL_RULES_MAX, emailRuleSchema, type EmailRule } from '../../shared/email-rules'
 import { CLAUDE_CONNECTOR_NAME_MAX, CLAUDE_CONNECTORS_MAX, MCP_TOOL_NAME_MAX, MCP_TOOL_POLICIES, MCP_TOOLS_MAX, type ClaudeConnectorPrefs } from '../../shared/mcp'
-import { EMAIL_ACCOUNT_ID_PATTERN, EMAIL_ADDRESS_PATTERN, EMAIL_HOST_PATTERN, EMAIL_POLL_MINUTES, EMAIL_PROTOCOLS, EMAIL_SECURITY, type EmailAccount } from '../../shared/email'
+import { EMAIL_ACCOUNT_ID_PATTERN, EMAIL_ADDRESS_PATTERN, EMAIL_FOLDER_PATH_MAX, EMAIL_HOST_PATTERN, EMAIL_POLL_MINUTES, EMAIL_PROTOCOLS, EMAIL_SECURITY, type EmailAccount } from '../../shared/email'
 import { AGENT_PROFILES, CALENDAR_IDS_MAX, CALENDAR_LEAD_MINUTES, CHAT_MODELS, CLAUDE_MODELS, CLAUDE_TRANSPORTS, CLOSE_BEHAVIORS, DAILY_RUN_LIMIT_OPTIONS, DEFAULT_SETTINGS, LANGUAGE_CODES, LOCK_AFTER_MINUTES, THEME_SETTINGS, TRANSLATION_ENGINES, type AppSettings, type SettingsPatch } from '../../shared/settings-defaults'
 
 export const SETTINGS_VERSION = 1
@@ -53,6 +53,27 @@ const calendarIdsSchema = z.object({ google: calendarIdList.nullable(), microsof
 
 /** Contrato 43: as contas de email recolhidas na barra lateral (só ids de conta). */
 const emailCollapsedSchema = z.array(z.string().regex(EMAIL_ACCOUNT_ID_PATTERN)).max(50)
+
+/** Contrato 55: um path de pasta de email (sem quebra de linha nem caractere nulo), como o do mover. */
+const emailFolderPath = z
+  .string()
+  .min(1)
+  .max(EMAIL_FOLDER_PATH_MAX)
+  .refine((value) => !/[\r\n\0]/.test(value))
+/** Contrato 55: as subárvores recolhidas na barra lateral, `<conta>\n<path>`. */
+const emailFoldersCollapsedSchema = z
+  .array(
+    z
+      .string()
+      .max(EMAIL_FOLDER_PATH_MAX + 40)
+      .refine((value) => {
+        const at = value.indexOf('\n')
+        return at !== -1 && EMAIL_ACCOUNT_ID_PATTERN.test(value.slice(0, at)) && emailFolderPath.safeParse(value.slice(at + 1)).success
+      }),
+  )
+  .max(500)
+/** Contrato 55: as até 3 pastas recentes do "Mover", por conta. */
+const emailRecentFoldersSchema = z.record(z.string().regex(EMAIL_ACCOUNT_ID_PATTERN), z.array(emailFolderPath).max(3)).refine((value) => Object.keys(value).length <= 50)
 
 /**
  * Contrato 57: os conectores do claude.ai, pelo nome (uma linha, sem caractere de controle), com a política de cada
@@ -134,6 +155,8 @@ const lenientSchema = z.object({
   emailPollMinutes: z.literal(EMAIL_POLL_MINUTES).catch(D.emailPollMinutes),
   emailNotifications: z.boolean().catch(D.emailNotifications),
   emailCollapsed: emailCollapsedSchema.catch([]),
+  emailFoldersCollapsed: emailFoldersCollapsedSchema.catch([]),
+  emailRecentFolders: emailRecentFoldersSchema.catch({}),
   claudeConnectors: lenientConnectorsSchema,
 })
 
@@ -181,6 +204,8 @@ const patchSchema = z
     emailPollMinutes: z.literal(EMAIL_POLL_MINUTES),
     emailNotifications: z.boolean(),
     emailCollapsed: emailCollapsedSchema,
+    emailFoldersCollapsed: emailFoldersCollapsedSchema,
+    emailRecentFolders: emailRecentFoldersSchema,
     claudeConnectors: claudeConnectorsSchema,
   })
   .partial()
