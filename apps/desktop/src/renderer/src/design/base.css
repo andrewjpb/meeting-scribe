@@ -419,7 +419,10 @@
    */
   .side-stack {
     display: grid;
-    grid-template: 1fr / 1fr;
+    /* minmax(0, 1fr): a faixa 1fr tem largura mínima "auto", então um endereço de conta ou um título de conversa
+       comprido alargava a coluna além dos 224 px e o número de não lidas saía pela borda. Com mínimo 0, o
+       conteúdo é que encurta (truncate), em qualquer nível. */
+    grid-template: minmax(0, 1fr) / minmax(0, 1fr);
     min-height: 0;
   }
 
@@ -430,6 +433,7 @@
   .side-stack > [data-sidebar-level] {
     grid-area: 1 / 1;
     min-height: 0;
+    min-width: 0;
     display: flex;
     flex-direction: column;
   }
