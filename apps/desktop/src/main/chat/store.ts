@@ -10,6 +10,7 @@
 // Contrato 25: o escopo guarda as fontes desligadas e o modo do WhatsApp; a resposta guarda as ações propostas
 // com o estado de cada cartão. Arquivo sem esses campos carrega com tudo ligado e sem cartões.
 // Contrato 21: o escopo guarda os servidores MCP desligados na conversa; cada passo pode ser de uma ferramenta MCP.
+// Contrato 78: os cartões de evento e de alterar e apagar um lembrete, e o estado `failed` (com a frase do erro).
 import { randomUUID } from 'node:crypto'
 import { chmod, mkdir, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -36,9 +37,19 @@ import {
   type ChatListItem,
   type ChatScope,
 } from '../../shared/chat'
-import { ACTIONS_PER_MESSAGE_MAX, CHAT_ACTION_STATUSES, EMAIL_CARD_ITEMS_MAX, OPEN_SCREENS, REMINDER_TEXT_MAX } from '../../shared/assistant'
+import {
+  ACTIONS_PER_MESSAGE_MAX,
+  CHAT_ACTION_ERROR_MAX,
+  CHAT_ACTION_STATUSES,
+  EMAIL_CARD_ITEMS_MAX,
+  EVENT_LOCATION_MAX,
+  EVENT_NOTES_MAX,
+  EVENT_TITLE_MAX,
+  OPEN_SCREENS,
+  REMINDER_TEXT_MAX,
+} from '../../shared/assistant'
 import { EMAIL_ACCOUNT_ID_PATTERN, EMAIL_RECIPIENTS_MAX, EMAIL_SUBJECT_MAX, EMAIL_TEXT_MAX } from '../../shared/email'
-import { scheduleSchema } from '../../shared/automations-schema'
+import { automationIdSchema, scheduleSchema } from '../../shared/automations-schema'
 import { MCP_SERVERS_MAX } from '../../shared/mcp'
 import { CHAT_MODELS } from '../../shared/settings-defaults'
 import { WHATSAPP_CHAT_ID_PATTERN, WHATSAPP_DEFAULT_SCOPE_DAYS, WHATSAPP_SCOPE_CHATS_MAX, WHATSAPP_SCOPE_DAYS, WHATSAPP_SEND_TEXT_MAX } from '../../shared/whatsapp'
@@ -116,6 +127,10 @@ const actionBase = {
   result: z.string().max(200).nullable(),
 }
 const chatIdOfWhatsApp = z.string().regex(WHATSAPP_CHAT_ID_PATTERN)
+/** Contrato 78: o id de uma agenda do EventKit, como o helper aceita. */
+export const calendarIdSchema = z.string().min(1).max(1024)
+/** Contrato 78: agendas graváveis guardadas num cartão de evento (as a mais ficam de fora). */
+export const CHAT_CALENDARS_MAX = 50
 const emailAccountId = z.string().regex(EMAIL_ACCOUNT_ID_PATTERN)
 
 /** Ação proposta gravada com a resposta (contrato 25), já validada e com o que o app leu (nomes, número). */
@@ -213,6 +228,61 @@ export const chatActionSchema = z.discriminatedUnion('kind', [
       batchId: z.string().uuid(),
       accountId: emailAccountId,
       account: z.string().max(320),
+    })
+    .strict(),
+  // Contrato 78: o evento no Calendário do Mac e os cartões de alterar e apagar um lembrete.
+  z
+    .object({
+      kind: z.literal('evento'),
+      ...actionBase,
+      title: z.string().min(1).max(EVENT_TITLE_MAX),
+      start: isoDate,
+      end: isoDate,
+      allDay: z.boolean(),
+      location: z.string().max(EVENT_LOCATION_MAX).nullable(),
+      notes: z.string().max(EVENT_NOTES_MAX).nullable(),
+      calendarId: calendarIdSchema.nullable(),
+      calendarTitle: z.string().max(300).nullable(),
+      calendars: z
+        .array(
+          z
+            .object({
+              id: calendarIdSchema,
+              title: z.string().max(300),
+              source: z.string().max(300),
+              color: z
+                .string()
+                .regex(/^#[0-9A-Fa-f]{6}$/)
+                .nullable(),
+              isDefault: z.boolean(),
+            })
+            .strict(),
+        )
+        .max(CHAT_CALENDARS_MAX),
+      access: z.enum(['full', 'not-determined', 'denied', 'unavailable']),
+      error: z.string().max(CHAT_ACTION_ERROR_MAX).nullable(),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal('lembrete-editar'),
+      ...actionBase,
+      taskId: automationIdSchema,
+      currentText: z.string().max(REMINDER_TEXT_MAX),
+      currentAt: isoDate,
+      text: z.string().max(REMINDER_TEXT_MAX).nullable(),
+      at: isoDate.nullable(),
+      error: z.string().max(CHAT_ACTION_ERROR_MAX).nullable(),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal('lembrete-apagar'),
+      ...actionBase,
+      taskId: automationIdSchema,
+      text: z.string().max(REMINDER_TEXT_MAX),
+      at: isoDate,
+      error: z.string().max(CHAT_ACTION_ERROR_MAX).nullable(),
     })
     .strict(),
 ])

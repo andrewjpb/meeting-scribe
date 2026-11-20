@@ -4,7 +4,8 @@
 // recentes, ou só as escolhidas). Cada fonte com interruptor no painel "Contexto"; desligada, o arquivo sai da
 // pasta. Contrato 45: o email (o `EMAILS.md` e as mensagens já baixadas, do cache local). O texto que vem de
 // mensagem, de execução ou de reunião é só material: tudo em uma linha (o corpo do email, citado), sem cerca de código
-// (um bloco de ação nunca nasce de uma mensagem copiada para cá).
+// (um bloco de ação nunca nasce de uma mensagem copiada para cá). Contrato 78: os lembretes com o id (para o modelo
+// propor alterar ou apagar um deles) e as agendas do Calendário do Mac em que dá para gravar, só pelo nome.
 import { randomUUID } from 'node:crypto'
 import { chmod, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -22,6 +23,7 @@ import {
   type AutomationRun,
   type ScheduledTask,
 } from '../../shared/automations'
+import type { ChatCalendarAccess } from '../../shared/assistant'
 import { chatSourcesOf, chatWhatsAppModeOf, type ChatScope } from '../../shared/chat'
 import { EMAIL_EXPORT_PREFIX, EMAIL_OVERVIEW_FILE } from '../../shared/email'
 import { WHATSAPP_DEFAULT_SCOPE_DAYS, WHATSAPP_EXPORT_PREFIX, WHATSAPP_OVERVIEW_FILE } from '../../shared/whatsapp'
@@ -62,8 +64,21 @@ export interface AssistantState {
   /** "Pausadas pela pessoa", "pausadas pelo limite diário" ou `null`. */
   automationsPaused: string | null
   agents: readonly Pick<Agent, 'name'>[]
-  /** Tarefas ligadas (fora da pausa automática), com a próxima vez. */
-  tasks: readonly Pick<ScheduledTask, 'name' | 'enabled' | 'autoPaused' | 'nextRunAt' | 'timezone' | 'reminder'>[]
+  /** Tarefas ligadas (fora da pausa automática), com a próxima vez. Contrato 78: o id, para os lembretes. */
+  tasks: readonly Pick<ScheduledTask, 'id' | 'name' | 'enabled' | 'autoPaused' | 'nextRunAt' | 'timezone' | 'reminder'>[]
+  /**
+   * Contrato 78: o Calendário do Mac. As agendas graváveis (nome, conta e a que o app usa por padrão), nunca o id; sem
+   * acesso, a lista vazia. Ausente, a seção não sai.
+   */
+  calendar?: { access: ChatCalendarAccess; calendars: readonly { title: string; source: string; isDefault: boolean }[] } | undefined
+}
+
+/** Contrato 78: a seção "Agendas do Mac" do `ESTADO.md`. */
+function calendarLines(calendar: NonNullable<AssistantState['calendar']>): string[] {
+  if (calendar.access === 'unavailable') return ['Calendário indisponível.']
+  if (calendar.access !== 'full') return ['Sem acesso ao Calendário do Mac (peça em Configurações › Email › Convites).']
+  if (!calendar.calendars.length) return ['Nenhuma agenda em que dá para gravar.']
+  return calendar.calendars.map((item) => `- ${oneLine(item.title)} (${oneLine(item.source)})${item.isDefault ? ', padrão' : ''}`)
 }
 
 const oneLine = (text: string): string => previewOf(text, 400)
@@ -71,6 +86,7 @@ const oneLine = (text: string): string => previewOf(text, 400)
 /** `ESTADO.md`: data, hora e fuso de agora, gravação, contas, versão e automações ligadas. */
 export function stateMarkdown(state: AssistantState): string {
   const on = state.tasks.filter((task) => task.enabled && !task.autoPaused)
+  const reminders = on.filter((task) => task.reminder && task.nextRunAt && !Number.isNaN(Date.parse(task.nextRunAt)))
   const lines = [
     '# Estado atual do app',
     '',
@@ -95,6 +111,12 @@ export function stateMarkdown(state: AssistantState): string {
             .join('; ')
         : 'nenhuma'
     }`,
+    // Contrato 78: os lembretes que ainda vão avisar, com o id (o cartão de alterar ou apagar só aceita um destes).
+    '',
+    '## Lembretes',
+    '',
+    ...(reminders.length ? reminders.map((task) => `- Lembrete: ${oneLine(task.reminder?.text ?? task.name)} · ${formatRunAt(Date.parse(task.nextRunAt ?? ''), task.timezone)} · id: ${task.id}`) : ['Nenhum lembrete.']),
+    ...(state.calendar ? ['', '## Agendas do Mac', '', ...calendarLines(state.calendar)] : []),
   ]
   return `${lines.join('\n')}\n`
 }
@@ -136,8 +158,14 @@ export function automationsMarkdown(snapshot: AutomationsSnapshot, timeZone: str
     '',
     ...(snapshot.tasks.length
       ? snapshot.tasks.map((task) => {
+          // Contrato 78: o lembrete com o id (o cartão de alterar ou apagar só aceita um destes).
+          if (task.reminder) {
+            const at = task.schedule.kind === 'once' ? task.schedule.at : task.nextRunAt
+            const state = task.lastRunAt ? `já avisou em ${when(task.lastRunAt, task.timezone)}` : task.enabled ? 'ligado' : 'desligado'
+            return `- Lembrete: ${oneLine(task.reminder.text)} · ${when(at, task.timezone)} · id: ${task.id} · só notificação, sem agente · ${state}`
+          }
           const state = task.autoPaused ? 'pausada depois de 3 falhas' : task.enabled ? 'ligada' : 'desligada'
-          const who = task.reminder ? 'lembrete (só notificação, sem agente)' : `agente ${oneLine(agentName(task.agentId))}`
+          const who = `agente ${oneLine(agentName(task.agentId))}`
           const last = task.lastStatus ? `${RUN_STATUS_LABELS[task.lastStatus]} em ${when(task.lastRunAt, task.timezone)}` : 'ainda não rodou'
           return `- ${oneLine(task.name)} · ${who} · ${describeSchedule(task.schedule, task.timezone)} · ${state} · próxima: ${when(task.nextRunAt, task.timezone)} · última: ${last}`
         })

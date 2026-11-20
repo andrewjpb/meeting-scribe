@@ -31,7 +31,10 @@
 //   com "pendente de resposta: sim", citando "[WhatsApp · <nome> · dd/mm hh:mm]"; "me lembre … <nome>" lê o estado e
 //   propõe um bloco `lap-acao` de lembrete para amanhã às 09:00 (sem hora no pedido) ligado à conversa; "responda
 //   <nome> dizendo <texto>" propõe o bloco de resposta no WhatsApp com o id da conversa do arquivo; "bloco inválido"
-//   devolve um bloco quebrado. O agente nunca executa nada: só escreve o bloco. Contrato 45: os pedidos de email
+//   devolve um bloco quebrado. O agente nunca executa nada: só escreve o bloco. Contrato 78: "aniversário" propõe o
+//   bloco `evento` (amanhã às 20:00, "Casa da Day", agenda "Pessoal"); "evento inválido", um `evento` com início ontem
+//   (o app tem de deixar como texto); "adie o lembrete <id> para [depois de] amanhã <h>h" propõe `lembrete-editar` com o
+//   id do pedido; "apague o lembrete <id>", `lembrete-apagar`. Contrato 45: os pedidos de email
 //   (`emailAnswer`): pendentes pelo `EMAILS.md`, rascunho de resposta, lembrete de um email e a busca pelas
 //   ferramentas do app (`lap-ferramenta`: `buscar_emails` e, achado só no servidor, `ler_email`). Contrato 56: "organiza
 //   … em Resolvidos" pede `listar_pastas`, depois `criar_pasta` "Resolvidos" e `mover_emails` do email do assunto pedido
@@ -135,6 +138,15 @@ function tomorrowNine() {
   const offset = -when.getTimezoneOffset()
   const two = (value) => String(Math.abs(value)).padStart(2, '0')
   return `${when.getFullYear()}-${two(when.getMonth() + 1)}-${two(when.getDate())}T09:00:00${offset >= 0 ? '+' : '-'}${two(Math.trunc(offset / 60))}:${two(offset % 60)}`
+}
+
+/** Contrato 78: daqui a `days` dias às `hour`:`minute`, em ISO 8601 com o fuso do Mac. */
+function dayAt(days, hour, minute = 0) {
+  const now = new Date()
+  const when = new Date(now.getFullYear(), now.getMonth(), now.getDate() + days, hour, minute)
+  const offset = -when.getTimezoneOffset()
+  const two = (value) => String(Math.abs(value)).padStart(2, '0')
+  return `${when.getFullYear()}-${two(when.getMonth() + 1)}-${two(when.getDate())}T${two(hour)}:${two(minute)}:00${offset >= 0 ? '+' : '-'}${two(Math.trunc(offset / 60))}:${two(offset % 60)}`
 }
 
 /** Contrato 45: as linhas do `EMAILS.md` (ou do `BUSCA-EMAILS.md`). */
@@ -301,6 +313,24 @@ async function assistantAnswer(question, cwd, read) {
   const email = await emailAnswer(question, cwd, read, fence)
   if (email !== null) return email
   if (/bloco inv[aá]lido/i.test(question)) return `Aqui vai um bloco quebrado.${fence('{"tipo": "lembrete", "quando": ')}`
+  // Contrato 78: o evento e os lembretes que já existem.
+  if (/evento inv[aá]lido/i.test(question)) return `Proponho o evento.${fence({ tipo: 'evento', titulo: 'Evento de ontem', inicio: dayAt(-1, 20) })}`
+  if (/anivers[aá]rio/i.test(question)) {
+    await read('ESTADO.md')
+    return `Montei o evento para amanhã às 20:00, com uma hora de duração. Confira e confirme no cartão.${fence({ tipo: 'evento', titulo: 'Aniversário do Jefferson', inicio: dayAt(1, 20), local: 'Casa da Day', agenda: 'Pessoal' })}`
+  }
+  const postpone = /adie o lembrete ([\w-]+)/i.exec(question)
+  if (postpone) {
+    if (has('AUTOMACOES.md')) await read('AUTOMACOES.md')
+    const hour = Number(/(\d{1,2}) ?h\b/i.exec(question)?.[1] ?? 9)
+    const days = /depois de amanh[ãa]/i.test(question) ? 2 : 1
+    return `Mudo o lembrete para ${days === 2 ? 'depois de amanhã' : 'amanhã'} às ${String(hour).padStart(2, '0')}:00. O texto continua o mesmo.${fence({ tipo: 'lembrete-editar', id: postpone[1], quando: dayAt(days, hour) })}`
+  }
+  const drop = /apague o lembrete ([\w-]+)/i.exec(question)
+  if (drop) {
+    if (has('AUTOMACOES.md')) await read('AUTOMACOES.md')
+    return `Confirme no cartão para eu apagar o lembrete.${fence({ tipo: 'lembrete-apagar', id: drop[1] })}`
+  }
   if (/pendente/i.test(question)) {
     if (!has(overviewFile)) return 'O WhatsApp não está na pasta desta conversa.'
     await read(overviewFile)
@@ -645,7 +675,8 @@ export function fakeAcpAgent({ log = () => undefined, pause = 300, mcpStatus = n
         return { stopReason: 'end_turn', usage: { totalTokens: 10, inputTokens: 5, outputTokens: 5 } }
       }
       // Contrato 21: as ferramentas MCP ("some" e "apague").
-      if (state.mcpServers.length && /\bsome\b|\bapague\b/i.test(question)) {
+      // Contrato 78: "apague o lembrete" é do Assistente, não do servidor MCP.
+      if (state.mcpServers.length && /\bsome\b|\bapague\b(?! o lembrete)/i.test(question)) {
         const server = state.mcpServers.find((entry) => /calc/i.test(entry.name)) ?? state.mcpServers[0]
         const results = []
         const call = async (tool, rawInput) => {

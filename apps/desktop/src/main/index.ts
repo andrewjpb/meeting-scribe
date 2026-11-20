@@ -6,6 +6,7 @@ import { basename, join } from 'node:path'
 import { app, BrowserWindow, clipboard, dialog, Menu, nativeImage, net, Notification, powerMonitor, safeStorage, screen, session, shell, systemPreferences, Tray, type MenuItemConstructorOptions, type NativeImage, type OpenDialogOptions, type SaveDialogOptions } from 'electron'
 import { DRIVE_FOLDER_URL_PREFIX } from '../shared/accounts'
 import { ASSEMBLYAI_DASHBOARD_URL } from '../shared/assemblyai'
+import type { ChatActionResult } from '../shared/assistant'
 import { formatRunAt, formatRunShort, type AutomationRun } from '../shared/automations'
 import { chatSourcesOf } from '../shared/chat'
 import { brandTexts, DEFAULT_BRAND_NAME } from '../shared/branding'
@@ -32,7 +33,8 @@ import { applyBrandName, applyDockIcon, type DockIconTarget } from './branding/a
 import { createBrandingService, type BrandingService, type ImageDialog } from './branding/service'
 import { registerDisplayMediaHandler } from './capture/display-media'
 import { createChatCorpus, type ChatCorpus } from './chat/corpus'
-import { createChatActions, extractActions, markEmailBatchCard, type ChatActions } from './chat/actions'
+import { cachedCalendarReads, calendarOverview, createChatActions, extractActions, markEmailBatchCard, type CachedCalendarReads, type ChatActions } from './chat/actions'
+import { createChatEventsStore } from './chat/events-store'
 import { createChatService, type ChatService } from './chat/service'
 import { AUTOMATION_RUNS_IN_SOURCE, writeSources, type AssistantState } from './chat/sources'
 import { createFileChatStore } from './chat/store'
@@ -874,6 +876,8 @@ interface AppServices {
   macCalendar: MacCalendar
   /** Contrato 62: os convites do email no Calendário do Mac (registro, estado do cartão e as gravações no clique). */
   invites: InviteService
+  /** Contrato 78: o acesso e as agendas guardados para o `ESTADO.md` do Assistente. */
+  calendarReads: CachedCalendarReads
   /** Contrato 64: o "Sugerir evento" (o Claude só atrás do canal com o token de clique próprio). */
   inviteSuggest: InviteSuggestChannels
   /** "Salvar plugin…" da aba Plugins (contrato 31). */
@@ -1298,8 +1302,18 @@ function createAppServices(userData: string): AppServices {
   // Contrato 25: as fontes do Assistente, relidas a cada pergunta. Do WhatsApp, só a exportação e a lista das
   // conversas (para o nome no cartão); o envio não chega aqui. As automações chegam pela função, depois de criadas.
   const guidePath = join(app.getAppPath(), 'resources', 'assistente', 'guia-do-app.md')
+  // Contrato 78: o acesso e as agendas do `ESTADO.md` guardados por 30 s (esquecidos no "Pedir acesso", na volta do foco
+  // à janela e quando o cartão lê outro acesso na hora).
+  const calendarReads = cachedCalendarReads(macCalendar)
+  app.on('browser-window-focus', () => calendarReads.invalidate())
   const assistantState = async (): Promise<AssistantState> => {
-    const [status, agents, tasks] = await Promise.all([automations.status(), automations.listAgents(), automations.listTasks()])
+    const [status, agents, tasks, calendar] = await Promise.all([
+      automations.status(),
+      automations.listAgents(),
+      automations.listTasks(),
+      // Contrato 78: as agendas do Calendário do Mac, só leitura (nunca pede acesso).
+      calendarOverview(calendarReads, async () => (await settings.get()).inviteCalendarId),
+    ])
     const account = google.status()
     return {
       now: Date.now(),
@@ -1312,6 +1326,7 @@ function createAppServices(userData: string): AppServices {
       automationsPaused: status.paused ? (status.pauseReason === 'limit' ? 'pausadas pelo limite diário' : 'pausadas pela pessoa') : null,
       agents: agents.agents,
       tasks,
+      calendar,
     }
   }
   const assistantSources = {
@@ -1378,6 +1393,18 @@ function createAppServices(userData: string): AppServices {
     agents: async () => (await automations.listAgents()).agents,
     meeting: async (meetingId: string) => meetings.get(meetingId),
     email: (ref: string) => emailTools.find(ref),
+    // Contrato 78: o acesso e as agendas do Calendário do Mac, lidos na hora (só leitura: montar o cartão não grava nada), e
+    // os lembretes. Acesso diferente do guardado para o `ESTADO.md` esquece o que estava guardado.
+    calendar: {
+      status: async () => {
+        const outcome = await macCalendar.status()
+        calendarReads.observe(outcome)
+        return outcome
+      },
+      calendars: () => macCalendar.calendars(),
+    },
+    preferredCalendar: async () => (await settings.get()).inviteCalendarId,
+    tasks: () => automations.listTasks(),
     now: Date.now,
     timeZone,
   }
@@ -1706,7 +1733,17 @@ function createAppServices(userData: string): AppServices {
   })
   navegadorServer = navegador
   // Contrato 25: o clique nos cartões do Assistente. O lembrete é a tarefa "uma vez" sem agente das Automações.
-  const chatActions = createChatActions({ store: chatStore, createReminder: (input) => automations.createReminder(input), timeZone })
+  // Contrato 78: o evento no Calendário do Mac (gravado só no clique, registrado em `chat-events.json`) e alterar ou apagar
+  // um lembrete das Automações.
+  const chatActions = createChatActions({
+    store: chatStore,
+    createReminder: (input) => automations.createReminder(input),
+    timeZone,
+    calendar: macCalendar,
+    events: createChatEventsStore(userData, devLog),
+    reminders: { list: () => automations.listTasks(), update: (id, change) => automations.updateReminder(id, change), remove: (id) => automations.deleteTask({ id }) },
+    ...devLog,
+  })
   return {
     settings: createSettingsService({ settings, secrets, gateway, mic }),
     meetings,
@@ -1742,6 +1779,7 @@ function createAppServices(userData: string): AppServices {
     micWatch,
     macCalendar,
     invites: inviteService,
+    calendarReads,
     inviteSuggest,
     pluginSave,
     mcp,
@@ -2037,6 +2075,9 @@ function registerIpc(services: AppServices): void {
   // Assistente (contrato 25): o cartão só grava o clique; o envio segue só por `scribe:whatsapp-send`.
   handle('scribe:chat-action-reminder', appOrigin, (_event, request) => chatActions.reminder(request))
   handle('scribe:chat-action-state', appOrigin, (_event, request) => chatActions.setState(request))
+  // Contrato 78: o evento só é gravado aqui, no clique em "Pôr na agenda"; o lembrete só muda ou sai no clique do cartão.
+  handle('scribe:chat-action-event', appOrigin, (_event, request) => chatActions.event(request).catch((): ChatActionResult => ({ ok: false, error: 'invalid' })))
+  handle('scribe:chat-action-reminder-change', appOrigin, (_event, request) => chatActions.reminderChange(request).catch((): ChatActionResult => ({ ok: false, error: 'invalid' })))
   // Contrato 21: o cartão de aprovação de uma ferramenta MCP e a aba "Conexões". Nenhum segredo volta por aqui.
   handle('scribe:chat-approval', appOrigin, (_event, request) => chat.answerApproval(request))
   handle('scribe:mcp-chat-servers', appOrigin, () => mcp.chatServers())
@@ -2175,7 +2216,13 @@ function registerIpc(services: AppServices): void {
   handle('scribe:invite-update', appOrigin, (_event, request) => invites.update(request).catch(() => inviteFailed))
   handle('scribe:invite-remove', appOrigin, (_event, request) => invites.remove(request).catch(() => inviteFailed))
   handle('scribe:invite-calendars', appOrigin, () => invites.calendars().catch(() => ({ ok: false, error: 'unavailable', reason: 'failed' }) as const))
-  handle('scribe:invite-request-access', appOrigin, () => invites.requestAccess().catch(() => ({ ok: false, error: 'unavailable', reason: 'failed' }) as const))
+  // Contrato 78: depois do pedido, o `ESTADO.md` do Assistente lê o acesso de novo.
+  handle('scribe:invite-request-access', appOrigin, () =>
+    invites
+      .requestAccess()
+      .catch(() => ({ ok: false, error: 'unavailable', reason: 'failed' }) as const)
+      .finally(() => services.calendarReads.invalidate()),
+  )
   handle('scribe:invite-open-ics', appOrigin, (_event, request) => invites.openIcs(request).catch(() => ({ ok: false, error: 'failed' }) as const))
   // Contrato 64: o "Sugerir evento" só com o token de clique próprio; gravar a sugestão é local e só no clique do cartão.
   handle('scribe:invite-suggest', appOrigin, (event, request) => inviteSuggest.suggest(event.sender.id, request).catch(() => ({ ok: false, error: 'failed' }) as const))

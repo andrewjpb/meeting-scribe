@@ -7,16 +7,51 @@
 // leu do cache quando a resposta terminou (nada é buscado de novo ao desenhar) e o clique abre a tela Email na
 // mensagem; o rascunho de resposta só sai pelo `window.__scribeApi.emailSend` (o token de clique do contrato 42), sem
 // diálogo, e vira "Enviado às hh:mm".
-import { Bell, Check, ExternalLink, Globe, ListChecks, Mail, MessageSquare, Pencil, Send, X } from 'lucide-react'
-import { useState } from 'react'
+// Contrato 78: o cartão de evento (só grava no Calendário do Mac no clique em "Pôr na agenda"; o "Editar" muda só o
+// cartão) e os cartões de alterar e apagar um lembrete, cada um pelo seu canal no main.
+import {
+  ArrowRight,
+  Bell,
+  Calendar,
+  CalendarCheck,
+  CalendarPlus,
+  Check,
+  ChevronDown,
+  CircleAlert,
+  Clock,
+  ExternalLink,
+  Globe,
+  ListChecks,
+  Mail,
+  MapPin,
+  MessageSquare,
+  Pencil,
+  RotateCcw,
+  Send,
+  Settings,
+  Trash2,
+  X,
+} from 'lucide-react'
+import { useEffect, useState, type KeyboardEvent } from 'react'
 import { useNavigate } from 'react-router'
 import {
   emailSentText,
+  EVENT_LOCATION_MAX,
+  EVENT_NOTES_MAX,
+  EVENT_TITLE_MAX,
+  eventWhen,
   reminderTitle,
+  reminderWhen,
   REMINDER_TEXT_MAX,
   sentText,
   type ChatAction,
+  type ChatActionCalendar,
+  type ChatActionEvent,
+  type ChatActionEventFields,
   type ChatActionRef,
+  type ChatActionReminderDelete,
+  type ChatActionReminderEdit,
+  type ChatCalendarAccess,
   type EmailListAction,
   type EmailReplyAction,
   type OpenAction,
@@ -30,8 +65,10 @@ import { emailPath, meetingPath, ROUTE_PATHS, settingsPath, isSettingsTab, type 
 import { WHATSAPP_SEND_TEXT_MAX } from '@shared/whatsapp'
 import { Button } from '../../design/Button'
 import { Icon } from '../../design/Icon'
+import { Note } from '../../design/Note'
 import { useAutomations, type AutomationsTab } from '../agents/automationsStore'
 import { emailTimeLabel, sendErrorText } from '../email/format'
+import { MENU_ITEM, useInlineMenu } from '../meetings/menu'
 import { macTimeZone } from '../schedules/TaskForm'
 import { QUIET_BUTTON } from './ChatMessages'
 import { useChat } from './chatStore'
@@ -522,6 +559,594 @@ function EmailReplyCard({ action, actionRef }: { action: EmailReplyAction; actio
   )
 }
 
+// --- Contrato 78: evento no Calendário do Mac e lembretes ---------------------------------------------------------
+
+const EVENT_ERRORS: Record<string, string> = {
+  past: 'Esse dia já passou. Escolha hoje ou um dia depois.',
+  done: 'Este cartão já foi usado.',
+  missing: 'Esta conversa não existe mais.',
+  invalid: 'Confira o título, a data e o horário do evento.',
+}
+const REMINDER_CHANGE_ERRORS: Record<string, string> = { ...REMINDER_ERRORS, invalid: 'Confira a data e o texto do lembrete.' }
+
+/** ISO -> "AAAA-MM-DD" e "hh:mm", na hora local. */
+function localParts(iso: string): { date: string; time: string } {
+  const value = localInput(iso)
+  return { date: value.slice(0, 10), time: value.slice(11, 16) }
+}
+
+/** "AAAA-MM-DD" + "hh:mm" na hora local -> ISO; `null` se não é uma data. */
+function isoOf(date: string, time: string): string | null {
+  const at = new Date(`${date}T${time || '00:00'}`)
+  return Number.isNaN(at.getTime()) ? null : at.toISOString()
+}
+
+/** O dia seguinte de "AAAA-MM-DD", à meia-noite local, em ISO. */
+function nextDayIso(date: string): string | null {
+  const [year = 0, month = 1, day = 1] = date.split('-').map(Number)
+  const at = new Date(year, month - 1, day + 1)
+  return Number.isNaN(at.getTime()) ? null : at.toISOString()
+}
+
+/** O erro do cartão (`failed`): a frase do main em --rec. */
+function CardError({ text }: { text: string }) {
+  return (
+    <p role="alert" data-chat-action-error className="flex items-start gap-1.5 text-12 text-rec">
+      <Icon icon={CircleAlert} size={14} className="mt-px shrink-0" />
+      <span>{text}</span>
+    </p>
+  )
+}
+
+/** "Ver em Automações", na aba Tarefas agendadas. */
+function OpenTasksLink() {
+  const navigate = useNavigate()
+  return (
+    <button
+      type="button"
+      data-action="chat-action-open-tasks"
+      onClick={() => {
+        useAutomations.getState().setTab('tarefas')
+        void navigate(ROUTE_PATHS.automacoes)
+      }}
+      className="text-12 text-accent underline decoration-1 underline-offset-3 hover:text-title"
+    >
+      Ver em Automações
+    </button>
+  )
+}
+
+/** O ponto com a cor que o Mac dá à agenda (redondo: 8 px com o raio de 4 px). A cor vem do Calendário, não do tema. */
+function CalendarDot({ color }: { color: string | null }) {
+  if (!color) return <span aria-hidden="true" className="size-2 shrink-0 rounded-[var(--radius-control)] border border-line-strong" />
+  return <span aria-hidden="true" className="size-2 shrink-0 rounded-[var(--radius-control)]" style={{ backgroundColor: color }} />
+}
+
+/** O seletor de agenda do cartão de evento: as graváveis, com o ponto da cor e a conta. */
+function EventCalendarSelect({ calendars, value, onChange, id }: { calendars: readonly ChatActionCalendar[]; value: string | null; onChange: (id: string) => void; id: string }) {
+  const [open, setOpen] = useState(false)
+  const close = (): void => setOpen(false)
+  const { button, menu, onBlur, onKeyDown } = useInlineMenu(open, close)
+  const current = calendars.find((item) => item.id === value) ?? null
+
+  useEffect(() => {
+    if (!open) return
+    const options = [...(menu.current?.querySelectorAll<HTMLButtonElement>('[role="option"]') ?? [])]
+    ;(options.find((item) => item.getAttribute('aria-selected') === 'true') ?? options[0])?.focus()
+  }, [open, menu])
+
+  const onListKey = (event: KeyboardEvent<HTMLDivElement>): void => {
+    if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return
+    const options = [...(menu.current?.querySelectorAll<HTMLButtonElement>('[role="option"]') ?? [])]
+    if (!options.length) return
+    event.preventDefault()
+    const at = options.indexOf(document.activeElement as HTMLButtonElement)
+    const next = event.key === 'Home' ? 0 : event.key === 'End' ? options.length - 1 : event.key === 'ArrowDown' ? Math.min(at + 1, options.length - 1) : Math.max(at - 1, 0)
+    options[next]?.focus()
+  }
+
+  const pick = (calendarId: string): void => {
+    close()
+    button.current?.focus()
+    onChange(calendarId)
+  }
+
+  return (
+    <div data-chat-event-calendar-picker onBlur={onBlur} onKeyDown={open ? onKeyDown : undefined} className="relative min-w-0">
+      <button
+        ref={button}
+        id={id}
+        type="button"
+        data-chat-event-calendar={current?.id ?? ''}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        aria-label={current ? `Agenda: ${current.title} (${current.source})` : 'Agenda: escolher'}
+        onClick={() => setOpen(!open)}
+        onKeyDown={(event) => {
+          if (event.key === 'ArrowDown' && !open) {
+            event.preventDefault()
+            setOpen(true)
+          }
+        }}
+        className={`no-drag inline-flex h-8 max-w-full min-w-0 items-center gap-2 rounded-[var(--radius-control)] border border-line-strong bg-bg pr-2 pl-2.5 text-13 whitespace-nowrap text-text transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-bg-sunken ${open ? 'bg-bg-sunken' : ''}`}
+      >
+        {current ? (
+          <>
+            <CalendarDot color={current.color} />
+            <span className="truncate">
+              {current.title} ({current.source})
+            </span>
+          </>
+        ) : (
+          <span className="truncate text-text-muted">Escolher agenda</span>
+        )}
+        <Icon icon={ChevronDown} size={14} className="shrink-0 text-text-muted" />
+      </button>
+      {open && (
+        <div
+          ref={menu}
+          role="listbox"
+          aria-label="Agenda"
+          data-chat-event-calendar-menu
+          onKeyDown={onListKey}
+          className="absolute top-full left-0 z-10 mt-1 flex w-60 max-w-[80vw] flex-col overflow-hidden rounded-[var(--radius-panel)] border border-line-strong bg-bg-raised p-1"
+        >
+          {calendars.map((calendar) => {
+            const selected = calendar.id === value
+            return (
+              <button
+                key={calendar.id}
+                type="button"
+                role="option"
+                tabIndex={-1}
+                aria-selected={selected}
+                data-chat-event-calendar-option={calendar.id}
+                onClick={() => pick(calendar.id)}
+                className={`${MENU_ITEM} gap-2 rounded-[var(--radius-control)] px-2 ${selected ? 'bg-bg-sunken font-medium text-title' : 'text-text'}`}
+              >
+                <CalendarDot color={calendar.color} />
+                <span className="truncate">{calendar.title}</span>
+                <span className="ml-auto shrink-0 text-12 font-normal text-text-faint">{calendar.source}</span>
+              </button>
+            )
+          })}
+        </div>
+      )}
+    </div>
+  )
+}
+
+type EventShown = Pick<ChatActionEvent, 'title' | 'start' | 'end' | 'allDay' | 'location' | 'notes'>
+
+/** O formulário do "Editar" do evento: os campos ficam aqui até "Salvar" (que só muda o cartão). */
+interface EventForm {
+  title: string
+  date: string
+  from: string
+  /** O dia do fim (o evento pode passar da meia-noite); no dia inteiro, não vale. */
+  endDate: string
+  to: string
+  allDay: boolean
+  location: string
+  notes: string
+}
+
+function formOf(shown: EventShown): EventForm {
+  const start = localParts(shown.start)
+  const end = localParts(shown.end)
+  return {
+    title: shown.title,
+    date: start.date,
+    from: shown.allDay ? '09:00' : start.time,
+    endDate: shown.allDay ? start.date : end.date,
+    to: shown.allDay ? '10:00' : end.time,
+    allDay: shown.allDay,
+    location: shown.location ?? '',
+    notes: shown.notes ?? '',
+  }
+}
+
+/** O formulário de volta ao cartão; `null` (com a razão) se não vale. */
+function shownOf(form: EventForm): EventShown | string {
+  const title = form.title.replace(/\s+/g, ' ').trim()
+  if (!title) return 'Escreva o título do evento.'
+  const start = isoOf(form.date, form.allDay ? '00:00' : form.from)
+  const end = form.allDay ? nextDayIso(form.date) : isoOf(form.endDate || form.date, form.to)
+  if (!start || !end) return 'Escolha a data e o horário.'
+  const today = new Date()
+  if (Date.parse(start) < new Date(today.getFullYear(), today.getMonth(), today.getDate()).getTime()) return EVENT_ERRORS['past'] ?? ''
+  if (Date.parse(end) <= Date.parse(start)) return 'O fim tem que ser depois do início.'
+  return { title: title.slice(0, EVENT_TITLE_MAX), start, end, allDay: form.allDay, location: form.location.trim() || null, notes: form.notes.trim() || null }
+}
+
+const ACCESS_OF: Readonly<Record<string, ChatCalendarAccess>> = { full: 'full', notDetermined: 'not-determined', denied: 'denied', restricted: 'denied', writeOnly: 'denied' }
+
+/**
+ * Contrato 78 (R1, quadros 02 e 03): o evento proposto, com a agenda num seletor. "Pôr na agenda" grava pelo main, na
+ * agenda escolhida, com o que o "Editar" mudou; sem acesso, o aviso e "Pedir acesso" (ou "Abrir Ajustes", negado), e o
+ * botão principal desabilitado até liberar. O erro do Calendário vira `failed`, com "Tentar de novo".
+ */
+function EventCard({ action, actionRef }: { action: ChatActionEvent; actionRef: ChatActionRef }) {
+  const timeZone = macTimeZone()
+  const [shown, setShown] = useState<EventShown>(action)
+  const [edited, setEdited] = useState(false)
+  const [form, setForm] = useState<EventForm | null>(null)
+  const [formError, setFormError] = useState<string | null>(null)
+  // Depois do "Pedir acesso", o cartão relê o acesso e as agendas (o que foi gravado com a resposta não muda).
+  const [calendarState, setCalendarState] = useState<{ access: ChatCalendarAccess; calendars: ChatActionCalendar[] }>({ access: action.access, calendars: action.calendars })
+  const [calendarId, setCalendarId] = useState<string | null>(action.calendarId)
+  const [busy, setBusy] = useState(false)
+  const [asking, setAsking] = useState(false)
+  const [failure, setFailure] = useState<string | null>(null)
+  const open = action.status === 'proposed' || action.status === 'failed'
+  const { access, calendars } = calendarState
+  const full = access === 'full'
+  const view: EventShown = open ? shown : action
+
+  const create = async (): Promise<void> => {
+    if (busy || !calendarId) return
+    setBusy(true)
+    setFailure(null)
+    const fields: ChatActionEventFields | undefined = edited ? { title: shown.title, start: shown.start, end: shown.end, allDay: shown.allDay, location: shown.location, notes: shown.notes } : undefined
+    const result = await useChat.getState().createEvent(actionRef, calendarId, fields)
+    setBusy(false)
+    if (!result.ok) setFailure(EVENT_ERRORS[result.error] ?? EVENT_ERRORS['invalid'] ?? '')
+  }
+
+  const requestAccess = (): void => {
+    if (asking) return
+    setAsking(true)
+    void window.__scribeApi
+      .invoke('scribe:invite-request-access')
+      .catch(() => null)
+      .then(() => window.__scribeApi.invoke('scribe:invite-calendars'))
+      .then((result) => {
+        if (!result.ok) {
+          setCalendarState({ access: 'unavailable', calendars: [] })
+          return
+        }
+        const next = ACCESS_OF[result.access] ?? 'denied'
+        // As agendas do canal dos convites vêm sem cor: o ponto fica só com o contorno.
+        const list: ChatActionCalendar[] = next === 'full' ? result.calendars.map((item) => ({ id: item.id, title: item.title, source: item.sourceTitle, color: null, isDefault: item.isDefault })) : []
+        setCalendarState({ access: next, calendars: list })
+        setCalendarId((current) => (current && list.some((item) => item.id === current) ? current : (result.defaultId ?? list[0]?.id ?? null)))
+      })
+      .catch(() => setCalendarState({ access: 'unavailable', calendars: [] }))
+      .finally(() => setAsking(false))
+  }
+
+  const save = (): void => {
+    if (!form) return
+    const next = shownOf(form)
+    if (typeof next === 'string') {
+      setFormError(next)
+      return
+    }
+    setShown(next)
+    setEdited(true)
+    setForm(null)
+    setFormError(null)
+  }
+
+  const chosen = calendars.find((item) => item.id === calendarId) ?? null
+  const accessNote =
+    access === 'not-determined'
+      ? 'O app ainda não tem acesso ao Calendário.'
+      : access === 'denied'
+        ? 'O acesso ao Calendário foi negado. Libere o app em Ajustes do Sistema › Privacidade e Segurança › Calendários.'
+        : access === 'unavailable'
+          ? 'O Calendário do Mac não está disponível agora.'
+          : calendars.length === 0
+            ? 'Nenhuma agenda gravável no Calendário do Mac.'
+            : null
+  const field = `${FIELD} h-8`
+
+  return (
+    <div data-chat-action="evento" data-chat-action-status={action.status} {...(form ? { 'data-editing': '' } : {})} className={CARD}>
+      <p className="flex items-start gap-2 text-13 font-medium text-title">
+        <Icon icon={Calendar} size={14} className="mt-0.5 shrink-0 text-text-muted" />
+        <span data-chat-action-title>{form ? shown.title : view.title}</span>
+      </p>
+      {form ? (
+        <div className="flex flex-col gap-2.5">
+          <label className="flex flex-col gap-1 text-12 text-text-muted">
+            Título
+            <input type="text" data-chat-event-field="title" value={form.title} maxLength={EVENT_TITLE_MAX} onChange={(event) => setForm({ ...form, title: event.target.value })} className={field} />
+          </label>
+          <div className="flex flex-wrap gap-2">
+            <label className="flex w-40 flex-col gap-1 text-12 text-text-muted">
+              Data
+              <input
+                type="date"
+                data-chat-event-field="date"
+                value={form.date}
+                // O fim no mesmo dia acompanha a troca do dia do início.
+                onChange={(event) => setForm({ ...form, date: event.target.value, endDate: form.endDate === form.date ? event.target.value : form.endDate })}
+                className={field}
+              />
+            </label>
+            {!form.allDay && (
+              <>
+                <label className="flex w-24 flex-col gap-1 text-12 text-text-muted">
+                  Início
+                  <input type="time" data-chat-event-field="from" value={form.from} onChange={(event) => setForm({ ...form, from: event.target.value })} className={field} />
+                </label>
+                <label className="flex w-40 flex-col gap-1 text-12 text-text-muted">
+                  Data do fim
+                  <input type="date" data-chat-event-field="endDate" value={form.endDate} onChange={(event) => setForm({ ...form, endDate: event.target.value })} className={field} />
+                </label>
+                <label className="flex w-24 flex-col gap-1 text-12 text-text-muted">
+                  Fim
+                  <input type="time" data-chat-event-field="to" value={form.to} onChange={(event) => setForm({ ...form, to: event.target.value })} className={field} />
+                </label>
+              </>
+            )}
+          </div>
+          <label className="flex h-6 items-center gap-2 text-13 text-text">
+            <input type="checkbox" data-chat-event-field="allDay" checked={form.allDay} onChange={(event) => setForm({ ...form, allDay: event.target.checked })} className="no-drag size-4 shrink-0 accent-accent" />
+            Dia inteiro
+          </label>
+          <label className="flex flex-col gap-1 text-12 text-text-muted">
+            Local
+            <input type="text" data-chat-event-field="location" value={form.location} maxLength={EVENT_LOCATION_MAX} onChange={(event) => setForm({ ...form, location: event.target.value })} className={field} />
+          </label>
+          <label className="flex flex-col gap-1 text-12 text-text-muted">
+            Notas
+            <textarea
+              data-chat-event-field="notes"
+              value={form.notes}
+              rows={2}
+              maxLength={EVENT_NOTES_MAX}
+              placeholder="Opcional"
+              onChange={(event) => setForm({ ...form, notes: event.target.value })}
+              className={`${FIELD} min-h-14 resize-y py-1.5 placeholder:text-text-faint`}
+            />
+          </label>
+          {full && calendars.length > 0 && (
+            <div className="flex flex-col gap-1 text-12 text-text-muted">
+              <label htmlFor={`chat-event-calendar-edit-${action.id}`}>Agenda</label>
+              <div className="flex">
+                <EventCalendarSelect id={`chat-event-calendar-edit-${action.id}`} calendars={calendars} value={calendarId} onChange={setCalendarId} />
+              </div>
+            </div>
+          )}
+          {formError && (
+            <p role="alert" data-chat-event-form-error className="text-12 text-rec">
+              {formError}
+            </p>
+          )}
+          <div className="flex flex-wrap items-center gap-2">
+            <Button action="chat-action-event-save" icon={Check} onClick={save}>
+              Salvar
+            </Button>
+            <Button
+              action="chat-action-event-cancel"
+              variant="secondary"
+              onClick={() => {
+                setForm(null)
+                setFormError(null)
+              }}
+            >
+              Cancelar
+            </Button>
+          </div>
+        </div>
+      ) : (
+        <>
+          <div className="flex flex-col gap-0.5 pl-[22px]">
+            {(open || action.status === 'dismissed') && (
+              <span data-chat-event-when className="flex items-center gap-2 text-13 text-text tabular">
+                <Icon icon={Clock} size={14} className="shrink-0 text-text-faint" />
+                {eventWhen(view, timeZone)}
+              </span>
+            )}
+            {view.location && (
+              <span data-chat-event-location className={`flex items-center gap-2 text-13 ${open ? 'text-text' : 'text-text-muted'}`}>
+                <Icon icon={MapPin} size={14} className="shrink-0 text-text-faint" />
+                <span className="min-w-0 truncate">{view.location}</span>
+              </span>
+            )}
+          </div>
+          {open && full && calendars.length > 0 && (
+            <div className="flex items-center gap-2 pl-[22px]">
+              <label htmlFor={`chat-event-calendar-${action.id}`} className="text-12 text-text-muted">
+                Agenda
+              </label>
+              <EventCalendarSelect id={`chat-event-calendar-${action.id}`} calendars={calendars} value={calendarId} onChange={setCalendarId} />
+            </div>
+          )}
+          {open && accessNote && (
+            <Note id="chat-event-calendar-access" icon={CalendarCheck} role="status">
+              {accessNote}
+            </Note>
+          )}
+          {action.status === 'failed' && action.error && <CardError text={action.error} />}
+          {open ? (
+            <div className="flex flex-wrap items-center gap-2">
+              <Button action="chat-action-event-create" icon={action.status === 'failed' ? RotateCcw : CalendarPlus} onClick={() => void create()} disabled={busy || !full || !chosen}>
+                {busy ? 'Gravando…' : action.status === 'failed' ? 'Tentar de novo' : 'Pôr na agenda'}
+              </Button>
+              {full ? (
+                <Button
+                  action="chat-action-event-edit"
+                  variant="secondary"
+                  icon={Pencil}
+                  onClick={() => {
+                    setForm(formOf(shown))
+                    setFailure(null)
+                  }}
+                >
+                  Editar
+                </Button>
+              ) : access === 'not-determined' ? (
+                <Button action="chat-action-calendar-access" variant="secondary" icon={CalendarCheck} disabled={asking} onClick={requestAccess}>
+                  Pedir acesso
+                </Button>
+              ) : access === 'denied' ? (
+                <Button action="chat-action-calendar-settings" variant="secondary" icon={Settings} onClick={() => window.__scribeApi.send('scribe:open-privacy-settings', 'calendars')}>
+                  Abrir Ajustes
+                </Button>
+              ) : null}
+              <DismissButton actionRef={actionRef} disabled={busy} />
+            </div>
+          ) : (
+            <Outcome action={action} />
+          )}
+        </>
+      )}
+      {failure && (
+        <p role="alert" data-chat-action-failure className="text-12 text-rec">
+          {failure}
+        </p>
+      )}
+    </div>
+  )
+}
+
+/**
+ * Contrato 78 (R2, quadro 04): alterar um lembrete. O texto atual e a hora antes → depois; "Salvar" aplica direto, e o
+ * "Editar" abre a data, a hora e o texto no cartão. O lembrete que já disparou ou foi apagado vira `failed`.
+ */
+function ReminderEditCard({ action, actionRef }: { action: ChatActionReminderEdit; actionRef: ChatActionRef }) {
+  const timeZone = macTimeZone()
+  const [editing, setEditing] = useState(false)
+  const [when, setWhen] = useState(() => localInput(action.at ?? action.currentAt))
+  const [text, setText] = useState(action.text ?? action.currentText)
+  const [busy, setBusy] = useState(false)
+  const [failure, setFailure] = useState<string | null>(null)
+  const proposed = action.status === 'proposed'
+  const editedAt = editing && when ? new Date(when) : null
+  const nextAt = editedAt && !Number.isNaN(editedAt.getTime()) ? editedAt.toISOString() : (action.at ?? action.currentAt)
+  const nextText = editing ? text.replace(/\s+/g, ' ').trim() : (action.text ?? action.currentText)
+
+  const save = async (): Promise<void> => {
+    if (busy) return
+    setBusy(true)
+    setFailure(null)
+    const result = await useChat.getState().changeReminder(actionRef, 'update', editing ? { at: nextAt, text: nextText } : {})
+    setBusy(false)
+    if (!result.ok) setFailure(REMINDER_CHANGE_ERRORS[result.error] ?? REMINDER_CHANGE_ERRORS['invalid'] ?? '')
+  }
+
+  const timeChanged = Date.parse(nextAt) !== Date.parse(action.currentAt)
+  const textChanged = nextText !== action.currentText
+
+  return (
+    <div data-chat-action="lembrete-editar" data-chat-action-status={action.status} {...(editing ? { 'data-editing': '' } : {})} className={CARD}>
+      <p className="flex items-start gap-2 text-13 font-medium text-title">
+        <Icon icon={Bell} size={14} className="mt-0.5 shrink-0 text-text-muted" />
+        <span data-chat-action-title>Lembrete: {action.currentText}</span>
+      </p>
+      {proposed && (
+        <div data-chat-reminder-change className="flex flex-col gap-0.5 pl-[22px]">
+          <span data-chat-reminder-change-when className="flex flex-wrap items-center gap-2 text-13 tabular">
+            <span className={timeChanged ? 'text-text-muted' : 'text-text'}>{reminderWhen(action.currentAt, timeZone)}</span>
+            {timeChanged && (
+              <>
+                <Icon icon={ArrowRight} size={14} className="shrink-0 text-text-faint" />
+                <span className="font-medium text-title">{reminderWhen(nextAt, timeZone)}</span>
+              </>
+            )}
+          </span>
+          {textChanged && nextText && (
+            <span data-chat-reminder-change-text className="flex flex-wrap items-center gap-2 text-13">
+              <span className="text-text-muted">“{action.currentText}”</span>
+              <Icon icon={ArrowRight} size={14} className="shrink-0 text-text-faint" />
+              <span className="font-medium text-title">“{nextText}”</span>
+            </span>
+          )}
+        </div>
+      )}
+      {proposed && editing && (
+        <div className="flex flex-col gap-2.5">
+          <label className="flex flex-col gap-1 text-12 text-text-muted">
+            Data e hora
+            <input type="datetime-local" data-chat-action-when value={when} onChange={(event) => setWhen(event.target.value)} className={`${FIELD} h-8 w-56`} />
+          </label>
+          <label className="flex flex-col gap-1 text-12 text-text-muted">
+            Texto
+            <input type="text" data-chat-action-text value={text} maxLength={REMINDER_TEXT_MAX} onChange={(event) => setText(event.target.value)} className={`${FIELD} h-8`} />
+          </label>
+        </div>
+      )}
+      {proposed ? (
+        <div className="flex flex-wrap items-center gap-2">
+          <Button action="chat-action-reminder-save" icon={Check} onClick={() => void save()} disabled={busy || (editing && (!when || !nextText))}>
+            Salvar
+          </Button>
+          {!editing && (
+            <Button action="chat-action-edit" variant="secondary" icon={Pencil} onClick={() => setEditing(true)}>
+              Editar
+            </Button>
+          )}
+          <DismissButton actionRef={actionRef} disabled={busy} />
+        </div>
+      ) : (
+        <>
+          {action.status === 'failed' && action.error && <CardError text={action.error} />}
+          <div className="flex flex-wrap items-center gap-3">
+            {action.status !== 'failed' && <Outcome action={action} />}
+            {action.status !== 'dismissed' && <OpenTasksLink />}
+          </div>
+        </>
+      )}
+      {failure && (
+        <p role="alert" data-chat-action-failure className="text-12 text-rec">
+          {failure}
+        </p>
+      )}
+    </div>
+  )
+}
+
+/** Contrato 78 (R2, quadro 05): apagar um lembrete, com o botão de perigo. O que já disparou ou sumiu vira `failed`. */
+function ReminderDeleteCard({ action, actionRef }: { action: ChatActionReminderDelete; actionRef: ChatActionRef }) {
+  const timeZone = macTimeZone()
+  const [busy, setBusy] = useState(false)
+  const [failure, setFailure] = useState<string | null>(null)
+
+  const remove = async (): Promise<void> => {
+    if (busy) return
+    setBusy(true)
+    setFailure(null)
+    const result = await useChat.getState().changeReminder(actionRef, 'delete')
+    setBusy(false)
+    if (!result.ok) setFailure(REMINDER_CHANGE_ERRORS[result.error] ?? REMINDER_CHANGE_ERRORS['invalid'] ?? '')
+  }
+
+  return (
+    <div data-chat-action="lembrete-apagar" data-chat-action-status={action.status} className={CARD}>
+      <p className="flex items-start gap-2 text-13 font-medium text-title">
+        <Icon icon={Trash2} size={14} className="mt-0.5 shrink-0 text-text-muted" />
+        <span data-chat-action-title>
+          Apagar o lembrete “{action.text}” de {reminderWhen(action.at, timeZone)}?
+        </span>
+      </p>
+      {action.status === 'proposed' ? (
+        <div className="flex flex-wrap items-center gap-2">
+          <Button action="chat-action-reminder-delete" variant="danger" icon={Trash2} onClick={() => void remove()} disabled={busy}>
+            Apagar lembrete
+          </Button>
+          <DismissButton actionRef={actionRef} disabled={busy} />
+        </div>
+      ) : (
+        <>
+          {action.status === 'failed' && action.error && <CardError text={action.error} />}
+          <div className="flex flex-wrap items-center gap-3">
+            {action.status !== 'failed' && <Outcome action={action} />}
+            {action.status !== 'dismissed' && <OpenTasksLink />}
+          </div>
+        </>
+      )}
+      {failure && (
+        <p role="alert" data-chat-action-failure className="text-12 text-rec">
+          {failure}
+        </p>
+      )}
+    </div>
+  )
+}
+
 /** O cartão de uma ação, pelo tipo. */
 function ActionCard({ action, actionRef, choice }: { action: ChatAction; actionRef: ChatActionRef; choice: boolean }) {
   if (action.kind === 'lembrete') return <ReminderCard action={action} actionRef={actionRef} />
@@ -531,6 +1156,10 @@ function ActionCard({ action, actionRef, choice }: { action: ChatAction; actionR
   if (action.kind === 'email-resposta') return <EmailReplyCard action={action} actionRef={actionRef} />
   // Contrato 56: o cartão do lote que o Assistente moveu (`EmailBatchCard.tsx`).
   if (action.kind === 'email-lote') return <EmailBatchCard action={action} />
+  // Contrato 78.
+  if (action.kind === 'evento') return <EventCard action={action} actionRef={actionRef} />
+  if (action.kind === 'lembrete-editar') return <ReminderEditCard action={action} actionRef={actionRef} />
+  if (action.kind === 'lembrete-apagar') return <ReminderDeleteCard action={action} actionRef={actionRef} />
   return <OpenCard action={action} />
 }
 

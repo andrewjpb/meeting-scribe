@@ -6,13 +6,16 @@ import { copyFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { phoneOfChatId, reminderTitle, withoutActionBlocks, withoutPendingActions, type ChatAction } from '../src/shared/assistant'
+import { eventWhen, phoneOfChatId, REMINDER_GONE_TEXT, reminderTitle, withoutActionBlocks, withoutPendingActions, type ChatAction, type ChatActionEvent } from '../src/shared/assistant'
 import type { AutomationNotice } from '../src/main/schedules/service'
 import { createAutomationsService } from '../src/main/schedules/service'
 import { createFileRunsStore, createFileSchedulesStore, SCHEDULE_RUNS_DIR } from '../src/main/schedules/store'
 import { createFileAgentsStore } from '../src/main/agents/store'
 import { applyOutput } from '../src/main/schedules/outputs'
-import { actionsHistory, createChatActions, extractActions, type ActionResolver } from '../src/main/chat/actions'
+import { actionsHistory, cachedCalendarReads, CALENDAR_READS_TTL_MS, createChatActions, extractActions, type ActionResolver } from '../src/main/chat/actions'
+import { createChatEventsStore } from '../src/main/chat/events-store'
+import type { MacCalendar } from '../src/main/mac-calendar/process'
+import type { MacCalendarCalendar, MacCalendarCreateArgs, MacCalendarError, MacCalendarEvent } from '../src/main/mac-calendar/protocol'
 import { CHAT_INDEX_FILE, CHAT_SCOPE_DIR, createChatCorpus } from '../src/main/chat/corpus'
 import { createChatService } from '../src/main/chat/service'
 import { AUTOMATIONS_FILE, automationsMarkdown, GUIDE_FILE, guideMarkdown, STATE_FILE, stateMarkdown, writeSources, type AssistantSourcesDeps } from '../src/main/chat/sources'
@@ -205,7 +208,8 @@ describe('cartões: só com o clique, uma vez só (CA3, CA5)', () => {
 
   it('os canais novos (chat-action-*) são recusados com o app bloqueado', () => {
     const channels = INVOKE_CHANNELS.filter((channel) => channel.startsWith('scribe:chat-action-'))
-    expect(channels.sort()).toEqual(['scribe:chat-action-reminder', 'scribe:chat-action-state'])
+    // Contrato 78: o evento no Calendário e alterar ou apagar um lembrete.
+    expect(channels.sort()).toEqual(['scribe:chat-action-event', 'scribe:chat-action-reminder', 'scribe:chat-action-reminder-change', 'scribe:chat-action-state'])
     for (const channel of channels) expect(WHEN_LOCKED[channel]).toBe('refused')
     // Nenhum caminho novo de envio: o WhatsApp continua só com o `whatsapp-send` e, no contrato 39, o anexo pelo mesmo
     // guarda do clique (`whatsapp-send-media`). Contrato 42: o email entra com o `email-send`, também só com o clique.
@@ -332,7 +336,7 @@ describe('fontes do app (CA2)', () => {
       whatsapp: 'Conectado como Andrea (+55 11 90000-0000)',
       automationsPaused: null,
       agents: [{ name: 'Resumo da semana' }],
-      tasks: [{ name: 'Lembrete: Ana', enabled: true, autoPaused: false, nextRunAt: '2026-11-17T12:00:00.000Z', timezone: SP, reminder: { text: 'Ana', whatsappChatId: null, whatsappChatName: null } }],
+      tasks: [{ id: 't-1', name: 'Lembrete: Ana', enabled: true, autoPaused: false, nextRunAt: '2026-11-17T12:00:00.000Z', timezone: SP, reminder: { text: 'Ana', whatsappChatId: null, whatsappChatName: null } }],
     })
     expect(state).toContain('- Agora: segunda, 16/11/2026 19:30 (America/Sao_Paulo).')
     expect(state).toContain('- Versão instalada: 0.7.0')
@@ -425,6 +429,347 @@ describe('fontes do app (CA2)', () => {
   })
 })
 
+describe('contrato 78: evento no Calendário do Mac', () => {
+  const CALENDARS: MacCalendarCalendar[] = [
+    { id: 'cal-pessoal', title: 'Pessoal', sourceId: 's1', sourceTitle: 'iCloud', sourceType: 'caldav', writable: true, availabilities: ['busy'], color: '#1BADF8', isDefault: false },
+    { id: 'cal-trabalho', title: 'Trabalho', sourceId: 's1', sourceTitle: 'iCloud', sourceType: 'caldav', writable: true, availabilities: ['busy'], color: null, isDefault: true },
+    { id: 'cal-feriados', title: 'Feriados', sourceId: 's2', sourceTitle: 'Assinadas', sourceType: 'subscribed', writable: false, availabilities: ['busy'], color: null, isDefault: false },
+  ]
+  type FakeCalendar = Pick<MacCalendar, 'status' | 'calendars' | 'find' | 'create'> & {
+    created: MacCalendarCreateArgs[]
+    failNext: MacCalendarError[]
+    /** O próximo `create` grava e depois estoura o prazo (como o helper que caiu no meio). */
+    saveThenTimeout: boolean
+    stored: MacCalendarEvent[]
+    finds: number
+  }
+  const fakeCalendar = (access: 'full' | 'notDetermined' | 'denied' | 'writeOnly' | 'broken' = 'full'): FakeCalendar => {
+    const fake: FakeCalendar = {
+      created: [],
+      failNext: [],
+      saveThenTimeout: false,
+      stored: [],
+      finds: 0,
+      find: (args) => {
+        fake.finds++
+        return Promise.resolve({ ok: true, value: { matches: fake.stored.filter((item) => item.title === args.title && item.start === args.start).map((item) => ({ ...item, match: 'title-start' as const })) } })
+      },
+      status: () =>
+        Promise.resolve(access === 'broken' ? { ok: false, error: { code: 'unavailable', reason: 'no-binary', message: '' } } : { ok: true, value: { access, version: 'lap-calendar 1' } }),
+      calendars: () => Promise.resolve({ ok: true, value: { calendars: CALENDARS } }),
+      create: (args) => {
+        const error = fake.failNext.shift()
+        if (error) return Promise.resolve({ ok: false, error })
+        fake.created.push(args)
+        const n = fake.created.length
+        const event: MacCalendarEvent = { eventIdentifier: `ev-${n}`, calendarItemIdentifier: `item-${n}`, externalIdentifier: `ext-${n}`, calendarId: args.calendarId, calendarTitle: 'Pessoal', sourceTitle: 'iCloud', title: args.title, start: args.start, end: args.end, allDay: args.allDay, timeZone: args.timeZone, recurring: false, occurrence: null, availability: 'busy', url: null }
+        fake.stored.push(event)
+        if (fake.saveThenTimeout) {
+          fake.saveThenTimeout = false
+          return Promise.resolve({ ok: false, error: { code: 'unavailable', reason: 'timeout', message: 'x' } })
+        }
+        return Promise.resolve({
+          ok: true,
+          value: {
+            event,
+            availabilityFallback: false,
+            exdatesRemoved: [],
+            exdatesMissing: [],
+          },
+        })
+      },
+    }
+    return fake
+  }
+  const PESSOAL = { id: 'cal-pessoal', title: 'Pessoal', source: 'iCloud', color: '#1BADF8', isDefault: false }
+  const TRABALHO = { id: 'cal-trabalho', title: 'Trabalho', source: 'iCloud', color: null, isDefault: true }
+  const withCalendar = (calendar: FakeCalendar, preferred: string | null = null): ActionResolver => resolver({ calendar, preferredCalendar: () => Promise.resolve(preferred) })
+  const first = async (json: unknown, using: ActionResolver): Promise<ChatAction | undefined> => (await extractActions(block(json), using)).actions[0]
+
+  it('o bloco vira cartão com a agenda pelo nome (sem acento e caixa), uma hora sem "fim" e o fuso do Mac sem fuso no texto', async () => {
+    const calendar = fakeCalendar()
+    const text = `Montei o evento.\n\n${block({ tipo: 'evento', titulo: 'Aniversário do Jefferson', inicio: '2026-11-16T20:00:00-03:00', local: 'Casa da Day', agenda: 'PESSOAL' })}`
+    const { text: rest, actions } = await extractActions(text, withCalendar(calendar))
+    expect(rest).toBe('Montei o evento.')
+    expect(actions).toEqual([
+      {
+        id: 'a1',
+        status: 'proposed',
+        result: null,
+        kind: 'evento',
+        title: 'Aniversário do Jefferson',
+        start: '2026-11-16T23:00:00.000Z',
+        end: '2026-11-17T00:00:00.000Z',
+        allDay: false,
+        location: 'Casa da Day',
+        notes: null,
+        calendarId: 'cal-pessoal',
+        calendarTitle: 'Pessoal',
+        calendars: [PESSOAL, TRABALHO],
+        access: 'full',
+        error: null,
+      },
+    ])
+    expect(eventWhen(actions[0] as ChatActionEvent, SP)).toBe('seg 16/11 · 20:00–21:00')
+    // Montar o cartão nunca grava.
+    expect(calendar.created).toEqual([])
+    // Hoje mais cedo vale; sem fuso, o do Mac; só o dia, dia inteiro.
+    expect(await first({ tipo: 'evento', titulo: 'Cedo', inicio: '2026-11-16T08:00:00-03:00' }, withCalendar(calendar))).toMatchObject({ start: '2026-11-16T11:00:00.000Z' })
+    expect(await first({ tipo: 'evento', titulo: 'Sem fuso', inicio: '2026-11-17T09:00', fim: '2026-11-17T10:15' }, withCalendar(calendar))).toMatchObject({ start: '2026-11-17T12:00:00.000Z', end: '2026-11-17T13:15:00.000Z' })
+    const day = await first({ tipo: 'evento', titulo: 'Feriado', inicio: '2026-11-18', diaInteiro: true }, withCalendar(calendar))
+    expect(day).toMatchObject({ allDay: true, start: '2026-11-18T03:00:00.000Z', end: '2026-11-19T03:00:00.000Z' })
+    expect(eventWhen(day as ChatActionEvent, SP)).toBe('qua 18/11 · dia inteiro')
+    expect(await first({ tipo: 'evento', titulo: 'Horas zeradas', inicio: '2026-11-18T15:00:00-03:00', diaInteiro: true }, withCalendar(calendar))).toMatchObject({ allDay: true, start: '2026-11-18T03:00:00.000Z' })
+    // A agenda: a das Configurações, a padrão do Mac (a só leitura nunca), e o título cortado.
+    expect(await first({ tipo: 'evento', titulo: 'X', inicio: '2026-11-17T09:00:00-03:00' }, withCalendar(calendar, 'cal-pessoal'))).toMatchObject({ calendarId: 'cal-pessoal' })
+    expect(await first({ tipo: 'evento', titulo: 'X', inicio: '2026-11-17T09:00:00-03:00', agenda: 'Feriados' }, withCalendar(calendar, 'cal-feriados'))).toMatchObject({ calendarId: 'cal-trabalho', calendarTitle: 'Trabalho' })
+    expect(((await first({ tipo: 'evento', titulo: 'a'.repeat(300), inicio: '2026-11-17T09:00:00-03:00', notas: 'b'.repeat(5000) }, withCalendar(calendar))) as ChatActionEvent).title).toHaveLength(200)
+  })
+
+  it('início no passado, fim antes do início, data que não existe e título vazio ficam como texto', async () => {
+    for (const json of [
+      { tipo: 'evento', titulo: 'Ontem', inicio: '2026-11-15T20:00:00-03:00' },
+      { tipo: 'evento', titulo: 'Ao contrário', inicio: '2026-11-17T20:00:00-03:00', fim: '2026-11-17T19:00:00-03:00' },
+      { tipo: 'evento', titulo: 'Igual', inicio: '2026-11-17T20:00:00-03:00', fim: '2026-11-17T20:00:00-03:00' },
+      { tipo: 'evento', titulo: '30 de fevereiro', inicio: '2027-02-30T10:00' },
+      { tipo: 'evento', titulo: '   ', inicio: '2026-11-17T20:00:00-03:00' },
+      { tipo: 'evento', titulo: 'Sem data', inicio: 'amanhã às 20h' },
+    ]) {
+      const result = await extractActions(`Antes.\n\n${block(json)}`, withCalendar(fakeCalendar()))
+      expect(result.actions).toEqual([])
+    }
+  })
+
+  it('sem acesso, o cartão vem sem agendas; helper indisponível, "unavailable"', async () => {
+    const json = { tipo: 'evento', titulo: 'X', inicio: '2026-11-17T09:00:00-03:00', agenda: 'Pessoal' }
+    expect(await first(json, withCalendar(fakeCalendar('notDetermined')))).toMatchObject({ access: 'not-determined', calendars: [], calendarId: null, calendarTitle: null })
+    expect(await first(json, withCalendar(fakeCalendar('writeOnly')))).toMatchObject({ access: 'denied', calendars: [], calendarId: null })
+    expect(await first(json, withCalendar(fakeCalendar('broken')))).toMatchObject({ access: 'unavailable', calendars: [] })
+    expect(await first(json, resolver())).toMatchObject({ access: 'unavailable', calendarId: null })
+  })
+
+  it('"Pôr na agenda" grava uma vez só, com o que o "Editar" mudou, e registra os ids; o erro do Calendário vira "failed" e "Tentar de novo" grava', async () => {
+    const calendar = fakeCalendar()
+    const proposed = (await first({ tipo: 'evento', titulo: 'Aniversário do Jefferson', inicio: '2026-11-16T20:00:00-03:00', local: 'Casa da Day', agenda: 'Pessoal' }, withCalendar(calendar))) as ChatActionEvent
+    const store = createFileChatStore({ dir })
+    const chat = (actions: ChatAction[]): Chat => ({
+      id: 'c1',
+      meetingId: null,
+      title: 'Agenda',
+      createdAt: new Date(NOW).toISOString(),
+      messages: [
+        { role: 'user', text: 'Marque', at: new Date(NOW).toISOString() },
+        { role: 'assistant', text: 'Montei', at: new Date(NOW).toISOString(), actions },
+      ],
+      scope: { kind: 'all' },
+      model: null,
+      thinkMore: false,
+    })
+    await store.save(chat([proposed, { ...proposed, id: 'a2' }, { ...proposed, id: 'a3', allDay: true, start: '2026-11-18T03:00:00.000Z', end: '2026-11-19T03:00:00.000Z' }]))
+    const events = createChatEventsStore(dir)
+    const actions = createChatActions({ store, createReminder: () => Promise.reject(new Error('não')), timeZone: () => SP, now: () => NOW, calendar, events })
+    const ref = { chatId: 'c1', index: 1, actionId: 'a1' }
+    // O "Editar" passa pelas mesmas regras: no passado, nada é gravado.
+    expect(await actions.event({ ...ref, calendarId: 'cal-pessoal', fields: { start: '2026-11-15T23:00:00.000Z' } })).toEqual({ ok: false, error: 'past' })
+    expect(await actions.event({ ...ref, calendarId: 'cal-pessoal', fields: { start: '2026-11-17T00:00:00.000Z', end: '2026-11-16T23:00:00.000Z' } })).toEqual({ ok: false, error: 'invalid' })
+    expect(calendar.created).toEqual([])
+    const done = await actions.event({ ...ref, calendarId: 'cal-pessoal', fields: { title: '  Aniversário   (surpresa) ', start: '2026-11-17T00:00:00.000Z', end: '2026-11-17T01:30:00.000Z' } })
+    expect(done.ok).toBe(true)
+    expect(calendar.created).toEqual([{ calendarId: 'cal-pessoal', title: 'Aniversário (surpresa)', start: '2026-11-17T00:00:00Z', end: '2026-11-17T01:30:00Z', allDay: false, timeZone: SP, availability: 'busy', location: 'Casa da Day' }])
+    expect((await store.get('c1'))?.messages[1]?.actions?.[0]).toMatchObject({ status: 'done', result: 'Evento criado · seg 16/11 21:00 · Pessoal', title: 'Aniversário (surpresa)', start: '2026-11-17T00:00:00.000Z', calendarId: 'cal-pessoal', error: null })
+    expect(await events.list()).toEqual([
+      { actionId: 'a1', chatId: 'c1', calendarId: 'cal-pessoal', eventIdentifier: 'ev-1', calendarItemIdentifier: 'item-1', externalIdentifier: 'ext-1', title: 'Aniversário (surpresa)', start: '2026-11-17T00:00:00.000Z', end: '2026-11-17T01:30:00.000Z', allDay: false, createdAt: new Date(NOW).toISOString() },
+    ])
+    // Segundo clique (ou recarregar): nada de novo.
+    expect(await actions.event({ ...ref, calendarId: 'cal-pessoal' })).toEqual({ ok: false, error: 'done' })
+    expect(await actions.setState({ ...ref, state: 'dismissed' })).toEqual({ ok: false, error: 'done' })
+    expect(calendar.created).toHaveLength(1)
+
+    // A agenda só de leitura (ou que sumiu) e o erro do helper: `failed`, com a frase; "Tentar de novo" grava.
+    const second = { ...ref, actionId: 'a2' }
+    expect(await actions.event({ ...second, calendarId: 'cal-feriados' })).toMatchObject({ ok: true })
+    expect((await store.get('c1'))?.messages[1]?.actions?.[1]).toMatchObject({ status: 'failed', error: 'Nenhuma agenda gravável escolhida.' })
+    calendar.failNext.push({ code: 'unavailable', reason: 'timeout', message: 'x' })
+    await actions.event({ ...second, calendarId: 'cal-pessoal' })
+    expect((await store.get('c1'))?.messages[1]?.actions?.[1]).toMatchObject({ status: 'failed', error: 'Não consegui gravar na agenda: o Calendário não respondeu a tempo. Nada foi criado.' })
+    calendar.failNext.push({ code: 'denied', reason: 'denied', message: 'x' })
+    await actions.event({ ...second, calendarId: 'cal-pessoal' })
+    expect((await store.get('c1'))?.messages[1]?.actions?.[1]).toMatchObject({ status: 'failed', error: 'O app não tem acesso ao Calendário.' })
+    expect(calendar.created).toHaveLength(1)
+    expect((await actions.event({ ...second, calendarId: 'cal-trabalho' })).ok).toBe(true)
+    expect((await store.get('c1'))?.messages[1]?.actions?.[1]).toMatchObject({ status: 'done', calendarId: 'cal-trabalho', calendarTitle: 'Trabalho', error: null })
+    // Dia inteiro: as datas (o fim exclusivo), sem fuso.
+    expect((await actions.event({ ...ref, actionId: 'a3', calendarId: 'cal-pessoal' })).ok).toBe(true)
+    expect(calendar.created.at(-1)).toMatchObject({ start: '2026-11-18', end: '2026-11-19', allDay: true, timeZone: null })
+    expect((await store.get('c1'))?.messages[1]?.actions?.[2]).toMatchObject({ result: 'Evento criado · qua 18/11 (dia inteiro) · Pessoal' })
+    expect(await events.list()).toHaveLength(3)
+  })
+
+  it('"Tentar de novo" depois de um prazo estourado: o evento que o helper gravou é achado e registrado, nada é criado de novo', async () => {
+    const calendar = fakeCalendar()
+    const proposed = (await first({ tipo: 'evento', titulo: 'Jantar', inicio: '2026-11-17T20:00:00-03:00', agenda: 'Pessoal' }, withCalendar(calendar))) as ChatActionEvent
+    const store = createFileChatStore({ dir })
+    await store.save({
+      id: 'c1',
+      meetingId: null,
+      title: 'Agenda',
+      createdAt: new Date(NOW).toISOString(),
+      messages: [
+        { role: 'user', text: 'Marque', at: new Date(NOW).toISOString() },
+        { role: 'assistant', text: 'Montei', at: new Date(NOW).toISOString(), actions: [proposed, { ...proposed, id: 'a2', title: 'Jantar de sexta' }] },
+      ],
+      scope: { kind: 'all' },
+      model: null,
+      thinkMore: false,
+    })
+    const events = createChatEventsStore(dir)
+    const actions = createChatActions({ store, createReminder: () => Promise.reject(new Error('não')), timeZone: () => SP, now: () => NOW, calendar, events })
+    const ref = { chatId: 'c1', index: 1, actionId: 'a1' }
+    calendar.saveThenTimeout = true
+    await actions.event({ ...ref, calendarId: 'cal-pessoal' })
+    expect((await store.get('c1'))?.messages[1]?.actions?.[0]).toMatchObject({ status: 'failed', error: 'Não consegui gravar na agenda: o Calendário não respondeu a tempo. Nada foi criado.' })
+    expect(calendar.created).toHaveLength(1)
+    expect(await events.list()).toEqual([])
+    // O retry procura antes: acha o que ficou gravado, registra e marca feito, sem um segundo `create`.
+    expect((await actions.event({ ...ref, calendarId: 'cal-pessoal' })).ok).toBe(true)
+    expect(calendar.created).toHaveLength(1)
+    expect((await store.get('c1'))?.messages[1]?.actions?.[0]).toMatchObject({ status: 'done', result: 'Evento já estava na agenda · ter 17/11 20:00 · Pessoal', error: null })
+    expect(await events.list()).toMatchObject([{ actionId: 'a1', calendarId: 'cal-pessoal', eventIdentifier: 'ev-1', calendarItemIdentifier: 'item-1' }])
+    // Outro título no mesmo horário não é o mesmo evento: cria.
+    expect((await actions.event({ ...ref, actionId: 'a2', calendarId: 'cal-pessoal' })).ok).toBe(true)
+    expect(calendar.created).toHaveLength(2)
+    expect(calendar.finds).toBe(3)
+  })
+
+  it('o ESTADO.md reaproveita o acesso e as agendas por 30 s; "Pedir acesso" e o acesso novo lido na hora esquecem', async () => {
+    let clock = NOW
+    let reads = 0
+    let access: 'full' | 'notDetermined' = 'notDetermined'
+    const counted = {
+      status: () => {
+        reads++
+        return Promise.resolve({ ok: true as const, value: { access, version: 'lap-calendar 1' as const } })
+      },
+      calendars: () => {
+        reads++
+        return Promise.resolve({ ok: true as const, value: { calendars: CALENDARS } })
+      },
+    }
+    const cache = cachedCalendarReads(counted, CALENDAR_READS_TTL_MS, () => clock)
+    await cache.status()
+    await cache.status()
+    expect(reads).toBe(1)
+    clock += CALENDAR_READS_TTL_MS
+    await cache.status()
+    expect(reads).toBe(2)
+    cache.invalidate()
+    await cache.calendars()
+    await cache.status()
+    expect(reads).toBe(4)
+    access = 'full'
+    cache.observe(await counted.status())
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(await cache.status()).toMatchObject({ ok: true, value: { access: 'full' } })
+  })
+
+  it('o histórico conta o que foi feito com o evento', async () => {
+    const proposed = (await first({ tipo: 'evento', titulo: 'Jantar', inicio: '2026-11-17T20:00:00-03:00', agenda: 'Pessoal' }, withCalendar(fakeCalendar()))) as ChatActionEvent
+    expect(actionsHistory([{ ...proposed, status: 'done', result: 'Evento criado · ter 17/11 20:00 · Pessoal' }])).toContain('- evento "Jantar" em 2026-11-17T23:00:00.000Z até 2026-11-18T00:00:00.000Z na agenda Pessoal (Evento criado · ter 17/11 20:00 · Pessoal)')
+    expect(actionsHistory([{ ...proposed, status: 'failed', error: 'O app não tem acesso ao Calendário.' }])).toContain('(não deu certo: O app não tem acesso ao Calendário.)')
+  })
+})
+
+describe('contrato 78: alterar e apagar um lembrete', () => {
+  const make = () =>
+    createAutomationsService({
+      agents: createFileAgentsStore({ dir, now: () => NOW }),
+      schedules: createFileSchedulesStore({ dir }),
+      runs: createFileRunsStore({ dir }),
+      runner: { run: () => Promise.reject(new Error('o lembrete não roda agente')), dispose: () => undefined },
+      applyOutput: () => Promise.resolve(''),
+      notify: () => undefined,
+      dailyLimit: () => Promise.resolve(50),
+      timeZone: () => SP,
+      onChange: () => undefined,
+      onEvent: () => undefined,
+      now: () => NOW,
+      timers: { setInterval: () => 0, clearInterval: () => undefined },
+    })
+
+  it('só o id de um lembrete que existe vira cartão; o clique altera ou apaga; o que sumiu fica "failed"', async () => {
+    const service = make()
+    const created = await service.createReminder({ at: '2026-11-17T09:00:00-03:00', reminder: { text: 'Responder a Ana', whatsappChatId: null, whatsappChatName: null } })
+    if (!created.ok) throw new Error('lembrete recusado')
+    const id = created.task.id
+    const using = resolver({ tasks: () => service.listTasks() })
+    const edit = await extractActions(block({ tipo: 'lembrete-editar', id, quando: '2026-11-18T09:00:00-03:00' }), using)
+    expect(edit.actions).toEqual([{ id: 'a1', status: 'proposed', result: null, kind: 'lembrete-editar', taskId: id, currentText: 'Responder a Ana', currentAt: '2026-11-17T12:00:00.000Z', text: null, at: '2026-11-18T09:00:00-03:00', error: null }])
+    const drop = await extractActions(block({ tipo: 'lembrete-apagar', id }), using)
+    expect(drop.actions).toEqual([{ id: 'a2', status: 'proposed', result: null, kind: 'lembrete-apagar', taskId: id, text: 'Responder a Ana', at: '2026-11-17T12:00:00.000Z', error: null }])
+    // Id inventado, hora no passado, nada a mudar e tarefa de agente: texto.
+    for (const json of [
+      { tipo: 'lembrete-editar', id: 'inventado', quando: '2026-11-18T09:00:00-03:00' },
+      { tipo: 'lembrete-editar', id, quando: '2026-11-16T09:00:00-03:00' },
+      { tipo: 'lembrete-editar', id },
+      { tipo: 'lembrete-apagar', id: 'inventado' },
+    ])
+      expect((await extractActions(block(json), using)).actions).toEqual([])
+
+    const store = createFileChatStore({ dir })
+    const later = (await extractActions(block({ tipo: 'lembrete-apagar', id }), using)).actions[0] as ChatAction
+    await store.save({
+      id: 'c1',
+      meetingId: null,
+      title: 'Lembretes',
+      createdAt: new Date(NOW).toISOString(),
+      messages: [
+        { role: 'user', text: 'Adie', at: new Date(NOW).toISOString() },
+        { role: 'assistant', text: 'Proposta', at: new Date(NOW).toISOString(), actions: [...edit.actions, ...drop.actions, { ...later, id: 'a3' }] },
+      ],
+      scope: { kind: 'all' },
+      model: null,
+      thinkMore: false,
+    })
+    const actions = createChatActions({
+      store,
+      createReminder: () => Promise.reject(new Error('não')),
+      timeZone: () => SP,
+      now: () => NOW,
+      reminders: { list: () => service.listTasks(), update: (taskId, change) => service.updateReminder(taskId, change), remove: (taskId) => service.deleteTask({ id: taskId }) },
+    })
+    const ref = (actionId: string) => ({ chatId: 'c1', index: 1, actionId })
+    // O cartão errado para a operação, e a hora do "Editar" no passado: nada muda.
+    expect(await actions.reminderChange({ ...ref('a1'), op: 'delete' })).toEqual({ ok: false, error: 'missing' })
+    expect(await actions.reminderChange({ ...ref('a1'), op: 'update', at: '2026-11-16T10:00:00-03:00' })).toEqual({ ok: false, error: 'past' })
+    expect((await actions.reminderChange({ ...ref('a1'), op: 'update', text: 'Ligar para a Ana' })).ok).toBe(true)
+    const task = (await service.listTasks()).find((item) => item.id === id)
+    expect(task).toMatchObject({ schedule: { kind: 'once', at: '2026-11-18T12:00:00.000Z' }, nextRunAt: '2026-11-18T12:00:00.000Z', name: 'Lembrete: Ligar para a Ana', runOnce: true })
+    expect((await store.get('c1'))?.messages[1]?.actions?.[0]).toMatchObject({ status: 'done', result: 'Lembrete alterado · qua 18/11 09:00', at: '2026-11-18T12:00:00.000Z', text: 'Ligar para a Ana' })
+    expect(await actions.reminderChange({ ...ref('a1'), op: 'update' })).toEqual({ ok: false, error: 'done' })
+    expect((await actions.reminderChange({ ...ref('a2'), op: 'delete' })).ok).toBe(true)
+    expect((await service.listTasks()).some((item) => item.id === id)).toBe(false)
+    expect((await store.get('c1'))?.messages[1]?.actions?.[1]).toMatchObject({ status: 'done', result: 'Lembrete apagado' })
+    // Apagado entre a proposta e o clique: "não existe mais".
+    expect((await actions.reminderChange({ ...ref('a3'), op: 'delete' })).ok).toBe(true)
+    expect((await store.get('c1'))?.messages[1]?.actions?.[2]).toMatchObject({ status: 'failed', error: REMINDER_GONE_TEXT })
+    expect(actionsHistory((await store.get('c1'))?.messages[1]?.actions)).toContain(`- alterar o lembrete "Responder a Ana" (id: ${id}) de 2026-11-17T12:00:00.000Z para 2026-11-18T12:00:00.000Z com o texto "Ligar para a Ana" (Lembrete alterado · qua 18/11 09:00)`)
+    service.dispose()
+  })
+
+  it('o ESTADO.md e o AUTOMACOES.md trazem o id dos lembretes e as agendas pelo nome, nunca o id da agenda', () => {
+    const reminder = { id: 'rem-1', name: 'Lembrete: Ana', enabled: true, autoPaused: false, nextRunAt: '2026-11-17T12:00:00.000Z', timezone: SP, reminder: { text: 'Ana', whatsappChatId: null, whatsappChatName: null } }
+    const base = { now: NOW, timeZone: SP, version: '0.7.0', recording: null, google: 'não conectada', whatsapp: 'Não instalado', automationsPaused: null, agents: [], tasks: [reminder] }
+    const state = stateMarkdown({ ...base, calendar: { access: 'full', calendars: [{ title: 'Pessoal', source: 'iCloud', isDefault: false }, { title: 'Trabalho', source: 'iCloud', isDefault: true }] } })
+    expect(state).toContain('## Lembretes\n\n- Lembrete: Ana · ter 17/11 09:00 · id: rem-1')
+    expect(state).toContain('## Agendas do Mac\n\n- Pessoal (iCloud)\n- Trabalho (iCloud), padrão')
+    expect(stateMarkdown({ ...base, calendar: { access: 'not-determined', calendars: [] } })).toContain('Sem acesso ao Calendário do Mac (peça em Configurações › Email › Convites).')
+    expect(stateMarkdown({ ...base, calendar: { access: 'unavailable', calendars: [] } })).toContain('Calendário indisponível.')
+    expect(stateMarkdown(base)).not.toContain('Agendas do Mac')
+    const task = { ...reminder, agentId: '', message: 'Ana', schedule: { kind: 'once' as const, at: '2026-11-17T12:00:00.000Z' }, runOnce: true, runOnceAction: 'disable' as const, timeoutS: 30, notify: 'always' as const, output: null, email: null, lastRunAt: null, lastStatus: null, lastResultPreview: null, lastError: null, consecutiveFailures: 0, createdAt: '', updatedAt: '' }
+    expect(automationsMarkdown({ agents: [], tasks: [task], runs: [] }, SP)).toContain('- Lembrete: Ana · ter 17/11 09:00 · id: rem-1 · só notificação, sem agente · ligado')
+  })
+})
+
 describe('nome (CA1)', () => {
   it('a rota é /assistente e a antiga /perguntar redireciona para ela', () => {
     expect(ROUTE_PATHS.assistente).toBe('/assistente')
@@ -441,6 +786,11 @@ describe('guia do app', () => {
     expect(guide).toContain('{{versao}}')
     expect(guide).toContain('Experimental')
     expect(guide).toContain('Bloqueio')
+    // Contrato 78: o evento e os lembretes por cartão; nada muda sem o clique.
+    expect(guide).toContain('"Pôr na agenda"')
+    expect(guide).toContain('tudo passa por cartão que você confirma')
+    expect(guide).toContain('nunca apaga evento que não criou')
+    expect(guide).toContain('alterar a hora ou o texto de um lembrete')
   })
 })
 
