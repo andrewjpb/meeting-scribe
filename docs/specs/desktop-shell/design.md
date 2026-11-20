@@ -78,6 +78,8 @@ Tema: atributo `data-theme="light|dark"` em `<html>`. `system` segue o macOS. O 
 - **Nível e rota**: o nível segue a rota num sentido só. Toda navegação para `/email/*`, `/configuracoes/*` ou `/assistente` mostra o nível daquela seção; qualquer outra rota mostra a raiz. **Voltar não navega**: só mostra a raiz, a tela continua a mesma e o item da seção fica marcado. Clicar na seção já estando nela só mostra o nível. O nível não é guardado: abrir a janela numa rota de seção mostra o nível dela de cara, sem animação.
 - **Foco**: entrar pelo clique (ou Enter) no item da raiz põe o foco no cabeçalho-voltar; voltar pelo cabeçalho põe o foco no item da seção na raiz. Navegação vinda de fora do sidebar (menu, ⌘, aviso de email, link na tela) não mexe no foco.
 
+**Esmaecimento de rolagem.** Lista que rola dentro da barra lateral (contas e pastas do nível Email, conversas do nível Assistente) ganha um esmaecimento de 24 px na borda de baixo (`design/ScrollFade.tsx`, classe `.scroll-fade` em `design/base.css`: gradiente de transparente para `var(--side-bg)`, `pointer-events: none`). Aparece só quando há conteúdo escondido abaixo e some no fim da rolagem; não altera layout nem altura de linha; ao focar por teclado uma linha que cairia sob a faixa, a lista rola o que falta para o anel aparecer inteiro. Lista que cabe inteira não mostra nada. Contrato 68.
+
 **Deslize horizontal.** Primeiro padrão de deslize do app, definido pela barra lateral em pilha (keyframes `side-push-in`, `side-push-out`, `side-pop-in` e `side-pop-out` em `design/base.css`; lógica em `app/SidebarStack.tsx` e `app/sidebarLevels.ts`).
 
 - Duração `--duration-slow` (180 ms) com `--ease-out`, sem biblioteca.

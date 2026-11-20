@@ -440,6 +440,19 @@
   }
 
   /*
+   * Contrato 68 (C): o pé da lista de pastas e da de conversas esmaece no azul da barra enquanto há mais abaixo
+   * (`ScrollFade`). Por cima da lista, sem ocupar lugar nem receber clique.
+   */
+  .scroll-fade {
+    position: absolute;
+    inset-inline: 0;
+    bottom: 0;
+    height: 24px;
+    pointer-events: none;
+    background: linear-gradient(to bottom, transparent, var(--side-bg));
+  }
+
+  /*
    * Entrar numa seção: o nível novo vem da direita e a raiz recua 30% sumindo; voltar faz o caminho inverso. O nível
    * mede a coluna sem o recuo de 12 px (`--space-3`): o deslize soma o recuo para sair inteiro pela borda.
    */

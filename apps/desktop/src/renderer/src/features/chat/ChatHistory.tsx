@@ -2,6 +2,7 @@ import { MoreHorizontal, Plus, Search } from 'lucide-react'
 import { useEffect, useRef, useState, type FocusEvent, type KeyboardEvent } from 'react'
 import { CHAT_TITLE_MAX, type ChatListItem } from '@shared/chat'
 import { Icon } from '../../design/Icon'
+import { ScrollFade } from '../../design/ScrollFade'
 import { listKey, openChat, useChat } from './chatStore'
 import { filterChats, groupChatsByDay, railScrollTarget } from './format'
 
@@ -16,6 +17,8 @@ export function ChatHistory() {
   const selected = useChat((state) => state.selected[key] ?? null)
   const failure = useChat((state) => state.failures[`list:${key}`])
   const [query, setQuery] = useState('')
+  // Contrato 68 (C): a lista que rola, para o esmaecimento do pé.
+  const listRef = useRef<HTMLDivElement>(null)
 
   const shown = filterChats(list ?? [], query)
   const groups = groupChatsByDay(shown, new Date())
@@ -48,18 +51,21 @@ export function ChatHistory() {
       </div>
       {failure && <p className="px-2.5 pb-2 text-12 text-side-rec">{failure}</p>}
       {list && list.length === 0 && !failure && <p className="px-2.5 text-12 text-side-muted">Nenhuma conversa ainda.</p>}
-      <div data-chat-list className="min-h-0 flex-1 overflow-y-auto">
-        {groups.map((group) => (
-          <section key={group.key} aria-label={group.label} data-chat-day={group.key}>
-            <h2 className="caps px-2.5 pt-3 pb-1 text-side-muted">{group.label}</h2>
-            <ul className="flex flex-col gap-0.5">
-              {group.items.map((item) => (
-                <ChatRow key={item.id} item={item} active={item.id === selected} onOpen={() => openChat(item.id)} />
-              ))}
-            </ul>
-          </section>
-        ))}
-        {list && list.length > 0 && !shown.length && <p className="px-2.5 pt-3 text-12 text-side-muted">Nenhuma conversa com "{query.trim()}".</p>}
+      <div className="relative flex min-h-0 flex-1 flex-col">
+        <div ref={listRef} data-chat-list className="min-h-0 flex-1 overflow-y-auto">
+          {groups.map((group) => (
+            <section key={group.key} aria-label={group.label} data-chat-day={group.key}>
+              <h2 className="caps px-2.5 pt-3 pb-1 text-side-muted">{group.label}</h2>
+              <ul className="flex flex-col gap-0.5">
+                {group.items.map((item) => (
+                  <ChatRow key={item.id} item={item} active={item.id === selected} onOpen={() => openChat(item.id)} />
+                ))}
+              </ul>
+            </section>
+          ))}
+          {list && list.length > 0 && !shown.length && <p className="px-2.5 pt-3 text-12 text-side-muted">Nenhuma conversa com "{query.trim()}".</p>}
+        </div>
+        <ScrollFade target={listRef} />
       </div>
     </div>
   )
@@ -77,6 +83,14 @@ function ChatRow({ item, active, onOpen }: { item: ChatListItem; active: boolean
   const [mode, setMode] = useState<'idle' | 'menu' | 'rename' | 'confirm'>('idle')
   const [title, setTitle] = useState(item.title)
   const menuButton = useRef<HTMLButtonElement | null>(null)
+  // Contrato 68 (B): saindo do renomear por Esc ou Enter, o foco volta para o botão da linha (blur deixa o foco onde está).
+  const openButton = useRef<HTMLButtonElement | null>(null)
+  const refocus = useRef(false)
+  useEffect(() => {
+    if (mode !== 'idle' || !refocus.current) return
+    refocus.current = false
+    openButton.current?.focus({ preventScroll: true })
+  }, [mode])
 
   const closeMenu = (event: FocusEvent<HTMLDivElement>): void => {
     if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setMode('idle')
@@ -144,13 +158,16 @@ function ChatRow({ item, active, onOpen }: { item: ChatListItem; active: boolean
           maxLength={CHAT_TITLE_MAX}
           onChange={(event) => setTitle(event.target.value)}
           onFocus={(event) => event.target.select()}
+          // Blur (clique fora, ⌘Tab): salva e deixa o foco onde o usuário o pôs; só Enter e Esc devolvem à linha.
           onBlur={rename}
           onKeyDown={(event) => {
             if (event.key === 'Enter') {
               event.preventDefault()
+              refocus.current = true
               rename()
             } else if (event.key === 'Escape') {
               event.preventDefault()
+              refocus.current = true
               setTitle(item.title)
               setMode('idle')
             }
@@ -169,7 +186,9 @@ function ChatRow({ item, active, onOpen }: { item: ChatListItem; active: boolean
     >
       {/* O "…" fica por cima, à direita: o título só encurta quando ele aparece (hover, foco na linha ou menu aberto). */}
       <button
+        ref={openButton}
         type="button"
+        data-chat-open
         aria-current={active ? 'page' : undefined}
         onClick={onOpen}
         className={`no-drag flex h-full min-w-0 flex-1 items-center pl-8 text-left focus-visible:outline-offset-[-2px] ${

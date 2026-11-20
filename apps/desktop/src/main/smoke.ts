@@ -841,13 +841,24 @@ async function chatContextCheck(contents: WebContents, ctx: SmokeContext, shootC
   const menuOk = JSON.stringify(menuKeys) === JSON.stringify(['rename-chat', 'delete-chat', 'rename-chat', 'delete-chat', 'rename-chat']) && menuClosed
   const menuWithContext = await evaluate<boolean>(contents, `Boolean(document.querySelector('[data-chat-context]'))`)
 
-  // Renomear pelo menu "…" da linha.
+  // Renomear pelo menu "…" da linha. Contrato 68 (B): Esc cancela e Enter salva, e nos dois o foco volta ao botão da linha.
+  const rowFocused = `document.activeElement === document.querySelector('${chatRow(chatId)} [data-chat-open]')`
+  const titleBeforeRename = chatFile(ctx.userDataDir, chatId)?.title
+  await clickSelector(contents, `${chatRow(chatId)} [data-action="chat-row-menu"]`)
+  await clickSelector(contents, '[data-action="rename-chat"]')
+  await waitFor(contents, `document.querySelector('[data-chat-rename-input]')`)
+  await setValue(contents, '[data-chat-rename-input]', 'Título descartado')
+  await evaluate(contents, `document.querySelector('[data-chat-rename-input]')?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })) ?? false`)
+  const renameEscFocus = await waitFor(contents, `!document.querySelector('[data-chat-rename-input]') && ${rowFocused}`, 1000)
+  await wait(150)
+  const renameEscKept = chatFile(ctx.userDataDir, chatId)?.title === titleBeforeRename && !(await evaluate<boolean>(contents, `Boolean(document.querySelector('${chatRow(chatId)}')?.textContent?.includes('Título descartado'))`))
   await clickSelector(contents, `${chatRow(chatId)} [data-action="chat-row-menu"]`)
   await clickSelector(contents, '[data-action="rename-chat"]')
   await waitFor(contents, `document.querySelector('[data-chat-rename-input]')`)
   await setValue(contents, '[data-chat-rename-input]', 'Conversa renomeada')
   await pressEnterIn(contents, '[data-chat-rename-input]')
   const renamedRow = await waitFor(contents, `document.querySelector('${chatRow(chatId)}')?.textContent?.includes('Conversa renomeada')`)
+  const renameEnterFocus = await waitFor(contents, rowFocused, 1000)
   for (let i = 0; i < 40 && chatFile(ctx.userDataDir, chatId)?.title !== 'Conversa renomeada'; i++) await wait(50)
   const renamedFile = chatFile(ctx.userDataDir, chatId)?.title
 
@@ -913,11 +924,14 @@ async function chatContextCheck(contents: WebContents, ctx: SmokeContext, shootC
       afterRedo.messages.at(-2)?.text === 'E o que ficou decidido?' &&
       renamedRow &&
       renamedFile === 'Conversa renomeada' &&
+      renameEscFocus &&
+      renameEscKept &&
+      renameEnterFocus &&
       editing &&
       edited.done &&
       afterEdit?.messages.length === lengthBeforeEdit &&
       lastQuestion === 'E quais decisões ficaram?',
-    detail: `conversa ${chatId}; teclado do escopo: 1 parada de Tab=${tabStops === 1}, ↓=${arrowed}, End=${ended}; escolhidas vazio: aviso=${blocked}, Enviar desligado=${sendDisabled}, nada enviado=${nothingSent}; menu "…" pelo teclado ${JSON.stringify(menuKeys)}, Esc fechou=${menuClosed}; trilho: aberto sem expandir nem X=${collapsed}, à direita=${rail.right}, sem a lista=${rail.below}, aberto depois da resposta=${recollapsed}, rótulo do modelo levou ao Modelo com o foco=${revealed}, menu com o Contexto aberto=${menuWithContext}; "Contexto" sem fechar, foco no Escopo=${panel}, consultadas no painel=${panelConsulted}, totais "${totals}"; escopo salvo ${JSON.stringify(savedScope)}, rótulo=${scoped}; processo do escopo em ${scopedSpawn ? scopedSpawn.cwd.replace(ctx.userDataDir, '<userData>') : '?'} com ${JSON.stringify(scopeFiles)}, anterior saiu=${previous?.exited ?? '?'}, resposta "${scopedAnswer.answer.slice(0, 80)}"; modelo -> ${opusSpawn?.args[opusSpawn.args.indexOf('--model') + 1] ?? '?'}, rodapé "${opusFooter.slice(0, 40)}"; Refazer: processo novo=${redoSpawn !== opusSpawn}, mensagens ${lengthBefore} -> ${afterRedo?.messages.length ?? '?'}; renomear: linha=${renamedRow}, arquivo "${renamedFile ?? '?'}"; ↑: editando=${editing}, mensagens ${lengthBeforeEdit} -> ${afterEdit?.messages.length ?? '?'}, última pergunta "${lastQuestion ?? '?'}"`,
+    detail: `conversa ${chatId}; teclado do escopo: 1 parada de Tab=${tabStops === 1}, ↓=${arrowed}, End=${ended}; escolhidas vazio: aviso=${blocked}, Enviar desligado=${sendDisabled}, nada enviado=${nothingSent}; menu "…" pelo teclado ${JSON.stringify(menuKeys)}, Esc fechou=${menuClosed}; trilho: aberto sem expandir nem X=${collapsed}, à direita=${rail.right}, sem a lista=${rail.below}, aberto depois da resposta=${recollapsed}, rótulo do modelo levou ao Modelo com o foco=${revealed}, menu com o Contexto aberto=${menuWithContext}; "Contexto" sem fechar, foco no Escopo=${panel}, consultadas no painel=${panelConsulted}, totais "${totals}"; escopo salvo ${JSON.stringify(savedScope)}, rótulo=${scoped}; processo do escopo em ${scopedSpawn ? scopedSpawn.cwd.replace(ctx.userDataDir, '<userData>') : '?'} com ${JSON.stringify(scopeFiles)}, anterior saiu=${previous?.exited ?? '?'}, resposta "${scopedAnswer.answer.slice(0, 80)}"; modelo -> ${opusSpawn?.args[opusSpawn.args.indexOf('--model') + 1] ?? '?'}, rodapé "${opusFooter.slice(0, 40)}"; Refazer: processo novo=${redoSpawn !== opusSpawn}, mensagens ${lengthBefore} -> ${afterRedo?.messages.length ?? '?'}; renomear: linha=${renamedRow}, arquivo "${renamedFile ?? '?'}", Esc manteve o título=${renameEscKept}, foco na linha depois do Esc=${renameEscFocus} e do Enter=${renameEnterFocus}; ↑: editando=${editing}, mensagens ${lengthBeforeEdit} -> ${afterEdit?.messages.length ?? '?'}, última pergunta "${lastQuestion ?? '?'}"`,
   }
 }
 
@@ -9207,6 +9221,36 @@ async function emailChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => voi
     detail: `contas recolhidas=${fitCollapsed} (${fitToggles.length}), uma não lida na linha da conta=${fitUnread}; com nomes compridos: borda direita da barra ${fit.asideRight}, linhas ${JSON.stringify(fit.rows)}, número ${fit.badge ?? 'nenhum na linha da conta recolhida'}; fora da borda ${JSON.stringify(fit.over)}; rótulos truncados ${JSON.stringify(fit.truncated)}, transbordando sem truncate ${JSON.stringify(fit.overflowing)}; nomes restaurados=${fit.restored}; lida de novo=${fitRead}`,
   }
 
+  // Contrato 68 (C): com a janela na altura mínima, a lista do nível Email não cabe e o pé dela esmaece (24 px, sem
+  // receber clique, rente ao pé da lista); rolada até o fim, o esmaecimento some. Com as contas recolhidas, a lista
+  // cabe e ele não aparece.
+  const fadeEl = `document.querySelector('${SIDEBAR_EMAIL} [data-email-nav] ~ [data-scroll-fade]')`
+  const navEl = `document.querySelector('${SIDEBAR_EMAIL} [data-email-nav]')`
+  const [fadeWidth, fadeHeight] = win.getContentSize() as [number, number]
+  win.setContentSize(fadeWidth, 600)
+  await waitFor(contents, `window.innerHeight === 600`)
+  await evaluate(contents, `(${navEl}.scrollTop = 0), true`)
+  const fadeCut = await evaluate<boolean>(contents, `${navEl}.scrollHeight > ${navEl}.clientHeight + 1`)
+  const fadeShown = await waitFor(contents, fadeEl, 2000)
+  const fadeBox = await evaluate<{ height: number; gap: number; events: string } | null>(
+    contents,
+    `(() => { const fade = ${fadeEl}; if (!fade) return null; const box = fade.getBoundingClientRect(), list = ${navEl}.getBoundingClientRect(); return { height: Math.round(box.height), gap: Math.round(Math.abs(box.bottom - list.bottom)), events: getComputedStyle(fade).pointerEvents } })()`,
+  )
+  await evaluate(contents, `(${navEl}.scrollTop = ${navEl}.scrollHeight), true`)
+  const fadeGoneAtEnd = await waitFor(contents, `!${fadeEl}`, 2000)
+  await evaluate(contents, `(${navEl}.scrollTop = 0), true`)
+  const fadeBack = await waitFor(contents, fadeEl, 2000)
+  win.setContentSize(fadeWidth, fadeHeight)
+  await waitFor(contents, `window.innerHeight === ${fadeHeight}`)
+  for (const id of fitToggles) await setOpen(id, false)
+  const fadeFits = await waitFor(contents, `${navEl}.scrollHeight <= ${navEl}.clientHeight && !${fadeEl}`, 2000)
+  for (const id of fitToggles) await setOpen(id, true)
+  await waitFor(contents, `document.querySelector('${ownInbox}')`)
+  sidebarChecks['sidebarScrollFade'] = {
+    ok: fadeCut && fadeShown && fadeBox?.height === 24 && fadeBox.gap === 0 && fadeBox.events === 'none' && fadeGoneAtEnd && fadeBack && fadeFits,
+    detail: `janela a 600 px: lista cortada=${fadeCut}, esmaecimento=${fadeShown} ${JSON.stringify(fadeBox)}; rolada até o fim some=${fadeGoneAtEnd}, de volta ao topo volta=${fadeBack}; contas recolhidas, lista cabe e sem esmaecimento=${fadeFits}`,
+  }
+
   // O print do nível Email: as duas contas, a do servidor falso com a Caixa de Entrada aberta e a com problema.
   await openEmailFolder(contents, 'inbox', 3)
   await settle(contents)
@@ -9984,9 +10028,18 @@ async function emailFoldersUiChecks(ctx: SmokeContext, watch: (win: BrowserWindo
     `JSON.stringify([...document.querySelectorAll('[data-settings-result]')].map((el) => el.innerText.split('\\n')[0])) === JSON.stringify(['Email › Assinatura', 'Email › Assinatura em mensagens novas', 'Email › Assinatura em respostas e encaminhamentos'])`,
   )
   await both('configuracoes-busca-email')
-  await pressKey('[data-settings-search] input', 'Escape')
+  // Contrato 68 (CA15): ⌘F e Esc de verdade (pela entrada do Chromium, não `dispatchEvent`: entre um ouvinte e outro da
+  // janela o React já desenha a busca vazia, como no app). O Esc que limpa a busca leva o foco à linha da aba aberta.
+  pressKeys(contents, 'F', ['meta'])
+  await waitFor(contents, `document.activeElement === document.querySelector('[data-settings-search] input')`, 2000)
+  pressKeys(contents, 'Escape')
   const searchCleared = await waitFor(contents, `!document.querySelector('[data-settings-results]')`)
-  checks['settingsSearch'] = { ok: found && searchCleared, detail: `"assinatura" acha as 3 linhas da aba Email=${found}; Esc limpa=${searchCleared}` }
+  const escTabFocus = await waitFor(contents, `document.activeElement?.dataset.settingsTabLink === 'email'`, 1000)
+  const escFocusedOn = await evaluate<string>(contents, `document.activeElement?.dataset.settingsTabLink ?? document.activeElement?.tagName ?? ''`)
+  checks['settingsSearch'] = {
+    ok: found && searchCleared && escTabFocus,
+    detail: `"assinatura" acha as 3 linhas da aba Email=${found}; Esc limpa=${searchCleared}; foco na linha da aba=${escTabFocus} (${escFocusedOn || 'nenhum'})`,
+  }
 
   // CA21 (tela 11): a conta POP3 no seletor (adicionada só para isto e tirada depois).
   const pop3 = await api<{ ok: boolean; status?: { account: { id: string } } }>('scribe:email-add-account', {
@@ -11216,7 +11269,7 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
   for (const [name, check] of Object.entries(email)) if (!check.ok) failures.push(`email ${name}: ${check.detail}`)
   for (const name of ['settings', 'list', 'reading', 'compose', 'folders', 'attachments', 'remove', 'dark', 'notify', 'assistantPending', 'assistantReply', 'assistantTask', 'assistantSearch', 'assistantOrganize', 'taskEmailForm', 'taskEmailRun']) if (!email[name]) failures.push(`email ${name}: não executado`)
   for (const [name, check] of Object.entries(sidebar)) if (!check.ok) failures.push(`barra lateral ${name}: ${check.detail}`)
-  for (const name of ['noAccount', 'rootItems', 'enterFirstTime', 'back', 'enterInSection', 'enterLast', 'slide', 'still', 'routeLevel', 'reducedMotion', 'badge', 'emailFits', 'settingsEnter', 'settingsRows', 'settingsBack', 'settingsEnterInSection', 'settingsScreen', 'settingsRouteLevel', 'settingsAnchor', 'settingsDoubleMenu', 'settingsDoubleClick', 'assistantEnter', 'assistantLevel', 'assistantRowMenu', 'assistantRail', 'assistantReveal', 'assistantOpen', 'assistantSearch', 'assistantDelete', 'assistantNewChat']) {
+  for (const name of ['noAccount', 'rootItems', 'enterFirstTime', 'back', 'enterInSection', 'enterLast', 'slide', 'still', 'routeLevel', 'reducedMotion', 'badge', 'emailFits', 'sidebarScrollFade', 'settingsEnter', 'settingsRows', 'settingsBack', 'settingsEnterInSection', 'settingsScreen', 'settingsRouteLevel', 'settingsAnchor', 'settingsDoubleMenu', 'settingsDoubleClick', 'assistantEnter', 'assistantLevel', 'assistantRowMenu', 'assistantRail', 'assistantReveal', 'assistantOpen', 'assistantSearch', 'assistantDelete', 'assistantNewChat']) {
     if (!sidebar[name]) failures.push(`barra lateral ${name}: não executado`)
   }
   for (const [name, check] of Object.entries(invite)) if (!check.ok) failures.push(`convites ${name}: ${check.detail}`)

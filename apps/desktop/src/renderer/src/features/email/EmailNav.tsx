@@ -1,5 +1,5 @@
 import { ChevronDown, ChevronRight, CircleAlert, FilePen, Folder, FolderPlus, Inbox, Lock, Pencil, Send, Trash2 } from 'lucide-react'
-import { useState, type DragEvent, type KeyboardEvent, type MouseEvent } from 'react'
+import { useRef, useState, type DragEvent, type KeyboardEvent, type MouseEvent } from 'react'
 import { createPortal } from 'react-dom'
 import { NavLink, useLocation, useNavigate } from 'react-router'
 import { emailFolderFromSlug, emailFolderSegment, emailPath, type EmailRouteFolder } from '@shared/routes'
@@ -7,6 +7,7 @@ import type { EmailAccount, EmailFolderNode } from '@shared/email'
 import { useSettings } from '../../app/settingsStore'
 import { Button } from '../../design/Button'
 import { Icon } from '../../design/Icon'
+import { ScrollFade } from '../../design/ScrollFade'
 import { ContextMenu, FLOAT_PANEL, type MenuEntry } from './ContextMenu'
 import { folderKey, useEmail } from './emailStore'
 import { moveMessages, useEmailUi } from './emailUi'
@@ -72,6 +73,8 @@ export function EmailNav() {
   const update = useSettings((state) => state.update)
   const navigate = useNavigate()
   const location = useLocation()
+  // Contrato 68 (C): a lista que rola, para o esmaecimento do pé.
+  const listRef = useRef<HTMLDivElement>(null)
   const [over, setOver] = useState<{ accountId: string; path: string; label: string; top: number; left: number } | null>(null)
   const [menu, setMenu] = useState<{ accountId: string; item: FolderItem; x: number; y: number } | null>(null)
   const [editing, setEditing] = useState<Editing>(null)
@@ -290,83 +293,86 @@ export function EmailNav() {
   }
 
   return (
-    <div data-email-nav className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto">
-      {accounts.map(({ account, state, error }) => {
-        // Contrato 65 (D1): com uma conta só, a linha dela fica sem a seta e as pastas aparecem sempre.
-        const single = accounts.length === 1
-        const open = single || !collapsed.includes(account.id)
-        const label = accountLabel(list, account)
-        const unread = unreadCount(folders[folderKey(account.id, 'inbox')])
-        const groupId = `email-nav-${account.id}`
-        const tree = trees[account.id]
-        const items = accountTree(tree?.nodes, (tree?.pop3 ?? false) || account.incoming.protocol === 'pop3')
-        const errorMark = state === 'error' && (
-          <span data-email-account-error title={error ?? 'Com problema'} className="size-1.5 shrink-0 bg-side-rec">
-            <span className="sr-only">Com problema</span>
-          </span>
-        )
-        return (
-          <div key={account.id} data-email-account={account.id} className="flex flex-col gap-0.5">
-            {single ? (
-              <div data-email-account-header={account.id} title={account.address} className={`${ROW} text-side-muted`}>
-                <span className="min-w-0 flex-1 truncate text-left">{label}</span>
-                {errorMark}
-              </div>
-            ) : (
-              <button
-                type="button"
-                data-email-account-toggle={account.id}
-                aria-expanded={open}
-                aria-controls={groupId}
-                title={account.address}
-                onClick={() => toggle(account.id)}
-                className={`${ROW} text-side-muted hover:text-side-text`}
-              >
-                <Icon icon={open ? ChevronDown : ChevronRight} className="shrink-0" />
-                <span className="min-w-0 flex-1 truncate text-left">{label}</span>
-                {errorMark}
-                {!open && unread > 0 && <span className="shrink-0 text-12 tabular text-side-text">{unreadBadge(unread)}</span>}
-              </button>
-            )}
-            {open && (
-              <ul id={groupId} data-email-tree={account.id} className="flex flex-col">
-                {items.map((item) => folderRow(account, item, 0, unread))}
-              </ul>
-            )}
-          </div>
-        )
-      })}
-      {over &&
-        createPortal(
-          <div data-email-drop-label role="status" style={{ top: over.top, left: over.left }} className={`${FLOAT_PANEL} pointer-events-none flex-row items-center gap-2 px-3 py-1.5 text-12 text-text`}>
-            {over.label}
-          </div>,
-          document.body,
-        )}
-      {menu && <ContextMenu kind="folder" label={`Pasta ${menu.item.label}`} at={{ x: menu.x, y: menu.y }} entries={menuEntries(menu.accountId, menu.item)} onClose={() => setMenu(null)} />}
-      {confirm &&
-        createPortal(
-          <div role="alertdialog" aria-labelledby="email-folder-delete-title" data-email-folder-delete-confirm={confirm.item.path} style={{ top: Math.min(confirm.top, window.innerHeight - 220), left: confirm.left }} className={`${FLOAT_PANEL} w-80 gap-3 p-4`}>
-            <p id="email-folder-delete-title" className="text-13 font-bold text-title">
-              {deleteConfirmation(confirm.item.label, confirm.contents).question}
-            </p>
-            {deleteConfirmation(confirm.item.label, confirm.contents).warning && <p className="text-12 text-text-muted">{deleteConfirmation(confirm.item.label, confirm.contents).warning}</p>}
-            {confirm.error && (
-              <p role="alert" className="text-12 text-rec">
-                {confirm.error}
-              </p>
-            )}
-            <div className="flex flex-wrap gap-2">
-              <Button action="email-folder-delete-confirm" variant="danger" onClick={() => void runDelete()} disabled={confirm.busy}>
-                {deleteConfirmation(confirm.item.label, confirm.contents).button}
-              </Button>
-              <Button action="email-folder-delete-cancel" variant="secondary" onClick={() => setConfirm(null)}>
-                Cancelar
-              </Button>
+    <div className="relative flex min-h-0 flex-1 flex-col">
+      <div ref={listRef} data-email-nav className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto">
+        {accounts.map(({ account, state, error }) => {
+          // Contrato 65 (D1): com uma conta só, a linha dela fica sem a seta e as pastas aparecem sempre.
+          const single = accounts.length === 1
+          const open = single || !collapsed.includes(account.id)
+          const label = accountLabel(list, account)
+          const unread = unreadCount(folders[folderKey(account.id, 'inbox')])
+          const groupId = `email-nav-${account.id}`
+          const tree = trees[account.id]
+          const items = accountTree(tree?.nodes, (tree?.pop3 ?? false) || account.incoming.protocol === 'pop3')
+          const errorMark = state === 'error' && (
+            <span data-email-account-error title={error ?? 'Com problema'} className="size-1.5 shrink-0 bg-side-rec">
+              <span className="sr-only">Com problema</span>
+            </span>
+          )
+          return (
+            <div key={account.id} data-email-account={account.id} className="flex flex-col gap-0.5">
+              {single ? (
+                <div data-email-account-header={account.id} title={account.address} className={`${ROW} text-side-muted`}>
+                  <span className="min-w-0 flex-1 truncate text-left">{label}</span>
+                  {errorMark}
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  data-email-account-toggle={account.id}
+                  aria-expanded={open}
+                  aria-controls={groupId}
+                  title={account.address}
+                  onClick={() => toggle(account.id)}
+                  className={`${ROW} text-side-muted hover:text-side-text`}
+                >
+                  <Icon icon={open ? ChevronDown : ChevronRight} className="shrink-0" />
+                  <span className="min-w-0 flex-1 truncate text-left">{label}</span>
+                  {errorMark}
+                  {!open && unread > 0 && <span className="shrink-0 text-12 tabular text-side-text">{unreadBadge(unread)}</span>}
+                </button>
+              )}
+              {open && (
+                <ul id={groupId} data-email-tree={account.id} className="flex flex-col">
+                  {items.map((item) => folderRow(account, item, 0, unread))}
+                </ul>
+              )}
             </div>
-          </div>,
-          document.body,
-        )}
+          )
+        })}
+        {over &&
+          createPortal(
+            <div data-email-drop-label role="status" style={{ top: over.top, left: over.left }} className={`${FLOAT_PANEL} pointer-events-none flex-row items-center gap-2 px-3 py-1.5 text-12 text-text`}>
+              {over.label}
+            </div>,
+            document.body,
+          )}
+        {menu && <ContextMenu kind="folder" label={`Pasta ${menu.item.label}`} at={{ x: menu.x, y: menu.y }} entries={menuEntries(menu.accountId, menu.item)} onClose={() => setMenu(null)} />}
+        {confirm &&
+          createPortal(
+            <div role="alertdialog" aria-labelledby="email-folder-delete-title" data-email-folder-delete-confirm={confirm.item.path} style={{ top: Math.min(confirm.top, window.innerHeight - 220), left: confirm.left }} className={`${FLOAT_PANEL} w-80 gap-3 p-4`}>
+              <p id="email-folder-delete-title" className="text-13 font-bold text-title">
+                {deleteConfirmation(confirm.item.label, confirm.contents).question}
+              </p>
+              {deleteConfirmation(confirm.item.label, confirm.contents).warning && <p className="text-12 text-text-muted">{deleteConfirmation(confirm.item.label, confirm.contents).warning}</p>}
+              {confirm.error && (
+                <p role="alert" className="text-12 text-rec">
+                  {confirm.error}
+                </p>
+              )}
+              <div className="flex flex-wrap gap-2">
+                <Button action="email-folder-delete-confirm" variant="danger" onClick={() => void runDelete()} disabled={confirm.busy}>
+                  {deleteConfirmation(confirm.item.label, confirm.contents).button}
+                </Button>
+                <Button action="email-folder-delete-cancel" variant="secondary" onClick={() => setConfirm(null)}>
+                  Cancelar
+                </Button>
+              </div>
+            </div>,
+            document.body,
+          )}
+      </div>
+      <ScrollFade target={listRef} />
     </div>
   )
 }

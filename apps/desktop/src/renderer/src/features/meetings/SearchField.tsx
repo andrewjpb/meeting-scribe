@@ -9,6 +9,8 @@ interface SearchFieldProps {
   onChange: (value: string) => void
   /** Texto de exemplo e nome do campo (padrão: "Buscar reuniões"; Configurações usa "Buscar configuração"). */
   label?: string
+  /** Chamado depois que o Esc limpou o campo (contrato 68: Configurações devolve o foco à linha da aba). */
+  onClear?: () => void
 }
 
 /** Diálogo aberto na tela: o Esc é dele, não da busca. */
@@ -18,11 +20,11 @@ const DIALOG_OPEN = 'dialog[open], [role="dialog"], [role="alertdialog"]'
  * "Buscar reuniões" no topo da lista (contrato 10, CA4): ⌘F foca o campo e Esc limpa a busca, com o foco
  * no campo ou fora dele (o campo só existe com a tela de Reuniões aberta), a não ser com um diálogo aberto.
  */
-export function SearchField({ value, onChange, label = 'Buscar reuniões' }: SearchFieldProps) {
+export function SearchField({ value, onChange, label = 'Buscar reuniões', onClear }: SearchFieldProps) {
   const input = useRef<HTMLInputElement>(null)
-  const latest = useRef({ value, onChange })
+  const latest = useRef({ value, onChange, onClear })
   useEffect(() => {
-    latest.current = { value, onChange }
+    latest.current = { value, onChange, onClear }
   })
 
   useEffect(() => {
@@ -31,6 +33,7 @@ export function SearchField({ value, onChange, label = 'Buscar reuniões' }: Sea
         if (event.defaultPrevented || !latest.current.value || document.querySelector(DIALOG_OPEN)) return
         event.preventDefault()
         latest.current.onChange('')
+        latest.current.onClear?.()
         return
       }
       if (!event.metaKey || event.ctrlKey || event.altKey || event.shiftKey || event.key.toLowerCase() !== 'f') return

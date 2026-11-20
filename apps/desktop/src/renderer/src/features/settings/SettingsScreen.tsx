@@ -146,7 +146,6 @@ function SettingsPanels({ tab }: { tab: SettingsTab }) {
   // da aba que deve receber o foco (⌘1…⌘9).
   const pendingRef = useRef<{ row: HTMLElement | null; block: Element | null } | null>(null)
   const focusTabRef = useRef(false)
-  const queryRef = useRef('')
   const [query, setQuery] = useState('')
   // Linha achada que só aparece em certa condição: "Esta opção aparece quando …".
   const [hint, setHint] = useState<SettingsEntry | null>(null)
@@ -165,20 +164,11 @@ function SettingsPanels({ tab }: { tab: SettingsTab }) {
     if (hint && hint.tab !== tab) setHint(null)
   }
 
-  useEffect(() => {
-    queryRef.current = query
-  })
-
   useEffect(() => rememberSettingsTab(tab), [tab])
 
   // ⌘1…⌘9 abrem a aba N enquanto Configurações está aberta (a barra lateral mostra o nível Configurações, pela rota).
   useEffect(() => {
     const onKey = (event: KeyboardEvent): void => {
-      // Esc que limpou a busca (o campo já tratou o evento): o foco volta para a linha da aba aberta.
-      if (event.key === 'Escape') {
-        if (event.defaultPrevented && queryRef.current) focusTabLink(tab)
-        return
-      }
       const next = tabForShortcut(event)
       if (!next || event.repeat) return
       event.preventDefault()
@@ -189,7 +179,7 @@ function SettingsPanels({ tab }: { tab: SettingsTab }) {
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [navigate, tab])
+  }, [navigate])
 
   // A cada navegação: a linha escolhida na busca (rola e destaca por 2 s), a âncora da URL (rola até o
   // bloco e foca o campo pedido) ou, sem nada disso, o topo da aba.
@@ -285,7 +275,7 @@ function SettingsPanels({ tab }: { tab: SettingsTab }) {
               // O campo (40 px) ocupa 32 px na linha do cabeçalho, como ao lado do título de 26/32 de antes: a busca fica
               // onde estava e o título, centrado nela.
               <div data-settings-search className="-my-1">
-                <SearchField value={query} onChange={search} label="Buscar configuração" />
+                <SearchField value={query} onChange={search} label="Buscar configuração" onClear={() => focusTabLink(tab)} />
               </div>
             }
           />
