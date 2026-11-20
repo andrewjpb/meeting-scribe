@@ -14,13 +14,14 @@ import { EmailFoldersSection } from './EmailFoldersSection'
 import { EmailRulesSection } from './EmailRulesSection'
 import { EmailSection } from './EmailSection'
 import { EmailSignatureSection } from './EmailSignatureSection'
+import { InvitesSection } from './InvitesSection'
 
 // D8: a conta escolhida vale para Assinatura, Regras e Pastas e fica lembrada enquanto o app está aberto.
 let rememberedAccount: string | null = null
 
 /**
  * Configurações › Email (contrato 55, CA14 a CA22, telas 09 a 12): Contas, o seletor de conta, Assinatura, Regras,
- * Pastas e Avisos, nesta ordem. Sem conta, só Contas, a nota e Avisos.
+ * Pastas e Avisos, nesta ordem; depois, Convites (contrato 63). Sem conta, só Contas, a nota e Avisos.
  */
 export function EmailSettingsTab() {
   const accounts = useEmail((state) => state.accounts)
@@ -91,6 +92,8 @@ export function EmailSettingsTab() {
           <Switch checked={notifications} labelledBy="settings-email-notifications" onChange={(emailNotifications) => void update({ emailNotifications })} />
         </SettingRow>
       </Section>
+      {/* Contrato 63: os convites, no fim (vale para todas as contas). */}
+      <InvitesSection />
       <MoveToPicker />
     </>
   )

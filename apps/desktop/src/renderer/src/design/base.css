@@ -15,6 +15,7 @@
   --color-text-faint: var(--text-faint);
   --color-accent: var(--accent);
   --color-on-accent: var(--on-accent);
+  --color-hl: var(--hl);
   --color-mic: var(--mic);
   --color-sys: var(--sys);
   --color-rec: var(--rec);

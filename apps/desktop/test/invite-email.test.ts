@@ -866,7 +866,8 @@ describe('N1 estático (CA15)', () => {
     const index = textOf('main/index.ts')
     const line = index.split('\n').find((item) => item.includes('.sendInviteReply(')) ?? ''
     expect(line.trimStart().startsWith("handle('scribe:invite-reply', appOrigin, (event, request) => email.sendInviteReply(")).toBe(true)
-    expect(all.filter(({ text }) => text.includes("'scribe:invite-reply'")).map(({ file }) => file).sort()).toEqual(['main/index.ts', 'preload/index.ts', 'shared/ipc.ts'])
+    // Contrato 63: o smoke também cita o canal, para conferir que o bloqueio o recusa (passo 11); não responde nada.
+    expect(all.filter(({ text }) => text.includes("'scribe:invite-reply'")).map(({ file }) => file).sort()).toEqual(['main/index.ts', 'main/smoke.ts', 'preload/index.ts', 'shared/ipc.ts'])
     // O 62 é quem liga o aviso (CA16 do 62): só para o registro de convites, nunca para outro envio.
     expect(index.match(/onInviteReplied:[^\n]*/g)).toEqual(['onInviteReplied: (event) => void invites?.recordReply(event).catch(() => undefined),'])
   })

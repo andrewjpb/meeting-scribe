@@ -43,6 +43,13 @@ export const EMAIL_SIGNATURE_REPLY_DESCRIPTION = 'Põe a assinatura acima do tex
 export const EMAIL_RULES_DESCRIPTION = 'As regras são do app: agem no email que chega, na ordem da lista, só enquanto o Meeting Scribe está aberto. “Parar aqui” impede as regras de baixo.'
 export const EMAIL_FOLDERS_DESCRIPTION = 'As pastas da conta no servidor. Para mover mensagens, arraste para a pasta na tela de email.'
 
+/** Descrições do bloco "Convites" da aba Email (contrato 63, CA21), as mesmas na tela e na busca. */
+export const INVITE_CALENDAR_DESCRIPTION = 'Onde entra o convite aceito. Dá para trocar em cada convite.'
+export const INVITE_CALENDAR_NO_ACCESS_DESCRIPTION = 'Permita o acesso ao Calendário para ver as agendas.'
+export const INVITE_ADD_ON_ACCEPT_DESCRIPTION = 'Ligado, Aceitar e Talvez também gravam o evento no Calendário do Mac. Dá para desligar em cada convite.'
+export const INVITE_ACCESS_DESCRIPTION = 'Acesso completo: o app lista as agendas, acha o convite que já está lá e atualiza o que ele mesmo gravou. Nunca apaga evento que não criou.'
+export const INVITE_SUGGEST_DESCRIPTION = 'Mostra “Sugerir evento” na leitura. No clique, o Claude (Haiku) lê só o texto do email aberto e preenche um evento para você conferir. Nada é gravado nem respondido sem você.'
+
 /** Uma linha de configuração no índice da busca. */
 export interface SettingsEntry {
   tab: SettingsTab
@@ -129,6 +136,11 @@ export function settingsIndex(agent: string): SettingsEntry[] {
     row('email', 'Regras', 'Regras', EMAIL_RULES_DESCRIPTION, 'há uma conta de email', 'regra executar agora mover marcar apagar não avisar'),
     row('email', 'Pastas', 'Pastas', EMAIL_FOLDERS_DESCRIPTION, 'há uma conta de email', 'pasta criar renomear apagar mover'),
     row('email', 'Avisos', 'Avisar quando chega email', EMAIL_NOTIFICATIONS_DESCRIPTION, undefined, 'avisos notificação'),
+    // Contrato 63: o bloco "Convites", no fim da aba (vale para todas as contas).
+    row('email', 'Convites', 'Agenda padrão', INVITE_CALENDAR_DESCRIPTION, undefined, 'convite agenda calendário'),
+    row('email', 'Convites', 'Pôr na agenda ao aceitar', INVITE_ADD_ON_ACCEPT_DESCRIPTION, undefined, 'convite agenda calendário aceitar'),
+    row('email', 'Convites', 'Acesso ao Calendário do Mac', INVITE_ACCESS_DESCRIPTION, undefined, 'convite agenda calendário permissão'),
+    row('email', 'Convites', 'Sugerir evento quando o email não tem convite', INVITE_SUGGEST_DESCRIPTION, undefined, 'convite sugerir evento agenda'),
     // Contrato 31: um cartão por plugin, com o nome (e o estado), "Salvar plugin" e "Como instalar". Contrato 46: o
     // do navegador tem também "Ativar ponte".
     ...APP_PLUGINS.flatMap((plugin) => [

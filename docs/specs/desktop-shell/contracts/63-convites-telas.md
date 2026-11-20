@@ -566,6 +566,13 @@ navegado — perguntar ao Andrew antes de gerar.
 
 ## Decisões deste contrato
 Tomadas pelo coordenador em 19/11/2026 (eram **[decidir]**); o Andrew confirma no ok do texto.
+- **Pulso do "Enviando" (CA9) no ritmo do `rec-pulse` do app (1,6 s), não em `--duration-slow`.** Com 180 ms por ciclo o
+  quadrado piscaria 5,5 vezes por segundo, o que não dá para usar; vale o pulso que o app já usa no quadrado de gravação
+  (só opacidade, nada com `prefers-reduced-motion`). Registrado na devolução do 63, em 19/11/2026.
+- **"Pôr na agenda" depois de responder** (devolução do 63): com resposta Aceito ou Talvez e o evento fora da agenda
+  (`calendar.status` `absent`/`needs-access` com `actions.add`), a caixa do CA6 vira o botão secundário
+  `data-action="invite-add-after"` "Pôr na agenda" com o seletor ao lado, no padrão do "Pôr de novo" (CA16). Chama só o
+  `scribe:invite-add`, sem REPLY. Trocar a resposta no segmentado não grava sozinho.
 - **"Sugerir evento" é todo do 64** (botão na barra, cartão do quadro 09, IA e canais). O 63 fica com o interruptor em
   Configurações e exporta as peças do cartão (CA27).
 - **A agenda escolhida no cartão não vira a padrão.** Vale só para aquele convite; a padrão só muda em Configurações (o

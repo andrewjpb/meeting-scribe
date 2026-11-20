@@ -154,6 +154,11 @@ describe('aba Email no índice (contrato 55, CA23)', () => {
       'Regras › Regras',
       'Pastas › Pastas',
       'Avisos › Avisar quando chega email',
+      // Contrato 63 (CA23): o bloco "Convites", no fim da aba.
+      'Convites › Agenda padrão',
+      'Convites › Pôr na agenda ao aceitar',
+      'Convites › Acesso ao Calendário do Mac',
+      'Convites › Sugerir evento quando o email não tem convite',
     ])
   })
 

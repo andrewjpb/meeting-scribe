@@ -1,4 +1,4 @@
-import { Check, FolderInput, Forward, Mail, MailOpen, PenLine, Reply, SquarePen, Trash2, TriangleAlert, X } from 'lucide-react'
+import { Calendar, CalendarX, Check, FolderInput, Forward, Mail, MailOpen, PenLine, Reply, SquarePen, Trash2, TriangleAlert, X } from 'lucide-react'
 import { useEffect, useRef, useState, type DragEvent, type KeyboardEvent, type MouseEvent, type RefObject } from 'react'
 import { Link, Navigate, useLocation, useNavigate, useParams } from 'react-router'
 import { emailFolderFromSlug, emailFolderSegment, emailPath, settingsPath, type EmailNavigationState, type EmailRouteFolder } from '@shared/routes'
@@ -61,6 +61,17 @@ interface MessageRowProps {
   onDragEnd: () => void
 }
 
+/** O calendário (ou o calendário com X, no cancelamento) à direita do assunto (contrato 63, CA19). */
+function InviteRowIcon({ cancel }: { cancel: boolean }) {
+  const label = cancel ? 'Convite cancelado' : 'Convite de reunião'
+  return (
+    <span data-email-row-invite={cancel ? 'cancel' : 'invite'} title={label} className="inline-flex shrink-0 text-text-faint">
+      <Icon icon={cancel ? CalendarX : Calendar} size={14} />
+      <span className="sr-only">{label}</span>
+    </span>
+  )
+}
+
 /** Uma linha da lista, no desenho do Outlook: iniciais, quem mandou em peso forte, a hora à direita, o assunto e a prévia. */
 function MessageRow({ message, sentMailbox, active, selecting, checked, leaving, draggable, onClick, onMenu, onDragStart, onDragEnd }: MessageRowProps) {
   const ref = useRef<HTMLButtonElement | null>(null)
@@ -108,6 +119,8 @@ function MessageRow({ message, sentMailbox, active, selecting, checked, leaving,
           <span data-email-row-subject className={`min-w-0 flex-1 truncate text-13 ${unread ? 'font-medium text-accent' : 'text-text'}`}>
             {message.subject || '(sem assunto)'}
           </span>
+          {/* Contrato 63 (CA19): o convite, só com o corpo já baixado (nada é pedido por causa do ícone). */}
+          {body?.invite && <InviteRowIcon cancel={body.invite.method === 'CANCEL'} />}
           {unread && <span data-email-unread-dot aria-hidden="true" className="size-1.5 shrink-0 bg-accent" />}
           {unread && <span className="sr-only">Não lida</span>}
         </span>
