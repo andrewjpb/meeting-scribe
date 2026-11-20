@@ -18,6 +18,15 @@ import type {
   RedesPublicationsPayload,
   RedesState,
 } from '@shared/redes'
+// 73: comentários
+import type { RedesCommentActionResult, RedesCommentReplyResult, RedesCommentsPayload } from '@shared/redes'
+// fim 73
+// 75: métricas
+import type { MetricPeriod, RedesMetricsState } from '@shared/redes'
+// fim 75
+// 74: mensagens
+import type { RedesMessageSendResult, RedesMessagesPayload } from '@shared/redes'
+// fim 74
 
 const FAILED = 'Não foi possível falar com o app. Tente de novo.'
 
@@ -80,6 +89,49 @@ interface RedesStoreState {
   /** "Publicar agora" e "Agendar": pelo preload, com o clique da pessoa (token de clique). */
   publish: (id: string | null, save?: PublicationSaveInput) => Promise<PublicationActionResult>
   schedule: (id: string | null, at: string, save?: PublicationSaveInput) => Promise<PublicationActionResult>
+  // 73: comentários
+  /** Contrato 73: os comentários de cada conta, agrupados por mídia, como o main mandou por último. */
+  comments: Record<string, RedesCommentsPayload>
+  /** A leitura em curso de cada conta (o "Atualizar" desabilita). */
+  commentsLoading: Record<string, boolean>
+  /** O que está guardado no main (sem ler o Instagram): o número do nível ao abrir o app. */
+  loadComments: (accountId: string) => Promise<void>
+  /** Abrir a seção e o "Atualizar": lê as mídias e os comentários agora. */
+  refreshComments: (accountId: string) => Promise<void>
+  /** Abrir uma mídia: os comentários dela ficam lidos (na tela na hora; o main confirma). */
+  markCommentsRead: (accountId: string, mediaId: string) => Promise<void>
+  /** Os comentários que eram novos quando a mídia foi aberta (o selo "novo" fica neles enquanto ela está aberta). */
+  commentsFresh: Record<string, string[]>
+  clearCommentsFresh: () => void
+  replyComment: (accountId: string, commentId: string, message: string) => Promise<RedesCommentReplyResult>
+  hideComment: (accountId: string, commentId: string, hide: boolean) => Promise<RedesCommentActionResult>
+  deleteComment: (accountId: string, commentId: string) => Promise<RedesCommentActionResult>
+  // fim 73
+  // 74: mensagens
+  /** Contrato 74: as conversas e mensagens de cada conta, como o main mandou por último. */
+  messages: Record<string, RedesMessagesPayload>
+  /** A leitura em curso de cada conta (o "Atualizar" desabilita). */
+  messagesLoading: Record<string, boolean>
+  /** O que está guardado no main (sem ler o Instagram): o número do nível ao abrir o app. */
+  loadMessages: (accountId: string) => Promise<void>
+  /** "Atualizar" e a abertura da seção: lê as conversas agora. */
+  refreshMessages: (accountId: string) => Promise<void>
+  /** A conversa aberta pela pessoa deixa de ser não lida. */
+  markConversationRead: (accountId: string, conversationId: string) => Promise<void>
+  /** "Enviar": pelo preload, com o clique da pessoa (token de clique). */
+  sendMessage: (accountId: string, conversationId: string, text: string) => Promise<RedesMessageSendResult>
+  // fim 74
+  // 75: métricas
+  /** Contrato 75: as métricas de cada conta (os três períodos e as mídias), como o main mandou por último. */
+  metrics: Record<string, RedesMetricsState>
+  /** O período escolhido em cada conta, nesta sessão (28 dias até escolher outro). */
+  metricsPeriod: Record<string, MetricPeriod>
+  /** A leitura em curso de cada conta (o "Atualizar" desabilita). */
+  metricsLoading: Record<string, boolean>
+  /** Abrir a seção ou trocar o período: o cache do main (1 h) ou a Meta; `force` é o "Atualizar". */
+  loadMetrics: (accountId: string, period: MetricPeriod, force?: boolean) => Promise<void>
+  setMetricsPeriod: (accountId: string, period: MetricPeriod) => void
+  // fim 75
 }
 
 const failedAction: PublicationActionResult = { ok: false, error: FAILED }
@@ -108,6 +160,36 @@ export const useRedes = create<RedesStoreState>()((set, get) => {
     }
   }
 
+  // 74: mensagens
+  /** O estado de mensagens de uma conta e o número de não lidas dela no nível Redes. */
+  const withMessages = (payload: RedesMessagesPayload): void => {
+    if (!payload.accountId) return
+    set((current) => ({
+      messages: { ...current.messages, [payload.accountId]: payload },
+      unread: { ...current.unread, [payload.accountId]: { comments: current.unread[payload.accountId]?.comments ?? 0, messages: payload.unread } },
+    }))
+  }
+  // fim 74
+  // 73: comentários
+  /** Os comentários de uma conta e o número de não lidos dela no nível Redes. */
+  const withComments = (payload: RedesCommentsPayload): void => {
+    if (!payload.accountId) return
+    set((current) => ({
+      comments: { ...current.comments, [payload.accountId]: payload },
+      unread: { ...current.unread, [payload.accountId]: { comments: payload.unread, messages: current.unread[payload.accountId]?.messages ?? 0 } },
+    }))
+  }
+  /** Uma ação de comentário: o estado novo volta junto com o resultado (e chega também pelo evento). */
+  const commentAction = async <T extends RedesCommentActionResult | RedesCommentReplyResult>(call: () => Promise<T>): Promise<T | { ok: false; error: string }> => {
+    try {
+      const result = await call()
+      if (result.ok) withComments(result.payload)
+      return result
+    } catch {
+      return { ok: false, error: FAILED }
+    }
+  }
+  // fim 73
   const withPublications = (payload: RedesPublicationsPayload): void => {
     if (!payload.accountId) return
     set((current) => ({
@@ -145,6 +227,122 @@ export const useRedes = create<RedesStoreState>()((set, get) => {
     collapsed: [],
     thumbs: {},
     notice: null,
+    // 73: comentários
+    comments: {},
+    commentsLoading: {},
+    loadComments: async (accountId) => {
+      try {
+        withComments(await window.__scribeApi.invoke('scribe:redes-comments', { accountId }))
+      } catch {
+        // Os comentários chegam pelo evento quando o main responder de novo.
+      }
+    },
+    refreshComments: async (accountId) => {
+      set((current) => ({ commentsLoading: { ...current.commentsLoading, [accountId]: true } }))
+      try {
+        withComments(await window.__scribeApi.invoke('scribe:redes-comments-refresh', { accountId }))
+      } catch {
+        set((current) => {
+          const last = current.comments[accountId]
+          return { comments: { ...current.comments, [accountId]: { ...(last ?? { accountId, media: [], unread: 0, updatedAt: null }), error: FAILED } } }
+        })
+      } finally {
+        set((current) => ({ commentsLoading: { ...current.commentsLoading, [accountId]: false } }))
+      }
+    },
+    markCommentsRead: async (accountId, mediaId) => {
+      const last = get().comments[accountId]
+      const target = last?.media.find((item) => item.mediaId === mediaId)
+      if (!last || !target || target.unread === 0) return
+      // Na tela na hora (o número do nível também); o main confirma com o estado inteiro.
+      const readAll = <C extends { read: boolean; replies: C[] }>(comment: C): C => ({ ...comment, read: true, replies: comment.replies.map(readAll) })
+      const media = last.media.map((item) => (item.mediaId === mediaId ? { ...item, unread: 0, comments: item.comments.map(readAll) } : item))
+      const fresh = target.comments.flatMap((top) => [top, ...top.replies]).filter((comment) => !comment.read).map((comment) => comment.id)
+      set((current) => ({ commentsFresh: { ...current.commentsFresh, [mediaId]: [...(current.commentsFresh[mediaId] ?? []), ...fresh] } }))
+      withComments({ ...last, media, unread: media.reduce((sum, item) => sum + item.unread, 0) })
+      try {
+        withComments(await window.__scribeApi.invoke('scribe:redes-comments-read', { accountId, mediaId }))
+      } catch {
+        // A próxima leitura traz o estado do main.
+      }
+    },
+    commentsFresh: {},
+    clearCommentsFresh: () => set({ commentsFresh: {} }),
+    // Responder e excluir pelo preload, com o clique da pessoa (token de clique); nada esperado antes.
+    replyComment: (accountId, commentId, message) => commentAction(() => window.__scribeApi.redesCommentReply(accountId, commentId, message)),
+    hideComment: (accountId, commentId, hide) => commentAction(() => window.__scribeApi.invoke('scribe:redes-comment-hide', { accountId, commentId, hide })),
+    deleteComment: (accountId, commentId) => commentAction(() => window.__scribeApi.redesCommentDelete(accountId, commentId)),
+    // fim 73
+    // 74: mensagens
+    messages: {},
+    messagesLoading: {},
+    loadMessages: async (accountId) => {
+      try {
+        withMessages(await window.__scribeApi.invoke('scribe:redes-messages', { accountId }))
+      } catch {
+        // O estado chega pelo evento quando o main responder de novo.
+      }
+    },
+    refreshMessages: async (accountId) => {
+      set((current) => ({ messagesLoading: { ...current.messagesLoading, [accountId]: true } }))
+      try {
+        withMessages(await window.__scribeApi.invoke('scribe:redes-messages-refresh', { accountId }))
+      } catch {
+        set((current) => {
+          const last = current.messages[accountId]
+          return last ? { messages: { ...current.messages, [accountId]: { ...last, error: FAILED } } } : {}
+        })
+      } finally {
+        set((current) => ({ messagesLoading: { ...current.messagesLoading, [accountId]: false } }))
+      }
+    },
+    markConversationRead: async (accountId, conversationId) => {
+      // Na tela na hora (o número do nível também); o main confirma com o estado inteiro.
+      set((current) => {
+        const last = current.messages[accountId]
+        if (!last) return {}
+        const conversations = last.conversations.map((item) => (item.id === conversationId ? { ...item, unread: false } : item))
+        const unread = last.access === 'denied' ? 0 : conversations.filter((item) => item.unread).length
+        return { messages: { ...current.messages, [accountId]: { ...last, conversations, unread } }, unread: { ...current.unread, [accountId]: { comments: current.unread[accountId]?.comments ?? 0, messages: unread } } }
+      })
+      try {
+        withMessages(await window.__scribeApi.invoke('scribe:redes-conversation-read', { accountId, conversationId }))
+      } catch {
+        // A próxima leitura traz o estado do main.
+      }
+    },
+    sendMessage: async (accountId, conversationId, text) => {
+      try {
+        // Sem nada esperado antes: o preload confere a ativação do clique na hora.
+        const result = await window.__scribeApi.redesMessageSend({ accountId, conversationId, text })
+        if (result.ok) withMessages(result.payload)
+        return result
+      } catch {
+        return { ok: false, error: FAILED }
+      }
+    },
+    // fim 74
+    // 75: métricas
+    metrics: {},
+    metricsPeriod: {},
+    metricsLoading: {},
+    loadMetrics: async (accountId, period, force = false) => {
+      set((current) => ({ metricsLoading: { ...current.metricsLoading, [accountId]: true } }))
+      try {
+        const state = await window.__scribeApi.invoke(force ? 'scribe:redes-metrics-refresh' : 'scribe:redes-metrics', { accountId, period })
+        if (state.accountId === accountId) set((current) => ({ metrics: { ...current.metrics, [accountId]: state } }))
+      } catch {
+        // Fica o que já estava; o erro do pedido que nem chegou ao main vai na nota.
+        set((current) => {
+          const last = current.metrics[accountId]
+          return { metrics: { ...current.metrics, [accountId]: { ...(last ?? { accountId, account: { 7: null, 28: null, 90: null }, media: [], updatedAt: null }), error: FAILED } } }
+        })
+      } finally {
+        set((current) => ({ metricsLoading: { ...current.metricsLoading, [accountId]: false } }))
+      }
+    },
+    setMetricsPeriod: (accountId, period) => set((current) => ({ metricsPeriod: { ...current.metricsPeriod, [accountId]: period } })),
+    // fim 75
     setNotice: (notice) => set({ notice }),
 
     load: async () => {
@@ -315,9 +513,70 @@ export function useRedesSync(): void {
         ...(payload.quota ? { quota: { ...current.quota, [payload.accountId]: payload.quota } } : {}),
       }))
     })
+    // 75: métricas
+    const offMetrics = window.__scribeApi.on('scribe:redes-metrics', (state) => {
+      if (!state.accountId) return
+      useRedes.setState((current) => ({ metrics: { ...current.metrics, [state.accountId]: state } }))
+    })
+    // fim 75
+    // 74: mensagens
+    // Contrato 74: as mensagens de qualquer janela; a conta nova lê o que está guardado (o número do nível ao abrir o
+    // app) e a que saiu leva as mensagens e o número dela.
+    const offMessages = window.__scribeApi.on('scribe:redes-messages', (payload) => {
+      if (!payload.accountId) return
+      useRedes.setState((current) => ({
+        messages: { ...current.messages, [payload.accountId]: payload },
+        unread: { ...current.unread, [payload.accountId]: { comments: current.unread[payload.accountId]?.comments ?? 0, messages: payload.unread } },
+      }))
+    })
+    const offAccounts = useRedes.subscribe((current, previous) => {
+      if (current.state === previous.state || !current.state) return
+      const ids = new Set(current.state.accounts.map((account) => account.id))
+      if (Object.keys(current.messages).some((id) => !ids.has(id))) {
+        useRedes.setState((now) => ({
+          messages: Object.fromEntries(Object.entries(now.messages).filter(([id]) => ids.has(id))),
+          unread: Object.fromEntries(Object.entries(now.unread).map(([id, entry]) => [id, ids.has(id) ? entry : { ...entry, messages: 0 }])),
+        }))
+      }
+      for (const id of ids) if (!current.messages[id]) void current.loadMessages(id)
+    })
+    // fim 74
+    // 73: comentários
+    // Contrato 73: os comentários de qualquer janela; a conta nova lê o que está guardado (o número do nível ao abrir o
+    // app) e a que saiu leva os comentários e o número dela.
+    const offComments = window.__scribeApi.on('scribe:redes-comments', (payload) => {
+      if (!payload.accountId) return
+      useRedes.setState((current) => ({
+        comments: { ...current.comments, [payload.accountId]: payload },
+        unread: { ...current.unread, [payload.accountId]: { comments: payload.unread, messages: current.unread[payload.accountId]?.messages ?? 0 } },
+      }))
+    })
+    const offCommentAccounts = useRedes.subscribe((current, previous) => {
+      if (current.state === previous.state || !current.state) return
+      const ids = new Set(current.state.accounts.map((account) => account.id))
+      if (Object.keys(current.comments).some((id) => !ids.has(id))) {
+        useRedes.setState((now) => ({
+          comments: Object.fromEntries(Object.entries(now.comments).filter(([id]) => ids.has(id))),
+          unread: Object.fromEntries(Object.entries(now.unread).map(([id, entry]) => [id, ids.has(id) ? entry : { ...entry, comments: 0 }])),
+        }))
+      }
+      for (const id of ids) if (!current.comments[id]) void current.loadComments(id)
+    })
+    // fim 73
     return () => {
       offState()
       offPublications()
+      // 73: comentários
+      offComments()
+      offCommentAccounts()
+      // fim 73
+      // 74: mensagens
+      offMessages()
+      offAccounts()
+      // fim 74
+      // 75: métricas
+      offMetrics()
+      // fim 75
     }
   }, [])
 }

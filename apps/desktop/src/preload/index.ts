@@ -8,6 +8,12 @@ import {
   PRELOAD_ONLY_EVENTS,
   RECORDING_SESSION_CHANNELS,
   REDES_CLICK_MESSAGE,
+  // 73: comentários
+  REDES_COMMENT_CLICK_MESSAGE,
+  // fim 73
+  // 74: mensagens
+  REDES_MESSAGE_CLICK_MESSAGE,
+  // fim 74
   REDES_PRELOAD_ONLY_EVENTS,
   RENDERER_EVENT_CHANNELS,
   type RecordingSessionTag,
@@ -104,6 +110,30 @@ const api: ScribeApi = {
     ipcRenderer.send('scribe:redes-click', clickToken)
     return ipcRenderer.invoke('scribe:redes-publication-schedule', { ...(id ? { id } : {}), at, clickToken, ...(save ? { save } : {}) })
   },
+  // 74: mensagens
+  // Contrato 74: responder uma mensagem direta é saída: a mesma ativação viva e o token de clique das redes.
+  redesMessageSend(request) {
+    if (!navigator.userActivation.isActive) return Promise.resolve({ ok: false, error: REDES_MESSAGE_CLICK_MESSAGE })
+    const clickToken = crypto.randomUUID()
+    ipcRenderer.send('scribe:redes-click', clickToken)
+    return ipcRenderer.invoke('scribe:redes-message-send', { accountId: request.accountId, conversationId: request.conversationId, text: request.text, clickToken })
+  },
+  // fim 74
+  // 73: comentários
+  // Contrato 73: responder e excluir um comentário são saída: a mesma ativação viva e o token de clique das redes.
+  redesCommentReply(accountId, commentId, message) {
+    if (!navigator.userActivation.isActive) return Promise.resolve({ ok: false, error: REDES_COMMENT_CLICK_MESSAGE })
+    const clickToken = crypto.randomUUID()
+    ipcRenderer.send('scribe:redes-click', clickToken)
+    return ipcRenderer.invoke('scribe:redes-comment-reply', { accountId, commentId, message, clickToken })
+  },
+  redesCommentDelete(accountId, commentId) {
+    if (!navigator.userActivation.isActive) return Promise.resolve({ ok: false, error: REDES_COMMENT_CLICK_MESSAGE })
+    const clickToken = crypto.randomUUID()
+    ipcRenderer.send('scribe:redes-click', clickToken)
+    return ipcRenderer.invoke('scribe:redes-comment-delete', { accountId, commentId, clickToken })
+  },
+  // fim 73
   on(channel, listener) {
     assertChannel(MAIN_EVENT_CHANNELS, channel)
     const wrapped = (_event: IpcRendererEvent, payload: Parameters<typeof listener>[0]): void => listener(payload)

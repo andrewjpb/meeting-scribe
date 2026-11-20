@@ -54,6 +54,11 @@ export const INVITE_SUGGEST_DESCRIPTION = 'Mostra “Sugerir evento” na leitur
 export const INSTAGRAM_SECTION_DESCRIPTION = 'Contas profissionais conectadas por token, para publicar, responder e ver métricas daqui. O token fica cifrado neste Mac.'
 export const INSTAGRAM_TOKEN_DESCRIPTION = 'Gerado no painel da Meta; começa com IGAA. Vale 60 dias e o app renova sozinho enquanto estiver em uso.'
 export const INSTAGRAM_PREREQUISITE = 'A conta precisa ser profissional (Business ou Creator) e pública.'
+// 73: comentários
+/** Contrato 73: "Atualizar comentários e mensagens a cada" (`redesPollMinutes`), a mesma na tela e na busca. */
+export const REDES_POLL_NAME = 'Atualizar comentários e mensagens a cada'
+export const REDES_POLL_DESCRIPTION = 'De quantos em quantos minutos o app lê os comentários e as mensagens do Instagram. Também atualiza ao abrir a seção.'
+// fim 73
 export const MEDIA_HOST_SECTION_DESCRIPTION = 'Imagens e carrosséis precisam de um endereço público para o Instagram buscar. Compatível com Cloudflare R2 e qualquer S3. Vídeos não precisam.'
 export const MEDIA_HOST_FIELDS = [
   { key: 'endpoint', name: 'Endpoint', description: 'Endereço S3 do provedor, com https://.' },
@@ -143,6 +148,9 @@ export function settingsIndex(agent: string): SettingsEntry[] {
     row('contas', 'WhatsApp', 'Mostrar quando estou digitando', WHATSAPP_TYPING_SIGNAL_DESCRIPTION),
     // Contrato 69: o Instagram por token e o armazenamento de mídia, depois do WhatsApp.
     row('contas', 'Instagram', 'Token de acesso', INSTAGRAM_TOKEN_DESCRIPTION, undefined, 'instagram meta conta conectar token redes'),
+    // 73: comentários
+    row('contas', 'Instagram', REDES_POLL_NAME, REDES_POLL_DESCRIPTION, undefined, 'instagram comentários mensagens atualizar redes'),
+    // fim 73
     ...MEDIA_HOST_FIELDS.map((field) => row('contas', 'Armazenamento de mídia (S3)', field.name, field.description, undefined, 's3 r2 cloudflare armazenamento mídia instagram')),
     row('contas', 'Armazenamento de mídia (S3)', MEDIA_HOST_PATH_STYLE_NAME, MEDIA_HOST_PATH_STYLE_DESCRIPTION, undefined, 's3 r2 armazenamento mídia'),
     row('contas', 'Google', 'Guardar no Google Drive', 'Depois de cada reunião, o áudio, a transcrição e o resumo vão para a pasta "LAP Reuniões" do seu Drive.', 'a conta Google está conectada'),

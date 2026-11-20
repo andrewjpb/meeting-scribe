@@ -41,6 +41,15 @@ import type {
   RedesPublicationsPayload,
   RedesState,
 } from './redes'
+// 73: comentários
+import type { RedesCommentActionResult, RedesCommentReplyResult, RedesCommentsPayload } from './redes'
+// fim 73
+// 75: métricas
+import type { MetricPeriod, RedesMetricsState } from './redes'
+// fim 75
+// 74: mensagens
+import type { RedesMessageSendResult, RedesMessagesPayload } from './redes'
+// fim 74
 import type { RouteId, SettingsTab } from './routes'
 import type { AppSettings, SettingsPatch } from './settings-defaults'
 import type { TranscriptCopyResult, TranscriptDocument, TranslateTurnResult, TranscriptionTokenResult } from './transcription'
@@ -544,6 +553,39 @@ export interface InvokeChannels {
    * cópia em `userData/redes/midia/` ou de um arquivo que o diálogo de mídias devolveu nesta sessão; vídeo e o resto, `null`.
    */
   'scribe:redes-media-thumb': { request: { path: string }; response: string | null }
+  // 73: comentários
+  /** Contrato 73: os comentários guardados de uma conta (sem ler o Instagram), agrupados por mídia, com os não lidos. */
+  'scribe:redes-comments': { request: { accountId: string }; response: RedesCommentsPayload }
+  /** Ao abrir a seção e no "Atualizar": lê as 25 mídias mais recentes e os comentários agora. */
+  'scribe:redes-comments-refresh': { request: { accountId: string }; response: RedesCommentsPayload }
+  /**
+   * "Responder" (Enter): a resposta vai ao comentário (a de uma resposta, ao comentário de cima). Até 2.200 caracteres.
+   * Só pelo `redesCommentReply` do preload, com o token de clique das redes.
+   */
+  'scribe:redes-comment-reply': { request: { accountId: string; commentId: string; message: string; clickToken: string }; response: RedesCommentReplyResult }
+  /** "Ocultar" (`hide: true`) ou "Mostrar". */
+  'scribe:redes-comment-hide': { request: { accountId: string; commentId: string; hide: boolean }; response: RedesCommentActionResult }
+  /** "Excluir", depois da confirmação na linha: só pelo `redesCommentDelete` do preload, com o token de clique das redes. */
+  'scribe:redes-comment-delete': { request: { accountId: string; commentId: string; clickToken: string }; response: RedesCommentActionResult }
+  /** A mídia aberta na tela: os comentários dela ficam lidos. */
+  'scribe:redes-comments-read': { request: { accountId: string; mediaId: string }; response: RedesCommentsPayload }
+  // fim 73
+  // 75: métricas
+  /** Contrato 75: as métricas da conta no período e das 25 mídias recentes (cache de 1 h; passou, lê da Meta). */
+  'scribe:redes-metrics': { request: { accountId: string; period: MetricPeriod }; response: RedesMetricsState }
+  /** Contrato 75: "Atualizar" das métricas: lê da Meta de novo. */
+  'scribe:redes-metrics-refresh': { request: { accountId: string; period: MetricPeriod }; response: RedesMetricsState }
+  // fim 75
+  // 74: mensagens
+  /** Contrato 74: as conversas e mensagens guardadas de uma conta (sem ler o Instagram). */
+  'scribe:redes-messages': { request: { accountId: string }; response: RedesMessagesPayload }
+  /** "Atualizar" e a abertura da seção: lê as conversas agora (só as mensagens das que mudaram). */
+  'scribe:redes-messages-refresh': { request: { accountId: string }; response: RedesMessagesPayload }
+  /** "Enviar" a resposta: só pelo `redesMessageSend` do preload, com o token de clique. Até 1000 bytes. */
+  'scribe:redes-message-send': { request: { accountId: string; conversationId: string; text: string; clickToken: string }; response: RedesMessageSendResult }
+  /** A conversa aberta na tela: deixa de ser não lida. */
+  'scribe:redes-conversation-read': { request: { accountId: string; conversationId: string }; response: RedesMessagesPayload }
+  // fim 74
 }
 
 /** renderer -> main, sem resposta (`__scribeApi.send` / `ipcMain.on`). */
@@ -668,6 +710,18 @@ export interface MainEvents {
   'scribe:redes-state': RedesState
   /** Contrato 71: a fila de publicações de uma conta mudou (vai inteira, com a cota em cache). Não chega bloqueado. */
   'scribe:redes-publications': RedesPublicationsPayload
+  // 73: comentários
+  /** Contrato 73: os comentários de uma conta mudaram (leitura, resposta, ocultar, excluir, lida). Não chega bloqueado. */
+  'scribe:redes-comments': RedesCommentsPayload
+  // fim 73
+  // 75: métricas
+  /** Contrato 75: as métricas de uma conta foram lidas (ao abrir, no "Atualizar" e a cada hora). Não chega bloqueado. */
+  'scribe:redes-metrics': RedesMetricsState
+  // fim 75
+  // 74: mensagens
+  /** Contrato 74: as conversas e mensagens de uma conta mudaram (leitura, envio, lida). Não chega bloqueado. */
+  'scribe:redes-messages': RedesMessagesPayload
+  // fim 74
   /**
    * Contrato 43: o clique na notificação de email: a Caixa de Entrada da conta com a mensagem aberta. Contrato 55: a que
    * uma regra moveu vem com a pasta (`mailbox`) e, sem o UID novo (`found: false`), abre só a pasta.
@@ -900,6 +954,24 @@ const INVOKE: Record<InvokeChannel, true> = {
   'scribe:redes-publication-retry': true,
   'scribe:redes-quota': true,
   'scribe:redes-media-thumb': true,
+  // 73: comentários
+  'scribe:redes-comments': true,
+  'scribe:redes-comments-refresh': true,
+  'scribe:redes-comment-reply': true,
+  'scribe:redes-comment-hide': true,
+  'scribe:redes-comment-delete': true,
+  'scribe:redes-comments-read': true,
+  // fim 73
+  // 75: métricas
+  'scribe:redes-metrics': true,
+  'scribe:redes-metrics-refresh': true,
+  // fim 75
+  // 74: mensagens
+  'scribe:redes-messages': true,
+  'scribe:redes-messages-refresh': true,
+  'scribe:redes-message-send': true,
+  'scribe:redes-conversation-read': true,
+  // fim 74
 }
 const RENDERER_EVENTS: Record<RendererEvent, true> = {
   'scribe:csp-violation': true,
@@ -957,6 +1029,15 @@ const MAIN_EVENTS: Record<MainEvent, true> = {
   'scribe:open-email': true,
   'scribe:redes-state': true,
   'scribe:redes-publications': true,
+  // 73: comentários
+  'scribe:redes-comments': true,
+  // fim 73
+  // 75: métricas
+  'scribe:redes-metrics': true,
+  // fim 75
+  // 74: mensagens
+  'scribe:redes-messages': true,
+  // fim 74
 }
 
 /**
@@ -1241,6 +1322,24 @@ export const WHEN_LOCKED: Readonly<Record<InvokeChannel, LockedPolicy>> = Object
   'scribe:redes-publication-retry': 'refused',
   'scribe:redes-quota': 'refused',
   'scribe:redes-media-thumb': 'refused',
+  // 73: comentários
+  'scribe:redes-comments': 'refused',
+  'scribe:redes-comments-refresh': 'refused',
+  'scribe:redes-comment-reply': 'refused',
+  'scribe:redes-comment-hide': 'refused',
+  'scribe:redes-comment-delete': 'refused',
+  'scribe:redes-comments-read': 'refused',
+  // fim 73
+  // 75: métricas
+  'scribe:redes-metrics': 'refused',
+  'scribe:redes-metrics-refresh': 'refused',
+  // fim 75
+  // 74: mensagens
+  'scribe:redes-messages': 'refused',
+  'scribe:redes-messages-refresh': 'refused',
+  'scribe:redes-message-send': 'refused',
+  'scribe:redes-conversation-read': 'refused',
+  // fim 74
 })
 
 /**
@@ -1276,6 +1375,14 @@ export const EMAIL_PRELOAD_ONLY_EVENTS: readonly RendererEvent[] = ['scribe:emai
 export const REDES_PRELOAD_ONLY_EVENTS: readonly RendererEvent[] = ['scribe:redes-click']
 /** Contrato 71: "Publicar agora" ou "Agendar" sem o clique da pessoa (o preload e o main devolvem o mesmo texto). */
 export const REDES_CLICK_MESSAGE = 'Clique em Publicar agora ou Agendar para confirmar'
+// 74: mensagens
+/** Contrato 74: o "Enviar" da mensagem direta sem o clique da pessoa (o preload e o main devolvem o mesmo texto). */
+export const REDES_MESSAGE_CLICK_MESSAGE = 'Clique em Enviar para mandar a mensagem'
+// fim 74
+// 73: comentários
+/** Contrato 73: responder ou excluir um comentário sem o clique da pessoa (o preload e o main devolvem o mesmo texto). */
+export const REDES_COMMENT_CLICK_MESSAGE = 'Clique em Responder ou Excluir para confirmar'
+// fim 73
 
 export const INVOKE_CHANNELS = Object.keys(INVOKE) as InvokeChannel[]
 export const RENDERER_EVENT_CHANNELS = Object.keys(RENDERER_EVENTS) as RendererEvent[]
@@ -1310,4 +1417,14 @@ export interface ScribeApi {
   redesPublish(id: string | null, save?: PublicationSaveInput): Promise<PublicationActionResult>
   /** Contrato 71: "Agendar" (`at` em ISO), pelo mesmo token de clique do `redesPublish`. */
   redesSchedule(id: string | null, at: string, save?: PublicationSaveInput): Promise<PublicationActionResult>
+  // 74: mensagens
+  /** Contrato 74: "Enviar" a resposta de uma mensagem direta, pelo mesmo token de clique das redes (ativação viva). */
+  redesMessageSend(request: { accountId: string; conversationId: string; text: string }): Promise<RedesMessageSendResult>
+  // fim 74
+  // 73: comentários
+  /** Contrato 73: "Responder" um comentário, pelo mesmo token de clique das redes (ativação viva). */
+  redesCommentReply(accountId: string, commentId: string, message: string): Promise<RedesCommentReplyResult>
+  /** Contrato 73: "Excluir" um comentário (o clique da confirmação), pelo mesmo token de clique. */
+  redesCommentDelete(accountId: string, commentId: string): Promise<RedesCommentActionResult>
+  // fim 73
 }

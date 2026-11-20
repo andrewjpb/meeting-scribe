@@ -59,7 +59,86 @@ export interface InstagramClient {
   publishingLimit(token: string, igUserId: string): Promise<InstagramResult<{ quota: PublicationQuota }>>
   /** Upload retomável do vídeo, de uma vez (`offset: 0`), com o token no cabeçalho `Authorization: OAuth`. */
   uploadResumable(token: string, uri: string, bytes: Uint8Array): Promise<InstagramResult<object>>
+  // 73: comentários
+  /** Os comentários de uma mídia (até 50, a primeira página), cada um com as respostas aninhadas. */
+  comments(token: string, mediaId: string): Promise<InstagramResult<{ comments: InstagramComment[] }>>
+  /** Responde a um comentário; devolve o id da resposta. */
+  replyComment(token: string, commentId: string, message: string): Promise<InstagramResult<{ id: string }>>
+  /** Oculta (`hide: true`) ou mostra de novo um comentário. */
+  hideComment(token: string, commentId: string, hide: boolean): Promise<InstagramResult<object>>
+  deleteComment(token: string, commentId: string): Promise<InstagramResult<object>>
+  // fim 73
+  // 74: mensagens
+  /** As conversas da caixa de mensagens diretas (`/me/conversations?platform=instagram`), a primeira página. */
+  conversations(token: string): Promise<MessagingResult<{ conversations: InstagramConversation[] }>>
+  /** As mensagens de uma conversa: só as 20 mais recentes vêm com detalhe; as outras só contam (`olderCount`). */
+  conversationMessages(token: string, conversationId: string): Promise<MessagingResult<{ messages: InstagramDirectMessage[]; olderCount: number }>>
+  /** Responde ao contato (`POST /<IG_ID>/messages`), só texto. */
+  sendMessage(token: string, igUserId: string, recipientId: string, text: string): Promise<MessagingResult<{ messageId: string | null }>>
+  // fim 74
+  // 75: métricas
+  /** As mídias mais recentes da conta (`limit` até 100), da mais nova para a mais antiga. Contrato 73 reaproveita. */
+  recentMedia(token: string, igUserId: string, limit?: number): Promise<InstagramResult<{ media: InstagramMedia[] }>>
+  /**
+   * Insights da conta entre `since` e `until` (UNIX, em segundos), `period=day` e `metric_type=total_value`: o total de
+   * cada métrica pedida. A métrica que não veio na resposta fica fora de `values` (a tela mostra "—"). Com
+   * `breakdown: 'follow_type'`, o `follows_and_unfollows` vem separado em ganhos e perdidos (`follows`).
+   */
+  accountInsights(token: string, igUserId: string, since: number, until: number, options?: { metrics?: readonly AccountMetric[]; breakdown?: 'follow_type' }): Promise<InstagramResult<{ values: Partial<Record<AccountMetric, number>>; follows: { follows: number; unfollows: number } | null }>>
+  /** Insights de uma mídia desde que saiu; a métrica que não veio fica fora de `values`. */
+  mediaInsights(token: string, mediaId: string, metrics?: readonly MediaMetric[]): Promise<InstagramResult<{ values: Partial<Record<MediaMetric, number>> }>>
+  /** Os seguidores de agora (`/me?fields=followers_count`). */
+  followersCount(token: string): Promise<InstagramResult<{ followers: number | null }>>
+  // fim 75
 }
+
+// 75: métricas
+/** Uma mídia publicada da conta, como `GET /<IG_ID>/media` devolve. */
+export interface InstagramMedia {
+  id: string
+  caption: string
+  /** `IMAGE`, `VIDEO`, `CAROUSEL_ALBUM`. */
+  mediaType: string
+  permalink: string | null
+  mediaUrl: string | null
+  /** Só vídeo e Reels: a capa. */
+  thumbnailUrl: string | null
+  /** ISO. */
+  timestamp: string
+  commentsCount: number | null
+}
+
+/** As métricas da conta (`/<IG_ID>/insights`), na ordem da spec; `impressions` não existe mais. */
+export const ACCOUNT_METRICS = ['reach', 'views', 'accounts_engaged', 'total_interactions', 'likes', 'comments', 'saves', 'shares', 'follows_and_unfollows', 'profile_links_taps'] as const
+export type AccountMetric = (typeof ACCOUNT_METRICS)[number]
+/** As métricas de uma mídia (`/<MEDIA_ID>/insights`); as mesmas para imagem, carrossel e vídeo/Reels. */
+export const MEDIA_METRICS = ['views', 'reach', 'likes', 'comments', 'saved', 'shares', 'total_interactions'] as const
+export type MediaMetric = (typeof MEDIA_METRICS)[number]
+const MEDIA_FIELDS = 'id,caption,media_type,permalink,media_url,thumbnail_url,timestamp,comments_count'
+// fim 75
+
+// 73: comentários
+/** Um comentário como `GET /<MEDIA_ID>/comments` devolve; as respostas só um nível abaixo (o Instagram não tem mais). */
+export interface InstagramComment {
+  id: string
+  parentId: string | null
+  text: string
+  username: string
+  /** Vazio quando a Meta não manda o `from`. */
+  fromId: string
+  /** ISO. */
+  timestamp: string
+  hidden: boolean
+  likeCount: number
+  replies: InstagramComment[]
+}
+const COMMENT_FIELDS = 'id,text,timestamp,username,from,hidden,like_count,parent_id'
+const COMMENTS_FIELDS = `${COMMENT_FIELDS},replies{${COMMENT_FIELDS.replace(',parent_id', '')}}`
+/** Os comentários lidos de uma vez por mídia (a primeira página). */
+export const COMMENTS_PAGE_LIMIT = 50
+/** O texto de terceiros guardado: até 2.200 pontos de código (o dobro em UTF-16); o resto é cortado. */
+const COMMENT_TEXT_KEEP = 4400
+// fim 73
 
 /** O upload do vídeo: 15 s mais 1 s a cada 256 KB (300 MB dão uns 20 min). */
 export const uploadTimeoutMs = (bytes: number): number => REDES_REQUEST_TIMEOUT_MS + Math.ceil(bytes / (256 * 1024)) * 1000
@@ -146,6 +225,158 @@ function apiFailure(status: number, body: Record<string, unknown> | null): Insta
   if (code === undefined) return failure(`Instagram respondeu ${status}`)
   return failure(instagramErrorMessage({ code, ...(subcode !== undefined ? { error_subcode: subcode } : {}) }), code, subcode ?? null)
 }
+
+// 75: métricas
+/** As linhas `data[]` de uma resposta de insights, com o `name` de cada uma. */
+function insightRows(body: Record<string, unknown> | null): { name: string; row: Record<string, unknown> }[] {
+  const rows = Array.isArray(body?.['data']) ? (body['data'] as unknown[]) : []
+  return rows.flatMap((raw) => {
+    const row = record(raw)
+    const name = typeof row?.['name'] === 'string' ? row['name'] : null
+    return row && name ? [{ name, row }] : []
+  })
+}
+
+/** `follows_and_unfollows` com `breakdown=follow_type`: `FOLLOWER` são os ganhos, `NON_FOLLOWER` os perdidos. */
+function followsOf(total: Record<string, unknown> | null): { follows: number; unfollows: number } | null {
+  const breakdowns = Array.isArray(total?.['breakdowns']) ? (total['breakdowns'] as unknown[]) : []
+  const results = breakdowns.flatMap((raw) => {
+    const list = record(raw)?.['results']
+    return Array.isArray(list) ? (list as unknown[]) : []
+  })
+  let follows: number | null = null
+  let unfollows: number | null = null
+  for (const raw of results) {
+    const item = record(raw)
+    const dimension = Array.isArray(item?.['dimension_values']) ? (item['dimension_values'] as unknown[])[0] : null
+    const value = count(item?.['value'])
+    if (value === null) continue
+    if (dimension === 'FOLLOWER') follows = (follows ?? 0) + value
+    else if (dimension === 'NON_FOLLOWER') unfollows = (unfollows ?? 0) + value
+  }
+  return follows === null && unfollows === null ? null : { follows: follows ?? 0, unfollows: unfollows ?? 0 }
+}
+// fim 75
+
+// 74: mensagens
+/** `denied`: a Meta recusou o acesso às mensagens (permissão, Standard Access, "Permitir acesso" desligado). */
+export type MessagingFailure = InstagramFailure & { denied: boolean }
+export type MessagingResult<T> = ({ ok: true } & T) | MessagingFailure
+
+export interface InstagramParticipant {
+  id: string
+  username: string
+  name: string | null
+}
+
+export interface InstagramConversation {
+  id: string
+  /** ISO. */
+  updatedAt: string
+  participants: InstagramParticipant[]
+}
+
+export interface InstagramDirectMessage {
+  id: string
+  /** ISO. */
+  createdAt: string
+  fromId: string
+  fromUsername: string | null
+  text: string | null
+  attachments: { kind: 'imagem' | 'video' | 'audio' | 'arquivo' | 'outro'; url: string | null }[]
+}
+
+/** Ids da caixa de mensagens (conversa e mensagem): base64 da Meta; vão no caminho da URL. */
+export const MESSAGING_ID = /^[A-Za-z0-9_=-]{1,400}$/
+/** Texto de terceiros guardado no máximo com isto (a Meta limita a 1000 bytes; folga para o que vier de outro app). */
+const DIRECT_TEXT_MAX = 4000
+/** Os códigos de permissão da Meta (10, 200–299) e o 230 ("Permitir acesso a mensagens" desligado); o 3 é capacidade do app. */
+const DENIED_CODES = new Set([3, 10, 230])
+/** A recusa de acesso que vem só pelo texto (sem um dos códigos acima). Só detecta: o texto da Meta não sai daqui. */
+const DENIED_TEXT = /permission|capabilit|allow access|access to messag|not authorized|standard access/i
+export const MESSAGES_DENIED_SUMMARY = 'O Instagram não liberou o acesso às mensagens desta conta'
+
+/** A falha de um pedido de mensagens, com o `denied` decidido pelo código (ou pelo texto, que não é guardado). */
+function messagingFailure(status: number, body: Record<string, unknown> | null): MessagingFailure {
+  const base = apiFailure(status, body)
+  const raw = record(body?.['error'])
+  const message = typeof raw?.['message'] === 'string' ? raw['message'] : ''
+  const code = base.code
+  const denied = code !== null && code !== 190 && (DENIED_CODES.has(code) || (code >= 200 && code <= 299) || DENIED_TEXT.test(message))
+  // O resumo da recusa em pt-BR com o código, nunca o texto da Meta (pode trazer dado da conta).
+  return { ...base, denied, ...(denied ? { error: `${code === 230 ? MESSAGES_DENIED_SUMMARY : base.error} (erro ${code})` } : {}) }
+}
+
+/** A recusa de transporte (rede, destino fora da lista): nunca é recusa de acesso. */
+const notDenied = (failure: InstagramFailure): MessagingFailure => ({ ...failure, denied: false })
+
+function participantsOf(value: unknown): InstagramParticipant[] {
+  const list = record(value)?.['data']
+  if (!Array.isArray(list)) return []
+  return list.flatMap((raw) => {
+    const item = record(raw)
+    const rawId = item?.['id']
+    const id = typeof rawId === 'number' ? String(rawId) : typeof rawId === 'string' ? rawId : ''
+    const username = text(item?.['username'])
+    return /^\d{1,40}$/.test(id) && username ? [{ id, username: username.slice(0, 100), name: text(item?.['name'])?.slice(0, 200) ?? null }] : []
+  })
+}
+
+/** O anexo pelo tipo que a Meta manda (`image_data`, `video_data`, `audio_data`, `file_url`); só URL `https://`. */
+function attachmentsOf(value: unknown): InstagramDirectMessage['attachments'] {
+  const list = record(value)?.['data']
+  if (!Array.isArray(list)) return []
+  const https = (url: unknown): string | null => (typeof url === 'string' && /^https:\/\/[^\s]+$/.test(url) && url.length <= 4096 ? url : null)
+  return list.slice(0, 20).map((raw) => {
+    const item = record(raw)
+    const image = record(item?.['image_data'])
+    const video = record(item?.['video_data'])
+    const audio = record(item?.['audio_data'])
+    if (image) return { kind: 'imagem' as const, url: https(image['url']) }
+    if (video) return { kind: 'video' as const, url: https(video['url']) }
+    if (audio) return { kind: 'audio' as const, url: https(audio['url']) }
+    const mime = typeof item?.['mime_type'] === 'string' ? item['mime_type'] : ''
+    if (item?.['file_url']) return { kind: mime.startsWith('audio/') ? ('audio' as const) : mime.startsWith('video/') ? ('video' as const) : mime.startsWith('image/') ? ('imagem' as const) : ('arquivo' as const), url: https(item['file_url']) }
+    return { kind: 'outro' as const, url: null }
+  })
+}
+
+const isoOf = (value: unknown): string | null => {
+  const at = typeof value === 'string' ? Date.parse(value) : NaN
+  return Number.isNaN(at) ? null : new Date(at).toISOString()
+}
+// fim 74
+
+// 73: comentários
+/** A data da Meta (`2026-11-19T15:22:10+0000`) em ISO; `null` se não for data. */
+function metaTime(value: unknown): string | null {
+  if (typeof value !== 'string') return null
+  const at = Date.parse(value.replace(/([+-]\d{2})(\d{2})$/, '$1:$2'))
+  return Number.isNaN(at) ? null : new Date(at).toISOString()
+}
+
+/** Um comentário (ou resposta) da Meta; sem id ou sem data, fica de fora. */
+function commentOf(raw: unknown, parentId: string | null): InstagramComment | null {
+  const item = record(raw)
+  const id = idOf(item?.['id'])
+  const timestamp = metaTime(item?.['timestamp'])
+  if (!item || !id || !timestamp) return null
+  const from = record(item['from'])
+  const username = (typeof item['username'] === 'string' ? item['username'] : typeof from?.['username'] === 'string' ? from['username'] : '').slice(0, 100)
+  const replies = parentId === null && Array.isArray(record(item['replies'])?.['data']) ? (record(item['replies'])?.['data'] as unknown[]) : []
+  return {
+    id,
+    parentId: parentId ?? idOf(item['parent_id']),
+    text: (typeof item['text'] === 'string' ? item['text'] : '').slice(0, COMMENT_TEXT_KEEP),
+    username,
+    fromId: idOf(from?.['id']) ?? '',
+    timestamp,
+    hidden: item['hidden'] === true,
+    likeCount: count(item['like_count']) ?? 0,
+    replies: replies.flatMap((reply) => commentOf(reply, id) ?? []),
+  }
+}
+// fim 73
 
 export function createInstagramClient(fetch: HttpFetch, options: { base?: string } = {}): InstagramClient {
   const base = options.base ?? INSTAGRAM_GRAPH
@@ -278,5 +509,172 @@ export function createInstagramClient(fetch: HttpFetch, options: { base?: string
         return failure(INSTAGRAM_NETWORK_ERROR)
       }
     },
+
+    // 73: comentários
+    async comments(token, mediaId) {
+      if (!META_ID.test(mediaId)) return failure(INSTAGRAM_UNEXPECTED)
+      const result = await get(version(`${mediaId}/comments`), { fields: COMMENTS_FIELDS, limit: String(COMMENTS_PAGE_LIMIT) }, token)
+      if ('ok' in result) return result
+      if (result.status !== 200) return apiFailure(result.status, result.body)
+      const rows = Array.isArray(result.body?.['data']) ? (result.body['data'] as unknown[]) : null
+      if (!rows) return failure(INSTAGRAM_UNEXPECTED)
+      return { ok: true, comments: rows.flatMap((raw) => commentOf(raw, null) ?? []) }
+    },
+
+    async replyComment(token, commentId, message) {
+      if (!META_ID.test(commentId)) return failure(INSTAGRAM_UNEXPECTED)
+      const result = await call('POST', version(`${commentId}/replies`), {}, token, { body: { message } })
+      if ('ok' in result) return result
+      if (result.status !== 200) return apiFailure(result.status, result.body)
+      const id = idOf(result.body?.['id'])
+      return id ? { ok: true, id } : failure(INSTAGRAM_UNEXPECTED)
+    },
+
+    async hideComment(token, commentId, hide) {
+      if (!META_ID.test(commentId)) return failure(INSTAGRAM_UNEXPECTED)
+      const result = await call('POST', version(commentId), {}, token, { body: { hide } })
+      if ('ok' in result) return result
+      if (result.status !== 200) return apiFailure(result.status, result.body)
+      return result.body?.['success'] === false ? failure(INSTAGRAM_UNEXPECTED) : { ok: true }
+    },
+
+    async deleteComment(token, commentId) {
+      if (!META_ID.test(commentId)) return failure(INSTAGRAM_UNEXPECTED)
+      const result = await call('DELETE', version(commentId), {}, token)
+      if ('ok' in result) return result
+      if (result.status !== 200) return apiFailure(result.status, result.body)
+      return result.body?.['success'] === false ? failure(INSTAGRAM_UNEXPECTED) : { ok: true }
+    },
+    // fim 73
+
+    // 75: métricas
+    async recentMedia(token, igUserId, limit = 25) {
+      if (!META_ID.test(igUserId)) return failure(INSTAGRAM_UNEXPECTED)
+      const size = Math.min(100, Math.max(1, Math.floor(limit)))
+      const result = await get(version(`${igUserId}/media`), { fields: MEDIA_FIELDS, limit: String(size) }, token)
+      if ('ok' in result) return result
+      if (result.status !== 200) return apiFailure(result.status, result.body)
+      const rows = Array.isArray(result.body?.['data']) ? (result.body['data'] as unknown[]) : null
+      if (!rows) return failure(INSTAGRAM_UNEXPECTED)
+      const media: InstagramMedia[] = []
+      for (const raw of rows) {
+        const item = record(raw)
+        const id = idOf(item?.['id'])
+        const timestamp = typeof item?.['timestamp'] === 'string' ? Date.parse(item['timestamp']) : NaN
+        // Sem id ou sem data, a mídia não entra (não dá para pedir os números nem pôr na tabela).
+        if (!item || !id || Number.isNaN(timestamp)) continue
+        media.push({
+          id,
+          caption: typeof item['caption'] === 'string' ? item['caption'] : '',
+          mediaType: text(item['media_type']) ?? 'IMAGE',
+          permalink: text(item['permalink']),
+          mediaUrl: text(item['media_url']),
+          thumbnailUrl: text(item['thumbnail_url']),
+          timestamp: new Date(timestamp).toISOString(),
+          commentsCount: count(item['comments_count']),
+        })
+      }
+      return { ok: true, media: media.slice(0, size) }
+    },
+
+    async accountInsights(token, igUserId, since, until, options = {}) {
+      const metrics = options.metrics ?? ACCOUNT_METRICS
+      if (!META_ID.test(igUserId) || !Number.isInteger(since) || !Number.isInteger(until) || since >= until || !metrics.length) return failure(INSTAGRAM_UNEXPECTED)
+      const query: Record<string, string> = { metric: metrics.join(','), period: 'day', metric_type: 'total_value', since: String(since), until: String(until) }
+      if (options.breakdown) query['breakdown'] = options.breakdown
+      const result = await get(version(`${igUserId}/insights`), query, token)
+      if ('ok' in result) return result
+      if (result.status !== 200) return apiFailure(result.status, result.body)
+      const values: Partial<Record<AccountMetric, number>> = {}
+      let follows: { follows: number; unfollows: number } | null = null
+      for (const entry of insightRows(result.body)) {
+        const name = metrics.find((metric) => metric === entry.name)
+        if (!name) continue
+        const total = record(entry.row['total_value'])
+        const value = count(total?.['value'])
+        if (value !== null) values[name] = value
+        if (name === 'follows_and_unfollows') follows = followsOf(total) ?? follows
+      }
+      return { ok: true, values, follows }
+    },
+
+    async mediaInsights(token, mediaId, metrics = MEDIA_METRICS) {
+      if (!META_ID.test(mediaId) || !metrics.length) return failure(INSTAGRAM_UNEXPECTED)
+      const result = await get(version(`${mediaId}/insights`), { metric: metrics.join(',') }, token)
+      if ('ok' in result) return result
+      if (result.status !== 200) return apiFailure(result.status, result.body)
+      const values: Partial<Record<MediaMetric, number>> = {}
+      for (const entry of insightRows(result.body)) {
+        const name = metrics.find((metric) => metric === entry.name)
+        if (!name) continue
+        // `lifetime`: o número em `values[0].value`; a forma nova (`total_value.value`) também vale.
+        const first = Array.isArray(entry.row['values']) ? record((entry.row['values'] as unknown[])[0]) : null
+        const value = count(first?.['value'] ?? record(entry.row['total_value'])?.['value'])
+        if (value !== null) values[name] = value
+      }
+      return { ok: true, values }
+    },
+
+    async followersCount(token) {
+      const result = await get(version('me'), { fields: 'followers_count' }, token)
+      if ('ok' in result) return result
+      if (result.status !== 200) return apiFailure(result.status, result.body)
+      return { ok: true, followers: count(result.body?.['followers_count']) }
+    },
+    // fim 75
+    // 74: mensagens
+    async conversations(token) {
+      const result = await get(version('me/conversations'), { platform: 'instagram', fields: 'id,updated_time,participants' }, token)
+      if ('ok' in result) return notDenied(result)
+      if (result.status !== 200) return messagingFailure(result.status, result.body)
+      const rows = Array.isArray(result.body?.['data']) ? (result.body['data'] as unknown[]) : null
+      if (!rows) return notDenied(failure(INSTAGRAM_UNEXPECTED))
+      const conversations: InstagramConversation[] = []
+      for (const raw of rows) {
+        const item = record(raw)
+        const id = typeof item?.['id'] === 'string' ? item['id'] : ''
+        const updatedAt = isoOf(item?.['updated_time'])
+        if (!MESSAGING_ID.test(id) || !updatedAt) continue
+        conversations.push({ id, updatedAt, participants: participantsOf(item?.['participants']) })
+      }
+      return { ok: true, conversations }
+    },
+
+    async conversationMessages(token, conversationId) {
+      if (!MESSAGING_ID.test(conversationId)) return notDenied(failure(INSTAGRAM_UNEXPECTED))
+      const result = await get(version(conversationId), { fields: 'messages{id,created_time,from,to,message,attachments}' }, token)
+      if ('ok' in result) return notDenied(result)
+      if (result.status !== 200) return messagingFailure(result.status, result.body)
+      const rows = record(result.body?.['messages'])?.['data']
+      const messages: InstagramDirectMessage[] = []
+      let olderCount = 0
+      for (const raw of Array.isArray(rows) ? rows : []) {
+        const item = record(raw)
+        const id = typeof item?.['id'] === 'string' ? item['id'] : ''
+        if (!MESSAGING_ID.test(id)) continue
+        const createdAt = isoOf(item?.['created_time'])
+        const from = record(item?.['from'])
+        const rawFrom = from?.['id']
+        const fromId = typeof rawFrom === 'number' ? String(rawFrom) : typeof rawFrom === 'string' ? rawFrom : ''
+        // Fora das 20 mais recentes, a Meta só manda o id: conta como mensagem antiga.
+        if (!createdAt || !/^\d{1,40}$/.test(fromId)) {
+          olderCount++
+          continue
+        }
+        const body = typeof item?.['message'] === 'string' && item['message'] ? item['message'].slice(0, DIRECT_TEXT_MAX) : null
+        messages.push({ id, createdAt, fromId, fromUsername: text(from?.['username']), text: body, attachments: attachmentsOf(item?.['attachments']) })
+      }
+      return { ok: true, messages, olderCount }
+    },
+
+    async sendMessage(token, igUserId, recipientId, message) {
+      if (!META_ID.test(igUserId) || !META_ID.test(recipientId)) return notDenied(failure(INSTAGRAM_UNEXPECTED))
+      const result = await call('POST', version(`${igUserId}/messages`), {}, token, { body: { recipient: { id: recipientId }, message: { text: message } } })
+      if ('ok' in result) return notDenied(result)
+      if (result.status !== 200) return messagingFailure(result.status, result.body)
+      const raw = result.body?.['message_id']
+      return { ok: true, messageId: typeof raw === 'string' && MESSAGING_ID.test(raw) ? raw : null }
+    },
+    // fim 74
   }
 }

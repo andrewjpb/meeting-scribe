@@ -1,4 +1,4 @@
-import { ChartNoAxesColumn, Info, MessageCircle, Plus, Send, TriangleAlert, type LucideIcon } from 'lucide-react'
+import { Info, Plus, TriangleAlert } from 'lucide-react'
 import { useEffect } from 'react'
 import { Navigate, useNavigate, useParams } from 'react-router'
 import { INSTAGRAM_ANCHOR, isRedesSection, redesPath, settingsPath, type RedesSection, type SettingsNavigationState } from '@shared/routes'
@@ -13,13 +13,15 @@ import { PublicationEditor } from './PublicationEditor'
 import { PublicationsList } from './PublicationsList'
 import { quotaLine, REDES_SECTION_LABELS } from './redesFormat'
 import { useRedes } from './redesStore'
-
-/** As seções que os contratos 73 a 75 preenchem: por enquanto, o estado vazio com o que vai aparecer ali. */
-const COMING: Readonly<Record<Exclude<RedesSection, 'publicacoes'>, { icon: LucideIcon; text: string }>> = {
-  comentarios: { icon: MessageCircle, text: 'Os comentários das suas publicações vão aparecer aqui, agrupados por publicação, para responder sem sair do app.' },
-  mensagens: { icon: Send, text: 'As mensagens diretas do Instagram vão aparecer aqui, com a resposta no mesmo lugar.' },
-  metricas: { icon: ChartNoAxesColumn, text: 'O alcance, as visualizações e as interações da conta e de cada publicação vão aparecer aqui.' },
-}
+// 73: comentários
+import { CommentsSection } from './CommentsSection'
+// fim 73
+// 74: mensagens
+import { MessagesSection } from './MessagesSection'
+// fim 74
+// 75: métricas
+import { MetricsSection } from './MetricsSection'
+// fim 75
 
 const PAGE_TOP = 'px-[var(--page-x)] pt-[var(--page-top)] pb-4'
 
@@ -134,32 +136,15 @@ function AccountSection({ accountId, username, section }: { accountId: string; u
     void useRedes.getState().loadQuota(accountId)
   }, [accountId, section])
 
-  if (section !== 'publicacoes') {
-    const coming = COMING[section]
-    return (
-      <div className="flex min-h-0 flex-1 flex-col">
-        <div className={PAGE_TOP}>
-          <PageHeader title={title} titleAttrs={{ 'data-redes-title': '' }} />
-        </div>
-        {noticeBar}
-        <div data-redes-coming={section} className="flex flex-1 flex-col items-center border-t border-line px-[var(--page-x)]">
-          <div className="grow-[3]" />
-          <EmptyState
-            illustration={
-              <span aria-hidden="true" className="flex size-14 items-center justify-center rounded-[var(--radius-panel)] border border-line-strong bg-bg-raised text-text-muted">
-                <Icon icon={coming.icon} />
-              </span>
-            }
-            title="Em preparação"
-          >
-            {coming.text}
-          </EmptyState>
-          <div className="grow-[7]" />
-        </div>
-      </div>
-    )
-  }
-
+  // 75: métricas
+  if (section === 'metricas') return <MetricsSection accountId={accountId} title={title} notice={noticeBar} />
+  // fim 75
+  // 74: mensagens
+  if (section === 'mensagens') return <MessagesSection accountId={accountId} title={title} notice={noticeBar} />
+  // fim 74
+  // 73: comentários
+  if (section === 'comentarios') return <CommentsSection accountId={accountId} username={username} title={title} notice={noticeBar} />
+  // fim 73
   const list = publications ?? []
   const editing = editor && editor.id !== 'novo' ? (list.find((item) => item.id === editor.id) ?? null) : null
   // A publicação que saiu da fila (apagada em outra janela) fecha o editor dela.

@@ -209,7 +209,16 @@ describe('cartões: só com o clique, uma vez só (CA3, CA5)', () => {
     for (const channel of channels) expect(WHEN_LOCKED[channel]).toBe('refused')
     // Nenhum caminho novo de envio: o WhatsApp continua só com o `whatsapp-send` e, no contrato 39, o anexo pelo mesmo
     // guarda do clique (`whatsapp-send-media`). Contrato 42: o email entra com o `email-send`, também só com o clique.
-    expect(INVOKE_CHANNELS.filter((channel) => /send/.test(channel))).toEqual(['scribe:chat-send', 'scribe:whatsapp-send', 'scribe:whatsapp-send-media', 'scribe:email-send'])
+    expect(INVOKE_CHANNELS.filter((channel) => /send/.test(channel))).toEqual([
+      'scribe:chat-send',
+      'scribe:whatsapp-send',
+      'scribe:whatsapp-send-media',
+      'scribe:email-send',
+      // 74: mensagens
+      // Contrato 74: a resposta da mensagem direta do Instagram (token de clique das redes, recusada bloqueado).
+      'scribe:redes-message-send',
+      // fim 74
+    ])
   })
 })
 

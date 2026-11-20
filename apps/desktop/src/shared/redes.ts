@@ -304,3 +304,246 @@ export const publicationSchema = z
   .strict()
 
 export const publicationQuotaSchema = z.object({ used: z.number().int().nonnegative(), total: z.number().int().nonnegative(), checkedAt: isoDate }).strict()
+
+// 75: métricas
+// ── Métricas (contrato 75, R7 da spec redes-instagram) ─────────────────────────────────────────────────────────────────
+// A conta (seguidores agora e os números do período) e as 25 publicações mais recentes, só números, sem gráfico. O main
+// guarda o que leu em `instagram-<id>.metrics.json` (cache de 1 h por período e por mídia); a métrica que a Meta recusa
+// vira `null` ("—" na tela), não erro.
+
+/** Os períodos da conta, em dias. */
+export const METRIC_PERIODS = [7, 28, 90] as const
+export type MetricPeriod = (typeof METRIC_PERIODS)[number]
+/** Os números lidos valem 1 h (a Meta entrega com até 48 h de atraso; ler mais vezes não traz nada novo). */
+export const METRICS_CACHE_MS = 3_600_000
+/** As publicações mais recentes da tabela. */
+export const METRICS_MEDIA_LIMIT = 25
+
+/** Os números da conta num período; cada um `null` quando a Meta não entregou (recusou a métrica, ou não há dado). */
+export interface AccountInsights {
+  period: MetricPeriod
+  /** ISO: o começo e o fim do período consultado. */
+  since: string
+  until: string
+  /** Agora, não no período. */
+  followers: number | null
+  reach: number | null
+  views: number | null
+  accountsEngaged: number | null
+  totalInteractions: number | null
+  likes: number | null
+  comments: number | null
+  saves: number | null
+  shares: number | null
+  followsAndUnfollows: { follows: number; unfollows: number } | null
+  profileLinksTaps: number | null
+  /** ISO. */
+  fetchedAt: string
+}
+
+/** Os números de uma publicação desde que saiu (`lifetime`). */
+export interface MediaInsights {
+  mediaId: string
+  caption: string
+  permalink: string | null
+  /** ISO. */
+  timestamp: string
+  /** `IMAGE`, `VIDEO` (Reels), `CAROUSEL_ALBUM`; o que a Meta disser. */
+  mediaType: string
+  views: number | null
+  reach: number | null
+  likes: number | null
+  comments: number | null
+  saved: number | null
+  shares: number | null
+  totalInteractions: number | null
+  /** A miniatura baixada para `userData/redes/thumbs/<mediaId>.jpg` (a tela pede a data URL por `scribe:redes-media-thumb`). */
+  thumbPath: string | null
+  /** ISO. */
+  fetchedAt: string
+}
+
+/** A resposta de `scribe:redes-metrics` e o evento de mesmo nome: a conta nos três períodos (o não lido, `null`) e as mídias. */
+export interface RedesMetricsState {
+  accountId: string
+  account: Record<MetricPeriod, AccountInsights | null>
+  media: MediaInsights[]
+  /** Em pt-BR, para a `Note`; `null` sem erro. */
+  error: string | null
+  /** ISO da última leitura que deu certo (`null`: nunca). */
+  updatedAt: string | null
+}
+// fim 75
+
+// 74: mensagens
+// ── Mensagens (contrato 74, R6 da spec redes-instagram) ───────────────────────────────────────────────────────────────
+// As conversas da caixa de mensagens diretas do Instagram e a resposta pela tela. O main lê `/me/conversations` a cada
+// `redesPollMinutes` e só as mensagens das conversas com `updated_time` novo, guardando tudo em
+// `instagram-<id>.messages.json`. O texto do contato é de terceiros: a tela mostra como texto, nunca como marcação.
+// "Enviar" só com o token de clique do preload (`redesMessageSend`), como o email.
+export { MESSAGE_TEXT_MAX_BYTES, MESSAGE_WINDOW_MS, messageBytes, outsideMessageWindow } from './redes-rules'
+
+export const MESSAGE_ATTACHMENT_KINDS = ['imagem', 'video', 'audio', 'arquivo', 'outro'] as const
+export type RedesMessageAttachmentKind = (typeof MESSAGE_ATTACHMENT_KINDS)[number]
+export const MESSAGES_ACCESS_STATES = ['ok', 'denied', 'unknown'] as const
+export type RedesMessagesAccess = (typeof MESSAGES_ACCESS_STATES)[number]
+
+export interface RedesConversation {
+  id: string
+  /** O IGSID do contato (o `recipient.id` da resposta). */
+  participantId: string
+  /** O nome do contato quando a Meta manda; senão o @. */
+  participantName: string
+  participantUsername: string
+  /** ISO: o `updated_time` da conversa. */
+  updatedAt: string
+  /** A última mensagem em uma linha (ou o tipo do anexo), `null` sem mensagem lida ainda. */
+  lastMessage: string | null
+  /** A última mensagem é do contato e a conversa ainda não foi aberta depois dela. */
+  unread: boolean
+  /** ISO: a última mensagem do contato (a janela de 24 h conta daqui). */
+  lastInboundAt: string | null
+  /** As mensagens antigas que o Instagram não detalha (só as 20 mais recentes vêm com texto e hora). */
+  olderCount: number
+  accessDenied?: never
+}
+
+export interface RedesMessageAttachment {
+  kind: RedesMessageAttachmentKind
+  /** Só `https://`; abre no navegador. */
+  url: string | null
+}
+
+export interface RedesMessage {
+  id: string
+  conversationId: string
+  fromId: string
+  fromMe: boolean
+  text: string | null
+  attachments: RedesMessageAttachment[]
+  /** ISO. */
+  createdAt: string
+}
+
+export interface RedesMessagesState {
+  conversations: RedesConversation[]
+  /** Por conversa, da mais antiga para a mais nova. */
+  messages: Record<string, RedesMessage[]>
+  /** `denied`: a Meta recusou o acesso às mensagens (permissão ou Standard Access); `unknown`: ainda não leu. */
+  access: RedesMessagesAccess
+  /** O resumo em pt-BR da recusa, `null` sem recusa. */
+  accessError: string | null
+  /** Conversas não lidas (o número do nível Redes). */
+  unread: number
+  /** ISO da última leitura que deu certo. */
+  updatedAt: string | null
+}
+
+/** O evento `scribe:redes-messages` e a resposta dos canais de mensagens: o estado inteiro de uma conta. */
+export interface RedesMessagesPayload extends RedesMessagesState {
+  accountId: string
+  /** A última leitura falhou por outro motivo (rede, limite): a tela mostra e mantém o que já tinha. */
+  error: string | null
+}
+
+export type RedesMessageSendResult = { ok: true; message: RedesMessage; payload: RedesMessagesPayload } | { ok: false; error: string }
+
+export const EMPTY_MESSAGES_STATE: Readonly<RedesMessagesState> = Object.freeze({ conversations: [], messages: {}, access: 'unknown', accessError: null, unread: 0, updatedAt: null })
+export const MESSAGE_WINDOW_REFUSED_MESSAGE = 'O Instagram recusou: fora da janela de 24 h'
+export const MESSAGE_TOO_LONG_MESSAGE = 'Mensagem acima de 1000 bytes'
+// fim 74
+
+// 73: comentários
+// ── Comentários (contrato 73, R5 e CA10 da spec redes-instagram) ──────────────────────────────────────────────────────
+// Os comentários das 25 mídias mais recentes da conta, lidos a cada `redesPollMinutes` e ao abrir a seção, guardados em
+// `instagram-<id>.comments.json` com o `read` de cada um (o novo chega `false`; abrir a mídia na tela marca). As respostas
+// ficam aninhadas no comentário (o Instagram só tem um nível). O texto, o @ e a legenda são de terceiros: a tela mostra
+// como texto, nunca como marcação. A miniatura é baixada pelo main para `userData/redes/thumbs/<mediaId>.jpg` (a CSP não
+// deixa a tela pedir imagem fora do app) e vai à tela como data URL pelo `scribe:redes-media-thumb`.
+export { REDES_POLL_MINUTES, REDES_POLL_MINUTES_DEFAULT, type RedesPollMinutes } from './settings-defaults'
+/** As mídias mais recentes lidas a cada atualização. */
+export const COMMENTS_MEDIA_LIMIT = 25
+/** A resposta a um comentário: até 2.200 caracteres, como a legenda. */
+export { CAPTION_MAX as COMMENT_REPLY_MAX } from './redes-rules'
+
+export interface RedesComment {
+  id: string
+  mediaId: string
+  /** O comentário de cima, numa resposta; `null` no comentário. */
+  parentId: string | null
+  text: string
+  username: string
+  /** O id de quem comentou (vazio quando a Meta não manda). */
+  fromId: string
+  /** ISO. */
+  timestamp: string
+  hidden: boolean
+  likeCount: number
+  read: boolean
+  /** Em ordem cronológica; sempre vazio numa resposta. */
+  replies: RedesComment[]
+}
+
+export interface RedesMediaWithComments {
+  mediaId: string
+  caption: string
+  permalink: string | null
+  mediaUrl: string | null
+  thumbnailUrl: string | null
+  /** ISO. */
+  timestamp: string
+  commentsCount: number
+  /** Os comentários e as respostas ainda não lidos. */
+  unread: number
+  /** Em ordem cronológica. */
+  comments: RedesComment[]
+  /** A miniatura já baixada em `userData/redes/thumbs/<mediaId>.jpg`, ou `null`. */
+  thumbPath: string | null
+}
+
+/** A resposta dos canais de comentários e o evento `scribe:redes-comments`: as mídias de uma conta e o total de não lidos. */
+export interface RedesCommentsPayload {
+  accountId: string
+  /** Só as mídias com comentário, da mais nova para a mais antiga. */
+  media: RedesMediaWithComments[]
+  unread: number
+  /** ISO da última atualização que deu certo (`null`: nunca). */
+  updatedAt: string | null
+  /** A última atualização falhou (em pt-BR); a lista fica como estava. */
+  error: string | null
+}
+
+export type RedesCommentReplyResult = { ok: true; comment: RedesComment; payload: RedesCommentsPayload } | { ok: false; error: string }
+export type RedesCommentActionResult = { ok: true; payload: RedesCommentsPayload } | { ok: false; error: string }
+
+/** Até 2.200 pontos de código: no máximo o dobro em unidades UTF-16 (o que vier maior é cortado ao ler). */
+export const COMMENT_TEXT_STORE_MAX = CAPTION_MAX * 2
+const commentFields = {
+  id: metaId,
+  mediaId: metaId,
+  parentId: metaId.nullable(),
+  text: z.string().max(COMMENT_TEXT_STORE_MAX),
+  username: z.string().max(100),
+  fromId: z.string().max(40),
+  timestamp: isoDate,
+  hidden: z.boolean(),
+  likeCount: z.number().int().nonnegative(),
+  read: z.boolean(),
+}
+const commentReplySchema = z.object({ ...commentFields, replies: z.array(z.never()).max(0) }).strict()
+export const redesCommentSchema = z.object({ ...commentFields, replies: z.array(commentReplySchema) }).strict()
+export const redesMediaWithCommentsSchema = z
+  .object({
+    mediaId: metaId,
+    caption: z.string().max(CAPTION_MAX * 2),
+    permalink: shortText.nullable(),
+    mediaUrl: z.string().max(4096).nullable(),
+    thumbnailUrl: z.string().max(4096).nullable(),
+    timestamp: isoDate,
+    commentsCount: z.number().int().nonnegative(),
+    unread: z.number().int().nonnegative(),
+    comments: z.array(redesCommentSchema),
+    thumbPath: z.string().max(4096).nullable(),
+  })
+  .strict()
+// fim 73

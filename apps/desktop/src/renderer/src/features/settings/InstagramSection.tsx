@@ -10,6 +10,13 @@ import { Note } from '../../design/Note'
 import { Section } from '../../design/Section'
 import { accountLine, REDES_STATE_LABELS } from '../redes/redesFormat'
 import { useRedes, watchRedes } from '../redes/redesStore'
+// 73: comentários
+import { REDES_POLL_DESCRIPTION, REDES_POLL_NAME } from '@shared/settings-index'
+import { REDES_POLL_MINUTES, type RedesPollMinutes } from '@shared/settings-defaults'
+import { useSettings } from '../../app/settingsStore'
+import { Select } from '../../design/Field'
+import { SettingRow } from '../../design/SettingRow'
+// fim 73
 
 export const INSTAGRAM_TOKEN_INPUT = 'redes-instagram-token'
 
@@ -120,6 +127,10 @@ export function InstagramSection() {
 
       {accounts?.map((account) => <AccountRow key={account.id} account={account} />)}
 
+      {/* 73: comentários */}
+      <RedesPollRow />
+      {/* fim 73 */}
+
       {loadFailed && (
         <div className="py-3">
           <Note id="redes-load-failed" icon={TriangleAlert} role="alert">
@@ -209,3 +220,18 @@ function AccountRow({ account }: { account: RedesAccount }) {
     </div>
   )
 }
+
+// 73: comentários
+const POLL_OPTIONS = REDES_POLL_MINUTES.map((value) => ({ value: String(value) as `${RedesPollMinutes}`, label: value === 60 ? '1 hora' : `${value} min` }))
+
+/** Contrato 73: de quantos em quantos minutos o main lê os comentários (e, no 74, as mensagens) de cada conta. */
+function RedesPollRow() {
+  const minutes = useSettings((state) => state.settings.redesPollMinutes)
+  const update = useSettings((state) => state.update)
+  return (
+    <SettingRow name={REDES_POLL_NAME} description={REDES_POLL_DESCRIPTION} htmlFor="settings-redes-poll">
+      <Select id="settings-redes-poll" value={String(minutes) as `${RedesPollMinutes}`} options={POLL_OPTIONS} onChange={(value) => void update({ redesPollMinutes: Number(value) as RedesPollMinutes })} />
+    </SettingRow>
+  )
+}
+// fim 73

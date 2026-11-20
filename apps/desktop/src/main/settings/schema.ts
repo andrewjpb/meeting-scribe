@@ -16,6 +16,9 @@ import { EMAIL_RULES_MAX, emailRuleSchema, type EmailRule } from '../../shared/e
 import { CLAUDE_CONNECTOR_NAME_MAX, CLAUDE_CONNECTORS_MAX, MCP_TOOL_NAME_MAX, MCP_TOOL_POLICIES, MCP_TOOLS_MAX, type ClaudeConnectorPrefs } from '../../shared/mcp'
 import { EMAIL_ACCOUNT_ID_PATTERN, EMAIL_ADDRESS_PATTERN, EMAIL_FOLDER_PATH_MAX, EMAIL_HOST_PATTERN, EMAIL_POLL_MINUTES, EMAIL_PROTOCOLS, EMAIL_SECURITY, type EmailAccount } from '../../shared/email'
 import { AGENT_PROFILES, CALENDAR_IDS_MAX, CALENDAR_LEAD_MINUTES, CHAT_MODELS, CLAUDE_MODELS, CLAUDE_TRANSPORTS, CLOSE_BEHAVIORS, DAILY_RUN_LIMIT_OPTIONS, DEFAULT_SETTINGS, LANGUAGE_CODES, LOCK_AFTER_MINUTES, THEME_SETTINGS, TRANSLATION_ENGINES, type AppSettings, type SettingsPatch } from '../../shared/settings-defaults'
+// 73: comentários
+import { REDES_POLL_MINUTES } from '../../shared/settings-defaults'
+// fim 73
 
 export const SETTINGS_VERSION = 1
 
@@ -164,6 +167,9 @@ const lenientSchema = z.object({
   emailFoldersCollapsed: emailFoldersCollapsedSchema.catch([]),
   emailRecentFolders: emailRecentFoldersSchema.catch({}),
   claudeConnectors: lenientConnectorsSchema,
+  // 73: comentários
+  redesPollMinutes: z.literal(REDES_POLL_MINUTES).catch(D.redesPollMinutes),
+  // fim 73
 })
 
 const patchSchema = z
@@ -216,6 +222,9 @@ const patchSchema = z
     emailFoldersCollapsed: emailFoldersCollapsedSchema,
     emailRecentFolders: emailRecentFoldersSchema,
     claudeConnectors: claudeConnectorsSchema,
+    // 73: comentários
+    redesPollMinutes: z.literal(REDES_POLL_MINUTES),
+    // fim 73
   })
   .partial()
   .strict()

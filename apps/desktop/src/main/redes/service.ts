@@ -63,6 +63,23 @@ import { publishOnce } from './publisher'
 import { createS3Client, safeKey, type S3Client } from './s3'
 import { REDES_REQUEST_TIMEOUT_MS } from './hosts'
 import { createRedesStore, MEDIA_DIR, REDES_DIR, type StoredMediaHost } from './store'
+// 73: comentários
+import { COMMENT_REPLY_MAX, type RedesComment, type RedesCommentActionResult, type RedesCommentReplyResult, type RedesCommentsPayload } from '../../shared/redes'
+import { addReply, changeComment, commentsPayload, findComment, markRead, readComments, syncComments, thumbPaths, updateComments, type CommentsFile } from './comments'
+import { THUMBS_DIR as COMMENT_THUMBS_DIR } from './store'
+import { REDES_COMMENT_CLICK_MESSAGE } from '../../shared/ipc'
+// fim 73
+// 73/74: polling
+import { REDES_POLL_MINUTES_DEFAULT } from '../../shared/settings-defaults'
+// fim 73/74
+// 74: mensagens
+import type { RedesMessageSendResult, RedesMessagesPayload } from '../../shared/redes'
+import { createMessagesService } from './messages'
+// fim 74
+// 75: métricas
+import { METRIC_PERIODS, METRICS_CACHE_MS, type MetricPeriod, type RedesMetricsState } from '../../shared/redes'
+import { createThumbSaver, loadMetrics, metricsStateOf, readMetricsCache } from './insights'
+// fim 75
 
 export const INSTAGRAM_VAULT_FILE = 'instagram.bin'
 export const MEDIA_HOST_VAULT_FILE = 'media-host.bin'
@@ -172,6 +189,12 @@ const connectRequestSchema = z.object({ token: z.string().max(REDES_TOKEN_MAX * 
 const accountRequestSchema = z.object({ accountId: z.string().regex(REDES_ACCOUNT_ID_PATTERN) })
 const mediaHostSaveSchema = z.object({ config: mediaHostConfigSchema, secretAccessKey: z.string().trim().max(1024).nullable() })
 
+// 73: comentários
+export const COMMENT_MISSING_MESSAGE = 'Comentário não encontrado; atualize a lista'
+export const COMMENT_EMPTY_MESSAGE = 'Escreva a resposta'
+export const COMMENT_TOO_LONG_MESSAGE = 'A resposta passa de 2.200 caracteres'
+// fim 73
+
 export interface RedesServiceOptions {
   userData: string
   safeStorage: SafeStorageLike
@@ -192,6 +215,22 @@ export interface RedesServiceOptions {
   sleep?: (ms: number) => Promise<void>
   /** Contrato 72: a miniatura de uma imagem (data URL), feita pelo `nativeImage` no `index.ts`; sem ela, nenhuma. */
   thumbnail?: (path: string) => Promise<string | null>
+  // 73: comentários
+  /** Contrato 73: os comentários de uma conta mudaram (vão inteiros, com os não lidos). Quem monta decide se vai às janelas. */
+  onComments?: (payload: RedesCommentsPayload) => void
+  // fim 73
+  // 73/74: polling
+  /** Contratos 73 e 74: `redesPollMinutes` das Configurações (lido a cada volta do timer); sem ele, 5 min. */
+  pollMinutes?: () => Promise<number> | number
+  // fim 73/74
+  // 74: mensagens
+  /** Contrato 74: as conversas e mensagens de uma conta mudaram (vai o estado inteiro); quem monta decide se vai às janelas. */
+  onMessages?: (payload: RedesMessagesPayload) => void
+  // fim 74
+  // 75: métricas
+  /** Contrato 75: as métricas de uma conta foram lidas (da Meta ou do cache); quem monta decide se vai às janelas. */
+  onMetrics?: (state: RedesMetricsState) => void
+  // fim 75
 }
 
 export interface RedesService {
@@ -221,10 +260,45 @@ export interface RedesService {
   quota(request: unknown): Promise<PublicationQuotaResult>
   /** Contrato 72: a miniatura de uma cópia salva ou de um arquivo escolhido no diálogo nesta sessão; o resto, `null`. */
   thumbnail(request: unknown): Promise<string | null>
+  // 73: comentários
+  /** Contrato 73: os comentários guardados de `{ accountId }` (sem ler a API). */
+  commentsState(request: unknown): Promise<RedesCommentsPayload>
+  /** Lê as 25 mídias e os comentários agora (ao abrir a seção e no "Atualizar"); a leitura em curso não sai duas vezes. */
+  refreshComments(request: unknown): Promise<RedesCommentsPayload>
+  /** Responde `{ accountId, commentId, message }`; a resposta a uma resposta vai ao comentário de cima. */
+  replyComment(senderId: number, request: unknown): Promise<RedesCommentReplyResult>
+  /** Oculta ou mostra `{ accountId, commentId, hide }`. */
+  hideComment(request: unknown): Promise<RedesCommentActionResult>
+  deleteComment(senderId: number, request: unknown): Promise<RedesCommentActionResult>
+  /** Abrir a mídia na tela: `{ accountId, mediaId }` fica toda lida. */
+  markCommentsRead(request: unknown): Promise<RedesCommentsPayload>
+  // fim 73
   registerClick(senderId: number, token: unknown): void
   forgetSender(senderId: number): void
   /** O agendador: publica o que venceu, retoma o que ficou em `publicando` e limpa o armazenamento (o smoke chama direto). */
   tick(): Promise<void>
+  // 73/74: polling
+  /** Contratos 73 e 74: uma volta do polling agora (comentários e mensagens das contas conectadas; nada bloqueado). */
+  poll(): Promise<void>
+  // fim 73/74
+  // 74: mensagens
+  /** Contrato 74: as conversas e mensagens guardadas de `{ accountId }` (sem ler o Instagram). */
+  messagesState(request: unknown): Promise<RedesMessagesPayload>
+  /** "Atualizar" e a abertura da seção: lê as conversas agora. */
+  refreshMessages(request: unknown): Promise<RedesMessagesPayload>
+  /** "Enviar": só com o token de clique registrado pela mesma janela (`senderId`). */
+  sendMessage(senderId: number, request: unknown): Promise<RedesMessageSendResult>
+  /** A conversa aberta na tela deixa de ser não lida. */
+  markConversationRead(request: unknown): Promise<RedesMessagesPayload>
+  /** O estado de cada conta conectada (ao desbloquear, para o número do nível). */
+  messagesPayloads(): RedesMessagesPayload[]
+  // fim 74
+  // 75: métricas
+  /** Contrato 75: as métricas de `{ accountId, period }`: o cache de 1 h, ou a Meta quando passou (ao abrir a seção). */
+  metricsState(request: unknown): Promise<RedesMetricsState>
+  /** "Atualizar": lê da Meta de novo, mesmo com o cache valendo. */
+  refreshMetrics(request: unknown): Promise<RedesMetricsState>
+  // fim 75
   dispose(): void
 }
 
@@ -671,6 +745,199 @@ export function createRedesService(options: RedesServiceOptions): RedesService {
     return run
   }
 
+  // 75: métricas
+  // Contrato 75: o período visto por último em cada conta é relido a cada hora (o cache vale 1 h), nunca bloqueado; o
+  // mesmo pedido em curso não sai duas vezes.
+  const metricsSeen = new Map<string, MetricPeriod>()
+  const metricsRuns = new Map<string, Promise<RedesMetricsState>>()
+  let metricsTimer: ReturnType<typeof setInterval> | null = null
+  const metricsRequestSchema = z.object({ accountId: z.string().regex(REDES_ACCOUNT_ID_PATTERN), period: z.literal(METRIC_PERIODS) })
+  // A miniatura de cada mídia vai para `thumbs/`, a mesma pasta dos comentários (e a tela pede pelo mesmo canal).
+  const saveThumb = createThumbSaver(options.fetch, store)
+  const noMetrics = (accountId: string, error: string): RedesMetricsState => ({ accountId, account: { 7: null, 28: null, 90: null }, media: [], error, updatedAt: null })
+  const runMetrics = (accountId: string, period: MetricPeriod, force: boolean): Promise<RedesMetricsState> => {
+    const account = accounts.get(accountId)
+    if (!account) return Promise.resolve(noMetrics(accountId, REDES_ACCOUNT_MISSING_MESSAGE))
+    const key = `${accountId}:${period}:${force ? 'f' : 'c'}`
+    const running = metricsRuns.get(key)
+    if (running) return running
+    const token = readTokens().tokens[accountId]?.token
+    const run = (async (): Promise<RedesMetricsState> => {
+      // Sem token (ou vencido): o que já estava no cache, com o aviso.
+      if (!token || account.state === 'expirada') return metricsStateOf(accountId, await readMetricsCache(store, accountId), REDES_EXPIRED_MESSAGE)
+      return loadMetrics(client, token, account, period, store, now, { force, saveThumb })
+    })()
+      .then((state) => {
+        if (!disposed && accounts.has(accountId)) options.onMetrics?.(state)
+        return state
+      })
+      .finally(() => {
+        if (metricsRuns.get(key) === run) metricsRuns.delete(key)
+      })
+    metricsRuns.set(key, run)
+    return run
+  }
+  // O tick lê da Meta sem olhar o cache: com o cache de 1 h e o tick de 1 h, o "ainda vale" por milissegundos pularia
+  // uma volta inteira.
+  const metricsTick = async (): Promise<void> => {
+    if (disposed || options.isLocked?.()) return
+    for (const [accountId, period] of [...metricsSeen]) if (accounts.has(accountId)) await runMetrics(accountId, period, true).catch(() => undefined)
+  }
+  const metricsRequest = (request: unknown, force: boolean): Promise<RedesMetricsState> => {
+    const parsed = metricsRequestSchema.safeParse(request)
+    if (!parsed.success) return Promise.resolve(noMetrics('', REDES_ACCOUNT_MISSING_MESSAGE))
+    const { accountId, period } = parsed.data
+    if (accounts.has(accountId)) metricsSeen.set(accountId, period)
+    return runMetrics(accountId, period, force)
+  }
+  // fim 75
+
+  // 73/74: polling
+  // Contratos 73 e 74: comentários e mensagens são lidos a cada `redesPollMinutes` por um timer só (`unref`, relido a
+  // cada volta para valer a mudança nas Configurações), nunca com o app bloqueado. Cada contrato põe a sua leitura em
+  // `pollers` (recebe as contas conectadas com token válido), uma depois da outra.
+  const pollers: ((accountIds: string[]) => Promise<void>)[] = []
+  let pollTimer: ReturnType<typeof setTimeout> | null = null
+  const poll = async (): Promise<void> => {
+    if (disposed || options.isLocked?.()) return
+    const ids = [...accounts.values()].filter((account) => account.state !== 'expirada').map((account) => account.id)
+    if (!ids.length) return
+    for (const poller of pollers) await poller(ids).catch(() => undefined)
+  }
+  const schedulePoll = async (): Promise<void> => {
+    const raw = await Promise.resolve(options.pollMinutes?.() ?? REDES_POLL_MINUTES_DEFAULT).catch(() => REDES_POLL_MINUTES_DEFAULT)
+    const minutes = Number.isFinite(raw) && raw >= 1 && raw <= 60 ? raw : REDES_POLL_MINUTES_DEFAULT
+    if (disposed) return
+    pollTimer = setTimeout(() => void poll().finally(() => void schedulePoll()), minutes * 60_000)
+    pollTimer.unref()
+  }
+  // fim 73/74
+
+  // 73: comentários
+  pollers.push(async (accountIds) => {
+    for (const accountId of accountIds) await syncAccountComments(accountId).catch(() => undefined)
+  })
+  // fim 73
+
+  // 74: mensagens
+  // Contrato 74: as mensagens diretas (`messages.ts`), no mesmo timer dos comentários; o "Enviar" gasta o mesmo token de
+  // clique das redes (`scribe:redes-click`).
+  const messages = createMessagesService({
+    client,
+    store,
+    now,
+    account: (accountId) => {
+      const account = accounts.get(accountId)
+      return account ? { id: account.id, username: account.username } : null
+    },
+    token: (accountId) => readTokens().tokens[accountId]?.token ?? null,
+    onChange: (payload) => {
+      if (!disposed) options.onMessages?.(payload)
+    },
+    consumeClick: (senderId, token) => guard.consume(senderId, token),
+  })
+  pollers.push((accountIds) => messages.syncAll(accountIds))
+  // fim 74
+
+  // 73: comentários
+  // Contrato 73: os comentários de cada conta em memória (o mesmo do arquivo) e a leitura em curso de cada conta (o
+  // "Atualizar" no meio do polling espera a mesma). O polling é o dos contratos 73 e 74 (`pollers`, mais acima).
+  const commentFiles = new Map<string, CommentsFile>()
+  const commentRuns = new Map<string, Promise<RedesCommentsPayload>>()
+  const commentThumbsRoot = resolve(options.userData, REDES_DIR, COMMENT_THUMBS_DIR)
+  const commentIdSchema = z.string().regex(/^\d{1,40}$/)
+  const commentRequestSchema = z.object({ accountId: z.string().regex(REDES_ACCOUNT_ID_PATTERN), commentId: commentIdSchema })
+  const replyRequestSchema = commentRequestSchema.extend({ message: z.string().max(COMMENT_REPLY_MAX * 4) })
+  const hideRequestSchema = commentRequestSchema.extend({ hide: z.boolean() })
+  const mediaReadSchema = z.object({ accountId: z.string().regex(REDES_ACCOUNT_ID_PATTERN), mediaId: commentIdSchema })
+
+  const noComments = (accountId: string, error: string | null): RedesCommentsPayload => ({ accountId, media: [], unread: 0, updatedAt: null, error })
+  const commentsOf = async (accountId: string): Promise<CommentsFile> => {
+    const cached = commentFiles.get(accountId)
+    if (cached) return cached
+    const file = await readComments(store, accountId)
+    if (accounts.has(accountId)) commentFiles.set(accountId, file)
+    return file
+  }
+  /** Guarda o arquivo como ficou e avisa a tela; a conta que saiu no meio não volta por aqui. */
+  const keepComments = (accountId: string, file: CommentsFile): RedesCommentsPayload => {
+    const payload = commentsPayload(accountId, file)
+    if (!accounts.has(accountId)) return payload
+    commentFiles.set(accountId, file)
+    if (!disposed) options.onComments?.(payload)
+    return payload
+  }
+  const syncAccountComments = (accountId: string): Promise<RedesCommentsPayload> => {
+    const running = commentRuns.get(accountId)
+    if (running) return running
+    const run = (async (): Promise<RedesCommentsPayload> => {
+      const account = accounts.get(accountId)
+      if (!account) return noComments(accountId, REDES_ACCOUNT_MISSING_MESSAGE)
+      const token = readTokens().tokens[accountId]?.token
+      // Sem token (ou vencido): o que já estava, com o aviso.
+      if (!token || account.state === 'expirada') return keepComments(accountId, await updateComments(store, accountId, (file) => ({ ...file, error: REDES_EXPIRED_MESSAGE })))
+      const result = await syncComments(client, token, account, store, now(), { fetch: options.fetch })
+      return keepComments(accountId, result.file)
+    })().finally(() => {
+      if (commentRuns.get(accountId) === run) commentRuns.delete(accountId)
+    })
+    commentRuns.set(accountId, run)
+    return run
+  }
+  /** O token da conta, ou a razão de não ter. */
+  const commentToken = (accountId: string): { account: RedesAccount; token: string } | { error: string } => {
+    const account = accounts.get(accountId)
+    if (!account) return { error: REDES_ACCOUNT_MISSING_MESSAGE }
+    const token = readTokens().tokens[accountId]?.token
+    return token && account.state !== 'expirada' ? { account, token } : { error: REDES_EXPIRED_MESSAGE }
+  }
+  // Responder e excluir só com o token de clique da mesma janela (gasto mesmo com o resto inválido); ocultar não.
+  const replyComment = async (senderId: number, request: unknown): Promise<RedesCommentReplyResult> => {
+    if (!guard.consume(senderId, ((request ?? {}) as { clickToken?: unknown }).clickToken)) return { ok: false, error: REDES_COMMENT_CLICK_MESSAGE }
+    const parsed = replyRequestSchema.safeParse(request)
+    if (!parsed.success) return { ok: false, error: COMMENT_MISSING_MESSAGE }
+    const { accountId, commentId } = parsed.data
+    const message = parsed.data.message.trim()
+    if (!message) return { ok: false, error: COMMENT_EMPTY_MESSAGE }
+    if ([...message].length > COMMENT_REPLY_MAX) return { ok: false, error: COMMENT_TOO_LONG_MESSAGE }
+    const auth = commentToken(accountId)
+    if ('error' in auth) return { ok: false, error: auth.error }
+    const found = findComment(await commentsOf(accountId), commentId)
+    if (!found) return { ok: false, error: COMMENT_MISSING_MESSAGE }
+    // O Instagram só aceita resposta a um comentário: a de uma resposta vai ao de cima.
+    const result = await client.replyComment(auth.token, found.top.id, message)
+    if (!result.ok) return { ok: false, error: result.error }
+    const reply: RedesComment = { id: result.id, mediaId: found.media.mediaId, parentId: found.top.id, text: message, username: auth.account.username, fromId: auth.account.id, timestamp: iso(now()), hidden: false, likeCount: 0, read: true, replies: [] }
+    const file = await updateComments(store, accountId, (current) => addReply(current, found.top.id, reply))
+    return { ok: true, comment: reply, payload: keepComments(accountId, file) }
+  }
+  const hideComment = async (request: unknown): Promise<RedesCommentActionResult> => {
+    const parsed = hideRequestSchema.safeParse(request)
+    if (!parsed.success) return { ok: false, error: COMMENT_MISSING_MESSAGE }
+    const { accountId, commentId, hide } = parsed.data
+    const auth = commentToken(accountId)
+    if ('error' in auth) return { ok: false, error: auth.error }
+    if (!findComment(await commentsOf(accountId), commentId)) return { ok: false, error: COMMENT_MISSING_MESSAGE }
+    const result = await client.hideComment(auth.token, commentId, hide)
+    if (!result.ok) return { ok: false, error: result.error }
+    const file = await updateComments(store, accountId, (current) => changeComment(current, commentId, (comment) => ({ ...comment, hidden: hide })))
+    return { ok: true, payload: keepComments(accountId, file) }
+  }
+  const deleteComment = async (senderId: number, request: unknown): Promise<RedesCommentActionResult> => {
+    if (!guard.consume(senderId, ((request ?? {}) as { clickToken?: unknown }).clickToken)) return { ok: false, error: REDES_COMMENT_CLICK_MESSAGE }
+    const parsed = commentRequestSchema.safeParse(request)
+    if (!parsed.success) return { ok: false, error: COMMENT_MISSING_MESSAGE }
+    const { accountId, commentId } = parsed.data
+    const auth = commentToken(accountId)
+    if ('error' in auth) return { ok: false, error: auth.error }
+    if (!findComment(await commentsOf(accountId), commentId)) return { ok: false, error: COMMENT_MISSING_MESSAGE }
+    const result = await client.deleteComment(auth.token, commentId)
+    if (!result.ok) return { ok: false, error: result.error }
+    const file = await updateComments(store, accountId, (current) => changeComment(current, commentId, () => null))
+    return { ok: true, payload: keepComments(accountId, file) }
+  }
+  // fim 73
+
   /** O agendador: nada com o app bloqueado (CA15). Espera as publicações que começou (o smoke confere em seguida). */
   const tick = async (): Promise<void> => {
     if (disposed || options.isLocked?.()) return
@@ -709,6 +976,9 @@ export function createRedesService(options: RedesServiceOptions): RedesService {
       // Contrato 71: a fila de cada conta; o que ficou em `publicando` (o app fechou no meio) o primeiro tick retoma.
       queues.clear()
       for (const account of stored) queues.set(account.id, await store.readPublications(account.id))
+      // 74: mensagens
+      await messages.init(stored.map((account) => account.id))
+      // fim 74
       emit()
       for (const id of queues.keys()) emitPublications(id)
       void refreshDue()
@@ -720,6 +990,22 @@ export function createRedesService(options: RedesServiceOptions): RedesService {
         publishTimer = setInterval(() => void tick().catch(() => undefined), PUBLISH_TICK_MS)
         publishTimer.unref()
       }
+      // 75: métricas
+      if (!metricsTimer && !disposed) {
+        metricsTimer = setInterval(() => void metricsTick().catch(() => undefined), METRICS_CACHE_MS)
+        metricsTimer.unref()
+      }
+      // fim 75
+      // 73/74: polling
+      if (!pollTimer && !disposed) void schedulePoll()
+      void poll()
+      // fim 73/74
+      // 73: comentários
+      // Os comentários guardados vão à tela (o número do nível); a leitura da API sai no polling (73/74).
+      commentFiles.clear()
+      for (const account of stored) commentFiles.set(account.id, await readComments(store, account.id))
+      for (const [id, file] of commentFiles) if (!disposed) options.onComments?.(commentsPayload(id, file))
+      // fim 73
       void tick().catch(() => undefined)
     },
 
@@ -774,7 +1060,25 @@ export function createRedesService(options: RedesServiceOptions): RedesService {
         quotas.delete(id)
         await removeFromStorage(queue.flatMap((publication) => publication.media)).catch(() => undefined)
         for (const publication of queue) await store.removeMediaDir(publication.id).catch(() => undefined)
+        // 74: mensagens
+        await messages.remove(id).catch(() => undefined)
+        // fim 74
         await store.removeAccount(id)
+        // 73: comentários
+        // Depois do arquivo da conta: uma gravação dos comentários que estava na fila não volta a criar o arquivo.
+        const commentsGone = commentFiles.get(id) ?? (await readComments(store, id).catch(() => null))
+        commentFiles.delete(id)
+        await store.removeComments(id).catch(() => undefined)
+        for (const path of commentsGone ? thumbPaths(commentsGone) : []) if (resolve(path).startsWith(commentThumbsRoot + sep)) await rm(path, { force: true }).catch(() => undefined)
+        // fim 73
+        // 75: métricas
+        // Também depois do arquivo da conta (a leitura em curso não recria o cache); com ele, as miniaturas que as
+        // métricas baixaram (registradas no cache, inclusive as que saíram das 25).
+        metricsSeen.delete(id)
+        const metricsGone = await readMetricsCache(store, id).catch(() => null)
+        await store.removeMetrics(id).catch(() => undefined)
+        for (const path of metricsGone?.thumbs ?? []) if (resolve(path).startsWith(commentThumbsRoot + sep)) await rm(path, { force: true }).catch(() => undefined)
+        // fim 75
         emit()
         return { ok: true }
       })
@@ -937,11 +1241,57 @@ export function createRedesService(options: RedesServiceOptions): RedesService {
       const parsed = z.object({ path: z.string().min(1).max(4096) }).safeParse(request)
       if (!parsed.success || !options.thumbnail) return null
       const { path } = parsed.data
+      // 73: comentários
+      // A miniatura de uma mídia com comentário, baixada pela atualização (`thumbs/<mídia>.jpg`).
+      if (resolve(path).startsWith(commentThumbsRoot + sep) && /^\d{1,40}\.jpg$/.test(basename(path))) return options.thumbnail(path).catch(() => null)
+      // fim 73
       const saved = resolve(path).startsWith(mediaRoot + sep)
       if (!saved && !picked.has(path)) return null
       if (!/\.jpe?g$/i.test(path)) return null
       return options.thumbnail(path).catch(() => null)
     },
+
+    // 75: métricas
+    metricsState: (request) => metricsRequest(request, false),
+    refreshMetrics: (request) => metricsRequest(request, true),
+    // fim 75
+
+    // 73/74: polling
+    poll,
+    // fim 73/74
+
+    // 74: mensagens
+    messagesState: (request) => messages.state(request),
+    refreshMessages: (request) => messages.refresh(request),
+    sendMessage: (senderId, request) => messages.send(senderId, request),
+    markConversationRead: (request) => messages.markRead(request),
+    messagesPayloads: () => messages.payloads(),
+    // fim 74
+
+    // 73: comentários
+    async commentsState(request) {
+      const parsed = accountRequestSchema.safeParse(request)
+      if (!parsed.success || !accounts.has(parsed.data.accountId)) return noComments(parsed.success ? parsed.data.accountId : '', REDES_ACCOUNT_MISSING_MESSAGE)
+      return commentsPayload(parsed.data.accountId, await commentsOf(parsed.data.accountId))
+    },
+
+    refreshComments(request) {
+      const parsed = accountRequestSchema.safeParse(request)
+      if (!parsed.success) return Promise.resolve(noComments('', REDES_ACCOUNT_MISSING_MESSAGE))
+      return syncAccountComments(parsed.data.accountId)
+    },
+
+    replyComment,
+    hideComment,
+    deleteComment,
+
+    async markCommentsRead(request) {
+      const parsed = mediaReadSchema.safeParse(request)
+      if (!parsed.success || !accounts.has(parsed.data.accountId)) return noComments(parsed.success ? parsed.data.accountId : '', REDES_ACCOUNT_MISSING_MESSAGE)
+      const { accountId, mediaId } = parsed.data
+      return keepComments(accountId, await markRead(store, accountId, mediaId))
+    },
+    // fim 73
 
     registerClick(senderId, token) {
       guard.register(senderId, token)
@@ -959,6 +1309,14 @@ export function createRedesService(options: RedesServiceOptions): RedesService {
       timer = null
       if (publishTimer) clearInterval(publishTimer)
       publishTimer = null
+      // 73/74: polling
+      if (pollTimer) clearTimeout(pollTimer)
+      pollTimer = null
+      // fim 73/74
+      // 75: métricas
+      if (metricsTimer) clearInterval(metricsTimer)
+      metricsTimer = null
+      // fim 75
     },
   }
 }

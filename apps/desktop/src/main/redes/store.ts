@@ -26,6 +26,10 @@ export const REDES_DIR = 'redes'
 export const MEDIA_HOST_FILE = 'media-host.json'
 /** Contrato 71: as cópias das mídias das publicações, uma pasta por publicação. */
 export const MEDIA_DIR = 'midia'
+// 73: comentários
+/** Contrato 73: as miniaturas das mídias publicadas (`thumbs/<mediaId>.jpg`), baixadas pelo main. */
+export const THUMBS_DIR = 'thumbs'
+// fim 73
 const STORE_VERSION = 1
 const ACCOUNT_FILE = /^instagram-(\d{1,32})\.json$/
 
@@ -56,6 +60,34 @@ export interface RedesStore {
   readMediaHost(): Promise<StoredMediaHost | null>
   writeMediaHost(value: StoredMediaHost): Promise<void>
   removeMediaHost(): Promise<void>
+  // 73: comentários
+  /** Contrato 73: os comentários da conta (`instagram-<id>.comments.json`), cru (quem lê valida); `null` sem arquivo. */
+  readComments(accountId: string): Promise<unknown>
+  /** Grava na mesma fila de escrita da conta; sem o arquivo da conta (removida), não grava e devolve `false`. */
+  writeComments(accountId: string, value: unknown): Promise<boolean>
+  removeComments(accountId: string): Promise<void>
+  /** A pasta das miniaturas das mídias (`thumbs/`, 0700), criada se `create`. */
+  thumbsDir(create?: boolean): Promise<string>
+  // fim 73
+  // 74: mensagens
+  /** Contrato 74: as conversas e mensagens da conta (`instagram-<id>.messages.json`), cru (quem lê valida); `null` sem arquivo. */
+  readMessages(accountId: string): Promise<unknown>
+  /** Grava na mesma fila de escrita da conta; sem o arquivo da conta (removida), não grava e devolve `false`. */
+  writeMessages(accountId: string, value: unknown): Promise<boolean>
+  removeMessages(accountId: string): Promise<void>
+  // fim 74
+  // 75: métricas
+  /** Contrato 75: o cache das métricas da conta (`instagram-<id>.metrics.json`), cru (quem lê valida); `null` sem arquivo. */
+  readMetrics(accountId: string): Promise<unknown>
+  /** Grava o cache na mesma fila de escrita da conta; sem o arquivo da conta (removida), não grava e devolve `false`. */
+  writeMetrics(accountId: string, value: unknown): Promise<boolean>
+  /**
+   * Lê e regrava o cache dentro da fila da conta (duas leituras em paralelo, de períodos diferentes, não se apagam):
+   * `change` recebe o conteúdo cru de agora e devolve o novo. Sem o arquivo da conta, não grava e devolve `null`.
+   */
+  updateMetrics<T>(accountId: string, change: (current: unknown) => T): Promise<T | null>
+  removeMetrics(accountId: string): Promise<void>
+  // fim 75
 }
 
 async function writeAtomic(file: string, content: string): Promise<void> {
@@ -108,6 +140,15 @@ export function createRedesStore(root: string): RedesStore {
     await ensureDir()
     await writeAtomic(accountFile(file.account.id), `${JSON.stringify({ version: STORE_VERSION, account: file.account, publications: file.publications }, null, 2)}\n`)
   }
+  // 75: métricas
+  const metricsFile = (accountId: string): string => `${accountFile(accountId).slice(0, -'.json'.length)}.metrics.json`
+  // fim 75
+  // 74: mensagens
+  const messagesFile = (accountId: string): string => `${accountFile(accountId).slice(0, -'.json'.length)}.messages.json`
+  // fim 74
+  // 73: comentários
+  const commentsFile = (accountId: string): string => `${accountFile(accountId).slice(0, -'.json'.length)}.comments.json`
+  // fim 73
   const mediaPath = (publicationId: string): string => {
     if (!PUBLICATION_ID_PATTERN.test(publicationId)) throw new Error('publicação inválida')
     return join(root, MEDIA_DIR, publicationId)
@@ -192,5 +233,92 @@ export function createRedesStore(root: string): RedesStore {
     async removeMediaHost() {
       await rm(join(root, MEDIA_HOST_FILE), { force: true })
     },
+
+    // 73: comentários
+    // Um arquivo à parte (`instagram-<id>.comments.json`): a gravação da fila, que regrava o da conta, não apaga o `read`.
+    async readComments(accountId) {
+      return readJson(commentsFile(accountId))
+    },
+
+    writeComments(accountId, value) {
+      const file = commentsFile(accountId)
+      return perAccount(accountId, async () => {
+        if (!(await readAccountFile(accountId))) return false
+        await ensureDir()
+        await writeAtomic(file, `${JSON.stringify(value)}\n`)
+        return true
+      })
+    },
+
+    removeComments(accountId) {
+      const file = commentsFile(accountId)
+      return perAccount(accountId, () => rm(file, { force: true }))
+    },
+
+    async thumbsDir(create = false) {
+      const dir = join(root, THUMBS_DIR)
+      if (create) {
+        await ensureDir()
+        await mkdir(dir, { recursive: true, mode: 0o700 })
+        await chmod(dir, 0o700)
+      }
+      return dir
+    },
+    // fim 73
+
+    // 75: métricas
+    // Um arquivo à parte (`instagram-<id>.metrics.json`): a gravação da fila, que regrava o da conta, não apaga as métricas.
+    async readMetrics(accountId) {
+      return readJson(metricsFile(accountId))
+    },
+
+    writeMetrics(accountId, value) {
+      const file = metricsFile(accountId)
+      return perAccount(accountId, async () => {
+        if (!(await readAccountFile(accountId))) return false
+        await ensureDir()
+        await writeAtomic(file, `${JSON.stringify(value)}\n`)
+        return true
+      })
+    },
+
+    updateMetrics(accountId, change) {
+      const file = metricsFile(accountId)
+      return perAccount(accountId, async () => {
+        if (!(await readAccountFile(accountId))) return null
+        const next = change(await readJson(file))
+        await ensureDir()
+        await writeAtomic(file, `${JSON.stringify(next)}\n`)
+        return next
+      })
+    },
+
+    removeMetrics(accountId) {
+      const file = metricsFile(accountId)
+      return perAccount(accountId, () => rm(file, { force: true }))
+    },
+    // fim 75
+
+    // 74: mensagens
+    // Um arquivo à parte (`instagram-<id>.messages.json`), como o das métricas: a fila e as mensagens não se apagam.
+    async readMessages(accountId) {
+      return readJson(messagesFile(accountId))
+    },
+
+    writeMessages(accountId, value) {
+      const file = messagesFile(accountId)
+      return perAccount(accountId, async () => {
+        if (!(await readAccountFile(accountId))) return false
+        await ensureDir()
+        await writeAtomic(file, `${JSON.stringify(value)}\n`)
+        return true
+      })
+    },
+
+    removeMessages(accountId) {
+      const file = messagesFile(accountId)
+      return perAccount(accountId, () => rm(file, { force: true }))
+    },
+    // fim 74
   }
 }

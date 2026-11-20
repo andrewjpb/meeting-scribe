@@ -106,6 +106,15 @@ import type { EmailOrganizer } from './email/organize'
 import { createEmailClickGuard, createEmailService, type EmailService } from './email/service'
 import { createRedesService, type RedesService } from './redes/service'
 import { testMediaHost } from './redes/media-host'
+// 73: comentários
+import type { RedesCommentsPayload } from '../shared/redes'
+// fim 73
+// 74: mensagens
+import { failedMessagesPayload, MESSAGE_SEND_FAILED_MESSAGE } from './redes/messages'
+// fim 74
+// 75: métricas
+import type { RedesMetricsState } from '../shared/redes'
+// fim 75
 import { createMacCalendar, locateMacCalendar, type MacCalendar } from './mac-calendar/process'
 import { createInviteService, type InviteService } from './invites/service'
 import { createInviteSuggester, createInviteSuggestChannels, type InviteSuggestChannels } from './invites/suggest'
@@ -278,6 +287,12 @@ function applyLockStatus(status: LockStatus): void {
     const redes = redesService
     broadcast(appWindows(), 'scribe:redes-state', redes.state())
     for (const account of redes.state().accounts) void redes.publications({ accountId: account.id }).then((payload) => broadcast(appWindows(), 'scribe:redes-publications', payload))
+    // 73: comentários
+    for (const account of redes.state().accounts) void redes.commentsState({ accountId: account.id }).then((payload) => broadcast(appWindows(), 'scribe:redes-comments', payload))
+    // fim 73
+    // 74: mensagens
+    for (const payload of redes.messagesPayloads()) broadcast(appWindows(), 'scribe:redes-messages', payload)
+    // fim 74
   }
   // Contrato 12: o mesmo para as próximas reuniões e a faixa da agenda.
   if (!status.locked && calendarService) broadcast(appWindows(), 'scribe:calendar-state', calendarService.view())
@@ -1244,6 +1259,26 @@ function createAppServices(userData: string): AppServices {
     ...(smokeFixtures ? { sleep: (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, Math.min(ms, 50))) } : {}),
     // Contrato 72: a miniatura da fila e do editor, pelo decodificador do Chromium (a tela não lê arquivo do disco).
     thumbnail: redesThumbnail,
+    // 73: comentários
+    // Contrato 73: os comentários; bloqueado, nada vai às janelas (e o polling não lê).
+    onComments: (payload) => {
+      if (!lockService?.isLocked()) broadcast(appWindows(), 'scribe:redes-comments', payload)
+    },
+    // fim 73
+    // 73/74: polling
+    pollMinutes: async () => (await settings.get()).redesPollMinutes,
+    // fim 73/74
+    // 74: mensagens
+    // Contrato 74: as mensagens diretas; bloqueado, nada vai às janelas (e o polling não lê).
+    onMessages: (payload) => {
+      if (!lockService?.isLocked()) broadcast(appWindows(), 'scribe:redes-messages', payload)
+    },
+    // fim 74
+    // 75: métricas
+    onMetrics: (state) => {
+      if (!lockService?.isLocked()) broadcast(appWindows(), 'scribe:redes-metrics', state)
+    },
+    // fim 75
   })
   redesService = redes
   // Contrato 60: o Calendário do Mac pelo `lap-calendar`, sob demanda (nada sobe até o primeiro pedido). No smoke, o
@@ -2253,7 +2288,29 @@ function registerIpc(services: AppServices): void {
   handle('scribe:redes-publication-retry', appOrigin, (_event, request) => redes.retry(request).catch(() => publicationFailed))
   handle('scribe:redes-quota', appOrigin, (_event, request) => redes.quota(request).catch(() => ({ ok: false, error: 'Não foi possível ler a cota do Instagram' }) as const))
   handle('scribe:redes-media-thumb', appOrigin, (_event, request) => redes.thumbnail(request).catch(() => null))
+  // 73: comentários
+  const commentsFailed = (request: unknown): RedesCommentsPayload => ({ accountId: String((request as { accountId?: unknown } | null)?.accountId ?? ''), media: [], unread: 0, updatedAt: null, error: 'Não foi possível ler os comentários do Instagram' })
+  const commentFailed = { ok: false, error: 'Não foi possível falar com o Instagram' } as const
+  handle('scribe:redes-comments', appOrigin, (_event, request) => redes.commentsState(request).catch(() => commentsFailed(request)))
+  handle('scribe:redes-comments-refresh', appOrigin, (_event, request) => redes.refreshComments(request).catch(() => commentsFailed(request)))
+  handle('scribe:redes-comment-reply', appOrigin, (event, request) => redes.replyComment(event.sender.id, request).catch(() => commentFailed))
+  handle('scribe:redes-comment-hide', appOrigin, (_event, request) => redes.hideComment(request).catch(() => commentFailed))
+  handle('scribe:redes-comment-delete', appOrigin, (event, request) => redes.deleteComment(event.sender.id, request).catch(() => commentFailed))
+  handle('scribe:redes-comments-read', appOrigin, (_event, request) => redes.markCommentsRead(request).catch(() => commentsFailed(request)))
+  // fim 73
+  // 75: métricas
+  const metricsFailed = (request: unknown): RedesMetricsState => ({ accountId: String((request as { accountId?: unknown } | null)?.accountId ?? ''), account: { 7: null, 28: null, 90: null }, media: [], error: 'Não foi possível ler as métricas do Instagram', updatedAt: null })
+  handle('scribe:redes-metrics', appOrigin, (_event, request) => redes.metricsState(request).catch(() => metricsFailed(request)))
+  handle('scribe:redes-metrics-refresh', appOrigin, (_event, request) => redes.refreshMetrics(request).catch(() => metricsFailed(request)))
+  // fim 75
   onEvent('scribe:redes-click', appOrigin, (event, token) => redes.registerClick(event.sender.id, token))
+  // 74: mensagens
+  // Contrato 74: as mensagens diretas. "Enviar" só com o token de clique da mesma janela (`redes-click`).
+  handle('scribe:redes-messages', appOrigin, (_event, request) => redes.messagesState(request).catch(() => failedMessagesPayload(request)))
+  handle('scribe:redes-messages-refresh', appOrigin, (_event, request) => redes.refreshMessages(request).catch(() => failedMessagesPayload(request)))
+  handle('scribe:redes-message-send', appOrigin, (event, request) => redes.sendMessage(event.sender.id, request).catch(() => ({ ok: false, error: MESSAGE_SEND_FAILED_MESSAGE }) as const))
+  handle('scribe:redes-conversation-read', appOrigin, (_event, request) => redes.markConversationRead(request).catch(() => failedMessagesPayload(request)))
+  // fim 74
   // Contrato 62: o cartão do convite e o Calendário do Mac. O serviço valida cada pedido; falha vira resposta tipada.
   const inviteFailed = { ok: false, error: 'failed', message: INVITE_ERROR_MESSAGES.failed, state: null } as const
   handle('scribe:invite-state', appOrigin, (_event, request) => invites.state(request).catch(() => ({ ok: false, error: 'unavailable' }) as const))

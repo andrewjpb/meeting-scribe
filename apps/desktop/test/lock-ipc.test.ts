@@ -317,7 +317,18 @@ describe('canais com o app bloqueado (contrato 22, CA4)', () => {
   it('contrato 69: todos os canais das redes são recusados bloqueado, antes do handler', async () => {
     const channels = INVOKE_CHANNELS.filter((channel) => channel.startsWith('scribe:redes-'))
     expect(channels.sort()).toEqual([
+      // 73: comentários
+      'scribe:redes-comment-delete',
+      'scribe:redes-comment-hide',
+      'scribe:redes-comment-reply',
+      'scribe:redes-comments',
+      'scribe:redes-comments-read',
+      'scribe:redes-comments-refresh',
+      // fim 73
       'scribe:redes-connect',
+      // 74: mensagens
+      'scribe:redes-conversation-read',
+      // fim 74
       'scribe:redes-media-host-clear',
       'scribe:redes-media-host-save',
       'scribe:redes-media-host-test',
@@ -325,6 +336,14 @@ describe('canais com o app bloqueado (contrato 22, CA4)', () => {
       'scribe:redes-media-pick',
       // Contrato 72: a miniatura da fila e do editor.
       'scribe:redes-media-thumb',
+      // 74: mensagens
+      'scribe:redes-message-send',
+      'scribe:redes-messages',
+      'scribe:redes-messages-refresh',
+      // fim 74
+      // Contrato 75: as métricas.
+      'scribe:redes-metrics',
+      'scribe:redes-metrics-refresh',
       'scribe:redes-publication-delete',
       'scribe:redes-publication-publish',
       'scribe:redes-publication-retry',

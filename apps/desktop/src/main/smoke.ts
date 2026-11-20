@@ -77,6 +77,10 @@
 // Contrato 72: depois das publicações pelo serviço (contrato 71) e antes do bloqueio, a tela Redes e o nível Redes da barra
 // lateral (`redesUiChecks`): o item só com conta, o estado vazio, o nível em pilha, a fila com os quatro grupos, o editor
 // (duas imagens, o PNG recusado, sem o armazenamento) e "Publicar agora", "Tentar de novo" e "Agendar" pelo clique.
+// 73: comentários
+// Contrato 73: no mesmo `redesUiChecks`, Redes › Comentários: a lista por mídia com a miniatura, os não lidos no nível e na
+// raiz zerando ao abrir, a resposta aninhada, ocultar/mostrar, excluir com confirmação e o comentário novo pela atualização.
+// fim 73
 import { appendFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { spawn as spawnChild } from 'node:child_process'
 import { request as httpRequest } from 'node:http'
@@ -88,6 +92,9 @@ import { WHATSAPP_EXPORT_PREFIX, WHATSAPP_FIXED_WARNING, WHATSAPP_PAIR_HINT, WHA
 import { INSIGHTS_MOOD_NOTE } from '../shared/whatsapp-insights'
 import { ASSEMBLYAI_DASHBOARD_URL } from '../shared/assemblyai'
 import { INVOKE_CHANNELS, WHEN_LOCKED, type CspViolation } from '../shared/ipc'
+// 73: comentários
+import { REDES_COMMENT_CLICK_MESSAGE } from '../shared/ipc'
+// fim 73
 import { LOCK_DISABLED_HINT, LOCKED_ERROR, lockedWindowTitle, TOUCH_ID_FAILED_TEXT } from '../shared/lock'
 import { analyzedUntil, type MeetingAnalysesFile, type MeetingAnalysis } from '../shared/meeting-analysis'
 import { notesMarkdown, type MeetingNote, type MeetingNotesFile } from '../shared/meeting-notes'
@@ -145,6 +152,12 @@ import {
   type RedesPublicationsPayload,
   type RedesState,
 } from '../shared/redes'
+// 73: comentários
+import type { RedesCommentsPayload } from '../shared/redes'
+// fim 73
+// 74: mensagens
+import type { RedesMessagesPayload } from '../shared/redes'
+// fim 74
 import { MEET_DISCONNECTED_LABEL } from '../shared/meet'
 import { APP_PLUGINS, pluginFolderName } from '../shared/plugins'
 import { MEET_PATH, MEET_PORTS, type MeetServer } from './meet/server'
@@ -10520,7 +10533,7 @@ async function redesUiChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => v
     sizes.connect === 28 &&
     sizes.footerGap === 4
   await clickSelector(contents, `${SIDEBAR_REDES} [data-redes-section="comentarios"]`)
-  const coming = await waitFor(contents, `document.querySelector('[data-redes-title]')?.textContent === '@${SMOKE_IG_USERNAME} · Comentários' && document.querySelector('[data-redes-coming="comentarios"]')?.textContent.includes('Em preparação') && document.querySelector('${SIDEBAR_REDES} [data-redes-section="comentarios"]')?.getAttribute('aria-current') === 'page'`, 8000)
+  const coming = await waitFor(contents, `document.querySelector('[data-redes-title]')?.textContent === '@${SMOKE_IG_USERNAME} · Comentários' && document.querySelector('[data-redes-comments]') && document.querySelector('${SIDEBAR_REDES} [data-redes-section="comentarios"]')?.getAttribute('aria-current') === 'page'`, 8000)
   await both('sidebar-redes')
   await clickNav(contents, 'reunioes')
   await waitFor(contents, `${routeIs('reunioes')} && ${oneLevel}`, 8000)
@@ -10528,7 +10541,7 @@ async function redesUiChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => v
   const remembered = await waitFor(contents, `${routeIs('redes')} && document.querySelector('[data-redes-title]')?.textContent === '@${SMOKE_IG_USERNAME} · Comentários' && document.querySelector('${SIDEBAR_REDES}') && ${oneLevel}`, 8000)
   checks['level'] = {
     ok: slideOk(push, 'root', 'redes') && stillOk(push) && entered && enterFocus && sizesOk && coming && remembered,
-    detail: `deslize meio ${JSON.stringify(push.middle)} depois ${JSON.stringify(push.after)}; marca e rodapé parados=${stillOk(push)}; publicações da conta=${entered}; foco no cabeçalho-voltar=${enterFocus}; medidas ${JSON.stringify(sizes)}; Comentários "Em preparação"=${coming}; de Reuniões, a última seção (Comentários)=${remembered}`,
+    detail: `deslize meio ${JSON.stringify(push.middle)} depois ${JSON.stringify(push.after)}; marca e rodapé parados=${stillOk(push)}; publicações da conta=${entered}; foco no cabeçalho-voltar=${enterFocus}; medidas ${JSON.stringify(sizes)}; a seção Comentários=${coming}; de Reuniões, a última seção (Comentários)=${remembered}`,
   }
 
   // CA13: o "voltar" mostra a raiz sem navegar, com o foco em "Redes" marcada; de novo em "Redes", o nível sem navegar; ⌘,
@@ -10761,7 +10774,7 @@ async function redesUiChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => v
   await waitFor(contents, `document.querySelector('[data-redes-editor="${target}"]')`, 8000)
   await setValue(contents, '[data-redes-caption]', 'Legenda mudada antes de sair da tela')
   await clickSelector(contents, `${SIDEBAR_REDES} [data-redes-section="comentarios"]`)
-  const leftNotice = await waitFor(contents, `document.querySelector('[data-redes-notice]')?.textContent.includes('As mudanças da publicação que estava aberta foram salvas como rascunho.') && document.querySelector('[data-redes-coming="comentarios"]')`, 8000)
+  const leftNotice = await waitFor(contents, `document.querySelector('[data-redes-notice]')?.textContent.includes('As mudanças da publicação que estava aberta foram salvas como rascunho.') && document.querySelector('[data-redes-comments]')`, 8000)
   const leftSaved = await until(target, (item) => item.caption === 'Legenda mudada antes de sair da tela', 5000)
   await clickSelector(contents, `${SIDEBAR_REDES} [data-redes-section="publicacoes"]`)
   const notReopened = await waitFor(contents, `document.querySelector('[data-redes-list]') && !document.querySelector('[data-redes-editor]')`, 8000)
@@ -10831,6 +10844,439 @@ async function redesUiChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => v
     ok: reduced.back === 1 && reduced.backed && reduced.enter === 1 && reduced.entered,
     detail: `no máximo ${reduced.back} nível nos 10 quadros depois de voltar (raiz=${reduced.backed}); ${reduced.enter} depois de entrar (nível Redes=${reduced.entered})`,
   }
+
+  // 73: comentários
+  // Contrato 73 (CA10): Redes › Comentários com o Instagram falso: as mídias com comentário à esquerda (miniatura baixada
+  // pelo main, "N comentários · M novos"); o número do nível e da raiz somando os não lidos e zerando ao abrir cada mídia;
+  // os comentários em ordem cronológica com a resposta recuada 28 px e o oculto apagado com o selo; "Responder" (Enter
+  // envia, Esc cancela) criando a resposta aninhada; "Ocultar"/"Mostrar"; "Excluir" com a confirmação; e o comentário
+  // novo pela atualização chegando não lido. Termina com tudo lido (o número das mensagens do 74 não muda). Um print nos
+  // dois temas, com a resposta aberta (artboard 05).
+  {
+    const commentsStarted = Date.now()
+    if (!fake.thumbJpeg) fake.thumbJpeg = new Uint8Array(nativeImage.createFromBitmap(picture(96, 96, 90), { width: 96, height: 96 }).toJPEG(80))
+    const commented = fake.mediaList().filter((item) => item.comments_count > 0)
+    const mediaA = commented[0]?.id ?? '?'
+    const mediaB = commented[1]?.id ?? '?'
+    const HOUR = 3_600_000
+    const at = (ms: number): number => fake.now() - ms
+    // A primeira atualização da conta é o ponto de partida (o que já existia entra lido): ela vem antes dos comentários
+    // abaixo, que chegam depois e contam como novos.
+    const baseline = await api<RedesCommentsPayload>('scribe:redes-comments-refresh', { accountId })
+    const carol = fake.addComment(mediaA, { text: 'Ficou lindo o app! Já dá para baixar?', username: 'carol.design', at: at(26 * HOUR) })
+    const own = fake.addComment(mediaA, { text: 'Já sim, Carol! O link está na bio.', username: SMOKE_IG_USERNAME, fromId: accountId, parentId: carol, at: at(25 * HOUR) })
+    const rafa = fake.addComment(mediaA, { text: 'Qual stack vocês usaram no desktop?', username: 'rafa.dev', at: at(2 * HOUR) })
+    const spam = fake.addComment(mediaA, { text: 'Ganhe 1.000 seguidores em 24 h, link no meu perfil <script>alert(1)</script>', username: 'pedro_ops', hidden: true, at: at(90 * 60_000) })
+    const lu = fake.addComment(mediaA, { text: 'Vai ter versão para Windows?', username: 'lu.santos', at: at(20 * 60_000) })
+    fake.addComment(mediaB, { text: 'Adorei as dicas, vou testar na próxima pauta', username: 'ana.paula', at: at(3 * 24 * HOUR) })
+    const comment = (id: string): string => `[data-redes-comment="${id}"]`
+    const badge = (selector: string): Promise<string> => evaluate<string>(contents, `(() => { const el = document.querySelector(${JSON.stringify(selector)}); return el && !el.hidden ? (el.firstChild?.textContent ?? '') : '' })()`)
+    const levelBadge = (): Promise<string> => badge(`${SIDEBAR_REDES} [data-redes-badge="comentarios"]`)
+    const messagesBadge = async (): Promise<number> => Number((await badge(`${SIDEBAR_REDES} [data-redes-badge="mensagens"]`)) || 0)
+    /** O número da raiz (o nível volta a aparecer sem navegar). */
+    const rootBadge = async (): Promise<string> => {
+      await clickSelector(contents, `${SIDEBAR_REDES} [data-sidebar-back]`)
+      await waitFor(contents, `document.querySelector('${SIDEBAR_ROOT}') && ${oneLevel}`)
+      const value = await badge(`${SIDEBAR_ROOT} [data-nav="redes"] [data-nav-badge]`)
+      await clickNav(contents, 'redes')
+      await waitFor(contents, `document.querySelector('${SIDEBAR_REDES}') && ${oneLevel}`)
+      return value
+    }
+    const mediaLine = (id: string): Promise<string> => text(contents, `[data-redes-media="${id}"] [data-redes-media-line]`)
+
+    // A lista: as duas mídias com comentário, a mais nova primeiro, com a miniatura e a contagem.
+    const messagesBefore = await messagesBadge()
+    await clickSelector(contents, `${SIDEBAR_REDES} [data-redes-section="comentarios"]`)
+    const listed = await waitFor(
+      contents,
+      `document.querySelector('[data-redes-title]')?.textContent === '@${SMOKE_IG_USERNAME} · Comentários' && JSON.stringify([...document.querySelectorAll('[data-redes-media]')].map((el) => el.dataset.redesMedia)) === '${JSON.stringify([mediaA, mediaB])}' && [...document.querySelectorAll('[data-redes-media] img[data-redes-comments-thumb]')].every((img) => img.src.startsWith('data:image/jpeg')) && document.querySelectorAll('[data-redes-media] img[data-redes-comments-thumb]').length === 2`,
+      15_000,
+    )
+    const lines = [await mediaLine(mediaA), await mediaLine(mediaB)]
+    const rows = await evaluate<{ height: number; thumb: number; list: number }>(
+      contents,
+      `({ height: Math.round(document.querySelector('[data-redes-media="${mediaA}"]').getBoundingClientRect().height), thumb: Math.round(document.querySelector('[data-redes-media="${mediaA}"] [data-redes-comments-thumb]').getBoundingClientRect().width), list: Math.round(document.querySelector('[data-redes-comments-media]').parentElement.getBoundingClientRect().width) })`,
+    )
+    const noThread = Boolean(await evaluate<boolean>(contents, `Boolean(document.querySelector('[data-redes-thread-none]'))`))
+    checks['commentsList'] = {
+      ok: baseline.unread === 0 && listed && lines[0] === '5 comentários · 4 novos' && lines[1] === '1 comentário · 1 novo' && rows.height === 44 && rows.thumb === 40 && rows.list === 300 && noThread,
+      detail: `ponto de partida sem novos=${baseline.unread === 0}; lista ${listed} (${mediaA}, ${mediaB}); linhas ${JSON.stringify(lines)}; medidas ${JSON.stringify(rows)}; nenhuma aberta=${noThread}`,
+    }
+
+    // Os não lidos no nível e na raiz (mais os das mensagens, do 74), e zerando a cada mídia aberta.
+    const unreadAll = { level: await levelBadge(), root: await rootBadge() }
+    await clickSelector(contents, `[data-redes-media="${mediaA}"]`)
+    const threadOpen = await waitFor(contents, `document.querySelector('[data-redes-thread="${mediaA}"]') && !document.querySelector('[data-redes-media="${mediaA}"] [data-redes-media-unread]')`, 8000)
+    const afterA = { line: await mediaLine(mediaA), level: await levelBadge(), root: await rootBadge() }
+    const thread = await evaluate<{ ids: string[]; replyOf: string; replyPad: string; topPad: string; fresh: string[]; hidden: string[]; badgeText: string; opacity: string; spamText: string; scripts: number; times: string[] }>(
+      contents,
+      `(() => {
+        const items = [...document.querySelectorAll('[data-redes-thread] [data-redes-comment]')]
+        const reply = document.querySelector('${comment(own)}')
+        const spam = document.querySelector('${comment(spam)}')
+        return {
+          ids: items.map((el) => el.dataset.redesComment), replyOf: reply?.dataset.redesCommentReplyOf ?? '', replyPad: reply ? getComputedStyle(reply).paddingLeft : '', topPad: getComputedStyle(document.querySelector('${comment(carol)}')).paddingLeft,
+          fresh: items.filter((el) => el.querySelector('[data-redes-comment-new]')).map((el) => el.dataset.redesComment),
+          hidden: items.filter((el) => el.hasAttribute('data-redes-comment-hidden')).map((el) => el.dataset.redesComment),
+          badgeText: spam?.querySelector('[data-redes-comment-hidden-badge]')?.textContent ?? '', opacity: spam ? getComputedStyle(spam.querySelector('[data-redes-comment-text]')).opacity : '',
+          spamText: spam?.querySelector('[data-redes-comment-text]')?.textContent ?? '', scripts: document.querySelectorAll('[data-redes-thread] script').length,
+          times: items.map((el) => el.querySelector('[data-redes-comment-time]')?.textContent ?? ''),
+        }
+      })()`,
+    )
+    await clickSelector(contents, `[data-redes-media="${mediaB}"]`)
+    const threadB = await waitFor(contents, `document.querySelector('[data-redes-thread="${mediaB}"]') && !document.querySelector('[data-redes-media-unread]')`, 8000)
+    const afterB = { level: await levelBadge(), root: await rootBadge() }
+    const total = (comments: number): string => (comments + messagesBefore ? String(comments + messagesBefore) : '')
+    checks['commentsUnreadBadge'] = {
+      ok:
+        unreadAll.level === '5' &&
+        unreadAll.root === total(5) &&
+        threadOpen &&
+        afterA.line === '5 comentários' &&
+        afterA.level === '1' &&
+        afterA.root === total(1) &&
+        threadB &&
+        afterB.level === '' &&
+        afterB.root === total(0) &&
+        JSON.stringify(thread.ids) === JSON.stringify([carol, own, rafa, spam, lu]) &&
+        thread.replyOf === carol &&
+        thread.replyPad === '28px' &&
+        thread.topPad === '0px' &&
+        JSON.stringify(thread.fresh) === JSON.stringify([carol, rafa, spam, lu]) &&
+        JSON.stringify(thread.hidden) === JSON.stringify([spam]) &&
+        thread.badgeText === 'Oculto' &&
+        thread.opacity === '0.6' &&
+        thread.spamText.includes('<script>') &&
+        thread.scripts === 0 &&
+        thread.times.every((value) => /^(agora|há \d+ (min|h|d)|\d\d\/\d\d)$/.test(value)),
+      detail: `antes: nível "${unreadAll.level}", raiz "${unreadAll.root}" (mensagens ${messagesBefore}); abrir a 1ª=${threadOpen} -> "${afterA.line}", nível "${afterA.level}", raiz "${afterA.root}"; abrir a 2ª=${threadB} -> nível "${afterB.level}", raiz "${afterB.root}"; conversa ${JSON.stringify(thread)}`,
+    }
+
+    // Responder e excluir direto pelo canal (sem o token de clique do preload): recusados, nada chega ao falso.
+    const writesBefore = fake.calls.filter((call) => call.method !== 'GET').length
+    const noClickReply = await api<{ ok: boolean; error?: string }>('scribe:redes-comment-reply', { accountId, commentId: rafa, message: 'sem clique', clickToken: 'inventado' })
+    const noClickDelete = await api<{ ok: boolean; error?: string }>('scribe:redes-comment-delete', { accountId, commentId: spam, clickToken: 'inventado' })
+    const noClick = noClickReply.error === REDES_COMMENT_CLICK_MESSAGE && noClickDelete.error === REDES_COMMENT_CLICK_MESSAGE && fake.calls.filter((call) => call.method !== 'GET').length === writesBefore
+
+    // "Responder" no @rafa.dev: o campo na linha (o print do artboard 05), Enter envia e a resposta entra aninhada.
+    await clickSelector(contents, `[data-redes-media="${mediaA}"]`)
+    await waitFor(contents, `document.querySelector('[data-redes-thread="${mediaA}"]')`, 8000)
+    const answer = 'Electron com React. A transcrição e o resumo saem pelo Claude.'
+    await clickSelector(contents, `${comment(rafa)} [data-redes-comment-reply]`)
+    const boxOpen = await waitFor(contents, `document.activeElement?.matches('${comment(rafa)} [data-redes-comment-reply-input]')`)
+    await setValue(contents, `${comment(rafa)} [data-redes-comment-reply-input]`, answer)
+    const counter = await text(contents, `${comment(rafa)} [data-redes-comment-reply-count]`)
+    await waitFor(contents, `document.getAnimations().every((animation) => animation.playState !== 'running')`, 3000)
+    await both('redes-comentarios')
+    await evaluate(contents, `document.querySelector('${comment(rafa)} [data-redes-comment-reply-input]').dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })), true`)
+    const replied = await waitFor(contents, `!document.querySelector('[data-redes-comment-reply-input]') && [...document.querySelectorAll('[data-redes-comment-reply-of="${rafa}"]')].some((el) => el.querySelector('[data-redes-comment-text]')?.textContent === ${JSON.stringify(answer)})`, 8000)
+    const inFake = fake.commentsOf(mediaA).find((item) => item.id === rafa)?.replies.map((item) => item.text) ?? []
+    const repliedLine = await mediaLine(mediaA)
+    // Esc cancela, com o foco de volta no "Responder".
+    await clickSelector(contents, `${comment(lu)} [data-redes-comment-reply]`)
+    await waitFor(contents, `document.activeElement?.matches('${comment(lu)} [data-redes-comment-reply-input]')`)
+    await evaluate(contents, `document.querySelector('${comment(lu)} [data-redes-comment-reply-input]').dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })), true`)
+    const escaped = await waitFor(contents, `!document.querySelector('[data-redes-comment-reply-input]') && document.activeElement?.matches('${comment(lu)} [data-redes-comment-reply]')`)
+    checks['commentReply'] = {
+      ok: noClick && boxOpen && counter === `${answer.length}/2.200` && replied && JSON.stringify(inFake) === JSON.stringify([answer]) && repliedLine === '6 comentários' && escaped,
+      detail: `sem o clique, responder e excluir recusados=${noClick} (${noClickReply.error ?? 'ok'} / ${noClickDelete.error ?? 'ok'}); campo aberto com o foco=${boxOpen}; contador "${counter}"; Enter -> resposta aninhada=${replied}, no falso ${JSON.stringify(inFake)}; linha "${repliedLine}"; Esc fechou com o foco no "Responder"=${escaped}`,
+    }
+
+    // "Ocultar" e "Mostrar" no @lu.santos: o selo e o falso acompanham.
+    await clickSelector(contents, `${comment(lu)} [data-redes-comment-hide]`)
+    const hid = await waitFor(contents, `document.querySelector('${comment(lu)}')?.hasAttribute('data-redes-comment-hidden') && document.querySelector('${comment(lu)} [data-redes-comment-hidden-badge]')?.textContent === 'Oculto' && document.querySelector('${comment(lu)} [data-redes-comment-hide]')?.textContent === 'Mostrar'`, 8000)
+    const hiddenInFake = fake.commentsOf(mediaA).find((item) => item.id === lu)?.hidden === true
+    await clickSelector(contents, `${comment(lu)} [data-redes-comment-hide]`)
+    const shown = await waitFor(contents, `!document.querySelector('${comment(lu)}')?.hasAttribute('data-redes-comment-hidden') && !document.querySelector('${comment(lu)} [data-redes-comment-hidden-badge]') && document.querySelector('${comment(lu)} [data-redes-comment-hide]')?.textContent === 'Ocultar'`, 8000)
+    const shownInFake = fake.commentsOf(mediaA).find((item) => item.id === lu)?.hidden === false
+    const ownNoHide = await evaluate<boolean>(contents, `!document.querySelector('${comment(own)} [data-redes-comment-hide]') && Boolean(document.querySelector('${comment(own)} [data-redes-comment-delete]'))`)
+    checks['commentHide'] = {
+      ok: hid && hiddenInFake && shown && shownInFake && ownNoHide,
+      detail: `ocultar -> selo=${hid} (falso ${hiddenInFake}); mostrar -> sem selo=${shown} (falso ${shownInFake}); a resposta da conta só com Responder e Excluir=${ownNoHide}`,
+    }
+
+    // "Excluir" no spam oculto: a confirmação na linha; "Excluir" tira da tela e do falso.
+    await clickSelector(contents, `${comment(spam)} [data-redes-comment-delete]`)
+    const asked = await waitFor(contents, `Boolean(document.querySelector('${comment(spam)} [data-redes-comment-delete-ask]')?.textContent.includes('Excluir este comentário?')) && Boolean(document.querySelector('${comment(spam)} [data-redes-comment-delete-confirm]'))`)
+    const stillInFake = fake.commentsOf(mediaA).some((item) => item.id === spam)
+    await clickSelector(contents, `${comment(spam)} [data-redes-comment-delete-confirm]`)
+    const deleted = await waitFor(contents, `!document.querySelector('${comment(spam)}')`, 8000)
+    const goneInFake = !fake.commentsOf(mediaA).some((item) => item.id === spam)
+    const deletedLine = await mediaLine(mediaA)
+    checks['commentDelete'] = {
+      ok: asked && stillInFake && deleted && goneInFake && deletedLine === '5 comentários',
+      detail: `confirmação na linha=${asked} (ainda no falso=${stillInFake}); excluído da tela=${deleted} e do falso=${goneInFake}; linha "${deletedLine}"`,
+    }
+
+    // O comentário novo pela atualização (o mesmo do polling): não lido na mídia e no número do nível; abrir zera.
+    fake.addComment(mediaB, { text: 'Vocês têm material para iniciantes?', username: 'joao.m', at: at(60_000) })
+    const refreshed = await api<RedesCommentsPayload>('scribe:redes-comments-refresh', { accountId })
+    const arrived = await waitFor(contents, `document.querySelector('[data-redes-media="${mediaB}"] [data-redes-media-line]')?.textContent === '2 comentários · 1 novo'`, 8000)
+    const pollLevel = await levelBadge()
+    await clickSelector(contents, `[data-redes-media="${mediaB}"]`)
+    const cleared = await waitFor(contents, `!document.querySelector('[data-redes-media-unread]') && document.querySelector('${SIDEBAR_REDES} [data-redes-badge="comentarios"]')?.hidden === true`, 8000)
+    // A tela zera na hora; o main confirma logo depois (o pedido de "lida" ainda pode estar a caminho).
+    let mainUnread = -1
+    for (let attempt = 0; attempt < 100 && mainUnread !== 0; attempt++) {
+      mainUnread = (await api<RedesCommentsPayload>('scribe:redes-comments', { accountId })).unread
+      if (mainUnread !== 0) await wait(40)
+    }
+    checks['commentsPoll'] = {
+      ok: refreshed.unread === 1 && arrived && pollLevel === '1' && cleared && mainUnread === 0,
+      detail: `atualização com ${refreshed.unread} não lido; linha da mídia=${arrived}; nível "${pollLevel}"; aberta e zerada=${cleared} (no main ${mainUnread})`,
+    }
+    console.log(`redes: comentários em ${((Date.now() - commentsStarted) / 1000).toFixed(1)} s`)
+  }
+  // fim 73
+
+  // 75: métricas
+  // Contrato 75 (CA12): Redes › Métricas com o Instagram falso: os números da conta em 28 dias (o padrão) e as 25
+  // publicações em pt-BR; 7 e 90 dias refazem a consulta e mudam os números (90 em três janelas de 30, alcance "—"); a
+  // volta a 28 sai do cache de 1 h; a tabela com miniaturas, linhas de 28 px e ordenação pelo cabeçalho; e a métrica
+  // recusada pela Meta ("Atualizar" com `views` negada) mostra "—" sem erro. Um print nos dois temas.
+  {
+    const metricsStarted = Date.now()
+    fake.thumbJpeg = new Uint8Array(nativeImage.createFromBitmap(picture(96, 96, 30), { width: 96, height: 96 }).toJPEG(80))
+    const accountCalls = (): number => fake.calls.filter((call) => call.path.endsWith(`/${accountId}/insights`)).length
+    const mediaListCalls = (): number => fake.calls.filter((call) => call.method === 'GET' && call.path.endsWith(`/${accountId}/media`)).length
+    const card = (name: string): string => `document.querySelector('[data-redes-metric="${name}"] [data-redes-metric-value]')?.textContent`
+    const cards = (): Promise<Record<string, string>> => evaluate<Record<string, string>>(contents, `Object.fromEntries([...document.querySelectorAll('[data-redes-metric]')].map((el) => [el.dataset.redesMetric, el.querySelector('[data-redes-metric-value]')?.textContent ?? '']))`)
+    const column = (name: string): Promise<string[]> => evaluate<string[]>(contents, `[...document.querySelectorAll('[data-redes-metrics-row] [data-redes-metrics-cell="${name}"]')].map((el) => el.textContent ?? '')`)
+    const sortOf = (name: string): Promise<string> => evaluate<string>(contents, `document.querySelector('[data-redes-metrics-sort="${name}"]')?.closest('th')?.getAttribute('aria-sort') ?? ''`)
+    // `1.284` → 1284; `21,3 mil` → 21300; "—" fica de fora.
+    const numberOf = (value: string): number | null => {
+      const mil = /^([\d.]+(?:,\d)?) mil$/.exec(value)
+      if (mil) return Number((mil[1] ?? '').replace(/\./g, '').replace(',', '.')) * 1000
+      return /^\d{1,3}(\.\d{3})*$/.test(value) ? Number(value.replace(/\./g, '')) : null
+    }
+    const descending = (values: string[]): boolean => values.map(numberOf).every((value, index, all) => index === 0 || (value ?? -1) <= (all[index - 1] ?? Infinity))
+    const ascending = (values: string[]): boolean => values.map(numberOf).filter((value) => value !== null).every((value, index, all) => index === 0 || value >= (all[index - 1] ?? -Infinity))
+    const FORMAT = /^(\d{1,3}(\.\d{3})*|\d{1,3}(,\d)? mil|—)$/
+    const expected28: Record<string, string> = { followers: '1.284', reach: '8.137', views: '21,3 mil', accountsEngaged: '593', totalInteractions: '1.465', likes: '1.096', comments: '85', saves: '142', shares: '140', followsAndUnfollows: '+58 · −14', profileLinksTaps: '59' }
+
+    const accountBefore = accountCalls()
+    await clickSelector(contents, `${SIDEBAR_REDES} [data-redes-section="metricas"]`)
+    const opened = await waitFor(
+      contents,
+      `document.querySelector('[data-redes-title]')?.textContent === '@${SMOKE_IG_USERNAME} · Métricas' && document.querySelector('[data-redes-period="28"]')?.getAttribute('aria-pressed') === 'true' && ${card('views')} === '21,3 mil' && document.querySelectorAll('[data-redes-metrics-row]').length === 25`,
+      15_000,
+    )
+    const shown = await cards()
+    const note = await text(contents, '[data-redes-metrics-updated]')
+    const noError = await evaluate<boolean>(contents, `!document.querySelector('[data-notice="redes-metrics-error"]')`)
+    const density = await evaluate<{ label: string; value: string; tabular: string; segmented: number; padX: string; padTop: string; note: string }>(
+      contents,
+      `(() => {
+        const tile = document.querySelector('[data-redes-metric="reach"]')
+        const label = getComputedStyle(tile.querySelector('.label')), value = getComputedStyle(tile.querySelector('[data-redes-metric-value]'))
+        const head = document.querySelector('[data-redes-title]').closest('header').parentElement
+        return { label: label.fontSize, value: value.fontSize, tabular: value.fontVariantNumeric, segmented: Math.round(document.querySelector('[data-redes-period="7"]').getBoundingClientRect().height), padX: getComputedStyle(head).paddingLeft, padTop: getComputedStyle(head).paddingTop, note: getComputedStyle(document.querySelector('[data-redes-metrics-updated]')).fontSize }
+      })()`,
+    )
+    const accountOk =
+      opened &&
+      JSON.stringify(shown) === JSON.stringify(expected28) &&
+      /^Dados do Instagram com até 48 h de atraso · atualizado (agora|há \d+ min)$/.test(note) &&
+      noError &&
+      accountCalls() > accountBefore &&
+      density.label === '11px' &&
+      density.value === '20px' &&
+      density.tabular.includes('tabular-nums') &&
+      density.segmented === 28 &&
+      density.padX === '32px' &&
+      density.padTop === '20px' &&
+      density.note === '11px'
+    checks['metricsAccount'] = { ok: accountOk, detail: `aberta=${opened}; cartões ${JSON.stringify(shown)}; nota "${note}"; sem erro=${noError}; medidas ${JSON.stringify(density)}` }
+
+    // A tabela: 25 linhas de 28 px com a miniatura baixada, a legenda numa linha, pt-BR, por visualizações (o padrão).
+    const thumbs = await waitFor(contents, `[...document.querySelectorAll('[data-redes-metrics-row]')].every((row) => row.querySelector('img[data-redes-metrics-thumb]')?.src.startsWith('data:image/jpeg'))`, 10_000)
+    const table = await evaluate<{ rows: number; heights: number[]; nowrap: boolean; header: number; cells: string[] }>(
+      contents,
+      `(() => {
+        const rows = [...document.querySelectorAll('[data-redes-metrics-table] [data-redes-metrics-row]')]
+        return {
+          rows: rows.length,
+          heights: [...new Set(rows.map((row) => Math.round(row.getBoundingClientRect().height)))],
+          nowrap: rows.every((row) => getComputedStyle(row.querySelector('[data-redes-metrics-caption]')).whiteSpace === 'nowrap'),
+          header: Math.round(document.querySelector('[data-redes-metrics-table] thead tr').getBoundingClientRect().height),
+          cells: [...document.querySelectorAll('[data-redes-metrics-cell]')].map((el) => el.textContent ?? ''),
+        }
+      })()`,
+    )
+    const views = await column('views')
+    const tableOk = thumbs && table.rows === 25 && JSON.stringify(table.heights) === '[28]' && table.nowrap && table.header === 28 && table.cells.every((cell) => FORMAT.test(cell)) && (await sortOf('views')) === 'descending' && descending(views)
+    checks['metricsTable'] = { ok: tableOk, detail: `miniaturas=${thumbs}; ${table.rows} linhas, alturas ${JSON.stringify(table.heights)}, cabeçalho ${table.header}px; legenda numa linha=${table.nowrap}; células fora do formato ${JSON.stringify(table.cells.filter((cell) => !FORMAT.test(cell)).slice(0, 5))}; visualizações ${JSON.stringify(views.slice(0, 5))}…` }
+    await waitFor(contents, `document.getAnimations().every((animation) => animation.playState !== 'running')`, 3000)
+    await both('redes-metricas')
+
+    // Trocar o período refaz a consulta da conta (as mídias seguem do cache) e muda os números; a volta a 28, do cache.
+    const callsAt28 = accountCalls()
+    const listAt28 = mediaListCalls()
+    await clickSelector(contents, '[data-redes-period="7"]')
+    const seven = await waitFor(contents, `document.querySelector('[data-redes-period="7"]')?.getAttribute('aria-pressed') === 'true' && ${card('views')} === '5.361' && ${card('reach')} === '2.047'`, 10_000)
+    const callsAt7 = accountCalls()
+    await clickSelector(contents, '[data-redes-period="90"]')
+    const ninety = await waitFor(contents, `${card('views')} === '68,5 mil' && ${card('reach')} === '—' && ${card('accountsEngaged')} === '—' && ${card('likes')} === '3.522'`, 10_000)
+    const callsAt90 = accountCalls()
+    await clickSelector(contents, '[data-redes-period="28"]')
+    const back = await waitFor(contents, `${card('views')} === '21,3 mil'`, 10_000)
+    await wait(300)
+    const periodsOk = seven && callsAt7 - callsAt28 === 2 && ninety && callsAt90 - callsAt7 === 6 && back && accountCalls() === callsAt90 && mediaListCalls() === listAt28
+    checks['metricsPeriods'] = { ok: periodsOk, detail: `7 dias=${seven} (+${callsAt7 - callsAt28} pedidos); 90 dias=${ninety} (+${callsAt90 - callsAt7}); 28 de novo pelo cache=${back} (+${accountCalls() - callsAt90}); lista de mídias pedida de novo ${mediaListCalls() - listAt28}×` }
+
+    // Ordenar por Curtidas: clique no cabeçalho (do maior para o menor), de novo inverte.
+    await clickSelector(contents, '[data-redes-metrics-sort="likes"]')
+    const likesDesc = await waitFor(contents, `document.querySelector('[data-redes-metrics-sort="likes"]')?.closest('th')?.getAttribute('aria-sort') === 'descending' && document.querySelector('[data-redes-metrics-sort="likes"] svg')`)
+    const likesDown = await column('likes')
+    await clickSelector(contents, '[data-redes-metrics-sort="likes"]')
+    const likesAsc = await waitFor(contents, `document.querySelector('[data-redes-metrics-sort="likes"]')?.closest('th')?.getAttribute('aria-sort') === 'ascending'`)
+    const likesUp = await column('likes')
+    const viewsUnsorted = (await sortOf('views')) === 'none'
+    // Cada cabeçalho, ordenado (com a seta), cabe sem reticências.
+    const clipped: string[] = []
+    for (const name of ['publicacao', 'data', 'views', 'reach', 'likes', 'comments', 'saved', 'shares']) {
+      await clickSelector(contents, `[data-redes-metrics-sort="${name}"]`)
+      await waitFor(contents, `document.querySelector('[data-redes-metrics-sort="${name}"] svg')`)
+      if (await evaluate<boolean>(contents, `(() => { const label = document.querySelector('[data-redes-metrics-sort="${name}"] span'); return label.scrollWidth > label.clientWidth })()`)) clipped.push(name)
+    }
+    checks['metricsSort'] = { ok: likesDesc && descending(likesDown) && likesAsc && ascending(likesUp) && viewsUnsorted && likesDown.length === 25 && clipped.length === 0, detail: `curtidas ↓=${likesDesc} ${JSON.stringify(likesDown.slice(0, 4))}…; ↑=${likesAsc} ${JSON.stringify(likesUp.slice(0, 4))}…; visualizações sem seta=${viewsUnsorted}; cabeçalhos cortados com a seta ${JSON.stringify(clipped)}` }
+
+    // A Meta recusa `views` (código 100): "Atualizar" lê de novo, a métrica vira "—" (cartão e coluna) e o resto fica, sem erro.
+    fake.denyMetric('views')
+    const beforeRefresh = accountCalls()
+    await clickSelector(contents, '[data-redes-metrics-refresh]')
+    const partial = await waitFor(contents, `${card('views')} === '—' && ${card('reach')} === '8.137' && ${card('likes')} === '1.096' && [...document.querySelectorAll('[data-redes-metrics-cell="views"]')].every((el) => el.textContent === '—') && document.querySelector('[data-redes-metrics-refresh]')?.disabled === false`, 15_000)
+    const partialNoError = await evaluate<boolean>(contents, `!document.querySelector('[data-notice="redes-metrics-error"]')`)
+    const reachCells = await column('reach')
+    fake.allowMetrics()
+    checks['metricsPartial'] = { ok: partial && partialNoError && accountCalls() > beforeRefresh && reachCells.every((cell) => cell !== '—'), detail: `"—" em Visualizações com o resto=${partial}; sem erro=${partialNoError}; alcance nas mídias ${JSON.stringify(reachCells.slice(0, 3))}…` }
+    fake.thumbJpeg = null
+    console.log(`redes: métricas em ${((Date.now() - metricsStarted) / 1000).toFixed(1)} s`)
+  }
+  // fim 75
+
+  // 74: mensagens
+  // Contrato 74 (CA11): Redes › Mensagens com o Instagram falso: a lista de conversas e a conversa aberta pelo clique (que
+  // a marca como lida); a resposta pelo "Enviar" (o clique de verdade) virando balão à direita e chegando ao falso; a
+  // conversa com a última do contato de 25 h atrás com o aviso da janela (e a recusa da Meta com a razão); a mensagem nova
+  // como não lida no número do nível e da raiz; e o acesso negado virando a nota de como liberar, com o número zerado.
+  // Prints nos dois temas: a conversa (06), fora da janela (06b) e sem acesso (06c).
+  {
+    const messagesStarted = Date.now()
+    const HOUR_MS = 3_600_000
+    const contacts = {
+      marina: { id: '7310000000000001', username: 'marina.alves', name: 'Marina Alves' },
+      studio: { id: '7310000000000002', username: 'studioponto', name: 'Studio Ponto' },
+      tiago: { id: '7310000000000003', username: 'tiago.ramos', name: 'Tiago Ramos' },
+    }
+    const at = fake.now()
+    const tiago = fake.addConversation(contacts.tiago)
+    fake.addInbound(tiago, 'Vocês conhecem alguém que faça identidade visual?', at - 26 * HOUR_MS)
+    fake.addInbound(tiago, 'Valeu pela indicação!', at - 25 * HOUR_MS)
+    const studio = fake.addConversation(contacts.studio)
+    fake.addInbound(studio, 'Fechado, mando o briefing amanhã.', at - 5 * HOUR_MS)
+    const marina = fake.addConversation(contacts.marina)
+    fake.addInbound(marina, 'Oi! Vi o post do lançamento do app de vocês <3', at - 16 * 60_000)
+    fake.addInbound(marina, 'Vocês fazem app para clínica também? Queria entender prazo e valores.', at - 60_000)
+    const bubble = (id: string): string => `[data-redes-conversation-open="${id}"] [data-redes-message]`
+    const levelBadge = (): Promise<{ hidden: boolean; count: number }> =>
+      evaluate<{ hidden: boolean; count: number }>(contents, `(() => { const el = document.querySelector('${SIDEBAR_REDES} [data-redes-badge="mensagens"]'); return { hidden: !el || el.hidden, count: Number.parseInt(el?.textContent ?? '', 10) || 0 } })()`)
+    const commentsBadge = (): Promise<number> => evaluate<number>(contents, `(() => { const el = document.querySelector('${SIDEBAR_REDES} [data-redes-badge="comentarios"]'); return el && !el.hidden ? Number.parseInt(el.textContent ?? '', 10) || 0 : 0 })()`)
+
+    // A lista (mais recente em cima, as três não lidas) e a conversa da Marina aberta pelo clique.
+    await clickSelector(contents, `${SIDEBAR_REDES} [data-redes-section="mensagens"]`)
+    const listed = await waitFor(contents, `document.querySelector('[data-redes-title]')?.textContent === '@${SMOKE_IG_USERNAME} · Mensagens' && document.querySelectorAll('[data-redes-conversation]').length === 3 && document.querySelectorAll('[data-redes-conversation-unread]').length === 3`, 15_000)
+    const order = await evaluate<string[]>(contents, `[...document.querySelectorAll('[data-redes-conversation]')].map((el) => el.dataset.redesConversation)`)
+    const listLayout = await evaluate<{ width: number; rows: number[]; preview: string }>(
+      contents,
+      `(() => ({ width: Math.round(document.querySelector('[data-redes-conversations]').closest('aside').getBoundingClientRect().width), rows: [...new Set([...document.querySelectorAll('[data-redes-conversation]')].map((el) => Math.round(el.getBoundingClientRect().height)))], preview: document.querySelector('[data-redes-conversation="${marina}"]')?.textContent ?? '' }))()`,
+    )
+    const unreadAtStart = await levelBadge()
+    await clickSelector(contents, `[data-redes-conversation="${marina}"]`)
+    const openedMarina = await waitFor(contents, `document.querySelectorAll('${bubble(marina)}').length === 2 && !document.querySelector('[data-redes-conversation="${marina}"] [data-redes-conversation-unread]')`, 8000)
+    const received = await evaluate<{ sides: string[]; plain: boolean; text: string }>(
+      contents,
+      `(() => { const items = [...document.querySelectorAll('${bubble(marina)}')]; return { sides: items.map((el) => el.dataset.fromMe), plain: !items.some((el) => el.querySelector('b, i, a, img, script')), text: items[0]?.textContent ?? '' } })()`,
+    )
+    const readMarina = (await api<RedesMessagesPayload>('scribe:redes-messages', { accountId })).conversations.find((item) => item.id === marina)?.unread === false
+    checks['messagesList'] = {
+      ok: listed && JSON.stringify(order) === JSON.stringify([marina, studio, tiago]) && listLayout.width === 280 && listLayout.rows.every((height) => height === 44) && listLayout.preview.includes('Vocês fazem app para clínica') && unreadAtStart.count === 3 && openedMarina && JSON.stringify(received.sides) === '["false","false"]' && received.plain && received.text.includes('<3') && readMarina,
+      detail: `lista=${listed} na ordem ${JSON.stringify(order)}; coluna ${listLayout.width}px, linhas ${JSON.stringify(listLayout.rows)}px; não lidas no nível ${unreadAtStart.count}; aberta pelo clique=${openedMarina} (lados ${JSON.stringify(received.sides)}, texto plano=${received.plain}); lida no main=${readMarina}`,
+    }
+
+    // A resposta: o contador de bytes da Meta, o print (06) e o "Enviar" pelo clique: o balão à direita e o texto no falso.
+    const reply = 'Oi, Marina! Fazemos sim. Posso te ligar amanhã para entender o projeto?'
+    const noWindowNote = await evaluate<boolean>(contents, `!document.querySelector('[data-redes-window-note]')`)
+    await setValue(contents, '[data-redes-message-input]', reply)
+    const counter = await waitFor(contents, `document.querySelector('[data-redes-message-bytes]')?.textContent.startsWith('${Buffer.byteLength(reply)}/1000 bytes') && document.querySelector('[data-redes-message-send]')?.disabled === false`)
+    await both('redes-mensagens')
+    const sentBefore = fake.sentMessages.length
+    await clickSelector(contents, '[data-redes-message-send]')
+    const sentBubble = await waitFor(contents, `[...document.querySelectorAll('${bubble(marina)}')].some((el) => el.dataset.fromMe === 'true' && el.textContent.includes(${JSON.stringify(reply)})) && document.querySelector('[data-redes-message-input]')?.value === ''`, 8000)
+    const lastSent = fake.sentMessages.at(-1)
+    const sendCall = fake.calls.filter((call) => call.method === 'POST' && call.path.endsWith(`/${accountId}/messages`)).at(-1)
+    checks['messageSend'] = {
+      ok: noWindowNote && counter && sentBubble && fake.sentMessages.length === sentBefore + 1 && lastSent?.recipientId === contacts.marina.id && lastSent.text === reply && sendCall?.bearer === true && sendCall.tokenInQuery === false,
+      detail: `sem aviso da janela na conversa de 1 min=${noWindowNote}; contador ${counter}; balão à direita e campo limpo=${sentBubble}; no falso ${JSON.stringify(lastSent ?? null)}; token só no cabeçalho=${sendCall?.bearer === true && sendCall.tokenInQuery === false}`,
+    }
+
+    // Fora da janela (a última do Tiago é de 25 h atrás): o aviso acima do campo, o print (06b) e o "Enviar" que a Meta
+    // recusa com a razão da janela.
+    await clickSelector(contents, `[data-redes-conversation="${tiago}"]`)
+    const windowNote = await waitFor(contents, `document.querySelectorAll('${bubble(tiago)}').length === 2 && document.querySelector('[data-redes-window-note]')?.textContent.includes('Fora da janela de 24 h: o Instagram pode recusar') && document.querySelector('[data-redes-message-send]') !== null`, 8000)
+    await setValue(contents, '[data-redes-message-input]', 'Deu certo com o Studio Ponto?')
+    await waitFor(contents, `document.querySelector('[data-redes-message-send]')?.disabled === false`)
+    await both('redes-mensagens-janela')
+    await clickSelector(contents, '[data-redes-message-send]')
+    const refusedText = await waitFor(contents, `document.querySelector('[data-redes-message-error]')?.textContent === 'O Instagram recusou: fora da janela de 24 h'`, 8000)
+    const notSent = fake.sentMessages.length === sentBefore + 1
+    checks['messageWindowNote'] = {
+      ok: windowNote && refusedText && notSent,
+      detail: `aviso da janela na conversa de 25 h=${windowNote}; "Enviar" tentado e a recusa com a razão=${refusedText}; nada aceito pelo falso=${notSent}`,
+    }
+
+    // A mensagem nova (na conversa da Marina, fechada agora) volta como não lida: o número do nível e o da raiz somam.
+    await setValue(contents, '[data-redes-message-input]', '')
+    const before = await levelBadge()
+    fake.addInbound(marina, 'Pode ser amanhã às 10h?')
+    await api('scribe:redes-messages-refresh', { accountId })
+    const unreadAgain = await waitFor(contents, `document.querySelector('[data-redes-conversation="${marina}"] [data-redes-conversation-unread]') && document.querySelector('[data-redes-conversation="${marina}"]')?.textContent.includes('Pode ser amanhã às 10h?')`, 8000)
+    const after = await levelBadge()
+    const comments = await commentsBadge()
+    await showRoot(contents)
+    const rootBadge = await evaluate<number>(contents, `Number.parseInt(document.querySelector('${SIDEBAR_ROOT} [data-nav="redes"] [data-nav-badge]')?.textContent ?? '', 10) || 0`)
+    await clickSelector(contents, `${SIDEBAR_ROOT} [data-nav="redes"]`)
+    await waitFor(contents, `document.querySelector('${SIDEBAR_REDES}') && document.querySelector('[data-redes-messages]')`, 8000)
+    checks['messagesUnreadBadge'] = {
+      ok: before.count === 1 && !before.hidden && unreadAgain && after.count === 2 && !after.hidden && rootBadge === comments + after.count,
+      detail: `não lidas no nível antes ${before.count} (à mostra=${!before.hidden}); mensagem nova como não lida=${unreadAgain}; depois ${after.count}; raiz ${rootBadge} (comentários ${comments} + mensagens ${after.count})`,
+    }
+
+    // Acesso negado pela Meta: a tela vira a nota de como liberar (06c), sem erro vermelho, e o número some; "Tentar de
+    // novo" com o acesso de volta traz as conversas.
+    fake.setMessagingAccess(false)
+    await clickSelector(contents, '[data-redes-messages-refresh]')
+    const deniedShown = await waitFor(
+      contents,
+      `document.querySelector('[data-redes-messages-denied]')?.textContent.includes('O Instagram não liberou o acesso às mensagens desta conta') && document.querySelector('[data-redes-messages-denied]')?.textContent.includes('Permitir acesso a mensagens') && !document.querySelector('[data-redes-conversation]') && !document.querySelector('[data-redes-messages] [role="alert"]')`,
+      8000,
+    )
+    const deniedBadge = await levelBadge()
+    await both('redes-mensagens-sem-acesso')
+    fake.setMessagingAccess(true)
+    await clickSelector(contents, '[data-redes-messages-retry]')
+    const back = await waitFor(contents, `!document.querySelector('[data-redes-messages-denied]') && document.querySelectorAll('[data-redes-conversation]').length === 3`, 8000)
+    const backBadge = await levelBadge()
+    checks['messagesDenied'] = {
+      ok: deniedShown && deniedBadge.hidden && deniedBadge.count === 0 && back && backBadge.count === 2,
+      detail: `nota de acesso negado sem a lista nem erro vermelho=${deniedShown}; número do nível escondido=${deniedBadge.hidden} (${deniedBadge.count}); "Tentar de novo" com o acesso de volta=${back} (número ${backBadge.count})`,
+    }
+
+    fake.clearConversations()
+    console.log(`redes: mensagens em ${((Date.now() - messagesStarted) / 1000).toFixed(1)} s`)
+  }
+  // fim 74
 
   // Termina sem conta (a fila e as cópias vão junto) e sem armazenamento.
   await api('scribe:redes-remove', { accountId })
@@ -12386,6 +12832,15 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
   for (const name of ['navHidden', 'navShown', 'level', 'levelBack', 'emptyState', 'queueGroups', 'editorOpen', 'editorInvalidMedia', 'editorNoS3', 'editorEsc', 'editorLeave', 'publishFromUi', 'scheduleFromUi', 'retryFromUi', 'levelFits', 'reducedMotion']) {
     if (!redesUi[name]) failures.push(`redes (tela) ${name}: não executado`)
   }
+  // 73: comentários
+  for (const name of ['commentsList', 'commentsUnreadBadge', 'commentReply', 'commentHide', 'commentDelete', 'commentsPoll']) if (!redesUi[name]) failures.push(`redes (tela) ${name}: não executado`)
+  // fim 73
+  // 75: métricas
+  for (const name of ['metricsAccount', 'metricsPeriods', 'metricsTable', 'metricsSort', 'metricsPartial']) if (!redesUi[name]) failures.push(`redes (tela) ${name}: não executado`)
+  // fim 75
+  // 74: mensagens
+  for (const name of ['messagesList', 'messageSend', 'messageWindowNote', 'messagesUnreadBadge', 'messagesDenied']) if (!redesUi[name]) failures.push(`redes (tela) ${name}: não executado`)
+  // fim 74
   for (const [name, check] of Object.entries(invite)) if (!check.ok) failures.push(`convites ${name}: ${check.detail}`)
   for (const name of ['convite-1', 'convite-2', 'convite-3', 'convite-4', 'convite-5', 'convite-6', 'convite-7', 'convite-8', 'convite-9', 'convite-10', 'convite-11', 'convite-estados', 'convite-lista', 'convite-configuracoes', 'convite-regra-1', 'convite-regra-2', 'convite-regra-3', 'convite-sugestao-4', 'convite-sugestao-5']) if (!invite[name]) failures.push(`convites ${name}: não executado`)
   for (const [name, check] of Object.entries(lock)) if (!check.ok) failures.push(`bloqueio ${name}: ${check.detail}`)
@@ -12420,7 +12875,10 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
   // "Sugestão — confira" e o editor com a regra de convite, nos dois temas (contrato 64); a seção Instagram com a conta
   // conectada e a do armazenamento de mídia, nos dois temas (contrato 69); a tela Redes sem conta, o nível Redes, a fila, o
   // editor, o editor sem o armazenamento e a fila com a publicação com erro, nos dois temas (contrato 72).
-  const expectedShots = SCREENS.length * THEMES.length + 159
+  // Contrato 74: +6 (a conversa, fora da janela de 24 h e sem acesso às mensagens, nos dois temas).
+  // Contrato 73: +2 (os comentários com a resposta aberta, nos dois temas).
+  // Contrato 75: +2 (as métricas da conta em 28 dias e a tabela das publicações, nos dois temas).
+  const expectedShots = SCREENS.length * THEMES.length + 169
   if (screenshots.length !== expectedShots) failures.push(`${screenshots.length} PNGs em vez de ${expectedShots}`)
   for (const shot of screenshots) {
     if (shot.name === MEETING_PROMPT_SHOT) {

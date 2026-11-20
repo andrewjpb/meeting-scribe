@@ -40,6 +40,12 @@ export type LockAfterMinutes = (typeof LOCK_AFTER_MINUTES)[number]
 export type CloseBehavior = (typeof CLOSE_BEHAVIORS)[number]
 export type DailyRunLimitOption = (typeof DAILY_RUN_LIMIT_OPTIONS)[number]
 export type CalendarLeadMinutes = (typeof CALENDAR_LEAD_MINUTES)[number]
+// 73: comentários
+/** Contrato 73: "Atualizar comentários e mensagens a cada" (Configurações › Contas › Instagram). */
+export const REDES_POLL_MINUTES = [1, 5, 15, 30, 60] as const
+export type RedesPollMinutes = (typeof REDES_POLL_MINUTES)[number]
+export const REDES_POLL_MINUTES_DEFAULT: RedesPollMinutes = 5
+// fim 73
 /** Agendas lidas de cada conta (contrato 12); `null` é só a principal. */
 export interface CalendarSelection {
   google: string[] | null
@@ -199,6 +205,10 @@ export interface AppSettings {
    * ferramenta. Vazio por padrão: conector fora daqui (inclusive o que aparecer depois na conta) está desligado.
    */
   claudeConnectors: Record<string, ClaudeConnectorPrefs>
+  // 73: comentários
+  /** Contrato 73: de quantos em quantos minutos o app lê os comentários (e, no 74, as mensagens) do Instagram. */
+  redesPollMinutes: RedesPollMinutes
+  // fim 73
 }
 
 /**
@@ -262,6 +272,9 @@ export const DEFAULT_SETTINGS: Readonly<AppSettings> = Object.freeze({
   emailFoldersCollapsed: Object.freeze([]) as unknown as string[],
   emailRecentFolders: Object.freeze({}) as Record<string, string[]>,
   claudeConnectors: Object.freeze({}) as Record<string, ClaudeConnectorPrefs>,
+  // 73: comentários
+  redesPollMinutes: 5,
+  // fim 73
 })
 
 /** Prefixo do modelo gravado na reunião quando a tradução veio do Claude CLI (`claude-cli:haiku`). */

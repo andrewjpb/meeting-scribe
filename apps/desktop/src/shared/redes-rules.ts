@@ -45,3 +45,25 @@ export function inferPublicationType(media: readonly { kind: PublicationMediaKin
   if (images > CAROUSEL_MAX) return { error: `Carrossel aceita no máximo ${CAROUSEL_MAX} imagens` }
   return images === 1 ? 'imagem' : 'carrossel'
 }
+
+// 74: mensagens
+// Contrato 74 (R6): os limites da resposta por mensagem direta e as duas regras puras que a tela e o main usam (o contador
+// de bytes e a janela de 24 h), aqui sem o zod pelo mesmo motivo de cima.
+
+/** A Meta aceita até 1000 bytes (UTF-8) no texto de uma mensagem. */
+export const MESSAGE_TEXT_MAX_BYTES = 1000
+/** A janela de resposta: 24 h desde a última mensagem do contato. */
+export const MESSAGE_WINDOW_MS = 24 * 3_600_000
+
+/** O tamanho do texto como a Meta conta (bytes em UTF-8: acento vale 2, emoji vale 4). */
+export function messageBytes(text: string): number {
+  return new TextEncoder().encode(text).byteLength
+}
+
+/** A última mensagem do contato tem mais de 24 h (sem mensagem dele, não há janela aberta). */
+export function outsideMessageWindow(lastInboundAt: string | null, now: number): boolean {
+  if (!lastInboundAt) return true
+  const at = Date.parse(lastInboundAt)
+  return !Number.isFinite(at) || now - at > MESSAGE_WINDOW_MS
+}
+// fim 74

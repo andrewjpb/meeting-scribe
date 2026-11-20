@@ -74,6 +74,10 @@ function redesRouter(instagram: FakeInstagram, s3: FakeS3): HttpFetch {
     if (s3Hosts.has(host)) return s3.fetch(url, init)
     // Contrato 71: o upload retomável do Reels também vai ao Instagram falso.
     if (host === 'graph.instagram.com' || host === 'rupload.facebook.com') return instagram.fetch(url, init)
+    // 75: métricas
+    // Contrato 75: a CDN das miniaturas também é o Instagram falso.
+    if (host.endsWith('.cdninstagram.com')) return instagram.fetch(url, init)
+    // fim 75
     return Promise.resolve(notFound())
   }
 }
