@@ -42,6 +42,8 @@
 // no `<conta>.rules-state.json` do store; nunca vira estado de erro da conta. "Executar agora" em dois passos
 // (`previewRule` devolve a contagem e um token; `runRule` só age com ele). E `pruneBodies`: os corpos que não são de
 // nenhuma mensagem guardada saem depois de cada corte pelo teto, no sincronismo e ao abrir o app, sempre na fila da conta.
+// Contrato 64: a ação "Pôr na agenda" roda depois do mover, pela única entrada das regras do serviço de convites
+// (`addFromRule`: só cria, nunca pede acesso, nunca responde); `storedMessage` dá ao "Sugerir evento" o corpo guardado.
 //
 // Erro de conexão (N4) nunca derruba o app: a conta fica `error` com uma mensagem curta e as outras seguem. Usuário ou
 // senha recusados não tentam de novo sozinhos (para o servidor não bloquear a conta); o resto tenta de novo em 1 min
@@ -109,6 +111,8 @@ import {
   type EmailRulesSetResult,
   type EmailRuleState,
 } from '../../shared/email-rules'
+import { inviteSelfAdding } from '../invites/map'
+import type { InviteService } from '../invites/service'
 import type { SafeStorageLike } from '../secrets'
 import { emailAddressSchema, emailIncomingSchema, emailNameSchema, emailServerSchema, emailSignatureSchema, emailUsernameSchema, type StoredEmailAccount } from '../settings/schema'
 import type { SettingsStore } from '../settings/store'
@@ -606,6 +610,11 @@ export interface EmailServiceDeps {
   onInviteReplied?: (event: InviteRepliedEvent) => void
   /** Contrato 61: o fuso do Mac para ler o convite (padrão: o do sistema). */
   timeZone?: () => string
+  /**
+   * Contrato 64: o serviço de convites do 62, para a ação "Pôr na agenda" das regras. Sem ele (testes antigos), a ação
+   * dá `no-calendar` e o `rules-set` recusa com `no-mac`.
+   */
+  invites?: Pick<InviteService, 'addFromRule' | 'calendarPresent'>
   /** Só estados e tipos de erro: nunca senha, endereço ou texto de mensagem. */
   log?: (message: string) => void
   now?: () => number
@@ -640,6 +649,8 @@ export interface EmailService {
    * nada nem abre conexão. `null`: sem conta, sem mensagem, sem corpo guardado ou sem convite.
    */
   inviteSource(accountId: string, id: string): Promise<{ account: EmailAccount; invite: EmailInvite; messageId: string } | null>
+  /** Contrato 64: a mensagem guardada e o corpo guardado (`null`: não baixado), sem ir ao servidor. */
+  storedMessage(accountId: string, id: string): Promise<{ message: EmailMessage; body: EmailBody | null } | null>
   /**
    * Contrato 45 (CA7): `UID SEARCH` no servidor IMAP, em todas as pastas do `LIST` abertas só para leitura (`EXAMINE`),
    * as `limit` mais recentes no total. Nada é gravado no cache e nenhuma flag muda. POP3 não tem busca no servidor.
@@ -1577,6 +1588,8 @@ export function createEmailService(deps: EmailServiceDeps): EmailService {
   interface RuleTarget {
     message: EmailMessage
     plan: EmailRulePlan
+    /** O corpo já lido para as condições (sem ele, o "pôr na agenda" lê o guardado). */
+    body?: EmailBody | null
   }
   /** O estado final da mensagem (`message`), se saiu da INBOX e se alguma etapa falhou. */
   interface RuleOutcome {
@@ -1591,6 +1604,7 @@ export function createEmailService(deps: EmailServiceDeps): EmailService {
    * Os planos, na fila da conta: (1) as marcas (`\Seen`, `\Flagged`) na conexão da INBOX; (2) o mover, um `MOVE` por
    * destino (até 500), pelo corpo do mover (`moveQueued`); apagar é mover para a `\Trash` do `LIST` (N3). A pasta que não
    * está no `LIST` (relido uma vez) nem é tentada. POP3: só "marcar lida", no app (N2). O que falha fica onde está.
+   * Contrato 64: (3) "pôr na agenda", depois do mover (o registro guarda o id final), só no convite REQUEST.
    */
   async function executePlans(rt: Runtime, session: ImapSession | null, targets: readonly RuleTarget[], rules: readonly EmailRule[], tally: RuleTally): Promise<RuleOutcome[]> {
     const id = rt.account.id
@@ -1609,6 +1623,14 @@ export function createEmailService(deps: EmailServiceDeps): EmailService {
     }
     const wantsMove = (rule: EmailRule): boolean => rule.actions.moveTo !== null
     const wantsDelete = (rule: EmailRule): boolean => rule.actions.delete
+    const wantsCalendar = (rule: EmailRule): boolean => rule.actions.addToCalendar
+    // O convite de cada mensagem que vai à agenda, lido antes do mover (o corpo fica com a chave da INBOX).
+    const invites: (EmailInvite | null)[] = []
+    for (const target of targets) {
+      if (!target.plan.addToCalendar) invites.push(null)
+      else if (target.body !== undefined) invites.push(target.body?.invite ?? null)
+      else invites.push((await store.body(id, bodyKey(target.message)).catch(() => null))?.invite ?? null)
+    }
 
     const seen = new Set<string>()
     const flagged = new Set<string>()
@@ -1743,6 +1765,25 @@ export function createEmailService(deps: EmailServiceDeps): EmailService {
       }
     }
 
+    // (3) Pôr na agenda: uma por vez, com a mensagem já no estado final. Só cria (C2): CANCEL e REPLY não fazem nada.
+    let selfAddingLogged = false
+    for (const [index, target] of targets.entries()) {
+      const invite = invites[index]
+      const outcome = outcomes[index]
+      if (!target.plan.addToCalendar || !invite || invite.method !== 'REQUEST' || !outcome || rt.removed) continue
+      // R5b: a conta já põe sozinha (só por arquivo antigo ou editado à mão; o `rules-set` recusa).
+      if (inviteSelfAdding(rt.account)) {
+        if (!selfAddingLogged) log(`${tag(rt)}: regras: pôr na agenda ignorado (a conta já põe)`)
+        selfAddingLogged = true
+        continue
+      }
+      const added = deps.invites ? await deps.invites.addFromRule({ account: publicAccount(rt.account), invite, messageId: outcome.message.id }).catch(() => ({ ok: false, error: 'no-calendar' }) as const) : ({ ok: false, error: 'no-calendar' } as const)
+      if (!added.ok) {
+        log(`${tag(rt)}: regras: pôr na agenda não feito (${added.error})`)
+        blame(index, wantsCalendar, added.error)
+      }
+    }
+
     for (const [index, target] of targets.entries()) {
       for (const ruleId of target.plan.ruleIds) {
         const entry = tally.get(ruleId) ?? { hits: 0, error: null }
@@ -1780,7 +1821,7 @@ export function createEmailService(deps: EmailServiceDeps): EmailService {
     const targets: RuleTarget[] = []
     for (const message of messages) {
       const body = wantBody ? await ruleBodyOf(rt, session, message) : null
-      targets.push({ message, plan: planActions(ruleInput(message, body), rules) })
+      targets.push({ message, plan: planActions(ruleInput(message, body), rules), ...(wantBody ? { body } : {}) })
     }
     const acting = targets.filter((target) => target.plan.ruleIds.length > 0)
     const tally: RuleTally = new Map()
@@ -1882,6 +1923,8 @@ export function createEmailService(deps: EmailServiceDeps): EmailService {
   }
 
   const rulesFailure = (error: EmailRulesFailure['error']): EmailRulesFailure => ({ ok: false, error })
+  /** Contrato 64: o Calendário do Mac existe aqui (o helper do 60, sem pedir acesso); sem o serviço de convites, não. */
+  const calendarHere = async (): Promise<boolean> => (deps.invites ? deps.invites.calendarPresent().catch(() => false) : false)
   const ruleHash = (rule: EmailRule): string => createHash('sha256').update(JSON.stringify(rule)).digest('hex')
 
   function sweepRuleTokens(): void {
@@ -1915,8 +1958,8 @@ export function createEmailService(deps: EmailServiceDeps): EmailService {
     sweepRuleTokens()
     const token = randomUUID()
     ruleTokens.set(token, { accountId, ruleId, hash: ruleHash(rule), ids, at: now() })
-    const { markRead, flag, moveTo, delete: remove } = rule.actions
-    return { ok: true, count: ids.length, actions: { markRead, flag, moveTo, delete: remove }, token }
+    const { markRead, flag, moveTo, delete: remove, addToCalendar } = rule.actions
+    return { ok: true, count: ids.length, actions: { markRead, flag, moveTo, delete: remove, addToCalendar }, token }
   }
 
   async function runRule(accountId: string, ruleId: string, token: string): Promise<EmailRuleRunResult> {
@@ -1939,8 +1982,8 @@ export function createEmailService(deps: EmailServiceDeps): EmailService {
       if (rt.removed) return rulesFailure('missing')
       const wanted = new Set(entry.ids)
       const present = (await store.read(accountId)).inbox.filter((message) => wanted.has(message.id))
-      const { markRead, flag, moveTo, delete: remove } = current.actions
-      const plan: EmailRulePlan = { ruleIds: [current.id], markRead, flag, moveTo, delete: remove, silent: false }
+      const { markRead, flag, moveTo, delete: remove, addToCalendar } = current.actions
+      const plan: EmailRulePlan = { ruleIds: [current.id], markRead, flag, moveTo, delete: remove, silent: false, addToCalendar }
       const tally: RuleTally = new Map()
       const outcomes = await executePlans(rt, rt.account.incoming.protocol === 'imap' ? rt.session : null, present.map((message) => ({ message, plan })), [current], tally)
       await saveTally(rt, tally, current.id)
@@ -2098,6 +2141,14 @@ export function createEmailService(deps: EmailServiceDeps): EmailService {
     async cachedBody(accountId, message) {
       if (!runtimes.has(accountId)) return null
       return store.body(accountId, bodyKey(message)).catch(() => null)
+    },
+
+    async storedMessage(accountId, id) {
+      const rt = runtimes.get(accountId)
+      if (!rt || rt.removed) return null
+      const message = (await findMessage(accountId, id, true).catch(() => null))?.message
+      if (!message) return null
+      return { message, body: await store.body(accountId, bodyKey(message)).catch(() => null) }
     },
 
     async inviteSource(accountId, id) {
@@ -2467,7 +2518,10 @@ export function createEmailService(deps: EmailServiceDeps): EmailService {
         return rulesFailure('unavailable')
       }
       const saved = await store.ruleState(accountId).catch((): Record<string, EmailRuleState> => ({}))
-      return { ok: true, rules, state: Object.fromEntries(rules.map((rule) => [rule.id, saved[rule.id] ?? { ...EMPTY_EMAIL_RULE_STATE }])) }
+      const rt = runtimes.get(accountId)
+      // Contrato 64 (CA1): a conta que já põe sozinha (R5b) e o Calendário do Mac aqui (sem pedir acesso, D9).
+      const invite = { autoAdds: rt ? inviteSelfAdding(rt.account) : false, mac: await calendarHere() }
+      return { ok: true, rules, state: Object.fromEntries(rules.map((rule) => [rule.id, saved[rule.id] ?? { ...EMPTY_EMAIL_RULE_STATE }])), invite }
     },
 
     async rulesSet(request) {
@@ -2489,6 +2543,12 @@ export function createEmailService(deps: EmailServiceDeps): EmailService {
         const check = await checkRuleTargets(rt, changedRules(rules, before))
         if (check.missing) return rulesFailure('folder-missing')
         noTrash = check.noTrash
+      }
+      // Contrato 64 (CA7): "Pôr na agenda" (ligada ou não) não grava na conta que já põe sozinha nem fora do Mac. A
+      // permissão e a agenda padrão não se conferem aqui: o erro aparece na execução.
+      if (rules.some((rule) => rule.actions.addToCalendar)) {
+        if (inviteSelfAdding(rt.account)) return rulesFailure('auto-calendar')
+        if (!(await calendarHere())) return rulesFailure('no-mac')
       }
       let saved: boolean
       try {

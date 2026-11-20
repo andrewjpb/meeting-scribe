@@ -8955,7 +8955,8 @@ async function emailFoldersUiChecks(ctx: SmokeContext, watch: (win: BrowserWindo
 }
 
 // ---------------------------------------------------------------------------------------------------------
-// Contrato 63: as telas dos convites com o IMAP/SMTP falso do email e o `lap-calendar` falso (62, CA24).
+// Contrato 63: as telas dos convites com o IMAP/SMTP falso do email e o `lap-calendar` falso (62, CA24). Contrato 64:
+// a regra "É convite → Pôr na agenda" e o "Sugerir evento" (CA17), antes do passo 11.
 
 /** Um convite das fixtures do 59 e do 62 (dados fictícios), com o convidado trocado pelo endereço da conta. */
 function inviteFixture(name: string, patch: { uid?: string; title?: string; attendee?: string | null } = {}): string {
@@ -9345,7 +9346,8 @@ async function inviteChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => vo
   const lastSection = await evaluate<boolean>(contents, `(() => { const sections = [...document.querySelectorAll('[data-settings-panel="email"] section[aria-label]')]; return sections.at(-1)?.getAttribute('aria-label') === 'Convites' })()`)
   await both('email-convite-configuracoes')
   await clickSelector(contents, '#invite-default-calendar')
-  const menuOpen = await waitFor(contents, `[...document.querySelectorAll('[data-invite-calendar-menu] [data-invite-calendar-group]')].map((el) => el.textContent).join('|') === 'iCloud|andrew.convites@lap.example' && !document.querySelector('[data-invite-calendar-option="cal-feriados"]')`)
+  // Os grupos por conta (a ordem não importa: a conta Gmail do passo 7 entra antes) e sem a agenda assinada.
+  const menuOpen = await waitFor(contents, `(() => { const groups = [...document.querySelectorAll('[data-invite-calendar-menu] [data-invite-calendar-group]')].map((el) => el.textContent).sort(); return groups.join('|') === 'andrew.convites@lap.example|iCloud' && !document.querySelector('[data-invite-calendar-option="cal-feriados"]') })()`)
   await both('email-convite-configuracoes-agendas')
   await clickSelector(contents, '[data-invite-calendar-option="cal-pessoal"]')
   await wait(300)
@@ -9389,30 +9391,175 @@ async function inviteChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => vo
     detail: `linhas ${JSON.stringify(rowNames)}; o último bloco da aba=${lastSection}; permitido=${allowed}; seletor por conta sem Feriados=${menuOpen}; escolha gravada=${savedCalendar}; "Pôr na agenda ao aceitar" grava=${toggled}; não pedido com "Pedir acesso"=${notAsked}; depois, permitido=${granted}; busca ${JSON.stringify(found)}`,
   }
 
-  // Passo 11: bloqueado, o cartão some e os oito canais recusam; desbloqueado, o cartão volta.
+  // ---------------------------------------------------------------------------------------------------------------
+  // Contrato 64 (CA17): a regra "É convite → Pôr na agenda" e o "Sugerir evento", com o IMAP/SMTP, o helper e o agente
+  // ACP falsos. O SMTP falso fica com as mesmas mensagens do começo ao fim: nada responde a ninguém.
+  const sentBefore64 = fake.sent.length
+  const accountSelect = '[data-email-settings-account-select]'
+  const editor64 = '[data-email-rule="new"]'
+  const rulesOf = (accountId: string) => api<{ ok: boolean; rules?: { id: string }[]; state?: Record<string, { hits: number; lastError: { code: string } | null }> }>('scribe:email-rules-get', { accountId })
+  /** A conta escolhida em Configurações › Email, com a seção Regras já lida. */
+  const pickAccount = async (accountId: string): Promise<boolean> => {
+    await setValue(contents, accountSelect, accountId, 'change')
+    return waitFor(contents, `document.querySelector('${accountSelect}')?.value === ${JSON.stringify(accountId)} && document.querySelector('[data-action="email-rule-new"]')?.disabled === false`, 8000)
+  }
+
+  // Passo 1: a regra pelo editor, na conta de IMAP próprio, com a agenda padrão "Trabalho"; o convite que chega vai para
+  // a agenda (um `create` no helper), sem nenhuma mensagem no SMTP, e a regra fica com 1 acerto e sem erro.
+  await evaluate(contents, "window.__scribeApi.invoke('scribe:settings-update', { inviteCalendarId: 'cal-trabalho' }).then(() => true)")
+  await openSettingsTab(contents, 'email')
+  const picked1 = await pickAccount(lapId)
+  await scrollToSection(contents, 'Regras')
+  await clickSelector(contents, '[data-action="email-rule-new"]')
+  await waitFor(contents, `document.querySelector('${editor64} [data-email-rule-editor]')`)
+  await setValue(contents, `${editor64} [data-email-rule-name-input]`, 'Convites na agenda')
+  await setValue(contents, `${editor64} [data-email-rule-condition="0"] select`, 'isInvite', 'change')
+  await clickSelector(contents, `${editor64} [data-action="email-rule-add-action"]`)
+  await setValue(contents, `${editor64} [data-email-rule-action] select`, 'calendar', 'change')
+  const editor1 = await waitFor(
+    contents,
+    `!document.querySelector('${editor64} [data-email-rule-value]') && document.querySelector('${editor64} [data-email-rule-action="calendar"]') && document.querySelector('${editor64} [data-email-rule-calendar-note]')?.textContent.startsWith('Só põe na agenda; não responde ao organizador.') && !document.querySelector('${editor64} [data-email-rule-calendar-setup]') && document.querySelector('${editor64} [data-action="email-rule-save"]')?.disabled === false`,
+    8000,
+  )
+  await scrollToSection(contents, 'Regras')
+  await both('configuracoes-email-regra-convite')
+  await clickSelector(contents, `${editor64} [data-action="email-rule-save"]`)
+  const saved1 = await waitFor(contents, `!document.querySelector('[data-email-rule-editor]') && document.querySelectorAll('[data-email-rule]').length === 1 && document.querySelector('[data-email-rule-summary]')?.textContent === 'Se é convite Pôr na agenda “Trabalho”'`, 8000)
+  const ruleId64 = (await rulesOf(lapId)).rules?.[0]?.id ?? ''
+  const calFrom1 = cal.log().length
+  await deliver('Convite: Revisão fictícia da proposta', 'REQUEST', inviteFixture('servico-request-v1.ics', { uid: 'smoke-regra-0064@example.com', title: 'Revisão fictícia da proposta' }))
+  let created1 = false
+  for (const stop = Date.now() + 10_000; !created1 && Date.now() < stop; await wait(100)) created1 = logOf('create', calFrom1).length === 1
+  let state1 = (await rulesOf(lapId)).state?.[ruleId64]
+  for (const stop = Date.now() + 5000; state1?.hits !== 1 && Date.now() < stop; await wait(100)) state1 = (await rulesOf(lapId)).state?.[ruleId64]
+  const noAsk1 = logOf('request-access', calFrom1).length === 0
+  // Sair e voltar: a linha relê o estado (sem erro).
+  await clickSelector(contents, '[data-nav="reunioes"]')
+  await waitFor(contents, routeIs('reunioes'), 8000)
+  await openSettingsTab(contents, 'email')
+  await pickAccount(lapId)
+  const line1 = await waitFor(contents, `document.querySelector('[data-email-rule="${ruleId64}"]') && !document.querySelector('[data-email-rule="${ruleId64}"] [data-email-rule-error]')`, 8000)
+  checks['convite-regra-1'] = {
+    ok: picked1 && editor1 && saved1 && Boolean(ruleId64) && created1 && state1?.hits === 1 && state1.lastError === null && noAsk1 && line1 && fake.sent.length === sentBefore64,
+    detail: `conta escolhida=${picked1}; editor com "É convite" e "Pôr na agenda"=${editor1}; gravada com o resumo=${saved1}; create no helper=${created1}; hits=${state1?.hits ?? '-'}, erro=${JSON.stringify(state1?.lastError ?? null)}; sem pedir acesso=${noAsk1}; linha sem erro=${line1}; SMTP +${fake.sent.length - sentBefore64}`,
+  }
+
+  // Passo 2: na conta Gmail, "Pôr na agenda" aparece desligado, com a frase do R5b.
+  const picked2 = await pickAccount(gmailId)
+  await clickSelector(contents, '[data-action="email-rule-new"]')
+  await waitFor(contents, `document.querySelector('${editor64} [data-email-rule-editor]')`)
+  await clickSelector(contents, `${editor64} [data-action="email-rule-add-action"]`)
+  const gmail2 = await waitFor(contents, `(() => { const option = document.querySelector('${editor64} [data-email-rule-action] select option[value="calendar"]'); return option?.disabled === true && option.textContent === 'Pôr na agenda · Sua conta já põe os convites na agenda dela.' })()`, 8000)
+  await clickSelector(contents, `${editor64} [data-action="email-rule-cancel"]`)
+  checks['convite-regra-2'] = { ok: picked2 && gmail2, detail: `conta Gmail escolhida=${picked2}; "Pôr na agenda" desligado com a frase do R5b=${gmail2}` }
+
+  // Passo 3: com o acesso negado no helper, o segundo convite deixa a linha da regra com o texto de `calendar-denied`.
+  writeHelper({ access: 'denied' })
+  const calFrom3 = cal.log().length
+  await deliver('Convite: Alinhamento fictício', 'REQUEST', inviteFixture('servico-request-v1.ics', { uid: 'smoke-regra-0065@example.com', title: 'Alinhamento fictício' }))
+  let state3 = (await rulesOf(lapId)).state?.[ruleId64]
+  for (const stop = Date.now() + 10_000; state3?.lastError?.code !== 'calendar-denied' && Date.now() < stop; await wait(100)) state3 = (await rulesOf(lapId)).state?.[ruleId64]
+  await pickAccount(lapId)
+  await clickSelector(contents, '[data-nav="reunioes"]')
+  await waitFor(contents, routeIs('reunioes'), 8000)
+  await openSettingsTab(contents, 'email')
+  await pickAccount(lapId)
+  const line3 = await waitFor(
+    contents,
+    `(document.querySelector('[data-email-rule="${ruleId64}"] [data-email-rule-error]')?.textContent ?? '').includes('sem acesso ao Calendário do Mac, então o convite não foi para a agenda. Dê o acesso em Configurações › Email › Convites.')`,
+    8000,
+  )
+  const quiet3 = logOf('request-access', calFrom3).length === 0 && logOf('create', calFrom3).length === 0
+  writeHelper({ access: 'full' })
+  await api('scribe:email-rules-set', { accountId: lapId, rules: [] })
+  checks['convite-regra-3'] = { ok: state3?.lastError?.code === 'calendar-denied' && line3 && quiet3 && fake.sent.length === sentBefore64, detail: `erro ${state3?.lastError?.code ?? '-'}; texto na linha=${line3}; sem pedir acesso nem criar=${quiet3}; SMTP +${fake.sent.length - sentBefore64}` }
+
+  // Passo 4: desligado, o email sem .ics não mostra "Sugerir evento"; ligado, mostra; o clique leva ao cartão
+  // "Sugestão — confira" com os campos do JSON do agente falso; "Pôr na agenda" → `create`; nada no SMTP.
+  await evaluate(contents, "window.__scribeApi.invoke('scribe:settings-update', { inviteSuggest: false }).then(() => true)")
+  const subject64 = 'Re: Proposta revisada: integração fictícia'
+  await fake.deliver({
+    from: { name: 'Paulo Fictício', address: 'paulo.ficticio@cliente.example' },
+    subject: subject64,
+    text: 'Oi, Andrew,\n\nPodemos fechar a proposta amanhã às 14h? Uma hora deve bastar. Fica o link: meet.google.com/hdw-qkpe-sto\n\nAbraço,\nPaulo',
+  })
+  const opened64 = (await openInvite(lapId, subject64, false)) && (await waitFor(contents, `document.querySelector('[data-email-body]')`, 8000))
+  await wait(300)
+  const hidden64 = await evaluate<boolean>(contents, `!document.querySelector('[data-action="invite-suggest"]')`)
+  await evaluate(contents, "window.__scribeApi.invoke('scribe:settings-update', { inviteSuggest: true }).then(() => true)")
+  // O botão à vista (com rótulo na barra larga, só o ícone na estreita) e Marcar, Apagar e Mais inteiros dentro da barra.
+  const suggestShown = `[...document.querySelectorAll('[data-action="invite-suggest"]')].find((el) => el.getClientRects().length > 0)`
+  const shown64 = await waitFor(contents, `(${suggestShown})?.getAttribute('aria-label') === 'Sugerir evento' || (${suggestShown})?.textContent === 'Sugerir evento'`, 8000)
+  const bar64 = await evaluate<{ fits: boolean; iconOnly: boolean; order: string[] }>(
+    contents,
+    `(() => {
+      const bar = document.querySelector('[data-email-actions]').getBoundingClientRect()
+      const right = [...document.querySelectorAll('[data-email-actions-right] [data-action]')].filter((el) => el.getClientRects().length > 0)
+      const fits = right.length === 4 && right.every((el) => { const box = el.getBoundingClientRect(); return box.width > 0 && box.left >= bar.left && box.right <= bar.right })
+      return { fits, iconOnly: !(${suggestShown})?.textContent, order: right.map((el) => el.dataset.action) }
+    })()`,
+  )
+  // A sugestão pelo agente ACP falso (o smoke começa na linha de comando); volta ao que estava no fim do passo.
+  const transport64 = readSettings(ctx.userDataDir).claudeTransport
+  await evaluate(contents, "window.__scribeApi.invoke('scribe:settings-update', { claudeTransport: 'acp' }).then(() => true)")
+  const acpFrom64 = readAcpLog(ctx.userDataDir).length
+  await evaluate(contents, `(${suggestShown})?.click(), true`)
+  const card64 = await waitFor(
+    contents,
+    `document.querySelector('[data-invite-suggest-card][data-invite-suggest-state="ready"]') && document.querySelector('[data-invite-suggest-title]')?.value === 'Proposta revisada: integração fictícia' && document.querySelector('[data-invite-suggest-time]')?.value === '14:00' && document.querySelector('[data-invite-suggest-duration]')?.value === '60' && document.querySelector('[data-invite-suggest-link]')?.value === 'meet.google.com/hdw-qkpe-sto' && document.querySelector('[data-invite-suggest-card] [data-invite-badge]')?.textContent === 'Sugestão — confira'`,
+    15_000,
+  )
+  const message64 = (await api<{ subject: string; date: number }[]>('scribe:email-messages', { accountId: lapId })).find((item) => item.subject === subject64)
+  const day64 = message64 ? new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(message64.date)) : ''
+  const [y64 = 0, m64 = 1, d64 = 1] = day64.split('-').map(Number)
+  const tomorrow64 = new Date(Date.UTC(y64, m64 - 1, d64 + 1)).toISOString().slice(0, 10)
+  const date64 = (await evaluate<string>(contents, `document.querySelector('[data-invite-suggest-date]')?.value ?? ''`)) === tomorrow64
+  const calendar64 = await waitFor(contents, `document.querySelector('[data-invite-suggest-card] [data-invite-calendar]')?.dataset.inviteCalendar === 'cal-trabalho'`, 8000)
+  await both('email-convite-sugestao')
+  const session64 = readAcpLog(ctx.userDataDir)
+    .slice(acpFrom64)
+    .find((entry) => entry.method === 'session/new' && entry.purpose === 'invite-suggest')
+  const haiku64 = JSON.stringify((session64 as { configOptions?: unknown } | undefined)?.configOptions ?? null).includes('haiku')
+  const calFrom64 = cal.log().length
+  await clickSelector(contents, '[data-action="invite-suggest-add"]')
+  const saved64 = await waitFor(contents, `document.querySelector('[data-invite-suggest-card][data-invite-suggest-state="created"]') && (document.querySelector('[data-invite-suggest-card] [data-invite-status-line]')?.textContent ?? '').startsWith('Na agenda Trabalho')`, 10_000)
+  const create64 = logOf('create', calFrom64)
+  const args64 = argsOf(create64[0])
+  await evaluate(contents, "window.__scribeApi.invoke('scribe:settings-update', { inviteSuggest: false }).then(() => true)")
+  await evaluate(contents, `window.__scribeApi.invoke('scribe:settings-update', { claudeTransport: '${transport64 === 'acp' ? 'acp' : 'cli'}' }).then(() => true)`)
+  checks['convite-sugestao-4'] = {
+    ok: opened64 && hidden64 && shown64 && bar64.fits && JSON.stringify(bar64.order) === JSON.stringify(['invite-suggest', 'email-toggle-seen', 'email-delete', 'email-more']) && card64 && date64 && calendar64 && Boolean(session64) && haiku64 && saved64 && create64.length === 1 && args64['title'] === 'Proposta revisada: integração fictícia' && args64['timeZone'] === tz && fake.sent.length === sentBefore64,
+    detail: `aberto=${opened64}; desligado sem o botão=${hidden64}; ligado com o botão=${shown64}; barra ${JSON.stringify(bar64.order)} inteira=${bar64.fits}, só o ícone=${bar64.iconOnly}; cartão com o JSON do agente=${card64}, a data de amanhã (${tomorrow64})=${date64}, a agenda padrão=${calendar64}; sessão invite-suggest=${Boolean(session64)} com o Haiku=${haiku64}; gravado=${saved64}, ${create64.length} create (${String(args64['start'])}, ${String(args64['timeZone'])}); SMTP +${fake.sent.length - sentBefore64}`,
+  }
+
+  // Passo 11: bloqueado, o cartão some e os canais recusam (os oito do 61/62 e, contrato 64, os dois do "Sugerir
+  // evento", o passo 5 do CA17 dele); desbloqueado, o cartão volta.
   const opened11 = await openInvite(lapId, subject1)
   await evaluate(contents, "window.__scribeApi.invoke('scribe:lock-now').then(() => true)")
   await waitFor(contents, LOCK_LAYER)
   const hidden11 = await waitFor(contents, `${INVITE_CARD} === null`)
-  // Os oito deste contrato: o `invite-reply` do 61 e os sete do 62 (os do 64 entram no passo dele).
-  const channels11 = ['scribe:invite-reply', 'scribe:invite-state', 'scribe:invite-add', 'scribe:invite-update', 'scribe:invite-remove', 'scribe:invite-calendars', 'scribe:invite-request-access', 'scribe:invite-open-ics']
-  const refused11 = await evaluate<number>(
+  // O `invite-reply` do 61, os sete do 62 e os dois do 64.
+  const channels64 = ['scribe:invite-suggest', 'scribe:invite-suggest-add']
+  const channels11 = ['scribe:invite-reply', 'scribe:invite-state', 'scribe:invite-add', 'scribe:invite-update', 'scribe:invite-remove', 'scribe:invite-calendars', 'scribe:invite-request-access', 'scribe:invite-open-ics', ...channels64]
+  const refusedList11 = await evaluate<string[]>(
     contents,
     `(async () => {
-      let refused = 0
+      const refused = []
       for (const channel of ${JSON.stringify(channels11)}) {
         try {
           await window.__scribeApi.invoke(channel, {})
         } catch (error) {
-          if (String(error?.message ?? error).endsWith('Error: ${LOCKED_ERROR}')) refused++
+          if (String(error?.message ?? error).endsWith('Error: ${LOCKED_ERROR}')) refused.push(channel)
         }
       }
       return refused
     })()`,
   )
+  const refused11 = refusedList11.length
   await typeLockPassword(contents, LOCK_PASSWORD)
   const back11 = await waitFor(contents, `!${LOCK_LAYER} && ${INVITE_CARD}`, 8000)
   checks['convite-11'] = { ok: opened11 && hidden11 && refused11 === channels11.length && back11, detail: `aberto=${opened11}; bloqueado sem o cartão=${hidden11}; ${refused11}/${channels11.length} canais recusados; desbloqueado, o cartão volta=${back11}` }
+  checks['convite-sugestao-5'] = { ok: channels64.every((channel) => refusedList11.includes(channel)), detail: `bloqueado, recusados: ${channels64.filter((channel) => refusedList11.includes(channel)).join(', ') || 'nenhum'}` }
 
   // A conta "Gmail" sai (o resto do smoke não a vê).
   if (gmailId) await api('scribe:email-remove-account', { accountId: gmailId })
@@ -9949,7 +10096,7 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
   for (const name of ['server', 'recording', 'setting', 'meetingPrompt', 'meetingPromptRecord', 'meetingPromptNever', 'micWatch']) if (!meet[name]) failures.push(`meet ${name}: não executado`)
   for (const [name, check] of Object.entries(email)) if (!check.ok) failures.push(`email ${name}: ${check.detail}`)
   for (const [name, check] of Object.entries(invite)) if (!check.ok) failures.push(`convites ${name}: ${check.detail}`)
-  for (const name of ['convite-1', 'convite-2', 'convite-3', 'convite-4', 'convite-5', 'convite-6', 'convite-7', 'convite-8', 'convite-9', 'convite-10', 'convite-11', 'convite-estados', 'convite-lista', 'convite-configuracoes']) if (!invite[name]) failures.push(`convites ${name}: não executado`)
+  for (const name of ['convite-1', 'convite-2', 'convite-3', 'convite-4', 'convite-5', 'convite-6', 'convite-7', 'convite-8', 'convite-9', 'convite-10', 'convite-11', 'convite-estados', 'convite-lista', 'convite-configuracoes', 'convite-regra-1', 'convite-regra-2', 'convite-regra-3', 'convite-sugestao-4', 'convite-sugestao-5']) if (!invite[name]) failures.push(`convites ${name}: não executado`)
   for (const name of ['settings', 'list', 'reading', 'compose', 'folders', 'attachments', 'remove', 'dark', 'notify', 'assistantPending', 'assistantReply', 'assistantTask', 'assistantSearch', 'assistantOrganize', 'taskEmailForm', 'taskEmailRun']) if (!email[name]) failures.push(`email ${name}: não executado`)
   for (const [name, check] of Object.entries(lock)) if (!check.ok) failures.push(`bloqueio ${name}: ${check.detail}`)
   for (const name of ['password', 'layer', 'channels', 'unlock', 'shortcutAndTouchId', 'recordingContinues', 'leaveDialog', 'endWhileLocked', 'reopen', 'reopenFromDisk', 'dark']) if (!lock[name]) failures.push(`bloqueio ${name}: não executado`)
@@ -9977,8 +10124,9 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
   // claro (contrato 51); a seção "Conectores do claude.ai" com o Notion ligado e as ferramentas, nos dois temas
   // (contrato 58); o cartão do lote do Assistente concluído e desfeito em parte, nos dois temas (contrato 56); as 12
   // telas de pastas, mover, assinatura, regras e o painel "Organizando", nos dois temas (contrato 55); os 17 quadros dos
-  // convites, nos dois temas (contrato 63).
-  const expectedShots = SCREENS.length * THEMES.length + 130
+  // convites, nos dois temas (contrato 63); o cartão "Sugestão — confira" e o editor com a regra de convite, nos dois
+  // temas (contrato 64).
+  const expectedShots = SCREENS.length * THEMES.length + 134
   if (screenshots.length !== expectedShots) failures.push(`${screenshots.length} PNGs em vez de ${expectedShots}`)
   for (const shot of screenshots) {
     if (shot.name === MEETING_PROMPT_SHOT) {

@@ -17,6 +17,11 @@
 //   os Detalhes falsos (`fake-whatsapp-insights.mjs`) entre cercas, com o custo no `usage_update`;
 // - correção ao enviar no WhatsApp (instrução "Você corrige mensagens de WhatsApp…", contrato 35): devolve a correção
 //   falsa (`fake-correct.mjs`), só texto, com o custo no `usage_update`;
+// - "Sugerir evento" do email (instrução "Você lê um email e sugere um evento de agenda.", contrato 64): devolve o JSON
+//   da sugestão, só texto, com o custo no `usage_update`. Com `inviteSuggest` (só nos testes), a função recebe o pedido e
+//   devolve o objeto (ou o texto) da resposta; sem ela, a sugestão sai do pedido: o assunto sem "Re: ", o dia seguinte ao
+//   `<data_do_email>`, às 14:00, 60 min e o primeiro link `meet.google.com/…` do texto (sem "reunião" no texto,
+//   `found: false`).
 // - chat: pensa em pedaços, monta o "Plano", lê o `INDICE.md` e a reunião mais recente e procura um termo,
 //   cada leitura pedindo permissão; tenta escrever um arquivo (permissão pedida e negada), ler um arquivo
 //   fora da pasta pelo cliente (`fs/read_text_file`, recusado) e abrir um terminal (recusado); responde em
@@ -359,7 +364,19 @@ function accountConnectors(state) {
   return [...servers].map((name) => ({ name, status: 'connected', tools: 3 }))
 }
 
-export function fakeAcpAgent({ log = () => undefined, pause = 300, mcpStatus = null } = {}) {
+/** Contrato 64: a sugestão padrão do agente falso, tirada só do pedido (o mesmo formato que o app pede ao Claude). */
+export function fakeInviteSuggestion(content) {
+  const block = (tag) => new RegExp(`<${tag}>\\n([\\s\\S]*?)\\n</${tag}>`).exec(content)?.[1] ?? ''
+  const text = block('email')
+  if (!/reuni|amanhã|call|meet/i.test(text)) return { found: false, title: null, date: null, time: null, durationMinutes: null, url: null }
+  const day = /^(\d{4})-(\d{2})-(\d{2})/.exec(block('data_do_email'))
+  const next = day ? new Date(Date.UTC(Number(day[1]), Number(day[2]) - 1, Number(day[3]) + 1)) : null
+  const date = next ? next.toISOString().slice(0, 10) : null
+  const url = /meet\.google\.com\/[\w-]+/.exec(text)?.[0] ?? null
+  return { found: date !== null, title: block('assunto').replace(/^(re|fw|enc):\s*/i, '') || null, date, time: '14:00', durationMinutes: 60, url }
+}
+
+export function fakeAcpAgent({ log = () => undefined, pause = 300, mcpStatus = null, inviteSuggest = null } = {}) {
   const sessions = new Map()
   let next = 0
 
@@ -372,6 +389,7 @@ export function fakeAcpAgent({ log = () => undefined, pause = 300, mcpStatus = n
     if (prompt.startsWith('Você escreve rascunhos')) return 'draft'
     if (prompt.startsWith('Você lê uma conversa do WhatsApp')) return 'whatsapp-insights'
     if (prompt.startsWith('Você corrige mensagens de WhatsApp')) return 'whatsapp-correct'
+    if (prompt.startsWith('Você lê um email e sugere um evento de agenda.')) return 'invite-suggest'
     return 'chat'
   }
 
@@ -506,6 +524,19 @@ export function fakeAcpAgent({ log = () => undefined, pause = 300, mcpStatus = n
         await say(fakeCorrection(content))
         await update({ sessionUpdate: 'usage_update', used: 300, size: 200000, cost: { amount: 0.0004, currency: 'USD' }, _meta: { '_claude/model': modelId } })
         return { stopReason: 'end_turn', usage: { totalTokens: Math.ceil(content.length / 4) + 20, inputTokens: Math.ceil(content.length / 4), outputTokens: 20 } }
+      }
+
+      // Contrato 64: a sugestão de evento, só JSON (o agente nunca responde ao email nem envia nada).
+      if (state.purpose === 'invite-suggest') {
+        const reply = inviteSuggest ? await inviteSuggest(content) : fakeInviteSuggestion(content)
+        if (reply === undefined) {
+          // O teste pediu uma resposta que não chega (o prazo do app tem de cancelar).
+          while (!state.cancelled) await sleep(20)
+          return { stopReason: 'cancelled', usage: { totalTokens: 10, inputTokens: 10, outputTokens: 0 } }
+        }
+        await say(typeof reply === 'string' ? reply : JSON.stringify(reply))
+        await update({ sessionUpdate: 'usage_update', used: 400, size: 200000, cost: { amount: 0.0006, currency: 'USD' }, _meta: { '_claude/model': modelId } })
+        return { stopReason: 'end_turn', usage: { totalTokens: Math.ceil(content.length / 4) + 40, inputTokens: Math.ceil(content.length / 4), outputTokens: 40 } }
       }
 
       // Contrato 32: os Detalhes da conversa do WhatsApp, só JSON (o agente nunca envia nada).

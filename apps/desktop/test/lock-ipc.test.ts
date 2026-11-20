@@ -256,8 +256,21 @@ describe('canais com o app bloqueado (contrato 22, CA4)', () => {
     ])
     for (const channel of channels) expect(WHEN_LOCKED[channel], channel).toBe('refused')
     expect(RENDERER_EVENTS_WHEN_LOCKED['scribe:email-click']).toBe('ignored')
-    expect(EMAIL_PRELOAD_ONLY_EVENTS).toEqual(['scribe:email-click'])
+    expect(EMAIL_PRELOAD_ONLY_EVENTS).toEqual(['scribe:email-click', 'scribe:invite-suggest-click'])
     expect(PRELOAD_ONLY_EVENTS).not.toContain('scribe:email-click')
+  })
+
+  it('contrato 64: o "Sugerir evento" e a gravação da sugestão são recusados bloqueados, antes do handler; o clique é ignorado', async () => {
+    locked = true
+    for (const channel of ['scribe:invite-suggest', 'scribe:invite-suggest-add'] as const) {
+      expect(WHEN_LOCKED[channel], channel).toBe('refused')
+      await expect(Promise.resolve().then(() => invokeHandlers.get(channel)?.(trusted, { accountId: 'x', id: '1' }))).rejects.toThrow(/^locked$/)
+    }
+    expect(calls).toEqual([])
+    expect(RENDERER_EVENTS_WHEN_LOCKED['scribe:invite-suggest-click']).toBe('ignored')
+    expect(EMAIL_PRELOAD_ONLY_EVENTS).toContain('scribe:invite-suggest-click')
+    locked = false
+    await expect(invoke('scribe:invite-suggest')).resolves.toBe('resposta')
   })
 
   it('contrato 61: a resposta de convite é recusada bloqueada, antes do handler', async () => {

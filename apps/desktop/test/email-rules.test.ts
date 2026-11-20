@@ -9,12 +9,13 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createEmailStore, type EmailStore } from '../src/main/email/email-store'
 import { createFakeEmail, SMOKE_EMAIL_ADDRESS, SMOKE_EMAIL_PASSWORD, type FakeEmailOptions } from '../src/main/email/fake-email'
 import type { Pop3Connect } from '../src/main/email/pop3-client'
-import { matchRule, needsBody, planActions, type EmailRuleInput } from '../src/main/email/rules'
+import { emptyPlan, matchRule, needsBody, planActions, ruleBody, type EmailRuleInput } from '../src/main/email/rules'
 import { createEmailService, type EmailService, type EmailServiceDeps } from '../src/main/email/service'
 import type { SafeStorageLike } from '../src/main/secrets'
 import { createFileSettingsStore, SETTINGS_FILE } from '../src/main/settings/store'
 import type { EmailBody, EmailMessage } from '../src/shared/email'
-import { emailRuleListSchema, emailRuleSchema, EMAIL_RULE_TOKEN_TTL_MS, newEmailRule, type EmailRule, type EmailRuleActions } from '../src/shared/email-rules'
+import type { EmailInvite } from '../src/shared/invite'
+import { DEFAULT_EMAIL_RULE_ACTIONS, EMAIL_RULE_ERROR_CODES, emailRuleListSchema, emailRuleSchema, EMAIL_RULE_TOKEN_TTL_MS, newEmailRule, type EmailRule, type EmailRuleActions } from '../src/shared/email-rules'
 
 const fakeSafeStorage = (): SafeStorageLike => ({
   isEncryptionAvailable: () => true,
@@ -37,6 +38,7 @@ const input = (extra: Partial<EmailRuleInput> = {}): EmailRuleInput => ({
   subject: 'Relatório de Novembro',
   body: 'Segue o relatório anexo.',
   hasAttachment: true,
+  inviteMethod: null,
   ...extra,
 })
 
@@ -92,7 +94,7 @@ describe('planActions (CA3)', () => {
     const a = rule(any, { markRead: true })
     const b = rule(any, { flag: true, moveTo: 'Clientes' })
     const c = rule(any, { silent: true, moveTo: 'Outra' })
-    expect(planActions(input(), [a, b, c])).toEqual({ ruleIds: [a.id, b.id], markRead: true, flag: true, moveTo: 'Clientes', delete: false, silent: false })
+    expect(planActions(input(), [a, b, c])).toEqual({ ruleIds: [a.id, b.id], markRead: true, flag: true, moveTo: 'Clientes', delete: false, silent: false, addToCalendar: false })
   })
 
   it('stopHere encerra; apagar encerra', () => {
@@ -107,7 +109,7 @@ describe('planActions (CA3)', () => {
     const a = rule(none, { markRead: true }, { stopHere: true })
     const b = rule(any, { flag: true })
     expect(planActions(input(), [a, b])).toMatchObject({ ruleIds: [b.id], flag: true, markRead: false })
-    expect(planActions(input(), [a])).toEqual({ ruleIds: [], markRead: false, flag: false, moveTo: null, delete: false, silent: false })
+    expect(planActions(input(), [a])).toEqual({ ruleIds: [], markRead: false, flag: false, moveTo: null, delete: false, silent: false, addToCalendar: false })
   })
 })
 
@@ -141,6 +143,72 @@ describe('esquema (CA1)', () => {
   it('a regra nova nasce ligada, sem "parar aqui" e sem nenhuma ação', () => {
     const fresh = newEmailRule(uuid(), 'Nova')
     expect(fresh).toMatchObject({ enabled: true, stopHere: false, actions: { moveTo: null, markRead: false, flag: false, delete: false, silent: false } })
+  })
+})
+
+// ——— Contrato 64: "É convite" e "Pôr na agenda" ———
+
+describe('esquema (contrato 64, CA1)', () => {
+  const base = rule([{ field: 'subject', value: 'x' }], { markRead: true })
+
+  it('a regra da 0.16.0, sem `addToCalendar`, continua válida e volta com `false`', () => {
+    const { addToCalendar: _gone, ...old } = base.actions
+    const parsed = emailRuleSchema.safeParse({ ...base, actions: old })
+    expect(parsed.success).toBe(true)
+    expect(parsed.data?.actions.addToCalendar).toBe(false)
+  })
+
+  it('`isInvite` sem valor; `addToCalendar` sozinho ou com qualquer ação; nenhuma regra nasce pondo na agenda', () => {
+    expect(emailRuleSchema.safeParse({ ...base, conditions: [{ field: 'isInvite' }] }).success).toBe(true)
+    expect(emailRuleSchema.safeParse({ ...base, conditions: [{ field: 'isInvite', value: 'x' }] }).success).toBe(false)
+    expect(emailRuleSchema.safeParse({ ...base, actions: { ...DEFAULT_EMAIL_RULE_ACTIONS, addToCalendar: true } }).success).toBe(true)
+    expect(emailRuleSchema.safeParse({ ...base, actions: { ...DEFAULT_EMAIL_RULE_ACTIONS, addToCalendar: 'sim' } }).success).toBe(false)
+    expect(emailRuleSchema.safeParse({ ...base, actions: { ...DEFAULT_EMAIL_RULE_ACTIONS, addToCalendar: true, moveTo: 'Arquivo' } }).success).toBe(true)
+    expect(emailRuleSchema.safeParse({ ...base, actions: { ...DEFAULT_EMAIL_RULE_ACTIONS, addToCalendar: true, delete: true } }).success).toBe(true)
+    expect(DEFAULT_EMAIL_RULE_ACTIONS.addToCalendar).toBe(false)
+    expect(EMAIL_RULE_ERROR_CODES.slice(-2)).toEqual(['calendar-denied', 'no-calendar'])
+  })
+})
+
+describe('matchRule (contrato 64, CA2)', () => {
+  const isInvite = rule([{ field: 'isInvite' }], { addToCalendar: true })
+
+  it('"é convite" casa com REQUEST e CANCEL; não com REPLY, sem convite ou regra desligada', () => {
+    expect(matchRule(input({ inviteMethod: 'REQUEST' }), isInvite)).toBe(true)
+    expect(matchRule(input({ inviteMethod: 'CANCEL' }), isInvite)).toBe(true)
+    expect(matchRule(input({ inviteMethod: 'REPLY' }), isInvite)).toBe(false)
+    expect(matchRule(input({ inviteMethod: null }), isInvite)).toBe(false)
+    expect(matchRule(input({ inviteMethod: 'REQUEST' }), { ...isInvite, enabled: false })).toBe(false)
+  })
+
+  it('ruleBody: o método do convite do corpo; sem corpo, os três `null`', () => {
+    const body = (invite: EmailInvite | null): EmailBody => ({ text: 'oi', html: null, attachments: [], invite })
+    expect(ruleBody(null)).toEqual({ body: null, hasAttachment: null, inviteMethod: null })
+    expect(ruleBody(body(null)).inviteMethod).toBeNull()
+    expect(ruleBody({ text: 'oi', html: null, attachments: [] }).inviteMethod).toBeNull()
+    expect(ruleBody(body({ method: 'CANCEL' } as EmailInvite)).inviteMethod).toBe('CANCEL')
+  })
+})
+
+describe('planActions (contrato 64, CA2)', () => {
+  const any: EmailRule['conditions'] = [{ field: 'from', value: 'marina' }]
+
+  it('"pôr na agenda" se soma como as marcas; quem encerra antes leva o dela, não o de depois', () => {
+    const mark = rule(any, { addToCalendar: true })
+    const move = rule(any, { moveTo: 'Arquivo' })
+    expect(planActions(input(), [mark, move])).toMatchObject({ addToCalendar: true, moveTo: 'Arquivo' })
+    expect(planActions(input(), [move, mark])).toMatchObject({ addToCalendar: false, moveTo: 'Arquivo' })
+    expect(planActions(input(), [rule(any, { addToCalendar: true, moveTo: 'Arquivo' }), mark])).toMatchObject({ addToCalendar: true, moveTo: 'Arquivo' })
+    expect(emptyPlan().addToCalendar).toBe(false)
+  })
+})
+
+describe('needsBody (contrato 64, CA2)', () => {
+  it('regra ligada com "é convite" ou "pôr na agenda" baixa o corpo', () => {
+    const fromOnly = rule([{ field: 'from', value: 'x' }], { addToCalendar: true })
+    expect(needsBody([fromOnly])).toBe(true)
+    expect(needsBody([{ ...fromOnly, enabled: false }])).toBe(false)
+    expect(needsBody([rule([{ field: 'isInvite' }], { markRead: true })])).toBe(true)
   })
 })
 

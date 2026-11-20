@@ -33,6 +33,7 @@ import { assistantSystemPrompt } from '../src/main/claude-cli/chat'
 import { AcpTranslator } from '../src/main/acp/translator'
 import { correctInput, correctionParser, correctSystemPrompt } from '../src/main/whatsapp/correct'
 import { insightsInput, insightsParser, insightsSystemPrompt } from '../src/main/whatsapp/insights'
+import { suggestInput, suggestParser, suggestSystemPrompt } from '../src/main/invites/suggest'
 import { CLAUDE_DISALLOWED_TOOLS, claudeProfile } from '../src/main/acp/profiles/claude'
 import { summaryInput } from '../src/main/claude-cli/summary'
 import { createChatCorpus } from '../src/main/chat/corpus'
@@ -526,6 +527,24 @@ describe('Correção ao enviar no WhatsApp pelo ACP (contrato 35)', () => {
     expect(log.find((entry) => entry.method === 'session/prompt')).toMatchObject({ purpose: 'whatsapp-correct' })
     expect(links[0]?.killed).toBe(true)
     expect(await permissionAllowed('whatsapp-correct', { kind: 'execute', title: 'enviar', locations: [], rawInput: {} } as never, corpus, corpus, { Read: 'read' })).toBe(false)
+  })
+})
+
+describe('"Sugerir evento" do email pelo ACP (contrato 64, CA10)', () => {
+  it('o agente falso reconhece o purpose novo pela instrução, com o Haiku, sem ferramentas nem MCP, e devolve o JSON', async () => {
+    const log: LogEntry[] = []
+    const { launch, links } = memory(fake(log))
+    const text = 'Podemos fechar amanhã às 14h? Fica o link: meet.google.com/hdw-qkpe-sto'
+    const input = suggestInput({ subject: 'Re: Proposta', date: Date.parse('2026-11-19T14:31:00Z'), timeZone: 'America/Sao_Paulo', text })
+    const result = await runAcpOneShot({ open: opener(launch), model: 'haiku', cwd: corpus, input, purpose: 'invite-suggest', systemPrompt: suggestSystemPrompt(), parse: suggestParser(text, 'Re: Proposta'), label: 'sugestão de evento' })
+    expect(result).toMatchObject({ ok: true, costUsd: 0.0006, content: { ok: true, suggestion: { title: 'Proposta', date: '2026-11-20', time: '14:00', durationMinutes: 60, url: 'https://meet.google.com/hdw-qkpe-sto' } } })
+    const opened = log.find((entry) => entry.method === 'session/new')
+    expect(opened).toMatchObject({ purpose: 'invite-suggest', options: { tools: [], settingSources: [] } })
+    expect(opened).toMatchObject({ configOptions: expect.arrayContaining([{ configId: 'model', value: 'haiku' }]), mcpServers: [] })
+    expect(log.find((entry) => entry.method === 'session/prompt')).toMatchObject({ purpose: 'invite-suggest' })
+    expect(links[0]?.killed).toBe(true)
+    expect(await permissionAllowed('invite-suggest', { kind: 'execute', title: 'enviar', locations: [], rawInput: {} } as never, corpus, corpus, { Read: 'read' })).toBe(false)
+    expect(await permissionAllowed('invite-suggest', { kind: 'read', title: 'ler', locations: [], rawInput: {} } as never, corpus, corpus, { Read: 'read' })).toBe(false)
   })
 })
 

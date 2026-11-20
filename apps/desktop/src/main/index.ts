@@ -103,9 +103,10 @@ import { createWhatsAppService, type WhatsAppService } from './whatsapp/service'
 import { EMAIL_DIR } from './email/email-store'
 import { createEmailBatchStore } from './email/batches'
 import type { EmailOrganizer } from './email/organize'
-import { createEmailService, type EmailService } from './email/service'
+import { createEmailClickGuard, createEmailService, type EmailService } from './email/service'
 import { createMacCalendar, locateMacCalendar, type MacCalendar } from './mac-calendar/process'
 import { createInviteService, type InviteService } from './invites/service'
+import { createInviteSuggester, createInviteSuggestChannels, type InviteSuggestChannels } from './invites/suggest'
 import { INVITE_ERROR_MESSAGES } from '../shared/invite-state'
 import { createEmailTools } from './email/assistant-tools'
 import { emailStateLabel, exportEmail } from './email/export'
@@ -176,6 +177,8 @@ let driveService: DriveSyncService | null = null
 let whatsappService: WhatsAppService | null = null
 /** Email (contrato 42): o mesmo do WhatsApp, o estado ao desbloquear e os cliques da janela fechada. */
 let emailService: EmailService | null = null
+/** Contrato 64: os canais do "Sugerir evento" (o guarda de clique sai com a janela). */
+let inviteSuggestChannels: InviteSuggestChannels | null = null
 /** Contrato 40: as configurações, lidas na hora de notificar e de pôr o número no Dock. */
 let readSettings: (() => Promise<AppSettings>) | null = null
 /** Servidor local da extensão do Meet (contrato 27): sobe e para com "Quem fala no Meet". */
@@ -287,6 +290,7 @@ function openMainWindow(query?: Record<string, string>, invisible = false): Brow
   win.on('closed', () => {
     whatsappService?.forgetSender(contentsId)
     emailService?.forgetSender(contentsId)
+    inviteSuggestChannels?.forget(contentsId)
     whatsappViewing.delete(contentsId)
     emailViewing.delete(contentsId)
     if (mainWindow === win) mainWindow = null
@@ -870,6 +874,8 @@ interface AppServices {
   macCalendar: MacCalendar
   /** Contrato 62: os convites do email no Calendário do Mac (registro, estado do cartão e as gravações no clique). */
   invites: InviteService
+  /** Contrato 64: o "Sugerir evento" (o Claude só atrás do canal com o token de clique próprio). */
+  inviteSuggest: InviteSuggestChannels
   /** "Salvar plugin…" da aba Plugins (contrato 31). */
   pluginSave: (input: unknown) => Promise<PluginSaveResult>
   /** Servidores MCP do agente: a aba "Conexões" e as sessões (contrato 21). */
@@ -1191,6 +1197,11 @@ function createAppServices(userData: string): AppServices {
     },
     // Contrato 62 (CA16): o REPLY saiu; a resposta vai para o registro (um caminho só: o `reply` do resultado não é usado).
     onInviteReplied: (event) => void invites?.recordReply(event).catch(() => undefined),
+    // Contrato 64: a ação "Pôr na agenda" das regras, pela entrada do 62 que só cria (nunca pede acesso, nunca responde).
+    invites: {
+      addFromRule: (source) => (invites ? invites.addFromRule(source) : Promise.resolve({ ok: false, error: 'no-calendar' } as const)),
+      calendarPresent: () => (invites ? invites.calendarPresent() : Promise.resolve(false)),
+    },
     // Só estados e tipos de erro, nunca senha, endereço ou texto de mensagem.
     ...(app.isPackaged ? {} : { log: (message: string) => console.log(message) }),
   })
@@ -1240,6 +1251,28 @@ function createAppServices(userData: string): AppServices {
     ...devLog,
   })
   invites = inviteService
+  // Contrato 64: o "Sugerir evento", sempre com o Haiku, numa execução curta sem ferramenta nenhuma; só o texto do email
+  // aberto, do corpo guardado, e só pelo canal com o token de clique próprio.
+  const inviteSuggest = createInviteSuggestChannels({
+    suggester: createInviteSuggester({
+      settings,
+      locate: () => claude.locate(),
+      enabled: async () => (await settings.get()).inviteSuggest,
+      spawn: smokeClaude?.spawnSummary ?? nodeSpawnSummary,
+      openAcp,
+      acpAvailable: async () => (await acpAgent.current()).available(),
+      userData,
+      baseEnv: process.env,
+      ...(app.isPackaged ? {} : { log: (message: string) => console.log(message) }),
+    }),
+    guard: createEmailClickGuard(),
+    locked: () => lockService?.isLocked() ?? false,
+    enabled: async () => (await settings.get()).inviteSuggest,
+    stored: (accountId, id) => email.storedMessage(accountId, id),
+    invites: inviteService,
+    timeZone: () => Intl.DateTimeFormat().resolvedOptions().timeZone,
+  })
+  inviteSuggestChannels = inviteSuggest
   // Contrato 32: os Detalhes da conversa (resumo, humor, pendências) pelo mesmo motor, numa execução curta sem
   // ferramenta nenhuma. Só lê as mensagens; o resultado fica em `whatsapp/insights.json`.
   const whatsappInsights = createInsightsService({
@@ -1709,6 +1742,7 @@ function createAppServices(userData: string): AppServices {
     micWatch,
     macCalendar,
     invites: inviteService,
+    inviteSuggest,
     pluginSave,
     mcp,
     navegador,
@@ -1825,7 +1859,7 @@ function openExternal(url: string): void {
 }
 
 function registerIpc(services: AppServices): void {
-  const { settings, meetings, meetingsService, meetingsIndex, tokenClient, translation, claude, files, summary, analysis, aiNotes, download, branding, updates, chat, chatActions, corpus, acp, lock, google, drive, microsoft, calendar, whatsapp, whatsappInsights, email, emailOrganizer, automations, meet, meetingPrompt, pluginSave, mcp, invites } = services
+  const { settings, meetings, meetingsService, meetingsIndex, tokenClient, translation, claude, files, summary, analysis, aiNotes, download, branding, updates, chat, chatActions, corpus, acp, lock, google, drive, microsoft, calendar, whatsapp, whatsappInsights, email, emailOrganizer, automations, meet, meetingPrompt, pluginSave, mcp, invites, inviteSuggest } = services
   /** Reunião salva, renomeada ou com anotações novas: o `.md` dela no acervo do chat é reescrito. */
   const touched = (meetingId: string): void => void corpus.sync(meetingId).catch(() => undefined)
   /**
@@ -2143,6 +2177,10 @@ function registerIpc(services: AppServices): void {
   handle('scribe:invite-calendars', appOrigin, () => invites.calendars().catch(() => ({ ok: false, error: 'unavailable', reason: 'failed' }) as const))
   handle('scribe:invite-request-access', appOrigin, () => invites.requestAccess().catch(() => ({ ok: false, error: 'unavailable', reason: 'failed' }) as const))
   handle('scribe:invite-open-ics', appOrigin, (_event, request) => invites.openIcs(request).catch(() => ({ ok: false, error: 'failed' }) as const))
+  // Contrato 64: o "Sugerir evento" só com o token de clique próprio; gravar a sugestão é local e só no clique do cartão.
+  handle('scribe:invite-suggest', appOrigin, (event, request) => inviteSuggest.suggest(event.sender.id, request).catch(() => ({ ok: false, error: 'failed' }) as const))
+  handle('scribe:invite-suggest-add', appOrigin, (_event, request) => inviteSuggest.add(request).catch(() => ({ ok: false, error: 'failed', message: INVITE_ERROR_MESSAGES.failed }) as const))
+  onEvent('scribe:invite-suggest-click', appOrigin, (event, token) => inviteSuggest.registerClick(event.sender.id, token))
   // Contrato 43: o teste da conta, o clipe do composer, as imagens remotas e a pasta aberta na tela.
   handle('scribe:email-test', appOrigin, (_event, request) => email.test(request).catch(() => ({ ok: false, stage: 'incoming', error: 'Erro ao falar com o servidor.' }) as const))
   handle('scribe:email-attach-pick', appOrigin, async () => {

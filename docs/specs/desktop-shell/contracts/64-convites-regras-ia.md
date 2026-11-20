@@ -414,5 +414,9 @@ Nenhum outro arquivo. Em especial, **não** mexer em `main/schedules/*`, `main/a
   mesmo depois de gravar (um novo "Pôr na agenda" ali volta "Já estava na agenda").
 - **C12 — Todo o "Sugerir evento" neste contrato** (botão, cartão, canais, `suggest.ts`), com as peças do cartão do 63;
   o 63 só tem o interruptor em Configurações.
+- **C13 — "Sugerir evento" depois do espaço flexível** (20/11/2026, devolução da revisão do 64, decisão do coordenador):
+  o botão fica à direita da barra da leitura, antes de Marcar, Apagar e Mais, como no quadro 09, e não depois de
+  Encaminhar como dizia o CA14. Com a barra estreita (menos de 660 px, por container query), vira só o ícone, com o nome
+  no `aria-label` e na dica; o grupo da direita nunca encolhe, então Marcar, Apagar e Mais nunca somem.
 
 Conferido com os contratos 61–64 em 19/11/2026.

@@ -1,6 +1,8 @@
 import { ArrowLeft, Download, ExternalLink, Folder, FolderInput, Forward, ImageOff, Mail, MailOpen, MoreHorizontal, Paperclip, Reply, ReplyAll, Sparkles, Trash2, TriangleAlert } from 'lucide-react'
 import { Component, useMemo, useState, type MouseEvent, type ReactNode } from 'react'
 import { isInbox, type EmailAccount, type EmailMessage } from '@shared/email'
+import { useLock } from '../../app/lockStore'
+import { useSettings } from '../../app/settingsStore'
 import { ActionButton } from '../../design/ActionButton'
 import { Button } from '../../design/Button'
 import { Icon } from '../../design/Icon'
@@ -11,6 +13,7 @@ import { bodyKey, useEmail } from './emailStore'
 import { addressLabel, addressLine, emailFullDate, sizeLabel, type ComposeMode } from './format'
 import type { FolderItem } from './folderTree'
 import { InviteCard } from './InviteCard'
+import { InviteSuggestCard, useInviteSuggest } from './InviteSuggestCard'
 import { linkify, sanitizeEmailHtml } from './sanitize'
 
 /** "Voltar para a lista": só na janela estreita, quando a lista e a leitura se alternam. */
@@ -140,6 +143,13 @@ export function ReadingPane({ account, message, onCompose, composing, onMailto, 
   const [actionError, setActionError] = useState<string | null>(null)
   const [ask, setAsk] = useState<LinkAsk | null>(null)
   const sender = message.from[0]
+  // Contrato 64 (CA14): "Sugerir evento" só com a opção ligada, o corpo já lido e sem convite; nunca com o app bloqueado.
+  const suggestOn = useSettings((store) => store.settings.inviteSuggest)
+  const locked = useLock((store) => store.status.locked)
+  const suggest = useInviteSuggest(account.id, message.id)
+  const bodyReady = state !== undefined && state !== 'loading' && state !== 'error'
+  const canSuggest = suggestOn && !locked && bodyReady && !state.invite
+  const suggestLabel = suggest.view?.phase === 'loading' ? 'Sugerindo…' : 'Sugerir evento'
 
   const remove = (): void => {
     void useEmail
@@ -178,21 +188,36 @@ export function ReadingPane({ account, message, onCompose, composing, onMailto, 
 
   return (
     <section data-email-reading={message.id} aria-label={message.subject || '(sem assunto)'} className="flex min-h-0 min-w-0 flex-1 flex-col">
-      {/* CA7: uma linha só, como no Outlook: as três respostas com rótulo à esquerda; Marcar e Apagar só com o ícone, à direita. */}
-      <div data-email-actions className="flex h-14 shrink-0 flex-nowrap items-center gap-2 overflow-hidden border-b border-line px-6">
-        <button type="button" data-action="email-back" onClick={onBack} aria-label="Voltar para a lista" className={`${BACK_BUTTON} ${NARROW_ONLY}`}>
-          <Icon icon={ArrowLeft} />
-        </button>
-        {onBackToOrganize && <ActionButton icon={Sparkles} label="Voltar ao andamento" action="email-back-to-organize" onClick={onBackToOrganize} />}
-        <ActionButton icon={Reply} label="Responder" action="email-reply" disabled={composing} onClick={() => onCompose('reply')} />
-        <ActionButton icon={ReplyAll} label="Responder a todos" action="email-reply-all" disabled={composing} onClick={() => onCompose('replyAll')} />
-        <ActionButton icon={Forward} label="Encaminhar" action="email-forward" disabled={composing} onClick={() => onCompose('forward')} />
-        <span className="ml-auto" />
-        {isInbox(message) && (
-          <ActionButton icon={message.seen ? Mail : MailOpen} label={message.seen ? 'Marcar como não lida' : 'Marcar como lida'} action="email-toggle-seen" iconOnly onClick={toggleSeen} />
-        )}
-        {canDelete && <ActionButton icon={Trash2} label="Apagar" action="email-delete" tone="danger" iconOnly onClick={() => setConfirmDelete(true)} />}
-        {move && <MoreMenu {...move} />}
+      {/* CA7: uma linha só, como no Outlook: as três respostas com rótulo à esquerda; Marcar e Apagar só com o ícone, à direita.
+          Contrato 64: "Sugerir evento" à direita, antes de Marcar (quadro 09); com a barra estreita, só o ícone. O grupo da
+          direita nunca encolhe: se faltar espaço, quem é cortado é o da esquerda. */}
+      <div data-email-actions className="@container/actions flex h-14 shrink-0 flex-nowrap items-center gap-2 overflow-hidden border-b border-line px-6">
+        <div data-email-actions-left className="flex min-w-0 flex-1 flex-nowrap items-center gap-2 overflow-hidden">
+          <button type="button" data-action="email-back" onClick={onBack} aria-label="Voltar para a lista" className={`${BACK_BUTTON} ${NARROW_ONLY}`}>
+            <Icon icon={ArrowLeft} />
+          </button>
+          {onBackToOrganize && <ActionButton icon={Sparkles} label="Voltar ao andamento" action="email-back-to-organize" onClick={onBackToOrganize} />}
+          <ActionButton icon={Reply} label="Responder" action="email-reply" disabled={composing} onClick={() => onCompose('reply')} />
+          <ActionButton icon={ReplyAll} label="Responder a todos" action="email-reply-all" disabled={composing} onClick={() => onCompose('replyAll')} />
+          <ActionButton icon={Forward} label="Encaminhar" action="email-forward" disabled={composing} onClick={() => onCompose('forward')} />
+        </div>
+        <div data-email-actions-right className="flex shrink-0 flex-nowrap items-center gap-2">
+          {canSuggest && (
+            <>
+              <span data-invite-suggest-wide className="hidden @min-[660px]/actions:contents">
+                <ActionButton icon={Sparkles} label={suggestLabel} action="invite-suggest" disabled={suggest.view?.phase === 'loading'} onClick={suggest.start} />
+              </span>
+              <span data-invite-suggest-narrow className="contents @min-[660px]/actions:hidden">
+                <ActionButton icon={Sparkles} label={suggestLabel} action="invite-suggest" iconOnly disabled={suggest.view?.phase === 'loading'} onClick={suggest.start} />
+              </span>
+            </>
+          )}
+          {isInbox(message) && (
+            <ActionButton icon={message.seen ? Mail : MailOpen} label={message.seen ? 'Marcar como não lida' : 'Marcar como lida'} action="email-toggle-seen" iconOnly onClick={toggleSeen} />
+          )}
+          {canDelete && <ActionButton icon={Trash2} label="Apagar" action="email-delete" tone="danger" iconOnly onClick={() => setConfirmDelete(true)} />}
+          {move && <MoreMenu {...move} />}
+        </div>
       </div>
       <div data-email-reading-scroll className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
         <div className="mx-auto flex w-full max-w-[760px] flex-col gap-4">
@@ -241,6 +266,13 @@ export function ReadingPane({ account, message, onCompose, composing, onMailto, 
           </div>
           {/* Contrato 63: o cartão do convite, só com o corpo já lido e com convite (acima dos avisos do corpo). */}
           {state !== undefined && state !== 'loading' && state !== 'error' && state.invite && <InviteCard account={account} message={message} invite={state.invite} onLink={openLink} />}
+          {/* Contrato 64: no mesmo lugar, a sugestão do Claude (ou a frase do erro). */}
+          {canSuggest && suggest.view?.phase === 'ready' && <InviteSuggestCard accountId={account.id} id={message.id} suggestion={suggest.view.suggestion} onDiscard={suggest.discard} />}
+          {canSuggest && suggest.view?.phase === 'error' && (
+            <Note id="invite-suggest-error" icon={TriangleAlert} role="alert">
+              {suggest.view.text}
+            </Note>
+          )}
           {ask && (
             <Note
               id="email-external-link"
