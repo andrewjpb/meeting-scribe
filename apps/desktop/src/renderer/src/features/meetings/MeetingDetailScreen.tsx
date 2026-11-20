@@ -161,7 +161,7 @@ export function MeetingDetailScreen() {
   }
   return (
     <div className="flex min-h-0 flex-1 flex-col" data-meeting={ready ? ready.meeting.id : ''}>
-      <header className={`border-b border-line px-10 pt-6 ${ready ? '' : 'pb-5'}`}>
+      <header className={`border-b border-line px-8 pt-5 ${ready ? '' : 'pb-5'}`}>
         <Link
           to={ROUTE_PATHS.reunioes}
           draggable={false}
@@ -173,29 +173,29 @@ export function MeetingDetailScreen() {
         {ready ? (
           <>
             <MeetingHeader meeting={ready.meeting} transcript={ready.transcript} onRename={rename} onDelete={remove} hasTranscript={items.length > 0 && tab === 'transcricao'} />
-            <div className="mt-4">
+            <div className="mt-3">
               <Tabs value={tab} tabs={TABS} onChange={(value) => setChosenTab({ id, tab: value })} label="Conteúdo da reunião" id={TABS_ID} />
             </div>
           </>
         ) : loaded.status === 'missing' ? (
           <div className="mt-1.5">
-            <h1 className="text-20 font-bold tracking-[-0.3px] text-title">Reunião não encontrada</h1>
+            <h1 className="text-15 font-bold text-title">Reunião não encontrada</h1>
             <p className="mt-1.5 text-12 text-text-muted">Ela pode ter sido excluída.</p>
           </div>
         ) : null}
       </header>
       {loaded.status === 'failed' && (
-        <RetryNotice id="detail-load-failed" text="Não foi possível abrir a reunião." onRetry={retryLoad} className="mx-10 mt-4" />
+        <RetryNotice id="detail-load-failed" text="Não foi possível abrir a reunião." onRetry={retryLoad} className="mx-8 mt-3" />
       )}
-      {failure && <RetryNotice id="detail-failed" text={failure.text} onRetry={failure.retry} className="mx-10 mt-4" />}
+      {failure && <RetryNotice id="detail-failed" text={failure.text} onRetry={failure.retry} className="mx-8 mt-3" />}
       {ready && notesSaveFailed && (
-        <RetryNotice id="notes-save-failed" text="Não foi possível salvar as anotações." onRetry={() => void useMeetingNotes.getState().flush(id)} className="mx-10 mt-4" />
+        <RetryNotice id="notes-save-failed" text="Não foi possível salvar as anotações." onRetry={() => void useMeetingNotes.getState().flush(id)} className="mx-8 mt-3" />
       )}
       {ready && analysisUnsaved && (
-        <RetryNotice id="analysis-unsaved" text="Uma análise não foi salva." onRetry={() => void useRecording.getState().retryUnsavedAnalyses(id)} className="mx-10 mt-4" />
+        <RetryNotice id="analysis-unsaved" text="Uma análise não foi salva." onRetry={() => void useRecording.getState().retryUnsavedAnalyses(id)} className="mx-8 mt-3" />
       )}
       {ready && filesFailed && (
-        <Note id="audio-folder-failed" icon={TriangleAlert} className="mx-10 mt-4">
+        <Note id="audio-folder-failed" icon={TriangleAlert} className="mx-8 mt-3">
           {AUDIO_FOLDER_FAILED_TEXT}
         </Note>
       )}
@@ -210,8 +210,8 @@ export function MeetingDetailScreen() {
             (items.length > 0 ? (
               <TranscriptList items={items} jumpTo={jump?.meetingId === id ? jump : null} />
             ) : (
-              <div className="min-h-0 flex-1 px-10 pb-10">
-                <div className="mx-auto w-full max-w-[680px] pt-7">
+              <div className="min-h-0 flex-1 px-8 pb-8">
+                <div className="mx-auto w-full max-w-[680px] pt-5">
                   <p className="text-13 text-pretty text-text-muted">
                     {ready.meeting.audioPath ? 'Esta reunião foi gravada sem transcrição.' : 'Esta reunião foi gravada sem transcrição. O áudio não fica guardado no Mac.'}
                   </p>
@@ -276,12 +276,12 @@ function MeetingHeader({
           </span>
           <SourceDots sources={meeting.sources} />
           {transcript?.targetLanguage && (
-            <span className="inline-flex h-[22px] items-center rounded-[var(--radius-control)] bg-bg-sunken px-2 font-medium">
+            <span className="inline-flex h-5 items-center rounded-[var(--radius-control)] bg-bg-sunken px-1.5 font-medium">
               {transcript.sourceLanguage.toUpperCase()} → {transcript.targetLanguage.toUpperCase()}
             </span>
           )}
           {transcript?.translationModel && (
-            <span className="inline-flex h-[22px] items-center rounded-[var(--radius-control)] bg-bg-sunken px-2 font-mono text-11">{transcript.translationModel}</span>
+            <span className="inline-flex h-5 items-center rounded-[var(--radius-control)] bg-bg-sunken px-1.5 font-mono text-11">{transcript.translationModel}</span>
           )}
         </div>
         {(origin || attendees.length > 0) && (

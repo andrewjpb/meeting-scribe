@@ -62,7 +62,7 @@ export function MicrosoftSection() {
   return (
     <Section title="Microsoft">
       <div
-        className="flex flex-col gap-3 py-4"
+        className="flex flex-col gap-2.5 py-3"
         data-setting-row
         data-setting-name="Conta Microsoft"
         data-setting-description="Entrar com a conta Microsoft para ler a agenda do Outlook."
@@ -110,7 +110,7 @@ export function MicrosoftSection() {
         </div>
 
         {configuring && (
-          <div data-microsoft-client-panel className="flex flex-col gap-3 rounded-[var(--radius-panel)] border border-line bg-bg-sunken p-4">
+          <div data-microsoft-client-panel className="flex flex-col gap-3 rounded-[var(--radius-panel)] border border-line bg-bg-sunken p-3">
             <div className="flex flex-col gap-1.5">
               <label htmlFor={MICROSOFT_CLIENT_ID_INPUT} className="text-12 font-medium text-text">
                 ID do aplicativo (cliente)

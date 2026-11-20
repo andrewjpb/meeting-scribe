@@ -1,5 +1,5 @@
-// Coluna de transcrição (CA11): horário na calha de 64 px, rótulo de quem fala na cor da fonte, texto
-// 16/26, tradução 14/22 com filete; parcial em --text-muted itálico. Rola sozinha até o fim; se o
+// Coluna de transcrição (CA11): horário na calha de 48 px, rótulo de quem fala na cor da fonte, texto
+// 15/24, tradução 13/20 com filete (contrato 81); parcial em --text-muted itálico. Rola sozinha até o fim; se o
 // usuário subir, para de rolar e mostra "Ir para o fim". Sem sombra, sem raio acima do token.
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { formatClock, segmentLabel, type TranscriptSource, type TranslationState } from '@shared/transcription'
@@ -65,11 +65,11 @@ export function TranscriptList({ items, bottomInset = false, autoScroll = false,
   }
 
   return (
-    <div data-transcript-scroll ref={scrollRef} onScroll={onScroll} className={`relative min-h-0 flex-1 overflow-y-auto px-10 ${bottomInset ? 'pb-28' : 'pb-10'}`}>
+    <div data-transcript-scroll ref={scrollRef} onScroll={onScroll} className={`relative min-h-0 flex-1 overflow-y-auto px-8 ${bottomInset ? 'pb-28' : 'pb-8'}`}>
       <div className="mx-auto w-full max-w-[680px]">
         {header}
         {items.length > 0 && (
-          <ol data-transcript-list className="flex flex-col gap-[22px] pt-7 pb-1">
+          <ol data-transcript-list className="flex flex-col gap-4 pt-5 pb-1">
             {items.map((item) => (
               <Segment key={item.id} item={item} onRetryTranslation={onRetryTranslation} target={jumpTo?.id === item.id} />
             ))}
@@ -95,14 +95,14 @@ export function TranscriptList({ items, bottomInset = false, autoScroll = false,
 function Segment({ item, onRetryTranslation, target }: { item: TranscriptItem; onRetryTranslation?: ((id: string) => void) | undefined; target: boolean }) {
   const showUnavailable = !item.partial && item.translationState === 'unavailable' && !item.translation
   return (
-    <li data-segment={item.id} data-jump-target={target || undefined} className="grid grid-cols-[64px_minmax(0,1fr)]">
+    <li data-segment={item.id} data-jump-target={target || undefined} className="grid grid-cols-[48px_minmax(0,1fr)]">
       <time className={`pt-0.5 text-12 tabular ${target ? 'font-bold text-title' : 'text-text-faint'}`}>{formatClock(item.startMs)}</time>
       <div className="flex min-w-0 flex-col gap-1">
         <p className={`caps ${item.source === 'mic' ? 'text-mic' : 'text-sys'}`}>{segmentLabel(item)}</p>
-        <p data-transcript-text className={`text-16 select-text ${item.partial ? 'text-text-muted italic' : 'text-text'}`}>{item.text}</p>
-        {item.translation && <p data-transcript-translation className="border-l-2 border-line-strong pl-3 text-14 text-text-muted select-text">{item.translation}</p>}
+        <p data-transcript-text className={`text-15 leading-6 select-text ${item.partial ? 'text-text-muted italic' : 'text-text'}`}>{item.text}</p>
+        {item.translation && <p data-transcript-translation className="border-l-2 border-line-strong pl-3 text-13 text-text-muted select-text">{item.translation}</p>}
         {showUnavailable && (
-          <div className="flex flex-wrap items-center gap-3 border-l-2 border-line-strong pl-3 text-14 text-text-muted">
+          <div className="flex flex-wrap items-center gap-3 border-l-2 border-line-strong pl-3 text-13 text-text-muted">
             <span>Tradução indisponível</span>
             {onRetryTranslation && (
               <button

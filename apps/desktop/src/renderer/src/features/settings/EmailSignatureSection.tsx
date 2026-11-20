@@ -12,7 +12,7 @@ const SAVE_AFTER_MS = 600
 /** Uma linha da aba Email: o nome e a descrição do índice da busca em atributos, e o texto da tela à vista. */
 export function EmailRow({ name, description, children, className = '' }: { name: string; description: string; children: ReactNode; className?: string }) {
   return (
-    <div data-setting-row data-setting-name={name} data-setting-description={description} className={`py-4 ${className}`}>
+    <div data-setting-row data-setting-name={name} data-setting-description={description} className={`py-3 ${className}`}>
       {children}
     </div>
   )

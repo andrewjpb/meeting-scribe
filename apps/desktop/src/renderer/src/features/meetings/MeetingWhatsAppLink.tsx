@@ -48,7 +48,7 @@ export function MeetingWhatsAppLink({ meetingId }: { meetingId: string }) {
   const switchId = `whatsapp-link-summary-${meetingId}`
 
   return (
-    <div data-whatsapp-link={link?.chatId ?? ''} className="mx-10 mt-4 flex flex-wrap items-center gap-x-4 gap-y-2 border-y border-line py-2.5 text-13">
+    <div data-whatsapp-link={link?.chatId ?? ''} className="mx-8 mt-3 flex flex-wrap items-center gap-x-4 gap-y-2 border-y border-line py-2.5 text-13">
       <Icon icon={Smartphone} className="shrink-0 text-text-muted" />
       {link ? (
         <>

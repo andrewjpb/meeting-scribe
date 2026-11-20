@@ -66,7 +66,7 @@ export function CalendarSection() {
       <SettingRow name="Avisar se a reunião não estiver sendo gravada" nameId="settings-calendar-not-recording" description="2 minutos depois do início, e de novo aos 10, se nada estiver gravando.">
         <Switch checked={settings.calendarNotRecordingAlert} labelledBy="settings-calendar-not-recording" onChange={(calendarNotRecordingAlert) => void update({ calendarNotRecordingAlert })} />
       </SettingRow>
-      <div className="flex flex-col gap-3 py-4" data-setting-row data-setting-name="Agendas" data-setting-description="Quais agendas de cada conta o app lê." data-calendar-list>
+      <div className="flex flex-col gap-2.5 py-3" data-setting-row data-setting-name="Agendas" data-setting-description="Quais agendas de cada conta o app lê." data-calendar-list>
         <div className="flex flex-col gap-0.5">
           <p className="text-13 font-medium text-text">Agendas</p>
           <p className="text-12 text-text-muted">Quais agendas de cada conta o app lê. O app só lê: não responde convites nem muda nada.</p>
@@ -77,7 +77,7 @@ export function CalendarSection() {
           const failed = list?.failed.includes(provider) ?? false
           return (
             <fieldset key={provider} className="flex flex-col gap-2" data-calendar-provider={provider}>
-              <legend className="caps mb-1 text-text-muted">{CALENDAR_PROVIDER_LABELS[provider]}</legend>
+              <legend className="label mb-1">{CALENDAR_PROVIDER_LABELS[provider]}</legend>
               {list === null && <p className="text-12 text-text-muted">Lendo as agendas…</p>}
               {failed && <p className="text-12 text-text-muted">Não foi possível ler as agendas desta conta agora.</p>}
               {calendars.map((item) => {

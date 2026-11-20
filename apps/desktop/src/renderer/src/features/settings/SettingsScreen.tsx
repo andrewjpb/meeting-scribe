@@ -245,7 +245,7 @@ function SettingsPanels({ tab }: { tab: SettingsTab }) {
       aria-label={SETTINGS_TAB_LABELS[value]}
       data-settings-panel={value}
       hidden={searching || value !== tab}
-      className="flex flex-col gap-8"
+      className="flex flex-col gap-6"
     >
       {children}
     </div>
@@ -258,30 +258,30 @@ function SettingsPanels({ tab }: { tab: SettingsTab }) {
        * seguir centralizada): título, busca e coluna ficam no mesmo `x` com e sem barra.
        */}
       {/*
-       * `pb-3`: os 4 px do campo que passam da linha do cabeçalho não são cortados e sobra respiro até o fio. O fio é
+       * `pb-2`: os 2 px do campo que passam da linha do cabeçalho não são cortados e sobra respiro até o fio. O fio é
        * sempre de 1 px (transparente no topo), para o conteúdo não pular quando ele aparece.
        */}
       <div
         data-settings-top
-        className={`overflow-hidden border-b px-10 pt-7 pb-3 [scrollbar-gutter:stable_both-edges] ${scrolled ? 'border-line' : 'border-transparent'}`}
+        className={`overflow-hidden border-b px-8 pt-5 pb-2 [scrollbar-gutter:stable_both-edges] ${scrolled ? 'border-line' : 'border-transparent'}`}
       >
         <div className="mx-auto w-full max-w-[var(--settings-width)]">
-          {/* Contrato 66: o nome da aba (20/26); com a busca preenchida, "Configurações". */}
+          {/* Contrato 66: o nome da aba (15/20, contrato 80); com a busca preenchida, "Configurações". */}
           <PageHeader
             size="section"
             title={searching ? 'Configurações' : SETTINGS_TAB_LABELS[tab]}
             titleAttrs={{ 'data-settings-title': '' }}
             actions={
-              // O campo (40 px) ocupa 32 px na linha do cabeçalho, como ao lado do título de 26/32 de antes: a busca fica
-              // onde estava e o título, centrado nela.
-              <div data-settings-search className="-my-1">
+              // O campo (32 px) ocupa 28 px na linha do cabeçalho (`-my-0.5`): a busca fica a 20 px do topo, como o título,
+              // e o título (15/20) fica centrado nela.
+              <div data-settings-search className="-my-0.5">
                 <SearchField value={query} onChange={search} label="Buscar configuração" onClear={() => focusTabLink(tab)} />
               </div>
             }
           />
         </div>
       </div>
-      <div ref={scrollRef} data-settings-scroll onScroll={(event) => setScrolled(event.currentTarget.scrollTop > 0)} className="min-h-0 flex-1 overflow-y-auto px-10 pt-8 pb-12 [scrollbar-gutter:stable_both-edges]">
+      <div ref={scrollRef} data-settings-scroll onScroll={(event) => setScrolled(event.currentTarget.scrollTop > 0)} className="min-h-0 flex-1 overflow-y-auto px-8 pt-5 pb-8 [scrollbar-gutter:stable_both-edges]">
         <div ref={rootRef} data-settings-column className="mx-auto flex w-full max-w-[var(--settings-width)] flex-col">
           {hint && !searching && (
             <Note id="settings-hint" icon={Info} role="status" className="mb-6">
@@ -408,7 +408,7 @@ function SettingsPanels({ tab }: { tab: SettingsTab }) {
                     />
                   </SettingRow>
                 ) : (
-                  <div className="py-4" data-setting-row data-setting-name="Modelo da AssemblyAI" data-setting-description="Lista de modelos de tradução com preço e contexto.">
+                  <div className="py-3" data-setting-row data-setting-name="Modelo da AssemblyAI" data-setting-description="Lista de modelos de tradução com preço e contexto.">
                     <ModelPicker />
                   </div>
                 )}
@@ -500,11 +500,11 @@ function SearchResults({ query, entries, groups, onOpen }: SearchResultsProps) {
     )
   }
   return (
-    <div data-settings-results className="flex flex-col gap-8">
+    <div data-settings-results className="flex flex-col gap-6">
       {groups.map((group) => (
         <div key={group.tab} role="group" aria-label={group.label} className="flex flex-col">
-          <h2 className="caps text-text-muted">{group.label}</h2>
-          <ul className="mt-3 flex flex-col overflow-hidden rounded-[var(--radius-panel)] border border-line-strong bg-bg-raised">
+          <h2 className="label mb-1">{group.label}</h2>
+          <ul className="mt-2 flex flex-col overflow-hidden rounded-[var(--radius-panel)] border border-line-strong bg-bg-raised">
             {group.indexes.map((index) => {
               const entry = entries[index]
               if (!entry) return null
@@ -514,7 +514,7 @@ function SearchResults({ query, entries, groups, onOpen }: SearchResultsProps) {
                     type="button"
                     data-settings-result={entry.tab}
                     onClick={() => onOpen(index)}
-                    className="no-drag flex w-full flex-col items-start gap-0.5 px-4 py-3 text-left transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-bg-sunken focus-visible:outline-offset-[-2px]"
+                    className="no-drag flex w-full flex-col items-start gap-px px-3 py-2 text-left transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-bg-sunken focus-visible:outline-offset-[-2px]"
                   >
                     <span className="text-13 font-medium text-text">{settingsResultLabel(entries, entry)}</span>
                     {entry.description && <span className="text-12 text-text-muted">{entry.description}</span>}

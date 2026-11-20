@@ -44,7 +44,7 @@ export function SelectionSummary({ count, canMove, canMarkRead, canDelete, delet
         </span>
       </span>
       <div className="flex flex-col gap-1">
-        <h2 className="text-20 font-bold text-title">{count} mensagens selecionadas</h2>
+        <h2 className="text-17 font-semibold text-title">{count} mensagens selecionadas</h2>
         <p className="text-13 text-text-muted">{canMove ? 'Arraste para uma pasta na barra lateral ou escolha uma ação.' : 'Escolha uma ação.'}</p>
       </div>
       <div className="flex flex-wrap items-center justify-center gap-2">

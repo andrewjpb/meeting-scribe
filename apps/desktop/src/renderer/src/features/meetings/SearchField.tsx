@@ -48,7 +48,7 @@ export function SearchField({ value, onChange, label = 'Buscar reuniões', onCle
   return (
     <div
       role="search"
-      className="no-drag flex h-10 w-[280px] items-center gap-2 rounded-[var(--radius-control)] border border-line-strong bg-bg-raised px-3 text-text-faint transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] has-[input:focus-visible]:outline-2 has-[input:focus-visible]:outline-offset-2 has-[input:focus-visible]:outline-focus"
+      className="no-drag flex h-8 w-[240px] items-center gap-2 rounded-[var(--radius-control)] border border-line-strong bg-bg-raised px-2.5 text-text-faint transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] has-[input:focus-visible]:outline-2 has-[input:focus-visible]:outline-offset-2 has-[input:focus-visible]:outline-focus"
     >
       <Icon icon={Search} />
       <input

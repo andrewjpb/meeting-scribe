@@ -31,11 +31,11 @@ function RecipientField({ id, label, value, onChange }: { id: string; label: str
     } else if (event.key === 'Backspace' && !typing && value.length) onChange(value.slice(0, -1))
   }
   return (
-    <div data-email-recipients={id} className="flex min-h-10 items-center gap-3 border-b border-line has-[input:focus-visible]:border-focus">
+    <div data-email-recipients={id} className="flex min-h-8 items-center gap-3 border-b border-line has-[input:focus-visible]:border-focus">
       <label htmlFor={`email-compose-${id}`} className="w-14 shrink-0 text-12 font-medium text-text-muted">
         {label}
       </label>
-      <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1.5 py-1.5">
+      <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1.5 py-0.5">
         {value.map((item) => (
           <span
             key={item.address}
@@ -166,17 +166,17 @@ export function Composer({ account, accountName, draft, onSent, onBack }: Compos
 
   return (
     <section data-email-composer={draft.mode} aria-label={TITLES[draft.mode]} onKeyDown={onKey} className="flex min-h-0 min-w-0 flex-1 flex-col">
-      <header className="flex min-h-14 shrink-0 items-center gap-3 border-b border-line px-6 py-2">
+      <header className="flex min-h-11 shrink-0 items-center gap-3 border-b border-line px-5 py-1.5">
         <button type="button" data-action="email-composer-back" onClick={onBack} aria-label="Voltar para a lista" className={`${BACK_BUTTON} ${NARROW_ONLY}`}>
           <Icon icon={ArrowLeft} />
         </button>
         <h2 className="min-w-0 flex-1 truncate text-15 font-bold text-title">{TITLES[draft.mode]}</h2>
         <span className="truncate text-12 text-text-muted">De: {account.name ? `${account.name} <${account.address}>` : account.address}</span>
       </header>
-      <div className="flex min-h-0 flex-1 flex-col px-6 pt-1 pb-4">
+      <div className="flex min-h-0 flex-1 flex-col px-5 pt-1 pb-4">
         <RecipientField id="to" label="Para" value={draft.to} onChange={(to) => update({ to })} />
         <RecipientField id="cc" label="Cc" value={draft.cc} onChange={(cc) => update({ cc })} />
-        <div className="flex min-h-10 items-center gap-3 border-b border-line has-[input:focus-visible]:border-focus">
+        <div className="flex min-h-8 items-center gap-3 border-b border-line has-[input:focus-visible]:border-focus">
           <label htmlFor="email-compose-subject" className="w-14 shrink-0 text-12 font-medium text-text-muted">
             Assunto
           </label>
@@ -187,7 +187,7 @@ export function Composer({ account, accountName, draft, onSent, onBack }: Compos
             maxLength={EMAIL_SUBJECT_MAX}
             autoComplete="off"
             onChange={(event) => update({ subject: event.target.value })}
-            className={`${INPUT} h-9 flex-1`}
+            className={`${INPUT} h-8 flex-1`}
           />
         </div>
         <label htmlFor="email-compose-text" className="sr-only">
@@ -200,7 +200,7 @@ export function Composer({ account, accountName, draft, onSent, onBack }: Compos
           maxLength={EMAIL_TEXT_MAX}
           placeholder="Escreva a mensagem"
           onChange={(event) => update({ text: event.target.value })}
-          className="no-drag mt-3 min-h-[160px] flex-1 resize-none bg-transparent text-15 text-text select-text placeholder:text-text-faint focus-visible:outline-offset-4"
+          className="no-drag mt-3 min-h-[140px] flex-1 resize-none bg-transparent text-15 text-text select-text placeholder:text-text-faint focus-visible:outline-offset-4"
         />
         {draft.attachments.length > 0 && (
           <ul data-email-compose-attachments aria-label="Anexos" className="mt-3 flex flex-wrap gap-2">
@@ -252,7 +252,7 @@ export function Composer({ account, accountName, draft, onSent, onBack }: Compos
             Descartar este rascunho?
           </Note>
         )}
-        <div className="mt-4 flex flex-wrap items-center justify-between gap-2">
+        <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
           <div className="flex items-center gap-2">
             <button
               type="button"
@@ -261,7 +261,7 @@ export function Composer({ account, accountName, draft, onSent, onBack }: Compos
               title="Anexar arquivos"
               onClick={pick}
               disabled={sending}
-              className="no-drag inline-flex size-10 shrink-0 items-center justify-center rounded-[var(--radius-control)] border border-line-strong bg-bg-raised text-title transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-bg-sunken disabled:pointer-events-none disabled:opacity-50"
+              className="no-drag inline-flex size-8 shrink-0 items-center justify-center rounded-[var(--radius-control)] border border-line-strong bg-bg-raised text-title transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-bg-sunken disabled:pointer-events-none disabled:opacity-50"
             >
               <Icon icon={Paperclip} />
             </button>

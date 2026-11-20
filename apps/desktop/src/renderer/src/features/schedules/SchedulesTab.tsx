@@ -67,7 +67,7 @@ export function SchedulesTab({ meetings }: { meetings: ChatMeetings }) {
     )
 
   return (
-    <div className="flex flex-col gap-5" data-tasks-tab>
+    <div className="flex flex-col gap-4" data-tasks-tab>
       <div className="flex items-center justify-between gap-4">
         <p className="text-13 text-text-muted">As tarefas rodam com o app aberto, com a janela aberta ou só o ícone na barra de menus.</p>
         <Button action="task-new" icon={Plus} onClick={() => setEditing(blankTask(agents))} disabled={!agents.length}>
@@ -81,13 +81,13 @@ export function SchedulesTab({ meetings }: { meetings: ChatMeetings }) {
       ) : (
         <table className="w-full border-collapse text-left">
           <thead>
-            <tr className="border-b border-line-strong text-12 text-text-muted">
-              <th className="py-2 pr-4 font-bold">Nome</th>
-              <th className="py-2 pr-4 font-bold">Agente</th>
-              <th className="py-2 pr-4 font-bold">Quando</th>
-              <th className="py-2 pr-4 font-bold">Última execução</th>
-              <th className="py-2 pr-4 font-bold">Ligada</th>
-              <th className="py-2 font-bold">
+            <tr className="label border-b border-line-strong">
+              <th className="py-1.5 pr-4 font-medium">Nome</th>
+              <th className="py-1.5 pr-4 font-medium">Agente</th>
+              <th className="py-1.5 pr-4 font-medium">Quando</th>
+              <th className="py-1.5 pr-4 font-medium">Última execução</th>
+              <th className="py-1.5 pr-4 font-medium">Ligada</th>
+              <th className="py-1.5 font-medium">
                 <span className="sr-only">Ações</span>
               </th>
             </tr>
@@ -139,7 +139,7 @@ function TaskRow({ task, agentName, onEdit, onDuplicate }: { task: ScheduledTask
   })()
   return (
     <tr data-task-row={task.id} data-task-name={task.name} data-task-reminder={task.reminder ? '' : undefined} data-task-status={task.lastStatus ?? ''} data-task-paused={task.autoPaused ? 'auto' : undefined} data-task-email={task.email ? '' : undefined} className="border-b border-line align-top text-13">
-      <td className="py-3 pr-4">
+      <td className="py-1.5 pr-4">
         <span id={switchId} className="inline-flex items-center gap-1.5 font-medium text-text">
           {task.reminder && <Icon icon={Bell} size={14} className="shrink-0 text-text-muted" />}
           {task.name}
@@ -151,30 +151,30 @@ function TaskRow({ task, agentName, onEdit, onDuplicate }: { task: ScheduledTask
           )}
         </span>
         {permission && (
-          <p data-task-email-line className="mt-1 text-12 text-text-muted tabular">
+          <p data-task-email-line className="mt-0.5 text-12 text-text-muted tabular">
             {permission}
           </p>
         )}
-        {task.reminder?.whatsappChatName && <p className="mt-1 text-12 text-text-muted">Conversa do WhatsApp: {task.reminder.whatsappChatName}</p>}
+        {task.reminder?.whatsappChatName && <p className="mt-0.5 text-12 text-text-muted">Conversa do WhatsApp: {task.reminder.whatsappChatName}</p>}
         {task.reminder?.email && (
-          <p className="mt-1 text-12 text-text-muted">
+          <p className="mt-0.5 text-12 text-text-muted">
             Email: {task.reminder.email.label}
             {task.reminder.email.mailbox ? ` (no servidor, pasta ${task.reminder.email.mailbox})` : ''}
           </p>
         )}
-        {notice && <p className="mt-1 text-12 text-text-muted">{notice}</p>}
+        {notice && <p className="mt-0.5 text-12 text-text-muted">{notice}</p>}
       </td>
-      <td className="py-3 pr-4 text-text-muted">{agentName}</td>
-      <td data-task-when className="py-3 pr-4 text-text tabular">
+      <td className="py-1.5 pr-4 text-text-muted">{agentName}</td>
+      <td data-task-when className="py-1.5 pr-4 text-text tabular">
         {scheduleLine(task)}
       </td>
-      <td data-task-last className={`py-3 pr-4 tabular ${task.autoPaused || task.lastStatus === 'error' || task.lastStatus === 'timeout' ? 'text-rec' : 'text-text-muted'}`}>
+      <td data-task-last className={`py-1.5 pr-4 tabular ${task.autoPaused || task.lastStatus === 'error' || task.lastStatus === 'timeout' ? 'text-rec' : 'text-text-muted'}`}>
         {last}
       </td>
-      <td className="py-3 pr-4">
+      <td className="py-1.5 pr-4">
         <Switch checked={task.enabled && !task.autoPaused} labelledBy={switchId} onChange={(enabled) => void toggle(enabled)} />
       </td>
-      <td className="py-2">
+      <td className="py-0.5">
         <div className="-mr-2 flex flex-wrap justify-end gap-1">
           <button type="button" data-action="task-run-now" onClick={() => void runNow()} className={QUIET_BUTTON}>
             <Icon icon={Play} size={14} />

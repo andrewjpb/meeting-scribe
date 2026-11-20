@@ -28,7 +28,7 @@ interface MeetingRowProps {
 
 /**
  * Linha da lista (contrato 10, CA3): título; hora, duração e participantes da agenda; a primeira frase do
- * resumo em até duas linhas; "N tarefas", "N decisões" e "N anotações" (contrato 13); "Gerando resumo…"
+ * resumo em uma linha (contrato 81); "N tarefas", "N decisões" e "N anotações" (contrato 13); "Gerando resumo…"
  * enquanto gera; à direita, a nuvem quando a reunião está no Google Drive (contrato 11). A linha inteira
  * é o link para o detalhe, inclusive pelo teclado. Contrato 28: o "…" de mover fica ao lado, fora do link, e a
  * pasta aparece discreta na linha de meta.
@@ -51,17 +51,17 @@ export function MeetingRow({ entry, found, folderName, move }: MeetingRowProps) 
         to={meetingPath(meeting.id)}
         data-meeting={meeting.id}
         draggable={false}
-        className="flex min-h-16 min-w-0 flex-1 items-start gap-4 px-2 py-3"
+        className="flex min-h-11 min-w-0 flex-1 items-start gap-3 px-2 py-1"
       >
-        <div className="flex min-w-0 flex-1 flex-col gap-[3px]">
-          <p className="truncate text-15 font-medium text-text">{meeting.title}</p>
-          <p className="truncate text-12 text-text-muted tabular">
+        <div className="flex min-w-0 flex-1 flex-col">
+          <p className="truncate text-13 font-medium text-text">{meeting.title}</p>
+          <p className="truncate text-11 text-text-muted tabular">
             {timeLabel(new Date(meeting.startedAt))} · {durationLabel(meeting.durationMs)}
             {names && <span data-attendees> · {names}</span>}
             {folderName && <span data-meeting-folder> · {folderName}</span>}
           </p>
           {found ? (
-            <p data-search-snippet className="mt-1 line-clamp-2 text-13 text-text-muted">
+            <p data-search-snippet className="mt-0.5 line-clamp-2 text-12 text-text-muted">
               {found.snippet.map((part, i) =>
                 part.mark ? (
                   <mark key={i} className="bg-transparent font-bold text-text">
@@ -74,13 +74,13 @@ export function MeetingRow({ entry, found, folderName, move }: MeetingRowProps) 
             </p>
           ) : (
             summary && (
-              <p data-summary-overview className="mt-1 line-clamp-2 text-13 text-text-muted">
+              <p data-summary-overview className="mt-0.5 line-clamp-1 text-12 text-text-muted">
                 {summary.overview}
               </p>
             )
           )}
           {markers.length > 0 && (
-            <p data-summary-markers className="mt-0.5 flex flex-wrap gap-x-3 text-12 text-text-muted">
+            <p data-summary-markers className="mt-0.5 flex flex-wrap gap-x-3 text-11 text-text-muted">
               {markers.map((marker) => (
                 <span key={marker}>{marker}</span>
               ))}

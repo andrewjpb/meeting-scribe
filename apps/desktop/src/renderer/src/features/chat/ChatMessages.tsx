@@ -66,7 +66,7 @@ function Plan({ entries }: { entries: readonly ChatPlanEntry[] }) {
  * Contrato 38: no Assistente, a resposta é um cartão suave (fundo elevado, fio e o raio do painel; sem sombra) e as ações
  * ficam no rodapé dele, separadas por um fio.
  */
-const CARD = 'rounded-[var(--radius-panel)] border border-line bg-bg-raised px-4 py-3'
+const CARD = 'rounded-[var(--radius-panel)] border border-line bg-bg-raised px-3 py-2.5'
 const CARD_ACTIONS = 'mt-1 flex flex-wrap items-center gap-1 border-t border-line pt-2 empty:hidden'
 /** Ações do cartão: o botão discreto com um fio que aparece no passar do mouse. */
 const CARD_BUTTON = `${QUIET_BUTTON} border border-transparent hover:border-line`
@@ -76,7 +76,7 @@ export function UserMessage({ text, editing = false, card = false }: { text: str
   return (
     <li data-chat-message="user" className="flex justify-end">
       <p
-        className={`max-w-[72ch] rounded-[var(--radius-panel)] bg-bg-sunken ${card ? 'px-4 py-3' : 'px-4 py-2.5'} text-15 whitespace-pre-line text-text select-text ${editing ? 'outline-1 outline-dashed outline-line-strong' : ''}`}
+        className={`max-w-[72ch] rounded-[var(--radius-panel)] bg-bg-sunken px-3 ${card ? 'py-2' : 'py-1.5'} text-14 whitespace-pre-line text-text select-text ${editing ? 'outline-1 outline-dashed outline-line-strong' : ''}`}
       >
         {text}
       </p>
@@ -284,7 +284,7 @@ export function AssistantMessage({ message, meetings, onCopy, onRedo, chatId = n
       <AssistantHeader at={message.at} />
       <Reasoning steps={message.steps ?? []} thinking={message.thinking ?? ''} denied={message.denied ?? 0} plan={message.plan ?? []} live={false} />
       {message.text && (
-        <div className="max-w-[72ch] text-15 text-text select-text">
+        <div className="max-w-[72ch] text-14 text-text select-text">
           <ChatMarkdown text={message.text} />
         </div>
       )}
@@ -328,7 +328,7 @@ export function LiveAssistantMessage({ answer, card = false, chatId = null }: { 
       <Reasoning steps={answer.steps} thinking={answer.thinking} denied={answer.denied} plan={answer.plan} live />
       {chatId && answer.approvals.map((approval) => <McpApprovalCard key={approval.id} chatId={chatId} approval={approval} />)}
       {text ? (
-        <div className="max-w-[72ch] text-15 text-text">
+        <div className="max-w-[72ch] text-14 text-text">
           <ChatMarkdown text={text} />
         </div>
       ) : (

@@ -97,20 +97,20 @@ function MessageRow({ message, sentMailbox, active, selecting, checked, leaving,
       }}
       onDragStart={onDragStart}
       onDragEnd={onDragEnd}
-      className={`no-drag flex w-full min-w-0 items-start gap-3 rounded-[var(--radius-control)] border-l-3 px-2.5 py-2.5 text-left transition-opacity duration-[var(--duration-base)] ease-[var(--ease-out)] ${leaving ? 'pointer-events-none opacity-0' : ''} ${checked && selecting ? 'border-accent bg-bg-sunken' : active ? 'border-transparent bg-bg-sunken' : 'border-transparent hover:bg-bg-sunken'}`}
+      className={`no-drag flex w-full min-w-0 items-start gap-2.5 rounded-[var(--radius-control)] border-l-3 py-1.5 pr-2 pl-[9px] text-left transition-opacity duration-[var(--duration-base)] ease-[var(--ease-out)] ${leaving ? 'pointer-events-none opacity-0' : ''} ${checked && selecting ? 'border-accent bg-bg-sunken' : active ? 'border-transparent bg-bg-sunken' : 'border-transparent hover:bg-bg-sunken'}`}
     >
       {selecting ? (
-        <span role="checkbox" aria-checked={checked} aria-label={checked ? 'Selecionada' : 'Não selecionada'} data-email-row-checkbox className="inline-flex size-10 shrink-0 items-center justify-center">
+        <span role="checkbox" aria-checked={checked} aria-label={checked ? 'Selecionada' : 'Não selecionada'} data-email-row-checkbox className="inline-flex size-8 shrink-0 items-center justify-center">
           <span aria-hidden="true" className={`inline-flex size-4 items-center justify-center rounded-[var(--radius-control)] border ${checked ? 'border-accent bg-accent text-on-accent' : 'border-line-strong bg-bg-raised'}`}>
             {checked && <Icon icon={Check} size={14} />}
           </span>
         </span>
       ) : (
-        <Avatar id={person?.address ?? message.id} name={addressLabel(person)} size={10} />
+        <Avatar id={person?.address ?? message.id} name={addressLabel(person)} size={8} />
       )}
       <span className="flex min-w-0 flex-1 flex-col gap-0.5">
         <span className="flex items-center gap-2">
-          <span data-email-row-from className="min-w-0 flex-1 truncate text-13 font-bold text-title">
+          <span data-email-row-from className="min-w-0 flex-1 truncate text-13 font-semibold text-title">
             {rowTitle(message, { sentMailbox })}
           </span>
           <span className={`shrink-0 text-12 tabular ${unread ? 'font-medium text-accent' : 'text-text-faint'}`}>{emailTimeLabel(message.date)}</span>
@@ -150,7 +150,7 @@ export function EmailScreen() {
 
   if (!accounts) {
     return loadFailed ? (
-      <div className="px-10 pt-7">
+      <div className="px-8 pt-5">
         <Note id="email-load-failed" icon={TriangleAlert} role="alert">
           Não foi possível ler as contas de email.
         </Note>
@@ -163,7 +163,7 @@ export function EmailScreen() {
   if (!status || !folder) {
     if (first) return <Navigate replace to={emailPath(first.account.id, 'inbox')} />
     return (
-      <div className="px-10 pt-7">
+      <div className="px-8 pt-5">
         <Note
           id="email-no-accounts"
           icon={Mail}
@@ -503,40 +503,41 @@ function FolderView({ account, sentMailbox, folder, pop3, nodes }: FolderViewPro
   return (
     <div data-email-folder-view={typeof folder === 'string' ? folder : 'path'} data-email-folder-view-path={fromPath} data-email-view-account={account.id} className="flex min-h-0 flex-1">
       <aside aria-label={`${label} de ${account.address}`} className={`flex w-[340px] shrink-0 flex-col border-r border-line max-[899px]:w-full max-[899px]:border-r-0 ${paneOpen ? 'max-[899px]:hidden' : ''}`}>
-        <div className="flex flex-col gap-3 px-3 pt-3 pb-2">
+        {/* Título, rótulo do dia e conteúdo das linhas na mesma vertical: 20 da borda da coluna (8 + 12; na linha, 8 + 3 da barra + 9). */}
+        <div className="flex flex-col gap-2 px-2 pt-2 pb-1">
           <div className="flex">
             <Button action="email-new" icon={ownDraft ? PenLine : SquarePen} onClick={() => newMessage()}>
               {ownDraft ? 'Voltar ao rascunho' : 'Nova mensagem'}
             </Button>
           </div>
-          <div className="flex items-baseline justify-between gap-2 px-1">
+          <div className="flex items-baseline justify-between gap-2 px-3">
             <h1 data-email-folder-title className="truncate text-15 font-bold text-title">
               {label}
             </h1>
             <span className="shrink-0 text-12 tabular text-text-muted">{unread > 0 ? `${unread} não ${unread === 1 ? 'lida' : 'lidas'}` : ''}</span>
           </div>
-          <p className="-mt-2 truncate px-1 text-12 text-text-muted">{account.address}</p>
+          <p className="-mt-1.5 truncate px-3 text-12 text-text-muted">{account.address}</p>
           {multi && (
-            <div data-email-selection-bar className="flex h-10 items-center gap-1 rounded-[var(--radius-control)] bg-bg-sunken pr-1 pl-3">
+            <div data-email-selection-bar className="flex h-8 items-center gap-1 rounded-[var(--radius-control)] bg-bg-sunken pr-0.5 pl-3">
               <span data-email-selected-count className="min-w-0 flex-1 truncate text-13 font-medium text-title">
                 {selectedLabel(selection.ids.length)}
               </span>
               {!pop3 && folder !== 'sent' && (
-                <button type="button" data-action="email-bar-move" aria-label="Mover para…" title="Mover para… (⇧⌘M)" onClick={(event) => openPicker(selection.ids, event.currentTarget.getBoundingClientRect())} className="no-drag inline-flex size-8 items-center justify-center rounded-[var(--radius-control)] text-text-muted hover:text-title">
+                <button type="button" data-action="email-bar-move" aria-label="Mover para…" title="Mover para… (⇧⌘M)" onClick={(event) => openPicker(selection.ids, event.currentTarget.getBoundingClientRect())} className="no-drag inline-flex size-7 items-center justify-center rounded-[var(--radius-control)] text-text-muted hover:text-title">
                   <Icon icon={FolderInput} />
                 </button>
               )}
               {folder === 'inbox' && (
-                <button type="button" data-action="email-bar-read" aria-label="Marcar como lidas" title="Marcar como lidas" onClick={() => void markAll(selection.ids, true)} className="no-drag inline-flex size-8 items-center justify-center rounded-[var(--radius-control)] text-text-muted hover:text-title">
+                <button type="button" data-action="email-bar-read" aria-label="Marcar como lidas" title="Marcar como lidas" onClick={() => void markAll(selection.ids, true)} className="no-drag inline-flex size-7 items-center justify-center rounded-[var(--radius-control)] text-text-muted hover:text-title">
                   <Icon icon={MailOpen} />
                 </button>
               )}
               {canDelete && (
-                <button type="button" data-action="email-bar-delete" aria-label="Apagar" title="Apagar" onClick={() => setPendingDelete(selection.ids)} className="no-drag inline-flex size-8 items-center justify-center rounded-[var(--radius-control)] text-rec">
+                <button type="button" data-action="email-bar-delete" aria-label="Apagar" title="Apagar" onClick={() => setPendingDelete(selection.ids)} className="no-drag inline-flex size-7 items-center justify-center rounded-[var(--radius-control)] text-rec">
                   <Icon icon={Trash2} />
                 </button>
               )}
-              <button type="button" data-action="email-bar-clear" aria-label="Limpar a seleção" title="Limpar a seleção (Esc)" onClick={() => dispatch({ type: 'clear' })} className="no-drag inline-flex size-8 items-center justify-center rounded-[var(--radius-control)] text-text-muted hover:text-title">
+              <button type="button" data-action="email-bar-clear" aria-label="Limpar a seleção" title="Limpar a seleção (Esc)" onClick={() => dispatch({ type: 'clear' })} className="no-drag inline-flex size-7 items-center justify-center rounded-[var(--radius-control)] text-text-muted hover:text-title">
                 <Icon icon={X} />
               </button>
             </div>
@@ -628,11 +629,11 @@ function FolderView({ account, sentMailbox, folder, pop3, nodes }: FolderViewPro
               ))}
             </div>
           ) : messages.length === 0 ? (
-            <p className="px-2 pt-2 text-12 text-text-muted">{folder === 'inbox' ? 'Nenhuma mensagem na Caixa de Entrada.' : folder === 'sent' ? 'Nenhuma mensagem enviada pelo app ainda.' : 'Nenhuma mensagem nesta pasta.'}</p>
+            <p className="px-3 pt-2 text-12 text-text-muted">{folder === 'inbox' ? 'Nenhuma mensagem na Caixa de Entrada.' : folder === 'sent' ? 'Nenhuma mensagem enviada pelo app ainda.' : 'Nenhuma mensagem nesta pasta.'}</p>
           ) : (
             groups.map((group) => (
               <section key={group.label} aria-label={group.label} data-email-group={group.label} className="flex flex-col">
-                <h2 className="px-2.5 pt-3 pb-1 text-12 font-bold text-text-muted">{group.label}</h2>
+                <h2 className="label px-3 pt-2 pb-1">{group.label}</h2>
                 <ul className="flex flex-col gap-0.5">
                   {group.items.map((message) => (
                     <li key={message.id}>

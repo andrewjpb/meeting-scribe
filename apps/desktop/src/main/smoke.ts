@@ -1181,6 +1181,54 @@ async function meetingsListCheck(contents: WebContents, userDataDir: string): Pr
   }
 }
 
+// 81: densidade
+/**
+ * Contrato 81: a lista de Reuniões na escala densa. Página a 32 da lateral e 20 do topo; busca de 32 por 240 e "Nova
+ * gravação" de 32; opção de pasta de 28; rótulo do dia 11/16 em caixa normal; linha de no mínimo 44 com título 13/500,
+ * apoio 11 e prévia do resumo 12 numa linha só.
+ */
+async function meetingsDensityCheck(contents: WebContents): Promise<Check> {
+  const view = await evaluate<Record<string, string | number>>(
+    contents,
+    `(() => {
+      const box = (selector) => document.querySelector(selector)?.getBoundingClientRect() ?? { left: 0, top: 0, width: 0, height: 0 }
+      const style = (selector) => getComputedStyle(document.querySelector(selector))
+      const main = box('main')
+      const row = document.querySelector('main a[data-meeting]')
+      const [title, meta] = row.querySelectorAll('p')
+      const day = style('main section[data-day] h2')
+      const overview = style('main [data-summary-overview]')
+      return {
+        contentLeft: Math.round(box('main header').left - main.left),
+        contentTop: Math.round(box('main header').top - main.top),
+        search: Math.round(box('main [role="search"]').height) + 'x' + Math.round(box('main [role="search"]').width),
+        newRecording: Math.round(box('main [data-action="new-recording"]').height),
+        folder: Math.round(box('main [data-folder="all"]').height),
+        day: day.fontSize + '/' + day.lineHeight + ' ' + day.fontWeight + ' ' + day.textTransform,
+        rowMin: getComputedStyle(row).minHeight,
+        rowHeight: Math.round(row.getBoundingClientRect().height),
+        title: getComputedStyle(title).fontSize + ' ' + getComputedStyle(title).fontWeight,
+        meta: getComputedStyle(meta).fontSize,
+        overview: overview.fontSize + ' clamp ' + overview.getPropertyValue('-webkit-line-clamp'),
+      }
+    })()`,
+  )
+  const ok =
+    view['contentLeft'] === 32 &&
+    view['contentTop'] === 20 &&
+    view['search'] === '32x240' &&
+    view['newRecording'] === 32 &&
+    view['folder'] === 28 &&
+    view['day'] === '11px/16px 500 none' &&
+    view['rowMin'] === '44px' &&
+    Number(view['rowHeight']) >= 44 &&
+    view['title'] === '13px 500' &&
+    view['meta'] === '11px' &&
+    view['overview'] === '12px clamp 1'
+  return { ok, detail: JSON.stringify(view) }
+}
+// 81: densidade (fim)
+
 /**
  * Busca (contrato 10, CA4): ⌘F foca o campo; palavras que só existem na transcrição acham a reunião com o
  * trecho marcado e "na transcrição" (fotografa `reunioes-busca-light`); termo sem resultado mostra o aviso;
@@ -3862,7 +3910,7 @@ type LayoutScreen = 'configuracoes' | 'gravacao' | 'detalhe'
  * Medidas em px lógicos contra os mockups aprovados (docs/specs/desktop-shell/mockups): barra lateral de
  * 224, item de navegação de 32 (contrato 79), quadrado de permissão de 6, conteúdo a 28 do topo (24 no detalhe) e 40 da
  * lateral, campo, seletor e botão de 32 e linha de configuração de 44 no mínimo (contrato 80), linha de modelo de 56,
- * fita de 96, calha da transcrição de 64 e as linhas de texto/tradução de 26/22. Lidas da tela, para a
+ * fita de 96, calha da transcrição de 48 e as linhas de texto/tradução de 24/20 (contrato 81). Lidas da tela, para a
  * escala de espaço não encolher de novo.
  */
 async function layoutMetrics(contents: WebContents, screen: LayoutScreen): Promise<Record<string, number>> {
@@ -3881,7 +3929,7 @@ async function layoutMetrics(contents: WebContents, screen: LayoutScreen): Promi
         permissionSquare: round(box('[data-permission="mic"] span[aria-hidden="true"]')?.width ?? 0),
       }
       if (${JSON.stringify(screen)} === 'configuracoes') {
-        // Contrato 66: o título da aba (20/26) fica centrado na linha da busca, que começa a 28 do topo como antes.
+        // Contrato 66: o título da aba fica centrado na linha da busca; 82: densidade, título 15/20 e busca a 20 do topo.
         const title = box('[data-settings-title]')
         const search = box('[data-settings-search]')
         Object.assign(out, {
@@ -3902,7 +3950,17 @@ async function layoutMetrics(contents: WebContents, screen: LayoutScreen): Promi
         })
         if (${JSON.stringify(screen)} === 'gravacao') {
           out.tapeHeight = round(box('[aria-label="Níveis de áudio de você e dos participantes"]').height)
+          // 81: densidade
+          out.statusHeight = round(box('main header p[aria-live]').height)
+          out.elapsedFontSize = round(parseFloat(getComputedStyle(document.querySelector('main header [aria-label="Tempo gravado"]')).fontSize))
+          out.controlButtonHeight = round(box('[data-action="end-recording"]').height)
+          out.controlChipHeight = round(box('[title="Idioma falado e idioma da tradução"]').height)
+          // 81: densidade (fim)
         } else {
+          // 81: densidade
+          out.titleFontSize = round(parseFloat(getComputedStyle(document.querySelector('main header h1 button')).fontSize))
+          out.tabHeight = round(box('main header [role="tab"]').height)
+          // 81: densidade (fim)
           out.transcriptTextLineHeight = lineHeight('[data-transcript-text]')
           out.transcriptTranslationLineHeight = lineHeight('[data-transcript-translation]')
           out.copyButtonHeight = round(box('[data-action="copy-transcript"]').height)
@@ -3922,16 +3980,19 @@ const COMMON_LAYOUT: Record<string, Expectation> = {
   sidebarWidth: { min: 224, max: 224 },
   navItemHeight: { min: 32, max: 32 }, // contrato 79: item da raiz e cabeçalho-voltar de 32
   permissionSquare: { min: 6, max: 6 },
-  contentLeft: { min: 40, max: 40 }, // 81/82 ajustam
-  transcriptGutter: { min: 64, max: 64 },
+  // 81: densidade (gravação e detalhe; Configurações tem o próprio contentLeft): página a 32 da lateral, calha de 48.
+  contentLeft: { min: 32, max: 32 },
+  transcriptGutter: { min: 48, max: 48 },
+  // 81: densidade (fim)
 }
 
 const SCREEN_LAYOUT: Record<LayoutScreen, Record<string, Expectation>> = {
   configuracoes: {
-    contentTop: { min: 28, max: 28 }, // 81/82 ajustam
-    // Contrato 18: coluna de leitura de até 760 px, centralizada (na janela de 1120, a 68 px da lateral, mais a
-    // reserva da barra de rolagem quando ela não é sobreposta).
-    contentLeft: { min: 40, max: 100 }, // 81/82 ajustam
+    // 82: densidade: topo a 20; coluna de leitura de até 760 px, centralizada (contrato 18; na janela de 1120, a 68 px
+    // da lateral, mais a reserva da barra de rolagem quando ela não é sobreposta), nunca a menos de 32.
+    contentTop: { min: 20, max: 20 },
+    contentLeft: { min: 32, max: 100 },
+    // 82: densidade (fim)
     columnWidth: { min: 600, max: 760 },
     columnCentered: { min: 0, max: 0.5 },
     headerAlign: { min: 0, max: 0.5 },
@@ -3949,18 +4010,27 @@ const SCREEN_LAYOUT: Record<LayoutScreen, Record<string, Expectation>> = {
     selectHeight: { min: 32, max: 32 },
     buttonHeight: { min: 32, max: 32 },
     settingRowHeight: { min: 44, max: 60 },
-    // Tela: 81/82 ajustam.
-    modelRowHeight: { min: 56, max: 64 },
+    // 82: densidade: linha do seletor de modelo de 40 (nome e id na mesma linha).
+    modelRowHeight: { min: 40, max: 48 },
+    // 82: densidade (fim)
   },
+  // 81: densidade: cabeçalho a 20 do topo; na gravação, status de 20, cronômetro 14, botões da barra 32 e etiquetas 24;
+  // no detalhe, título 15, abas 32, texto da transcrição 15/24 e tradução 13/20.
   gravacao: {
-    contentTop: { min: 28, max: 28 }, // 81/82 ajustam
+    contentTop: { min: 20, max: 20 },
     tapeHeight: { min: 96, max: 96 },
+    statusHeight: { min: 20, max: 20 },
+    elapsedFontSize: { min: 14, max: 14 },
+    controlButtonHeight: { min: 32, max: 32 },
+    controlChipHeight: { min: 24, max: 24 },
   },
   detalhe: {
-    // Mockup do detalhe: cabeçalho a 24 do topo, texto 16/26 e tradução 14/22.
-    contentTop: { min: 24, max: 24 }, // 81/82 ajustam
-    transcriptTextLineHeight: { min: 26, max: 26 },
-    transcriptTranslationLineHeight: { min: 22, max: 22 },
+    contentTop: { min: 20, max: 20 },
+    titleFontSize: { min: 15, max: 15 },
+    tabHeight: { min: 32, max: 32 },
+    transcriptTextLineHeight: { min: 24, max: 24 },
+    transcriptTranslationLineHeight: { min: 20, max: 20 },
+    // 81: densidade (fim)
     // Componente (contrato 80): o "Copiar" é um `Button`, 32.
     copyButtonHeight: { min: 32, max: 32 },
   },
@@ -4966,6 +5036,13 @@ async function lockChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => void
   const layer = await lockLayerView(win)
   const sharpAfter = await edgesOutsideCard(win)
   shots.push(await capture(win, ctx.outDir, 'bloqueado-light'))
+  // 81: densidade: cartão de 380 com 24 de respiro e 12 entre as partes, título 17/24 e "Desbloquear" de 32.
+  const lockCard = await evaluate<string>(
+    contents,
+    `(() => { const card = document.querySelector('[data-lock-card]'), style = getComputedStyle(card), title = getComputedStyle(document.querySelector('#lock-title')); return [Math.round(card.getBoundingClientRect().width), style.paddingTop, style.rowGap, title.fontSize + '/' + title.lineHeight, Math.round(document.querySelector('[data-action="unlock"]').getBoundingClientRect().height)].join(' ') })()`,
+  )
+  checks['density'] = { ok: lockCard === '380 24px 12px 17px/24px 32', detail: lockCard }
+  // 81: densidade (fim)
   // Foco preso: Tab e Shift+Tab nunca saem da camada.
   const tabStops: string[] = []
   for (let i = 0; i < 6; i++) {
@@ -8613,19 +8690,23 @@ async function assistantLevelChecks(ctx: SmokeContext, watch: (win: BrowserWindo
         }
       })()`,
     )
+    // 82: densidade: cabeçalho do Contexto e o da conversa de 44, com os fios na mesma linha.
+    const chatHeaderHeight = await evaluate<number>(contents, `Math.round(document.querySelector('[data-chat-header]')?.getBoundingClientRect().height ?? 0)`)
+    const railDense = rail.headerHeight === 44 && chatHeaderHeight === 44
+    // 82: densidade (fim)
     sidebarChecks['assistantRail'] = {
       ok:
         rail.width === 300 &&
         rail.right &&
         rail.header === 'Contexto' &&
-        rail.headerHeight === 48 &&
+        railDense &&
         !rail.close &&
         !rail.expand &&
         rail.label === '' &&
         JSON.stringify(rail.sections) === JSON.stringify(['scope', 'sources', 'connections', 'consulted', 'totals', 'model']) &&
         !rail.list &&
         rail.first,
-      detail: `trilho ${rail.width}px à direita=${rail.right}, só o Contexto=${rail.first && !rail.list}; cabeçalho "${rail.header}" ${rail.headerHeight}px, X=${rail.close}, expandir=${rail.expand}, aria-label da seção "${rail.label}"; seções ${JSON.stringify(rail.sections)}`,
+      detail: `trilho ${rail.width}px à direita=${rail.right}, só o Contexto=${rail.first && !rail.list}; cabeçalho "${rail.header}" ${rail.headerHeight}px (conversa ${chatHeaderHeight}px), X=${rail.close}, expandir=${rail.expand}, aria-label da seção "${rail.label}"; seções ${JSON.stringify(rail.sections)}`,
     }
 
     // CA7: o cabeçalho da conversa leva o trilho à seção, com o foco no primeiro controle dela; "Escolhidas" leva ao
@@ -11040,6 +11121,9 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
       await clickNav(contents, 'reunioes')
       await waitFor(contents, "document.querySelectorAll('main a[data-meeting]').length === 6 && document.querySelectorAll('main [data-summary-overview]').length === 2")
       meetingsList[themeName === 'light' ? 'list' : 'listDark'] = await meetingsListCheck(contents, ctx.userDataDir)
+      // 81: densidade
+      if (themeName === 'light') meetingsList['density'] = await meetingsDensityCheck(contents)
+      // 81: densidade (fim)
       await shoot('reunioes-lista', 'reunioes')
       if (themeName === 'light') {
         const search = await meetingsSearchCheck(win, ctx.outDir)
@@ -11301,6 +11385,9 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
   for (const [name, check] of Object.entries(settings)) if (!check.ok) failures.push(`configurações ${name}: ${check.detail}`)
   for (const [name, check] of Object.entries(meetingsList)) if (!check.ok) failures.push(`lista de reuniões ${name}: ${check.detail}`)
   for (const name of ['list', 'listDark', 'search', 'folders', 'recordingNow']) if (!meetingsList[name]) failures.push(`lista de reuniões ${name}: não executado`)
+  // 81: densidade
+  if (!meetingsList['density']) failures.push('lista de reuniões density: não executado')
+  // 81: densidade (fim)
   for (const [name, check] of Object.entries(chat)) if (!check.ok) failures.push(`chat ${name}: ${check.detail}`)
   for (const name of ['screen', 'screenDark', 'details', 'detailsDark', 'stop', 'context', 'meeting', 'meetingContext', 'acp']) if (!chat[name]) failures.push(`chat ${name}: não executado`)
   for (const name of ['configuracoes', 'gravacao', 'detalhe']) {
@@ -11346,6 +11433,9 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
   for (const name of ['convite-1', 'convite-2', 'convite-3', 'convite-4', 'convite-5', 'convite-6', 'convite-7', 'convite-8', 'convite-9', 'convite-10', 'convite-11', 'convite-estados', 'convite-lista', 'convite-configuracoes', 'convite-regra-1', 'convite-regra-2', 'convite-regra-3', 'convite-sugestao-4', 'convite-sugestao-5']) if (!invite[name]) failures.push(`convites ${name}: não executado`)
   for (const [name, check] of Object.entries(lock)) if (!check.ok) failures.push(`bloqueio ${name}: ${check.detail}`)
   for (const name of ['password', 'layer', 'channels', 'unlock', 'shortcutAndTouchId', 'recordingContinues', 'leaveDialog', 'endWhileLocked', 'reopen', 'reopenFromDisk', 'dark']) if (!lock[name]) failures.push(`bloqueio ${name}: não executado`)
+  // 81: densidade
+  if (!lock['density']) failures.push('bloqueio density: não executado')
+  // 81: densidade (fim)
   if (!theme.ok) failures.push(`tema: ${theme.detail}`)
   if (!motion.ok) failures.push(`movimento reduzido: ${motion.detail}`)
   // Mais o aviso de sistema sem som, nos dois temas, o eco removido, os arquivos no detalhe, a aba

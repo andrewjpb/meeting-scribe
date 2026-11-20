@@ -46,7 +46,7 @@ export function DriveStatusRow({ meetingId, rowClass, actionClass }: { meetingId
 
   return (
     <li data-drive-status={status.state} className={rowClass}>
-      <span className="w-24 shrink-0 text-12 font-medium text-text-muted">Google Drive</span>
+      <span className="label w-20 shrink-0">Google Drive</span>
       <span data-drive-text className={`min-w-0 flex-1 truncate text-13 tabular ${status.state === 'error' ? 'text-rec' : 'text-text'}`} aria-live="polite">
         {line.text}
       </span>

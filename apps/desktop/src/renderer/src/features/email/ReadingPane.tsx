@@ -104,7 +104,7 @@ function MoreMenu({ recents, onPick, onMoveTo }: NonNullable<ReadingPaneProps['m
           {recents.length > 0 && (
             <>
               <div role="separator" className="my-1 h-px bg-line" />
-              <p aria-hidden="true" className="caps px-3 pt-1 pb-1 text-text-muted">
+              <p aria-hidden="true" className="label px-3 pt-1 pb-1">
                 Recentes
               </p>
               {recents.map((folder) => (
@@ -191,7 +191,7 @@ export function ReadingPane({ account, message, onCompose, composing, onMailto, 
       {/* CA7: uma linha só, como no Outlook: as três respostas com rótulo à esquerda; Marcar e Apagar só com o ícone, à direita.
           Contrato 64: "Sugerir evento" à direita, antes de Marcar (quadro 09); com a barra estreita, só o ícone. O grupo da
           direita nunca encolhe: se faltar espaço, quem é cortado é o da esquerda. */}
-      <div data-email-actions className="@container/actions flex h-14 shrink-0 flex-nowrap items-center gap-2 overflow-hidden border-b border-line px-6">
+      <div data-email-actions className="@container/actions flex h-11 shrink-0 flex-nowrap items-center gap-2 overflow-hidden border-b border-line px-5">
         <div data-email-actions-left className="flex min-w-0 flex-1 flex-nowrap items-center gap-2 overflow-hidden">
           <button type="button" data-action="email-back" onClick={onBack} aria-label="Voltar para a lista" className={`${BACK_BUTTON} ${NARROW_ONLY}`}>
             <Icon icon={ArrowLeft} />
@@ -219,7 +219,7 @@ export function ReadingPane({ account, message, onCompose, composing, onMailto, 
           {move && <MoreMenu {...move} />}
         </div>
       </div>
-      <div data-email-reading-scroll className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
+      <div data-email-reading-scroll className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
         <div className="mx-auto flex w-full max-w-[760px] flex-col gap-4">
           {confirmDelete && (
             <Note
@@ -245,11 +245,11 @@ export function ReadingPane({ account, message, onCompose, composing, onMailto, 
               {actionError}
             </Note>
           )}
-          <h2 data-email-subject className="text-20 font-bold tracking-[-0.2px] text-title select-text">
+          <h2 data-email-subject className="text-17 font-semibold text-title select-text">
             {message.subject || '(sem assunto)'}
           </h2>
           <div className="flex items-start gap-3">
-            <Avatar id={sender?.address ?? message.id} name={addressLabel(sender)} size={10} />
+            <Avatar id={sender?.address ?? message.id} name={addressLabel(sender)} size={8} />
             <div className="flex min-w-0 flex-1 flex-col gap-0.5 text-12 text-text-muted select-text">
               <p className="flex flex-wrap items-baseline gap-x-2">
                 <span data-email-from className="text-13 font-bold text-text">

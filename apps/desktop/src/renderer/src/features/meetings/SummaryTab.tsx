@@ -72,8 +72,8 @@ interface OpenQuestionsProps {
 /** Coluna da aba: mesma largura e margens da transcrição, rolando sozinha. */
 function Column({ children, state, questions, empty = false }: { children: ReactNode; state: string; questions?: OpenQuestionsProps | undefined; empty?: boolean }) {
   return (
-    <div data-summary-scroll className="min-h-0 flex-1 overflow-y-auto px-10 pb-10">
-      <div data-summary={state} aria-live="polite" className="mx-auto flex w-full max-w-[680px] flex-col gap-8 pt-7">
+    <div data-summary-scroll className="min-h-0 flex-1 overflow-y-auto px-8 pb-8">
+      <div data-summary={state} aria-live="polite" className="mx-auto flex w-full max-w-[680px] flex-col gap-6 pt-5">
         <AcpFallbackNote />
         {children}
         {questions && <OpenQuestionsSection {...questions} disabled={empty} />}
@@ -142,7 +142,7 @@ export function SummaryTab({
         <RetryNotice id="summary-failed" text={`Não foi possível gerar o resumo. ${summaryErrorReason(view.error, agentLabel)}`} onRetry={onGenerate} />
       )}
       {view.state === 'error' && view.error === 'agent' && (
-        <div className="-mt-4">
+        <div className="-mt-3">
           <UseCommandLine />
         </div>
       )}
@@ -154,8 +154,8 @@ export function SummaryTab({
 function SectionTitle({ children }: { children: string }) {
   return (
     <>
-      <h2 className="text-17 font-bold text-title">{children}</h2>
-      <span aria-hidden="true" className="mt-2 mb-3 block h-0.5 w-6 bg-title" />
+      <h2 className="text-14 leading-5 font-semibold text-title">{children}</h2>
+      <span aria-hidden="true" className="mt-2 mb-3 block h-0.5 w-5 bg-title" />
     </>
   )
 }
@@ -197,7 +197,7 @@ function SummaryContent({ meetingId, summary, onGenerate }: { meetingId: string;
             .map((paragraph) => paragraph.trim())
             .filter(Boolean)
             .map((paragraph, index) => (
-              <p key={index} className="text-16 text-pretty text-text select-text">
+              <p key={index} className="text-15 leading-6 text-pretty text-text select-text">
                 {paragraph}
               </p>
             ))}
@@ -209,8 +209,8 @@ function SummaryContent({ meetingId, summary, onGenerate }: { meetingId: string;
           <SectionTitle>Decisões</SectionTitle>
           <ul data-summary-decisions className="flex flex-col gap-2">
             {summary.decisions.map((decision, index) => (
-              <li key={index} className="grid grid-cols-[16px_minmax(0,1fr)] text-15 text-text select-text">
-                <span aria-hidden="true" className="mt-2 size-1.5 bg-accent" />
+              <li key={index} className="grid grid-cols-[16px_minmax(0,1fr)] text-15 leading-6 text-text select-text">
+                <span aria-hidden="true" className="mt-[9px] size-1.5 bg-accent" />
                 <span>{decision}</span>
               </li>
             ))}
@@ -227,14 +227,14 @@ function SummaryContent({ meetingId, summary, onGenerate }: { meetingId: string;
         ) : (
           <table data-summary-tasks className="w-full table-fixed border-collapse text-left">
             <thead>
-              <tr className="border-b border-line-strong text-12 font-medium text-text-muted">
-                <th scope="col" className="py-2 pr-4 font-medium">
+              <tr className="label border-b border-line-strong">
+                <th scope="col" className="py-1.5 pr-4 font-medium">
                   Tarefa
                 </th>
-                <th scope="col" className="w-40 py-2 pr-4 font-medium">
+                <th scope="col" className="w-40 py-1.5 pr-4 font-medium">
                   Quem
                 </th>
-                <th scope="col" className="w-32 py-2 font-medium">
+                <th scope="col" className="w-32 py-1.5 font-medium">
                   Prazo
                 </th>
               </tr>
@@ -242,9 +242,9 @@ function SummaryContent({ meetingId, summary, onGenerate }: { meetingId: string;
             <tbody>
               {summary.tasks.map((task, index) => (
                 <tr key={index} className="border-b border-line align-top text-13 text-text select-text">
-                  <td className="py-2.5 pr-4">{task.task}</td>
-                  <td className={`py-2.5 pr-4 ${task.owner ? 'font-medium' : 'text-text-muted'}`}>{task.owner ?? '—'}</td>
-                  <td className={`py-2.5 tabular ${task.due ? '' : 'text-text-muted'}`}>{task.due ?? '—'}</td>
+                  <td className="py-1.5 pr-4">{task.task}</td>
+                  <td className={`py-1.5 pr-4 ${task.owner ? 'font-medium' : 'text-text-muted'}`}>{task.owner ?? '—'}</td>
+                  <td className={`py-1.5 tabular ${task.due ? '' : 'text-text-muted'}`}>{task.due ?? '—'}</td>
                 </tr>
               ))}
             </tbody>

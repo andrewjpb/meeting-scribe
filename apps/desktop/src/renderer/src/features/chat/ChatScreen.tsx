@@ -71,7 +71,7 @@ export function ChatScreen() {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div className="px-10 pt-7 pb-6">
+      <div className="px-8 pt-5 pb-5">
         <PageHeader title="Assistente" description="Pergunte ou peça qualquer coisa: reuniões, WhatsApp, email, automações e o próprio app." />
       </div>
       <div className="flex min-h-0 flex-1 border-t border-line">

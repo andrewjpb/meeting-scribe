@@ -39,8 +39,8 @@ interface ChatConversationProps {
   railId?: string
 }
 
-/** Até 8 linhas de 20 px, mais o respiro do campo. */
-const INPUT_MAX_HEIGHT = 8 * 20 + 16
+/** Até 8 linhas de 22 px (texto 14/22), mais o respiro do campo. */
+const INPUT_MAX_HEIGHT = 8 * 22 + 14
 const COUNT = new Intl.NumberFormat('pt-BR')
 /** Cliques seguidos no escopo viram uma gravação só. */
 const SCOPE_DELAY_MS = 300
@@ -50,9 +50,9 @@ const LABEL_BUTTON =
 /** Ícone de cada grupo de sugestões do Assistente (contrato 38), na ordem dos grupos. */
 const SUGGESTION_ICONS: readonly LucideIcon[] = [CalendarDays, Users, Hash]
 const SUGGESTION =
-  'no-drag min-h-16 rounded-[var(--radius-panel)] border border-line-strong bg-bg-raised px-4 py-3 text-left text-13 text-title transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-bg-sunken disabled:opacity-50'
+  'no-drag min-h-11 rounded-[var(--radius-panel)] border border-line-strong bg-bg-raised px-3 py-2 text-left text-13 text-title transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-bg-sunken disabled:opacity-50'
 const SUGGESTION_CARD =
-  'no-drag group flex min-h-16 items-start gap-3 rounded-[var(--radius-panel)] border border-line bg-bg-raised px-4 py-3 text-left text-13 text-title transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:border-line-strong hover:bg-bg-sunken disabled:opacity-50'
+  'no-drag group flex min-h-11 items-start gap-2.5 rounded-[var(--radius-panel)] border border-line bg-bg-raised px-3 py-2 text-left text-13 text-title transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:border-line-strong hover:bg-bg-sunken disabled:opacity-50'
 
 const BAR_SELECT =
   'no-drag h-7 rounded-[var(--radius-control)] border border-line-strong bg-bg-raised px-1.5 text-12 text-text transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-bg-sunken'
@@ -277,7 +277,7 @@ export function ChatConversation({ chatId, meetingId, meetings, contextOpen, onC
 
   if (claude === 'not-found') {
     return (
-      <div data-chat-conversation="no-claude" className="flex min-h-0 flex-1 flex-col px-10 pt-7">
+      <div data-chat-conversation="no-claude" className="flex min-h-0 flex-1 flex-col px-6 pt-4">
         <div className="mx-auto w-full max-w-[680px]">
           <Note
             id="chat-no-claude"
@@ -306,12 +306,12 @@ export function ChatConversation({ chatId, meetingId, meetings, contextOpen, onC
   return (
     <div className="flex min-h-0 min-w-0 flex-1">
       <div data-chat-conversation={chatId ?? 'new'} className="flex min-h-0 min-w-0 flex-1 flex-col">
-        <header data-chat-header className="flex h-14 shrink-0 items-center gap-3 border-b border-line px-6">
+        <header data-chat-header className="flex h-11 shrink-0 items-center gap-2 border-b border-line px-5">
           <div className="min-w-0 flex-1">
             {chat ? (
               <EditableTitle value={chat.title} maxLength={CHAT_TITLE_MAX} label="Título da conversa" onCommit={(title) => void useChat.getState().update(chat.id, { title })} />
             ) : (
-              <h2 className="truncate text-20 font-bold tracking-[-0.3px] text-title">Nova conversa</h2>
+              <h2 className="truncate text-15 font-bold tracking-[-0.2px] text-title">Nova conversa</h2>
             )}
           </div>
           {meetingId ? (
@@ -340,19 +340,19 @@ export function ChatConversation({ chatId, meetingId, meetings, contextOpen, onC
           </button>
         </header>
         <div className="relative flex min-h-0 flex-1 flex-col">
-          <div ref={scroller} data-chat-scroll onScroll={onScroll} className="min-h-0 flex-1 overflow-y-auto px-8 pb-6">
-            <div className="mx-auto flex w-full max-w-[720px] flex-col gap-6 pt-6">
+          <div ref={scroller} data-chat-scroll onScroll={onScroll} className="min-h-0 flex-1 overflow-y-auto px-6 pb-5">
+            <div className="mx-auto flex w-full max-w-[720px] flex-col gap-4 pt-4">
               {empty && (
-                <div data-chat-empty className="flex flex-col gap-5">
+                <div data-chat-empty className="flex flex-col gap-4">
                   <div className="flex items-center gap-2 text-13 text-text-muted">
                     <Icon icon={MessageCircle} className="shrink-0" />
                     {meetingId ? 'Pergunte sobre esta reunião.' : 'Pergunte ou peça algo. Nada é criado nem enviado sem o seu clique.'}
                   </div>
-                  <div className="grid grid-cols-2 gap-x-4 gap-y-5" aria-label="Sugestões">
+                  <div className="grid grid-cols-2 gap-x-3 gap-y-4" aria-label="Sugestões">
                     {groups.map((group, groupIndex) => (
-                      <section key={group.title} aria-label={group.title} className="col-span-2 flex flex-col gap-2">
-                        <h3 className="text-12 font-bold text-text-muted">{group.title}</h3>
-                        <div className="grid grid-cols-2 gap-3">
+                      <section key={group.title} aria-label={group.title} className="col-span-2 flex flex-col gap-1.5">
+                        <h3 className="label">{group.title}</h3>
+                        <div className="grid grid-cols-2 gap-2">
                           {group.items.map((suggestion) => (
                             <button
                               key={suggestion}
@@ -379,7 +379,7 @@ export function ChatConversation({ chatId, meetingId, meetings, contextOpen, onC
                 </div>
               )}
               {!empty && (
-                <ol aria-label="Mensagens" aria-live="polite" className="flex flex-col gap-6">
+                <ol aria-label="Mensagens" aria-live="polite" className="flex flex-col gap-4">
                   {messages.map((message, index) => {
                     // Refazendo: a resposta antiga e a pergunta que vai de novo saem da tela até voltar.
                     if (redoing && index >= lastUser) return null
@@ -421,7 +421,7 @@ export function ChatConversation({ chatId, meetingId, meetings, contextOpen, onC
             </button>
           )}
         </div>
-        <div className={`shrink-0 px-8 py-4 ${cards ? '' : 'border-t border-line'}`}>
+        <div className={`shrink-0 px-6 py-3 ${cards ? '' : 'border-t border-line'}`}>
           <div className="mx-auto flex w-full max-w-[720px] flex-col rounded-[var(--radius-panel)] border border-line-strong bg-bg-raised has-[textarea:focus-visible]:outline-2 has-[textarea:focus-visible]:outline-offset-2 has-[textarea:focus-visible]:outline-focus">
             {noneChosen && (
               <p data-chat-scope-empty role="status" className="px-3 pt-2 text-12 text-rec">
@@ -437,14 +437,14 @@ export function ChatConversation({ chatId, meetingId, meetings, contextOpen, onC
               ref={input}
               data-chat-input
               value={text}
-              rows={2}
+              rows={1}
               maxLength={CHAT_TEXT_MAX}
               placeholder={meetingId ? 'Pergunte sobre esta reunião' : 'Pergunte ou peça algo…'}
               aria-label="Pergunta"
               aria-keyshortcuts="Enter Meta+Enter"
               onChange={(event) => setText(event.target.value)}
               onKeyDown={onKeyDown}
-              className="no-drag min-h-14 resize-none bg-transparent px-3 pt-2.5 pb-1 text-15 text-text select-text placeholder:text-text-faint focus-visible:outline-none"
+              className="no-drag min-h-11 resize-none bg-transparent px-3 pt-2.5 pb-1 text-14 text-text select-text placeholder:text-text-faint focus-visible:outline-none"
             />
             <div className={`flex flex-wrap items-center gap-2 px-2 pb-2 ${cards ? 'mx-1 border-t border-line pt-2' : ''}`}>
               <label className="sr-only" htmlFor={`chat-model-${key}`}>

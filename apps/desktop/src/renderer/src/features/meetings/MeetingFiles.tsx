@@ -54,8 +54,8 @@ export function MeetingFiles({ meetingId, hasFiles, hasTranscript, hasSummary }:
   const generated: MeetingDownloadKind[] = [...(!hasFiles && hasTranscript ? (['transcript'] as const) : []), ...(hasSummary ? (['summary'] as const) : [])]
 
   return (
-    <div className="min-h-0 flex-1 overflow-y-auto px-10 pb-10">
-      <div className="mx-auto flex w-full max-w-[680px] flex-col gap-6 pt-7">
+    <div className="min-h-0 flex-1 overflow-y-auto px-8 pb-8">
+      <div className="mx-auto flex w-full max-w-[680px] flex-col gap-4 pt-5">
         {!hasFiles && <p className="text-13 text-pretty text-text-muted">O áudio não fica guardado no Mac.</p>}
         {hasFiles && info && (
           <ul data-meeting-files aria-label="Arquivos da reunião" className="flex flex-col">
@@ -67,7 +67,7 @@ export function MeetingFiles({ meetingId, hasFiles, hasTranscript, hasSummary }:
           <ul data-meeting-downloads aria-label="Baixar em Markdown" className="flex flex-col">
             {generated.map((kind) => (
               <li key={kind} data-download={kind} className={ROW_CLASS}>
-                <span className="w-24 shrink-0 text-12 font-medium text-text-muted">{kind === 'summary' ? 'Resumo' : 'Transcrição'}</span>
+                <span className="label w-20 shrink-0">{kind === 'summary' ? 'Resumo' : 'Transcrição'}</span>
                 <span className="min-w-0 flex-1 truncate text-13 text-text-muted">Texto em Markdown</span>
                 <DownloadButton meetingId={meetingId} kind={kind} />
               </li>
@@ -127,7 +127,7 @@ function FileRow({ kind, file, folder, meetingId }: { kind: MeetingFileKind; fil
   const reveal = (): void => void window.__scribeApi.invoke('scribe:meeting-file-reveal', { meetingId, kind }).catch(() => undefined)
   return (
     <li data-file={kind} data-exists={file.exists} className={ROW_CLASS}>
-      <span className="w-24 shrink-0 text-12 font-medium text-text-muted">{label.name}</span>
+      <span className="label w-20 shrink-0">{label.name}</span>
       {file.exists ? (
         <>
           <span data-file-name className="min-w-0 flex-1 truncate text-13 text-text" title={file.name}>

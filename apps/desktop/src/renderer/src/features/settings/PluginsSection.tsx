@@ -68,7 +68,7 @@ function PluginCard({ plugin }: { plugin: AppPlugin }) {
         </Button>
       </SettingRow>
       {(save.kind === 'saved' || save.kind === 'failed') && (
-        <p role="status" data-plugin-feedback={save.kind} className="py-3 text-12 text-text-muted">
+        <p role="status" data-plugin-feedback={save.kind} className="py-2 text-12 text-text-muted">
           {save.kind === 'saved' ? (
             <>
               Salvo em <span className="text-text select-text">{save.path}</span>
@@ -130,7 +130,7 @@ function InstallManual({ id, plugin }: { id: string; plugin: AppPlugin }) {
   const code = 'rounded-[var(--radius-control)] bg-bg-sunken px-1 font-mono text-12 text-text select-text'
   const extras = MANUAL_EXTRAS[plugin.id]
   return (
-    <div id={id} data-plugin-manual={plugin.id} className="flex flex-col gap-3 py-4 text-13 text-text">
+    <div id={id} data-plugin-manual={plugin.id} className="flex flex-col gap-2.5 py-3 text-13 text-text">
       <ol className="flex list-decimal flex-col gap-1.5 pl-5 marker:text-text-muted">
         <li>Clique em “Salvar plugin…” e escolha uma pasta. O app grava ali a pasta “{pluginFolderName(plugin)}”.</li>
         <li>

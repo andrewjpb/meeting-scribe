@@ -108,7 +108,7 @@ function AccountLine({ status, label }: { status: EmailAccountStatus; label: str
     })
   }
   return (
-    <li data-email-settings-account={account.id} data-email-settings-state={state} className="flex flex-col gap-2 border-b border-line py-3 last:border-b-0">
+    <li data-email-settings-account={account.id} data-email-settings-state={state} className="flex flex-col gap-2 border-b border-line py-2 last:border-b-0">
       <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-2">
         <div className="flex min-w-0 flex-1 items-start gap-3">
           <span aria-hidden="true" className={`mt-1.5 size-1.5 shrink-0 ${state === 'error' ? 'bg-rec' : state === 'connected' ? 'bg-accent' : 'bg-text-faint'}`} />
@@ -265,7 +265,7 @@ export function EmailSection() {
 
   return (
     <Section title="Contas">
-      <div className="flex flex-col gap-3 py-4" data-setting-row data-setting-name="Contas de email" data-setting-description={EMAIL_ACCOUNTS_DESCRIPTION} data-email-settings>
+      <div className="flex flex-col gap-2.5 py-3" data-setting-row data-setting-name="Contas de email" data-setting-description={EMAIL_ACCOUNTS_DESCRIPTION} data-email-settings>
         <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-3">
           <div className="flex min-w-0 flex-col gap-0.5">
             <p className="text-13 font-medium text-text">Contas de email</p>
@@ -281,7 +281,7 @@ export function EmailSection() {
         </div>
 
         {accounts && accounts.length > 0 && (
-          <ul data-email-settings-accounts className="flex flex-col rounded-[var(--radius-panel)] border border-line px-4">
+          <ul data-email-settings-accounts className="flex flex-col rounded-[var(--radius-panel)] border border-line px-3">
             {accounts.map((status) => (
               <AccountLine key={status.account.id} status={status} label={accountLabel(accounts.map((item) => item.account), status.account)} />
             ))}
@@ -289,7 +289,7 @@ export function EmailSection() {
         )}
 
         {step !== 'closed' && (
-          <div data-email-add-panel={step} className="flex flex-col gap-4 rounded-[var(--radius-panel)] border border-line bg-bg-sunken p-4">
+          <div data-email-add-panel={step} className="flex flex-col gap-3 rounded-[var(--radius-panel)] border border-line bg-bg-sunken p-3">
             <div className="flex flex-wrap gap-3">
               <TextInput id="email-add-address" label="Email" value={form.address} onChange={(address) => set({ address })} placeholder="voce@empresa.com.br" />
               <TextInput id="email-add-password" label="Senha" type="password" value={form.password} onChange={(password) => set({ password })} />
@@ -328,7 +328,7 @@ export function EmailSection() {
                   </button>
                 </div>
                 {advanced && (
-                  <div data-email-advanced className="flex flex-col gap-4">
+                  <div data-email-advanced className="flex flex-col gap-3">
                     <div className="flex flex-wrap gap-3">
                       <TextInput id="email-add-name" label="Seu nome (no De:)" value={form.name} onChange={(name) => set({ name })} placeholder="Opcional" />
                       <TextInput id="email-add-username" label="Usuário" value={form.username} onChange={(username) => set({ username })} placeholder="O próprio email" />
