@@ -100,7 +100,7 @@ export function unreadByAccount(inboxes: Readonly<Record<string, readonly Pick<E
  */
 export function totalUnread(
   accounts: readonly { account: { id: string } }[] | null,
-  folders: Readonly<Record<string, readonly Pick<EmailMessage, 'seen' | 'folder'>[] | undefined>>,
+  folders: Readonly<Record<string, readonly Pick<EmailMessage, 'seen' | 'mailbox'>[] | undefined>>,
 ): number {
   return (accounts ?? []).reduce((total, { account }) => total + unreadCount(folders[`${account.id}:inbox`]), 0)
 }

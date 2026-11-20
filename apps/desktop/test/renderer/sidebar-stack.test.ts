@@ -1,12 +1,12 @@
 // Barra lateral em pilha (contrato 65, CA20; contrato 66, CA11, o nível Configurações; contrato 67, CA13, o nível Assistente): o nível de cada rota, o "voltar" que vale só para a navegação dele, o
 // deslize entre os níveis, o último email aberto na sessão e o número do item "Email" na raiz.
 import { beforeEach, describe, expect, it } from 'vitest'
-import type { EmailMessage } from '../../src/shared/email'
+import { EMAIL_INBOX_MAILBOX, EMAIL_SENT_MAILBOX, type EmailMessage } from '../../src/shared/email'
 import { activeNavId, lastEmailPath, levelFor, rememberEmailPath, resetSidebarMemory, sectionOf, SIDEBAR_SLIDE_FALLBACK_MS, SIDEBAR_SLIDE_MS, transitionOf } from '../../src/renderer/src/app/sidebarLevels'
 import { totalUnread } from '../../src/renderer/src/features/email/format'
 
-type Unread = Pick<EmailMessage, 'seen' | 'folder'>
-const inbox = (unread: number, read = 1): Unread[] => [...Array.from({ length: unread }, () => ({ seen: false, folder: 'inbox' as const })), ...Array.from({ length: read }, () => ({ seen: true, folder: 'inbox' as const }))]
+type Unread = Pick<EmailMessage, 'seen' | 'mailbox'>
+const inbox = (unread: number, read = 1): Unread[] => [...Array.from({ length: unread }, () => ({ seen: false, mailbox: EMAIL_INBOX_MAILBOX })), ...Array.from({ length: read }, () => ({ seen: true, mailbox: EMAIL_INBOX_MAILBOX }))]
 const account = (id: string) => ({ account: { id } })
 
 beforeEach(() => resetSidebarMemory())
@@ -108,8 +108,8 @@ describe('número do item "Email" (contrato 65, CA3)', () => {
   })
 
   it('não lida em Enviados não conta; conta sem a lista carregada, 0', () => {
-    expect(totalUnread([account('a')], { 'a:inbox': inbox(0), 'a:sent': [{ seen: false, folder: 'sent' }] })).toBe(0)
-    expect(totalUnread([account('a')], { 'a:inbox': [...inbox(1), { seen: false, folder: 'sent' }] })).toBe(1)
+    expect(totalUnread([account('a')], { 'a:inbox': inbox(0), 'a:sent': [{ seen: false, mailbox: EMAIL_SENT_MAILBOX }] })).toBe(0)
+    expect(totalUnread([account('a')], { 'a:inbox': [...inbox(1), { seen: false, mailbox: EMAIL_SENT_MAILBOX }] })).toBe(1)
     expect(totalUnread([account('a'), account('b')], { 'a:inbox': inbox(1) })).toBe(1)
     expect(totalUnread([account('b')], {})).toBe(0)
   })
