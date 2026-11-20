@@ -10,7 +10,7 @@ Dois artefatos no claude.ai registram o estado visual do LAP Reuniões em 19/11/
 ## Como foram feitos
 
 - Inventário a partir do código em `apps/desktop/src/renderer/src/` (rotas em `shared/routes.ts`, tokens em `design/tokens.css` e `design/base.css`, componentes em `design/`). Nenhum valor foi inventado; onde `docs/specs/desktop-shell/design.md` diverge do CSS, vale o CSS.
-- O sidebar segue o mockup aprovado `docs/specs/sidebar-pilha/mockups/SidebarPilha.dc.html` (branch `sidebar-pilha`): raiz com Reuniões, Assistente, Email (com o total de não lidas), Automações, WhatsApp e Configurações; níveis próprios para Email e Configurações com cabeçalho-voltar; Configurações sem abas horizontais, com o nome da aba no topo.
+- O sidebar segue o mockup aprovado `docs/specs/_archive/sidebar-pilha/mockups/SidebarPilha.dc.html` (branch `sidebar-pilha`): raiz com Reuniões, Assistente, Email (com o total de não lidas), Automações, WhatsApp e Configurações; níveis próprios para Email e Configurações com cabeçalho-voltar; Configurações sem abas horizontais, com o nome da aba no topo.
 - Nada foi verificado visualmente nesta sessão: os artboards foram escritos e publicados sem renderizar. Ajustes visuais se fazem na própria página do canvas ou editando os fontes abaixo e republicando.
 
 ## Fontes dos artboards
