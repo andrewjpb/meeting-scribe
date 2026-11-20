@@ -124,6 +124,10 @@ export const PUBLICATION_FAILED_MESSAGE = 'Não foi possível publicar'
 export const PUBLICATION_STARTED_MESSAGE = 'A publicação começou a ser publicada; não dá para editar agora'
 /** Contrato 72: "Publicar agora" ou "Agendar" direto numa publicação com erro (sem a edição junto). */
 export const PUBLICATION_ERROR_STATE_MESSAGE = 'Publicação com erro: use Tentar de novo ou edite antes'
+/** Contrato 76: o rascunho sem mídia (criado pelo Assistente) não é publicado nem agendado. */
+export const PUBLICATION_NO_MEDIA_MESSAGE = 'Escolha ao menos uma imagem ou um vídeo'
+/** Contrato 76: o id escolhido para o rascunho novo já é de outra publicação. */
+export const PUBLICATION_ID_TAKEN_MESSAGE = 'Esse rascunho já existe'
 /** Contrato 72: editar a com erro cujo contêiner já saiu (ou que a Meta não deixou conferir): só o "Tentar de novo" retoma. */
 export const PUBLICATION_MAYBE_OUT_MESSAGE = 'Esta publicação pode já ter saído no Instagram; use Tentar de novo'
 const PUBLICATION_SAVE_FAILED = 'Não foi possível guardar a mídia neste Mac'
@@ -248,7 +252,13 @@ export interface RedesService {
   publications(request: unknown): Promise<RedesPublicationsPayload>
   /** O diálogo nativo; devolve os arquivos já conferidos, sem salvar nada. */
   pickMedia(): Promise<MediaCandidate[]>
-  savePublication(request: unknown): Promise<PublicationSaveResult>
+  /**
+   * Salva o rascunho. Contrato 76: com `draftWithoutMedia` (só o Assistente), o rascunho pode vir sem mídia: as imagens são
+   * escolhidas no editor, e ele não é publicado nem agendado sem elas; o rascunho que já existe sem mídia também salva sem
+   * ela (a legenda ajustada no editor antes das imagens). `newId`: o id do rascunho novo, escolhido por quem cria (o cartão
+   * do Assistente grava o id antes, para um segundo clique não criar outro); um id que já existe é recusado.
+   */
+  savePublication(request: unknown, options?: { draftWithoutMedia?: boolean; newId?: string }): Promise<PublicationSaveResult>
   deletePublication(request: unknown): Promise<{ ok: true } | { ok: false; error: string }>
   /** "Agendar": só com o token de clique registrado pela mesma janela (`senderId`). */
   schedulePublication(senderId: number, request: unknown): Promise<PublicationActionResult>
@@ -258,6 +268,10 @@ export interface RedesService {
   /** "Tentar de novo" (só em `erro`): retoma pelo contêiner que já existe. */
   retry(request: unknown): Promise<PublicationActionResult>
   quota(request: unknown): Promise<PublicationQuotaResult>
+  /** Contrato 76: as métricas guardadas de uma conta (só o cache, sem ler a Meta), para o `REDES.md` do Assistente. */
+  cachedMetrics(accountId: string): Promise<RedesMetricsState>
+  /** Contrato 76: a publicação está na fila de alguma conta (o cartão do Assistente não cria o rascunho duas vezes). */
+  hasPublication(id: string): boolean
   /** Contrato 72: a miniatura de uma cópia salva ou de um arquivo escolhido no diálogo nesta sessão; o resto, `null`. */
   thumbnail(request: unknown): Promise<string | null>
   // 73: comentários
@@ -494,7 +508,7 @@ export function createRedesService(options: RedesServiceOptions): RedesService {
   /** Rascunho, agendada ou (contrato 72) com erro: o "Editar" da fila abre as três. */
   const editable = (publication: Publication): boolean => publication.state === 'rascunho' || publication.state === 'agendada' || publication.state === 'erro'
 
-  const savePublication = async (request: unknown): Promise<PublicationSaveResult> => {
+  const savePublication = async (request: unknown, options: { draftWithoutMedia?: boolean; newId?: string } = {}): Promise<PublicationSaveResult> => {
     const parsed = saveRequestSchema.safeParse(request)
     if (!parsed.success) return { ok: false, problems: ['Confira os campos da publicação'] }
     const input = parsed.data
@@ -504,7 +518,9 @@ export function createRedesService(options: RedesServiceOptions): RedesService {
     if (existing && !editable(existing)) return { ok: false, problems: [PUBLICATION_NOT_EDITABLE_MESSAGE] }
     // Contrato 72: a com erro só é editada (e o contêiner dela esquecido) se ele não saiu no Instagram.
     if (existing?.state === 'erro' && !(await containerDiscardable(existing))) return { ok: false, problems: [PUBLICATION_MAYBE_OUT_MESSAGE] }
-    const publicationId = existing?.id ?? randomUUID()
+    // Contrato 76: o id do rascunho novo escolhido pelo cartão do Assistente (nunca o de uma publicação que já existe).
+    if (!existing && options.newId !== undefined && (!PUBLICATION_ID_PATTERN.test(options.newId) || findPublication(options.newId))) return { ok: false, problems: [PUBLICATION_ID_TAKEN_MESSAGE] }
+    const publicationId = existing?.id ?? options.newId ?? randomUUID()
 
     // A mídia já salva vem pelo `localPath` da cópia; a nova é conferida pelos bytes.
     const problems: string[] = []
@@ -520,7 +536,9 @@ export function createRedesService(options: RedesServiceOptions): RedesService {
       items.push({ candidate })
     }
     const kinds = items.map((item) => ('saved' in item ? { kind: item.saved.kind } : { kind: item.candidate.kind ?? 'imagem' }))
-    const type = inferPublicationType(kinds)
+    // Contrato 76: o rascunho do Assistente sem mídia fica como imagem até a mídia entrar no editor (o tipo é refeito ao salvar).
+    const emptyAllowed = options.draftWithoutMedia === true || (existing?.state === 'rascunho' && existing.media.length === 0)
+    const type = emptyAllowed && !kinds.length ? 'imagem' : inferPublicationType(kinds)
     if (typeof type !== 'string') problems.push(type.error)
     problems.push(...captionStats(input.caption).problems)
     if (problems.length || typeof type !== 'string') return { ok: false, problems: problems.length ? problems : ['Confira as mídias'] }
@@ -618,7 +636,14 @@ export function createRedesService(options: RedesServiceOptions): RedesService {
   }
   /** Por que esta não pode ser publicada nem agendada agora (`null`: pode). */
   const notStartable = (publication: Publication): string | null =>
-    publication.state === 'erro' ? PUBLICATION_ERROR_STATE_MESSAGE : publication.state !== 'rascunho' && publication.state !== 'agendada' ? PUBLICATION_NOT_EDITABLE_MESSAGE : null
+    publication.state === 'erro'
+      ? PUBLICATION_ERROR_STATE_MESSAGE
+      : publication.state !== 'rascunho' && publication.state !== 'agendada'
+        ? PUBLICATION_NOT_EDITABLE_MESSAGE
+        : // Contrato 76: o rascunho do Assistente sem mídia.
+          !publication.media.length
+          ? PUBLICATION_NO_MEDIA_MESSAGE
+          : null
 
   /** Uma tentativa inteira de uma publicação em `publicando`; termina sempre gravada (`publicada`, `erro` ou adiada). */
   const attempt = async (id: string): Promise<void> => {
@@ -1235,6 +1260,12 @@ export function createRedesService(options: RedesServiceOptions): RedesService {
       const quota = rememberQuota(accountId, result.quota)
       emitPublications(accountId)
       return { ok: true, quota: { ...quota } }
+    },
+
+    hasPublication: (id) => findPublication(id) !== undefined,
+
+    async cachedMetrics(accountId) {
+      return metricsStateOf(accountId, await readMetricsCache(store, accountId))
     },
 
     async thumbnail(request) {

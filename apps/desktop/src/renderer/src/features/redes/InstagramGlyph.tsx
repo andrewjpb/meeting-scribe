@@ -1,8 +1,8 @@
 /**
- * Contrato 72: o glifo do Instagram no traço dos ícones do app (o `lucide-react` não traz mais ícones de marca): 16 px,
- * traço 1,5, pontas retas, na cor do texto. Decorativo para leitor de tela (o @ da conta vai ao lado).
+ * Contrato 72: o glifo do Instagram no traço dos ícones do app (o `lucide-react` não traz mais ícones de marca): 16 px
+ * (contrato 76: 14 px nos cartões do Assistente), traço 1,5, pontas retas, na cor do texto. Decorativo para leitor de tela (o @ da conta vai ao lado).
  */
-export function InstagramGlyph({ className, size = 16 }: { className?: string; size?: 16 | 24 }) {
+export function InstagramGlyph({ className, size = 16 }: { className?: string; size?: 14 | 16 | 24 }) {
   return (
     <svg
       width={size}
@@ -10,7 +10,7 @@ export function InstagramGlyph({ className, size = 16 }: { className?: string; s
       viewBox="0 0 24 24"
       fill="none"
       stroke="currentColor"
-      strokeWidth={size === 16 ? 1.5 : 1.25}
+      strokeWidth={size === 24 ? 1.25 : 1.5}
       strokeLinecap="square"
       strokeLinejoin="miter"
       aria-hidden="true"

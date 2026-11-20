@@ -1,9 +1,10 @@
 import { useEffect } from 'react'
 import { useNavigate } from 'react-router'
-import { emailPath, isSettingsTab, meetingPath, REDES_ROOT_PATH, ROUTE_PATHS, settingsPath, type EmailNavigationState, type WhatsAppNavigationState } from '@shared/routes'
+import { emailPath, isSettingsTab, meetingPath, REDES_ROOT_PATH, redesPath, ROUTE_PATHS, settingsPath, type EmailNavigationState, type WhatsAppNavigationState } from '@shared/routes'
 import { useAutomations } from '../features/agents/automationsStore'
 import { useRecording } from '../features/live/recordingStore'
 import { useStartRecording } from '../features/live/useStartRecording'
+import { useRedes } from '../features/redes/redesStore'
 import { useLock } from './lockStore'
 
 /**
@@ -66,6 +67,17 @@ export function useMainNavigation(): void {
         }
         const state: EmailNavigationState = { messageId: id }
         void navigate(emailPath(accountId, 'inbox'), { state })
+      }),
+    [navigate],
+  )
+
+  // Contrato 76: o rascunho que o cartão do Assistente criou: Redes › Publicações da conta, com o editor nele.
+  useEffect(
+    () =>
+      window.__scribeApi.on('scribe:open-redes', ({ accountId, publicationId }) => {
+        if (useLock.getState().status.locked || typeof accountId !== 'string' || typeof publicationId !== 'string') return
+        useRedes.getState().openEditor({ accountId, id: publicationId })
+        void navigate(redesPath(accountId, 'publicacoes'))
       }),
     [navigate],
   )

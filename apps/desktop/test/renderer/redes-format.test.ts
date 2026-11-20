@@ -45,6 +45,8 @@ describe('textos da fila (contrato 72)', () => {
     expect(publicationLine(publication({ state: 'agendada', scheduledAt: local(21, 10) }), NOW, false)).toBe('Imagem · Sáb., 21/11 às 10:00')
     expect(publicationLine(publication({ state: 'publicada', type: 'reels', publishedAt: local(18, 12) }), NOW, false)).toBe('Reels · 18/11')
     expect(publicationLine(publication({ state: 'publicando' }), NOW, false)).toBe('Imagem · Publicando…')
+    // Contrato 76: o rascunho do Assistente, ainda sem mídia.
+    expect(publicationLine(publication({ updatedAt: local(20, 9) }), NOW, false)).toBe('Sem mídia · editado hoje às 09:00')
   })
 
   it('quotaLine: a cota lida, consultando ou indisponível', () => {

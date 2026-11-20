@@ -31,7 +31,7 @@ import type { NotesStore } from '../meetings/notes'
 import type { MeetingsStore } from '../meetings/store'
 import type { SummaryStore } from '../meetings/summaries'
 import type { TranscriptStore } from '../meetings/transcripts'
-import { AUTOMATIONS_FILE, EMAIL_SEARCH_FILE, GUIDE_FILE, isSourceFile, STATE_FILE } from './sources'
+import { AUTOMATIONS_FILE, EMAIL_SEARCH_FILE, GUIDE_FILE, isSourceFile, REDES_FILE, STATE_FILE } from './sources'
 
 export const CHAT_CORPUS_DIR = 'chat-corpus'
 export const CHAT_INDEX_FILE = 'INDICE.md'
@@ -122,6 +122,8 @@ const SOURCE_DESCRIPTIONS: Readonly<Record<string, string>> = {
   // Contrato 45.
   [EMAIL_OVERVIEW_FILE]: `uma linha por email recebido nos últimos ${EMAIL_RECENT_DAYS} dias, por conta, com a referência, quem mandou, o assunto, a idade, se foi lido, "pendente de resposta" e o arquivo com o corpo (quando já baixado).`,
   [EMAIL_SEARCH_FILE]: 'o resultado da última busca de emails (ferramenta buscar_emails).',
+  // Contrato 76.
+  [REDES_FILE]: 'as contas do Instagram conectadas, as 10 últimas publicações (com as métricas guardadas), a fila de rascunhos e agendadas e os comentários e as mensagens não lidos, com os ids.',
 }
 
 /**

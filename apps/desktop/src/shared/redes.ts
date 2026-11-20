@@ -287,7 +287,8 @@ export const publicationSchema = z
     id: z.string().regex(PUBLICATION_ID_PATTERN),
     accountId: z.string().regex(REDES_ACCOUNT_ID_PATTERN),
     type: z.enum(PUBLICATION_TYPES),
-    media: z.array(publicationMediaSchema).min(1).max(CAROUSEL_MAX),
+    // Contrato 76: o rascunho que o Assistente cria vem sem mídia (as imagens são escolhidas no editor); só o rascunho.
+    media: z.array(publicationMediaSchema).max(CAROUSEL_MAX),
     // Até 2.200 pontos de código: no máximo o dobro em unidades UTF-16.
     caption: z.string().max(CAPTION_MAX * 2),
     scheduledAt: isoDate.nullable(),
@@ -302,6 +303,7 @@ export const publicationSchema = z
     updatedAt: isoDate,
   })
   .strict()
+  .refine((publication) => publication.media.length > 0 || publication.state === 'rascunho', { message: 'publicação sem mídia fora de rascunho', path: ['media'] })
 
 export const publicationQuotaSchema = z.object({ used: z.number().int().nonnegative(), total: z.number().int().nonnegative(), checkedAt: isoDate }).strict()
 

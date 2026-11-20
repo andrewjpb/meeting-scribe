@@ -77,8 +77,9 @@ export function scheduleWhen(iso: string): string {
 
 /** A segunda linha de uma publicação na fila: o tipo e o estado ou a data (a métrica entra com o contrato 75). */
 export function publicationLine(publication: Publication, now: Date, editing: boolean): string {
-  const parts = [publicationTypeLabel(publication.type)]
-  if (publication.type === 'carrossel') parts.push(`${publication.media.length} mídias`)
+  // Contrato 76: o rascunho do Assistente chega sem mídia (as imagens entram no editor).
+  const parts = [publication.state === 'rascunho' && !publication.media.length ? 'Sem mídia' : publicationTypeLabel(publication.type)]
+  if (publication.type === 'carrossel' && publication.media.length) parts.push(`${publication.media.length} mídias`)
   switch (publication.state) {
     case 'erro':
       parts.push(`falhou ${relativeWhen(publication.updatedAt, now)}`)

@@ -86,6 +86,9 @@ export function PublicationEditor({ accountId, publication, notice, revision, on
   const snapshot = (): string => JSON.stringify([media.map((item) => [item.path, item.altText]), caption, date, time])
   const [baseline] = useState(snapshot)
   const dirty = snapshot() !== baseline
+  // Contrato 76: o rascunho que o Assistente criou sem mídia salva a legenda antes das imagens (publicar e agendar, não).
+  const emptyDraft = publication !== null && publication.state === 'rascunho' && publication.media.length === 0
+  const canSave = media.length > 0 || emptyDraft
   const panelRef = useRef<HTMLElement>(null)
   /** O editor terminou por uma ação dele (fechar, descartar, salvar, publicar, agendar, excluir): sair não salva nada. */
   const settledRef = useRef(false)
@@ -131,14 +134,14 @@ export function PublicationEditor({ accountId, publication, notice, revision, on
   // Esc fecha; com mudança não salva, a confirmação no painel (Esc de novo continua editando).
   const escRef = useRef<() => void>(() => undefined)
   // Sair da tela (outra seção, outra conta, outra rota) sem uma ação do editor: o último estado dele, para salvar.
-  const leaveRef = useRef<{ dirty: boolean; input: PublicationSaveInput; media: number }>({ dirty: false, input: saveInput(), media: 0 })
+  const leaveRef = useRef<{ dirty: boolean; input: PublicationSaveInput; media: number; emptyDraft: boolean }>({ dirty: false, input: saveInput(), media: 0, emptyDraft: false })
   useEffect(() => {
     escRef.current = () => {
       if (confirm) setConfirm(null)
       else if (dirty) setConfirm('close')
       else finish()
     }
-    leaveRef.current = { dirty, input: saveInput(), media: media.length }
+    leaveRef.current = { dirty, input: saveInput(), media: media.length, emptyDraft }
   })
   // A desmontagem de verdade (a do `StrictMode` remonta na hora, e o adiamento a ignora): fecha o editor no store, para
   // ele não reabrir ao voltar, e salva a mudança como rascunho, com o aviso na tela.
@@ -153,7 +156,7 @@ export function PublicationEditor({ accountId, publication, notice, revision, on
         const store = useRedes.getState()
         if (store.editor?.revision === revision) store.openEditor(null)
         if (!last.dirty) return
-        if (!last.media) {
+        if (!last.media && !last.emptyDraft) {
           store.setNotice({ accountId, text: 'A publicação nova não foi guardada: ela ainda não tinha mídia.' })
           return
         }
@@ -220,7 +223,7 @@ export function PublicationEditor({ accountId, publication, notice, revision, on
   }
 
   const save = async (): Promise<void> => {
-    if (!idle || !media.length) return
+    if (!idle || !canSave) return
     setBusy('save')
     setError(null)
     const result = await useRedes.getState().savePublication(saveInput())
@@ -453,7 +456,7 @@ export function PublicationEditor({ accountId, publication, notice, revision, on
         </div>
       )}
       <footer className="flex shrink-0 flex-wrap items-center gap-2 border-t border-line px-4 py-3">
-        <Button variant="secondary" action="redes-save" data={{ 'data-redes-save': '' }} onClick={() => void save()} disabled={!idle || !media.length}>
+        <Button variant="secondary" action="redes-save" data={{ 'data-redes-save': '' }} onClick={() => void save()} disabled={!idle || !canSave}>
           {busy === 'save' ? 'Salvando…' : 'Salvar rascunho'}
         </Button>
         <span className="ml-auto flex gap-2">

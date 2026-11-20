@@ -106,8 +106,9 @@ import { EMAIL_DIR } from './email/email-store'
 import { createEmailBatchStore } from './email/batches'
 import type { EmailOrganizer } from './email/organize'
 import { createEmailClickGuard, createEmailService, type EmailService } from './email/service'
-import { createRedesService, type RedesService } from './redes/service'
+import { createRedesService, REDES_ACCOUNT_MISSING_MESSAGE, type RedesService } from './redes/service'
 import { testMediaHost } from './redes/media-host'
+import { createRedesAssistant } from './redes/assistant-tools'
 // 73: comentários
 import type { RedesCommentsPayload } from '../shared/redes'
 // fim 73
@@ -1404,6 +1405,8 @@ function createAppServices(userData: string): AppServices {
       calendar,
     }
   }
+  // Contrato 76: as ferramentas do Instagram (a fila, os comentários guardados e o rascunho sem publicar) e o `REDES.md`.
+  const redesAssistant = createRedesAssistant({ service: redes, locked: () => lockService?.isLocked() ?? false, timeZone })
   const assistantSources = {
     state: assistantState,
     guide: () => readFile(guidePath, 'utf8'),
@@ -1415,6 +1418,8 @@ function createAppServices(userData: string): AppServices {
     whatsapp: { exportRecent: (folder: string) => whatsapp.exportRecent(folder), exportChats: (folder: string, chatIds: readonly string[], days: number) => whatsapp.exportChats(folder, chatIds, days) },
     // Contrato 45: o cache do email (só leitura do store; bloqueado, nada).
     email: { export: (folder: string) => exportEmail(emailExport, folder) },
+    // Contrato 76: o guardado das redes (sem ler a Meta); bloqueado, nada.
+    redes: () => redesAssistant.sourceAccounts(),
     ...devLog,
   }
   // Contrato 45: o email do Assistente. O `EMAILS.md` e as mensagens já baixadas saem do cache (sem servidor); as
@@ -1480,6 +1485,8 @@ function createAppServices(userData: string): AppServices {
     },
     preferredCalendar: async () => (await settings.get()).inviteCalendarId,
     tasks: () => automations.listTasks(),
+    // Contrato 76: as contas do Instagram conectadas (o id e o @).
+    instagramAccounts: async () => redes.state().accounts.map((account) => ({ id: account.id, username: account.username })),
     now: Date.now,
     timeZone,
   }
@@ -1493,7 +1500,11 @@ function createAppServices(userData: string): AppServices {
       extract: (text) => extractActions(text, actionResolver),
       // Contrato 45 (CA7): com conta de email e a fonte ligada, as ferramentas de busca e leitura. Contrato 56: e as de
       // organizar (só aqui, no Assistente interativo; as automações recebem só as de leitura).
-      tools: (scope) => (chatSourcesOf(scope).email && email.accounts().length > 0 && !emailLocked() ? [...emailTools.tools, ...emailTools.organizeTools] : []),
+      // Contrato 76: com a fonte Redes ligada e uma conta do Instagram, as ferramentas do Instagram.
+      tools: (scope) => [
+        ...(chatSourcesOf(scope).email && email.accounts().length > 0 && !emailLocked() ? [...emailTools.tools, ...emailTools.organizeTools] : []),
+        ...(chatSourcesOf(scope).redes && redes.state().accounts.length > 0 && !emailLocked() ? redesAssistant.tools : []),
+      ],
       endTurn: (turn, outcome) => emailTools.organizer?.endTurn(turn, outcome) ?? Promise.resolve(),
     },
     settings,
@@ -1817,6 +1828,16 @@ function createAppServices(userData: string): AppServices {
     calendar: macCalendar,
     events: createChatEventsStore(userData, devLog),
     reminders: { list: () => automations.listTasks(), update: (id, change) => automations.updateReminder(id, change), remove: (id) => automations.deleteTask({ id }) },
+    // Contrato 76: o rascunho do Instagram sem mídia, pelo `savePublication` das redes (nunca publica nem agenda).
+    instagram: {
+      accounts: () => redes.state().accounts.map((account) => ({ id: account.id, username: account.username })),
+      exists: (publicationId) => redes.hasPublication(publicationId),
+      createDraft: async ({ accountId, caption, at, publicationId }) => {
+        const saved = await redes.savePublication({ accountId, caption, mediaPaths: [], altTexts: {}, scheduledAt: at }, { draftWithoutMedia: true, newId: publicationId })
+        if (saved.ok) return { ok: true, publicationId: saved.publication.id }
+        return { ok: false, error: saved.problems.includes(REDES_ACCOUNT_MISSING_MESSAGE) ? 'missing' : 'invalid' }
+      },
+    },
     ...devLog,
   })
   return {
@@ -2177,6 +2198,14 @@ function registerIpc(services: AppServices): void {
   // Contrato 78: o evento só é gravado aqui, no clique em "Pôr na agenda"; o lembrete só muda ou sai no clique do cartão.
   handle('scribe:chat-action-event', appOrigin, (_event, request) => chatActions.event(request).catch((): ChatActionResult => ({ ok: false, error: 'invalid' })))
   handle('scribe:chat-action-reminder-change', appOrigin, (_event, request) => chatActions.reminderChange(request).catch((): ChatActionResult => ({ ok: false, error: 'invalid' })))
+  // Contrato 76: o rascunho do Instagram só entra na fila aqui, no clique em "Criar rascunho"; a janela do clique abre o editor.
+  handle('scribe:chat-action-instagram-draft', appOrigin, (event, request) =>
+    chatActions
+      .instagramDraft(request, (target) => {
+        if (!lockService?.isLocked()) sendTo(event.sender, 'scribe:open-redes', target)
+      })
+      .catch((): ChatActionResult => ({ ok: false, error: 'invalid' })),
+  )
   // Contrato 21: o cartão de aprovação de uma ferramenta MCP e a aba "Conexões". Nenhum segredo volta por aqui.
   handle('scribe:chat-approval', appOrigin, (_event, request) => chat.answerApproval(request))
   handle('scribe:mcp-chat-servers', appOrigin, () => mcp.chatServers())

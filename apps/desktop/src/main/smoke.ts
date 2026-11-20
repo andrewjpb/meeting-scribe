@@ -81,6 +81,10 @@
 // Contrato 73: no mesmo `redesUiChecks`, Redes › Comentários: a lista por mídia com a miniatura, os não lidos no nível e na
 // raiz zerando ao abrir, a resposta aninhada, ocultar/mostrar, excluir com confirmação e o comentário novo pela atualização.
 // fim 73
+//
+// Contrato 76: logo depois da tela Redes, o Instagram no Assistente (`redesAssistantChecks`): a fonte "Redes" no Contexto
+// com o `REDES.md`, o cartão "Rascunho para o Instagram" até o rascunho na fila e o editor aberto, e a ferramenta que lista
+// a fila, com o agente ACP falso.
 import { appendFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { spawn as spawnChild } from 'node:child_process'
 import { request as httpRequest } from 'node:http'
@@ -120,7 +124,7 @@ import { BRANDING_DIR } from './branding/service'
 import { summaryInput, summaryLines } from './claude-cli/summary'
 import { MENU_IDS } from './menu'
 import { CHAT_CORPUS_DIR, CHAT_INDEX_FILE, CHAT_SCOPE_DIR, corpusFileSuffix } from './chat/corpus'
-import { AUTOMATIONS_FILE, EMAIL_SEARCH_FILE, GUIDE_FILE, isSourceFile, STATE_FILE } from './chat/sources'
+import { AUTOMATIONS_FILE, EMAIL_SEARCH_FILE, GUIDE_FILE, isSourceFile, REDES_FILE, REDES_PUBLICATIONS_FILE, STATE_FILE } from './chat/sources'
 import { CHAT_EVENTS_FILE } from './chat/events-store'
 import { CHATS_DIR } from './chat/store'
 import type { FakeDriveFile } from './google/fake-google'
@@ -453,6 +457,16 @@ async function tapeFps(contents: WebContents): Promise<number> {
   const before = await evaluate<number>(contents, `${probeJs('tapeFrames()')} ?? 0`)
   await wait(1000)
   return (await evaluate<number>(contents, `${probeJs('tapeFrames()')} ?? 0`)) - before
+}
+
+/**
+ * Grava um arquivo que o app aberto lê (o `meetings.json` semeado com a janela no ar): num temporário e com `rename`, para o
+ * app nunca ler o arquivo pela metade (ele guardaria o "inválido" como `.corrupt-…` e recomeçaria a lista vazia).
+ */
+function writeFileAtomicSync(file: string, content: string): void {
+  const temp = `${file}.smoke-${process.pid}-${Date.now()}.tmp`
+  writeFileSync(temp, content)
+  renameSync(temp, file)
 }
 
 function readMeetings(userDataDir: string): Meeting[] {
@@ -1088,11 +1102,11 @@ function seedMeetings(userDataDir: string): void {
     { id: 'smoke-2', title: 'Revisão do contrato com a agência', startedAt: at(1, 16, 10), durationMs: 47 * 60_000, sources: { mic: true, system: true }, audioPath: null, transcriptPath: null },
     { id: 'smoke-3', title: 'Notas da visita à fábrica', startedAt: at(3, 11, 0), durationMs: 72 * 60_000, sources: { mic: true, system: false }, audioPath: null, transcriptPath: null },
   ]
-  writeFileSync(join(userDataDir, MEETINGS_FILE), `${JSON.stringify({ version: 1, meetings }, null, 2)}\n`)
+  writeFileAtomicSync(join(userDataDir, MEETINGS_FILE), `${JSON.stringify({ version: 1, meetings }, null, 2)}\n`)
   // A primeira reunião tem a transcrição da fixture: o detalhe fotografado abre com texto salvo.
   const transcripts = join(userDataDir, 'meetings')
   mkdirSync(transcripts, { recursive: true })
-  writeFileSync(join(transcripts, 'smoke-1.json'), `${JSON.stringify(transcriptDocument('smoke-1', readSessionFixture()), null, 2)}\n`)
+  writeFileAtomicSync(join(transcripts, 'smoke-1.json'), `${JSON.stringify(transcriptDocument('smoke-1', readSessionFixture()), null, 2)}\n`)
 }
 
 /**
@@ -1142,9 +1156,9 @@ function seedListMeetings(userDataDir: string): void {
     { id: 'smoke-5', title: 'Entrevista com o fornecedor de nuvem', startedAt: at(12, 15, 30), durationMs: 58 * 60_000, sources: { mic: true, system: true }, audioPath: null, transcriptPath: null },
     { id: 'smoke-6', title: 'Retrospectiva do ano', startedAt: at(400, 17, 0), durationMs: 15 * 60_000, sources: { mic: false, system: true }, audioPath: null, transcriptPath: null },
   ]
-  writeFileSync(join(userDataDir, MEETINGS_FILE), `${JSON.stringify({ version: 1, meetings: [...readMeetings(userDataDir), ...more] }, null, 2)}\n`)
+  writeFileAtomicSync(join(userDataDir, MEETINGS_FILE), `${JSON.stringify({ version: 1, meetings: [...readMeetings(userDataDir), ...more] }, null, 2)}\n`)
   for (const summary of Object.values(LIST_SUMMARIES)) {
-    writeFileSync(join(userDataDir, 'meetings', `${summary.meetingId}.summary.json`), `${JSON.stringify(summary, null, 2)}\n`)
+    writeFileAtomicSync(join(userDataDir, 'meetings', `${summary.meetingId}.summary.json`), `${JSON.stringify(summary, null, 2)}\n`)
   }
   // Contrato 13, CA8: duas anotações (e uma em branco, que não conta) numa reunião sem resumo.
   const now = new Date().toISOString()
@@ -11638,6 +11652,163 @@ async function redesUiChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => v
 }
 
 /**
+ * Contrato 76 (CA14), com o Instagram falso e o agente ACP falso: a fonte "Redes" no Contexto (desligada por padrão; ligada,
+ * o `REDES.md` na pasta da conversa com a conta, a fila e o comentário não lido, sem token), o pedido "escreva um post" que
+ * vira o cartão "Rascunho para o Instagram" (nada criado antes do clique), "Criar rascunho" pondo o rascunho sem mídia na
+ * fila (nada publicado: nenhum POST à Meta) e abrindo o editor em Redes, e a ferramenta `listar_publicacoes_instagram`
+ * devolvendo a fila. Prints `assistente-contexto-redes` e `assistente-cartao-rascunho`, nos dois temas. Termina sem conta.
+ */
+async function redesAssistantChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => void, checks: Record<string, Check>, shots: Screenshot[]): Promise<void> {
+  const startedAt = Date.now()
+  const fake = ctx.fixtures.instagram
+  const themeBefore = readSettings(ctx.userDataDir).theme ?? 'system'
+  const transportBefore = readSettings(ctx.userDataDir).claudeTransport
+  nativeTheme.themeSource = 'light'
+  const win = ctx.openWindow({})
+  watch(win)
+  await loadAndWait(win)
+  const contents = win.webContents
+  if (themeBefore !== 'system') await evaluate(contents, "window.__scribeApi.invoke('scribe:settings-update', { theme: 'system' }).then(() => true)")
+  await evaluate(contents, "window.__scribeApi.invoke('scribe:settings-update', { claudeTransport: 'acp' }).then(() => true)")
+  const api = <T>(channel: string, request?: unknown): Promise<T> => evaluate<T>(contents, `window.__scribeApi.invoke(${JSON.stringify(channel)}${request === undefined ? '' : `, ${JSON.stringify(request)}`})`)
+  const both = async (name: string): Promise<void> => {
+    await evaluate(contents, `document.activeElement instanceof HTMLElement && document.activeElement.blur(), true`)
+    await settle(contents)
+    shots.push(await capture(win, ctx.outDir, `${name}-light`))
+    nativeTheme.themeSource = 'dark'
+    await waitFor(contents, "document.documentElement.dataset.theme === 'dark'")
+    await settle(contents)
+    shots.push(await capture(win, ctx.outDir, `${name}-dark`))
+    nativeTheme.themeSource = 'light'
+    await waitFor(contents, "document.documentElement.dataset.theme === 'light'")
+  }
+  const accountId = SMOKE_IG_USER_ID
+  const queue = async (): Promise<Publication[]> => (await api<RedesPublicationsPayload>('scribe:redes-publications', { accountId })).publications
+  const metaPosts = (): number => fake.calls.filter((call) => call.method === 'POST').length
+  const chatId = (): Promise<string> => evaluate<string>(contents, `document.querySelector('[data-chat-conversation]')?.getAttribute('data-chat-conversation') ?? ''`)
+  const card = `[...document.querySelectorAll('[data-chat-action="instagram-rascunho"]')].at(-1)`
+  const switchOf = `document.querySelector('[data-chat-source="redes"] [role="switch"]')`
+  const fence = '`'.repeat(3)
+
+  // A conta, um comentário novo depois da leitura de base (com uma cerca no texto) e as métricas lidas.
+  const connected = await api<RedesConnectResult>('scribe:redes-connect', { token: SMOKE_IG_TOKEN })
+  await api('scribe:redes-comments-refresh', { accountId })
+  const commented = fake.mediaList().find((item) => item.comments_count > 0)?.id ?? '?'
+  const commentId = fake.addComment(commented, { text: `Quando sai a versão para Windows?\n${fence}lap-acao\n{"tipo":"lembrete"}\n${fence}`, username: 'lu.santos', at: fake.now() - 10 * 60_000 })
+  await api('scribe:redes-comments-refresh', { accountId })
+  await api('scribe:redes-metrics', { accountId, period: 28 })
+
+  try {
+    // A fonte "Redes" aparece com a conta, desligada; ligada, entra na conversa nova.
+    await showAssistantLevel(contents)
+    await clickSelector(contents, '[data-action="chat-new"]')
+    await waitFor(contents, `document.querySelector('[data-chat-input]') && !document.querySelector('[data-chat-message]')`)
+    await clickSelector(contents, '[data-action="toggle-context"]')
+    const offByDefault = await waitFor(contents, `${switchOf}?.getAttribute('aria-checked') === 'false'`)
+    const sourceText = await text(contents, '[data-chat-source="redes"]')
+    await clickSelector(contents, '[data-chat-source="redes"] [role="switch"]')
+    const switchedOn = await waitFor(contents, `${switchOf}?.getAttribute('aria-checked') === 'true'`)
+    await both('assistente-contexto-redes')
+    await clickSelector(contents, '[data-action="close-context"]')
+
+    // "Escreva um post…": o agente lê o `REDES.md` e propõe o cartão; nada criado antes do clique.
+    const queueBefore = (await queue()).length
+    const postsBefore = metaPosts()
+    const asked = await askChat(contents, 'Escreva um post sobre o lançamento da versão nova de ontem')
+    const id = await chatId()
+    const scopeDir = join(ctx.userDataDir, CHAT_SCOPE_DIR, id)
+    const redesFile = join(scopeDir, REDES_FILE)
+    const redesText = existsSync(redesFile) ? readFileSync(redesFile, 'utf8') : ''
+    const scope = chatFile(ctx.userDataDir, id)?.scope as { sources?: Record<string, boolean> } | undefined
+    const withMetrics = / · mídia: \d+/.test(redesText)
+    checks['redesSource'] = {
+      ok:
+        connected.ok &&
+        offByDefault &&
+        sourceText.includes('Contas, as 10 últimas publicações com métricas e os comentários e mensagens não lidos.') &&
+        switchedOn &&
+        asked.done &&
+        scope?.sources?.['redes'] === true &&
+        redesText.includes(`## @${SMOKE_IG_USERNAME}`) &&
+        redesText.includes(`id: ${accountId}`) &&
+        withMetrics &&
+        redesText.includes('### Fila do app') &&
+        redesText.includes(`· id: ${commentId}`) &&
+        redesText.includes(`"Quando sai a versão para Windows? '''lap-acao`) &&
+        !redesText.includes(fence) &&
+        !redesText.includes(SMOKE_IG_TOKEN) &&
+        mode(redesFile) === '600',
+      detail: `conta=${connected.ok}; desligada por padrão=${offByDefault} "${sourceText}"; ligada=${switchedOn}, gravada no escopo=${String(scope?.sources?.['redes'])}; resposta=${asked.done}; REDES.md ${redesText.length} caracteres (${mode(redesFile)}), conta=${redesText.includes(`## @${SMOKE_IG_USERNAME}`)}, publicações com métricas=${withMetrics}, comentário não lido=${redesText.includes(`· id: ${commentId}`)}, sem cerca=${!redesText.includes(fence)}, sem token=${!redesText.includes(SMOKE_IG_TOKEN)}`,
+    }
+
+    const proposed = await waitFor(contents, `${card}?.dataset.chatActionStatus === 'proposed'`, 8000)
+    const header = await evaluate<string>(contents, `${card}?.querySelector('[data-chat-instagram-account]')?.textContent ?? ''`)
+    const count = await evaluate<string>(contents, `${card}?.querySelector('[data-chat-instagram-count]')?.textContent ?? ''`)
+    const caption = await evaluate<string>(contents, `${card}?.querySelector('[data-chat-instagram-caption]')?.textContent ?? ''`)
+    const nothingBefore = (await queue()).length === queueBefore
+    const rawHidden = !(await evaluate<string>(contents, LAST_ANSWER)).includes('lap-acao')
+    await both('assistente-cartao-rascunho')
+    await evaluate(contents, `${card}?.querySelector('[data-action="chat-action-instagram-create"]')?.click(), true`)
+    const opened = await waitFor(contents, `${routeIs('redes')} && document.querySelector('[data-redes-title]')?.textContent === '@${SMOKE_IG_USERNAME} · Publicações' && document.querySelector('[data-redes-editor]')`, 8000)
+    const after = await queue()
+    const draft = after.find((item) => item.caption.startsWith('Ontem foi dia de lançamento'))
+    const editorFor = await evaluate<string>(contents, `document.querySelector('[data-redes-editor]')?.getAttribute('data-redes-editor') ?? ''`)
+    const editorCaption = await evaluate<string>(contents, `document.querySelector('[data-redes-caption]')?.value ?? ''`)
+    const saved = chatFile(ctx.userDataDir, id)?.messages.at(-1)?.actions?.[0] as (SmokeActionFile & { publicationId?: string | null }) | undefined
+    const again = await api<{ ok: boolean; error?: string }>('scribe:chat-action-instagram-draft', { chatId: id, index: (chatFile(ctx.userDataDir, id)?.messages.length ?? 1) - 1, actionId: saved?.id ?? 'x' })
+    const queueAfter = (await queue()).length
+    checks['redesDraftCard'] = {
+      ok:
+        proposed &&
+        header === `· @${SMOKE_IG_USERNAME}` &&
+        /^\d{3}\/2\.200 · 2 # · 0 @$/.test(count) &&
+        caption.startsWith('Ontem foi dia de lançamento') &&
+        nothingBefore &&
+        rawHidden &&
+        opened &&
+        after.length === queueBefore + 1 &&
+        draft?.state === 'rascunho' &&
+        draft.media.length === 0 &&
+        draft.scheduledAt === null &&
+        editorFor === draft.id &&
+        editorCaption === draft.caption &&
+        saved?.status === 'done' &&
+        saved.result === 'Rascunho criado · abra em Redes' &&
+        saved.publicationId === draft.id &&
+        again.ok === false &&
+        again.error === 'done' &&
+        queueAfter === queueBefore + 1 &&
+        metaPosts() === postsBefore,
+      detail: `cartão=${proposed} "${header}" "${count}" "${caption.slice(0, 60)}"; nada antes do clique=${nothingBefore}; bloco escondido=${rawHidden}; editor aberto=${opened} (${editorFor}); fila ${queueBefore} -> ${after.length} -> ${queueAfter}, rascunho ${draft ? `${draft.state}, ${draft.media.length} mídia(s)` : 'ausente'}; cartão ${saved?.status ?? '?'} "${saved?.result ?? ''}"; de novo -> ${JSON.stringify(again)}; POST à Meta ${postsBefore} -> ${metaPosts()}`,
+    }
+
+    // A ferramenta `listar_publicacoes_instagram` pelo agente falso devolve a fila (com o rascunho do cartão).
+    await clickNav(contents, 'assistente')
+    await waitFor(contents, `${routeIs('assistente')} && document.querySelector('[data-chat-conversation="${id}"]')`, 8000)
+    const listed = await askChat(contents, 'Liste a fila do Instagram')
+    const toolFile = join(scopeDir, REDES_PUBLICATIONS_FILE)
+    const toolText = existsSync(toolFile) ? readFileSync(toolFile, 'utf8') : ''
+    checks['redesTools'] = {
+      ok:
+        listed.done &&
+        toolText.includes(`- id: ${draft?.id ?? '?'} · @${SMOKE_IG_USERNAME} · estado: rascunho · sem mídia`) &&
+        listed.answer.includes('Na fila do Instagram: 1 publicação(ões).') &&
+        listed.answer.includes('«Ontem foi dia de lançamento') &&
+        listed.answer.includes('(rascunho)') &&
+        mode(toolFile) === '600',
+      detail: `resposta=${listed.done} "${listed.answer.slice(0, 160)}"; ${REDES_PUBLICATIONS_FILE} com o rascunho=${toolText.includes(`- id: ${draft?.id ?? '?'}`)} (${mode(toolFile)})`,
+    }
+  } finally {
+    await api('scribe:redes-remove', { accountId })
+    await evaluate(contents, `window.__scribeApi.invoke('scribe:settings-update', { claudeTransport: '${transportBefore}' }).then(() => true)`)
+    if (themeBefore !== 'system') await evaluate(contents, `window.__scribeApi.invoke('scribe:settings-update', { theme: '${themeBefore}' }).then(() => true)`)
+    nativeTheme.themeSource = 'system'
+    win.destroy()
+    console.log(`redes: assistente em ${((Date.now() - startedAt) / 1000).toFixed(1)} s`)
+  }
+}
+
+/**
  * Contrato 55 (CA26), numa janela que troca de tema no lugar (cada print em claro e escuro, no mesmo estado): a árvore
  * de pastas do servidor falso na ordem D1, com a contagem; ⌘ clique em 3 mensagens ("3 selecionadas" e o resumo), o
  * alvo de arrastar, o "Mover para…" por ⇧⌘M com Enter levando as 3 para "Arquivo"; arrastar uma para "Pendentes"; o erro
@@ -13097,6 +13268,10 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
     // sem conta e sem armazenamento.
     await redesUiChecks(ctx, watch, redesUi, screenshots)
 
+    // Contrato 76: o Instagram no Assistente (a fonte, o cartão do rascunho e a ferramenta), com o Instagram e o agente
+    // ACP falsos; antes do bloqueio (que recusa o canal novo junto com os outros cartões). Termina sem conta.
+    await redesAssistantChecks(ctx, watch, redesUi, screenshots)
+
     // Contrato 22: bloqueio do app, por último (a senha criada vale para o userData inteiro).
     await lockChecks(ctx, watch, lock, screenshots)
 
@@ -13199,6 +13374,8 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
   // 74: mensagens
   for (const name of ['messagesList', 'messageSend', 'messageWindowNote', 'messagesUnreadBadge', 'messagesDenied']) if (!redesUi[name]) failures.push(`redes (tela) ${name}: não executado`)
   // fim 74
+  // Contrato 76: o Instagram no Assistente.
+  for (const name of ['redesSource', 'redesDraftCard', 'redesTools']) if (!redesUi[name]) failures.push(`redes (tela) ${name}: não executado`)
   for (const [name, check] of Object.entries(invite)) if (!check.ok) failures.push(`convites ${name}: ${check.detail}`)
   for (const name of ['convite-1', 'convite-2', 'convite-3', 'convite-4', 'convite-5', 'convite-6', 'convite-7', 'convite-8', 'convite-9', 'convite-10', 'convite-11', 'convite-estados', 'convite-lista', 'convite-configuracoes', 'convite-regra-1', 'convite-regra-2', 'convite-regra-3', 'convite-sugestao-4', 'convite-sugestao-5']) if (!invite[name]) failures.push(`convites ${name}: não executado`)
   for (const [name, check] of Object.entries(lock)) if (!check.ok) failures.push(`bloqueio ${name}: ${check.detail}`)
@@ -13240,7 +13417,8 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
   // Contrato 74: +6 (a conversa, fora da janela de 24 h e sem acesso às mensagens, nos dois temas).
   // Contrato 73: +2 (os comentários com a resposta aberta, nos dois temas).
   // Contrato 75: +2 (as métricas da conta em 28 dias e a tabela das publicações, nos dois temas).
-  const expectedShots = SCREENS.length * THEMES.length + 175
+  // Contrato 76: +4 (a fonte Redes ligada no Contexto e o cartão do rascunho para o Instagram, nos dois temas).
+  const expectedShots = SCREENS.length * THEMES.length + 179
   if (screenshots.length !== expectedShots) failures.push(`${screenshots.length} PNGs em vez de ${expectedShots}`)
   for (const shot of screenshots) {
     if (shot.name === MEETING_PROMPT_SHOT) {

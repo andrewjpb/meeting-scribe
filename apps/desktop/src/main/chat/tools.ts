@@ -59,6 +59,11 @@ export interface AssistantTool {
   rounds?: number | undefined
   /** Contrato 56: as ferramentas com o mesmo id viram um passo só na tela, trocado a cada chamada. */
   stepId?: string | undefined
+  /**
+   * Contrato 76: cria algo no app sem publicar nem enviar (o rascunho do Instagram): a frase que a instrução acrescenta à
+   * lista ("uma que cria um rascunho no Instagram, sem publicar").
+   */
+  creates?: string | undefined
 }
 
 /** O bloco ```lap-ferramenta … ``` numa linha própria. */
@@ -104,7 +109,15 @@ export function toolsInstructions(tools: readonly AssistantTool[], options: { ro
   const fence = '```'
   // Contrato 56: com as de organizar o email, a lista deixa de ser "só de leitura".
   const changing = tools.filter((tool) => tool.changes).map((tool) => tool.name)
-  const kind = options.sends ? 'de leitura e, nesta execução, uma de envio de email' : changing.length ? `de leitura e ${changing.length === 1 ? 'uma que muda' : 'algumas que mudam'} o email (${changing.join(', ')})` : 'só de leitura'
+  const creating = options.sends ? [] : tools.flatMap((tool) => (tool.creates ? [tool.creates] : []))
+  const reading = options.sends
+    ? 'de leitura e, nesta execução, uma de envio de email'
+    : changing.length
+      ? `de leitura e ${changing.length === 1 ? 'uma que muda' : 'algumas que mudam'} o email (${changing.join(', ')})`
+      : creating.length
+        ? 'de leitura'
+        : 'só de leitura'
+  const kind = `${reading}${creating.map((phrase) => `, e ${phrase}`).join('')}`
   const result = options.sends ? 'O app roda a ferramenta e devolve o resultado (o nome de um arquivo da pasta para ler, ou uma linha dizendo se o envio saiu ou foi recusado); aí você continua.' : 'O app roda a ferramenta, grava o resultado num arquivo da pasta e devolve o nome dele; aí você lê o arquivo e responde.'
   const longer = Math.max(0, ...tools.map((tool) => tool.rounds ?? 0))
   const rounds = options.rounds ?? TOOL_ROUNDS_MAX

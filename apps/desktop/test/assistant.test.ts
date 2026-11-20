@@ -208,8 +208,8 @@ describe('cartões: só com o clique, uma vez só (CA3, CA5)', () => {
 
   it('os canais novos (chat-action-*) são recusados com o app bloqueado', () => {
     const channels = INVOKE_CHANNELS.filter((channel) => channel.startsWith('scribe:chat-action-'))
-    // Contrato 78: o evento no Calendário e alterar ou apagar um lembrete.
-    expect(channels.sort()).toEqual(['scribe:chat-action-event', 'scribe:chat-action-reminder', 'scribe:chat-action-reminder-change', 'scribe:chat-action-state'])
+    // Contrato 78: o evento no Calendário e alterar ou apagar um lembrete. Contrato 76: o rascunho do Instagram.
+    expect(channels.sort()).toEqual(['scribe:chat-action-event', 'scribe:chat-action-instagram-draft', 'scribe:chat-action-reminder', 'scribe:chat-action-reminder-change', 'scribe:chat-action-state'])
     for (const channel of channels) expect(WHEN_LOCKED[channel]).toBe('refused')
     // Nenhum caminho novo de envio: o WhatsApp continua só com o `whatsapp-send` e, no contrato 39, o anexo pelo mesmo
     // guarda do clique (`whatsapp-send-media`). Contrato 42: o email entra com o `email-send`, também só com o clique.
