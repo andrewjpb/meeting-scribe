@@ -1,8 +1,11 @@
-import { CircleCheck, Folder, GripVertical, MoreHorizontal, Plus, TriangleAlert, X } from 'lucide-react'
+import { CircleCheck, Folder, GripVertical, Info, MoreHorizontal, Plus, TriangleAlert, X } from 'lucide-react'
 import { useEffect, useState, type DragEvent } from 'react'
+import { useNavigate } from 'react-router'
 import type { EmailRule, EmailRuleState, EmailRulesError } from '@shared/email-rules'
 import { EMAIL_RULE_CONDITIONS_MAX, EMAIL_RULES_MAX } from '@shared/email-rules-limits'
+import { settingsPath } from '@shared/routes'
 import { EMAIL_RULES_DESCRIPTION } from '@shared/settings-index'
+import { useSettings } from '../../app/settingsStore'
 import { Button } from '../../design/Button'
 import { CONTROL_CLASS } from '../../design/Field'
 import { Icon } from '../../design/Icon'
@@ -11,14 +14,17 @@ import { Section } from '../../design/Section'
 import { Segmented } from '../../design/Segmented'
 import { Switch } from '../../design/Switch'
 import { useEmailUi } from '../email/emailUi'
+import { useInvites } from '../email/inviteStore'
 import { INLINE_INPUT, MENU_ITEM, MENU_PANEL, useInlineMenu } from '../meetings/menu'
 import { EmailRow } from './EmailSignatureSection'
 import {
   ACTION_KINDS,
   ACTION_LABELS,
   availableActions,
+  CALENDAR_UNAVAILABLE_HINTS,
   CONDITION_FIELDS,
   CONDITION_LABELS,
+  conditionHasValue,
   draftToRule,
   moveRule,
   newRuleDraft,
@@ -31,7 +37,10 @@ import {
   rulesSaveOutcome,
   runResultText,
   validateRuleDraft,
+  POP3_ACTION_KINDS,
   type ActionKind,
+  type CalendarAvailability,
+  type CalendarName,
   type ConditionField,
   type FolderName,
   type RuleDraft,
@@ -46,6 +55,21 @@ interface RulesProps {
   name: FolderName
   /** Mensagens da Caixa de Entrada guardadas no app (o T da contagem do "Executar agora"). */
   inboxCount: number
+}
+
+/**
+ * Contrato 64: a agenda padrão das Configurações (o nome, se ela está na lista) e se falta escolher a agenda ou dar o
+ * acesso ao Calendário do Mac. A regra só usa a agenda gravada (`inviteCalendarId`), nunca uma escolhida por ela.
+ */
+function useRuleCalendar(): { name: CalendarName; needsSetup: boolean } {
+  const saved = useSettings((state) => state.settings.inviteCalendarId)
+  const calendars = useInvites((state) => state.calendars)
+  useEffect(() => {
+    if (useInvites.getState().calendars === null) void useInvites.getState().loadCalendars()
+  }, [])
+  const full = calendars?.ok === true && calendars.access === 'full'
+  const name = saved !== null && calendars?.ok ? (calendars.calendars.find((item) => item.id === saved)?.title ?? null) : null
+  return { name, needsSetup: !full || name === null }
 }
 
 type Run = { ruleId: string; phase: 'counting' } | { ruleId: string; phase: 'ready'; count: number; token: string } | { ruleId: string; phase: 'running' } | { ruleId: string; phase: 'done'; text: string } | { ruleId: string; phase: 'stale' } | { ruleId: string; phase: 'error'; text: string }
@@ -64,6 +88,9 @@ export function EmailRulesSection({ accountId, pop3, hasTrash, name, inboxCount 
   const [run, setRun] = useState<Run | null>(null)
   const [announce, setAnnounce] = useState('')
   const [dragging, setDragging] = useState<string | null>(null)
+  // Contrato 64: "Pôr na agenda" nesta conta (R5b e fora do Mac desligam a ação).
+  const [calendarOk, setCalendarOk] = useState<CalendarAvailability>('ok')
+  const calendar = useRuleCalendar()
 
   useEffect(() => {
     let alive = true
@@ -73,6 +100,7 @@ export function EmailRulesSection({ accountId, pop3, hasTrash, name, inboxCount 
         if (result.ok) {
           setRules(result.rules)
           setStates(result.state)
+          setCalendarOk(result.invite.autoAdds ? 'auto' : result.invite.mac ? 'ok' : 'no-mac')
           setFailure(null)
         } else setFailure('Não foi possível ler as regras desta conta.')
       },
@@ -199,7 +227,7 @@ export function EmailRulesSection({ accountId, pop3, hasTrash, name, inboxCount 
         {full && <p className="text-12 text-text-muted">Limite de 50 regras por conta</p>}
         {pop3 && (
           <Note id="email-rules-pop3" icon={TriangleAlert} role="status">
-            Conta POP3 não tem pastas no servidor: as regras desta conta só podem <b>marcar como lida</b> e <b>não avisar</b>. Mover, estrela e apagar ficam desligados.
+            Conta POP3 não tem pastas no servidor: as regras desta conta só podem <b>marcar como lida</b>, <b>não avisar</b> e <b>pôr na agenda</b>. Mover, estrela e apagar ficam desligados.
           </Note>
         )}
         {failure && (
@@ -234,6 +262,8 @@ export function EmailRulesSection({ accountId, pop3, hasTrash, name, inboxCount 
                     accountId={accountId}
                     pop3={pop3}
                     hasTrash={hasTrash}
+                    calendarOk={calendarOk}
+                    calendar={calendar}
                     name={name}
                   />
                 ) : (
@@ -243,6 +273,7 @@ export function EmailRulesSection({ accountId, pop3, hasTrash, name, inboxCount 
                       number={index + 1}
                       total={rules?.length ?? 0}
                       name={name}
+                      calendar={calendar.name}
                       canEdit={!dirty}
                       onDragStart={() => setDragging(rule.id)}
                       onDragEnd={() => setDragging(null)}
@@ -272,7 +303,7 @@ export function EmailRulesSection({ accountId, pop3, hasTrash, name, inboxCount 
                         </span>
                       </p>
                     )}
-                    {run?.ruleId === rule.id && <RunPanel rule={rule} run={run} inboxCount={inboxCount} name={name} onExecute={(token) => void execute(rule, token)} onRecount={() => void count(rule)} onClose={() => setRun(null)} />}
+                    {run?.ruleId === rule.id && <RunPanel rule={rule} run={run} inboxCount={inboxCount} name={name} calendar={calendar.name} onExecute={(token) => void execute(rule, token)} onRecount={() => void count(rule)} onClose={() => setRun(null)} />}
                   </>
                 )}
               </li>
@@ -291,6 +322,8 @@ export function EmailRulesSection({ accountId, pop3, hasTrash, name, inboxCount 
                 accountId={accountId}
                 pop3={pop3}
                 hasTrash={hasTrash}
+                calendarOk={calendarOk}
+                calendar={calendar}
                 name={name}
               />
             </li>
@@ -307,6 +340,7 @@ interface RuleLineProps {
   number: number
   total: number
   name: FolderName
+  calendar: CalendarName
   canEdit: boolean
   onDragStart: () => void
   onDragEnd: () => void
@@ -318,10 +352,10 @@ interface RuleLineProps {
 }
 
 /** Uma regra na lista (CA17, D9, D10): alça, número, nome, resumo, ligar/desligar, "Executar agora" e ⋯. */
-function RuleLine({ rule, number, total, name, canEdit, onDragStart, onDragEnd, onToggle, onEdit, onMove, onDelete, onRun }: RuleLineProps) {
+function RuleLine({ rule, number, total, name, calendar, canEdit, onDragStart, onDragEnd, onToggle, onEdit, onMove, onDelete, onRun }: RuleLineProps) {
   const [open, setOpen] = useState(false)
   const { button, menu, onBlur, onKeyDown } = useInlineMenu(open, () => setOpen(false))
-  const summary = ruleSummaryParts(rule, name)
+  const summary = ruleSummaryParts(rule, name, calendar)
   const labelId = `email-rule-${rule.id}-label`
   const item = (key: string, label: string, act: () => void, disabled = false, danger = false) => (
     <button
@@ -387,7 +421,7 @@ function RuleLine({ rule, number, total, name, canEdit, onDragStart, onDragEnd, 
 }
 
 /** "Executar agora" (CA19): a contagem antes, sempre; só então o botão que executa com o token. */
-function RunPanel({ rule, run, inboxCount, name, onExecute, onRecount, onClose }: { rule: EmailRule; run: Run; inboxCount: number; name: FolderName; onExecute: (token: string) => void; onRecount: () => void; onClose: () => void }) {
+function RunPanel({ rule, run, inboxCount, name, calendar, onExecute, onRecount, onClose }: { rule: EmailRule; run: Run; inboxCount: number; name: FolderName; calendar: CalendarName; onExecute: (token: string) => void; onRecount: () => void; onClose: () => void }) {
   return (
     <div data-email-rule-run={run.phase} className="ml-[52px] flex flex-col gap-2 border-l-3 border-title bg-bg-sunken px-4 py-3">
       {run.phase === 'counting' && <p className="text-13 text-text-muted">Contando… (pode levar alguns segundos quando a regra olha o corpo)</p>}
@@ -396,7 +430,7 @@ function RunPanel({ rule, run, inboxCount, name, onExecute, onRecount, onClose }
         <>
           <p className="text-13 font-bold text-title">{`Executar “${rule.name}” agora?`}</p>
           <p data-email-rule-preview className="text-13 text-text">
-            {previewText(rule, run.count, inboxCount, name)}
+            {previewText(rule, run.count, inboxCount, name, calendar)}
           </p>
           <div className="flex flex-wrap gap-2">
             {run.count > 0 ? (
@@ -462,19 +496,28 @@ interface EditorProps {
   accountId: string
   pop3: boolean
   hasTrash: boolean
+  /** Contrato 64: "Pôr na agenda" nesta conta. */
+  calendarOk: CalendarAvailability
+  calendar: { name: CalendarName; needsSetup: boolean }
   name: FolderName
 }
 
 /** O editor da regra (CA18, D10, tela 10), no lugar da linha. */
-function RuleEditor({ number, editing, onChange, onSave, onCancel, onAskDelete, onDelete, accountId, pop3, hasTrash, name }: EditorProps) {
+function RuleEditor({ number, editing, onChange, onSave, onCancel, onAskDelete, onDelete, accountId, pop3, hasTrash, calendarOk, calendar, name }: EditorProps) {
+  const navigate = useNavigate()
   const { draft } = editing
-  const options = { pop3, hasTrash }
+  const options = { pop3, hasTrash, calendar: calendarOk }
   const problem = validateRuleDraft(draft, options)
   const set = (patch: Partial<RuleDraft>): void => onChange({ ...draft, ...patch })
   const setCondition = (index: number, patch: Partial<RuleDraft['conditions'][number]>): void => set({ conditions: draft.conditions.map((item, at) => (at === index ? { ...item, ...patch } : item)) })
   const setAction = (index: number, patch: Partial<RuleDraft['actions'][number]>): void => set({ actions: draft.actions.map((item, at) => (at === index ? { ...item, ...patch } : item)) })
   const nextAction = availableActions(draft, options)[0]
-  const kinds = pop3 ? ACTION_KINDS.filter((kind) => kind === 'read' || kind === 'silent') : ACTION_KINDS
+  const kinds = pop3 ? POP3_ACTION_KINDS : ACTION_KINDS
+  const optionLabel = (kind: ActionKind): string => {
+    if (kind === 'delete' && !hasTrash) return `${ACTION_LABELS[kind]} · Esta conta não tem Lixeira`
+    if (kind === 'calendar' && calendarOk !== 'ok') return `${ACTION_LABELS[kind]} · ${CALENDAR_UNAVAILABLE_HINTS[calendarOk]}`
+    return ACTION_LABELS[kind]
+  }
 
   const pickFolder = (index: number, anchor: DOMRect): void => {
     const current = draft.actions[index]?.moveTo ?? null
@@ -525,7 +568,7 @@ function RuleEditor({ number, editing, onChange, onSave, onCancel, onAskDelete, 
                 </option>
               ))}
             </select>
-            {condition.field !== 'hasAttachment' && <input aria-label="Texto da condição" data-email-rule-value value={condition.value} maxLength={220} onChange={(event) => setCondition(index, { value: event.target.value })} className={`${INLINE_INPUT} h-9 flex-1`} />}
+            {conditionHasValue(condition.field) && <input aria-label="Texto da condição" data-email-rule-value value={condition.value} maxLength={220} onChange={(event) => setCondition(index, { value: event.target.value })} className={`${INLINE_INPUT} h-9 flex-1`} />}
             <button type="button" aria-label="Tirar a condição" onClick={() => set({ conditions: draft.conditions.filter((_, at) => at !== index) })} className="no-drag inline-flex size-8 shrink-0 items-center justify-center text-text-muted hover:text-title">
               <Icon icon={X} size={14} />
             </button>
@@ -536,7 +579,7 @@ function RuleEditor({ number, editing, onChange, onSave, onCancel, onAskDelete, 
             <Icon icon={Plus} size={14} />
             Adicionar condição
           </button>
-          <span className="text-12 text-text-faint">Condições: remetente contém · destinatário ou Cc contém · assunto contém · corpo contém · tem anexo</span>
+          <span className="text-12 text-text-faint">Condições: remetente contém · destinatário ou Cc contém · assunto contém · corpo contém · tem anexo · é convite</span>
         </div>
       </div>
       <div className="flex flex-col gap-2">
@@ -544,25 +587,42 @@ function RuleEditor({ number, editing, onChange, onSave, onCancel, onAskDelete, 
         {draft.actions.map((action, index) => {
           const allowed = availableActions(draft, options, action.kind)
           return (
-            <div key={index} data-email-rule-action={action.kind} className="flex items-center gap-2">
-              <select aria-label="Ação" value={action.kind} onChange={(event) => setAction(index, { kind: event.target.value as ActionKind, moveTo: null })} className={SELECT}>
-                {kinds.map((kind) => (
-                  <option key={kind} value={kind} disabled={!allowed.includes(kind)}>
-                    {kind === 'delete' && !hasTrash ? `${ACTION_LABELS[kind]} · Esta conta não tem Lixeira` : ACTION_LABELS[kind]}
-                  </option>
-                ))}
-              </select>
-              {action.kind === 'move' && (
-                <button type="button" data-action="email-rule-pick-folder" onClick={(event) => pickFolder(index, event.currentTarget.getBoundingClientRect())} className={`${CONTROL_CLASS} inline-flex h-9 min-w-0 flex-1 items-center gap-2 px-2.5 text-left`}>
-                  <Icon icon={Folder} size={14} className="shrink-0 text-text-muted" />
-                  <span data-email-rule-folder className={`truncate ${action.moveTo ? '' : 'text-text-faint'}`}>
-                    {action.moveTo ? name(action.moveTo) : 'Escolher pasta…'}
-                  </span>
+            <div key={index} className="flex flex-col gap-1.5">
+              <div data-email-rule-action={action.kind} className="flex items-center gap-2">
+                <select aria-label="Ação" value={action.kind} onChange={(event) => setAction(index, { kind: event.target.value as ActionKind, moveTo: null })} className={SELECT}>
+                  {kinds.map((kind) => (
+                    <option key={kind} value={kind} disabled={!allowed.includes(kind)}>
+                      {optionLabel(kind)}
+                    </option>
+                  ))}
+                </select>
+                {action.kind === 'move' && (
+                  <button type="button" data-action="email-rule-pick-folder" onClick={(event) => pickFolder(index, event.currentTarget.getBoundingClientRect())} className={`${CONTROL_CLASS} inline-flex h-9 min-w-0 flex-1 items-center gap-2 px-2.5 text-left`}>
+                    <Icon icon={Folder} size={14} className="shrink-0 text-text-muted" />
+                    <span data-email-rule-folder className={`truncate ${action.moveTo ? '' : 'text-text-faint'}`}>
+                      {action.moveTo ? name(action.moveTo) : 'Escolher pasta…'}
+                    </span>
+                  </button>
+                )}
+                <button type="button" aria-label="Tirar a ação" onClick={() => set({ actions: draft.actions.filter((_, at) => at !== index) })} className="no-drag inline-flex size-8 shrink-0 items-center justify-center text-text-muted hover:text-title">
+                  <Icon icon={X} size={14} />
                 </button>
+              </div>
+              {action.kind === 'calendar' && (
+                <div data-email-rule-calendar-note className="flex flex-col gap-1 text-12 text-text-muted">
+                  <p className="flex items-center gap-1.5">
+                    <Icon icon={Info} size={14} className="shrink-0" />
+                    Só põe na agenda; não responde ao organizador.
+                  </p>
+                  {calendarOk === 'ok' && calendar.needsSetup && (
+                    <p data-email-rule-calendar-setup className="pl-5">
+                      <button type="button" data-action="email-rule-calendar-settings" onClick={() => void navigate(settingsPath('email', 'convites'))} className="no-drag font-medium text-accent underline decoration-1 underline-offset-3">
+                        Escolha a agenda e dê o acesso em Configurações › Email › Convites.
+                      </button>
+                    </p>
+                  )}
+                </div>
               )}
-              <button type="button" aria-label="Tirar a ação" onClick={() => set({ actions: draft.actions.filter((_, at) => at !== index) })} className="no-drag inline-flex size-8 shrink-0 items-center justify-center text-text-muted hover:text-title">
-                <Icon icon={X} size={14} />
-              </button>
             </div>
           )
         })}
@@ -571,7 +631,7 @@ function RuleEditor({ number, editing, onChange, onSave, onCancel, onAskDelete, 
             <Icon icon={Plus} size={14} />
             Adicionar ação
           </button>
-          <span className="text-12 text-text-faint">{pop3 ? 'Ações: marcar como lida · não avisar' : 'Ações: mover para a pasta · marcar como lida · marcar com estrela · apagar (vai para a Lixeira) · não avisar'}</span>
+          <span className="text-12 text-text-faint">{pop3 ? 'Ações: marcar como lida · não avisar · pôr na agenda' : 'Ações: mover para a pasta · marcar como lida · marcar com estrela · apagar (vai para a Lixeira) · não avisar · pôr na agenda'}</span>
         </div>
       </div>
       <label className="flex items-center gap-2 text-13 text-text">

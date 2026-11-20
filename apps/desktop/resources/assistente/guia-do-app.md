@@ -130,6 +130,8 @@ Avisos: "Avisar quando chega email" (a notificação do macOS; uma regra com "n�
 
 Convites (vale para todas as contas): "Agenda padrão" (onde entra o convite aceito, entre as agendas do Calendário do Mac em que dá para gravar; dá para trocar em cada convite), "Pôr na agenda ao aceitar" (ligado, Aceitar e Talvez também gravam o evento), "Acesso ao Calendário do Mac" (permitido, não pedido, com "Pedir acesso", ou negado, com "Abrir Ajustes"; o app nunca apaga evento que não criou) e "Sugerir evento quando o email não tem convite".
 
+Convite nas regras e "Sugerir evento": uma regra com a condição "É convite" e a ação "Pôr na agenda" grava o convite que chega na agenda padrão, sem responder ao organizador e sem pedir acesso ao Calendário (não existe nas contas Gmail e Microsoft, que já põem sozinhas, nem fora do Mac). "Sugerir evento" (desligado por padrão) põe um botão na leitura de um email sem convite: no seu clique, o Claude lê só o texto daquele email e propõe título, data, hora, duração e link num cartão "Sugestão — confira", com os campos editáveis; nada vai para a agenda sem o clique em "Pôr na agenda", e ninguém recebe resposta.
+
 <!-- aba: plugins -->
 ### Plugins
 

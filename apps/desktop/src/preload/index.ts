@@ -81,6 +81,13 @@ const api: ScribeApi = {
     ipcRenderer.send('scribe:email-click', clickToken)
     return ipcRenderer.invoke('scribe:invite-reply', { accountId: request.accountId, id: request.id, partstat: request.partstat, clickToken })
   },
+  // Contrato 64: mandar o texto do email ao Claude é saída de dado: a mesma ativação viva e um token de clique próprio.
+  inviteSuggest(request) {
+    if (!navigator.userActivation.isActive) return Promise.resolve({ ok: false, error: 'click' })
+    const clickToken = crypto.randomUUID()
+    ipcRenderer.send('scribe:invite-suggest-click', clickToken)
+    return ipcRenderer.invoke('scribe:invite-suggest', { accountId: request.accountId, id: request.id, clickToken })
+  },
   on(channel, listener) {
     assertChannel(MAIN_EVENT_CHANNELS, channel)
     const wrapped = (_event: IpcRendererEvent, payload: Parameters<typeof listener>[0]): void => listener(payload)

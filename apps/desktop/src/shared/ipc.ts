@@ -10,6 +10,7 @@ import type { LockResponse, LockStatus } from './lock'
 import type { EmailAccountInput, EmailAccountStatus, EmailAddResult, EmailAttachmentRequest, EmailAttachmentSaveResult, EmailAttachmentsResult, EmailAttachPickResult, EmailAutoconfig, EmailBodyResult, EmailFolder, EmailFolderDeleteResult, EmailFolderPathResult, EmailFoldersResult, EmailMessage, EmailMoveResult, EmailOpenFolderResult, EmailSendRequest, EmailSendResult, EmailTestResult, InviteReplySendRequest, InviteReplySendResult } from './email'
 import type { EmailSignature, EmailSignatureResult } from './email-signature'
 import type { InviteAccessResult, InviteActionResult, InviteAddRequest, InviteCalendarsResult, InviteMessageRequest, InviteOpenIcsResult, InviteStateResult } from './invite-state'
+import type { InviteSuggestAddRequest, InviteSuggestAddResult, InviteSuggestRequest, InviteSuggestResult } from './invite-suggest'
 import type { EmailRule, EmailRulePreviewResult, EmailRuleRunResult, EmailRulesGetResult, EmailRulesSetResult } from './email-rules'
 import type { EmailBatchGetResult, EmailBatchUndoResult, EmailOrganizeEvent, EmailOrganizeStateResult } from './email-organize'
 import type { KeySaveResult, KeyStatus, MicAccess, ModelCheck, ModelsResult } from './assemblyai'
@@ -416,6 +417,13 @@ export interface InvokeChannels {
   'scribe:invite-calendars': { request: undefined; response: InviteCalendarsResult }
   'scribe:invite-request-access': { request: undefined; response: InviteAccessResult }
   'scribe:invite-open-ics': { request: InviteMessageRequest; response: InviteOpenIcsResult }
+  /**
+   * Contrato 64: "Sugerir evento" num email sem convite: só com o token de clique próprio (`ScribeApi.inviteSuggest`), com a
+   * opção ligada e o corpo guardado; o Claude lê só o texto daquele email. Nada é gravado nem enviado.
+   */
+  'scribe:invite-suggest': { request: InviteSuggestRequest; response: InviteSuggestResult }
+  /** Contrato 64: grava a sugestão conferida, só no clique de "Pôr na agenda" do cartão (local, sem token). */
+  'scribe:invite-suggest-add': { request: InviteSuggestAddRequest; response: InviteSuggestAddResult }
   /** Contrato 43: "Testar conexão" com os dados do formulário (recebimento e envio); nada é gravado. */
   'scribe:email-test': { request: EmailAccountInput; response: EmailTestResult }
   /** Contrato 43: o clipe do composer abre o seletor do macOS; os arquivos voltam para a lista de anexos (nada é enviado). */
@@ -514,6 +522,8 @@ export interface RendererEvents {
   'scribe:whatsapp-viewing': { chatId: string | null }
   /** Clique em "Enviar" do email (contrato 42): só o preload manda, com a ativação do usuário viva. */
   'scribe:email-click': string
+  /** Contrato 64: clique em "Sugerir evento", com guarda próprio; só o preload manda, com a ativação do usuário viva. */
+  'scribe:invite-suggest-click': string
   /**
    * Contrato 43: a pasta aberta na tela "Email" desta janela (`null`: nenhuma, ou saiu da tela). Com a janela em foco e a
    * Caixa de Entrada da conta aberta, o email novo dela não vira notificação. Ignorada com o app bloqueado.
@@ -781,6 +791,8 @@ const INVOKE: Record<InvokeChannel, true> = {
   'scribe:invite-calendars': true,
   'scribe:invite-request-access': true,
   'scribe:invite-open-ics': true,
+  'scribe:invite-suggest': true,
+  'scribe:invite-suggest-add': true,
   'scribe:email-test': true,
   'scribe:email-attach-pick': true,
   'scribe:email-remote-images': true,
@@ -829,6 +841,7 @@ const RENDERER_EVENTS: Record<RendererEvent, true> = {
   'scribe:whatsapp-pair-cancel': true,
   'scribe:whatsapp-viewing': true,
   'scribe:email-click': true,
+  'scribe:invite-suggest-click': true,
   'scribe:email-viewing': true,
   'scribe:email-folder-watch': true,
 }
@@ -1090,6 +1103,9 @@ export const WHEN_LOCKED: Readonly<Record<InvokeChannel, LockedPolicy>> = Object
   'scribe:invite-calendars': 'refused',
   'scribe:invite-request-access': 'refused',
   'scribe:invite-open-ics': 'refused',
+  // Contrato 64: o "Sugerir evento" e a gravação da sugestão.
+  'scribe:invite-suggest': 'refused',
+  'scribe:invite-suggest-add': 'refused',
   // Contrato 43: o teste da conta, o clipe do composer e as imagens remotas, como o resto do email.
   'scribe:email-test': 'refused',
   'scribe:email-attach-pick': 'refused',
@@ -1150,14 +1166,18 @@ export const RENDERER_EVENTS_WHEN_LOCKED: Readonly<Record<RendererEvent, 'pass' 
   'scribe:whatsapp-pair-cancel': 'pass',
   'scribe:whatsapp-viewing': 'ignored',
   'scribe:email-click': 'ignored',
+  'scribe:invite-suggest-click': 'ignored',
   'scribe:email-viewing': 'ignored',
   'scribe:email-folder-watch': 'ignored',
 })
 
 /** Mensagens que só o próprio preload manda (o `send` genérico recusa): o clique do envio do WhatsApp. */
 export const PRELOAD_ONLY_EVENTS: readonly RendererEvent[] = ['scribe:whatsapp-click']
-/** Contrato 42: o clique do envio do email, também só pelo preload (lista à parte: a do WhatsApp fica como estava). */
-export const EMAIL_PRELOAD_ONLY_EVENTS: readonly RendererEvent[] = ['scribe:email-click']
+/**
+ * Contrato 42: o clique do envio do email, também só pelo preload (lista à parte: a do WhatsApp fica como estava).
+ * Contrato 64: e o clique do "Sugerir evento".
+ */
+export const EMAIL_PRELOAD_ONLY_EVENTS: readonly RendererEvent[] = ['scribe:email-click', 'scribe:invite-suggest-click']
 
 export const INVOKE_CHANNELS = Object.keys(INVOKE) as InvokeChannel[]
 export const RENDERER_EVENT_CHANNELS = Object.keys(RENDERER_EVENTS) as RendererEvent[]
@@ -1183,4 +1203,6 @@ export interface ScribeApi {
   emailSend(request: Omit<EmailSendRequest, 'clickToken'>): Promise<EmailSendResult>
   /** Contrato 61: "Aceitar", "Talvez" ou "Recusar" de um convite, pelo mesmo token de clique do `emailSend`. */
   inviteReply(request: Omit<InviteReplySendRequest, 'clickToken'>): Promise<InviteReplySendResult>
+  /** Contrato 64: "Sugerir evento", com o desenho do `emailSend` (ativação viva, token de clique) e guarda próprio. */
+  inviteSuggest(request: Omit<InviteSuggestRequest, 'clickToken'>): Promise<InviteSuggestResult>
 }

@@ -1,10 +1,15 @@
 // Contrato 53 (CA3): as regras de email, puras (sem IMAP, sem disco, sem relógio). `matchRule` diz se uma regra casa com
 // uma mensagem; `planActions` percorre as regras na ordem e devolve o que fazer; `needsBody` diz se vale baixar o corpo.
 // "Contém" é sem diferenciar maiúsculas e com acento (D2): os dois lados em NFC, "relatorio" não acha "relatório".
+// Contrato 64: "é convite" olha o método do convite do corpo (REQUEST ou CANCEL) e "pôr na agenda" entra no plano.
 import type { EmailAddress, EmailBody } from '../../shared/email'
 import type { EmailRule, EmailRuleActions, EmailRuleCondition } from '../../shared/email-rules'
+import type { InviteMethod } from '../../shared/invite'
 
-/** O que as condições olham. `body`/`hasAttachment` `null`: não deu para ler (condição de corpo ou anexo não casa). */
+/**
+ * O que as condições olham. `body`/`hasAttachment` `null`: não deu para ler (condição de corpo ou anexo não casa).
+ * `inviteMethod` `null`: sem convite, ou sem corpo.
+ */
 export interface EmailRuleInput {
   from: EmailAddress[]
   to: EmailAddress[]
@@ -12,6 +17,7 @@ export interface EmailRuleInput {
   subject: string
   body: string | null
   hasAttachment: boolean | null
+  inviteMethod: InviteMethod | null
 }
 
 export interface EmailRulePlan {
@@ -22,6 +28,8 @@ export interface EmailRulePlan {
   moveTo: string | null
   delete: boolean
   silent: boolean
+  /** Contrato 64: alguma regra que casou pede "pôr na agenda". */
+  addToCalendar: boolean
 }
 
 const fold = (value: string): string => value.normalize('NFC').toLowerCase()
@@ -42,14 +50,16 @@ export function htmlText(html: string): string {
     .replace(/\s+/g, ' ')
 }
 
-/** O corpo como as condições olham: o texto (ou o HTML reduzido) e se tem anexo; sem corpo, os dois `null`. */
-export function ruleBody(body: EmailBody | null): Pick<EmailRuleInput, 'body' | 'hasAttachment'> {
-  if (!body) return { body: null, hasAttachment: null }
-  return { body: body.text ?? (body.html !== null ? htmlText(body.html) : ''), hasAttachment: body.attachments.length > 0 }
+/** O corpo como as condições olham: o texto (ou o HTML reduzido), se tem anexo e o método do convite; sem corpo, os três `null`. */
+export function ruleBody(body: EmailBody | null): Pick<EmailRuleInput, 'body' | 'hasAttachment' | 'inviteMethod'> {
+  if (!body) return { body: null, hasAttachment: null, inviteMethod: null }
+  return { body: body.text ?? (body.html !== null ? htmlText(body.html) : ''), hasAttachment: body.attachments.length > 0, inviteMethod: body.invite?.method ?? null }
 }
 
 function matchCondition(message: EmailRuleInput, condition: EmailRuleCondition): boolean {
   if (condition.field === 'hasAttachment') return message.hasAttachment === true
+  // C1: a resposta de um convidado (REPLY) não é convite.
+  if (condition.field === 'isInvite') return message.inviteMethod === 'REQUEST' || message.inviteMethod === 'CANCEL'
   const { value } = condition
   if (condition.field === 'from') return people(message.from, value)
   if (condition.field === 'to') return people(message.to, value) || people(message.cc, value)
@@ -63,11 +73,11 @@ export function matchRule(message: EmailRuleInput, rule: EmailRule): boolean {
   return rule.match === 'all' ? rule.conditions.every(check) : rule.conditions.some(check)
 }
 
-export const emptyPlan = (): EmailRulePlan => ({ ruleIds: [], markRead: false, flag: false, moveTo: null, delete: false, silent: false })
+export const emptyPlan = (): EmailRulePlan => ({ ruleIds: [], markRead: false, flag: false, moveTo: null, delete: false, silent: false, addToCalendar: false })
 
 /**
- * Na ordem: as marcas (`markRead`, `flag`, `silent`) se somam; a primeira regra que casa com mover ou apagar decide o
- * destino e encerra (a mensagem saiu da INBOX, D4); `stopHere` encerra também.
+ * Na ordem: as marcas (`markRead`, `flag`, `silent`, `addToCalendar`) se somam; a primeira regra que casa com mover ou
+ * apagar decide o destino e encerra (a mensagem saiu da INBOX, D4), levando as marcas dela; `stopHere` encerra também.
  */
 export function planActions(message: EmailRuleInput, rules: readonly EmailRule[]): EmailRulePlan {
   const plan = emptyPlan()
@@ -78,6 +88,7 @@ export function planActions(message: EmailRuleInput, rules: readonly EmailRule[]
     plan.markRead ||= actions.markRead
     plan.flag ||= actions.flag
     plan.silent ||= actions.silent
+    plan.addToCalendar ||= actions.addToCalendar
     if (actions.delete) {
       plan.delete = true
       break
@@ -91,7 +102,7 @@ export function planActions(message: EmailRuleInput, rules: readonly EmailRule[]
   return plan
 }
 
-/** Alguma regra ligada olha o corpo ou o anexo: vale baixar o corpo antes. */
+/** Alguma regra ligada olha o corpo, o anexo ou o convite, ou põe na agenda: vale baixar o corpo antes. */
 export function needsBody(rules: readonly EmailRule[]): boolean {
-  return rules.some((rule) => rule.enabled && rule.conditions.some((condition) => condition.field === 'body' || condition.field === 'hasAttachment'))
+  return rules.some((rule) => rule.enabled && (rule.actions.addToCalendar || rule.conditions.some((condition) => condition.field === 'body' || condition.field === 'hasAttachment' || condition.field === 'isInvite')))
 }
