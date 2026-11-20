@@ -122,3 +122,220 @@ export const redesStateSchema = z.object({ accounts: z.array(redesAccountSchema)
 
 /** O token colado: sem espaço nem quebra (a tela já corta as pontas). */
 export const redesTokenSchema = z.string().trim().min(1).max(REDES_TOKEN_MAX).regex(/^\S+$/)
+
+// ── Publicações (contrato 71, R4 da spec redes-instagram) ─────────────────────────────────────────────────────────────
+// A fila local de cada conta: rascunho → agendada → publicando → publicada (ou erro). As mídias são arquivos locais
+// copiados para `userData/redes/midia/<id>/` ao salvar; a imagem sobe para o armazenamento S3 só na hora de publicar (o
+// Instagram busca por URL pública) e o vídeo vai pelo upload retomável da Meta. "Publicar agora" e "Agendar" só com o
+// token de clique do preload, como o "Enviar" do email.
+
+/** `publicando`: o serviço está subindo a mídia, criando o contêiner ou publicando (retoma ao abrir o app). */
+export const PUBLICATION_STATES = ['rascunho', 'agendada', 'publicando', 'publicada', 'erro'] as const
+export type PublicationState = (typeof PUBLICATION_STATES)[number]
+
+/** Inferido pelas mídias: 1 imagem, 2 a 10 imagens, 1 vídeo. */
+export const PUBLICATION_TYPES = ['imagem', 'carrossel', 'reels'] as const
+export type PublicationType = (typeof PUBLICATION_TYPES)[number]
+
+export const PUBLICATION_MEDIA_KINDS = ['imagem', 'video'] as const
+export type PublicationMediaKind = (typeof PUBLICATION_MEDIA_KINDS)[number]
+export const PUBLICATION_MIME_TYPES = ['image/jpeg', 'video/mp4', 'video/quicktime'] as const
+export type PublicationMimeType = (typeof PUBLICATION_MIME_TYPES)[number]
+
+export interface PublicationMedia {
+  id: string
+  kind: PublicationMediaKind
+  /** O nome do arquivo escolhido (o texto alternativo da tela é por nome). */
+  fileName: string
+  mimeType: PublicationMimeType
+  bytes: number
+  width: number
+  height: number
+  durationSeconds: number | null
+  altText: string
+  /** A cópia em `userData/redes/midia/<publicação>/<mídia>.<ext>` (o original pode sumir). */
+  localPath: string
+  /** A chave no armazenamento enquanto a imagem está lá (apagada depois de publicada, ou 48 h depois de erro). */
+  s3Key: string | null
+  /** O contêiner do item de carrossel, ou o do Reels antes do upload terminar (nunca é criado duas vezes). */
+  containerId: string | null
+}
+
+export interface Publication {
+  id: string
+  accountId: string
+  type: PublicationType
+  media: PublicationMedia[]
+  caption: string
+  /** ISO: a hora marcada (no rascunho, só a planejada). */
+  scheduledAt: string | null
+  state: PublicationState
+  /** Mensagem curta em pt-BR (o erro da Meta traduzido, ou o aviso da cota). */
+  error: string | null
+  attempts: number
+  /** O contêiner que vai a `media_publish`; gravado antes de publicar (idempotência). */
+  creationId: string | null
+  publishedMediaId: string | null
+  permalink: string | null
+  /** ISO. */
+  publishedAt: string | null
+  createdAt: string
+  updatedAt: string
+}
+
+/** `content_publishing_limit`: publicações nas últimas 24 h e o teto (hoje 50). */
+export interface PublicationQuota {
+  used: number
+  total: number
+  /** ISO. */
+  checkedAt: string
+}
+
+/** Um arquivo escolhido no diálogo, já conferido pelas regras da Meta (nada é salvo ainda). */
+export interface MediaCandidate {
+  path: string
+  fileName: string
+  ok: boolean
+  kind: PublicationMediaKind | null
+  mimeType: string | null
+  bytes: number
+  width: number | null
+  height: number | null
+  durationSeconds: number | null
+  /** Em pt-BR, para a tela; vazio quando `ok`. */
+  problems: string[]
+}
+
+export const CAPTION_MAX = 2200
+export const CAPTION_HASHTAGS_MAX = 30
+export const CAPTION_MENTIONS_MAX = 20
+export const CAROUSEL_MIN = 2
+export const CAROUSEL_MAX = 10
+const MIB = 1024 * 1024
+export const IMAGE_MAX_BYTES = 8 * MIB
+export const IMAGE_MIN_WIDTH = 320
+/** 4:5. */
+export const IMAGE_RATIO_MIN = 0.8
+export const IMAGE_RATIO_MAX = 1.91
+export const VIDEO_MAX_BYTES = 300 * MIB
+export const VIDEO_MIN_SECONDS = 3
+export const VIDEO_MAX_SECONDS = 900
+/** O status do contêiner é consultado a cada 5 s, por até 5 min. */
+export const CONTAINER_POLL_MS = 5000
+export const CONTAINER_POLL_MAX_MS = 300_000
+/** O agendador confere a fila a cada 30 s. */
+export const PUBLISH_TICK_MS = 30_000
+/** Cota esgotada: a publicação é adiada 1 h. */
+export const QUOTA_POSTPONE_MS = 3_600_000
+/** A imagem de uma publicação com erro sai do armazenamento 48 h depois. */
+export const MEDIA_CLEANUP_AFTER_ERROR_MS = 48 * 3_600_000
+/** Texto alternativo por imagem. */
+export const ALT_TEXT_MAX = 1000
+
+export const QUOTA_POSTPONED_MESSAGE = 'Cota de publicações das últimas 24 h esgotada; adiada por 1 hora'
+export const MEDIA_HOST_REQUIRED_MESSAGE = 'Configure o armazenamento de mídia em Configurações › Contas'
+/** "Publicar agora" ou "Agendar" sem o clique da pessoa: mora em `ipc.ts`, que o preload importa sem levar o zod junto. */
+export { REDES_CLICK_MESSAGE } from './ipc'
+
+export interface CaptionStats {
+  /** Caracteres como a pessoa conta (pontos de código, um emoji simples é 1). */
+  chars: number
+  hashtags: number
+  mentions: number
+  problems: string[]
+}
+
+const HASHTAG = /(^|[^\p{L}\p{N}_&])#[\p{L}\p{N}_]+/gu
+const MENTION = /(^|[^\p{L}\p{N}_.@])@[A-Za-z0-9._]+/gu
+const thousands = (value: number): string => value.toLocaleString('pt-BR')
+
+/** O contador da legenda e o que passa dos limites da Meta (2.200 caracteres, 30 hashtags, 20 @). */
+export function captionStats(caption: string): CaptionStats {
+  const chars = [...caption].length
+  const hashtags = caption.match(HASHTAG)?.length ?? 0
+  const mentions = caption.match(MENTION)?.length ?? 0
+  const problems: string[] = []
+  if (chars > CAPTION_MAX) problems.push(`Legenda acima de ${thousands(CAPTION_MAX)} caracteres`)
+  if (hashtags > CAPTION_HASHTAGS_MAX) problems.push(`Mais de ${CAPTION_HASHTAGS_MAX} hashtags na legenda`)
+  if (mentions > CAPTION_MENTIONS_MAX) problems.push(`Mais de ${CAPTION_MENTIONS_MAX} menções (@) na legenda`)
+  return { chars, hashtags, mentions, problems }
+}
+
+/** 1 imagem → imagem; 2 a 10 imagens → carrossel; 1 vídeo → Reels. O resto é recusado com a razão. */
+export function inferPublicationType(media: readonly { kind: PublicationMediaKind }[]): PublicationType | { error: string } {
+  const videos = media.filter((item) => item.kind === 'video').length
+  const images = media.length - videos
+  if (media.length === 0) return { error: 'Escolha ao menos uma imagem ou um vídeo' }
+  if (videos > 0 && images > 0) return { error: 'Vídeo não entra em carrossel: publique o vídeo sozinho' }
+  if (videos > 1) return { error: 'Só um vídeo por publicação' }
+  if (videos === 1) return 'reels'
+  if (images > CAROUSEL_MAX) return { error: `Carrossel aceita no máximo ${CAROUSEL_MAX} imagens` }
+  return images === 1 ? 'imagem' : 'carrossel'
+}
+
+/** O que `savePublication` recebe da tela: a ordem final das mídias (as já salvas pelo `localPath`). */
+export interface PublicationSaveInput {
+  id?: string
+  accountId: string
+  caption: string
+  mediaPaths: string[]
+  /** Texto alternativo por nome de arquivo (só imagens). */
+  altTexts: Record<string, string>
+  scheduledAt: string | null
+}
+
+export type PublicationSaveResult = { ok: true; publication: Publication } | { ok: false; problems: string[] }
+export type PublicationActionResult = { ok: true; publication: Publication } | { ok: false; error: string }
+export type PublicationQuotaResult = { ok: true; quota: PublicationQuota } | { ok: false; error: string }
+
+/** O evento `scribe:redes-publications` e a resposta do canal de mesmo nome: a fila inteira de uma conta. */
+export interface RedesPublicationsPayload {
+  accountId: string
+  publications: Publication[]
+  /** A última cota lida (cache de 5 min), ou `null` se ainda não leu. */
+  quota: PublicationQuota | null
+}
+
+export const PUBLICATION_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
+/** Ids da Meta (contêiner, mídia): só dígitos. */
+const metaId = z.string().regex(/^\d{1,40}$/)
+
+export const publicationMediaSchema = z
+  .object({
+    id: z.string().regex(PUBLICATION_ID_PATTERN),
+    kind: z.enum(PUBLICATION_MEDIA_KINDS),
+    fileName: z.string().min(1).max(500),
+    mimeType: z.enum(PUBLICATION_MIME_TYPES),
+    bytes: z.number().int().nonnegative(),
+    width: z.number().int().nonnegative(),
+    height: z.number().int().nonnegative(),
+    durationSeconds: z.number().nonnegative().nullable(),
+    altText: z.string().max(ALT_TEXT_MAX),
+    localPath: z.string().min(1).max(4096),
+    s3Key: z.string().max(1024).nullable(),
+    containerId: metaId.nullable(),
+  })
+  .strict()
+
+export const publicationSchema = z
+  .object({
+    id: z.string().regex(PUBLICATION_ID_PATTERN),
+    accountId: z.string().regex(REDES_ACCOUNT_ID_PATTERN),
+    type: z.enum(PUBLICATION_TYPES),
+    media: z.array(publicationMediaSchema).min(1).max(CAROUSEL_MAX),
+    // Até 2.200 pontos de código: no máximo o dobro em unidades UTF-16.
+    caption: z.string().max(CAPTION_MAX * 2),
+    scheduledAt: isoDate.nullable(),
+    state: z.enum(PUBLICATION_STATES),
+    error: shortText.nullable(),
+    attempts: z.number().int().nonnegative(),
+    creationId: metaId.nullable(),
+    publishedMediaId: metaId.nullable(),
+    permalink: shortText.nullable(),
+    publishedAt: isoDate.nullable(),
+    createdAt: isoDate,
+    updatedAt: isoDate,
+  })
+  .strict()
+
+export const publicationQuotaSchema = z.object({ used: z.number().int().nonnegative(), total: z.number().int().nonnegative(), checkedAt: isoDate }).strict()

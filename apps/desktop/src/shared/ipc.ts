@@ -28,7 +28,19 @@ import type { MeetingNote } from './meeting-notes'
 import type { SummaryStatus } from './meeting-summary'
 import type { Meeting, MeetingFolder, NewMeeting } from './meetings'
 import type { MeetingOverview, MeetingSearchResult } from './meetings-overview'
-import type { MediaHostConfig, MediaHostSaveResult, MediaHostStatus, RedesConnectResult, RedesState } from './redes'
+import type {
+  MediaCandidate,
+  MediaHostConfig,
+  MediaHostSaveResult,
+  MediaHostStatus,
+  PublicationActionResult,
+  PublicationQuotaResult,
+  PublicationSaveInput,
+  PublicationSaveResult,
+  RedesConnectResult,
+  RedesPublicationsPayload,
+  RedesState,
+} from './redes'
 import type { RouteId, SettingsTab } from './routes'
 import type { AppSettings, SettingsPatch } from './settings-defaults'
 import type { TranscriptCopyResult, TranscriptDocument, TranslateTurnResult, TranscriptionTokenResult } from './transcription'
@@ -509,6 +521,24 @@ export interface InvokeChannels {
   /** "Testar": upload de 1 byte e leitura pública (contrato 70); o resultado fica em `lastTest`. */
   'scribe:redes-media-host-test': { request: undefined; response: MediaHostStatus }
   'scribe:redes-media-host-clear': { request: undefined; response: MediaHostStatus }
+  /** Contrato 71: a fila de publicações de uma conta e a última cota lida. */
+  'scribe:redes-publications': { request: { accountId: string }; response: RedesPublicationsPayload }
+  /** O diálogo nativo (JPEG, MP4, MOV, vários): os arquivos já conferidos pelas regras da Meta, sem salvar nada. */
+  'scribe:redes-media-pick': { request: undefined; response: MediaCandidate[] }
+  /** Salvar o rascunho (as mídias novas são conferidas e copiadas para `userData/redes/midia/`); problemas voltam em pt-BR. */
+  'scribe:redes-publication-save': { request: PublicationSaveInput; response: PublicationSaveResult }
+  /** Apagar (não em `publicando`): a publicação e as cópias das mídias. */
+  'scribe:redes-publication-delete': { request: { id: string }; response: { ok: true } | { ok: false; error: string } }
+  /** "Agendar": só pelo `redesSchedule` do preload, com o token de clique. */
+  'scribe:redes-publication-schedule': { request: { id: string; at: string; clickToken: string }; response: PublicationActionResult }
+  /** "Publicar agora": só pelo `redesPublish` do preload, com o token de clique. */
+  'scribe:redes-publication-publish': { request: { id: string; clickToken: string }; response: PublicationActionResult }
+  /** A agendada volta a rascunho. */
+  'scribe:redes-publication-unschedule': { request: { id: string }; response: PublicationActionResult }
+  /** "Tentar de novo" (só em `erro`): retoma pelo contêiner que já existe, sem criar outro. */
+  'scribe:redes-publication-retry': { request: { id: string }; response: PublicationActionResult }
+  /** A cota das últimas 24 h (cache de 5 min). */
+  'scribe:redes-quota': { request: { accountId: string }; response: PublicationQuotaResult }
 }
 
 /** renderer -> main, sem resposta (`__scribeApi.send` / `ipcMain.on`). */
@@ -538,6 +568,8 @@ export interface RendererEvents {
   'scribe:email-click': string
   /** Contrato 64: clique em "Sugerir evento", com guarda próprio; só o preload manda, com a ativação do usuário viva. */
   'scribe:invite-suggest-click': string
+  /** Contrato 71: clique em "Publicar agora" ou "Agendar" das redes; só o preload manda, com a ativação do usuário viva. */
+  'scribe:redes-click': string
   /**
    * Contrato 43: a pasta aberta na tela "Email" desta janela (`null`: nenhuma, ou saiu da tela). Com a janela em foco e a
    * Caixa de Entrada da conta aberta, o email novo dela não vira notificação. Ignorada com o app bloqueado.
@@ -629,6 +661,8 @@ export interface MainEvents {
   'scribe:email-organize': EmailOrganizeEvent
   /** Contrato 69: as redes mudaram (conta entrou, renovou, venceu, saiu; armazenamento salvo ou testado). Não chega bloqueado. */
   'scribe:redes-state': RedesState
+  /** Contrato 71: a fila de publicações de uma conta mudou (vai inteira, com a cota em cache). Não chega bloqueado. */
+  'scribe:redes-publications': RedesPublicationsPayload
   /**
    * Contrato 43: o clique na notificação de email: a Caixa de Entrada da conta com a mensagem aberta. Contrato 55: a que
    * uma regra moveu vem com a pasta (`mailbox`) e, sem o UID novo (`found: false`), abre só a pasta.
@@ -851,6 +885,15 @@ const INVOKE: Record<InvokeChannel, true> = {
   'scribe:redes-media-host-save': true,
   'scribe:redes-media-host-test': true,
   'scribe:redes-media-host-clear': true,
+  'scribe:redes-publications': true,
+  'scribe:redes-media-pick': true,
+  'scribe:redes-publication-save': true,
+  'scribe:redes-publication-delete': true,
+  'scribe:redes-publication-schedule': true,
+  'scribe:redes-publication-publish': true,
+  'scribe:redes-publication-unschedule': true,
+  'scribe:redes-publication-retry': true,
+  'scribe:redes-quota': true,
 }
 const RENDERER_EVENTS: Record<RendererEvent, true> = {
   'scribe:csp-violation': true,
@@ -865,6 +908,7 @@ const RENDERER_EVENTS: Record<RendererEvent, true> = {
   'scribe:whatsapp-viewing': true,
   'scribe:email-click': true,
   'scribe:invite-suggest-click': true,
+  'scribe:redes-click': true,
   'scribe:email-viewing': true,
   'scribe:email-folder-watch': true,
 }
@@ -906,6 +950,7 @@ const MAIN_EVENTS: Record<MainEvent, true> = {
   'scribe:email-organize': true,
   'scribe:open-email': true,
   'scribe:redes-state': true,
+  'scribe:redes-publications': true,
 }
 
 /**
@@ -1180,6 +1225,15 @@ export const WHEN_LOCKED: Readonly<Record<InvokeChannel, LockedPolicy>> = Object
   'scribe:redes-media-host-save': 'refused',
   'scribe:redes-media-host-test': 'refused',
   'scribe:redes-media-host-clear': 'refused',
+  'scribe:redes-publications': 'refused',
+  'scribe:redes-media-pick': 'refused',
+  'scribe:redes-publication-save': 'refused',
+  'scribe:redes-publication-delete': 'refused',
+  'scribe:redes-publication-schedule': 'refused',
+  'scribe:redes-publication-publish': 'refused',
+  'scribe:redes-publication-unschedule': 'refused',
+  'scribe:redes-publication-retry': 'refused',
+  'scribe:redes-quota': 'refused',
 })
 
 /**
@@ -1199,6 +1253,7 @@ export const RENDERER_EVENTS_WHEN_LOCKED: Readonly<Record<RendererEvent, 'pass' 
   'scribe:whatsapp-viewing': 'ignored',
   'scribe:email-click': 'ignored',
   'scribe:invite-suggest-click': 'ignored',
+  'scribe:redes-click': 'ignored',
   'scribe:email-viewing': 'ignored',
   'scribe:email-folder-watch': 'ignored',
 })
@@ -1210,6 +1265,10 @@ export const PRELOAD_ONLY_EVENTS: readonly RendererEvent[] = ['scribe:whatsapp-c
  * Contrato 64: e o clique do "Sugerir evento".
  */
 export const EMAIL_PRELOAD_ONLY_EVENTS: readonly RendererEvent[] = ['scribe:email-click', 'scribe:invite-suggest-click']
+/** Contrato 71: o clique do "Publicar agora" e do "Agendar" das redes, também só pelo preload (lista à parte). */
+export const REDES_PRELOAD_ONLY_EVENTS: readonly RendererEvent[] = ['scribe:redes-click']
+/** Contrato 71: "Publicar agora" ou "Agendar" sem o clique da pessoa (o preload e o main devolvem o mesmo texto). */
+export const REDES_CLICK_MESSAGE = 'Clique em Publicar ou Agendar para confirmar'
 
 export const INVOKE_CHANNELS = Object.keys(INVOKE) as InvokeChannel[]
 export const RENDERER_EVENT_CHANNELS = Object.keys(RENDERER_EVENTS) as RendererEvent[]
@@ -1237,4 +1296,8 @@ export interface ScribeApi {
   inviteReply(request: Omit<InviteReplySendRequest, 'clickToken'>): Promise<InviteReplySendResult>
   /** Contrato 64: "Sugerir evento", com o desenho do `emailSend` (ativação viva, token de clique) e guarda próprio. */
   inviteSuggest(request: Omit<InviteSuggestRequest, 'clickToken'>): Promise<InviteSuggestResult>
+  /** Contrato 71: "Publicar agora" das redes, com o desenho do `emailSend` (ativação viva, token de clique) e guarda próprio. */
+  redesPublish(id: string): Promise<PublicationActionResult>
+  /** Contrato 71: "Agendar" (`at` em ISO), pelo mesmo token de clique do `redesPublish`. */
+  redesSchedule(id: string, at: string): Promise<PublicationActionResult>
 }

@@ -78,7 +78,7 @@ import { spawn as spawnChild } from 'node:child_process'
 import { request as httpRequest } from 'node:http'
 import { tmpdir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
-import { app, BrowserWindow, ipcMain, Menu, nativeTheme, session, type MenuItem, type MenuItemConstructorOptions, type WebContents } from 'electron'
+import { app, BrowserWindow, ipcMain, Menu, nativeImage, nativeTheme, session, type MenuItem, type MenuItemConstructorOptions, type WebContents } from 'electron'
 import { DRIVE_ROOT_FOLDER_NAME } from '../shared/accounts'
 import { WHATSAPP_EXPORT_PREFIX, WHATSAPP_FIXED_WARNING, WHATSAPP_PAIR_HINT, WHATSAPP_RISK_CHECKBOX, WHATSAPP_RISK_TEXT, WHATSAPP_RISK_TITLE } from '../shared/whatsapp'
 import { INSIGHTS_MOOD_NOTE } from '../shared/whatsapp-insights'
@@ -126,10 +126,21 @@ import { AGENTS_FILE } from './agents/store'
 import type { TrayController } from './tray/menu'
 import type { CalendarService } from './calendar/service'
 import { INSTAGRAM_VAULT_FILE, type RedesService } from './redes/service'
-import { REDES_DIR } from './redes/store'
+import { MEDIA_DIR, REDES_DIR } from './redes/store'
 import { SMOKE_IG_TOKEN, SMOKE_IG_USER_ID, SMOKE_IG_USERNAME } from './redes/fake-instagram'
 import { ACCOUNTS_DIR } from './accounts/vault'
-import { INSTAGRAM_TOKEN_TTL_DAYS, type RedesConnectResult, type RedesState } from '../shared/redes'
+import {
+  INSTAGRAM_TOKEN_TTL_DAYS,
+  QUOTA_POSTPONED_MESSAGE,
+  REDES_CLICK_MESSAGE,
+  type MediaCandidate,
+  type Publication,
+  type PublicationActionResult,
+  type PublicationSaveResult,
+  type RedesConnectResult,
+  type RedesPublicationsPayload,
+  type RedesState,
+} from '../shared/redes'
 import { MEET_DISCONNECTED_LABEL } from '../shared/meet'
 import { APP_PLUGINS, pluginFolderName } from '../shared/plugins'
 import { MEET_PATH, MEET_PORTS, type MeetServer } from './meet/server'
@@ -213,8 +224,9 @@ export interface SmokeContext {
   meet: Pick<MeetServer, 'port' | 'status'>
   /** Contrato 46: a ponte do "Controle do navegador" (a porta em que subiu e se a extensão está conectada). */
   navegador: Pick<NavegadorServer, 'port' | 'connected'>
-  /** Contrato 69: as redes (o smoke adianta o relógio do Instagram falso e roda a renovação diária na hora). */
-  redes: Pick<RedesService, 'refreshDue' | 'state'>
+  /** Contrato 69: as redes (o smoke adianta o relógio do Instagram falso e roda a renovação diária na hora). Contrato 71: e
+   * o agendador das publicações (`tick`) e a fila lida direto do serviço (com o app bloqueado, o canal recusa). */
+  redes: Pick<RedesService, 'refreshDue' | 'state' | 'tick' | 'publications'>
 }
 
 interface Check {
@@ -9997,6 +10009,288 @@ async function redesChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => voi
 }
 
 /**
+ * Contrato 71 (CA5–CA9, CA15), sem tela (a tela vem no 72): as publicações pelo `api()` e pelo `redesPublish`/
+ * `redesSchedule` do preload (o `evaluate` roda com a ativação do usuário, como um clique), com o Instagram e o S3
+ * falsos. JPEG de 640×800 e de 1920×600 e um PNG gerados pelo `nativeImage`; o MP4 de 4 s da fixture. O PNG e a
+ * proporção errada recusados com a razão; imagem, carrossel e Reels (sem armazenamento) publicados; agendada para
+ * daqui a 1 s e o agendador na hora; a cota esgotada adiando 1 h; o erro da Meta traduzido; "Tentar de novo" sem
+ * contêiner novo; bloqueado, o agendador não publica e, ao desbloquear, publica. Termina sem conta e sem armazenamento.
+ */
+async function redesPublicationChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => void, checks: Record<string, Check>): Promise<void> {
+  const fake = ctx.fixtures.instagram
+  const s3 = ctx.fixtures.s3
+  const startedAt = Date.now()
+  const win = ctx.openWindow({ theme: 'light' })
+  watch(win)
+  await loadAndWait(win)
+  const contents = win.webContents
+  const api = <T>(channel: string, request?: unknown): Promise<T> => evaluate<T>(contents, `window.__scribeApi.invoke(${JSON.stringify(channel)}${request === undefined ? '' : `, ${JSON.stringify(request)}`})`)
+  const accountId = SMOKE_IG_USER_ID
+
+  // Os arquivos: JPEG pelo `nativeImage` (o mesmo codificador do app), o PNG e o vídeo da fixture.
+  const dir = join(ctx.userDataDir, 'redes-arquivos')
+  mkdirSync(dir, { recursive: true })
+  const bitmap = (width: number, height: number): Buffer => {
+    const data = Buffer.alloc(width * height * 4)
+    for (let i = 0; i < data.length; i += 4) {
+      data[i] = (i / 4) % 251
+      data[i + 1] = 120
+      data[i + 2] = 200
+      data[i + 3] = 255
+    }
+    return data
+  }
+  const good = join(dir, 'foto-640x800.jpg')
+  const wide = join(dir, 'larga.jpg')
+  const png = join(dir, 'imagem.png')
+  writeFileSync(good, nativeImage.createFromBitmap(bitmap(640, 800), { width: 640, height: 800 }).toJPEG(80))
+  writeFileSync(wide, nativeImage.createFromBitmap(bitmap(1920, 600), { width: 1920, height: 600 }).toJPEG(80))
+  writeFileSync(png, nativeImage.createFromBitmap(bitmap(64, 64), { width: 64, height: 64 }).toPNG())
+  const video = join(app.getAppPath(), 'test', 'fixtures', 'redes', 'video-4s.mp4')
+
+  const connected = await api<RedesConnectResult>('scribe:redes-connect', { token: SMOKE_IG_TOKEN })
+  const hostConfig = { endpoint: SMOKE_S3_ENDPOINT, region: SMOKE_S3_REGION, bucket: SMOKE_S3_BUCKET, accessKeyId: SMOKE_S3_ACCESS_KEY_ID, publicBaseUrl: SMOKE_S3_PUBLIC_BASE_URL, pathStyle: true }
+  const saveHost = (): Promise<{ ok: boolean }> => api<{ ok: boolean }>('scribe:redes-media-host-save', { config: hostConfig, secretAccessKey: SMOKE_S3_SECRET_ACCESS_KEY })
+  const hostSaved = (await saveHost()).ok
+  const setup = `conta=${connected.ok}; armazenamento=${hostSaved}`
+
+  const list = async (): Promise<Publication[]> => (await api<RedesPublicationsPayload>('scribe:redes-publications', { accountId })).publications
+  /** Espera a publicação sair de `publicando` (ou o `until` pedido), lendo a fila pelo canal. */
+  const until = async (id: string, done: (item: Publication) => boolean = (item) => item.state !== 'publicando', timeoutMs = 15_000): Promise<Publication | null> => {
+    const deadline = Date.now() + timeoutMs
+    while (Date.now() < deadline) {
+      const item = (await list()).find((entry) => entry.id === id)
+      if (item && done(item)) return item
+      await wait(40)
+    }
+    return (await list()).find((entry) => entry.id === id) ?? null
+  }
+  const save = (paths: string[], caption: string): Promise<PublicationSaveResult> => api<PublicationSaveResult>('scribe:redes-publication-save', { accountId, caption, mediaPaths: paths, altTexts: {}, scheduledAt: null })
+  const draft = async (paths: string[], caption: string): Promise<Publication | null> => {
+    const result = await save(paths, caption)
+    return result.ok ? result.publication : null
+  }
+  // O clique de verdade passa pelo preload (ativação viva no `evaluate`), que gera e registra o token.
+  const publish = (id: string): Promise<PublicationActionResult> => evaluate<PublicationActionResult>(contents, `window.__scribeApi.redesPublish(${JSON.stringify(id)})`)
+  const schedule = (id: string, at: string): Promise<PublicationActionResult> => evaluate<PublicationActionResult>(contents, `window.__scribeApi.redesSchedule(${JSON.stringify(id)}, ${JSON.stringify(at)})`)
+  const mediaPosts = (): number => fake.calls.filter((call) => call.method === 'POST' && call.path.endsWith('/media')).length
+  const s3Key = (publication: Publication, index = 0): string => `instagram/${accountId}/${publication.id}/${publication.media[index]?.id ?? '?'}.jpg`
+  const summary = (item: Publication | null): string => (item ? `${item.state}${item.error ? ` "${item.error}"` : ''}` : 'sumiu')
+
+  // CA6: o diálogo e o salvar recusam o PNG e a proporção errada com a razão; 11 imagens também. Nada fica salvo.
+  ctx.fixtures.chosenRedesMedia = [png, wide, good]
+  const picked = await api<MediaCandidate[]>('scribe:redes-media-pick')
+  ctx.fixtures.chosenRedesMedia = []
+  const invalid = await save([png, wide], 'Não vai')
+  const eleven = await save(Array<string>(11).fill(good), 'Não vai')
+  const nothingSaved = (await list()).length === 0
+  const invalidProblems = invalid.ok ? [] : invalid.problems
+  checks['pubDraftInvalid'] = {
+    ok:
+      connected.ok &&
+      hostSaved &&
+      JSON.stringify(picked.map((item) => [item.fileName, item.ok])) === JSON.stringify([['imagem.png', false], ['larga.jpg', false], ['foto-640x800.jpg', true]]) &&
+      invalidProblems.includes('imagem.png: Só JPEG é aceito para imagem') &&
+      invalidProblems.includes('larga.jpg: Proporção fora de 4:5 a 1,91:1 (está em 3,2:1)') &&
+      !eleven.ok &&
+      eleven.problems.includes('Carrossel aceita no máximo 10 imagens') &&
+      nothingSaved,
+    detail: `${setup}; diálogo ${JSON.stringify(picked.map((item) => [item.fileName, item.ok, item.problems]))}; recusas ${JSON.stringify(invalidProblems)}; 11 imagens ${JSON.stringify(eleven.ok ? 'aceitas' : eleven.problems)}; nada salvo=${nothingSaved}`,
+  }
+
+  // CA5: imagem válida, "Publicar agora" pelo preload; token inventado e o clique pelo `send` genérico recusados.
+  const image = await draft([good], 'Primeira publicação do smoke #lap')
+  const igCallsBefore = fake.calls.length
+  const s3CallsBefore = s3.calls.length
+  const forged = await api<PublicationActionResult>('scribe:redes-publication-publish', { id: image?.id ?? '', clickToken: crypto.randomUUID() })
+  const genericClick = await evaluate<string>(contents, `(() => { try { window.__scribeApi.send('scribe:redes-click', crypto.randomUUID()); return 'mandou' } catch (error) { return String(error?.message ?? error) } })()`)
+  const forgedRefused = !forged.ok && forged.error === REDES_CLICK_MESSAGE && (await list())[0]?.state === 'rascunho'
+  const started = image ? await publish(image.id) : null
+  const published = image ? await until(image.id) : null
+  const imageContainer = fake.containers().find((item) => item.kind === 'imagem')
+  const igCalls = fake.calls.slice(igCallsBefore)
+  const s3Calls = s3.calls.slice(s3CallsBefore).map((call) => `${call.method} ${call.path}`)
+  const key = image ? s3Key(image) : '?'
+  const copied = image ? existsSync(image.media[0]?.localPath ?? '') && (image.media[0]?.localPath ?? '').startsWith(join(ctx.userDataDir, REDES_DIR, MEDIA_DIR, image.id)) : false
+  const leaked = filesContaining(ctx.userDataDir, [...fake.tokens(), SMOKE_S3_SECRET_ACCESS_KEY])
+  checks['pubImage'] = {
+    ok:
+      image !== null &&
+      image.type === 'imagem' &&
+      copied &&
+      forgedRefused &&
+      genericClick.includes('Canal não permitido') &&
+      started?.ok === true &&
+      started.publication.state === 'publicando' &&
+      published?.state === 'publicada' &&
+      /^https:\/\/www\.instagram\.com\/p\//.test(published.permalink ?? '') &&
+      published.media[0]?.s3Key === null &&
+      imageContainer?.imageUrl === `${SMOKE_S3_PUBLIC_BASE_URL}/${key}` &&
+      s3Calls.includes(`PUT /s3/${SMOKE_S3_BUCKET}/${key}`) &&
+      s3Calls.includes(`DELETE /s3/${SMOKE_S3_BUCKET}/${key}`) &&
+      s3.objects().size === 0 &&
+      igCalls.filter((call) => call.host === 'graph.instagram.com').every((call) => call.bearer && !call.tokenInQuery) &&
+      leaked.length === 0,
+    detail: `rascunho=${image?.state ?? 'não salvo'} (cópia no userData=${copied}); token inventado recusado=${forgedRefused} (${JSON.stringify(forged)}); send genérico "${genericClick}"; publicar=${JSON.stringify(started && (started.ok ? started.publication.state : started.error))} -> ${summary(published)} permalink=${published?.permalink ?? '?'}; image_url=${imageContainer?.imageUrl ?? '?'}; S3 ${JSON.stringify(s3Calls)} (objetos depois=${s3.objects().size}); pedidos ao Instagram sem token na URL=${igCalls.every((call) => !call.tokenInQuery)}; token ou chave em claro em ${JSON.stringify(leaked)}`,
+  }
+
+  // CA7: carrossel de 3 imagens: 3 itens e o pai com os 3 filhos.
+  const carouselFrom = fake.containers().length
+  const carousel = await draft([good, good, good], 'Carrossel do smoke')
+  const carouselStarted = carousel ? await publish(carousel.id) : null
+  const carouselDone = carousel ? await until(carousel.id) : null
+  const carouselContainers = fake.containers().slice(carouselFrom)
+  const parent = carouselContainers.find((item) => item.kind === 'carrossel')
+  checks['pubCarousel'] = {
+    ok:
+      carousel?.type === 'carrossel' &&
+      carouselStarted?.ok === true &&
+      carouselDone?.state === 'publicada' &&
+      JSON.stringify(carouselContainers.map((item) => item.kind)) === JSON.stringify(['item', 'item', 'item', 'carrossel']) &&
+      JSON.stringify(parent?.children) === JSON.stringify(carouselContainers.slice(0, 3).map((item) => item.id)) &&
+      carouselDone.creationId === parent?.id &&
+      s3.objects().size === 0,
+    detail: `tipo=${carousel?.type ?? '?'}; ${summary(carouselDone)}; contêineres ${JSON.stringify(carouselContainers.map((item) => item.kind))}; filhos do pai ${JSON.stringify(parent?.children ?? [])}; objetos no S3 depois=${s3.objects().size}`,
+  }
+
+  // CA9: o contêiner em ERROR (36003, permanente como na Meta) vira a mensagem em pt-BR; a imagem fica no armazenamento
+  // (sai 48 h depois). "Tentar de novo" troca o contêiner morto por um novo uma vez e publica uma vez só.
+  fake.failNext(36003)
+  const failing = await draft([good], 'Vai dar erro')
+  if (failing) await publish(failing.id)
+  const failed = failing ? await until(failing.id) : null
+  const keptInStorage = s3.objects().size
+  const postsBeforeRecreate = mediaPosts()
+  const recreated = failing ? await api<PublicationActionResult>('scribe:redes-publication-retry', { id: failing.id }) : null
+  const recreatedDone = failing ? await until(failing.id) : null
+  const recreatedPublished = fake.published().filter((item) => item.creationId === recreatedDone?.creationId).length
+  checks['pubError'] = {
+    ok:
+      failed?.state === 'erro' &&
+      failed.error === 'Proporção fora de 4:5 a 1,91:1' &&
+      failed.creationId !== null &&
+      failed.attempts === 1 &&
+      keptInStorage === 1 &&
+      recreated?.ok === true &&
+      recreatedDone?.state === 'publicada' &&
+      recreatedDone.creationId !== failed.creationId &&
+      mediaPosts() - postsBeforeRecreate === 1 &&
+      recreatedPublished === 1 &&
+      fake.published().every((item) => item.creationId !== failed.creationId),
+    detail: `${summary(failed)}; creationId=${failed?.creationId ?? 'null'}; tentativas=${failed?.attempts ?? '?'}; objetos no S3=${keptInStorage}; tentar de novo -> ${summary(recreatedDone)} com contêiner novo=${recreatedDone?.creationId !== failed?.creationId} (POST /media=${mediaPosts() - postsBeforeRecreate}, publicado ${recreatedPublished} vez(es))`,
+  }
+
+  // CA9: falha transitória no `media_publish` (o contêiner FINISHED fica): "Tentar de novo" usa o mesmo contêiner, sem
+  // `POST …/media` novo, e publica uma vez só.
+  fake.failPublishNext()
+  const transient = await draft([good], 'Falha passageira')
+  if (transient) await publish(transient.id)
+  const transientFailed = transient ? await until(transient.id) : null
+  const postsBeforeRetry = mediaPosts()
+  const retried = transient ? await api<PublicationActionResult>('scribe:redes-publication-retry', { id: transient.id }) : null
+  const retryDone = transient ? await until(transient.id) : null
+  const publishedTimes = fake.published().filter((item) => item.creationId === transientFailed?.creationId).length
+  checks['pubRetryIdempotent'] = {
+    ok:
+      transientFailed?.state === 'erro' &&
+      transientFailed.error === 'Limite de chamadas do Instagram; tente mais tarde' &&
+      transientFailed.creationId !== null &&
+      retried?.ok === true &&
+      retryDone?.state === 'publicada' &&
+      retryDone.creationId === transientFailed.creationId &&
+      mediaPosts() === postsBeforeRetry &&
+      publishedTimes === 1 &&
+      retryDone.attempts === 2 &&
+      s3.objects().size === 0,
+    detail: `${summary(transientFailed)}; tentar de novo=${JSON.stringify(retried && (retried.ok ? retried.publication.state : retried.error))} -> ${summary(retryDone)}; mesmo creationId=${retryDone?.creationId === transientFailed?.creationId}; POST /media novos=${mediaPosts() - postsBeforeRetry}; publicado ${publishedTimes} vez(es); objetos no S3=${s3.objects().size}`,
+  }
+
+  // CA8: cota esgotada: adiada 1 h com o aviso, sem contêiner.
+  fake.setQuota(50, 50)
+  const quotaPub = await draft([good], 'Sem cota')
+  const quotaPosts = mediaPosts()
+  const quotaAt = fake.now()
+  if (quotaPub) await publish(quotaPub.id)
+  const postponed = quotaPub ? await until(quotaPub.id) : null
+  const delay = postponed?.scheduledAt ? Date.parse(postponed.scheduledAt) - quotaAt : 0
+  fake.setQuota(0, 50)
+  const quotaDeleted = quotaPub ? (await api<{ ok: boolean }>('scribe:redes-publication-delete', { id: quotaPub.id })).ok : false
+  checks['pubQuota'] = {
+    ok: postponed?.state === 'agendada' && postponed.error === QUOTA_POSTPONED_MESSAGE && delay >= 3_590_000 && delay <= 3_620_000 && mediaPosts() === quotaPosts && quotaDeleted,
+    detail: `${summary(postponed)}; adiada ${Math.round(delay / 1000)} s; POST /media=${mediaPosts() - quotaPosts}; apagada depois=${quotaDeleted}`,
+  }
+
+  // CA8: agendada para daqui a 1 s (pelo preload); o agendador na hora certa publica.
+  const scheduled = await draft([good], 'Agendada do smoke')
+  const scheduledResult = scheduled ? await schedule(scheduled.id, new Date(fake.now() + 1000).toISOString()) : null
+  const waitedState = scheduled ? (await list()).find((item) => item.id === scheduled.id)?.state : undefined
+  await wait(1100)
+  await ctx.redes.tick()
+  const scheduledDone = scheduled ? await until(scheduled.id) : null
+  checks['pubScheduled'] = {
+    ok: scheduledResult?.ok === true && scheduledResult.publication.state === 'agendada' && waitedState === 'agendada' && scheduledDone?.state === 'publicada',
+    detail: `agendar=${JSON.stringify(scheduledResult && (scheduledResult.ok ? scheduledResult.publication.state : scheduledResult.error))}; antes da hora=${waitedState ?? '?'}; depois do tick ${summary(scheduledDone)}`,
+  }
+
+  // CA15: bloqueado, o canal recusa e o agendador não publica a vencida; desbloqueado, publica.
+  const lockPassword = 'smoke-redes-0000'
+  let passwordSet = false
+  let passwordRemoved = false
+  try {
+    passwordSet = (await api<{ result: string }>('scribe:lock-password-set', { current: null, next: lockPassword })).result === 'ok'
+    // A hora marcada vence já com o app bloqueado: o tick de 30 s do próprio serviço não a pega antes do bloqueio.
+    const lockedPub = await draft([good], 'Bloqueada do smoke')
+    const lockedAt = fake.now() + 1500
+    const lockedScheduled = lockedPub ? (await schedule(lockedPub.id, new Date(lockedAt).toISOString())).ok : false
+    const lockedNow = (await api<{ locked: boolean }>('scribe:lock-now')).locked
+    await wait(Math.max(0, lockedAt - fake.now()) + 100)
+    const refused = await evaluate<string>(contents, `window.__scribeApi.invoke('scribe:redes-publications', { accountId: '${accountId}' }).then(() => 'respondeu', (error) => String(error?.message ?? error))`)
+    const lockedPosts = mediaPosts()
+    await ctx.redes.tick()
+    const whileLocked = lockedPub ? (await ctx.redes.publications({ accountId })).publications.find((item) => item.id === lockedPub.id)?.state : undefined
+    const postsWhileLocked = mediaPosts() - lockedPosts
+    const unlocked = (await api<{ result: string }>('scribe:lock-unlock', { password: lockPassword })).result === 'ok'
+    await ctx.redes.tick()
+    const afterUnlock = lockedPub ? await until(lockedPub.id) : null
+    checks['pubLocked'] = {
+      ok: passwordSet && lockedScheduled && lockedNow && refused.includes('locked') && whileLocked === 'agendada' && postsWhileLocked === 0 && unlocked && afterUnlock?.state === 'publicada',
+      detail: `senha criada=${passwordSet}; agendada=${lockedScheduled}; bloqueado=${lockedNow}; canal "${refused.slice(0, 80)}"; no tick bloqueado=${whileLocked ?? '?'} (POST /media=${postsWhileLocked}); desbloqueado=${unlocked} -> ${summary(afterUnlock)}`,
+    }
+  } finally {
+    // A senha própria sai sempre (o `lockChecks` começa sem senha), mesmo com um passo acima falhando.
+    if (passwordSet) {
+      await api('scribe:lock-unlock', { password: lockPassword }).catch(() => undefined)
+      passwordRemoved = (await api<{ result: string }>('scribe:lock-password-remove', { current: lockPassword }).catch(() => ({ result: 'erro' }))).result === 'ok'
+    }
+  }
+  if (!passwordRemoved) checks['pubLocked'] = { ok: false, detail: `${checks['pubLocked']?.detail ?? 'não terminou'}; senha própria removida=false` }
+
+  // CA7: Reels sem armazenamento: o upload retomável com o `file_size` do arquivo.
+  const hostCleared = !(await api<{ configured: boolean }>('scribe:redes-media-host-clear')).configured
+  const uploadsFrom = fake.uploads.length
+  const reelS3From = s3.calls.length
+  const reel = await draft([video], 'Reels do smoke')
+  if (reel) await publish(reel.id)
+  const reelDone = reel ? await until(reel.id) : null
+  const uploads = fake.uploads.slice(uploadsFrom)
+  const size = statSync(video).size
+  checks['pubReel'] = {
+    ok: hostCleared && reel?.type === 'reels' && reelDone?.state === 'publicada' && uploads.length === 1 && uploads[0]?.fileSize === String(size) && uploads[0].bodyBytes === size && uploads[0].offset === '0' && uploads[0].oauth && s3.calls.length === reelS3From,
+    detail: `armazenamento removido=${hostCleared}; tipo=${reel?.type ?? '?'}; ${summary(reelDone)}; uploads ${JSON.stringify(uploads)} (arquivo ${size} bytes); pedidos ao S3=${s3.calls.length - reelS3From}`,
+  }
+
+  // Termina sem conta (a fila e as cópias vão junto) e sem armazenamento.
+  await api('scribe:redes-remove', { accountId })
+  const mediaRoot = join(ctx.userDataDir, REDES_DIR, MEDIA_DIR)
+  const leftovers = existsSync(mediaRoot) ? readdirSync(mediaRoot) : []
+  if (leftovers.length) checks['pubReel'] = { ok: false, detail: `${checks['pubReel']?.detail ?? ''}; cópias que sobraram depois de remover a conta: ${leftovers.length}` }
+  fake.setQuota(0, 50)
+  rmSync(dir, { recursive: true, force: true })
+  win.destroy()
+  console.log(`redes: publicações em ${((Date.now() - startedAt) / 1000).toFixed(1)} s`)
+}
+
+/**
  * Contrato 55 (CA26), numa janela que troca de tema no lugar (cada print em claro e escuro, no mesmo estado): a árvore
  * de pastas do servidor falso na ordem D1, com a contagem; ⌘ clique em 3 mensagens ("3 selecionadas" e o resumo), o
  * alvo de arrastar, o "Mover para…" por ⇧⌘M com Enter levando as 3 para "Arquivo"; arrastar uma para "Pendentes"; o erro
@@ -11440,6 +11734,10 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
     // os canais novos junto com os outros). Termina sem conta e sem armazenamento.
     await redesChecks(ctx, watch, redes, screenshots)
 
+    // Contrato 71: as publicações pelo `api()` (sem tela), com o Instagram e o S3 falsos; antes do bloqueio (cria e
+    // remove uma senha própria para o CA15). Termina sem conta e sem armazenamento.
+    await redesPublicationChecks(ctx, watch, redes)
+
     // Contrato 22: bloqueio do app, por último (a senha criada vale para o userData inteiro).
     await lockChecks(ctx, watch, lock, screenshots)
 
@@ -11522,7 +11820,9 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
     if (!sidebar[name]) failures.push(`barra lateral ${name}: não executado`)
   }
   for (const [name, check] of Object.entries(redes)) if (!check.ok) failures.push(`redes ${name}: ${check.detail}`)
-  for (const name of ['connectInvalid', 'connect', 'refresh', 'expired', 'remove', 'mediaHostForm']) if (!redes[name]) failures.push(`redes ${name}: não executado`)
+  for (const name of ['connectInvalid', 'connect', 'refresh', 'expired', 'remove', 'mediaHostForm', 'pubDraftInvalid', 'pubImage', 'pubCarousel', 'pubReel', 'pubScheduled', 'pubQuota', 'pubError', 'pubRetryIdempotent', 'pubLocked']) {
+    if (!redes[name]) failures.push(`redes ${name}: não executado`)
+  }
   for (const [name, check] of Object.entries(invite)) if (!check.ok) failures.push(`convites ${name}: ${check.detail}`)
   for (const name of ['convite-1', 'convite-2', 'convite-3', 'convite-4', 'convite-5', 'convite-6', 'convite-7', 'convite-8', 'convite-9', 'convite-10', 'convite-11', 'convite-estados', 'convite-lista', 'convite-configuracoes', 'convite-regra-1', 'convite-regra-2', 'convite-regra-3', 'convite-sugestao-4', 'convite-sugestao-5']) if (!invite[name]) failures.push(`convites ${name}: não executado`)
   for (const [name, check] of Object.entries(lock)) if (!check.ok) failures.push(`bloqueio ${name}: ${check.detail}`)

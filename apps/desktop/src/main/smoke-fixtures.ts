@@ -72,7 +72,8 @@ function redesRouter(instagram: FakeInstagram, s3: FakeS3): HttpFetch {
   return (url, init) => {
     const host = new URL(url).host
     if (s3Hosts.has(host)) return s3.fetch(url, init)
-    if (host === 'graph.instagram.com') return instagram.fetch(url, init)
+    // Contrato 71: o upload retomável do Reels também vai ao Instagram falso.
+    if (host === 'graph.instagram.com' || host === 'rupload.facebook.com') return instagram.fetch(url, init)
     return Promise.resolve(notFound())
   }
 }
@@ -248,6 +249,8 @@ export interface SmokeFixtures {
   emailNotify: SmokeEmailNotify
   /** Contrato 43: os arquivos que o clipe do composer do email "escolhe"; vazio cancela. */
   chosenEmailAttachments: string[]
+  /** Contrato 71: os arquivos que o diálogo "Escolher mídias" das redes devolve no smoke. */
+  chosenRedesMedia: string[]
 }
 
 export interface SmokeEmailNotify {
@@ -436,6 +439,7 @@ export function createSmokeFixtures(currentVersion: string, userDataDir: string)
     email: createFakeEmail(),
     emailNotify: { notifications: [], focusedContentsId: null },
     chosenEmailAttachments: [],
+    chosenRedesMedia: [],
     lock: { skewMs: 0, touchIdAvailable: true, touchIdApproves: true, touchIdPrompts: 0, power: new EventEmitter(), refresh: () => undefined },
     fetch: (url: string, init: FetchInit) => {
       const path = new URL(url).pathname
@@ -470,6 +474,8 @@ export function createSmokeFixtures(currentVersion: string, userDataDir: string)
     },
   }
   fixtures.redesFetch = redesRouter(fixtures.instagram, fixtures.s3)
+  // Contrato 71: o Instagram falso "baixa" a `image_url` do S3 falso, como a Meta faz com a URL pública.
+  fixtures.instagram.mediaFetch = fixtures.s3.fetch
   return fixtures
 }
 

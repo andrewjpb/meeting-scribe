@@ -273,8 +273,12 @@ function applyLockStatus(status: LockStatus): void {
   if (!status.locked && whatsappService) broadcast(appWindows(), 'scribe:whatsapp-state', whatsappService.status())
   // Contrato 42: o mesmo para as contas de email.
   if (!status.locked && emailService) broadcast(appWindows(), 'scribe:email-state', emailService.accounts())
-  // Contrato 69: o mesmo para as redes.
-  if (!status.locked && redesService) broadcast(appWindows(), 'scribe:redes-state', redesService.state())
+  // Contrato 69: o mesmo para as redes. Contrato 71: e a fila de publicações de cada conta.
+  if (!status.locked && redesService) {
+    const redes = redesService
+    broadcast(appWindows(), 'scribe:redes-state', redes.state())
+    for (const account of redes.state().accounts) void redes.publications({ accountId: account.id }).then((payload) => broadcast(appWindows(), 'scribe:redes-publications', payload))
+  }
   // Contrato 12: o mesmo para as próximas reuniões e a faixa da agenda.
   if (!status.locked && calendarService) broadcast(appWindows(), 'scribe:calendar-state', calendarService.view())
 }
@@ -297,6 +301,7 @@ function openMainWindow(query?: Record<string, string>, invisible = false): Brow
     whatsappService?.forgetSender(contentsId)
     emailService?.forgetSender(contentsId)
     inviteSuggestChannels?.forget(contentsId)
+    redesService?.forgetSender(contentsId)
     whatsappViewing.delete(contentsId)
     emailViewing.delete(contentsId)
     if (mainWindow === win) mainWindow = null
@@ -1227,6 +1232,16 @@ function createAppServices(userData: string): AppServices {
     onState: (state) => {
       if (!lockService?.isLocked()) broadcast(appWindows(), 'scribe:redes-state', state)
     },
+    // Contrato 71: a fila de publicações. Bloqueado, o agendador não começa nada (CA15) e nada vai às janelas; o
+    // "Publicar agora" e o "Agendar" com um guarda de clique próprio; no smoke, o diálogo devolve os arquivos da fixture
+    // e a espera entre as consultas do contêiner é curta (o Instagram falso responde na hora).
+    isLocked: () => lockService?.isLocked() ?? false,
+    clickGuard: createEmailClickGuard(),
+    pickFiles: chooseRedesMedia,
+    onPublications: (payload) => {
+      if (!lockService?.isLocked()) broadcast(appWindows(), 'scribe:redes-publications', payload)
+    },
+    ...(smokeFixtures ? { sleep: (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, Math.min(ms, 50))) } : {}),
   })
   redesService = redes
   // Contrato 60: o Calendário do Mac pelo `lap-calendar`, sob demanda (nada sobe até o primeiro pedido). No smoke, o
@@ -1863,6 +1878,19 @@ async function chooseEmailAttachments(): Promise<string[]> {
   return result.canceled ? [] : result.filePaths
 }
 
+/** Contrato 71: as mídias de uma publicação (JPEG, MP4, MOV; várias). No smoke, os arquivos da fixture. */
+async function chooseRedesMedia(): Promise<string[]> {
+  if (smokeFixtures) return smokeFixtures.chosenRedesMedia
+  const options: OpenDialogOptions = {
+    title: 'Escolher mídias',
+    buttonLabel: 'Escolher',
+    properties: ['openFile', 'multiSelections'],
+    filters: [{ name: 'Imagens JPEG e vídeos MP4 ou MOV', extensions: ['jpg', 'jpeg', 'mp4', 'mov'] }],
+  }
+  const result = mainWindow ? await dialog.showOpenDialog(mainWindow, options) : await dialog.showOpenDialog(options)
+  return result.canceled ? [] : result.filePaths
+}
+
 const nativeOpener: FileOpener = {
   openPath: (path) => shell.openPath(path),
   showItemInFolder: (path) => shell.showItemInFolder(path),
@@ -2201,6 +2229,18 @@ function registerIpc(services: AppServices): void {
   handle('scribe:redes-media-host-save', appOrigin, (_event, request) => redes.mediaHostSave(request).catch(() => ({ ok: false, error: 'Não foi possível salvar o armazenamento', status: redes.state().mediaHost }) as const))
   handle('scribe:redes-media-host-test', appOrigin, () => redes.mediaHostTest().catch(() => redes.state().mediaHost))
   handle('scribe:redes-media-host-clear', appOrigin, () => redes.mediaHostClear().catch(() => redes.state().mediaHost))
+  // Contrato 71: as publicações. "Publicar agora" e "Agendar" só com o token de clique da mesma janela (`redes-click`).
+  const publicationFailed = { ok: false, error: 'Não foi possível concluir a ação na publicação' } as const
+  handle('scribe:redes-publications', appOrigin, (_event, request) => redes.publications(request).catch(() => ({ accountId: '', publications: [], quota: null })))
+  handle('scribe:redes-media-pick', appOrigin, () => redes.pickMedia().catch(() => []))
+  handle('scribe:redes-publication-save', appOrigin, (_event, request) => redes.savePublication(request).catch(() => ({ ok: false, problems: [publicationFailed.error] }) as const))
+  handle('scribe:redes-publication-delete', appOrigin, (_event, request) => redes.deletePublication(request).catch(() => publicationFailed))
+  handle('scribe:redes-publication-schedule', appOrigin, (event, request) => redes.schedulePublication(event.sender.id, request).catch(() => publicationFailed))
+  handle('scribe:redes-publication-publish', appOrigin, (event, request) => redes.publishNow(event.sender.id, request).catch(() => publicationFailed))
+  handle('scribe:redes-publication-unschedule', appOrigin, (_event, request) => redes.unschedule(request).catch(() => publicationFailed))
+  handle('scribe:redes-publication-retry', appOrigin, (_event, request) => redes.retry(request).catch(() => publicationFailed))
+  handle('scribe:redes-quota', appOrigin, (_event, request) => redes.quota(request).catch(() => ({ ok: false, error: 'Não foi possível ler a cota do Instagram' }) as const))
+  onEvent('scribe:redes-click', appOrigin, (event, token) => redes.registerClick(event.sender.id, token))
   // Contrato 62: o cartão do convite e o Calendário do Mac. O serviço valida cada pedido; falha vira resposta tipada.
   const inviteFailed = { ok: false, error: 'failed', message: INVITE_ERROR_MESSAGES.failed, state: null } as const
   handle('scribe:invite-state', appOrigin, (_event, request) => invites.state(request).catch(() => ({ ok: false, error: 'unavailable' }) as const))

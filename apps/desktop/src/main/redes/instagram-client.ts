@@ -5,14 +5,16 @@
 // O token vai sempre no cabeçalho `Authorization: Bearer`, nunca na URL: assim ele não aparece em log de URL, nem no
 // relatório do smoke. A Graph API aceita o cabeçalho também em `/refresh_access_token`; se um dia a Meta recusar ali, a
 // troca é só no `auth` daquela chamada (`'query'` põe o `access_token` na consulta, só nela).
-import type { HttpFetch, HttpResponse } from '../accounts/http'
-import type { RedesAccountType } from '../../shared/redes'
-import { fetchWithTimeout, redesAllowedUrl } from './hosts'
+import type { HttpFetch, HttpMethod, HttpResponse } from '../accounts/http'
+import type { PublicationQuota, RedesAccountType } from '../../shared/redes'
+import { fetchWithTimeout, REDES_REQUEST_TIMEOUT_MS, redesAllowedUrl } from './hosts'
 
 export const INSTAGRAM_API_VERSION = 'v27.0'
 export const INSTAGRAM_GRAPH = 'https://graph.instagram.com'
 /** A Graph API e o upload retomável de vídeo (contrato 71). */
 export const INSTAGRAM_HOSTS: readonly string[] = ['graph.instagram.com', 'rupload.facebook.com']
+/** Contrato 71: o host do upload retomável do vídeo. */
+export const RUPLOAD_HOST = 'rupload.facebook.com'
 
 const PROFILE_FIELDS = 'user_id,username,name,account_type,profile_picture_url,followers_count,follows_count,media_count'
 
@@ -38,12 +40,38 @@ export interface InstagramApiError {
 export type InstagramFailure = { ok: false; error: string; code: number | null; subcode: number | null }
 export type InstagramResult<T> = ({ ok: true } & T) | InstagramFailure
 
+/** Status do contêiner (`status_code`): `status` é o texto da Meta, que traz o código do erro em `ERROR`. */
+export type ContainerStatusCode = 'IN_PROGRESS' | 'FINISHED' | 'ERROR' | 'EXPIRED' | 'PUBLISHED'
+
+/** Corpo do `POST /<IG_ID>/media` (contrato 71): imagem, item de carrossel, carrossel ou Reels retomável. */
+export type ContainerBody = Record<string, string | boolean>
+
 export interface InstagramClient {
   me(token: string): Promise<InstagramResult<{ profile: InstagramProfile }>>
   refreshToken(token: string): Promise<InstagramResult<{ accessToken: string; expiresInSeconds: number }>>
+  /** Contrato 71: cria o contêiner; o Reels retomável devolve também a `uri` do upload em `rupload.facebook.com`. */
+  createContainer(token: string, igUserId: string, body: ContainerBody): Promise<InstagramResult<{ id: string; uri: string | null }>>
+  containerStatus(token: string, id: string): Promise<InstagramResult<{ statusCode: ContainerStatusCode | null; status: string | null }>>
+  publishContainer(token: string, igUserId: string, creationId: string): Promise<InstagramResult<{ id: string }>>
+  /** Campos de uma mídia (ou de um contêiner), só os textos e números pedidos. */
+  mediaInfo(token: string, mediaId: string, fields: readonly string[]): Promise<InstagramResult<{ data: Record<string, string | number> }>>
+  /** `content_publishing_limit`: o uso e o teto das últimas 24 h. */
+  publishingLimit(token: string, igUserId: string): Promise<InstagramResult<{ quota: PublicationQuota }>>
+  /** Upload retomável do vídeo, de uma vez (`offset: 0`), com o token no cabeçalho `Authorization: OAuth`. */
+  uploadResumable(token: string, uri: string, bytes: Uint8Array): Promise<InstagramResult<object>>
 }
 
-/** Pelo subcódigo, que é o mais específico (os de publicação ficam para o contrato 71). */
+/** O upload do vídeo: 15 s mais 1 s a cada 256 KB (300 MB dão uns 20 min). */
+export const uploadTimeoutMs = (bytes: number): number => REDES_REQUEST_TIMEOUT_MS + Math.ceil(bytes / (256 * 1024)) * 1000
+
+const CONTAINER_STATUS_CODES: readonly ContainerStatusCode[] = ['IN_PROGRESS', 'FINISHED', 'ERROR', 'EXPIRED', 'PUBLISHED']
+const META_ID = /^\d{1,40}$/
+const idOf = (value: unknown): string | null => {
+  const raw = typeof value === 'number' && Number.isInteger(value) ? String(value) : value
+  return typeof raw === 'string' && META_ID.test(raw) ? raw : null
+}
+
+/** Pelo subcódigo, que é o mais específico (os de publicação são do contrato 71). */
 const BY_SUBCODE: Readonly<Record<number, string>> = {
   2207052: 'O Instagram não conseguiu baixar a mídia',
   2207027: 'Mídia ainda não está pronta',
@@ -122,21 +150,28 @@ function apiFailure(status: number, body: Record<string, unknown> | null): Insta
 export function createInstagramClient(fetch: HttpFetch, options: { base?: string } = {}): InstagramClient {
   const base = options.base ?? INSTAGRAM_GRAPH
 
-  /** GET com o token no cabeçalho (`auth: 'header'`) ou, se um endpoint recusar o cabeçalho, na consulta. */
-  const get = async (path: string, query: Record<string, string>, token: string, auth: 'header' | 'query' = 'header'): Promise<{ status: number; body: Record<string, unknown> | null } | InstagramFailure> => {
+  /**
+   * Pedido com o token no cabeçalho (`auth: 'header'`) ou, se um endpoint recusar o cabeçalho, na consulta. `body` vai
+   * como JSON (a Graph API aceita JSON no `POST` com o `Bearer`).
+   */
+  const call = async (method: HttpMethod, path: string, query: Record<string, string>, token: string, options: { auth?: 'header' | 'query'; body?: Record<string, unknown> } = {}): Promise<{ status: number; body: Record<string, unknown> | null } | InstagramFailure> => {
+    const auth = options.auth ?? 'header'
     const url = new URL(path, base)
     for (const [name, value] of Object.entries(query)) url.searchParams.set(name, value)
     if (auth === 'query') url.searchParams.set('access_token', token)
     if (!redesAllowedUrl(url.toString(), INSTAGRAM_HOSTS)) return failure('Destino fora da lista do Instagram')
     const headers: Record<string, string> = { accept: 'application/json' }
     if (auth === 'header') headers['authorization'] = `Bearer ${token}`
+    if (options.body) headers['content-type'] = 'application/json'
     try {
       // 15 s com a leitura do corpo (`fetchWithTimeout`); o tempo esgotado conta como falha de rede.
-      return await fetchWithTimeout(fetch, url.toString(), { method: 'GET', headers }, async (response) => ({ status: response.status, body: await jsonBody(response) }))
+      return await fetchWithTimeout(fetch, url.toString(), { method, headers, ...(options.body ? { body: JSON.stringify(options.body) } : {}) }, async (response) => ({ status: response.status, body: await jsonBody(response) }))
     } catch {
       return failure(INSTAGRAM_NETWORK_ERROR)
     }
   }
+  const get = (path: string, query: Record<string, string>, token: string, auth: 'header' | 'query' = 'header') => call('GET', path, query, token, { auth })
+  const version = (path: string): string => `/${INSTAGRAM_API_VERSION}/${path}`
 
   return {
     async me(token) {
@@ -172,6 +207,76 @@ export function createInstagramClient(fetch: HttpFetch, options: { base?: string
       const expiresIn = integer(result.body?.['expires_in'])
       if (!accessToken || /\s/.test(accessToken) || expiresIn === undefined || expiresIn <= 0) return failure(INSTAGRAM_UNEXPECTED)
       return { ok: true, accessToken, expiresInSeconds: expiresIn }
+    },
+
+    async createContainer(token, igUserId, body) {
+      if (!META_ID.test(igUserId)) return failure(INSTAGRAM_UNEXPECTED)
+      const result = await call('POST', version(`${igUserId}/media`), {}, token, { body })
+      if ('ok' in result) return result
+      if (result.status !== 200) return apiFailure(result.status, result.body)
+      const id = idOf(result.body?.['id'])
+      if (!id) return failure(INSTAGRAM_UNEXPECTED)
+      // Só a `uri` do próprio upload retomável da Meta (o host é conferido de novo no upload).
+      const uri = text(result.body?.['uri'])
+      return { ok: true, id, uri: uri && redesAllowedUrl(uri, [RUPLOAD_HOST]) ? uri : null }
+    },
+
+    async containerStatus(token, id) {
+      if (!META_ID.test(id)) return failure(INSTAGRAM_UNEXPECTED)
+      const result = await get(version(id), { fields: 'status_code,status' }, token)
+      if ('ok' in result) return result
+      if (result.status !== 200) return apiFailure(result.status, result.body)
+      const raw = result.body?.['status_code']
+      const statusCode = CONTAINER_STATUS_CODES.find((code) => code === raw) ?? null
+      return { ok: true, statusCode, status: text(result.body?.['status']) }
+    },
+
+    async publishContainer(token, igUserId, creationId) {
+      if (!META_ID.test(igUserId) || !META_ID.test(creationId)) return failure(INSTAGRAM_UNEXPECTED)
+      const result = await call('POST', version(`${igUserId}/media_publish`), {}, token, { body: { creation_id: creationId } })
+      if ('ok' in result) return result
+      if (result.status !== 200) return apiFailure(result.status, result.body)
+      const id = idOf(result.body?.['id'])
+      return id ? { ok: true, id } : failure(INSTAGRAM_UNEXPECTED)
+    },
+
+    async mediaInfo(token, mediaId, fields) {
+      if (!META_ID.test(mediaId) || !fields.every((field) => /^[a-z_]{1,40}$/.test(field))) return failure(INSTAGRAM_UNEXPECTED)
+      const result = await get(version(mediaId), { fields: fields.join(',') }, token)
+      if ('ok' in result) return result
+      if (result.status !== 200) return apiFailure(result.status, result.body)
+      const data: Record<string, string | number> = {}
+      for (const field of fields) {
+        const value = result.body?.[field]
+        if (typeof value === 'string' || typeof value === 'number') data[field] = value
+      }
+      return { ok: true, data }
+    },
+
+    async publishingLimit(token, igUserId) {
+      if (!META_ID.test(igUserId)) return failure(INSTAGRAM_UNEXPECTED)
+      const result = await get(version(`${igUserId}/content_publishing_limit`), { fields: 'quota_usage,config' }, token)
+      if ('ok' in result) return result
+      if (result.status !== 200) return apiFailure(result.status, result.body)
+      // `{ data: [{ quota_usage, config: { quota_total, quota_duration } }] }`; o `quota_total` solto também vale.
+      const data = Array.isArray(result.body?.['data']) ? record((result.body['data'] as unknown[])[0]) : null
+      const used = count(data?.['quota_usage'])
+      const total = count(record(data?.['config'])?.['quota_total'] ?? data?.['quota_total'])
+      if (used === null || total === null) return failure(INSTAGRAM_UNEXPECTED)
+      return { ok: true, quota: { used, total, checkedAt: new Date().toISOString() } }
+    },
+
+    async uploadResumable(token, uri, bytes) {
+      if (!redesAllowedUrl(uri, [RUPLOAD_HOST])) return failure('Destino fora da lista do Instagram')
+      // O upload retomável pede o token no formato `OAuth <token>` (não `Bearer`), também no cabeçalho.
+      const headers = { authorization: `OAuth ${token}`, offset: '0', file_size: String(bytes.byteLength), 'content-type': 'application/octet-stream' }
+      try {
+        const result = await fetchWithTimeout(fetch, uri, { method: 'POST', headers, body: bytes }, async (response) => ({ status: response.status, body: await jsonBody(response) }), uploadTimeoutMs(bytes.byteLength))
+        if (result.status !== 200) return apiFailure(result.status, result.body)
+        return result.body?.['success'] === false ? failure('O Instagram recusou o envio do vídeo') : { ok: true }
+      } catch {
+        return failure(INSTAGRAM_NETWORK_ERROR)
+      }
     },
   }
 }

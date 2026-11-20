@@ -7,14 +7,33 @@
 // Renovação (R2, CA3): ao abrir o app e a cada 24 h, o token com 7 dias ou mais (e ainda válido) é renovado por mais 60;
 // o que já venceu vira `expirada` sem chamar a API. A Meta só renova token com mais de 24 h: o "Renovar agora" antes
 // disso não chama a API (uma recusa ali poderia ser lida como token vencido).
-import { join } from 'node:path'
+//
+// Publicações (contrato 71, R4 e CA5–CA9, CA15): a fila de cada conta fica no mesmo `instagram-<id>.json`; ao salvar o
+// rascunho, cada mídia é conferida (`media-check.ts`) e copiada para `redes/midia/<publicação>/`. "Publicar agora" e
+// "Agendar" só com o token de clique do preload (o desenho do `emailSend`). A publicação roda uma por conta por vez:
+// confere a cota (esgotada adia 1 h), sobe as imagens para o armazenamento, chama `publishOnce` gravando cada passo (o
+// `creationId` antes do `media_publish`) e apaga as imagens do armazenamento depois de publicada (ou 48 h depois de um
+// erro, pelo agendador). O agendador (30 s) não começa nada com o app bloqueado e retoma o que ficou em `publicando`.
+import { randomUUID } from 'node:crypto'
+import { chmod, copyFile, open, readFile, rm, stat } from 'node:fs/promises'
+import { basename, join } from 'node:path'
 import { z } from 'zod'
 import { ACCOUNTS_DIR, createVault } from '../accounts/vault'
 import type { HttpFetch } from '../accounts/http'
 import { EncryptionUnavailableError, type SafeStorageLike } from '../secrets'
 import { MEDIA_HOST_FIELDS } from '../../shared/settings-index'
 import {
+  ALT_TEXT_MAX,
+  captionStats,
   EMPTY_MEDIA_HOST_STATUS,
+  inferPublicationType,
+  MEDIA_CLEANUP_AFTER_ERROR_MS,
+  MEDIA_HOST_REQUIRED_MESSAGE,
+  PUBLICATION_ID_PATTERN,
+  PUBLISH_TICK_MS,
+  QUOTA_POSTPONE_MS,
+  QUOTA_POSTPONED_MESSAGE,
+  REDES_CLICK_MESSAGE,
   INSTAGRAM_REFRESH_AFTER_DAYS,
   INSTAGRAM_REFRESH_MIN_AGE_HOURS,
   INSTAGRAM_TOKEN_TTL_DAYS,
@@ -24,13 +43,25 @@ import {
   redesTokenSchema,
   type MediaHostConfig,
   type MediaHostSaveResult,
+  type MediaCandidate,
   type MediaHostStatus,
+  type Publication,
+  type PublicationActionResult,
+  type PublicationMedia,
+  type PublicationQuota,
+  type PublicationQuotaResult,
+  type PublicationSaveResult,
   type RedesAccount,
   type RedesConnectResult,
+  type RedesPublicationsPayload,
   type RedesState,
 } from '../../shared/redes'
 import { createInstagramClient, type InstagramProfile } from './instagram-client'
-import { mediaHostConfigProblem, type MediaHostTester } from './media-host'
+import { inspectMedia, type ReadHead } from './media-check'
+import { mediaHostConfigProblem, removeMedia, uploadMedia, type MediaHostTester } from './media-host'
+import { publishOnce } from './publisher'
+import { createS3Client, safeKey, type S3Client } from './s3'
+import { REDES_REQUEST_TIMEOUT_MS } from './hosts'
 import { createRedesStore, REDES_DIR, type StoredMediaHost } from './store'
 
 export const INSTAGRAM_VAULT_FILE = 'instagram.bin'
@@ -66,6 +97,70 @@ const instagramVaultSchema = z.object({ tokens: z.record(z.string().regex(REDES_
 const mediaHostVaultSchema = z.object({ secretAccessKey: z.string().min(1).max(1024) }).strict()
 type InstagramVault = z.infer<typeof instagramVaultSchema>
 
+// Contrato 71: as publicações.
+export const PUBLICATION_MISSING_MESSAGE = 'Publicação não encontrada'
+export const PUBLICATION_NOT_EDITABLE_MESSAGE = 'Só rascunho ou publicação agendada pode ser editada'
+export const PUBLICATION_BUSY_MESSAGE = 'A publicação está sendo publicada agora'
+export const PUBLICATION_PAST_MESSAGE = 'Escolha um horário no futuro'
+export const PUBLICATION_MEDIA_GONE_MESSAGE = 'A cópia da mídia sumiu deste Mac; escolha o arquivo de novo'
+export const PUBLICATION_FAILED_MESSAGE = 'Não foi possível publicar'
+export const PUBLICATION_STARTED_MESSAGE = 'A publicação começou a ser publicada; não dá para editar agora'
+const PUBLICATION_SAVE_FAILED = 'Não foi possível guardar a mídia neste Mac'
+const MEDIA_FILE_MISSING = 'Arquivo não encontrado'
+/** A cota lida vale 5 min no canal `scribe:redes-quota`. */
+export const QUOTA_CACHE_MS = 5 * 60_000
+
+/**
+ * Token de clique do "Publicar agora" e do "Agendar" (a regra do `emailSend`: uso único, só a janela que o registrou,
+ * 10 s). O `index.ts` injeta um guarda próprio (`createEmailClickGuard`); sem ele, nada passa.
+ */
+export interface RedesClickGuard {
+  register(senderId: number, token: unknown): void
+  consume(senderId: number, token: unknown): boolean
+  forget(senderId: number): void
+}
+const REFUSE_ALL_CLICKS: RedesClickGuard = { register: () => undefined, consume: () => false, forget: () => undefined }
+
+const isoSchema = z.iso.datetime({ offset: true })
+const publicationIdSchema = z.string().regex(PUBLICATION_ID_PATTERN)
+const publicationRequestSchema = z.object({ id: publicationIdSchema })
+const scheduleRequestSchema = z.object({ id: publicationIdSchema, at: isoSchema, clickToken: z.string().max(100) })
+const publishRequestSchema = z.object({ id: publicationIdSchema, clickToken: z.string().max(100) })
+const saveRequestSchema = z.object({
+  id: publicationIdSchema.optional(),
+  accountId: z.string().regex(REDES_ACCOUNT_ID_PATTERN),
+  // O limite de 2.200 é conferido pelo `captionStats`, com a razão para a tela.
+  caption: z.string().max(50_000),
+  mediaPaths: z.array(z.string().min(1).max(4096)).max(50),
+  altTexts: z.record(z.string().max(1000), z.string().max(ALT_TEXT_MAX)).default({}),
+  scheduledAt: isoSchema.nullable(),
+})
+
+const EXTENSION: Readonly<Record<PublicationMedia['mimeType'], string>> = { 'image/jpeg': 'jpg', 'video/mp4': 'mp4', 'video/quicktime': 'mov' }
+
+/** Leitura do começo (ou de um trecho) de um arquivo, para o `inspectMedia`. */
+export const readFileHead: ReadHead = async (path, bytes, position = 0) => {
+  const handle = await open(path, 'r')
+  try {
+    const buffer = Buffer.alloc(bytes)
+    const { bytesRead } = await handle.read(buffer, 0, bytes, position)
+    return new Uint8Array(buffer.buffer, buffer.byteOffset, bytesRead)
+  } finally {
+    await handle.close()
+  }
+}
+
+/** Confere um arquivo do disco; o que não abre vira um candidato recusado. */
+async function inspectFile(path: string): Promise<MediaCandidate> {
+  try {
+    const info = await stat(path)
+    if (!info.isFile()) throw new Error('não é arquivo')
+    return await inspectMedia(path, readFileHead, info.size)
+  } catch {
+    return { path, fileName: basename(path), ok: false, kind: null, mimeType: null, bytes: 0, width: null, height: null, durationSeconds: null, problems: [MEDIA_FILE_MISSING] }
+  }
+}
+
 const connectRequestSchema = z.object({ token: z.string().max(REDES_TOKEN_MAX * 2) })
 const accountRequestSchema = z.object({ accountId: z.string().regex(REDES_ACCOUNT_ID_PATTERN) })
 const mediaHostSaveSchema = z.object({ config: mediaHostConfigSchema, secretAccessKey: z.string().trim().max(1024).nullable() })
@@ -78,6 +173,16 @@ export interface RedesServiceOptions {
   onState: (state: RedesState) => void
   now?: () => number
   testMediaHost: MediaHostTester
+  /** Contrato 71: com o app bloqueado, o agendador não começa nada (CA15). */
+  isLocked?: () => boolean
+  /** Contrato 71: o guarda do token de clique do "Publicar agora" e do "Agendar". */
+  clickGuard?: RedesClickGuard
+  /** Contrato 71: o diálogo nativo de escolher as mídias (caminhos; vazio se cancelou). */
+  pickFiles?: () => Promise<string[]>
+  /** Contrato 71: a fila de uma conta mudou (vai inteira, com a cota em cache). */
+  onPublications?: (payload: RedesPublicationsPayload) => void
+  /** Contrato 71: a espera entre as consultas do contêiner (o smoke encurta; o padrão é o `setTimeout`). */
+  sleep?: (ms: number) => Promise<void>
 }
 
 export interface RedesService {
@@ -91,6 +196,24 @@ export interface RedesService {
   mediaHostSave(request: unknown): Promise<MediaHostSaveResult>
   mediaHostTest(): Promise<MediaHostStatus>
   mediaHostClear(): Promise<MediaHostStatus>
+  /** Contrato 71: a fila de uma conta (`{ accountId }`) e a última cota lida. */
+  publications(request: unknown): Promise<RedesPublicationsPayload>
+  /** O diálogo nativo; devolve os arquivos já conferidos, sem salvar nada. */
+  pickMedia(): Promise<MediaCandidate[]>
+  savePublication(request: unknown): Promise<PublicationSaveResult>
+  deletePublication(request: unknown): Promise<{ ok: true } | { ok: false; error: string }>
+  /** "Agendar": só com o token de clique registrado pela mesma janela (`senderId`). */
+  schedulePublication(senderId: number, request: unknown): Promise<PublicationActionResult>
+  /** "Publicar agora": só com o token de clique; põe em `publicando` e começa na hora. */
+  publishNow(senderId: number, request: unknown): Promise<PublicationActionResult>
+  unschedule(request: unknown): Promise<PublicationActionResult>
+  /** "Tentar de novo" (só em `erro`): retoma pelo contêiner que já existe. */
+  retry(request: unknown): Promise<PublicationActionResult>
+  quota(request: unknown): Promise<PublicationQuotaResult>
+  registerClick(senderId: number, token: unknown): void
+  forgetSender(senderId: number): void
+  /** O agendador: publica o que venceu, retoma o que ficou em `publicando` e limpa o armazenamento (o smoke chama direto). */
+  tick(): Promise<void>
   dispose(): void
 }
 
@@ -105,6 +228,15 @@ export function createRedesService(options: RedesServiceOptions): RedesService {
   const accounts = new Map<string, RedesAccount>()
   let mediaHost: StoredMediaHost | null = null
   let timer: ReturnType<typeof setInterval> | null = null
+  // Contrato 71: a fila de cada conta (a mesma do arquivo), a cota lida e as publicações em curso.
+  const queues = new Map<string, Publication[]>()
+  const quotas = new Map<string, PublicationQuota>()
+  /** A tentativa em curso de cada publicação (termina depois da última gravação dela). */
+  const runs = new Map<string, Promise<void>>()
+  const accountRuns = new Map<string, Promise<unknown>>()
+  const guard = options.clickGuard ?? REFUSE_ALL_CLICKS
+  const sleep = options.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)))
+  let publishTimer: ReturnType<typeof setInterval> | null = null
   let disposed = false
   // Uma mudança por vez (conectar, renovar, remover, salvar): a renovação diária não cruza com o "Remover".
   let queue: Promise<unknown> = Promise.resolve()
@@ -202,6 +334,314 @@ export function createRedesService(options: RedesServiceOptions): RedesService {
     }
   }
 
+  // ── Publicações (contrato 71) ──────────────────────────────────────────────────────────────────────────────────
+
+  const payloadOf = (accountId: string): RedesPublicationsPayload => {
+    const quota = quotas.get(accountId)
+    return { accountId, publications: (queues.get(accountId) ?? []).map((item) => ({ ...item, media: item.media.map((media) => ({ ...media })) })), quota: quota ? { ...quota } : null }
+  }
+  const emitPublications = (accountId: string): void => {
+    if (!disposed) options.onPublications?.(payloadOf(accountId))
+  }
+  const findPublication = (id: string): Publication | undefined => {
+    for (const queue of queues.values()) {
+      const found = queue.find((item) => item.id === id)
+      if (found) return found
+    }
+    return undefined
+  }
+  /** Grava a publicação na fila (nova no fim), no arquivo e avisa. A conta que saiu não volta por aqui. */
+  const putPublication = async (publication: Publication): Promise<Publication> => {
+    const next: Publication = { ...publication, updatedAt: iso(now()) }
+    if (!accounts.has(next.accountId)) return next
+    const queue = queues.get(next.accountId) ?? []
+    const updated = queue.some((item) => item.id === next.id) ? queue.map((item) => (item.id === next.id ? next : item)) : [...queue, next]
+    queues.set(next.accountId, updated)
+    await store.writePublications(next.accountId, updated)
+    emitPublications(next.accountId)
+    return next
+  }
+  const rememberQuota = (accountId: string, quota: PublicationQuota): PublicationQuota => {
+    const value = { ...quota, checkedAt: iso(now()) }
+    quotas.set(accountId, value)
+    return value
+  }
+
+  /** O cliente do armazenamento, com prazo para a maior imagem (15 s mais 1 s a cada 256 KB). */
+  const storageClient = (bytes: number): S3Client | null => {
+    const secret = mediaSecret.read()?.secretAccessKey
+    if (!mediaHost || !secret) return null
+    return createS3Client(options.fetch, mediaHost.config, secret, undefined, REDES_REQUEST_TIMEOUT_MS + Math.ceil(bytes / (256 * 1024)) * 1000)
+  }
+  /** Apaga do armazenamento as imagens que ainda estão lá; devolve as mídias com `s3Key` limpo onde deu certo. */
+  const removeFromStorage = async (media: PublicationMedia[]): Promise<PublicationMedia[]> => {
+    const client = media.some((item) => item.s3Key) ? storageClient(0) : null
+    const out: PublicationMedia[] = []
+    for (const item of media) {
+      if (!item.s3Key || !client) {
+        out.push(item)
+        continue
+      }
+      const removed = await removeMedia(client, item.s3Key)
+      out.push(removed.ok ? { ...item, s3Key: null } : item)
+    }
+    return out
+  }
+
+  const savePublication = async (request: unknown): Promise<PublicationSaveResult> => {
+    const parsed = saveRequestSchema.safeParse(request)
+    if (!parsed.success) return { ok: false, problems: ['Confira os campos da publicação'] }
+    const input = parsed.data
+    if (!accounts.has(input.accountId)) return { ok: false, problems: [REDES_ACCOUNT_MISSING_MESSAGE] }
+    const existing = input.id ? findPublication(input.id) : undefined
+    if (input.id && (!existing || existing.accountId !== input.accountId)) return { ok: false, problems: [PUBLICATION_MISSING_MESSAGE] }
+    if (existing && existing.state !== 'rascunho' && existing.state !== 'agendada') return { ok: false, problems: [PUBLICATION_NOT_EDITABLE_MESSAGE] }
+    const publicationId = existing?.id ?? randomUUID()
+
+    // A mídia já salva vem pelo `localPath` da cópia; a nova é conferida pelos bytes.
+    const problems: string[] = []
+    const items: ({ saved: PublicationMedia } | { candidate: MediaCandidate })[] = []
+    for (const path of input.mediaPaths) {
+      const saved = existing?.media.find((item) => item.localPath === path)
+      if (saved) {
+        items.push({ saved })
+        continue
+      }
+      const candidate = await inspectFile(path)
+      if (!candidate.ok) problems.push(...candidate.problems.map((problem) => `${candidate.fileName}: ${problem}`))
+      items.push({ candidate })
+    }
+    const kinds = items.map((item) => ('saved' in item ? { kind: item.saved.kind } : { kind: item.candidate.kind ?? 'imagem' }))
+    const type = inferPublicationType(kinds)
+    if (typeof type !== 'string') problems.push(type.error)
+    problems.push(...captionStats(input.caption).problems)
+    if (problems.length || typeof type !== 'string') return { ok: false, problems: problems.length ? problems : ['Confira as mídias'] }
+
+    const media: PublicationMedia[] = []
+    const copied: string[] = []
+    try {
+      for (const item of items) {
+        if ('saved' in item) {
+          const altText = item.saved.kind === 'imagem' ? (input.altTexts[item.saved.fileName] ?? item.saved.altText) : ''
+          media.push({ ...item.saved, altText: altText.trim() })
+          continue
+        }
+        const { candidate } = item
+        const id = randomUUID()
+        const mimeType = candidate.mimeType as PublicationMedia['mimeType']
+        const dir = await store.mediaDir(publicationId, true)
+        const localPath = join(dir, `${id}.${EXTENSION[mimeType]}`)
+        await copyFile(candidate.path, localPath)
+        await chmod(localPath, 0o600)
+        copied.push(localPath)
+        media.push({
+          id,
+          kind: candidate.kind ?? 'imagem',
+          fileName: candidate.fileName,
+          mimeType,
+          bytes: candidate.bytes,
+          width: candidate.width ?? 0,
+          height: candidate.height ?? 0,
+          durationSeconds: candidate.durationSeconds,
+          altText: candidate.kind === 'imagem' ? (input.altTexts[candidate.fileName] ?? '').trim() : '',
+          localPath,
+          s3Key: null,
+          containerId: null,
+        })
+      }
+    } catch {
+      for (const path of copied) await rm(path, { force: true }).catch(() => undefined)
+      return { ok: false, problems: [PUBLICATION_SAVE_FAILED] }
+    }
+    // Relida depois dos `await` (conferir e copiar): se o agendador começou a publicar nesse meio-tempo, a edição não
+    // vale e nada da publicação é apagado (só as cópias novas desta edição).
+    if (existing) {
+      const current = findPublication(existing.id)
+      if (!current || (current.state !== 'rascunho' && current.state !== 'agendada')) {
+        for (const path of copied) await rm(path, { force: true }).catch(() => undefined)
+        return { ok: false, problems: [current ? PUBLICATION_STARTED_MESSAGE : PUBLICATION_MISSING_MESSAGE] }
+      }
+    }
+    // As cópias que saíram da publicação.
+    for (const old of existing?.media ?? []) if (!media.some((item) => item.id === old.id)) await rm(old.localPath, { force: true }).catch(() => undefined)
+
+    const at = iso(now())
+    // Salvar sempre deixa rascunho: "Agendar" é outro passo, com o token de clique (a agendada editada volta a rascunho).
+    const publication: Publication = {
+      id: publicationId,
+      accountId: input.accountId,
+      type,
+      media,
+      caption: input.caption,
+      scheduledAt: input.scheduledAt ? iso(Date.parse(input.scheduledAt)) : null,
+      state: 'rascunho',
+      error: null,
+      attempts: existing?.attempts ?? 0,
+      creationId: null,
+      publishedMediaId: null,
+      permalink: null,
+      publishedAt: null,
+      createdAt: existing?.createdAt ?? at,
+      updatedAt: at,
+    }
+    return { ok: true, publication: await putPublication(publication) }
+  }
+
+  /** A conta saiu ("Remover") no meio da tentativa: nada mais é gravado nem pedido. */
+  class AccountGone extends Error {}
+
+  /** Uma tentativa inteira de uma publicação em `publicando`; termina sempre gravada (`publicada`, `erro` ou adiada). */
+  const attempt = async (id: string): Promise<void> => {
+    try {
+      await attemptSteps(id)
+    } catch (error) {
+      if (!(error instanceof AccountGone)) throw error
+    }
+  }
+
+  const attemptSteps = async (id: string): Promise<void> => {
+    let publication = findPublication(id)
+    if (!publication || publication.state !== 'publicando') return
+    const accountId = publication.accountId
+    const save = async (next: Publication): Promise<Publication> => {
+      if (!accounts.has(accountId)) throw new AccountGone()
+      return putPublication(next)
+    }
+    const fail = async (error: string): Promise<void> => {
+      if (publication && accounts.has(accountId)) await putPublication({ ...publication, state: 'erro', error })
+    }
+    const account = accounts.get(publication.accountId)
+    const token = readTokens().tokens[publication.accountId]?.token
+    if (!account || !token || account.state === 'expirada') return fail(REDES_EXPIRED_MESSAGE)
+
+    // A cota (o que já foi publicado não conta de novo); esgotada adia 1 h, sem gastar tentativa.
+    if (!publication.publishedMediaId) {
+      const limit = await client.publishingLimit(token, account.id)
+      if (limit.ok) {
+        const quota = rememberQuota(account.id, limit.quota)
+        if (quota.used >= quota.total) {
+          await save({ ...publication, state: 'agendada', scheduledAt: iso(now() + QUOTA_POSTPONE_MS), error: QUOTA_POSTPONED_MESSAGE })
+          return
+        }
+      }
+    }
+    publication = await save({ ...publication, attempts: publication.attempts + 1 })
+
+    // As imagens sobem para o armazenamento (o Instagram busca pela URL pública); o vídeo vai pelo upload da Meta. Com o
+    // `publishedMediaId` já gravado, só falta o permalink: nada sobe e o armazenamento não é exigido.
+    let s3: S3Client | null = null
+    if (publication.type !== 'reels' && !publication.publishedMediaId) {
+      s3 = storageClient(Math.max(...publication.media.map((item) => item.bytes)))
+      if (!s3) return fail(MEDIA_HOST_REQUIRED_MESSAGE)
+      for (const [index, item] of publication.media.entries()) {
+        let bytes: Uint8Array
+        try {
+          bytes = await readFile(item.localPath)
+        } catch {
+          return fail(PUBLICATION_MEDIA_GONE_MESSAGE)
+        }
+        const key = safeKey(['instagram', account.id, publication.id, `${item.id}.jpg`])
+        const put = await uploadMedia(s3, key, bytes, item.mimeType)
+        if (!put.ok) return fail(`Não foi possível subir a imagem: ${put.error}`)
+        // Gravada a cada item: no carrossel que para no meio, as que subiram saem do armazenamento depois.
+        const current: Publication = publication
+        publication = await save({ ...current, media: current.media.map((entry, at) => (at === index ? { ...entry, s3Key: key } : entry)) })
+      }
+    }
+
+    const client_ = s3
+    const result = await publishOnce({
+      client,
+      token,
+      igUserId: account.id,
+      publication,
+      mediaUrl: (media) => (media.s3Key && client_ ? client_.publicUrl(media.s3Key) : null),
+      uploadReel: async (uri, media) => {
+        let bytes: Uint8Array
+        try {
+          bytes = await readFile(media.localPath)
+        } catch {
+          throw new Error(PUBLICATION_MEDIA_GONE_MESSAGE)
+        }
+        const sent = await client.uploadResumable(token, uri, bytes)
+        if (!sent.ok) throw new Error(sent.error)
+      },
+      now,
+      // A conta que saiu durante a espera do contêiner para a tentativa antes do `media_publish`.
+      sleep: async (ms) => {
+        await sleep(ms)
+        if (!accounts.has(accountId)) throw new AccountGone()
+      },
+      // Cada passo no arquivo antes do seguinte (o `creationId` antes do `media_publish`).
+      onProgress: async (step) => {
+        publication = await save({ ...step, state: 'publicando' })
+      },
+    })
+    let final = result.publication
+    if (final.state === 'publicada') {
+      // Publicada: a imagem sai do armazenamento (a que não saiu fica com o `s3Key`, e o agendador tenta de novo) e a
+      // cota em cache conta mais uma.
+      final = { ...final, media: await removeFromStorage(final.media) }
+      const quota = quotas.get(account.id)
+      if (quota) quotas.set(account.id, { ...quota, used: quota.used + 1 })
+    }
+    await save(final)
+  }
+
+  /**
+   * Uma publicação por conta por vez; a mesma publicação nunca roda duas vezes ao mesmo tempo. Pedida de novo enquanto a
+   * anterior termina (a nova tentativa logo depois de um erro), roda em seguida: a tentativa só faz algo em `publicando`.
+   */
+  const runPublication = (id: string): Promise<void> => {
+    const current = runs.get(id)
+    if (current) return current.then(() => runPublication(id))
+    const publication = findPublication(id)
+    if (!publication) return Promise.resolve()
+    const accountId = publication.accountId
+    const run = (accountRuns.get(accountId) ?? Promise.resolve())
+      .then(() => attempt(id))
+      .catch(async () => {
+        const failed = findPublication(id)
+        if (failed?.state === 'publicando') await putPublication({ ...failed, state: 'erro', error: PUBLICATION_FAILED_MESSAGE }).catch(() => undefined)
+      })
+      .finally(() => {
+        if (runs.get(id) === run) runs.delete(id)
+      })
+    runs.set(id, run)
+    accountRuns.set(accountId, run)
+    void run.then(() => {
+      if (accountRuns.get(accountId) === run) accountRuns.delete(accountId)
+    })
+    return run
+  }
+
+  /** O agendador: nada com o app bloqueado (CA15). Espera as publicações que começou (o smoke confere em seguida). */
+  const tick = async (): Promise<void> => {
+    if (disposed || options.isLocked?.()) return
+    const at = now()
+    const started: Promise<void>[] = []
+    const ids = [...queues.values()].flatMap((queue) => queue.map((item) => item.id))
+    for (const id of ids) {
+      // Relida a cada passo: entre um `await` e outro a pessoa pode ter mudado (voltado a rascunho, apagado).
+      const publication = findPublication(id)
+      if (!publication) continue
+      if (publication.state === 'agendada' && publication.scheduledAt && Date.parse(publication.scheduledAt) <= at) {
+        await putPublication({ ...publication, state: 'publicando', error: null })
+        started.push(runPublication(publication.id))
+      } else if (publication.state === 'publicando' && !runs.has(publication.id)) {
+        // Ficou no meio (o app fechou): retoma pelo que está gravado.
+        started.push(runPublication(publication.id))
+      } else if (publication.media.some((item) => item.s3Key) && (publication.state === 'publicada' || (publication.state === 'erro' && Date.parse(publication.updatedAt) + MEDIA_CLEANUP_AFTER_ERROR_MS <= at))) {
+        // A imagem que ficou no armazenamento: da publicada (o DELETE falhou) já, da com erro 48 h depois. Só grava o
+        // que saiu (a falha tenta de novo no próximo tick).
+        const media = await removeFromStorage(publication.media)
+        const current = findPublication(id)
+        if (current?.state === publication.state && media.some((item, index) => item.s3Key !== publication.media[index]?.s3Key)) await putPublication({ ...current, media })
+      }
+    }
+    await Promise.all(started)
+  }
+
   return {
     async init() {
       const [stored, host] = await Promise.all([store.listAccounts(), store.readMediaHost()])
@@ -210,12 +650,21 @@ export function createRedesService(options: RedesServiceOptions): RedesService {
       const vault = readTokens()
       for (const account of stored) accounts.set(account.id, vault.tokens[account.id] ? account : { ...account, state: 'expirada', error: REDES_EXPIRED_MESSAGE })
       mediaHost = host
+      // Contrato 71: a fila de cada conta; o que ficou em `publicando` (o app fechou no meio) o primeiro tick retoma.
+      queues.clear()
+      for (const account of stored) queues.set(account.id, await store.readPublications(account.id))
       emit()
+      for (const id of queues.keys()) emitPublications(id)
       void refreshDue()
       if (!timer && !disposed) {
         timer = setInterval(() => void refreshDue(), REDES_REFRESH_INTERVAL_MS)
         timer.unref()
       }
+      if (!publishTimer && !disposed) {
+        publishTimer = setInterval(() => void tick().catch(() => undefined), PUBLISH_TICK_MS)
+        publishTimer.unref()
+      }
+      void tick().catch(() => undefined)
     },
 
     state,
@@ -261,8 +710,15 @@ export function createRedesService(options: RedesServiceOptions): RedesService {
         const id = parsed.data.accountId
         if (!accounts.has(id)) return { ok: false }
         writeToken(id, null)
-        await store.removeAccount(id)
+        // Contrato 71: a conta sai primeiro (a publicação em curso para de gravar e de pedir), depois a fila (as cópias
+        // das mídias e, se der, as imagens que ainda estão no armazenamento).
         accounts.delete(id)
+        const queue = queues.get(id) ?? []
+        queues.delete(id)
+        quotas.delete(id)
+        await removeFromStorage(queue.flatMap((publication) => publication.media)).catch(() => undefined)
+        for (const publication of queue) await store.removeMediaDir(publication.id).catch(() => undefined)
+        await store.removeAccount(id)
         emit()
         return { ok: true }
       })
@@ -326,10 +782,107 @@ export function createRedesService(options: RedesServiceOptions): RedesService {
       })
     },
 
+    publications(request) {
+      const parsed = accountRequestSchema.safeParse(request)
+      return Promise.resolve(parsed.success ? payloadOf(parsed.data.accountId) : { accountId: '', publications: [], quota: null })
+    },
+
+    async pickMedia() {
+      const paths = options.pickFiles ? await options.pickFiles() : []
+      const candidates: MediaCandidate[] = []
+      for (const path of paths.slice(0, 50)) candidates.push(await inspectFile(path))
+      return candidates
+    },
+
+    savePublication,
+
+    async deletePublication(request) {
+      const parsed = publicationRequestSchema.safeParse(request)
+      const publication = parsed.success ? findPublication(parsed.data.id) : undefined
+      if (!publication) return { ok: false, error: PUBLICATION_MISSING_MESSAGE }
+      // Fora de `publicando`, a tentativa (se ainda está terminando) já fez a última gravação.
+      if (publication.state === 'publicando') return { ok: false, error: PUBLICATION_BUSY_MESSAGE }
+      const queue = (queues.get(publication.accountId) ?? []).filter((item) => item.id !== publication.id)
+      queues.set(publication.accountId, queue)
+      await store.writePublications(publication.accountId, queue)
+      emitPublications(publication.accountId)
+      await removeFromStorage(publication.media).catch(() => undefined)
+      await store.removeMediaDir(publication.id).catch(() => undefined)
+      return { ok: true }
+    },
+
+    async schedulePublication(senderId, request) {
+      // O token é gasto mesmo com o resto inválido: não serve para uma segunda tentativa.
+      if (!guard.consume(senderId, ((request ?? {}) as { clickToken?: unknown }).clickToken)) return { ok: false, error: REDES_CLICK_MESSAGE }
+      const parsed = scheduleRequestSchema.safeParse(request)
+      const publication = parsed.success ? findPublication(parsed.data.id) : undefined
+      if (!parsed.success || !publication) return { ok: false, error: PUBLICATION_MISSING_MESSAGE }
+      if (publication.state !== 'rascunho' && publication.state !== 'agendada') return { ok: false, error: PUBLICATION_NOT_EDITABLE_MESSAGE }
+      const at = Date.parse(parsed.data.at)
+      if (!(at > now())) return { ok: false, error: PUBLICATION_PAST_MESSAGE }
+      return { ok: true, publication: await putPublication({ ...publication, state: 'agendada', scheduledAt: iso(at), error: null }) }
+    },
+
+    async publishNow(senderId, request) {
+      if (!guard.consume(senderId, ((request ?? {}) as { clickToken?: unknown }).clickToken)) return { ok: false, error: REDES_CLICK_MESSAGE }
+      const parsed = publishRequestSchema.safeParse(request)
+      const publication = parsed.success ? findPublication(parsed.data.id) : undefined
+      if (!publication) return { ok: false, error: PUBLICATION_MISSING_MESSAGE }
+      if (publication.state !== 'rascunho' && publication.state !== 'agendada') return { ok: false, error: PUBLICATION_NOT_EDITABLE_MESSAGE }
+      const started = await putPublication({ ...publication, state: 'publicando', error: null })
+      void runPublication(started.id)
+      return { ok: true, publication: started }
+    },
+
+    async unschedule(request) {
+      const parsed = publicationRequestSchema.safeParse(request)
+      const publication = parsed.success ? findPublication(parsed.data.id) : undefined
+      if (!publication) return { ok: false, error: PUBLICATION_MISSING_MESSAGE }
+      if (publication.state !== 'agendada') return { ok: false, error: 'Só publicação agendada pode voltar a rascunho' }
+      return { ok: true, publication: await putPublication({ ...publication, state: 'rascunho', error: null }) }
+    },
+
+    async retry(request) {
+      const parsed = publicationRequestSchema.safeParse(request)
+      const publication = parsed.success ? findPublication(parsed.data.id) : undefined
+      if (!publication) return { ok: false, error: PUBLICATION_MISSING_MESSAGE }
+      if (publication.state !== 'erro') return { ok: false, error: 'Só publicação com erro pode ser tentada de novo' }
+      const started = await putPublication({ ...publication, state: 'publicando', error: null })
+      void runPublication(started.id)
+      return { ok: true, publication: started }
+    },
+
+    async quota(request) {
+      const parsed = accountRequestSchema.safeParse(request)
+      if (!parsed.success || !accounts.has(parsed.data.accountId)) return { ok: false, error: REDES_ACCOUNT_MISSING_MESSAGE }
+      const accountId = parsed.data.accountId
+      const cached = quotas.get(accountId)
+      if (cached && now() - Date.parse(cached.checkedAt) < QUOTA_CACHE_MS) return { ok: true, quota: { ...cached } }
+      const token = readTokens().tokens[accountId]?.token
+      if (!token) return { ok: false, error: REDES_EXPIRED_MESSAGE }
+      const result = await client.publishingLimit(token, accountId)
+      if (!result.ok) return { ok: false, error: result.error }
+      const quota = rememberQuota(accountId, result.quota)
+      emitPublications(accountId)
+      return { ok: true, quota: { ...quota } }
+    },
+
+    registerClick(senderId, token) {
+      guard.register(senderId, token)
+    },
+
+    forgetSender(senderId) {
+      guard.forget(senderId)
+    },
+
+    tick,
+
     dispose() {
       disposed = true
       if (timer) clearInterval(timer)
       timer = null
+      if (publishTimer) clearInterval(publishTimer)
+      publishTimer = null
     },
   }
 }

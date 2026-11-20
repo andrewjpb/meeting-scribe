@@ -7,6 +7,8 @@ import {
   MAIN_EVENT_CHANNELS,
   PRELOAD_ONLY_EVENTS,
   RECORDING_SESSION_CHANNELS,
+  REDES_CLICK_MESSAGE,
+  REDES_PRELOAD_ONLY_EVENTS,
   RENDERER_EVENT_CHANNELS,
   type RecordingSessionTag,
   type CspViolation,
@@ -29,7 +31,7 @@ const api: ScribeApi = {
   },
   send(channel, payload) {
     assertChannel(RENDERER_EVENT_CHANNELS, channel)
-    if (PRELOAD_ONLY_EVENTS.includes(channel) || EMAIL_PRELOAD_ONLY_EVENTS.includes(channel)) throw new Error(`Canal não permitido: ${channel}`)
+    if (PRELOAD_ONLY_EVENTS.includes(channel) || EMAIL_PRELOAD_ONLY_EVENTS.includes(channel) || REDES_PRELOAD_ONLY_EVENTS.includes(channel)) throw new Error(`Canal não permitido: ${channel}`)
     ipcRenderer.send(channel, payload)
   },
   // Contrato 24, CA4: o token de clique nasce aqui, só com a ativação do usuário viva (um clique ou tecla de
@@ -87,6 +89,19 @@ const api: ScribeApi = {
     const clickToken = crypto.randomUUID()
     ipcRenderer.send('scribe:invite-suggest-click', clickToken)
     return ipcRenderer.invoke('scribe:invite-suggest', { accountId: request.accountId, id: request.id, clickToken })
+  },
+  // Contrato 71: publicar e agendar no Instagram são saída: a mesma ativação viva e um token de clique próprio das redes.
+  redesPublish(id) {
+    if (!navigator.userActivation.isActive) return Promise.resolve({ ok: false, error: REDES_CLICK_MESSAGE })
+    const clickToken = crypto.randomUUID()
+    ipcRenderer.send('scribe:redes-click', clickToken)
+    return ipcRenderer.invoke('scribe:redes-publication-publish', { id, clickToken })
+  },
+  redesSchedule(id, at) {
+    if (!navigator.userActivation.isActive) return Promise.resolve({ ok: false, error: REDES_CLICK_MESSAGE })
+    const clickToken = crypto.randomUUID()
+    ipcRenderer.send('scribe:redes-click', clickToken)
+    return ipcRenderer.invoke('scribe:redes-publication-schedule', { id, at, clickToken })
   },
   on(channel, listener) {
     assertChannel(MAIN_EVENT_CHANNELS, channel)

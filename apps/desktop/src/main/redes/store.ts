@@ -1,21 +1,37 @@
 // Arquivos locais das redes (contrato 69, decisão 4 do plan redes-instagram), em `userData/redes/` (0700): um
 // `instagram-<id>.json` por conta (0600) e o `media-host.json` com a configuração do armazenamento sem a chave secreta e o
 // último teste. Gravação atômica (temporário + `rename`), validada pelo zod na leitura; arquivo ausente ou inválido vale
-// como vazio. Nesta fase o arquivo da conta guarda só o perfil em cache e o estado; a fila de publicações, os comentários
-// e o resto entram nos contratos seguintes. Remover a conta apaga o arquivo (não há `removedAt`). Nenhum segredo vai
+// como vazio. O arquivo da conta guarda o perfil em cache, o estado e (contrato 71) a fila de publicações; comentários e o
+// resto entram nos contratos seguintes. Remover a conta apaga o arquivo (não há `removedAt`). As cópias das mídias das
+// publicações ficam em `midia/<publicação>/` (0700), apagadas com a publicação. Nenhum segredo vai
 // para estes arquivos: o token e a chave secreta ficam no cofre (`accounts/instagram.bin`, `accounts/media-host.bin`).
 import { randomUUID } from 'node:crypto'
 import { chmod, mkdir, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { z } from 'zod'
-import { mediaHostConfigSchema, mediaHostTestSchema, REDES_ACCOUNT_ID_PATTERN, redesAccountSchema, type MediaHostConfig, type MediaHostStatus, type RedesAccount } from '../../shared/redes'
+import {
+  mediaHostConfigSchema,
+  mediaHostTestSchema,
+  PUBLICATION_ID_PATTERN,
+  publicationSchema,
+  REDES_ACCOUNT_ID_PATTERN,
+  redesAccountSchema,
+  type MediaHostConfig,
+  type MediaHostStatus,
+  type Publication,
+  type RedesAccount,
+} from '../../shared/redes'
 
 export const REDES_DIR = 'redes'
 export const MEDIA_HOST_FILE = 'media-host.json'
+/** Contrato 71: as cópias das mídias das publicações, uma pasta por publicação. */
+export const MEDIA_DIR = 'midia'
 const STORE_VERSION = 1
 const ACCOUNT_FILE = /^instagram-(\d{1,32})\.json$/
 
-const accountFileSchema = z.object({ version: z.literal(STORE_VERSION), account: redesAccountSchema }).strict()
+// Contrato 71: `publications` entrou sem mudar a versão (o arquivo do 69, sem ela, vale como fila vazia).
+const accountFileSchema = z.object({ version: z.literal(STORE_VERSION), account: redesAccountSchema, publications: z.array(publicationSchema).default([]) }).strict()
+type AccountFile = z.output<typeof accountFileSchema>
 const mediaHostFileSchema = z.object({ version: z.literal(STORE_VERSION), config: mediaHostConfigSchema, lastTest: mediaHostTestSchema.nullable() }).strict()
 
 export interface StoredMediaHost {
@@ -27,8 +43,16 @@ export interface RedesStore {
   readonly dir: string
   accountFile(accountId: string): string
   listAccounts(): Promise<RedesAccount[]>
+  /** Grava o perfil e o estado; a fila que já está no arquivo fica. */
   writeAccount(account: RedesAccount): Promise<void>
   removeAccount(accountId: string): Promise<void>
+  /** Contrato 71: a fila de publicações da conta (vazia sem arquivo). */
+  readPublications(accountId: string): Promise<Publication[]>
+  /** Grava a fila inteira; sem o arquivo da conta (removida), não grava nada e devolve `false`. */
+  writePublications(accountId: string, publications: Publication[]): Promise<boolean>
+  /** A pasta das cópias de uma publicação (`midia/<id>`), criada (0700) se `create`. */
+  mediaDir(publicationId: string, create?: boolean): Promise<string>
+  removeMediaDir(publicationId: string): Promise<void>
   readMediaHost(): Promise<StoredMediaHost | null>
   writeMediaHost(value: StoredMediaHost): Promise<void>
   removeMediaHost(): Promise<void>
@@ -64,6 +88,30 @@ export function createRedesStore(root: string): RedesStore {
     if (!REDES_ACCOUNT_ID_PATTERN.test(accountId)) throw new Error('conta inválida')
     return join(root, `instagram-${accountId}.json`)
   }
+  const readAccountFile = async (accountId: string): Promise<AccountFile | null> => {
+    const parsed = accountFileSchema.safeParse(await readJson(accountFile(accountId)))
+    return parsed.success && parsed.data.account.id === accountId ? parsed.data : null
+  }
+  // Contrato 71: o perfil (renovação do token) e a fila (publicação em curso) mudam o mesmo arquivo por caminhos
+  // diferentes do serviço; cada gravação lê o que está lá e regrava, uma por vez por conta, para nenhuma apagar a outra.
+  const chains = new Map<string, Promise<unknown>>()
+  const perAccount = <T>(accountId: string, task: () => Promise<T>): Promise<T> => {
+    const run = (chains.get(accountId) ?? Promise.resolve()).then(task, task)
+    const settled = run.catch(() => undefined)
+    chains.set(accountId, settled)
+    void settled.then(() => {
+      if (chains.get(accountId) === settled) chains.delete(accountId)
+    })
+    return run
+  }
+  const writeFileOf = async (file: AccountFile): Promise<void> => {
+    await ensureDir()
+    await writeAtomic(accountFile(file.account.id), `${JSON.stringify({ version: STORE_VERSION, account: file.account, publications: file.publications }, null, 2)}\n`)
+  }
+  const mediaPath = (publicationId: string): string => {
+    if (!PUBLICATION_ID_PATTERN.test(publicationId)) throw new Error('publicação inválida')
+    return join(root, MEDIA_DIR, publicationId)
+  }
 
   return {
     dir: root,
@@ -87,14 +135,46 @@ export function createRedesStore(root: string): RedesStore {
       return accounts
     },
 
-    async writeAccount(account) {
+    writeAccount(account) {
       const valid = redesAccountSchema.parse(account)
-      await ensureDir()
-      await writeAtomic(accountFile(valid.id), `${JSON.stringify({ version: STORE_VERSION, account: valid }, null, 2)}\n`)
+      return perAccount(valid.id, async () => {
+        const current = await readAccountFile(valid.id)
+        await writeFileOf({ version: STORE_VERSION, account: valid, publications: current?.publications ?? [] })
+      })
     },
 
-    async removeAccount(accountId) {
-      await rm(accountFile(accountId), { force: true })
+    removeAccount(accountId) {
+      const file = accountFile(accountId)
+      return perAccount(accountId, () => rm(file, { force: true }))
+    },
+
+    async readPublications(accountId) {
+      return (await readAccountFile(accountId))?.publications ?? []
+    },
+
+    writePublications(accountId, publications) {
+      const valid = publications.map((item) => publicationSchema.parse(item))
+      return perAccount(accountId, async () => {
+        const current = await readAccountFile(accountId)
+        if (!current) return false
+        await writeFileOf({ ...current, publications: valid })
+        return true
+      })
+    },
+
+    async mediaDir(publicationId, create = false) {
+      const dir = mediaPath(publicationId)
+      if (create) {
+        await ensureDir()
+        await mkdir(join(root, MEDIA_DIR), { recursive: true, mode: 0o700 })
+        await mkdir(dir, { recursive: true, mode: 0o700 })
+        await chmod(dir, 0o700)
+      }
+      return dir
+    },
+
+    async removeMediaDir(publicationId) {
+      await rm(mediaPath(publicationId), { recursive: true, force: true })
     },
 
     async readMediaHost() {
