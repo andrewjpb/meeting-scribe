@@ -303,6 +303,19 @@ describe('canais com o app bloqueado (contrato 22, CA4)', () => {
     await expect(invoke('scribe:meeting-prompt-state')).resolves.toBe('resposta')
   })
 
+  it('contrato 69: todos os canais das redes são recusados bloqueado, antes do handler', async () => {
+    const channels = INVOKE_CHANNELS.filter((channel) => channel.startsWith('scribe:redes-'))
+    expect(channels.sort()).toEqual(['scribe:redes-connect', 'scribe:redes-media-host-clear', 'scribe:redes-media-host-save', 'scribe:redes-media-host-test', 'scribe:redes-refresh', 'scribe:redes-remove', 'scribe:redes-state'])
+    locked = true
+    for (const channel of channels) {
+      expect(WHEN_LOCKED[channel], channel).toBe('refused')
+      await expect(Promise.resolve().then(() => invokeHandlers.get(channel)?.(trusted, { token: 'IGAAx', accountId: '1' }))).rejects.toThrow(/^locked$/)
+    }
+    expect(calls).toEqual([])
+    locked = false
+    await expect(invoke('scribe:redes-state')).resolves.toBe('resposta')
+  })
+
   it('contrato 40: a conversa aberta no WhatsApp é ignorada bloqueado (o main não muda a regra da notificação)', () => {
     expect(RENDERER_EVENTS_WHEN_LOCKED['scribe:whatsapp-viewing']).toBe('ignored')
   })

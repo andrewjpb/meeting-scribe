@@ -19,12 +19,15 @@ interface TextFieldProps {
   disabled?: boolean
   /** Id do texto de apoio (`aria-describedby`). */
   describedBy?: string | undefined
+  /** Contrato 69: ganchos `data-*` a mais para o smoke (`{ 'data-redes-token': '' }`). */
+  data?: Readonly<Record<`data-${string}`, string>>
 }
 
-export function TextField({ id, value, onChange, type = 'text', placeholder, ariaLabel, onEnter, onBlur, maxLength, disabled = false, describedBy }: TextFieldProps) {
+export function TextField({ id, value, onChange, type = 'text', placeholder, ariaLabel, onEnter, onBlur, maxLength, disabled = false, describedBy, data }: TextFieldProps) {
   return (
     <input
       id={id}
+      {...data}
       type={type}
       value={value}
       placeholder={placeholder}

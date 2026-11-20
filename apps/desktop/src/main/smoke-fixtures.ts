@@ -21,6 +21,9 @@ import type { SpawnAcp } from './acp/agent'
 import { NPM_REGISTRY, type AcpPackage, type DownloadTarball } from './acp/install'
 import { createFakeGoogle, type FakeGoogle } from './google/fake-google'
 import { createFakeMicrosoft, type FakeMicrosoft } from './microsoft/fake-microsoft'
+import { createFakeInstagram, type FakeInstagram } from './redes/fake-instagram'
+import { createFakeS3, type FakeS3 } from './redes/fake-s3'
+import type { HttpFetch, HttpResponse } from './accounts/http'
 import type { CalendarNoticeKind } from '../shared/calendar'
 import { fakeMediaAccess } from './permissions'
 import { writeFakeIndex } from './whatsapp/fake-index'
@@ -46,6 +49,33 @@ export const SMOKE_GOOGLE_CLIENT_ID = '000000000000-smokefalso.apps.googleuserco
 export const SMOKE_GOOGLE_CLIENT_SECRET = 'smoke-segredo-falso-0000'
 /** ID de aplicativo inventado da Microsoft falsa (contrato 12): o smoke cola em Configurações › Contas. */
 export const SMOKE_MICROSOFT_CLIENT_ID = '00000000-0000-4000-8000-00000000abcd'
+/**
+ * Contrato 69: o armazenamento S3 falso que o smoke digita em Configurações › Contas › Armazenamento de mídia. Endereços
+ * no próprio Mac (o `http://` só vale em 127.0.0.1), numa porta onde nada escuta: quem responde é o `fake-s3` em memória.
+ */
+export const SMOKE_S3_ENDPOINT = 'http://127.0.0.1:9/s3'
+export const SMOKE_S3_PUBLIC_BASE_URL = 'http://127.0.0.1:9/publico'
+export const SMOKE_S3_REGION = 'auto'
+export const SMOKE_S3_BUCKET = 'lap-midia-smoke'
+export const SMOKE_S3_ACCESS_KEY_ID = 'AKSMOKEFALSA0000'
+/** A chave secreta inventada: nunca pode sair do cofre (o smoke procura em claro no `userData`, na tela e no relatório). */
+export const SMOKE_S3_SECRET_ACCESS_KEY = 'smoke-chave-secreta-s3-falsa-0000'
+
+const notFound = (): HttpResponse => {
+  const bytes = Buffer.from('{"error":"não encontrado"}', 'utf8')
+  return { status: 404, header: () => null, text: () => Promise.resolve(bytes.toString('utf8')), bytes: () => Promise.resolve(new Uint8Array(bytes)) }
+}
+
+/** Contrato 69: o `fetch` das redes no smoke: os hosts do S3 falso, o Instagram falso e 404 para o resto. */
+function redesRouter(instagram: FakeInstagram, s3: FakeS3): HttpFetch {
+  const s3Hosts = new Set([new URL(SMOKE_S3_ENDPOINT).host, new URL(SMOKE_S3_PUBLIC_BASE_URL).host])
+  return (url, init) => {
+    const host = new URL(url).host
+    if (s3Hosts.has(host)) return s3.fetch(url, init)
+    if (host === 'graph.instagram.com') return instagram.fetch(url, init)
+    return Promise.resolve(notFound())
+  }
+}
 
 const CATALOG = {
   data: [
@@ -192,6 +222,12 @@ export interface SmokeFixtures {
   automations: SmokeAutomations
   /** Microsoft falsa (contrato 12): token, perfil, foto e agendas em memória; nada sai da máquina. */
   microsoft: FakeMicrosoft
+  /** Contrato 69: o Instagram falso (perfil e renovação do token) e o relógio das redes; nada sai da máquina. */
+  instagram: FakeInstagram
+  /** Contrato 69: o armazenamento S3 falso (assinatura conferida), para o "Testar" do armazenamento de mídia. */
+  s3: FakeS3
+  /** Contrato 69: o `fetch` que o serviço das redes usa no smoke (S3 falso, Instagram falso, 404 para o resto). */
+  redesFetch: HttpFetch
   /** Agendas (contrato 12): as notificações substitutas. */
   calendar: SmokeCalendar
   /** Aviso de reunião (contrato 48): cada janela do aviso que o app abriu, na ordem. */
@@ -385,6 +421,9 @@ export function createSmokeFixtures(currentVersion: string, userDataDir: string)
     whatsapp: writeFakeIndex(join(userDataDir, 'whatsapp-indice-falso')),
     automations: { skewMs: 0, notifications: [], trayImages: [], trayTitles: [], dock: { hides: 0, shows: 0 }, loginItems: [], quitRequests: 0 },
     microsoft: createFakeMicrosoft({ clientId: SMOKE_MICROSOFT_CLIENT_ID, profile: { name: 'Bruno Teste', email: 'bruno.teste@example.com' } }),
+    instagram: createFakeInstagram(),
+    s3: createFakeS3({ endpoint: SMOKE_S3_ENDPOINT, bucket: SMOKE_S3_BUCKET, publicBaseUrl: SMOKE_S3_PUBLIC_BASE_URL, accessKeyId: SMOKE_S3_ACCESS_KEY_ID, secretAccessKey: SMOKE_S3_SECRET_ACCESS_KEY, strictSignature: true }),
+    redesFetch: () => Promise.resolve(notFound()),
     calendar: { notifications: [] },
     meetingPrompt: { windows: [] },
     micWatch: { file: join(userDataDir, 'mic-watch-falso.jsonl') },
@@ -430,6 +469,7 @@ export function createSmokeFixtures(currentVersion: string, userDataDir: string)
       return Promise.resolve(reply(200, { ...CHAT_OK, model }))
     },
   }
+  fixtures.redesFetch = redesRouter(fixtures.instagram, fixtures.s3)
   return fixtures
 }
 

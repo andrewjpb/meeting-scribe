@@ -104,6 +104,8 @@ import { EMAIL_DIR } from './email/email-store'
 import { createEmailBatchStore } from './email/batches'
 import type { EmailOrganizer } from './email/organize'
 import { createEmailClickGuard, createEmailService, type EmailService } from './email/service'
+import { createRedesService, type RedesService } from './redes/service'
+import { testMediaHost } from './redes/media-host'
 import { createMacCalendar, locateMacCalendar, type MacCalendar } from './mac-calendar/process'
 import { createInviteService, type InviteService } from './invites/service'
 import { createInviteSuggester, createInviteSuggestChannels, type InviteSuggestChannels } from './invites/suggest'
@@ -177,6 +179,8 @@ let driveService: DriveSyncService | null = null
 let whatsappService: WhatsAppService | null = null
 /** Email (contrato 42): o mesmo do WhatsApp, o estado ao desbloquear e os cliques da janela fechada. */
 let emailService: EmailService | null = null
+/** Redes (contrato 69): o estado volta às janelas ao desbloquear. */
+let redesService: RedesService | null = null
 /** Contrato 64: os canais do "Sugerir evento" (o guarda de clique sai com a janela). */
 let inviteSuggestChannels: InviteSuggestChannels | null = null
 /** Contrato 40: as configurações, lidas na hora de notificar e de pôr o número no Dock. */
@@ -269,6 +273,8 @@ function applyLockStatus(status: LockStatus): void {
   if (!status.locked && whatsappService) broadcast(appWindows(), 'scribe:whatsapp-state', whatsappService.status())
   // Contrato 42: o mesmo para as contas de email.
   if (!status.locked && emailService) broadcast(appWindows(), 'scribe:email-state', emailService.accounts())
+  // Contrato 69: o mesmo para as redes.
+  if (!status.locked && redesService) broadcast(appWindows(), 'scribe:redes-state', redesService.state())
   // Contrato 12: o mesmo para as próximas reuniões e a faixa da agenda.
   if (!status.locked && calendarService) broadcast(appWindows(), 'scribe:calendar-state', calendarService.view())
 }
@@ -862,6 +868,8 @@ interface AppServices {
   email: EmailService
   /** Contrato 56: os lotes do Assistente que organiza o email (o estado, o cartão e o Desfazer). */
   emailOrganizer: EmailOrganizer | null
+  /** Contas do Instagram por token e o armazenamento de mídia (contrato 69). */
+  redes: RedesService
   /** Agentes, tarefas agendadas e execuções (contrato 23). */
   automations: AutomationsService
   /** Servidor local da extensão do Meet (contrato 27). */
@@ -1206,6 +1214,21 @@ function createAppServices(userData: string): AppServices {
     ...(app.isPackaged ? {} : { log: (message: string) => console.log(message) }),
   })
   emailService = email
+  // Redes (contrato 69): o Instagram pela Graph API (`net.fetch`, só os hosts da lista) com o token cifrado no cofre; no
+  // smoke, o Instagram falso em memória e o relógio dele (para "passar" dias sem esperar).
+  const redes = createRedesService({
+    userData,
+    safeStorage: smokeFixtures ? memorySafeStorage() : safeStorage,
+    // No smoke, o Instagram e o S3 falsos por host (`redesFetch`); nada sai da máquina.
+    fetch: smokeFixtures ? smokeFixtures.redesFetch : netHttp,
+    ...(smokeFixtures ? { now: smokeFixtures.instagram.now } : {}),
+    testMediaHost,
+    // Bloqueado (contrato 22), nada das redes vai às janelas; a renovação do token segue.
+    onState: (state) => {
+      if (!lockService?.isLocked()) broadcast(appWindows(), 'scribe:redes-state', state)
+    },
+  })
+  redesService = redes
   // Contrato 60: o Calendário do Mac pelo `lap-calendar`, sob demanda (nada sobe até o primeiro pedido). No smoke, o
   // falso (test/fixtures/fake-lap-calendar.mjs, CA24 do 62), com o estado e o log no userData do smoke.
   const macCalendarFixture = smokeFixtures?.macCalendar
@@ -1736,6 +1759,7 @@ function createAppServices(userData: string): AppServices {
     whatsappInsights,
     email,
     emailOrganizer: emailTools.organizer,
+    redes,
     automations,
     meet,
     meetingPrompt,
@@ -1859,7 +1883,7 @@ function openExternal(url: string): void {
 }
 
 function registerIpc(services: AppServices): void {
-  const { settings, meetings, meetingsService, meetingsIndex, tokenClient, translation, claude, files, summary, analysis, aiNotes, download, branding, updates, chat, chatActions, corpus, acp, lock, google, drive, microsoft, calendar, whatsapp, whatsappInsights, email, emailOrganizer, automations, meet, meetingPrompt, pluginSave, mcp, invites, inviteSuggest } = services
+  const { settings, meetings, meetingsService, meetingsIndex, tokenClient, translation, claude, files, summary, analysis, aiNotes, download, branding, updates, chat, chatActions, corpus, acp, lock, google, drive, microsoft, calendar, whatsapp, whatsappInsights, email, emailOrganizer, redes, automations, meet, meetingPrompt, pluginSave, mcp, invites, inviteSuggest } = services
   /** Reunião salva, renomeada ou com anotações novas: o `.md` dela no acervo do chat é reescrito. */
   const touched = (meetingId: string): void => void corpus.sync(meetingId).catch(() => undefined)
   /**
@@ -2168,6 +2192,15 @@ function registerIpc(services: AppServices): void {
   handle('scribe:email-send', appOrigin, (event, request) => email.send(event.sender.id, request).catch(() => ({ ok: false, error: 'failed' }) as const))
   handle('scribe:invite-reply', appOrigin, (event, request) => email.sendInviteReply(event.sender.id, request).catch(() => ({ ok: false, error: 'failed' }) as const))
   onEvent('scribe:email-click', appOrigin, (event, token) => email.registerClick(event.sender.id, token))
+  // Redes (contrato 69): o serviço valida cada pedido; falha vira resposta tipada, nunca exceção para a tela.
+  const redesFailed = { ok: false, error: 'Não foi possível falar com o Instagram' } as const
+  handle('scribe:redes-state', appOrigin, () => redes.state())
+  handle('scribe:redes-connect', appOrigin, (_event, request) => redes.connect(request).catch(() => redesFailed))
+  handle('scribe:redes-refresh', appOrigin, (_event, request) => redes.refresh(request).catch(() => redesFailed))
+  handle('scribe:redes-remove', appOrigin, (_event, request) => redes.remove(request).catch(() => ({ ok: false })))
+  handle('scribe:redes-media-host-save', appOrigin, (_event, request) => redes.mediaHostSave(request).catch(() => ({ ok: false, error: 'Não foi possível salvar o armazenamento', status: redes.state().mediaHost }) as const))
+  handle('scribe:redes-media-host-test', appOrigin, () => redes.mediaHostTest().catch(() => redes.state().mediaHost))
+  handle('scribe:redes-media-host-clear', appOrigin, () => redes.mediaHostClear().catch(() => redes.state().mediaHost))
   // Contrato 62: o cartão do convite e o Calendário do Mac. O serviço valida cada pedido; falha vira resposta tipada.
   const inviteFailed = { ok: false, error: 'failed', message: INVITE_ERROR_MESSAGES.failed, state: null } as const
   handle('scribe:invite-state', appOrigin, (_event, request) => invites.state(request).catch(() => ({ ok: false, error: 'unavailable' }) as const))
@@ -2356,6 +2389,8 @@ void app.whenReady().then(async () => {
   void services.whatsapp.init().catch(() => undefined)
   // Contrato 42: as contas de email gravadas conectam (sem conta, nada acontece).
   void services.email.init().catch(() => undefined)
+  // Contrato 69: as contas do Instagram gravadas; o token com 7 dias ou mais é renovado já e a cada 24 h.
+  void services.redes.init().catch(() => undefined)
   // Contrato 27: o servidor da extensão do Meet, com "Quem fala no Meet" ligado (padrão).
   if ((await services.settings.getSettings()).meetSpeakers) void services.meet.start().catch(() => null)
   // Contrato 49: o observador do microfone, com "Avisar quando uma reunião começar" ligado (padrão).
@@ -2394,6 +2429,7 @@ void app.whenReady().then(async () => {
     services.drive.dispose()
     void services.whatsapp.dispose()
     void services.email.dispose()
+    services.redes.dispose()
     void services.meet.stop()
     void services.micWatch.dispose()
     // Contrato 62: os `.ics` temporários saem; o `lap-calendar` fecha.
@@ -2441,6 +2477,8 @@ void app.whenReady().then(async () => {
   wake.on('resume', () => {
     void services.automations.resume()
     void services.calendar.refresh()
+    // Contrato 69: o token do Instagram que passou dos 7 dias com o Mac dormindo renova ao acordar.
+    void services.redes.refreshDue().catch(() => undefined)
   })
   // Contrato 12: o cache das agendas, a primeira leitura (sem conta, nenhum pedido) e os relógios dos avisos.
   services.calendar.start()
@@ -2468,6 +2506,7 @@ void app.whenReady().then(async () => {
       calendar: services.calendar,
       meet: services.meet,
       navegador: services.navegador,
+      redes: services.redes,
     })
     // `app.exit` não passa por `will-quit`.
     services.calendar.dispose()
@@ -2483,6 +2522,7 @@ void app.whenReady().then(async () => {
     services.drive.dispose()
     await services.whatsapp.dispose()
     await services.email.dispose()
+    services.redes.dispose()
     disposeWhatsAppBadge()
     await services.meet.stop()
     await services.micWatch.dispose()

@@ -50,6 +50,22 @@ export const INVITE_ADD_ON_ACCEPT_DESCRIPTION = 'Ligado, Aceitar e Talvez també
 export const INVITE_ACCESS_DESCRIPTION = 'Acesso completo: o app lista as agendas, acha o convite que já está lá e atualiza o que ele mesmo gravou. Nunca apaga evento que não criou.'
 export const INVITE_SUGGEST_DESCRIPTION = 'Mostra “Sugerir evento” na leitura. No clique, o Claude (Haiku) lê só o texto do email aberto e preenche um evento para você conferir. Nada é gravado nem respondido sem você.'
 
+/** Contrato 69: as seções "Instagram" e "Armazenamento de mídia (S3)" da aba Contas, as mesmas na tela e na busca. */
+export const INSTAGRAM_SECTION_DESCRIPTION = 'Contas profissionais conectadas por token, para publicar, responder e ver métricas daqui. O token fica cifrado neste Mac.'
+export const INSTAGRAM_TOKEN_DESCRIPTION = 'Gerado no painel da Meta; começa com IGAA. Vale 60 dias e o app renova sozinho enquanto estiver em uso.'
+export const INSTAGRAM_PREREQUISITE = 'A conta precisa ser profissional (Business ou Creator) e pública.'
+export const MEDIA_HOST_SECTION_DESCRIPTION = 'Imagens e carrosséis precisam de um endereço público para o Instagram buscar. Compatível com Cloudflare R2 e qualquer S3. Vídeos não precisam.'
+export const MEDIA_HOST_FIELDS = [
+  { key: 'endpoint', name: 'Endpoint', description: 'Endereço S3 do provedor, com https://.' },
+  { key: 'region', name: 'Região', description: 'No Cloudflare R2, “auto”.' },
+  { key: 'bucket', name: 'Bucket', description: 'Onde os arquivos sobem, em instagram/<conta>/.' },
+  { key: 'accessKeyId', name: 'Chave de acesso', description: 'O ID da chave de API do armazenamento.' },
+  { key: 'secretAccessKey', name: 'Chave secreta', description: 'Fica cifrada neste Mac e nunca aparece de novo.' },
+  { key: 'publicBaseUrl', name: 'URL pública base', description: 'De onde o Instagram baixa a imagem.' },
+] as const
+export const MEDIA_HOST_PATH_STYLE_NAME = 'Endereço no caminho (path-style)'
+export const MEDIA_HOST_PATH_STYLE_DESCRIPTION = 'Ligado: endpoint/bucket/arquivo, como o R2 pede. Desligado: bucket.endpoint/arquivo.'
+
 /** Uma linha de configuração no índice da busca. */
 export interface SettingsEntry {
   tab: SettingsTab
@@ -125,6 +141,10 @@ export function settingsIndex(agent: string): SettingsEntry[] {
     row('contas', 'WhatsApp', 'Notificações do WhatsApp', WHATSAPP_NOTIFICATIONS_DESCRIPTION),
     row('contas', 'WhatsApp', 'Só pessoas (sem grupos)', WHATSAPP_ONLY_PEOPLE_DESCRIPTION, '"Notificações do WhatsApp" está ligado'),
     row('contas', 'WhatsApp', 'Mostrar quando estou digitando', WHATSAPP_TYPING_SIGNAL_DESCRIPTION),
+    // Contrato 69: o Instagram por token e o armazenamento de mídia, depois do WhatsApp.
+    row('contas', 'Instagram', 'Token de acesso', INSTAGRAM_TOKEN_DESCRIPTION, undefined, 'instagram meta conta conectar token redes'),
+    ...MEDIA_HOST_FIELDS.map((field) => row('contas', 'Armazenamento de mídia (S3)', field.name, field.description, undefined, 's3 r2 cloudflare armazenamento mídia instagram')),
+    row('contas', 'Armazenamento de mídia (S3)', MEDIA_HOST_PATH_STYLE_NAME, MEDIA_HOST_PATH_STYLE_DESCRIPTION, undefined, 's3 r2 armazenamento mídia'),
     row('contas', 'Google', 'Guardar no Google Drive', 'Depois de cada reunião, o áudio, a transcrição e o resumo vão para a pasta "LAP Reuniões" do seu Drive.', 'a conta Google está conectada'),
     // Contrato 43: as contas de email, os avisos e o intervalo do POP3. Contrato 55: na aba "Email", com a assinatura,
     // as regras e as pastas da conta escolhida.

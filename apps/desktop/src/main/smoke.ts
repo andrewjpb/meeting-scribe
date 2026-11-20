@@ -69,7 +69,11 @@
 // a aba "Conexões", ligar um do CLI para o chat, importar do Claude Desktop falso sem o segredo, adicionar pelo
 // formulário (no CLI) e por JSON colado (só no app), "Testar conexão", o cartão de aprovação com "Permitir uma vez" e a
 // ferramenta negada pela política. Termina com tudo desligado. Nenhum segredo vai para a tela, o log ou o relatório.
-import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
+//
+// Contrato 69: antes do bloqueio, as redes (`redesChecks`) com o Instagram falso em memória e o relógio dele adiantado: o
+// token recusado e o aceito em Configurações › Contas › Instagram, a renovação, o token vencido, o "Remover" e o
+// armazenamento de mídia. Nenhum token nem chave secreta em claro no `userData`, na tela ou no relatório.
+import { appendFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { spawn as spawnChild } from 'node:child_process'
 import { request as httpRequest } from 'node:http'
 import { tmpdir } from 'node:os'
@@ -121,6 +125,11 @@ import { SCHEDULE_RUNS_DIR, SCHEDULES_FILE } from './schedules/store'
 import { AGENTS_FILE } from './agents/store'
 import type { TrayController } from './tray/menu'
 import type { CalendarService } from './calendar/service'
+import { INSTAGRAM_VAULT_FILE, type RedesService } from './redes/service'
+import { REDES_DIR } from './redes/store'
+import { SMOKE_IG_TOKEN, SMOKE_IG_USER_ID, SMOKE_IG_USERNAME } from './redes/fake-instagram'
+import { ACCOUNTS_DIR } from './accounts/vault'
+import { INSTAGRAM_TOKEN_TTL_DAYS, type RedesConnectResult, type RedesState } from '../shared/redes'
 import { MEET_DISCONNECTED_LABEL } from '../shared/meet'
 import { APP_PLUGINS, pluginFolderName } from '../shared/plugins'
 import { MEET_PATH, MEET_PORTS, type MeetServer } from './meet/server'
@@ -145,6 +154,12 @@ import {
   SMOKE_OFFLINE_KEY,
   SMOKE_OFFLINE_MODEL,
   SMOKE_REFUSED_KEY,
+  SMOKE_S3_ACCESS_KEY_ID,
+  SMOKE_S3_BUCKET,
+  SMOKE_S3_ENDPOINT,
+  SMOKE_S3_PUBLIC_BASE_URL,
+  SMOKE_S3_REGION,
+  SMOKE_S3_SECRET_ACCESS_KEY,
   type SmokeFixtures,
 } from './smoke-fixtures'
 
@@ -198,6 +213,8 @@ export interface SmokeContext {
   meet: Pick<MeetServer, 'port' | 'status'>
   /** Contrato 46: a ponte do "Controle do navegador" (a porta em que subiu e se a extensão está conectada). */
   navegador: Pick<NavegadorServer, 'port' | 'connected'>
+  /** Contrato 69: as redes (o smoke adianta o relógio do Instagram falso e roda a renovação diária na hora). */
+  redes: Pick<RedesService, 'refreshDue' | 'state'>
 }
 
 interface Check {
@@ -4161,7 +4178,8 @@ async function settingsTabsChecks(contents: WebContents, ctx: SmokeContext, shot
     // Contrato 12: o bloco "Microsoft" sem cadastro e o bloco "Agenda" (dois interruptores e "Avisar antes").
     // Contrato 40: os dois interruptores das notificações do WhatsApp, depois do "Instalar". Contrato 34: e o de
     // "Mostrar quando estou digitando". Contrato 55: o bloco do email saiu de Contas (foi para a aba Email).
-    JSON.stringify(contasButtons) === JSON.stringify(['Configurar…', 'Configurar…', '', '1 min', '5 min', '10 min', '', 'Instalar', '', '', '']) &&
+    // Contrato 69: o "Conectar" do Instagram e, no armazenamento de mídia, o path-style, "Salvar", "Testar" e "Remover".
+    JSON.stringify(contasButtons) === JSON.stringify(['Configurar…', 'Configurar…', '', '1 min', '5 min', '10 min', '', 'Instalar', '', '', '', 'Conectar', '', 'Salvar', 'Testar', 'Remover']) &&
     contas.includes('Conta Microsoft') &&
     contas.includes('Entre com a conta Google ou Microsoft acima para escolher as agendas.') &&
     contas.includes(WHATSAPP_FIXED_WARNING) &&
@@ -9753,6 +9771,231 @@ async function emailRulesCheck(ctx: SmokeContext, watch: (win: BrowserWindow) =>
   win.destroy()
 }
 
+const REDES_DAY_MS = 24 * 60 * 60_000
+
+/**
+ * Contrato 69: os arquivos do `userData` do smoke em que algum dos textos aparece em claro (o cofre do smoke é o
+ * `safeStorage` substituto, que também não guarda em claro). Arquivos grandes (o `venv` do WhatsApp) ficam de fora.
+ */
+function filesContaining(root: string, needles: readonly string[]): string[] {
+  const found: string[] = []
+  const walk = (dir: string): void => {
+    let names: string[]
+    try {
+      names = readdirSync(dir)
+    } catch {
+      return
+    }
+    for (const name of names) {
+      const path = join(dir, name)
+      let info
+      try {
+        info = lstatSync(path)
+      } catch {
+        continue
+      }
+      if (info.isSymbolicLink()) continue
+      if (info.isDirectory()) {
+        if (name !== 'venv' && name !== '.venv' && name !== 'node_modules') walk(path)
+      } else if (info.size <= 2 * 1024 * 1024) {
+        const content = readFileSync(path).toString('latin1')
+        if (needles.some((needle) => content.includes(needle))) found.push(path.slice(root.length + 1))
+      }
+    }
+  }
+  walk(root)
+  return found
+}
+
+/**
+ * Contrato 69 (CA1–CA3, CA16), numa janela clara à parte e antes do bloqueio: Configurações › Contas › Instagram com o
+ * Instagram falso. Token recusado; token válido (a conta, o tipo, a validade de 60 dias, o campo limpo e nenhum token em
+ * claro no `userData`, no estado ou na tela); "Renovar agora" com o relógio do falso adiantado 2 dias (o token vai no
+ * cabeçalho, nunca na URL); 61 dias depois, a renovação diária marca a conta como vencida sem chamar a API; "Remover" com a
+ * confirmação na linha apaga o arquivo da conta e o cofre. Depois, o armazenamento de mídia: salvar (a chave secreta só no
+ * cofre), os campos numa janela nova, "Testar" com o resultado na nota e "Remover". Prints da seção com a conta e da
+ * seção do S3, nos dois temas. Termina sem conta e sem armazenamento, com o relógio do falso de volta.
+ */
+async function redesChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => void, checks: Record<string, Check>, shots: Screenshot[]): Promise<void> {
+  const fake = ctx.fixtures.instagram
+  const themeBefore = readSettings(ctx.userDataDir).theme ?? 'system'
+  nativeTheme.themeSource = 'light'
+  const win = ctx.openWindow({})
+  watch(win)
+  await loadAndWait(win)
+  const contents = win.webContents
+  if (themeBefore !== 'system') await evaluate(contents, "window.__scribeApi.invoke('scribe:settings-update', { theme: 'system' }).then(() => true)")
+  const api = <T>(channel: string, request?: unknown): Promise<T> => evaluate<T>(contents, `window.__scribeApi.invoke(${JSON.stringify(channel)}${request === undefined ? '' : `, ${JSON.stringify(request)}`})`)
+  const both = async (name: string): Promise<void> => {
+    await settle(contents)
+    shots.push(await capture(win, ctx.outDir, `${name}-light`))
+    nativeTheme.themeSource = 'dark'
+    await waitFor(contents, "document.documentElement.dataset.theme === 'dark'")
+    await settle(contents)
+    shots.push(await capture(win, ctx.outDir, `${name}-dark`))
+    nativeTheme.themeSource = 'light'
+    await waitFor(contents, "document.documentElement.dataset.theme === 'light'")
+  }
+  const accountRow = `[data-redes-account="${SMOKE_IG_USER_ID}"]`
+  const rowText = (): Promise<string> => text(contents, accountRow)
+  const ptDate = (ms: number): string => new Date(ms).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric' })
+  const accountFile = join(ctx.userDataDir, REDES_DIR, `instagram-${SMOKE_IG_USER_ID}.json`)
+  const vaultFile = join(ctx.userDataDir, ACCOUNTS_DIR, INSTAGRAM_VAULT_FILE)
+  /** O token (ou a chave) em algum lugar da tela: no HTML ou no valor de um campo. */
+  const onScreen = (secret: string): Promise<boolean> =>
+    evaluate<boolean>(contents, `document.documentElement.outerHTML.includes(${JSON.stringify(secret)}) || [...document.querySelectorAll('input, textarea')].some((el) => el.value.includes(${JSON.stringify(secret)}))`)
+
+  await openSettingsTab(contents, 'contas')
+  await scrollToSection(contents, 'Instagram')
+
+  // CA1: token recusado, com a mensagem e sem conta.
+  const callsAtStart = fake.calls.length
+  await setValue(contents, '[data-redes-token]', 'IGAAtokenErradoDoSmoke000')
+  await clickSelector(contents, '[data-redes-connect]')
+  const refused = await waitFor(contents, `document.querySelector('[data-redes-error]')?.textContent.includes('Token recusado pelo Instagram')`, 8000)
+  const noAccount = (await api<RedesState>('scribe:redes-state')).accounts.length === 0 && !(await evaluate<boolean>(contents, "Boolean(document.querySelector('[data-redes-account]'))"))
+  checks['connectInvalid'] = { ok: refused && noAccount && !existsSync(accountFile), detail: `"Token recusado pelo Instagram" na nota=${refused}; nenhuma conta=${noAccount}; arquivo da conta=${existsSync(accountFile)}` }
+
+  // CA1 e CA2: o token válido mostra a conta; o campo limpa e o token só existe cifrado no cofre.
+  const connectedAt = fake.now()
+  await setValue(contents, '[data-redes-token]', SMOKE_IG_TOKEN)
+  await clickSelector(contents, '[data-redes-connect]')
+  const connected = await waitFor(contents, `document.querySelector('${accountRow}')?.textContent.includes('@${SMOKE_IG_USERNAME}') && document.querySelector('${accountRow} [data-redes-account-state]')?.dataset.redesAccountState === 'conectada'`, 8000)
+  const line = await rowText()
+  const validUntil = `Token válido até ${ptDate(connectedAt + INSTAGRAM_TOKEN_TTL_DAYS * REDES_DAY_MS)}`
+  const fieldEmpty = await evaluate<boolean>(contents, "document.querySelector('[data-redes-token]')?.value === '' && !document.querySelector('[data-redes-error]')")
+  const connectState = await api<RedesState>('scribe:redes-state')
+  const leakedFiles = filesContaining(ctx.userDataDir, fake.tokens())
+  const tokenOnScreen = await onScreen(SMOKE_IG_TOKEN)
+  const meCalls = fake.calls.slice(callsAtStart).filter((call) => call.path.endsWith('/me'))
+  const meBearer = meCalls.length === 2 && meCalls.every((call) => call.bearer && !call.tokenInQuery)
+  checks['connect'] = {
+    ok:
+      connected &&
+      line.includes('LAP Teste') &&
+      line.includes('Conta Business') &&
+      line.includes('1.284 seguidores') &&
+      line.includes(validUntil) &&
+      fieldEmpty &&
+      existsSync(vaultFile) &&
+      existsSync(accountFile) &&
+      leakedFiles.length === 0 &&
+      !JSON.stringify(connectState).includes(SMOKE_IG_TOKEN) &&
+      !tokenOnScreen &&
+      meBearer,
+    detail: `conta na tela=${connected} "${line.replace(/\s+/g, ' ').trim()}" (esperado "${validUntil}"); campo limpo=${fieldEmpty}; cofre=${existsSync(vaultFile)}; arquivo da conta=${existsSync(accountFile)}; token em claro em ${JSON.stringify(leakedFiles)}; no estado=${JSON.stringify(connectState).includes(SMOKE_IG_TOKEN)}; na tela=${tokenOnScreen}; /me com Bearer e sem token na URL=${meBearer} (${meCalls.length} pedidos)`,
+  }
+  await scrollToSection(contents, 'Instagram')
+  await both('contas-instagram')
+
+  // CA3: "Renovar agora" 2 dias depois (a Meta só renova token com mais de 24 h): a validade avança.
+  const before = connectState.accounts[0]
+  fake.skewMs += 2 * REDES_DAY_MS
+  const callsBeforeRefresh = fake.calls.length
+  const refreshed = await api<RedesConnectResult>('scribe:redes-refresh', { accountId: SMOKE_IG_USER_ID })
+  const refreshCalls = fake.calls.slice(callsBeforeRefresh)
+  const advanced = refreshed.ok && before !== undefined && refreshed.account.refreshedAt !== before.refreshedAt && Date.parse(refreshed.account.tokenExpiresAt) > Date.parse(before.tokenExpiresAt)
+  const newUntil = refreshed.ok ? `Token válido até ${ptDate(Date.parse(refreshed.account.tokenExpiresAt))}` : '?'
+  const shownUntil = await waitFor(contents, `document.querySelector('${accountRow}')?.textContent.includes(${JSON.stringify(newUntil)})`, 8000)
+  const noTokenInUrl = refreshCalls.length === 1 && refreshCalls[0]?.path === '/refresh_access_token' && refreshCalls[0].bearer && !refreshCalls[0].tokenInQuery
+  const refreshLeak = filesContaining(ctx.userDataDir, fake.tokens())
+  checks['refresh'] = {
+    ok: advanced && shownUntil && noTokenInUrl && refreshLeak.length === 0,
+    detail: `refreshedAt e validade avançaram=${advanced} (${before?.tokenExpiresAt ?? '?'} -> ${refreshed.ok ? refreshed.account.tokenExpiresAt : refreshed.error}); na tela "${newUntil}"=${shownUntil}; pedidos ${JSON.stringify(refreshCalls.map((call) => ({ path: call.path, bearer: call.bearer, tokenInQuery: call.tokenInQuery })))}; token novo em claro em ${JSON.stringify(refreshLeak)}`,
+  }
+
+  // CA3: 61 dias depois, a renovação diária encontra o token vencido e marca a conta sem chamar a API.
+  fake.skewMs += 61 * REDES_DAY_MS
+  const callsBeforeDue = fake.calls.length
+  await ctx.redes.refreshDue()
+  const expired = await waitFor(contents, `document.querySelector('${accountRow} [data-redes-account-state]')?.dataset.redesAccountState === 'expirada' && document.querySelector('${accountRow}')?.textContent.includes('Token vencido')`, 8000)
+  const expiredState = ctx.redes.state().accounts[0]?.state
+  checks['expired'] = {
+    ok: expired && expiredState === 'expirada' && fake.calls.length === callsBeforeDue,
+    detail: `"Token vencido" na linha=${expired} "${(await rowText()).replace(/\s+/g, ' ').trim()}"; estado ${expiredState ?? '?'}; pedidos à API na renovação=${fake.calls.length - callsBeforeDue}`,
+  }
+
+  // CA16: "Remover" pede confirmação na linha; "Sim" apaga o arquivo da conta e o cofre.
+  await clickSelector(contents, `[data-redes-remove="${SMOKE_IG_USER_ID}"]`)
+  const asked = await waitFor(contents, `document.querySelector('${accountRow} [data-redes-remove-ask]')?.textContent.includes('Remover @${SMOKE_IG_USERNAME}? Publicações, comentários e mensagens guardados neste Mac serão apagados.')`)
+  await clickSelector(contents, `[data-redes-remove-confirm="${SMOKE_IG_USER_ID}"]`)
+  const gone = await waitFor(contents, "!document.querySelector('[data-redes-account]')", 8000)
+  const removedState = await api<RedesState>('scribe:redes-state')
+  checks['remove'] = {
+    ok: asked && gone && removedState.accounts.length === 0 && !existsSync(accountFile) && !existsSync(vaultFile),
+    detail: `confirmação na linha=${asked}; a conta saiu da tela=${gone} e do estado=${removedState.accounts.length === 0}; arquivo da conta=${existsSync(accountFile)}; cofre=${existsSync(vaultFile)}`,
+  }
+  fake.skewMs = 0
+
+  // R3: o armazenamento de mídia, com o S3 falso (assinatura conferida). Endereço fora de https é recusado no Salvar com
+  // a razão e o que foi digitado fica; salvar guarda a chave secreta só no cofre; numa janela nova os campos voltam.
+  await scrollToSection(contents, 'Armazenamento de mídia (S3)')
+  const mediaConfig = { endpoint: SMOKE_S3_ENDPOINT, region: SMOKE_S3_REGION, bucket: SMOKE_S3_BUCKET, accessKeyId: SMOKE_S3_ACCESS_KEY_ID, publicBaseUrl: SMOKE_S3_PUBLIC_BASE_URL }
+  const testDisabledBefore = await evaluate<boolean>(contents, "document.querySelector('[data-media-host-test]')?.disabled === true")
+  for (const [key, value] of Object.entries(mediaConfig)) await setValue(contents, `[data-media-host-field="${key}"]`, value)
+  await setValue(contents, '[data-media-host-field="endpoint"]', 'http://s3.smoke.example')
+  await setValue(contents, '[data-media-host-field="secretAccessKey"]', SMOKE_S3_SECRET_ACCESS_KEY)
+  await clickSelector(contents, '[data-media-host-save]')
+  const invalidRefused = await waitFor(
+    contents,
+    `document.querySelector('[data-media-host-error]')?.textContent.includes('O endpoint precisa começar com https://') && document.querySelector('[data-media-host-field="endpoint"]')?.value === 'http://s3.smoke.example' && document.querySelector('[data-media-host-field="secretAccessKey"]')?.value !== ''`,
+    8000,
+  )
+  const invalidNotSaved = !(await api<RedesState>('scribe:redes-state')).mediaHost.configured
+  await setValue(contents, '[data-media-host-field="endpoint"]', SMOKE_S3_ENDPOINT)
+  await clickSelector(contents, '[data-media-host-save]')
+  const saved = await waitFor(contents, "document.querySelector('[data-media-host-field=\"secretAccessKey\"]')?.value === '' && document.querySelector('[data-media-host-field=\"secretAccessKey\"]')?.placeholder === '••••• guardada' && document.querySelector('[data-media-host-test]')?.disabled === false", 8000)
+  const savedState = await api<RedesState>('scribe:redes-state')
+  const other = ctx.openWindow({ theme: 'light' })
+  watch(other)
+  await loadAndWait(other)
+  await openSettingsTab(other.webContents, 'contas')
+  const persisted = await waitFor(other.webContents, `${JSON.stringify(Object.entries(mediaConfig))}.every(([key, value]) => document.querySelector('[data-media-host-field="' + key + '"]')?.value === value) && document.querySelector('[data-media-host-field="secretAccessKey"]')?.placeholder === '••••• guardada'`, 8000)
+  other.destroy()
+  // "Testar" (contrato 70) no S3 falso: sobe 1 byte assinado, lê pela URL pública, apaga; a nota verde com a hora.
+  const s3CallsBefore = ctx.fixtures.s3.calls.length
+  await clickSelector(contents, '[data-media-host-test]')
+  const tested = await waitFor(contents, "document.querySelector('[data-media-host-result=\"ok\"]')?.textContent.includes('Upload e leitura pública ok')", 20_000)
+  const testedState = await api<RedesState>('scribe:redes-state')
+  const resultText = await text(contents, '[data-media-host-result]')
+  const s3Calls = ctx.fixtures.s3.calls.slice(s3CallsBefore).map((call) => call.method)
+  const s3Clean = ctx.fixtures.s3.objects().size === 0
+  const secretLeak = filesContaining(ctx.userDataDir, [SMOKE_S3_SECRET_ACCESS_KEY])
+  const secretOnScreen = await onScreen(SMOKE_S3_SECRET_ACCESS_KEY)
+  await scrollToSection(contents, 'Armazenamento de mídia (S3)')
+  await both('contas-midia-s3')
+  await clickSelector(contents, '[data-media-host-clear]')
+  const cleared = await waitFor(contents, `!document.querySelector('[data-media-host-result]') && document.querySelector('[data-media-host-field="bucket"]')?.value === '' && document.querySelector('[data-media-host-test]')?.disabled === true`, 8000)
+  const clearedState = await api<RedesState>('scribe:redes-state')
+  checks['mediaHostForm'] = {
+    ok:
+      testDisabledBefore &&
+      invalidRefused &&
+      invalidNotSaved &&
+      saved &&
+      savedState.mediaHost.configured &&
+      savedState.mediaHost.secretSet &&
+      savedState.mediaHost.config?.bucket === mediaConfig.bucket &&
+      savedState.mediaHost.config.pathStyle &&
+      persisted &&
+      tested &&
+      testedState.mediaHost.lastTest?.ok === true &&
+      testedState.mediaHost.lastTest.detail === 'Upload e leitura pública ok' &&
+      JSON.stringify(s3Calls) === JSON.stringify(['PUT', 'GET', 'DELETE']) &&
+      s3Clean &&
+      secretLeak.length === 0 &&
+      !secretOnScreen &&
+      !JSON.stringify([savedState, testedState]).includes(SMOKE_S3_SECRET_ACCESS_KEY) &&
+      cleared &&
+      !clearedState.mediaHost.configured &&
+      !clearedState.mediaHost.secretSet,
+    detail: `"Testar" desabilitado sem configuração=${testDisabledBefore}; endpoint em http recusado no Salvar com a razão e o digitado mantido=${invalidRefused} (nada salvo=${invalidNotSaved}); salvo=${saved} (secretSet=${savedState.mediaHost.secretSet}); os campos numa janela nova=${persisted}; teste na nota=${tested} "${resultText.replace(/\s+/g, ' ').trim()}" (ok=${testedState.mediaHost.lastTest?.ok ?? '?'}; pedidos ao S3 falso ${JSON.stringify(s3Calls)}; bucket vazio depois=${s3Clean}); chave secreta em claro em ${JSON.stringify(secretLeak)}, na tela=${secretOnScreen}; removido=${cleared} (configured=${clearedState.mediaHost.configured}, secretSet=${clearedState.mediaHost.secretSet})`,
+  }
+  if (themeBefore !== 'system') await evaluate(contents, `window.__scribeApi.invoke('scribe:settings-update', { theme: '${themeBefore}' }).then(() => true)`)
+  nativeTheme.themeSource = 'system'
+  win.destroy()
+}
+
 /**
  * Contrato 55 (CA26), numa janela que troca de tema no lugar (cada print em claro e escuro, no mesmo estado): a árvore
  * de pastas do servidor falso na ordem D1, com a contagem; ⌘ clique em 3 mensagens ("3 selecionadas" e o resumo), o
@@ -10796,6 +11039,8 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
   const sidebar: Record<string, Check> = {}
   /** Contrato 63: os convites. */
   const invite: Record<string, Check> = {}
+  /** Contrato 69: as contas do Instagram e o armazenamento de mídia. */
+  const redes: Record<string, Check> = {}
   let analysisMeasured: AnalysisMeasured | null = null
 
   // A fixture da sessão real, reduzida pelo mesmo redutor do app: a mesma dos testes (CA4) e do smoke.
@@ -11191,6 +11436,10 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
     // Contrato 55: as telas de pastas, mover, assinatura, regras e o painel "Organizando"; antes do bloqueio.
     await emailFoldersUiChecks(ctx, watch, email, screenshots)
 
+    // Contrato 69: o Instagram por token e o armazenamento de mídia, com o Instagram falso; antes do bloqueio (que recusa
+    // os canais novos junto com os outros). Termina sem conta e sem armazenamento.
+    await redesChecks(ctx, watch, redes, screenshots)
+
     // Contrato 22: bloqueio do app, por último (a senha criada vale para o userData inteiro).
     await lockChecks(ctx, watch, lock, screenshots)
 
@@ -11272,6 +11521,8 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
   for (const name of ['noAccount', 'rootItems', 'enterFirstTime', 'back', 'enterInSection', 'enterLast', 'slide', 'still', 'routeLevel', 'reducedMotion', 'badge', 'emailFits', 'sidebarScrollFade', 'settingsEnter', 'settingsRows', 'settingsBack', 'settingsEnterInSection', 'settingsScreen', 'settingsRouteLevel', 'settingsAnchor', 'settingsDoubleMenu', 'settingsDoubleClick', 'assistantEnter', 'assistantLevel', 'assistantRowMenu', 'assistantRail', 'assistantReveal', 'assistantOpen', 'assistantSearch', 'assistantDelete', 'assistantNewChat']) {
     if (!sidebar[name]) failures.push(`barra lateral ${name}: não executado`)
   }
+  for (const [name, check] of Object.entries(redes)) if (!check.ok) failures.push(`redes ${name}: ${check.detail}`)
+  for (const name of ['connectInvalid', 'connect', 'refresh', 'expired', 'remove', 'mediaHostForm']) if (!redes[name]) failures.push(`redes ${name}: não executado`)
   for (const [name, check] of Object.entries(invite)) if (!check.ok) failures.push(`convites ${name}: ${check.detail}`)
   for (const name of ['convite-1', 'convite-2', 'convite-3', 'convite-4', 'convite-5', 'convite-6', 'convite-7', 'convite-8', 'convite-9', 'convite-10', 'convite-11', 'convite-estados', 'convite-lista', 'convite-configuracoes', 'convite-regra-1', 'convite-regra-2', 'convite-regra-3', 'convite-sugestao-4', 'convite-sugestao-5']) if (!invite[name]) failures.push(`convites ${name}: não executado`)
   for (const [name, check] of Object.entries(lock)) if (!check.ok) failures.push(`bloqueio ${name}: ${check.detail}`)
@@ -11303,8 +11554,9 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
   // salva com o "Contexto" no escuro (contrato 67; no claro ele é o print do contrato 25); o cartão do lote do Assistente
   // concluído e desfeito em parte, nos dois temas (contrato 56); as 12 telas de pastas, mover, assinatura, regras e o
   // painel "Organizando", nos dois temas (contrato 55); os 17 quadros dos convites, nos dois temas (contrato 63); o cartão
-  // "Sugestão — confira" e o editor com a regra de convite, nos dois temas (contrato 64).
-  const expectedShots = SCREENS.length * THEMES.length + 143
+  // "Sugestão — confira" e o editor com a regra de convite, nos dois temas (contrato 64); a seção Instagram com a conta
+  // conectada e a do armazenamento de mídia, nos dois temas (contrato 69).
+  const expectedShots = SCREENS.length * THEMES.length + 147
   if (screenshots.length !== expectedShots) failures.push(`${screenshots.length} PNGs em vez de ${expectedShots}`)
   for (const shot of screenshots) {
     if (shot.name === MEETING_PROMPT_SHOT) {
@@ -11366,6 +11618,10 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
     email,
     sidebar,
     invite,
+    // Contrato 69: só os resultados e o método, o servidor e o caminho dos pedidos ao Instagram falso; nenhum token.
+    redes,
+    instagramFakeCalls: ctx.fixtures.instagram.calls,
+    s3FakeCalls: ctx.fixtures.s3.calls,
     // Contrato 23: os resultados, as notificações, o Dock e os itens de login substitutos; nenhum texto de reunião.
     automations,
     automationsFixtures: { notifications: ctx.fixtures.automations.notifications.map((notice) => notice.title), trayImages: ctx.fixtures.automations.trayImages, dock: ctx.fixtures.automations.dock, loginItems: ctx.fixtures.automations.loginItems, quitRequests: ctx.fixtures.automations.quitRequests },
@@ -11394,6 +11650,9 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
   const calendarData = [...ctx.fixtures.microsoft.accessTokens(), ...ctx.fixtures.microsoft.refreshTokens(), 'token-ms-', 'Alinhamento com o jurídico', 'Status da obra', 'Orçamento do trimestre', 'Carla Dias', 'ana.lima@example.com', 'meet.google.com/smk', 'teams.microsoft.com/l/meetup-join/smoke']
   const calendarLeaked = calendarData.filter((value) => JSON.stringify(report).includes(value))
   if (calendarLeaked.length) failures.push(`${calendarLeaked.length} dado(s) da agenda ou token da Microsoft no relatório`)
+  // Contrato 69 (CA2): nenhum token do Instagram falso nem a chave secreta do armazenamento no relatório.
+  const redesLeaked = [...ctx.fixtures.instagram.tokens(), SMOKE_S3_SECRET_ACCESS_KEY].filter((secret) => JSON.stringify(report).includes(secret))
+  if (redesLeaked.length) failures.push(`${redesLeaked.length} token(s) do Instagram ou chave do armazenamento no relatório`)
   writeFileSync(join(ctx.outDir, 'report.json'), `${JSON.stringify(report, null, 2)}\n`)
 
   clearTimeout(timer)

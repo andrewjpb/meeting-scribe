@@ -28,6 +28,7 @@ import type { MeetingNote } from './meeting-notes'
 import type { SummaryStatus } from './meeting-summary'
 import type { Meeting, MeetingFolder, NewMeeting } from './meetings'
 import type { MeetingOverview, MeetingSearchResult } from './meetings-overview'
+import type { MediaHostConfig, MediaHostSaveResult, MediaHostStatus, RedesConnectResult, RedesState } from './redes'
 import type { RouteId, SettingsTab } from './routes'
 import type { AppSettings, SettingsPatch } from './settings-defaults'
 import type { TranscriptCopyResult, TranscriptDocument, TranslateTurnResult, TranscriptionTokenResult } from './transcription'
@@ -495,6 +496,19 @@ export interface InvokeChannels {
   'scribe:automations-status': { request: undefined; response: AutomationsStatus }
   /** "Pausar todas as tarefas" / "Retomar". */
   'scribe:automations-pause': { request: { paused: boolean }; response: AutomationsStatus }
+  /** Redes (contrato 69): as contas do Instagram e o armazenamento de mídia. Nenhum token nem chave secreta volta. */
+  'scribe:redes-state': { request: undefined; response: RedesState }
+  /** "Conectar": o token colado vai ao main, que valida no `/me` e guarda só cifrado; erro não grava nada. */
+  'scribe:redes-connect': { request: { token: string }; response: RedesConnectResult }
+  /** "Renovar agora" (só depois de 24 h da última renovação, como a Meta exige). */
+  'scribe:redes-refresh': { request: { accountId: string }; response: RedesConnectResult }
+  /** "Remover": o token e os dados locais da conta. Nada muda no Instagram. */
+  'scribe:redes-remove': { request: { accountId: string }; response: { ok: boolean } }
+  /** Salvar o armazenamento; `secretAccessKey: null` mantém a chave secreta guardada. Configuração inválida volta com a razão. */
+  'scribe:redes-media-host-save': { request: { config: MediaHostConfig; secretAccessKey: string | null }; response: MediaHostSaveResult }
+  /** "Testar": upload de 1 byte e leitura pública (contrato 70); o resultado fica em `lastTest`. */
+  'scribe:redes-media-host-test': { request: undefined; response: MediaHostStatus }
+  'scribe:redes-media-host-clear': { request: undefined; response: MediaHostStatus }
 }
 
 /** renderer -> main, sem resposta (`__scribeApi.send` / `ipcMain.on`). */
@@ -613,6 +627,8 @@ export interface MainEvents {
   'scribe:email-changed': { accountId: string }
   /** Contrato 56 (CA10): o estado inteiro de um lote do Assistente a cada mudança. Não chega bloqueado. */
   'scribe:email-organize': EmailOrganizeEvent
+  /** Contrato 69: as redes mudaram (conta entrou, renovou, venceu, saiu; armazenamento salvo ou testado). Não chega bloqueado. */
+  'scribe:redes-state': RedesState
   /**
    * Contrato 43: o clique na notificação de email: a Caixa de Entrada da conta com a mensagem aberta. Contrato 55: a que
    * uma regra moveu vem com a pasta (`mailbox`) e, sem o UID novo (`found: false`), abre só a pasta.
@@ -828,6 +844,13 @@ const INVOKE: Record<InvokeChannel, true> = {
   'scribe:runs-rerun': true,
   'scribe:automations-status': true,
   'scribe:automations-pause': true,
+  'scribe:redes-state': true,
+  'scribe:redes-connect': true,
+  'scribe:redes-refresh': true,
+  'scribe:redes-remove': true,
+  'scribe:redes-media-host-save': true,
+  'scribe:redes-media-host-test': true,
+  'scribe:redes-media-host-clear': true,
 }
 const RENDERER_EVENTS: Record<RendererEvent, true> = {
   'scribe:csp-violation': true,
@@ -882,6 +905,7 @@ const MAIN_EVENTS: Record<MainEvent, true> = {
   'scribe:email-changed': true,
   'scribe:email-organize': true,
   'scribe:open-email': true,
+  'scribe:redes-state': true,
 }
 
 /**
@@ -1148,6 +1172,14 @@ export const WHEN_LOCKED: Readonly<Record<InvokeChannel, LockedPolicy>> = Object
   'scribe:runs-rerun': 'refused',
   'scribe:automations-status': 'refused',
   'scribe:automations-pause': 'refused',
+  // Redes (contrato 69, R10, CA15): tudo recusado com o app bloqueado. A renovação diária do token segue no main.
+  'scribe:redes-state': 'refused',
+  'scribe:redes-connect': 'refused',
+  'scribe:redes-refresh': 'refused',
+  'scribe:redes-remove': 'refused',
+  'scribe:redes-media-host-save': 'refused',
+  'scribe:redes-media-host-test': 'refused',
+  'scribe:redes-media-host-clear': 'refused',
 })
 
 /**
