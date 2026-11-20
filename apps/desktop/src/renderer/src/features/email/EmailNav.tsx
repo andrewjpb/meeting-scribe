@@ -16,10 +16,10 @@ import { accountLabel, unreadBadge, unreadCount } from './format'
 import { canDrop, dropLabel } from './moveTargets'
 import type { LucideIcon } from 'lucide-react'
 
-/** A mesma linha dos itens da navegação principal (`Sidebar`): 40 px, ícone 16 e rótulo 13. */
-const ROW = 'flex h-10 min-w-0 items-center gap-2.5 rounded-[var(--radius-control)] px-2.5 text-13 transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)]'
-/** Contrato 55 (D2): a linha de pasta tem 30 px; a da conta segue com 40. */
-const FOLDER_ROW = 'flex h-[30px] min-w-0 items-center gap-2 rounded-[var(--radius-control)] pr-2.5 text-13 transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)]'
+/** Linha da conta: 28 px como as pastas (contrato 79), distinta pela seta e pela falta do ícone de pasta; rótulo 13. */
+const ROW = 'flex h-[var(--side-subrow)] min-w-0 items-center gap-2 rounded-[var(--radius-control)] px-2.5 text-13 transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)]'
+/** Linha de pasta: 28 px (contrato 79; era 30 no contrato 55), recuada 18 + 16 por nível porque já tem ícone. */
+const FOLDER_ROW = 'flex h-[var(--side-subrow)] min-w-0 items-center gap-2 rounded-[var(--radius-control)] pr-2.5 text-13 transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)]'
 const SIDE_INPUT = 'no-drag h-[26px] min-w-0 flex-1 rounded-[var(--radius-control)] border border-side-outline bg-transparent px-1.5 text-13 text-side-text select-text'
 
 const KIND_ICONS: Partial<Record<FolderKind, LucideIcon>> = { inbox: Inbox, drafts: FilePen, sent: Send, junk: CircleAlert, trash: Trash2 }
@@ -187,7 +187,7 @@ export function EmailNav() {
   const inputRow = (depth: number) =>
     editing && (
       <div data-email-folder-input={editing.mode} className="flex flex-col gap-0.5" style={{ paddingLeft: `${18 + depth * 16}px` }}>
-        <div className="flex h-[30px] items-center gap-2 pr-2.5">
+        <div className="flex h-[var(--side-subrow)] items-center gap-2 pr-2.5">
           <Icon icon={Folder} className="shrink-0 text-side-muted" />
           <input
             // Aberto pelo próprio clique em "Nova subpasta…" ou "Renomear…": o foco vai para ele.
@@ -262,7 +262,7 @@ export function EmailNav() {
               data-email-folder-toggle={item.path}
               onClick={() => toggleFolder(account.id, item.path)}
               style={{ left: `${depth * 16}px` }}
-              className="no-drag absolute top-[7px] z-[1] inline-flex size-4 items-center justify-center text-side-muted hover:text-side-text"
+              className="no-drag absolute top-1.5 z-[1] inline-flex size-4 items-center justify-center text-side-muted hover:text-side-text"
             >
               <Icon icon={open ? ChevronDown : ChevronRight} size={14} />
             </button>

@@ -3860,8 +3860,8 @@ type LayoutScreen = 'configuracoes' | 'gravacao' | 'detalhe'
 
 /**
  * Medidas em px lógicos contra os mockups aprovados (docs/specs/desktop-shell/mockups): barra lateral de
- * 224, item de navegação de 40, quadrado de permissão de 6, conteúdo a 28 do topo (24 no detalhe) e 40 da
- * lateral, campo, seletor e botão de 40, linha de configuração de 64 no mínimo, linha de modelo de 56,
+ * 224, item de navegação de 32 (contrato 79), quadrado de permissão de 6, conteúdo a 28 do topo (24 no detalhe) e 40 da
+ * lateral, campo, seletor e botão de 32 e linha de configuração de 44 no mínimo (contrato 80), linha de modelo de 56,
  * fita de 96, calha da transcrição de 64 e as linhas de texto/tradução de 26/22. Lidas da tela, para a
  * escala de espaço não encolher de novo.
  */
@@ -3920,18 +3920,18 @@ interface Expectation {
 
 const COMMON_LAYOUT: Record<string, Expectation> = {
   sidebarWidth: { min: 224, max: 224 },
-  navItemHeight: { min: 40, max: 40 },
+  navItemHeight: { min: 32, max: 32 }, // contrato 79: item da raiz e cabeçalho-voltar de 32
   permissionSquare: { min: 6, max: 6 },
-  contentLeft: { min: 40, max: 40 },
+  contentLeft: { min: 40, max: 40 }, // 81/82 ajustam
   transcriptGutter: { min: 64, max: 64 },
 }
 
 const SCREEN_LAYOUT: Record<LayoutScreen, Record<string, Expectation>> = {
   configuracoes: {
-    contentTop: { min: 28, max: 28 },
+    contentTop: { min: 28, max: 28 }, // 81/82 ajustam
     // Contrato 18: coluna de leitura de até 760 px, centralizada (na janela de 1120, a 68 px da lateral, mais a
     // reserva da barra de rolagem quando ela não é sobreposta).
-    contentLeft: { min: 40, max: 100 },
+    contentLeft: { min: 40, max: 100 }, // 81/82 ajustam
     columnWidth: { min: 600, max: 760 },
     columnCentered: { min: 0, max: 0.5 },
     headerAlign: { min: 0, max: 0.5 },
@@ -3944,22 +3944,25 @@ const SCREEN_LAYOUT: Record<LayoutScreen, Record<string, Expectation>> = {
     ...Object.fromEntries(SETTINGS_TABS.map((tab) => [`controlSpread_${tab}`, { min: 0, max: 0.5 }])),
     // Botões das contas (Google, Microsoft): alinhados pela direita, a mesma borda em todas as linhas.
     ...Object.fromEntries(SETTINGS_TABS.map((tab) => [`controlEndSpread_${tab}`, { min: 0, max: 0.5 }])),
-    inputHeight: { min: 40, max: 40 },
-    selectHeight: { min: 40, max: 40 },
-    buttonHeight: { min: 40, max: 40 },
-    settingRowHeight: { min: 64, max: 80 },
+    // Componentes (contrato 80): campo, seletor e botão de 32, linha de configuração de 44 no mínimo.
+    inputHeight: { min: 32, max: 32 },
+    selectHeight: { min: 32, max: 32 },
+    buttonHeight: { min: 32, max: 32 },
+    settingRowHeight: { min: 44, max: 60 },
+    // Tela: 81/82 ajustam.
     modelRowHeight: { min: 56, max: 64 },
   },
   gravacao: {
-    contentTop: { min: 28, max: 28 },
+    contentTop: { min: 28, max: 28 }, // 81/82 ajustam
     tapeHeight: { min: 96, max: 96 },
   },
   detalhe: {
     // Mockup do detalhe: cabeçalho a 24 do topo, texto 16/26 e tradução 14/22.
-    contentTop: { min: 24, max: 24 },
+    contentTop: { min: 24, max: 24 }, // 81/82 ajustam
     transcriptTextLineHeight: { min: 26, max: 26 },
     transcriptTranslationLineHeight: { min: 22, max: 22 },
-    copyButtonHeight: { min: 40, max: 40 },
+    // Componente (contrato 80): o "Copiar" é um `Button`, 32.
+    copyButtonHeight: { min: 32, max: 32 },
   },
 }
 
@@ -8186,7 +8189,8 @@ async function settingsLevelChecks(ctx: SmokeContext, watch: (win: BrowserWindow
     detail: `de Reuniões, a primeira vez em Geral=${firstTime} (foco no cabeçalho-voltar=${firstFocus}); clique na linha Conexões=${clicked}; de Reuniões de novo, Conexões=${lastTab} (foco no cabeçalho-voltar=${lastFocus})`,
   }
 
-  // CA1 e CA2: o cabeçalho-voltar e uma linha de 30 px por aba, sem ícone, recuada 32 px, com ⌘N; Conexões marcada.
+  // CA1 e CA2: o cabeçalho-voltar (32 px, contrato 79) e uma linha de 28 px por aba, sem ícone, recuada 28 px, com ⌘N;
+  // Conexões marcada.
   const rows = await evaluate<{ tab: string; label: string; height: number; top: number; padding: string; current: boolean; hint: string; keys: string; icons: number }[]>(
     contents,
     `[...document.querySelectorAll('${SIDEBAR_SETTINGS} [data-settings-tab-link]')].map((el) => {
@@ -8205,11 +8209,11 @@ async function settingsLevelChecks(ctx: SmokeContext, watch: (win: BrowserWindow
   const rowsOk =
     JSON.stringify(rows.map((row) => row.tab)) === JSON.stringify(SETTINGS_TABS) &&
     JSON.stringify(rows.map((row) => row.label)) === JSON.stringify(SETTINGS_ROW_LABELS) &&
-    rows.every((row, index) => row.height === 30 && row.icons === 0 && row.padding === '32px 10px' && row.hint === `⌘${index + 1}` && row.keys === `Meta+${index + 1}`) &&
+    rows.every((row, index) => row.height === 28 && row.icons === 0 && row.padding === '28px 10px' && row.hint === `⌘${index + 1}` && row.keys === `Meta+${index + 1}`) &&
     rows.filter((row) => row.current).map((row) => row.tab).join() === 'conexoes' &&
     rows.find((row) => row.tab === 'email')?.hint === '⌘6' &&
     rows.find((row) => row.tab === 'conexoes')?.hint === '⌘8'
-  const headerOk = header.level === 'Configurações' && header.label === 'Configurações: voltar ao menu' && header.text === 'Configurações' && header.height === 40 && header.icons === 2 && firstGap === 8 && gaps.every((gap) => gap === 2)
+  const headerOk = header.level === 'Configurações' && header.label === 'Configurações: voltar ao menu' && header.text === 'Configurações' && header.height === 32 && header.icons === 2 && firstGap === 4 && gaps.every((gap) => gap === 2)
   sidebarChecks['settingsRows'] = {
     ok: rowsOk && headerOk,
     detail: `linhas ${JSON.stringify(rows.map((row) => `${row.label} ${row.height}px ${row.padding} ${row.hint}${row.current ? ' (aberta)' : ''}${row.icons ? ' com ícone' : ''}`))}; cabeçalho "${header.label}" (${header.height}px, ${header.icons} ícones), 1ª linha a ${firstGap}px, entre as linhas ${JSON.stringify([...new Set(gaps)])}px`,
@@ -8239,7 +8243,7 @@ async function settingsLevelChecks(ctx: SmokeContext, watch: (win: BrowserWindow
     detail: `nível Configurações com Conexões=${again}; sem navegar (painel e rolagem iguais)=${againKept}; foco no cabeçalho-voltar=${againFocus}`,
   }
 
-  // CA8 e CA9: sem Tabs; o nome da aba em 20/26 peso 700; os painéis como regiões com o nome da aba.
+  // CA8 e CA9: sem Tabs; o nome da aba em 15/20 peso 700 (`PageHeader` section, denso no contrato 80); os painéis como regiões com o nome da aba.
   const screen = await evaluate<{ tablist: boolean; tabs: number; tabpanels: number; tag: string; title: string; font: string; weight: string; regions: string[]; search: boolean }>(
     contents,
     `(() => {
@@ -8265,7 +8269,7 @@ async function settingsLevelChecks(ctx: SmokeContext, watch: (win: BrowserWindow
       screen.tabpanels === 0 &&
       screen.tag === 'H1' &&
       screen.title === 'Conexões' &&
-      screen.font === '20px/26px' &&
+      screen.font === '15px/20px' &&
       screen.weight === '700' &&
       JSON.stringify(screen.regions) === JSON.stringify(SETTINGS_ROW_LABELS.map((label) => `region:${label}`)) &&
       screen.search,
@@ -8484,22 +8488,25 @@ async function assistantLevelChecks(ctx: SmokeContext, watch: (win: BrowserWindo
       detail: `de Reuniões -> nível Assistente com 3 conversas=${entered}, deslize ${JSON.stringify(slide.pairs)}, foco no cabeçalho-voltar=${enterFocus}; conversa aberta pela linha=${opened}; voltar: raiz=${backed}, mesma conversa sem navegar=${backState.same}, "Assistente" aria-current="${backState.current}" com o foco=${backState.focus}; de novo: nível=${again}, sem navegar=${againSame}, foco no cabeçalho-voltar=${againFocus}; ⌘, -> nível Configurações=${toSettings}, foco na barra=${toSettingsFocus}; scribe:navigate -> nível Assistente na mesma conversa=${toAssistant}, foco na barra=${toAssistantFocus}`,
     }
 
-    // CA2 e CA3: cabeçalho, "Nova conversa", a busca e a lista, nessa ordem; os dias em caixa alta; linhas de 30 px sem
-    // a hora, a aberta com aria-current="page".
+    // CA2 e CA3: cabeçalho, "Nova conversa", a busca e a lista, nessa ordem; a aberta com aria-current="page". Contrato 79:
+    // cabeçalho de 32, "Nova conversa" e busca (13 px) de 28, os dias em 11 px caixa normal numa linha de 28 alinhados às
+    // conversas, e as linhas de 28 px sem a hora, recuadas 28.
     await waitFor(contents, rowsShown(3))
     const level = await evaluate<{
       header: string
       label: string
       icons: number
       order: boolean
+      headerHeight: number
       newHeight: number
       newIcons: number
       newText: string
       newBg: string
       searchHeight: number
+      searchFont: string
       searchBg: string
       placeholder: string
-      days: { key: string; text: string; upper: boolean; font: string }[]
+      days: { key: string; text: string; upper: boolean; font: string; tracking: string; height: number; indent: string }[]
       rows: { id: string; text: string; height: number; padding: string; current: string }[]
       dots: number[]
       fits: boolean
@@ -8514,14 +8521,16 @@ async function assistantLevelChecks(ctx: SmokeContext, watch: (win: BrowserWindo
           label: back.getAttribute('aria-label') ?? '',
           icons: back.querySelectorAll('svg').length,
           order: box(back).bottom <= box(add).top + 0.5 && box(add).bottom <= box(search).top + 0.5 && box(search).bottom <= box(list).top + 0.5,
+          headerHeight: Math.round(box(back).height * 10) / 10,
           newHeight: Math.round(box(add).height * 10) / 10,
           newIcons: add.querySelectorAll('svg').length,
           newText: add.textContent ?? '',
           newBg: getComputedStyle(add).backgroundColor + ' ' + getComputedStyle(add).borderTopWidth,
           searchHeight: Math.round(box(search).height * 10) / 10,
+          searchFont: getComputedStyle(input).fontSize,
           searchBg: getComputedStyle(search).backgroundColor,
           placeholder: input.placeholder,
-          days: [...list.querySelectorAll('[data-chat-day]')].map((el) => { const h = el.querySelector('h2'); const style = getComputedStyle(h); return { key: el.dataset.chatDay, text: h.innerText, upper: style.textTransform === 'uppercase', font: style.fontSize } }),
+          days: [...list.querySelectorAll('[data-chat-day]')].map((el) => { const h = el.querySelector('h2'); const style = getComputedStyle(h); return { key: el.dataset.chatDay, text: h.innerText, upper: style.textTransform === 'uppercase', font: style.fontSize + '/' + style.lineHeight, tracking: style.letterSpacing, height: Math.round(box(el.querySelector('h2')).height), indent: style.paddingLeft } }),
           rows: [...list.querySelectorAll('[data-chat-item]')].map((el) => { const b = el.querySelector('button'); return { id: el.dataset.chatItem, text: b.textContent ?? '', height: Math.round(box(el).height * 10) / 10, padding: getComputedStyle(b).paddingLeft, current: b.getAttribute('aria-current') ?? '' } }),
           dots: [...list.querySelectorAll('[data-action="chat-row-menu"]')].map((el) => Math.round(box(el).height)),
           // Tudo dentro do recuo de 12 px da barra (um título comprido não alarga a coluna).
@@ -8534,24 +8543,26 @@ async function assistantLevelChecks(ctx: SmokeContext, watch: (win: BrowserWindo
       level.label === 'Assistente: voltar ao menu' &&
       level.icons === 2 &&
       level.order &&
-      level.newHeight === 30 &&
+      level.headerHeight === 32 &&
+      level.newHeight === 28 &&
       level.newIcons === 1 &&
       level.newText === 'Nova conversa' &&
       level.newBg.startsWith('rgba(0, 0, 0, 0)') &&
       level.searchHeight === 28 &&
+      level.searchFont === '13px' &&
       level.searchBg !== 'rgba(0, 0, 0, 0)' &&
       level.placeholder === 'Buscar conversas' &&
-      JSON.stringify(level.days.map((day) => day.text)) === JSON.stringify(['HOJE', 'ONTEM']) &&
-      level.days.every((day) => day.upper && day.font === '10px') &&
+      JSON.stringify(level.days.map((day) => day.text)) === JSON.stringify(['Hoje', 'Ontem']) &&
+      level.days.every((day) => !day.upper && day.font === '11px/16px' && day.tracking === 'normal' && day.height === 28 && day.indent === '28px') &&
       JSON.stringify(level.rows.map((row) => row.id)) === JSON.stringify([first.id, second.id, third.id]) &&
-      level.rows.every((row, index) => row.text === LEVEL_CHATS[index]?.title && row.height === 30 && row.padding === '32px') &&
+      level.rows.every((row, index) => row.text === LEVEL_CHATS[index]?.title && row.height === 28 && row.padding === '28px') &&
       level.rows.filter((row) => row.current === 'page').map((row) => row.id).join() === first.id &&
       level.dots.length === 3 &&
       level.dots.every((height) => height === 24) &&
       level.fits
     sidebarChecks['assistantLevel'] = {
       ok: levelOk,
-      detail: `cabeçalho "${level.label}" (${level.icons} ícones); ordem cabeçalho > Nova conversa > busca > lista=${level.order}; "Nova conversa" ${level.newHeight}px, ${level.newIcons} ícone, fundo e borda ${level.newBg}; busca ${level.searchHeight}px fundo ${level.searchBg} "${level.placeholder}"; dias ${JSON.stringify(level.days)}; linhas ${JSON.stringify(level.rows)}; "…" ${JSON.stringify(level.dots)}px; dentro do recuo da barra=${level.fits}`,
+      detail: `cabeçalho "${level.label}" (${level.headerHeight}px, ${level.icons} ícones); ordem cabeçalho > Nova conversa > busca > lista=${level.order}; "Nova conversa" ${level.newHeight}px, ${level.newIcons} ícone, fundo e borda ${level.newBg}; busca ${level.searchHeight}px ${level.searchFont} fundo ${level.searchBg} "${level.placeholder}"; dias ${JSON.stringify(level.days)}; linhas ${JSON.stringify(level.rows)}; "…" ${JSON.stringify(level.dots)}px; dentro do recuo da barra=${level.fits}`,
     }
 
     // Print do nível: duas no dia, uma ontem, a primeira aberta, o menu fechado (o foco no campo da conversa).
@@ -8796,9 +8807,45 @@ async function emailChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => voi
   const navOrder = await evaluate<string[]>(contents, `[...document.querySelectorAll('aside nav[aria-label="Navegação principal"] [data-nav]')].map((el) => el.dataset.nav)`)
   const rootBadge = await waitFor(contents, `${NAV_BADGE} === '2'`, 8000)
   const badgeLabel = await evaluate<string>(contents, `document.querySelector('[data-nav-badge]')?.textContent ?? ''`)
+  // Contrato 79 (barra densa): itens de 32 px com 2 entre eles e o ícone a 8 do texto, 16 px entre a marca e a lista;
+  // no rodapé (126 px sem o aviso de versão), "Bloquear" e as permissões em linhas de 28, estas em 12 px, e o rótulo
+  // "Permissões" em 11 px, caixa normal, sem espaçamento.
+  const dense = await evaluate<{ items: number[]; gaps: number[]; iconGap: number[]; above: number; lock: number; perms: { height: number; font: string }[]; label: { font: string; upper: boolean; tracking: string }; footer: number }>(
+    contents,
+    `(() => {
+      const aside = document.querySelector('aside'), stack = aside.querySelector('[data-sidebar-stack]'), brand = aside.querySelector('[data-brand]')
+      const items = [...aside.querySelectorAll('${SIDEBAR_ROOT} [data-nav]')].map((el) => el.getBoundingClientRect())
+      const round = (n) => Math.round(n * 10) / 10
+      const label = aside.querySelector('section[aria-label="Permissões"] h2'), style = getComputedStyle(label)
+      const update = aside.querySelector('[data-update-notice]')
+      return {
+        items: items.map((box) => round(box.height)),
+        gaps: items.slice(1).map((box, index) => round(box.top - items[index].bottom)),
+        iconGap: [...aside.querySelectorAll('${SIDEBAR_ROOT} [data-nav]')].map((el) => round(el.querySelector('span').getBoundingClientRect().left - el.querySelector('svg').getBoundingClientRect().right)),
+        above: round(stack.getBoundingClientRect().top - brand.getBoundingClientRect().bottom),
+        lock: round(aside.querySelector('[data-action="lock-app"]').getBoundingClientRect().height),
+        perms: [...aside.querySelectorAll('[data-permission]')].map((el) => ({ height: round(el.getBoundingClientRect().height), font: getComputedStyle(el).fontSize })),
+        label: { font: style.fontSize + '/' + style.lineHeight, upper: style.textTransform === 'uppercase', tracking: style.letterSpacing },
+        footer: round(aside.getBoundingClientRect().bottom - stack.getBoundingClientRect().bottom - (update ? update.getBoundingClientRect().height : 0)),
+      }
+    })()`,
+  )
+  const denseOk =
+    dense.items.length === 6 &&
+    dense.items.every((height) => height === 32) &&
+    dense.gaps.every((gap) => gap === 2) &&
+    dense.iconGap.every((gap) => gap === 8) &&
+    dense.above === 16 &&
+    dense.lock === 28 &&
+    dense.perms.length === 2 &&
+    dense.perms.every((row) => row.height === 28 && row.font === '12px') &&
+    dense.label.font === '11px/16px' &&
+    !dense.label.upper &&
+    dense.label.tracking === 'normal' &&
+    dense.footer === 126
   sidebarChecks['rootItems'] = {
-    ok: JSON.stringify(navOrder) === JSON.stringify(['reunioes', 'assistente', 'email', 'automacoes', 'whatsapp', 'configuracoes']) && rootBadge && badgeLabel === '2 não lidas',
-    detail: `itens ${JSON.stringify(navOrder)}; número do Email "${badgeLabel}"`,
+    ok: JSON.stringify(navOrder) === JSON.stringify(['reunioes', 'assistente', 'email', 'automacoes', 'whatsapp', 'configuracoes']) && rootBadge && badgeLabel === '2 não lidas' && denseOk,
+    detail: `itens ${JSON.stringify(navOrder)}; número do Email "${badgeLabel}"; alturas ${JSON.stringify(dense.items)}px, entre eles ${JSON.stringify([...new Set(dense.gaps)])}, ícone a ${JSON.stringify([...new Set(dense.iconGap)])}px do texto, ${dense.above}px acima da lista; rodapé ${dense.footer}px, Bloquear ${dense.lock}px, permissões ${JSON.stringify(dense.perms)}, rótulo ${JSON.stringify(dense.label)}`,
   }
   await clickNav(contents, 'email')
   const firstTime = await waitFor(contents, `${routeIs('email')} && document.querySelector('[data-email-folder-view="inbox"]') && document.querySelector('${SIDEBAR_EMAIL} [data-email-folder="inbox"][data-email-folder-account="${accountId}"]')?.getAttribute('aria-current') === 'page'`, 8000)
@@ -9201,6 +9248,24 @@ async function emailChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => voi
   )
   for (const id of fitToggles) await setOpen(id, true)
   await waitFor(contents, `document.querySelector('${ownInbox}')`)
+  // Contrato 79 (barra densa): cabeçalho-voltar de 32 com 4 abaixo dele; contas e pastas em linhas de 28 (a seta da
+  // subpasta centrada na linha, a 6 px do topo).
+  const rowSizes = await evaluate<{ header: number; below: number; accounts: number[]; folders: number[]; toggles: number[] }>(
+    contents,
+    `(() => {
+      const level = document.querySelector('${SIDEBAR_EMAIL}')
+      const round = (n) => Math.round(n * 10) / 10
+      const back = level.querySelector('[data-sidebar-back]').getBoundingClientRect(), nav = level.querySelector('[data-email-nav]').getBoundingClientRect()
+      return {
+        header: round(back.height),
+        below: round(nav.top - back.bottom),
+        accounts: [...level.querySelectorAll('[data-email-account-toggle], [data-email-account-header]')].map((el) => round(el.getBoundingClientRect().height)),
+        folders: [...level.querySelectorAll('[data-email-folder]')].map((el) => round(el.getBoundingClientRect().height)),
+        toggles: [...level.querySelectorAll('[data-email-folder-toggle]')].map((el) => round(el.getBoundingClientRect().top - el.parentElement.getBoundingClientRect().top)),
+      }
+    })()`,
+  )
+  const rowSizesOk = rowSizes.header === 32 && rowSizes.below === 4 && rowSizes.accounts.length === 2 && rowSizes.accounts.every((height) => height === 28) && rowSizes.folders.length > 0 && rowSizes.folders.every((height) => height === 28) && rowSizes.toggles.every((top) => top === 6)
   await clickSelector(contents, '[data-action="email-toggle-seen"]')
   const fitRead = await waitFor(contents, `!document.querySelector('[data-email-unread-count]')`, 8000)
   sidebarChecks['emailFits'] = {
@@ -9217,18 +9282,22 @@ async function emailChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => voi
       fit.truncated.every(Boolean) &&
       fit.overflowing.length === 0 &&
       fit.restored &&
+      rowSizesOk &&
       fitRead,
-    detail: `contas recolhidas=${fitCollapsed} (${fitToggles.length}), uma não lida na linha da conta=${fitUnread}; com nomes compridos: borda direita da barra ${fit.asideRight}, linhas ${JSON.stringify(fit.rows)}, número ${fit.badge ?? 'nenhum na linha da conta recolhida'}; fora da borda ${JSON.stringify(fit.over)}; rótulos truncados ${JSON.stringify(fit.truncated)}, transbordando sem truncate ${JSON.stringify(fit.overflowing)}; nomes restaurados=${fit.restored}; lida de novo=${fitRead}`,
+    detail: `contas recolhidas=${fitCollapsed} (${fitToggles.length}), uma não lida na linha da conta=${fitUnread}; com nomes compridos: borda direita da barra ${fit.asideRight}, linhas ${JSON.stringify(fit.rows)}, número ${fit.badge ?? 'nenhum na linha da conta recolhida'}; fora da borda ${JSON.stringify(fit.over)}; rótulos truncados ${JSON.stringify(fit.truncated)}, transbordando sem truncate ${JSON.stringify(fit.overflowing)}; nomes restaurados=${fit.restored}; cabeçalho ${rowSizes.header}px com ${rowSizes.below}px abaixo, contas ${JSON.stringify(rowSizes.accounts)}px, pastas ${JSON.stringify([...new Set(rowSizes.folders)])}px (${rowSizes.folders.length}), seta da subpasta a ${JSON.stringify([...new Set(rowSizes.toggles)])}px do topo; lida de novo=${fitRead}`,
   }
 
-  // Contrato 68 (C): com a janela na altura mínima, a lista do nível Email não cabe e o pé dela esmaece (24 px, sem
-  // receber clique, rente ao pé da lista); rolada até o fim, o esmaecimento some. Com as contas recolhidas, a lista
-  // cabe e ele não aparece.
+  // Contrato 68 (C): com a janela baixa, a lista do nível Email não cabe e o pé dela esmaece (24 px, sem receber
+  // clique, rente ao pé da lista); rolada até o fim, o esmaecimento some. Com as contas recolhidas, a lista cabe e ele
+  // não aparece. Contrato 79: com as linhas de 28 as oito linhas do servidor falso cabem na altura mínima (600), então
+  // a janela desce a 480 só aqui, com o mínimo dela solto e devolvido em seguida.
   const fadeEl = `document.querySelector('${SIDEBAR_EMAIL} [data-email-nav] ~ [data-scroll-fade]')`
   const navEl = `document.querySelector('${SIDEBAR_EMAIL} [data-email-nav]')`
   const [fadeWidth, fadeHeight] = win.getContentSize() as [number, number]
-  win.setContentSize(fadeWidth, 600)
-  await waitFor(contents, `window.innerHeight === 600`)
+  const [minWidth, minHeight] = win.getMinimumSize() as [number, number]
+  win.setMinimumSize(minWidth, 0)
+  win.setContentSize(fadeWidth, 480)
+  await waitFor(contents, `window.innerHeight === 480`)
   await evaluate(contents, `(${navEl}.scrollTop = 0), true`)
   const fadeCut = await evaluate<boolean>(contents, `${navEl}.scrollHeight > ${navEl}.clientHeight + 1`)
   const fadeShown = await waitFor(contents, fadeEl, 2000)
@@ -9241,6 +9310,7 @@ async function emailChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => voi
   await evaluate(contents, `(${navEl}.scrollTop = 0), true`)
   const fadeBack = await waitFor(contents, fadeEl, 2000)
   win.setContentSize(fadeWidth, fadeHeight)
+  win.setMinimumSize(minWidth, minHeight)
   await waitFor(contents, `window.innerHeight === ${fadeHeight}`)
   for (const id of fitToggles) await setOpen(id, false)
   const fadeFits = await waitFor(contents, `${navEl}.scrollHeight <= ${navEl}.clientHeight && !${fadeEl}`, 2000)
@@ -9248,7 +9318,7 @@ async function emailChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => voi
   await waitFor(contents, `document.querySelector('${ownInbox}')`)
   sidebarChecks['sidebarScrollFade'] = {
     ok: fadeCut && fadeShown && fadeBox?.height === 24 && fadeBox.gap === 0 && fadeBox.events === 'none' && fadeGoneAtEnd && fadeBack && fadeFits,
-    detail: `janela a 600 px: lista cortada=${fadeCut}, esmaecimento=${fadeShown} ${JSON.stringify(fadeBox)}; rolada até o fim some=${fadeGoneAtEnd}, de volta ao topo volta=${fadeBack}; contas recolhidas, lista cabe e sem esmaecimento=${fadeFits}`,
+    detail: `janela a 480 px: lista cortada=${fadeCut}, esmaecimento=${fadeShown} ${JSON.stringify(fadeBox)}; rolada até o fim some=${fadeGoneAtEnd}, de volta ao topo volta=${fadeBack}; contas recolhidas, lista cabe e sem esmaecimento=${fadeFits}`,
   }
 
   // O print do nível Email: as duas contas, a do servidor falso com a Caixa de Entrada aberta e a com problema.

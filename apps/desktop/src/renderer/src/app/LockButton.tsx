@@ -12,7 +12,7 @@ export function LockButton() {
   const canLock = useLock((state) => state.status.canLock)
   const lock = useLock((state) => state.lock)
   return (
-    <div title={canLock ? 'Bloquear (⌘⇧L)' : LOCK_DISABLED_HINT} className="mb-2 flex">
+    <div title={canLock ? 'Bloquear (⌘⇧L)' : LOCK_DISABLED_HINT} className="mb-1 flex">
       <button
         type="button"
         data-action="lock-app"
@@ -20,7 +20,7 @@ export function LockButton() {
         aria-keyshortcuts="Meta+Shift+L"
         aria-describedby={canLock ? undefined : 'lock-disabled-hint'}
         onClick={() => void lock()}
-        className="no-drag flex h-10 grow items-center gap-2.5 rounded-[var(--radius-control)] px-2.5 text-13 text-side-muted transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:text-side-text disabled:pointer-events-none disabled:opacity-50"
+        className="no-drag flex h-[var(--side-subrow)] grow items-center gap-2 rounded-[var(--radius-control)] px-2.5 text-13 text-side-muted transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:text-side-text disabled:pointer-events-none disabled:opacity-50"
       >
         <Icon icon={Lock} className="shrink-0" />
         <span className="grow text-left">Bloquear</span>
