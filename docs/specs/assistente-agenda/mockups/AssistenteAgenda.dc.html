@@ -1,0 +1,585 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<title>Assistente: agenda e lembretes</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0;background:#D9DFE8;font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;color:#061A3D;-webkit-font-smoothing:antialiased}
+button{font:inherit}
+.canvas{padding:48px;display:flex;flex-direction:column;gap:56px;width:max-content}
+.doc{max-width:1100px;background:#FFFFFF;border:1px solid #C9D4E5;border-radius:6px;padding:32px 40px}
+.doc h1{margin:0;font-size:26px;line-height:32px;font-weight:700;letter-spacing:-.3px;color:#0A2A5E}
+.doc .sub{margin:6px 0 20px;color:#5B6B85;font-size:13px;line-height:1.5}
+.doc h2{margin:24px 0 4px;font-size:17px;line-height:24px;color:#0A2A5E}
+.doc .bar{display:block;width:24px;height:2px;background:#0A2A5E;margin:8px 0 12px}
+.doc ol{margin:0;padding:0;list-style:none;display:grid;grid-template-columns:1fr 1fr;gap:10px 32px}
+.doc li{font-size:13px;line-height:1.45;display:grid;grid-template-columns:40px 1fr}
+.doc li b{color:#0A2A5E}.doc li .k{font-weight:700;color:#1E5BB8}
+.doc code{font-family:Menlo,ui-monospace,monospace;font-size:11px}
+.doc .idx{columns:2;font-size:13px;line-height:1.7;color:#061A3D}
+.board{padding:24px;margin:-24px;background:#D9DFE8}
+.board>h2{margin:0 0 4px;font-size:17px;line-height:24px;color:#0A2A5E}
+.board .cap{margin:0 0 16px;font-size:13px;line-height:1.5;color:#5B6B85;max-width:1100px}
+.pair{display:flex;gap:48px;align-items:flex-start}
+.lbl{display:block;font-size:10px;font-weight:500;letter-spacing:.14em;color:#5B6B85;margin-bottom:8px}
+
+.t-light{--bg:#FFFFFF;--bg-raised:#FFFFFF;--bg-sunken:#EEF2F9;--line:#E3E9F2;--line-strong:#C9D4E5;--title:#0A2A5E;--text:#061A3D;--text-muted:#5B6B85;--text-faint:#7F8DA6;--accent:#1E5BB8;--on-accent:#FFFFFF;--rec:#C62F34;--ok:#1E5BB8}
+.frame{position:relative;display:flex;overflow:hidden;background:var(--bg);color:var(--text);font-size:13px;line-height:20px;border:1px solid #C9D4E5;border-radius:6px;box-sizing:border-box}
+.frame *,.states *{box-sizing:border-box}
+.ic{flex:none;display:block}
+.sp{flex:1}
+.fl{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+/* barra lateral, nível Assistente (SidebarPilha, tela 06) */
+.side{width:224px;flex:0 0 224px;background:#0A2A5E;color:#FFFFFF;display:flex;flex-direction:column;padding:52px 12px 0;position:relative;line-height:1.4}
+.lights{position:absolute;left:18px;top:18px;display:flex;gap:8px}.lights i{width:12px;height:12px;border-radius:50%;background:rgba(255,255,255,.22)}
+.brand{display:flex;align-items:center;gap:10px;padding:0 8px;height:28px;margin-bottom:24px;flex:none}
+.brand div{display:flex;flex-direction:column;gap:2px}.brand b{font-size:15px;letter-spacing:-.2px}.brand small{font-size:10px;font-weight:500;letter-spacing:.14em;color:#A8B5CC}
+.lvl{flex:1;min-height:0;display:flex;flex-direction:column;gap:2px;overflow:hidden}
+.back{display:flex;align-items:center;gap:10px;height:40px;padding:0 10px;border-radius:4px;color:#FFFFFF;font-weight:500;flex:none}
+.lgap{height:6px;flex:none}
+.newc{display:flex;align-items:center;gap:10px;height:30px;padding:0 10px;border-radius:4px;color:#A8B5CC;flex:none}
+.csearch{display:flex;align-items:center;gap:8px;height:28px;margin:4px 0 8px;padding:0 8px;border-radius:4px;background:rgba(255,255,255,.12);color:#A8B5CC;font-size:12px;flex:none}
+.cday{margin:10px 0 4px;padding:0 10px;font-size:10px;font-weight:500;letter-spacing:.14em;color:#A8B5CC}
+.crow{display:flex;align-items:center;gap:6px;height:30px;padding:0 4px 0 32px;border-radius:4px;color:#A8B5CC;flex:none}
+.crow.on{background:rgba(255,255,255,.12);color:#FFFFFF;font-weight:500}
+.rmore{width:24px;height:24px;display:flex;align-items:center;justify-content:center;border-radius:4px;color:#A8B5CC}
+.foot{flex:none;display:flex;flex-direction:column;padding-top:8px}
+.lockb{display:flex;align-items:center;gap:10px;height:40px;padding:0 10px;border-radius:4px;color:#A8B5CC;margin-bottom:8px}
+.lockb kbd{font-family:inherit;font-size:12px;opacity:.8}
+.perm{display:flex;flex-direction:column;gap:10px;border-top:1px solid rgba(255,255,255,.12);padding:16px 4px 20px}
+.caps-s{margin:0;font-size:10px;font-weight:500;letter-spacing:.14em;color:#A8B5CC}
+.pr{display:flex;align-items:center;gap:8px;font-size:12px}
+.pr .sq{width:6px;height:6px;background:#A8B5CC;flex:none}.pr .sq.ok{background:#3B82F6}
+.ps{color:#A8B5CC;white-space:nowrap}
+
+/* conversa sem o PageHeader: a linha de 52 px é o topo */
+.main{flex:1;min-width:0;display:flex}
+.conv{flex:1;min-width:0;display:flex;flex-direction:column}
+.chead{flex:0 0 52px;height:52px;display:flex;align-items:center;gap:12px;padding:0 24px;border-bottom:1px solid var(--line)}
+.ctitle{flex:1;min-width:0;margin:0;font-size:15px;line-height:20px;font-weight:700;letter-spacing:-.2px;color:var(--title);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.hbtn{display:inline-flex;align-items:center;gap:6px;height:28px;padding:0 8px;border:1px solid var(--line-strong);border-radius:4px;background:transparent;color:var(--title);font-size:12px;font-weight:500;white-space:nowrap}
+.msgs{flex:1;min-height:0;overflow:hidden;display:flex;flex-direction:column;justify-content:flex-end;padding:0 32px 24px}
+.msgs ol{margin:0;padding:24px 0 0;list-style:none;width:100%;max-width:720px;align-self:center;display:flex;flex-direction:column;gap:24px}
+.mu{display:flex;justify-content:flex-end}
+.mu p{margin:0;max-width:72ch;padding:12px 16px;border-radius:6px;background:var(--bg-sunken);font-size:15px;line-height:22px}
+.ma{display:flex;flex-direction:column;gap:8px;padding:12px 16px;border:1px solid var(--line);border-radius:6px;background:var(--bg-raised)}
+.ma p{margin:0;max-width:72ch;font-size:15px;line-height:22px}
+.ma .who{display:flex;align-items:baseline;gap:8px}.ma .who b{font-size:13px;color:var(--title)}.ma .who time{font-size:12px;line-height:16px;color:var(--text-faint);font-variant-numeric:tabular-nums}
+.steps{align-self:flex-start;display:flex;align-items:center;gap:6px;margin-left:-4px;padding:2px 4px;color:var(--text-muted);font-size:12px;line-height:16px;font-weight:500}
+.steps span{font-weight:400;color:var(--text-faint)}
+.ma ul{margin:0;padding:0 0 0 18px;font-size:15px;line-height:22px}
+.meta{margin:0;font-size:12px!important;line-height:16px!important;color:var(--text-faint);font-variant-numeric:tabular-nums}
+.mtools{margin-top:4px;padding-top:8px;border-top:1px solid var(--line);display:flex;align-items:center;gap:4px}
+.qt{display:inline-flex;align-items:center;gap:6px;height:28px;padding:0 8px;border-radius:4px;background:transparent;color:var(--text-muted);font-size:12px;white-space:nowrap}
+.mut{color:var(--text-muted)}
+
+/* caixa de pergunta */
+.ask{flex:0 0 auto;padding:16px 32px}
+.askbox{max-width:720px;margin:0 auto;display:flex;flex-direction:column;border:1px solid var(--line-strong);border-radius:6px;background:var(--bg-raised)}
+.askbox .ph{min-height:56px;padding:10px 12px 4px;font-size:15px;line-height:22px;color:var(--text-faint)}
+.askbar{display:flex;align-items:center;gap:8px;margin:0 4px;padding:8px 4px;border-top:1px solid var(--line)}
+.bsel{display:inline-flex;align-items:center;gap:6px;height:28px;padding:0 6px;border:1px solid var(--line-strong);border-radius:4px;background:var(--bg-raised);font-size:12px;white-space:nowrap}
+.send{display:inline-flex;align-items:center;gap:6px;height:32px;padding:0 12px;border-radius:4px;background:var(--accent);color:var(--on-accent);font-size:13px;font-weight:500}
+
+/* painel Contexto (trilho de 300 px) */
+.ctx{width:300px;flex:0 0 300px;border-left:1px solid var(--line);display:flex;flex-direction:column;overflow:hidden}
+.ctxh{display:flex;align-items:center;flex:0 0 52px;height:52px;padding:0 16px;border-bottom:1px solid var(--line)}.ctxh h2{margin:0;font-size:13px;font-weight:700;color:var(--title)}
+.cs{display:flex;flex-direction:column;gap:8px;padding:16px;border-bottom:1px solid var(--line)}
+.csh{margin:0;font-size:12px;line-height:16px;font-weight:700;color:var(--text-muted)}
+.rad{display:flex;align-items:center;gap:8px;height:32px;padding:0 4px;font-size:13px}
+.rad.on{font-weight:500;color:var(--title)}
+.rsq{width:8px;height:8px;border:1px solid var(--line-strong);flex:none}.rad.on .rsq{border-color:var(--accent);background:var(--accent)}
+.radg{display:flex;flex-direction:column}
+.fon{display:flex;align-items:center;gap:8px;height:28px;font-size:13px}
+.sw{display:flex;align-items:center;width:36px;height:20px;padding:2px;border:1px solid var(--line-strong);border-radius:4px;background:var(--bg-sunken)}
+.sw i{width:14px;height:14px;border-radius:2px;background:var(--text-muted)}
+.sw.on{justify-content:flex-end;background:var(--accent);border-color:var(--accent)}.sw.on i{background:var(--on-accent)}
+.tot{display:grid;grid-template-columns:auto 1fr;gap:4px 16px;margin:0;font-size:13px;font-variant-numeric:tabular-nums}
+.tot dt{color:var(--text-muted)}.tot dd{margin:0;text-align:right}
+.seg{display:flex;border:1px solid var(--line-strong);border-radius:4px;overflow:hidden}
+.seg span{flex:1;height:40px;display:flex;align-items:center;justify-content:center;font-size:13px;border-left:1px solid var(--line-strong)}
+.seg span:first-child{border-left:0}.seg span.on{background:var(--title);color:var(--bg);font-weight:500}
+
+/* cartões de ação */
+.card{display:flex;flex-direction:column;gap:8px;max-width:72ch;padding:12px;border:1px solid var(--line-strong);border-radius:6px;background:var(--bg-raised);list-style:none}
+.ct{margin:0;display:flex;align-items:flex-start;gap:8px;font-size:13px;font-weight:500;color:var(--title)}
+.ct .ic{margin-top:3px;color:var(--text-muted)}
+.facts{margin:0;display:flex;flex-direction:column;gap:2px;padding-left:22px}
+.fact{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--text);font-variant-numeric:tabular-nums}
+.fact .ic{color:var(--text-faint)}
+.agrow{display:flex;align-items:center;gap:8px;padding-left:22px}
+.agrow .k{font-size:12px;color:var(--text-muted)}
+.cal{display:inline-flex;align-items:center;gap:8px;height:32px;padding:0 8px 0 10px;border:1px solid var(--line-strong);border-radius:4px;background:var(--bg);font-size:13px;color:var(--text);white-space:nowrap}
+.cal .ic{color:var(--text-muted)}
+.cal.dis{opacity:.5}
+.cdot{width:8px;height:8px;border-radius:50%;flex:none}
+.acts{display:flex;flex-wrap:wrap;align-items:center;gap:8px}
+.b{display:inline-flex;align-items:center;gap:8px;height:40px;border-radius:4px;font-size:13px;font-weight:500;white-space:nowrap;border:1px solid transparent}
+.b.pri{padding:0 16px;background:var(--accent);color:var(--on-accent)}
+.b.sec{padding:0 14px;border-color:var(--line-strong);background:var(--bg-raised);color:var(--title)}
+.b.danger{padding:0 14px;color:var(--rec);background:transparent}
+.b.dis{opacity:.5}
+.quiet{display:inline-flex;align-items:center;height:28px;padding:0 8px;border-radius:4px;color:var(--text-muted);font-size:12px}
+.outc{margin:0;display:flex;align-items:center;gap:6px;font-size:12px;line-height:16px;color:var(--text-muted);font-variant-numeric:tabular-nums}
+.outc .ic{color:var(--ok)}
+.lnk{font-size:12px;color:var(--accent);text-decoration:underline;text-decoration-thickness:1px;text-underline-offset:3px}
+.err{margin:0;display:flex;align-items:flex-start;gap:6px;font-size:12px;line-height:16px;color:var(--rec)}
+.err .ic{margin-top:0}
+.note{display:flex;align-items:center;gap:12px;border-left:3px solid var(--title);background:var(--bg-sunken);padding:12px 16px;font-size:13px}
+.note .ic{color:var(--text-muted)}
+.note p{margin:0;flex:1;min-width:0}
+.change{display:flex;align-items:center;gap:8px;padding-left:22px;font-size:13px;font-variant-numeric:tabular-nums}
+.change .old{color:var(--text-muted)}
+.change .new{color:var(--title);font-weight:500}
+.change .ic{color:var(--text-faint)}
+
+/* formulário de edição no cartão */
+.form{display:flex;flex-direction:column;gap:10px}
+.fld{display:flex;flex-direction:column;gap:4px;font-size:12px;line-height:16px;color:var(--text-muted)}
+.inp{display:flex;align-items:center;gap:8px;height:32px;padding:0 8px;border:1px solid var(--line-strong);border-radius:4px;background:var(--bg);font-size:13px;line-height:20px;color:var(--text);font-variant-numeric:tabular-nums}
+.inp.focus{border-color:var(--accent);outline:2px solid var(--accent);outline-offset:-1px}
+.inp.area{height:56px;align-items:flex-start;padding-top:6px}
+.inp .phd{color:var(--text-faint)}
+.inp .ic{color:var(--text-muted)}
+.frow{display:flex;gap:8px}
+.chk{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--text);height:24px}
+.chk i{width:16px;height:16px;border:1px solid var(--line-strong);border-radius:4px;background:var(--bg);flex:none}
+
+/* coluna de estados ao lado do quadro */
+.states{width:584px;background:#FFFFFF;border:1px solid #C9D4E5;border-radius:6px;padding:24px 32px;display:flex;flex-direction:column;gap:24px;color:#061A3D;font-size:13px;line-height:20px;box-sizing:border-box}
+.states .st{display:flex;flex-direction:column}
+.states .card{width:518px}
+.menu{width:240px;margin:4px 0 0 76px;padding:4px;border:1px solid var(--line-strong);border-radius:6px;background:var(--bg-raised);display:flex;flex-direction:column}
+.menu div{display:flex;align-items:center;gap:8px;height:32px;padding:0 8px;border-radius:4px;font-size:13px}
+.menu div.on{background:var(--bg-sunken);font-weight:500;color:var(--title)}
+.menu small{margin-left:auto;font-size:12px;color:var(--text-faint)}
+.menu .ic{color:var(--accent)}
+</style>
+</helmet>
+<div class="canvas">
+<div class="doc"><h1>Assistente: agenda e lembretes</h1><p class="sub">Mockup da feature assistente-agenda (spec R1, R2 e R4), 20/11/2026, semana 2026-W47. Modo claro, dados fictícios. Base: AssistenteConversa (cartão de lembrete, botões de 40 px) e SidebarPilha tela 06 (nível Assistente e trilho Contexto). Sem sombra, sem pílula, raio 4/6, ícones lucide.</p>
+<h2>Telas</h2><span class="bar"></span><div class="idx"><div>01 · Tela do Assistente sem o cabeçalho</div><div>02 · Cartão evento: proposto, em edição, concluído</div><div>03 · Cartão evento: sem acesso, negado, erro do helper</div><div>04 · Cartão lembrete-editar</div><div>05 · Cartão lembrete-apagar</div></div>
+<h2>Escolhas de desenho para validar</h2><span class="bar"></span><ol>
+<li><span class="k">D1</span><span><b>Apagar lembrete</b> usa a variante <code>danger</code> que já existe (texto --rec, sem fundo), como nas confirmações de Configurações. Alternativa: botão cheio em --rec.</span></li>
+<li><span class="k">D2</span><span><b>Editar o evento</b> abre os campos no cartão com Salvar/Cancelar; Salvar só volta ao cartão com os dados novos e quem grava é “Pôr na agenda”. Alternativa: como no lembrete de hoje, os campos abrem e o primário continua “Pôr na agenda”.</span></li>
+<li><span class="k">D3</span><span><b>Cor da agenda</b> como ponto redondo de 8 px (a cor que o Mac dá à agenda), única forma redonda da tela. Alternativa: quadrado de 8 px, como os marcadores do app.</span></li>
+<li><span class="k">D4</span><span><b>Sem acesso ao Calendário</b>, o seletor de agenda some e “Pedir acesso” entra como botão secundário ao lado do “Pôr na agenda” desabilitado. Alternativa: o link de ação dentro da própria Note, como nas outras notas do app.</span></li>
+</ol></div>
+<section class="board" id="a01"><h2>01 · Tela do Assistente sem o cabeçalho</h2><p class="cap">O PageHeader “Assistente / Pergunte…” saiu; a linha da conversa é o topo. Barra lateral no nível Assistente com “Agenda de hoje” marcada; a linha de 52 px traz o título da conversa, o escopo, o modelo e “Contexto”, e o trilho Contexto fica aberto à direita, sem mudança visual.</p>
+<div class="pair"><div><span class="lbl">TELA · CLARO</span><div class="frame t-light" style="width:1120px;height:740px">
+<nav class="side" aria-label="Barra lateral">
+<div class="lights"><i></i><i></i><i></i></div>
+<div class="brand"><svg width="28" height="28" viewBox="0 0 100 100" role="img" aria-label="LAP"><rect x="0" y="0" width="100" height="100" rx="6" fill="#FFFFFF"></rect><path d="M 20 25 L 20 75 L 55 75" fill="none" stroke="#0A2A5E" stroke-width="8" stroke-linecap="square" stroke-linejoin="miter"></path><rect x="62" y="58" width="22" height="22" fill="#3B82F6"></rect></svg><div><b>LAP Reuniões</b><small>LAP SOFTWARE</small></div></div>
+<div class="lvl" aria-label="Assistente">
+<div class="back" aria-label="Assistente: voltar ao menu"><svg class="ic " width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg><svg class="ic " width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><path d="M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .963 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.581a.5.5 0 0 1 0 .964L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.963 0z"/></svg><span class="fl">Assistente</span></div>
+<div class="lgap"></div>
+<div class="newc"><svg class="ic " width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><path d="M5 12h14M12 5v14"/></svg><span class="fl">Nova conversa</span></div>
+<div class="csearch"><svg class="ic " width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg><span>Buscar conversas</span></div>
+<p class="cday">HOJE</p><div class="crow on" aria-current="page"><span class="fl">Agenda de hoje</span><span class="rmore"><svg class="ic " width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/></svg></span></div><div class="crow"><span class="fl">Pendências no WhatsApp</span></div><p class="cday">ONTEM</p><div class="crow"><span class="fl">Resumo do Planejamento Q1</span></div><div class="crow"><span class="fl">Tarefas da Daily</span></div><p class="cday">SEXTA-FEIRA</p><div class="crow"><span class="fl">Decisões da semana</span></div>
+</div>
+<div class="foot">
+<div class="lockb"><svg class="ic " width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><rect width="18" height="11" x="3" y="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg><span class="fl">Bloquear</span><kbd>⌘⇧L</kbd></div>
+<section class="perm"><p class="caps-s">PERMISSÕES</p>
+<div class="pr"><span class="sq ok"></span><span class="fl">Microfone</span><span class="ps">concedido</span></div>
+<div class="pr"><span class="sq ok"></span><span class="fl">Áudio do sistema</span><span class="ps">concedido</span></div>
+</section>
+</div>
+</nav>
+<main class="main">
+<section class="conv" aria-label="Conversa">
+<header class="chead">
+<h2 class="ctitle">Agenda de hoje</h2>
+<span class="hbtn" title="Escopo da conversa">Todas as reuniões (10)</span>
+<span class="hbtn" title="Modelo da conversa">Opus</span>
+<span class="hbtn"><svg class="ic " width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><rect x="3" y="3" width="18" height="18"/><path d="M15 3v18"/></svg>Contexto</span>
+</header>
+<div class="msgs"><ol aria-label="Mensagens">
+<li class="mu"><p>O que eu tenho hoje?</p></li><li class="ma">
+<p class="who"><b>Claude</b><time>09:12</time></p>
+<span class="steps"><svg class="ic " width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg>Raciocínio e passos<span>· 3 passos</span></span>
+<p>Hoje, sexta 20/11, você tem:</p>
+<ul><li>10:00 · Alinhamento semanal ABF (reunião agendada)</li><li>14:30 · Revisão do app Conecta</li><li>17:00 · lembrete: enviar a proposta para o Paulo</li></ul>
+<p>À noite está livre.</p>
+<p class="meta">Opus · 6 s · 4,4 mil entrada · 280 saída · US$ 0,08 · 2 reuniões consultadas</p>
+<div class="mtools"><span class="qt"><svg class="ic " width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><rect x="8" y="8" width="13" height="13"/><path d="M4 16V4h12"/></svg>Copiar</span><span class="qt"><svg class="ic " width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/></svg>Refazer</span></div>
+</li>
+</ol></div>
+<div class="ask"><div class="askbox">
+<div class="ph">Pergunte ou peça algo…</div>
+<div class="askbar">
+<span class="bsel">Opus <svg class="ic " width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></span>
+<span class="bsel">Todas as reuniões (10) <svg class="ic " width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></span>
+<span class="bsel"><svg class="ic " width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><path d="M9 4a3 3 0 0 0-3 3 3 3 0 0 0-2 5 3 3 0 0 0 2 5 3 3 0 0 0 6 0V5a2 2 0 0 0-3-1z"/><path d="M15 4a3 3 0 0 1 3 3 3 3 0 0 1 2 5 3 3 0 0 1-2 5 3 3 0 0 1-6 0"/></svg>Pensar mais</span>
+<span class="sp"></span>
+<span class="send"><svg class="ic " width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><path d="m5 12 7-7 7 7"/><path d="M12 19V5"/></svg>Enviar</span>
+</div></div></div>
+</section>
+<aside class="ctx" aria-label="Contexto">
+<div class="ctxh"><h2>Contexto</h2></div>
+<section class="cs"><p class="csh">Escopo</p><div class="radg"><div class="rad on"><span class="rsq"></span>Todas as reuniões (10)</div><div class="rad"><span class="rsq"></span>Últimos 7 dias</div><div class="rad"><span class="rsq"></span>Últimos 30 dias</div><div class="rad"><span class="rsq"></span>Reuniões escolhidas</div></div></section>
+<section class="cs"><p class="csh">Fontes</p><div class="fon"><span class="fl">WhatsApp</span><span class="sw on"><i></i></span></div><div class="fon"><span class="fl">Email</span><span class="sw on"><i></i></span></div><div class="fon"><span class="fl">Automações</span><span class="sw on"><i></i></span></div><div class="fon"><span class="fl">Guia do app</span><span class="sw on"><i></i></span></div><div class="fon"><span class="fl">Internet</span><span class="sw"><i></i></span></div></section>
+<section class="cs"><p class="csh">Consultadas nesta conversa</p><p style="margin:0;font-size:12px;color:var(--text-muted)">Nenhuma ainda.</p></section>
+<section class="cs"><p class="csh">Totais</p><dl class="tot"><dt>Mensagens</dt><dd>4</dd><dt>Tokens</dt><dd>9,8 mil</dd><dt>Custo nominal</dt><dd>US$ 0,21</dd><dt>Tempo</dt><dd>14 s</dd></dl></section>
+<section class="cs"><p class="csh">Modelo</p><div class="seg"><span>Haiku</span><span>Sonnet</span><span class="on">Opus</span></div></section>
+</aside>
+</main>
+</div></div></div>
+</section><section class="board" id="a02"><h2>02 · Cartão evento proposto, em edição e concluído</h2><p class="cap">Novo cartão <b>evento</b> (R1): ícone calendar, título, data e horário, local e a agenda num seletor com as agendas graváveis do Mac (a cor da agenda como ponto). “Pôr na agenda” grava pelo helper; “Editar” abre os campos no próprio cartão e “Salvar” volta ao cartão com os dados novos (nada é gravado até “Pôr na agenda”). Depois do clique, o cartão vira o resultado e não oferece criar de novo.</p>
+<div class="pair"><div><span class="lbl">TELA · CLARO</span><div class="frame t-light" style="width:1120px;height:740px">
+<nav class="side" aria-label="Barra lateral">
+<div class="lights"><i></i><i></i><i></i></div>
+<div class="brand"><svg width="28" height="28" viewBox="0 0 100 100" role="img" aria-label="LAP"><rect x="0" y="0" width="100" height="100" rx="6" fill="#FFFFFF"></rect><path d="M 20 25 L 20 75 L 55 75" fill="none" stroke="#0A2A5E" stroke-width="8" stroke-linecap="square" stroke-linejoin="miter"></path><rect x="62" y="58" width="22" height="22" fill="#3B82F6"></rect></svg><div><b>LAP Reuniões</b><small>LAP SOFTWARE</small></div></div>
+<div class="lvl" aria-label="Assistente">
+<div class="back" aria-label="Assistente: voltar ao menu"><svg class="ic " width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg><svg class="ic " width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><path d="M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .963 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.581a.5.5 0 0 1 0 .964L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.963 0z"/></svg><span class="fl">Assistente</span></div>
+<div class="lgap"></div>
+<div class="newc"><svg class="ic " width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><path d="M5 12h14M12 5v14"/></svg><span class="fl">Nova conversa</span></div>
+<div class="csearch"><svg class="ic " width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg><span>Buscar conversas</span></div>
+<p class="cday">HOJE</p><div class="crow on" aria-current="page"><span class="fl">Agenda de hoje</span><span class="rmore"><svg class="ic " width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/></svg></span></div><div class="crow"><span class="fl">Pendências no WhatsApp</span></div><p class="cday">ONTEM</p><div class="crow"><span class="fl">Resumo do Planejamento Q1</span></div><div class="crow"><span class="fl">Tarefas da Daily</span></div><p class="cday">SEXTA-FEIRA</p><div class="crow"><span class="fl">Decisões da semana</span></div>
+</div>
+<div class="foot">
+<div class="lockb"><svg class="ic " width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><rect width="18" height="11" x="3" y="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg><span class="fl">Bloquear</span><kbd>⌘⇧L</kbd></div>
+<section class="perm"><p class="caps-s">PERMISSÕES</p>
+<div class="pr"><span class="sq ok"></span><span class="fl">Microfone</span><span class="ps">concedido</span></div>
+<div class="pr"><span class="sq ok"></span><span class="fl">Áudio do sistema</span><span class="ps">concedido</span></div>
+</section>
+</div>
+</nav>
+<main class="main">
+<section class="conv" aria-label="Conversa">
+<header class="chead">
+<h2 class="ctitle">Agenda de hoje</h2>
+<span class="hbtn" title="Escopo da conversa">Todas as reuniões (10)</span>
+<span class="hbtn" title="Modelo da conversa">Opus</span>
+<span class="hbtn"><svg class="ic " width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><rect x="3" y="3" width="18" height="18"/><path d="M15 3v18"/></svg>Contexto</span>
+</header>
+<div class="msgs"><ol aria-label="Mensagens">
+<li class="mu"><p>Marque o aniversário do Jefferson hoje às 20h, na casa da Day.</p></li><li class="ma">
+<p class="who"><b>Claude</b><time>09:14</time></p>
+<span class="steps"><svg class="ic " width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg>Raciocínio e passos<span>· 2 passos</span></span>
+<p>Montei o evento para hoje às 20:00, com uma hora de duração, na sua agenda padrão. Confira e confirme no cartão.</p>
+<p class="meta">Opus · 5 s · 4,1 mil entrada · 310 saída · US$ 0,08</p>
+<div class="mtools"><span class="qt"><svg class="ic " width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><rect x="8" y="8" width="13" height="13"/><path d="M4 16V4h12"/></svg>Copiar</span><span class="qt"><svg class="ic " width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/></svg>Refazer</span></div>
+</li><li class="card" data-chat-action="evento" data-chat-action-status="proposed">
+<p class="ct"><svg class="ic " width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><path d="M8 2v4"/><path d="M16 2v4"/><rect width="18" height="18" x="3" y="4" rx="2"/><path d="M3 10h18"/></svg><span>Aniversário do Jefferson</span></p>
+<div class="facts">
+<span class="fact"><svg class="ic " width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>sex 20/11 · 20:00–21:00</span>
+<span class="fact"><svg class="ic " width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><path d="M20 10c0 5-5.5 10.2-7.4 11.8a1 1 0 0 1-1.2 0C9.5 20.2 4 15 4 10a8 8 0 0 1 16 0"/><circle cx="12" cy="10" r="3"/></svg>Casa da Day</span>
+</div>
+<div class="agrow"><span class="k">Agenda</span><span class="cal"><span class="cdot" style="background:#1BADF8"></span>Pessoal (iCloud)<svg class="ic " width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></span></div>
+<div class="acts">
+<span class="b pri"><svg class="ic " width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><path d="M8 2v4"/><path d="M16 2v4"/><path d="M21 13V6a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h8"/><path d="M3 10h18"/><path d="M16 19h6"/><path d="M19 16v6"/></svg>Pôr na agenda</span>
+<span class="b sec"><svg class="ic " width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><path d="M17 3l4 4L7 21H3v-4z"/></svg>Editar</span>
+<span class="quiet">Descartar</span>
+</div>
+</li>
+</ol></div>
+<div class="ask"><div class="askbox">
+<div class="ph">Pergunte ou peça algo…</div>
+<div class="askbar">
+<span class="bsel">Opus <svg class="ic " width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></span>
+<span class="bsel">Todas as reuniões (10) <svg class="ic " width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></span>
+<span class="bsel"><svg class="ic " width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><path d="M9 4a3 3 0 0 0-3 3 3 3 0 0 0-2 5 3 3 0 0 0 2 5 3 3 0 0 0 6 0V5a2 2 0 0 0-3-1z"/><path d="M15 4a3 3 0 0 1 3 3 3 3 0 0 1 2 5 3 3 0 0 1-2 5 3 3 0 0 1-6 0"/></svg>Pensar mais</span>
+<span class="sp"></span>
+<span class="send"><svg class="ic " width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><path d="m5 12 7-7 7 7"/><path d="M12 19V5"/></svg>Enviar</span>
+</div></div></div>
+</section>
+<aside class="ctx" aria-label="Contexto">
+<div class="ctxh"><h2>Contexto</h2></div>
+<section class="cs"><p class="csh">Escopo</p><div class="radg"><div class="rad on"><span class="rsq"></span>Todas as reuniões (10)</div><div class="rad"><span class="rsq"></span>Últimos 7 dias</div><div class="rad"><span class="rsq"></span>Últimos 30 dias</div><div class="rad"><span class="rsq"></span>Reuniões escolhidas</div></div></section>
+<section class="cs"><p class="csh">Fontes</p><div class="fon"><span class="fl">WhatsApp</span><span class="sw on"><i></i></span></div><div class="fon"><span class="fl">Email</span><span class="sw on"><i></i></span></div><div class="fon"><span class="fl">Automações</span><span class="sw on"><i></i></span></div><div class="fon"><span class="fl">Guia do app</span><span class="sw on"><i></i></span></div><div class="fon"><span class="fl">Internet</span><span class="sw"><i></i></span></div></section>
+<section class="cs"><p class="csh">Consultadas nesta conversa</p><p style="margin:0;font-size:12px;color:var(--text-muted)">Nenhuma ainda.</p></section>
+<section class="cs"><p class="csh">Totais</p><dl class="tot"><dt>Mensagens</dt><dd>4</dd><dt>Tokens</dt><dd>9,8 mil</dd><dt>Custo nominal</dt><dd>US$ 0,21</dd><dt>Tempo</dt><dd>14 s</dd></dl></section>
+<section class="cs"><p class="csh">Modelo</p><div class="seg"><span>Haiku</span><span>Sonnet</span><span class="on">Opus</span></div></section>
+</aside>
+</main>
+</div></div><div><span class="lbl">ESTADOS DO CARTÃO</span><div class="states t-light"><div class="st"><span class="lbl">EM EDIÇÃO</span><div class="card" data-chat-action="evento" data-chat-action-status="proposed" data-editing>
+<p class="ct"><svg class="ic " width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><path d="M8 2v4"/><path d="M16 2v4"/><rect width="18" height="18" x="3" y="4" rx="2"/><path d="M3 10h18"/></svg><span>Aniversário do Jefferson</span></p>
+<div class="form">
+<label class="fld">Título<span class="inp focus">Aniversário do Jefferson</span></label>
+<div class="frow">
+<label class="fld" style="width:160px">Data<span class="inp">20/11/2026<span class="sp"></span><svg class="ic " width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><path d="M8 2v4"/><path d="M16 2v4"/><rect width="18" height="18" x="3" y="4" rx="2"/><path d="M3 10h18"/></svg></span></label>
+<label class="fld" style="width:96px">Início<span class="inp">20:00</span></label>
+<label class="fld" style="width:96px">Fim<span class="inp">21:00</span></label>
+</div>
+<span class="chk"><i></i>Dia inteiro</span>
+<label class="fld">Local<span class="inp">Casa da Day</span></label>
+<label class="fld">Notas<span class="inp area"><span class="phd">Opcional</span></span></label>
+<label class="fld">Agenda<span style="display:flex"><span class="cal"><span class="cdot" style="background:#1BADF8"></span>Pessoal (iCloud)<svg class="ic " width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></span></span></label>
+</div>
+<div class="acts">
+<span class="b pri"><svg class="ic " width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>Salvar</span>
+<span class="b sec">Cancelar</span>
+</div>
+</div></div><div class="st"><span class="lbl">CONCLUÍDO</span><div class="card" data-chat-action="evento" data-chat-action-status="done">
+<p class="ct"><svg class="ic " width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><path d="M8 2v4"/><path d="M16 2v4"/><rect width="18" height="18" x="3" y="4" rx="2"/><path d="M3 10h18"/></svg><span>Aniversário do Jefferson</span></p>
+<div class="facts"><span class="fact" style="color:var(--text-muted)"><svg class="ic " width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><path d="M20 10c0 5-5.5 10.2-7.4 11.8a1 1 0 0 1-1.2 0C9.5 20.2 4 15 4 10a8 8 0 0 1 16 0"/><circle cx="12" cy="10" r="3"/></svg>Casa da Day</span></div>
+<p class="outc"><svg class="ic " width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>Evento criado · sex 20/11 20:00 · Pessoal</p>
+</div></div><div class="st"><span class="lbl">SELETOR DE AGENDA ABERTO</span><div class="card" style="gap:0">
+<div class="agrow" style="padding-left:0"><span class="k">Agenda</span><span class="cal"><span class="cdot" style="background:#1BADF8"></span>Pessoal (iCloud)<svg class="ic " width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></span></div>
+<div class="menu" style="margin-left:52px">
+<div class="on"><span class="cdot" style="background:#1BADF8"></span>Pessoal<small>iCloud</small></div>
+<div><span class="cdot" style="background:#FF9500"></span>Família<small>iCloud</small></div>
+<div><span class="cdot" style="background:#63DA38"></span>Trabalho<small>Google</small></div>
+</div>
+</div></div></div></div></div>
+</section><section class="board" id="a03"><h2>03 · Cartão evento sem acesso ao Calendário e com erro do helper</h2><p class="cap">Sem acesso, o cartão mostra a Note “O app ainda não tem acesso ao Calendário”, o seletor de agenda some (sem acesso não há lista) e “Pôr na agenda” fica desabilitado até liberar; “Pedir acesso” usa o mesmo pedido de Configurações › Email › Convites. Negado, o botão vira “Abrir Ajustes”. Erro do helper: texto em pt-BR no cartão, status failed, com “Tentar de novo”.</p>
+<div class="pair"><div><span class="lbl">TELA · CLARO</span><div class="frame t-light" style="width:1120px;height:740px">
+<nav class="side" aria-label="Barra lateral">
+<div class="lights"><i></i><i></i><i></i></div>
+<div class="brand"><svg width="28" height="28" viewBox="0 0 100 100" role="img" aria-label="LAP"><rect x="0" y="0" width="100" height="100" rx="6" fill="#FFFFFF"></rect><path d="M 20 25 L 20 75 L 55 75" fill="none" stroke="#0A2A5E" stroke-width="8" stroke-linecap="square" stroke-linejoin="miter"></path><rect x="62" y="58" width="22" height="22" fill="#3B82F6"></rect></svg><div><b>LAP Reuniões</b><small>LAP SOFTWARE</small></div></div>
+<div class="lvl" aria-label="Assistente">
+<div class="back" aria-label="Assistente: voltar ao menu"><svg class="ic " width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg><svg class="ic " width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><path d="M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .963 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.581a.5.5 0 0 1 0 .964L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.963 0z"/></svg><span class="fl">Assistente</span></div>
+<div class="lgap"></div>
+<div class="newc"><svg class="ic " width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><path d="M5 12h14M12 5v14"/></svg><span class="fl">Nova conversa</span></div>
+<div class="csearch"><svg class="ic " width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg><span>Buscar conversas</span></div>
+<p class="cday">HOJE</p><div class="crow on" aria-current="page"><span class="fl">Agenda de hoje</span><span class="rmore"><svg class="ic " width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/></svg></span></div><div class="crow"><span class="fl">Pendências no WhatsApp</span></div><p class="cday">ONTEM</p><div class="crow"><span class="fl">Resumo do Planejamento Q1</span></div><div class="crow"><span class="fl">Tarefas da Daily</span></div><p class="cday">SEXTA-FEIRA</p><div class="crow"><span class="fl">Decisões da semana</span></div>
+</div>
+<div class="foot">
+<div class="lockb"><svg class="ic " width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><rect width="18" height="11" x="3" y="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg><span class="fl">Bloquear</span><kbd>⌘⇧L</kbd></div>
+<section class="perm"><p class="caps-s">PERMISSÕES</p>
+<div class="pr"><span class="sq ok"></span><span class="fl">Microfone</span><span class="ps">concedido</span></div>
+<div class="pr"><span class="sq ok"></span><span class="fl">Áudio do sistema</span><span class="ps">concedido</span></div>
+</section>
+</div>
+</nav>
+<main class="main">
+<section class="conv" aria-label="Conversa">
+<header class="chead">
+<h2 class="ctitle">Agenda de hoje</h2>
+<span class="hbtn" title="Escopo da conversa">Todas as reuniões (10)</span>
+<span class="hbtn" title="Modelo da conversa">Opus</span>
+<span class="hbtn"><svg class="ic " width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><rect x="3" y="3" width="18" height="18"/><path d="M15 3v18"/></svg>Contexto</span>
+</header>
+<div class="msgs"><ol aria-label="Mensagens">
+<li class="mu"><p>Marque o aniversário do Jefferson hoje às 20h, na casa da Day.</p></li><li class="ma">
+<p class="who"><b>Claude</b><time>09:14</time></p>
+<span class="steps"><svg class="ic " width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg>Raciocínio e passos<span>· 2 passos</span></span>
+<p>Montei o evento para hoje às 20:00, com uma hora de duração. Para eu gravar no Calendário do Mac, o app precisa de acesso.</p>
+<p class="meta">Opus · 5 s · 4,1 mil entrada · 310 saída · US$ 0,08</p>
+<div class="mtools"><span class="qt"><svg class="ic " width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><rect x="8" y="8" width="13" height="13"/><path d="M4 16V4h12"/></svg>Copiar</span><span class="qt"><svg class="ic " width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/></svg>Refazer</span></div>
+</li><li class="card" data-chat-action="evento" data-chat-action-status="proposed">
+<p class="ct"><svg class="ic " width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><path d="M8 2v4"/><path d="M16 2v4"/><rect width="18" height="18" x="3" y="4" rx="2"/><path d="M3 10h18"/></svg><span>Aniversário do Jefferson</span></p>
+<div class="facts">
+<span class="fact"><svg class="ic " width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>sex 20/11 · 20:00–21:00</span>
+<span class="fact"><svg class="ic " width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><path d="M20 10c0 5-5.5 10.2-7.4 11.8a1 1 0 0 1-1.2 0C9.5 20.2 4 15 4 10a8 8 0 0 1 16 0"/><circle cx="12" cy="10" r="3"/></svg>Casa da Day</span>
+</div>
+<div class="note" data-notice="chat-event-calendar-access"><svg class="ic " width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><path d="M8 2v4"/><path d="M16 2v4"/><rect width="18" height="18" x="3" y="4" rx="2"/><path d="M3 10h18"/><path d="m14 14-4 4"/><path d="m10 14 4 4"/></svg><p>O app ainda não tem acesso ao Calendário.</p></div>
+<div class="acts">
+<span class="b pri dis" aria-disabled="true"><svg class="ic " width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><path d="M8 2v4"/><path d="M16 2v4"/><path d="M21 13V6a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h8"/><path d="M3 10h18"/><path d="M16 19h6"/><path d="M19 16v6"/></svg>Pôr na agenda</span>
+<span class="b sec"><svg class="ic " width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><path d="M20 13c0 5-3.5 7.5-7.7 9a1 1 0 0 1-.6 0C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.2-2.7a1.2 1.2 0 0 1 1.6 0C14.5 3.8 17 5 19 5a1 1 0 0 1 1 1z"/><path d="m9 12 2 2 4-4"/></svg>Pedir acesso</span>
+<span class="quiet">Descartar</span>
+</div>
+</li>
+</ol></div>
+<div class="ask"><div class="askbox">
+<div class="ph">Pergunte ou peça algo…</div>
+<div class="askbar">
+<span class="bsel">Opus <svg class="ic " width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></span>
+<span class="bsel">Todas as reuniões (10) <svg class="ic " width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></span>
+<span class="bsel"><svg class="ic " width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><path d="M9 4a3 3 0 0 0-3 3 3 3 0 0 0-2 5 3 3 0 0 0 2 5 3 3 0 0 0 6 0V5a2 2 0 0 0-3-1z"/><path d="M15 4a3 3 0 0 1 3 3 3 3 0 0 1 2 5 3 3 0 0 1-2 5 3 3 0 0 1-6 0"/></svg>Pensar mais</span>
+<span class="sp"></span>
+<span class="send"><svg class="ic " width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><path d="m5 12 7-7 7 7"/><path d="M12 19V5"/></svg>Enviar</span>
+</div></div></div>
+</section>
+<aside class="ctx" aria-label="Contexto">
+<div class="ctxh"><h2>Contexto</h2></div>
+<section class="cs"><p class="csh">Escopo</p><div class="radg"><div class="rad on"><span class="rsq"></span>Todas as reuniões (10)</div><div class="rad"><span class="rsq"></span>Últimos 7 dias</div><div class="rad"><span class="rsq"></span>Últimos 30 dias</div><div class="rad"><span class="rsq"></span>Reuniões escolhidas</div></div></section>
+<section class="cs"><p class="csh">Fontes</p><div class="fon"><span class="fl">WhatsApp</span><span class="sw on"><i></i></span></div><div class="fon"><span class="fl">Email</span><span class="sw on"><i></i></span></div><div class="fon"><span class="fl">Automações</span><span class="sw on"><i></i></span></div><div class="fon"><span class="fl">Guia do app</span><span class="sw on"><i></i></span></div><div class="fon"><span class="fl">Internet</span><span class="sw"><i></i></span></div></section>
+<section class="cs"><p class="csh">Consultadas nesta conversa</p><p style="margin:0;font-size:12px;color:var(--text-muted)">Nenhuma ainda.</p></section>
+<section class="cs"><p class="csh">Totais</p><dl class="tot"><dt>Mensagens</dt><dd>4</dd><dt>Tokens</dt><dd>9,8 mil</dd><dt>Custo nominal</dt><dd>US$ 0,21</dd><dt>Tempo</dt><dd>14 s</dd></dl></section>
+<section class="cs"><p class="csh">Modelo</p><div class="seg"><span>Haiku</span><span>Sonnet</span><span class="on">Opus</span></div></section>
+</aside>
+</main>
+</div></div><div><span class="lbl">ESTADOS DO CARTÃO</span><div class="states t-light"><div class="st"><span class="lbl">ACESSO NEGADO</span><div class="card" data-chat-action="evento" data-chat-action-status="proposed">
+<p class="ct"><svg class="ic " width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><path d="M8 2v4"/><path d="M16 2v4"/><rect width="18" height="18" x="3" y="4" rx="2"/><path d="M3 10h18"/></svg><span>Aniversário do Jefferson</span></p>
+<div class="facts">
+<span class="fact"><svg class="ic " width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>sex 20/11 · 20:00–21:00</span>
+<span class="fact"><svg class="ic " width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><path d="M20 10c0 5-5.5 10.2-7.4 11.8a1 1 0 0 1-1.2 0C9.5 20.2 4 15 4 10a8 8 0 0 1 16 0"/><circle cx="12" cy="10" r="3"/></svg>Casa da Day</span>
+</div>
+<div class="note" data-notice="chat-event-calendar-access"><svg class="ic " width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><path d="M8 2v4"/><path d="M16 2v4"/><rect width="18" height="18" x="3" y="4" rx="2"/><path d="M3 10h18"/><path d="m14 14-4 4"/><path d="m10 14 4 4"/></svg><p>O acesso ao Calendário foi negado. Libere o LAP Reuniões em Ajustes do Sistema › Privacidade e Segurança › Calendários.</p></div>
+<div class="acts">
+<span class="b pri dis" aria-disabled="true"><svg class="ic " width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><path d="M8 2v4"/><path d="M16 2v4"/><path d="M21 13V6a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h8"/><path d="M3 10h18"/><path d="M16 19h6"/><path d="M19 16v6"/></svg>Pôr na agenda</span>
+<span class="b sec"><svg class="ic " width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v8H3V6h8"/></svg>Abrir Ajustes</span>
+<span class="quiet">Descartar</span>
+</div>
+</div></div><div class="st"><span class="lbl">ERRO DO HELPER (FAILED)</span><div class="card" data-chat-action="evento" data-chat-action-status="failed">
+<p class="ct"><svg class="ic " width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><path d="M8 2v4"/><path d="M16 2v4"/><rect width="18" height="18" x="3" y="4" rx="2"/><path d="M3 10h18"/></svg><span>Aniversário do Jefferson</span></p>
+<div class="facts">
+<span class="fact"><svg class="ic " width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>sex 20/11 · 20:00–21:00</span>
+<span class="fact"><svg class="ic " width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><path d="M20 10c0 5-5.5 10.2-7.4 11.8a1 1 0 0 1-1.2 0C9.5 20.2 4 15 4 10a8 8 0 0 1 16 0"/><circle cx="12" cy="10" r="3"/></svg>Casa da Day</span>
+</div>
+<div class="agrow"><span class="k">Agenda</span><span class="cal"><span class="cdot" style="background:#1BADF8"></span>Pessoal (iCloud)<svg class="ic " width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></span></div>
+<p class="err" role="alert"><svg class="ic " width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 8v4"/><path d="M12 16h.01"/></svg><span>Não consegui gravar na agenda: o Calendário não respondeu a tempo. Nada foi criado.</span></p>
+<div class="acts">
+<span class="b pri"><svg class="ic " width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/></svg>Tentar de novo</span>
+<span class="b sec"><svg class="ic " width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><path d="M17 3l4 4L7 21H3v-4z"/></svg>Editar</span>
+<span class="quiet">Descartar</span>
+</div>
+</div></div></div></div></div>
+</section><section class="board" id="a04"><h2>04 · Cartão lembrete-editar</h2><p class="cap">Novo cartão <b>lembrete-editar</b> (R2): o texto atual do lembrete e o horário antes → depois. “Salvar” aplica direto; “Editar” abre data e hora e texto no cartão, como no cartão de lembrete de hoje. Concluído, o cartão diz o novo horário e leva às Automações.</p>
+<div class="pair"><div><span class="lbl">TELA · CLARO</span><div class="frame t-light" style="width:1120px;height:740px">
+<nav class="side" aria-label="Barra lateral">
+<div class="lights"><i></i><i></i><i></i></div>
+<div class="brand"><svg width="28" height="28" viewBox="0 0 100 100" role="img" aria-label="LAP"><rect x="0" y="0" width="100" height="100" rx="6" fill="#FFFFFF"></rect><path d="M 20 25 L 20 75 L 55 75" fill="none" stroke="#0A2A5E" stroke-width="8" stroke-linecap="square" stroke-linejoin="miter"></path><rect x="62" y="58" width="22" height="22" fill="#3B82F6"></rect></svg><div><b>LAP Reuniões</b><small>LAP SOFTWARE</small></div></div>
+<div class="lvl" aria-label="Assistente">
+<div class="back" aria-label="Assistente: voltar ao menu"><svg class="ic " width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg><svg class="ic " width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><path d="M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .963 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.581a.5.5 0 0 1 0 .964L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.963 0z"/></svg><span class="fl">Assistente</span></div>
+<div class="lgap"></div>
+<div class="newc"><svg class="ic " width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><path d="M5 12h14M12 5v14"/></svg><span class="fl">Nova conversa</span></div>
+<div class="csearch"><svg class="ic " width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg><span>Buscar conversas</span></div>
+<p class="cday">HOJE</p><div class="crow on" aria-current="page"><span class="fl">Agenda de hoje</span><span class="rmore"><svg class="ic " width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/></svg></span></div><div class="crow"><span class="fl">Pendências no WhatsApp</span></div><p class="cday">ONTEM</p><div class="crow"><span class="fl">Resumo do Planejamento Q1</span></div><div class="crow"><span class="fl">Tarefas da Daily</span></div><p class="cday">SEXTA-FEIRA</p><div class="crow"><span class="fl">Decisões da semana</span></div>
+</div>
+<div class="foot">
+<div class="lockb"><svg class="ic " width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><rect width="18" height="11" x="3" y="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg><span class="fl">Bloquear</span><kbd>⌘⇧L</kbd></div>
+<section class="perm"><p class="caps-s">PERMISSÕES</p>
+<div class="pr"><span class="sq ok"></span><span class="fl">Microfone</span><span class="ps">concedido</span></div>
+<div class="pr"><span class="sq ok"></span><span class="fl">Áudio do sistema</span><span class="ps">concedido</span></div>
+</section>
+</div>
+</nav>
+<main class="main">
+<section class="conv" aria-label="Conversa">
+<header class="chead">
+<h2 class="ctitle">Agenda de hoje</h2>
+<span class="hbtn" title="Escopo da conversa">Todas as reuniões (10)</span>
+<span class="hbtn" title="Modelo da conversa">Opus</span>
+<span class="hbtn"><svg class="ic " width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><rect x="3" y="3" width="18" height="18"/><path d="M15 3v18"/></svg>Contexto</span>
+</header>
+<div class="msgs"><ol aria-label="Mensagens">
+<li class="mu"><p>Adie o lembrete de responder a Ana para quarta, mesmo horário.</p></li><li class="ma">
+<p class="who"><b>Claude</b><time>09:20</time></p>
+<span class="steps"><svg class="ic " width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg>Raciocínio e passos<span>· 2 passos</span></span>
+<p>Mudo o lembrete de terça 17/11 para quarta 18/11, às 09:00. O texto continua o mesmo.</p>
+<p class="meta">Opus · 5 s · 4,1 mil entrada · 310 saída · US$ 0,08</p>
+<div class="mtools"><span class="qt"><svg class="ic " width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><rect x="8" y="8" width="13" height="13"/><path d="M4 16V4h12"/></svg>Copiar</span><span class="qt"><svg class="ic " width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/></svg>Refazer</span></div>
+</li><li class="card" data-chat-action="lembrete-editar" data-chat-action-status="proposed">
+<p class="ct"><svg class="ic " width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg><span>Lembrete: responder a Ana sobre o orçamento</span></p>
+<div class="change"><span class="old">ter 17/11 09:00</span><svg class="ic " width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><path d="M5 12h14"/><path d="m13 6 6 6-6 6"/></svg><span class="new">qua 18/11 09:00</span></div>
+<div class="acts">
+<span class="b pri"><svg class="ic " width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>Salvar</span>
+<span class="b sec"><svg class="ic " width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><path d="M17 3l4 4L7 21H3v-4z"/></svg>Editar</span>
+<span class="quiet">Descartar</span>
+</div>
+</li>
+</ol></div>
+<div class="ask"><div class="askbox">
+<div class="ph">Pergunte ou peça algo…</div>
+<div class="askbar">
+<span class="bsel">Opus <svg class="ic " width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></span>
+<span class="bsel">Todas as reuniões (10) <svg class="ic " width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></span>
+<span class="bsel"><svg class="ic " width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><path d="M9 4a3 3 0 0 0-3 3 3 3 0 0 0-2 5 3 3 0 0 0 2 5 3 3 0 0 0 6 0V5a2 2 0 0 0-3-1z"/><path d="M15 4a3 3 0 0 1 3 3 3 3 0 0 1 2 5 3 3 0 0 1-2 5 3 3 0 0 1-6 0"/></svg>Pensar mais</span>
+<span class="sp"></span>
+<span class="send"><svg class="ic " width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><path d="m5 12 7-7 7 7"/><path d="M12 19V5"/></svg>Enviar</span>
+</div></div></div>
+</section>
+<aside class="ctx" aria-label="Contexto">
+<div class="ctxh"><h2>Contexto</h2></div>
+<section class="cs"><p class="csh">Escopo</p><div class="radg"><div class="rad on"><span class="rsq"></span>Todas as reuniões (10)</div><div class="rad"><span class="rsq"></span>Últimos 7 dias</div><div class="rad"><span class="rsq"></span>Últimos 30 dias</div><div class="rad"><span class="rsq"></span>Reuniões escolhidas</div></div></section>
+<section class="cs"><p class="csh">Fontes</p><div class="fon"><span class="fl">WhatsApp</span><span class="sw on"><i></i></span></div><div class="fon"><span class="fl">Email</span><span class="sw on"><i></i></span></div><div class="fon"><span class="fl">Automações</span><span class="sw on"><i></i></span></div><div class="fon"><span class="fl">Guia do app</span><span class="sw on"><i></i></span></div><div class="fon"><span class="fl">Internet</span><span class="sw"><i></i></span></div></section>
+<section class="cs"><p class="csh">Consultadas nesta conversa</p><p style="margin:0;font-size:12px;color:var(--text-muted)">Nenhuma ainda.</p></section>
+<section class="cs"><p class="csh">Totais</p><dl class="tot"><dt>Mensagens</dt><dd>4</dd><dt>Tokens</dt><dd>9,8 mil</dd><dt>Custo nominal</dt><dd>US$ 0,21</dd><dt>Tempo</dt><dd>14 s</dd></dl></section>
+<section class="cs"><p class="csh">Modelo</p><div class="seg"><span>Haiku</span><span>Sonnet</span><span class="on">Opus</span></div></section>
+</aside>
+</main>
+</div></div><div><span class="lbl">ESTADOS DO CARTÃO</span><div class="states t-light"><div class="st"><span class="lbl">EM EDIÇÃO</span><div class="card" data-chat-action="lembrete-editar" data-chat-action-status="proposed" data-editing>
+<p class="ct"><svg class="ic " width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg><span>Lembrete: responder a Ana sobre o orçamento</span></p>
+<div class="change"><span class="old">ter 17/11 09:00</span><svg class="ic " width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><path d="M5 12h14"/><path d="m13 6 6 6-6 6"/></svg><span class="new">qua 18/11 10:30</span></div>
+<div class="form">
+<label class="fld">Data e hora<span class="inp focus" style="width:224px">18/11/2026, 10:30<span class="sp"></span><svg class="ic " width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><path d="M8 2v4"/><path d="M16 2v4"/><rect width="18" height="18" x="3" y="4" rx="2"/><path d="M3 10h18"/></svg></span></label>
+<label class="fld">Texto<span class="inp">responder a Ana sobre o orçamento</span></label>
+</div>
+<div class="acts">
+<span class="b pri"><svg class="ic " width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>Salvar</span>
+<span class="quiet">Descartar</span>
+</div>
+</div></div><div class="st"><span class="lbl">CONCLUÍDO</span><div class="card" data-chat-action="lembrete-editar" data-chat-action-status="done">
+<p class="ct"><svg class="ic " width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg><span>Lembrete: responder a Ana sobre o orçamento</span></p>
+<div style="display:flex;align-items:center;gap:12px"><p class="outc"><svg class="ic " width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>Lembrete alterado · qua 18/11 09:00</p><span class="lnk">Ver em Automações</span></div>
+</div></div></div></div></div>
+</section><section class="board" id="a05"><h2>05 · Cartão lembrete-apagar</h2><p class="cap">Novo cartão <b>lembrete-apagar</b> (R2): a pergunta com o texto e o horário do lembrete, o botão de perigo “Apagar lembrete” (variante danger do Button, na cor --rec) e “Descartar”. Concluído: “Lembrete apagado”. Se o lembrete disparou ou foi apagado entre a proposta e o clique, status failed com “Esse lembrete não existe mais”.</p>
+<div class="pair"><div><span class="lbl">TELA · CLARO</span><div class="frame t-light" style="width:1120px;height:740px">
+<nav class="side" aria-label="Barra lateral">
+<div class="lights"><i></i><i></i><i></i></div>
+<div class="brand"><svg width="28" height="28" viewBox="0 0 100 100" role="img" aria-label="LAP"><rect x="0" y="0" width="100" height="100" rx="6" fill="#FFFFFF"></rect><path d="M 20 25 L 20 75 L 55 75" fill="none" stroke="#0A2A5E" stroke-width="8" stroke-linecap="square" stroke-linejoin="miter"></path><rect x="62" y="58" width="22" height="22" fill="#3B82F6"></rect></svg><div><b>LAP Reuniões</b><small>LAP SOFTWARE</small></div></div>
+<div class="lvl" aria-label="Assistente">
+<div class="back" aria-label="Assistente: voltar ao menu"><svg class="ic " width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg><svg class="ic " width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><path d="M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .963 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.581a.5.5 0 0 1 0 .964L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.963 0z"/></svg><span class="fl">Assistente</span></div>
+<div class="lgap"></div>
+<div class="newc"><svg class="ic " width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><path d="M5 12h14M12 5v14"/></svg><span class="fl">Nova conversa</span></div>
+<div class="csearch"><svg class="ic " width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg><span>Buscar conversas</span></div>
+<p class="cday">HOJE</p><div class="crow on" aria-current="page"><span class="fl">Agenda de hoje</span><span class="rmore"><svg class="ic " width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/></svg></span></div><div class="crow"><span class="fl">Pendências no WhatsApp</span></div><p class="cday">ONTEM</p><div class="crow"><span class="fl">Resumo do Planejamento Q1</span></div><div class="crow"><span class="fl">Tarefas da Daily</span></div><p class="cday">SEXTA-FEIRA</p><div class="crow"><span class="fl">Decisões da semana</span></div>
+</div>
+<div class="foot">
+<div class="lockb"><svg class="ic " width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><rect width="18" height="11" x="3" y="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg><span class="fl">Bloquear</span><kbd>⌘⇧L</kbd></div>
+<section class="perm"><p class="caps-s">PERMISSÕES</p>
+<div class="pr"><span class="sq ok"></span><span class="fl">Microfone</span><span class="ps">concedido</span></div>
+<div class="pr"><span class="sq ok"></span><span class="fl">Áudio do sistema</span><span class="ps">concedido</span></div>
+</section>
+</div>
+</nav>
+<main class="main">
+<section class="conv" aria-label="Conversa">
+<header class="chead">
+<h2 class="ctitle">Agenda de hoje</h2>
+<span class="hbtn" title="Escopo da conversa">Todas as reuniões (10)</span>
+<span class="hbtn" title="Modelo da conversa">Opus</span>
+<span class="hbtn"><svg class="ic " width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><rect x="3" y="3" width="18" height="18"/><path d="M15 3v18"/></svg>Contexto</span>
+</header>
+<div class="msgs"><ol aria-label="Mensagens">
+<li class="mu"><p>Pode apagar o lembrete da Ana, já respondi.</p></li><li class="ma">
+<p class="who"><b>Claude</b><time>09:24</time></p>
+<span class="steps"><svg class="ic " width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg>Raciocínio e passos<span>· 2 passos</span></span>
+<p>Certo. Confirme no cartão para eu apagar o lembrete de terça 17/11 às 09:00.</p>
+<p class="meta">Opus · 5 s · 4,1 mil entrada · 310 saída · US$ 0,08</p>
+<div class="mtools"><span class="qt"><svg class="ic " width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><rect x="8" y="8" width="13" height="13"/><path d="M4 16V4h12"/></svg>Copiar</span><span class="qt"><svg class="ic " width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/></svg>Refazer</span></div>
+</li><li class="card" data-chat-action="lembrete-apagar" data-chat-action-status="proposed">
+<p class="ct"><svg class="ic " width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><path d="M3 6h18"/><path d="M19 6v14H5V6"/><path d="M8 6V3h8v3"/><path d="M10 11v6"/><path d="M14 11v6"/></svg><span>Apagar o lembrete “responder a Ana sobre o orçamento” de ter 17/11 09:00?</span></p>
+<div class="acts">
+<span class="b danger"><svg class="ic " width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><path d="M3 6h18"/><path d="M19 6v14H5V6"/><path d="M8 6V3h8v3"/><path d="M10 11v6"/><path d="M14 11v6"/></svg>Apagar lembrete</span>
+<span class="quiet">Descartar</span>
+</div>
+</li>
+</ol></div>
+<div class="ask"><div class="askbox">
+<div class="ph">Pergunte ou peça algo…</div>
+<div class="askbar">
+<span class="bsel">Opus <svg class="ic " width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></span>
+<span class="bsel">Todas as reuniões (10) <svg class="ic " width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></span>
+<span class="bsel"><svg class="ic " width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><path d="M9 4a3 3 0 0 0-3 3 3 3 0 0 0-2 5 3 3 0 0 0 2 5 3 3 0 0 0 6 0V5a2 2 0 0 0-3-1z"/><path d="M15 4a3 3 0 0 1 3 3 3 3 0 0 1 2 5 3 3 0 0 1-2 5 3 3 0 0 1-6 0"/></svg>Pensar mais</span>
+<span class="sp"></span>
+<span class="send"><svg class="ic " width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><path d="m5 12 7-7 7 7"/><path d="M12 19V5"/></svg>Enviar</span>
+</div></div></div>
+</section>
+<aside class="ctx" aria-label="Contexto">
+<div class="ctxh"><h2>Contexto</h2></div>
+<section class="cs"><p class="csh">Escopo</p><div class="radg"><div class="rad on"><span class="rsq"></span>Todas as reuniões (10)</div><div class="rad"><span class="rsq"></span>Últimos 7 dias</div><div class="rad"><span class="rsq"></span>Últimos 30 dias</div><div class="rad"><span class="rsq"></span>Reuniões escolhidas</div></div></section>
+<section class="cs"><p class="csh">Fontes</p><div class="fon"><span class="fl">WhatsApp</span><span class="sw on"><i></i></span></div><div class="fon"><span class="fl">Email</span><span class="sw on"><i></i></span></div><div class="fon"><span class="fl">Automações</span><span class="sw on"><i></i></span></div><div class="fon"><span class="fl">Guia do app</span><span class="sw on"><i></i></span></div><div class="fon"><span class="fl">Internet</span><span class="sw"><i></i></span></div></section>
+<section class="cs"><p class="csh">Consultadas nesta conversa</p><p style="margin:0;font-size:12px;color:var(--text-muted)">Nenhuma ainda.</p></section>
+<section class="cs"><p class="csh">Totais</p><dl class="tot"><dt>Mensagens</dt><dd>4</dd><dt>Tokens</dt><dd>9,8 mil</dd><dt>Custo nominal</dt><dd>US$ 0,21</dd><dt>Tempo</dt><dd>14 s</dd></dl></section>
+<section class="cs"><p class="csh">Modelo</p><div class="seg"><span>Haiku</span><span>Sonnet</span><span class="on">Opus</span></div></section>
+</aside>
+</main>
+</div></div><div><span class="lbl">ESTADOS DO CARTÃO</span><div class="states t-light"><div class="st"><span class="lbl">CONCLUÍDO</span><div class="card" data-chat-action="lembrete-apagar" data-chat-action-status="done">
+<p class="ct"><svg class="ic " width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><path d="M3 6h18"/><path d="M19 6v14H5V6"/><path d="M8 6V3h8v3"/><path d="M10 11v6"/><path d="M14 11v6"/></svg><span>Apagar o lembrete “responder a Ana sobre o orçamento” de ter 17/11 09:00?</span></p>
+<div style="display:flex;align-items:center;gap:12px"><p class="outc"><svg class="ic " width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>Lembrete apagado</p><span class="lnk">Ver em Automações</span></div>
+</div></div><div class="st"><span class="lbl">ERRO (FAILED)</span><div class="card" data-chat-action="lembrete-apagar" data-chat-action-status="failed">
+<p class="ct"><svg class="ic " width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><path d="M3 6h18"/><path d="M19 6v14H5V6"/><path d="M8 6V3h8v3"/><path d="M10 11v6"/><path d="M14 11v6"/></svg><span>Apagar o lembrete “responder a Ana sobre o orçamento” de ter 17/11 09:00?</span></p>
+<p class="err" role="alert"><svg class="ic " width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 8v4"/><path d="M12 16h.01"/></svg><span>Esse lembrete não existe mais: já disparou ou foi apagado em Automações.</span></p>
+<div style="display:flex;align-items:center;gap:12px"><span class="lnk">Ver em Automações</span></div>
+</div></div></div></div></div>
+</section>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1900,"height":4400}}'>
+class Component extends DCLogic {
+  renderVals() {
+    return {};
+  }
+}
+</script>
+</body>
+</html>
