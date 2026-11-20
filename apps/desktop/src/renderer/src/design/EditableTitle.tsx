@@ -8,9 +8,9 @@ interface EditableTitleProps {
   label?: string
 }
 
-const TITLE_CLASS = 'text-20 font-bold tracking-[-0.3px] text-title'
+const TITLE_CLASS = 'text-15 font-bold tracking-[-0.2px] text-title'
 
-/** Título da reunião (20/26, negrito azul) que vira campo ao clicar. Enter confirma, Esc cancela. */
+/** Título da reunião ou da conversa (15/20, negrito azul) que vira campo ao clicar. Enter confirma, Esc cancela. */
 export function EditableTitle({ value, onCommit, maxLength, label = 'Título da reunião' }: EditableTitleProps) {
   const [draft, setDraft] = useState<string | null>(null)
 

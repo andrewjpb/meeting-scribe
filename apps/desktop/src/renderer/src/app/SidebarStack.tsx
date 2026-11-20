@@ -102,7 +102,7 @@ export function SidebarStack({ level, root, onBack, focusRef }: { level: Sidebar
   )
   // No `push` o nível novo cobre a raiz; no `pop` o que sai passa por cima da raiz que volta.
   return (
-    <div data-sidebar-stack className={`side-stack -mx-3 mt-6 flex-1 px-3${leaving ? ' is-sliding' : ''}`}>
+    <div data-sidebar-stack className={`side-stack -mx-3 mt-4 flex-1 px-3${leaving ? ' is-sliding' : ''}`}>
       {leaving?.transition === 'pop' ? [entering, exiting] : [exiting, entering]}
     </div>
   )
@@ -143,7 +143,7 @@ function BackHeader({ icon, label, onBack }: { icon: LucideIcon; label: string; 
       data-sidebar-back
       aria-label={`${label}: voltar ao menu`}
       onClick={onBack}
-      className="no-drag mb-2 flex h-10 shrink-0 items-center gap-2.5 rounded-[var(--radius-control)] px-2.5 text-13 font-medium text-side-text transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-side-active"
+      className="no-drag mb-1 flex h-[var(--side-row)] shrink-0 items-center gap-2 rounded-[var(--radius-control)] px-2.5 text-13 font-medium text-side-text transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-side-active"
     >
       <Icon icon={ChevronLeft} className="shrink-0" />
       <Icon icon={icon} className="shrink-0" />
@@ -152,9 +152,9 @@ function BackHeader({ icon, label, onBack }: { icon: LucideIcon; label: string; 
   )
 }
 
-/** Linha de aba: 30 px, sem ícone, recuada como as pastas do email; a aberta marcada pelo `NavLink`. */
+/** Linha de aba: 28 px, sem ícone, com o recuo de 28 das linhas de nível sem ícone; a aberta marcada pelo `NavLink`. */
 const tabLinkClass = ({ isActive }: { isActive: boolean }): string =>
-  `flex h-[30px] min-w-0 shrink-0 items-center gap-2.5 rounded-[var(--radius-control)] pr-2.5 pl-8 text-13 transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] ${
+  `flex h-[var(--side-subrow)] min-w-0 shrink-0 items-center gap-2 rounded-[var(--radius-control)] pr-2.5 pl-[var(--side-indent)] text-13 transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] ${
     isActive ? 'bg-side-active font-medium text-side-text' : 'text-side-muted hover:text-side-text'
   }`
 

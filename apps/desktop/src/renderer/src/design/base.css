@@ -149,13 +149,29 @@
     font-variant-numeric: tabular-nums;
   }
 
-  /* Rótulos de fonte e a assinatura "LAP SOFTWARE": os únicos usos de maiúsculas (design.md). */
+  /*
+   * Maiúsculas só na fita e na marca (design.md): rótulos de fonte de áudio (`TapeIllustration`, `LevelTape`, rótulo
+   * de fonte do `TranscriptList`) e a assinatura "LAP SOFTWARE" da barra. Rótulo de seção usa `.label`.
+   */
   .caps {
     font-size: 10px;
     line-height: 14px;
     font-weight: 500;
     letter-spacing: 0.14em;
     text-transform: uppercase;
+  }
+}
+
+@layer components {
+  /*
+   * Rótulo de seção ou grupo (contrato 80): 11/16, peso 500, cor de apoio, em caixa normal e sem espaçamento. Na camada
+   * de componentes, para um utilitário ao lado vencer: na barra lateral a cor vem da barra (`label text-side-muted`).
+   */
+  .label {
+    font-size: 11px;
+    line-height: 16px;
+    font-weight: 500;
+    color: var(--text-muted);
   }
 }
 
@@ -418,6 +434,17 @@
    * ficam parados. Os dois níveis ocupam a mesma célula e só coexistem durante o deslize; com movimento reduzido a regra
    * de tokens.css zera a animação e a troca é instantânea.
    */
+  /*
+   * Contrato 79 (barra lateral densa): as alturas das linhas da barra num lugar só, para os níveis, o rodapé e o nível
+   * Redes (contrato 72) citarem. 32 na raiz e no cabeçalho-voltar; 28 nas linhas de nível (abas, conversas, contas,
+   * pastas, "Nova conversa", busca), em "Bloquear" e nas permissões; 28 de recuo na linha de nível sem ícone.
+   */
+  :root {
+    --side-row: 32px;
+    --side-subrow: 28px;
+    --side-indent: 28px;
+  }
+
   .side-stack {
     display: grid;
     /* minmax(0, 1fr): a faixa 1fr tem largura mínima "auto", então um endereço de conta ou um título de conversa

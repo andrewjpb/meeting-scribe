@@ -68,7 +68,7 @@ export function Sidebar() {
         aria-current={active ? 'page' : undefined}
         draggable={false}
         onClick={isSidebarSection(item.id) ? openSection(item.id) : undefined}
-        className={`flex h-10 items-center gap-2.5 rounded-[var(--radius-control)] px-2.5 text-13 transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] ${
+        className={`flex h-[var(--side-row)] items-center gap-2 rounded-[var(--radius-control)] px-2.5 text-13 transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] ${
           active ? 'bg-side-active text-side-text' : 'text-side-muted hover:text-side-text'
         }`}
       >
@@ -104,9 +104,9 @@ export function Sidebar() {
       {/*
        * Rodapé: "Bloquear" (contrato 22) e o aviso de versão nova (quando há) logo acima das permissões. O fio de cima
        * separa a lista do nível (conversas, contas) quando ela é longa; a coluna em pilha ocupa o resto, então o rodapé
-       * fica no pé da barra em todos os níveis.
+       * fica no pé da barra em todos os níveis. Contrato 79: 126 px no total, com "Bloquear" e as permissões em linhas de 28.
        */}
-      <div className="mt-2 flex flex-col border-t border-side-divider pt-2">
+      <div className="mt-1 flex flex-col border-t border-side-divider pt-1">
         <LockButton />
         <UpdateNotice />
         <PermissionsBlock />

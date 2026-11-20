@@ -24,9 +24,9 @@ interface ButtonProps {
 // Primário: bloco azul (--accent) com texto --on-accent. Secundário: contorno, texto em --title.
 // Perigo: só o texto em --rec, sem contorno (o "Excluir" dos mockups).
 const VARIANT: Record<Variant, string> = {
-  primary: 'gap-2.5 bg-accent px-4 text-on-accent hover:opacity-90 active:opacity-80',
-  secondary: 'gap-2 border border-line-strong bg-bg-raised px-3.5 text-title hover:bg-bg-sunken active:bg-line',
-  danger: 'gap-2 px-3.5 text-rec hover:bg-bg-sunken active:bg-line',
+  primary: 'bg-accent text-on-accent hover:opacity-90 active:opacity-80',
+  secondary: 'border border-line-strong bg-bg-raised text-title hover:bg-bg-sunken active:bg-line',
+  danger: 'text-rec hover:bg-bg-sunken active:bg-line',
 }
 
 export function Button({ children, onClick, variant = 'primary', icon, shortcut, ariaShortcut, action, data, disabled = false }: ButtonProps) {
@@ -38,7 +38,7 @@ export function Button({ children, onClick, variant = 'primary', icon, shortcut,
       onClick={onClick}
       disabled={disabled}
       aria-keyshortcuts={ariaShortcut}
-      className={`no-drag inline-flex h-10 shrink-0 items-center rounded-[var(--radius-control)] text-13 font-medium whitespace-nowrap transition-[opacity,background-color] duration-[var(--duration-fast)] ease-[var(--ease-out)] disabled:pointer-events-none disabled:opacity-50 ${VARIANT[variant]}`}
+      className={`no-drag inline-flex h-8 shrink-0 items-center gap-2 rounded-[var(--radius-control)] px-3 text-13 font-medium whitespace-nowrap transition-[opacity,background-color] duration-[var(--duration-fast)] ease-[var(--ease-out)] disabled:pointer-events-none disabled:opacity-50 ${VARIANT[variant]}`}
     >
       {icon && <Icon icon={icon} />}
       <span>{children}</span>

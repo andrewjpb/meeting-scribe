@@ -30,12 +30,12 @@ export function ChatHistory() {
         type="button"
         data-action="chat-new"
         onClick={() => openChat(null)}
-        className="no-drag flex h-[30px] shrink-0 items-center gap-2.5 rounded-[var(--radius-control)] px-2.5 text-13 text-side-muted transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:text-side-text"
+        className="no-drag flex h-[var(--side-subrow)] shrink-0 items-center gap-2 rounded-[var(--radius-control)] px-2.5 text-13 text-side-muted transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:text-side-text"
       >
         <Icon icon={Plus} className="shrink-0" />
         <span className="min-w-0 truncate">Nova conversa</span>
       </button>
-      <div className="no-drag mt-1 mb-2 flex h-7 shrink-0 items-center gap-2 rounded-[var(--radius-control)] bg-side-active px-2 text-side-muted has-[input:focus-visible]:outline-2 has-[input:focus-visible]:outline-offset-2 has-[input:focus-visible]:outline-side-text">
+      <div className="no-drag my-1 flex h-[var(--side-subrow)] shrink-0 items-center gap-2 rounded-[var(--radius-control)] bg-side-active px-2 text-side-muted has-[input:focus-visible]:outline-2 has-[input:focus-visible]:outline-offset-2 has-[input:focus-visible]:outline-side-text">
         <Icon icon={Search} size={14} className="shrink-0" />
         <input
           type="text"
@@ -46,7 +46,7 @@ export function ChatHistory() {
           autoComplete="off"
           spellCheck={false}
           onChange={(event) => setQuery(event.target.value)}
-          className="min-w-0 flex-1 bg-transparent text-12 text-side-text select-text placeholder:text-side-muted focus-visible:outline-none"
+          className="min-w-0 flex-1 bg-transparent text-13 text-side-text select-text placeholder:text-side-muted focus-visible:outline-none"
         />
       </div>
       {failure && <p className="px-2.5 pb-2 text-12 text-side-rec">{failure}</p>}
@@ -55,7 +55,7 @@ export function ChatHistory() {
         <div ref={listRef} data-chat-list className="min-h-0 flex-1 overflow-y-auto">
           {groups.map((group) => (
             <section key={group.key} aria-label={group.label} data-chat-day={group.key}>
-              <h2 className="caps px-2.5 pt-3 pb-1 text-side-muted">{group.label}</h2>
+              <h2 className="label pt-2 pr-2.5 pb-1 pl-[var(--side-indent)] text-side-muted">{group.label}</h2>
               <ul className="flex flex-col gap-0.5">
                 {group.items.map((item) => (
                   <ChatRow key={item.id} item={item} active={item.id === selected} onOpen={() => openChat(item.id)} />
@@ -133,7 +133,7 @@ function ChatRow({ item, active, onOpen }: { item: ChatListItem; active: boolean
 
   if (mode === 'confirm') {
     return (
-      <li data-chat-item={item.id} className="flex flex-col gap-2 rounded-[var(--radius-control)] py-2 pr-1 pl-8">
+      <li data-chat-item={item.id} className="flex flex-col gap-2 rounded-[var(--radius-control)] py-2 pr-1 pl-[var(--side-indent)]">
         <p className="text-12 text-side-text">Excluir esta conversa?</p>
         <div className="flex gap-2">
           <button type="button" data-action="confirm-delete-chat" onClick={() => void useChat.getState().remove(item.id, item.meetingId)} className={`${CONFIRM_BUTTON} text-side-rec`}>
@@ -148,7 +148,7 @@ function ChatRow({ item, active, onOpen }: { item: ChatListItem; active: boolean
   }
   if (mode === 'rename') {
     return (
-      <li data-chat-item={item.id} className="flex h-[30px] items-center pr-1 pl-6">
+      <li data-chat-item={item.id} className="flex h-[var(--side-subrow)] items-center pr-1 pl-5">
         <input
           // Campo aberto pelo próprio clique em "Renomear": o foco vai para ele.
           autoFocus
@@ -180,7 +180,7 @@ function ChatRow({ item, active, onOpen }: { item: ChatListItem; active: boolean
   return (
     <li
       data-chat-item={item.id}
-      className={`group relative flex h-[30px] items-center rounded-[var(--radius-control)] text-13 transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] ${
+      className={`group relative flex h-[var(--side-subrow)] items-center rounded-[var(--radius-control)] text-13 transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] ${
         active ? 'bg-side-active font-medium text-side-text' : 'text-side-muted hover:text-side-text'
       }`}
     >
@@ -191,7 +191,7 @@ function ChatRow({ item, active, onOpen }: { item: ChatListItem; active: boolean
         data-chat-open
         aria-current={active ? 'page' : undefined}
         onClick={onOpen}
-        className={`no-drag flex h-full min-w-0 flex-1 items-center pl-8 text-left focus-visible:outline-offset-[-2px] ${
+        className={`no-drag flex h-full min-w-0 flex-1 items-center pl-[var(--side-indent)] text-left focus-visible:outline-offset-[-2px] ${
           mode === 'menu' ? 'pr-8' : 'pr-1 group-focus-within:pr-8 group-hover:pr-8'
         }`}
       >

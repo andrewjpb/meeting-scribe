@@ -34,7 +34,7 @@ export function Tabs<T extends string>({ value, tabs, onChange, label, id }: Tab
   }
 
   return (
-    <div role="tablist" aria-label={label} onKeyDown={onKeyDown} className="-mb-px flex gap-6">
+    <div role="tablist" aria-label={label} onKeyDown={onKeyDown} className="-mb-px flex gap-5">
       {tabs.map((tab, index) => {
         const active = tab.value === value
         const reachable = active || (value === null && index === 0)
@@ -52,7 +52,7 @@ export function Tabs<T extends string>({ value, tabs, onChange, label, id }: Tab
             aria-controls={tabPanelId(id, tab.value)}
             tabIndex={reachable ? 0 : -1}
             onClick={() => onChange(tab.value)}
-            className={`no-drag h-10 border-b-2 text-13 font-medium transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] focus-visible:outline-offset-[-2px] ${
+            className={`no-drag h-8 border-b-2 text-13 font-medium transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] focus-visible:outline-offset-[-2px] ${
               active ? 'border-accent text-title' : 'border-transparent text-text-muted hover:text-title'
             }`}
           >

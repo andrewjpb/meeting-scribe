@@ -42,10 +42,11 @@ Tema: atributo `data-theme="light|dark"` em `<html>`. `system` segue o macOS. O 
 ## Tipografia (nenhuma fonte embutida, nenhuma requisição externa)
 
 - Tudo em `"Helvetica Neue", Helvetica, Arial, sans-serif`, a mesma família do logo. Nunca serifa.
-- Título de página 26/32, peso 700, `letter-spacing: -0.3px`, cor `--title`. Título de seção 17/24, peso 700. Título da reunião 20/26, peso 700.
-- Interface 12, 13 e 15; pesos 400, 500 e 700. Transcrição 16/26, peso 400.
+- Títulos em `--title`: de página 20/26, peso 700, `letter-spacing: -0.3px`; de seção ou painel (a aba de Configurações, o cabeçalho da conversa e da leitura, o título editável da reunião) 15/20, peso 700; de bloco dentro da página (os blocos do Resumo, os formulários) 14/20, peso 600.
+- Interface 13/20 e 12/16; metadados secundários 11/16; pesos 400, 500, 600 e 700. Leitura (resumo, corpo de email, transcrição) 15/24, tradução 13/20; balões e prévias 14/22.
 - Números (cronômetro, horários, preços) na mesma família com `font-variant-numeric: tabular-nums`. Só ids de modelo usam `Menlo, ui-monospace, monospace`.
-- Rótulos de fonte ("VOCÊ", "PARTICIPANTES") e a assinatura "LAP SOFTWARE": 10–11 px, maiúsculas, peso 500, `letter-spacing: .14em`, como a linha "SOFTWARE & CONSULTORIA" do logo. Na barra lateral, o mesmo estilo vale para os rótulos de grupo ("PERMISSÕES" e os dias das conversas no nível Assistente). São os únicos usos de maiúsculas.
+- Rótulo de seção ou de grupo (títulos de `Section`, dias, "Permissões", cabeçalhos de tabela): classe `.label`, 11/16, peso 500, `--text-muted` (na barra lateral, `--side-muted`), em caixa normal e sem espaçamento entre letras.
+- Caixa alta só na fita e na marca: os rótulos de fonte de áudio ("VOCÊ", "PARTICIPANTES") e a assinatura "LAP SOFTWARE", classe `.caps` (10 px, peso 500, `letter-spacing: .14em`), como a linha "SOFTWARE & CONSULTORIA" do logo. Nenhum outro uso de maiúsculas.
 
 ## Espaço, forma, movimento
 
@@ -55,6 +56,18 @@ Tema: atributo `data-theme="light|dark"` em `<html>`. `system` segue o macOS. O 
 - Movimento: 120–180 ms `ease-out`. Com `prefers-reduced-motion: reduce`, nenhuma animação. O único deslize horizontal do app é o da barra lateral em pilha (padrão em "Deslize horizontal", abaixo); tela nova que precise deslizar usa o mesmo padrão.
 - Foco: contorno de 2 px em `--focus` com deslocamento de 2 px, só em `:focus-visible`; sobre `--side-bg` o contorno é branco.
 - Ícones: `lucide-react`, traço 1,5, 16 px. Nunca emoji.
+
+## Controles e densidade
+
+Decisão de 2026-11-20: densidade no estilo do painel do Claude Desktop, aprovada pelo Andrew (feature `densidade`, `docs/specs/densidade/spec.md`). Medidas nos componentes de `design/` e nos tokens de `tokens.css` (`--control-h`, `--control-compact-h`, `--row-h`, `--row-compact-h`, `--panel-head-h`, `--page-x`, `--page-top`).
+
+- Botão (`Button`) de 32 px, `px-3`, gap 8, rótulo 13/500; um tamanho só. `ActionButton` (só ícone) continua com 28.
+- Campo (`TextField`, `Select`) de 32 px, `px-2.5`. Abas (`Tabs`) de 32, com 20 entre elas. Segmentado (`Segmented`) de 28, `px-3`. Alternador (`Switch`) de 36×20 com botão de 14.
+- Nota (`Note`): `px-3 py-2`, texto 13, barra de 3 px à esquerda.
+- Linha de lista de 44 (duas linhas de texto) ou 32 (uma linha); linha de tabela densa `py-1.5` (28 a 32). Linha de configuração (`SettingRow`) de 44 no mínimo, `py-2`.
+- Cabeçalho de painel (Contexto, leitura de email, conversa, WhatsApp) de 44.
+- Página com `px-8 pt-5` (32 nas laterais, 20 no topo) e `pb-8`; grupo de seções com `gap-6`.
+- Estado vazio (`EmptyState`): ilustração com 20 abaixo, título 17/24 peso 600, texto a 8, ação a 16.
 
 ## Marca
 
@@ -69,12 +82,14 @@ Tema: atributo `data-theme="light|dark"` em `<html>`. `system` segue o macOS. O 
 - Barra lateral de 224 px (`--sidebar-width`) em `--side-bg` nos dois temas. De cima para baixo: espaço dos botões da janela; bloco da marca; a coluna de navegação em pilha (abaixo); no rodapé, Bloquear, o aviso de versão e o bloco "Permissões" com duas linhas (quadrado de estado de 6 px + nome + estado em `--side-muted`). A marca e o rodapé ficam parados; só a coluna do meio troca de nível.
 - Faixa superior de 52 px arrastável; controles dentro dela com `no-drag`.
 
-**Barra lateral em pilha.** Navegação em dois níveis, no máximo, como os Ajustes do iOS. Nenhuma linha de um nível de seção abre um terceiro nível.
+**Barra lateral em pilha.** Navegação em dois níveis, no máximo, como os Ajustes do iOS. Nenhuma linha de um nível de seção abre um terceiro nível. Medidas densas, no ritmo do painel lateral do Claude Desktop (decisão de 2026-11-20, aprovada pelo Andrew com o mockup `docs/specs/densidade/mockups/SidebarDensa.dc.html`, contrato 79): as alturas moram num lugar só, `--side-row` (32 px), `--side-subrow` (28 px) e `--side-indent` (28 px) em `design/base.css`, e toda linha da barra (inclusive o nível Redes) as cita em vez de repetir o número.
 
-- **Raiz** (`<nav aria-label="Navegação principal">`): Reuniões, Assistente, Email, Automações, WhatsApp (só com o serviço instalado) e Configurações. Itens de 40 px, ícone 16 + rótulo 13 em `--side-muted`; o ativo com fundo `--side-active`, texto `--side-text` e `aria-current="page"`. À direita do Email, o total de não lidas das Caixas de Entrada carregadas, 12 px tabular `--side-text`, que some em zero.
+- **Raiz** (`<nav aria-label="Navegação principal">`): Reuniões, Assistente, Email, Automações, WhatsApp (só com o serviço instalado) e Configurações. Itens de 32 px (`--side-row`), 2 px entre eles, ícone 16 a 8 px do rótulo 13 em `--side-muted`, 16 px entre a marca e a lista; o ativo com fundo `--side-active`, texto `--side-text` e `aria-current="page"`. À direita do Email, o total de não lidas das Caixas de Entrada carregadas, 12 px tabular `--side-text`, que some em zero.
 - **Nível de seção**: só Email, Configurações e Assistente têm nível próprio (`<nav>` com o nome da seção); Automações e WhatsApp são itens planos. O nível ocupa a coluna inteira entre a marca e o rodapé, e só a lista dele rola.
-- **Cabeçalho-voltar**: primeira linha do nível, 40 px, um `<button>` inteiro com `ChevronLeft` 16, o ícone da seção 16 (`Mail`, `Settings`, `Sparkles`) e o nome em 13 peso 500 `--side-text`; hover com `--side-active`. Nome acessível com o nome visível na frente: "<Seção>: voltar ao menu" (por exemplo, "Email: voltar ao menu").
-- **Linhas de seção**: 30 px, rótulo 13, recuo de 32 px (o mesmo das pastas do email), sem ícone; a ativa com `--side-active` e `--side-text`. Em Configurações, uma linha por aba de `SETTINGS_TABS`, com a dica `⌘1` a `⌘8` à direita. No Assistente, "Nova conversa" (30 px, recuo de 10 px, ícone `Plus`), a busca compacta de 28 px em `--side-active` e as conversas por dia (linhas de 30 px com recuo de 32 px, sem hora), com o dia em maiúsculas espaçadas de 10 px.
+- **Cabeçalho-voltar**: primeira linha do nível, 32 px (`--side-row`) com 4 px abaixo, um `<button>` inteiro com `ChevronLeft` 16, o ícone da seção 16 (`Mail`, `Settings`, `Sparkles`) e o nome em 13 peso 500 `--side-text`; hover com `--side-active`. Nome acessível com o nome visível na frente: "<Seção>: voltar ao menu" (por exemplo, "Email: voltar ao menu").
+- **Linhas de seção**: 28 px (`--side-subrow`), rótulo 13, recuo de 28 px (`--side-indent`), sem ícone; a ativa com `--side-active` e `--side-text`. Em Configurações, uma linha por aba de `SETTINGS_TABS`, com a dica `⌘1` a `⌘9` à direita. No Assistente, "Nova conversa" (28 px, recuo de 10 px, ícone `Plus`), a busca compacta de 28 px em `--side-active` com o texto em 13 e as conversas por dia (linhas de 28 px com recuo de 28 px, sem hora); o dia é um rótulo `.label` (11/16, caixa normal, sem espaçamento, `--side-muted`) numa linha de 28, alinhado ao título das conversas.
+- **Email**: a linha da conta e a de pasta têm a mesma altura, 28 px; a conta se distingue pela seta e pela falta do ícone de pasta. As pastas, que já têm ícone, ficam com o recuo de 18 px + 16 por nível; a seta da subpasta, a 6 px do topo da linha.
+- **Rodapé**: 126 px no total, sem o aviso de versão. "Bloquear" numa linha de 28 px; o rótulo "Permissões" em `.label` (11 px, caixa normal) e as duas permissões em linhas de 28 px com o texto em 12 px (em 13, "Áudio do sistema" e "não verificado" não cabem juntos em 224 px).
 - **Nível e rota**: o nível segue a rota num sentido só. Toda navegação para `/email/*`, `/configuracoes/*` ou `/assistente` mostra o nível daquela seção; qualquer outra rota mostra a raiz. **Voltar não navega**: só mostra a raiz, a tela continua a mesma e o item da seção fica marcado. Clicar na seção já estando nela só mostra o nível. O nível não é guardado: abrir a janela numa rota de seção mostra o nível dela de cara, sem animação.
 - **Foco**: entrar pelo clique (ou Enter) no item da raiz põe o foco no cabeçalho-voltar; voltar pelo cabeçalho põe o foco no item da seção na raiz. Navegação vinda de fora do sidebar (menu, ⌘, aviso de email, link na tela) não mexe no foco.
 
@@ -99,7 +114,7 @@ Barra de controles: bloco em `--side-bg` com raio 6, centralizado a 24 px do rod
 
 **Detalhe da reunião.** Mesmo esqueleto da gravação, sem fita ao vivo: título editável, linha de apoio com data, hora e duração, coluna de transcrição e as ações "Copiar transcrição" e "Excluir" (com confirmação).
 
-**Configurações.** Sem abas na tela: as abas são as linhas do nível Configurações da barra lateral. O topo mostra o nome da aba aberta à esquerda ("Configurações" durante uma busca) e a busca à direita. Coluna única rolável, largura máxima 640. Seções com título 17/24 peso 700 `--title` e um fio `--title` de 2 px e 24 px de largura abaixo do título. Cada linha: nome 13/500 e descrição 12 `--text-muted` à esquerda, controle à direita, fio entre linhas. Seletor de modelo: painel dentro da página com campo de busca, lista de linhas (nome 13/500, id em `Menlo` 11 `--text-faint`, à direita preço tabular no formato `US$ 0,10 / 0,50 por 1M` e contexto como `200k`); o modelo atual tem a marca de seleção em `--accent`.
+**Configurações.** Sem abas na tela: as abas são as linhas do nível Configurações da barra lateral. O topo mostra o nome da aba aberta à esquerda ("Configurações" durante uma busca) e a busca à direita. Coluna única rolável, largura máxima 760 (`--settings-width`). Cada seção (`Section`) tem o rótulo 11 em caixa normal (`.label`) e as linhas num painel com fio de 1 px e raio 6. Cada linha (`SettingRow`, 44 no mínimo): nome 13/500 e descrição 12 `--text-muted` à esquerda, controle na coluna fixa de 340 à direita, fio entre linhas. Seletor de modelo: painel dentro da página com campo de busca, lista de linhas (nome 13/500, id em `Menlo` 11 `--text-faint`, à direita preço tabular no formato `US$ 0,10 / 0,50 por 1M` e contexto como `200k`); o modelo atual tem a marca de seleção em `--accent`.
 
 ## Texto
 
@@ -107,4 +122,4 @@ pt-BR, só a primeira letra maiúscula, frases curtas. Nunca usar na interface: 
 
 ## Não fazer
 
-Gradiente; sombra; vidro fosco; serifa; raio acima de 6; pílula; cor fora das variáveis; verde, amarelo ou roxo; botão em maiúsculas; tudo centralizado; spinner onde cabe esqueleto; texto de preenchimento; fonte carregada da rede ou embutida.
+Gradiente; sombra; vidro fosco; serifa; raio acima de 6; pílula; cor fora das variáveis; verde, amarelo ou roxo; botão em maiúsculas; tudo centralizado; spinner onde cabe esqueleto; texto de preenchimento; fonte carregada da rede ou embutida; controle de 40 px (não voltar a 40 nos controles); caixa alta em rótulo de seção; título de página acima de 20 px.

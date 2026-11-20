@@ -1,7 +1,7 @@
-// Campo de texto e seletor no padrão dos controles: 40 px de altura, raio 4, contorno --line-strong.
+// Campo de texto e seletor no padrão dos controles: 32 px de altura (contrato 80), raio 4, contorno --line-strong.
 
 export const CONTROL_CLASS =
-  'no-drag h-10 rounded-[var(--radius-control)] border border-line-strong bg-bg-raised text-13 text-text transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)]'
+  'no-drag h-8 rounded-[var(--radius-control)] border border-line-strong bg-bg-raised text-13 text-text transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)]'
 
 interface TextFieldProps {
   id?: string
@@ -45,7 +45,7 @@ export function TextField({ id, value, onChange, type = 'text', placeholder, ari
           onEnter()
         }
       }}
-      className={`${CONTROL_CLASS} min-w-0 flex-[1_1_280px] px-3 select-text placeholder:text-text-faint`}
+      className={`${CONTROL_CLASS} min-w-0 flex-[1_1_280px] px-2.5 select-text placeholder:text-text-faint`}
     />
   )
 }

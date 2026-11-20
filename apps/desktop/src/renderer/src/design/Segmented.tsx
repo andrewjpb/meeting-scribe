@@ -21,7 +21,7 @@ export function Segmented<T extends string>({ value, options, onChange, labelled
             {...{ [`data-${dataName}`]: option.value }}
             aria-pressed={active}
             onClick={() => onChange(option.value)}
-            className={`no-drag h-10 px-4 text-13 transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] focus-visible:outline-offset-[-2px] ${
+            className={`no-drag h-7 px-3 text-13 transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] focus-visible:outline-offset-[-2px] ${
               index > 0 ? 'border-l border-line-strong' : ''
             } ${active ? 'bg-title font-medium text-bg' : 'bg-bg-raised text-text hover:bg-bg-sunken'}`}
           >
