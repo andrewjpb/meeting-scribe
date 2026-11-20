@@ -13,7 +13,7 @@ import type { SafeStorageLike } from '../src/main/secrets'
 import { createFakeInstagram, SMOKE_IG_TOKEN, SMOKE_IG_USER_ID, type FakeInstagram } from '../src/main/redes/fake-instagram'
 import { createFakeS3, type FakeS3 } from '../src/main/redes/fake-s3'
 import { testMediaHost } from '../src/main/redes/media-host'
-import { createRedesService, type RedesService } from '../src/main/redes/service'
+import { createRedesService, PUBLICATION_ERROR_STATE_MESSAGE, PUBLICATION_MAYBE_OUT_MESSAGE, type RedesService } from '../src/main/redes/service'
 
 const T0 = Date.parse('2026-11-20T12:00:00.000Z')
 const HOUR = 3_600_000
@@ -59,6 +59,8 @@ describe('publicações no serviço das redes (contrato 71)', () => {
   let s3Faults: { deletes: boolean; failPutAt: number | null; puts: number }
   /** Chamado na espera do contêiner (a tentativa está no meio). */
   let onSleep: (() => Promise<void>) | null
+  /** Contrato 72: o `media_publish` sai na Meta mas a resposta se perde; a consulta do status do contêiner falha. */
+  let metaFaults: { losePublish: boolean; statusFails: boolean }
 
   const make = (): RedesService => {
     const guard = createEmailClickGuard(() => clock)
@@ -67,7 +69,14 @@ describe('publicações no serviço das redes (contrato 71)', () => {
       guard.register(WINDOW, token)
       return token
     }
-    const fetch: HttpFetch = (url, init) => {
+    const fetch: HttpFetch = async (url, init) => {
+      const failed = { status: 500, header: () => null, text: () => Promise.resolve('{"error":{"code":2}}'), bytes: () => Promise.resolve(new Uint8Array(0)) }
+      if (metaFaults.statusFails && new URL(url).searchParams.get('fields')?.includes('status_code')) return failed
+      if (metaFaults.losePublish && new URL(url).pathname.endsWith('/media_publish')) {
+        metaFaults.losePublish = false
+        await fake.fetch(url, init)
+        return failed
+      }
       if (new URL(url).host !== '127.0.0.1:9') return fake.fetch(url, init)
       if (init.method === 'PUT') s3Faults.puts++
       const refused = (init.method === 'DELETE' && s3Faults.deletes) || (init.method === 'PUT' && s3Faults.puts === s3Faults.failPutAt)
@@ -119,6 +128,7 @@ describe('publicações no serviço das redes (contrato 71)', () => {
     locked = false
     s3Faults = { deletes: false, failPutAt: null, puts: 0 }
     onSleep = null
+    metaFaults = { losePublish: false, statusFails: false }
     events = []
     service = make()
     await service.init()
@@ -161,7 +171,7 @@ describe('publicações no serviço das redes (contrato 71)', () => {
     expect(statSync(join(dir, 'redes', 'midia', publication.id)).mode & 0o777).toBe(0o700)
     // O original pode sumir: a cópia vale.
     rmSync(join(files, 'foto.jpg'))
-    const edited = await service.savePublication({ id: publication.id, accountId: SMOKE_IG_USER_ID, caption: 'Outra', mediaPaths: [copy?.localPath ?? '', join(FIXTURES, 'imagem-640x800.jpg')], altTexts: { 'foto.jpg': 'Equipe na sala' }, scheduledAt: null })
+    const edited = await service.savePublication({ id: publication.id, accountId: SMOKE_IG_USER_ID, caption: 'Outra', mediaPaths: [copy?.localPath ?? '', join(FIXTURES, 'imagem-640x800.jpg')], altTexts: { [copy?.localPath ?? '']: 'Equipe na sala' }, scheduledAt: null })
     expect(edited.ok).toBe(true)
     if (!edited.ok) return
     expect(edited.publication).toMatchObject({ id: publication.id, type: 'carrossel', caption: 'Outra' })
@@ -411,5 +421,106 @@ describe('publicações no serviço das redes (contrato 71)', () => {
     expect(await service.remove({ accountId: SMOKE_IG_USER_ID })).toEqual({ ok: true })
     expect(existsSync(join(dir, 'redes', 'midia', publication.id))).toBe(false)
     expect((await service.publications({ accountId: SMOKE_IG_USER_ID })).publications).toEqual([])
+  })
+
+  it('contrato 72: a com erro pode ser editada; volta a rascunho sem o contêiner e sem a imagem no armazenamento', async () => {
+    fake.failNext(36003)
+    const publication = await draft([join(files, 'foto.jpg')])
+    await service.publishNow(WINDOW, { id: publication.id, clickToken: click() })
+    const failed = await settled(publication.id)
+    expect(failed.state).toBe('erro')
+    expect(s3.objects().size).toBe(1)
+    const edited = await service.savePublication({ id: publication.id, accountId: SMOKE_IG_USER_ID, caption: 'Legenda nova', mediaPaths: failed.media.map((item) => item.localPath), altTexts: {}, scheduledAt: null })
+    expect(edited).toMatchObject({ ok: true, publication: { state: 'rascunho', caption: 'Legenda nova', creationId: null, error: null } })
+    if (!edited.ok) return
+    expect(edited.publication.media.map((item) => [item.id, item.s3Key, item.containerId])).toEqual(failed.media.map((item) => [item.id, null, null]))
+    expect(s3.objects().size).toBe(0)
+    const posts = mediaPosts()
+    await service.publishNow(WINDOW, { id: publication.id, clickToken: click() })
+    expect(await settled(publication.id)).toMatchObject({ state: 'publicada' })
+    expect(mediaPosts() - posts).toBe(1)
+  })
+
+  it('contrato 72: a miniatura só de uma cópia salva ou de um arquivo do diálogo, e só JPEG', async () => {
+    const asked: string[] = []
+    service.dispose()
+    service = createRedesService({
+      userData: dir,
+      safeStorage,
+      fetch: fake.fetch,
+      onState: () => undefined,
+      now: () => clock,
+      testMediaHost,
+      pickFiles: () => Promise.resolve([join(files, 'larga.jpg')]),
+      thumbnail: (path) => {
+        asked.push(basename(path))
+        return Promise.resolve('data:image/jpeg;base64,AA==')
+      },
+    })
+    await service.init()
+    expect(await service.thumbnail({ path: join(files, 'foto.jpg') })).toBeNull()
+    await service.pickMedia()
+    expect(await service.thumbnail({ path: join(files, 'larga.jpg') })).toBe('data:image/jpeg;base64,AA==')
+    const saved = await service.savePublication({ accountId: SMOKE_IG_USER_ID, caption: 'x', mediaPaths: [join(files, 'foto.jpg')], altTexts: {}, scheduledAt: null })
+    if (!saved.ok) throw new Error(saved.problems.join('; '))
+    const copy = saved.publication.media[0]?.localPath ?? ''
+    expect(await service.thumbnail({ path: copy })).toBe('data:image/jpeg;base64,AA==')
+    expect(await service.thumbnail({ path: join(copy, '..', '..', '..', '..', 'outro.jpg') })).toBeNull()
+    expect(await service.thumbnail({ path: join(FIXTURES, 'video-4s.mp4') })).toBeNull()
+    expect(await service.thumbnail({ path: 42 })).toBeNull()
+    expect(asked).toEqual(['larga.jpg', basename(copy)])
+  })
+
+  it('contrato 72: com erro e o contêiner já publicado (a resposta se perdeu), a edição é recusada; "Tentar de novo" só marca como publicada', async () => {
+    metaFaults.losePublish = true
+    const publication = await draft([join(files, 'foto.jpg')])
+    await service.publishNow(WINDOW, { id: publication.id, clickToken: click() })
+    const failed = await settled(publication.id)
+    expect(failed).toMatchObject({ state: 'erro' })
+    expect(failed.creationId).not.toBeNull()
+    expect(fake.published()).toHaveLength(1)
+    const edited = await service.savePublication({ id: publication.id, accountId: SMOKE_IG_USER_ID, caption: 'Outra', mediaPaths: failed.media.map((item) => item.localPath), altTexts: {}, scheduledAt: null })
+    expect(edited).toEqual({ ok: false, problems: [PUBLICATION_MAYBE_OUT_MESSAGE] })
+    expect(find(publication.id)).toMatchObject({ state: 'erro', creationId: failed.creationId })
+    // Pelo clique com a edição junto, a mesma recusa (o token já foi gasto, nada sai).
+    expect(await service.publishNow(WINDOW, { id: publication.id, clickToken: click(), save: { id: publication.id, accountId: SMOKE_IG_USER_ID, caption: 'Outra', mediaPaths: failed.media.map((item) => item.localPath), altTexts: {}, scheduledAt: null } })).toEqual({ ok: false, error: PUBLICATION_MAYBE_OUT_MESSAGE, problems: [PUBLICATION_MAYBE_OUT_MESSAGE] })
+    const posts = mediaPosts()
+    await service.retry({ id: publication.id })
+    expect(await settled(publication.id)).toMatchObject({ state: 'publicada', creationId: failed.creationId })
+    expect(mediaPosts()).toBe(posts)
+    expect(fake.published()).toHaveLength(1)
+  })
+
+  it('contrato 72: com erro e a consulta do contêiner falhando, a edição é recusada e nada muda', async () => {
+    fake.failNext(36003)
+    const publication = await draft([join(files, 'foto.jpg')])
+    await service.publishNow(WINDOW, { id: publication.id, clickToken: click() })
+    const failed = await settled(publication.id)
+    metaFaults.statusFails = true
+    const edited = await service.savePublication({ id: publication.id, accountId: SMOKE_IG_USER_ID, caption: 'Outra', mediaPaths: failed.media.map((item) => item.localPath), altTexts: {}, scheduledAt: null })
+    expect(edited).toEqual({ ok: false, problems: [PUBLICATION_MAYBE_OUT_MESSAGE] })
+    expect(find(publication.id)).toMatchObject({ state: 'erro', creationId: failed.creationId, caption: failed.caption })
+    expect(s3.objects().size).toBe(1)
+  })
+
+  it('contrato 72: "Publicar agora" e "Agendar" com a edição junto salvam depois do token; direto na com erro, a mensagem própria', async () => {
+    const input = { accountId: SMOKE_IG_USER_ID, caption: 'Nova pelo clique', mediaPaths: [join(files, 'foto.jpg')], altTexts: { [join(files, 'foto.jpg')]: 'Foto da equipe' }, scheduledAt: null }
+    // Sem token, nada é salvo.
+    expect(await service.publishNow(WINDOW, { clickToken: 'inventado', save: input })).toEqual({ ok: false, error: REDES_CLICK_MESSAGE })
+    expect(queue()).toHaveLength(0)
+    const started = await service.publishNow(WINDOW, { clickToken: click(), save: input })
+    expect(started).toMatchObject({ ok: true, publication: { state: 'publicando', caption: 'Nova pelo clique' } })
+    if (!started.ok) return
+    expect(started.publication.media[0]?.altText).toBe('Foto da equipe')
+    expect(await settled(started.publication.id)).toMatchObject({ state: 'publicada' })
+    const scheduled = await service.schedulePublication(WINDOW, { at: new Date(clock + HOUR).toISOString(), clickToken: click(), save: { ...input, caption: 'Agendada pelo clique' } })
+    expect(scheduled).toMatchObject({ ok: true, publication: { state: 'agendada', caption: 'Agendada pelo clique' } })
+    // A com erro, sem a edição: a mensagem própria.
+    fake.failNext(36003)
+    const failing = await draft([join(files, 'foto.jpg')])
+    await service.publishNow(WINDOW, { id: failing.id, clickToken: click() })
+    await settled(failing.id)
+    expect(await service.publishNow(WINDOW, { id: failing.id, clickToken: click() })).toEqual({ ok: false, error: PUBLICATION_ERROR_STATE_MESSAGE })
+    expect(await service.schedulePublication(WINDOW, { id: failing.id, at: new Date(clock + HOUR).toISOString(), clickToken: click() })).toEqual({ ok: false, error: PUBLICATION_ERROR_STATE_MESSAGE })
   })
 })

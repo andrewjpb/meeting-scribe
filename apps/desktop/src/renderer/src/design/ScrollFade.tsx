@@ -10,9 +10,10 @@ const RING_PX = 4
 /**
  * Contrato 68 (C): o esmaecimento no pé de uma lista rolável da barra lateral, só enquanto há mais abaixo. Fica irmão
  * da lista, num pai `relative`, e não ocupa lugar nem recebe clique. A linha focada por teclado que cairia debaixo dele
- * rola o que falta para o contorno de foco aparecer inteiro.
+ * rola o que falta para o contorno de foco aparecer inteiro. Contrato 72: `tone="page"` esmaece no fundo da tela, para
+ * uma lista da área principal (a fila de publicações das redes).
  */
-export function ScrollFade({ target }: { target: RefObject<HTMLElement | null> }) {
+export function ScrollFade({ target, tone = 'side' }: { target: RefObject<HTMLElement | null>; tone?: 'side' | 'page' }) {
   const [visible, setVisible] = useState(false)
 
   useEffect(() => {
@@ -57,5 +58,5 @@ export function ScrollFade({ target }: { target: RefObject<HTMLElement | null> }
     }
   }, [target])
 
-  return visible ? <div aria-hidden="true" data-scroll-fade className="scroll-fade" /> : null
+  return visible ? <div aria-hidden="true" data-scroll-fade className={tone === 'page' ? 'scroll-fade scroll-fade-page' : 'scroll-fade'} /> : null
 }

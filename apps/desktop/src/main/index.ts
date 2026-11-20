@@ -1242,6 +1242,8 @@ function createAppServices(userData: string): AppServices {
       if (!lockService?.isLocked()) broadcast(appWindows(), 'scribe:redes-publications', payload)
     },
     ...(smokeFixtures ? { sleep: (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, Math.min(ms, 50))) } : {}),
+    // Contrato 72: a miniatura da fila e do editor, pelo decodificador do Chromium (a tela não lê arquivo do disco).
+    thumbnail: redesThumbnail,
   })
   redesService = redes
   // Contrato 60: o Calendário do Mac pelo `lap-calendar`, sob demanda (nada sobe até o primeiro pedido). No smoke, o
@@ -1891,6 +1893,16 @@ async function chooseRedesMedia(): Promise<string[]> {
   return result.canceled ? [] : result.filePaths
 }
 
+/** Contrato 72: a miniatura de uma imagem em JPEG, até 192 px de lado (96 px na tela, em Retina), como data URL. */
+function redesThumbnail(path: string): Promise<string | null> {
+  const image = nativeImage.createFromPath(path)
+  if (image.isEmpty()) return Promise.resolve(null)
+  const { width, height } = image.getSize()
+  const scale = Math.min(1, 192 / Math.max(width, height, 1))
+  const small = scale < 1 ? image.resize({ width: Math.max(1, Math.round(width * scale)), height: Math.max(1, Math.round(height * scale)), quality: 'good' }) : image
+  return Promise.resolve(`data:image/jpeg;base64,${small.toJPEG(80).toString('base64')}`)
+}
+
 const nativeOpener: FileOpener = {
   openPath: (path) => shell.openPath(path),
   showItemInFolder: (path) => shell.showItemInFolder(path),
@@ -2240,6 +2252,7 @@ function registerIpc(services: AppServices): void {
   handle('scribe:redes-publication-unschedule', appOrigin, (_event, request) => redes.unschedule(request).catch(() => publicationFailed))
   handle('scribe:redes-publication-retry', appOrigin, (_event, request) => redes.retry(request).catch(() => publicationFailed))
   handle('scribe:redes-quota', appOrigin, (_event, request) => redes.quota(request).catch(() => ({ ok: false, error: 'Não foi possível ler a cota do Instagram' }) as const))
+  handle('scribe:redes-media-thumb', appOrigin, (_event, request) => redes.thumbnail(request).catch(() => null))
   onEvent('scribe:redes-click', appOrigin, (event, token) => redes.registerClick(event.sender.id, token))
   // Contrato 62: o cartão do convite e o Calendário do Mac. O serviço valida cada pedido; falha vira resposta tipada.
   const inviteFailed = { ok: false, error: 'failed', message: INVITE_ERROR_MESSAGES.failed, state: null } as const

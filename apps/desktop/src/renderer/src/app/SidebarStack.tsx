@@ -1,4 +1,4 @@
-import { ChevronLeft, Mail, Settings, Sparkles, type LucideIcon } from 'lucide-react'
+import { AtSign, ChevronLeft, Mail, Settings, Sparkles, type LucideIcon } from 'lucide-react'
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from 'react'
 import { NavLink } from 'react-router'
 import { settingsPath, SETTINGS_TABS } from '@shared/routes'
@@ -7,15 +7,16 @@ import { Shortcut } from '../design/Shortcut'
 import { ChatHistory } from '../features/chat/ChatHistory'
 import { EmailNav } from '../features/email/EmailNav'
 import { useEmail } from '../features/email/emailStore'
+import { RedesNav } from '../features/redes/RedesNav'
 import { SETTINGS_TAB_LABELS } from '../features/settings/settingsTabs'
 import { SIDEBAR_SLIDE_FALLBACK_MS, transitionOf, type SidebarLevel, type SidebarSection } from './sidebarLevels'
 
 /** Para onde vai o foco depois da troca de nível: o cabeçalho-voltar do nível novo ou o item da seção na raiz. */
 export type SidebarFocus = '[data-sidebar-back]' | `[data-nav="${SidebarSection}"]`
 
-const LEVEL_LABELS: Record<SidebarLevel, string> = { root: 'Navegação principal', email: 'Email', configuracoes: 'Configurações', assistente: 'Assistente' }
+const LEVEL_LABELS: Record<SidebarLevel, string> = { root: 'Navegação principal', email: 'Email', configuracoes: 'Configurações', assistente: 'Assistente', redes: 'Redes' }
 // A raiz é a lista dos itens, como o `<nav>` de antes; os níveis de seção arrumam o cabeçalho e a lista deles.
-const LEVEL_CLASSES: Record<SidebarLevel, string> = { root: 'gap-0.5', email: '', configuracoes: '', assistente: '' }
+const LEVEL_CLASSES: Record<SidebarLevel, string> = { root: 'gap-0.5', email: '', configuracoes: '', assistente: '', redes: '' }
 const levelClass = (level: SidebarLevel, slide: string | null): string | undefined => [LEVEL_CLASSES[level], slide].filter(Boolean).join(' ') || undefined
 
 interface Shown {
@@ -26,7 +27,8 @@ interface Shown {
 const reducedMotion = (): boolean => window.matchMedia('(prefers-reduced-motion: reduce)').matches
 
 /**
- * Coluna do meio da barra lateral em pilha (contrato 65; contrato 66, o nível Configurações; contrato 67, o nível Assistente): a raiz ou o nível de uma seção, entre a marca e o rodapé, que
+ * Coluna do meio da barra lateral em pilha (contrato 65; contrato 66, o nível Configurações; contrato 67, o nível Assistente;
+ * contrato 72, o nível Redes): a raiz ou o nível de uma seção, entre a marca e o rodapé, que
  * ficam parados. O nível vem pronto do `Sidebar` (sai da rota); aqui só o deslize: durante ele, o nível que sai fica no
  * DOM, inerte, até o `animationend` do que entra ou a reserva de tempo (com movimento reduzido a troca é instantânea e
  * nunca há dois níveis). `focusRef` é a marca posta pelo clique que trocou o nível, lida depois da troca.
@@ -67,6 +69,8 @@ export function SidebarStack({ level, root, onBack, focusRef }: { level: Sidebar
         return <SettingsLevel onBack={onBack} />
       case 'assistente':
         return <AssistantLevel onBack={onBack} />
+      case 'redes':
+        return <RedesLevel onBack={onBack} />
       default: {
         const never: never = item
         return never
@@ -190,6 +194,19 @@ function AssistantLevel({ onBack }: { onBack: () => void }) {
     <div className="flex min-h-0 flex-1 flex-col">
       <BackHeader icon={Sparkles} label="Assistente" onBack={onBack} />
       <ChatHistory />
+    </div>
+  )
+}
+
+/**
+ * Nível Redes (contrato 72): o cabeçalho-voltar, as contas com as seções (só elas rolam) e, preso no pé, "Conectar
+ * conta…". Sem conta (a rota aberta à mão), só o cabeçalho e o "Conectar conta…".
+ */
+function RedesLevel({ onBack }: { onBack: () => void }) {
+  return (
+    <div className="flex min-h-0 flex-1 flex-col">
+      <BackHeader icon={AtSign} label="Redes" onBack={onBack} />
+      <RedesNav />
     </div>
   )
 }

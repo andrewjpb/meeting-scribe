@@ -16,7 +16,7 @@
 // erro, pelo agendador). O agendador (30 s) não começa nada com o app bloqueado e retoma o que ficou em `publicando`.
 import { randomUUID } from 'node:crypto'
 import { chmod, copyFile, open, readFile, rm, stat } from 'node:fs/promises'
-import { basename, join } from 'node:path'
+import { basename, join, resolve, sep } from 'node:path'
 import { z } from 'zod'
 import { ACCOUNTS_DIR, createVault } from '../accounts/vault'
 import type { HttpFetch } from '../accounts/http'
@@ -62,7 +62,7 @@ import { mediaHostConfigProblem, removeMedia, uploadMedia, type MediaHostTester 
 import { publishOnce } from './publisher'
 import { createS3Client, safeKey, type S3Client } from './s3'
 import { REDES_REQUEST_TIMEOUT_MS } from './hosts'
-import { createRedesStore, REDES_DIR, type StoredMediaHost } from './store'
+import { createRedesStore, MEDIA_DIR, REDES_DIR, type StoredMediaHost } from './store'
 
 export const INSTAGRAM_VAULT_FILE = 'instagram.bin'
 export const MEDIA_HOST_VAULT_FILE = 'media-host.bin'
@@ -99,12 +99,16 @@ type InstagramVault = z.infer<typeof instagramVaultSchema>
 
 // Contrato 71: as publicações.
 export const PUBLICATION_MISSING_MESSAGE = 'Publicação não encontrada'
-export const PUBLICATION_NOT_EDITABLE_MESSAGE = 'Só rascunho ou publicação agendada pode ser editada'
+export const PUBLICATION_NOT_EDITABLE_MESSAGE = 'Só rascunho, publicação agendada ou com erro pode ser editada'
 export const PUBLICATION_BUSY_MESSAGE = 'A publicação está sendo publicada agora'
 export const PUBLICATION_PAST_MESSAGE = 'Escolha um horário no futuro'
 export const PUBLICATION_MEDIA_GONE_MESSAGE = 'A cópia da mídia sumiu deste Mac; escolha o arquivo de novo'
 export const PUBLICATION_FAILED_MESSAGE = 'Não foi possível publicar'
 export const PUBLICATION_STARTED_MESSAGE = 'A publicação começou a ser publicada; não dá para editar agora'
+/** Contrato 72: "Publicar agora" ou "Agendar" direto numa publicação com erro (sem a edição junto). */
+export const PUBLICATION_ERROR_STATE_MESSAGE = 'Publicação com erro: use Tentar de novo ou edite antes'
+/** Contrato 72: editar a com erro cujo contêiner já saiu (ou que a Meta não deixou conferir): só o "Tentar de novo" retoma. */
+export const PUBLICATION_MAYBE_OUT_MESSAGE = 'Esta publicação pode já ter saído no Instagram; use Tentar de novo'
 const PUBLICATION_SAVE_FAILED = 'Não foi possível guardar a mídia neste Mac'
 const MEDIA_FILE_MISSING = 'Arquivo não encontrado'
 /** A cota lida vale 5 min no canal `scribe:redes-quota`. */
@@ -124,15 +128,18 @@ const REFUSE_ALL_CLICKS: RedesClickGuard = { register: () => undefined, consume:
 const isoSchema = z.iso.datetime({ offset: true })
 const publicationIdSchema = z.string().regex(PUBLICATION_ID_PATTERN)
 const publicationRequestSchema = z.object({ id: publicationIdSchema })
-const scheduleRequestSchema = z.object({ id: publicationIdSchema, at: isoSchema, clickToken: z.string().max(100) })
-const publishRequestSchema = z.object({ id: publicationIdSchema, clickToken: z.string().max(100) })
+// Contrato 72: `save` é a edição da tela, salva no main depois de gastar o token de clique (a ativação do clique dura
+// poucos segundos; salvar antes, no renderer, podia passar dela). Com `save`, o `id` é o dele.
+const scheduleRequestSchema = z.object({ id: publicationIdSchema.optional(), at: isoSchema, clickToken: z.string().max(100), save: z.unknown().optional() })
+const publishRequestSchema = z.object({ id: publicationIdSchema.optional(), clickToken: z.string().max(100), save: z.unknown().optional() })
 const saveRequestSchema = z.object({
   id: publicationIdSchema.optional(),
   accountId: z.string().regex(REDES_ACCOUNT_ID_PATTERN),
   // O limite de 2.200 é conferido pelo `captionStats`, com a razão para a tela.
   caption: z.string().max(50_000),
   mediaPaths: z.array(z.string().min(1).max(4096)).max(50),
-  altTexts: z.record(z.string().max(1000), z.string().max(ALT_TEXT_MAX)).default({}),
+  // Contrato 72: por caminho (o `localPath` da cópia salva ou o do arquivo novo), não pelo nome: dois arquivos de mesmo nome.
+  altTexts: z.record(z.string().max(4096), z.string().max(ALT_TEXT_MAX)).default({}),
   scheduledAt: isoSchema.nullable(),
 })
 
@@ -183,6 +190,8 @@ export interface RedesServiceOptions {
   onPublications?: (payload: RedesPublicationsPayload) => void
   /** Contrato 71: a espera entre as consultas do contêiner (o smoke encurta; o padrão é o `setTimeout`). */
   sleep?: (ms: number) => Promise<void>
+  /** Contrato 72: a miniatura de uma imagem (data URL), feita pelo `nativeImage` no `index.ts`; sem ela, nenhuma. */
+  thumbnail?: (path: string) => Promise<string | null>
 }
 
 export interface RedesService {
@@ -210,6 +219,8 @@ export interface RedesService {
   /** "Tentar de novo" (só em `erro`): retoma pelo contêiner que já existe. */
   retry(request: unknown): Promise<PublicationActionResult>
   quota(request: unknown): Promise<PublicationQuotaResult>
+  /** Contrato 72: a miniatura de uma cópia salva ou de um arquivo escolhido no diálogo nesta sessão; o resto, `null`. */
+  thumbnail(request: unknown): Promise<string | null>
   registerClick(senderId: number, token: unknown): void
   forgetSender(senderId: number): void
   /** O agendador: publica o que venceu, retoma o que ficou em `publicando` e limpa o armazenamento (o smoke chama direto). */
@@ -235,6 +246,9 @@ export function createRedesService(options: RedesServiceOptions): RedesService {
   const runs = new Map<string, Promise<void>>()
   const accountRuns = new Map<string, Promise<unknown>>()
   const guard = options.clickGuard ?? REFUSE_ALL_CLICKS
+  // Contrato 72: os arquivos que o diálogo devolveu nesta sessão (a tela pede a miniatura deles antes de salvar).
+  const picked = new Set<string>()
+  const mediaRoot = resolve(options.userData, REDES_DIR, MEDIA_DIR)
   const sleep = options.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)))
   let publishTimer: ReturnType<typeof setInterval> | null = null
   let disposed = false
@@ -388,6 +402,24 @@ export function createRedesService(options: RedesServiceOptions): RedesService {
     return out
   }
 
+  /**
+   * Contrato 72: o contêiner de uma publicação com erro pode ser esquecido (para a edição criar outro)? Sem contêiner, sim;
+   * com o id de mídia publicado, não; senão só se a Meta disser `ERROR`, `EXPIRED` ou `FINISHED` (pronto e não
+   * publicado). `PUBLISHED`, `IN_PROGRESS` ou a consulta que falha: não (o "Tentar de novo" retoma e, se já saiu, só
+   * marca como publicada, sem publicar de novo).
+   */
+  const containerDiscardable = async (publication: Publication): Promise<boolean> => {
+    if (publication.publishedMediaId) return false
+    if (!publication.creationId) return true
+    const token = readTokens().tokens[publication.accountId]?.token
+    if (!token) return false
+    const result = await client.containerStatus(token, publication.creationId).catch(() => null)
+    return result !== null && result.ok && (result.statusCode === 'ERROR' || result.statusCode === 'EXPIRED' || result.statusCode === 'FINISHED')
+  }
+
+  /** Rascunho, agendada ou (contrato 72) com erro: o "Editar" da fila abre as três. */
+  const editable = (publication: Publication): boolean => publication.state === 'rascunho' || publication.state === 'agendada' || publication.state === 'erro'
+
   const savePublication = async (request: unknown): Promise<PublicationSaveResult> => {
     const parsed = saveRequestSchema.safeParse(request)
     if (!parsed.success) return { ok: false, problems: ['Confira os campos da publicação'] }
@@ -395,7 +427,9 @@ export function createRedesService(options: RedesServiceOptions): RedesService {
     if (!accounts.has(input.accountId)) return { ok: false, problems: [REDES_ACCOUNT_MISSING_MESSAGE] }
     const existing = input.id ? findPublication(input.id) : undefined
     if (input.id && (!existing || existing.accountId !== input.accountId)) return { ok: false, problems: [PUBLICATION_MISSING_MESSAGE] }
-    if (existing && existing.state !== 'rascunho' && existing.state !== 'agendada') return { ok: false, problems: [PUBLICATION_NOT_EDITABLE_MESSAGE] }
+    if (existing && !editable(existing)) return { ok: false, problems: [PUBLICATION_NOT_EDITABLE_MESSAGE] }
+    // Contrato 72: a com erro só é editada (e o contêiner dela esquecido) se ele não saiu no Instagram.
+    if (existing?.state === 'erro' && !(await containerDiscardable(existing))) return { ok: false, problems: [PUBLICATION_MAYBE_OUT_MESSAGE] }
     const publicationId = existing?.id ?? randomUUID()
 
     // A mídia já salva vem pelo `localPath` da cópia; a nova é conferida pelos bytes.
@@ -422,7 +456,7 @@ export function createRedesService(options: RedesServiceOptions): RedesService {
     try {
       for (const item of items) {
         if ('saved' in item) {
-          const altText = item.saved.kind === 'imagem' ? (input.altTexts[item.saved.fileName] ?? item.saved.altText) : ''
+          const altText = item.saved.kind === 'imagem' ? (input.altTexts[item.saved.localPath] ?? item.saved.altText) : ''
           media.push({ ...item.saved, altText: altText.trim() })
           continue
         }
@@ -443,7 +477,7 @@ export function createRedesService(options: RedesServiceOptions): RedesService {
           width: candidate.width ?? 0,
           height: candidate.height ?? 0,
           durationSeconds: candidate.durationSeconds,
-          altText: candidate.kind === 'imagem' ? (input.altTexts[candidate.fileName] ?? '').trim() : '',
+          altText: candidate.kind === 'imagem' ? (input.altTexts[candidate.path] ?? '').trim() : '',
           localPath,
           s3Key: null,
           containerId: null,
@@ -457,13 +491,19 @@ export function createRedesService(options: RedesServiceOptions): RedesService {
     // vale e nada da publicação é apagado (só as cópias novas desta edição).
     if (existing) {
       const current = findPublication(existing.id)
-      if (!current || (current.state !== 'rascunho' && current.state !== 'agendada')) {
+      if (!current || !editable(current)) {
         for (const path of copied) await rm(path, { force: true }).catch(() => undefined)
         return { ok: false, problems: [current ? PUBLICATION_STARTED_MESSAGE : PUBLICATION_MISSING_MESSAGE] }
       }
     }
     // As cópias que saíram da publicação.
     for (const old of existing?.media ?? []) if (!media.some((item) => item.id === old.id)) await rm(old.localPath, { force: true }).catch(() => undefined)
+    // Contrato 72: a com erro editada volta a rascunho sem nada da tentativa: as imagens saem do armazenamento (a que não
+    // sair fica com a chave, e a próxima publicação a sobrescreve e apaga) e os contêineres dos itens são refeitos.
+    if (existing?.state === 'erro') {
+      const cleared = await removeFromStorage(media).catch(() => media)
+      for (const [index, item] of cleared.entries()) media[index] = { ...item, containerId: null }
+    }
 
     const at = iso(now())
     // Salvar sempre deixa rascunho: "Agendar" é outro passo, com o token de clique (a agendada editada volta a rascunho).
@@ -489,6 +529,22 @@ export function createRedesService(options: RedesServiceOptions): RedesService {
 
   /** A conta saiu ("Remover") no meio da tentativa: nada mais é gravado nem pedido. */
   class AccountGone extends Error {}
+
+  /**
+   * Contrato 72: a publicação do "Publicar agora" ou do "Agendar", já com o token gasto: a edição da tela salva aqui
+   * (`save`, com a conferência da Meta e a limpeza do armazenamento da com erro) ou a da fila, pelo `id`.
+   */
+  const clickTarget = async (request: { id?: string | undefined; save?: unknown }): Promise<{ ok: true; publication: Publication; saved: boolean } | { ok: false; error: string; problems?: string[] }> => {
+    if (request.save !== undefined) {
+      const result = await savePublication(request.save)
+      return result.ok ? { ok: true, publication: result.publication, saved: true } : { ok: false, error: result.problems.join('. '), problems: result.problems }
+    }
+    const publication = request.id ? findPublication(request.id) : undefined
+    return publication ? { ok: true, publication, saved: false } : { ok: false, error: PUBLICATION_MISSING_MESSAGE }
+  }
+  /** Por que esta não pode ser publicada nem agendada agora (`null`: pode). */
+  const notStartable = (publication: Publication): string | null =>
+    publication.state === 'erro' ? PUBLICATION_ERROR_STATE_MESSAGE : publication.state !== 'rascunho' && publication.state !== 'agendada' ? PUBLICATION_NOT_EDITABLE_MESSAGE : null
 
   /** Uma tentativa inteira de uma publicação em `publicando`; termina sempre gravada (`publicada`, `erro` ou adiada). */
   const attempt = async (id: string): Promise<void> => {
@@ -790,7 +846,10 @@ export function createRedesService(options: RedesServiceOptions): RedesService {
     async pickMedia() {
       const paths = options.pickFiles ? await options.pickFiles() : []
       const candidates: MediaCandidate[] = []
-      for (const path of paths.slice(0, 50)) candidates.push(await inspectFile(path))
+      for (const path of paths.slice(0, 50)) {
+        picked.add(path)
+        candidates.push(await inspectFile(path))
+      }
       return candidates
     },
 
@@ -815,20 +874,27 @@ export function createRedesService(options: RedesServiceOptions): RedesService {
       // O token é gasto mesmo com o resto inválido: não serve para uma segunda tentativa.
       if (!guard.consume(senderId, ((request ?? {}) as { clickToken?: unknown }).clickToken)) return { ok: false, error: REDES_CLICK_MESSAGE }
       const parsed = scheduleRequestSchema.safeParse(request)
-      const publication = parsed.success ? findPublication(parsed.data.id) : undefined
-      if (!parsed.success || !publication) return { ok: false, error: PUBLICATION_MISSING_MESSAGE }
-      if (publication.state !== 'rascunho' && publication.state !== 'agendada') return { ok: false, error: PUBLICATION_NOT_EDITABLE_MESSAGE }
+      if (!parsed.success) return { ok: false, error: PUBLICATION_MISSING_MESSAGE }
       const at = Date.parse(parsed.data.at)
+      // A hora antes de salvar: no passado, nada muda.
       if (!(at > now())) return { ok: false, error: PUBLICATION_PAST_MESSAGE }
+      const target = await clickTarget(parsed.data)
+      if (!target.ok) return target
+      const { publication, saved } = target
+      const refused = notStartable(publication)
+      if (refused) return { ok: false, error: refused, ...(saved ? { saved: publication } : {}) }
       return { ok: true, publication: await putPublication({ ...publication, state: 'agendada', scheduledAt: iso(at), error: null }) }
     },
 
     async publishNow(senderId, request) {
       if (!guard.consume(senderId, ((request ?? {}) as { clickToken?: unknown }).clickToken)) return { ok: false, error: REDES_CLICK_MESSAGE }
       const parsed = publishRequestSchema.safeParse(request)
-      const publication = parsed.success ? findPublication(parsed.data.id) : undefined
-      if (!publication) return { ok: false, error: PUBLICATION_MISSING_MESSAGE }
-      if (publication.state !== 'rascunho' && publication.state !== 'agendada') return { ok: false, error: PUBLICATION_NOT_EDITABLE_MESSAGE }
+      if (!parsed.success) return { ok: false, error: PUBLICATION_MISSING_MESSAGE }
+      const target = await clickTarget(parsed.data)
+      if (!target.ok) return target
+      const { publication, saved } = target
+      const refused = notStartable(publication)
+      if (refused) return { ok: false, error: refused, ...(saved ? { saved: publication } : {}) }
       const started = await putPublication({ ...publication, state: 'publicando', error: null })
       void runPublication(started.id)
       return { ok: true, publication: started }
@@ -865,6 +931,16 @@ export function createRedesService(options: RedesServiceOptions): RedesService {
       const quota = rememberQuota(accountId, result.quota)
       emitPublications(accountId)
       return { ok: true, quota: { ...quota } }
+    },
+
+    async thumbnail(request) {
+      const parsed = z.object({ path: z.string().min(1).max(4096) }).safeParse(request)
+      if (!parsed.success || !options.thumbnail) return null
+      const { path } = parsed.data
+      const saved = resolve(path).startsWith(mediaRoot + sep)
+      if (!saved && !picked.has(path)) return null
+      if (!/\.jpe?g$/i.test(path)) return null
+      return options.thumbnail(path).catch(() => null)
     },
 
     registerClick(senderId, token) {

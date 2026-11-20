@@ -530,15 +530,20 @@ export interface InvokeChannels {
   /** Apagar (não em `publicando`): a publicação e as cópias das mídias. */
   'scribe:redes-publication-delete': { request: { id: string }; response: { ok: true } | { ok: false; error: string } }
   /** "Agendar": só pelo `redesSchedule` do preload, com o token de clique. */
-  'scribe:redes-publication-schedule': { request: { id: string; at: string; clickToken: string }; response: PublicationActionResult }
+  'scribe:redes-publication-schedule': { request: { id?: string; at: string; clickToken: string; save?: PublicationSaveInput }; response: PublicationActionResult }
   /** "Publicar agora": só pelo `redesPublish` do preload, com o token de clique. */
-  'scribe:redes-publication-publish': { request: { id: string; clickToken: string }; response: PublicationActionResult }
+  'scribe:redes-publication-publish': { request: { id?: string; clickToken: string; save?: PublicationSaveInput }; response: PublicationActionResult }
   /** A agendada volta a rascunho. */
   'scribe:redes-publication-unschedule': { request: { id: string }; response: PublicationActionResult }
   /** "Tentar de novo" (só em `erro`): retoma pelo contêiner que já existe, sem criar outro. */
   'scribe:redes-publication-retry': { request: { id: string }; response: PublicationActionResult }
   /** A cota das últimas 24 h (cache de 5 min). */
   'scribe:redes-quota': { request: { accountId: string }; response: PublicationQuotaResult }
+  /**
+   * Contrato 72: a miniatura de uma imagem da fila ou do editor (data URL em JPEG, até 192 px), feita no main. Só de uma
+   * cópia em `userData/redes/midia/` ou de um arquivo que o diálogo de mídias devolveu nesta sessão; vídeo e o resto, `null`.
+   */
+  'scribe:redes-media-thumb': { request: { path: string }; response: string | null }
 }
 
 /** renderer -> main, sem resposta (`__scribeApi.send` / `ipcMain.on`). */
@@ -894,6 +899,7 @@ const INVOKE: Record<InvokeChannel, true> = {
   'scribe:redes-publication-unschedule': true,
   'scribe:redes-publication-retry': true,
   'scribe:redes-quota': true,
+  'scribe:redes-media-thumb': true,
 }
 const RENDERER_EVENTS: Record<RendererEvent, true> = {
   'scribe:csp-violation': true,
@@ -1234,6 +1240,7 @@ export const WHEN_LOCKED: Readonly<Record<InvokeChannel, LockedPolicy>> = Object
   'scribe:redes-publication-unschedule': 'refused',
   'scribe:redes-publication-retry': 'refused',
   'scribe:redes-quota': 'refused',
+  'scribe:redes-media-thumb': 'refused',
 })
 
 /**
@@ -1268,7 +1275,7 @@ export const EMAIL_PRELOAD_ONLY_EVENTS: readonly RendererEvent[] = ['scribe:emai
 /** Contrato 71: o clique do "Publicar agora" e do "Agendar" das redes, também só pelo preload (lista à parte). */
 export const REDES_PRELOAD_ONLY_EVENTS: readonly RendererEvent[] = ['scribe:redes-click']
 /** Contrato 71: "Publicar agora" ou "Agendar" sem o clique da pessoa (o preload e o main devolvem o mesmo texto). */
-export const REDES_CLICK_MESSAGE = 'Clique em Publicar ou Agendar para confirmar'
+export const REDES_CLICK_MESSAGE = 'Clique em Publicar agora ou Agendar para confirmar'
 
 export const INVOKE_CHANNELS = Object.keys(INVOKE) as InvokeChannel[]
 export const RENDERER_EVENT_CHANNELS = Object.keys(RENDERER_EVENTS) as RendererEvent[]
@@ -1296,8 +1303,11 @@ export interface ScribeApi {
   inviteReply(request: Omit<InviteReplySendRequest, 'clickToken'>): Promise<InviteReplySendResult>
   /** Contrato 64: "Sugerir evento", com o desenho do `emailSend` (ativação viva, token de clique) e guarda próprio. */
   inviteSuggest(request: Omit<InviteSuggestRequest, 'clickToken'>): Promise<InviteSuggestResult>
-  /** Contrato 71: "Publicar agora" das redes, com o desenho do `emailSend` (ativação viva, token de clique) e guarda próprio. */
-  redesPublish(id: string): Promise<PublicationActionResult>
+  /**
+   * Contrato 71: "Publicar agora" das redes, com o desenho do `emailSend` (ativação viva, token de clique) e guarda próprio.
+   * Contrato 72: com `save`, a edição da tela vai junto e o main salva depois de gastar o token (`id` `null` numa nova).
+   */
+  redesPublish(id: string | null, save?: PublicationSaveInput): Promise<PublicationActionResult>
   /** Contrato 71: "Agendar" (`at` em ISO), pelo mesmo token de clique do `redesPublish`. */
-  redesSchedule(id: string, at: string): Promise<PublicationActionResult>
+  redesSchedule(id: string | null, at: string, save?: PublicationSaveInput): Promise<PublicationActionResult>
 }

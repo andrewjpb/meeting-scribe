@@ -73,6 +73,10 @@
 // Contrato 69: antes do bloqueio, as redes (`redesChecks`) com o Instagram falso em memória e o relógio dele adiantado: o
 // token recusado e o aceito em Configurações › Contas › Instagram, a renovação, o token vencido, o "Remover" e o
 // armazenamento de mídia. Nenhum token nem chave secreta em claro no `userData`, na tela ou no relatório.
+//
+// Contrato 72: depois das publicações pelo serviço (contrato 71) e antes do bloqueio, a tela Redes e o nível Redes da barra
+// lateral (`redesUiChecks`): o item só com conta, o estado vazio, o nível em pilha, a fila com os quatro grupos, o editor
+// (duas imagens, o PNG recusado, sem o armazenamento) e "Publicar agora", "Tentar de novo" e "Agendar" pelo clique.
 import { appendFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { spawn as spawnChild } from 'node:child_process'
 import { request as httpRequest } from 'node:http'
@@ -10360,6 +10364,485 @@ async function redesPublicationChecks(ctx: SmokeContext, watch: (win: BrowserWin
   console.log(`redes: publicações em ${((Date.now() - startedAt) / 1000).toFixed(1)} s`)
 }
 
+/** Contrato 72: o nível Redes à mostra (o que está saindo no deslize não conta). */
+const SIDEBAR_REDES = '[data-sidebar-level="redes"]:not([data-sidebar-leaving])'
+
+/**
+ * Contrato 72 (CA4 na tela, CA5–CA9 pela tela, CA13), numa janela que troca de tema no lugar, depois das publicações pelo
+ * serviço e antes do bloqueio: sem conta, "Redes" fora da raiz e `/redes` com o estado vazio (o botão leva ao campo do
+ * token); com a conta, o item entre Email e Automações, o nível Redes (deslize, foco, marca e rodapé parados, medidas
+ * densas, a última seção lembrada), o "voltar" sem navegar e o ⌘,; a fila com os quatro grupos (publicações feitas pelo
+ * serviço, uma de cada estado); o editor com duas imagens, o PNG recusado na nota, o aviso sem o armazenamento e os
+ * botões desabilitados, "Salvar rascunho", o Esc com a confirmação; "Publicar agora", "Tentar de novo" e "Agendar" pelo
+ * clique (o token de clique do preload); a largura de 224 px com o nome comprido e o número; e o movimento reduzido.
+ * Seis prints nos dois temas. Termina sem conta e sem armazenamento.
+ */
+async function redesUiChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => void, checks: Record<string, Check>, shots: Screenshot[]): Promise<void> {
+  const startedAt = Date.now()
+  const fake = ctx.fixtures.instagram
+  const themeBefore = readSettings(ctx.userDataDir).theme ?? 'system'
+  nativeTheme.themeSource = 'light'
+  const win = ctx.openWindow({})
+  watch(win)
+  await loadAndWait(win)
+  const contents = win.webContents
+  if (themeBefore !== 'system') await evaluate(contents, "window.__scribeApi.invoke('scribe:settings-update', { theme: 'system' }).then(() => true)")
+  const api = <T>(channel: string, request?: unknown): Promise<T> => evaluate<T>(contents, `window.__scribeApi.invoke(${JSON.stringify(channel)}${request === undefined ? '' : `, ${JSON.stringify(request)}`})`)
+  const both = async (name: string): Promise<void> => {
+    await settle(contents)
+    shots.push(await capture(win, ctx.outDir, `${name}-light`))
+    nativeTheme.themeSource = 'dark'
+    await waitFor(contents, "document.documentElement.dataset.theme === 'dark'")
+    await settle(contents)
+    shots.push(await capture(win, ctx.outDir, `${name}-dark`))
+    nativeTheme.themeSource = 'light'
+    await waitFor(contents, "document.documentElement.dataset.theme === 'light'")
+  }
+  const accountId = SMOKE_IG_USER_ID
+  const oneLevel = `${SIDEBAR_LEVELS}.length === 1`
+  const title = (): Promise<string> => text(contents, '[data-redes-title]')
+  const row = (id: string): string => `[data-redes-pub="${id}"]`
+  const focusIs = (selector: string): Promise<boolean> => evaluate<boolean>(contents, `document.activeElement?.matches(${JSON.stringify(selector)}) === true`)
+  const list = async (): Promise<Publication[]> => (await api<RedesPublicationsPayload>('scribe:redes-publications', { accountId })).publications
+  const until = async (id: string, done: (item: Publication) => boolean, timeoutMs = 15_000): Promise<Publication | null> => {
+    const deadline = Date.now() + timeoutMs
+    while (Date.now() < deadline) {
+      const item = (await list()).find((entry) => entry.id === id)
+      if (item && done(item)) return item
+      await wait(40)
+    }
+    return (await list()).find((entry) => entry.id === id) ?? null
+  }
+  const mediaPosts = (): number => fake.calls.filter((call) => call.method === 'POST' && call.path.endsWith('/media')).length
+  const hostConfig = { endpoint: SMOKE_S3_ENDPOINT, region: SMOKE_S3_REGION, bucket: SMOKE_S3_BUCKET, accessKeyId: SMOKE_S3_ACCESS_KEY_ID, publicBaseUrl: SMOKE_S3_PUBLIC_BASE_URL, pathStyle: true }
+  const saveHost = async (): Promise<boolean> => (await api<{ ok: boolean }>('scribe:redes-media-host-save', { config: hostConfig, secretAccessKey: SMOKE_S3_SECRET_ACCESS_KEY })).ok
+
+  // As mídias: duas fotos em JPEG (4:5 e 1:1) com faixas de cor, para a miniatura aparecer no print, e um PNG.
+  const dir = join(ctx.userDataDir, 'redes-tela')
+  mkdirSync(dir, { recursive: true })
+  const picture = (width: number, height: number, tint: number): Buffer => {
+    const data = Buffer.alloc(width * height * 4)
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        const i = (y * width + x) * 4
+        const band = Math.floor((y / height) * 4)
+        data[i] = band === 1 ? 240 : 10 + tint
+        data[i + 1] = band === 2 ? 130 : 42 + Math.round((x / width) * 60)
+        data[i + 2] = band === 3 ? 246 : 94 + tint
+        data[i + 3] = 255
+      }
+    }
+    return data
+  }
+  const photoA = join(dir, 'bastidores.jpg')
+  const photoB = join(dir, 'equipe.jpg')
+  const png = join(dir, 'logo.png')
+  writeFileSync(photoA, nativeImage.createFromBitmap(picture(1080, 1350, 0), { width: 1080, height: 1350 }).toJPEG(82))
+  writeFileSync(photoB, nativeImage.createFromBitmap(picture(1080, 1080, 60), { width: 1080, height: 1080 }).toJPEG(82))
+  writeFileSync(png, nativeImage.createFromBitmap(picture(64, 64, 0), { width: 64, height: 64 }).toPNG())
+
+  // CA13: sem conta, "Redes" não está na raiz.
+  await showRoot(contents)
+  const hidden = await waitFor(contents, `document.querySelector('${SIDEBAR_ROOT}') && !document.querySelector('[data-nav="redes"]')`)
+  const noAccounts = (await api<RedesState>('scribe:redes-state')).accounts.length === 0
+  checks['navHidden'] = { ok: hidden && noAccounts, detail: `sem conta=${noAccounts}; "Redes" fora da raiz=${hidden}` }
+
+  // R8 (artboard 08): `/redes` sem conta: o estado vazio e o nível só com o cabeçalho e "Conectar conta…"; o botão leva
+  // a Configurações › Contas com o foco no campo do token.
+  contents.send('scribe:navigate', 'redes')
+  const empty = await waitFor(
+    contents,
+    `${routeIs('redes')} && document.querySelector('[data-redes-empty]')?.textContent.includes('Nenhuma conta conectada') && document.querySelector('[data-redes-empty]')?.textContent.includes('Conecte um Instagram profissional em Configurações › Contas.') && document.querySelector('[data-redes-empty-connect]') && document.querySelector('${SIDEBAR_REDES}') && ${oneLevel}`,
+    8000,
+  )
+  const emptyLevel = await evaluate<{ rows: number; connect: string; back: string; nav: boolean }>(
+    contents,
+    `({ rows: document.querySelectorAll('${SIDEBAR_REDES} [data-redes-account-row]').length, connect: document.querySelector('${SIDEBAR_REDES} [data-redes-connect-link]')?.textContent ?? '', back: document.querySelector('${SIDEBAR_REDES} [data-sidebar-back]')?.getAttribute('aria-label') ?? '', nav: Boolean(document.querySelector('[data-nav="redes"]')) })`,
+  )
+  const emptyTitle = await title()
+  await both('redes-vazio')
+  await clickSelector(contents, '[data-redes-empty-connect]')
+  const toToken = await waitFor(contents, `${routeIs('configuracoes')} && ${settingsTabIs('contas')} && document.activeElement?.matches('[data-redes-token]')`, 8000)
+  checks['emptyState'] = {
+    ok: empty && emptyTitle === 'Redes' && emptyLevel.rows === 0 && emptyLevel.connect === 'Conectar conta…' && emptyLevel.back === 'Redes: voltar ao menu' && toToken,
+    detail: `estado vazio em /redes=${empty} (título "${emptyTitle}"); nível ${JSON.stringify(emptyLevel)}; "Conectar conta" -> Contas com o foco no token=${toToken}`,
+  }
+
+  // CA13: com a conta, "Redes" entre Email e Automações, sem número (nenhum não lido nesta fase).
+  const connected = await api<RedesConnectResult>('scribe:redes-connect', { token: SMOKE_IG_TOKEN })
+  await clickNav(contents, 'reunioes')
+  const shown = await waitFor(contents, `${routeIs('reunioes')} && document.querySelector('${SIDEBAR_ROOT} [data-nav="redes"]') && ${oneLevel}`, 8000)
+  const order = await evaluate<string[]>(contents, `[...document.querySelectorAll('${SIDEBAR_ROOT} [data-nav]')].map((el) => el.dataset.nav)`)
+  const at = order.indexOf('redes')
+  const noBadge = await evaluate<boolean>(contents, `!document.querySelector('${SIDEBAR_ROOT} [data-nav="redes"] [data-nav-badge]')`)
+  checks['navShown'] = {
+    ok: connected.ok && shown && at > 0 && order[at - 1] === 'email' && order[at + 1] === 'automacoes' && noBadge,
+    detail: `conta=${connected.ok}; itens ${JSON.stringify(order)}; sem número=${noBadge}`,
+  }
+
+  // CA13: de Reuniões, "Redes" desliza para o nível (marca e rodapé parados) com o foco no cabeçalho-voltar e abre as
+  // publicações da conta; as medidas densas (contrato 79); a última seção vista volta no clique seguinte.
+  const push = await evaluate<SlideView>(contents, slideScript(`${SIDEBAR_ROOT} [data-nav="redes"]`, 'push'))
+  const entered = await waitFor(contents, `${routeIs('redes')} && document.querySelector('[data-redes-title]')?.textContent === '@${SMOKE_IG_USERNAME} · Publicações' && document.querySelector('${SIDEBAR_REDES} [data-redes-section="publicacoes"]')?.getAttribute('aria-current') === 'page'`, 8000)
+  const enterFocus = await focusIs(`${SIDEBAR_REDES} [data-sidebar-back]`)
+  const sizes = await evaluate<{ header: number; label: string; text: string; icons: number; below: number; account: number; toggle: boolean; glyph: boolean; sections: { section: string; label: string; height: number; padding: string; icons: number }[]; gaps: number[]; connect: number; footerGap: number }>(
+    contents,
+    `(() => {
+      const level = document.querySelector('${SIDEBAR_REDES}')
+      const round = (n) => Math.round(n * 10) / 10
+      const back = level.querySelector('[data-sidebar-back]'), backBox = back.getBoundingClientRect()
+      const account = level.querySelector('[data-redes-account-header]'), accountBox = account.getBoundingClientRect()
+      const sections = [...level.querySelectorAll('[data-redes-section]')]
+      const connect = level.querySelector('[data-redes-connect-link]').getBoundingClientRect()
+      // O rodapé da barra (o fio de cima): o "Bloquear" mora num invólucro dentro dele.
+      const footer = document.querySelector('[data-action="lock-app"]').parentElement.parentElement.getBoundingClientRect()
+      return {
+        header: round(backBox.height), label: back.getAttribute('aria-label') ?? '', text: back.textContent ?? '', icons: back.querySelectorAll('svg').length,
+        below: round(accountBox.top - backBox.bottom), account: round(accountBox.height), toggle: Boolean(level.querySelector('[data-redes-account-toggle]')), glyph: Boolean(account.querySelector('svg')),
+        sections: sections.map((el) => ({ section: el.dataset.redesSection, label: el.querySelector('span.truncate')?.textContent ?? '', height: round(el.getBoundingClientRect().height), padding: getComputedStyle(el).paddingLeft, icons: el.querySelectorAll('svg').length })),
+        gaps: sections.slice(1).map((el, index) => round(el.getBoundingClientRect().top - sections[index].getBoundingClientRect().bottom)),
+        connect: round(connect.height), footerGap: round(footer.top - connect.bottom),
+      }
+    })()`,
+  )
+  const sizesOk =
+    sizes.header === 32 &&
+    sizes.label === 'Redes: voltar ao menu' &&
+    sizes.text === 'Redes' &&
+    sizes.icons === 2 &&
+    sizes.below === 4 &&
+    sizes.account === 28 &&
+    !sizes.toggle &&
+    sizes.glyph &&
+    JSON.stringify(sizes.sections.map((item) => item.label)) === JSON.stringify(['Publicações', 'Comentários', 'Mensagens', 'Métricas']) &&
+    sizes.sections.every((item) => item.height === 28 && item.padding === '28px' && item.icons === 1) &&
+    sizes.gaps.every((gap) => gap === 2) &&
+    sizes.connect === 28 &&
+    sizes.footerGap === 4
+  await clickSelector(contents, `${SIDEBAR_REDES} [data-redes-section="comentarios"]`)
+  const coming = await waitFor(contents, `document.querySelector('[data-redes-title]')?.textContent === '@${SMOKE_IG_USERNAME} · Comentários' && document.querySelector('[data-redes-coming="comentarios"]')?.textContent.includes('Em preparação') && document.querySelector('${SIDEBAR_REDES} [data-redes-section="comentarios"]')?.getAttribute('aria-current') === 'page'`, 8000)
+  await both('sidebar-redes')
+  await clickNav(contents, 'reunioes')
+  await waitFor(contents, `${routeIs('reunioes')} && ${oneLevel}`, 8000)
+  await clickNav(contents, 'redes')
+  const remembered = await waitFor(contents, `${routeIs('redes')} && document.querySelector('[data-redes-title]')?.textContent === '@${SMOKE_IG_USERNAME} · Comentários' && document.querySelector('${SIDEBAR_REDES}') && ${oneLevel}`, 8000)
+  checks['level'] = {
+    ok: slideOk(push, 'root', 'redes') && stillOk(push) && entered && enterFocus && sizesOk && coming && remembered,
+    detail: `deslize meio ${JSON.stringify(push.middle)} depois ${JSON.stringify(push.after)}; marca e rodapé parados=${stillOk(push)}; publicações da conta=${entered}; foco no cabeçalho-voltar=${enterFocus}; medidas ${JSON.stringify(sizes)}; Comentários "Em preparação"=${coming}; de Reuniões, a última seção (Comentários)=${remembered}`,
+  }
+
+  // CA13: o "voltar" mostra a raiz sem navegar, com o foco em "Redes" marcada; de novo em "Redes", o nível sem navegar; ⌘,
+  // do nível Redes leva ao nível Configurações.
+  await clickSelector(contents, `${SIDEBAR_REDES} [data-sidebar-back]`)
+  const backed = await waitFor(contents, `document.querySelector('${SIDEBAR_ROOT}') && ${oneLevel}`)
+  const backState = await evaluate<{ route: boolean; title: string; current: string; focus: boolean }>(
+    contents,
+    `({ route: ${routeIs('redes')}, title: document.querySelector('[data-redes-title]')?.textContent ?? '', current: document.querySelector('${SIDEBAR_ROOT} [data-nav="redes"]')?.getAttribute('aria-current') ?? '', focus: document.activeElement?.matches('${SIDEBAR_ROOT} [data-nav="redes"]') === true })`,
+  )
+  await clickNav(contents, 'redes')
+  const again = await waitFor(contents, `document.querySelector('${SIDEBAR_REDES}') && ${oneLevel} && document.querySelector('[data-redes-title]')?.textContent === '@${SMOKE_IG_USERNAME} · Comentários'`)
+  const againFocus = await focusIs(`${SIDEBAR_REDES} [data-sidebar-back]`)
+  Menu.getApplicationMenu()?.getMenuItemById(MENU_IDS.settings)?.click()
+  const toSettings = await waitFor(contents, `${routeIs('configuracoes')} && document.querySelector('${SIDEBAR_SETTINGS}') && ${oneLevel}`, 8000)
+  checks['levelBack'] = {
+    ok: backed && backState.route && backState.title === `@${SMOKE_IG_USERNAME} · Comentários` && backState.current === 'page' && backState.focus && again && againFocus && toSettings,
+    detail: `raiz=${backed}, tela igual ${JSON.stringify(backState)}; de novo em Redes, o nível sem navegar=${again} (foco no cabeçalho=${againFocus}); ⌘, -> nível Configurações=${toSettings}`,
+  }
+
+  // A fila (artboard 03): uma publicação de cada estado, pelo serviço (o mesmo clique do preload do contrato 71).
+  const hostSaved = await saveHost()
+  const draft = async (paths: string[], caption: string): Promise<Publication | null> => {
+    const result = await api<PublicationSaveResult>('scribe:redes-publication-save', { accountId, caption, mediaPaths: paths, altTexts: {}, scheduledAt: null })
+    return result.ok ? result.publication : null
+  }
+  const publish = (id: string): Promise<PublicationActionResult> => evaluate<PublicationActionResult>(contents, `window.__scribeApi.redesPublish(${JSON.stringify(id)})`)
+  fake.failNext(36003)
+  const failing = await draft([photoA], 'Promoção de fim de ano: 20% no primeiro mês')
+  if (failing) await publish(failing.id)
+  const failed = failing ? await until(failing.id, (item) => item.state !== 'publicando') : null
+  const carousel = await draft([photoA, photoB], 'Bastidores da semana na LAP: três reuniões com cliente, um app novo no ar e café')
+  const later = await draft([photoB], 'Live na terça: como automatizar a ata das suas reuniões')
+  const tomorrow = new Date(fake.now() + 24 * 3_600_000)
+  tomorrow.setHours(10, 0, 0, 0)
+  const scheduled = later ? await evaluate<PublicationActionResult>(contents, `window.__scribeApi.redesSchedule(${JSON.stringify(later.id)}, ${JSON.stringify(tomorrow.toISOString())})`) : null
+  const done = await draft([photoA], 'Bastidores do lançamento do app')
+  if (done) await publish(done.id)
+  const published = done ? await until(done.id, (item) => item.state === 'publicada') : null
+  await clickNav(contents, 'redes')
+  await clickSelector(contents, `${SIDEBAR_REDES} [data-redes-section="publicacoes"]`)
+  const ids = [failing?.id, carousel?.id, later?.id, done?.id]
+  const groupsShown = await waitFor(
+    contents,
+    `JSON.stringify([...document.querySelectorAll('[data-redes-group]')].map((el) => el.dataset.redesGroup + ':' + el.querySelector('[data-redes-group-count]')?.textContent)) === '${JSON.stringify(['erro:1', 'rascunho:1', 'agendada:1', 'publicada:1'])}' && ${JSON.stringify(ids)}.every((id) => document.querySelector('[data-redes-pub="' + id + '"] img[data-redes-thumb]')?.src.startsWith('data:image/jpeg'))`,
+    10_000,
+  )
+  const rows = await evaluate<{ id: string; state: string; group: string; caption: string; line: string; error: string; height: number }[]>(
+    contents,
+    `[...document.querySelectorAll('[data-redes-pub]')].map((el) => ({ id: el.dataset.redesPub, state: el.dataset.redesPubState, group: el.closest('[data-redes-group]')?.dataset.redesGroup ?? '', caption: el.querySelector('[data-redes-pub-caption]')?.textContent ?? '', line: el.querySelector('[data-redes-pub-line]')?.textContent ?? '', error: el.querySelector('[data-redes-pub-error]')?.textContent ?? '', height: Math.round(el.getBoundingClientRect().height) }))`,
+  )
+  const quotaText = await waitFor(contents, `/^Cota da Meta: \\d+ de 50 publicações nas últimas 24 h$/.test(document.querySelector('[data-redes-quota]')?.textContent ?? '')`, 8000)
+  const byId = (id: string | undefined): (typeof rows)[number] | undefined => rows.find((item) => item.id === id)
+  const day = (iso: string): string => new Date(iso).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' })
+  const rowsOk =
+    byId(failing?.id)?.group === 'erro' &&
+    byId(failing?.id)?.line.startsWith('Imagem · falhou hoje às') === true &&
+    byId(failing?.id)?.error === 'Proporção fora de 4:5 a 1,91:1' &&
+    (byId(failing?.id)?.height ?? 0) > 44 &&
+    byId(carousel?.id)?.line.startsWith('Carrossel · 2 mídias · editado hoje às') === true &&
+    byId(later?.id)?.group === 'agendada' &&
+    byId(later?.id)?.line.startsWith('Imagem · ') === true &&
+    byId(later?.id)?.line.endsWith(`${day(tomorrow.toISOString())} às 10:00`) === true &&
+    byId(done?.id)?.line === `Imagem · ${day(published?.publishedAt ?? new Date().toISOString())}` &&
+    [carousel?.id, later?.id, done?.id].every((id) => byId(id)?.height === 44)
+  // O deslize do nível e a entrada da tela terminados antes do print.
+  await waitFor(contents, `${oneLevel} && document.getAnimations().every((animation) => animation.playState !== 'running')`, 3000)
+  await both('redes-publicacoes')
+  checks['queueGroups'] = {
+    ok: hostSaved && failed?.state === 'erro' && scheduled?.ok === true && published?.state === 'publicada' && groupsShown && rowsOk && quotaText,
+    detail: `armazenamento=${hostSaved}; com erro=${failed?.state ?? '?'}, agendada=${JSON.stringify(scheduled && (scheduled.ok ? scheduled.publication.state : scheduled.error))}, publicada=${published?.state ?? '?'}; grupos e miniaturas=${groupsShown}; linhas ${JSON.stringify(rows)}; cota "${await text(contents, '[data-redes-quota]')}"`,
+  }
+
+  // R4 (artboard 04): "Nova publicação" abre o editor de 300 px à direita e a fila encolhe; duas imagens pelo diálogo
+  // (o falso devolve os arquivos da fixture), a legenda com o contador e o texto alternativo.
+  const listWidth = (): Promise<number> => evaluate<number>(contents, `Math.round(document.querySelector('[data-redes-list]')?.getBoundingClientRect().width ?? 0)`)
+  const widthBefore = await listWidth()
+  await clickSelector(contents, '[data-redes-new]')
+  const opened = await waitFor(contents, `document.querySelector('[data-redes-editor="novo"]') && document.activeElement?.matches('[data-redes-media-add]')`, 8000)
+  ctx.fixtures.chosenRedesMedia = [photoA, photoB]
+  await clickSelector(contents, '[data-redes-media-add]')
+  const added = await waitFor(contents, `document.querySelectorAll('[data-redes-media]').length === 2 && [...document.querySelectorAll('[data-redes-media] img[data-redes-thumb]')].length === 2`, 8000)
+  ctx.fixtures.chosenRedesMedia = []
+  await setValue(contents, '[data-redes-caption]', 'Bastidores da semana na LAP: três reuniões com cliente e um app novo no ar. Obrigado a quem acompanhou com a gente! @equipe.lap #lapsoftware #bastidores')
+  await setValue(contents, '[data-redes-alt]', 'Faixas em azul e branco com o símbolo da LAP')
+  const editor = await evaluate<{ width: number; header: number; type: string; info: string; stats: string; alt: string; save: boolean; schedule: boolean; publish: boolean; note: boolean }>(
+    contents,
+    `(() => {
+      const panel = document.querySelector('[data-redes-editor]')
+      return {
+        width: Math.round(panel.getBoundingClientRect().width), header: Math.round(panel.querySelector('header').getBoundingClientRect().height),
+        type: panel.querySelector('[data-redes-editor-type]')?.textContent ?? '', info: panel.querySelector('[data-redes-media-info]')?.textContent ?? '',
+        stats: panel.querySelector('[data-redes-caption-stats]')?.textContent ?? '', alt: panel.querySelector('[data-redes-alt]')?.value ?? '',
+        save: panel.querySelector('[data-redes-save]')?.disabled === false, schedule: panel.querySelector('[data-redes-schedule]')?.disabled === true, publish: panel.querySelector('[data-redes-publish]')?.disabled === false,
+        note: Boolean(panel.querySelector('[data-redes-s3-note]')),
+      }
+    })()`,
+  )
+  const widthAfter = await listWidth()
+  checks['editorOpen'] = {
+    ok:
+      opened &&
+      added &&
+      editor.width === 300 &&
+      editor.header === 44 &&
+      widthAfter === widthBefore - 300 &&
+      editor.type === 'Carrossel' &&
+      /^JPEG 1080 × 1350 \(4:5\) · \d+ KB · dentro das especificações$/.test(editor.info) &&
+      /^1\d\d\/2\.200 · 2 hashtags · 1 @$/.test(editor.stats) &&
+      editor.alt.startsWith('Faixas') &&
+      editor.save &&
+      editor.schedule &&
+      editor.publish &&
+      !editor.note,
+    detail: `editor aberto com o foco em "Adicionar mídia"=${opened}; duas miniaturas=${added}; ${JSON.stringify(editor)}; fila ${widthBefore} -> ${widthAfter} px`,
+  }
+  await both('redes-editor')
+
+  // CA6: o PNG do diálogo fica de fora, com a razão na nota, e a foto que já está na publicação também; as duas continuam.
+  ctx.fixtures.chosenRedesMedia = [png, photoA]
+  await clickSelector(contents, '[data-redes-media-add]')
+  const refusedPng = await waitFor(
+    contents,
+    `document.querySelector('[data-redes-media-problems]')?.textContent.includes('logo.png: Só JPEG é aceito para imagem') && document.querySelector('[data-redes-media-problems]')?.textContent.includes('bastidores.jpg: já está na publicação') && document.querySelectorAll('[data-redes-media]').length === 2`,
+    8000,
+  )
+  ctx.fixtures.chosenRedesMedia = []
+  checks['editorInvalidMedia'] = { ok: refusedPng, detail: `PNG e a foto repetida recusados na nota, as duas imagens mantidas=${refusedPng} ("${await text(contents, '[data-redes-media-problems]')}")` }
+
+  // CA4 (artboard 04b): sem o armazenamento, a nota e "Agendar"/"Publicar agora" desabilitados; "Salvar rascunho" segue e
+  // grava (o editor reabre pela publicação salva).
+  const hostCleared = !(await api<{ configured: boolean }>('scribe:redes-media-host-clear')).configured
+  const noS3 = await waitFor(
+    contents,
+    `document.querySelector('[data-redes-s3-note]')?.textContent.includes('Imagens precisam do armazenamento de mídia configurado em Configurações › Contas') && document.querySelector('[data-redes-publish]')?.disabled === true && document.querySelector('[data-redes-schedule]')?.disabled === true && document.querySelector('[data-redes-save]')?.disabled === false`,
+    8000,
+  )
+  await both('redes-editor-sem-s3')
+  await clickSelector(contents, '[data-redes-save]')
+  const savedOpen = await waitFor(contents, `(document.querySelector('[data-redes-editor]')?.dataset.redesEditor ?? 'novo') !== 'novo' && document.querySelector('[data-redes-group="rascunho"] [data-redes-group-count]')?.textContent === '2'`, 8000)
+  const savedId = await evaluate<string>(contents, `document.querySelector('[data-redes-editor]')?.dataset.redesEditor ?? ''`)
+  const savedPub = (await list()).find((item) => item.id === savedId)
+  const editingLine = await text(contents, `${row(savedId)} [data-redes-pub-line]`)
+  checks['editorNoS3'] = {
+    ok: hostCleared && noS3 && savedOpen && savedPub?.state === 'rascunho' && savedPub.type === 'carrossel' && savedPub.media.length === 2 && savedPub.media[0]?.altText.startsWith('Faixas') === true && editingLine === 'Carrossel · 2 mídias · editando',
+    detail: `armazenamento removido=${hostCleared}; nota e botões=${noS3}; "Salvar rascunho" -> ${savedPub ? `${savedPub.state} ${savedPub.type} com ${savedPub.media.length} mídias (texto alternativo "${savedPub.media[0]?.altText ?? ''}")` : 'não salvo'}, editor reaberto=${savedOpen}; linha "${editingLine}"`,
+  }
+
+  // Esc com mudança não salva: a confirmação no painel; "Descartar" fecha e a fila fica como estava.
+  await setValue(contents, '[data-redes-caption]', 'Mudança que não vai ficar')
+  await evaluate(contents, "window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })), true")
+  const asked = await waitFor(contents, `document.querySelector('[data-redes-discard-confirm]') && document.querySelector('[data-redes-editor]')`)
+  await clickSelector(contents, '[data-redes-discard-confirm] [data-action="redes-editor-confirm"]')
+  const closed = await waitFor(contents, `!document.querySelector('[data-redes-editor]') && document.activeElement?.matches('[data-redes-new]')`)
+  const kept = (await list()).find((item) => item.id === savedId)?.caption.startsWith('Bastidores da semana') === true
+  checks['editorEsc'] = { ok: asked && closed && kept, detail: `Esc pediu confirmação=${asked}; "Descartar" fechou com o foco em "Nova publicação"=${closed}; legenda salva mantida=${kept}` }
+
+  // CA5 pela tela: o armazenamento de volta, "Editar" no rascunho salvo e "Publicar agora" pelo clique: a linha passa por
+  // Publicando e chega a Publicada.
+  const hostBack = await saveHost()
+  await clickSelector(contents, `${row(savedId)} [data-redes-pub-action="editar"]`)
+  const editOpen = await waitFor(contents, `document.querySelector('[data-redes-editor="${savedId}"]') && document.querySelectorAll('[data-redes-media]').length === 2 && !document.querySelector('[data-redes-s3-note]') && document.querySelector('[data-redes-publish]')?.disabled === false`, 8000)
+  await evaluate(
+    contents,
+    `(() => {
+      window.__smokePubStates = []
+      const record = () => { const state = document.querySelector('${row(savedId)}')?.dataset.redesPubState; if (state && window.__smokePubStates.at(-1) !== state) window.__smokePubStates.push(state) }
+      window.__smokePubObserver?.disconnect()
+      window.__smokePubObserver = new MutationObserver(record)
+      window.__smokePubObserver.observe(document.querySelector('[data-redes-queue]'), { childList: true, subtree: true, attributes: true })
+      record()
+      return true
+    })()`,
+  )
+  const publishedBefore = fake.published().length
+  await clickSelector(contents, '[data-redes-publish]')
+  const publishedRow = await waitFor(contents, `document.querySelector('${row(savedId)}')?.dataset.redesPubState === 'publicada' && document.querySelector('${row(savedId)}')?.closest('[data-redes-group]')?.dataset.redesGroup === 'publicada' && !document.querySelector('[data-redes-editor]')`, 15_000)
+  const states = await evaluate<string[]>(contents, `(() => { window.__smokePubObserver?.disconnect(); return window.__smokePubStates })()`)
+  const publishedPub = (await list()).find((item) => item.id === savedId)
+  checks['publishFromUi'] = {
+    ok: hostBack && editOpen && publishedRow && JSON.stringify(states) === JSON.stringify(['rascunho', 'publicando', 'publicada']) && fake.published().length === publishedBefore + 1 && /^https:\/\/www\.instagram\.com\/p\//.test(publishedPub?.permalink ?? ''),
+    detail: `armazenamento=${hostBack}; "Editar" abriu o rascunho=${editOpen}; estados da linha ${JSON.stringify(states)}; publicada e editor fechado=${publishedRow}; publicadas no falso +${fake.published().length - publishedBefore}; permalink=${publishedPub?.permalink ?? '?'}`,
+  }
+  // "Abrir no Instagram" na publicada: o link vai ao navegador pelo canal de sempre (substituto no smoke).
+  const openedBefore = ctx.fixtures.openedUrls.length
+  await clickSelector(contents, `${row(savedId)} [data-redes-pub-action="abrir"]`)
+  await wait(200)
+  const openedLink = ctx.fixtures.openedUrls.slice(openedBefore).includes(publishedPub?.permalink ?? '?')
+  if (!openedLink) checks['publishFromUi'] = { ok: false, detail: `${checks['publishFromUi']?.detail ?? ''}; "Abrir no Instagram" não abriu ${publishedPub?.permalink ?? '?'}` }
+
+  // CA9 pela tela: a com erro mostra a razão; o foco em "Tentar de novo" deixa as ações à mostra no print; o clique troca o
+  // contêiner morto uma vez e publica.
+  const retryButton = `${failing ? row(failing.id) : '[data-redes-pub="?"]'} [data-redes-pub-action="tentar"]`
+  await evaluate(contents, `(document.querySelector('${retryButton}')?.focus(), true)`)
+  const retryVisible = await waitFor(contents, `getComputedStyle(document.querySelector('${retryButton}').closest('[data-redes-pub-actions]')).opacity === '1'`)
+  await both('redes-publicacao-erro')
+  const postsBefore = mediaPosts()
+  await clickSelector(contents, retryButton)
+  const retried = failing ? await until(failing.id, (item) => item.state === 'publicada') : null
+  const retriedRow = failing ? await waitFor(contents, `document.querySelector('${row(failing.id)}')?.dataset.redesPubState === 'publicada' && !document.querySelector('[data-redes-group="erro"]')`, 8000) : false
+  checks['retryFromUi'] = {
+    ok: retryVisible && retried?.state === 'publicada' && retried.creationId !== failed?.creationId && mediaPosts() - postsBefore === 1 && retriedRow,
+    detail: `ações à mostra no foco=${retryVisible}; "Tentar de novo" -> ${retried?.state ?? '?'} com contêiner novo=${retried?.creationId !== failed?.creationId} (POST /media=${mediaPosts() - postsBefore}); grupo "Com erro" sumiu=${retriedRow}`,
+  }
+
+  // CA8 pela tela: "Editar" no rascunho, a data e a hora de daqui a 1 min (mais a folga para o minuto cheio) e "Agendar"
+  // pelo clique: a linha vai a Agendadas com a hora marcada; "Voltar a rascunho" desfaz.
+  const target = carousel?.id ?? '?'
+  await clickSelector(contents, `${row(target)} [data-redes-pub-action="editar"]`)
+  await waitFor(contents, `document.querySelector('[data-redes-editor="${target}"]')`, 8000)
+  const when = new Date(fake.now() + 90_000)
+  when.setSeconds(0, 0)
+  const pad = (n: number): string => String(n).padStart(2, '0')
+  await setValue(contents, '[data-redes-date]', `${when.getFullYear()}-${pad(when.getMonth() + 1)}-${pad(when.getDate())}`)
+  await setValue(contents, '[data-redes-time]', `${pad(when.getHours())}:${pad(when.getMinutes())}`)
+  const scheduleEnabled = await waitFor(contents, `document.querySelector('[data-redes-schedule]')?.disabled === false`)
+  await clickSelector(contents, '[data-redes-schedule]')
+  const scheduledRow = await waitFor(contents, `document.querySelector('${row(target)}')?.closest('[data-redes-group]')?.dataset.redesGroup === 'agendada' && !document.querySelector('[data-redes-editor]')`, 8000)
+  const scheduledPub = (await list()).find((item) => item.id === target)
+  const scheduledLine = await text(contents, `${row(target)} [data-redes-pub-line]`)
+  await clickSelector(contents, `${row(target)} [data-redes-pub-action="voltar"]`)
+  const unscheduled = await waitFor(contents, `document.querySelector('${row(target)}')?.dataset.redesPubState === 'rascunho'`, 8000)
+  checks['scheduleFromUi'] = {
+    ok: scheduleEnabled && scheduledRow && scheduledPub?.state === 'agendada' && scheduledPub.scheduledAt === when.toISOString() && scheduledLine.includes(`às ${pad(when.getHours())}:${pad(when.getMinutes())}`) && unscheduled,
+    detail: `"Agendar" habilitado com a data=${scheduleEnabled}; em Agendadas=${scheduledRow} (${scheduledPub?.state ?? '?'} ${scheduledPub?.scheduledAt ?? '?'}, esperado ${when.toISOString()}; linha "${scheduledLine}"); "Voltar a rascunho"=${unscheduled}`,
+  }
+
+  // Sair para outra seção com o editor mudado: a mudança vira rascunho com o aviso na tela, e o editor não volta sozinho.
+  await clickSelector(contents, `${row(target)} [data-redes-pub-action="editar"]`)
+  await waitFor(contents, `document.querySelector('[data-redes-editor="${target}"]')`, 8000)
+  await setValue(contents, '[data-redes-caption]', 'Legenda mudada antes de sair da tela')
+  await clickSelector(contents, `${SIDEBAR_REDES} [data-redes-section="comentarios"]`)
+  const leftNotice = await waitFor(contents, `document.querySelector('[data-redes-notice]')?.textContent.includes('As mudanças da publicação que estava aberta foram salvas como rascunho.') && document.querySelector('[data-redes-coming="comentarios"]')`, 8000)
+  const leftSaved = await until(target, (item) => item.caption === 'Legenda mudada antes de sair da tela', 5000)
+  await clickSelector(contents, `${SIDEBAR_REDES} [data-redes-section="publicacoes"]`)
+  const notReopened = await waitFor(contents, `document.querySelector('[data-redes-list]') && !document.querySelector('[data-redes-editor]')`, 8000)
+  await clickSelector(contents, '[data-redes-notice] button')
+  const noticeGone = await waitFor(contents, `!document.querySelector('[data-redes-notice]')`)
+  checks['editorLeave'] = {
+    ok: leftNotice && leftSaved?.caption === 'Legenda mudada antes de sair da tela' && leftSaved.state === 'rascunho' && notReopened && noticeGone,
+    detail: `aviso em Comentários=${leftNotice}; salva como rascunho=${leftSaved ? `${leftSaved.state} "${leftSaved.caption}"` : 'não'}; de volta a Publicações sem o editor=${notReopened}; aviso fechado=${noticeGone}`,
+  }
+
+  // CA13: 224 px sem corte: o @ comprido trunca e o número de não lidos (o do DOM, à mostra aqui) cabe na borda.
+  const fit = await evaluate<{ width: number; over: string[]; truncated: boolean[]; badge: number; aside: number; restored: boolean }>(
+    contents,
+    `(() => {
+      const level = document.querySelector('${SIDEBAR_REDES}')
+      const aside = level.closest('aside').getBoundingClientRect()
+      const labels = [level.querySelector('[data-redes-account-header] span.truncate'), level.querySelector('[data-redes-section="comentarios"] span.truncate')]
+      const original = labels.map((el) => el.firstChild.nodeValue)
+      const badge = level.querySelector('[data-redes-badge="comentarios"]')
+      labels[0].firstChild.nodeValue = '@lap.software.consultoria.contas.de.teste.comprida'
+      labels[1].firstChild.nodeValue = 'Comentários das publicações recentes da conta'
+      badge.hidden = false
+      const count = badge.insertBefore(document.createTextNode('128'), badge.firstChild)
+      const describe = (el) => el.tagName.toLowerCase() + (typeof el.className === 'string' && el.className ? '.' + el.className.trim().split(/\\s+/).slice(0, 3).join('.') : '')
+      const visible = [...level.querySelectorAll('*')].filter((el) => !el.closest('.sr-only') && !el.closest('[hidden]'))
+      const result = {
+        width: Math.round(aside.width),
+        over: visible.filter((el) => el.getBoundingClientRect().right > aside.right + 0.5).map(describe),
+        truncated: labels.map((el) => el.scrollWidth > el.clientWidth),
+        badge: Math.round(badge.getBoundingClientRect().right),
+        aside: Math.round(aside.right),
+      }
+      labels.forEach((el, index) => { el.firstChild.nodeValue = original[index] })
+      count.remove()
+      badge.hidden = true
+      return { ...result, restored: labels.every((el, index) => el.textContent === original[index]) }
+    })()`,
+  )
+  checks['levelFits'] = {
+    ok: fit.width === 224 && fit.over.length === 0 && fit.truncated.every(Boolean) && fit.badge <= fit.aside && fit.badge > 0 && fit.restored,
+    detail: `barra ${fit.width}px; fora da borda ${JSON.stringify(fit.over)}; rótulos truncados ${JSON.stringify(fit.truncated)}; número a ${fit.badge} (borda ${fit.aside}); restaurado=${fit.restored}`,
+  }
+
+  // CA13: com movimento reduzido, entrar e voltar sem deslize (nunca dois níveis).
+  const framesAfterClick = (selector: string): string => `(async () => {
+    document.querySelector(${JSON.stringify(selector)})?.click()
+    let most = 0
+    for (let i = 0; i < 10; i++) {
+      await new Promise((resolve) => requestAnimationFrame(() => resolve()))
+      most = Math.max(most, ${SIDEBAR_LEVELS}.length)
+    }
+    return most
+  })()`
+  const reduced = { back: -1, backed: false, enter: -1, entered: false }
+  contents.debugger.attach('1.3')
+  try {
+    await contents.debugger.sendCommand('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'reduce' }] })
+    reduced.back = await evaluate<number>(contents, framesAfterClick(`${SIDEBAR_REDES} [data-sidebar-back]`))
+    reduced.backed = await waitFor(contents, `document.querySelector('${SIDEBAR_ROOT}') && ${oneLevel}`)
+    reduced.enter = await evaluate<number>(contents, framesAfterClick(`${SIDEBAR_ROOT} [data-nav="redes"]`))
+    reduced.entered = await waitFor(contents, `document.querySelector('${SIDEBAR_REDES}') && ${oneLevel}`)
+  } finally {
+    await contents.debugger.sendCommand('Emulation.setEmulatedMedia', { features: [] }).catch(() => undefined)
+    contents.debugger.detach()
+  }
+  checks['reducedMotion'] = {
+    ok: reduced.back === 1 && reduced.backed && reduced.enter === 1 && reduced.entered,
+    detail: `no máximo ${reduced.back} nível nos 10 quadros depois de voltar (raiz=${reduced.backed}); ${reduced.enter} depois de entrar (nível Redes=${reduced.entered})`,
+  }
+
+  // Termina sem conta (a fila e as cópias vão junto) e sem armazenamento.
+  await api('scribe:redes-remove', { accountId })
+  await api('scribe:redes-media-host-clear')
+  fake.setQuota(0, 50)
+  rmSync(dir, { recursive: true, force: true })
+  if (themeBefore !== 'system') await evaluate(contents, `window.__scribeApi.invoke('scribe:settings-update', { theme: '${themeBefore}' }).then(() => true)`)
+  nativeTheme.themeSource = 'system'
+  win.destroy()
+  console.log(`redes: tela em ${((Date.now() - startedAt) / 1000).toFixed(1)} s`)
+}
+
 /**
  * Contrato 55 (CA26), numa janela que troca de tema no lugar (cada print em claro e escuro, no mesmo estado): a árvore
  * de pastas do servidor falso na ordem D1, com a contagem; ⌘ clique em 3 mensagens ("3 selecionadas" e o resumo), o
@@ -11405,6 +11888,8 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
   const invite: Record<string, Check> = {}
   /** Contrato 69: as contas do Instagram e o armazenamento de mídia. */
   const redes: Record<string, Check> = {}
+  /** Contrato 72: a tela Redes e o nível Redes. */
+  const redesUi: Record<string, Check> = {}
   let analysisMeasured: AnalysisMeasured | null = null
 
   // A fixture da sessão real, reduzida pelo mesmo redutor do app: a mesma dos testes (CA4) e do smoke.
@@ -11808,6 +12293,10 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
     // remove uma senha própria para o CA15). Termina sem conta e sem armazenamento.
     await redesPublicationChecks(ctx, watch, redes)
 
+    // Contrato 72: a tela Redes e o nível Redes da barra lateral, com o Instagram e o S3 falsos; antes do bloqueio. Termina
+    // sem conta e sem armazenamento.
+    await redesUiChecks(ctx, watch, redesUi, screenshots)
+
     // Contrato 22: bloqueio do app, por último (a senha criada vale para o userData inteiro).
     await lockChecks(ctx, watch, lock, screenshots)
 
@@ -11893,6 +12382,10 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
   for (const name of ['connectInvalid', 'connect', 'refresh', 'expired', 'remove', 'mediaHostForm', 'pubDraftInvalid', 'pubImage', 'pubCarousel', 'pubReel', 'pubScheduled', 'pubQuota', 'pubError', 'pubRetryIdempotent', 'pubLocked']) {
     if (!redes[name]) failures.push(`redes ${name}: não executado`)
   }
+  for (const [name, check] of Object.entries(redesUi)) if (!check.ok) failures.push(`redes (tela) ${name}: ${check.detail}`)
+  for (const name of ['navHidden', 'navShown', 'level', 'levelBack', 'emptyState', 'queueGroups', 'editorOpen', 'editorInvalidMedia', 'editorNoS3', 'editorEsc', 'editorLeave', 'publishFromUi', 'scheduleFromUi', 'retryFromUi', 'levelFits', 'reducedMotion']) {
+    if (!redesUi[name]) failures.push(`redes (tela) ${name}: não executado`)
+  }
   for (const [name, check] of Object.entries(invite)) if (!check.ok) failures.push(`convites ${name}: ${check.detail}`)
   for (const name of ['convite-1', 'convite-2', 'convite-3', 'convite-4', 'convite-5', 'convite-6', 'convite-7', 'convite-8', 'convite-9', 'convite-10', 'convite-11', 'convite-estados', 'convite-lista', 'convite-configuracoes', 'convite-regra-1', 'convite-regra-2', 'convite-regra-3', 'convite-sugestao-4', 'convite-sugestao-5']) if (!invite[name]) failures.push(`convites ${name}: não executado`)
   for (const [name, check] of Object.entries(lock)) if (!check.ok) failures.push(`bloqueio ${name}: ${check.detail}`)
@@ -11925,8 +12418,9 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
   // concluído e desfeito em parte, nos dois temas (contrato 56); as 12 telas de pastas, mover, assinatura, regras e o
   // painel "Organizando", nos dois temas (contrato 55); os 17 quadros dos convites, nos dois temas (contrato 63); o cartão
   // "Sugestão — confira" e o editor com a regra de convite, nos dois temas (contrato 64); a seção Instagram com a conta
-  // conectada e a do armazenamento de mídia, nos dois temas (contrato 69).
-  const expectedShots = SCREENS.length * THEMES.length + 147
+  // conectada e a do armazenamento de mídia, nos dois temas (contrato 69); a tela Redes sem conta, o nível Redes, a fila, o
+  // editor, o editor sem o armazenamento e a fila com a publicação com erro, nos dois temas (contrato 72).
+  const expectedShots = SCREENS.length * THEMES.length + 159
   if (screenshots.length !== expectedShots) failures.push(`${screenshots.length} PNGs em vez de ${expectedShots}`)
   for (const shot of screenshots) {
     if (shot.name === MEETING_PROMPT_SHOT) {

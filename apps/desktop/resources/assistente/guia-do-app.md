@@ -81,6 +81,13 @@ A assinatura da conta entra sozinha ao escrever (depois de "-- ", acima do texto
 
 Quando você pede ao Assistente para organizar o email ("organiza meus emails em resolvidos e pendentes"), a área da leitura da conta vira o painel "Organizando": o pedido, Parar, as etapas (Lendo, Decidindo, Movendo), quantas mensagens ele leu e moveu, quantas foram para Resolvidos, Pendentes e outras pastas e uma linha por assunto com o veredito, o motivo e a evidência. Clicar numa linha abre o email, e "Voltar ao andamento" traz o painel de volta. As mensagens movidas somem da lista na hora. Ele lê as 200 mensagens mais recentes da pasta; na dúvida, manda para Pendentes. Ao parar ou terminar, o painel mostra o resumo, "Desfazer as N" (devolve tudo à pasta de origem) e "Abrir no Assistente", e o topo da lista ganha a faixa "O Assistente moveu N mensagens" com Desfazer, que fica até o fim do dia ou até você fechar.
 
+<!-- tela: redes -->
+## Redes
+
+O Instagram profissional (Business ou Creator) conectado em Configurações › Contas › Instagram, com o token gerado no painel da Meta. "Redes" só aparece na barra lateral com uma conta conectada; o clique abre o nível Redes, com cada conta pelo @ e as seções Publicações, Comentários, Mensagens e Métricas (com duas contas ou mais, a seta de cada uma abre e fecha as seções). No pé do nível, "Conectar conta…" leva a Configurações › Contas. Sem conta, a tela mostra "Nenhuma conta conectada" com o botão "Conectar conta".
+
+Em Publicações, a fila da conta agrupada em Com erro, Rascunhos, Agendadas e Publicadas, e a cota da Meta das últimas 24 h no topo. "Nova publicação" abre o editor à direita da fila: as mídias (JPEG para imagem e carrossel de até 10; MP4 ou MOV para Reels), conferidas pelas regras do Instagram antes de entrar; a legenda, com o contador de 2.200 caracteres, hashtags e @; o texto alternativo de cada imagem; e o agendamento opcional. "Salvar rascunho" guarda; "Agendar" e "Publicar agora" só saem com o seu clique. Imagem e carrossel precisam do armazenamento de mídia (S3) configurado em Configurações › Contas; vídeo não. A publicação agendada sai na hora com o app aberto (com o app fechado, na próxima abertura). Com erro, a linha mostra o motivo e "Tentar de novo". Comentários, Mensagens e Métricas ainda estão em preparação.
+
 <!-- tela: configuracoes -->
 ## Configurações
 

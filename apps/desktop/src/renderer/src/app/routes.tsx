@@ -1,6 +1,6 @@
 // Tabela de rotas. Rota nova: id em shared/routes.ts, linha aqui; com `nav`, aparece na barra lateral.
 import type { LucideIcon } from 'lucide-react'
-import { Bot, Mail, NotebookText, Settings, Smartphone, Sparkles } from 'lucide-react'
+import { AtSign, Bot, Mail, NotebookText, Settings, Smartphone, Sparkles } from 'lucide-react'
 import type { ReactElement } from 'react'
 import { matchPath, Navigate } from 'react-router'
 import { ROUTE_PATHS, ROUTE_REDIRECTS, SETTINGS_ROUTE_PATTERN, type RouteId } from '@shared/routes'
@@ -10,6 +10,7 @@ import { EmailScreen } from '../features/email/EmailScreen'
 import { LiveScreen } from '../features/live/LiveScreen'
 import { MeetingDetailScreen } from '../features/meetings/MeetingDetailScreen'
 import { MeetingsScreen } from '../features/meetings/MeetingsScreen'
+import { RedesScreen } from '../features/redes/RedesScreen'
 import { SettingsScreen } from '../features/settings/SettingsScreen'
 import { WhatsAppScreen } from '../features/whatsapp/WhatsAppScreen'
 
@@ -27,6 +28,9 @@ export const APP_ROUTES: AppRoute[] = [
   // Contrato 65: "Email" na raiz da barra lateral, com o número de não lidas; o clique abre o nível com as contas e as
   // pastas (`SidebarStack` e `EmailNav`).
   { id: 'email', path: ROUTE_PATHS.email, element: <EmailScreen />, nav: { label: 'Email', icon: Mail } },
+  // Contrato 72: "Redes" entre Email e Automações, só com uma conta conectada (ou a rota aberta; `Sidebar`), com a soma
+  // dos não lidos; o clique abre o nível com as contas e as seções (`SidebarStack` e `RedesNav`).
+  { id: 'redes', path: ROUTE_PATHS.redes, element: <RedesScreen />, nav: { label: 'Redes', icon: AtSign } },
   // Contrato 23: agentes, tarefas agendadas e execuções, logo abaixo do "Assistente".
   { id: 'automacoes', path: ROUTE_PATHS.automacoes, element: <AutomationsScreen />, nav: { label: 'Automações', icon: Bot } },
   // Contrato 24: só aparece na barra lateral com o serviço do WhatsApp instalado (`Sidebar`).

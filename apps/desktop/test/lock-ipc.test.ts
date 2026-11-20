@@ -323,6 +323,8 @@ describe('canais com o app bloqueado (contrato 22, CA4)', () => {
       'scribe:redes-media-host-test',
       // Contrato 71: as publicações.
       'scribe:redes-media-pick',
+      // Contrato 72: a miniatura da fila e do editor.
+      'scribe:redes-media-thumb',
       'scribe:redes-publication-delete',
       'scribe:redes-publication-publish',
       'scribe:redes-publication-retry',

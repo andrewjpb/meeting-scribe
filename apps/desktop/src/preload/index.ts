@@ -91,17 +91,18 @@ const api: ScribeApi = {
     return ipcRenderer.invoke('scribe:invite-suggest', { accountId: request.accountId, id: request.id, clickToken })
   },
   // Contrato 71: publicar e agendar no Instagram são saída: a mesma ativação viva e um token de clique próprio das redes.
-  redesPublish(id) {
+  // Contrato 72: a edição da tela (`save`) vai junto, para o main salvar só depois de gastar o token (nada espera antes).
+  redesPublish(id, save) {
     if (!navigator.userActivation.isActive) return Promise.resolve({ ok: false, error: REDES_CLICK_MESSAGE })
     const clickToken = crypto.randomUUID()
     ipcRenderer.send('scribe:redes-click', clickToken)
-    return ipcRenderer.invoke('scribe:redes-publication-publish', { id, clickToken })
+    return ipcRenderer.invoke('scribe:redes-publication-publish', { ...(id ? { id } : {}), clickToken, ...(save ? { save } : {}) })
   },
-  redesSchedule(id, at) {
+  redesSchedule(id, at, save) {
     if (!navigator.userActivation.isActive) return Promise.resolve({ ok: false, error: REDES_CLICK_MESSAGE })
     const clickToken = crypto.randomUUID()
     ipcRenderer.send('scribe:redes-click', clickToken)
-    return ipcRenderer.invoke('scribe:redes-publication-schedule', { id, at, clickToken })
+    return ipcRenderer.invoke('scribe:redes-publication-schedule', { ...(id ? { id } : {}), at, clickToken, ...(save ? { save } : {}) })
   },
   on(channel, listener) {
     assertChannel(MAIN_EVENT_CHANNELS, channel)

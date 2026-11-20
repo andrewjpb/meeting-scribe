@@ -2,6 +2,7 @@ import { CircleCheck, TriangleAlert } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { MEDIA_HOST_FIELDS, MEDIA_HOST_PATH_STYLE_DESCRIPTION, MEDIA_HOST_PATH_STYLE_NAME, MEDIA_HOST_SECTION_DESCRIPTION } from '@shared/settings-index'
 import type { MediaHostConfig } from '@shared/redes'
+import { MEDIA_HOST_ANCHOR } from '@shared/routes'
 import { Button } from '../../design/Button'
 import { TextField } from '../../design/Field'
 import { Note } from '../../design/Note'
@@ -84,7 +85,7 @@ export function MediaHostSection() {
 
   const lastTest = status?.lastTest ?? null
   return (
-    <Section title="Armazenamento de mídia (S3)" description={MEDIA_HOST_SECTION_DESCRIPTION}>
+    <Section title="Armazenamento de mídia (S3)" description={MEDIA_HOST_SECTION_DESCRIPTION} anchor={MEDIA_HOST_ANCHOR}>
       {MEDIA_HOST_FIELDS.map((field) => (
         <SettingRow key={field.key} name={field.name} description={field.description} htmlFor={inputId(field.key)}>
           {field.key === 'secretAccessKey' ? (

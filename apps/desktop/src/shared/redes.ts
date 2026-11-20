@@ -4,6 +4,7 @@
 // secreta do armazenamento só existem em claro no main e ficam cifrados no cofre (`accounts/instagram.bin`,
 // `accounts/media-host.bin`); nenhum canal os devolve (`MediaHostStatus.secretSet` é só um booleano).
 import { z } from 'zod'
+import { ALT_TEXT_MAX, CAPTION_MAX, CAROUSEL_MAX } from './redes-rules'
 
 export const REDES = ['instagram'] as const
 export type RedeId = (typeof REDES)[number]
@@ -206,11 +207,9 @@ export interface MediaCandidate {
   problems: string[]
 }
 
-export const CAPTION_MAX = 2200
-export const CAPTION_HASHTAGS_MAX = 30
-export const CAPTION_MENTIONS_MAX = 20
-export const CAROUSEL_MIN = 2
-export const CAROUSEL_MAX = 10
+// Contrato 72: os limites da legenda e do carrossel e as duas regras puras moram em `redes-rules.ts`, que a tela importa
+// sem levar o zod junto (o zod testa `new Function` ao montar os esquemas, e a CSP do renderer recusa e registra).
+export { ALT_TEXT_MAX, CAPTION_HASHTAGS_MAX, CAPTION_MAX, CAPTION_MENTIONS_MAX, CAROUSEL_MAX, CAROUSEL_MIN, captionStats, inferPublicationType, type CaptionStats } from './redes-rules'
 const MIB = 1024 * 1024
 export const IMAGE_MAX_BYTES = 8 * MIB
 export const IMAGE_MIN_WIDTH = 320
@@ -229,49 +228,11 @@ export const PUBLISH_TICK_MS = 30_000
 export const QUOTA_POSTPONE_MS = 3_600_000
 /** A imagem de uma publicação com erro sai do armazenamento 48 h depois. */
 export const MEDIA_CLEANUP_AFTER_ERROR_MS = 48 * 3_600_000
-/** Texto alternativo por imagem. */
-export const ALT_TEXT_MAX = 1000
 
 export const QUOTA_POSTPONED_MESSAGE = 'Cota de publicações das últimas 24 h esgotada; adiada por 1 hora'
 export const MEDIA_HOST_REQUIRED_MESSAGE = 'Configure o armazenamento de mídia em Configurações › Contas'
 /** "Publicar agora" ou "Agendar" sem o clique da pessoa: mora em `ipc.ts`, que o preload importa sem levar o zod junto. */
 export { REDES_CLICK_MESSAGE } from './ipc'
-
-export interface CaptionStats {
-  /** Caracteres como a pessoa conta (pontos de código, um emoji simples é 1). */
-  chars: number
-  hashtags: number
-  mentions: number
-  problems: string[]
-}
-
-const HASHTAG = /(^|[^\p{L}\p{N}_&])#[\p{L}\p{N}_]+/gu
-const MENTION = /(^|[^\p{L}\p{N}_.@])@[A-Za-z0-9._]+/gu
-const thousands = (value: number): string => value.toLocaleString('pt-BR')
-
-/** O contador da legenda e o que passa dos limites da Meta (2.200 caracteres, 30 hashtags, 20 @). */
-export function captionStats(caption: string): CaptionStats {
-  const chars = [...caption].length
-  const hashtags = caption.match(HASHTAG)?.length ?? 0
-  const mentions = caption.match(MENTION)?.length ?? 0
-  const problems: string[] = []
-  if (chars > CAPTION_MAX) problems.push(`Legenda acima de ${thousands(CAPTION_MAX)} caracteres`)
-  if (hashtags > CAPTION_HASHTAGS_MAX) problems.push(`Mais de ${CAPTION_HASHTAGS_MAX} hashtags na legenda`)
-  if (mentions > CAPTION_MENTIONS_MAX) problems.push(`Mais de ${CAPTION_MENTIONS_MAX} menções (@) na legenda`)
-  return { chars, hashtags, mentions, problems }
-}
-
-/** 1 imagem → imagem; 2 a 10 imagens → carrossel; 1 vídeo → Reels. O resto é recusado com a razão. */
-export function inferPublicationType(media: readonly { kind: PublicationMediaKind }[]): PublicationType | { error: string } {
-  const videos = media.filter((item) => item.kind === 'video').length
-  const images = media.length - videos
-  if (media.length === 0) return { error: 'Escolha ao menos uma imagem ou um vídeo' }
-  if (videos > 0 && images > 0) return { error: 'Vídeo não entra em carrossel: publique o vídeo sozinho' }
-  if (videos > 1) return { error: 'Só um vídeo por publicação' }
-  if (videos === 1) return 'reels'
-  if (images > CAROUSEL_MAX) return { error: `Carrossel aceita no máximo ${CAROUSEL_MAX} imagens` }
-  return images === 1 ? 'imagem' : 'carrossel'
-}
 
 /** O que `savePublication` recebe da tela: a ordem final das mídias (as já salvas pelo `localPath`). */
 export interface PublicationSaveInput {
@@ -279,13 +240,17 @@ export interface PublicationSaveInput {
   accountId: string
   caption: string
   mediaPaths: string[]
-  /** Texto alternativo por nome de arquivo (só imagens). */
+  /** Texto alternativo por caminho (o `localPath` da cópia salva ou o do arquivo novo; só imagens). Contrato 72. */
   altTexts: Record<string, string>
   scheduledAt: string | null
 }
 
 export type PublicationSaveResult = { ok: true; publication: Publication } | { ok: false; problems: string[] }
-export type PublicationActionResult = { ok: true; publication: Publication } | { ok: false; error: string }
+/**
+ * Contrato 72: o "Publicar agora" e o "Agendar" com a edição junto (`save`) devolvem, na recusa, os problemas da edição
+ * (`problems`) ou a publicação já salva (`saved`) quando só o publicar/agendar não passou.
+ */
+export type PublicationActionResult = { ok: true; publication: Publication } | { ok: false; error: string; problems?: string[]; saved?: Publication }
 export type PublicationQuotaResult = { ok: true; quota: PublicationQuota } | { ok: false; error: string }
 
 /** O evento `scribe:redes-publications` e a resposta do canal de mesmo nome: a fila inteira de uma conta. */

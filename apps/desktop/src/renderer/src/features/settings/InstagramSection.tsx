@@ -1,6 +1,7 @@
 import { KeyRound, TriangleAlert } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { INSTAGRAM_PREREQUISITE, INSTAGRAM_SECTION_DESCRIPTION, INSTAGRAM_TOKEN_DESCRIPTION } from '@shared/settings-index'
+import { INSTAGRAM_ANCHOR } from '@shared/routes'
 import type { RedesAccount } from '@shared/redes'
 import { Button } from '../../design/Button'
 import { TextField } from '../../design/Field'
@@ -61,7 +62,7 @@ export function InstagramSection() {
   }
 
   return (
-    <Section title="Instagram" description={INSTAGRAM_SECTION_DESCRIPTION}>
+    <Section title="Instagram" description={INSTAGRAM_SECTION_DESCRIPTION} anchor={INSTAGRAM_ANCHOR}>
       <div data-setting-row data-setting-name="Token de acesso" data-setting-description={INSTAGRAM_TOKEN_DESCRIPTION} className="flex flex-wrap items-center justify-between gap-x-6 gap-y-3 py-4">
         <div className="flex min-w-0 flex-[1_1_240px] flex-col gap-0.5">
           <label htmlFor={INSTAGRAM_TOKEN_INPUT} className="text-13 font-medium text-text">

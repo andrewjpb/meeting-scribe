@@ -1,5 +1,5 @@
 // Rotas do renderer. O main só conhece o id; o caminho é detalhe do roteador em memória.
-export type RouteId = 'reunioes' | 'assistente' | 'automacoes' | 'whatsapp' | 'email' | 'gravacao' | 'detalhe' | 'configuracoes'
+export type RouteId = 'reunioes' | 'assistente' | 'automacoes' | 'whatsapp' | 'email' | 'redes' | 'gravacao' | 'detalhe' | 'configuracoes'
 
 export const ROUTE_PATHS: Record<RouteId, string> = {
   reunioes: '/',
@@ -14,6 +14,11 @@ export const ROUTE_PATHS: Record<RouteId, string> = {
    * `emailPath(conta, pasta)`. Sem conta, a tela abre a Caixa de Entrada da primeira.
    */
   email: '/email/:conta?/:pasta?',
+  /**
+   * Redes (contrato 72): a seção de uma conta do Instagram, aberta pelo nível Redes da barra lateral. Padrão do roteador;
+   * o caminho concreto sai de `redesPath(conta, secao)`. Sem conta, a tela abre a primeira (ou o estado vazio).
+   */
+  redes: '/redes/:conta?/:secao?',
   gravacao: '/gravacao',
   /** Padrão do roteador; o caminho concreto sai de `meetingPath(id)`. */
   detalhe: '/reunioes/:id',
@@ -89,6 +94,23 @@ export interface EmailNavigationState {
   missingFolder?: string
 }
 
+/** Destino do item "Redes" da barra lateral (contrato 72) na primeira vez da sessão: a tela abre a primeira conta. */
+export const REDES_ROOT_PATH = '/redes'
+
+/** As seções de cada conta das redes, na ordem do nível Redes (contrato 72); a primeira é a padrão. */
+export const REDES_SECTIONS = ['publicacoes', 'comentarios', 'mensagens', 'metricas'] as const
+export type RedesSection = (typeof REDES_SECTIONS)[number]
+export const DEFAULT_REDES_SECTION: RedesSection = 'publicacoes'
+
+export function isRedesSection(value: unknown): value is RedesSection {
+  return typeof value === 'string' && (REDES_SECTIONS as readonly string[]).includes(value)
+}
+
+/** Caminho da seção de uma conta: `/redes/<id>/publicacoes`. */
+export function redesPath(accountId: string, section: RedesSection = DEFAULT_REDES_SECTION): string {
+  return `${REDES_ROOT_PATH}/${encodeURIComponent(accountId)}/${section}`
+}
+
 export function meetingPath(id: string): string {
   return `/reunioes/${encodeURIComponent(id)}`
 }
@@ -120,6 +142,11 @@ export function settingsPath(tab: SettingsTab, anchor?: string): string {
 
 /** Âncora do bloco "Transcrição" (chave da AssemblyAI), na aba "Gravação". */
 export const TRANSCRIPTION_ANCHOR = 'transcricao'
+
+/** Contrato 72: âncora da seção "Instagram", na aba "Contas" ("Conectar conta…" do nível Redes). */
+export const INSTAGRAM_ANCHOR = 'instagram'
+/** Contrato 72: âncora da seção "Armazenamento de mídia (S3)", na aba "Contas" (a nota do editor de publicação). */
+export const MEDIA_HOST_ANCHOR = 'armazenamento-de-midia'
 
 /** `state` da navegação para Configurações que pede foco num campo depois de rolar (ex.: a chave). */
 export interface SettingsNavigationState {
