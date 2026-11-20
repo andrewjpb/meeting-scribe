@@ -1,5 +1,5 @@
 ---
-status: aprovado-antecipadamente
+status: arquivado
 feature: densidade
 data: 2026-11-20
 semana: 2026-W47

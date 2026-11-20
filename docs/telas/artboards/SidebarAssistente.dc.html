@@ -1,0 +1,102 @@
+<!doctype html>
+<!-- densidade: adensar.mjs -->
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<title>Sidebar, nível Assistente</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0}
+</style>
+</helmet>
+<aside style="display: flex; flex-direction: column; width: 224px; height: 740px; box-sizing: border-box; padding: 0 12px; background: #0a2a5e; color: #ffffff; font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; font-size: 13px; line-height: 20px; -webkit-font-smoothing: antialiased; overflow: hidden">
+
+<div style="flex: none; height: 52px; box-sizing: border-box; padding: 18px 0 0 6px">
+<svg width="52" height="12" viewBox="0 0 52 12" aria-hidden="true" style="display: block"><circle cx="6" cy="6" r="6" fill="rgba(255,255,255,0.22)"></circle><circle cx="26" cy="6" r="6" fill="rgba(255,255,255,0.22)"></circle><circle cx="46" cy="6" r="6" fill="rgba(255,255,255,0.22)"></circle></svg>
+</div>
+
+<div style="flex: none; display: flex; align-items: center; gap: 10px; height: 36px; padding: 0 8px">
+<svg width="28" height="28" viewBox="0 0 100 100" role="img" aria-label="LAP" style="flex: none; display: block"><rect x="0" y="0" width="100" height="100" rx="6" fill="#ffffff"></rect><path d="M 20 25 L 20 75 L 55 75" fill="none" stroke="#0a2a5e" stroke-width="8" stroke-linecap="square" stroke-linejoin="miter"></path><rect x="62" y="58" width="22" height="22" fill="#3b82f6"></rect></svg>
+<p style="margin: 0; display: flex; flex-direction: column; gap: 2px; min-width: 0">
+<span style="font-size: 15px; line-height: 20px; font-weight: 700; letter-spacing: -0.2px; white-space: nowrap">LAP Reuniões</span>
+<span style="font-size: 10px; line-height: 14px; font-weight: 500; letter-spacing: 0.14em; color: #a8b5cc; white-space: nowrap">LAP SOFTWARE</span>
+</p>
+</div>
+
+<nav aria-label="Assistente" style="flex: 1 1 auto; min-height: 0; margin-top: 16px; display: flex; flex-direction: column; overflow: hidden">
+<button type="button" aria-label="Assistente: voltar ao menu" style="flex: none; display: flex; align-items: center; gap: 8px; height: 32px; margin-bottom: 4px; padding: 0 10px; border: 0; border-radius: 4px; background: transparent; color: #ffffff; font: inherit; font-size: 13px; font-weight: 500; text-align: left; cursor: pointer">
+<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true" style="flex: none; display: block"><path d="m15 18-6-6 6-6"></path></svg>
+<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true" style="flex: none; display: block"><path d="M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .963 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.581a.5.5 0 0 1 0 .964L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.963 0zM20 3v4M22 5h-4M4 17v2M5 18H3"></path></svg>
+<span style="flex: 1 1 auto; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">Assistente</span>
+</button>
+<a href="AssistenteVazio.dc.html" style="flex: none; display: flex; align-items: center; gap: 8px; height: 28px; padding: 0 10px; border-radius: 4px; text-decoration: none; font-size: 13px; color: #a8b5cc">
+<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true" style="flex: none; display: block"><path d="M5 12h14M12 5v14"></path></svg>
+<span>Nova conversa</span>
+</a>
+<div role="search" style="flex: none; display: flex; align-items: center; gap: 8px; height: 28px; margin: 4px 0; padding: 0 8px; border-radius: 4px; background: rgba(255,255,255,0.12); color: #a8b5cc">
+<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true" style="flex: none; display: block"><circle cx="11" cy="11" r="8"></circle><path d="m21 21-4.3-4.3"></path></svg>
+<span style="font-size: 13px">Buscar conversas</span>
+</div>
+<sc-for list="{{dias}}" as="dia" hint-placeholder-count="2">
+<section aria-label="{{dia.rotulo}}" style="flex: none; display: flex; flex-direction: column">
+<h2 style="margin: 0; padding: 8px 10px 4px 28px; font-size: 11px; line-height: 16px; font-weight: 500; color: #a8b5cc">{{dia.rotulo}}</h2>
+<ul style="margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 2px">
+<sc-for list="{{dia.conversas}}" as="c" hint-placeholder-count="2">
+<li style="display: flex; align-items: center; height: 28px; padding: 0 4px 0 28px; border-radius: 4px; font-size: 13px; background: {{c.bg}}; color: {{c.fg}}; font-weight: {{c.peso}}">
+<a href="AssistenteConversa.dc.html" aria-current="{{c.current}}" style="min-width: 0; color: inherit; text-decoration: none; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">{{c.titulo}}</a>
+</li>
+</sc-for>
+</ul>
+</section>
+</sc-for>
+</nav>
+
+<div style="flex: none; display: flex; flex-direction: column; margin-top: 4px; padding-top: 4px; border-top: 1px solid rgba(255,255,255,0.2)">
+<div style="display: flex; margin-bottom: 4px">
+<button type="button" aria-keyshortcuts="Meta+Shift+L" style="flex: 1 1 auto; display: flex; align-items: center; gap: 8px; height: 28px; padding: 0 10px; border: 0; border-radius: 4px; background: transparent; color: #a8b5cc; font: inherit; font-size: 13px; text-align: left; cursor: pointer">
+<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true" style="flex: none; display: block"><rect width="18" height="11" x="3" y="11" rx="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>
+<span style="flex: 1 1 auto">Bloquear</span>
+<kbd aria-hidden="true" style="font-family: inherit; font-size: 12px; opacity: 0.8; font-variant-numeric: tabular-nums">⌘⇧L</kbd>
+</button>
+</div>
+<section aria-label="Permissões" style="display: flex; flex-direction: column; padding: 4px; border-top: 1px solid rgba(255,255,255,0.12)">
+<p style="margin: 0; padding-top: 4px; font-size: 11px; line-height: 16px; font-weight: 500; color: #a8b5cc">Permissões</p>
+<div style="display: flex; align-items: center; gap: 8px; height: 28px; font-size: 12px; line-height: 16px">
+<span aria-hidden="true" style="flex: none; width: 6px; height: 6px; background: #3b82f6"></span>
+<span style="flex: 1 1 auto; min-width: 0; white-space: nowrap">Microfone</span>
+<span style="color: #a8b5cc; white-space: nowrap">concedido</span>
+</div>
+<div style="display: flex; align-items: center; gap: 8px; height: 28px; font-size: 12px; line-height: 16px">
+<span aria-hidden="true" style="flex: none; width: 6px; height: 6px; background: #3b82f6"></span>
+<span style="flex: 1 1 auto; min-width: 0; white-space: nowrap">Áudio do sistema</span>
+<span style="color: #a8b5cc; white-space: nowrap">ok</span>
+</div>
+</section>
+</div>
+
+</aside>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"conversa":{"editor":"enum","options":["pendencias","resumo","daily","fornecedor","decisoes","nenhuma"],"default":"pendencias"},"$preview":{"width":224,"height":740}}'>
+class Component extends DCLogic {
+  renderVals() {
+    var aberta = this.props.conversa ?? 'pendencias';
+    function conversa(id, titulo) {
+      var on = id === aberta;
+      return { titulo: titulo, current: on ? 'page' : undefined, bg: on ? 'rgba(255,255,255,0.12)' : 'transparent', fg: on ? '#ffffff' : '#a8b5cc', peso: on ? 500 : 400 };
+    }
+    return {
+      dias: [
+        { rotulo: 'Hoje', conversas: [conversa('pendencias', 'Pendências no WhatsApp'), conversa('resumo', 'Resumo do Planejamento Q1')] },
+        { rotulo: 'Ontem', conversas: [conversa('daily', 'Tarefas da Daily'), conversa('fornecedor', 'Email do fornecedor')] },
+        { rotulo: 'Sexta-feira', conversas: [conversa('decisoes', 'Decisões da semana')] }
+      ]
+    };
+  }
+}
+</script>
+</body>
+</html>

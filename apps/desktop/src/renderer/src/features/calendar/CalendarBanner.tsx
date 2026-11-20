@@ -15,7 +15,7 @@ export function CalendarBanner() {
   const record = useRecordEvent()
   if (!banner || recording) return null
   return (
-    <div className="relative z-10 px-10 pt-3" data-calendar-banner={banner.key}>
+    <div className="relative z-10 px-8 pt-3" data-calendar-banner={banner.key}>
       <Note
         id="calendar-not-recording"
         icon={CalendarClock}

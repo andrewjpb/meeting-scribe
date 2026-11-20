@@ -59,7 +59,7 @@ Tema: atributo `data-theme="light|dark"` em `<html>`. `system` segue o macOS. O 
 
 ## Controles e densidade
 
-Decisão de 2026-11-20: densidade no estilo do painel do Claude Desktop, aprovada pelo Andrew (feature `densidade`, `docs/specs/densidade/spec.md`). Medidas nos componentes de `design/` e nos tokens de `tokens.css` (`--control-h`, `--control-compact-h`, `--row-h`, `--row-compact-h`, `--panel-head-h`, `--page-x`, `--page-top`).
+Decisão de 2026-11-20: densidade no estilo do painel do Claude Desktop, aprovada pelo Andrew (feature `densidade`, `docs/specs/_archive/densidade/spec.md`). Medidas nos componentes de `design/` e nos tokens de `tokens.css` (`--control-h`, `--control-compact-h`, `--row-h`, `--row-compact-h`, `--panel-head-h`, `--page-x`, `--page-top`).
 
 - Botão (`Button`) de 32 px, `px-3`, gap 8, rótulo 13/500; um tamanho só. `ActionButton` (só ícone) continua com 28.
 - Campo (`TextField`, `Select`) de 32 px, `px-2.5`. Abas (`Tabs`) de 32, com 20 entre elas. Segmentado (`Segmented`) de 28, `px-3`. Alternador (`Switch`) de 36×20 com botão de 14.
@@ -82,7 +82,7 @@ Decisão de 2026-11-20: densidade no estilo do painel do Claude Desktop, aprovad
 - Barra lateral de 224 px (`--sidebar-width`) em `--side-bg` nos dois temas. De cima para baixo: espaço dos botões da janela; bloco da marca; a coluna de navegação em pilha (abaixo); no rodapé, Bloquear, o aviso de versão e o bloco "Permissões" com duas linhas (quadrado de estado de 6 px + nome + estado em `--side-muted`). A marca e o rodapé ficam parados; só a coluna do meio troca de nível.
 - Faixa superior de 52 px arrastável; controles dentro dela com `no-drag`.
 
-**Barra lateral em pilha.** Navegação em dois níveis, no máximo, como os Ajustes do iOS. Nenhuma linha de um nível de seção abre um terceiro nível. Medidas densas, no ritmo do painel lateral do Claude Desktop (decisão de 2026-11-20, aprovada pelo Andrew com o mockup `docs/specs/densidade/mockups/SidebarDensa.dc.html`, contrato 79): as alturas moram num lugar só, `--side-row` (32 px), `--side-subrow` (28 px) e `--side-indent` (28 px) em `design/base.css`, e toda linha da barra (inclusive o nível Redes) as cita em vez de repetir o número.
+**Barra lateral em pilha.** Navegação em dois níveis, no máximo, como os Ajustes do iOS. Nenhuma linha de um nível de seção abre um terceiro nível. Medidas densas, no ritmo do painel lateral do Claude Desktop (decisão de 2026-11-20, aprovada pelo Andrew com o mockup `docs/specs/_archive/densidade/mockups/SidebarDensa.dc.html`, contrato 79): as alturas moram num lugar só, `--side-row` (32 px), `--side-subrow` (28 px) e `--side-indent` (28 px) em `design/base.css`, e toda linha da barra (inclusive o nível Redes) as cita em vez de repetir o número.
 
 - **Raiz** (`<nav aria-label="Navegação principal">`): Reuniões, Assistente, Email, Automações, WhatsApp (só com o serviço instalado) e Configurações. Itens de 32 px (`--side-row`), 2 px entre eles, ícone 16 a 8 px do rótulo 13 em `--side-muted`, 16 px entre a marca e a lista; o ativo com fundo `--side-active`, texto `--side-text` e `aria-current="page"`. À direita do Email, o total de não lidas das Caixas de Entrada carregadas, 12 px tabular `--side-text`, que some em zero.
 - **Nível de seção**: só Email, Configurações e Assistente têm nível próprio (`<nav>` com o nome da seção); Automações e WhatsApp são itens planos. O nível ocupa a coluna inteira entre a marca e o rodapé, e só a lista dele rola.
