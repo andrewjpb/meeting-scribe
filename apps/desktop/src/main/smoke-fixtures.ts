@@ -7,7 +7,7 @@ import type { EmailNotice } from './email/notify'
 import { execFile, spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { EventEmitter } from 'node:events'
-import { mkdirSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:http'
 import { join } from 'node:path'
 import { gzipSync } from 'node:zlib'
@@ -198,6 +198,12 @@ export interface SmokeFixtures {
   meetingPrompt: { windows: BrowserWindow[] }
   /** Contrato 49: o arquivo de onde o `lap-mic-watch` falso tira as linhas que escreve (o smoke acrescenta nele). */
   micWatch: { file: string }
+  /**
+   * Contrato 62 (CA24): o `lap-calendar` falso (test/fixtures/fake-lap-calendar.mjs). O smoke escreve o estado dele em
+   * `statePath` (o falso relê a cada requisição; ausente = `full`, "Trabalho" e "Feriados") e lê o que ele recebeu em
+   * `log()`, uma requisição por item.
+   */
+  macCalendar: { statePath: string; logPath: string; log(): Record<string, unknown>[] }
   /** Notificações do WhatsApp (contrato 40): as substitutas, o foco fingido e o número do Dock. */
   whatsappNotify: SmokeWhatsAppNotify
   /** Contrato 43: o servidor de email falso (IMAP, SMTP e imagens remotas em memória). */
@@ -343,6 +349,15 @@ export function createSmokeUpdates(currentVersion: string): SmokeUpdates {
 
 const reply = (status: number, body: unknown): FetchResponse => ({ status, text: () => Promise.resolve(JSON.stringify(body)) })
 
+/** Contrato 62 (CA24): as requisições que o `lap-calendar` falso recebeu, uma por linha do `.jsonl`. */
+function readFakeCalendarLog(file: string): Record<string, unknown>[] {
+  if (!existsSync(file)) return []
+  return readFileSync(file, 'utf8')
+    .split('\n')
+    .filter((line) => line.trim() !== '')
+    .map((line) => JSON.parse(line) as Record<string, unknown>)
+}
+
 export function createSmokeFixtures(currentVersion: string, userDataDir: string): SmokeFixtures {
   const fixtures: SmokeFixtures = {
     updates: createSmokeUpdates(currentVersion),
@@ -373,6 +388,11 @@ export function createSmokeFixtures(currentVersion: string, userDataDir: string)
     calendar: { notifications: [] },
     meetingPrompt: { windows: [] },
     micWatch: { file: join(userDataDir, 'mic-watch-falso.jsonl') },
+    macCalendar: {
+      statePath: join(userDataDir, 'lap-calendar-falso.json'),
+      logPath: join(userDataDir, 'lap-calendar-falso.jsonl'),
+      log: () => readFakeCalendarLog(join(userDataDir, 'lap-calendar-falso.jsonl')),
+    },
     whatsappNotify: { notifications: [], focusedContentsId: null, badges: [] },
     email: createFakeEmail(),
     emailNotify: { notifications: [], focusedContentsId: null },

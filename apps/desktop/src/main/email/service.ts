@@ -635,6 +635,12 @@ export interface EmailService {
   /** Contrato 45: o corpo de uma mensagem se já foi baixado; `null` se não (nunca baixa). */
   cachedBody(accountId: string, message: Pick<EmailMessage, 'mailbox' | 'id' | 'uid'>): Promise<EmailBody | null>
   /**
+   * Contrato 62 (CA6): o convite guardado no corpo de uma mensagem já aberta, com a conta (sem a senha), para o serviço
+   * de convites. Os mesmos passos do `sendInviteReply` (a mensagem fora dos enviados, o corpo do cache); nunca baixa
+   * nada nem abre conexão. `null`: sem conta, sem mensagem, sem corpo guardado ou sem convite.
+   */
+  inviteSource(accountId: string, id: string): Promise<{ account: EmailAccount; invite: EmailInvite; messageId: string } | null>
+  /**
    * Contrato 45 (CA7): `UID SEARCH` no servidor IMAP, em todas as pastas do `LIST` abertas só para leitura (`EXAMINE`),
    * as `limit` mais recentes no total. Nada é gravado no cache e nenhuma flag muda. POP3 não tem busca no servidor.
    */
@@ -2092,6 +2098,15 @@ export function createEmailService(deps: EmailServiceDeps): EmailService {
     async cachedBody(accountId, message) {
       if (!runtimes.has(accountId)) return null
       return store.body(accountId, bodyKey(message)).catch(() => null)
+    },
+
+    async inviteSource(accountId, id) {
+      const rt = runtimes.get(accountId)
+      if (!rt || rt.removed) return null
+      const message = (await findMessage(accountId, id, true).catch(() => null))?.message
+      if (!message || (!isInbox(message) && (message.uid === null || message.mailbox === rt.sentMailbox))) return null
+      const invite = (await store.body(accountId, bodyKey(message)).catch(() => null))?.invite
+      return invite ? { account: publicAccount(rt.account), invite, messageId: message.id } : null
     },
 
     async searchServer(accountId, query, limit) {

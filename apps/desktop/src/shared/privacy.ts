@@ -5,6 +5,8 @@ import type { PrivacyPane } from './ipc'
 export const PRIVACY_PANE_URLS: Readonly<Record<PrivacyPane, string>> = {
   microphone: 'x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone',
   'audio-capture': 'x-apple.systempreferences:com.apple.preference.security?Privacy_AudioCapture',
+  // Contrato 62 (R8): "Abrir Ajustes" do cartão do convite sem acesso ao Calendário.
+  calendars: 'x-apple.systempreferences:com.apple.preference.security?Privacy_Calendars',
 }
 
 export function privacyPaneUrl(pane: unknown): string | null {

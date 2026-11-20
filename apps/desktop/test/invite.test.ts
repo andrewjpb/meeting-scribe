@@ -1004,7 +1004,8 @@ describe('anonimização (CA14)', () => {
 
   it('todo endereço das fixtures é example.com, example.org ou example.net (salvo o UID do Google)', async () => {
     const files = readdirSync(FIXTURES)
-    expect(files.length).toBe(14)
+    // 14 do contrato 59 e as 5 `servico-*.ics` do contrato 62.
+    expect(files.length).toBe(19)
     for (const name of files) {
       const path = join(FIXTURES, name)
       expect(statSync(path).isFile()).toBe(true)

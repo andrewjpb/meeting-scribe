@@ -179,6 +179,15 @@ export interface AppSettings {
   /** Contrato 43: as contas de email recolhidas na barra lateral (as outras aparecem abertas, com as pastas). */
   emailCollapsed: string[]
   /**
+   * Contrato 62 (R9): a agenda do Calendário do Mac onde os convites entram por padrão; `null` é a padrão do
+   * Calendário. O main não confere se ainda existe ao gravar: o serviço cai para a padrão quando ela some.
+   */
+  inviteCalendarId: string | null
+  /** Contrato 62 (R9): "Pôr na agenda ao aceitar" começa ligado no cartão (menos na conta que já põe sozinha, R5b). */
+  inviteAddOnAccept: boolean
+  /** Contrato 62 (R9, R11): "Sugerir evento quando o email não tem convite"; quem lê é o contrato 64. */
+  inviteSuggest: boolean
+  /**
    * Contrato 57: os conectores do claude.ai que o agente do chat pode usar, pelo nome ("Notion"), com a política de cada
    * ferramenta. Vazio por padrão: conector fora daqui (inclusive o que aparecer depois na conta) está desligado.
    */
@@ -240,6 +249,9 @@ export const DEFAULT_SETTINGS: Readonly<AppSettings> = Object.freeze({
   emailPollMinutes: 5,
   emailNotifications: true,
   emailCollapsed: Object.freeze([]) as unknown as string[],
+  inviteCalendarId: null,
+  inviteAddOnAccept: true,
+  inviteSuggest: false,
   claudeConnectors: Object.freeze({}) as Record<string, ClaudeConnectorPrefs>,
 })
 

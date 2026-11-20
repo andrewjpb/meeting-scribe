@@ -9,6 +9,7 @@ import type { BrandingInfo, BrandLogoChoice } from './branding'
 import type { LockResponse, LockStatus } from './lock'
 import type { EmailAccountInput, EmailAccountStatus, EmailAddResult, EmailAttachmentRequest, EmailAttachmentSaveResult, EmailAttachmentsResult, EmailAttachPickResult, EmailAutoconfig, EmailBodyResult, EmailFolder, EmailFolderDeleteResult, EmailFolderPathResult, EmailFoldersResult, EmailMessage, EmailMoveResult, EmailOpenFolderResult, EmailSendRequest, EmailSendResult, EmailTestResult, InviteReplySendRequest, InviteReplySendResult } from './email'
 import type { EmailSignature, EmailSignatureResult } from './email-signature'
+import type { InviteAccessResult, InviteActionResult, InviteAddRequest, InviteCalendarsResult, InviteMessageRequest, InviteOpenIcsResult, InviteStateResult } from './invite-state'
 import type { EmailRule, EmailRulePreviewResult, EmailRuleRunResult, EmailRulesGetResult, EmailRulesSetResult } from './email-rules'
 import type { EmailBatchGetResult, EmailBatchUndoResult, EmailOrganizeEvent, EmailOrganizeStateResult } from './email-organize'
 import type { KeySaveResult, KeyStatus, MicAccess, ModelCheck, ModelsResult } from './assemblyai'
@@ -74,7 +75,7 @@ export interface CspViolation {
 export type CaptureMode = 'real' | 'synthetic'
 
 /** Painéis de privacidade dos Ajustes do Sistema que o app abre. */
-export type PrivacyPane = 'microphone' | 'audio-capture'
+export type PrivacyPane = 'microphone' | 'audio-capture' | 'calendars'
 
 /** renderer -> main, com resposta (`__scribeApi.invoke` / `ipcMain.handle`). */
 export interface InvokeChannels {
@@ -404,6 +405,17 @@ export interface InvokeChannels {
    * 61); nunca regra, tarefa ou Assistente. Não fica em Enviados. Falha volta tipada, sem exceção.
    */
   'scribe:invite-reply': { request: InviteReplySendRequest; response: InviteReplySendResult }
+  /**
+   * Contrato 62: o estado do cartão do convite e o Calendário do Mac. O renderer manda só a conta e a mensagem; o
+   * convite sai do corpo guardado no main. Gravar é local e o app só mexe no evento que ele criou (sem token de clique).
+   */
+  'scribe:invite-state': { request: InviteMessageRequest; response: InviteStateResult }
+  'scribe:invite-add': { request: InviteAddRequest; response: InviteActionResult }
+  'scribe:invite-update': { request: InviteMessageRequest; response: InviteActionResult }
+  'scribe:invite-remove': { request: InviteMessageRequest; response: InviteActionResult }
+  'scribe:invite-calendars': { request: undefined; response: InviteCalendarsResult }
+  'scribe:invite-request-access': { request: undefined; response: InviteAccessResult }
+  'scribe:invite-open-ics': { request: InviteMessageRequest; response: InviteOpenIcsResult }
   /** Contrato 43: "Testar conexão" com os dados do formulário (recebimento e envio); nada é gravado. */
   'scribe:email-test': { request: EmailAccountInput; response: EmailTestResult }
   /** Contrato 43: o clipe do composer abre o seletor do macOS; os arquivos voltam para a lista de anexos (nada é enviado). */
@@ -759,6 +771,13 @@ const INVOKE: Record<InvokeChannel, true> = {
   'scribe:email-delete': true,
   'scribe:email-send': true,
   'scribe:invite-reply': true,
+  'scribe:invite-state': true,
+  'scribe:invite-add': true,
+  'scribe:invite-update': true,
+  'scribe:invite-remove': true,
+  'scribe:invite-calendars': true,
+  'scribe:invite-request-access': true,
+  'scribe:invite-open-ics': true,
   'scribe:email-test': true,
   'scribe:email-attach-pick': true,
   'scribe:email-remote-images': true,
@@ -1060,6 +1079,14 @@ export const WHEN_LOCKED: Readonly<Record<InvokeChannel, LockedPolicy>> = Object
   'scribe:email-send': 'refused',
   // Contrato 61: a resposta de convite é envio, como o "Enviar".
   'scribe:invite-reply': 'refused',
+  // Contrato 62 (N6): o cartão não aparece bloqueado, e a agenda também não muda.
+  'scribe:invite-state': 'refused',
+  'scribe:invite-add': 'refused',
+  'scribe:invite-update': 'refused',
+  'scribe:invite-remove': 'refused',
+  'scribe:invite-calendars': 'refused',
+  'scribe:invite-request-access': 'refused',
+  'scribe:invite-open-ics': 'refused',
   // Contrato 43: o teste da conta, o clipe do composer e as imagens remotas, como o resto do email.
   'scribe:email-test': 'refused',
   'scribe:email-attach-pick': 'refused',

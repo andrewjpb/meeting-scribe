@@ -32,6 +32,13 @@ interface Seed {
   cc?: EmailAddress[]
   /** Contrato 43 (CA8 e CA9): anexos (nome e conteúdo em texto). */
   attachments?: { name: string; type: string; content: string }[]
+  /** Contrato 62 (CA24): o convite, como o Google manda (N10): a parte `text/calendar; method=…` e o anexo `invite.ics`. */
+  calendar?: FakeInviteCalendar
+}
+
+export interface FakeInviteCalendar {
+  method: 'REQUEST' | 'CANCEL' | 'REPLY'
+  content: string
 }
 
 /** O anexo da mensagem do Financeiro: o smoke confere que o arquivo salvo tem exatamente isto. */
@@ -106,6 +113,12 @@ function rfc822(seed: Seed, date: Date, messageId: string): Buffer {
     'MIME-Version: 1.0',
   ]
   const part = (type: string, body: string): string => `Content-Type: ${type}; charset=utf-8\r\nContent-Transfer-Encoding: base64\r\n\r\n${Buffer.from(body, 'utf8').toString('base64')}`
+  if (seed.calendar) {
+    const base64 = Buffer.from(seed.calendar.content, 'utf8').toString('base64')
+    const calendar = `--m1\r\nContent-Type: text/calendar; charset=utf-8; method=${seed.calendar.method}\r\nContent-Transfer-Encoding: base64\r\n\r\n${base64}\r\n`
+    const file = `--m1\r\nContent-Type: application/ics; name="invite.ics"\r\nContent-Disposition: attachment; filename="invite.ics"\r\nContent-Transfer-Encoding: base64\r\n\r\n${base64}\r\n`
+    return Buffer.from(`${head.join('\r\n')}\r\nContent-Type: multipart/mixed; boundary="m1"\r\n\r\n--m1\r\n${part('text/plain', seed.text)}\r\n${calendar}${file}--m1--\r\n`)
+  }
   if (seed.attachments?.length) {
     const files = seed.attachments.map((item) => `--m1\r\nContent-Type: ${item.type}; name="${item.name}"\r\nContent-Disposition: attachment; filename="${item.name}"\r\nContent-Transfer-Encoding: base64\r\n\r\n${Buffer.from(item.content, 'utf8').toString('base64')}\r\n`)
     return Buffer.from(`${head.join('\r\n')}\r\nContent-Type: multipart/mixed; boundary="m1"\r\n\r\n--m1\r\n${part('text/plain', seed.text)}\r\n${files.join('')}--m1--\r\n`)
@@ -188,7 +201,7 @@ export interface FakeEmail {
   /** Contrato 61: posto, o SMTP espera essa promessa antes de registrar em `sent` e de responder (o "Enviando"). */
   smtpHold: (() => Promise<void>) | null
   /** Um email novo na INBOX, avisado pelo "IDLE". */
-  deliver(input: { from: EmailAddress; subject: string; text: string; cc?: EmailAddress[]; attachments?: Seed['attachments'] }): Promise<void>
+  deliver(input: { from: EmailAddress; subject: string; text: string; cc?: EmailAddress[]; attachments?: Seed['attachments']; calendar?: FakeInviteCalendar }): Promise<void>
   /** Imagens remotas pedidas pelo "Carregar imagens". */
   imageRequests: string[]
   fetchImage(url: string): Promise<{ type: string; bytes: Uint8Array } | null>
@@ -482,7 +495,7 @@ export function createFakeEmail(now: () => number = Date.now, options: FakeEmail
       if (config.pass === SMOKE_EMAIL_WRONG_PASSWORD) throw new SmtpError('auth')
     },
     async deliver(input) {
-      add({ from: input.from, subject: input.subject, text: input.text, minutesAgo: 0, seen: false, ...(input.cc ? { cc: input.cc } : {}), ...(input.attachments ? { attachments: input.attachments } : {}) }, now())
+      add({ from: input.from, subject: input.subject, text: input.text, minutesAgo: 0, seen: false, ...(input.cc ? { cc: input.cc } : {}), ...(input.attachments ? { attachments: input.attachments } : {}), ...(input.calendar ? { calendar: input.calendar } : {}) }, now())
       for (const listener of listeners) listener()
     },
     async fetchImage(url) {

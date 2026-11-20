@@ -250,5 +250,6 @@ Nenhum outro arquivo. Em particular: nada no renderer, no `preload` além do que
 - **E5 — Timeout no `create` não adota evento.** Se ficou gravado, ele aparece como "Já estava na agenda", sem `event`. Prefere-se perder o controle a correr o risco de apagar um evento da pessoa.
 - **E6 — `title-start` só é adotado como do app na mesma agenda do registro** (o último passo do N3); em qualquer outra agenda é a cópia de outra pessoa ou conta.
 - **E7 — `refresh` no máximo a cada 60 s ao abrir o cartão, sempre antes de criar; reconciliação de fundo a cada 5 min, 20 eventos por vez, só com acesso já concedido.**
+- **Salvaguarda da devolução (decisão do coordenador, 19/11/2026).** O D0 não respondeu se o `calendarItemExternalIdentifier` é o UID do convite. Por isso um `title-start` na agenda do registro só é adotado como evento do app quando o `externalIdentifier` do achado é igual ao que o app gravou no `event` (inclusive os dois `null`). Fora disso o achado é tratado como da conta: o estado sai "Já estava na agenda" (`account`, `merged: false`), a linha perde o `event` e o app nunca atualiza nem tira esse evento (`not-owned`). Isso aperta o E6 e o último passo do N3 a favor do invariante "o app nunca mexe em evento que não criou".
 
 Conferido com os contratos 61–64 em 19/11/2026.

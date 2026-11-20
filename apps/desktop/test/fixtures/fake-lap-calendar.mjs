@@ -15,6 +15,8 @@
 //   - Eventos criados aqui: `fake-ev-<n>`, `fake-item-<n>`, `fake-ext-<n>` (diferente do UID, como no EventKit) e
 //     `origin: "app"`.
 // - `FAKE_LAP_CALENDAR_LOG=<arquivo.jsonl>`: cada requisição recebida, uma por linha.
+// - Cenário (contrato 62): `FAKE_LAP_CALENDAR_DETACHED_IDS=1` dá a cada ocorrência destacada (`detached`) um
+//   `eventIdentifier` próprio (`<o da série>-<ocorrência>`), como o EventKit; os ids da série continuam valendo.
 // - Falhas: `FAKE_LAP_CALENDAR_HANG=<cmd>` (não responde mais), `FAKE_LAP_CALENDAR_EXIT_ON=<cmd>` (sai com 1 ao
 //   receber), `FAKE_LAP_CALENDAR_GARBAGE=<cmd>` (responde uma linha fora do formato).
 //
@@ -59,6 +61,7 @@ const LOG_FILE = process.env['FAKE_LAP_CALENDAR_LOG']
 const HANG = process.env['FAKE_LAP_CALENDAR_HANG']
 const EXIT_ON = process.env['FAKE_LAP_CALENDAR_EXIT_ON']
 const GARBAGE = process.env['FAKE_LAP_CALENDAR_GARBAGE']
+const DETACHED_IDS = process.env['FAKE_LAP_CALENDAR_DETACHED_IDS'] === '1'
 
 // --- Estado ------------------------------------------------------------------------------------------------------
 
@@ -308,7 +311,8 @@ function occurrences(event) {
     const occurrence = formatMs(ms, event.allDay)
     if (event.removed.includes(occurrence)) continue
     const detached = event.detached[occurrence]
-    out.push({ occurrence, event: detached ? { ...event, ...detached } : { ...event, start: occurrence, end: formatMs(ms + duration, event.allDay) } })
+    const own = detached && DETACHED_IDS && event.eventIdentifier ? { eventIdentifier: `${event.eventIdentifier}-${occurrence.replace(/[^0-9]/g, '')}` } : {}
+    out.push({ occurrence, event: detached ? { ...event, ...detached, ...own } : { ...event, start: occurrence, end: formatMs(ms + duration, event.allDay) } })
   }
   return out
 }

@@ -51,6 +51,9 @@ const lockAfterMinutesSchema = z.literal(LOCK_AFTER_MINUTES)
 const calendarIdList = z.array(z.string().min(1).max(1024).refine(hasNoControlChar)).max(CALENDAR_IDS_MAX)
 const calendarIdsSchema = z.object({ google: calendarIdList.nullable(), microsoft: calendarIdList.nullable() })
 
+/** Contrato 62 (R9): a agenda padrão dos convites, um id do Calendário do Mac, sem caractere de controle. */
+const inviteCalendarIdSchema = z.string().min(1).max(1024).refine(hasNoControlChar)
+
 /** Contrato 43: as contas de email recolhidas na barra lateral (só ids de conta). */
 const emailCollapsedSchema = z.array(z.string().regex(EMAIL_ACCOUNT_ID_PATTERN)).max(50)
 
@@ -134,6 +137,9 @@ const lenientSchema = z.object({
   emailPollMinutes: z.literal(EMAIL_POLL_MINUTES).catch(D.emailPollMinutes),
   emailNotifications: z.boolean().catch(D.emailNotifications),
   emailCollapsed: emailCollapsedSchema.catch([]),
+  inviteCalendarId: inviteCalendarIdSchema.nullable().catch(D.inviteCalendarId),
+  inviteAddOnAccept: z.boolean().catch(D.inviteAddOnAccept),
+  inviteSuggest: z.boolean().catch(D.inviteSuggest),
   claudeConnectors: lenientConnectorsSchema,
 })
 
@@ -181,6 +187,9 @@ const patchSchema = z
     emailPollMinutes: z.literal(EMAIL_POLL_MINUTES),
     emailNotifications: z.boolean(),
     emailCollapsed: emailCollapsedSchema,
+    inviteCalendarId: inviteCalendarIdSchema.nullable(),
+    inviteAddOnAccept: z.boolean(),
+    inviteSuggest: z.boolean(),
     claudeConnectors: claudeConnectorsSchema,
   })
   .partial()
