@@ -38,7 +38,9 @@
 //   (`emailAnswer`): pendentes pelo `EMAILS.md`, rascunho de resposta, lembrete de um email e a busca pelas
 //   ferramentas do app (`lap-ferramenta`: `buscar_emails` e, achado só no servidor, `ler_email`). Contrato 56: "organiza
 //   … em Resolvidos" pede `listar_pastas`, depois `criar_pasta` "Resolvidos" e `mover_emails` do email do assunto pedido
-//   (ou do primeiro do `EMAILS.md`) para lá, e responde contando.
+//   (ou do primeiro do `EMAILS.md`) para lá, e responde contando. Contrato 76: "escreva um post" lê o `REDES.md` (se
+//   estiver na pasta) e propõe o bloco `instagram-rascunho` para a conta dele; "liste a fila do instagram" pede a
+//   ferramenta `listar_publicacoes_instagram` e responde com as legendas do resultado.
 // - internet (contrato 26), em qualquer chat (agente ou Assistente), com "pesquise" no pedido: `WebSearch` (pedindo
 //   permissão, como o adaptador) com resultados inventados no `tool_call_update` ("Título (url)", sem rede nenhuma);
 //   abre o primeiro resultado (`WebFetch`) e tenta abrir um endereço montado com o título da reunião na consulta (que o
@@ -325,6 +327,20 @@ async function assistantAnswer(question, cwd, read) {
     const hour = Number(/(\d{1,2}) ?h\b/i.exec(question)?.[1] ?? 9)
     const days = /depois de amanh[ãa]/i.test(question) ? 2 : 1
     return `Mudo o lembrete para ${days === 2 ? 'depois de amanhã' : 'amanhã'} às ${String(hour).padStart(2, '0')}:00. O texto continua o mesmo.${fence({ tipo: 'lembrete-editar', id: postpone[1], quando: dayAt(days, hour) })}`
+  }
+  // Contrato 76: o Instagram (o post vira cartão; a fila, pela ferramenta do app).
+  if (/^\[Resultado da ferramenta listar_publicacoes_instagram\]/.test(question)) {
+    await read('PUBLICACOES-INSTAGRAM.md')
+    const rows = readFileSync(join(cwd, 'PUBLICACOES-INSTAGRAM.md'), 'utf8')
+      .split('\n')
+      .filter((line) => line.startsWith('- id: '))
+    return `Na fila do Instagram: ${rows.length} publicação(ões). ${rows.map((line) => `«${/ · legenda: "(.*?)"/.exec(line)?.[1] ?? ''}» (${/ · estado: (\S+)/.exec(line)?.[1] ?? '?'})`).join('; ')}`
+  }
+  if (/liste a fila do instagram/i.test(question)) return `Vou ver a fila.\n\n\`\`\`lap-ferramenta\n${JSON.stringify({ ferramenta: 'listar_publicacoes_instagram' })}\n\`\`\``
+  if (/escreva um post/i.test(question)) {
+    const account = has('REDES.md') ? (await read('REDES.md'), /^## (@\S+)/m.exec(readFileSync(join(cwd, 'REDES.md'), 'utf8'))?.[1]) : undefined
+    const legenda = 'Ontem foi dia de lançamento por aqui: o LAP Reuniões ganhou versão nova, com resumo automático e lembretes direto do WhatsApp.\n\nObrigado a todo mundo que testou com a gente nas últimas semanas! #lapsoftware #lancamento'
+    return `Montei a legenda com o tom das últimas publicações. Confira no cartão.${fence({ tipo: 'instagram-rascunho', ...(account ? { conta: account } : {}), legenda })}`
   }
   const drop = /apague o lembrete ([\w-]+)/i.exec(question)
   if (drop) {

@@ -479,6 +479,11 @@
     background: linear-gradient(to bottom, transparent, var(--side-bg));
   }
 
+  /* Contrato 72: o mesmo esmaecimento numa lista da área principal (a fila de publicações), no fundo da tela. */
+  .scroll-fade-page {
+    background: linear-gradient(to bottom, transparent, var(--bg));
+  }
+
   /*
    * Entrar numa seção: o nível novo vem da direita e a raiz recua 30% sumindo; voltar faz o caminho inverso. O nível
    * mede a coluna sem o recuo de 12 px (`--space-3`): o deslize soma o recuo para sair inteiro pela borda.

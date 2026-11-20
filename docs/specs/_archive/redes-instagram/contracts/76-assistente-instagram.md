@@ -1,0 +1,20 @@
+# Contrato 76 — Assistente e Instagram
+
+Feature `redes-instagram` · Wave 4 · Depende de: 71, 72 (e 73 para comentários no contexto; se o 73 não estiver commitado, a parte de comentários fica condicional) · Spec `../spec.md` (R9, R10; CA14) · Mockup artboard 09. **Você não commita.** Worktree `/Users/andrew/Documents/GitHub/meeting-scribe-redes-instagram`. Padrões: `main/chat/sources.ts` (fontes), `main/chat/tools.ts` + `main/email/assistant-tools.ts` (ferramentas `lap-ferramenta`), `main/chat/actions.ts` + `shared/assistant.ts` + `features/chat/ActionCards.tsx` (cartões `lap-acao`), `resources/assistente/guia-do-app.md`, `test/assistant.test.ts` (lista fixa de canais `chat-action-*`; na branch `assistente-agenda` ela ganhou dois canais: ao juntar, as duas listas somam).
+
+## Superfície
+- **Fonte `REDES.md`** (`sources.ts`): interruptor "Redes" no painel Contexto (desligado por padrão; persistido como as outras fontes); conteúdo: contas conectadas (@, tipo, seguidores), últimas 10 publicações (data, tipo, legenda em 1 linha, métricas se houver, permalink), fila (rascunhos/agendadas com data), comentários não lidos (até 30: @, texto plano em 1 linha, mídia) e mensagens não lidas (até 20), tudo com `id`s que as ferramentas aceitam. Texto de terceiros em uma linha, sem cerca de código.
+- **Ferramentas** (`main/redes/assistant-tools.ts`, registradas em `index.ts` junto das do email): `listar_publicacoes_instagram {conta?, estado?, limite?}`, `listar_comentarios_instagram {conta?, so_nao_lidos?, limite?}`, `criar_rascunho_instagram {conta?, legenda, midias?: caminhos locais, quando?: ISO}` (usa `savePublication` do 71: valida mídia e legenda; devolve o id e os problemas; **nunca publica**). Só no chat (`context.chatId`), recusadas bloqueado.
+- **Cartão `instagram-rascunho`** (`CHAT_ACTION_KINDS`): o modelo propõe `{"tipo":"instagram-rascunho","conta":"@x"?,"legenda":"…","quando":"<ISO>"?}`; o app resolve a conta (única ou nomeada), valida a legenda (`captionStats`) e monta o cartão: ícone do Instagram, @conta, legenda (até 6 linhas com "ver mais"), contador "187/2.200 · 4 # · 1 @", agendamento proposto se houver; botões **Criar rascunho** (cria pelo `savePublication` sem mídia e abre `/redes/<conta>/publicacoes` com o editor no rascunho novo, via `scribe:open-redes` evento main→renderer), **Editar** (legenda e data inline), **Descartar**; `done` → "Rascunho criado · abra em Redes"; canal `scribe:chat-action-instagram-draft {chatId, index, actionId, caption?, at?}` (`refused` bloqueado; entra na lista fixa do teste).
+- **Instrução de sistema** (`claude-cli/chat.ts`): bloco novo documentado; regra "rascunho sempre; a pessoa publica em Redes"; o guia (`guia-do-app.md`) ganha a seção **Redes** (o que é, nível na barra, Publicações/Comentários/Mensagens/Métricas, Configurações › Contas › Instagram e Armazenamento de mídia, o que o Assistente faz e não faz) com os marcadores `<!-- tela: … -->` que o teste do guia exige.
+- Smoke (`redesUiChecks` ou `assistantChecks` += `redesSource`, `redesDraftCard`, `redesTools`): ligar "Redes" no Contexto → `REDES.md` na pasta da conversa com as contas e a fila; pergunta "escreva um post sobre…" → o agente falso responde com o bloco → cartão → Criar rascunho → publicação `rascunho` na fila e rota aberta no editor; ferramenta `listar_publicacoes_instagram` pelo agente falso devolve a fila. Prints `both('assistente-contexto-redes')`, `both('assistente-cartao-rascunho')`; `expectedShots += 4`.
+- Testes: `test/redes-assistant.test.ts` (fonte: texto plano, limites; ferramentas: validação e recusa fora do chat; cartão: schema, resolução de conta, legenda longa).
+
+## Critérios de aceite
+CA14; nada publica a partir do Assistente; segredos nunca em `REDES.md`; canal classificado; guia testado.
+
+## Fora de escopo
+Responder comentários/mensagens pelo Assistente (cartões futuros), métricas no contexto além das 10 publicações, automações.
+
+## Gates / Relatório
+`SMOKE_NO_SANDBOX=1 caffeinate -dimsu pnpm gates` verde. Relatório curto.

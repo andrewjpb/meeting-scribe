@@ -14,6 +14,9 @@
 // Contrato 78: o evento no Calendário do Mac (a agenda resolvida pelo nome entre as graváveis, gravado pelo `lap-calendar`
 // só no clique em "Pôr na agenda") e os cartões de alterar e apagar um lembrete, que só aceitam o id de um lembrete que
 // existe nas Automações. O modelo nunca vê o id de uma agenda: ele escreve o nome.
+// Contrato 76: o rascunho para o Instagram. A conta é resolvida entre as conectadas (a única, ou a nomeada pelo @); o clique
+// em "Criar rascunho" só põe o rascunho, sem mídia, na fila da conta (pela função injetada, que usa o `savePublication`
+// das redes): nada daqui importa o serviço das redes, publica ou agenda.
 import { randomUUID } from 'node:crypto'
 import { z } from 'zod'
 import {
@@ -30,6 +33,8 @@ import {
   EVENT_TITLE_MAX,
   eventAlreadyText,
   eventCreatedText,
+  INSTAGRAM_DRAFT_CAPTION_MAX,
+  INSTAGRAM_DRAFT_CREATED_TEXT,
   openLabel,
   OPEN_SCREENS,
   phoneOfChatId,
@@ -62,6 +67,7 @@ import type { MacCalendarCreateArgs, MacCalendarError } from '../mac-calendar/pr
 import type { AutomationsService } from '../schedules/service'
 import type { ChatEventsStore } from './events-store'
 import { calendarIdSchema, CHAT_CALENDARS_MAX, chatIdSchema, type ChatStore } from './store'
+import { captionStats } from '../../shared/redes-rules'
 
 /** Bloco ```lap-acao … ``` numa linha própria, com o JSON dentro. */
 const FENCE_PATTERN = new RegExp(`(^|\\n)[ \\t]*\`\`\`${ACTION_FENCE}[ \\t]*\\n([\\s\\S]*?)\\n[ \\t]*\`\`\`[ \\t]*(?=\\n|$)`, 'g')
@@ -111,6 +117,13 @@ const proposedSchema = z.discriminatedUnion('tipo', [
   }),
   z.object({ tipo: z.literal('lembrete-editar'), id: automationIdSchema, quando: zonedIso.optional(), texto: line(REMINDER_TEXT_MAX).optional() }),
   z.object({ tipo: z.literal('lembrete-apagar'), id: automationIdSchema }),
+  // Contrato 76: a legenda mantém as quebras de linha; a acima dos limites do Instagram vira cartão com o problema marcado.
+  z.object({
+    tipo: z.literal('instagram-rascunho'),
+    conta: z.string().trim().max(100).nullable().optional(),
+    legenda: z.string().max(INSTAGRAM_DRAFT_CAPTION_MAX),
+    quando: zonedIso.nullable().optional(),
+  }),
 ])
 type Proposed = z.infer<typeof proposedSchema>
 
@@ -128,6 +141,8 @@ export interface ActionResolver {
   preferredCalendar?: () => Promise<string | null>
   /** Contrato 78: as tarefas das Automações (o lembrete que o cartão de alterar ou apagar aceita). */
   tasks?: () => Promise<readonly ScheduledTask[]>
+  /** Contrato 76: as contas do Instagram conectadas (o id e o @), para o cartão do rascunho. */
+  instagramAccounts?: () => Promise<readonly InstagramDraftAccount[]>
   now: () => number
   timeZone: () => string
   newId?: () => string
@@ -181,6 +196,27 @@ function cardItem(found: FoundEmail): EmailCardItem {
     pending: found.pending,
     mailbox: found.mailbox ? found.mailbox.slice(0, 200) : null,
   }
+}
+
+// --- Contrato 76: rascunho para o Instagram ---------------------------------------------------------------------
+
+/** Uma conta do Instagram como o cartão do rascunho precisa (nunca o token). */
+export interface InstagramDraftAccount {
+  id: string
+  username: string
+}
+
+/** A legenda sem caracteres de controle (as quebras de linha ficam), sem espaço nas pontas. */
+export const instagramCaption = (value: string): string => withoutControls(value, true).trim()
+
+/**
+ * Contrato 76: a conta do rascunho. Sem nome, a única conectada (com duas ou mais, nenhuma); com nome, a do @ (com ou sem
+ * "@", sem caixa) ou do id.
+ */
+export function chooseInstagramAccount(accounts: readonly InstagramDraftAccount[], wanted: string | null | undefined): InstagramDraftAccount | null {
+  const name = wanted?.trim().replace(/^@/, '').toLocaleLowerCase('pt-BR') ?? ''
+  if (!name) return accounts.length === 1 ? (accounts[0] ?? null) : null
+  return accounts.find((item) => item.username.toLocaleLowerCase('pt-BR') === name || item.id === name) ?? null
 }
 
 // --- Contrato 78: evento e lembretes ----------------------------------------------------------------------------
@@ -472,6 +508,14 @@ async function resolve(proposed: Proposed, id: string, resolver: ActionResolver)
       if (!task) return null
       return { ...base, kind: 'lembrete-apagar', taskId: task.id, text: task.reminder.text, at: task.schedule.at, error: null }
     }
+    case 'instagram-rascunho': {
+      const caption = instagramCaption(proposed.legenda)
+      if (!caption) return null
+      if (proposed.quando && Date.parse(proposed.quando) <= resolver.now()) return null
+      const account = chooseInstagramAccount((await resolver.instagramAccounts?.().catch(() => [])) ?? [], proposed.conta)
+      if (!account) return null
+      return { ...base, kind: 'instagram-rascunho', accountId: account.id, username: account.username.slice(0, 100), caption, at: proposed.quando ?? null, publicationId: null }
+    }
   }
 }
 
@@ -537,6 +581,8 @@ export function actionsHistory(actions: readonly ChatAction[] | undefined): stri
         return `- alterar o lembrete "${action.currentText}" (id: ${action.taskId}) de ${action.currentAt}${action.at ? ` para ${action.at}` : ''}${action.text ? ` com o texto "${action.text}"` : ''} (${state})`
       case 'lembrete-apagar':
         return `- apagar o lembrete "${action.text}" (id: ${action.taskId}) de ${action.at} (${state})`
+      case 'instagram-rascunho':
+        return `- rascunho para o Instagram @${action.username}${action.at ? ` (data proposta ${action.at})` : ''}: "${action.caption.replace(/\s+/g, ' ').slice(0, 200)}" (${state})`
     }
   })
   return ['[Cartões propostos nesta resposta:', ...lines, ']'].join('\n')
@@ -570,6 +616,16 @@ export interface ChatActionsDeps {
   calendar?: Pick<MacCalendar, 'calendars' | 'find' | 'create'>
   /** Contrato 78: o registro dos eventos que o Assistente gravou (`chat-events.json`). */
   events?: Pick<ChatEventsStore, 'add'>
+  /**
+   * Contrato 76: o rascunho do Instagram, só no clique: as contas conectadas, se um rascunho já existe na fila e o rascunho
+   * sem mídia na fila com o id que o cartão gravou antes (o `savePublication` das redes). `missing`: a conta saiu;
+   * `invalid`: a legenda ou a data recusadas.
+   */
+  instagram?: {
+    accounts: () => readonly InstagramDraftAccount[]
+    exists: (publicationId: string) => boolean
+    createDraft: (input: { accountId: string; caption: string; at: string | null; publicationId: string }) => Promise<{ ok: true; publicationId: string } | { ok: false; error: 'missing' | 'invalid' }>
+  }
   /** Contrato 78: alterar e apagar um lembrete das Automações (só no clique). */
   reminders?: {
     list: () => Promise<readonly ScheduledTask[]>
@@ -588,6 +644,11 @@ export interface ChatActions {
   event(request: unknown): Promise<ChatActionResult>
   /** Contrato 78: "Salvar" no cartão de alterar um lembrete e "Apagar lembrete". */
   reminderChange(request: unknown): Promise<ChatActionResult>
+  /**
+   * Contrato 76: "Criar rascunho" (com a legenda e a data do "Editar"). `onCreated` recebe a conta e o rascunho criado (quem
+   * monta abre o editor em Redes).
+   */
+  instagramDraft(request: unknown, onCreated?: (target: { accountId: string; publicationId: string }) => void): Promise<ChatActionResult>
 }
 
 /** Contrato 78: a frase do erro do helper no cartão do evento, sem termo técnico. */
@@ -658,6 +719,7 @@ const eventRequestSchema = z
   })
   .strict()
 const reminderChangeRequestSchema = z.object({ ...refFields, op: z.enum(['update', 'delete']), at: zonedIso.optional(), text: z.string().max(REMINDER_TEXT_MAX * 2).optional() }).strict()
+const instagramDraftRequestSchema = z.object({ ...refFields, caption: z.string().max(INSTAGRAM_DRAFT_CAPTION_MAX).optional(), at: z.iso.datetime({ offset: true }).nullable().optional() }).strict()
 
 type Ref = { chatId: string; index: number; actionId: string }
 
@@ -898,6 +960,46 @@ export function createChatActions(deps: ChatActionsDeps): ChatActions {
             ? { ...action, at: savedAt, text: savedText === action.currentText ? action.text : savedText, status: 'done', result: reminderChangedText(savedAt, timeZone), error: null }
             : null,
         )
+      } finally {
+        busy.delete(key)
+      }
+    },
+
+    async instagramDraft(request, onCreated) {
+      const parsed = instagramDraftRequestSchema.safeParse(request)
+      if (!parsed.success) return { ok: false, error: 'invalid' }
+      const ref = parsed.data
+      const key = keyOf(ref)
+      if (busy.has(key)) return { ok: false, error: 'done' }
+      busy.add(key)
+      try {
+        const current = actionIn(await deps.store.get(ref.chatId), ref)
+        if (!current || current.kind !== 'instagram-rascunho') return { ok: false, error: 'missing' }
+        if (current.status !== 'proposed') return { ok: false, error: 'done' }
+        if (!deps.instagram) return { ok: false, error: 'invalid' }
+        // O "Editar" passa pelas mesmas regras da proposta: a legenda dentro dos limites do Instagram e a data no futuro.
+        const caption = instagramCaption(parsed.data.caption ?? current.caption)
+        const at = parsed.data.at === undefined ? current.at : parsed.data.at
+        if (!caption || captionStats(caption).problems.length) return { ok: false, error: 'invalid' }
+        if (at !== null && Date.parse(at) <= now()) return { ok: false, error: 'past' }
+        const instagram = deps.instagram
+        const finish = async (publicationId: string, fields: { caption: string; at: string | null }): Promise<ChatActionResult> => {
+          const saved = await write(ref, (action) => (action.kind === 'instagram-rascunho' ? { ...action, ...fields, publicationId, status: 'done', result: INSTAGRAM_DRAFT_CREATED_TEXT } : null))
+          if (saved.ok) onCreated?.({ accountId: current.accountId, publicationId })
+          return saved
+        }
+        // O clique anterior criou o rascunho e não chegou a marcar o cartão: marca agora e reabre o mesmo, sem criar outro.
+        if (current.publicationId && instagram.exists(current.publicationId)) return await finish(current.publicationId, { caption: current.caption, at: current.at })
+        if (!instagram.accounts().some((item) => item.id === current.accountId)) return { ok: false, error: 'missing' }
+        // O id do rascunho fica no cartão antes de criar: se a gravação de depois falhar, o próximo clique acha o rascunho.
+        const publicationId = current.publicationId ?? randomUUID()
+        if (!current.publicationId) {
+          const reserved = await write(ref, (action) => (action.kind === 'instagram-rascunho' ? { ...action, publicationId } : null))
+          if (!reserved.ok) return reserved
+        }
+        const created = await instagram.createDraft({ accountId: current.accountId, caption, at, publicationId })
+        if (!created.ok) return { ok: false, error: created.error }
+        return await finish(created.publicationId, { caption, at })
       } finally {
         busy.delete(key)
       }

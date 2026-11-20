@@ -105,7 +105,10 @@ export interface ChatScope {
    * campo (conversa do contrato 24), vale `chosen`.
    */
   whatsappMode?: ChatWhatsAppMode | undefined
-  /** Contrato 25 (CA2): fontes desligadas no painel "Contexto". Ausente = ligada. */
+  /**
+   * Contrato 25 (CA2): fontes desligadas no painel "Contexto". Ausente = ligada. Contrato 76: as de `CHAT_SOURCES_OFF_BY_DEFAULT`
+   * (a Redes) ao contrário: ausente = desligada, e fica guardado só o `true`.
+   */
   sources?: Partial<ChatSources> | undefined
   /**
    * Contrato 21 (CA6): servidores MCP desligados nesta conversa (as chaves `app:<id>` e `cli:<nome>`). Ausente = os
@@ -117,20 +120,34 @@ export interface ChatScope {
 export const CHAT_WHATSAPP_MODES = ['recent', 'chosen'] as const
 export type ChatWhatsAppMode = (typeof CHAT_WHATSAPP_MODES)[number]
 
-/** Fontes do Assistente com interruptor (o estado atual vai sempre). `internet`: contrato 26; `email`: contrato 45. */
-export const CHAT_SOURCE_KINDS = ['whatsapp', 'email', 'automations', 'guide', 'internet'] as const
+/**
+ * Fontes do Assistente com interruptor (o estado atual vai sempre). `internet`: contrato 26; `email`: contrato 45; `redes`:
+ * contrato 76 (o Instagram, desligada por padrão).
+ */
+export const CHAT_SOURCE_KINDS = ['whatsapp', 'email', 'redes', 'automations', 'guide', 'internet'] as const
 export type ChatSourceKind = (typeof CHAT_SOURCE_KINDS)[number]
 export type ChatSources = Record<ChatSourceKind, boolean>
+/** Contrato 76: as fontes que começam desligadas (a conversa guarda só o `true` delas). */
+export const CHAT_SOURCES_OFF_BY_DEFAULT: readonly ChatSourceKind[] = ['redes']
 
-/** As fontes de um escopo, com o padrão (todas ligadas). */
+/** O valor de uma fonte quando a conversa não diz nada. */
+export const chatSourceDefault = (kind: ChatSourceKind): boolean => !CHAT_SOURCES_OFF_BY_DEFAULT.includes(kind)
+
+/** As fontes de um escopo, com o padrão (todas ligadas, menos a Redes). */
 export function chatSourcesOf(scope: Pick<ChatScope, 'sources'>): ChatSources {
   return {
     whatsapp: scope.sources?.whatsapp !== false,
     email: scope.sources?.email !== false,
+    redes: scope.sources?.redes === true,
     automations: scope.sources?.automations !== false,
     guide: scope.sources?.guide !== false,
     internet: scope.sources?.internet !== false,
   }
+}
+
+/** Só o que difere do padrão fica guardado na conversa (as desligadas e, da Redes, o `true`). */
+export function chatSourcesToKeep(sources: Partial<ChatSources> | undefined): Partial<ChatSources> {
+  return Object.fromEntries(CHAT_SOURCE_KINDS.filter((kind) => sources?.[kind] !== undefined && sources[kind] !== chatSourceDefault(kind)).map((kind) => [kind, sources?.[kind] as boolean]))
 }
 
 /** Como o WhatsApp entra no escopo: o escolhido, ou `chosen` quando há conversas escolhidas. */

@@ -32,6 +32,7 @@ import {
   CHAT_THINKING_MAX,
   CHAT_TITLE_MAX,
   CHAT_WHATSAPP_MODES,
+  chatSourcesToKeep,
   chatWhatsAppModeOf,
   type Chat,
   type ChatListItem,
@@ -45,12 +46,14 @@ import {
   EVENT_LOCATION_MAX,
   EVENT_NOTES_MAX,
   EVENT_TITLE_MAX,
+  INSTAGRAM_DRAFT_CAPTION_MAX,
   OPEN_SCREENS,
   REMINDER_TEXT_MAX,
 } from '../../shared/assistant'
 import { EMAIL_ACCOUNT_ID_PATTERN, EMAIL_RECIPIENTS_MAX, EMAIL_SUBJECT_MAX, EMAIL_TEXT_MAX } from '../../shared/email'
 import { automationIdSchema, scheduleSchema } from '../../shared/automations-schema'
 import { MCP_SERVERS_MAX } from '../../shared/mcp'
+import { PUBLICATION_ID_PATTERN, REDES_ACCOUNT_ID_PATTERN } from '../../shared/redes'
 import { CHAT_MODELS } from '../../shared/settings-defaults'
 import { WHATSAPP_CHAT_ID_PATTERN, WHATSAPP_DEFAULT_SCOPE_DAYS, WHATSAPP_SCOPE_CHATS_MAX, WHATSAPP_SCOPE_DAYS, WHATSAPP_SEND_TEXT_MAX } from '../../shared/whatsapp'
 
@@ -109,16 +112,16 @@ export const chatScopeSchema = z
   .strict()
   // Só "Reuniões escolhidas" leva a lista; as conversas do WhatsApp vão em qualquer escopo. "Só estas conversas"
   // sem nenhuma escolhida guarda o modo; com conversas, o modo fica implícito (como no contrato 24). Das fontes,
-  // só as desligadas ficam.
+  // só as desligadas ficam (contrato 76: da Redes, que começa desligada, só o `true`).
   .transform((scope): ChatScope => {
     const base: ChatScope = scope.kind === 'meetings' ? { kind: scope.kind, meetingIds: [...new Set(scope.meetingIds ?? [])] } : { kind: scope.kind }
     const chats = [...new Set(scope.whatsappChats ?? [])]
     const mode = chatWhatsAppModeOf({ whatsappMode: scope.whatsappMode, whatsappChats: chats })
     const days = scope.whatsappDays ?? WHATSAPP_DEFAULT_SCOPE_DAYS
     const whatsapp: Partial<ChatScope> = mode === 'recent' ? {} : chats.length ? { whatsappChats: chats, whatsappDays: days } : { whatsappMode: 'chosen', whatsappDays: days }
-    const off = CHAT_SOURCE_KINDS.filter((kind) => scope.sources?.[kind] === false)
+    const sources = chatSourcesToKeep(scope.sources)
     const mcpOff = [...new Set(scope.mcpOff ?? [])]
-    return { ...base, ...whatsapp, ...(off.length ? { sources: Object.fromEntries(off.map((kind) => [kind, false])) } : {}), ...(mcpOff.length ? { mcpOff } : {}) }
+    return { ...base, ...whatsapp, ...(Object.keys(sources).length ? { sources } : {}), ...(mcpOff.length ? { mcpOff } : {}) }
   })
 
 const actionBase = {
@@ -283,6 +286,18 @@ export const chatActionSchema = z.discriminatedUnion('kind', [
       text: z.string().max(REMINDER_TEXT_MAX),
       at: isoDate,
       error: z.string().max(CHAT_ACTION_ERROR_MAX).nullable(),
+    })
+    .strict(),
+  // Contrato 76: o rascunho para o Instagram (a conta lida do app; o rascunho criado, depois do clique).
+  z
+    .object({
+      kind: z.literal('instagram-rascunho'),
+      ...actionBase,
+      accountId: z.string().regex(REDES_ACCOUNT_ID_PATTERN),
+      username: z.string().max(100),
+      caption: z.string().max(INSTAGRAM_DRAFT_CAPTION_MAX),
+      at: isoDate.nullable(),
+      publicationId: z.string().regex(PUBLICATION_ID_PATTERN).nullable(),
     })
     .strict(),
 ])

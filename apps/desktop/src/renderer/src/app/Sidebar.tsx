@@ -6,22 +6,26 @@ import { PermissionsBlock } from '../features/permissions/PermissionsBlock'
 import { UpdateNotice } from '../features/settings/UpdateNotice'
 import { useBranding } from './brandingStore'
 import { LockButton } from './LockButton'
-import { EMAIL_ROOT_PATH, ROUTE_PATHS } from '@shared/routes'
+import { EMAIL_ROOT_PATH, REDES_ROOT_PATH, ROUTE_PATHS } from '@shared/routes'
 import { whatsappInstalled } from '@shared/whatsapp'
 import { useWhatsApp } from '../features/whatsapp/whatsappStore'
 import { useEmail } from '../features/email/emailStore'
 import { totalUnread, unreadBadge } from '../features/email/format'
+import { redesUnreadTotal, useRedes } from '../features/redes/redesStore'
 import { APP_ROUTES, routeIdOf } from './routes'
-import { activeNavId, isSidebarSection, lastEmailPath, levelFor, rememberEmailPath, sectionOf, type SidebarSection } from './sidebarLevels'
+import { activeNavId, isSidebarSection, lastEmailPath, lastRedesPath, levelFor, rememberEmailPath, rememberRedesPath, sectionOf, type SidebarSection } from './sidebarLevels'
 import { SidebarStack, type SidebarFocus } from './SidebarStack'
 
-// O item leva ao caminho da rota (Configurações sem a aba abre a última aberta; Email, contrato 65, à última pasta aberta).
-const NAV_ITEMS = APP_ROUTES.flatMap((route) => (route.nav ? [{ ...route.nav, id: route.id, path: route.id === 'email' ? EMAIL_ROOT_PATH : ROUTE_PATHS[route.id] }] : []))
+// O item leva ao caminho da rota (Configurações sem a aba abre a última aberta; Email, contrato 65, à última pasta aberta;
+// Redes, contrato 72, à última seção vista).
+const ROOT_PATHS: Partial<Record<string, string>> = { email: EMAIL_ROOT_PATH, redes: REDES_ROOT_PATH }
+const NAV_ITEMS = APP_ROUTES.flatMap((route) => (route.nav ? [{ ...route.nav, id: route.id, path: ROOT_PATHS[route.id] ?? ROUTE_PATHS[route.id] }] : []))
 
 /**
  * Barra lateral opaca em azul profundo: espaço dos botões da janela, marca (a escolhida em Configurações
  * ou a da LAP), a coluna em pilha (contrato 65: a raiz com os itens, o nível Email com as contas, contrato 66, o
- * nível Configurações com as abas ou, contrato 67, o nível Assistente com as conversas) e, no rodapé,
+ * nível Configurações com as abas, contrato 67, o nível Assistente com as conversas ou, contrato 72, o nível Redes com
+ * as contas do Instagram) e, no rodapé,
  * "Bloquear", o aviso de versão nova e as permissões.
  */
 export function Sidebar() {
@@ -29,8 +33,11 @@ export function Sidebar() {
   // Contrato 24: "WhatsApp" só com o serviço instalado.
   const whatsapp = useWhatsApp((state) => (state.status ? whatsappInstalled(state.status.state) : false))
   const unread = useEmail((state) => totalUnread(state.accounts, state.folders))
-  const items = NAV_ITEMS.filter((item) => item.id !== 'whatsapp' || whatsapp)
+  // Contrato 72: "Redes" só com uma conta conectada, ou com a rota aberta (o estado vazio leva a Configurações).
+  const redesAccounts = useRedes((state) => state.state?.accounts.length ?? 0)
+  const redesUnread = useRedes((state) => redesUnreadTotal(state.unread))
   const location = useLocation()
+  const items = NAV_ITEMS.filter((item) => (item.id !== 'whatsapp' || whatsapp) && (item.id !== 'redes' || redesAccounts > 0 || sectionOf(location.pathname) === 'redes'))
   const navigate = useNavigate()
   // Contrato 65: o "voltar" mostra a raiz sem navegar e vale só para esta navegação (o `key` muda a cada uma).
   const [poppedKey, setPoppedKey] = useState<string | null>(null)
@@ -39,17 +46,22 @@ export function Sidebar() {
   // O nível e o item marcado saem do mesmo padrão da seção (`sectionOf`).
   const activeId = activeNavId(location.pathname, routeIdOf(location.pathname))
 
-  useEffect(() => rememberEmailPath(location.pathname), [location.pathname])
+  useEffect(() => {
+    rememberEmailPath(location.pathname)
+    rememberRedesPath(location.pathname)
+  }, [location.pathname])
 
   // Item de seção: na seção, só mostra o nível de novo (rota, mensagem, aba e conversa abertas iguais); de fora, o Email
   // abre a última pasta aberta, Configurações, `/configuracoes`, que o `SettingsScreen` leva à última aba vista, e o
-  // Assistente (contrato 67), `/assistente`, com a conversa que estava aberta no store.
+  // Assistente (contrato 67), `/assistente`, com a conversa que estava aberta no store; Redes (contrato 72), a última seção
+  // vista (na primeira vez, as publicações da primeira conta).
   const openSection = (section: SidebarSection) => (event: MouseEvent): void => {
     event.preventDefault()
     focusRef.current = '[data-sidebar-back]'
     if (sectionOf(location.pathname) === section) setPoppedKey(null)
     else if (section === 'email') void navigate(lastEmailPath(useEmail.getState().accounts?.map((status) => status.account.id) ?? []))
     else if (section === 'assistente') void navigate(ROUTE_PATHS.assistente)
+    else if (section === 'redes') void navigate(lastRedesPath(useRedes.getState().state?.accounts.map((account) => account.id) ?? []))
     else void navigate(ROUTE_PATHS.configuracoes)
   }
   const back = (): void => {
@@ -59,7 +71,7 @@ export function Sidebar() {
 
   const root = items.map((item) => {
     const active = activeId === item.id
-    const badge = item.id === 'email' ? unreadBadge(unread) : ''
+    const badge = item.id === 'email' ? unreadBadge(unread) : item.id === 'redes' ? unreadBadge(redesUnread) : ''
     return (
       <Link
         key={item.id}
@@ -77,7 +89,7 @@ export function Sidebar() {
         {badge && (
           <span data-nav-badge className="shrink-0 text-12 font-medium tabular text-side-text">
             {badge}
-            <span className="sr-only"> não lidas</span>
+            <span className="sr-only">{item.id === 'redes' ? ' não lidos' : ' não lidas'}</span>
           </span>
         )}
       </Link>

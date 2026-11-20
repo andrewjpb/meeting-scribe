@@ -8,8 +8,11 @@
 // o cartão do lote que o Assistente moveu (`email-lote`), montado pelo main a partir do lote, nunca do texto do modelo.
 // Contrato 78: o evento no Calendário do Mac (`evento`, gravado só no clique em "Pôr na agenda") e os cartões de alterar e
 // apagar um lembrete que já existe (`lembrete-editar`, `lembrete-apagar`), que só aceitam o id de um lembrete do app.
+// Contrato 76: o rascunho de uma publicação no Instagram (`instagram-rascunho`): o clique em "Criar rascunho" só põe o
+// rascunho na fila da conta e abre o editor na tela Redes; nada é publicado daqui.
 import { formatRunAt, wallTime, type Schedule } from './automations'
 import type { Chat } from './chat'
+import { CAPTION_MAX } from './redes-rules'
 
 /** Linguagem da cerca do bloco de ação: ```lap-acao ... ```. */
 export const ACTION_FENCE = 'lap-acao'
@@ -30,6 +33,11 @@ export const EVENT_LOCATION_MAX = 1024
 export const EVENT_DEFAULT_DURATION_MS = 3_600_000
 /** A frase do erro de um cartão `failed`. */
 export const CHAT_ACTION_ERROR_MAX = 300
+/**
+ * Contrato 76: a legenda que o cartão do rascunho aceita (em unidades UTF-16). Acima dos 2.200 caracteres do Instagram o
+ * cartão aparece com o contador marcando o problema (dá para editar); acima disto, o bloco fica como texto.
+ */
+export const INSTAGRAM_DRAFT_CAPTION_MAX = CAPTION_MAX * 4
 
 /** Telas que o botão "Abrir" alcança. `alvo`: a reunião, a conversa, a aba de Configurações ou a aba das Automações. */
 export const OPEN_SCREENS = ['reuniao', 'reunioes', 'whatsapp', 'configuracoes', 'automacoes', 'gravacao'] as const
@@ -51,7 +59,7 @@ export const AUTOMATIONS_TABS = ['agentes', 'tarefas', 'execucoes'] as const
  */
 export const CHAT_ACTION_STATUSES = ['proposed', 'done', 'failed', 'dismissed'] as const
 export type ChatActionStatus = (typeof CHAT_ACTION_STATUSES)[number]
-export const CHAT_ACTION_KINDS = ['lembrete', 'whatsapp-resposta', 'tarefa', 'abrir', 'emails', 'email-resposta', 'email-lote', 'evento', 'lembrete-editar', 'lembrete-apagar'] as const
+export const CHAT_ACTION_KINDS = ['lembrete', 'whatsapp-resposta', 'tarefa', 'abrir', 'emails', 'email-resposta', 'email-lote', 'evento', 'lembrete-editar', 'lembrete-apagar', 'instagram-rascunho'] as const
 export type ChatActionKind = (typeof CHAT_ACTION_KINDS)[number]
 
 interface ActionBase {
@@ -243,6 +251,24 @@ export interface ChatActionReminderDelete extends ActionBase {
   error: string | null
 }
 
+/**
+ * Contrato 76: `instagram-rascunho`, a legenda proposta para uma conta do Instagram conectada (a conta resolvida pelo app:
+ * a única, ou a nomeada). "Criar rascunho" põe o rascunho, sem mídia, na fila da conta e abre o editor em Redes; nada é
+ * publicado nem agendado daqui. A legenda acima dos limites do Instagram vira cartão com o contador marcando o problema.
+ */
+export interface ChatActionInstagramDraft extends ActionBase {
+  kind: 'instagram-rascunho'
+  /** O id da conta (`RedesAccount.id`). */
+  accountId: string
+  /** O @ da conta, lido do app (sem o "@"). */
+  username: string
+  caption: string
+  /** A data proposta para publicar (ISO 8601), ou `null`: no rascunho ela é só planejada. */
+  at: string | null
+  /** O rascunho criado (`Publication.id`), depois do clique. */
+  publicationId: string | null
+}
+
 export type ChatAction =
   | ReminderAction
   | WhatsAppReplyAction
@@ -254,6 +280,7 @@ export type ChatAction =
   | ChatActionEvent
   | ChatActionReminderEdit
   | ChatActionReminderDelete
+  | ChatActionInstagramDraft
 
 /** Qual cartão de qual resposta. */
 export interface ChatActionRef {
@@ -290,6 +317,12 @@ export interface ChatActionReminderChangeRequest extends ChatActionRef {
   op: 'update' | 'delete'
   at?: string | undefined
   text?: string | undefined
+}
+
+/** Contrato 76: "Criar rascunho", com a legenda e a data do "Editar" (`at: null` tira a data proposta). */
+export interface ChatActionInstagramDraftRequest extends ChatActionRef {
+  caption?: string | undefined
+  at?: string | null | undefined
 }
 
 /**
@@ -367,6 +400,8 @@ export function reminderChangedText(at: string, timeZone: string): string {
 }
 
 export const REMINDER_DELETED_TEXT = 'Lembrete apagado'
+/** Contrato 76: o cartão do rascunho depois do clique. */
+export const INSTAGRAM_DRAFT_CREATED_TEXT = 'Rascunho criado · abra em Redes'
 /** Contrato 78: o lembrete já disparou ou foi apagado entre a proposta e o clique. */
 export const REMINDER_GONE_TEXT = 'Esse lembrete não existe mais: já disparou ou foi apagado em Automações.'
 

@@ -9,6 +9,8 @@
 // diálogo, e vira "Enviado às hh:mm".
 // Contrato 78: o cartão de evento (só grava no Calendário do Mac no clique em "Pôr na agenda"; o "Editar" muda só o
 // cartão) e os cartões de alterar e apagar um lembrete, cada um pelo seu canal no main.
+// Contrato 76: o rascunho para o Instagram ("Criar rascunho" põe o rascunho na fila da conta e o main abre o editor em
+// Redes; nada é publicado daqui).
 import {
   ArrowRight,
   Bell,
@@ -20,6 +22,7 @@ import {
   CircleAlert,
   Clock,
   ExternalLink,
+  FilePlus,
   Globe,
   ListChecks,
   Mail,
@@ -32,7 +35,7 @@ import {
   Trash2,
   X,
 } from 'lucide-react'
-import { useEffect, useState, type KeyboardEvent } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent } from 'react'
 import { useNavigate } from 'react-router'
 import {
   emailSentText,
@@ -48,6 +51,7 @@ import {
   type ChatActionCalendar,
   type ChatActionEvent,
   type ChatActionEventFields,
+  type ChatActionInstagramDraft,
   type ChatActionRef,
   type ChatActionReminderDelete,
   type ChatActionReminderEdit,
@@ -61,7 +65,8 @@ import {
 } from '@shared/assistant'
 import { EMAIL_TEXT_MAX } from '@shared/email'
 import { describeSchedule, TASK_TIMEOUT_DEFAULT_S } from '@shared/automations'
-import { emailPath, meetingPath, ROUTE_PATHS, settingsPath, isSettingsTab, type EmailNavigationState, type WhatsAppNavigationState } from '@shared/routes'
+import { emailPath, meetingPath, redesPath, ROUTE_PATHS, settingsPath, isSettingsTab, type EmailNavigationState, type WhatsAppNavigationState } from '@shared/routes'
+import { CAPTION_MAX, captionStats } from '@shared/redes-rules'
 import { WHATSAPP_SEND_TEXT_MAX } from '@shared/whatsapp'
 import { Button } from '../../design/Button'
 import { Icon } from '../../design/Icon'
@@ -69,6 +74,9 @@ import { Note } from '../../design/Note'
 import { useAutomations, type AutomationsTab } from '../agents/automationsStore'
 import { emailTimeLabel, sendErrorText } from '../email/format'
 import { MENU_ITEM, useInlineMenu } from '../meetings/menu'
+import { InstagramGlyph } from '../redes/InstagramGlyph'
+import { scheduleWhen } from '../redes/redesFormat'
+import { useRedes } from '../redes/redesStore'
 import { macTimeZone } from '../schedules/TaskForm'
 import { QUIET_BUTTON } from './ChatMessages'
 import { useChat } from './chatStore'
@@ -1147,6 +1155,164 @@ function ReminderDeleteCard({ action, actionRef }: { action: ChatActionReminderD
   )
 }
 
+const INSTAGRAM_DRAFT_ERRORS: Record<string, string> = {
+  past: 'Essa data já passou. Escolha outra ou deixe sem data.',
+  done: 'Este cartão já foi usado.',
+  missing: 'A conta do Instagram não está mais conectada.',
+  invalid: 'Confira a legenda: até 2.200 caracteres, 30 hashtags e 20 @.',
+}
+const THOUSANDS = new Intl.NumberFormat('pt-BR')
+
+/**
+ * Contrato 76 (R9, artboard 09): o rascunho para o Instagram. A legenda proposta (até 6 linhas, com "ver mais"), o contador
+ * "187/2.200 · 4 # · 1 @" e a data planejada, quando há. "Criar rascunho" põe o rascunho, sem mídia, na fila da conta e o
+ * main abre o editor em Redes › Publicações; "Editar" muda a legenda e a data só no cartão. Nada é publicado daqui.
+ */
+function InstagramDraftCard({ action, actionRef }: { action: ChatActionInstagramDraft; actionRef: ChatActionRef }) {
+  const navigate = useNavigate()
+  const [editing, setEditing] = useState(false)
+  const [caption, setCaption] = useState(action.caption)
+  const [when, setWhen] = useState(() => (action.at ? localInput(action.at) : ''))
+  const [expanded, setExpanded] = useState(false)
+  const [clamped, setClamped] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [failure, setFailure] = useState<string | null>(null)
+  const captionRef = useRef<HTMLParagraphElement>(null)
+  const proposed = action.status === 'proposed'
+  const text = editing ? caption : action.caption
+  const stats = captionStats(text)
+  const editedAt = when ? new Date(when) : null
+  // A data do "Editar" que não se lê não vira "sem data" em silêncio: o cartão avisa e não cria.
+  const badDate = editing && editedAt !== null && Number.isNaN(editedAt.getTime())
+  const at = editing ? (editedAt && !badDate ? editedAt.toISOString() : null) : action.at
+  const tooLong = stats.problems.length > 0
+
+  // "ver mais" só quando a legenda passa das 6 linhas.
+  useLayoutEffect(() => {
+    const element = captionRef.current
+    if (!element || expanded) return
+    setClamped(element.scrollHeight > element.clientHeight + 1)
+  }, [text, expanded, editing])
+
+  const create = async (): Promise<void> => {
+    if (busy || tooLong || badDate || !text.trim()) return
+    setBusy(true)
+    setFailure(null)
+    const result = await useChat.getState().createInstagramDraft(actionRef, editing ? { caption, at } : {})
+    setBusy(false)
+    if (!result.ok) setFailure(INSTAGRAM_DRAFT_ERRORS[result.error] ?? INSTAGRAM_DRAFT_ERRORS['invalid'] ?? '')
+  }
+  const openDraft = (): void => {
+    if (!action.publicationId) return
+    useRedes.getState().openEditor({ accountId: action.accountId, id: action.publicationId })
+    void navigate(redesPath(action.accountId, 'publicacoes'))
+  }
+
+  return (
+    <div data-chat-action="instagram-rascunho" data-chat-action-status={action.status} {...(editing ? { 'data-editing': '' } : {})} className={CARD}>
+      <p className="flex items-center gap-2 text-13 font-medium text-title">
+        <InstagramGlyph size={14} className="shrink-0 text-text-muted" />
+        <span>Rascunho para o Instagram</span>
+        <span data-chat-instagram-account className="min-w-0 truncate font-normal text-text-muted">
+          · @{action.username}
+        </span>
+      </p>
+      {proposed && editing ? (
+        <div className="flex flex-col gap-2.5">
+          <label className="flex flex-col gap-1 text-12 text-text-muted">
+            Legenda
+            <textarea
+              data-chat-instagram-field="caption"
+              value={caption}
+              rows={6}
+              onChange={(event) => setCaption(event.target.value)}
+              className={`${FIELD} min-h-24 resize-y py-1.5 leading-5`}
+            />
+          </label>
+          <label className="flex flex-col gap-1 text-12 text-text-muted">
+            Data planejada
+            <input type="datetime-local" data-chat-instagram-field="at" value={when} onChange={(event) => setWhen(event.target.value)} className={`${FIELD} h-8 w-56`} />
+          </label>
+          {badDate && (
+            <p role="alert" data-chat-instagram-date-error className="text-12 text-rec">
+              Não entendi essa data. Corrija ou apague para criar sem data.
+            </p>
+          )}
+        </div>
+      ) : (
+        <div className="flex flex-col gap-1">
+          <p
+            ref={captionRef}
+            data-chat-instagram-caption
+            className={`border-l-[3px] border-line-strong bg-bg-sunken px-3 py-2.5 text-13 leading-5 whitespace-pre-wrap select-text ${proposed ? 'text-text' : 'text-text-muted'} ${expanded ? '' : 'line-clamp-6'}`}
+          >
+            {action.caption}
+          </p>
+          {(clamped || expanded) && (
+            <button type="button" data-action="chat-action-instagram-more" onClick={() => setExpanded((value) => !value)} className="self-start text-12 text-accent underline decoration-1 underline-offset-3 hover:text-title">
+              {expanded ? 'ver menos' : 'ver mais'}
+            </button>
+          )}
+        </div>
+      )}
+      {proposed && (
+        <p data-chat-instagram-count className={`text-12 tabular ${tooLong ? 'text-rec' : 'text-text-muted'}`}>
+          {THOUSANDS.format(stats.chars)}/{THOUSANDS.format(CAPTION_MAX)} · {stats.hashtags} # · {stats.mentions} @{tooLong ? ` · ${stats.problems.join('; ')}` : ''}
+        </p>
+      )}
+      {proposed && !editing && (
+        <p data-chat-instagram-when className="text-12 text-text-muted">
+          {at ? `Sem mídia: as imagens você escolhe no editor. Data planejada: ${scheduleWhen(at)} (agendar é no editor).` : 'Sem mídia e sem data: as imagens e o horário você escolhe no editor.'}
+        </p>
+      )}
+      {proposed ? (
+        <>
+          <div className="flex flex-wrap items-center gap-2">
+            <Button action="chat-action-instagram-create" icon={FilePlus} onClick={() => void create()} disabled={busy || tooLong || badDate || !text.trim()}>
+              {busy ? 'Criando…' : 'Criar rascunho'}
+            </Button>
+            {editing ? (
+              <Button
+                action="chat-action-instagram-cancel"
+                variant="secondary"
+                disabled={busy}
+                onClick={() => {
+                  setCaption(action.caption)
+                  setWhen(action.at ? localInput(action.at) : '')
+                  setEditing(false)
+                  setFailure(null)
+                }}
+              >
+                Cancelar
+              </Button>
+            ) : (
+              <Button action="chat-action-edit" variant="secondary" icon={Pencil} onClick={() => setEditing(true)}>
+                Editar
+              </Button>
+            )}
+            <DismissButton actionRef={actionRef} disabled={busy} />
+          </div>
+          <p className="text-12 text-text-faint">Abre o rascunho em Redes › Publicações. Nada é publicado daqui.</p>
+        </>
+      ) : (
+        <div className="flex flex-wrap items-center gap-3">
+          <Outcome action={action} />
+          {action.status === 'done' && action.publicationId && (
+            <button type="button" data-action="chat-action-instagram-open" onClick={openDraft} className="text-12 text-accent underline decoration-1 underline-offset-3 hover:text-title">
+              Abrir em Redes
+            </button>
+          )}
+        </div>
+      )}
+      {failure && (
+        <p role="alert" data-chat-action-failure className="text-12 text-rec">
+          {failure}
+        </p>
+      )}
+    </div>
+  )
+}
+
 /** O cartão de uma ação, pelo tipo. */
 function ActionCard({ action, actionRef, choice }: { action: ChatAction; actionRef: ChatActionRef; choice: boolean }) {
   if (action.kind === 'lembrete') return <ReminderCard action={action} actionRef={actionRef} />
@@ -1160,6 +1326,8 @@ function ActionCard({ action, actionRef, choice }: { action: ChatAction; actionR
   if (action.kind === 'evento') return <EventCard action={action} actionRef={actionRef} />
   if (action.kind === 'lembrete-editar') return <ReminderEditCard action={action} actionRef={actionRef} />
   if (action.kind === 'lembrete-apagar') return <ReminderDeleteCard action={action} actionRef={actionRef} />
+  // Contrato 76.
+  if (action.kind === 'instagram-rascunho') return <InstagramDraftCard action={action} actionRef={actionRef} />
   return <OpenCard action={action} />
 }
 

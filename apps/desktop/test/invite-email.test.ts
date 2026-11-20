@@ -924,7 +924,20 @@ describe('N1 estático (CA15)', () => {
   })
 
   it('os canais de envio e resposta são os de antes mais scribe:invite-reply', () => {
-    expect(INVOKE_CHANNELS.filter((channel) => /send|reply/.test(channel)).sort()).toEqual(['scribe:chat-send', 'scribe:email-send', 'scribe:invite-reply', 'scribe:whatsapp-send', 'scribe:whatsapp-send-media'])
+    expect(INVOKE_CHANNELS.filter((channel) => /send|reply/.test(channel)).sort()).toEqual([
+      'scribe:chat-send',
+      'scribe:email-send',
+      'scribe:invite-reply',
+      // 73: comentários
+      // Contrato 73: a resposta pública a um comentário do Instagram (recusada bloqueado; o contrato não pede o token de clique).
+      'scribe:redes-comment-reply',
+      // fim 73
+      // 74: mensagens
+      'scribe:redes-message-send',
+      // fim 74
+      'scribe:whatsapp-send',
+      'scribe:whatsapp-send-media',
+    ])
   })
 
   it('CA14: o preload confere a ativação antes do token e manda só os quatro campos', () => {

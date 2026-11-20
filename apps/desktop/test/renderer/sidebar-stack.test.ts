@@ -2,8 +2,8 @@
 // deslize entre os níveis, o último email aberto na sessão e o número do item "Email" na raiz.
 import { beforeEach, describe, expect, it } from 'vitest'
 import { EMAIL_INBOX_MAILBOX, EMAIL_SENT_MAILBOX, type EmailMessage } from '../../src/shared/email'
-import { emailFolderFromSlug, emailFolderSegment, emailPath } from '../../src/shared/routes'
-import { activeNavId, lastEmailPath, levelFor, rememberEmailPath, resetSidebarMemory, sectionOf, SIDEBAR_SLIDE_FALLBACK_MS, SIDEBAR_SLIDE_MS, transitionOf } from '../../src/renderer/src/app/sidebarLevels'
+import { emailFolderFromSlug, emailFolderSegment, emailPath, isRedesSection, REDES_SECTIONS, redesPath } from '../../src/shared/routes'
+import { activeNavId, lastEmailPath, lastRedesPath, levelFor, rememberEmailPath, rememberRedesPath, resetSidebarMemory, sectionOf, SIDEBAR_SECTIONS, SIDEBAR_SLIDE_FALLBACK_MS, SIDEBAR_SLIDE_MS, transitionOf } from '../../src/renderer/src/app/sidebarLevels'
 import { totalUnread } from '../../src/renderer/src/features/email/format'
 
 type Unread = Pick<EmailMessage, 'seen' | 'mailbox'>
@@ -77,6 +77,51 @@ describe('nível da barra lateral (contrato 65)', () => {
   it('o deslize dura o --duration-slow, com reserva de 80 ms', () => {
     expect(SIDEBAR_SLIDE_MS).toBe(180)
     expect(SIDEBAR_SLIDE_FALLBACK_MS).toBe(260)
+  })
+})
+
+describe('nível Redes (contrato 72, CA13)', () => {
+  it('sectionOf: /redes e /redes/* são a seção Redes', () => {
+    expect(SIDEBAR_SECTIONS).toContain('redes')
+    expect(sectionOf('/redes')).toBe('redes')
+    expect(sectionOf('/redes/123/publicacoes')).toBe('redes')
+    expect(sectionOf('/redesx')).toBeNull()
+  })
+
+  it('o nível, o "voltar" da mesma navegação, o item marcado e o deslize', () => {
+    expect(levelFor('/redes/123/comentarios', null, 'k')).toBe('redes')
+    expect(levelFor('/redes/123/comentarios', 'k', 'k')).toBe('root')
+    expect(activeNavId('/redes/123/metricas', 'redes')).toBe('redes')
+    expect(transitionOf('root', 'redes')).toBe('push')
+    expect(transitionOf('redes', 'configuracoes')).toBe('push')
+    expect(transitionOf('redes', 'root')).toBe('pop')
+  })
+
+  it('redesPath: a conta e a seção, Publicações por padrão; só as quatro seções valem', () => {
+    expect(redesPath('123')).toBe('/redes/123/publicacoes')
+    expect(redesPath('123', 'mensagens')).toBe('/redes/123/mensagens')
+    expect(REDES_SECTIONS).toEqual(['publicacoes', 'comentarios', 'mensagens', 'metricas'])
+    expect(isRedesSection('metricas')).toBe(true)
+    expect(isRedesSection('stories')).toBe(false)
+  })
+
+  it('lastRedesPath: a última seção vista, se a conta existe; senão a primeira conta; sem conta, /redes', () => {
+    expect(lastRedesPath([])).toBe('/redes')
+    expect(lastRedesPath(['1', '2'])).toBe('/redes/1/publicacoes')
+    rememberRedesPath('/redes/2/comentarios')
+    expect(lastRedesPath(['1', '2'])).toBe('/redes/2/comentarios')
+    expect(lastRedesPath(['1'])).toBe('/redes/1/publicacoes')
+    expect(lastRedesPath([])).toBe('/redes')
+  })
+
+  it('/redes sozinho, seção desconhecida e outras rotas não trocam o lembrado', () => {
+    rememberRedesPath('/redes/2/mensagens')
+    rememberRedesPath('/redes')
+    rememberRedesPath('/redes/2/stories')
+    rememberRedesPath('/email/a/entrada')
+    expect(lastRedesPath(['1', '2'])).toBe('/redes/2/mensagens')
+    resetSidebarMemory()
+    expect(lastRedesPath(['1', '2'])).toBe('/redes/1/publicacoes')
   })
 })
 

@@ -78,6 +78,16 @@ A tela que antes se chamava "Perguntar".
 
 **Outlook, Hotmail e Live pessoais** ainda não funcionam: a Microsoft só aceita login moderno (OAuth) por IMAP, e isso exigiria registrar o app numa conta da Microsoft. Exchange e Microsoft 365 também ficam para depois.
 
+### Redes: Instagram
+
+- **Conta por token**: em Configurações › Contas › Instagram, cole o token de acesso gerado no painel da Meta (app do tipo Business com o produto Instagram, a sua conta como testadora). Vale para conta profissional (Business ou Creator), sem Página do Facebook e sem login de terceiros. O app confere o token, mostra a conta (tipo, seguidores, validade) e renova o token sozinho antes dos 60 dias. Dá para conectar mais de uma conta.
+- **Armazenamento de mídia (S3)**: o Instagram só aceita imagem por um endereço público, então imagens e carrosséis sobem antes para um bucket seu (Amazon S3, Cloudflare R2 ou qualquer S3), configurado em Configurações › Contas, com "Testar". O arquivo sai do bucket depois que o Instagram publica. Vídeo e Reels vão direto para a Meta e não precisam dele.
+- **Publicações**: a fila de cada conta (com erro, rascunhos, agendadas, publicadas) e o editor ao lado: imagem, carrossel de até 10 ou Reels, conferidos pelas regras do Instagram antes de entrar; legenda com contador de 2.200 caracteres, hashtags e @; texto alternativo; agendamento. A agendada sai na hora com o app aberto (com o app fechado, na próxima abertura), e nada sai duas vezes.
+- **Comentários**: os das 25 publicações mais recentes, agrupados por publicação, com responder, ocultar e excluir. Os não lidos aparecem na barra lateral.
+- **Mensagens**: as conversas diretas e a resposta pela tela, com o aviso da janela de 24 h do Instagram.
+- **Métricas**: alcance, visualizações, interações, seguidores ganhos e perdidos e mais, em 7, 28 ou 90 dias, e a tabela das 25 publicações mais recentes, ordenável.
+- **Assistente**: com a fonte "Redes" ligada no Contexto, ele lê as publicações, as métricas e o que está sem resposta, escreve posts a partir das reuniões e propõe o cartão "Rascunho para o Instagram". "Criar rascunho" põe na fila; publicar é sempre com você, na tela Redes.
+
 ### Conexões: servidores MCP e conectores do claude.ai
 - Em **Configurações › Conexões**, servidores MCP (os do Claude CLI, os só do app e os importados do Claude Desktop) dão ao Assistente ferramentas de outros sistemas. Tudo começa desligado. Cada ferramenta tem uma regra: **Perguntar** (o padrão), Permitir ou Negar. Com "Perguntar", a conversa mostra um cartão com os argumentos, e sem resposta em 2 minutos o app nega.
 - **Conectores do claude.ai** (Notion, Google Drive, Gmail…): a última seção da aba lista os conectores da sua conta (lidos do `claude mcp list`). Todos ficam **desligados por padrão**, inclusive um conector novo que aparecer na conta depois: o agente só usa o que você ligar, um por um. Ligado, o conector vale no Assistente e no chat da reunião a partir da próxima pergunta; tradução, resumo, análise e Automações nunca usam conector.
@@ -87,7 +97,7 @@ A tela que antes se chamava "Perguntar".
 
 ### Do seu jeito
 - **Configurações em abas** (Geral, Gravação, Claude, Arquivos, Contas, Email, Plugins, Conexões, Sobre) com busca (⌘F). As abas ficam na barra lateral, e ⌘1 a ⌘9 trocam de aba com Configurações aberta.
-- **Barra lateral em dois níveis**, como os Ajustes do iOS: na raiz, Reuniões, Assistente, Email (com o total de não lidas), Automações, WhatsApp e Configurações. Email, Configurações e Assistente têm nível próprio, que entra deslizando com as contas e pastas, as abas ou as conversas. O cabeçalho no topo do nível volta ao menu sem trocar a tela aberta.
+- **Barra lateral em dois níveis**, como os Ajustes do iOS: na raiz, Reuniões, Assistente, Email (com o total de não lidas), Redes (com uma conta do Instagram conectada), Automações, WhatsApp e Configurações. Email, Redes, Configurações e Assistente têm nível próprio, que entra deslizando com as contas e pastas, as contas e seções, as abas ou as conversas. O cabeçalho no topo do nível volta ao menu sem trocar a tela aberta.
 - **Sua marca**: troque o nome e o logo do app.
 - Tema claro, escuro ou do sistema.
 - **Atualização pelo GitHub**: o app avisa quando sai versão nova, baixa, confere o arquivo e abre o instalador.
@@ -126,8 +136,10 @@ Reuniões em Markdown no seu Mac ─> agente de IA via ACP ─> resumo · análi
 | Texto da reunião | só para o agente de IA local que você escolheu (com a sua conta) |
 | Arquivos (áudio, transcrição, resumo, anotações) | ficam no seu Mac |
 | Chaves e tokens | cifrados pelo Chaveiro do macOS |
+| Instagram | o app só fala com `graph.instagram.com` e `rupload.facebook.com`, e só baixa as miniaturas dos servidores de imagem da Meta (`*.cdninstagram.com`, `*.fbcdn.net`, só JPEG). O token e a chave secreta do S3 ficam cifrados pelo Chaveiro do macOS |
+| Imagens a publicar | só para o bucket S3 que você configurou, de onde saem depois que o Instagram publica |
 
-O agente **não escreve arquivos, não roda comandos e só usa os servidores MCP e os conectores do claude.ai que você ligar**, com a regra de cada ferramenta. A internet só entra onde você liga (a fonte "Internet" do Assistente e o "Pode pesquisar na internet" de cada agente): a busca é livre (até 10 por pedido), mas o app só deixa abrir uma página cujo endereço veio de um resultado dessa busca ou foi escrito por você (até 15 por pedido). Um endereço montado pelo agente, que poderia levar trechos das suas reuniões para fora, é recusado. Tradução, resumo e análise nunca acessam a internet. Ele roda sem as suas configurações pessoais do Claude (hooks, `CLAUDE.md`, permissões globais) e só lê dentro da pasta das reuniões — o app confere cada pedido e o próprio `claude` recebe `--restricted`. O agente oficial do Claude (que tem licença proprietária da Anthropic) **não vem dentro do instalador**: o app baixa do registro do npm na primeira vez, só com o seu clique, conferindo o hash de cada pacote.
+O agente **não escreve arquivos, não roda comandos e só usa os servidores MCP e os conectores do claude.ai que você ligar**, com a regra de cada ferramenta. A internet só entra onde você liga (a fonte "Internet" do Assistente e o "Pode pesquisar na internet" de cada agente): a busca é livre (até 10 por pedido), mas o app só deixa abrir uma página cujo endereço veio de um resultado dessa busca ou foi escrito por você (até 15 por pedido). Um endereço montado pelo agente, que poderia levar trechos das suas reuniões para fora, é recusado. Tradução, resumo e análise nunca acessam a internet. Nada é publicado, respondido, ocultado ou excluído no Instagram sem o seu clique na tela Redes: o Assistente só cria rascunho. Ele roda sem as suas configurações pessoais do Claude (hooks, `CLAUDE.md`, permissões globais) e só lê dentro da pasta das reuniões — o app confere cada pedido e o próprio `claude` recebe `--restricted`. O agente oficial do Claude (que tem licença proprietária da Anthropic) **não vem dentro do instalador**: o app baixa do registro do npm na primeira vez, só com o seu clique, conferindo o hash de cada pacote.
 
 Avise as pessoas antes de gravar uma reunião.
 
@@ -197,6 +209,7 @@ Se o script falhar no meio, ele volta a versão no `package.json`. Se o commit j
 ### Estrutura
 
 - `apps/desktop/` — o app (main, preload, renderer, testes, smoke).
+- `apps/desktop/src/main/redes/` e `apps/desktop/src/renderer/src/features/redes/` — Redes (Instagram): cliente da API, S3 com assinatura SigV4, fila e agendador no main; a tela e o editor no renderer.
 - `services/whatsapp-bridge/` — o serviço local do WhatsApp (experimental), com os testes em pytest.
 - `docs/specs/desktop-shell/` — spec, design e contratos de cada etapa.
 - `docs/fase0.md` — prova técnica (captura de áudio, provedores).

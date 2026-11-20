@@ -16,6 +16,8 @@ interface ButtonProps {
   ariaShortcut?: string
   /** Nome estável da ação (`data-action`), para o smoke achar o botão. */
   action?: string
+  /** Contrato 69: ganchos `data-*` a mais para o smoke (`{ 'data-redes-connect': '' }`). */
+  data?: Readonly<Record<`data-${string}`, string>>
   disabled?: boolean
 }
 
@@ -27,11 +29,12 @@ const VARIANT: Record<Variant, string> = {
   danger: 'text-rec hover:bg-bg-sunken active:bg-line',
 }
 
-export function Button({ children, onClick, variant = 'primary', icon, shortcut, ariaShortcut, action, disabled = false }: ButtonProps) {
+export function Button({ children, onClick, variant = 'primary', icon, shortcut, ariaShortcut, action, data, disabled = false }: ButtonProps) {
   return (
     <button
       type="button"
       data-action={action}
+      {...data}
       onClick={onClick}
       disabled={disabled}
       aria-keyshortcuts={ariaShortcut}

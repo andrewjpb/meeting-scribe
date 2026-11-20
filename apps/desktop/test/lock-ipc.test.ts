@@ -1,5 +1,16 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
-import { EMAIL_PRELOAD_ONLY_EVENTS, INVOKE_CHANNELS, PRELOAD_ONLY_EVENTS, RECORDING_SESSION_CHANNELS, RENDERER_EVENT_CHANNELS, RENDERER_EVENTS_WHEN_LOCKED, WHEN_LOCKED, type InvokeChannel, type RendererEvent } from '../src/shared/ipc'
+import {
+  EMAIL_PRELOAD_ONLY_EVENTS,
+  INVOKE_CHANNELS,
+  PRELOAD_ONLY_EVENTS,
+  RECORDING_SESSION_CHANNELS,
+  REDES_PRELOAD_ONLY_EVENTS,
+  RENDERER_EVENT_CHANNELS,
+  RENDERER_EVENTS_WHEN_LOCKED,
+  WHEN_LOCKED,
+  type InvokeChannel,
+  type RendererEvent,
+} from '../src/shared/ipc'
 import { createRecordingSessions, leaveButtons } from '../src/main/lock/recording-session'
 
 // O registro do main (`main/ipc.ts`) com um `ipcMain` falso: cada canal registrado fica aqui para o teste chamar.
@@ -301,6 +312,71 @@ describe('canais com o app bloqueado (contrato 22, CA4)', () => {
     expect(calls).toEqual([])
     locked = false
     await expect(invoke('scribe:meeting-prompt-state')).resolves.toBe('resposta')
+  })
+
+  it('contrato 69: todos os canais das redes são recusados bloqueado, antes do handler', async () => {
+    const channels = INVOKE_CHANNELS.filter((channel) => channel.startsWith('scribe:redes-'))
+    expect(channels.sort()).toEqual([
+      // 73: comentários
+      'scribe:redes-comment-delete',
+      'scribe:redes-comment-hide',
+      'scribe:redes-comment-reply',
+      'scribe:redes-comments',
+      'scribe:redes-comments-read',
+      'scribe:redes-comments-refresh',
+      // fim 73
+      'scribe:redes-connect',
+      // 74: mensagens
+      'scribe:redes-conversation-read',
+      // fim 74
+      'scribe:redes-media-host-clear',
+      'scribe:redes-media-host-save',
+      'scribe:redes-media-host-test',
+      // Contrato 71: as publicações.
+      'scribe:redes-media-pick',
+      // Contrato 72: a miniatura da fila e do editor.
+      'scribe:redes-media-thumb',
+      // 74: mensagens
+      'scribe:redes-message-send',
+      'scribe:redes-messages',
+      'scribe:redes-messages-refresh',
+      // fim 74
+      // Contrato 75: as métricas.
+      'scribe:redes-metrics',
+      'scribe:redes-metrics-refresh',
+      'scribe:redes-publication-delete',
+      'scribe:redes-publication-publish',
+      'scribe:redes-publication-retry',
+      'scribe:redes-publication-save',
+      'scribe:redes-publication-schedule',
+      'scribe:redes-publication-unschedule',
+      'scribe:redes-publications',
+      'scribe:redes-quota',
+      'scribe:redes-refresh',
+      'scribe:redes-remove',
+      'scribe:redes-state',
+    ])
+    locked = true
+    for (const channel of channels) {
+      expect(WHEN_LOCKED[channel], channel).toBe('refused')
+      await expect(Promise.resolve().then(() => invokeHandlers.get(channel)?.(trusted, { token: 'IGAAx', accountId: '1' }))).rejects.toThrow(/^locked$/)
+    }
+    expect(calls).toEqual([])
+    locked = false
+    await expect(invoke('scribe:redes-state')).resolves.toBe('resposta')
+  })
+
+  it('contrato 71: o clique de publicar e agendar é ignorado bloqueado e só o preload manda (lista própria)', async () => {
+    expect(RENDERER_EVENTS_WHEN_LOCKED['scribe:redes-click']).toBe('ignored')
+    expect(REDES_PRELOAD_ONLY_EVENTS).toEqual(['scribe:redes-click'])
+    expect(EMAIL_PRELOAD_ONLY_EVENTS).not.toContain('scribe:redes-click')
+    expect(PRELOAD_ONLY_EVENTS).not.toContain('scribe:redes-click')
+    locked = true
+    for (const channel of ['scribe:redes-publication-publish', 'scribe:redes-publication-schedule'] as const) {
+      await expect(Promise.resolve().then(() => invokeHandlers.get(channel)?.(trusted, { id: 'x', at: '2026-11-20T12:00:00Z', clickToken: 'y' }))).rejects.toThrow(/^locked$/)
+    }
+    expect(calls).toEqual([])
+    locked = false
   })
 
   it('contrato 40: a conversa aberta no WhatsApp é ignorada bloqueado (o main não muda a regra da notificação)', () => {

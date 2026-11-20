@@ -61,6 +61,9 @@ describe('esquema de configurações (CA1)', () => {
       emailFoldersCollapsed: [],
       emailRecentFolders: {},
       claudeConnectors: {},
+      // 73: comentários
+      redesPollMinutes: 5,
+      // fim 73
     })
     expect(parseSettings(undefined)).toEqual(DEFAULT_SETTINGS)
     expect(parseSettings({})).toEqual(DEFAULT_SETTINGS)
@@ -132,8 +135,14 @@ describe('esquema de configurações (CA1)', () => {
       emailFoldersCollapsed: ['0b6f2c1e-3a4d-4c5b-8e9f-0a1b2c3d4e5f\nClientes'],
       emailRecentFolders: { '0b6f2c1e-3a4d-4c5b-8e9f-0a1b2c3d4e5f': ['Clientes/ABF', 'Resolvidos'] },
       claudeConnectors: { Notion: { enabled: true, tools: { 'notion-search': 'allow', 'notion-create-pages': 'deny' } }, 'Google Drive': { enabled: false, tools: {} } },
+      // 73: comentários
+      redesPollMinutes: 15,
+      // fim 73
     }
     expect(parseSettings(saved)).toEqual(saved)
+    // 73: comentários
+    expect(parseSettings({ ...saved, redesPollMinutes: 7 })).toEqual({ ...saved, redesPollMinutes: 5 })
+    // fim 73
     // Contrato 12: minutos fora da lista e uma lista de agendas inválida voltam ao padrão, sem perder a outra conta.
     expect(parseSettings({ ...saved, calendarLeadMinutes: 3 })).toEqual({ ...saved, calendarLeadMinutes: 5 })
     expect(parseSettings({ ...saved, calendarIds: { google: 'primary', microsoft: ['default'] } })).toEqual({ ...saved, calendarIds: { google: null, microsoft: ['default'] } })
@@ -175,7 +184,7 @@ describe('esquema de configurações (CA1)', () => {
   it('Claude CLI (contrato 05, CA1): motor, modelo e caminho com padrão próprio cada um', () => {
     // `settings.json` do contrato 04, sem os campos novos: carrega com os padrões deles e mantém o resto.
     const old = { translationEnabled: false, translationModel: 'gpt-oss-120b', sourceLanguage: 'es', targetLanguage: 'ja', echoCancellation: true, theme: 'dark', micDeviceId: null }
-    expect(parseSettings(old)).toEqual({ ...old, removeEcho: true, translationEngine: 'assemblyai', claudeModel: 'haiku', chatModel: 'sonnet', claudePath: null, claudeTransport: 'acp', agentProfile: 'claude', saveToFolder: true, audioFolder: null, summarizeOnStop: true, liveCards: false, whatsappInsights: true, whatsappAutoCorrect: false, whatsappNotifications: true, whatsappNotifyGroups: true, whatsappTypingSignal: false, identifySpeakers: false, meetSpeakers: true, meetingPrompt: true, navegadorPlugin: false, brandName: null, brandSubtitle: null, brandLogo: null, autoCheckUpdates: true, lockUseTouchId: false, lockAfterMinutes: 0, lockOnSystemLock: true, lockOnLaunch: false, saveToDrive: true, closeBehavior: 'tray', openAtLogin: false, scheduledRunsDailyLimit: 50, calendarAlerts: true, calendarLeadMinutes: 5, calendarNotRecordingAlert: true, calendarIds: { google: null, microsoft: null }, emailPollMinutes: 5, emailNotifications: true, emailCollapsed: [], emailFoldersCollapsed: [], emailRecentFolders: {}, inviteCalendarId: null, inviteAddOnAccept: true, inviteSuggest: false, claudeConnectors: {} })
+    expect(parseSettings(old)).toEqual({ ...old, removeEcho: true, translationEngine: 'assemblyai', claudeModel: 'haiku', chatModel: 'sonnet', claudePath: null, claudeTransport: 'acp', agentProfile: 'claude', saveToFolder: true, audioFolder: null, summarizeOnStop: true, liveCards: false, whatsappInsights: true, whatsappAutoCorrect: false, whatsappNotifications: true, whatsappNotifyGroups: true, whatsappTypingSignal: false, identifySpeakers: false, meetSpeakers: true, meetingPrompt: true, navegadorPlugin: false, brandName: null, brandSubtitle: null, brandLogo: null, autoCheckUpdates: true, lockUseTouchId: false, lockAfterMinutes: 0, lockOnSystemLock: true, lockOnLaunch: false, saveToDrive: true, closeBehavior: 'tray', openAtLogin: false, scheduledRunsDailyLimit: 50, calendarAlerts: true, calendarLeadMinutes: 5, calendarNotRecordingAlert: true, calendarIds: { google: null, microsoft: null }, emailPollMinutes: 5, emailNotifications: true, emailCollapsed: [], emailFoldersCollapsed: [], emailRecentFolders: {}, inviteCalendarId: null, inviteAddOnAccept: true, inviteSuggest: false, claudeConnectors: {}, redesPollMinutes: 5 })
     expect(parseSettings({ translationEngine: 'claude-cli', claudeModel: 'sonnet' })).toMatchObject({ translationEngine: 'claude-cli', claudeModel: 'sonnet' })
     // Fora da lista cai no padrão: só `haiku` e `sonnet`, só os dois motores.
     expect(parseSettings({ translationEngine: 'openai' }).translationEngine).toBe('assemblyai')

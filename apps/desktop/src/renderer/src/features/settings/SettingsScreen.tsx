@@ -27,6 +27,8 @@ import { CalendarSection } from './CalendarSection'
 import { ConnectionsSection } from './ConnectionsSection'
 import { MicrosoftSection } from './MicrosoftSection'
 import { WhatsAppSection } from './WhatsAppSection'
+import { InstagramSection } from './InstagramSection'
+import { MediaHostSection } from './MediaHostSection'
 import { EmailSettingsTab } from './EmailSettingsTab'
 import { AcpAgentField } from './AcpAgentField'
 import { ApiKeyField } from './ApiKeyField'
@@ -451,7 +453,7 @@ function SettingsPanels({ tab }: { tab: SettingsTab }) {
 
           {panel('arquivos', <MeetingFilesSection />)}
 
-          {/* Contrato 11: a conta Google e o Drive. Contrato 12: a Microsoft e as agendas. Contrato 24: o WhatsApp. */}
+          {/* Contrato 11: a conta Google e o Drive. Contrato 12: a Microsoft e as agendas. Contrato 24: o WhatsApp. Contrato 69: o Instagram e o armazenamento de mídia. */}
           {panel(
             'contas',
             <>
@@ -459,6 +461,8 @@ function SettingsPanels({ tab }: { tab: SettingsTab }) {
               <MicrosoftSection />
               <CalendarSection />
               <WhatsAppSection />
+              <InstagramSection />
+              <MediaHostSection />
             </>,
           )}
 

@@ -110,6 +110,8 @@ interface ChatState {
   createEvent: (ref: ChatActionRef, calendarId: string, fields?: ChatActionEventFields) => Promise<ChatActionResult>
   /** Contrato 78: "Salvar" (`update`, com a hora e o texto do "Editar") ou "Apagar lembrete" (`delete`). */
   changeReminder: (ref: ChatActionRef, op: 'update' | 'delete', edit?: { at?: string; text?: string }) => Promise<ChatActionResult>
+  /** Contrato 76: "Criar rascunho" no cartão do Instagram, com a legenda e a data do "Editar" (`at: null` tira a data). */
+  createInstagramDraft: (ref: ChatActionRef, edit?: { caption?: string; at?: string | null }) => Promise<ChatActionResult>
   /** Contrato 21: "Permitir uma vez", "Sempre permitir esta ferramenta" ou "Negar" num cartão de aprovação. */
   answerApproval: (chatId: string, id: string, decision: McpApprovalDecision) => Promise<boolean>
 }
@@ -391,6 +393,16 @@ export const useChat = create<ChatState>()((set, get) => {
     changeReminder: async (ref, op, edit = {}) => {
       try {
         const result = await window.__scribeApi.invoke('scribe:chat-action-reminder-change', { ...ref, op, ...(edit.at ? { at: edit.at } : {}), ...(edit.text !== undefined ? { text: edit.text } : {}) })
+        if (result.ok) keepChat(result.chat)
+        return result
+      } catch {
+        return { ok: false, error: 'invalid' }
+      }
+    },
+
+    createInstagramDraft: async (ref, edit = {}) => {
+      try {
+        const result = await window.__scribeApi.invoke('scribe:chat-action-instagram-draft', { ...ref, ...(edit.caption !== undefined ? { caption: edit.caption } : {}), ...(edit.at !== undefined ? { at: edit.at } : {}) })
         if (result.ok) keepChat(result.chat)
         return result
       } catch {
