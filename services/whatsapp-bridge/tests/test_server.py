@@ -387,7 +387,10 @@ def test_fake_history_is_spread_over_days_and_not_unread(running):
     ana = next(c for c in call(port, 'GET', '/chats')[1]['chats'] if c['id'] == ANA)
     assert ana['unread'] == 2
     messages = call(port, 'GET', f'/chats/{ANA}/messages')[1]['messages']
-    days = {m['at'] // 86_400_000 for m in messages}
+    # Dias atrás em relação à mais nova, arredondados: o histórico fica a ±3 h do horário de cada dia, então contar
+    # pelo dia em UTC juntava dois dias perto da meia-noite UTC (~21 h em São Paulo) e o teste falhava conforme a hora.
+    newest = max(m['at'] for m in messages)
+    days = {round((newest - m['at']) / 86_400_000) for m in messages}
     assert len(messages) == 11 and len(days) >= 6
 
 
