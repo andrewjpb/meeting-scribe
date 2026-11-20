@@ -1,6 +1,6 @@
 import { CircleCheck, Info, KeyRound, TriangleAlert } from 'lucide-react'
 import { useState } from 'react'
-import { EMAIL_POLL_MINUTES, EMAIL_SECURITY, type EmailAccountInput, type EmailAccountStatus, type EmailPollMinutes, type EmailProtocol, type EmailSecurity, type EmailTestResult } from '@shared/email'
+import { EMAIL_POLL_MINUTES, EMAIL_SECURITY, type EmailAccountInput, type EmailAccountStatus, type EmailPollMinutes, type EmailProtocol, type EmailSecurity, type EmailTestResult, type EmailAutoconfig } from '@shared/email'
 import { EMAIL_ACCOUNTS_DESCRIPTION, EMAIL_NOTIFICATIONS_DESCRIPTION, EMAIL_POLL_DESCRIPTION } from '@shared/settings-index'
 import { useSettings } from '../../app/settingsStore'
 import { Button } from '../../design/Button'
@@ -155,7 +155,7 @@ export function EmailSection() {
   const [step, setStep] = useState<Step>('closed')
   const [form, setForm] = useState<Form>(emptyForm)
   const [advanced, setAdvanced] = useState(false)
-  const [found, setFound] = useState<'preset' | 'ispdb' | null>(null)
+  const [found, setFound] = useState<EmailAutoconfig['source'] | null>(null)
   const [busy, setBusy] = useState<'autoconfig' | 'test' | 'add' | null>(null)
   const [test, setTest] = useState<EmailTestResult | null>(null)
   const [error, setError] = useState<string | null>(null)

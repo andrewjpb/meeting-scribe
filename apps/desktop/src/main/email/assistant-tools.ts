@@ -10,7 +10,7 @@ import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { chmod, rename, writeFile } from 'node:fs/promises'
 import { z } from 'zod'
-import { EMAIL_REF_PATTERN, type EmailAccountStatus, type EmailBody, type EmailBodyResult, type EmailMessage } from '../../shared/email'
+import { EMAIL_REF_PATTERN, isInbox, isSent, type EmailAccountStatus, type EmailBody, type EmailBodyResult, type EmailMessage } from '../../shared/email'
 import { EMAIL_SEARCH_FILE } from '../chat/sources'
 import type { AssistantTool, ToolResult } from '../chat/tools'
 import { ageLabel, bodyText, emailAddressLine, emailFileName, emailOneLine, emailRef, emailStamp, isPending, messageMarkdown, type EmailCache } from './export'
@@ -98,7 +98,7 @@ export function createEmailTools(deps: EmailToolsDeps): EmailTools {
     const own = caches.map((cache) => cache.status.account.address)
     const sent = caches.flatMap((cache) => cache.sent)
     const entries = caches.flatMap((cache) =>
-      [...cache.inbox, ...cache.sent].map((message) => ({ ref: emailRef(cache.status.account.id, `${message.folder}:${message.id}`.replace(/^inbox:/, '')), status: cache.status, message, mailbox: null, uid: message.uid, pending: isPending(message, sent, own) })),
+      [...cache.inbox, ...cache.sent].map((message) => ({ ref: emailRef(cache.status.account.id, isInbox(message) ? message.id : `sent:${message.id}`), status: cache.status, message, mailbox: null, uid: message.uid, pending: isPending(message, sent, own, cache.status) })),
     )
     return { caches, entries }
   }
@@ -113,13 +113,13 @@ export function createEmailTools(deps: EmailToolsDeps): EmailTools {
     [
       `- ref: ${found.ref}`,
       `conta: ${found.status.account.address}`,
-      `onde: ${found.mailbox === null ? (found.message.folder === 'sent' ? 'enviados (no app)' : 'Caixa de Entrada (no app)') : `servidor, pasta ${emailOneLine(found.mailbox)}`}`,
+      `onde: ${found.mailbox === null ? (isSent(found.message, found.status) ? 'enviados (no app)' : 'Caixa de Entrada (no app)') : `servidor, pasta ${emailOneLine(found.mailbox)}`}`,
       `de: ${emailAddressLine(found.message.from[0])}`,
       `para: ${found.message.to.map(emailAddressLine).join(', ') || 'ninguém'}`,
       `assunto: "${emailOneLine(found.message.subject || '(sem assunto)').replace(/"/g, "'")}"`,
       `data: ${emailStamp(found.message.date)} (${ageLabel(found.message.date, now())})`,
       found.message.seen ? 'lida' : 'não lida',
-      ...(found.message.folder === 'inbox' ? [`pendente de resposta: ${found.pending ? 'sim' : 'não'}`] : []),
+      ...(!isSent(found.message, found.status) ? [`pendente de resposta: ${found.pending ? 'sim' : 'não'}`] : []),
       'corpo: peça com ler_email',
     ].join(' · ')
 
@@ -181,14 +181,14 @@ export function createEmailTools(deps: EmailToolsDeps): EmailTools {
           if (uid === null) continue
           // Só a INBOX do servidor casa com a INBOX do cache (o mesmo UID na mesma pasta): aí vale a referência do cache.
           // Uma mensagem de outra pasta nunca é casada pelo UID: fica com a referência dela (a pasta, o UIDVALIDITY e o UID).
-          const cached = hit.mailbox.toUpperCase() === 'INBOX' ? entries.find((entry) => entry.status.account.id === cache.status.account.id && entry.message.folder === 'inbox' && entry.message.uid === uid) : undefined
+          const cached = hit.mailbox.toUpperCase() === 'INBOX' ? entries.find((entry) => entry.status.account.id === cache.status.account.id && isInbox(entry.message) && entry.message.uid === uid) : undefined
           if (cached) {
             if (!local.includes(cached)) local.push(cached)
             continue
           }
           // A mesma mensagem (o mesmo Message-ID) já está nos resultados pelo cache (a cópia em Enviados): não repete.
           if (hit.message.messageId !== null && local.some((entry) => entry.status.account.id === cache.status.account.id && entry.message.messageId === hit.message.messageId)) continue
-          const found: EmailFound = { ref: emailRef(cache.status.account.id, hit.message.id, 'servidor'), status: cache.status, message: hit.message, mailbox: hit.mailbox, uid, pending: hit.message.folder === 'inbox' && isPending(hit.message, sent, own) }
+          const found: EmailFound = { ref: emailRef(cache.status.account.id, hit.message.id, 'servidor'), status: cache.status, message: hit.message, mailbox: hit.mailbox, uid, pending: hit.specialUse !== '\\Sent' && isPending(hit.message, sent, own, cache.status) }
           remember(found)
           remote.push(found)
         }
@@ -222,7 +222,7 @@ export function createEmailTools(deps: EmailToolsDeps): EmailTools {
       const found = await find(parsed.data.email)
       if (!found) return { file: null, label: 'Email não encontrado', note: 'Não achei esse email: faça a busca de novo.' }
       let body: EmailBody | null = await deps.body(found.status.account.id, found.message).catch(() => null)
-      if (!body && found.mailbox === null && found.message.folder === 'inbox' && found.uid !== null && found.status.account.incoming.protocol === 'imap') {
+      if (!body && found.mailbox === null && isInbox(found.message) && found.uid !== null && found.status.account.incoming.protocol === 'imap') {
         // Da INBOX, ainda não baixado: do servidor, só leitura (sem gravar no cache).
         const result = await deps.peekServer(found.status.account.id, 'INBOX', found.uid)
         body = result.ok ? result.body : null

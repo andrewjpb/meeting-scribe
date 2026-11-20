@@ -20,13 +20,15 @@ import {
   unreadCount,
 } from '../../src/renderer/src/features/email/format'
 
+/** Contrato 52: a pasta de enviados da conta. */
+const SENT = { sentMailbox: 'Sent' }
 const NOW = new Date(2026, 10, 19, 15, 30)
 const at = (day: number, hour = 10, minute = 0, month = 10, year = 2026): number => new Date(year, month, day, hour, minute).getTime()
 
 const message = (over: Partial<EmailMessage> = {}): EmailMessage => ({
   id: '1',
   accountId: 'conta',
-  folder: 'inbox',
+  mailbox: 'INBOX',
   uid: 1,
   seen: false,
   flagged: false,
@@ -74,9 +76,9 @@ describe('prévia e linha da lista', () => {
   })
 
   it('Caixa de Entrada mostra quem mandou; Enviados, para quem foi', () => {
-    expect(rowTitle(message())).toBe('Marina Rocha')
-    expect(rowTitle(message({ from: [{ name: null, address: 'avisos@x.example' }] }))).toBe('avisos@x.example')
-    expect(rowTitle(message({ folder: 'sent' }))).toBe('Para: Andrew, time@lap.example')
+    expect(rowTitle(message(), SENT)).toBe('Marina Rocha')
+    expect(rowTitle(message({ from: [{ name: null, address: 'avisos@x.example' }] }), SENT)).toBe('avisos@x.example')
+    expect(rowTitle(message({ mailbox: 'Sent' }), SENT)).toBe('Para: Andrew, time@lap.example')
   })
 })
 
@@ -84,7 +86,7 @@ describe('não lidas por conta', () => {
   it('conta só as não lidas da Caixa de Entrada, por conta', () => {
     const a = [message(), message({ id: '2', seen: true }), message({ id: '3' })]
     expect(unreadCount(a)).toBe(2)
-    expect(unreadCount([message({ folder: 'sent' })])).toBe(0)
+    expect(unreadCount([message({ mailbox: 'Sent' })])).toBe(0)
     expect(unreadByAccount({ a, b: [], c: undefined })).toEqual({ a: 2, b: 0, c: 0 })
     expect(unreadBadge(0)).toBe('')
     expect(unreadBadge(7)).toBe('7')
@@ -118,7 +120,7 @@ describe('composer', () => {
   })
 
   it('Responder: para quem mandou, "Re:" e a citação com a data e o remetente', () => {
-    const account = { id: 'conta', address: 'andrew@lap.example' }
+    const account = { id: 'conta', address: 'andrew@lap.example', ...SENT }
     const draft = composeFrom('reply', message(), { text: 'Linha 1\nLinha 2', html: null }, account)
     expect(draft.to).toEqual([{ address: 'marina@cliente.example', valid: true }])
     expect(draft.cc).toEqual([])
@@ -128,13 +130,13 @@ describe('composer', () => {
   })
 
   it('Responder a todos: os outros de Para e Cc, sem a própria conta', () => {
-    const draft = composeFrom('replyAll', message(), null, { id: 'conta', address: 'ANDREW@lap.example' })
+    const draft = composeFrom('replyAll', message(), null, { id: 'conta', address: 'ANDREW@lap.example', ...SENT })
     expect(draft.to.map((item) => item.address)).toEqual(['marina@cliente.example'])
     expect(draft.cc.map((item) => item.address)).toEqual(['time@lap.example', 'paulo@cliente.example'])
   })
 
   it('Encaminhar: sem destinatário, "Enc:" e a original no texto', () => {
-    const draft = composeFrom('forward', message(), { text: 'Corpo', html: null }, { id: 'conta', address: 'andrew@lap.example' })
+    const draft = composeFrom('forward', message(), { text: 'Corpo', html: null }, { id: 'conta', address: 'andrew@lap.example', ...SENT })
     expect(draft.to).toEqual([])
     expect(draft.subject).toBe('Enc: Proposta')
     expect(draft.inReplyTo).toBeNull()

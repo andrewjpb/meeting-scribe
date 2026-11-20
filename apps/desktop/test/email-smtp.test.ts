@@ -140,6 +140,7 @@ function fakeImap(parent: ImapMessage): { connect: ImapConnect; appended: Buffer
     since: () => Promise.resolve([]),
     source: () => Promise.resolve(PARENT_RAW),
     setSeen: () => Promise.resolve(),
+    setFlagged: () => Promise.resolve(),
     remove: () => Promise.resolve(),
     appendSent: (raw) => {
       appended.push(raw)
@@ -269,7 +270,7 @@ describe('envio por SMTP (contrato 42, CA5)', () => {
     expect(imap.appended[0]?.toString('latin1')).toContain(`Message-ID: ${result.messageId}`)
     // E no app: enviados guardados e a original marcada como respondida.
     const sent = await service.messages({ accountId, folder: 'sent' })
-    expect(sent).toMatchObject([{ id: result.messageId, folder: 'sent', subject: 'Re: Proposta', inReplyTo: '<orig@cliente.com>' }])
+    expect(sent).toMatchObject([{ id: result.messageId, mailbox: 'Sent', subject: 'Re: Proposta', inReplyTo: '<orig@cliente.com>' }])
     expect(await service.body({ accountId, id: result.messageId })).toEqual({ ok: true, body: { text: 'Pode ser na quinta.', html: null, attachments: [] } })
     expect((await service.messages({ accountId }))[0]?.answered).toBe(true)
   })

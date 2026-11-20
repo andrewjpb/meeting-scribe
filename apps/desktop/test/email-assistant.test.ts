@@ -38,7 +38,7 @@ const OWN = 'andrew@lap.example'
 const message = (id: string, patch: Partial<EmailMessage> = {}): EmailMessage => ({
   id,
   accountId: ACCOUNT,
-  folder: 'inbox',
+  mailbox: 'INBOX',
   uid: Number(id),
   seen: false,
   flagged: false,
@@ -66,6 +66,7 @@ const status = (protocol: 'imap' | 'pop3' = 'imap'): EmailAccountStatus => ({
   },
   state: 'connected',
   error: null,
+  sentMailbox: 'Sent',
 })
 
 const fakeSafeStorage: SafeStorageLike = {
@@ -89,7 +90,7 @@ describe('pendência (CA6)', () => {
     // A marca \Answered do servidor (respondida em outro programa).
     expect(isPending({ ...received, answered: true }, [], [OWN])).toBe(false)
     // Um enviado depois, com o In-Reply-To ou o References dela.
-    const reply = message('<r1@lap.example>', { folder: 'sent', uid: null, from: [{ name: null, address: OWN }], date: NOW, inReplyTo: '<m1@cliente.example>' })
+    const reply = message('<r1@lap.example>', { mailbox: 'Sent', uid: null, from: [{ name: null, address: OWN }], date: NOW, inReplyTo: '<m1@cliente.example>' })
     expect(isPending(received, [reply], [OWN])).toBe(false)
     expect(isPending(received, [{ ...reply, inReplyTo: null, references: ['<x@y>', '<m1@cliente.example>'] }], [OWN])).toBe(false)
     // Uma resposta de antes dela não conta (a mensagem é a resposta da outra pessoa à minha).

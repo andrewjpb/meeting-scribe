@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<title>Tela de bloqueio</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0}
+button{font:inherit}
+input::placeholder{color:#7f8da6}
+</style>
+</helmet>
+<div style="position: relative; display: flex; width: 1120px; height: 740px; overflow: hidden; background: #ffffff; color: #061a3d; font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; font-size: 13px; line-height: 20px; -webkit-font-smoothing: antialiased">
+<dc-import name="SidebarRaiz" ativo="reunioes" nao-lidas="{{naoLidas}}" hint-size="224px,740px"></dc-import>
+
+<main aria-hidden="true" style="flex: 1 1 0; min-width: 0; height: 740px; display: flex; flex-direction: column; background: #ffffff">
+<div style="flex: 0 0 52px; height: 52px"></div>
+<div style="padding: 0 40px; display: flex; align-items: center; justify-content: space-between; gap: 24px">
+<h1 style="margin: 0; font-size: 26px; line-height: 32px; font-weight: 700; letter-spacing: -0.3px; color: #0a2a5e">Reuniões</h1>
+<div style="display: flex; align-items: center; gap: 8px">
+<div style="width: 280px; height: 40px; box-sizing: border-box; display: flex; align-items: center; gap: 8px; padding: 0 12px; border: 1px solid #c9d4e5; border-radius: 4px; color: #7f8da6"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter"><circle cx="11" cy="11" r="7"></circle><path d="m20 20-4-4"></path></svg><span>Buscar reuniões</span></div>
+<span style="display: flex; align-items: center; gap: 8px; height: 40px; padding: 0 16px; border-radius: 4px; background: #1e5bb8; color: #ffffff; font-weight: 500"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter"><path d="M5 12h14"></path><path d="M12 5v14"></path></svg>Nova gravação</span>
+</div>
+</div>
+<div style="padding: 28px 40px 0; max-width: 820px; display: flex; flex-direction: column; gap: 24px">
+<div style="display: flex; align-items: center; gap: 12px; padding: 12px 16px; border: 1px solid #c9d4e5; border-radius: 6px">
+<span style="width: 8px; height: 8px; background: #c62f34"></span>
+<span style="font-size: 13px; font-weight: 500; color: #c62f34">Gravando agora</span>
+<span style="flex: 1 1 0; font-size: 15px; font-weight: 500; color: #0a2a5e">Planejamento Q1</span>
+<span style="font-size: 13px; color: #5b6b85; font-variant-numeric: tabular-nums">12:34</span>
+</div>
+<div style="display: flex; flex-direction: column">
+<div style="display: flex; justify-content: space-between; padding-bottom: 6px; border-bottom: 1px solid #c9d4e5; font-size: 12px; line-height: 16px; font-weight: 700; color: #5b6b85"><span>Hoje</span><span style="font-weight: 400; font-variant-numeric: tabular-nums">2 reuniões · 47 min</span></div>
+<div style="display: flex; flex-direction: column; gap: 4px; padding: 12px 8px; border-bottom: 1px solid #e3e9f2"><span style="font-size: 15px; font-weight: 500; color: #0a2a5e">Daily</span><span style="font-size: 12px; line-height: 16px; color: #5b6b85; font-variant-numeric: tabular-nums">10:00 · 15 min · Ana, Bruno +2</span><span style="font-size: 13px; color: #5b6b85">Bruno fecha a pauta de sexta e Ana revisa o orçamento do trimestre.</span></div>
+<div style="display: flex; flex-direction: column; gap: 4px; padding: 12px 8px; border-bottom: 1px solid #e3e9f2"><span style="font-size: 15px; font-weight: 500; color: #0a2a5e">Alinhamento com fornecedor</span><span style="font-size: 12px; line-height: 16px; color: #5b6b85; font-variant-numeric: tabular-nums">08:30 · 32 min · Carla, Diego</span><span style="font-size: 13px; color: #5b6b85">Prazos do contrato revistos; a entrega passa para dezembro.</span></div>
+</div>
+<div style="display: flex; flex-direction: column">
+<div style="display: flex; justify-content: space-between; padding-bottom: 6px; border-bottom: 1px solid #c9d4e5; font-size: 12px; line-height: 16px; font-weight: 700; color: #5b6b85"><span>Ontem</span><span style="font-weight: 400; font-variant-numeric: tabular-nums">1 reunião · 1 h 05 min</span></div>
+<div style="display: flex; flex-direction: column; gap: 4px; padding: 12px 8px; border-bottom: 1px solid #e3e9f2"><span style="font-size: 15px; font-weight: 500; color: #0a2a5e">Revisão do produto</span><span style="font-size: 12px; line-height: 16px; color: #5b6b85; font-variant-numeric: tabular-nums">16:00 · 1 h 05 min · Ana, Carla +3</span><span style="font-size: 13px; color: #5b6b85">Três decisões sobre o lançamento e duas tarefas novas.</span></div>
+</div>
+</div>
+</main>
+
+<div role="dialog" aria-modal="true" aria-labelledby="lock-title" style="position: absolute; top: 0; right: 0; bottom: 0; left: 0; z-index: 100; display: flex; align-items: center; justify-content: center; padding: 0 24px; background: rgba(6,26,61,0.45); backdrop-filter: blur(24px); -webkit-backdrop-filter: blur(24px)">
+<div style="width: 100%; max-width: 380px; box-sizing: border-box; display: flex; flex-direction: column; gap: 16px; padding: 32px; border: 1px solid #c9d4e5; border-radius: 6px; background: #ffffff">
+<div style="display: flex; align-items: center; gap: 10px">
+<span style="flex: 0 0 28px; width: 28px; height: 28px; display: flex; align-items: center; justify-content: center; border-radius: 4px; background: #0a2a5e"><svg width="22" height="22" viewBox="0 0 100 100" role="img" aria-label="LAP"><rect x="0" y="0" width="100" height="100" rx="6" fill="#ffffff"></rect><path d="M 20 25 L 20 75 L 55 75" fill="none" stroke="#0a2a5e" stroke-width="8" stroke-linecap="square" stroke-linejoin="miter"></path><rect x="62" y="58" width="22" height="22" fill="#3b82f6"></rect></svg></span>
+<span style="font-size: 15px; font-weight: 700; color: #0a2a5e">LAP Reuniões</span>
+</div>
+<h1 id="lock-title" style="margin: 0; font-size: 20px; line-height: 26px; font-weight: 700; color: #0a2a5e">LAP Reuniões está bloqueado</h1>
+<p role="status" style="margin: 0; display: flex; align-items: center; gap: 8px; font-size: 13px; color: #5b6b85"><span aria-hidden="true" style="flex: 0 0 8px; width: 8px; height: 8px; background: #c62f34"></span><span style="font-variant-numeric: tabular-nums">Gravando · 12:34</span></p>
+<div style="display: flex; flex-direction: column; gap: 12px">
+<label for="lock-password" style="font-size: 13px; font-weight: 500; color: #061a3d">Senha</label>
+<input id="lock-password" type="password" autocomplete="off" style="height: 40px; box-sizing: border-box; padding: 0 12px; border: 1px solid #c9d4e5; border-radius: 4px; background: #ffffff; color: #061a3d; font: inherit; font-size: 13px">
+<button type="button" style="display: flex; align-items: center; justify-content: center; gap: 8px; height: 40px; padding: 0 16px; border: 0; border-radius: 4px; background: #1e5bb8; color: #ffffff; font-size: 13px; font-weight: 500; cursor: pointer"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><rect x="3" y="11" width="18" height="11"></rect><path d="M7 11V7a5 5 0 0 1 9.9-1"></path></svg>Desbloquear</button>
+</div>
+<button type="button" style="display: flex; align-items: center; justify-content: center; gap: 8px; height: 40px; padding: 0 14px; border: 1px solid #c9d4e5; border-radius: 4px; background: #ffffff; color: #0a2a5e; font-size: 13px; font-weight: 500; cursor: pointer"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><path d="M6 8a7 7 0 0 1 12 0"></path><path d="M9 12a3 3 0 0 1 6 0c0 3-.5 6-1.5 8"></path><path d="M12 12c0 2-.3 5-1.5 7"></path><path d="M5 12c0 2-.2 4-1 6"></path><path d="M19 12c0 2-.3 4-.8 6"></path></svg>Usar Touch ID</button>
+<a href="#" style="align-self: flex-start; font-size: 13px; font-weight: 500; color: #1e5bb8; text-decoration: underline; text-underline-offset: 3px">Esqueci a senha</a>
+</div>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1120,"height":740}}'>
+class Component extends DCLogic {
+  renderVals() {
+    return { naoLidas: 3 };
+  }
+}
+</script>
+</body>
+</html>

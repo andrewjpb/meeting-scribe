@@ -225,12 +225,27 @@ describe('canais com o app bloqueado (contrato 22, CA4)', () => {
       'scribe:email-attachments',
       'scribe:email-autoconfig',
       'scribe:email-delete',
+      // Contrato 52: as pastas.
+      'scribe:email-folder-create',
+      'scribe:email-folder-delete',
+      'scribe:email-folder-rename',
+      'scribe:email-folders',
       'scribe:email-get-body',
       'scribe:email-mark-read',
       'scribe:email-messages',
+      'scribe:email-move',
+      'scribe:email-open-folder',
       'scribe:email-remote-images',
       'scribe:email-remove-account',
+      // Contrato 53: as regras.
+      'scribe:email-rules-get',
+      'scribe:email-rules-preview',
+      'scribe:email-rules-run',
+      'scribe:email-rules-set',
       'scribe:email-send',
+      // Contrato 54: a assinatura.
+      'scribe:email-signature-get',
+      'scribe:email-signature-set',
       'scribe:email-test',
     ])
     for (const channel of channels) expect(WHEN_LOCKED[channel], channel).toBe('refused')
@@ -242,6 +257,11 @@ describe('canais com o app bloqueado (contrato 22, CA4)', () => {
   it('contrato 43: a pasta aberta na tela do email é ignorada bloqueado (o main não muda a regra da notificação)', () => {
     expect(RENDERER_EVENTS_WHEN_LOCKED['scribe:email-viewing']).toBe('ignored')
     expect(EMAIL_PRELOAD_ONLY_EVENTS).not.toContain('scribe:email-viewing')
+  })
+
+  it('contrato 52: a pasta relida na tela do email é ignorada bloqueado', () => {
+    expect(RENDERER_EVENTS_WHEN_LOCKED['scribe:email-folder-watch']).toBe('ignored')
+    expect(EMAIL_PRELOAD_ONLY_EVENTS).not.toContain('scribe:email-folder-watch')
   })
 
   it('contrato 48: os dois canais do aviso de reunião são recusados bloqueado, antes do handler', async () => {

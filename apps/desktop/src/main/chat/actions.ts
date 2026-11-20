@@ -34,7 +34,7 @@ import {
   type OpenScreen,
   type ReminderEmail,
 } from '../../shared/assistant'
-import { EMAIL_REF_PATTERN, EMAIL_TEXT_MAX, prefixedSubject, type EmailAccountStatus, type EmailMessage } from '../../shared/email'
+import { EMAIL_REF_PATTERN, EMAIL_TEXT_MAX, isSent, prefixedSubject, type EmailAccountStatus, type EmailMessage } from '../../shared/email'
 import { describeSchedule, TASK_MESSAGE_MAX, TASK_NAME_MAX, type TaskReminder, type TaskSaveResult } from '../../shared/automations'
 import { scheduleSchema } from '../../shared/automations-schema'
 import type { Chat, ChatMessage } from '../../shared/chat'
@@ -200,7 +200,7 @@ async function resolve(proposed: Proposed, id: string, resolver: ActionResolver)
       const { message, status } = found
       // Para quem mandou (ou, num enviado, os mesmos destinatários), sem a própria conta.
       const own = status.account.address.toLowerCase()
-      const targets = (message.folder === 'sent' ? message.to : message.from).filter((item) => item.address.toLowerCase() !== own)
+      const targets = (isSent(message, status) ? message.to : message.from).filter((item) => item.address.toLowerCase() !== own)
       const to = [...new Set(targets.map((item) => item.address))].slice(0, 10)
       if (!to.length) return null
       const inReplyTo = message.messageId && /^<[^<>\s]{1,250}>$/.test(message.messageId) ? message.messageId : null

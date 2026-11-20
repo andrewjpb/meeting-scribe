@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<title>Configurações · Claude</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0}
+button{font:inherit}
+input::placeholder{color:#7f8da6}
+</style>
+</helmet>
+<div style="display: flex; width: 1120px; height: 740px; overflow: hidden; background: #ffffff; color: #061a3d; font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; font-size: 13px; line-height: 20px; -webkit-font-smoothing: antialiased">
+<dc-import name="SidebarConfig" aba="claude" hint-size="224px,740px"></dc-import>
+<main style="flex: 1 1 0; min-width: 0; height: 740px; display: flex; flex-direction: column; background: #ffffff">
+<div aria-hidden="true" style="flex: 0 0 52px; height: 52px"></div>
+
+<div style="flex: 0 0 auto; padding: 28px 40px 0">
+<div style="max-width: 760px; margin: 0 auto; display: flex; align-items: center; justify-content: space-between; gap: 24px">
+<h1 style="margin: 0; font-size: 20px; line-height: 26px; font-weight: 700; color: #0a2a5e">Claude</h1>
+<div style="flex: 0 0 280px; width: 280px; height: 40px; box-sizing: border-box; display: flex; align-items: center; gap: 8px; padding: 0 12px; border: 1px solid #c9d4e5; border-radius: 4px; background: #ffffff; color: #7f8da6">
+<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><path d="m20 20-4-4"></path></svg>
+<label for="busca-config-claude" style="position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0)">Buscar configuração</label>
+<input id="busca-config-claude" type="search" placeholder="Buscar configuração" style="flex: 1 1 0; min-width: 0; border: 0; background: transparent; font: inherit; font-size: 13px; color: #061a3d; outline: none">
+<span aria-hidden="true" style="font-size: 11px; line-height: 16px; color: #7f8da6">⌘F</span>
+</div>
+</div>
+</div>
+
+<div style="flex: 1 1 0; min-height: 0; overflow: hidden; padding: 32px 40px 48px">
+<div style="max-width: 760px; margin: 0 auto; display: flex; flex-direction: column; gap: 32px">
+
+<section aria-label="Claude" style="display: flex; flex-direction: column">
+<h2 style="margin: 0; font-size: 10px; line-height: 14px; font-weight: 500; letter-spacing: 0.14em; text-transform: uppercase; color: #5b6b85">Claude</h2>
+<div style="margin-top: 12px; display: flex; flex-direction: column; border: 1px solid #c9d4e5; border-radius: 6px; background: #ffffff; overflow: hidden">
+<div style="display: grid; grid-template-columns: minmax(0, 1fr) 340px; column-gap: 24px; align-items: center; min-height: 64px; box-sizing: border-box; padding: 12px 16px; border-bottom: 1px solid #e3e9f2">
+<div style="display: flex; flex-direction: column; gap: 2px; min-width: 0"><p id="transporte-nome" style="margin: 0; font-size: 13px; font-weight: 500; color: #061a3d">Conexão com o Claude</p><p style="margin: 0; font-size: 12px; line-height: 16px; color: #5b6b85">O agente mostra o raciocínio e os passos do Claude direto do protocolo.</p></div>
+<div role="group" aria-labelledby="transporte-nome" style="display: flex; justify-self: start; border: 1px solid #c9d4e5; border-radius: 4px; overflow: hidden">
+<button type="button" aria-pressed="true" style="height: 38px; padding: 0 12px; border: 0; background: #0a2a5e; color: #ffffff; font-size: 13px; font-weight: 500; white-space: nowrap; cursor: pointer">Agente (ACP, recomendado)</button>
+<button type="button" aria-pressed="false" style="height: 38px; padding: 0 12px; border: 0; border-left: 1px solid #c9d4e5; background: #ffffff; color: #061a3d; font-size: 13px; white-space: nowrap; cursor: pointer">Linha de comando</button>
+</div>
+</div>
+<div style="display: grid; grid-template-columns: minmax(0, 1fr) 340px; column-gap: 24px; align-items: center; min-height: 64px; box-sizing: border-box; padding: 12px 16px; border-bottom: 1px solid #e3e9f2">
+<div style="display: flex; flex-direction: column; gap: 2px; min-width: 0"><p style="margin: 0; font-size: 13px; font-weight: 500; color: #061a3d">Agente do Claude</p><p style="margin: 0; font-size: 12px; line-height: 16px; color: #5b6b85">Baixado do registro do npm só quando você pede; fica neste Mac.</p></div>
+<p style="margin: 0; display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 500; color: #1e5bb8"><span aria-hidden="true" style="flex: 0 0 6px; width: 6px; height: 6px; background: #1e5bb8"></span>Instalado 0.4.2</p>
+</div>
+<div style="display: grid; grid-template-columns: minmax(0, 1fr) 340px; column-gap: 24px; align-items: center; min-height: 64px; box-sizing: border-box; padding: 12px 16px">
+<div style="display: flex; flex-direction: column; gap: 2px; min-width: 0"><p style="margin: 0; font-size: 13px; font-weight: 500; color: #061a3d">Claude CLI</p><p style="margin: 0; font-size: 12px; line-height: 16px; color: #5b6b85">Caminho do claude instalado neste Mac, usado na tradução, no resumo e no Assistente.</p></div>
+<div style="display: flex; flex-direction: column; gap: 4px; min-width: 0">
+<p style="margin: 0; display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 500; color: #1e5bb8"><span aria-hidden="true" style="flex: 0 0 6px; width: 6px; height: 6px; background: #1e5bb8"></span>Claude Code 2.1 encontrado</p>
+<p style="margin: 0; font-family: Menlo, ui-monospace, monospace; font-size: 11px; line-height: 16px; color: #5b6b85; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">~/.local/bin/claude</p>
+</div>
+</div>
+</div>
+</section>
+
+<section aria-label="Modelo de tradução" style="display: flex; flex-direction: column">
+<h2 style="margin: 0; font-size: 10px; line-height: 14px; font-weight: 500; letter-spacing: 0.14em; text-transform: uppercase; color: #5b6b85">Modelo de tradução</h2>
+<div style="margin-top: 12px; display: flex; flex-direction: column; border: 1px solid #c9d4e5; border-radius: 6px; background: #ffffff; overflow: hidden">
+<div style="display: grid; grid-template-columns: minmax(0, 1fr) 340px; column-gap: 24px; align-items: center; min-height: 64px; box-sizing: border-box; padding: 12px 16px; border-bottom: 1px solid #e3e9f2">
+<div style="display: flex; flex-direction: column; gap: 2px; min-width: 0"><p id="motor-nome" style="margin: 0; font-size: 13px; font-weight: 500; color: #061a3d">Traduzir com</p><p style="margin: 0; font-size: 12px; line-height: 16px; color: #5b6b85">O Claude CLI usa o claude instalado neste Mac, com a sua conta.</p></div>
+<div role="group" aria-labelledby="motor-nome" style="display: flex; justify-self: start; border: 1px solid #c9d4e5; border-radius: 4px; overflow: hidden">
+<button type="button" aria-pressed="false" style="height: 38px; padding: 0 16px; border: 0; background: #ffffff; color: #061a3d; font-size: 13px; cursor: pointer">AssemblyAI</button>
+<button type="button" aria-pressed="true" style="height: 38px; padding: 0 16px; border: 0; border-left: 1px solid #c9d4e5; background: #0a2a5e; color: #ffffff; font-size: 13px; font-weight: 500; cursor: pointer">Claude CLI</button>
+</div>
+</div>
+<div style="display: grid; grid-template-columns: minmax(0, 1fr) 340px; column-gap: 24px; align-items: center; min-height: 64px; box-sizing: border-box; padding: 12px 16px">
+<p id="modelo-trad-nome" style="margin: 0; font-size: 13px; font-weight: 500; color: #061a3d">Modelo</p>
+<div role="group" aria-labelledby="modelo-trad-nome" style="display: flex; justify-self: start; border: 1px solid #c9d4e5; border-radius: 4px; overflow: hidden">
+<button type="button" aria-pressed="true" style="height: 38px; padding: 0 16px; border: 0; background: #0a2a5e; color: #ffffff; font-size: 13px; font-weight: 500; cursor: pointer">Haiku (mais rápido)</button>
+<button type="button" aria-pressed="false" style="height: 38px; padding: 0 16px; border: 0; border-left: 1px solid #c9d4e5; background: #ffffff; color: #061a3d; font-size: 13px; cursor: pointer">Sonnet</button>
+</div>
+</div>
+</div>
+</section>
+
+<section aria-label="Chat e resumo" style="display: flex; flex-direction: column">
+<h2 style="margin: 0; font-size: 10px; line-height: 14px; font-weight: 500; letter-spacing: 0.14em; text-transform: uppercase; color: #5b6b85">Chat e resumo</h2>
+<div style="margin-top: 12px; display: flex; flex-direction: column; border: 1px solid #c9d4e5; border-radius: 6px; background: #ffffff; overflow: hidden">
+<div style="display: grid; grid-template-columns: minmax(0, 1fr) 340px; column-gap: 24px; align-items: center; min-height: 64px; box-sizing: border-box; padding: 12px 16px; border-bottom: 1px solid #e3e9f2">
+<div style="display: flex; flex-direction: column; gap: 2px; min-width: 0"><p id="chat-nome" style="margin: 0; font-size: 13px; font-weight: 500; color: #061a3d">Modelo do chat</p><p style="margin: 0; font-size: 12px; line-height: 16px; color: #5b6b85">Usado no Assistente. O Opus responde melhor e demora mais.</p></div>
+<div role="group" aria-labelledby="chat-nome" style="display: flex; justify-self: start; border: 1px solid #c9d4e5; border-radius: 4px; overflow: hidden">
+<button type="button" aria-pressed="false" style="height: 38px; padding: 0 16px; border: 0; background: #ffffff; color: #061a3d; font-size: 13px; cursor: pointer">Haiku</button>
+<button type="button" aria-pressed="true" style="height: 38px; padding: 0 16px; border: 0; border-left: 1px solid #c9d4e5; background: #0a2a5e; color: #ffffff; font-size: 13px; font-weight: 500; cursor: pointer">Sonnet</button>
+<button type="button" aria-pressed="false" style="height: 38px; padding: 0 16px; border: 0; border-left: 1px solid #c9d4e5; background: #ffffff; color: #061a3d; font-size: 13px; cursor: pointer">Opus</button>
+</div>
+</div>
+<div style="display: grid; grid-template-columns: minmax(0, 1fr) 340px; column-gap: 24px; align-items: center; min-height: 64px; box-sizing: border-box; padding: 12px 16px; border-bottom: 1px solid #e3e9f2">
+<div style="display: flex; flex-direction: column; gap: 2px; min-width: 0"><p id="resumir-nome" style="margin: 0; font-size: 13px; font-weight: 500; color: #061a3d">Resumir ao encerrar</p><p style="margin: 0; font-size: 12px; line-height: 16px; color: #5b6b85">Ao encerrar, o Claude lê a transcrição e escreve o resumo, as decisões e as tarefas.</p></div>
+<div><button type="button" role="switch" aria-checked="true" aria-labelledby="resumir-nome" style="display: flex; align-items: center; justify-content: flex-end; width: 44px; height: 24px; box-sizing: border-box; padding: 3px; border: 1px solid #1e5bb8; border-radius: 4px; background: #1e5bb8; cursor: pointer"><span style="width: 16px; height: 16px; border-radius: 2px; background: #ffffff"></span></button></div>
+</div>
+<div style="display: grid; grid-template-columns: minmax(0, 1fr) 340px; column-gap: 24px; align-items: center; min-height: 64px; box-sizing: border-box; padding: 12px 16px; border-bottom: 1px solid #e3e9f2">
+<div style="display: flex; flex-direction: column; gap: 2px; min-width: 0"><p id="ia-nome" style="margin: 0; font-size: 13px; font-weight: 500; color: #061a3d">IA anotando ao vivo</p><p style="margin: 0; font-size: 12px; line-height: 16px; color: #5b6b85">Durante a gravação, a cada 5 minutos o Claude local lê o trecho novo da conversa e cria e resolve post-its. Vale como padrão do interruptor "IA anotando" de cada gravação.</p></div>
+<div><button type="button" role="switch" aria-checked="true" aria-labelledby="ia-nome" style="display: flex; align-items: center; justify-content: flex-end; width: 44px; height: 24px; box-sizing: border-box; padding: 3px; border: 1px solid #1e5bb8; border-radius: 4px; background: #1e5bb8; cursor: pointer"><span style="width: 16px; height: 16px; border-radius: 2px; background: #ffffff"></span></button></div>
+</div>
+<div style="display: grid; grid-template-columns: minmax(0, 1fr) 340px; column-gap: 24px; align-items: center; min-height: 64px; box-sizing: border-box; padding: 12px 16px; border-bottom: 1px solid #e3e9f2">
+<div style="display: flex; flex-direction: column; gap: 2px; min-width: 0"><p id="wa-ia-nome" style="margin: 0; font-size: 13px; font-weight: 500; color: #061a3d">Detalhes com IA no WhatsApp</p><p style="margin: 0; font-size: 12px; line-height: 16px; color: #5b6b85">Ao abrir uma conversa, o Claude local lê as últimas mensagens e escreve o resumo, o humor, as pendências e os compromissos no painel Detalhes. Nunca envia nada.</p></div>
+<div><button type="button" role="switch" aria-checked="true" aria-labelledby="wa-ia-nome" style="display: flex; align-items: center; justify-content: flex-end; width: 44px; height: 24px; box-sizing: border-box; padding: 3px; border: 1px solid #1e5bb8; border-radius: 4px; background: #1e5bb8; cursor: pointer"><span style="width: 16px; height: 16px; border-radius: 2px; background: #ffffff"></span></button></div>
+</div>
+<div style="display: grid; grid-template-columns: minmax(0, 1fr) 340px; column-gap: 24px; align-items: center; min-height: 64px; box-sizing: border-box; padding: 12px 16px">
+<div style="display: flex; flex-direction: column; gap: 2px; min-width: 0"><p id="wa-corrigir-nome" style="margin: 0; font-size: 13px; font-weight: 500; color: #061a3d">Corrigir ao enviar no WhatsApp</p><p style="margin: 0; font-size: 12px; line-height: 16px; color: #5b6b85">Ao clicar em Enviar, o Claude (Haiku) corrige ortografia e pontuação e melhora a clareza da mensagem.</p></div>
+<div><button type="button" role="switch" aria-checked="false" aria-labelledby="wa-corrigir-nome" style="display: flex; align-items: center; width: 44px; height: 24px; box-sizing: border-box; padding: 3px; border: 1px solid #c9d4e5; border-radius: 4px; background: #eef2f9; cursor: pointer"><span style="width: 16px; height: 16px; border-radius: 2px; background: #5b6b85"></span></button></div>
+</div>
+</div>
+</section>
+
+<section aria-label="Automações" style="display: flex; flex-direction: column">
+<h2 style="margin: 0; font-size: 10px; line-height: 14px; font-weight: 500; letter-spacing: 0.14em; text-transform: uppercase; color: #5b6b85">Automações</h2>
+<div style="margin-top: 12px; display: flex; flex-direction: column; border: 1px solid #c9d4e5; border-radius: 6px; background: #ffffff; overflow: hidden">
+<div style="display: grid; grid-template-columns: minmax(0, 1fr) 340px; column-gap: 24px; align-items: center; min-height: 64px; box-sizing: border-box; padding: 12px 16px">
+<div style="display: flex; flex-direction: column; gap: 2px; min-width: 0"><label for="limite-diario" style="font-size: 13px; font-weight: 500; color: #061a3d">Limite diário de execuções agendadas</label><p style="margin: 0; font-size: 12px; line-height: 16px; color: #5b6b85">Ao passar, todas as tarefas pausam e o app avisa.</p></div>
+<select id="limite-diario" style="min-width: 240px; justify-self: start; height: 40px; padding: 0 10px; border: 1px solid #c9d4e5; border-radius: 4px; background: #ffffff; color: #061a3d; font: inherit; font-size: 13px"><option>50 por dia</option><option>10 por dia</option><option>25 por dia</option><option>100 por dia</option><option>200 por dia</option></select>
+</div>
+</div>
+</section>
+
+</div>
+</div>
+</main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1120,"height":740}}'>
+class Component extends DCLogic {
+  renderVals() {
+    return {};
+  }
+}
+</script>
+</body>
+</html>

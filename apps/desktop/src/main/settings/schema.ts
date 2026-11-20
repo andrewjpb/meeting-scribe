@@ -6,10 +6,13 @@
 // `audioFolder` também fica de fora: só o diálogo nativo do main a escolhe (`setAudioFolder`).
 // `brandLogo` idem: só o main grava, depois de conferir e copiar a imagem (`setBrandLogo`).
 // As contas de email (contrato 42) ficam no mesmo arquivo, ao lado de `settings`, com a senha cifrada: só o main grava
-// (`setEmailAccounts`) e o renderer não as recebe junto com as configurações.
+// (`setEmailAccounts`) e o renderer não as recebe junto com as configurações. As assinaturas (contrato 54) também, em
+// `emailSignatures`, por id de conta, e as regras (contrato 53), em `emailRules`.
 import { z } from 'zod'
 import { isAbsolute } from 'node:path'
 import { BRAND_LOGO_PATTERN, BRAND_TEXT_MAX } from '../../shared/branding'
+import { EMAIL_SIGNATURE_MAX, type EmailSignature } from '../../shared/email-signature'
+import { EMAIL_RULES_MAX, emailRuleSchema, type EmailRule } from '../../shared/email-rules'
 import { CLAUDE_CONNECTOR_NAME_MAX, CLAUDE_CONNECTORS_MAX, MCP_TOOL_NAME_MAX, MCP_TOOL_POLICIES, MCP_TOOLS_MAX, type ClaudeConnectorPrefs } from '../../shared/mcp'
 import { EMAIL_ACCOUNT_ID_PATTERN, EMAIL_ADDRESS_PATTERN, EMAIL_HOST_PATTERN, EMAIL_POLL_MINUTES, EMAIL_PROTOCOLS, EMAIL_SECURITY, type EmailAccount } from '../../shared/email'
 import { AGENT_PROFILES, CALENDAR_IDS_MAX, CALENDAR_LEAD_MINUTES, CHAT_MODELS, CLAUDE_MODELS, CLAUDE_TRANSPORTS, CLOSE_BEHAVIORS, DAILY_RUN_LIMIT_OPTIONS, DEFAULT_SETTINGS, LANGUAGE_CODES, LOCK_AFTER_MINUTES, THEME_SETTINGS, TRANSLATION_ENGINES, type AppSettings, type SettingsPatch } from '../../shared/settings-defaults'
@@ -247,4 +250,47 @@ export function parseEmailAccounts(raw: unknown): StoredEmailAccount[] {
 /** Só para o main: confere a lista antes de gravar; uma conta fora do formato lança erro. */
 export function checkEmailAccounts(accounts: readonly StoredEmailAccount[]): StoredEmailAccount[] {
   return z.array(storedEmailAccountSchema).max(50).parse(accounts)
+}
+
+/** Contrato 54: a assinatura de uma conta. Quebra de linha e tabulação valem; outro caractere de controle, não. */
+export const emailSignatureSchema = z
+  .object({
+    text: z
+      .string()
+      .max(EMAIL_SIGNATURE_MAX)
+      .refine((value) => ![...value].some((char) => (char.charCodeAt(0) < 0x20 && char !== '\n' && char !== '\t') || char.charCodeAt(0) === 0x7f)),
+    onNew: z.boolean(),
+    onReply: z.boolean(),
+  })
+  .strict()
+
+/** Assinaturas do arquivo: a inválida (ou de conta que não está em `accountIds`) sai sozinha, sem levar as outras. */
+export function parseEmailSignatures(raw: unknown, accountIds: readonly string[]): Record<string, EmailSignature> {
+  const signatures: Record<string, EmailSignature> = {}
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return signatures
+  for (const [id, value] of Object.entries(raw)) {
+    if (!EMAIL_ACCOUNT_ID_PATTERN.test(id) || !accountIds.includes(id)) continue
+    const parsed = emailSignatureSchema.safeParse(value)
+    if (parsed.success) signatures[id] = parsed.data
+  }
+  return signatures
+}
+
+/**
+ * Contrato 53: as regras do arquivo, por conta. A regra inválida (ou de id repetido) sai sozinha, sem levar as outras;
+ * conta que não está em `accountIds` sai inteira; passou de 50, o resto fica de fora.
+ */
+export function parseEmailRules(raw: unknown, accountIds: readonly string[]): Record<string, EmailRule[]> {
+  const rules: Record<string, EmailRule[]> = {}
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return rules
+  for (const [id, value] of Object.entries(raw)) {
+    if (!EMAIL_ACCOUNT_ID_PATTERN.test(id) || !accountIds.includes(id) || !Array.isArray(value)) continue
+    const list: EmailRule[] = []
+    for (const item of value) {
+      const parsed = emailRuleSchema.safeParse(item)
+      if (parsed.success && list.length < EMAIL_RULES_MAX && !list.some((rule) => rule.id === parsed.data.id)) list.push(parsed.data)
+    }
+    if (list.length > 0) rules[id] = list
+  }
+  return rules
 }

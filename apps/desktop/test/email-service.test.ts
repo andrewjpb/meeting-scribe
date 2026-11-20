@@ -111,6 +111,9 @@ function fakeImap(initial: ImapMessage[] = []): FakeImap {
         setSeen: async (uid, seen) => {
           fake.calls.push(`UID STORE ${uid} ${seen ? '+' : '-'}FLAGS (\\Seen)`)
         },
+        setFlagged: async (uid, flagged) => {
+          fake.calls.push(`UID STORE ${uid} ${flagged ? '+' : '-'}FLAGS (\\Flagged)`)
+        },
         remove: async (uid) => {
           fake.calls.push(`UID STORE ${uid} +FLAGS (\\Deleted)`, `UID EXPUNGE ${uid}`)
           fake.messages = fake.messages.filter((message) => message.uid !== uid)
@@ -312,7 +315,7 @@ describe('IMAP com o cliente falso (contrato 42, CA3)', () => {
     expect(received).toEqual([])
     imap.deliver(imapMessage(201, { subject: 'Chegou agora' }))
     await vi.waitFor(() => expect(received).toHaveLength(1))
-    expect(received[0]).toMatchObject({ accountId: id, id: '201', subject: 'Chegou agora', folder: 'inbox' })
+    expect(received[0]).toMatchObject({ accountId: id, id: '201', subject: 'Chegou agora', mailbox: 'INBOX' })
     expect(imap.calls).toContain('UID FETCH 201:*')
     const list = await service.messages({ accountId: id })
     expect(list).toHaveLength(200)

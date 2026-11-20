@@ -17,6 +17,8 @@ import {
   EMAIL_OVERVIEW_FILE,
   EMAIL_RECENT_DAYS,
   EMAIL_RECENT_PER_ACCOUNT_MAX,
+  EMAIL_SENT_MAILBOX,
+  isSent,
   type EmailAccountStatus,
   type EmailAddress,
   type EmailBody,
@@ -106,10 +108,11 @@ export function bodyText(body: Pick<EmailBody, 'text' | 'html'>): string {
 
 /**
  * Pendente de resposta (CA6): recebida na INBOX, de outra pessoa (não da própria conta), sem a marca `\Answered` e sem
- * nenhum enviado depois dela que a responda (o `In-Reply-To` ou o `References` com o Message-ID dela).
+ * nenhum enviado depois dela que a responda (o `In-Reply-To` ou o `References` com o Message-ID dela). Contrato 52: o
+ * enviado é o da pasta de enviados da conta (`account`; sem ela, a pasta local `Sent`).
  */
-export function isPending(message: EmailMessage, sent: readonly EmailMessage[], own: readonly string[]): boolean {
-  if (message.folder !== 'inbox' || message.answered) return false
+export function isPending(message: EmailMessage, sent: readonly EmailMessage[], own: readonly string[], account: Pick<EmailAccountStatus, 'sentMailbox'> = { sentMailbox: EMAIL_SENT_MAILBOX }): boolean {
+  if (isSent(message, account) || message.answered) return false
   const mine = new Set(own.map((address) => address.toLowerCase()))
   if (message.from.some((item) => mine.has(item.address.toLowerCase()))) return false
   const id = message.messageId
@@ -184,7 +187,7 @@ export function recentEntries(caches: readonly EmailCache[], now: number, remind
         ref: emailRef(cache.status.account.id, message.id),
         status: cache.status,
         message,
-        pending: isPending(message, sent, own),
+        pending: isPending(message, sent, own, cache.status),
         reminder: reminders.find((mark) => !mark.mailbox && mark.accountId === cache.status.account.id && mark.messageId === message.id)?.when ?? null,
         file: null,
       })),
@@ -246,7 +249,7 @@ export function messageMarkdown(entry: Pick<EmailEntry, 'ref' | 'status' | 'mess
     ...(message.cc.length ? [`- Cc: ${message.cc.map(emailAddressLine).join(', ')}`] : []),
     `- Data: ${fullDate(message.date)} (${ageLabel(message.date, now)})`,
     `- Lida: ${message.seen ? 'sim' : 'não'}`,
-    ...(message.folder === 'inbox' ? [`- Pendente de resposta: ${entry.pending ? 'sim' : 'não'}`] : []),
+    ...(!isSent(message, entry.status) ? [`- Pendente de resposta: ${entry.pending ? 'sim' : 'não'}`] : []),
     ...(entry.reminder ? [`- Lembrete marcado: ${entry.reminder}`] : []),
     ...(body.attachments.length ? [`- Anexos: ${body.attachments.map((item) => emailOneLine(item.filename ?? 'sem nome')).join(', ')}`] : []),
     `- Citar como: [Email · ${senderName(message.from[0])} · ${emailStamp(message.date)}]`,

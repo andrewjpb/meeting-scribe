@@ -13,12 +13,13 @@ const status = (id: string): EmailAccountStatus => ({
   account: { id, address: `${id.slice(0, 4)}@lap.example`, name: null, username: 'x', incoming: { protocol: 'imap', host: 'imap.lap.example', port: 993, security: 'tls' }, outgoing: { host: 'smtp.lap.example', port: 465, security: 'tls' }, deleteFromServer: false },
   state: 'connected',
   error: null,
+  sentMailbox: 'Sent',
 })
 
 const message = (id: string, date: number, over: Partial<EmailMessage> = {}): EmailMessage => ({
   id,
   accountId: A,
-  folder: 'inbox',
+  mailbox: 'INBOX',
   uid: Number(id),
   seen: false,
   flagged: false,
@@ -91,6 +92,14 @@ describe('emailStore', () => {
     await useEmail.getState().remove(A, '1')
     useEmail.getState().receive(message('3', 40))
     expect(useEmail.getState().folders[folderKey(A, 'inbox')]?.map((item) => item.id)).toEqual(['3', '2'])
+  })
+
+  it('email movido por regra (contrato 53) não entra na Caixa de Entrada nem nos Enviados', () => {
+    useEmail.setState({ folders: { [folderKey(A, 'inbox')]: [message('1', 10)], [folderKey(A, 'sent')]: [] } })
+    useEmail.getState().receive(message('2', 20, { mailbox: 'Arquivo', id: 'servidor:1:2:Arquivo' }))
+    useEmail.getState().receive(message('3', 30, { mailbox: 'Lixeira', id: 'servidor:1:3:Lixeira' }))
+    expect(useEmail.getState().folders[folderKey(A, 'inbox')]?.map((item) => item.id)).toEqual(['1'])
+    expect(useEmail.getState().folders[folderKey(A, 'sent')]).toEqual([])
   })
 
   it('corpo pedido uma vez, no máximo 3 ao mesmo tempo; a falha pode ser pedida de novo', async () => {

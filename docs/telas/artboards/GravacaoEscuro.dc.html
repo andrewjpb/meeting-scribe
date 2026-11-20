@@ -1,0 +1,246 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<title>Gravação ao vivo, tema escuro</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0;background:#061a3d}
+.sc{scrollbar-width:none}.sc::-webkit-scrollbar{display:none}
+</style>
+</helmet>
+<div style="display: flex; width: 1120px; height: 740px; overflow: hidden; background: #061a3d; color: #ffffff; font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; font-size: 13px; line-height: 20px; -webkit-font-smoothing: antialiased">
+
+<div style="flex: 0 0 224px; width: 224px; height: 740px">
+<dc-import name="SidebarRaiz" ativo="nenhum" nao-lidas="{{duas}}" hint-size="224px,740px"></dc-import>
+</div>
+
+<main style="position: relative; flex: 1 1 0; min-width: 0; height: 740px; display: flex; flex-direction: column; overflow: hidden">
+<div aria-hidden="true" style="flex: none; height: 52px"></div>
+
+<header style="flex: none; padding: 28px 40px 20px">
+<div style="display: flex; align-items: center; gap: 20px">
+<p aria-live="polite" style="margin: 0; display: flex; align-items: center; gap: 12px; height: 20px">
+<span aria-hidden="true" style="width: 8px; height: 8px; background: #f0656b"></span>
+<span style="font-size: 13px; font-weight: 500; color: #f0656b">Gravando</span>
+<span aria-label="Tempo gravado" style="font-size: 15px; line-height: 20px; font-weight: 500; font-variant-numeric: tabular-nums">23:41</span>
+</p>
+</div>
+<h1 style="margin: 10px 0 0; font-size: 20px; line-height: 26px; font-weight: 700; letter-spacing: -0.3px; color: #ffffff">Alinhamento com a Fluxopay</h1>
+</header>
+
+<section role="img" aria-label="Níveis de áudio de você e dos participantes" style="flex: none; position: relative; height: 96px; background: #04122b">
+<svg width="736" height="96" viewBox="0 0 736 96" aria-hidden="true" style="position: absolute; left: 160px; top: 0; display: block">
+<rect x="0" y="48" width="736" height="1" fill="rgba(201,212,229,0.28)"></rect>
+<sc-for list="{{micBars}}" as="b" hint-placeholder-count="0"><rect x="{{b.x}}" y="{{b.y}}" width="3" height="{{b.h}}" fill="#5392f7"></rect></sc-for>
+<sc-for list="{{sysBars}}" as="b" hint-placeholder-count="0"><rect x="{{b.x}}" y="49" width="3" height="{{b.h}}" fill="#a8b5cc"></rect></sc-for>
+</svg>
+<span style="position: absolute; left: 40px; top: 0; height: 48px; display: flex; align-items: center; font-size: 10px; line-height: 14px; font-weight: 500; letter-spacing: 0.14em; color: #5392f7">VOCÊ</span>
+<span style="position: absolute; left: 40px; top: 48px; height: 48px; display: flex; align-items: center; font-size: 10px; line-height: 14px; font-weight: 500; letter-spacing: 0.14em; color: #a8b5cc">PARTICIPANTES</span>
+</section>
+
+<div style="flex: 1 1 auto; min-height: 0; display: flex">
+
+<div class="sc" style="flex: 1 1 auto; min-width: 0; overflow-y: auto; padding: 0 40px 112px">
+<ol aria-label="Transcrição" style="margin: 0 auto; max-width: 680px; padding: 28px 0 4px; list-style: none; display: flex; flex-direction: column; gap: 22px">
+<li style="display: grid; grid-template-columns: 64px minmax(0, 1fr)">
+<time style="padding-top: 2px; font-size: 12px; line-height: 16px; color: #7c8cab; font-variant-numeric: tabular-nums">21:48</time>
+<div style="min-width: 0; display: flex; flex-direction: column; gap: 4px">
+<p style="margin: 0; font-size: 10px; line-height: 14px; font-weight: 500; letter-spacing: 0.14em; color: #5392f7">VOCÊ</p>
+<p style="margin: 0; font-size: 16px; line-height: 26px">Então a gente fecha o escopo do painel de vendas até sexta?</p>
+<p style="margin: 0; padding-left: 12px; border-left: 2px solid rgba(201,212,229,0.28); font-size: 14px; line-height: 22px; color: #a8b5cc">So we close the sales dashboard scope by Friday?</p>
+</div>
+</li>
+<li style="display: grid; grid-template-columns: 64px minmax(0, 1fr)">
+<time style="padding-top: 2px; font-size: 12px; line-height: 16px; color: #7c8cab; font-variant-numeric: tabular-nums">22:05</time>
+<div style="min-width: 0; display: flex; flex-direction: column; gap: 4px">
+<p style="margin: 0; font-size: 10px; line-height: 14px; font-weight: 500; letter-spacing: 0.14em; color: #a8b5cc">PARTICIPANTES</p>
+<p style="margin: 0; font-size: 16px; line-height: 26px">Fecha, mas preciso da lista de relatórios que o financeiro usa hoje. Sem ela eu não consigo estimar.</p>
+<p style="margin: 0; padding-left: 12px; border-left: 2px solid rgba(201,212,229,0.28); font-size: 14px; line-height: 22px; color: #a8b5cc">Yes, but I need the list of reports finance uses today. Without it I can't estimate.</p>
+</div>
+</li>
+<li style="display: grid; grid-template-columns: 64px minmax(0, 1fr)">
+<time style="padding-top: 2px; font-size: 12px; line-height: 16px; color: #7c8cab; font-variant-numeric: tabular-nums">22:31</time>
+<div style="min-width: 0; display: flex; flex-direction: column; gap: 4px">
+<p style="margin: 0; font-size: 10px; line-height: 14px; font-weight: 500; letter-spacing: 0.14em; color: #5392f7">VOCÊ</p>
+<p style="margin: 0; font-size: 16px; line-height: 26px">Eu peço para a Carla e te mando amanhã de manhã.</p>
+<p style="margin: 0; padding-left: 12px; border-left: 2px solid rgba(201,212,229,0.28); font-size: 14px; line-height: 22px; color: #a8b5cc">I'll ask Carla and send it to you tomorrow morning.</p>
+</div>
+</li>
+<li style="display: grid; grid-template-columns: 64px minmax(0, 1fr)">
+<time style="padding-top: 2px; font-size: 12px; line-height: 16px; color: #7c8cab; font-variant-numeric: tabular-nums">22:47</time>
+<div style="min-width: 0; display: flex; flex-direction: column; gap: 4px">
+<p style="margin: 0; font-size: 10px; line-height: 14px; font-weight: 500; letter-spacing: 0.14em; color: #a8b5cc">PARTICIPANTES</p>
+<p style="margin: 0; font-size: 16px; line-height: 26px">Combinado. E a migração do servidor continua para janeiro?</p>
+<p style="margin: 0; padding-left: 12px; border-left: 2px solid rgba(201,212,229,0.28); font-size: 14px; line-height: 22px; color: #a8b5cc">Deal. And is the server migration still set for January?</p>
+</div>
+</li>
+<li style="display: grid; grid-template-columns: 64px minmax(0, 1fr)">
+<time style="padding-top: 2px; font-size: 12px; line-height: 16px; color: #7c8cab; font-variant-numeric: tabular-nums">23:02</time>
+<div style="min-width: 0; display: flex; flex-direction: column; gap: 4px">
+<p style="margin: 0; font-size: 10px; line-height: 14px; font-weight: 500; letter-spacing: 0.14em; color: #5392f7">VOCÊ</p>
+<p style="margin: 0; font-size: 16px; line-height: 26px; font-style: italic; color: #a8b5cc">Continua, só falta o cliente aprovar a janela de manutenção</p>
+</div>
+</li>
+</ol>
+</div>
+
+<aside aria-label="Anotações e análise" style="flex: none; width: 320px; box-sizing: border-box; display: flex; flex-direction: column; border-left: 1px solid rgba(201,212,229,0.14); padding-bottom: 112px">
+<div style="flex: none; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 16px 0; border-bottom: 1px solid rgba(201,212,229,0.14)">
+<div role="tablist" aria-label="Painel da gravação" style="display: flex; gap: 24px; margin-bottom: -1px">
+<a href="GravacaoAnotacoes.dc.html" role="tab" aria-selected="false" style="display: flex; align-items: center; height: 40px; box-sizing: border-box; border-bottom: 2px solid transparent; font-size: 13px; font-weight: 500; color: #a8b5cc; text-decoration: none">Anotações</a>
+<a href="GravacaoEscuro.dc.html" role="tab" aria-selected="true" style="display: flex; align-items: center; height: 40px; box-sizing: border-box; border-bottom: 2px solid #5392f7; font-size: 13px; font-weight: 500; color: #ffffff; text-decoration: none">Análise</a>
+</div>
+</div>
+<div class="sc" role="tabpanel" style="flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 16px">
+<div aria-live="polite" style="display: flex; flex-direction: column; gap: 16px">
+
+<article aria-label="Análise até 22:40" style="padding-bottom: 16px; border-bottom: 1px solid rgba(201,212,229,0.14)">
+<button type="button" aria-expanded="true" style="display: flex; align-items: center; gap: 6px; width: 100%; height: 32px; padding: 0; border: 0; border-radius: 4px; background: transparent; font: inherit; font-size: 13px; font-weight: 700; color: #ffffff; text-align: left; font-variant-numeric: tabular-nums; cursor: pointer">
+<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#a8b5cc" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true" style="flex: none; display: block"><path d="m6 9 6 6 6-6"></path></svg>
+<span>Até 22:40</span>
+</button>
+<div style="margin-top: 8px; display: flex; flex-direction: column; gap: 16px">
+
+<section aria-label="Perguntas em aberto">
+<h3 style="margin: 0; font-size: 12px; line-height: 16px; font-weight: 700; color: #a8b5cc">Perguntas em aberto</h3>
+<ul style="margin: 6px 0 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 12px">
+<li style="display: flex; flex-direction: column; gap: 2px">
+<p style="margin: 0; font-size: 13px; line-height: 20px; text-wrap: pretty"><button type="button" aria-label="Ir para 22:05 na transcrição" style="margin-right: 6px; padding: 0; border: 0; background: transparent; font: inherit; font-size: 12px; font-weight: 500; color: #5392f7; font-variant-numeric: tabular-nums; cursor: pointer">22:05</button>Quem envia a lista de relatórios do financeiro?</p>
+<div style="display: flex; align-items: center; gap: 12px">
+<button type="button" style="display: inline-flex; align-items: center; gap: 4px; height: 24px; padding: 0; border: 0; border-radius: 4px; background: transparent; font: inherit; font-size: 12px; font-weight: 500; color: #5392f7; cursor: pointer"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true" style="display: block"><path d="M15.5 3H5a2 2 0 0 0-2 2v14c0 1.1.9 2 2 2h14a2 2 0 0 0 2-2V8.5L15.5 3Z"></path><path d="M15 3v4a2 2 0 0 0 2 2h4"></path></svg>Virar anotação</button>
+<button type="button" style="display: inline-flex; align-items: center; gap: 4px; height: 24px; padding: 0; border: 0; border-radius: 4px; background: transparent; font: inherit; font-size: 12px; font-weight: 500; color: #5392f7; cursor: pointer"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true" style="display: block"><rect width="14" height="14" x="8" y="8" rx="2"></rect><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"></path></svg>Copiar</button>
+</div>
+</li>
+<li style="display: flex; flex-direction: column; gap: 2px">
+<p style="margin: 0; font-size: 13px; line-height: 20px; color: #a8b5cc; text-decoration: line-through; text-wrap: pretty"><button type="button" aria-label="Ir para 14:12 na transcrição" style="margin-right: 6px; padding: 0; border: 0; background: transparent; font: inherit; font-size: 12px; font-weight: 500; color: #5392f7; font-variant-numeric: tabular-nums; cursor: pointer">14:12</button>O contrato novo já foi assinado?</p>
+<div style="display: flex; align-items: center; gap: 12px">
+<button type="button" style="display: inline-flex; align-items: center; gap: 4px; height: 24px; padding: 0; border: 0; border-radius: 4px; background: transparent; font: inherit; font-size: 12px; font-weight: 500; color: #5392f7; cursor: pointer"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true" style="display: block"><path d="M15.5 3H5a2 2 0 0 0-2 2v14c0 1.1.9 2 2 2h14a2 2 0 0 0 2-2V8.5L15.5 3Z"></path><path d="M15 3v4a2 2 0 0 0 2 2h4"></path></svg>Virar anotação</button>
+<button type="button" style="display: inline-flex; align-items: center; gap: 4px; height: 24px; padding: 0; border: 0; border-radius: 4px; background: transparent; font: inherit; font-size: 12px; font-weight: 500; color: #5392f7; cursor: pointer"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true" style="display: block"><rect width="14" height="14" x="8" y="8" rx="2"></rect><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"></path></svg>Copiar</button>
+</div>
+</li>
+</ul>
+</section>
+
+<section aria-label="Não ficou claro">
+<h3 style="margin: 0; font-size: 12px; line-height: 16px; font-weight: 700; color: #a8b5cc">Não ficou claro</h3>
+<ul style="margin: 6px 0 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 12px">
+<li style="display: flex; flex-direction: column; gap: 2px">
+<p style="margin: 0; font-size: 13px; line-height: 20px; text-wrap: pretty"><button type="button" aria-label="Ir para 22:47 na transcrição" style="margin-right: 6px; padding: 0; border: 0; background: transparent; font: inherit; font-size: 12px; font-weight: 500; color: #5392f7; font-variant-numeric: tabular-nums; cursor: pointer">22:47</button>Semana da migração do servidor</p>
+<p style="margin: 0; font-size: 12px; line-height: 16px; color: #a8b5cc; text-wrap: pretty">Janeiro foi citado, mas ninguém fechou a semana.</p>
+<div style="display: flex; align-items: center; gap: 12px">
+<button type="button" style="display: inline-flex; align-items: center; gap: 4px; height: 24px; padding: 0; border: 0; border-radius: 4px; background: transparent; font: inherit; font-size: 12px; font-weight: 500; color: #5392f7; cursor: pointer"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true" style="display: block"><path d="M15.5 3H5a2 2 0 0 0-2 2v14c0 1.1.9 2 2 2h14a2 2 0 0 0 2-2V8.5L15.5 3Z"></path><path d="M15 3v4a2 2 0 0 0 2 2h4"></path></svg>Virar anotação</button>
+<button type="button" style="display: inline-flex; align-items: center; gap: 4px; height: 24px; padding: 0; border: 0; border-radius: 4px; background: transparent; font: inherit; font-size: 12px; font-weight: 500; color: #5392f7; cursor: pointer"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true" style="display: block"><rect width="14" height="14" x="8" y="8" rx="2"></rect><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"></path></svg>Copiar</button>
+</div>
+</li>
+</ul>
+</section>
+
+<section aria-label="Para confirmar">
+<h3 style="margin: 0; font-size: 12px; line-height: 16px; font-weight: 700; color: #a8b5cc">Para confirmar</h3>
+<ul style="margin: 6px 0 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 12px">
+<li style="display: flex; flex-direction: column; gap: 2px">
+<p style="margin: 0; font-size: 13px; line-height: 20px; text-wrap: pretty">Escopo do painel de vendas fechado até sexta</p>
+<p style="margin: 0; font-size: 12px; line-height: 16px; color: #a8b5cc">Você</p>
+<div style="display: flex; align-items: center; gap: 12px">
+<button type="button" style="display: inline-flex; align-items: center; gap: 4px; height: 24px; padding: 0; border: 0; border-radius: 4px; background: transparent; font: inherit; font-size: 12px; font-weight: 500; color: #5392f7; cursor: pointer"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true" style="display: block"><path d="M15.5 3H5a2 2 0 0 0-2 2v14c0 1.1.9 2 2 2h14a2 2 0 0 0 2-2V8.5L15.5 3Z"></path><path d="M15 3v4a2 2 0 0 0 2 2h4"></path></svg>Virar anotação</button>
+<button type="button" style="display: inline-flex; align-items: center; gap: 4px; height: 24px; padding: 0; border: 0; border-radius: 4px; background: transparent; font: inherit; font-size: 12px; font-weight: 500; color: #5392f7; cursor: pointer"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true" style="display: block"><rect width="14" height="14" x="8" y="8" rx="2"></rect><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"></path></svg>Copiar</button>
+</div>
+</li>
+</ul>
+</section>
+
+<section aria-label="Perguntas para fazer agora">
+<h3 style="margin: 0; font-size: 12px; line-height: 16px; font-weight: 700; color: #a8b5cc">Perguntas para fazer agora</h3>
+<ul style="margin: 6px 0 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 12px">
+<li style="display: flex; flex-direction: column; gap: 2px">
+<p style="margin: 0; font-size: 13px; line-height: 20px; text-wrap: pretty">Qual janela de manutenção o cliente aceita em janeiro?</p>
+<div style="display: flex; align-items: center; gap: 12px">
+<button type="button" style="display: inline-flex; align-items: center; gap: 4px; height: 24px; padding: 0; border: 0; border-radius: 4px; background: transparent; font: inherit; font-size: 12px; font-weight: 500; color: #5392f7; cursor: pointer"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true" style="display: block"><path d="M15.5 3H5a2 2 0 0 0-2 2v14c0 1.1.9 2 2 2h14a2 2 0 0 0 2-2V8.5L15.5 3Z"></path><path d="M15 3v4a2 2 0 0 0 2 2h4"></path></svg>Virar anotação</button>
+<button type="button" style="display: inline-flex; align-items: center; gap: 4px; height: 24px; padding: 0; border: 0; border-radius: 4px; background: transparent; font: inherit; font-size: 12px; font-weight: 500; color: #5392f7; cursor: pointer"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true" style="display: block"><rect width="14" height="14" x="8" y="8" rx="2"></rect><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"></path></svg>Copiar</button>
+</div>
+</li>
+</ul>
+</section>
+
+<p style="margin: 0; font-size: 12px; line-height: 16px; color: #7c8cab; font-variant-numeric: tabular-nums">Haiku · 4 s · US$ 0,01</p>
+</div>
+</article>
+
+<article aria-label="Análise até 12:30" style="padding-bottom: 16px; border-bottom: 1px solid rgba(201,212,229,0.14)">
+<button type="button" aria-expanded="false" style="display: flex; align-items: center; gap: 6px; width: 100%; height: 32px; padding: 0; border: 0; border-radius: 4px; background: transparent; font: inherit; font-size: 13px; font-weight: 700; color: #ffffff; text-align: left; font-variant-numeric: tabular-nums; cursor: pointer">
+<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#a8b5cc" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true" style="flex: none; display: block"><path d="m9 18 6-6-6-6"></path></svg>
+<span>Até 12:30</span>
+</button>
+</article>
+
+</div>
+</div>
+</aside>
+</div>
+
+<div style="position: absolute; left: 0; right: 0; bottom: 24px; display: flex; justify-content: center; box-sizing: border-box; padding: 0 16px">
+<div role="toolbar" aria-label="Controles da gravação" style="display: flex; align-items: center; gap: 4px; min-width: 0; max-width: 100%; box-sizing: border-box; padding: 6px; border: 1px solid rgba(201,212,229,0.28); border-radius: 6px; background: #0a2a5e; color: #ffffff">
+<button type="button" aria-keyshortcuts="Space" style="flex: none; display: inline-flex; align-items: center; gap: 8px; height: 40px; padding: 0 14px; border: 0; border-radius: 4px; background: transparent; color: #ffffff; font: inherit; font-size: 13px; font-weight: 500; white-space: nowrap; cursor: pointer">
+<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" style="display: block"><rect x="6" y="4" width="4" height="16"></rect><rect x="14" y="4" width="4" height="16"></rect></svg>
+Pausar
+</button>
+<button type="button" aria-label="Ouvir só os participantes" aria-pressed="false" title="Ouvir só os participantes" style="flex: none; display: inline-flex; align-items: center; height: 40px; padding: 0 12px; border: 0; border-radius: 4px; background: transparent; color: #ffffff; cursor: pointer">
+<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true" style="display: block"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"></path><path d="M19 10v2a7 7 0 0 1-14 0v-2"></path><path d="M12 19v3"></path></svg>
+</button>
+<button type="button" aria-pressed="false" aria-keyshortcuts="Meta+Shift+N" title="Anotações (⌘⇧N)" style="flex: none; display: inline-flex; align-items: center; gap: 8px; height: 40px; padding: 0 14px; border: 0; border-radius: 4px; background: transparent; color: #ffffff; font: inherit; font-size: 13px; font-weight: 500; white-space: nowrap; cursor: pointer">
+<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true" style="display: block"><path d="M15.5 3H5a2 2 0 0 0-2 2v14c0 1.1.9 2 2 2h14a2 2 0 0 0 2-2V8.5L15.5 3Z"></path><path d="M15 3v4a2 2 0 0 0 2 2h4"></path></svg>
+Anotações
+</button>
+<button type="button" aria-keyshortcuts="Meta+Shift+A" title="Perguntas em aberto e o que não ficou claro até agora (⌘⇧A)" style="flex: none; display: inline-flex; align-items: center; gap: 8px; height: 40px; padding: 0 14px; border: 0; border-radius: 4px; background: transparent; color: #ffffff; font: inherit; font-size: 13px; font-weight: 500; white-space: nowrap; cursor: pointer">
+<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true" style="display: block"><path d="M3 7V5a2 2 0 0 1 2-2h2M17 3h2a2 2 0 0 1 2 2v2M21 17v2a2 2 0 0 1-2 2h-2M7 21H5a2 2 0 0 1-2-2v-2"></path><circle cx="12" cy="12" r="3"></circle><path d="m16 16-1.9-1.9"></path></svg>
+Analisar até agora
+</button>
+<span aria-hidden="true" style="flex: none; width: 1px; height: 24px; background: rgba(255,255,255,0.2)"></span>
+<span title="Idioma falado e idioma da tradução" style="flex: none; display: flex; align-items: center; height: 28px; margin-left: 8px; padding: 0 10px; border-radius: 4px; background: rgba(255,255,255,0.12); font-size: 12px; font-weight: 500; white-space: nowrap">PT → EN</span>
+<span title="Modelo de tradução: claude-cli:haiku" style="flex: 0 1 auto; min-width: 0; max-width: 132px; height: 28px; padding: 0 10px; box-sizing: border-box; border-radius: 4px; background: rgba(255,255,255,0.12); font-family: Menlo, ui-monospace, monospace; font-size: 11px; line-height: 28px; color: #a8b5cc; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">claude-cli:haiku</span>
+<span title="O áudio da reunião está sendo salvo na pasta escolhida em Configurações" style="flex: none; display: flex; align-items: center; gap: 6px; height: 28px; padding: 0 8px; font-size: 12px; color: #a8b5cc; white-space: nowrap">
+<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true" style="display: block"><path d="M22 12H2M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11zM6 16h.01M10 16h.01"></path></svg>
+Gravando áudio
+</span>
+<span aria-hidden="true" style="flex: none; width: 4px"></span>
+<span aria-hidden="true" style="flex: none; width: 1px; height: 24px; background: rgba(255,255,255,0.2)"></span>
+<button type="button" aria-label="Bloquear" aria-keyshortcuts="Meta+Shift+L" title="Bloquear o app; a gravação continua (⌘⇧L)" style="flex: none; display: inline-flex; align-items: center; height: 40px; padding: 0 12px; border: 0; border-radius: 4px; background: transparent; color: #ffffff; cursor: pointer">
+<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true" style="display: block"><rect width="18" height="11" x="3" y="11" rx="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>
+</button>
+<span aria-hidden="true" style="flex: none; width: 1px; height: 24px; background: rgba(255,255,255,0.2)"></span>
+<a href="DetalheResumo.dc.html" style="flex: none; display: inline-flex; align-items: center; gap: 8px; height: 40px; padding: 0 14px; border-radius: 4px; color: #ffffff; text-decoration: none; font-size: 13px; font-weight: 500; white-space: nowrap">
+<span aria-hidden="true" style="width: 8px; height: 8px; background: #f0646a"></span>
+Encerrar
+</a>
+</div>
+</div>
+
+</main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1120,"height":740}}'>
+class Component extends DCLogic {
+  renderVals() {
+    var seed = 7;
+    function rnd() { seed = (seed * 9301 + 49297) % 233280; return seed / 233280; }
+    var mic = [], sys = [];
+    for (var i = 0; i < 184; i++) {
+      var x = i * 4;
+      var micOn = (i > 2 && i < 30) || (i > 84 && i < 108) || (i > 146 && i < 166) || i > 176;
+      var sysOn = (i > 32 && i < 80) || (i > 110 && i < 142) || (i > 168 && i < 175);
+      var m = micOn ? Math.round(6 + rnd() * 34) : (rnd() < 0.12 ? 2 : 0);
+      var s = sysOn ? Math.round(6 + rnd() * 34) : (rnd() < 0.12 ? 2 : 0);
+      if (m > 0) mic.push({ x: x, h: m, y: 48 - m });
+      if (s > 0) sys.push({ x: x, h: s });
+    }
+    return { duas: 3, micBars: mic, sysBars: sys };
+  }
+}
+</script>
+</body>
+</html>
