@@ -102,10 +102,10 @@ function ChatRow({ chat, active, onOpen }: { chat: WhatsAppChat; active: boolean
       data-whatsapp-chat={chat.id}
       aria-current={active ? 'true' : undefined}
       onClick={onOpen}
-      className={`no-drag flex w-full min-w-0 items-center gap-3 rounded-[var(--radius-control)] px-2.5 py-2 text-left ${active ? 'bg-bg-sunken' : 'hover:bg-bg-sunken'}`}
+      className={`no-drag flex w-full min-w-0 items-center gap-2.5 rounded-[var(--radius-control)] px-2 py-1.5 text-left ${active ? 'bg-bg-sunken' : 'hover:bg-bg-sunken'}`}
     >
       <span className="flex shrink-0" {...(group ? { 'data-whatsapp-group': '', title: 'Grupo' } : {})}>
-        <Avatar id={chat.id} name={chat.name} photo={photo} group={group} size={10} />
+        <Avatar id={chat.id} name={chat.name} photo={photo} group={group} size={8} />
         {group && <span className="sr-only">Grupo:</span>}
       </span>
       <span className="flex min-w-0 flex-1 flex-col gap-0.5">
@@ -190,7 +190,7 @@ function MessageItem({ message, first, group, photo, swapped, loaded, picking, o
       )}
       {mine && <MessageActions message={message} picking={picking} onReply={onReply} onPick={onPick} />}
       <div className={`flex max-w-[560px] min-w-0 flex-col gap-1 ${mine ? 'items-end' : 'items-start'}`}>
-        <div data-wa-bubble className={`flex max-w-full min-w-0 flex-col gap-1 rounded-[var(--radius-panel)] px-3 py-2 text-15 whitespace-pre-wrap select-text ${mine ? 'bg-accent text-on-accent' : 'border border-line bg-bg-raised text-text'}`}>
+        <div data-wa-bubble className={`flex max-w-full min-w-0 flex-col gap-1 rounded-[var(--radius-panel)] px-3 py-1.5 text-14 whitespace-pre-wrap select-text ${mine ? 'bg-accent text-on-accent' : 'border border-line bg-bg-raised text-text'}`}>
           {group && !mine && first ? <span className="text-12 font-bold text-accent">{author}</span> : <span className="sr-only">{author}: </span>}
           {quote && (
             <button
@@ -284,7 +284,7 @@ function PendingItem({ item }: { item: PendingSend }) {
   const correcting = item.phase === 'correcting'
   return (
     <li data-wa-pending={item.key} data-wa-pending-phase={item.phase} className="mt-3 flex items-end justify-end gap-2 first:mt-0">
-      <div className={`flex max-w-[560px] min-w-0 flex-col gap-1 rounded-[var(--radius-panel)] bg-accent px-3 py-2 text-15 whitespace-pre-wrap text-on-accent select-text ${correcting ? 'wa-pending-shimmer' : ''}`}>
+      <div className={`flex max-w-[560px] min-w-0 flex-col gap-1 rounded-[var(--radius-panel)] bg-accent px-3 py-1.5 text-14 whitespace-pre-wrap text-on-accent select-text ${correcting ? 'wa-pending-shimmer' : ''}`}>
         <span className="sr-only">Você: </span>
         <span data-wa-pending-text>{item.text}</span>
         <span data-wa-pending-status role="status" className="flex items-center gap-1 self-end text-12 opacity-80">
@@ -690,8 +690,8 @@ function Conversation({ chat, initialText, detailsOpen, onDetails }: Conversatio
           Solte para anexar
         </div>
       )}
-      <header ref={header} className="flex h-14 shrink-0 items-center gap-3 border-b border-line px-6">
-        <Avatar id={chat.id} name={chat.name} photo={photo} group={group} size={10} />
+      <header ref={header} className="flex h-11 shrink-0 items-center gap-2.5 border-b border-line px-5">
+        <Avatar id={chat.id} name={chat.name} photo={photo} group={group} size={8} />
         <div className="flex min-w-0 flex-1 flex-col">
           <h2 data-whatsapp-chat-title className="truncate text-15 font-bold text-title">
             {chat.name}
@@ -717,7 +717,7 @@ function Conversation({ chat, initialText, detailsOpen, onDetails }: Conversatio
           Detalhes
         </button>
       </header>
-      <div ref={list} onScroll={onScroll} data-whatsapp-messages className="min-h-0 flex-1 overflow-y-auto px-6 py-4">
+      <div ref={list} onScroll={onScroll} data-whatsapp-messages className="min-h-0 flex-1 overflow-y-auto px-5 py-3">
         {messages === undefined ? (
           <div className="flex flex-col gap-3" aria-hidden="true">
             {[0, 1, 2].map((key) => (
@@ -750,7 +750,7 @@ function Conversation({ chat, initialText, detailsOpen, onDetails }: Conversatio
           <p className="text-13 text-text-muted">Nenhuma mensagem guardada nesta conversa ainda.</p>
         )}
       </div>
-      <div className="flex shrink-0 flex-col gap-2 border-t border-line px-6 py-4">
+      <div className="flex shrink-0 flex-col gap-2 border-t border-line px-4 py-3">
         {draftOpen && (
           <div data-whatsapp-draft-panel className="flex flex-col gap-2 rounded-[var(--radius-panel)] border border-line bg-bg-sunken p-3">
             <label htmlFor="whatsapp-draft-instruction" className="text-12 font-medium text-text">
@@ -770,7 +770,7 @@ function Conversation({ chat, initialText, detailsOpen, onDetails }: Conversatio
                   draft()
                 }
               }}
-              className="no-drag h-10 rounded-[var(--radius-control)] border border-line-strong bg-bg-raised px-3 text-13 text-text select-text placeholder:text-text-faint"
+              className="no-drag h-8 rounded-[var(--radius-control)] border border-line-strong bg-bg-raised px-2.5 text-13 text-text select-text placeholder:text-text-faint"
             />
             <div className="flex flex-wrap items-center gap-2">
               <label htmlFor="whatsapp-draft-meeting" className="text-12 text-text-muted">
@@ -867,7 +867,7 @@ function Conversation({ chat, initialText, detailsOpen, onDetails }: Conversatio
             typingSignal.current?.input(event.target.value)
           }}
           onKeyDown={onKey}
-          className="no-drag min-h-[72px] resize-none rounded-[var(--radius-control)] border border-line-strong bg-bg-raised px-3 py-2 text-15 text-text select-text placeholder:text-text-faint"
+          className="no-drag min-h-[72px] resize-none rounded-[var(--radius-control)] border border-line-strong bg-bg-raised px-3 py-2 text-14 text-text select-text placeholder:text-text-faint"
         />
         {sendError && (
           <p role="alert" data-whatsapp-send-error className="text-12 text-rec">
@@ -883,7 +883,7 @@ function Conversation({ chat, initialText, detailsOpen, onDetails }: Conversatio
               title="Anexar imagem ou vídeo (ou arraste para a conversa)"
               onClick={pickAttachment}
               disabled={sending}
-              className="no-drag inline-flex size-10 shrink-0 items-center justify-center rounded-[var(--radius-control)] border border-line-strong bg-bg-raised text-title transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-bg-sunken disabled:pointer-events-none disabled:opacity-50"
+              className="no-drag inline-flex size-8 shrink-0 items-center justify-center rounded-[var(--radius-control)] border border-line-strong bg-bg-raised text-title transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-bg-sunken disabled:pointer-events-none disabled:opacity-50"
             >
               <Icon icon={Paperclip} />
             </button>
@@ -974,7 +974,7 @@ export function WhatsAppScreen() {
     // começam no topo da área.
     <div className="flex min-h-0 flex-1 flex-col">
       {!connected ? (
-        <div className="px-10 pt-7 pb-8">
+        <div className="px-8 pt-5 pb-8">
           <Note
             id="whatsapp-not-connected"
             icon={TriangleAlert}
@@ -991,8 +991,8 @@ export function WhatsAppScreen() {
       ) : (
         <div className="flex min-h-0 flex-1">
           <aside aria-label="Conversas do WhatsApp" className={`flex w-[300px] shrink-0 flex-col border-r border-line ${open && detailsOpen ? 'max-[1279px]:hidden' : ''}`}>
-            <div className="p-3">
-              <div className="no-drag flex h-8 items-center gap-2 rounded-[var(--radius-control)] border border-line-strong bg-bg-raised px-2 text-text-faint has-[input:focus-visible]:outline-2 has-[input:focus-visible]:outline-offset-2 has-[input:focus-visible]:outline-focus">
+            <div className="p-2">
+              <div className="no-drag flex h-7 items-center gap-2 rounded-[var(--radius-control)] border border-line-strong bg-bg-raised px-2 text-text-faint has-[input:focus-visible]:outline-2 has-[input:focus-visible]:outline-offset-2 has-[input:focus-visible]:outline-focus">
                 <Icon icon={Search} size={14} />
                 <input
                   type="text"
@@ -1022,7 +1022,7 @@ export function WhatsAppScreen() {
               )}
               {shownHits && (
                 <section aria-label="Mensagens encontradas" className="mt-4 flex flex-col gap-1">
-                  <h3 className="px-2 text-12 font-bold text-text-muted">Mensagens</h3>
+                  <h3 className="label px-2">Mensagens</h3>
                   {shownHits.length ? (
                     <ul data-whatsapp-hits className="flex flex-col gap-0.5">
                       {shownHits.map((hit) => (

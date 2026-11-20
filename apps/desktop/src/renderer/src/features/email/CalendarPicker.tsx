@@ -105,7 +105,7 @@ export function CalendarPicker({ calendars, value, onChange, disabled = false, i
         >
           {groups.map((group) => (
             <div key={group.source} role="group" aria-label={group.source} className="flex flex-col">
-              <p aria-hidden="true" data-invite-calendar-group className="caps truncate px-3 pt-2 pb-1 text-text-faint">
+              <p aria-hidden="true" data-invite-calendar-group className="label truncate px-3 pt-2 pb-1">
                 {group.source}
               </p>
               {group.items.map((calendar) => {

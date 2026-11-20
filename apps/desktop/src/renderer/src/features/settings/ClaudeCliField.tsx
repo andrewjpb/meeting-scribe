@@ -54,7 +54,7 @@ export function ClaudeCliField() {
 
   return (
     <div
-      className="flex flex-col gap-3 py-4"
+      className="flex flex-col gap-2.5 py-3"
       data-claude-state={check.phase}
       data-setting-row
       data-setting-name="Claude CLI"

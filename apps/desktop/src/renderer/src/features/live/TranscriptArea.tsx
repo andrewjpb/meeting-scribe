@@ -57,8 +57,8 @@ export function TranscriptArea() {
 
   if (status === 'no-key') {
     return (
-      <div className="min-h-0 flex-1 overflow-y-auto px-10 pb-28">
-        <div className="mx-auto grid w-full max-w-[680px] grid-cols-[64px_minmax(0,1fr)] pt-7" data-transcript-state="no-key">
+      <div className="min-h-0 flex-1 overflow-y-auto px-8 pb-28">
+        <div className="mx-auto grid w-full max-w-[680px] grid-cols-[48px_minmax(0,1fr)] pt-5" data-transcript-state="no-key">
           <CloudOff size={16} strokeWidth={1.5} strokeLinecap="square" aria-hidden="true" className="mt-0.5 text-text-faint" />
           <div>
             <p className="text-15 font-medium text-text">Adicione sua chave da AssemblyAI para transcrever.</p>
@@ -70,7 +70,7 @@ export function TranscriptArea() {
                 type="button"
                 data-action="open-settings-from-transcript"
                 onClick={() => void navigate(settingsPath('gravacao', TRANSCRIPTION_ANCHOR))}
-                className="no-drag inline-flex h-10 items-center rounded-[var(--radius-control)] bg-accent px-4 text-13 font-medium text-on-accent transition-opacity duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:opacity-90"
+                className="no-drag inline-flex h-8 items-center rounded-[var(--radius-control)] bg-accent px-3 text-13 font-medium text-on-accent transition-opacity duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:opacity-90"
               >
                 Abrir Configurações
               </button>
@@ -96,7 +96,7 @@ export function TranscriptArea() {
           id="claude-not-found"
           role="status"
           icon={Languages}
-          className="mx-10 mt-4"
+          className="mx-8 mt-3"
           action={
             <button type="button" data-action="open-settings-from-claude" className={NOTE_ACTION_CLASS} onClick={() => void navigate(settingsPath('claude'))}>
               Abrir Configurações
@@ -113,8 +113,8 @@ export function TranscriptArea() {
 
 function ExampleHeader({ onHide }: { onHide: () => void }) {
   return (
-    <div data-transcript-state="example" className="sticky top-0 z-10 grid grid-cols-[64px_minmax(0,1fr)] items-center border-b border-line bg-bg py-3">
-      <span className="inline-flex h-[22px] w-fit items-center rounded-[var(--radius-control)] bg-bg-sunken px-1.5 text-12 font-medium text-text-muted">Exemplo</span>
+    <div data-transcript-state="example" className="sticky top-0 z-10 grid grid-cols-[48px_minmax(0,1fr)] items-center border-b border-line bg-bg py-2">
+      <span className="inline-flex h-5 w-fit items-center rounded-[var(--radius-control)] bg-bg-sunken px-1.5 text-12 font-medium text-text-muted">Exemplo</span>
       <div className="flex items-center justify-between gap-4">
         <p className="text-12 text-text-faint">Conversa fictícia, só para mostrar o formato. Não é salva.</p>
         <button

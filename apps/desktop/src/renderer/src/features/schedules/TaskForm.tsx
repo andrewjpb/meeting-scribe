@@ -186,13 +186,13 @@ export function TaskForm({ initial, meetings, onClose, onSaved }: { initial: Tas
   const meetingOptions = [{ value: '', label: 'Escolha a reunião' }, ...(meetings.list ?? []).map((entry) => ({ value: entry.meeting.id, label: entry.meeting.title }))]
 
   return (
-    <div data-task-form className="flex max-w-[760px] flex-col gap-6">
+    <div data-task-form className="flex max-w-[760px] flex-col gap-4">
       <div className="flex items-center gap-2">
         <button type="button" data-action="task-form-back" onClick={onClose} className={QUIET_BUTTON}>
           <Icon icon={ArrowLeft} size={14} />
           Tarefas agendadas
         </button>
-        <h2 className="text-17 font-bold text-title">{initial.id ? 'Editar tarefa' : 'Nova tarefa'}</h2>
+        <h2 className="text-15 font-bold text-title">{initial.id ? 'Editar tarefa' : 'Nova tarefa'}</h2>
       </div>
 
       {initial.id === null && (
@@ -231,7 +231,7 @@ export function TaskForm({ initial, meetings, onClose, onSaved }: { initial: Tas
         </div>
       </FormField>
 
-      <div className="grid grid-cols-[repeat(auto-fit,minmax(280px,1fr))] gap-6">
+      <div className="grid grid-cols-[repeat(auto-fit,minmax(280px,1fr))] gap-4">
         <FormField label="Fuso" htmlFor="task-timezone" hint={timeZoneOk ? 'Padrão: o fuso deste Mac.' : 'Fuso desconhecido.'}>
           <TextField id="task-timezone" value={task.timezone} onChange={(timezone) => patch({ timezone })} maxLength={64} />
         </FormField>
@@ -249,7 +249,7 @@ export function TaskForm({ initial, meetings, onClose, onSaved }: { initial: Tas
         </FormField>
       </div>
 
-      <div className="grid grid-cols-[repeat(auto-fit,minmax(280px,1fr))] gap-6">
+      <div className="grid grid-cols-[repeat(auto-fit,minmax(280px,1fr))] gap-4">
         <FormField label="Saída" htmlFor="task-output">
           <Select
             id="task-output"
@@ -270,14 +270,14 @@ export function TaskForm({ initial, meetings, onClose, onSaved }: { initial: Tas
 
       <EmailSection draft={emailDraft} accounts={emailAccounts} grantedAt={grantedAt} timeZone={task.timezone} error={'error' in email ? email.error : null} onChange={(next) => setEmailDraft((current) => ({ ...current, ...next }))} />
 
-      <div className="flex flex-wrap items-center gap-6">
-        <div className="flex items-center gap-3">
+      <div className="flex flex-wrap items-center gap-5">
+        <div className="flex items-center gap-2.5">
           <Switch checked={task.enabled} labelledBy="task-enabled" onChange={(enabled) => patch({ enabled })} />
           <span id="task-enabled" className="text-13 text-text">
             Ligada
           </span>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2.5">
           <Switch checked={task.runOnce} labelledBy="task-run-once" onChange={(runOnce) => patch({ runOnce })} />
           <span id="task-run-once" className="text-13 text-text">
             Rodar uma vez só
@@ -297,7 +297,7 @@ export function TaskForm({ initial, meetings, onClose, onSaved }: { initial: Tas
         </div>
       </div>
 
-      <section aria-label="Próximas 5 execuções" data-task-preview className="flex flex-col gap-2 rounded-[var(--radius-panel)] border border-line-strong bg-bg-raised p-4">
+      <section aria-label="Próximas 5 execuções" data-task-preview className="flex flex-col gap-2 rounded-[var(--radius-panel)] border border-line-strong bg-bg-raised p-3">
         <h3 className="text-13 font-medium text-text">Próximas 5 execuções</h3>
         {frequency.kind === 'after-meeting' ? (
           <p className="text-12 text-text-muted">Roda depois de cada reunião encerrada, com o escopo apontando para ela.</p>
@@ -357,8 +357,8 @@ function EmailSection({
   const granted = grantedAt ? Date.parse(grantedAt) : Number.NaN
   const zone = Number.isNaN(granted) || !isValidTimeZone(timeZone) ? null : formatRunAt(granted, timeZone)
   return (
-    <section aria-label="Pode enviar email" data-task-email={draft.on ? 'on' : 'off'} className="flex flex-col gap-4 rounded-[var(--radius-panel)] border border-line-strong bg-bg-raised p-4">
-      <div className="flex items-start gap-3">
+    <section aria-label="Pode enviar email" data-task-email={draft.on ? 'on' : 'off'} className="flex flex-col gap-3 rounded-[var(--radius-panel)] border border-line-strong bg-bg-raised p-3">
+      <div className="flex items-start gap-2.5">
         <Switch checked={draft.on} labelledBy="task-email" action="task-email-toggle" disabled={none && !draft.on} onChange={turn} />
         <div className="flex min-w-0 flex-col gap-1">
           <span id="task-email" className="inline-flex items-center gap-1.5 text-13 font-medium text-text">
@@ -441,7 +441,7 @@ function FrequencyControls({ draft, onChange }: { draft: FrequencyDraft; onChang
                   aria-pressed={on}
                   aria-label={day.label}
                   onClick={() => onChange({ days: on ? draft.days.filter((value) => value !== day.value) : [...draft.days, day.value] })}
-                  className={`no-drag h-10 w-11 text-13 ${index > 0 ? 'border-l border-line-strong' : ''} ${on ? 'bg-title font-medium text-bg' : 'bg-bg-raised text-text hover:bg-bg-sunken'}`}
+                  className={`no-drag h-8 w-10 text-13 ${index > 0 ? 'border-l border-line-strong' : ''} ${on ? 'bg-title font-medium text-bg' : 'bg-bg-raised text-text hover:bg-bg-sunken'}`}
                 >
                   {day.short}
                 </button>

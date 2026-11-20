@@ -108,15 +108,15 @@ function Panel({ children }: { children: ReactNode }) {
 function Skeleton() {
   return (
     <Panel>
-      <div className="flex h-11 items-center gap-2.5 border-b border-line-strong bg-bg-sunken px-3">
+      <div className="flex h-8 items-center gap-2 border-b border-line-strong bg-bg-sunken px-2.5">
         <Icon icon={Search} className="text-text-muted" />
         <span className="text-13 text-text-faint">Carregando modelos…</span>
       </div>
       <div aria-hidden="true">
         {Array.from({ length: SKELETON_ROWS }, (_, index) => (
-          <div key={index} className="flex min-h-14 items-center gap-3 border-b border-line px-3 py-2 last:border-b-0">
+          <div key={index} className="flex min-h-10 items-center gap-2.5 border-b border-line px-2.5 py-1.5 last:border-b-0">
             <span className="w-[16px]" />
-            <span className="flex flex-[1_1_200px] flex-col gap-1.5">
+            <span className="flex flex-[1_1_200px] items-center gap-2">
               <span className="h-3 w-40 rounded-[2px] bg-bg-sunken" />
               <span className="h-2.5 w-28 rounded-[2px] bg-bg-sunken" />
             </span>
@@ -146,7 +146,7 @@ function ModelList({ models, current }: { models: CatalogModel[]; current: strin
   return (
     <div className="flex flex-col">
       <Panel>
-        <div className="flex items-center gap-2.5 border-b border-line-strong bg-bg-sunken px-3">
+        <div className="flex items-center gap-2 border-b border-line-strong bg-bg-sunken px-2.5">
           <Icon icon={Search} className="shrink-0 text-text-muted" />
           <input
             type="search"
@@ -157,7 +157,7 @@ function ModelList({ models, current }: { models: CatalogModel[]; current: strin
             autoComplete="off"
             spellCheck={false}
             data-model-search
-            className="no-drag h-11 min-w-0 grow border-0 bg-transparent text-13 text-text select-text placeholder:text-text-faint focus-visible:outline-offset-[-2px]"
+            className="no-drag h-8 min-w-0 grow border-0 bg-transparent text-13 text-text select-text placeholder:text-text-faint focus-visible:outline-offset-[-2px]"
           />
           <span className="shrink-0 text-12 text-text-muted tabular" aria-live="polite">
             {countLabel(shown.length, all.length)}
@@ -165,7 +165,7 @@ function ModelList({ models, current }: { models: CatalogModel[]; current: strin
         </div>
         <div className="max-h-[336px] overflow-y-auto" role="group" aria-label="Modelos de tradução">
           {shown.length === 0 ? (
-            <p className="px-3 py-4 text-13 text-text-muted">Nenhum modelo com esse nome ou id.</p>
+            <p className="px-2.5 py-3 text-13 text-text-muted">Nenhum modelo com esse nome ou id.</p>
           ) : (
             shown.map((model) => (
               <ModelRow
@@ -217,12 +217,13 @@ function ModelRow({ model, selected, blocked, checking, busy, onSelect }: ModelR
       onClick={() => {
         if (!blocked && !busy) onSelect()
       }}
-      className={`no-drag flex min-h-14 w-full flex-wrap items-center gap-3 border-b border-line px-3 py-2 text-left text-13 transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] last:border-b-0 focus-visible:outline-offset-[-2px] ${tone}`}
+      className={`no-drag flex min-h-10 w-full flex-wrap items-center gap-x-2.5 gap-y-0.5 border-b border-line px-2.5 py-1.5 text-left text-13 transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] last:border-b-0 focus-visible:outline-offset-[-2px] ${tone}`}
     >
       {selected ? <Check size={16} strokeWidth={2} strokeLinecap="square" aria-hidden="true" className="shrink-0 text-accent" /> : <span aria-hidden="true" className="w-[16px] shrink-0" />}
-      <span className="flex min-w-0 flex-[1_1_200px] flex-col gap-0.5">
-        <span className="font-medium">{model.name}</span>
-        <span className={`font-mono text-11 ${blocked ? '' : 'text-text-muted'}`}>{model.id}</span>
+      {/* Contrato 82: nome e id na mesma linha, para a linha ficar em 40. */}
+      <span title={`${model.name} · ${model.id}`} className="flex min-w-0 flex-[1_1_200px] items-baseline gap-2">
+        <span className="min-w-0 shrink truncate font-medium">{model.name}</span>
+        <span className={`min-w-0 shrink-[2] truncate font-mono text-11 ${blocked ? '' : 'text-text-muted'}`}>{model.id}</span>
       </span>
       {price}
       <span className={`flex-[0_0_40px] text-right text-12 tabular ${blocked ? '' : 'text-text-muted'}`}>{formatContext(model.contextLength)}</span>

@@ -1,5 +1,5 @@
 ---
-status: aprovado-antecipadamente
+status: arquivado
 feature: densidade
 data: 2026-11-20
 semana: 2026-W47
@@ -47,9 +47,9 @@ Regra de caixa alta: só rótulos de fonte de áudio (fita), "LAP SOFTWARE" e na
 - **Reuniões**: página `px-8 pt-5`; grupo do dia rótulo 11; linha 44 (título 13/500, apoio 11, prévia 12 em 1 linha); "Próximas" linha 32; busca 32; pastas 28; "gravando agora" `px-3 py-2`.
 - **Detalhe da reunião**: cabeçalho `pt-5`, título 15/700 editável, abas 32, etiquetas 20; Resumo: títulos de bloco 14/600 com fio, texto 15/24, tabela de tarefas `py-1.5`; Anotações `gap-3`; Áudio rótulos 11; Transcrição texto 15/24, tradução 13/20, rótulo 11, botões 28.
 - **Gravação**: cabeçalho `pt-5 pb-3`, status 20 px, cronômetro 14; análise linhas 28; painel de anotações abas 32 e corpo `px-3 pt-3`; barra de controles botões 32, etiquetas 24.
-- **Assistente**: já sem PageHeader (contrato 78); cabeçalho da conversa 44, título 15/700; sugestões 44; corpo coluna 720 `gap-4 pt-4`; balões 14/22 `px-3 py-2`; cartão de resposta `px-3 py-2.5`; caixa de pergunta textarea 44, seletores 28; Contexto cabeçalho 40, seções `px-3 py-3`, rótulo 11, linhas 28.
+- **Assistente**: já sem PageHeader (contrato 78); cabeçalho da conversa 44, título 15/700; sugestões 44; corpo coluna 720 `gap-4 pt-4`; balões 14/22 `px-3 py-2`; cartão de resposta `px-3 py-2.5`; caixa de pergunta textarea 44, seletores 28; Contexto cabeçalho 44, seções `px-3 py-3`, rótulo 11, linhas 28.
 - **Email**: topo da lista `px-2 pt-2 pb-1`, título 15; barra de seleção 32; linha `px-2 py-1.5` (remetente 13/600, assunto 13, prévia 12); leitura: barra 44, assunto 17/600, corpo 15/24 mantido; compor: cabeçalho 44, campos 32, texto 15; organizar `px-5 py-4`, título 15.
-- **WhatsApp**: busca 28; linha `px-2 py-1.5`, avatar 32; cabeçalho 44; balões 14/22 `px-3 py-1.5`; composição `px-4 py-3`, campo 32; detalhes cabeçalho 40, seções `px-3 py-3`.
+- **WhatsApp**: busca 28; linha `px-2 py-1.5`, avatar 32; cabeçalho 44; balões 14/22 `px-3 py-1.5`; composição `px-4 py-3`, campo 32; detalhes cabeçalho 44, seções `px-3 py-3`.
 - **Automações**: abas 32 `mt-4`; corpo `pt-4 pb-8`; cartão de agente `p-3 gap-2`, título 13/600; tabela de tarefas cabeçalho rótulo 11, linha `py-1.5`; execuções `py-1.5`; formulários título 15, gap 16.
 - **Configurações**: topo `px-8 pt-5 pb-2`, título 15/700 (já é o nome da aba), busca 32; rolagem `pt-5 pb-8`, `gap-6`; `Section`/`SettingRow` densos; seletor de modelo busca 32 e linha 40; Conexões blocos `py-3`, linhas `px-2 py-1.5`; Plugins/Contas `py-3`; regras de email `py-2`, botões 28; pastas 32; Sobre 13.
 - **Bloqueio** e **Aviso de reunião**: iguais (já compactos), só botão 32 no bloqueio.
@@ -60,7 +60,7 @@ Todas as telas do app mudam de ritmo (mais itens visíveis, títulos menores, r�
 
 ## Critérios de aceite
 - **CA1.** Componentes do `design/` com as medidas da tabela; nenhum uso de `.caps` fora de fita/marca; `.label` criada e usada.
-- **CA2.** Cada tela da seção "Telas" com as medidas indicadas, conferidas no smoke (`layoutMetrics` e checks por tela atualizados: `buttonHeight` 32, `inputHeight` 32, `settingRowHeight` 44–60, `modelRowHeight` 40, `contentLeft` 32, `contentTop` 20, título de Configurações `15px/20px`, cabeçalho do Contexto 40, transcrição 24/20, etc.).
+- **CA2.** Cada tela da seção "Telas" com as medidas indicadas, conferidas no smoke (`layoutMetrics` e checks por tela atualizados: `buttonHeight` 32, `inputHeight` 32, `settingRowHeight` 44–60, `modelRowHeight` 40, `contentLeft` 32, `contentTop` 20, título de Configurações `15px/20px`, cabeçalho do Contexto 44, transcrição 24/20, etc.).
 - **CA3.** Nenhum texto cortado, nenhum controle desalinhado nos prints (auditoria de todos os prints do smoke com laudo).
 - **CA4.** design.md reescrito nas linhas 45–48, 52–53, 61, 69–81, 92–102 e "Não fazer" ganha "não voltar a 40 px em controles nem a caixa alta em rótulos".
 - **CA5.** `docs/telas`: todos os 35 artboards regenerados na escala densa (valores literais atualizados: 40→32, 64→44, 10 caps→11 normal, etc.), mais os artboards que faltam (Configurações Gravação/Arquivos/Email/Plugins/Sobre, Email leitura e compor) e os de Redes (contrato 77), `canvas.json` e README; `docs/telas/ds/lap-reunioes/` passa a existir no repo com `tokens.json` (gerado de `tokens.css` por script `scripts/export-tokens.mjs`) e os READMEs dos componentes com as medidas densas; artefatos "Telas do LAP Reuniões" e "LAP Reuniões Design System" republicados pelo coordenador.

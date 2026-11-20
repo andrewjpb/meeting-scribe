@@ -28,8 +28,8 @@ export type ContextSection = 'scope' | 'sources' | 'connections' | 'consulted' |
 
 function PanelSection({ title, section, children }: { title: string; section: ContextSection; children: ReactNode }) {
   return (
-    <section aria-label={title} data-context-section={section} className="flex flex-col gap-2 border-b border-line px-4 py-4 last:border-b-0">
-      <h3 className="text-12 font-bold text-text-muted">{title}</h3>
+    <section aria-label={title} data-context-section={section} className="flex flex-col gap-2 border-b border-line px-3 py-3 last:border-b-0">
+      <h3 className="label">{title}</h3>
       {children}
     </section>
   )
@@ -137,7 +137,7 @@ interface ContextPanelProps extends ContextSectionsProps {
 export function ContextPanel({ onClose, ...sections }: ContextPanelProps) {
   return (
     <aside data-chat-context aria-label="Contexto" className="flex w-[280px] shrink-0 flex-col overflow-y-auto border-l border-line bg-bg">
-      <div className="flex h-12 shrink-0 items-center justify-between border-b border-line pr-2 pl-4">
+      <div className="flex h-11 shrink-0 items-center justify-between border-b border-line pr-1.5 pl-3">
         <h2 className="text-13 font-bold text-title">Contexto</h2>
         <button
           type="button"
@@ -183,7 +183,7 @@ export function RailContext({ pinned, open, onClose, onFocusAway, ...sections }:
   if (!pinned && !open) return null
   return (
     <section data-chat-context className="flex flex-col">
-      <div className={`flex h-12 shrink-0 items-center justify-between border-b border-line pl-4 ${pinned ? 'pr-4' : 'pr-2'}`}>
+      <div className={`flex h-11 shrink-0 items-center justify-between border-b border-line pl-3 ${pinned ? 'pr-3' : 'pr-1.5'}`}>
         <h2 className="text-13 font-bold text-title">Contexto</h2>
         {!pinned && (
           <button
@@ -254,7 +254,7 @@ function ContextSections({ meetingId, scope, model, messages, meetings, onScope,
                     data-scope-option={option.kind}
                     tabIndex={active ? 0 : -1}
                     onClick={() => pick(option.kind)}
-                    className={`no-drag flex h-8 items-center gap-2 rounded-[var(--radius-control)] px-1 text-left text-13 hover:bg-bg-sunken ${active ? 'font-medium text-title' : 'text-text'}`}
+                    className={`no-drag flex h-7 items-center gap-2 rounded-[var(--radius-control)] px-1 text-left text-13 hover:bg-bg-sunken ${active ? 'font-medium text-title' : 'text-text'}`}
                   >
                     <span aria-hidden="true" className={`size-2 shrink-0 border ${active ? 'border-accent bg-accent' : 'border-line-strong'}`} />
                     {option.label(total)}

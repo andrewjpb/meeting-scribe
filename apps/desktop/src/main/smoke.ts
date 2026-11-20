@@ -91,6 +91,7 @@ import { DRIVE_ROOT_FOLDER_NAME } from '../shared/accounts'
 import { WHATSAPP_EXPORT_PREFIX, WHATSAPP_FIXED_WARNING, WHATSAPP_PAIR_HINT, WHATSAPP_RISK_CHECKBOX, WHATSAPP_RISK_TEXT, WHATSAPP_RISK_TITLE } from '../shared/whatsapp'
 import { INSIGHTS_MOOD_NOTE } from '../shared/whatsapp-insights'
 import { ASSEMBLYAI_DASHBOARD_URL } from '../shared/assemblyai'
+import { formatRunAt } from '../shared/automations'
 import { INVOKE_CHANNELS, WHEN_LOCKED, type CspViolation } from '../shared/ipc'
 // 73: comentários
 import { REDES_COMMENT_CLICK_MESSAGE } from '../shared/ipc'
@@ -120,6 +121,7 @@ import { summaryInput, summaryLines } from './claude-cli/summary'
 import { MENU_IDS } from './menu'
 import { CHAT_CORPUS_DIR, CHAT_INDEX_FILE, CHAT_SCOPE_DIR, corpusFileSuffix } from './chat/corpus'
 import { AUTOMATIONS_FILE, EMAIL_SEARCH_FILE, GUIDE_FILE, isSourceFile, STATE_FILE } from './chat/sources'
+import { CHAT_EVENTS_FILE } from './chat/events-store'
 import { CHATS_DIR } from './chat/store'
 import type { FakeDriveFile } from './google/fake-google'
 import { RECORDING_LEAVE_MESSAGE } from './lock/recording-session'
@@ -1226,6 +1228,54 @@ async function meetingsListCheck(contents: WebContents, userDataDir: string): Pr
     detail: `grupos ${JSON.stringify(groups)} (esperado ${JSON.stringify(expectedLabels)}); smoke-4 "${first?.overview ?? ''}" ${JSON.stringify(first?.markers ?? [])}; smoke-2 ${second?.overview.length ?? 0} caracteres ${JSON.stringify(second?.markers ?? [])}; smoke-5 ${JSON.stringify(withNotes?.markers ?? [])}; sem resumo: ${plain.map((row) => row.id).join(', ')}`,
   }
 }
+
+// 81: densidade
+/**
+ * Contrato 81: a lista de Reuniões na escala densa. Página a 32 da lateral e 20 do topo; busca de 32 por 240 e "Nova
+ * gravação" de 32; opção de pasta de 28; rótulo do dia 11/16 em caixa normal; linha de no mínimo 44 com título 13/500,
+ * apoio 11 e prévia do resumo 12 numa linha só.
+ */
+async function meetingsDensityCheck(contents: WebContents): Promise<Check> {
+  const view = await evaluate<Record<string, string | number>>(
+    contents,
+    `(() => {
+      const box = (selector) => document.querySelector(selector)?.getBoundingClientRect() ?? { left: 0, top: 0, width: 0, height: 0 }
+      const style = (selector) => getComputedStyle(document.querySelector(selector))
+      const main = box('main')
+      const row = document.querySelector('main a[data-meeting]')
+      const [title, meta] = row.querySelectorAll('p')
+      const day = style('main section[data-day] h2')
+      const overview = style('main [data-summary-overview]')
+      return {
+        contentLeft: Math.round(box('main header').left - main.left),
+        contentTop: Math.round(box('main header').top - main.top),
+        search: Math.round(box('main [role="search"]').height) + 'x' + Math.round(box('main [role="search"]').width),
+        newRecording: Math.round(box('main [data-action="new-recording"]').height),
+        folder: Math.round(box('main [data-folder="all"]').height),
+        day: day.fontSize + '/' + day.lineHeight + ' ' + day.fontWeight + ' ' + day.textTransform,
+        rowMin: getComputedStyle(row).minHeight,
+        rowHeight: Math.round(row.getBoundingClientRect().height),
+        title: getComputedStyle(title).fontSize + ' ' + getComputedStyle(title).fontWeight,
+        meta: getComputedStyle(meta).fontSize,
+        overview: overview.fontSize + ' clamp ' + overview.getPropertyValue('-webkit-line-clamp'),
+      }
+    })()`,
+  )
+  const ok =
+    view['contentLeft'] === 32 &&
+    view['contentTop'] === 20 &&
+    view['search'] === '32x240' &&
+    view['newRecording'] === 32 &&
+    view['folder'] === 28 &&
+    view['day'] === '11px/16px 500 none' &&
+    view['rowMin'] === '44px' &&
+    Number(view['rowHeight']) >= 44 &&
+    view['title'] === '13px 500' &&
+    view['meta'] === '11px' &&
+    view['overview'] === '12px clamp 1'
+  return { ok, detail: JSON.stringify(view) }
+}
+// 81: densidade (fim)
 
 /**
  * Busca (contrato 10, CA4): ⌘F foca o campo; palavras que só existem na transcrição acham a reunião com o
@@ -3908,7 +3958,7 @@ type LayoutScreen = 'configuracoes' | 'gravacao' | 'detalhe'
  * Medidas em px lógicos contra os mockups aprovados (docs/specs/desktop-shell/mockups): barra lateral de
  * 224, item de navegação de 32 (contrato 79), quadrado de permissão de 6, conteúdo a 28 do topo (24 no detalhe) e 40 da
  * lateral, campo, seletor e botão de 32 e linha de configuração de 44 no mínimo (contrato 80), linha de modelo de 56,
- * fita de 96, calha da transcrição de 64 e as linhas de texto/tradução de 26/22. Lidas da tela, para a
+ * fita de 96, calha da transcrição de 48 e as linhas de texto/tradução de 24/20 (contrato 81). Lidas da tela, para a
  * escala de espaço não encolher de novo.
  */
 async function layoutMetrics(contents: WebContents, screen: LayoutScreen): Promise<Record<string, number>> {
@@ -3927,7 +3977,7 @@ async function layoutMetrics(contents: WebContents, screen: LayoutScreen): Promi
         permissionSquare: round(box('[data-permission="mic"] span[aria-hidden="true"]')?.width ?? 0),
       }
       if (${JSON.stringify(screen)} === 'configuracoes') {
-        // Contrato 66: o título da aba (20/26) fica centrado na linha da busca, que começa a 28 do topo como antes.
+        // Contrato 66: o título da aba fica centrado na linha da busca; 82: densidade, título 15/20 e busca a 20 do topo.
         const title = box('[data-settings-title]')
         const search = box('[data-settings-search]')
         Object.assign(out, {
@@ -3948,7 +3998,17 @@ async function layoutMetrics(contents: WebContents, screen: LayoutScreen): Promi
         })
         if (${JSON.stringify(screen)} === 'gravacao') {
           out.tapeHeight = round(box('[aria-label="Níveis de áudio de você e dos participantes"]').height)
+          // 81: densidade
+          out.statusHeight = round(box('main header p[aria-live]').height)
+          out.elapsedFontSize = round(parseFloat(getComputedStyle(document.querySelector('main header [aria-label="Tempo gravado"]')).fontSize))
+          out.controlButtonHeight = round(box('[data-action="end-recording"]').height)
+          out.controlChipHeight = round(box('[title="Idioma falado e idioma da tradução"]').height)
+          // 81: densidade (fim)
         } else {
+          // 81: densidade
+          out.titleFontSize = round(parseFloat(getComputedStyle(document.querySelector('main header h1 button')).fontSize))
+          out.tabHeight = round(box('main header [role="tab"]').height)
+          // 81: densidade (fim)
           out.transcriptTextLineHeight = lineHeight('[data-transcript-text]')
           out.transcriptTranslationLineHeight = lineHeight('[data-transcript-translation]')
           out.copyButtonHeight = round(box('[data-action="copy-transcript"]').height)
@@ -3968,16 +4028,19 @@ const COMMON_LAYOUT: Record<string, Expectation> = {
   sidebarWidth: { min: 224, max: 224 },
   navItemHeight: { min: 32, max: 32 }, // contrato 79: item da raiz e cabeçalho-voltar de 32
   permissionSquare: { min: 6, max: 6 },
-  contentLeft: { min: 40, max: 40 }, // 81/82 ajustam
-  transcriptGutter: { min: 64, max: 64 },
+  // 81: densidade (gravação e detalhe; Configurações tem o próprio contentLeft): página a 32 da lateral, calha de 48.
+  contentLeft: { min: 32, max: 32 },
+  transcriptGutter: { min: 48, max: 48 },
+  // 81: densidade (fim)
 }
 
 const SCREEN_LAYOUT: Record<LayoutScreen, Record<string, Expectation>> = {
   configuracoes: {
-    contentTop: { min: 28, max: 28 }, // 81/82 ajustam
-    // Contrato 18: coluna de leitura de até 760 px, centralizada (na janela de 1120, a 68 px da lateral, mais a
-    // reserva da barra de rolagem quando ela não é sobreposta).
-    contentLeft: { min: 40, max: 100 }, // 81/82 ajustam
+    // 82: densidade: topo a 20; coluna de leitura de até 760 px, centralizada (contrato 18; na janela de 1120, a 68 px
+    // da lateral, mais a reserva da barra de rolagem quando ela não é sobreposta), nunca a menos de 32.
+    contentTop: { min: 20, max: 20 },
+    contentLeft: { min: 32, max: 100 },
+    // 82: densidade (fim)
     columnWidth: { min: 600, max: 760 },
     columnCentered: { min: 0, max: 0.5 },
     headerAlign: { min: 0, max: 0.5 },
@@ -3995,18 +4058,27 @@ const SCREEN_LAYOUT: Record<LayoutScreen, Record<string, Expectation>> = {
     selectHeight: { min: 32, max: 32 },
     buttonHeight: { min: 32, max: 32 },
     settingRowHeight: { min: 44, max: 60 },
-    // Tela: 81/82 ajustam.
-    modelRowHeight: { min: 56, max: 64 },
+    // 82: densidade: linha do seletor de modelo de 40 (nome e id na mesma linha).
+    modelRowHeight: { min: 40, max: 48 },
+    // 82: densidade (fim)
   },
+  // 81: densidade: cabeçalho a 20 do topo; na gravação, status de 20, cronômetro 14, botões da barra 32 e etiquetas 24;
+  // no detalhe, título 15, abas 32, texto da transcrição 15/24 e tradução 13/20.
   gravacao: {
-    contentTop: { min: 28, max: 28 }, // 81/82 ajustam
+    contentTop: { min: 20, max: 20 },
     tapeHeight: { min: 96, max: 96 },
+    statusHeight: { min: 20, max: 20 },
+    elapsedFontSize: { min: 14, max: 14 },
+    controlButtonHeight: { min: 32, max: 32 },
+    controlChipHeight: { min: 24, max: 24 },
   },
   detalhe: {
-    // Mockup do detalhe: cabeçalho a 24 do topo, texto 16/26 e tradução 14/22.
-    contentTop: { min: 24, max: 24 }, // 81/82 ajustam
-    transcriptTextLineHeight: { min: 26, max: 26 },
-    transcriptTranslationLineHeight: { min: 22, max: 22 },
+    contentTop: { min: 20, max: 20 },
+    titleFontSize: { min: 15, max: 15 },
+    tabHeight: { min: 32, max: 32 },
+    transcriptTextLineHeight: { min: 24, max: 24 },
+    transcriptTranslationLineHeight: { min: 20, max: 20 },
+    // 81: densidade (fim)
     // Componente (contrato 80): o "Copiar" é um `Button`, 32.
     copyButtonHeight: { min: 32, max: 32 },
   },
@@ -5013,6 +5085,13 @@ async function lockChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => void
   const layer = await lockLayerView(win)
   const sharpAfter = await edgesOutsideCard(win)
   shots.push(await capture(win, ctx.outDir, 'bloqueado-light'))
+  // 81: densidade: cartão de 380 com 24 de respiro e 12 entre as partes, título 17/24 e "Desbloquear" de 32.
+  const lockCard = await evaluate<string>(
+    contents,
+    `(() => { const card = document.querySelector('[data-lock-card]'), style = getComputedStyle(card), title = getComputedStyle(document.querySelector('#lock-title')); return [Math.round(card.getBoundingClientRect().width), style.paddingTop, style.rowGap, title.fontSize + '/' + title.lineHeight, Math.round(document.querySelector('[data-action="unlock"]').getBoundingClientRect().height)].join(' ') })()`,
+  )
+  checks['density'] = { ok: lockCard === '380 24px 12px 17px/24px 32', detail: lockCard }
+  // 81: densidade (fim)
   // Foco preso: Tab e Shift+Tab nunca saem da camada.
   const tabStops: string[] = []
   for (let i = 0; i < 6; i++) {
@@ -6410,8 +6489,8 @@ interface SmokeActionFile {
 }
 
 /**
- * Contrato 25 (CA1 a CA6), numa janela clara: "Assistente" na barra lateral, com o título, a descrição e o campo
- * novos; "tenho algo pendente no WhatsApp?" responde citando as conversas pendentes; o painel "Contexto" com as
+ * Contrato 25 (CA1 a CA6), numa janela clara: "Assistente" na barra lateral (contrato 78: a tela sem título) e o campo
+ * novo; "tenho algo pendente no WhatsApp?" responde citando as conversas pendentes; o painel "Contexto" com as
  * fontes; "me lembre amanhã de responder a Ana" vira cartão (data absoluta, "amanhã", 09:00 sem hora no pedido), e
  * "Criar lembrete" cria a tarefa "uma vez" sem agente, que aparece em Automações › Tarefas agendadas; clicar de
  * novo não repete; "responda ao Bruno dizendo sim" vira cartão com o nome e o número lidos do app, e "Enviar" (com o
@@ -6441,11 +6520,12 @@ async function assistantChecks(ctx: SmokeContext, watch: (win: BrowserWindow) =>
   await showAssistantLevel(contents)
   await clickSelector(contents, '[data-action="chat-new"]')
   await waitFor(contents, `document.querySelector('[data-chat-input]') && !document.querySelector('[data-chat-message]')`)
-  const header = await evaluate<string>(contents, `document.querySelector('main h1')?.parentElement?.textContent ?? ''`)
+  // Contrato 78: a tela não tem mais o cabeçalho "Assistente" (o `noHeader` confere a altura da linha da conversa).
+  const noTitle = await evaluate<boolean>(contents, `![...document.querySelectorAll('main h1')].some((el) => !el.closest('[data-chat-header]') || el.textContent.trim() === 'Assistente')`)
   const placeholder = await evaluate<string>(contents, `document.querySelector('[data-chat-input]')?.placeholder ?? ''`)
   checks['name'] = {
-    ok: navLabel === 'Assistente' && noOldName && header.includes('Assistente') && header.includes('Pergunte ou peça qualquer coisa: reuniões, WhatsApp, email, automações e o próprio app.') && placeholder === 'Pergunte ou peça algo…',
-    detail: `barra lateral "${navLabel}", sem "Perguntar"=${noOldName}; cabeçalho "${header.slice(0, 120)}"; campo "${placeholder}"`,
+    ok: navLabel === 'Assistente' && noOldName && noTitle && placeholder === 'Pergunte ou peça algo…',
+    detail: `barra lateral "${navLabel}", sem "Perguntar"=${noOldName}; sem título na tela=${noTitle}; campo "${placeholder}"`,
   }
 
   // CA2: o que está pendente no WhatsApp, com a citação de cada conversa.
@@ -6573,6 +6653,270 @@ async function assistantChecks(ctx: SmokeContext, watch: (win: BrowserWindow) =>
 
   await evaluate(contents, `window.__scribeApi.invoke('scribe:settings-update', { claudeTransport: '${transportBefore === 'acp' ? 'acp' : 'cli'}' }).then(() => true)`)
   win.destroy()
+}
+
+/** Contrato 78: as agendas do helper falso durante o `assistantAgendaChecks` (uma gravável "Pessoal", uma só leitura). */
+const AGENDA_CALENDARS = [
+  { id: 'cal-pessoal', title: 'Pessoal', sourceId: 'src-icloud', sourceTitle: 'iCloud', sourceType: 'caldav', writable: true, availabilities: ['busy', 'tentative', 'free'], color: '#1BADF8', isDefault: false },
+  { id: 'cal-trabalho', title: 'Trabalho', sourceId: 'src-icloud', sourceTitle: 'iCloud', sourceType: 'caldav', writable: true, availabilities: ['busy', 'tentative', 'free'], color: '#1B6FD8', isDefault: true },
+  { id: 'cal-feriados', title: 'Feriados', sourceId: 'src-assinadas', sourceTitle: 'Assinadas', sourceType: 'subscribed', writable: false, availabilities: ['busy', 'free'], color: null, isDefault: false },
+]
+
+/** Daqui a `days` dias às `hour`:00 na hora local, em ISO UTC sem fração (como o app manda ao helper). */
+const localDayAt = (days: number, hour: number): string => {
+  const now = new Date()
+  return new Date(now.getFullYear(), now.getMonth(), now.getDate() + days, hour, 0).toISOString().replace(/\.\d{3}Z$/, 'Z')
+}
+
+/**
+ * Contrato 78 (CA1 a CA10), numa janela que troca de tema no lugar, com o agente ACP falso e o `lap-calendar` falso com a
+ * agenda "Pessoal": a tela do Assistente sem cabeçalho (a linha da conversa e o trilho no topo da área); "marque o
+ * aniversário…" vira o cartão de evento com o título, o horário, o local e "Pessoal", e "Pôr na agenda" cria um evento
+ * só (o segundo pedido volta `done`), registrado em `chat-events.json`; o "Editar" muda o título e a hora e o helper
+ * recebe o editado; sem acesso, o aviso com "Pedir acesso" e o botão principal desabilitado; o evento no passado vira
+ * texto. O lembrete criado pelo cartão de sempre é adiado pelo cartão "lembrete-editar" (antes → depois) e apagado pelo
+ * "lembrete-apagar"; com o id apagado, nada de cartão. O helper falso volta ao estado de antes no fim.
+ */
+async function assistantAgendaChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => void, checks: Record<string, Check>, shots: Screenshot[]): Promise<void> {
+  const cal = ctx.fixtures.macCalendar
+  const helperBefore = existsSync(cal.statePath) ? readFileSync(cal.statePath, 'utf8') : null
+  const writeHelper = (patch: Record<string, unknown>): void =>
+    writeFileSync(cal.statePath, `${JSON.stringify({ ...(helperBefore ? (JSON.parse(helperBefore) as Record<string, unknown>) : {}), calendars: AGENDA_CALENDARS, ...patch }, null, 2)}\n`)
+  const creates = (from = 0): Record<string, unknown>[] => cal.log().slice(from).filter((item) => item['cmd'] === 'create')
+  const argsOf = (item: Record<string, unknown> | undefined): Record<string, unknown> => (item?.['args'] as Record<string, unknown> | undefined) ?? {}
+  writeHelper({ access: 'full' })
+  const themeBefore = readSettings(ctx.userDataDir).theme ?? 'system'
+  const transportBefore = readSettings(ctx.userDataDir).claudeTransport
+  nativeTheme.themeSource = 'light'
+  const win = ctx.openWindow({})
+  watch(win)
+  await loadAndWait(win)
+  const contents = win.webContents
+  if (themeBefore !== 'system') await evaluate(contents, "window.__scribeApi.invoke('scribe:settings-update', { theme: 'system' }).then(() => true)")
+  await evaluate(contents, "window.__scribeApi.invoke('scribe:settings-update', { claudeTransport: 'acp' }).then(() => true)")
+  /** O mesmo estado nos dois temas: claro, escuro (no lugar, sem recarregar) e de volta ao claro. */
+  const both = async (name: string): Promise<void> => {
+    await evaluate(contents, `document.activeElement instanceof HTMLElement && document.activeElement.blur(), true`)
+    await settle(contents)
+    shots.push(await capture(win, ctx.outDir, `${name}-light`))
+    nativeTheme.themeSource = 'dark'
+    await waitFor(contents, "document.documentElement.dataset.theme === 'dark'")
+    await settle(contents)
+    shots.push(await capture(win, ctx.outDir, `${name}-dark`))
+    nativeTheme.themeSource = 'light'
+    await waitFor(contents, "document.documentElement.dataset.theme === 'light'")
+  }
+  const chatId = (): Promise<string> => evaluate<string>(contents, `document.querySelector('[data-chat-conversation]')?.getAttribute('data-chat-conversation') ?? ''`)
+  const lastActions = async (): Promise<SmokeActionFile[]> => chatFile(ctx.userDataDir, await chatId())?.messages.at(-1)?.actions ?? []
+  const lastCard = (kind: string): string => `[...document.querySelectorAll('[data-chat-action="${kind}"]')].at(-1)`
+  const cardText = (card: string, selector: string): Promise<string> => evaluate<string>(contents, `${card}?.querySelector(${JSON.stringify(selector)})?.textContent ?? ''`)
+  const clickIn = (card: string, action: string): Promise<unknown> => evaluate(contents, `${card}?.querySelector('[data-action="${action}"]')?.click(), true`)
+  const geometry = (): Promise<{ title: boolean; screen: number; header: number; rail: number | null }> =>
+    evaluate(
+      contents,
+      `(() => ({
+        // O título editável da conversa é um h1 dentro da linha da conversa; nenhum outro título na tela.
+        title: [...document.querySelectorAll('main h1')].some((el) => !el.closest('[data-chat-header]') || el.textContent.trim() === 'Assistente'),
+        screen: document.querySelector('[data-chat-screen]')?.getBoundingClientRect().top ?? -1,
+        header: document.querySelector('[data-chat-header]')?.getBoundingClientRect().top ?? -2,
+        rail: document.querySelector('[data-chat-rail]')?.getBoundingClientRect().top ?? null,
+      }))()`,
+    )
+
+  try {
+    // CA8: a conversa nova começa na linha da conversa, sem o cabeçalho da tela.
+    await showAssistantLevel(contents)
+    await clickSelector(contents, '[data-action="chat-new"]')
+    await waitFor(contents, `document.querySelector('[data-chat-input]') && !document.querySelector('[data-chat-message]')`)
+    const fresh = await geometry()
+
+    // CA1: o cartão de evento, do pedido até a agenda (no helper falso), uma vez só.
+    const createsStart = creates().length
+    const asked = await askChat(contents, 'Marque o aniversário do Jefferson amanhã às 20h, na casa da Day')
+    const card = lastCard('evento')
+    const proposed = await waitFor(contents, `${card}?.dataset.chatActionStatus === 'proposed'`)
+    const nothingBefore = creates().length === createsStart
+    const saved = await geometry()
+    const title = await cardText(card, '[data-chat-action-title]')
+    const when = await cardText(card, '[data-chat-event-when]')
+    const place = await cardText(card, '[data-chat-event-location]')
+    const agenda = await cardText(card, '[data-chat-event-calendar]')
+    await both('assistente-evento')
+    const logFrom = cal.log().length
+    await clickIn(card, 'chat-action-event-create')
+    const created = await waitFor(contents, `${card}?.dataset.chatActionStatus === 'done' && (${card}?.querySelector('[data-chat-action-result]')?.textContent ?? '').startsWith('Evento criado · ')`, 8000)
+    const result = await cardText(card, '[data-chat-action-result]')
+    const made = creates(logFrom)
+    const eventAction = (await lastActions())[0]
+    const again = await evaluate<{ ok: boolean; error?: string }>(
+      contents,
+      `window.__scribeApi.invoke('scribe:chat-action-event', { chatId: '${await chatId()}', index: ${(chatFile(ctx.userDataDir, await chatId())?.messages.length ?? 1) - 1}, actionId: '${eventAction?.id ?? 'x'}', calendarId: 'cal-pessoal' })`,
+    )
+    const eventsFile = join(ctx.userDataDir, CHAT_EVENTS_FILE)
+    const registered = existsSync(eventsFile) ? (JSON.parse(readFileSync(eventsFile, 'utf8')) as { events: { actionId: string; calendarId: string; calendarItemIdentifier: string }[] }).events : []
+    const createArgs = argsOf(made[0])
+    // CA3: o evento com início ontem fica como texto, sem cartão.
+    const invalid = await askChat(contents, 'Mande um evento inválido')
+    const invalidCards = await evaluate<number>(contents, `${LAST_ASSISTANT}?.querySelectorAll('[data-chat-action]').length ?? -1`)
+    const invalidText = await evaluate<string>(contents, LAST_ANSWER)
+    checks['eventCard'] = {
+      ok:
+        asked.done &&
+        proposed &&
+        title === 'Aniversário do Jefferson' &&
+        when.endsWith(' · 20:00–21:00') &&
+        place === 'Casa da Day' &&
+        agenda.includes('Pessoal') &&
+        nothingBefore &&
+        created &&
+        result.endsWith(' 20:00 · Pessoal') &&
+        made.length === 1 &&
+        createArgs['calendarId'] === 'cal-pessoal' &&
+        createArgs['title'] === 'Aniversário do Jefferson' &&
+        createArgs['location'] === 'Casa da Day' &&
+        createArgs['start'] === localDayAt(1, 20) &&
+        createArgs['end'] === localDayAt(1, 21) &&
+        again.ok === false &&
+        again.error === 'done' &&
+        creates(logFrom).length === 1 &&
+        registered.length === 1 &&
+        registered[0]?.actionId === eventAction?.id &&
+        registered[0]?.calendarId === 'cal-pessoal' &&
+        mode(eventsFile) === '600' &&
+        invalid.done &&
+        invalidCards === 0 &&
+        invalidText.includes('"tipo":"evento"'),
+    detail: `resposta=${asked.done}; cartão=${proposed} "${title}" "${when}" "${place}" agenda "${agenda}"; nada antes do clique=${nothingBefore}; criado=${created} "${result}"; ${made.length} create ${JSON.stringify(createArgs)}; de novo -> ${JSON.stringify(again)} (${creates(logFrom).length} create); chat-events.json ${registered.length} evento(s) (${mode(eventsFile)}); inválido=${invalid.done} cartões=${invalidCards} "${invalidText.slice(0, 80)}"`,
+    }
+    checks['noHeader'] = {
+      ok: !fresh.title && fresh.header === fresh.screen && fresh.rail === null && !saved.title && saved.header === saved.screen && saved.rail === saved.screen,
+      detail: `conversa nova: título=${fresh.title}, linha a ${fresh.header - fresh.screen} px do topo; conversa salva: título=${saved.title}, linha a ${saved.header - saved.screen} px, trilho a ${saved.rail === null ? 'ausente' : `${saved.rail - saved.screen} px`}`,
+    }
+
+    // CA4: "Editar" muda o título e a hora no cartão; "Pôr na agenda" grava o editado.
+    await askChat(contents, 'Marque o aniversário do Jefferson amanhã às 20h, na casa da Day')
+    const editCard = lastCard('evento')
+    await waitFor(contents, `${editCard}?.dataset.chatActionStatus === 'proposed'`)
+    await clickIn(editCard, 'chat-action-event-edit')
+    const form = await waitFor(contents, `${editCard}?.querySelector('[data-chat-event-field="title"]')`)
+    const field = (name: string): string => `[data-chat-action="evento"][data-editing] [data-chat-event-field="${name}"]`
+    await setValue(contents, field('title'), 'Aniversário do Jefferson (surpresa)')
+    await setValue(contents, field('from'), '21:00')
+    await setValue(contents, field('to'), '23:30')
+    await clickIn(editCard, 'chat-action-event-save')
+    const edited = await waitFor(contents, `!${editCard}?.hasAttribute('data-editing') && (${editCard}?.querySelector('[data-chat-event-when]')?.textContent ?? '').endsWith(' · 21:00–23:30')`)
+    const editedTitle = await cardText(editCard, '[data-chat-action-title]')
+    const editFrom = cal.log().length
+    await clickIn(editCard, 'chat-action-event-create')
+    const editDone = await waitFor(contents, `${editCard}?.dataset.chatActionStatus === 'done'`, 8000)
+    const editArgs = argsOf(creates(editFrom)[0])
+    checks['eventEdit'] = {
+      ok:
+        form &&
+        edited &&
+        editedTitle === 'Aniversário do Jefferson (surpresa)' &&
+        editDone &&
+        creates(editFrom).length === 1 &&
+        editArgs['title'] === 'Aniversário do Jefferson (surpresa)' &&
+        editArgs['start'] === localDayAt(1, 21) &&
+        editArgs['end'] === new Date(Date.parse(localDayAt(1, 23)) + 30 * 60_000).toISOString().replace(/\.\d{3}Z$/, 'Z') &&
+        editArgs['calendarId'] === 'cal-pessoal',
+      detail: `campos=${form}; cartão editado=${edited} "${editedTitle}"; gravado=${editDone}, ${creates(editFrom).length} create ${JSON.stringify(editArgs)}`,
+    }
+
+    // CA2: sem acesso ao Calendário, o aviso com "Pedir acesso" e o botão principal desabilitado.
+    writeHelper({ access: 'notDetermined' })
+    await askChat(contents, 'Marque o aniversário do Jefferson amanhã às 20h, na casa da Day')
+    const noAccess = lastCard('evento')
+    const noAccessShown = await waitFor(contents, `${noAccess}?.dataset.chatActionStatus === 'proposed'`)
+    const view = await evaluate<{ note: string; ask: string; disabled: boolean; picker: boolean }>(
+      contents,
+      `(() => { const card = ${noAccess}; return { note: card?.querySelector('[data-notice="chat-event-calendar-access"]')?.textContent ?? '', ask: card?.querySelector('[data-action="chat-action-calendar-access"]')?.textContent ?? '', disabled: card?.querySelector('[data-action="chat-action-event-create"]')?.disabled === true, picker: Boolean(card?.querySelector('[data-chat-event-calendar-picker]')) } })()`,
+    )
+    const savedNoAccess = (await lastActions())[0] as (SmokeActionFile & { access?: string; calendarId?: string | null }) | undefined
+    writeHelper({ access: 'full' })
+    checks['eventNoAccess'] = {
+      ok: noAccessShown && view.note.includes('O app ainda não tem acesso ao Calendário.') && view.ask === 'Pedir acesso' && view.disabled && !view.picker && savedNoAccess?.access === 'not-determined' && savedNoAccess.calendarId === null,
+      detail: `cartão=${noAccessShown}; aviso "${view.note}"; botão "${view.ask}"; "Pôr na agenda" desabilitado=${view.disabled}; seletor=${view.picker}; gravado access=${String(savedNoAccess?.access)} agenda=${String(savedNoAccess?.calendarId)}`,
+    }
+
+    // CA6: o lembrete criado pelo cartão de sempre, adiado pelo cartão "lembrete-editar".
+    const tasksBefore = new Set((await ctx.automations.listTasks()).map((item) => item.id))
+    await askChat(contents, 'Me lembre amanhã de responder o Bruno')
+    const reminderCard = lastCard('lembrete')
+    await waitFor(contents, `${reminderCard}?.dataset.chatActionStatus === 'proposed'`)
+    await clickIn(reminderCard, 'chat-action-reminder-create')
+    await waitFor(contents, `${reminderCard}?.dataset.chatActionStatus === 'done'`, 8000)
+    const task = (await ctx.automations.listTasks()).find((item) => item.reminder && !tasksBefore.has(item.id))
+    const taskId = task?.id ?? 'sem-tarefa'
+    const reminderText = task?.reminder?.text ?? '?'
+    const oldAt = task?.schedule.kind === 'once' ? task.schedule.at : ''
+    const scopeDir = join(ctx.userDataDir, CHAT_SCOPE_DIR, await chatId())
+    const postpone = await askChat(contents, `Adie o lembrete ${taskId} para depois de amanhã 9h`)
+    const stateText = existsSync(join(scopeDir, STATE_FILE)) ? readFileSync(join(scopeDir, STATE_FILE), 'utf8') : ''
+    const automationsText = existsSync(join(scopeDir, AUTOMATIONS_FILE)) ? readFileSync(join(scopeDir, AUTOMATIONS_FILE), 'utf8') : ''
+    const editReminder = lastCard('lembrete-editar')
+    const editShown = await waitFor(contents, `${editReminder}?.dataset.chatActionStatus === 'proposed'`)
+    const change = await cardText(editReminder, '[data-chat-reminder-change-when]')
+    const newAt = new Date(Date.parse(localDayAt(2, 9))).toISOString()
+    const tz = macTimeZone()
+    const changeOk = change.startsWith(formatRunAt(Date.parse(oldAt), tz)) && change.endsWith(formatRunAt(Date.parse(newAt), tz))
+    await both('assistente-lembrete-editar')
+    await clickIn(editReminder, 'chat-action-reminder-save')
+    const editSaved = await waitFor(contents, `${editReminder}?.dataset.chatActionStatus === 'done' && (${editReminder}?.querySelector('[data-chat-action-result]')?.textContent ?? '').startsWith('Lembrete alterado · ')`, 8000)
+    const moved = (await ctx.automations.listTasks()).find((item) => item.id === taskId)
+    await clickIn(editReminder, 'chat-action-open-tasks')
+    const listed = await waitFor(contents, `${routeIs('automacoes')} && document.querySelector('[data-automations-tab="tarefas"] [data-task-reminder][data-task-name="${task?.name ?? '?'}"]')`, 8000)
+    const listedWhen = await evaluate<string>(contents, `document.querySelector('[data-task-reminder][data-task-name="${task?.name ?? '?'}"] [data-task-when]')?.textContent ?? ''`)
+    checks['reminderEdit'] = {
+      ok:
+        task !== undefined &&
+        postpone.done &&
+        stateText.includes(`· id: ${taskId}`) &&
+        stateText.includes('## Agendas do Mac') &&
+        stateText.includes('- Pessoal (iCloud)') &&
+        stateText.includes('- Trabalho (iCloud), padrão') &&
+        !stateText.includes('Feriados') &&
+        !stateText.includes('cal-') &&
+        automationsText.includes(`- Lembrete: ${reminderText} · ${formatRunAt(Date.parse(oldAt), tz)} · id: ${taskId}`) &&
+        editShown &&
+        changeOk &&
+        editSaved &&
+        moved?.schedule.kind === 'once' &&
+        moved.schedule.at === newAt &&
+        moved.nextRunAt === newAt &&
+        moved.runOnce &&
+        moved.reminder?.text === reminderText &&
+        listed &&
+        listedWhen.includes(formatRunAt(Date.parse(newAt), tz).slice(4, 9)),
+      detail: `lembrete ${task ? task.id : 'ausente'} (${oldAt}); ESTADO com o id=${stateText.includes(`· id: ${taskId}`)}, agendas=${stateText.includes('## Agendas do Mac')} sem id de agenda=${!stateText.includes('cal-')}; AUTOMACOES com o id=${automationsText.includes(`id: ${taskId}`)}; cartão=${editShown} "${change}"; salvo=${editSaved} -> ${moved?.schedule.kind === 'once' ? moved.schedule.at : 'sumiu'} (próxima ${String(moved?.nextRunAt)}, uma vez só=${String(moved?.runOnce)}); em Automações=${listed} "${listedWhen}"`,
+    }
+    await clickNav(contents, 'assistente')
+    await waitFor(contents, `${routeIs('assistente')} && document.querySelector('[data-chat-conversation]')`, 8000)
+
+    // CA7: apagar o lembrete pelo cartão de perigo; o id que não existe mais não vira cartão.
+    await askChat(contents, `Apague o lembrete ${taskId}`)
+    const deleteCard = lastCard('lembrete-apagar')
+    const deleteShown = await waitFor(contents, `${deleteCard}?.dataset.chatActionStatus === 'proposed'`)
+    const question = await cardText(deleteCard, '[data-chat-action-title]')
+    await both('assistente-lembrete-apagar')
+    await clickIn(deleteCard, 'chat-action-reminder-delete')
+    const deleted = await waitFor(contents, `${deleteCard}?.dataset.chatActionStatus === 'done' && (${deleteCard}?.querySelector('[data-chat-action-result]')?.textContent ?? '') === 'Lembrete apagado'`, 8000)
+    const gone = !(await ctx.automations.listTasks()).some((item) => item.id === taskId)
+    const repeat = await askChat(contents, `Apague o lembrete ${taskId}`)
+    const repeatCards = await evaluate<number>(contents, `${LAST_ASSISTANT}?.querySelectorAll('[data-chat-action]').length ?? -1`)
+    checks['reminderDelete'] = {
+      ok: deleteShown && question === `Apagar o lembrete “${reminderText}” de ${formatRunAt(Date.parse(newAt), tz)}?` && deleted && gone && repeat.done && repeatCards === 0 && (await lastActions()).length === 0 && repeat.answer.includes('lembrete-apagar'),
+      detail: `cartão=${deleteShown} "${question}"; apagado=${deleted}, fora das tarefas=${gone}; de novo: cartões=${repeatCards}, texto "${repeat.answer.slice(0, 80)}"`,
+    }
+  } finally {
+    if (helperBefore === null) rmSync(cal.statePath, { force: true })
+    else writeFileSync(cal.statePath, helperBefore)
+    await evaluate(contents, `window.__scribeApi.invoke('scribe:settings-update', { claudeTransport: '${transportBefore === 'acp' ? 'acp' : 'cli'}' }).then(() => true)`).catch(() => undefined)
+    if (themeBefore !== 'system') await evaluate(contents, `window.__scribeApi.invoke('scribe:settings-update', { theme: '${themeBefore}' }).then(() => true)`).catch(() => undefined)
+    nativeTheme.themeSource = 'system'
+    win.destroy()
+  }
 }
 
 // ---------------------------------------------------------------------------------------------------------
@@ -8660,19 +9004,23 @@ async function assistantLevelChecks(ctx: SmokeContext, watch: (win: BrowserWindo
         }
       })()`,
     )
+    // 82: densidade: cabeçalho do Contexto e o da conversa de 44, com os fios na mesma linha.
+    const chatHeaderHeight = await evaluate<number>(contents, `Math.round(document.querySelector('[data-chat-header]')?.getBoundingClientRect().height ?? 0)`)
+    const railDense = rail.headerHeight === 44 && chatHeaderHeight === 44
+    // 82: densidade (fim)
     sidebarChecks['assistantRail'] = {
       ok:
         rail.width === 300 &&
         rail.right &&
         rail.header === 'Contexto' &&
-        rail.headerHeight === 48 &&
+        railDense &&
         !rail.close &&
         !rail.expand &&
         rail.label === '' &&
         JSON.stringify(rail.sections) === JSON.stringify(['scope', 'sources', 'connections', 'consulted', 'totals', 'model']) &&
         !rail.list &&
         rail.first,
-      detail: `trilho ${rail.width}px à direita=${rail.right}, só o Contexto=${rail.first && !rail.list}; cabeçalho "${rail.header}" ${rail.headerHeight}px, X=${rail.close}, expandir=${rail.expand}, aria-label da seção "${rail.label}"; seções ${JSON.stringify(rail.sections)}`,
+      detail: `trilho ${rail.width}px à direita=${rail.right}, só o Contexto=${rail.first && !rail.list}; cabeçalho "${rail.header}" ${rail.headerHeight}px (conversa ${chatHeaderHeight}px), X=${rail.close}, expandir=${rail.expand}, aria-label da seção "${rail.label}"; seções ${JSON.stringify(rail.sections)}`,
     }
 
     // CA7: o cabeçalho da conversa leva o trilho à seção, com o foco no primeiro controle dela; "Escolhidas" leva ao
@@ -12510,6 +12858,9 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
       await clickNav(contents, 'reunioes')
       await waitFor(contents, "document.querySelectorAll('main a[data-meeting]').length === 6 && document.querySelectorAll('main [data-summary-overview]').length === 2")
       meetingsList[themeName === 'light' ? 'list' : 'listDark'] = await meetingsListCheck(contents, ctx.userDataDir)
+      // 81: densidade
+      if (themeName === 'light') meetingsList['density'] = await meetingsDensityCheck(contents)
+      // 81: densidade (fim)
       await shoot('reunioes-lista', 'reunioes')
       if (themeName === 'light') {
         const search = await meetingsSearchCheck(win, ctx.outDir)
@@ -12692,6 +13043,9 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
     // bloqueio (que recusa os canais novos junto com os outros).
     await assistantChecks(ctx, watch, assistant, screenshots)
 
+    // Contrato 78: o evento no Calendário do Mac (helper falso), alterar e apagar um lembrete e a tela sem cabeçalho.
+    await assistantAgendaChecks(ctx, watch, assistant, screenshots)
+
     // Contrato 26: a internet nos agentes, no "Pedir agora" e no Assistente, com o agente ACP falso (sem rede).
     await internetChecks(ctx, watch, internet, screenshots)
 
@@ -12783,6 +13137,9 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
   for (const [name, check] of Object.entries(settings)) if (!check.ok) failures.push(`configurações ${name}: ${check.detail}`)
   for (const [name, check] of Object.entries(meetingsList)) if (!check.ok) failures.push(`lista de reuniões ${name}: ${check.detail}`)
   for (const name of ['list', 'listDark', 'search', 'folders', 'recordingNow']) if (!meetingsList[name]) failures.push(`lista de reuniões ${name}: não executado`)
+  // 81: densidade
+  if (!meetingsList['density']) failures.push('lista de reuniões density: não executado')
+  // 81: densidade (fim)
   for (const [name, check] of Object.entries(chat)) if (!check.ok) failures.push(`chat ${name}: ${check.detail}`)
   for (const name of ['screen', 'screenDark', 'details', 'detailsDark', 'stop', 'context', 'meeting', 'meetingContext', 'acp']) if (!chat[name]) failures.push(`chat ${name}: não executado`)
   for (const name of ['configuracoes', 'gravacao', 'detalhe']) {
@@ -12810,7 +13167,8 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
   for (const name of ['detect', 'install', 'risk', 'paired', 'screen', 'draft', 'send', 'correct', 'ask', 'dark', 'locked', 'notify']) if (!whatsapp[name]) failures.push(`whatsapp ${name}: não executado`)
   for (const [name, check] of Object.entries(automations)) if (!check.ok) failures.push(`automações ${name}: ${check.detail}`)
   for (const [name, check] of Object.entries(assistant)) if (!check.ok) failures.push(`assistente ${name}: ${check.detail}`)
-  for (const name of ['name', 'pending', 'sources', 'reminder', 'whatsapp', 'invalid']) if (!assistant[name]) failures.push(`assistente ${name}: não executado`)
+  for (const name of ['name', 'pending', 'sources', 'reminder', 'whatsapp', 'invalid', 'noHeader', 'eventCard', 'eventEdit', 'eventNoAccess', 'reminderEdit', 'reminderDelete'])
+    if (!assistant[name]) failures.push(`assistente ${name}: não executado`)
   for (const name of ['screen', 'testNow', 'agentForm', 'tasks', 'scheduled', 'afterMeeting', 'skipped', 'tray', 'autoPaused', 'missed', 'askNow', 'runs', 'settings', 'closeKeepsApp', 'dark']) if (!automations[name]) failures.push(`automações ${name}: não executado`)
   for (const [name, check] of Object.entries(internet)) if (!check.ok) failures.push(`internet ${name}: ${check.detail}`)
   for (const name of ['agent', 'askNow', 'noInternet', 'assistant']) if (!internet[name]) failures.push(`internet ${name}: não executado`)
@@ -12845,6 +13203,9 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
   for (const name of ['convite-1', 'convite-2', 'convite-3', 'convite-4', 'convite-5', 'convite-6', 'convite-7', 'convite-8', 'convite-9', 'convite-10', 'convite-11', 'convite-estados', 'convite-lista', 'convite-configuracoes', 'convite-regra-1', 'convite-regra-2', 'convite-regra-3', 'convite-sugestao-4', 'convite-sugestao-5']) if (!invite[name]) failures.push(`convites ${name}: não executado`)
   for (const [name, check] of Object.entries(lock)) if (!check.ok) failures.push(`bloqueio ${name}: ${check.detail}`)
   for (const name of ['password', 'layer', 'channels', 'unlock', 'shortcutAndTouchId', 'recordingContinues', 'leaveDialog', 'endWhileLocked', 'reopen', 'reopenFromDisk', 'dark']) if (!lock[name]) failures.push(`bloqueio ${name}: não executado`)
+  // 81: densidade
+  if (!lock['density']) failures.push('bloqueio density: não executado')
+  // 81: densidade (fim)
   if (!theme.ok) failures.push(`tema: ${theme.detail}`)
   if (!motion.ok) failures.push(`movimento reduzido: ${motion.detail}`)
   // Mais o aviso de sistema sem som, nos dois temas, o eco removido, os arquivos no detalhe, a aba
@@ -12874,11 +13235,12 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
   // painel "Organizando", nos dois temas (contrato 55); os 17 quadros dos convites, nos dois temas (contrato 63); o cartão
   // "Sugestão — confira" e o editor com a regra de convite, nos dois temas (contrato 64); a seção Instagram com a conta
   // conectada e a do armazenamento de mídia, nos dois temas (contrato 69); a tela Redes sem conta, o nível Redes, a fila, o
-  // editor, o editor sem o armazenamento e a fila com a publicação com erro, nos dois temas (contrato 72).
+  // editor, o editor sem o armazenamento e a fila com a publicação com erro, nos dois temas (contrato 72); o cartão de
+  // evento e os de alterar e apagar um lembrete do Assistente, nos dois temas (contrato 78).
   // Contrato 74: +6 (a conversa, fora da janela de 24 h e sem acesso às mensagens, nos dois temas).
   // Contrato 73: +2 (os comentários com a resposta aberta, nos dois temas).
   // Contrato 75: +2 (as métricas da conta em 28 dias e a tabela das publicações, nos dois temas).
-  const expectedShots = SCREENS.length * THEMES.length + 169
+  const expectedShots = SCREENS.length * THEMES.length + 175
   if (screenshots.length !== expectedShots) failures.push(`${screenshots.length} PNGs em vez de ${expectedShots}`)
   for (const shot of screenshots) {
     if (shot.name === MEETING_PROMPT_SHOT) {

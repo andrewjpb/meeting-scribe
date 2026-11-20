@@ -124,7 +124,7 @@ function ToolsList({
   return (
     <ul data-mcp-tools className="flex flex-col divide-y divide-line rounded-[var(--radius-control)] border border-line">
       {tools.map((tool) => (
-        <li key={tool.name} data-mcp-tool={tool.name} className="flex items-center gap-3 px-3 py-2">
+        <li key={tool.name} data-mcp-tool={tool.name} className="flex items-center gap-2.5 px-2 py-1.5">
           <div className="flex min-w-0 flex-1 flex-col">
             {markWrite ? (
               <span className="flex min-w-0 items-center gap-2">
@@ -226,7 +226,7 @@ function ServerItem({ index, kind, server, onOverview, onEdit }: ServerItemProps
   const type = server.transport === 'other' ? 'Outro tipo' : MCP_TRANSPORT_LABELS[server.transport]
   const subtitle = cli ? `${type} · CLI: ${MCP_CLI_HEALTH_LABELS[cli.health]}` : type
   return (
-    <div data-mcp-server={server.key} data-mcp-state={server.state.kind} className="flex flex-col gap-3 py-4">
+    <div data-mcp-server={server.key} data-mcp-state={server.state.kind} className="flex flex-col gap-2.5 py-3">
       <div className="flex items-start justify-between gap-4">
         <div className="flex min-w-0 flex-col gap-0.5">
           <p id={nameId} className="truncate text-13 font-medium text-text">
@@ -486,7 +486,7 @@ function ServerForm({ initial, onDone, onCancel }: { initial: FormState; onDone:
   }
 
   return (
-    <div data-mcp-form={editing ? 'edit' : 'new'} className="flex flex-col gap-4 bg-bg-sunken py-4">
+    <div data-mcp-form={editing ? 'edit' : 'new'} className="flex flex-col gap-3 bg-bg-sunken py-3">
       <div className="flex items-center justify-between gap-3">
         <p className="text-13 font-bold text-title">{editing ? `Editar ${initial.name}` : 'Novo servidor MCP'}</p>
         {!editing && (
@@ -610,7 +610,7 @@ function ServerForm({ initial, onDone, onCancel }: { initial: FormState; onDone:
               tabIndex={form.target === value ? 0 : -1}
               data-mcp-form-target={value}
               onClick={() => change({ target: value })}
-              className={`no-drag flex h-8 items-center gap-2 rounded-[var(--radius-control)] px-1 text-left text-13 hover:bg-bg-raised ${form.target === value ? 'font-medium text-title' : 'text-text'}`}
+              className={`no-drag flex h-7 items-center gap-2 rounded-[var(--radius-control)] px-1 text-left text-13 hover:bg-bg-raised ${form.target === value ? 'font-medium text-title' : 'text-text'}`}
             >
               <span aria-hidden="true" className={`size-2 shrink-0 border ${form.target === value ? 'border-accent bg-accent' : 'border-line-strong'}`} />
               {label}
@@ -670,7 +670,7 @@ function FoundItem({ server, onOverview }: { server: McpFoundServer; onOverview:
   }
   const keys = [...server.envKeys, ...server.headerKeys]
   return (
-    <div data-mcp-found={server.id} className="flex flex-col gap-2 py-4">
+    <div data-mcp-found={server.id} className="flex flex-col gap-2 py-3">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="flex min-w-0 flex-col gap-0.5">
           <p className="truncate text-13 font-medium text-text">{server.name}</p>
@@ -742,7 +742,7 @@ function ConnectorItem({ index, connector }: { index: number; connector: ClaudeC
   }
 
   return (
-    <div data-connector={connector.name} data-connector-state={connector.state} data-connector-enabled={enabled} className="flex flex-col gap-3 py-4">
+    <div data-connector={connector.name} data-connector-state={connector.state} data-connector-enabled={enabled} className="flex flex-col gap-2.5 py-3">
       <div className="flex items-start justify-between gap-4">
         <div className="flex min-w-0 flex-col gap-0.5">
           <p id={nameId} className="truncate text-13 font-medium text-text">
@@ -832,18 +832,18 @@ function ConnectorsSection({ overview }: { overview: McpOverview | null }) {
         )}
       </SettingRow>
       <div data-connectors-section={state} className="flex flex-col divide-y divide-line">
-        {cli === 'loading' && <p className="py-4 text-12 text-text-muted">Lendo o claude mcp list…</p>}
-        {cli === 'not-found' && <p className="py-4 text-12 text-text-muted">O claude não foi encontrado neste Mac.</p>}
-        {cli === 'error' && <p className="py-4 text-12 text-rec">Não foi possível ler os conectores do claude.ai.</p>}
+        {cli === 'loading' && <p className="py-3 text-12 text-text-muted">Lendo o claude mcp list…</p>}
+        {cli === 'not-found' && <p className="py-3 text-12 text-text-muted">O claude não foi encontrado neste Mac.</p>}
+        {cli === 'error' && <p className="py-3 text-12 text-rec">Não foi possível ler os conectores do claude.ai.</p>}
         {cli === 'ok' && list.reason === 'no-subscription' && (
-          <div data-connectors-no-subscription className="flex flex-wrap items-center gap-3 py-4">
+          <div data-connectors-no-subscription className="flex flex-wrap items-center gap-3 py-3">
             <p className="min-w-0 flex-[1_1_320px] text-13 text-text">{CLAUDE_CONNECTORS_NO_SUBSCRIPTION}</p>
             <button type="button" data-action="connectors-open-claude-settings" onClick={() => void navigate(settingsPath('claude'))} className={SMALL}>
               Abrir Configurações › Claude
             </button>
           </div>
         )}
-        {cli === 'ok' && list.reason === 'none' && <p className="py-4 text-12 text-text-muted">Nenhum conector na sua conta do claude.ai.</p>}
+        {cli === 'ok' && list.reason === 'none' && <p className="py-3 text-12 text-text-muted">Nenhum conector na sua conta do claude.ai.</p>}
         {cli === 'ok' &&
           list.connectors.map((connector, index) => (
             <ConnectorItem key={connector.name} index={index} connector={connector} />
@@ -901,17 +901,17 @@ export function ConnectionsSection({ active }: { active: boolean }) {
           </Button>
         </SettingRow>
         <div data-mcp-section="cli" data-mcp-cli-state={cli?.state ?? 'loading'} className="flex flex-col divide-y divide-line empty:hidden">
-          {(!cli || cli.state === 'loading') && <p className="py-4 text-12 text-text-muted">Lendo o claude mcp list…</p>}
+          {(!cli || cli.state === 'loading') && <p className="py-3 text-12 text-text-muted">Lendo o claude mcp list…</p>}
           {cli?.state === 'not-found' && (
-            <div className="flex flex-wrap items-center gap-3 py-4">
+            <div className="flex flex-wrap items-center gap-3 py-3">
               <p className="min-w-0 flex-1 text-12 text-text-muted">O claude não foi encontrado neste Mac.</p>
               <button type="button" data-action="mcp-open-claude-settings" onClick={() => void navigate(settingsPath('claude'))} className={SMALL}>
                 Abrir Configurações › Claude
               </button>
             </div>
           )}
-          {cli?.state === 'error' && <p className="py-4 text-12 text-rec">Não foi possível ler os servidores do Claude CLI.</p>}
-          {cli?.state === 'ok' && !cli.servers.length && <p className="py-4 text-12 text-text-muted">Nenhum servidor no Claude CLI.</p>}
+          {cli?.state === 'error' && <p className="py-3 text-12 text-rec">Não foi possível ler os servidores do Claude CLI.</p>}
+          {cli?.state === 'ok' && !cli.servers.length && <p className="py-3 text-12 text-text-muted">Nenhum servidor no Claude CLI.</p>}
           {cli?.servers.map((server, index) => <ServerItem key={server.key} index={`cli-${index}`} kind="cli" server={server} onOverview={setOverview} />)}
         </div>
       </Section>
@@ -936,7 +936,7 @@ export function ConnectionsSection({ active }: { active: boolean }) {
           />
         )}
         <div data-mcp-section="app" className="flex flex-col divide-y divide-line">
-          {overview && !overview.app.length && <p className="py-4 text-12 text-text-muted">Nenhum servidor só deste app.</p>}
+          {overview && !overview.app.length && <p className="py-3 text-12 text-text-muted">Nenhum servidor só deste app.</p>}
           {overview?.app.map((server, index) => <ServerItem key={server.key} index={`app-${index}`} kind="app" server={server} onOverview={setOverview} onEdit={() => setForm(formOf(server))} />)}
         </div>
       </Section>

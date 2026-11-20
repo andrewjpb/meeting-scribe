@@ -42,9 +42,9 @@ export function OpenQuestionsSection({ meetingId, view, onAnalyze, disabled, onJ
         className="no-drag flex items-center gap-1.5 rounded-[var(--radius-control)] text-left"
       >
         <Icon icon={open ? ChevronDown : ChevronRight} className="shrink-0 text-text-muted" />
-        <span className="text-17 font-bold text-title">Perguntas em aberto</span>
+        <span className="text-14 leading-5 font-semibold text-title">Perguntas em aberto</span>
       </button>
-      <span aria-hidden="true" className="mt-2 mb-3 block h-0.5 w-6 bg-title" />
+      <span aria-hidden="true" className="mt-2 mb-3 block h-0.5 w-5 bg-title" />
       {open && (
         <div id={bodyId} className="flex flex-col gap-4">
           {view.error && !view.analyzing && <RetryNotice id="meeting-analysis-failed" text={analysisErrorText(view.error, agentLabel)} onRetry={onAnalyze} />}

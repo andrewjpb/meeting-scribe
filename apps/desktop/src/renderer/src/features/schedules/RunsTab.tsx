@@ -32,7 +32,7 @@ export function RunsTab({ meetings }: { meetings: ChatMeetings }) {
   const shown = runs.filter((run) => (!taskFilter || run.taskId === taskFilter) && (!statusFilter || run.status === statusFilter))
   const now = new Date()
   return (
-    <div className="flex flex-col gap-5" data-runs-tab>
+    <div className="flex flex-col gap-4" data-runs-tab>
       <div className="flex flex-wrap items-center gap-3">
         <Select
           id="runs-task-filter"
@@ -55,14 +55,14 @@ export function RunsTab({ meetings }: { meetings: ChatMeetings }) {
       ) : (
         <table className="w-full border-collapse text-left">
           <thead>
-            <tr className="border-b border-line-strong text-12 text-text-muted">
-              <th className="py-2 pr-4 font-bold">Data</th>
-              <th className="py-2 pr-4 font-bold">Tarefa</th>
-              <th className="py-2 pr-4 font-bold">Agente</th>
-              <th className="py-2 pr-4 font-bold">Estado</th>
-              <th className="py-2 pr-4 font-bold">Duração</th>
-              <th className="py-2 pr-4 font-bold">Custo</th>
-              <th className="py-2 font-bold">Modelo</th>
+            <tr className="label border-b border-line-strong">
+              <th className="py-1.5 pr-4 font-medium">Data</th>
+              <th className="py-1.5 pr-4 font-medium">Tarefa</th>
+              <th className="py-1.5 pr-4 font-medium">Agente</th>
+              <th className="py-1.5 pr-4 font-medium">Estado</th>
+              <th className="py-1.5 pr-4 font-medium">Duração</th>
+              <th className="py-1.5 pr-4 font-medium">Custo</th>
+              <th className="py-1.5 font-medium">Modelo</th>
             </tr>
           </thead>
           <tbody>
@@ -78,21 +78,21 @@ export function RunsTab({ meetings }: { meetings: ChatMeetings }) {
                   onClick={() => useAutomations.getState().openRun(run.id)}
                   className="cursor-default border-b border-line text-13 transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-bg-sunken"
                 >
-                  <td className="py-2.5 pr-4 text-text-muted tabular">
+                  <td className="py-1.5 pr-4 text-text-muted tabular">
                     {dayLabel(date, now)} {timeLabel(date)}
                   </td>
-                  <td className="py-2.5 pr-4">
+                  <td className="py-1.5 pr-4">
                     <button type="button" data-action="run-open" onClick={() => useAutomations.getState().openRun(run.id)} className="no-drag text-left font-medium text-text hover:text-title">
                       {runTitle(run)}
                     </button>
                   </td>
-                  <td className="py-2.5 pr-4 text-text-muted">{run.agentName}</td>
-                  <td className={`py-2.5 pr-4 ${run.status === 'error' || run.status === 'timeout' ? 'text-rec' : 'text-text-muted'}`}>{RUN_STATUS_LABELS[run.status]}</td>
-                  <td className="py-2.5 pr-4 text-text-muted tabular">{run.status === 'running' || run.status === 'skipped' ? '—' : durationLabel(run.durationMs)}</td>
-                  <td className="py-2.5 pr-4 text-text-muted tabular" title={COST_HINT}>
+                  <td className="py-1.5 pr-4 text-text-muted">{run.agentName}</td>
+                  <td className={`py-1.5 pr-4 ${run.status === 'error' || run.status === 'timeout' ? 'text-rec' : 'text-text-muted'}`}>{RUN_STATUS_LABELS[run.status]}</td>
+                  <td className="py-1.5 pr-4 text-text-muted tabular">{run.status === 'running' || run.status === 'skipped' ? '—' : durationLabel(run.durationMs)}</td>
+                  <td className="py-1.5 pr-4 text-text-muted tabular" title={COST_HINT}>
                     {run.status === 'skipped' ? '—' : costLabel(run.costUsd)}
                   </td>
-                  <td className="py-2.5 text-text-muted">{AGENT_MODEL_LABELS[run.model]}</td>
+                  <td className="py-1.5 text-text-muted">{AGENT_MODEL_LABELS[run.model]}</td>
                 </tr>
               )
             })}
@@ -149,7 +149,7 @@ function RunDetail({ runId, meetings }: { runId: string; meetings: ChatMeetings 
     }
   }
   return (
-    <div data-run-detail={shown.id} className="flex max-w-[820px] flex-col gap-5">
+    <div data-run-detail={shown.id} className="flex max-w-[820px] flex-col gap-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
         {back}
         <Button action="run-again" variant="secondary" icon={RotateCcw} onClick={() => void again()} disabled={shown.status === 'running'}>
@@ -157,7 +157,7 @@ function RunDetail({ runId, meetings }: { runId: string; meetings: ChatMeetings 
         </Button>
       </div>
       <header className="flex flex-col gap-1">
-        <h2 className="text-17 font-bold text-title">{runTitle(shown)}</h2>
+        <h2 className="text-15 font-bold text-title">{runTitle(shown)}</h2>
         <p className="flex flex-wrap gap-x-2 text-12 text-text-muted tabular">
           <span>
             {dayLabel(date, new Date())} {timeLabel(date)}
@@ -192,8 +192,8 @@ function RunDetail({ runId, meetings }: { runId: string; meetings: ChatMeetings 
         <RunAnswer runId={shown.id} prompt={shown.prompt} meetings={meetings} />
       )}
       {rerun && (
-        <section aria-label="Rodar de novo" className="flex flex-col gap-3 border-t border-line pt-5">
-          <h3 className="text-15 font-bold text-title">Rodando de novo</h3>
+        <section aria-label="Rodar de novo" className="flex flex-col gap-2 border-t border-line pt-4">
+          <h3 className="text-14 leading-5 font-semibold text-title">Rodando de novo</h3>
           <RunAnswer runId={rerun} prompt={null} meetings={meetings} />
         </section>
       )}
@@ -207,7 +207,7 @@ function RunDetail({ runId, meetings }: { runId: string; meetings: ChatMeetings 
  */
 function RunOrganizeRefused({ items }: { items: readonly RunOrganizeRefusedItem[] }) {
   return (
-    <section aria-label="Organizar email nesta execução" data-run-organize className="flex flex-col gap-3 rounded-[var(--radius-panel)] border border-line-strong bg-bg-raised p-4">
+    <section aria-label="Organizar email nesta execução" data-run-organize className="flex flex-col gap-2 rounded-[var(--radius-panel)] border border-line-strong bg-bg-raised p-3">
       <h3 className="text-13 font-medium text-text">
         Organizar email nesta execução{' '}
         <span className="font-normal text-text-muted tabular">· {items.length === 1 ? '1 pedido recusado' : `${items.length} pedidos recusados`}</span>
@@ -234,7 +234,7 @@ function RunEmails({ emails }: { emails: readonly RunEmail[] }) {
   const sent = emails.filter((item) => item.ok).length
   const refused = emails.length - sent
   return (
-    <section aria-label="Emails desta execução" data-run-emails className="flex flex-col gap-3 rounded-[var(--radius-panel)] border border-line-strong bg-bg-raised p-4">
+    <section aria-label="Emails desta execução" data-run-emails className="flex flex-col gap-2 rounded-[var(--radius-panel)] border border-line-strong bg-bg-raised p-3">
       <h3 className="text-13 font-medium text-text">
         Emails desta execução{' '}
         <span className="font-normal text-text-muted tabular">

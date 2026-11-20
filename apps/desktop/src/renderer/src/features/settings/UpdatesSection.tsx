@@ -39,7 +39,7 @@ export function UpdatesSection() {
         <Switch checked={autoCheckUpdates} labelledBy="settings-auto-updates" onChange={(value) => void update({ autoCheckUpdates: value })} />
       </SettingRow>
       {available && (
-        <div data-update-available className="flex flex-col gap-3 py-4">
+        <div data-update-available className="flex flex-col gap-2.5 py-3">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <p className="text-13 font-medium text-text">Nova versão {available.version}</p>
             {progress ? (
@@ -65,7 +65,7 @@ export function UpdatesSection() {
             </p>
           )}
           {phase.phase === 'ready' && (
-            <div data-update-ready className="flex flex-wrap items-center justify-between gap-3 border-l-3 border-title bg-bg-sunken px-4 py-3">
+            <div data-update-ready className="flex flex-wrap items-center justify-between gap-3 border-l-3 border-title bg-bg-sunken px-3 py-2">
               <p className="min-w-0 flex-[1_1_320px] text-13 text-text">
                 {UPDATE_INSTALL_INSTRUCTION}
                 {recording && <span data-update-quit-blocked className="mt-1 block text-text-muted">{UPDATE_QUIT_BLOCKED_MESSAGE}</span>}

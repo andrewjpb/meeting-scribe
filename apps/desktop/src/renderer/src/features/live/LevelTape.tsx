@@ -185,7 +185,7 @@ function TapeLabel({ label, tone, absent, off = false, position }: { label: stri
     <p
       data-source-label={tone}
       data-source-off={off || undefined}
-      className={`caps absolute left-10 flex h-12 items-center ${position === 'top' ? 'top-0' : 'bottom-0'}`}
+      className={`caps absolute left-8 flex h-12 items-center ${position === 'top' ? 'top-0' : 'bottom-0'}`}
     >
       <span className={tone === 'mic' ? 'text-mic' : 'text-sys'}>{label}</span>
       {off ? (

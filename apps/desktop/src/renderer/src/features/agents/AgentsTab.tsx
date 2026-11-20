@@ -28,7 +28,7 @@ export function AgentsTab({ meetings }: { meetings: ChatMeetings }) {
   }
 
   return (
-    <div className="flex flex-col gap-5" data-agents-tab>
+    <div className="flex flex-col gap-4" data-agents-tab>
       <div className="flex items-center justify-between gap-4">
         <p className="text-13 text-text-muted">Cada agente tem instruções, um modelo e as reuniões que ele lê. Ele só lê e responde: nunca envia nada a ninguém.</p>
         <Button action="agent-new" icon={Plus} onClick={() => setEditing({ input: blankAgent() })}>
@@ -40,7 +40,7 @@ export function AgentsTab({ meetings }: { meetings: ChatMeetings }) {
           Nenhum agente ainda. Crie um com "Novo agente".
         </p>
       ) : (
-        <ul className="grid grid-cols-[repeat(auto-fill,minmax(300px,1fr))] gap-4">
+        <ul className="grid grid-cols-[repeat(auto-fill,minmax(300px,1fr))] gap-3">
           {agents.map((agent) => (
             <AgentCard
               key={agent.id}
@@ -66,11 +66,11 @@ function AgentCard({ agent, tasks, onEdit, onDuplicate }: { agent: Agent; tasks:
   }
   const used = tasks.length === 0 ? 'Nenhuma tarefa' : tasks.length === 1 ? '1 tarefa' : `${tasks.length} tarefas`
   return (
-    <li data-agent-card={agent.id} data-agent-name={agent.name} className="flex flex-col gap-3 rounded-[var(--radius-panel)] border border-line-strong bg-bg-raised p-4">
-      <div className="flex items-start gap-3">
+    <li data-agent-card={agent.id} data-agent-name={agent.name} className="flex flex-col gap-2 rounded-[var(--radius-panel)] border border-line-strong bg-bg-raised p-3">
+      <div className="flex items-start gap-2.5">
         <AgentBadge icon={agent.icon} color={agent.color} />
         <div className="flex min-w-0 flex-col gap-0.5">
-          <h3 className="truncate text-15 font-bold text-title">{agent.name}</h3>
+          <h3 className="truncate text-13 font-semibold text-title">{agent.name}</h3>
           {agent.description && <p className="line-clamp-2 text-12 text-text-muted">{agent.description}</p>}
         </div>
       </div>

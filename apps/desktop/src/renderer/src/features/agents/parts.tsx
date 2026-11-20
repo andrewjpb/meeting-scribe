@@ -44,14 +44,17 @@ export function AgentBadge({ icon, color }: { icon: AgentIcon; color: AgentColor
 }
 
 /** Campo de várias linhas no padrão dos controles. */
-export const AREA_CLASS = `${CONTROL_CLASS} h-auto min-w-0 w-full px-3 py-2 leading-5 select-text placeholder:text-text-faint`
+export const AREA_CLASS = `${CONTROL_CLASS} h-auto min-w-0 w-full px-2.5 py-1.5 leading-5 select-text placeholder:text-text-faint`
 /** Campo curto (número, hora, data) no padrão dos controles. */
-export const INPUT_CLASS = `${CONTROL_CLASS} px-3 tabular`
+export const INPUT_CLASS = `${CONTROL_CLASS} px-2.5 tabular`
 
-/** Rótulo de um campo do formulário, com a descrição e o controle abaixo. */
+/**
+ * Rótulo de um campo do formulário, com a descrição e o controle abaixo. `[&>input]:flex-none`: o `TextField` cresce
+ * com `flex-[1_1_280px]` numa linha; nesta coluna a base viraria altura (o campo "Nome" com centenas de px).
+ */
 export function FormField({ label, htmlFor, labelId, hint, children }: { label: string; htmlFor?: string; labelId?: string; hint?: ReactNode; children: ReactNode }) {
   return (
-    <div className="flex flex-col gap-1.5" data-form-field={label}>
+    <div className="flex flex-col gap-1.5 [&>input]:flex-none" data-form-field={label}>
       {htmlFor ? (
         <label id={labelId} htmlFor={htmlFor} className="text-13 font-medium text-text">
           {label}

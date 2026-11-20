@@ -1,0 +1,105 @@
+<!doctype html>
+<!-- densidade: adensar.mjs -->
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<title>Configurações · Gravação</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0}
+button{font:inherit}
+input::placeholder,textarea::placeholder{color:#7f8da6}
+</style>
+</helmet>
+<div style="display: flex; width: 1120px; height: 740px; overflow: hidden; background: #ffffff; color: #061a3d; font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; font-size: 13px; line-height: 20px; -webkit-font-smoothing: antialiased">
+<dc-import name="SidebarConfig" aba="gravacao" hint-size="224px,740px"></dc-import>
+<main style="flex: 1 1 0; min-width: 0; height: 740px; display: flex; flex-direction: column; background: #ffffff">
+
+<div style="flex: 0 0 auto; padding: 20px 32px 8px">
+<div style="max-width: 760px; margin: 0 auto; display: flex; align-items: center; justify-content: space-between; gap: 24px">
+<h1 style="margin: 0; font-size: 15px; line-height: 20px; font-weight: 700; color: #0a2a5e">Gravação</h1>
+<div style="flex: 0 0 240px; width: 240px; height: 32px; box-sizing: border-box; display: flex; align-items: center; gap: 8px; padding: 0 10px; border: 1px solid #c9d4e5; border-radius: 4px; background: #ffffff; color: #7f8da6">
+<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true" style="flex: none; display: block"><circle cx="11" cy="11" r="8"></circle><path d="m21 21-4.3-4.3"></path></svg>
+<label for="busca-config-gravacao" style="position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0)">Buscar configuração</label>
+<input id="busca-config-gravacao" type="search" placeholder="Buscar configuração" style="flex: 1 1 0; min-width: 0; border: 0; background: transparent; font: inherit; font-size: 13px; color: #061a3d; outline: none">
+<span aria-hidden="true" style="font-size: 11px; line-height: 16px; color: #7f8da6; font-variant-numeric: tabular-nums">⌘F</span>
+</div>
+</div>
+</div>
+
+<div style="flex: 1 1 0; min-height: 0; overflow: hidden; padding: 20px 32px 32px">
+<div style="max-width: 760px; margin: 0 auto; display: flex; flex-direction: column; gap: 24px">
+
+<section aria-label="Áudio" style="display: flex; flex-direction: column">
+<h2 style="margin: 0 0 4px; font-size: 11px; line-height: 16px; font-weight: 500; color: #5b6b85">Áudio</h2>
+<div style="margin-top: 8px; display: flex; flex-direction: column; border: 1px solid #c9d4e5; border-radius: 6px; background: #ffffff; overflow: hidden">
+<div style="border-bottom: 1px solid #e3e9f2; display: grid; grid-template-columns: minmax(0, 1fr) 340px; column-gap: 20px; align-items: center; min-height: 44px; box-sizing: border-box; padding: 8px 12px">
+<div style="display: flex; flex-direction: column; gap: 1px; min-width: 0"><p style="margin: 0; font-size: 13px; line-height: 20px; font-weight: 500; color: #061a3d">Microfone</p><p style="margin: 0; font-size: 12px; line-height: 16px; color: #5b6b85">Usado para a sua voz.</p></div>
+<div style="display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-width: 0"><select style="min-width: 240px; height: 32px; padding: 0 10px; border: 1px solid #c9d4e5; border-radius: 4px; background: #ffffff; color: #061a3d; font: inherit; font-size: 13px"><option>Padrão do sistema</option></select></div>
+</div>
+<div style="display: grid; grid-template-columns: minmax(0, 1fr) 340px; column-gap: 20px; align-items: center; min-height: 44px; box-sizing: border-box; padding: 8px 12px">
+<div style="display: flex; flex-direction: column; gap: 1px; min-width: 0"><p id="eco-nome" style="margin: 0; font-size: 13px; line-height: 20px; font-weight: 500; color: #061a3d">Cancelamento de eco</p><p style="margin: 0; font-size: 12px; line-height: 16px; color: #5b6b85">Ligue se usar alto-falante em vez de fone, para a fala dos participantes não entrar pelo seu microfone.</p></div>
+<div style="display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-width: 0"><button type="button" role="switch" aria-checked="false" aria-labelledby="eco-nome" style="display: flex; align-items: center; width: 36px; height: 20px; box-sizing: border-box; padding: 2px; border: 1px solid #c9d4e5; border-radius: 4px; background: #eef2f9; cursor: pointer"><span style="width: 14px; height: 14px; border-radius: 2px; background: #5b6b85"></span></button></div>
+</div>
+</div>
+</section>
+
+<section aria-label="Transcrição" style="display: flex; flex-direction: column">
+<h2 style="margin: 0 0 4px; font-size: 11px; line-height: 16px; font-weight: 500; color: #5b6b85">Transcrição</h2>
+<div style="margin-top: 8px; display: flex; flex-direction: column; border: 1px solid #c9d4e5; border-radius: 6px; background: #ffffff; overflow: hidden">
+<div style="border-bottom: 1px solid #e3e9f2; padding: 12px; display: flex; flex-direction: column; gap: 8px">
+<div style="display: flex; align-items: center; justify-content: space-between; gap: 12px"><div style="display: flex; flex-direction: column; gap: 1px; min-width: 0"><p style="margin: 0; font-size: 13px; line-height: 20px; font-weight: 500; color: #061a3d">Chave da AssemblyAI</p></div><span style="display: inline-flex; align-items: center; gap: 6px; font-size: 12px; line-height: 16px; color: #1e5bb8"><span aria-hidden="true" style="width: 6px; height: 6px; background: #1e5bb8"></span>Chave válida · termina em ••••4f2a</span></div>
+<div style="display: flex; align-items: center; gap: 8px"><input type="password" placeholder="Cole uma chave nova para substituir" style="flex: 1 1 auto; min-width: 0; height: 32px; box-sizing: border-box; padding: 0 10px; border: 1px solid #c9d4e5; border-radius: 4px; background: #ffffff; font: inherit; font-size: 13px"><button type="button" style="display: inline-flex; align-items: center; gap: 8px; height: 32px; box-sizing: border-box; padding: 0 12px; border: 0; background: #1e5bb8; color: #ffffff; border-radius: 4px; font: inherit; font-size: 13px; font-weight: 500; white-space: nowrap; cursor: pointer"><span>Salvar</span></button><button type="button" style="display: inline-flex; align-items: center; gap: 8px; height: 32px; box-sizing: border-box; padding: 0 12px; border: 0; background: transparent; color: #c62f34; border-radius: 4px; font: inherit; font-size: 13px; font-weight: 500; white-space: nowrap; cursor: pointer"><span>Remover</span></button></div>
+<p style="margin: 0; font-size: 12px; line-height: 16px; color: #5b6b85">Guardada cifrada neste Mac, protegida pelo Chaveiro do macOS. <a href="#" style="color: #1e5bb8; text-decoration: underline; text-underline-offset: 3px">Criar chave</a></p>
+</div>
+<div style="border-bottom: 1px solid #e3e9f2; display: grid; grid-template-columns: minmax(0, 1fr) 340px; column-gap: 20px; align-items: center; min-height: 44px; box-sizing: border-box; padding: 8px 12px">
+<div style="display: flex; flex-direction: column; gap: 1px; min-width: 0"><p id="aec-nome" style="margin: 0; font-size: 13px; line-height: 20px; font-weight: 500; color: #061a3d">Remover eco do alto-falante</p><p style="margin: 0; font-size: 12px; line-height: 16px; color: #5b6b85">Some com a fala dos participantes que vaza para o seu microfone quando você não usa fone.</p></div>
+<div style="display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-width: 0"><button type="button" role="switch" aria-checked="true" aria-labelledby="aec-nome" style="display: flex; align-items: center; justify-content: flex-end; width: 36px; height: 20px; box-sizing: border-box; padding: 2px; border: 1px solid #1e5bb8; border-radius: 4px; background: #1e5bb8; cursor: pointer"><span style="width: 14px; height: 14px; border-radius: 2px; background: #ffffff"></span></button></div>
+</div>
+<div style="border-bottom: 1px solid #e3e9f2; display: grid; grid-template-columns: minmax(0, 1fr) 340px; column-gap: 20px; align-items: center; min-height: 44px; box-sizing: border-box; padding: 8px 12px">
+<div style="display: flex; flex-direction: column; gap: 1px; min-width: 0"><p id="diar-nome" style="margin: 0; font-size: 13px; line-height: 20px; font-weight: 500; color: #061a3d">Identificar quem fala</p><p style="margin: 0; font-size: 12px; line-height: 16px; color: #5b6b85">Separa os participantes por voz. Mais lento; desligado, as falas se dividem pelas pausas.</p></div>
+<div style="display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-width: 0"><button type="button" role="switch" aria-checked="false" aria-labelledby="diar-nome" style="display: flex; align-items: center; width: 36px; height: 20px; box-sizing: border-box; padding: 2px; border: 1px solid #c9d4e5; border-radius: 4px; background: #eef2f9; cursor: pointer"><span style="width: 14px; height: 14px; border-radius: 2px; background: #5b6b85"></span></button></div>
+</div>
+<div style="border-bottom: 1px solid #e3e9f2; display: grid; grid-template-columns: minmax(0, 1fr) 340px; column-gap: 20px; align-items: center; min-height: 44px; box-sizing: border-box; padding: 8px 12px">
+<div style="display: flex; flex-direction: column; gap: 1px; min-width: 0"><p id="meet-nome" style="margin: 0; font-size: 13px; line-height: 20px; font-weight: 500; color: #061a3d">Quem fala no Meet</p><p style="margin: 0; font-size: 12px; line-height: 16px; color: #5b6b85">Com a extensão do LAP Reuniões no Chrome, cada fala do Meet e do Teams ganha o nome de quem falou. Tudo fica neste computador.</p></div>
+<div style="display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-width: 0"><button type="button" role="switch" aria-checked="true" aria-labelledby="meet-nome" style="display: flex; align-items: center; justify-content: flex-end; width: 36px; height: 20px; box-sizing: border-box; padding: 2px; border: 1px solid #1e5bb8; border-radius: 4px; background: #1e5bb8; cursor: pointer"><span style="width: 14px; height: 14px; border-radius: 2px; background: #ffffff"></span></button></div>
+</div>
+<div style="display: grid; grid-template-columns: minmax(0, 1fr) 340px; column-gap: 20px; align-items: center; min-height: 44px; box-sizing: border-box; padding: 8px 12px">
+<div style="display: flex; flex-direction: column; gap: 1px; min-width: 0"><p id="aviso-nome" style="margin: 0; font-size: 13px; line-height: 20px; font-weight: 500; color: #061a3d">Avisar quando uma reunião começar</p><p style="margin: 0; font-size: 12px; line-height: 16px; color: #5b6b85">Mostra um aviso no topo da tela quando você entra numa reunião: Meet e Teams no navegador (com o plugin) ou apps como Zoom e FaceTime.</p></div>
+<div style="display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-width: 0"><button type="button" role="switch" aria-checked="true" aria-labelledby="aviso-nome" style="display: flex; align-items: center; justify-content: flex-end; width: 36px; height: 20px; box-sizing: border-box; padding: 2px; border: 1px solid #1e5bb8; border-radius: 4px; background: #1e5bb8; cursor: pointer"><span style="width: 14px; height: 14px; border-radius: 2px; background: #ffffff"></span></button></div>
+</div>
+</div>
+</section>
+
+<section aria-label="Idiomas" style="display: flex; flex-direction: column">
+<h2 style="margin: 0 0 4px; font-size: 11px; line-height: 16px; font-weight: 500; color: #5b6b85">Idiomas</h2>
+<div style="margin-top: 8px; display: flex; flex-direction: column; border: 1px solid #c9d4e5; border-radius: 6px; background: #ffffff; overflow: hidden">
+<div style="border-bottom: 1px solid #e3e9f2; display: grid; grid-template-columns: minmax(0, 1fr) 340px; column-gap: 20px; align-items: center; min-height: 44px; box-sizing: border-box; padding: 8px 12px">
+<div style="display: flex; flex-direction: column; gap: 1px; min-width: 0"><p style="margin: 0; font-size: 13px; line-height: 20px; font-weight: 500; color: #061a3d">Idioma da reunião</p><p style="margin: 0; font-size: 12px; line-height: 16px; color: #5b6b85">A fala é transcrita neste idioma.</p></div>
+<div style="display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-width: 0"><select style="min-width: 240px; height: 32px; padding: 0 10px; border: 1px solid #c9d4e5; border-radius: 4px; background: #ffffff; color: #061a3d; font: inherit; font-size: 13px"><option>Português (Brasil)</option></select></div>
+</div>
+<div style="display: grid; grid-template-columns: minmax(0, 1fr) 340px; column-gap: 20px; align-items: center; min-height: 44px; box-sizing: border-box; padding: 8px 12px">
+<div style="display: flex; flex-direction: column; gap: 1px; min-width: 0"><p style="margin: 0; font-size: 13px; line-height: 20px; font-weight: 500; color: #061a3d">Traduzir para</p><p style="margin: 0; font-size: 12px; line-height: 16px; color: #5b6b85">A tradução aparece embaixo de cada fala.</p></div>
+<div style="display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-width: 0"><select style="min-width: 240px; height: 32px; padding: 0 10px; border: 1px solid #c9d4e5; border-radius: 4px; background: #ffffff; color: #061a3d; font: inherit; font-size: 13px"><option>Inglês</option></select></div>
+</div>
+</div>
+</section>
+
+</div>
+</div>
+</main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1120,"height":740}}'>
+class Component extends DCLogic {
+  renderVals() {
+    return {};
+  }
+}
+</script>
+</body>
+</html>

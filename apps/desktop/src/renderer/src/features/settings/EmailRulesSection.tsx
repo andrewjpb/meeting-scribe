@@ -46,7 +46,7 @@ import {
   type RuleDraft,
 } from './rulesFormat'
 
-const SELECT = `${CONTROL_CLASS} h-9 shrink-0 px-2.5`
+const SELECT = `${CONTROL_CLASS} shrink-0 px-2.5`
 
 interface RulesProps {
   accountId: string
@@ -248,7 +248,7 @@ export function EmailRulesSection({ accountId, pop3, hasTrash, name, inboxCount 
                 data-email-rule={rule.id}
                 onDragOver={(event) => dragging !== null && event.preventDefault()}
                 onDrop={(event) => onDrop(event, index)}
-                className={`flex flex-col gap-2 border-t border-line py-3 first:border-t-0 ${dragging === rule.id ? 'opacity-50' : ''}`}
+                className={`flex flex-col gap-2 border-t border-line py-2 first:border-t-0 ${dragging === rule.id ? 'opacity-50' : ''}`}
               >
                 {isEditing && editing ? (
                   <RuleEditor
@@ -310,7 +310,7 @@ export function EmailRulesSection({ accountId, pop3, hasTrash, name, inboxCount 
             )
           })}
           {editing?.isNew && (
-            <li data-email-rule="new" className="flex flex-col gap-2 border-t border-line py-3 first:border-t-0">
+            <li data-email-rule="new" className="flex flex-col gap-2 border-t border-line py-2 first:border-t-0">
               <RuleEditor
                 number={(rules?.length ?? 0) + 1}
                 editing={editing}
@@ -423,7 +423,7 @@ function RuleLine({ rule, number, total, name, calendar, canEdit, onDragStart, o
 /** "Executar agora" (CA19): a contagem antes, sempre; só então o botão que executa com o token. */
 function RunPanel({ rule, run, inboxCount, name, calendar, onExecute, onRecount, onClose }: { rule: EmailRule; run: Run; inboxCount: number; name: FolderName; calendar: CalendarName; onExecute: (token: string) => void; onRecount: () => void; onClose: () => void }) {
   return (
-    <div data-email-rule-run={run.phase} className="ml-[52px] flex flex-col gap-2 border-l-3 border-title bg-bg-sunken px-4 py-3">
+    <div data-email-rule-run={run.phase} className="ml-[52px] flex flex-col gap-2 border-l-3 border-title bg-bg-sunken px-3 py-2">
       {run.phase === 'counting' && <p className="text-13 text-text-muted">Contando… (pode levar alguns segundos quando a regra olha o corpo)</p>}
       {run.phase === 'running' && <p className="text-13 text-text-muted">Executando…</p>}
       {run.phase === 'ready' && (
@@ -532,7 +532,7 @@ function RuleEditor({ number, editing, onChange, onSave, onCancel, onAskDelete, 
   }
 
   return (
-    <div data-email-rule-editor={draft.id} className="flex flex-col gap-4 rounded-[var(--radius-panel)] border border-line-strong p-4">
+    <div data-email-rule-editor={draft.id} className="flex flex-col gap-3 rounded-[var(--radius-panel)] border border-line-strong p-3">
       <div className="flex items-center gap-2">
         <span className="text-12 tabular text-text-muted">{number}</span>
         <p className="text-13 font-bold text-title">{editing.isNew ? 'Nova regra' : 'Editar regra'}</p>
@@ -542,7 +542,7 @@ function RuleEditor({ number, editing, onChange, onSave, onCancel, onAskDelete, 
         <label htmlFor={`email-rule-name-${draft.id}`} className="w-14 shrink-0 text-12 font-medium text-text">
           Nome
         </label>
-        <input id={`email-rule-name-${draft.id}`} data-email-rule-name-input value={draft.name} maxLength={120} onChange={(event) => set({ name: event.target.value })} className={`${INLINE_INPUT} h-9 max-w-[360px] flex-1`} />
+        <input id={`email-rule-name-${draft.id}`} data-email-rule-name-input value={draft.name} maxLength={120} onChange={(event) => set({ name: event.target.value })} className={`${INLINE_INPUT} max-w-[360px] flex-1`} />
       </div>
       <div className="flex flex-col gap-2">
         <div className="flex flex-wrap items-center gap-2 text-13 text-text">
@@ -568,7 +568,7 @@ function RuleEditor({ number, editing, onChange, onSave, onCancel, onAskDelete, 
                 </option>
               ))}
             </select>
-            {conditionHasValue(condition.field) && <input aria-label="Texto da condição" data-email-rule-value value={condition.value} maxLength={220} onChange={(event) => setCondition(index, { value: event.target.value })} className={`${INLINE_INPUT} h-9 flex-1`} />}
+            {conditionHasValue(condition.field) && <input aria-label="Texto da condição" data-email-rule-value value={condition.value} maxLength={220} onChange={(event) => setCondition(index, { value: event.target.value })} className={`${INLINE_INPUT} flex-1`} />}
             <button type="button" aria-label="Tirar a condição" onClick={() => set({ conditions: draft.conditions.filter((_, at) => at !== index) })} className="no-drag inline-flex size-8 shrink-0 items-center justify-center text-text-muted hover:text-title">
               <Icon icon={X} size={14} />
             </button>
@@ -597,7 +597,7 @@ function RuleEditor({ number, editing, onChange, onSave, onCancel, onAskDelete, 
                   ))}
                 </select>
                 {action.kind === 'move' && (
-                  <button type="button" data-action="email-rule-pick-folder" onClick={(event) => pickFolder(index, event.currentTarget.getBoundingClientRect())} className={`${CONTROL_CLASS} inline-flex h-9 min-w-0 flex-1 items-center gap-2 px-2.5 text-left`}>
+                  <button type="button" data-action="email-rule-pick-folder" onClick={(event) => pickFolder(index, event.currentTarget.getBoundingClientRect())} className={`${CONTROL_CLASS} inline-flex min-w-0 flex-1 items-center gap-2 px-2.5 text-left`}>
                     <Icon icon={Folder} size={14} className="shrink-0 text-text-muted" />
                     <span data-email-rule-folder className={`truncate ${action.moveTo ? '' : 'text-text-faint'}`}>
                       {action.moveTo ? name(action.moveTo) : 'Escolher pasta…'}

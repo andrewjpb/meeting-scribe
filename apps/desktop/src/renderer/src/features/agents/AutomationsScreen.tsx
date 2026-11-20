@@ -37,7 +37,7 @@ export function AutomationsScreen() {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col" data-automations>
-      <div className="px-10 pt-7">
+      <div className="px-8 pt-5">
         <PageHeader
           title="Automações"
           description={pauseText ?? 'Agentes que leem as suas reuniões e, se você deixar, a internet, e respondem na hora ou no horário que você escolher.'}
@@ -53,11 +53,11 @@ export function AutomationsScreen() {
           }
         />
         <AskNow meetings={meetings} />
-        <div className="mt-6 border-b border-line">
+        <div className="mt-4 border-b border-line">
           <Tabs value={tab} tabs={TABS} onChange={(next) => useAutomations.getState().setTab(next)} label="Seções das automações" id={TABS_ID} />
         </div>
       </div>
-      <div className="min-h-0 flex-1 overflow-y-auto px-10 pt-6 pb-12" role="tabpanel" id={tabPanelId(TABS_ID, tab)} aria-labelledby={tabId(TABS_ID, tab)} data-automations-tab={tab}>
+      <div className="min-h-0 flex-1 overflow-y-auto px-8 pt-4 pb-8" role="tabpanel" id={tabPanelId(TABS_ID, tab)} aria-labelledby={tabId(TABS_ID, tab)} data-automations-tab={tab}>
         {failure && !loaded ? (
           <p className="text-13 text-text-muted">{failure}</p>
         ) : !loaded ? (
@@ -104,9 +104,9 @@ function AskNow({ meetings }: { meetings: ChatMeetings }) {
   }
 
   return (
-    <section aria-label="Pedir agora" data-ask-now className="mt-6 flex flex-col gap-3 rounded-[var(--radius-panel)] border border-line-strong bg-bg-raised p-4">
+    <section aria-label="Pedir agora" data-ask-now className="mt-4 flex flex-col gap-2 rounded-[var(--radius-panel)] border border-line-strong bg-bg-raised p-3">
       <div className="flex items-center justify-between gap-3">
-        <h2 className="text-15 font-bold text-title">Pedir agora</h2>
+        <h2 className="text-14 leading-5 font-semibold text-title">Pedir agora</h2>
         {agents.length > 0 && <Select id="ask-now-agent" value={chosen} options={agents.map((agent) => ({ value: agent.id, label: agent.name }))} onChange={setAgentId} />}
       </div>
       <div className="flex items-end gap-2">

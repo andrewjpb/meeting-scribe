@@ -1,0 +1,102 @@
+<!doctype html>
+<!-- densidade: adensar.mjs -->
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<title>Configurações · Email</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0}
+button{font:inherit}
+input::placeholder,textarea::placeholder{color:#7f8da6}
+</style>
+</helmet>
+<div style="display: flex; width: 1120px; height: 740px; overflow: hidden; background: #ffffff; color: #061a3d; font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; font-size: 13px; line-height: 20px; -webkit-font-smoothing: antialiased">
+<dc-import name="SidebarConfig" aba="email" hint-size="224px,740px"></dc-import>
+<main style="flex: 1 1 0; min-width: 0; height: 740px; display: flex; flex-direction: column; background: #ffffff">
+
+<div style="flex: 0 0 auto; padding: 20px 32px 8px">
+<div style="max-width: 760px; margin: 0 auto; display: flex; align-items: center; justify-content: space-between; gap: 24px">
+<h1 style="margin: 0; font-size: 15px; line-height: 20px; font-weight: 700; color: #0a2a5e">Email</h1>
+<div style="flex: 0 0 240px; width: 240px; height: 32px; box-sizing: border-box; display: flex; align-items: center; gap: 8px; padding: 0 10px; border: 1px solid #c9d4e5; border-radius: 4px; background: #ffffff; color: #7f8da6">
+<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true" style="flex: none; display: block"><circle cx="11" cy="11" r="8"></circle><path d="m21 21-4.3-4.3"></path></svg>
+<label for="busca-config-email" style="position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0)">Buscar configuração</label>
+<input id="busca-config-email" type="search" placeholder="Buscar configuração" style="flex: 1 1 0; min-width: 0; border: 0; background: transparent; font: inherit; font-size: 13px; color: #061a3d; outline: none">
+<span aria-hidden="true" style="font-size: 11px; line-height: 16px; color: #7f8da6; font-variant-numeric: tabular-nums">⌘F</span>
+</div>
+</div>
+</div>
+
+<div style="flex: 1 1 0; min-height: 0; overflow: hidden; padding: 20px 32px 32px">
+<div style="max-width: 760px; margin: 0 auto; display: flex; flex-direction: column; gap: 24px">
+
+<section aria-label="Contas" style="display: flex; flex-direction: column">
+<h2 style="margin: 0 0 4px; font-size: 11px; line-height: 16px; font-weight: 500; color: #5b6b85">Contas</h2>
+<div style="margin-top: 8px; display: flex; flex-direction: column; border: 1px solid #c9d4e5; border-radius: 6px; background: #ffffff; overflow: hidden">
+<div style="border-bottom: 1px solid #e3e9f2; padding: 12px; display: flex; flex-direction: column; gap: 8px">
+<div style="display: flex; align-items: center; justify-content: space-between; gap: 12px"><div style="display: flex; flex-direction: column; gap: 1px; min-width: 0"><p style="margin: 0; font-size: 13px; line-height: 20px; font-weight: 500; color: #061a3d">Contas de email</p><p style="margin: 0; font-size: 12px; line-height: 16px; color: #5b6b85">Contas de email IMAP ou POP3, com envio por SMTP. A senha fica cifrada neste Mac.</p></div><button type="button" style="display: inline-flex; align-items: center; gap: 8px; height: 32px; box-sizing: border-box; padding: 0 12px; border: 1px solid #c9d4e5; background: #ffffff; color: #0a2a5e; border-radius: 4px; font: inherit; font-size: 13px; font-weight: 500; white-space: nowrap; cursor: pointer"><span>Adicionar conta</span></button></div>
+<div style="display: flex; align-items: center; gap: 12px; padding: 6px 8px; border: 1px solid #e3e9f2; border-radius: 4px">
+<span aria-hidden="true" style="flex: none; width: 6px; height: 6px; background: #1e5bb8"></span>
+<div style="flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column"><span style="font-size: 13px; color: #061a3d"><strong style="font-weight: 600">Ana Pereira</strong> oi@exemplo.com.br</span><span style="font-size: 12px; line-height: 16px; color: #5b6b85">IMAP · imap.exemplo.com.br</span></div>
+<span style="font-size: 12px; line-height: 16px; color: #5b6b85">Conectada</span>
+<button type="button" style="height: 28px; padding: 0 8px; border: 0; border-radius: 4px; background: transparent; color: #c62f34; font: inherit; font-size: 12px; font-weight: 500; cursor: pointer">Remover</button>
+</div>
+</div>
+<div style="display: grid; grid-template-columns: minmax(0, 1fr) 340px; column-gap: 20px; align-items: center; min-height: 44px; box-sizing: border-box; padding: 8px 12px">
+<div style="display: flex; flex-direction: column; gap: 1px; min-width: 0"><p style="margin: 0; font-size: 13px; line-height: 20px; font-weight: 500; color: #061a3d">Buscar emails novos a cada</p><p style="margin: 0; font-size: 12px; line-height: 16px; color: #5b6b85">Só nas contas POP3: de quantos em quantos minutos o app procura email novo. As contas IMAP recebem na hora.</p></div>
+<div style="display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-width: 0"><select style="min-width: 240px; height: 32px; padding: 0 10px; border: 1px solid #c9d4e5; border-radius: 4px; background: #ffffff; color: #061a3d; font: inherit; font-size: 13px"><option>5 min</option></select></div>
+</div>
+</div>
+</section>
+
+<div style="display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-radius: 6px; background: #eef2f9; font-size: 13px; color: #5b6b85">Assinatura, regras e pastas de <select style="min-width: 200px; height: 28px; padding: 0 10px; border: 1px solid #c9d4e5; border-radius: 4px; background: #ffffff; color: #061a3d; font: inherit; font-size: 13px"><option>oi@exemplo.com.br</option></select></div>
+
+<section aria-label="Assinatura" style="display: flex; flex-direction: column">
+<h2 style="margin: 0 0 4px; font-size: 11px; line-height: 16px; font-weight: 500; color: #5b6b85">Assinatura</h2>
+<div style="margin-top: 8px; display: flex; flex-direction: column; border: 1px solid #c9d4e5; border-radius: 6px; background: #ffffff; overflow: hidden">
+<div style="border-bottom: 1px solid #e3e9f2; padding: 12px; display: flex; flex-direction: column; gap: 8px">
+<div style="display: flex; flex-direction: column; gap: 1px; min-width: 0"><p style="margin: 0; font-size: 13px; line-height: 20px; font-weight: 500; color: #061a3d">Texto da assinatura</p><p style="margin: 0; font-size: 12px; line-height: 16px; color: #5b6b85">Texto simples. Links e emails viram link. Entra acima do texto citado, depois de “-- ”.</p></div>
+<textarea rows="4" style="box-sizing: border-box; width: 100%; resize: none; padding: 8px 10px; border: 1px solid #c9d4e5; border-radius: 4px; background: #ffffff; color: #061a3d; font: inherit; font-size: 13px; line-height: 20px">Ana Pereira
+LAP Software &amp; Consultoria
+(11) 98765-4321 · https://lap.example</textarea>
+<span style="align-self: flex-end; font-size: 12px; line-height: 16px; color: #7f8da6; font-variant-numeric: tabular-nums">74 de 2000</span>
+</div>
+<div style="border-bottom: 1px solid #e3e9f2; display: grid; grid-template-columns: minmax(0, 1fr) 340px; column-gap: 20px; align-items: center; min-height: 44px; box-sizing: border-box; padding: 8px 12px">
+<div style="display: flex; flex-direction: column; gap: 1px; min-width: 0"><p id="ass-novas" style="margin: 0; font-size: 13px; line-height: 20px; font-weight: 500; color: #061a3d">Em mensagens novas</p></div>
+<div style="display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-width: 0"><button type="button" role="switch" aria-checked="true" aria-labelledby="ass-novas" style="display: flex; align-items: center; justify-content: flex-end; width: 36px; height: 20px; box-sizing: border-box; padding: 2px; border: 1px solid #1e5bb8; border-radius: 4px; background: #1e5bb8; cursor: pointer"><span style="width: 14px; height: 14px; border-radius: 2px; background: #ffffff"></span></button></div>
+</div>
+<div style="display: grid; grid-template-columns: minmax(0, 1fr) 340px; column-gap: 20px; align-items: center; min-height: 44px; box-sizing: border-box; padding: 8px 12px">
+<div style="display: flex; flex-direction: column; gap: 1px; min-width: 0"><p id="ass-resp" style="margin: 0; font-size: 13px; line-height: 20px; font-weight: 500; color: #061a3d">Em respostas e encaminhamentos</p></div>
+<div style="display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-width: 0"><button type="button" role="switch" aria-checked="true" aria-labelledby="ass-resp" style="display: flex; align-items: center; justify-content: flex-end; width: 36px; height: 20px; box-sizing: border-box; padding: 2px; border: 1px solid #1e5bb8; border-radius: 4px; background: #1e5bb8; cursor: pointer"><span style="width: 14px; height: 14px; border-radius: 2px; background: #ffffff"></span></button></div>
+</div>
+</div>
+</section>
+
+<section aria-label="Regras" style="display: flex; flex-direction: column">
+<h2 style="margin: 0 0 4px; font-size: 11px; line-height: 16px; font-weight: 500; color: #5b6b85">Regras</h2>
+<div style="margin-top: 8px; display: flex; flex-direction: column; border: 1px solid #c9d4e5; border-radius: 6px; background: #ffffff; overflow: hidden">
+<div style="padding: 12px; display: flex; flex-direction: column; gap: 8px">
+<div style="display: flex; align-items: center; justify-content: space-between; gap: 12px"><div style="display: flex; flex-direction: column; gap: 1px; min-width: 0"><p style="margin: 0; font-size: 13px; line-height: 20px; font-weight: 500; color: #061a3d">Regras</p><p style="margin: 0; font-size: 12px; line-height: 16px; color: #5b6b85">Movem ou marcam os emails novos que chegam nesta conta.</p></div><button type="button" style="display: inline-flex; align-items: center; gap: 8px; height: 32px; box-sizing: border-box; padding: 0 12px; border: 1px solid #c9d4e5; background: #ffffff; color: #0a2a5e; border-radius: 4px; font: inherit; font-size: 13px; font-weight: 500; white-space: nowrap; cursor: pointer"><span>Nova regra</span></button></div>
+<div style="display: flex; align-items: center; gap: 12px; padding: 8px 0; border-top: 1px solid #e3e9f2"><span style="flex: 1 1 auto; font-size: 13px; color: #061a3d">De <strong style="font-weight: 600">financeiro@</strong> → pasta Financeiro</span><button type="button" style="height: 28px; padding: 0 8px; border: 1px solid #c9d4e5; border-radius: 4px; background: #ffffff; color: #0a2a5e; font: inherit; font-size: 12px; font-weight: 500">Editar</button><button type="button" style="height: 28px; padding: 0 8px; border: 0; border-radius: 4px; background: transparent; color: #c62f34; font: inherit; font-size: 12px; font-weight: 500">Excluir</button></div>
+</div>
+</div>
+</section>
+
+</div>
+</div>
+</main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1120,"height":740}}'>
+class Component extends DCLogic {
+  renderVals() {
+    return {};
+  }
+}
+</script>
+</body>
+</html>

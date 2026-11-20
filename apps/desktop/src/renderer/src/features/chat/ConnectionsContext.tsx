@@ -48,8 +48,8 @@ export function ConnectionsContext({ scope, onScope }: { scope: ChatScope; onSco
     onScope(next.size ? { ...rest, mcpOff: [...next] } : rest)
   }
   return (
-    <section aria-label="Conexões" data-chat-connections className="flex flex-col gap-3 border-b border-line px-4 py-4">
-      <h3 className="text-12 font-bold text-text-muted">Conexões</h3>
+    <section aria-label="Conexões" data-chat-connections className="flex flex-col gap-2 border-b border-line px-3 py-3">
+      <h3 className="label">Conexões</h3>
       {servers.map((server, index) => {
         const id = `chat-connection-${index}`
         const unavailable = cli ? 'Só com o motor ACP (Configurações › Claude)' : server.unavailable

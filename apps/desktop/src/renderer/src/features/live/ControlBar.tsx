@@ -59,7 +59,7 @@ export function ControlBar({
       <div
         role="toolbar"
         aria-label="Controles da gravação"
-        className="on-side pointer-events-auto flex min-w-0 max-w-full items-center gap-1 rounded-[var(--radius-panel)] border border-side-edge bg-side-bg p-1.5 text-side-text"
+        className="on-side pointer-events-auto flex min-w-0 max-w-full items-center gap-1 rounded-[var(--radius-panel)] border border-side-edge bg-side-bg p-1 text-side-text"
       >
         <BarButton action="toggle-pause" label={paused ? 'Retomar' : 'Pausar'} onClick={onTogglePause} disabled={busy} ariaShortcut="Space">
           {/* Cheio, como nos mockups: o contorno de 1,5 px some no azul. */}
@@ -98,14 +98,14 @@ export function ControlBar({
         )}
         <Divider />
         <span
-          className="ml-2 flex h-7 items-center rounded-[var(--radius-control)] bg-side-active px-2.5 text-12 font-medium whitespace-nowrap"
+          className="ml-2 flex h-6 items-center rounded-[var(--radius-control)] bg-side-active px-2 text-12 font-medium whitespace-nowrap"
           title="Idioma falado e idioma da tradução"
         >
           {languagePairLabel(settings)}
         </span>
         {model && (
           <span
-            className="block h-7 min-w-0 max-w-[132px] truncate rounded-[var(--radius-control)] bg-side-active px-2.5 font-mono text-11 leading-7 whitespace-nowrap text-side-muted"
+            className="block h-6 min-w-0 max-w-[132px] truncate rounded-[var(--radius-control)] bg-side-active px-2 font-mono text-11 leading-6 whitespace-nowrap text-side-muted"
             title={`Modelo de tradução: ${model}`}
           >
             {model}
@@ -114,7 +114,7 @@ export function ControlBar({
         {savingAudio && (
           <span
             data-audio-marker
-            className="flex h-7 items-center gap-1.5 px-2 text-12 whitespace-nowrap text-side-muted"
+            className="flex h-6 items-center gap-1.5 px-2 text-12 whitespace-nowrap text-side-muted"
             title="O áudio da reunião está sendo salvo na pasta escolhida em Configurações"
           >
             <Icon icon={HardDrive} size={14} />
@@ -170,7 +170,7 @@ function BarButton({ action, label, children, onClick, disabled, ariaShortcut, p
       aria-pressed={pressed}
       aria-busy={busy || undefined}
       title={title}
-      className={`no-drag inline-flex h-10 items-center gap-2 rounded-[var(--radius-control)] ${iconOnly ? 'px-3' : 'px-3.5'} text-13 font-medium text-side-text transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-side-active disabled:opacity-50 ${pressed ? 'bg-side-active' : ''}`}
+      className={`no-drag inline-flex h-8 items-center gap-2 rounded-[var(--radius-control)] ${iconOnly ? 'w-8 justify-center' : 'px-3'} text-13 font-medium text-side-text transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-side-active disabled:opacity-50 ${pressed ? 'bg-side-active' : ''}`}
     >
       {children}
       <span className={iconOnly ? 'sr-only' : 'whitespace-nowrap'}>{label}</span>

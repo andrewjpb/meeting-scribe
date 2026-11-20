@@ -108,12 +108,12 @@ function LockLayer() {
     >
       {/* A janela continua arrastável pela faixa de cima, como no resto do app. */}
       <div aria-hidden="true" className="drag absolute inset-x-0 top-0 h-[var(--titlebar-height)]" />
-      <div data-lock-card className="no-drag relative flex w-full max-w-[380px] flex-col gap-4 rounded-[var(--radius-panel)] border border-line-strong bg-bg-raised p-8">
+      <div data-lock-card className="no-drag relative flex w-full max-w-[380px] flex-col gap-3 rounded-[var(--radius-panel)] border border-line-strong bg-bg-raised p-6">
         <div className="flex items-center gap-2.5">
           <BrandLogo dataUrl={branding.logoDataUrl} />
           <span className="truncate text-15 font-bold text-title">{branding.name}</span>
         </div>
-        <h1 id="lock-title" className="text-20 leading-[26px] font-bold text-title">
+        <h1 id="lock-title" className="text-17 font-bold text-title">
           {branding.name} está bloqueado
         </h1>
         <RecordingLine />

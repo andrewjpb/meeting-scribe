@@ -102,13 +102,13 @@ export function AgentForm({ initial, meetings, onClose }: { initial: AgentInput;
   const chosen = new Set(agent.scope.meetingIds ?? [])
 
   return (
-    <div data-agent-form className="flex max-w-[760px] flex-col gap-6">
+    <div data-agent-form className="flex max-w-[760px] flex-col gap-4">
       <div className="flex items-center gap-2">
         <button type="button" data-action="agent-form-back" onClick={onClose} className={QUIET_BUTTON}>
           <Icon icon={ArrowLeft} size={14} />
           Agentes
         </button>
-        <h2 className="text-17 font-bold text-title">{initial.id ? 'Editar agente' : 'Novo agente'}</h2>
+        <h2 className="text-15 font-bold text-title">{initial.id ? 'Editar agente' : 'Novo agente'}</h2>
       </div>
 
       <FormField label="Nome" htmlFor="agent-name">
@@ -168,7 +168,7 @@ export function AgentForm({ initial, meetings, onClose }: { initial: AgentInput;
         <textarea id="agent-instructions" rows={10} value={agent.instructions} maxLength={AGENT_INSTRUCTIONS_MAX} onChange={(event) => patch({ instructions: event.target.value })} className={AREA_CLASS} />
       </FormField>
 
-      <div className="grid grid-cols-[repeat(auto-fit,minmax(280px,1fr))] gap-6">
+      <div className="grid grid-cols-[repeat(auto-fit,minmax(280px,1fr))] gap-4">
         <FormField label="Modelo" labelId="agent-model">
           <Segmented value={agent.model} options={models.map((model) => ({ value: model, label: AGENT_MODEL_LABELS[model] }))} labelledBy="agent-model" dataName="agent-model-option" onChange={(model) => patch({ model })} />
         </FormField>
@@ -177,7 +177,7 @@ export function AgentForm({ initial, meetings, onClose }: { initial: AgentInput;
         </FormField>
       </div>
 
-      <div className="grid grid-cols-[repeat(auto-fit,minmax(280px,1fr))] gap-6">
+      <div className="grid grid-cols-[repeat(auto-fit,minmax(280px,1fr))] gap-4">
         <FormField label="Escopo" htmlFor="agent-scope" hint="As reuniões que o agente lê.">
           <Select
             id="agent-scope"
@@ -242,8 +242,8 @@ export function AgentForm({ initial, meetings, onClose }: { initial: AgentInput;
         </Button>
       </div>
 
-      <section aria-label="Testar agora" data-agent-test className="flex flex-col gap-3 border-t border-line pt-6">
-        <h3 className="text-15 font-bold text-title">Testar agora</h3>
+      <section aria-label="Testar agora" data-agent-test className="flex flex-col gap-2 border-t border-line pt-4">
+        <h3 className="text-14 leading-5 font-semibold text-title">Testar agora</h3>
         <p className="text-12 text-text-muted">Roda o agente como está no formulário, sem salvar, e mostra a resposta aqui. Não entra em Execuções.</p>
         <textarea
           id="agent-test-text"
