@@ -54,6 +54,12 @@ describe('quando notificar', () => {
     expect(notifier.receive(input())).toEqual({ accountId: ACCOUNT.id, id: '1', title: 'Marina Rocha', body: 'Proposta revisada', count: 1 })
   })
 
+  it('contrato 55 (CA24): a movida por uma regra leva a pasta de destino e se o servidor disse o UID novo', () => {
+    const { notifier } = setup()
+    expect(notifier.receive(input({ movedByRule: true, message: message({ id: 'Arquivo\n7\n12', mailbox: 'Arquivo', uid: 12 }) }))?.mailbox).toEqual({ path: 'Arquivo', found: true })
+    expect(notifier.receive(input({ movedByRule: true, message: message({ id: '9', mailbox: 'Arquivo', uid: null, from: [{ name: 'Outro', address: 'outro@x.example' }] }) }))?.mailbox).toEqual({ path: 'Arquivo', found: false })
+  })
+
   it('nunca o email da própria conta; nada desligado; nada em Enviados', () => {
     const { notifier, shown } = setup()
     expect(notifier.receive(input({ message: message({ from: [{ name: 'Eu', address: 'ANDREW@lap.example' }] }) }))).toBeNull()

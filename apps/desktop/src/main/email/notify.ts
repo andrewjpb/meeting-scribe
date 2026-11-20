@@ -32,6 +32,11 @@ export interface EmailNotice {
   body: string
   /** Quantos emails a notificação resume (1, ou 3 ou mais numa rajada). */
   count: number
+  /**
+   * Contrato 55 (CA24): a pasta para onde uma regra levou a mensagem (`undefined` na Caixa de Entrada); `found: false`
+   * quando o servidor não disse o UID novo (o clique abre a pasta, sem a mensagem).
+   */
+  mailbox?: { path: string; found: boolean } | undefined
 }
 
 export type ShowEmailNotice = (notice: EmailNotice) => NoticeHandle
@@ -90,7 +95,7 @@ export function createEmailNotifier(deps: { show: ShowEmailNotice; appName: () =
       burst.count++
       const who = senderName(message)
       const count = burst.count >= BURST_MIN ? burst.count : 1
-      const base = { accountId: input.account.id, id: message.id, count }
+      const base = { accountId: input.account.id, id: message.id, count, ...(isInbox(message) ? {} : { mailbox: { path: message.mailbox, found: message.uid !== null } }) }
       const notice: EmailNotice =
         count > 1
           ? { ...base, title: locked ? deps.appName() : who, body: `${count} emails de ${who}` }

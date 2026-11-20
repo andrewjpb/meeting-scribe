@@ -1,5 +1,7 @@
 import { ArrowLeft, Paperclip, Send, TriangleAlert, X } from 'lucide-react'
 import { useRef, useState, type KeyboardEvent } from 'react'
+import { Link } from 'react-router'
+import { settingsPath } from '@shared/routes'
 import { EMAIL_ATTACH_MAX_BYTES, EMAIL_ATTACH_MAX_FILES, EMAIL_SUBJECT_MAX, EMAIL_TEXT_MAX, type EmailAccount } from '@shared/email'
 import { Button } from '../../design/Button'
 import { Icon } from '../../design/Icon'
@@ -74,6 +76,8 @@ function RecipientField({ id, label, value, onChange }: { id: string; label: str
 
 interface ComposerProps {
   account: EmailAccount
+  /** O nome da conta na tela (o da barra lateral), para a linha de apoio da assinatura. */
+  accountName: string
   draft: ComposeDraft
   /** Saiu com sucesso: o id da mensagem em Enviados. */
   onSent: (messageId: string) => void
@@ -85,7 +89,7 @@ interface ComposerProps {
  * "Enviar" (ou ⌘↵) manda pelo `emailSend` do preload, que só vale no clique da pessoa, sem diálogo de confirmação.
  * Deu certo: o composer fecha e a mensagem aparece em Enviados. Deu errado: o rascunho fica, com o aviso.
  */
-export function Composer({ account, draft, onSent, onBack }: ComposerProps) {
+export function Composer({ account, accountName, draft, onSent, onBack }: ComposerProps) {
   const update = useEmail((state) => state.updateDraft)
   const [sending, setSending] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -272,6 +276,15 @@ export function Composer({ account, draft, onSent, onBack }: ComposerProps) {
             </Button>
           </div>
         </div>
+        {/* Contrato 55 (CA11, D5): a assinatura é texto do campo; esta linha só diz de onde ela veio. */}
+        {draft.signed && (
+          <p data-email-signature-hint className="mt-3 text-12 text-text-muted">
+            Assinatura da conta {accountName}. Pode editar ou apagar aqui; a padrão fica em{' '}
+            <Link to={settingsPath('email', 'assinatura')} className="font-medium text-accent underline decoration-1 underline-offset-3">
+              Configurações › Email
+            </Link>
+          </p>
+        )}
       </div>
     </section>
   )

@@ -507,7 +507,8 @@ function emailFocusedInbox(): string | null {
 
 /** Notificação de um email (contrato 43), local; o clique abre o app na mensagem. No smoke, o substituto registra. */
 function showEmailNotice(notice: EmailNotice): NoticeHandle {
-  const open = (): void => sendWhenLoaded(showMainWindow(), 'scribe:open-email', { accountId: notice.accountId, id: notice.id })
+  // Contrato 55 (CA24): a movida por uma regra abre a pasta de destino (e a mensagem, se o servidor disse o UID novo).
+  const open = (): void => sendWhenLoaded(showMainWindow(), 'scribe:open-email', { accountId: notice.accountId, id: notice.id, ...(notice.mailbox ? { mailbox: notice.mailbox.path, found: notice.mailbox.found } : {}) })
   if (smokeFixtures) {
     const entry = { ...notice, closed: false, open }
     smokeFixtures.emailNotify.notifications.push(entry)

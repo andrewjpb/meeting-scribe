@@ -58,6 +58,8 @@ describe('esquema de configurações (CA1)', () => {
       inviteCalendarId: null,
       inviteAddOnAccept: true,
       inviteSuggest: false,
+      emailFoldersCollapsed: [],
+      emailRecentFolders: {},
       claudeConnectors: {},
     })
     expect(parseSettings(undefined)).toEqual(DEFAULT_SETTINGS)
@@ -127,6 +129,8 @@ describe('esquema de configurações (CA1)', () => {
       inviteCalendarId: 'cal-trabalho',
       inviteAddOnAccept: false,
       inviteSuggest: true,
+      emailFoldersCollapsed: ['0b6f2c1e-3a4d-4c5b-8e9f-0a1b2c3d4e5f\nClientes'],
+      emailRecentFolders: { '0b6f2c1e-3a4d-4c5b-8e9f-0a1b2c3d4e5f': ['Clientes/ABF', 'Resolvidos'] },
       claudeConnectors: { Notion: { enabled: true, tools: { 'notion-search': 'allow', 'notion-create-pages': 'deny' } }, 'Google Drive': { enabled: false, tools: {} } },
     }
     expect(parseSettings(saved)).toEqual(saved)
@@ -171,7 +175,7 @@ describe('esquema de configurações (CA1)', () => {
   it('Claude CLI (contrato 05, CA1): motor, modelo e caminho com padrão próprio cada um', () => {
     // `settings.json` do contrato 04, sem os campos novos: carrega com os padrões deles e mantém o resto.
     const old = { translationEnabled: false, translationModel: 'gpt-oss-120b', sourceLanguage: 'es', targetLanguage: 'ja', echoCancellation: true, theme: 'dark', micDeviceId: null }
-    expect(parseSettings(old)).toEqual({ ...old, removeEcho: true, translationEngine: 'assemblyai', claudeModel: 'haiku', chatModel: 'sonnet', claudePath: null, claudeTransport: 'acp', agentProfile: 'claude', saveToFolder: true, audioFolder: null, summarizeOnStop: true, liveCards: false, whatsappInsights: true, whatsappAutoCorrect: false, whatsappNotifications: true, whatsappNotifyGroups: true, whatsappTypingSignal: false, identifySpeakers: false, meetSpeakers: true, meetingPrompt: true, navegadorPlugin: false, brandName: null, brandSubtitle: null, brandLogo: null, autoCheckUpdates: true, lockUseTouchId: false, lockAfterMinutes: 0, lockOnSystemLock: true, lockOnLaunch: false, saveToDrive: true, closeBehavior: 'tray', openAtLogin: false, scheduledRunsDailyLimit: 50, calendarAlerts: true, calendarLeadMinutes: 5, calendarNotRecordingAlert: true, calendarIds: { google: null, microsoft: null }, emailPollMinutes: 5, emailNotifications: true, emailCollapsed: [], inviteCalendarId: null, inviteAddOnAccept: true, inviteSuggest: false, claudeConnectors: {} })
+    expect(parseSettings(old)).toEqual({ ...old, removeEcho: true, translationEngine: 'assemblyai', claudeModel: 'haiku', chatModel: 'sonnet', claudePath: null, claudeTransport: 'acp', agentProfile: 'claude', saveToFolder: true, audioFolder: null, summarizeOnStop: true, liveCards: false, whatsappInsights: true, whatsappAutoCorrect: false, whatsappNotifications: true, whatsappNotifyGroups: true, whatsappTypingSignal: false, identifySpeakers: false, meetSpeakers: true, meetingPrompt: true, navegadorPlugin: false, brandName: null, brandSubtitle: null, brandLogo: null, autoCheckUpdates: true, lockUseTouchId: false, lockAfterMinutes: 0, lockOnSystemLock: true, lockOnLaunch: false, saveToDrive: true, closeBehavior: 'tray', openAtLogin: false, scheduledRunsDailyLimit: 50, calendarAlerts: true, calendarLeadMinutes: 5, calendarNotRecordingAlert: true, calendarIds: { google: null, microsoft: null }, emailPollMinutes: 5, emailNotifications: true, emailCollapsed: [], emailFoldersCollapsed: [], emailRecentFolders: {}, inviteCalendarId: null, inviteAddOnAccept: true, inviteSuggest: false, claudeConnectors: {} })
     expect(parseSettings({ translationEngine: 'claude-cli', claudeModel: 'sonnet' })).toMatchObject({ translationEngine: 'claude-cli', claudeModel: 'sonnet' })
     // Fora da lista cai no padrão: só `haiku` e `sonnet`, só os dois motores.
     expect(parseSettings({ translationEngine: 'openai' }).translationEngine).toBe('assemblyai')
@@ -298,6 +302,20 @@ describe('esquema de configurações (CA1)', () => {
     const id = '0b6f2c1e-3a4d-4c5b-8e9f-0a1b2c3d4e5f'
     expect(parseSettingsPatch({ emailCollapsed: [id] })).toEqual({ emailCollapsed: [id] })
     expect(() => parseSettingsPatch({ emailCollapsed: ['conta'] })).toThrow()
+  })
+
+  it('Email (contrato 55): subárvores recolhidas por conta e pasta; até 3 pastas recentes por conta', () => {
+    const id = '0b6f2c1e-3a4d-4c5b-8e9f-0a1b2c3d4e5f'
+    expect(DEFAULT_SETTINGS.emailFoldersCollapsed).toEqual([])
+    expect(DEFAULT_SETTINGS.emailRecentFolders).toEqual({})
+    expect(parseSettingsPatch({ emailFoldersCollapsed: [`${id}\nClientes/ABF`] })).toEqual({ emailFoldersCollapsed: [`${id}\nClientes/ABF`] })
+    expect(() => parseSettingsPatch({ emailFoldersCollapsed: ['Clientes'] })).toThrow()
+    expect(() => parseSettingsPatch({ emailFoldersCollapsed: [`${id}\nA\nB`] })).toThrow()
+    expect(parseSettings({ emailFoldersCollapsed: ['x'] }).emailFoldersCollapsed).toEqual([])
+    expect(parseSettingsPatch({ emailRecentFolders: { [id]: ['Resolvidos', 'Clientes/ABF'] } })).toEqual({ emailRecentFolders: { [id]: ['Resolvidos', 'Clientes/ABF'] } })
+    expect(() => parseSettingsPatch({ emailRecentFolders: { [id]: ['a', 'b', 'c', 'd'] } })).toThrow()
+    expect(() => parseSettingsPatch({ emailRecentFolders: { conta: ['a'] } })).toThrow()
+    expect(parseSettings({ emailRecentFolders: { conta: ['a'] } }).emailRecentFolders).toEqual({})
   })
 
   it('Conectores do claude.ai (contrato 57, CA2): vazio por padrão; arquivo antigo carrega igual; entrada inválida sai sozinha', () => {
