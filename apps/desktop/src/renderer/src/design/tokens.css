@@ -19,6 +19,8 @@
   --text-faint: #7f8da6;
   --accent: #1e5bb8;
   --on-accent: #ffffff;
+  /* Realce da linha que mudou num convite (contrato 63, D7): o --accent a 14 %, como no mockup ConvitesAgenda. */
+  --hl: rgba(30, 91, 184, 0.14);
   --mic: #1e5bb8;
   --sys: #5b6b85;
   --rec: #c62f34;
@@ -84,6 +86,8 @@
   /* design.md pede #3B82F6; sobre --bg-raised dava 3,79:1. Mesmo matiz, luminosidade 60% -> 65%. */
   --accent: #5392f7;
   --on-accent: #061a3d;
+  /* O realce do convite no escuro: o azul do mockup a 22 %. */
+  --hl: rgba(59, 130, 246, 0.22);
   --mic: #5392f7;
   --sys: #a8b5cc;
   /* design.md pede #F0646A; sobre --bg-raised dava 4,47:1. Mesmo matiz, luminosidade +0,2%. */

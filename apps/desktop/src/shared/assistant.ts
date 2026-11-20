@@ -4,7 +4,8 @@
 // resposta. Nada roda sem o clique da pessoa no cartão: o lembrete vira uma tarefa "uma vez" das Automações (23),
 // a resposta no WhatsApp passa pelo envio do contrato 24 (token de clique e diálogo nativo) e a tarefa abre o
 // formulário do 23 preenchido. Sem zod e sem Node: o renderer usa as frases. Contrato 45: os cartões de email (a lista
-// que abre a tela Email e o rascunho de resposta, que só sai pelo envio com o token de clique do contrato 42).
+// que abre a tela Email e o rascunho de resposta, que só sai pelo envio com o token de clique do contrato 42). Contrato 56:
+// o cartão do lote que o Assistente moveu (`email-lote`), montado pelo main a partir do lote, nunca do texto do modelo.
 import { formatRunAt, wallTime, type Schedule } from './automations'
 import type { Chat } from './chat'
 
@@ -37,7 +38,7 @@ export const AUTOMATIONS_TABS = ['agentes', 'tarefas', 'execucoes'] as const
 /** `proposed`: o cartão espera o clique; `done`: feito (criado, enviado); `dismissed`: "Descartar". */
 export const CHAT_ACTION_STATUSES = ['proposed', 'done', 'dismissed'] as const
 export type ChatActionStatus = (typeof CHAT_ACTION_STATUSES)[number]
-export const CHAT_ACTION_KINDS = ['lembrete', 'whatsapp-resposta', 'tarefa', 'abrir', 'emails', 'email-resposta'] as const
+export const CHAT_ACTION_KINDS = ['lembrete', 'whatsapp-resposta', 'tarefa', 'abrir', 'emails', 'email-resposta', 'email-lote'] as const
 export type ChatActionKind = (typeof CHAT_ACTION_KINDS)[number]
 
 interface ActionBase {
@@ -154,7 +155,20 @@ export interface EmailReplyAction extends ActionBase {
   text: string
 }
 
-export type ChatAction = ReminderAction | WhatsAppReplyAction | TaskAction | OpenAction | EmailListAction | EmailReplyAction
+/**
+ * Contrato 56: `email-lote`, o que o Assistente moveu num turno (uma conta). O main anexa à resposta (o modelo nunca
+ * escreve este bloco); o cartão lê o lote por `scribe:email-batch-get` e desfaz por `scribe:email-batch-undo`. Depois do
+ * Desfazer fica `done`, com a frase do estado ("Desfeito às 14:40").
+ */
+export interface EmailBatchAction extends ActionBase {
+  kind: 'email-lote'
+  batchId: string
+  accountId: string
+  /** O endereço da conta, lido do app. */
+  account: string
+}
+
+export type ChatAction = ReminderAction | WhatsAppReplyAction | TaskAction | OpenAction | EmailListAction | EmailReplyAction | EmailBatchAction
 
 /** Qual cartão de qual resposta. */
 export interface ChatActionRef {

@@ -274,9 +274,29 @@ export function actionsHistory(actions: readonly ChatAction[] | undefined): stri
         return `- cartão com ${action.items.length} email(s): ${action.items.map((item) => `${item.from} · "${item.subject.replace(/\s+/g, ' ').slice(0, 80)}"`).join('; ')}`
       case 'email-resposta':
         return `- resposta por email para ${action.toLabel} ("${action.subject}"): "${action.text.replace(/\s+/g, ' ').slice(0, 200)}" (${state})`
+      case 'email-lote':
+        return `- lote de emails movidos na conta ${action.account} (${action.status === 'proposed' ? 'com Desfazer' : state})`
     }
   })
   return ['[Cartões propostos nesta resposta:', ...lines, ']'].join('\n')
+}
+
+/**
+ * Contrato 56: o cartão do lote de emails depois do Desfazer: `done`, com a frase do estado ("Desfeito às 14:40"), em
+ * toda resposta da conversa que tem o cartão daquele lote. `null` se a conversa não tem nenhum.
+ */
+export async function markEmailBatchCard(store: Pick<ChatStore, 'mutate'>, chatId: string, batchId: string, result: string): Promise<Chat | null> {
+  return store.mutate(chatId, (chat) => {
+    if (!chat) return null
+    const has = (message: ChatMessage): boolean => message.actions?.some((action) => action.kind === 'email-lote' && action.batchId === batchId) ?? false
+    if (!chat.messages.some(has)) return null
+    return {
+      ...chat,
+      messages: chat.messages.map((message) =>
+        has(message) ? { ...message, actions: (message.actions ?? []).map((action) => (action.kind === 'email-lote' && action.batchId === batchId ? { ...action, status: 'done' as const, result } : action)) } : message,
+      ),
+    }
+  })
 }
 
 export interface ChatActionsDeps {
@@ -371,7 +391,8 @@ export function createChatActions(deps: ChatActionsDeps): ChatActions {
       const { state, text } = parsed.data
       const ref = parsed.data
       if (busy.has(keyOf(ref))) return { ok: false, error: 'done' }
-      if (state === 'dismissed') return write(ref, (action) => (action.kind === 'abrir' || action.kind === 'emails' ? null : { ...action, status: 'dismissed', result: DISMISSED_TEXT }))
+      // Contrato 56: o cartão do lote não se descarta (o Desfazer é o caminho dele).
+      if (state === 'dismissed') return write(ref, (action) => (action.kind === 'abrir' || action.kind === 'emails' || action.kind === 'email-lote' ? null : { ...action, status: 'dismissed', result: DISMISSED_TEXT }))
       if (state === 'task-created') return write(ref, (action) => (action.kind === 'tarefa' ? { ...action, status: 'done', result: TASK_CREATED_TEXT } : null))
       // "Enviar" passou pelo contrato 24: grava o texto que foi e a hora; as outras escolhas "É esta conversa?" com o
       // mesmo texto saem.

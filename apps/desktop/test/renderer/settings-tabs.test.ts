@@ -23,9 +23,9 @@ const key = (key: string, mods: Partial<Record<'metaKey' | 'ctrlKey' | 'altKey' 
 })
 
 describe('abas de Configurações (contrato 18)', () => {
-  it('oito abas, nesta ordem, com os rótulos da tela', () => {
-    expect(SETTINGS_TABS).toEqual(['geral', 'gravacao', 'claude', 'arquivos', 'contas', 'plugins', 'conexoes', 'sobre'])
-    expect(SETTINGS_TABS.map((tab) => SETTINGS_TAB_LABELS[tab])).toEqual(['Geral', 'Gravação', 'Claude', 'Arquivos', 'Contas', 'Plugins', 'Conexões', 'Sobre'])
+  it('nove abas, nesta ordem, com os rótulos da tela (contrato 55: Email depois de Contas)', () => {
+    expect(SETTINGS_TABS).toEqual(['geral', 'gravacao', 'claude', 'arquivos', 'contas', 'email', 'plugins', 'conexoes', 'sobre'])
+    expect(SETTINGS_TABS.map((tab) => SETTINGS_TAB_LABELS[tab])).toEqual(['Geral', 'Gravação', 'Claude', 'Arquivos', 'Contas', 'Email', 'Plugins', 'Conexões', 'Sobre'])
   })
 
   it('aba na URL, com a âncora do bloco', () => {
@@ -44,13 +44,15 @@ describe('abas de Configurações (contrato 18)', () => {
     rememberSettingsTab('geral')
   })
 
-  it('⌘1…⌘8 abrem a aba N; outras teclas e modificadores não', () => {
+  it('⌘1…⌘9 abrem a aba N (⌘6 Email, ⌘9 Sobre); outras teclas e modificadores não', () => {
     expect(tabForShortcut(key('1'))).toBe('geral')
     expect(tabForShortcut(key('3'))).toBe('claude')
-    expect(tabForShortcut(key('6'))).toBe('plugins')
-    expect(tabForShortcut(key('7'))).toBe('conexoes')
-    expect(tabForShortcut(key('8'))).toBe('sobre')
-    expect(tabForShortcut(key('9'))).toBeNull()
+    expect(tabForShortcut(key('5'))).toBe('contas')
+    expect(tabForShortcut(key('6'))).toBe('email')
+    expect(tabForShortcut(key('7'))).toBe('plugins')
+    expect(tabForShortcut(key('8'))).toBe('conexoes')
+    expect(tabForShortcut(key('9'))).toBe('sobre')
+    expect(tabForShortcut(key('0'))).toBeNull()
     expect(tabForShortcut(key('1', {}))).toBeNull()
     expect(tabForShortcut(key('1', { metaKey: true, shiftKey: true }))).toBeNull()
     expect(tabForShortcut(key('1', { ctrlKey: true }))).toBeNull()
@@ -134,5 +136,45 @@ describe('índice da busca (contrato 18, devolução)', () => {
     expect(matchesRow({ name: 'Modelo' }, 'Modelo do chat')).toBe(false)
     expect(resultsLabel(1)).toBe('1 resultado')
     expect(resultsLabel(3)).toBe('3 resultados')
+  })
+})
+
+describe('aba Email no índice (contrato 55, CA23)', () => {
+  const index = settingsIndex('Claude')
+  const find = (query: string): SettingsEntry[] => searchSettings(index, query).flatMap((group) => group.indexes.map((i) => index[i] as SettingsEntry))
+
+  it('as linhas de email saíram de Contas e as novas entraram em Email', () => {
+    expect(index.filter((entry) => entry.tab === 'contas').some((entry) => /email/i.test(entry.name))).toBe(false)
+    expect(index.filter((entry) => entry.tab === 'email').map((entry) => `${entry.section} › ${entry.name}`)).toEqual([
+      'Contas › Contas de email',
+      'Contas › Buscar emails novos a cada',
+      'Assinatura › Assinatura',
+      'Assinatura › Assinatura em mensagens novas',
+      'Assinatura › Assinatura em respostas e encaminhamentos',
+      'Regras › Regras',
+      'Pastas › Pastas',
+      'Avisos › Avisar quando chega email',
+      // Contrato 63 (CA23): o bloco "Convites", no fim da aba.
+      'Convites › Agenda padrão',
+      'Convites › Pôr na agenda ao aceitar',
+      'Convites › Acesso ao Calendário do Mac',
+      'Convites › Sugerir evento quando o email não tem convite',
+    ])
+  })
+
+  it('cada palavra acha ao menos uma linha da aba Email, com o rótulo "Email › <nome>"', () => {
+    for (const word of ['regra', 'regras', 'executar', 'pasta', 'pastas', 'mover', 'assinatura', 'avisos', 'notificação']) {
+      expect(find(word).some((entry) => entry.tab === 'email'), word).toBe(true)
+    }
+    const signature = find('assinatura')
+    expect(signature.map((entry) => settingsResultLabel(index, entry))).toEqual(['Email › Assinatura', 'Email › Assinatura em mensagens novas', 'Email › Assinatura em respostas e encaminhamentos'])
+    expect(signature[0]?.description).toBe('Texto que entra no fim das mensagens da conta. Um por conta.')
+  })
+
+  it('"Avisar quando chega email" com o texto exato da CA22; "avisos" acha pelas palavras-chave, fora da tela', () => {
+    const notices = index.find((entry) => entry.name === 'Avisar quando chega email')
+    expect(notices?.description).toBe('Notificação do macOS para email novo na Caixa de Entrada. Uma regra com “não avisar” vale mais.')
+    expect(notices?.description).not.toMatch(/avisos/i)
+    expect(find('avisos').map((entry) => entry.name)).toContain('Avisar quando chega email')
   })
 })

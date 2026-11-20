@@ -27,7 +27,7 @@ import { CalendarSection } from './CalendarSection'
 import { ConnectionsSection } from './ConnectionsSection'
 import { MicrosoftSection } from './MicrosoftSection'
 import { WhatsAppSection } from './WhatsAppSection'
-import { EmailSection } from './EmailSection'
+import { EmailSettingsTab } from './EmailSettingsTab'
 import { AcpAgentField } from './AcpAgentField'
 import { ApiKeyField } from './ApiKeyField'
 import { BrandSection } from './BrandSection'
@@ -143,7 +143,7 @@ function SettingsPanels({ tab }: { tab: SettingsTab }) {
   const rootRef = useRef<HTMLDivElement>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
   // Depois da próxima navegação: a linha achada pela busca (com o bloco dela, se a linha não aparece) ou a linha
-  // da aba que deve receber o foco (⌘1…⌘8).
+  // da aba que deve receber o foco (⌘1…⌘9).
   const pendingRef = useRef<{ row: HTMLElement | null; block: Element | null } | null>(null)
   const focusTabRef = useRef(false)
   const queryRef = useRef('')
@@ -171,7 +171,7 @@ function SettingsPanels({ tab }: { tab: SettingsTab }) {
 
   useEffect(() => rememberSettingsTab(tab), [tab])
 
-  // ⌘1…⌘8 abrem a aba N enquanto Configurações está aberta (a barra lateral mostra o nível Configurações, pela rota).
+  // ⌘1…⌘9 abrem a aba N enquanto Configurações está aberta (a barra lateral mostra o nível Configurações, pela rota).
   useEffect(() => {
     const onKey = (event: KeyboardEvent): void => {
       // Esc que limpou a busca (o campo já tratou o evento): o foco volta para a linha da aba aberta.
@@ -469,10 +469,11 @@ function SettingsPanels({ tab }: { tab: SettingsTab }) {
               <MicrosoftSection />
               <CalendarSection />
               <WhatsAppSection />
-              {/* Contrato 43: as contas de email, as notificações e o intervalo do POP3. */}
-              <EmailSection />
             </>,
           )}
+
+          {/* Contrato 55: o email numa aba própria (as contas vieram de Contas), com a assinatura, as regras, as pastas e os avisos. */}
+          {panel('email', <EmailSettingsTab />)}
 
           {/* Contrato 31: as extensões de navegador que vêm no app. */}
           {panel('plugins', <PluginsSection />)}

@@ -22,6 +22,16 @@
 // fila da conta (a mesma do sincronismo da INBOX e do IDLE), e o que chega à INBOX por ele não vira aviso de email novo.
 // Nenhum pedido de pastas faz login numa conta com a senha recusada; a pasta vigiada só é relida com a conta conectada.
 //
+// Contrato 56: o que o agente do Assistente usa para organizar (`organize.ts`): `moveMessages` com o `UIDVALIDITY` da
+// referência (pasta nunca aberta no app) e os Message-IDs que voltam à INBOX sem aviso de email novo, `listFolders` com
+// o `LIST` relido e `locateMessages` (`UID SEARCH` só para leitura) para o Desfazer achar a mensagem no destino.
+//
+// Contrato 61 (convites-agenda): o convite (`.ics`) é lido no mesmo parse do corpo e guardado dentro dele
+// (`EmailBody.invite`); o corpo guardado antes disso é relido uma vez ao abrir (do `.eml` guardado ou, no IMAP, do
+// servidor). "Aceitar", "Talvez" e "Recusar" mandam o REPLY ao organizador só com o token de clique do email
+// (`sendInviteReply`), pelo mesmo `deliver`, sem virar enviado (nem na lista, nem no disco, nem no `APPEND`). Regra,
+// tarefa agendada, Assistente e agente nunca chegam aqui.
+//
 // Contrato 54: a assinatura de cada conta, lida e gravada no `settings.json` (sai junto quando a conta sai). Quem a põe no
 // texto é o rascunho da tela, antes do envio; o envio (o do clique e o da tarefa agendada) não acrescenta nada.
 //
@@ -32,12 +42,15 @@
 // no `<conta>.rules-state.json` do store; nunca vira estado de erro da conta. "Executar agora" em dois passos
 // (`previewRule` devolve a contagem e um token; `runRule` só age com ele). E `pruneBodies`: os corpos que não são de
 // nenhuma mensagem guardada saem depois de cada corte pelo teto, no sincronismo e ao abrir o app, sempre na fila da conta.
+// Contrato 64: a ação "Pôr na agenda" roda depois do mover, pela única entrada das regras do serviço de convites
+// (`addFromRule`: só cria, nunca pede acesso, nunca responde); `storedMessage` dá ao "Sugerir evento" o corpo guardado.
 //
 // Erro de conexão (N4) nunca derruba o app: a conta fica `error` com uma mensagem curta e as outras seguem. Usuário ou
 // senha recusados não tentam de novo sozinhos (para o servidor não bloquear a conta); o resto tenta de novo em 1 min
 // (IMAP) ou no próximo poll (POP3).
 import { createHash, randomUUID } from 'node:crypto'
 import type { ConnectionOptions } from 'node:tls'
+import type { Attachment } from 'mailparser'
 import { z } from 'zod'
 import {
   EMAIL_ACCOUNT_ID_PATTERN,
@@ -79,8 +92,11 @@ import {
   type EmailAttachmentsResult,
   type EmailOutgoingAttachment,
   type EmailTestResult,
+  type InviteRepliedEvent,
+  type InviteReplySendResult,
   isInbox,
 } from '../../shared/email'
+import { buildReply, parseInvite, type EmailInvite, type InvitePart } from '../../shared/invite'
 import { DEFAULT_EMAIL_SIGNATURE, type EmailSignature, type EmailSignatureResult } from '../../shared/email-signature'
 import {
   EMAIL_RULE_TOKEN_TTL_MS,
@@ -95,11 +111,13 @@ import {
   type EmailRulesSetResult,
   type EmailRuleState,
 } from '../../shared/email-rules'
+import { inviteSelfAdding } from '../invites/map'
+import type { InviteService } from '../invites/service'
 import type { SafeStorageLike } from '../secrets'
 import { emailAddressSchema, emailIncomingSchema, emailNameSchema, emailServerSchema, emailSignatureSchema, emailUsernameSchema, type StoredEmailAccount } from '../settings/schema'
 import type { SettingsStore } from '../settings/store'
 import { addressDomain, autoconfigure, AUTOCONFIG_TIMEOUT_MS, type AutoconfigFetch, type MxResolver } from './autoconfig'
-import { capInbox, createEmailStore, type EmailAccountData, type EmailCachedFolder, type EmailStore } from './email-store'
+import { capInbox, createEmailStore, emailInviteSchema, type EmailAccountData, type EmailCachedFolder, type EmailStore } from './email-store'
 import {
   connectImap,
   connectImapFolders,
@@ -110,6 +128,7 @@ import {
   type ImapFolderConnect,
   type ImapFolderEntry,
   type ImapFolderSession,
+  type ImapLocated,
   type ImapMessage,
   type ImapReaderConnect,
   type ImapSearchQuery,
@@ -204,6 +223,10 @@ const folderWatchSchema = z.object({ accountId: accountIdSchema, path: folderPat
 const moveSchema = z
   .object({ accountId: accountIdSchema, fromPath: folderPathSchema, uids: z.array(z.number().int().positive().max(0xffffffff)).min(1).max(EMAIL_MOVE_MAX), toPath: folderPathSchema })
   .strict()
+/** Contrato 56 (CA7): o `UIDVALIDITY` da referência e os Message-IDs que voltam à INBOX. */
+const moveOptionsSchema = z
+  .object({ uidValidity: z.string().regex(/^\d{1,20}$/).optional(), messageIds: z.array(messageIdSchema).max(EMAIL_MOVE_MAX).optional() })
+  .strict()
 const folderCreateSchema = z.object({ accountId: accountIdSchema, parentPath: folderPathSchema.nullable(), name: z.string().max(EMAIL_FOLDER_PATH_MAX) }).strict()
 const folderRenameSchema = z.object({ accountId: accountIdSchema, path: folderPathSchema, newName: z.string().max(EMAIL_FOLDER_PATH_MAX) }).strict()
 const folderDeleteSchema = z.object({ accountId: accountIdSchema, path: folderPathSchema, force: z.boolean().optional() }).strict()
@@ -257,6 +280,8 @@ const taskSendSchema = z
     text: z.string().max(EMAIL_TEXT_MAX),
   })
   .strict()
+/** Contrato 61 (CA8): "Aceitar", "Talvez" ou "Recusar" de um convite já aberto. */
+const inviteReplySchema = z.object({ accountId: accountIdSchema, id: messageIdSchema, partstat: z.enum(['ACCEPTED', 'TENTATIVE', 'DECLINED']), clickToken: z.string().max(100) }).strict()
 
 /** O que sai pelo SMTP, já validado: o envio do clique e o da tarefa. */
 interface Delivery {
@@ -268,6 +293,10 @@ interface Delivery {
   text: string
   inReplyTo: string | undefined
   attachments: { name: string; bytes: Uint8Array }[]
+  /** Contrato 61: o REPLY de um convite (só o `sendInviteReply` põe). */
+  icalEvent?: OutgoingMail['icalEvent']
+  /** Contrato 61 (CA7): `false` não grava nada do envio (nem Enviados, nem `answered`, nem `APPEND`). */
+  record?: false
 }
 
 /** O que sai do `mailparser`: cabeçalho e corpo. */
@@ -283,7 +312,13 @@ export interface ParsedEmail {
   body: EmailBody
 }
 
-export type EmailParse = (raw: Buffer) => Promise<ParsedEmail>
+/** Contrato 61: os endereços da conta (o N5 do convite) e o fuso do Mac (o N11). */
+export interface EmailParseContext {
+  self: readonly string[]
+  localTimeZone: string
+}
+
+export type EmailParse = (raw: Buffer, context: EmailParseContext) => Promise<ParsedEmail>
 
 interface ParsedAddressList {
   value: { name: string; address?: string | undefined; group?: ParsedAddressList['value'] | undefined }[]
@@ -302,8 +337,34 @@ function flattenAddresses(input: ParsedAddressList | ParsedAddressList[] | undef
   return out.slice(0, 100)
 }
 
-/** `mailparser` (carregado no primeiro uso): cabeçalho e corpo, sem guardar o conteúdo dos anexos. */
-export const parseEmail: EmailParse = async (raw) => {
+/**
+ * Contrato 61 (CA3): o convite das partes da mensagem (a `text/calendar` e o anexo `.ics` dão um só, N10), ou `null`
+ * (sem convite, ilegível ou fora do formato guardado). Nunca derruba o parse do email.
+ */
+function inviteOf(attachments: readonly Attachment[], context: EmailParseContext): EmailInvite | null {
+  try {
+    const parts: InvitePart[] = attachments.map((item) => {
+      const params = (item.headers.get('content-type') as { params?: Record<string, string> } | undefined)?.params
+      return { contentType: item.contentType, filename: item.filename ?? null, method: params?.method ?? null, content: item.content }
+    })
+    const result = parseInvite(parts, context)
+    if (!result.ok) return null
+    return emailInviteSchema.safeParse(result.invite).success ? result.invite : null
+  } catch {
+    return null
+  }
+}
+
+/** Contrato 61 (N12): anexo que pode ser um convite (a regra do CA2 do contrato 59). */
+function mayHaveInvite(body: EmailBody): boolean {
+  return body.attachments.some((item) => {
+    const type = (item.contentType.split(';')[0] ?? '').trim().toLowerCase()
+    return type === 'text/calendar' || type === 'application/ics' || (item.filename ?? '').trim().toLowerCase().endsWith('.ics')
+  })
+}
+
+/** `mailparser` (carregado no primeiro uso): cabeçalho e corpo, sem guardar o conteúdo dos anexos (fora o `.ics` do convite). */
+export const parseEmail: EmailParse = async (raw, context) => {
   const { simpleParser } = await import('mailparser')
   const parsed = await simpleParser(raw, { skipTextToHtml: true, skipTextLinks: true, skipImageLinks: true })
   const references = parsed.references === undefined ? [] : (Array.isArray(parsed.references) ? parsed.references : [parsed.references]).flatMap((value) => messageIds(value))
@@ -321,6 +382,7 @@ export const parseEmail: EmailParse = async (raw) => {
       html: typeof parsed.html === 'string' ? parsed.html : null,
       // Nos limites do store: um nome de anexo enorme não impede a mensagem de entrar.
       attachments: parsed.attachments.slice(0, 500).map((item) => ({ filename: item.filename ? clip(item.filename, 1000) : null, contentType: clip(item.contentType, 300), size: item.size })),
+      invite: inviteOf(parsed.attachments, context),
     },
   }
 }
@@ -418,6 +480,12 @@ export function serverMessageId(mailbox: string, uidValidity: string, uid: numbe
   return `servidor:${uidValidity}:${uid}:${mailbox}`.slice(0, 1000)
 }
 
+/** Contrato 56: a pasta, o `UIDVALIDITY` e o UID de um id de `serverMessageId`, ou `null`. */
+export function serverMessageParts(id: string): { mailbox: string; uidValidity: string; uid: number } | null {
+  const match = /^servidor:([^:]*):(\d+):([\s\S]+)$/.exec(id)
+  return match ? { uidValidity: match[1] ?? '', uid: Number(match[2]), mailbox: match[3] ?? '' } : null
+}
+
 /** Contrato 52: a pasta de um id de `serverMessageId`, ou `null` (id do cache da INBOX, do POP3 ou dos enviados). */
 export function serverMessageMailbox(id: string): string | null {
   const match = /^servidor:[^:]*:\d+:([\s\S]+)$/.exec(id)
@@ -492,6 +560,12 @@ export function validFolderName(name: string, delimiter: string | null): boolean
 
 const folderFailure = (error: EmailFolderFailure['error']): EmailFolderFailure => ({ ok: false, error })
 
+/** Contrato 56 (CA7): o mover do agente e do Desfazer. */
+export interface EmailMoveOptions {
+  uidValidity?: string | undefined
+  messageIds?: readonly string[] | undefined
+}
+
 export interface EmailServiceDeps {
   /** `userData/email`. */
   root: string
@@ -527,6 +601,20 @@ export interface EmailServiceDeps {
   onMessage: (message: EmailMessage, options: { notify: boolean }) => void
   /** A lista de uma conta mudou (sincronismo, lida, apagada, enviada): a tela relê. */
   onMessagesChanged?: (accountId: string) => void
+  /** Contrato 56: a conta saiu (os lotes do agente saem com ela). */
+  onAccountRemoved?: (accountId: string) => void
+  /**
+   * Contrato 61 (CA12): um REPLY de convite saiu (só depois do SMTP com sucesso, uma vez por REPLY). Exceção aqui vira
+   * log e não muda o resultado.
+   */
+  onInviteReplied?: (event: InviteRepliedEvent) => void
+  /** Contrato 61: o fuso do Mac para ler o convite (padrão: o do sistema). */
+  timeZone?: () => string
+  /**
+   * Contrato 64: o serviço de convites do 62, para a ação "Pôr na agenda" das regras. Sem ele (testes antigos), a ação
+   * dá `no-calendar` e o `rules-set` recusa com `no-mac`.
+   */
+  invites?: Pick<InviteService, 'addFromRule' | 'calendarPresent'>
   /** Só estados e tipos de erro: nunca senha, endereço ou texto de mensagem. */
   log?: (message: string) => void
   now?: () => number
@@ -552,9 +640,17 @@ export interface EmailService {
    * Contrato 45: o cache local de cada conta (a INBOX e os enviados guardados), para o Assistente. Só leitura do store:
    * nada vai ao servidor.
    */
-  cached(): Promise<{ status: EmailAccountStatus; inbox: EmailMessage[]; sent: EmailMessage[] }[]>
+  cached(): Promise<{ status: EmailAccountStatus; inbox: EmailMessage[]; sent: EmailMessage[]; uidValidity: string | null }[]>
   /** Contrato 45: o corpo de uma mensagem se já foi baixado; `null` se não (nunca baixa). */
   cachedBody(accountId: string, message: Pick<EmailMessage, 'mailbox' | 'id' | 'uid'>): Promise<EmailBody | null>
+  /**
+   * Contrato 62 (CA6): o convite guardado no corpo de uma mensagem já aberta, com a conta (sem a senha), para o serviço
+   * de convites. Os mesmos passos do `sendInviteReply` (a mensagem fora dos enviados, o corpo do cache); nunca baixa
+   * nada nem abre conexão. `null`: sem conta, sem mensagem, sem corpo guardado ou sem convite.
+   */
+  inviteSource(accountId: string, id: string): Promise<{ account: EmailAccount; invite: EmailInvite; messageId: string } | null>
+  /** Contrato 64: a mensagem guardada e o corpo guardado (`null`: não baixado), sem ir ao servidor. */
+  storedMessage(accountId: string, id: string): Promise<{ message: EmailMessage; body: EmailBody | null } | null>
   /**
    * Contrato 45 (CA7): `UID SEARCH` no servidor IMAP, em todas as pastas do `LIST` abertas só para leitura (`EXAMINE`),
    * as `limit` mais recentes no total. Nada é gravado no cache e nenhuma flag muda. POP3 não tem busca no servidor.
@@ -576,6 +672,12 @@ export interface EmailService {
    * `index.ts` chama (teste estático em `email-automations.test.ts`).
    */
   sendForTask(request: unknown): Promise<EmailSendResult>
+  /**
+   * Contrato 61: "Aceitar", "Talvez" ou "Recusar" do convite de uma mensagem já aberta: o REPLY ao organizador, só com o
+   * token de clique do email (o mesmo do `send`), sem gravar em Enviados. Só o registro do IPC chama (teste estático em
+   * `invite-email.test.ts`). Nunca lança.
+   */
+  sendInviteReply(senderId: number, request: unknown): Promise<InviteReplySendResult>
   forgetSender(senderId: number): void
   /** Contrato 43 (CA8): um anexo recebido, com os bytes (do servidor no IMAP, da mensagem guardada no POP3 e nos enviados). */
   attachment(request: unknown): Promise<{ ok: true; name: string; bytes: Uint8Array } | { ok: false; error: 'not-found' | 'unavailable' }>
@@ -583,10 +685,19 @@ export interface EmailService {
   attachments(request: unknown): Promise<EmailAttachmentsResult>
   /** POP3: busca agora (o mesmo do relógio). */
   poll(accountId: string): Promise<void>
-  /** Contrato 52 (CA2): as pastas em árvore, com as contagens; guardadas na memória até mudar algo ou reconectar. */
-  listFolders(accountId: string): Promise<EmailFoldersResult>
-  /** Contrato 52 (CA4): `MOVE` de até 500 UIDs; erro do servidor não tira nada do store. */
-  moveMessages(accountId: string, fromPath: string, uids: readonly number[], toPath: string): Promise<EmailMoveResult>
+  /**
+   * Contrato 52 (CA2): as pastas em árvore, com as contagens; guardadas na memória até mudar algo ou reconectar.
+   * Contrato 56: `fresh` relê o `LIST` do servidor.
+   */
+  listFolders(accountId: string, options?: { fresh?: boolean }): Promise<EmailFoldersResult>
+  /**
+   * Contrato 52 (CA4): `MOVE` de até 500 UIDs; erro do servidor não tira nada do store. Contrato 56 (CA7): com
+   * `uidValidity`, os UIDs valem com ele (a pasta de origem não precisa ter sido aberta no app); com `messageIds`, os que
+   * chegam à INBOX não viram aviso de email novo. Com `options`, o resultado traz o `UIDVALIDITY` do destino.
+   */
+  moveMessages(accountId: string, fromPath: string, uids: readonly number[], toPath: string, options?: EmailMoveOptions): Promise<EmailMoveResult & { uidValidity?: string | null }>
+  /** Contrato 56 (CA9): só leitura, numa conexão à parte: o `UIDVALIDITY` da pasta, os UIDs que existem e os de cada Message-ID. */
+  locateMessages(accountId: string, path: string, uids: readonly number[], messageIds: readonly string[]): Promise<({ ok: true } & ImapLocated) | EmailFolderFailure>
   /** Contrato 52 (CA5): pasta nova na raiz (`parentPath` `null`) ou dentro de outra. */
   createFolder(accountId: string, parentPath: string | null, name: string): Promise<EmailFolderPathResult>
   renameFolder(accountId: string, path: string, newName: string): Promise<EmailFolderPathResult>
@@ -652,6 +763,7 @@ export function createEmailService(deps: EmailServiceDeps): EmailService {
   const smtp = deps.smtp ?? sendSmtp
   const smtpVerify = deps.smtpVerify ?? verifySmtp
   const parse = deps.parse ?? parseEmail
+  const timeZone = deps.timeZone ?? (() => Intl.DateTimeFormat().resolvedOptions().timeZone)
   const readAttachments = deps.parseAttachments ?? parseAttachments
   const retryMs = deps.retryMs ?? EMAIL_RETRY_MS
   const secrets = createEmailSecrets(deps.safeStorage)
@@ -672,6 +784,8 @@ export function createEmailService(deps: EmailServiceDeps): EmailService {
   const folderWatches = new Map<number, { accountId: string; path: string; timer: ReturnType<typeof setInterval>; failures: number }>()
   /** Contrato 53 (CA10): os tokens do "Executar agora" (uso único, 2 min), presos à conta, à regra e às mensagens. */
   const ruleTokens = new Map<string, { accountId: string; ruleId: string; hash: string; ids: string[]; at: number }>()
+  /** Contrato 61 (CA9): os convites sendo respondidos agora (conta, UID e ocorrência). */
+  const replying = new Set<string>()
   let disposed = false
 
   const log = (message: string): void => deps.log?.(`[email] ${message}`)
@@ -686,6 +800,8 @@ export function createEmailService(deps: EmailServiceDeps): EmailService {
     if (!disposed) deps.onMessagesChanged?.(accountId)
   }
   const live = (rt: Runtime, generation: number): boolean => !disposed && !rt.removed && rt.generation === generation
+  /** Contrato 61 (CA4): todo parse lê o convite com o endereço da conta e o fuso do Mac. */
+  const parseContext = (rt: Runtime): EmailParseContext => ({ self: [rt.account.address], localTimeZone: timeZone() })
 
   function setState(rt: Runtime, state: EmailAccountState, error: string | null): void {
     rt.state = state
@@ -858,7 +974,7 @@ export function createEmailService(deps: EmailServiceDeps): EmailService {
         const raw = await session.retr(number)
         let message: EmailMessage
         try {
-          const parsed = await parse(raw)
+          const parsed = await parse(raw, parseContext(rt))
           message = fromParsed(id, uidl, parsed, now())
           if (!live(rt, generation)) throw new Error('conta removida')
           await store.setBody(id, bodyKey(message), parsed.body)
@@ -970,15 +1086,35 @@ export function createEmailService(deps: EmailServiceDeps): EmailService {
 
   async function downloadBody(rt: Runtime, message: EmailMessage): Promise<EmailBodyResult> {
     const cached = await store.body(rt.account.id, bodyKey(message))
-    if (cached) return { ok: true, body: cached }
+    if (cached) return 'invite' in cached || !mayHaveInvite(cached) ? { ok: true, body: cached } : { ok: true, body: await withInvite(rt, message, cached) }
     if (message.uid === null) return { ok: false, error: 'not-found' }
     const raw = await serverSource(rt, { ...message, uid: message.uid })
     if (raw === 'unavailable') return { ok: false, error: 'unavailable' }
     if (raw === 'too-big') return { ok: false, error: 'too-big' }
     if (raw === null) return { ok: false, error: 'not-found' }
-    const parsed = await parse(raw)
+    const parsed = await parse(raw, parseContext(rt))
     if (!rt.removed) await store.setBody(rt.account.id, bodyKey(message), parsed.body)
     return { ok: true, body: parsed.body }
+  }
+
+  /**
+   * Contrato 61 (N12): o corpo guardado antes do convite existir, com um anexo que pode ser convite, é relido uma vez: do
+   * `.eml` guardado (POP3, enviados), sem rede, ou do servidor (IMAP). Sem conexão ou com erro, fica como está e tenta de
+   * novo na próxima abertura; grande demais, apagada ou sem UID, grava `invite: null` e não tenta mais.
+   */
+  async function withInvite(rt: Runtime, message: EmailMessage, cached: EmailBody): Promise<EmailBody> {
+    const key = bodyKey(message)
+    try {
+      const saved = await store.raw(rt.account.id, key)
+      const raw = saved ?? (message.uid === null ? null : await serverSource(rt, { ...message, uid: message.uid }))
+      if (raw === 'unavailable') return cached
+      const body: EmailBody = raw === null || raw === 'too-big' ? { ...cached, invite: null } : await parse(raw, parseContext(rt)).then((parsed) => ({ ...parsed.body, invite: parsed.body.invite ?? null }))
+      if (!rt.removed) await store.setBody(rt.account.id, key, body)
+      return body
+    } catch (error) {
+      log(`${tag(rt)}: convite não relido (${failureOf(error)})`)
+      return cached
+    }
   }
 
   /** A mensagem inteira: a guardada (POP3, enviados) ou, no IMAP, pedida de novo ao servidor. */
@@ -1009,7 +1145,7 @@ export function createEmailService(deps: EmailServiceDeps): EmailService {
 
   /** O envio já validado (o do clique ou o da tarefa): SMTP, a cópia em Enviados no app e o `APPEND` no IMAP. */
   async function deliver(delivery: Delivery, sentLog: string): Promise<EmailSendResult> {
-    const { accountId, to, cc, bcc, subject, text, inReplyTo, attachments } = delivery
+    const { accountId, to, cc, bcc, subject, text, inReplyTo, attachments, icalEvent } = delivery
     const rt = runtimes.get(accountId)
     const pass = rt ? secrets.open(rt.account.password) : null
     if (!rt || pass === null) return { ok: false, error: 'account' }
@@ -1020,7 +1156,20 @@ export function createEmailService(deps: EmailServiceDeps): EmailService {
     // References: as da mensagem respondida e o Message-ID dela por último (RFC 5322, 3.6.4).
     const references = inReplyTo ? [...(parent?.references ?? []).filter((value) => value !== inReplyTo), inReplyTo].slice(-50) : []
     const date = now()
-    const mail: OutgoingMail = { from: { name: rt.account.name, address: rt.account.address }, to, cc, ...(bcc.length > 0 ? { bcc } : {}), subject, text, attachments, messageId, inReplyTo: inReplyTo ?? null, references, date: new Date(date) }
+    const mail: OutgoingMail = {
+      from: { name: rt.account.name, address: rt.account.address },
+      to,
+      cc,
+      ...(bcc.length > 0 ? { bcc } : {}),
+      subject,
+      text,
+      attachments,
+      ...(icalEvent ? { icalEvent } : {}),
+      messageId,
+      inReplyTo: inReplyTo ?? null,
+      references,
+      date: new Date(date),
+    }
     let bytes: Buffer
     try {
       bytes = await smtp(serverConfig(rt, pass, rt.account.outgoing), mail)
@@ -1030,6 +1179,8 @@ export function createEmailService(deps: EmailServiceDeps): EmailService {
       return { ok: false, error: kind }
     }
     log(`${tag(rt)}: ${sentLog}`)
+    // Contrato 61 (CA7): o REPLY de convite não vira enviado: nem a lista, nem o corpo, nem o `answered`, nem o `APPEND`.
+    if (delivery.record === false) return { ok: true, messageId }
     const sent: EmailMessage = {
       id: messageId,
       accountId,
@@ -1059,7 +1210,8 @@ export function createEmailService(deps: EmailServiceDeps): EmailService {
         inbox: parent ? current.inbox.map((item) => (item.id === parent.id ? { ...item, answered: true } : item)) : current.inbox,
         }
       })
-      await store.setBody(accountId, bodyKey(sent), { text, html: null, attachments: attachments.map((item) => ({ filename: item.name, contentType: 'application/octet-stream', size: item.bytes.byteLength })) })
+      // Contrato 61: `invite: null`, para o enviado nunca ser relido atrás de convite.
+      await store.setBody(accountId, bodyKey(sent), { text, html: null, attachments: attachments.map((item) => ({ filename: item.name, contentType: 'application/octet-stream', size: item.bytes.byteLength })), invite: null })
       // Contrato 43: os bytes enviados, para baixar ou encaminhar os anexos depois.
       if (attachments.length > 0) await store.setRaw(accountId, bodyKey(sent), bytes)
       // Contrato 53 (CA11): o enviado mais antigo saiu pelo teto; o corpo e o `.eml` dele também.
@@ -1165,12 +1317,13 @@ export function createEmailService(deps: EmailServiceDeps): EmailService {
     return [node(EMAIL_INBOX_MAILBOX, null, data.inbox), node(EMAIL_SENT_MAILBOX, '\\Sent', data.sent)]
   }
 
-  async function listFolders(accountId: string): Promise<EmailFoldersResult> {
+  async function listFolders(accountId: string, options: { fresh?: boolean } = {}): Promise<EmailFoldersResult> {
     const rt = imapRuntime(accountId)
     if (isFailure(rt)) {
       const pop = rt.error === 'pop3' ? runtimes.get(accountId) : undefined
       return pop ? { ok: true, folders: await pop3Folders(pop), pop3: true } : rt
     }
+    if (options.fresh) folderCache.delete(rt.account.id)
     const entries = await folderEntries(rt)
     if (isFailure(entries)) return entries
     return { ok: true, folders: folderTree(entries), pop3: false }
@@ -1210,32 +1363,39 @@ export function createEmailService(deps: EmailServiceDeps): EmailService {
   /** Um Message-ID que chega à INBOX por "Mover" fica sem aviso de email novo por 10 min. */
   const MOVED_IN_MS = 10 * 60_000
 
-  async function moveMessages(accountId: string, fromPath: string, uids: readonly number[], toPath: string): Promise<EmailMoveResult> {
+  async function moveMessages(accountId: string, fromPath: string, uids: readonly number[], toPath: string, options?: EmailMoveOptions): Promise<EmailMoveResult & { uidValidity?: string | null }> {
     const parsed = moveSchema.safeParse({ accountId, fromPath, uids: [...uids], toPath })
     if (!parsed.success || fromPath === toPath) return folderFailure('invalid')
+    if (options && !moveOptionsSchema.safeParse({ uidValidity: options.uidValidity, messageIds: options.messageIds ? [...options.messageIds] : undefined }).success) return folderFailure('invalid')
     const rt = imapRuntime(accountId)
     if (isFailure(rt)) return rt
     const list = [...new Set(parsed.data.uids)]
     // Na fila da conta: um sincronismo da INBOX em andamento termina antes, e não devolve as movidas à lista.
-    const result = await enqueue(rt, () => moveQueued(rt, fromPath, list, toPath))
-    return result.ok ? { ok: true, moved: result.moved } : result
+    const result = await enqueue(rt, () => moveQueued(rt, fromPath, list, toPath, options))
+    if (!result.ok) return result
+    return options ? { ok: true, moved: result.moved, uidValidity: result.uidValidity } : { ok: true, moved: result.moved }
   }
 
   /** O mover já na fila da conta; com o `UIDVALIDITY` do destino (`COPYUID`), que as regras usam (contrato 53). */
-  async function moveQueued(rt: Runtime, fromPath: string, list: number[], toPath: string): Promise<{ ok: true; moved: { fromUid: number; toUid: number | null }[]; uidValidity: string | null } | EmailFolderFailure> {
+  async function moveQueued(rt: Runtime, fromPath: string, list: number[], toPath: string, options?: EmailMoveOptions): Promise<{ ok: true; moved: { fromUid: number; toUid: number | null }[]; uidValidity: string | null } | EmailFolderFailure> {
     const accountId = rt.account.id
     if (rt.removed) return folderFailure('missing')
     const fromInbox = isInbox({ mailbox: fromPath })
     const toInbox = isInbox({ mailbox: toPath })
     // Os UIDs valem com o `UIDVALIDITY` guardado da pasta de origem: sem ele (pasta nunca aberta), não há como conferir.
+    // Contrato 56 (CA7): o agente e o Desfazer trazem o da referência, que vale mesmo sem a pasta no store.
     const data = await store.read(accountId)
     const source = fromInbox ? null : await store.folder(accountId, fromPath)
-    const uidValidity = fromInbox ? data.uidValidity : (source?.uidValidity ?? null)
+    const uidValidity = options?.uidValidity ?? (fromInbox ? data.uidValidity : (source?.uidValidity ?? null))
     if (uidValidity === null) return folderFailure('invalid')
     const gone = new Set(list)
-    const known = (fromInbox ? data.inbox : (source?.messages ?? [])).filter((message) => message.uid !== null && gone.has(message.uid))
+    // O que o store guarda da origem só vale com o mesmo `UIDVALIDITY` (o de outra época tem outros UIDs).
+    const sameSource = fromInbox ? data.uidValidity === uidValidity : source?.uidValidity === uidValidity
+    const known = sameSource ? (fromInbox ? data.inbox : (source?.messages ?? [])).filter((message) => message.uid !== null && gone.has(message.uid)) : []
     // Antes do servidor: o IDLE pode avisar a chegada na INBOX antes de o mover voltar.
     if (toInbox) for (const message of known) if (message.messageId !== null) rt.movedIn.set(message.messageId, now() + MOVED_IN_MS)
+    // Contrato 56: os Message-IDs de quem pediu, mesmo sem a mensagem no store (o Desfazer de uma pasta nunca aberta).
+    if (toInbox) for (const messageId of options?.messageIds ?? []) rt.movedIn.set(messageId, now() + MOVED_IN_MS)
     const result = await withFolders(rt, 'mover', (session) => session.move(fromPath, list, toPath, uidValidity))
     // Erro do servidor: nada sai do store; o `LIST` guardado é relido (as contagens podem ter mudado).
     if (isFailure(result)) {
@@ -1255,7 +1415,7 @@ export function createEmailService(deps: EmailServiceDeps): EmailService {
     }
     let capped = false
     await store.update(accountId, (current) => {
-      let inbox = fromInbox ? keep(current.inbox) : current.inbox
+      let inbox = fromInbox && sameSource ? keep(current.inbox) : current.inbox
       if (toInbox && result.uidValidity === current.uidValidity) {
         const copies = arrived(EMAIL_INBOX_MAILBOX, (uid) => String(uid))
         if (copies) {
@@ -1266,7 +1426,7 @@ export function createEmailService(deps: EmailServiceDeps): EmailService {
       }
       return { ...current, inbox }
     })
-    if (!fromInbox) await store.updateFolder(accountId, fromPath, (current) => (current ? { ...current, messages: keep(current.messages), at: now() } : null))
+    if (!fromInbox && sameSource) await store.updateFolder(accountId, fromPath, (current) => (current ? { ...current, messages: keep(current.messages), at: now() } : null))
     if (!toInbox) {
       const cached = await store.folder(accountId, toPath)
       if (cached) {
@@ -1414,7 +1574,7 @@ export function createEmailService(deps: EmailServiceDeps): EmailService {
     try {
       const raw = await session.source(message.uid)
       if (!Buffer.isBuffer(raw)) return null
-      const parsed = await parse(raw)
+      const parsed = await parse(raw, parseContext(rt))
       if (!rt.removed) await store.setBody(rt.account.id, bodyKey(message), parsed.body)
       return parsed.body
     } catch (error) {
@@ -1428,6 +1588,8 @@ export function createEmailService(deps: EmailServiceDeps): EmailService {
   interface RuleTarget {
     message: EmailMessage
     plan: EmailRulePlan
+    /** O corpo já lido para as condições (sem ele, o "pôr na agenda" lê o guardado). */
+    body?: EmailBody | null
   }
   /** O estado final da mensagem (`message`), se saiu da INBOX e se alguma etapa falhou. */
   interface RuleOutcome {
@@ -1442,6 +1604,7 @@ export function createEmailService(deps: EmailServiceDeps): EmailService {
    * Os planos, na fila da conta: (1) as marcas (`\Seen`, `\Flagged`) na conexão da INBOX; (2) o mover, um `MOVE` por
    * destino (até 500), pelo corpo do mover (`moveQueued`); apagar é mover para a `\Trash` do `LIST` (N3). A pasta que não
    * está no `LIST` (relido uma vez) nem é tentada. POP3: só "marcar lida", no app (N2). O que falha fica onde está.
+   * Contrato 64: (3) "pôr na agenda", depois do mover (o registro guarda o id final), só no convite REQUEST.
    */
   async function executePlans(rt: Runtime, session: ImapSession | null, targets: readonly RuleTarget[], rules: readonly EmailRule[], tally: RuleTally): Promise<RuleOutcome[]> {
     const id = rt.account.id
@@ -1460,6 +1623,14 @@ export function createEmailService(deps: EmailServiceDeps): EmailService {
     }
     const wantsMove = (rule: EmailRule): boolean => rule.actions.moveTo !== null
     const wantsDelete = (rule: EmailRule): boolean => rule.actions.delete
+    const wantsCalendar = (rule: EmailRule): boolean => rule.actions.addToCalendar
+    // O convite de cada mensagem que vai à agenda, lido antes do mover (o corpo fica com a chave da INBOX).
+    const invites: (EmailInvite | null)[] = []
+    for (const target of targets) {
+      if (!target.plan.addToCalendar) invites.push(null)
+      else if (target.body !== undefined) invites.push(target.body?.invite ?? null)
+      else invites.push((await store.body(id, bodyKey(target.message)).catch(() => null))?.invite ?? null)
+    }
 
     const seen = new Set<string>()
     const flagged = new Set<string>()
@@ -1594,6 +1765,25 @@ export function createEmailService(deps: EmailServiceDeps): EmailService {
       }
     }
 
+    // (3) Pôr na agenda: uma por vez, com a mensagem já no estado final. Só cria (C2): CANCEL e REPLY não fazem nada.
+    let selfAddingLogged = false
+    for (const [index, target] of targets.entries()) {
+      const invite = invites[index]
+      const outcome = outcomes[index]
+      if (!target.plan.addToCalendar || !invite || invite.method !== 'REQUEST' || !outcome || rt.removed) continue
+      // R5b: a conta já põe sozinha (só por arquivo antigo ou editado à mão; o `rules-set` recusa).
+      if (inviteSelfAdding(rt.account)) {
+        if (!selfAddingLogged) log(`${tag(rt)}: regras: pôr na agenda ignorado (a conta já põe)`)
+        selfAddingLogged = true
+        continue
+      }
+      const added = deps.invites ? await deps.invites.addFromRule({ account: publicAccount(rt.account), invite, messageId: outcome.message.id }).catch(() => ({ ok: false, error: 'no-calendar' }) as const) : ({ ok: false, error: 'no-calendar' } as const)
+      if (!added.ok) {
+        log(`${tag(rt)}: regras: pôr na agenda não feito (${added.error})`)
+        blame(index, wantsCalendar, added.error)
+      }
+    }
+
     for (const [index, target] of targets.entries()) {
       for (const ruleId of target.plan.ruleIds) {
         const entry = tally.get(ruleId) ?? { hits: 0, error: null }
@@ -1631,7 +1821,7 @@ export function createEmailService(deps: EmailServiceDeps): EmailService {
     const targets: RuleTarget[] = []
     for (const message of messages) {
       const body = wantBody ? await ruleBodyOf(rt, session, message) : null
-      targets.push({ message, plan: planActions(ruleInput(message, body), rules) })
+      targets.push({ message, plan: planActions(ruleInput(message, body), rules), ...(wantBody ? { body } : {}) })
     }
     const acting = targets.filter((target) => target.plan.ruleIds.length > 0)
     const tally: RuleTally = new Map()
@@ -1733,6 +1923,8 @@ export function createEmailService(deps: EmailServiceDeps): EmailService {
   }
 
   const rulesFailure = (error: EmailRulesFailure['error']): EmailRulesFailure => ({ ok: false, error })
+  /** Contrato 64: o Calendário do Mac existe aqui (o helper do 60, sem pedir acesso); sem o serviço de convites, não. */
+  const calendarHere = async (): Promise<boolean> => (deps.invites ? deps.invites.calendarPresent().catch(() => false) : false)
   const ruleHash = (rule: EmailRule): string => createHash('sha256').update(JSON.stringify(rule)).digest('hex')
 
   function sweepRuleTokens(): void {
@@ -1766,8 +1958,8 @@ export function createEmailService(deps: EmailServiceDeps): EmailService {
     sweepRuleTokens()
     const token = randomUUID()
     ruleTokens.set(token, { accountId, ruleId, hash: ruleHash(rule), ids, at: now() })
-    const { markRead, flag, moveTo, delete: remove } = rule.actions
-    return { ok: true, count: ids.length, actions: { markRead, flag, moveTo, delete: remove }, token }
+    const { markRead, flag, moveTo, delete: remove, addToCalendar } = rule.actions
+    return { ok: true, count: ids.length, actions: { markRead, flag, moveTo, delete: remove, addToCalendar }, token }
   }
 
   async function runRule(accountId: string, ruleId: string, token: string): Promise<EmailRuleRunResult> {
@@ -1790,8 +1982,8 @@ export function createEmailService(deps: EmailServiceDeps): EmailService {
       if (rt.removed) return rulesFailure('missing')
       const wanted = new Set(entry.ids)
       const present = (await store.read(accountId)).inbox.filter((message) => wanted.has(message.id))
-      const { markRead, flag, moveTo, delete: remove } = current.actions
-      const plan: EmailRulePlan = { ruleIds: [current.id], markRead, flag, moveTo, delete: remove, silent: false }
+      const { markRead, flag, moveTo, delete: remove, addToCalendar } = current.actions
+      const plan: EmailRulePlan = { ruleIds: [current.id], markRead, flag, moveTo, delete: remove, silent: false, addToCalendar }
       const tally: RuleTally = new Map()
       const outcomes = await executePlans(rt, rt.account.incoming.protocol === 'imap' ? rt.session : null, present.map((message) => ({ message, plan })), [current], tally)
       await saveTally(rt, tally, current.id)
@@ -1923,6 +2115,7 @@ export function createEmailService(deps: EmailServiceDeps): EmailService {
       await store.remove(rt.account.id)
       log(`${tag(rt)}: removida`)
       announce()
+      deps.onAccountRemoved?.(rt.account.id)
       return true
     },
 
@@ -1936,10 +2129,11 @@ export function createEmailService(deps: EmailServiceDeps): EmailService {
     },
 
     async cached() {
-      const list: { status: EmailAccountStatus; inbox: EmailMessage[]; sent: EmailMessage[] }[] = []
+      const list: { status: EmailAccountStatus; inbox: EmailMessage[]; sent: EmailMessage[]; uidValidity: string | null }[] = []
       for (const rt of runtimes.values()) {
         const data = await store.read(rt.account.id).catch(() => null)
-        if (data && !rt.removed) list.push({ status: statusOf(rt), inbox: data.inbox, sent: data.sent })
+        // Contrato 56: o `UIDVALIDITY` da INBOX guardada (o do lote do agente).
+        if (data && !rt.removed) list.push({ status: statusOf(rt), inbox: data.inbox, sent: data.sent, uidValidity: data.uidValidity })
       }
       return list
     },
@@ -1947,6 +2141,23 @@ export function createEmailService(deps: EmailServiceDeps): EmailService {
     async cachedBody(accountId, message) {
       if (!runtimes.has(accountId)) return null
       return store.body(accountId, bodyKey(message)).catch(() => null)
+    },
+
+    async storedMessage(accountId, id) {
+      const rt = runtimes.get(accountId)
+      if (!rt || rt.removed) return null
+      const message = (await findMessage(accountId, id, true).catch(() => null))?.message
+      if (!message) return null
+      return { message, body: await store.body(accountId, bodyKey(message)).catch(() => null) }
+    },
+
+    async inviteSource(accountId, id) {
+      const rt = runtimes.get(accountId)
+      if (!rt || rt.removed) return null
+      const message = (await findMessage(accountId, id, true).catch(() => null))?.message
+      if (!message || (!isInbox(message) && (message.uid === null || message.mailbox === rt.sentMailbox))) return null
+      const invite = (await store.body(accountId, bodyKey(message)).catch(() => null))?.invite
+      return invite ? { account: publicAccount(rt.account), invite, messageId: message.id } : null
     },
 
     async searchServer(accountId, query, limit) {
@@ -1989,10 +2200,30 @@ export function createEmailService(deps: EmailServiceDeps): EmailService {
         const raw = await reader.peek(mailbox, uid)
         if (raw === 'too-big') return { ok: false, error: 'too-big' }
         if (raw === null) return { ok: false, error: 'not-found' }
-        return { ok: true, body: (await parse(raw)).body }
+        return { ok: true, body: (await parse(raw, parseContext(rt))).body }
       } catch (error) {
         log(`${tag(rt)}: leitura no servidor falhou (${failureOf(error)})`)
         return { ok: false, error: 'unavailable' }
+      } finally {
+        await reader?.close().catch(() => undefined)
+      }
+    },
+
+    async locateMessages(accountId, path, uids, messageIds) {
+      if (!folderPathSchema.safeParse(path).success) return folderFailure('invalid')
+      const rt = imapRuntime(accountId)
+      if (isFailure(rt)) return rt
+      // Como os pedidos de pastas: senha recusada não tenta login de novo.
+      if (rt.foldersAuthRefused || (rt.state === 'error' && (rt.error === EMAIL_FAILURES.auth || rt.error === EMAIL_FAILURES.secret))) return folderFailure('unavailable')
+      const pass = secrets.open(rt.account.password)
+      if (pass === null) return folderFailure('unavailable')
+      let reader: Awaited<ReturnType<ImapReaderConnect>> | null = null
+      try {
+        reader = await imapReader(serverConfig(rt, pass, rt.account.incoming))
+        return { ok: true, ...(await reader.locate(path, uids, messageIds)) }
+      } catch (error) {
+        log(`${tag(rt)}: procura no servidor falhou (${failureOf(error)})`)
+        return folderFailure('unavailable')
       } finally {
         await reader?.close().catch(() => undefined)
       }
@@ -2088,6 +2319,78 @@ export function createEmailService(deps: EmailServiceDeps): EmailService {
       if (!parsed.success) return { ok: false, error: 'invalid' }
       const { accountId, to, subject, text } = parsed.data
       return deliver({ accountId, to, cc: parsed.data.cc ?? [], bcc: parsed.data.bcc ?? [], subject, text, inReplyTo: undefined, attachments: [] }, 'mensagem enviada por uma tarefa com permissão')
+    },
+
+    async sendInviteReply(senderId, request) {
+      try {
+        // 1. O token de clique, gasto mesmo com o resto inválido (o mesmo guarda do "Enviar").
+        if (!guard.consume(senderId, ((request ?? {}) as { clickToken?: unknown }).clickToken)) {
+          log('resposta de convite recusada: sem clique')
+          return { ok: false, error: 'click' }
+        }
+        const parsed = inviteReplySchema.safeParse(request)
+        if (!parsed.success) return { ok: false, error: 'invalid' }
+        const { accountId, id, partstat } = parsed.data
+        const rt = runtimes.get(accountId)
+        if (!rt || rt.removed || secrets.open(rt.account.password) === null) return { ok: false, error: 'account' }
+        const found = await findMessage(accountId, id, true)
+        const message = found?.message
+        if (!message || (!isInbox(message) && (message.uid === null || message.mailbox === rt.sentMailbox))) return { ok: false, error: 'not-found' }
+        // E5: só o corpo já aberto (o mesmo `invite` que a tela mostrou); nada é baixado aqui.
+        const body = await store.body(accountId, bodyKey(message)).catch(() => null)
+        if (!body) return { ok: false, error: 'not-found' }
+        const invite = body.invite
+        if (!invite) return { ok: false, error: 'no-invite' }
+        if (invite.method !== 'REQUEST') return { ok: false, error: 'not-request' }
+        const lock = `${accountId}\n${invite.uid}\n${invite.recurrenceId ?? ''}`
+        if (replying.has(lock)) return { ok: false, error: 'busy' }
+        replying.add(lock)
+        try {
+          const reply = buildReply(invite, { partstat, self: [rt.account.address], now: new Date(now()) })
+          if (!reply.ok) return { ok: false, error: reply.error }
+          if (!emailAddressSchema.safeParse(reply.to.address).success) return { ok: false, error: 'no-organizer' }
+          const subject = clip(reply.subject, EMAIL_SUBJECT_MAX)
+          const sent = await deliver(
+            {
+              accountId,
+              to: [reply.to.address],
+              cc: [],
+              bcc: [],
+              subject,
+              text: `${subject}\n`,
+              inReplyTo: headerIdSchema.safeParse(message.messageId).success ? (message.messageId ?? undefined) : undefined,
+              attachments: [],
+              icalEvent: { method: 'REPLY', filename: 'invite.ics', content: reply.ics },
+              record: false,
+            },
+            'resposta de convite enviada com o clique da pessoa',
+          )
+          if (!sent.ok) return sent
+          const event: InviteRepliedEvent = {
+            accountId,
+            messageId: message.id,
+            mailbox: message.mailbox,
+            uid: invite.uid,
+            recurrenceId: invite.recurrenceId,
+            sequence: invite.sequence,
+            dtstamp: invite.dtstamp,
+            partstat,
+            respondedAt: now(),
+            replyMessageId: sent.messageId,
+          }
+          try {
+            deps.onInviteReplied?.(event)
+          } catch {
+            log('resposta de convite: aviso falhou')
+          }
+          return { ok: true, messageId: sent.messageId, reply: event }
+        } finally {
+          replying.delete(lock)
+        }
+      } catch (error) {
+        log(`resposta de convite falhou (${failureOf(error)})`)
+        return { ok: false, error: 'failed' }
+      }
     },
 
     forgetSender(senderId) {
@@ -2215,7 +2518,10 @@ export function createEmailService(deps: EmailServiceDeps): EmailService {
         return rulesFailure('unavailable')
       }
       const saved = await store.ruleState(accountId).catch((): Record<string, EmailRuleState> => ({}))
-      return { ok: true, rules, state: Object.fromEntries(rules.map((rule) => [rule.id, saved[rule.id] ?? { ...EMPTY_EMAIL_RULE_STATE }])) }
+      const rt = runtimes.get(accountId)
+      // Contrato 64 (CA1): a conta que já põe sozinha (R5b) e o Calendário do Mac aqui (sem pedir acesso, D9).
+      const invite = { autoAdds: rt ? inviteSelfAdding(rt.account) : false, mac: await calendarHere() }
+      return { ok: true, rules, state: Object.fromEntries(rules.map((rule) => [rule.id, saved[rule.id] ?? { ...EMPTY_EMAIL_RULE_STATE }])), invite }
     },
 
     async rulesSet(request) {
@@ -2237,6 +2543,12 @@ export function createEmailService(deps: EmailServiceDeps): EmailService {
         const check = await checkRuleTargets(rt, changedRules(rules, before))
         if (check.missing) return rulesFailure('folder-missing')
         noTrash = check.noTrash
+      }
+      // Contrato 64 (CA7): "Pôr na agenda" (ligada ou não) não grava na conta que já põe sozinha nem fora do Mac. A
+      // permissão e a agenda padrão não se conferem aqui: o erro aparece na execução.
+      if (rules.some((rule) => rule.actions.addToCalendar)) {
+        if (inviteSelfAdding(rt.account)) return rulesFailure('auto-calendar')
+        if (!(await calendarHere())) return rulesFailure('no-mac')
       }
       let saved: boolean
       try {

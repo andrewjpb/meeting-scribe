@@ -111,9 +111,12 @@ export function SidebarStack({ level, root, onBack, focusRef }: { level: Sidebar
 /** Nível Email: o cabeçalho-voltar parado em cima e as contas com as pastas, que rolam sozinhas. */
 function EmailLevel({ onBack }: { onBack: () => void }) {
   const empty = useEmail((state) => state.accounts?.length === 0)
+  // Conta quantas árvores de pasta já chegaram: antes delas só existem Caixa de Entrada e Enviados.
+  const treesLoaded = useEmail((state) => Object.keys(state.trees).length)
   const ref = useRef<HTMLDivElement>(null)
 
-  // A pasta aberta à vista ao entrar (sem `scrollIntoView`, que rolaria a coluna cortada durante o deslize).
+  // A pasta aberta à vista ao entrar e de novo quando a árvore da conta chega, porque uma pasta `p~...`
+  // só aparece depois dela (sem `scrollIntoView`, que rolaria a coluna cortada durante o deslize).
   useLayoutEffect(() => {
     const list = ref.current?.querySelector<HTMLElement>('[data-email-nav]')
     const active = list?.querySelector<HTMLElement>('[aria-current="page"]')
@@ -121,7 +124,7 @@ function EmailLevel({ onBack }: { onBack: () => void }) {
     const box = list.getBoundingClientRect()
     const item = active.getBoundingClientRect()
     if (item.top < box.top || item.bottom > box.bottom) list.scrollTop += item.top - box.top - (box.height - item.height) / 2
-  }, [])
+  }, [treesLoaded])
 
   return (
     <div ref={ref} className="flex min-h-0 flex-1 flex-col">

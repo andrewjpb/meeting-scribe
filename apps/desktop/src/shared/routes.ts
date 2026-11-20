@@ -41,14 +41,52 @@ export const EMAIL_FOLDER_SLUGS = { inbox: 'entrada', sent: 'enviados' } as cons
  */
 export const EMAIL_ROOT_PATH = '/email'
 
-/** Caminho da pasta de uma conta: `/email/<id>/entrada`. */
-export function emailPath(accountId: string, folder: 'inbox' | 'sent' = 'inbox'): string {
-  return `/email/${encodeURIComponent(accountId)}/${EMAIL_FOLDER_SLUGS[folder]}`
+/**
+ * Contrato 55: as outras pastas vão num segmento com este prefixo e o path codificado (`p~Clientes%2FABF`), que nunca
+ * colide com os dois slugs acima (nem com uma pasta chamada "entrada").
+ */
+export const EMAIL_PATH_SLUG_PREFIX = 'p~'
+
+/** A pasta da tela: as duas fixas, ou o path IMAP de qualquer outra (contrato 55). */
+export type EmailRouteFolder = 'inbox' | 'sent' | { path: string }
+
+/** Caminho da pasta de uma conta: `/email/<id>/entrada`, `/email/<id>/enviados` ou `/email/<id>/p~<path>`. */
+export function emailPath(accountId: string, folder: EmailRouteFolder = 'inbox'): string {
+  const slug = typeof folder === 'string' ? EMAIL_FOLDER_SLUGS[folder] : `${EMAIL_PATH_SLUG_PREFIX}${encodeURIComponent(folder.path)}`
+  return `/email/${encodeURIComponent(accountId)}/${slug}`
 }
 
-/** `state` da navegação para o email que abre uma mensagem (o clique na notificação, contrato 43). */
+/**
+ * O inverso de `emailPath` para o segmento da pasta, ainda codificado (como está no caminho: a tela lê o `pathname`, não
+ * o parâmetro já decodificado pelo roteador, para um `%` do nome não ser decodificado duas vezes); `null` fora do formato.
+ */
+export function emailFolderFromSlug(segment: string | undefined): EmailRouteFolder | null {
+  if (segment === EMAIL_FOLDER_SLUGS.inbox) return 'inbox'
+  if (segment === EMAIL_FOLDER_SLUGS.sent) return 'sent'
+  if (!segment?.startsWith(EMAIL_PATH_SLUG_PREFIX)) return null
+  try {
+    const path = decodeURIComponent(segment.slice(EMAIL_PATH_SLUG_PREFIX.length))
+    return path ? { path } : null
+  } catch {
+    return null
+  }
+}
+
+/** O segmento da pasta (cru) num caminho da tela de email: `/email/<conta>/<pasta>`. */
+export function emailFolderSegment(pathname: string): string | undefined {
+  return pathname.split('/')[3]
+}
+
+/**
+ * `state` da navegação para o email que abre uma mensagem (o clique na notificação, contrato 43). Contrato 55: `mailbox`
+ * é a pasta onde ela está (uma regra a moveu); `movedByRule` sem `messageId` abre a pasta com a nota de que ela foi movida.
+ */
 export interface EmailNavigationState {
   messageId?: string
+  mailbox?: string
+  movedByRule?: boolean
+  /** Contrato 55 (CA1): a pasta pedida não existe mais na conta; a Caixa de Entrada abre com a nota. */
+  missingFolder?: string
 }
 
 export function meetingPath(id: string): string {
@@ -62,9 +100,9 @@ export function isRouteId(value: unknown): value is RouteId {
 /**
  * Abas de Configurações (contrato 18), na ordem da tela. A aba aberta fica na URL: `/configuracoes/:aba`. Contrato 31:
  * "Plugins" entra antes de "Sobre", que continua a última. Contrato 21: "Conexões" (os servidores MCP) depois de
- * "Plugins".
+ * "Plugins". Contrato 55: "Email" logo depois de "Contas" (⌘6); Plugins, Conexões e Sobre passam a ⌘7, ⌘8 e ⌘9.
  */
-export const SETTINGS_TABS = ['geral', 'gravacao', 'claude', 'arquivos', 'contas', 'plugins', 'conexoes', 'sobre'] as const
+export const SETTINGS_TABS = ['geral', 'gravacao', 'claude', 'arquivos', 'contas', 'email', 'plugins', 'conexoes', 'sobre'] as const
 export type SettingsTab = (typeof SETTINGS_TABS)[number]
 export const DEFAULT_SETTINGS_TAB: SettingsTab = 'geral'
 

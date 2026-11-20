@@ -2,6 +2,7 @@
 // deslize entre os níveis, o último email aberto na sessão e o número do item "Email" na raiz.
 import { beforeEach, describe, expect, it } from 'vitest'
 import { EMAIL_INBOX_MAILBOX, EMAIL_SENT_MAILBOX, type EmailMessage } from '../../src/shared/email'
+import { emailFolderFromSlug, emailFolderSegment, emailPath } from '../../src/shared/routes'
 import { activeNavId, lastEmailPath, levelFor, rememberEmailPath, resetSidebarMemory, sectionOf, SIDEBAR_SLIDE_FALLBACK_MS, SIDEBAR_SLIDE_MS, transitionOf } from '../../src/renderer/src/app/sidebarLevels'
 import { totalUnread } from '../../src/renderer/src/features/email/format'
 
@@ -95,6 +96,14 @@ describe('último email aberto na sessão (contrato 65, CA6)', () => {
     rememberEmailPath('/email')
     rememberEmailPath('/reunioes')
     expect(lastEmailPath(['a', 'b'])).toBe('/email/b/enviados')
+  })
+
+  it('contrato 55: lembra também as outras pastas (`emailPath` com o path)', () => {
+    const path = emailPath('b', { path: 'Clientes/ABF 100%' })
+    rememberEmailPath(path)
+    expect(lastEmailPath(['a', 'b'])).toBe(path)
+    expect(emailFolderFromSlug(emailFolderSegment(lastEmailPath(['a', 'b'])))).toEqual({ path: 'Clientes/ABF 100%' })
+    expect(lastEmailPath(['a'])).toBe('/email')
   })
 })
 

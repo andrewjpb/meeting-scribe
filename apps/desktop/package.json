@@ -21,6 +21,7 @@
   "dependencies": {
     "@agentclientprotocol/claude-agent-acp": "0.107.0",
     "@agentclientprotocol/sdk": "2.7.0",
+    "ical.js": "2.2.1",
     "imapflow": "2.12.1",
     "lucide-react": "1.72.0",
     "mailparser": "3.14.5",

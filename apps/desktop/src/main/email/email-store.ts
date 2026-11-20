@@ -32,6 +32,8 @@ import {
   type EmailMessage,
 } from '../../shared/email'
 import { EMAIL_RULE_ERROR_CODES, type EmailRuleState } from '../../shared/email-rules'
+import { CALENDAR_ATTENDEES_MAX, CALENDAR_TEXT_MAX } from '../../shared/calendar'
+import { INVITE_DESCRIPTION_MAX, INVITE_EXCEPTIONS_MAX, INVITE_EXDATES_MAX, INVITE_ICS_MAX_BYTES, type EmailInvite } from '../../shared/invite'
 
 export const EMAIL_DIR = 'email'
 /** Contrato 52: pastas abertas guardadas por conta (a usada há mais tempo sai). */
@@ -97,11 +99,78 @@ const ruleStateSchema = z.object({
 })
 /** Contrato 53: um temporário de gravação mais velho que isto sobrou de uma gravação que não terminou. */
 const STALE_TEMP_MS = 10 * 60_000
-const bodySchema = z.object({
+/**
+ * Contrato 61 (CA2): o `EmailInvite` do contrato 59, no formato exato. O que o 59 não corta (local, endereços, a regra da
+ * recorrência) sai do `.ics`, então não passa do teto dele.
+ */
+const inviteText = z.string().max(INVITE_ICS_MAX_BYTES)
+const inviteWeekday = z.enum(['MO', 'TU', 'WE', 'TH', 'FR', 'SA', 'SU'])
+const invitePersonSchema = z.object({ address: inviteText, name: inviteText.nullable() }).strict()
+const inviteAttendeeSchema = invitePersonSchema.extend({ partstat: z.enum(['NEEDS-ACTION', 'ACCEPTED', 'TENTATIVE', 'DECLINED', 'DELEGATED']) }).strict()
+const inviteNumbers = z.array(z.number().int()).max(INVITE_ICS_MAX_BYTES)
+export const emailInviteSchema = z
+  .object({
+    method: z.enum(['REQUEST', 'CANCEL', 'REPLY']),
+    uid: inviteText.min(1),
+    sequence: z.number().int().nonnegative(),
+    dtstamp: inviteText.nullable(),
+    recurrenceId: inviteText.nullable(),
+    status: z.enum(['CONFIRMED', 'TENTATIVE', 'CANCELLED']).nullable(),
+    title: z.string().max(CALENDAR_TEXT_MAX),
+    allDay: z.boolean(),
+    start: inviteText,
+    end: inviteText,
+    timeZone: inviteText.nullable(),
+    originalTzid: inviteText.nullable(),
+    location: inviteText.nullable(),
+    description: z.string().max(INVITE_DESCRIPTION_MAX).nullable(),
+    joinUrl: inviteText.nullable(),
+    organizer: invitePersonSchema.nullable(),
+    attendees: z.array(inviteAttendeeSchema).max(CALENDAR_ATTENDEES_MAX),
+    attendeeCount: z.number().int().nonnegative(),
+    self: inviteAttendeeSchema.nullable(),
+    recurrence: z
+      .object({
+        rule: z
+          .object({
+            freq: z.enum(['SECONDLY', 'MINUTELY', 'HOURLY', 'DAILY', 'WEEKLY', 'MONTHLY', 'YEARLY']),
+            interval: z.number().int(),
+            count: z.number().int().nullable(),
+            until: inviteText.nullable(),
+            byDay: z.array(z.object({ day: inviteWeekday, pos: z.number().int().nullable() }).strict()).max(INVITE_ICS_MAX_BYTES),
+            byMonthDay: inviteNumbers,
+            byMonth: inviteNumbers,
+            bySetPos: inviteNumbers,
+            weekStart: inviteWeekday.nullable(),
+          })
+          .strict()
+          .nullable(),
+        exdates: z.array(inviteText).max(INVITE_EXDATES_MAX),
+        text: inviteText,
+        storable: z.boolean(),
+        block: z.enum(['sub-daily', 'byhour', 'byminute', 'bysecond', 'byweekno', 'byyearday', 'rdate', 'exrule', 'multiple-rrule', 'invalid']).nullable(),
+      })
+      .strict()
+      .nullable(),
+    exceptions: z.array(z.object({ recurrenceId: inviteText, start: inviteText, end: inviteText, cancelled: z.boolean() }).strict()).max(INVITE_EXCEPTIONS_MAX),
+    warnings: z.array(z.enum(['unknown-tzid', 'floating-time', 'attendees-clipped', 'description-clipped', 'other-uids-ignored', 'exdates-clipped', 'exceptions-clipped'])).max(20),
+    source: inviteText,
+  })
+  // Campo que falte aqui não compila; campo a mais recusaria o convite do 59 (o teste do CA2 lê um de verdade).
+  .strict() satisfies z.ZodType<EmailInvite>
+
+const bodyBaseSchema = z.object({
   text: z.string().nullable(),
   html: z.string().nullable(),
   attachments: z.array(z.object({ filename: z.string().max(1000).nullable(), contentType: z.string().max(300), size: z.number().int().nonnegative() })).max(500),
 })
+/**
+ * O corpo como é lido. Contrato 61: `invite` ausente continua ausente (corpo de antes do 61); fora do formato vira
+ * `null` sem perder o corpo.
+ */
+const bodySchema = bodyBaseSchema.extend({ invite: emailInviteSchema.nullable().exactOptional().catch(null) })
+/** O corpo como é gravado: `invite` fora do formato lança, como o resto do corpo. */
+const bodyWriteSchema = bodyBaseSchema.extend({ invite: emailInviteSchema.nullable().exactOptional() })
 
 export type EmailAccountData = z.infer<typeof dataSchema>
 
@@ -260,7 +329,7 @@ export function createEmailStore(root: string, now: () => number = Date.now): Em
     // Os corpos entram na mesma fila da conta: uma gravação pedida antes do `remove` termina antes dele.
     setBody: (accountId, messageId, body) =>
       serial(accountId, async () => {
-        const content = `${JSON.stringify(bodySchema.parse(body))}\n`
+        const content = `${JSON.stringify(bodyWriteSchema.parse(body))}\n`
         await mkdir(bodiesDir(accountId), { recursive: true, mode: 0o700 })
         await writeAtomic(bodyFile(accountId, messageId), content)
       }),

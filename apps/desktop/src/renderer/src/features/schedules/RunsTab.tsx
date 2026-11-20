@@ -6,7 +6,7 @@
 // hora, Message-ID ou o motivo).
 import { ArrowLeft, Ban, RotateCcw, Send } from 'lucide-react'
 import { useEffect, useState } from 'react'
-import { AGENT_MODEL_LABELS, durationLabel, RUN_STATUS_LABELS, RUN_STATUSES, RUN_TRIGGER_LABELS, type AutomationRun, type AutomationRunListItem, type RunStatus } from '@shared/automations'
+import { AGENT_MODEL_LABELS, durationLabel, RUN_STATUS_LABELS, RUN_STATUSES, RUN_TRIGGER_LABELS, type AutomationRun, type AutomationRunListItem, type RunOrganizeRefused as RunOrganizeRefusedItem, type RunStatus } from '@shared/automations'
 import type { RunEmail } from '@shared/task-email'
 import { Button } from '../../design/Button'
 import { Select } from '../../design/Field'
@@ -183,6 +183,7 @@ function RunDetail({ runId, meetings }: { runId: string; meetings: ChatMeetings 
         </p>
       </header>
       {shown.emails && shown.emails.length > 0 && <RunEmails emails={shown.emails} />}
+      {shown.organizeRefused && shown.organizeRefused.length > 0 && <RunOrganizeRefused items={shown.organizeRefused} />}
       {shown.status === 'skipped' ? (
         <p data-run-error className="text-13 text-text-muted">
           {shown.error ?? 'Pulada.'}
@@ -197,6 +198,34 @@ function RunDetail({ runId, meetings }: { runId: string; meetings: ChatMeetings 
         </section>
       )}
     </div>
+  )
+}
+
+/**
+ * Contrato 56 (D19, quadro 17): o modelo pediu para organizar o email numa tarefa agendada. Nada se moveu (a execução não
+ * tem essas ferramentas): sem cartão e sem botão, só a recusa e para onde ir.
+ */
+function RunOrganizeRefused({ items }: { items: readonly RunOrganizeRefusedItem[] }) {
+  return (
+    <section aria-label="Organizar email nesta execução" data-run-organize className="flex flex-col gap-3 rounded-[var(--radius-panel)] border border-line-strong bg-bg-raised p-4">
+      <h3 className="text-13 font-medium text-text">
+        Organizar email nesta execução{' '}
+        <span className="font-normal text-text-muted tabular">· {items.length === 1 ? '1 pedido recusado' : `${items.length} pedidos recusados`}</span>
+      </h3>
+      <ol className="flex flex-col gap-3">
+        {items.map((item, index) => (
+          <li key={`${item.at}-${index}`} data-run-organize-refused className="flex items-start gap-2 text-13">
+            <Icon icon={Ban} size={14} className="mt-0.5 shrink-0 text-rec" />
+            <div className="flex min-w-0 flex-col gap-0.5">
+              <p className="text-text">
+                <span className="font-medium text-rec">Recusado</span> · {item.request}
+              </p>
+              <p className="text-12 text-text-muted">Tarefa agendada não move, não cria pasta e não apaga email. Para organizar, peça no Assistente.</p>
+            </div>
+          </li>
+        ))}
+      </ol>
+    </section>
   )
 }
 

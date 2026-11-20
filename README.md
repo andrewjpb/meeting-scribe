@@ -86,7 +86,7 @@ A tela que antes se chamava "Perguntar".
 - **Os conectores só funcionam com o Claude logado pela assinatura.** Com chave de API ou outro provedor, a seção mostra só esse aviso.
 
 ### Do seu jeito
-- **Configurações em abas** (Geral, Gravação, Claude, Arquivos, Contas, Plugins, Conexões, Sobre) com busca (⌘F). As abas ficam na barra lateral, e ⌘1 a ⌘8 trocam de aba com Configurações aberta.
+- **Configurações em abas** (Geral, Gravação, Claude, Arquivos, Contas, Email, Plugins, Conexões, Sobre) com busca (⌘F). As abas ficam na barra lateral, e ⌘1 a ⌘9 trocam de aba com Configurações aberta.
 - **Barra lateral em dois níveis**, como os Ajustes do iOS: na raiz, Reuniões, Assistente, Email (com o total de não lidas), Automações, WhatsApp e Configurações. Email, Configurações e Assistente têm nível próprio, que entra deslizando com as contas e pastas, as abas ou as conversas. O cabeçalho no topo do nível volta ao menu sem trocar a tela aberta.
 - **Sua marca**: troque o nome e o logo do app.
 - Tema claro, escuro ou do sistema.

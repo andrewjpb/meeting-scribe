@@ -81,7 +81,7 @@ export function safeJoinUrl(value: unknown): string | null {
 }
 
 /** Links de chamada que o app reconhece no local ou na descrição do evento. */
-const JOIN_URL_PATTERN = /https:\/\/(?:meet\.google\.com\/[\w-]+|teams\.microsoft\.com\/l\/meetup-join\/[^\s<>"']+|teams\.live\.com\/meet\/[^\s<>"']+|(?:[\w-]+\.)*zoom\.us\/(?:j|my|w)\/[^\s<>"']+)/i
+const JOIN_URL_PATTERN = /https:\/\/(?:meet\.google\.com\/[\w-]+|teams\.microsoft\.com\/l\/meetup-join\/[^\s<>"']+|teams\.microsoft\.com\/meet\/\d+(?:\?p=[\w-]+)?|teams\.live\.com\/meet\/[^\s<>"']+|(?:[\w-]+\.)*zoom\.us\/(?:j|my|w)\/[^\s<>"']+)/i
 
 /** Primeiro link de Meet, Teams ou Zoom nos textos (local, descrição). */
 export function findJoinUrl(...texts: readonly (string | null | undefined)[]): string | null {

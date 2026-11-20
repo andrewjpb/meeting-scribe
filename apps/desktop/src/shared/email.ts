@@ -2,6 +2,7 @@
 // enviar, direto do main (sem serviço à parte). A senha só existe em claro no main, na hora de conectar: no disco vai
 // cifrada pelo `safeStorage`, e nenhum canal a devolve. O envio sai só do clique da pessoa em "Enviar", com o token
 // de clique de uso único (`EmailSendRequest.clickToken`), como no WhatsApp.
+import type { EmailInvite, InviteReplyPartstat } from './invite'
 
 export const EMAIL_PROTOCOLS = ['imap', 'pop3'] as const
 export type EmailProtocol = (typeof EMAIL_PROTOCOLS)[number]
@@ -203,6 +204,11 @@ export interface EmailBody {
   text: string | null
   html: string | null
   attachments: EmailAttachmentInfo[]
+  /**
+   * Contrato 61 (convites-agenda, D4): o convite lido no mesmo parse do corpo. Ausente: corpo guardado antes do 61 (é
+   * relido uma vez, N12); `null`: já lido, sem convite (ou ilegível).
+   */
+  invite?: EmailInvite | null
 }
 
 export type EmailBodyResult = { ok: true; body: EmailBody } | { ok: false; error: 'not-found' | 'too-big' | 'unavailable' }
@@ -255,6 +261,44 @@ export const EMAIL_REMOTE_IMAGE_MAX_BYTES = 5 * 1024 * 1024
  */
 export type EmailSendError = 'click' | 'invalid' | 'account' | 'auth' | 'connection' | 'rejected' | 'failed'
 export type EmailSendResult = { ok: true; messageId: string } | { ok: false; error: EmailSendError }
+
+/**
+ * Contrato 61: "Aceitar", "Talvez" e "Recusar" de um convite. O REPLY vai só ao organizador, só com o token de clique do
+ * email (`scribe:email-click`), e não fica em Enviados. `id` é o `EmailMessage.id` da mensagem do convite, cujo corpo já
+ * foi aberto (a resposta sai do `invite` guardado nele).
+ */
+export interface InviteReplySendRequest {
+  accountId: string
+  id: string
+  partstat: InviteReplyPartstat
+  clickToken: string
+}
+
+/**
+ * `no-invite`: o corpo guardado não tem convite; `not-request`: CANCEL ou REPLY (não se respondem); `busy`: o mesmo
+ * convite já está sendo respondido; `no-organizer`, `not-invited` (N5) e `malformed`: do `buildReply`; o resto, como no
+ * `EmailSendError`.
+ */
+export type InviteReplySendError = 'click' | 'invalid' | 'account' | 'not-found' | 'no-invite' | 'not-request' | 'busy' | 'no-organizer' | 'not-invited' | 'malformed' | 'auth' | 'connection' | 'rejected' | 'failed'
+
+/** Contrato 61 (CA12): o REPLY saiu. JSON puro; `uid`, `recurrenceId`, `sequence` e `dtstamp` são os do convite respondido. */
+export interface InviteRepliedEvent {
+  accountId: string
+  /** `EmailMessage.id` da mensagem do convite. */
+  messageId: string
+  mailbox: string
+  uid: string
+  recurrenceId: string | null
+  sequence: number
+  dtstamp: string | null
+  partstat: InviteReplyPartstat
+  /** Hora do envio. */
+  respondedAt: number
+  /** Message-ID do REPLY, com `<` e `>`. */
+  replyMessageId: string
+}
+
+export type InviteReplySendResult = { ok: true; messageId: string; reply: InviteRepliedEvent } | { ok: false; error: InviteReplySendError }
 
 /** Contrato 43 (CA8 e CA9): um anexo recebido, pela posição dele em `EmailBody.attachments`. */
 export interface EmailAttachmentRequest {

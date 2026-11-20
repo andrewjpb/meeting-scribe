@@ -1,10 +1,10 @@
 # Contrato 55 — Telas do email: árvore de pastas, mover, assinatura, painel "Organizando" e Configurações › Email
+
+> Integrado à barra lateral em pilha em 19/11/2026: a árvore de pastas renderiza no nível Email (ver docs/specs/_archive/sidebar-pilha/), os itens principais não ficam acima dela e a aba Email é uma linha do nível Configurações.
+
+> Aprovado pelo Andrew em 19/11/2026: \Archive na ordem alfabética e protegida, \Important escondida; pastas recentes do menu "Mais" gravadas no settings (`emailRecentFolders`); a frase da senha na seção Contas fica "cifrada neste Mac"; demais decisões como propostas.
 Feature: email-organizacao · Wave: 4 · Depende de: 52, 53, 54, 56 · Spec: `docs/specs/email-organizacao/spec.md` (R1, R2, R3, R5, R6, R7, R8, R11, R12, N1, N2, N3, N6) · Plan: `docs/specs/email-organizacao/plan.md`
 
-> RASCUNHO (19/11/2026). O mockup e as decisões D1–D12 estão aprovados (abaixo). Falta o ok do Andrew **no texto
-> deste contrato** e nos pontos marcados **[decidir]**. Os nomes de eventos e canais do painel "Organizando" seguem o
-> rascunho do contrato 56 (`56-email-agente-organiza.md`, também de 19/11/2026); o que ainda depende dele está marcado
-> **[alinhar com o 56]**. Se o 56 mudar esses nomes na aprovação, atualizar aqui antes de ir ao implementador.
 
 Pedido do Andrew (19/11/2026 13:00): "organizar o email como no Outlook desktop". Este contrato é **só o renderer**
 (mais o mínimo no main para o que é da tela: duas chaves novas no settings e a navegação a partir do aviso). Os

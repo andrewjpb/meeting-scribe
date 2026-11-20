@@ -1,5 +1,5 @@
 // Abas de Configurações (contrato 18; desde o contrato 66, linhas do nível Configurações da barra lateral, não mais uma
-// fileira no topo da tela): rótulos, a aba lembrada na sessão, os atalhos ⌘1…⌘8 e a busca, que filtra as linhas de
+// fileira no topo da tela): rótulos, a aba lembrada na sessão, os atalhos ⌘1…⌘9 e a busca, que filtra as linhas de
 // todas as abas pelo nome e pela descrição, sem acento nem maiúscula.
 import { DEFAULT_SETTINGS_TAB, SETTINGS_TABS, type SettingsTab } from '@shared/routes'
 import type { SettingsEntry } from '@shared/settings-index'
@@ -13,6 +13,7 @@ export const SETTINGS_TAB_LABELS: Record<SettingsTab, string> = {
   claude: 'Claude',
   arquivos: 'Arquivos',
   contas: 'Contas',
+  email: 'Email',
   plugins: 'Plugins',
   conexoes: 'Conexões',
   sobre: 'Sobre',
@@ -32,7 +33,7 @@ export function rememberSettingsTab(tab: SettingsTab): void {
   rememberedTab = tab
 }
 
-/** ⌘1…⌘8 abrem a aba N; qualquer outra tecla (ou modificador a mais) não é atalho. */
+/** ⌘1…⌘9 abrem a aba N (contrato 55: ⌘6 Email, ⌘9 Sobre); qualquer outra tecla (ou modificador a mais) não é atalho. */
 export function tabForShortcut(event: Pick<KeyboardEvent, 'key' | 'metaKey' | 'ctrlKey' | 'altKey' | 'shiftKey'>): SettingsTab | null {
   if (!event.metaKey || event.ctrlKey || event.altKey || event.shiftKey || !/^[1-9]$/.test(event.key)) return null
   return SETTINGS_TABS[Number(event.key) - 1] ?? null
@@ -66,7 +67,7 @@ export function searchSettings(entries: readonly SettingsEntry[], query: string)
   if (!needle) return []
   return SETTINGS_TABS.flatMap((tab) => {
     const indexes = entries.flatMap((entry, index) =>
-      entry.tab === tab && (normalizeSearch(entry.name).includes(needle) || normalizeSearch(entry.description).includes(needle)) ? [index] : [],
+      entry.tab === tab && [entry.name, entry.description, entry.keywords ?? ''].some((text) => normalizeSearch(text).includes(needle)) ? [index] : [],
     )
     return indexes.length ? [{ tab, label: SETTINGS_TAB_LABELS[tab], indexes }] : []
   })
