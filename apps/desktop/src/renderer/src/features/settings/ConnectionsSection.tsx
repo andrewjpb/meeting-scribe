@@ -58,9 +58,12 @@ import { Segmented } from '../../design/Segmented'
 import { SettingRow } from '../../design/SettingRow'
 import { Switch } from '../../design/Switch'
 
+const SMALL_BASE =
+  'no-drag inline-flex h-8 items-center gap-1.5 rounded-[var(--radius-control)] border px-2.5 text-12 font-medium transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] disabled:pointer-events-none disabled:opacity-50'
 /** Botão pequeno das ações de cada servidor (o discreto do chat, com o fio). */
-const SMALL =
-  'no-drag inline-flex h-8 items-center gap-1.5 rounded-[var(--radius-control)] border border-line-strong bg-bg-raised px-2.5 text-12 font-medium text-title transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-bg-sunken disabled:pointer-events-none disabled:opacity-50'
+const SMALL = `${SMALL_BASE} border-line-strong bg-bg-raised text-title hover:bg-bg-sunken`
+/** O mesmo botão marcado (chip ligado de "Usar em"): texto na cor do fundo sobre o título, sem as cores do discreto brigando. */
+const SMALL_ON = `${SMALL_BASE} border-title bg-title text-bg`
 const SMALL_DANGER =
   'no-drag inline-flex h-8 items-center gap-1.5 rounded-[var(--radius-control)] px-2.5 text-12 font-medium text-rec transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-bg-sunken disabled:pointer-events-none disabled:opacity-50'
 const SMALL_SELECT = 'no-drag h-8 rounded-[var(--radius-control)] border border-line-strong bg-bg-raised px-1.5 text-12 text-text'
@@ -92,7 +95,7 @@ function UsesPicker({ uses, onChange, disabled = false }: { uses: readonly McpUs
             aria-pressed={on}
             disabled={disabled}
             onClick={() => onChange(on ? uses.filter((item) => item !== use) : [...uses, use])}
-            className={`${SMALL} ${on ? 'border-title bg-title text-bg hover:bg-title' : ''}`}
+            className={on ? SMALL_ON : SMALL}
           >
             {MCP_USE_LABELS[use]}
           </button>

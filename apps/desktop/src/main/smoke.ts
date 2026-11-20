@@ -5422,6 +5422,8 @@ async function whatsappChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => 
   const connected = await waitFor(contents, `${WA_STATE} === 'connected' && !document.querySelector('[data-whatsapp-pairing]')`, 8000)
   const connectedLine = await text(contents, '[data-whatsapp-line]')
   const pairAgain = await evaluate<unknown>(contents, `window.__scribeApi.invoke('scribe:whatsapp-pair', {})`)
+  // O print é do bloco do WhatsApp, não do topo de Contas: rola até ele como a âncora faria (o bloco não tem âncora).
+  await evaluate(contents, `document.querySelector('[data-settings-panel="contas"] section[aria-label="WhatsApp"]')?.scrollIntoView({ block: 'start' }), true`)
   await settle(contents)
   shots.push(await capture(win, ctx.outDir, 'configuracoes-whatsapp-light'))
   checks['paired'] = {
@@ -9131,6 +9133,11 @@ async function emailChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => voi
     ok: errorLine && errorInSidebar && confirmShown && removed,
     detail: `estado com problema na lista=${errorLine} e na barra=${errorInSidebar}; confirmação=${confirmShown}; removida=${removed}`,
   }
+  // O print escuro da raiz, como o claro, com uma não lida: a mensagem em HTML volta a não lida pelo botão da leitura.
+  await openEmailFolder(contents, 'inbox', 3)
+  await clickEmailRow(contents, EMAIL_HTML_SUBJECT)
+  await clickSelector(contents, '[data-action="email-toggle-seen"]')
+  const unreadAgain = await waitFor(contents, `${EMAIL_UNREAD} === '1'`, 8000)
   win.destroy()
 
   // Escuro: a lista, a leitura e o composer.
@@ -9139,7 +9146,8 @@ async function emailChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => voi
   await loadAndWait(dark)
   const darkContents = dark.webContents
   // Contrato 65: a raiz e o nível Email com uma conta só (D1), no escuro.
-  await waitFor(darkContents, `${routeIs('reunioes')} && document.querySelector('${SIDEBAR_ROOT} [data-nav="email"]')`, 8000)
+  // As contas carregam depois da janela: o print espera o número de não lidas do Email.
+  const darkBadge = await waitFor(darkContents, `${routeIs('reunioes')} && document.querySelector('${SIDEBAR_ROOT} [data-nav="email"]') && ${NAV_BADGE} === '1'`, 8000)
   await settle(darkContents)
   shots.push(await capture(dark, ctx.outDir, 'sidebar-raiz-dark'))
   const darkList = await openEmailFolder(darkContents, 'inbox', 3)
@@ -9161,7 +9169,10 @@ async function emailChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => voi
   await clickSelector(darkContents, '[data-action="email-discard"]')
   await clickSelector(darkContents, '[data-action="email-discard-confirm"]')
   const darkTheme = await evaluate<string>(darkContents, 'document.documentElement.dataset.theme ?? ""')
-  checks['dark'] = { ok: darkList && darkSingle && darkFirst && darkReading && darkComposer && darkTheme === 'dark', detail: `lista=${darkList} (${darkFirst}), conta única sem seta=${darkSingle}, leitura=${darkReading}, composer=${darkComposer}, tema=${darkTheme}` }
+  checks['dark'] = {
+    ok: unreadAgain && darkBadge && darkList && darkSingle && darkFirst && darkReading && darkComposer && darkTheme === 'dark',
+    detail: `raiz com 1 não lida (marcada de novo=${unreadAgain})=${darkBadge}; lista=${darkList} (${darkFirst}), conta única sem seta=${darkSingle}, leitura=${darkReading}, composer=${darkComposer}, tema=${darkTheme}`,
+  }
   dark.destroy()
 }
 

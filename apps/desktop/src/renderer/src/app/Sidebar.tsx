@@ -101,8 +101,12 @@ export function Sidebar() {
         </p>
       </div>
       <SidebarStack level={level} root={root} onBack={back} focusRef={focusRef} />
-      {/* Rodapé: "Bloquear" (contrato 22) e o aviso de versão nova (quando há) logo acima das permissões. */}
-      <div className="mt-auto flex flex-col">
+      {/*
+       * Rodapé: "Bloquear" (contrato 22) e o aviso de versão nova (quando há) logo acima das permissões. O fio de cima
+       * separa a lista do nível (conversas, contas) quando ela é longa; a coluna em pilha ocupa o resto, então o rodapé
+       * fica no pé da barra em todos os níveis.
+       */}
+      <div className="mt-2 flex flex-col border-t border-side-divider pt-2">
         <LockButton />
         <UpdateNotice />
         <PermissionsBlock />

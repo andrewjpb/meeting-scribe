@@ -150,6 +150,8 @@ function SettingsPanels({ tab }: { tab: SettingsTab }) {
   const [query, setQuery] = useState('')
   // Linha achada que só aparece em certa condição: "Esta opção aparece quando …".
   const [hint, setHint] = useState<SettingsEntry | null>(null)
+  // Com a página rolada, o topo fixo ganha o fio de baixo (o que as abas faziam antes): o conteúdo some atrás dele.
+  const [scrolled, setScrolled] = useState(false)
   const entries = settingsIndex(agentLabel)
   const groups = searchSettings(entries, query)
   const resultCount = groups.reduce((total, group) => total + group.indexes.length, 0)
@@ -265,8 +267,14 @@ function SettingsPanels({ tab }: { tab: SettingsTab }) {
        * O cabeçalho reserva o mesmo espaço da barra de rolagem que a área de baixo (dos dois lados, para a coluna
        * seguir centralizada): título, busca e coluna ficam no mesmo `x` com e sem barra.
        */}
-      {/* `pb-1`: sem as abas embaixo, os 4 px do campo que passam da linha do cabeçalho não podem ser cortados. */}
-      <div className="overflow-hidden px-10 pt-7 pb-1 [scrollbar-gutter:stable_both-edges]">
+      {/*
+       * `pb-3`: os 4 px do campo que passam da linha do cabeçalho não são cortados e sobra respiro até o fio. O fio é
+       * sempre de 1 px (transparente no topo), para o conteúdo não pular quando ele aparece.
+       */}
+      <div
+        data-settings-top
+        className={`overflow-hidden border-b px-10 pt-7 pb-3 [scrollbar-gutter:stable_both-edges] ${scrolled ? 'border-line' : 'border-transparent'}`}
+      >
         <div className="mx-auto w-full max-w-[var(--settings-width)]">
           {/* Contrato 66: o nome da aba (20/26); com a busca preenchida, "Configurações". */}
           <PageHeader
@@ -283,7 +291,7 @@ function SettingsPanels({ tab }: { tab: SettingsTab }) {
           />
         </div>
       </div>
-      <div ref={scrollRef} data-settings-scroll className="min-h-0 flex-1 overflow-y-auto px-10 pt-8 pb-12 [scrollbar-gutter:stable_both-edges]">
+      <div ref={scrollRef} data-settings-scroll onScroll={(event) => setScrolled(event.currentTarget.scrollTop > 0)} className="min-h-0 flex-1 overflow-y-auto px-10 pt-8 pb-12 [scrollbar-gutter:stable_both-edges]">
         <div ref={rootRef} data-settings-column className="mx-auto flex w-full max-w-[var(--settings-width)] flex-col">
           {hint && !searching && (
             <Note id="settings-hint" icon={Info} role="status" className="mb-6">

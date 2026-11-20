@@ -167,10 +167,18 @@ function ChatRow({ item, active, onOpen }: { item: ChatListItem; active: boolean
         active ? 'bg-side-active font-medium text-side-text' : 'text-side-muted hover:text-side-text'
       }`}
     >
-      <button type="button" aria-current={active ? 'page' : undefined} onClick={onOpen} className="no-drag flex h-full min-w-0 flex-1 items-center pr-1 pl-8 text-left focus-visible:outline-offset-[-2px]">
+      {/* O "…" fica por cima, à direita: o título só encurta quando ele aparece (hover, foco na linha ou menu aberto). */}
+      <button
+        type="button"
+        aria-current={active ? 'page' : undefined}
+        onClick={onOpen}
+        className={`no-drag flex h-full min-w-0 flex-1 items-center pl-8 text-left focus-visible:outline-offset-[-2px] ${
+          mode === 'menu' ? 'pr-8' : 'pr-1 group-focus-within:pr-8 group-hover:pr-8'
+        }`}
+      >
         <span className="min-w-0 truncate">{item.title}</span>
       </button>
-      <div onBlur={closeMenu} onKeyDown={onMenuKey} className="mr-1 shrink-0">
+      <div onBlur={closeMenu} onKeyDown={onMenuKey} className="absolute inset-y-0 right-1 flex items-center">
         <button
           ref={menuButton}
           type="button"
@@ -190,7 +198,7 @@ function ChatRow({ item, active, onOpen }: { item: ChatListItem; active: boolean
             ref={menu}
             role="menu"
             aria-label="Ações da conversa"
-            className="absolute top-full right-1 z-10 flex w-36 flex-col overflow-hidden rounded-[var(--radius-control)] border border-line-strong bg-bg-raised py-1 font-normal"
+            className="absolute top-full right-0 z-10 flex w-36 flex-col overflow-hidden rounded-[var(--radius-control)] border border-line-strong bg-bg-raised py-1 font-normal"
           >
             <button
               type="button"
