@@ -44,7 +44,7 @@ export function MeetingChatTab({ meetingId }: { meetingId: string }) {
 
   return (
     <div data-meeting-chat={meetingId} className="flex min-h-0 flex-1 flex-col">
-      <div className="px-10 pt-5 pb-3">
+      <div className="px-8 pt-4 pb-2">
         <div className="mx-auto flex w-full max-w-[720px] flex-wrap items-center gap-2">
           <Button action="chat-new" variant="secondary" icon={Plus} onClick={() => choose(null)}>
             Nova conversa

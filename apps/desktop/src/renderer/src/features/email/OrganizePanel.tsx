@@ -89,7 +89,7 @@ export function OrganizePanel({ view, onOpen, where, onBack }: OrganizePanelProp
   const bar = view.total > 0 ? Math.min(100, Math.round((view.read / view.total) * 100)) : 0
 
   return (
-    <section data-email-organize={view.state} data-email-organize-batch={view.batchId} aria-label={view.title} className="flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto px-7 py-5">
+    <section data-email-organize={view.state} data-email-organize-batch={view.batchId} aria-label={view.title} className="flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto px-5 py-4">
       <div className="mx-auto flex w-full max-w-[760px] flex-col gap-5">
         <header className="flex items-start gap-3">
           <button type="button" data-action="email-organize-back" onClick={onBack} aria-label="Voltar para a lista" className={`no-drag inline-flex size-8 shrink-0 items-center justify-center rounded-[var(--radius-control)] text-title hover:bg-bg-sunken ${NARROW_ONLY}`}>
@@ -99,7 +99,7 @@ export function OrganizePanel({ view, onOpen, where, onBack }: OrganizePanelProp
             <Icon icon={Sparkles} />
           </span>
           <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-            <h2 data-email-organize-title className="text-17 font-bold text-title">
+            <h2 data-email-organize-title className="text-15 font-bold text-title">
               {view.title}
             </h2>
             <p className="text-12 text-text-muted">{view.running ? view.request : view.summary?.line}</p>
@@ -166,7 +166,7 @@ export function OrganizePanel({ view, onOpen, where, onBack }: OrganizePanelProp
                     {undo.busy ? 'Desfazendo…' : view.summary.undo}
                   </Button>
                 )}
-                <button type="button" data-action="email-organize-chat" onClick={openChat} className="no-drag inline-flex h-10 items-center gap-2 rounded-[var(--radius-control)] px-3 text-13 font-medium text-title hover:bg-bg-raised">
+                <button type="button" data-action="email-organize-chat" onClick={openChat} className="no-drag inline-flex h-8 items-center gap-2 rounded-[var(--radius-control)] px-3 text-13 font-medium text-title hover:bg-bg-raised">
                   <Icon icon={Sparkles} />
                   Abrir no Assistente
                 </button>
@@ -176,7 +176,7 @@ export function OrganizePanel({ view, onOpen, where, onBack }: OrganizePanelProp
         )}
 
         <div className="flex flex-col">
-          <h3 className="caps text-text-muted">{view.summary ? `Decisões por assunto · ${view.summary.decisions}` : 'Decisões por assunto'}</h3>
+          <h3 className="label">{view.summary ? `Decisões por assunto · ${view.summary.decisions}` : 'Decisões por assunto'}</h3>
           <p aria-live="polite" className="sr-only" data-email-organize-live>
             {announce}
           </p>

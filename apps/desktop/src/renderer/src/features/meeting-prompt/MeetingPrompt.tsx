@@ -8,7 +8,7 @@ import { MEETING_PROMPT_WHERE, type MeetingPromptAction, type MeetingPromptState
 import { Icon } from '../../design/Icon'
 import { LapSymbol } from '../../design/LapSymbol'
 
-const SPLIT_CLASS = 'no-drag inline-flex h-8 shrink-0 items-center bg-accent text-13 font-medium whitespace-nowrap text-on-accent hover:opacity-90 active:opacity-80 disabled:pointer-events-none disabled:opacity-50'
+const SPLIT_CLASS = 'no-drag inline-flex h-7 shrink-0 items-center bg-accent text-13 font-medium whitespace-nowrap text-on-accent hover:opacity-90 active:opacity-80 disabled:pointer-events-none disabled:opacity-50'
 const MENU_ITEM_CLASS =
   'no-drag flex h-6 w-full items-center rounded-[var(--radius-control)] px-2 text-left text-12 font-medium whitespace-nowrap text-title hover:bg-bg-sunken active:bg-line disabled:pointer-events-none disabled:opacity-50'
 const ICON_BUTTON_CLASS = 'no-drag flex size-7 shrink-0 items-center justify-center rounded-[var(--radius-control)] text-text-muted hover:bg-bg-sunken hover:text-title'

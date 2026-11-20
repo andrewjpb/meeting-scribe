@@ -113,7 +113,7 @@ export function EmailFoldersSection({ accountId, pop3 }: { accountId: string; po
             <ul data-email-settings-folders className="flex flex-col">
               {rows.map(({ item, depth }) => (
                 <li key={item.path} data-email-settings-folder={item.path} className="flex flex-col border-t border-line first:border-t-0">
-                  <div className="flex min-h-10 items-center gap-3 py-1.5" style={{ paddingLeft: `${depth * 20}px` }}>
+                  <div className="flex min-h-8 items-center gap-3 py-1" style={{ paddingLeft: `${depth * 20}px` }}>
                     {edit?.mode === 'rename' && edit.path === item.path ? (
                       input(`Novo nome de ${item.label}`)
                     ) : (
@@ -140,7 +140,7 @@ export function EmailFoldersSection({ accountId, pop3 }: { accountId: string; po
                     )}
                   </div>
                   {confirm?.item.path === item.path && (
-                    <div data-email-settings-folder-confirm className="mb-3 flex flex-col gap-2 border-l-3 border-rec bg-bg-sunken px-4 py-3" style={{ marginLeft: `${depth * 20}px` }}>
+                    <div data-email-settings-folder-confirm className="mb-2 flex flex-col gap-2 border-l-3 border-rec bg-bg-sunken px-3 py-2" style={{ marginLeft: `${depth * 20}px` }}>
                       <p className="text-13 font-bold text-title">{deleteConfirmation(item.label, confirm.contents).question}</p>
                       {deleteConfirmation(item.label, confirm.contents).warning && <p className="text-12 text-text-muted">{deleteConfirmation(item.label, confirm.contents).warning}</p>}
                       {confirm.error && (

@@ -153,6 +153,18 @@
   --radius-control: 4px;
   --radius-panel: 6px;
 
+  /*
+   * Densidade (contrato 80, estilo do painel do Claude Desktop): botão, campo e abas de 32; segmentado de 28; linha de
+   * lista de 44 (duas linhas de texto) ou 32 (uma); cabeçalho de painel de 44; página com 32 nas laterais e 20 no topo.
+   */
+  --control-h: 32px;
+  --control-compact-h: 28px;
+  --row-h: 44px;
+  --row-compact-h: 32px;
+  --panel-head-h: 44px;
+  --page-x: 32px;
+  --page-top: 20px;
+
   --sidebar-width: 224px;
   --titlebar-height: 52px;
   /* Configurações (contrato 18): largura de leitura e a coluna dos controles, igual em toda linha. */

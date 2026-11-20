@@ -171,7 +171,7 @@ function PasswordForm({ mode, onCancel, onDone }: PasswordFormProps) {
   )
 
   return (
-    <div data-lock-password-form={mode} className="flex flex-col gap-3 py-4">
+    <div data-lock-password-form={mode} className="flex flex-col gap-2.5 py-3">
       {asksCurrent && field('lock-current', 'Senha atual', current, setCurrent)}
       {asksNext && field('lock-next', 'Nova senha', next, setNext)}
       {asksNext && field('lock-confirm', 'Confirmar a senha', confirm, setConfirm)}

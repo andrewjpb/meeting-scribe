@@ -67,7 +67,7 @@ export function AnalysisBlock({ analysis, answered, expanded, onToggle, onNote, 
   )
 
   return (
-    <article data-analysis={analysis.id} data-expanded={expanded} aria-label={`Análise ${until.toLowerCase()}`} className="border-b border-line pb-4">
+    <article data-analysis={analysis.id} data-expanded={expanded} aria-label={`Análise ${until.toLowerCase()}`} className="border-b border-line pb-3">
       {onToggle ? (
         <button
           type="button"
@@ -75,13 +75,13 @@ export function AnalysisBlock({ analysis, answered, expanded, onToggle, onNote, 
           aria-expanded={expanded}
           aria-controls={bodyId}
           onClick={onToggle}
-          className="no-drag flex h-8 w-full items-center gap-1.5 rounded-[var(--radius-control)] text-left text-13 font-bold text-title tabular"
+          className="no-drag flex h-7 w-full items-center gap-1.5 rounded-[var(--radius-control)] text-left text-13 font-semibold text-title tabular"
         >
           <Icon icon={expanded ? ChevronDown : ChevronRight} size={14} className="shrink-0 text-text-muted" />
           <span data-analysis-until>{until}</span>
         </button>
       ) : (
-        <p data-analysis-until className="text-13 font-bold text-title tabular">
+        <p data-analysis-until className="text-13 font-semibold text-title tabular">
           {until}
         </p>
       )}
@@ -119,7 +119,7 @@ function AnalysisSection({ section, items }: { section: Section; items: ReactNod
   if (!items.length) return null
   return (
     <section data-analysis-section={section} aria-label={SECTION_TITLES[section]}>
-      <h3 className="text-12 font-bold text-text-muted">{SECTION_TITLES[section]}</h3>
+      <h3 className="label">{SECTION_TITLES[section]}</h3>
       <ul className="mt-1.5 flex flex-col gap-3">{items}</ul>
     </section>
   )

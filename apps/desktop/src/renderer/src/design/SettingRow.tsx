@@ -23,9 +23,9 @@ export function SettingRow({ name, description, htmlFor, nameId, children }: Set
       data-setting-row
       data-setting-name={name}
       data-setting-description={description}
-      className="grid min-h-16 grid-cols-[minmax(0,1fr)_var(--settings-control-width)] items-center gap-x-6 py-3"
+      className="grid min-h-11 grid-cols-[minmax(0,1fr)_var(--settings-control-width)] items-center gap-x-5 py-2"
     >
-      <div className="flex min-w-0 flex-col gap-0.5">
+      <div className="flex min-w-0 flex-col gap-px">
         {htmlFor ? (
           <label id={nameId} htmlFor={htmlFor} className={nameClass}>
             {name}

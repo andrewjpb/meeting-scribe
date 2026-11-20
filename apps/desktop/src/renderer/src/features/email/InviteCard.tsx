@@ -191,7 +191,7 @@ function DangerOutlineButton({ action, icon, children, onClick, disabled = false
       data-action={action}
       onClick={onClick}
       disabled={disabled}
-      className="no-drag inline-flex h-10 shrink-0 items-center gap-2 rounded-[var(--radius-control)] border border-rec bg-bg-raised px-3.5 text-13 font-medium whitespace-nowrap text-rec transition-[opacity,background-color] duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-bg-sunken disabled:pointer-events-none disabled:opacity-50"
+      className="no-drag inline-flex h-8 shrink-0 items-center gap-2 rounded-[var(--radius-control)] border border-rec bg-bg-raised px-3 text-13 font-medium whitespace-nowrap text-rec transition-[opacity,background-color] duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-bg-sunken disabled:pointer-events-none disabled:opacity-50"
     >
       <Icon icon={icon} />
       <span>{children}</span>

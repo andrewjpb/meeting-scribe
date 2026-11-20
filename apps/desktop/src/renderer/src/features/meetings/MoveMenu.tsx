@@ -34,7 +34,7 @@ export function MoveMenu({ folderId, folders, onMove, onMoveToNew }: MoveMenuPro
   }
 
   return (
-    <div onBlur={onBlur} onKeyDown={mode === 'menu' ? onKeyDown : undefined} className="relative shrink-0 pt-3 pr-1">
+    <div onBlur={onBlur} onKeyDown={mode === 'menu' ? onKeyDown : undefined} className="relative shrink-0 pt-0 pr-1">
       <button
         ref={button}
         type="button"

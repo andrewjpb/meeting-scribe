@@ -213,7 +213,7 @@ function Picker() {
           {!request.choose && <span className="text-12 text-text-muted">{messagesLabel(request.ids.length)}</span>}
         </div>
         <div className="px-3 pb-2">
-          <div className="flex h-9 items-center gap-2 rounded-[var(--radius-control)] border border-focus bg-bg-raised px-2.5">
+          <div className="flex h-8 items-center gap-2 rounded-[var(--radius-control)] border border-focus bg-bg-raised px-2.5">
             <Icon icon={Search} size={14} className="shrink-0 text-text-muted" />
             <input
               ref={input}

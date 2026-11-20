@@ -66,7 +66,7 @@ export function ApiKeyField() {
 
   return (
     <div
-      className="flex flex-col gap-3 py-4"
+      className="flex flex-col gap-2.5 py-3"
       data-key-state={check ?? (status?.configured ? 'saved' : 'none')}
       data-setting-row
       data-setting-name="Chave da AssemblyAI"

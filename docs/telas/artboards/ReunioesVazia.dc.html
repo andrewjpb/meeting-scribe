@@ -1,4 +1,5 @@
 <!doctype html>
+<!-- densidade: adensar.mjs -->
 <html lang="pt-BR">
 <head>
 <meta charset="utf-8">
@@ -19,27 +20,26 @@ body{margin:0}
 </div>
 
 <main style="flex: 1 1 0; min-width: 0; height: 740px; display: flex; flex-direction: column; overflow: hidden">
-<div aria-hidden="true" style="flex: none; height: 52px"></div>
 
-<div style="flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; padding: 28px 40px 40px">
+<div style="flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; padding: 20px 32px 32px">
 <header style="flex: none; display: flex; align-items: center; justify-content: space-between; gap: 16px">
-<h1 style="margin: 0; font-size: 26px; line-height: 32px; font-weight: 700; letter-spacing: -0.3px; color: #0a2a5e">Reuniões</h1>
+<h1 style="margin: 0; font-size: 20px; line-height: 26px; font-weight: 700; letter-spacing: -0.3px; color: #0a2a5e">Reuniões</h1>
 </header>
 
 <div aria-hidden="true" style="flex: 3 1 0"></div>
 
 <section aria-label="Nenhuma reunião ainda" style="flex: none; display: flex; flex-direction: column; align-items: center; text-align: center">
-<div style="margin-bottom: 28px">
+<div style="margin-bottom: 20px">
 <svg width="320" height="80" viewBox="0 0 320 80" aria-hidden="true" style="display: block">
 <sc-for list="{{micBars}}" as="b" hint-placeholder-count="0"><rect x="{{b.x}}" y="{{b.y}}" width="3" height="{{b.h}}" fill="#1e5bb8"></rect></sc-for>
 <sc-for list="{{sysBars}}" as="b" hint-placeholder-count="0"><rect x="{{b.x}}" y="41" width="3" height="{{b.h}}" fill="#5b6b85"></rect></sc-for>
 <rect x="0" y="40" width="320" height="1" fill="#c9d4e5"></rect>
 </svg>
 </div>
-<h2 style="margin: 0; font-size: 20px; line-height: 26px; font-weight: 700; letter-spacing: -0.3px; color: #0a2a5e">Nenhuma reunião ainda</h2>
-<p style="margin: 12px 0 0; max-width: 400px; font-size: 13px; line-height: 20px; color: #5b6b85; text-wrap: pretty">As gravações ficam neste Mac e aparecem aqui, da mais recente para a mais antiga.</p>
-<div style="margin-top: 24px">
-<a href="GravacaoAnalise.dc.html" aria-keyshortcuts="Meta+N" style="display: inline-flex; align-items: center; gap: 10px; height: 40px; box-sizing: border-box; padding: 0 16px; border-radius: 4px; background: #1e5bb8; color: #ffffff; text-decoration: none; font-size: 13px; font-weight: 500; white-space: nowrap">
+<h2 style="margin: 0; font-size: 17px; line-height: 24px; font-weight: 600; color: #0a2a5e">Nenhuma reunião ainda</h2>
+<p style="margin: 8px 0 0; max-width: 400px; font-size: 13px; line-height: 20px; color: #5b6b85; text-wrap: pretty">As gravações ficam neste Mac e aparecem aqui, da mais recente para a mais antiga.</p>
+<div style="margin-top: 16px">
+<a href="GravacaoAnalise.dc.html" aria-keyshortcuts="Meta+N" style="display: inline-flex; align-items: center; gap: 8px; height: 32px; box-sizing: border-box; padding: 0 12px; border-radius: 4px; background: #1e5bb8; color: #ffffff; text-decoration: none; font-size: 13px; font-weight: 500; white-space: nowrap">
 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true" style="flex: none; display: block"><path d="M5 12h14M12 5v14"></path></svg>
 <span>Nova gravação</span>
 <kbd aria-hidden="true" style="font-family: inherit; font-size: 12px; font-weight: 400; opacity: 0.8">⌘N</kbd>

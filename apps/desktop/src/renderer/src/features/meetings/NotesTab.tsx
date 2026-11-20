@@ -37,8 +37,8 @@ export function NotesTab({ meetingId, onJump }: { meetingId: string; onJump: (at
   const shown = filterNotes(entry.notes, filter)
 
   return (
-    <div data-notes-scroll className="min-h-0 flex-1 overflow-y-auto px-10 pb-10">
-      <div data-notes-tab={entry.status === 'ready' ? entry.notes.length : 'failed'} data-notes-root className="mx-auto flex w-full max-w-[1040px] flex-col gap-4 pt-7">
+    <div data-notes-scroll className="min-h-0 flex-1 overflow-y-auto px-8 pb-8">
+      <div data-notes-tab={entry.status === 'ready' ? entry.notes.length : 'failed'} data-notes-root className="mx-auto flex w-full max-w-[1040px] flex-col gap-3 pt-5">
         {entry.status === 'failed' ? (
           <RetryNotice id="notes-load-failed" text="Não foi possível abrir as anotações." onRetry={() => void store.load(meetingId)} />
         ) : (

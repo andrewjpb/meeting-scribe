@@ -64,9 +64,10 @@ export function PermissionsBlock() {
 
   return (
     // Recuo lateral de 4 px (o mockup tem 10): com 10, "Áudio do sistema" + "não verificado" passa dos
-    // 180 px que sobram em 12 px de Helvetica e quebra em duas linhas.
-    <section aria-label="Permissões" className="mt-auto flex flex-col gap-2.5 border-t border-side-active px-1 pt-4 pb-5">
-      <h2 className="caps text-side-muted">Permissões</h2>
+    // 180 px que sobram em 12 px de Helvetica e quebra em duas linhas (por isso as linhas ficam em 12, não em 13).
+    // Contrato 79: rótulo 11 em caixa normal e linhas de 28, como "Bloquear".
+    <section aria-label="Permissões" className="mt-auto flex flex-col border-t border-side-active px-1 py-1">
+      <h2 className="label pt-1 text-side-muted">Permissões</h2>
       <Row name="Microfone" tone={micTone} permission="mic" state={mic ?? ''}>
         {micState}
       </Row>
@@ -79,7 +80,7 @@ export function PermissionsBlock() {
 
 function Row({ name, tone, permission, state, children }: { name: string; tone: Tone; permission: string; state: string; children: ReactNode }) {
   return (
-    <div data-permission={permission} data-state={state} className="flex items-center gap-2 text-12">
+    <div data-permission={permission} data-state={state} className="flex h-[var(--side-subrow)] items-center gap-2 text-12">
       <span aria-hidden="true" className={`size-1.5 shrink-0 ${SQUARE[tone]}`} />
       <span className="grow whitespace-nowrap">{name}</span>
       {children}

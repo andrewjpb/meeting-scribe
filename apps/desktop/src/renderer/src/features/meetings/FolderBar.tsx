@@ -17,7 +17,7 @@ interface FolderBarProps {
 }
 
 // Opção da barra no traço do `Segmented`: contorno --line-strong; a marcada em bloco --title.
-const CHIP = 'no-drag inline-flex h-8 items-center gap-1.5 rounded-[var(--radius-control)] border px-3 text-13 whitespace-nowrap transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)]'
+const CHIP = 'no-drag inline-flex h-7 items-center gap-1.5 rounded-[var(--radius-control)] border px-2.5 text-13 whitespace-nowrap transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)]'
 const chipClass = (active: boolean): string => `${CHIP} ${active ? 'border-title bg-title font-medium text-bg' : 'border-line-strong bg-bg-raised text-text hover:bg-bg-sunken'}`
 
 /**
@@ -50,7 +50,7 @@ export function FolderBar({ folders, counts, selected, onSelect, onCreate, onRen
   }
 
   return (
-    <div className="max-w-[820px] pb-7">
+    <div className="max-w-[820px] pb-5">
       <div data-folders role="group" aria-label="Pastas" className="flex flex-wrap items-center gap-2">
         <button type="button" data-folder="all" aria-pressed={selected === 'all'} onClick={() => select('all')} className={chipClass(selected === 'all')}>
           Todas
@@ -159,7 +159,7 @@ export function FolderBar({ folders, counts, selected, onSelect, onCreate, onRen
             type="button"
             data-action="new-folder"
             onClick={() => setCreating(true)}
-            className="no-drag inline-flex h-8 items-center gap-1.5 rounded-[var(--radius-control)] px-2.5 text-13 font-medium text-accent transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-bg-sunken"
+            className="no-drag inline-flex h-7 items-center gap-1.5 rounded-[var(--radius-control)] px-2 text-13 font-medium text-accent transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-bg-sunken"
           >
             <Icon icon={FolderPlus} size={14} />
             Nova pasta

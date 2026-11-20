@@ -1,0 +1,84 @@
+<!doctype html>
+<!-- densidade: adensar.mjs -->
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<title>Configurações · Plugins</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0}
+button{font:inherit}
+input::placeholder,textarea::placeholder{color:#7f8da6}
+</style>
+</helmet>
+<div style="display: flex; width: 1120px; height: 740px; overflow: hidden; background: #ffffff; color: #061a3d; font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; font-size: 13px; line-height: 20px; -webkit-font-smoothing: antialiased">
+<dc-import name="SidebarConfig" aba="plugins" hint-size="224px,740px"></dc-import>
+<main style="flex: 1 1 0; min-width: 0; height: 740px; display: flex; flex-direction: column; background: #ffffff">
+
+<div style="flex: 0 0 auto; padding: 20px 32px 8px">
+<div style="max-width: 760px; margin: 0 auto; display: flex; align-items: center; justify-content: space-between; gap: 24px">
+<h1 style="margin: 0; font-size: 15px; line-height: 20px; font-weight: 700; color: #0a2a5e">Plugins</h1>
+<div style="flex: 0 0 240px; width: 240px; height: 32px; box-sizing: border-box; display: flex; align-items: center; gap: 8px; padding: 0 10px; border: 1px solid #c9d4e5; border-radius: 4px; background: #ffffff; color: #7f8da6">
+<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true" style="flex: none; display: block"><circle cx="11" cy="11" r="8"></circle><path d="m21 21-4.3-4.3"></path></svg>
+<label for="busca-config-plugins" style="position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0)">Buscar configuração</label>
+<input id="busca-config-plugins" type="search" placeholder="Buscar configuração" style="flex: 1 1 0; min-width: 0; border: 0; background: transparent; font: inherit; font-size: 13px; color: #061a3d; outline: none">
+<span aria-hidden="true" style="font-size: 11px; line-height: 16px; color: #7f8da6; font-variant-numeric: tabular-nums">⌘F</span>
+</div>
+</div>
+</div>
+
+<div style="flex: 1 1 0; min-height: 0; overflow: hidden; padding: 20px 32px 32px">
+<div style="max-width: 760px; margin: 0 auto; display: flex; flex-direction: column; gap: 24px">
+
+<section aria-label="Quem fala no Meet" style="display: flex; flex-direction: column">
+<h2 style="margin: 0 0 4px; font-size: 11px; line-height: 16px; font-weight: 500; color: #5b6b85">Quem fala no Meet</h2>
+<div style="margin-top: 8px; display: flex; flex-direction: column; border: 1px solid #c9d4e5; border-radius: 6px; background: #ffffff; overflow: hidden">
+<div style="border-bottom: 1px solid #e3e9f2; display: grid; grid-template-columns: minmax(0, 1fr) 340px; column-gap: 20px; align-items: center; min-height: 44px; box-sizing: border-box; padding: 8px 12px">
+<div style="display: flex; flex-direction: column; gap: 1px; min-width: 0"><p style="margin: 0; font-size: 13px; line-height: 20px; font-weight: 500; color: #061a3d">Quem fala no Meet</p><p style="margin: 0; font-size: 12px; line-height: 16px; color: #5b6b85">Google Chrome. No Google Meet e no Microsoft Teams aberto no Chrome, manda ao app os nomes de quem fala, para a transcrição dizer quem falou cada trecho.</p></div>
+<div style="display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-width: 0"><span style="font-size: 12px; line-height: 16px; color: #5b6b85">Desconectado</span></div>
+</div>
+<div style="border-bottom: 1px solid #e3e9f2; display: grid; grid-template-columns: minmax(0, 1fr) 340px; column-gap: 20px; align-items: center; min-height: 44px; box-sizing: border-box; padding: 8px 12px">
+<div style="display: flex; flex-direction: column; gap: 1px; min-width: 0"><p style="margin: 0; font-size: 13px; line-height: 20px; font-weight: 500; color: #061a3d">Salvar plugin</p><p style="margin: 0; font-size: 12px; line-height: 16px; color: #5b6b85">Grava a pasta do plugin onde você escolher, para carregar no navegador.</p></div>
+<div style="display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-width: 0"><button type="button" style="display: inline-flex; align-items: center; gap: 8px; height: 32px; box-sizing: border-box; padding: 0 12px; border: 1px solid #c9d4e5; background: #ffffff; color: #0a2a5e; border-radius: 4px; font: inherit; font-size: 13px; font-weight: 500; white-space: nowrap; cursor: pointer"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true" style="flex: none; display: block"><path d="M12 15V3M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5"></path></svg><span>Salvar plugin…</span></button></div>
+</div>
+<div style="border-bottom: 1px solid #e3e9f2; padding: 12px; display: flex; flex-direction: column; gap: 8px">
+<p style="margin: 0; font-size: 12px; line-height: 16px; color: #5b6b85">Salvo em <span style="color: #061a3d">~/Documents/LAP Reuniões - Quem fala no Meet</span></p>
+</div>
+<div style="border-bottom: 1px solid #e3e9f2; display: grid; grid-template-columns: minmax(0, 1fr) 340px; column-gap: 20px; align-items: center; min-height: 44px; box-sizing: border-box; padding: 8px 12px">
+<div style="display: flex; flex-direction: column; gap: 1px; min-width: 0"><p style="margin: 0; font-size: 13px; line-height: 20px; font-weight: 500; color: #061a3d">Como instalar</p><p style="margin: 0; font-size: 12px; line-height: 16px; color: #5b6b85">O passo a passo para carregar o plugin sem compactação.</p></div>
+<div style="display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-width: 0"><button type="button" aria-expanded="true" style="display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 8px; border: 0; border-radius: 4px; background: transparent; color: #0a2a5e; font: inherit; font-size: 13px; font-weight: 500"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true" style="flex: none; display: block"><path d="m6 9 6 6 6-6"></path></svg>Como instalar</button></div>
+</div>
+<div style="padding: 12px; display: flex; flex-direction: column; gap: 8px">
+<ol style="margin: 0; padding-left: 20px; font-size: 13px; line-height: 20px; color: #061a3d"><li style="margin: 0 0 4px">Clique em “Salvar plugin…” e escolha uma pasta. O app grava ali a pasta “LAP Reuniões - Quem fala no Meet”.</li><li style="margin: 0 0 4px">No Google Chrome, digite <code style="font-family: Menlo, ui-monospace, monospace; font-size: 12px; padding: 0 4px; border-radius: 4px; background: #eef2f9">chrome://extensions</code> na barra de endereço e tecle Enter.</li><li style="margin: 0 0 4px">Ligue o “Modo do desenvolvedor”, no canto superior direito.</li><li style="margin: 0 0 4px">Clique em “Carregar sem compactação” e escolha a pasta que você salvou.</li><li style="margin: 0 0 4px">Recarregue a aba do Meet ou do Teams.</li></ol><p style="margin: 0; font-size: 12px; line-height: 16px; color: #5b6b85">Tudo fica neste computador: o plugin só fala com o app.</p>
+</div>
+</div>
+</section>
+
+<section aria-label="Controle do navegador" style="display: flex; flex-direction: column">
+<h2 style="margin: 0 0 4px; font-size: 11px; line-height: 16px; font-weight: 500; color: #5b6b85">Controle do navegador</h2>
+<div style="margin-top: 8px; display: flex; flex-direction: column; border: 1px solid #c9d4e5; border-radius: 6px; background: #ffffff; overflow: hidden">
+<div style="display: grid; grid-template-columns: minmax(0, 1fr) 340px; column-gap: 20px; align-items: center; min-height: 44px; box-sizing: border-box; padding: 8px 12px">
+<div style="display: flex; flex-direction: column; gap: 1px; min-width: 0"><p style="margin: 0; font-size: 13px; line-height: 20px; font-weight: 500; color: #061a3d">Controle do navegador</p><p style="margin: 0; font-size: 12px; line-height: 16px; color: #5b6b85">Google Chrome. O agente usa uma janela própria do Chrome para abrir e ler páginas. Não mexe nas suas abas.</p></div>
+<div style="display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-width: 0"><span style="font-size: 12px; line-height: 16px; color: #5b6b85">Desconectado</span></div>
+</div>
+</div>
+</section>
+
+</div>
+</div>
+</main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1120,"height":740}}'>
+class Component extends DCLogic {
+  renderVals() {
+    return {};
+  }
+}
+</script>
+</body>
+</html>

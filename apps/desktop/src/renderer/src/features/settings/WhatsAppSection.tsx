@@ -64,7 +64,7 @@ function PairingPanel({ onClose }: { onClose: () => void }) {
   }
 
   return (
-    <section data-whatsapp-pairing aria-label="Conectar o WhatsApp" className="flex flex-col gap-4 rounded-[var(--radius-panel)] border border-line bg-bg-sunken p-4">
+    <section data-whatsapp-pairing aria-label="Conectar o WhatsApp" className="flex flex-col gap-3 rounded-[var(--radius-panel)] border border-line bg-bg-sunken p-3">
       <div className="flex flex-wrap items-start gap-6">
         {pairing?.qr ? <QrCode text={pairing.qr} /> : <div data-whatsapp-qr-loading className="size-[232px] shrink-0 rounded-[var(--radius-control)] bg-bg-raised" />}
         <div className="flex min-w-0 flex-[1_1_240px] flex-col gap-3">
@@ -160,7 +160,7 @@ export function WhatsAppSection() {
   return (
     <Section title="WhatsApp">
       <div
-        className="flex flex-col gap-3 py-4"
+        className="flex flex-col gap-2.5 py-3"
         data-setting-row
         data-setting-name="WhatsApp"
         data-setting-description="Ler as suas conversas e enviar mensagens só com o seu clique. Experimental."
@@ -217,7 +217,7 @@ export function WhatsAppSection() {
         {panel === 'risk-pair' && <RiskPanel confirmLabel="Mostrar QR code" confirmAction="whatsapp-show-qr" onConfirm={() => accept('pair')} onCancel={() => setPanel(null)} />}
         {panel === 'pairing' && <PairingPanel onClose={closePairing} />}
         {panel === 'remove' && (
-          <div data-whatsapp-remove-confirm className="flex flex-col gap-3 rounded-[var(--radius-panel)] border border-line bg-bg-sunken p-4">
+          <div data-whatsapp-remove-confirm className="flex flex-col gap-3 rounded-[var(--radius-panel)] border border-line bg-bg-sunken p-3">
             <p className="text-13 text-text">Remover o WhatsApp deste Mac? O ambiente Python, a sessão e as mensagens guardadas são apagados.</p>
             <div className="flex flex-wrap gap-2">
               <Button

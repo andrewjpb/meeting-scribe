@@ -11,8 +11,8 @@ import { ActivityChart, BalanceChart, MoodChart } from './Charts'
 
 function PanelSection({ title, children, name }: { title: string; children: ReactNode; name: string }) {
   return (
-    <section aria-label={title} data-wa-section={name} className="flex flex-col gap-2 border-b border-line px-4 py-4 last:border-b-0">
-      <h3 className="text-12 font-bold text-text-muted">{title}</h3>
+    <section aria-label={title} data-wa-section={name} className="flex flex-col gap-2 border-b border-line px-3 py-3 last:border-b-0">
+      <h3 className="label">{title}</h3>
       {children}
     </section>
   )
@@ -108,7 +108,7 @@ export function DetailsPanel({ chat, messages, onClose }: DetailsPanelProps) {
 
   return (
     <aside data-wa-details aria-label="Detalhes" className="flex w-[300px] shrink-0 flex-col overflow-y-auto border-l border-line bg-bg">
-      <div className="flex h-12 shrink-0 items-center justify-between border-b border-line pr-2 pl-4">
+      <div className="flex h-11 shrink-0 items-center justify-between border-b border-line pr-1.5 pl-3">
         <h2 className="text-13 font-bold text-title">Detalhes</h2>
         <button
           type="button"
@@ -122,7 +122,7 @@ export function DetailsPanel({ chat, messages, onClose }: DetailsPanelProps) {
       </div>
 
       {!enabled ? (
-        <section data-wa-insights="off" className="flex flex-col gap-2 border-b border-line px-4 py-4">
+        <section data-wa-insights="off" className="flex flex-col gap-2 border-b border-line px-3 py-3">
           <p className="text-13 text-text-muted">Os Detalhes com IA estão desligados. Os gráficos abaixo saem só das mensagens deste Mac.</p>
           <div>
             <Button action="whatsapp-insights-enable" variant="secondary" icon={Sparkles} onClick={() => void update({ whatsappInsights: true })}>
@@ -198,7 +198,7 @@ export function DetailsPanel({ chat, messages, onClose }: DetailsPanelProps) {
       </PanelSection>
 
       {enabled && insights && footer && (
-        <p data-wa-insights-footer className="px-4 py-3 text-12 text-text-faint tabular">
+        <p data-wa-insights-footer className="px-3 py-3 text-12 text-text-faint tabular">
           {footer.text}
           {footer.cost && (
             <span data-wa-insights-cost title={COST_HINT}>

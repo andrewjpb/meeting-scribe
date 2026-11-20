@@ -12,6 +12,7 @@
     "lint": "pnpm --filter @meeting-scribe/desktop lint",
     "test": "pnpm --filter @meeting-scribe/desktop test",
     "smoke": "pnpm --filter @meeting-scribe/desktop smoke",
-    "gates": "bash apps/desktop/scripts/gates.sh"
+    "gates": "bash apps/desktop/scripts/gates.sh",
+    "tokens:export": "node apps/desktop/scripts/export-tokens.mjs"
   }
 }

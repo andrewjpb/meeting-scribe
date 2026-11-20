@@ -66,10 +66,10 @@ export function MeetingsScreen() {
   // vazio não piscar antes da lista.
   if (list === null && failed) {
     return (
-      <div className="flex flex-1 flex-col px-10 pt-7">
+      <div className="flex flex-1 flex-col px-8 pt-5">
         <PageHeader title="Reuniões" actions={newRecording} />
-        <RecordingNow className="mt-7" />
-        <RetryNotice id="list-failed" text="Não foi possível ler as reuniões deste Mac." onRetry={retry} className="mt-7 max-w-[820px]" />
+        <RecordingNow className="mt-5" />
+        <RetryNotice id="list-failed" text="Não foi possível ler as reuniões deste Mac." onRetry={retry} className="mt-5 max-w-[820px]" />
       </div>
     )
   }
@@ -77,10 +77,10 @@ export function MeetingsScreen() {
 
   if (!list.length) {
     return (
-      <div className="flex flex-1 flex-col px-10 pt-7 pb-10">
+      <div className="flex flex-1 flex-col px-8 pt-5 pb-8">
         <PageHeader title="Reuniões" />
-        <RecordingNow className="mt-7" />
-        <UpcomingSection className="mt-7" />
+        <RecordingNow className="mt-5" />
+        <UpcomingSection className="mt-5" />
         <div className="grow-[3]" />
         <EmptyState illustration={<TapeIllustration />} title="Nenhuma reunião ainda" action={newRecording}>
           As gravações ficam neste Mac e aparecem aqui, da mais recente para a mais antiga.
@@ -101,7 +101,7 @@ export function MeetingsScreen() {
     body = rows.length ? (
       <DayGroups groups={groupByDay(rows, now, (entry) => entry.meeting)} {...rowOptions} />
     ) : (
-      <div className="pt-10">
+      <div className="pt-8">
         <EmptyState illustration={<TapeIllustration />} title="Nenhuma reunião nesta pasta">
           Mova reuniões para cá pelo "…" de cada linha.
         </EmptyState>
@@ -121,7 +121,7 @@ export function MeetingsScreen() {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div className="px-10 pt-7">
+      <div className="px-8 pt-5">
         <PageHeader
           title="Reuniões"
           actions={
@@ -132,7 +132,7 @@ export function MeetingsScreen() {
           }
         />
       </div>
-      <div className="min-h-0 flex-1 overflow-y-auto px-10 pt-7 pb-10" aria-busy={search.pending}>
+      <div className="min-h-0 flex-1 overflow-y-auto px-8 pt-5 pb-8" aria-busy={search.pending}>
         <RecordingNow />
         {shown === null && (
           <FolderBar
@@ -145,7 +145,7 @@ export function MeetingsScreen() {
             onDelete={deleteFolder}
           />
         )}
-        {shown === null && <UpcomingSection className="pb-7" />}
+        {shown === null && <UpcomingSection className="pb-5" />}
         {body}
       </div>
     </div>
@@ -162,11 +162,12 @@ interface DayGroupsProps {
 }
 
 function DayGroups({ groups, folders, showFolder, rowMove }: DayGroupsProps) {
-  return groups.map((group) => (
-    <section key={group.key} aria-label={group.label} data-day={group.key} className="max-w-[820px] pt-7 first:pt-0">
-      <div className="flex items-baseline justify-between gap-4 border-b border-line-strong pb-2">
-        <h2 className="text-12 font-bold text-text-muted">{group.label}</h2>
-        <span data-day-total className="text-12 text-text-muted tabular">
+  // 20 entre os grupos; o primeiro encosta no que vem antes (pastas e "Próximas" já deixam os 20 abaixo de si).
+  return groups.map((group, index) => (
+    <section key={group.key} aria-label={group.label} data-day={group.key} className={`max-w-[820px] ${index > 0 ? 'pt-5' : ''}`}>
+      <div className="flex items-baseline justify-between gap-4 border-b border-line-strong pb-1.5">
+        <h2 className="label">{group.label}</h2>
+        <span data-day-total className="label tabular">
           {group.total}
         </span>
       </div>

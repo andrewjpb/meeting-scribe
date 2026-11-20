@@ -53,7 +53,7 @@ export function EmailSettingsTab() {
       <EmailSection />
       {status ? (
         <>
-          <div data-email-settings-account-picker className="-mt-4 flex flex-wrap items-center gap-3 rounded-[var(--radius-panel)] bg-bg-sunken px-4 py-3">
+          <div data-email-settings-account-picker className="-mt-3 flex flex-wrap items-center gap-3 rounded-[var(--radius-panel)] bg-bg-sunken px-3 py-2">
             <label htmlFor="settings-email-account" className="text-13 text-text-muted">
               Assinatura, regras e pastas de
             </label>
@@ -62,7 +62,7 @@ export function EmailSettingsTab() {
               data-email-settings-account-select
               value={status.account.id}
               onChange={(event) => setChosen(event.target.value)}
-              className="no-drag h-9 rounded-[var(--radius-control)] border border-line-strong bg-bg-raised px-2.5 text-13 font-bold text-title"
+              className="no-drag h-8 rounded-[var(--radius-control)] border border-line-strong bg-bg-raised px-2.5 text-13 font-bold text-title"
             >
               {list.map((item) => (
                 <option key={item.account.id} value={item.account.id}>

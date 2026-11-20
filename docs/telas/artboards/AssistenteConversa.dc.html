@@ -1,4 +1,5 @@
 <!doctype html>
+<!-- densidade: adensar.mjs -->
 <html lang="pt-BR">
 <head>
 <meta charset="utf-8">
@@ -15,36 +16,30 @@ textarea::placeholder,input::placeholder{color:#7f8da6}
 </style>
 </helmet>
 <div style="display: flex; width: 1120px; height: 740px; overflow: hidden; background: #ffffff; color: #061a3d; font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; font-size: 13px; line-height: 20px; -webkit-font-smoothing: antialiased">
-<dc-import name="SidebarRaiz" ativo="assistente" nao-lidas="{{naoLidas}}" hint-size="224px,740px"></dc-import>
+<dc-import name="SidebarAssistente" conversa="pendencias" hint-size="224px,740px"></dc-import>
 <main style="flex: 1 1 0; min-width: 0; height: 740px; display: flex; flex-direction: column; background: #ffffff">
-<div aria-hidden="true" style="flex: 0 0 52px; height: 52px"></div>
 
-<div style="flex: 0 0 auto; display: flex; flex-direction: column; gap: 4px; padding: 0 40px 24px">
-<h1 style="margin: 0; font-size: 26px; line-height: 32px; font-weight: 700; letter-spacing: -0.3px; color: #0a2a5e">Assistente</h1>
-<p style="margin: 0; font-size: 13px; line-height: 20px; color: #5b6b85">Pergunte ou peça qualquer coisa: reuniões, WhatsApp, email, automações e o próprio app.</p>
-</div>
-
-<div style="flex: 1 1 0; min-height: 0; display: flex; border-top: 1px solid #e3e9f2">
+<div style="flex: 1 1 0; min-height: 0; display: flex">
 
 <section aria-label="Conversa" style="flex: 1 1 0; min-width: 0; display: flex; flex-direction: column">
-<header style="flex: 0 0 56px; height: 56px; box-sizing: border-box; display: flex; align-items: center; gap: 12px; padding: 0 24px; border-bottom: 1px solid #e3e9f2">
-<h2 style="flex: 1 1 0; min-width: 0; margin: 0; font-size: 20px; line-height: 26px; font-weight: 700; letter-spacing: -0.3px; color: #0a2a5e; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">Pendências no WhatsApp</h2>
+<header style="flex: 0 0 44px; height: 44px; box-sizing: border-box; display: flex; align-items: center; gap: 8px; padding: 0 20px; border-bottom: 1px solid #e3e9f2">
+<h2 style="flex: 1 1 0; min-width: 0; margin: 0; font-size: 15px; line-height: 20px; font-weight: 700; letter-spacing: -0.2px; color: #0a2a5e; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">Pendências no WhatsApp</h2>
 <button type="button" title="Escopo da conversa" style="display: flex; align-items: center; gap: 6px; height: 28px; padding: 0 8px; border: 1px solid #c9d4e5; border-radius: 4px; background: transparent; color: #0a2a5e; font-size: 12px; font-weight: 500; cursor: pointer">Todas as reuniões (12)</button>
 <button type="button" title="Modelo da conversa" style="display: flex; align-items: center; gap: 6px; height: 28px; padding: 0 8px; border: 1px solid #c9d4e5; border-radius: 4px; background: transparent; color: #0a2a5e; font-size: 12px; font-weight: 500; cursor: pointer">Sonnet</button>
 <button type="button" style="display: flex; align-items: center; gap: 6px; height: 28px; padding: 0 8px; border: 1px solid #c9d4e5; border-radius: 4px; background: transparent; color: #0a2a5e; font-size: 12px; font-weight: 500; cursor: pointer"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><rect x="3" y="3" width="18" height="18"></rect><path d="M15 3v18"></path></svg>Contexto</button>
 </header>
 
-<div style="flex: 1 1 0; min-height: 0; overflow: hidden; display: flex; flex-direction: column; justify-content: flex-end; padding: 0 32px 24px">
-<ol aria-label="Mensagens" style="margin: 0; padding: 24px 0 0; list-style: none; width: 100%; max-width: 720px; align-self: center; display: flex; flex-direction: column; gap: 24px">
+<div style="flex: 1 1 0; min-height: 0; overflow: hidden; display: flex; flex-direction: column; justify-content: flex-end; padding: 0 24px 20px">
+<ol aria-label="Mensagens" style="margin: 0; padding: 16px 0 0; list-style: none; width: 100%; max-width: 720px; align-self: center; display: flex; flex-direction: column; gap: 16px">
 
 <li style="display: flex; justify-content: flex-end">
-<p style="margin: 0; max-width: 72ch; padding: 12px 16px; border-radius: 6px; background: #eef2f9; font-size: 15px; line-height: 22px; color: #061a3d">Tenho algo pendente para responder no WhatsApp?</p>
+<p style="margin: 0; max-width: 72ch; padding: 8px 12px; border-radius: 6px; background: #eef2f9; font-size: 14px; line-height: 22px; color: #061a3d">Tenho algo pendente para responder no WhatsApp?</p>
 </li>
 
-<li style="display: flex; flex-direction: column; gap: 8px; padding: 12px 16px; border: 1px solid #e3e9f2; border-radius: 6px; background: #ffffff">
+<li style="display: flex; flex-direction: column; gap: 8px; padding: 10px 12px; border: 1px solid #e3e9f2; border-radius: 6px; background: #ffffff">
 <p style="margin: 0; display: flex; align-items: baseline; gap: 8px"><span style="font-size: 13px; font-weight: 700; color: #0a2a5e">Claude</span><time style="font-size: 12px; line-height: 16px; color: #7f8da6; font-variant-numeric: tabular-nums">14:52</time></p>
 <button type="button" aria-expanded="false" style="align-self: flex-start; display: flex; align-items: center; gap: 6px; margin-left: -4px; padding: 2px 4px; border: 0; border-radius: 4px; background: transparent; color: #5b6b85; font-size: 12px; line-height: 16px; font-weight: 500; cursor: pointer"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><path d="m9 6 6 6-6 6"></path></svg>Raciocínio e passos<span style="font-weight: 400; color: #7f8da6">· 3 passos</span></button>
-<p style="margin: 0; max-width: 72ch; font-size: 15px; line-height: 22px; color: #061a3d">Sim, uma. A Ana perguntou se o orçamento do Planejamento Q1 sai até sexta <span style="color: #5b6b85">[WhatsApp · Ana · 16/11 14:46]</span> e ainda está sem resposta.</p>
+<p style="margin: 0; max-width: 72ch; font-size: 14px; line-height: 22px; color: #061a3d">Sim, uma. A Ana perguntou se o orçamento do Planejamento Q1 sai até sexta <span style="color: #5b6b85">[WhatsApp · Ana · 16/11 14:46]</span> e ainda está sem resposta.</p>
 <p style="margin: 0; display: flex; flex-wrap: wrap; gap: 4px 8px; font-size: 12px; line-height: 16px; color: #7f8da6; font-variant-numeric: tabular-nums">Sonnet · 3 s · 3,1 mil entrada · 420 saída · US$ 0,02 · 1 reunião consultada</p>
 <div style="margin-top: 4px; padding-top: 8px; border-top: 1px solid #e3e9f2; display: flex; align-items: center; gap: 4px">
 <button type="button" style="display: flex; align-items: center; gap: 6px; height: 28px; padding: 0 8px; border: 1px solid transparent; border-radius: 4px; background: transparent; color: #5b6b85; font-size: 12px; cursor: pointer"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><rect x="8" y="8" width="13" height="13"></rect><path d="M4 16V4h12"></path></svg>Copiar</button>
@@ -55,18 +50,18 @@ textarea::placeholder,input::placeholder{color:#7f8da6}
 <li style="display: flex; flex-direction: column; gap: 8px; max-width: 72ch; padding: 12px; border: 1px solid #c9d4e5; border-radius: 6px; background: #ffffff">
 <p style="margin: 0; display: flex; align-items: flex-start; gap: 8px; font-size: 13px; font-weight: 500; color: #0a2a5e"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#5b6b85" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true" style="margin-top: 3px; flex: 0 0 14px"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"></path><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"></path></svg><span>Lembrete amanhã às 09:00: responder a Ana sobre o orçamento</span></p>
 <div style="display: flex; flex-wrap: wrap; align-items: center; gap: 8px">
-<button type="button" style="display: flex; align-items: center; gap: 8px; height: 40px; padding: 0 16px; border: 0; border-radius: 4px; background: #1e5bb8; color: #ffffff; font-size: 13px; font-weight: 500; cursor: pointer"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"></path><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"></path></svg>Criar lembrete</button>
-<button type="button" style="display: flex; align-items: center; gap: 8px; height: 40px; padding: 0 14px; border: 1px solid #c9d4e5; border-radius: 4px; background: #ffffff; color: #0a2a5e; font-size: 13px; font-weight: 500; cursor: pointer"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><path d="M17 3l4 4L7 21H3v-4z"></path></svg>Editar</button>
+<button type="button" style="display: flex; align-items: center; gap: 8px; height: 32px; padding: 0 12px; border: 0; border-radius: 4px; background: #1e5bb8; color: #ffffff; font-size: 13px; font-weight: 500; cursor: pointer"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"></path><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"></path></svg>Criar lembrete</button>
+<button type="button" style="display: flex; align-items: center; gap: 8px; height: 32px; padding: 0 12px; border: 1px solid #c9d4e5; border-radius: 4px; background: #ffffff; color: #0a2a5e; font-size: 13px; font-weight: 500; cursor: pointer"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><path d="M17 3l4 4L7 21H3v-4z"></path></svg>Editar</button>
 <button type="button" style="display: flex; align-items: center; height: 28px; padding: 0 8px; border: 0; border-radius: 4px; background: transparent; color: #5b6b85; font-size: 12px; cursor: pointer">Descartar</button>
 </div>
 </li>
 </ol>
 </div>
 
-<div style="flex: 0 0 auto; padding: 16px 32px">
+<div style="flex: 0 0 auto; padding: 12px 24px">
 <div style="max-width: 720px; margin: 0 auto; display: flex; flex-direction: column; border: 1px solid #c9d4e5; border-radius: 6px; background: #ffffff">
 <label for="pergunta" style="position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0)">Pergunta</label>
-<textarea id="pergunta" rows="2" placeholder="Pergunte ou peça algo…" style="min-height: 56px; box-sizing: border-box; resize: none; border: 0; background: transparent; padding: 10px 12px 4px; font: inherit; font-size: 15px; line-height: 22px; color: #061a3d; outline: none"></textarea>
+<textarea id="pergunta" rows="2" placeholder="Pergunte ou peça algo…" style="min-height: 44px; box-sizing: border-box; resize: none; border: 0; background: transparent; padding: 10px 12px 4px; font: inherit; font-size: 14px; line-height: 22px; color: #061a3d; outline: none"></textarea>
 <div style="display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0 4px; padding: 8px 4px; border-top: 1px solid #e3e9f2">
 <label for="modelo" style="position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0)">Modelo</label>
 <select id="modelo" style="height: 28px; padding: 0 6px; border: 1px solid #c9d4e5; border-radius: 4px; background: #ffffff; color: #061a3d; font: inherit; font-size: 12px"><option>Sonnet</option><option>Haiku</option><option>Opus</option></select>
@@ -74,41 +69,20 @@ textarea::placeholder,input::placeholder{color:#7f8da6}
 <select id="escopo" style="height: 28px; padding: 0 6px; border: 1px solid #c9d4e5; border-radius: 4px; background: #ffffff; color: #061a3d; font: inherit; font-size: 12px"><option>Últimos 7 dias</option><option>Últimos 30 dias</option><option>Reuniões escolhidas</option></select>
 <button type="button" aria-pressed="false" style="display: flex; align-items: center; gap: 6px; height: 28px; padding: 0 6px; border: 1px solid #c9d4e5; border-radius: 4px; background: #ffffff; color: #061a3d; font-size: 12px; cursor: pointer"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><path d="M9 4a3 3 0 0 0-3 3 3 3 0 0 0-2 5 3 3 0 0 0 2 5 3 3 0 0 0 6 0V5a2 2 0 0 0-3-1z"></path><path d="M15 4a3 3 0 0 1 3 3 3 3 0 0 1 2 5 3 3 0 0 1-2 5 3 3 0 0 1-6 0"></path></svg>Pensar mais</button>
 <span style="flex: 1 1 0"></span>
-<span style="font-size: 12px; line-height: 16px; color: #7f8da6">↵ envia · ⇧↵ quebra linha</span>
 <button type="button" style="display: flex; align-items: center; gap: 6px; height: 32px; padding: 0 12px; border: 0; border-radius: 4px; background: #1e5bb8; color: #ffffff; font-size: 13px; font-weight: 500; cursor: pointer"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><path d="m5 12 7-7 7 7"></path><path d="M12 19V5"></path></svg>Enviar</button>
 </div>
 </div>
 </div>
 </section>
 
-<aside aria-label="Conversas e contexto" style="flex: 0 0 300px; width: 300px; display: flex; flex-direction: column; border-left: 1px solid #e3e9f2">
-<div style="display: flex; flex-direction: column; gap: 8px; padding: 12px">
-<button type="button" style="display: flex; align-items: center; justify-content: center; gap: 8px; height: 40px; padding: 0 14px; border: 1px solid #c9d4e5; border-radius: 4px; background: #ffffff; color: #0a2a5e; font-size: 13px; font-weight: 500; cursor: pointer"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><path d="M5 12h14"></path><path d="M12 5v14"></path></svg>Nova conversa</button>
-<div style="display: flex; align-items: center; gap: 8px; height: 32px; box-sizing: border-box; padding: 0 8px; border: 1px solid #c9d4e5; border-radius: 4px; background: #ffffff; color: #7f8da6">
-<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><path d="m20 20-4-4"></path></svg>
-<label for="busca-conversas" style="position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0)">Buscar conversas</label>
-<input id="busca-conversas" type="search" placeholder="Buscar conversas" style="flex: 1 1 0; min-width: 0; border: 0; background: transparent; font: inherit; font-size: 12px; color: #061a3d; outline: none">
+<aside aria-label="Contexto" style="flex: 0 0 300px; width: 300px; display: flex; flex-direction: column; overflow: hidden; border-left: 1px solid #e3e9f2; background: #ffffff">
+<div style="flex: 0 0 44px; height: 44px; box-sizing: border-box; display: flex; align-items: center; justify-content: space-between; padding: 0 6px 0 12px; border-bottom: 1px solid #e3e9f2">
+<h2 style="margin: 0; font-size: 13px; line-height: 20px; font-weight: 700; color: #0a2a5e">Contexto</h2>
+<button type="button" aria-label="Fechar o contexto" style="display: flex; align-items: center; justify-content: center; width: 32px; height: 32px; padding: 0; border: 0; border-radius: 4px; background: transparent; color: #5b6b85; cursor: pointer"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true" style="flex: none; display: block"><path d="M18 6 6 18M6 6l12 12"></path></svg></button>
 </div>
-</div>
-
-<div style="flex: 1 1 0; min-height: 0; overflow: hidden; padding-bottom: 12px">
-<h3 style="margin: 0; padding: 12px 16px 6px; border-bottom: 1px solid #e3e9f2; font-size: 12px; line-height: 16px; font-weight: 700; color: #5b6b85">Hoje</h3>
-<ul style="margin: 0; padding: 0; list-style: none">
-<li style="display: flex; flex-direction: column; gap: 2px; padding: 10px 16px; border-bottom: 1px solid #e3e9f2; background: #eef2f9"><a href="#" aria-current="true" style="font-size: 13px; font-weight: 500; color: #0a2a5e; text-decoration: none">Pendências no WhatsApp</a><span style="font-size: 12px; line-height: 16px; color: #5b6b85; font-variant-numeric: tabular-nums">14:52</span></li>
-<li style="display: flex; flex-direction: column; gap: 2px; padding: 10px 16px; border-bottom: 1px solid #e3e9f2"><a href="#" style="font-size: 13px; font-weight: 500; color: #0a2a5e; text-decoration: none">Resumo do Planejamento Q1</a><span style="font-size: 12px; line-height: 16px; color: #5b6b85; font-variant-numeric: tabular-nums">11:20</span></li>
-</ul>
-<h3 style="margin: 0; padding: 12px 16px 6px; border-bottom: 1px solid #e3e9f2; font-size: 12px; line-height: 16px; font-weight: 700; color: #5b6b85">Ontem</h3>
-<ul style="margin: 0; padding: 0; list-style: none">
-<li style="display: flex; flex-direction: column; gap: 2px; padding: 10px 16px; border-bottom: 1px solid #e3e9f2"><a href="#" style="font-size: 13px; font-weight: 500; color: #0a2a5e; text-decoration: none">Tarefas da Daily</a><span style="font-size: 12px; line-height: 16px; color: #5b6b85; font-variant-numeric: tabular-nums">18:05</span></li>
-<li style="display: flex; flex-direction: column; gap: 2px; padding: 10px 16px; border-bottom: 1px solid #e3e9f2"><a href="#" style="font-size: 13px; font-weight: 500; color: #0a2a5e; text-decoration: none">Email do fornecedor</a><span style="font-size: 12px; line-height: 16px; color: #5b6b85; font-variant-numeric: tabular-nums">09:40</span></li>
-</ul>
-<h3 style="margin: 0; padding: 12px 16px 6px; border-bottom: 1px solid #e3e9f2; font-size: 12px; line-height: 16px; font-weight: 700; color: #5b6b85">Sexta-feira</h3>
-<ul style="margin: 0; padding: 0; list-style: none">
-<li style="display: flex; flex-direction: column; gap: 2px; padding: 10px 16px; border-bottom: 1px solid #e3e9f2"><a href="#" style="font-size: 13px; font-weight: 500; color: #0a2a5e; text-decoration: none">Decisões da semana</a><span style="font-size: 12px; line-height: 16px; color: #5b6b85; font-variant-numeric: tabular-nums">17:12</span></li>
-</ul>
-</div>
-
-<button type="button" aria-expanded="false" style="flex: 0 0 auto; display: flex; align-items: center; gap: 8px; min-height: 44px; padding: 0 16px; border: 0; border-top: 1px solid #e3e9f2; background: transparent; color: #0a2a5e; font-size: 12px; font-weight: 500; text-align: left; cursor: pointer"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><path d="m9 6 6 6-6 6"></path></svg><span>Contexto</span><span style="font-weight: 400; color: #5b6b85">· Todas as reuniões (12) · Sonnet</span></button>
+<section aria-label="Escopo" style="display: flex; flex-direction: column; gap: 8px; padding: 12px; border-bottom: 1px solid #e3e9f2"><h3 style="margin: 0; font-size: 11px; line-height: 16px; font-weight: 500; color: #5b6b85">Escopo</h3><div style="display: flex; flex-direction: column; margin: 0 -4px"><label style="display: flex; align-items: center; gap: 8px; height: 28px; padding: 0 4px; border-radius: 4px; font-size: 13px; font-weight: 500; color: #0a2a5e"><span aria-hidden="true" style="flex: none; width: 8px; height: 8px; box-sizing: border-box; border: 1px solid #1e5bb8; background: #1e5bb8"></span>Todas as reuniões (12)</label><label style="display: flex; align-items: center; gap: 8px; height: 28px; padding: 0 4px; border-radius: 4px; font-size: 13px; color: #061a3d"><span aria-hidden="true" style="flex: none; width: 8px; height: 8px; box-sizing: border-box; border: 1px solid #c9d4e5; background: transparent"></span>Últimos 7 dias</label><label style="display: flex; align-items: center; gap: 8px; height: 28px; padding: 0 4px; border-radius: 4px; font-size: 13px; color: #061a3d"><span aria-hidden="true" style="flex: none; width: 8px; height: 8px; box-sizing: border-box; border: 1px solid #c9d4e5; background: transparent"></span>Últimos 30 dias</label><label style="display: flex; align-items: center; gap: 8px; height: 28px; padding: 0 4px; border-radius: 4px; font-size: 13px; color: #061a3d"><span aria-hidden="true" style="flex: none; width: 8px; height: 8px; box-sizing: border-box; border: 1px solid #c9d4e5; background: transparent"></span>Reuniões escolhidas</label></div></section>
+<section aria-label="Fontes" style="display: flex; flex-direction: column; gap: 8px; padding: 12px; border-bottom: 1px solid #e3e9f2"><h3 style="margin: 0; font-size: 11px; line-height: 16px; font-weight: 500; color: #5b6b85">Fontes</h3><div style="display: flex; flex-direction: column; gap: 4px; margin: 0 -4px"><div style="display: flex; align-items: flex-start; gap: 8px; padding: 4px"><div style="flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column"><span style="font-size: 13px; color: #061a3d">Automações</span><span style="font-size: 12px; line-height: 16px; color: #5b6b85">Agentes, tarefas agendadas e as últimas 20 execuções.</span></div><span role="switch" aria-checked="true" style="flex: none; display: flex; align-items: center; justify-content: flex-end; width: 36px; height: 20px; box-sizing: border-box; padding: 2px; border-radius: 4px; border: 1px solid #1e5bb8; background: #1e5bb8"><span style="width: 14px; height: 14px; border-radius: 2px; background: #ffffff"></span></span></div><div style="display: flex; align-items: flex-start; gap: 8px; padding: 4px"><div style="flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column"><span style="font-size: 13px; color: #061a3d">Guia do app</span><span style="font-size: 12px; line-height: 16px; color: #5b6b85">Cada tela, cada aba de Configurações, os atalhos e o que cada recurso faz.</span></div><span role="switch" aria-checked="true" style="flex: none; display: flex; align-items: center; justify-content: flex-end; width: 36px; height: 20px; box-sizing: border-box; padding: 2px; border-radius: 4px; border: 1px solid #1e5bb8; background: #1e5bb8"><span style="width: 14px; height: 14px; border-radius: 2px; background: #ffffff"></span></span></div><div style="display: flex; align-items: flex-start; gap: 8px; padding: 4px"><div style="flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column"><span style="font-size: 13px; color: #061a3d">Internet</span><span style="font-size: 12px; line-height: 16px; color: #5b6b85">Só com o motor ACP (Configurações › Claude).</span></div><span role="switch" aria-checked="false" style="flex: none; display: flex; align-items: center; justify-content: flex-start; width: 36px; height: 20px; box-sizing: border-box; padding: 2px; border-radius: 4px; border: 1px solid #c9d4e5; background: #eef2f9"><span style="width: 14px; height: 14px; border-radius: 2px; background: #5b6b85"></span></span></div></div></section>
+<section aria-label="Consultadas nesta conversa" style="display: flex; flex-direction: column; gap: 8px; padding: 12px; border-bottom: 1px solid #e3e9f2"><h3 style="margin: 0; font-size: 11px; line-height: 16px; font-weight: 500; color: #5b6b85">Consultadas nesta conversa</h3><a href="DetalheResumo.dc.html" style="display: flex; flex-direction: column; padding: 4px; border-radius: 4px; text-decoration: none"><span style="font-size: 13px; font-weight: 500; color: #1e5bb8">Planejamento Q1</span><span style="font-size: 12px; line-height: 16px; color: #7f8da6; font-variant-numeric: tabular-nums">16/11 · 16:00</span></a></section><section aria-label="Totais" style="display: flex; flex-direction: column; gap: 8px; padding: 12px; border-bottom: 1px solid #e3e9f2; border-bottom: 0"><h3 style="margin: 0; font-size: 11px; line-height: 16px; font-weight: 500; color: #5b6b85">Totais</h3><dl style="margin: 0; display: grid; grid-template-columns: auto 1fr; gap: 4px 16px; font-size: 13px; font-variant-numeric: tabular-nums"><dt style="color: #5b6b85">Mensagens</dt><dd style="margin: 0; text-align: right; color: #061a3d">2</dd><dt style="color: #5b6b85">Tokens</dt><dd style="margin: 0; text-align: right; color: #061a3d">3,5 mil</dd><dt style="color: #5b6b85">Custo</dt><dd style="margin: 0; text-align: right; color: #061a3d">US$ 0,02</dd></dl></section>
 </aside>
 </div>
 </main>

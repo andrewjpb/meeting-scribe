@@ -63,8 +63,8 @@ export function SourcesSection({ scope, onScope }: { scope: ChatScope; onScope: 
   }
 
   return (
-    <section aria-label="Fontes" data-chat-sources className="flex flex-col gap-3 border-b border-line px-4 py-4">
-      <h3 className="text-12 font-bold text-text-muted">Fontes</h3>
+    <section aria-label="Fontes" data-chat-sources className="flex flex-col gap-2 border-b border-line px-3 py-3">
+      <h3 className="label">Fontes</h3>
       {showWhatsApp && (
         <>
           <SourceRow kind="whatsapp" checked={sources.whatsapp} onChange={(on) => toggle('whatsapp', on)} />

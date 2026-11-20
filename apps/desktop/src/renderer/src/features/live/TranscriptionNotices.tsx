@@ -123,7 +123,7 @@ export function TranscriptionNotices() {
 
   if (!rows.length) return null
   return (
-    <ul aria-live="polite" className="mx-10 mt-4 flex flex-col gap-2">
+    <ul aria-live="polite" className="mx-8 mt-3 flex flex-col gap-2">
       {rows}
     </ul>
   )

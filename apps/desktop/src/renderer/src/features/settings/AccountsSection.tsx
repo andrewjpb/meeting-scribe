@@ -78,7 +78,7 @@ export function AccountsSection() {
   return (
     <Section title="Google">
       <div
-        className="flex flex-col gap-3 py-4"
+        className="flex flex-col gap-2.5 py-3"
         data-setting-row
         data-setting-name="Conta Google"
         data-setting-description="Entrar com a conta Google para guardar as reuniões no Drive."
@@ -136,7 +136,7 @@ export function AccountsSection() {
         </div>
 
         {configuring && (
-          <div data-google-client-panel className="flex flex-col gap-3 rounded-[var(--radius-panel)] border border-line bg-bg-sunken p-4">
+          <div data-google-client-panel className="flex flex-col gap-3 rounded-[var(--radius-panel)] border border-line bg-bg-sunken p-3">
             <div className="flex flex-col gap-1.5">
               <label htmlFor={GOOGLE_CLIENT_ID_INPUT} className="text-12 font-medium text-text">
                 ID do cliente

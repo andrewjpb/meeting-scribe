@@ -8,7 +8,7 @@ import { Plus, Sparkles } from 'lucide-react'
 import { useState } from 'react'
 import { Icon } from '../../design/Icon'
 import { Switch } from '../../design/Switch'
-import { Button } from '../../design/Button'
+import { ActionButton } from '../../design/ActionButton'
 import { tabPanelId, Tabs, tabId } from '../../design/Tabs'
 import { NoteUndo, NotesBoard } from '../notes/NotesBoard'
 import { filterNotes, NotesFilter, type NotesFilterValue } from '../notes/NotesFilter'
@@ -36,27 +36,26 @@ export function NotesPanel() {
   // O fim do painel fica livre para a barra de controles, que flutua por cima: nenhum card passa por baixo dela.
   return (
     <aside data-notes-panel data-notes-root data-panel-tab={tab} aria-label="Anotações e análise" className="flex w-[320px] shrink-0 flex-col border-l border-line pb-28">
-      <div className="flex items-center justify-between gap-3 border-b border-line px-4 pt-2">
+      {/* Abas de 32 com o sublinhado sobre o fio; "Nova anotação" de 28 centrada na linha delas (contrato 81). */}
+      <div className="flex items-end justify-between gap-3 border-b border-line px-3 pt-1.5">
         <Tabs value={tab} tabs={PANEL_TABS} onChange={setPanelTab} label="Painel da gravação" id={PANEL_TABS_ID} />
         {tab === 'anotacoes' && (
-          <div className="pb-1.5">
-            <Button
+          <div className="pb-0.5">
+            <ActionButton
               action="new-note"
-              variant="secondary"
               icon={Plus}
+              label="Nova anotação"
               onClick={() => {
                 // O card novo está aberto: com "Resolvidas" ele não apareceria.
                 if (filter === 'resolvidas') setFilter('todas')
                 addNote()
               }}
               disabled={saving}
-            >
-              Nova anotação
-            </Button>
+            />
           </div>
         )}
       </div>
-      <div role="tabpanel" id={tabPanelId(PANEL_TABS_ID, tab)} aria-labelledby={tabId(PANEL_TABS_ID, tab)} className="min-h-0 flex-1 overflow-y-auto px-4 pt-4 pb-4">
+      <div role="tabpanel" id={tabPanelId(PANEL_TABS_ID, tab)} aria-labelledby={tabId(PANEL_TABS_ID, tab)} className="min-h-0 flex-1 overflow-y-auto px-3 pt-3 pb-4">
         {tab === 'analise' ? (
           <AnalysisPanel />
         ) : (

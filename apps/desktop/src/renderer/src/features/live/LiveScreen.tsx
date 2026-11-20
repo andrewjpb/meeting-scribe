@@ -117,12 +117,12 @@ export function LiveScreen() {
 
   return (
     <div className="relative flex min-h-0 flex-1 flex-col" data-phase={phase} data-mic={capture.mic} data-system={capture.system}>
-      <header className="px-10 pt-7 pb-5">
+      <header className="px-8 pt-5 pb-3">
         <div className="flex items-center gap-5">
           <RecordingStatus phase={phase} elapsed={elapsed} />
           {meetSpeakers && <MeetMarker connected={meetConnected} participants={meetParticipants} />}
         </div>
-        <div className="mt-2.5">
+        <div className="mt-2">
           <EditableTitle value={title} onCommit={setTitle} maxLength={MEETING_TITLE_MAX} />
         </div>
       </header>
@@ -168,10 +168,10 @@ function RecordingStatus({ phase, elapsed }: { phase: CapturePhase; elapsed: num
   return (
     <p className="flex h-5 items-center gap-3" aria-live="polite">
       <span aria-hidden="true" data-rec-square className={`size-2 ${status.square}`} />
-      <span data-status className={`text-13 font-medium ${status.text}`}>
+      <span data-status className={`label ${status.text}`}>
         {status.label}
       </span>
-      <span className="text-15 font-medium text-text tabular" aria-label="Tempo gravado">
+      <span className="text-14 font-medium text-text tabular" aria-label="Tempo gravado">
         {formatElapsed(elapsed)}
       </span>
     </p>
@@ -192,7 +192,7 @@ function MeetMarker({ connected, participants }: { connected: boolean; participa
     <button
       type="button"
       data-meet-marker={connected ? 'on' : 'off'}
-      className="no-drag flex h-5 items-center gap-1.5 rounded-[var(--radius-control)] text-12 whitespace-nowrap text-text-muted transition-opacity duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:opacity-80"
+      className="no-drag flex h-5 items-center gap-1.5 rounded-[var(--radius-control)] label whitespace-nowrap transition-opacity duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:opacity-80"
       title={hint}
       aria-label={hint}
       onClick={() => void navigate(settingsPath('plugins'))}
@@ -210,7 +210,7 @@ function NoRecording() {
   const startFailed = useRecording((state) => state.startFailed)
   const retryStart = useRecording((state) => state.retryStart)
   return (
-    <div className="flex flex-1 flex-col px-10 pt-7 pb-10">
+    <div className="flex flex-1 flex-col px-8 pt-5 pb-8">
       {startFailed && <RetryNotice id="start-failed" text="Não foi possível preparar a gravação." onRetry={() => void retryStart()} />}
       <div className="grow-[3]" />
       <EmptyState
