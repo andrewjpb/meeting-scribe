@@ -9117,6 +9117,76 @@ async function emailChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => voi
     ok: twoToggles && collapsed && saved && stillCollapsed && expanded && deleted,
     detail: `duas contas com a seta=${twoToggles}; recolhida=${collapsed}, gravada=${saved}, recolhida na janela nova=${stillCollapsed}, aberta de novo=${expanded}; apagada pela confirmação=${deleted}`,
   }
+  // As duas contas recolhidas, a do servidor falso com uma não lida (a mensagem em HTML volta a não lida pelo botão da
+  // leitura): a linha de cada conta mostra o nome e, na dela, o número. Os nomes ganham um texto comprido só para a
+  // medição (no nó de texto que o React já tem, restaurado logo depois): nada do nível passa da borda direita da barra
+  // lateral e só os rótulos com `truncate` encurtam. Sem o `min-width: 0` dos níveis E o `minmax(0, 1fr)` da
+  // `.side-stack`, a coluna alarga com o texto e o número sai pela borda.
+  await openEmailFolder(contents, 'inbox', 3)
+  await clickEmailRow(contents, EMAIL_HTML_SUBJECT)
+  await clickSelector(contents, '[data-action="email-toggle-seen"]')
+  const fitUnread = await waitFor(contents, `${EMAIL_UNREAD} === '1'`, 8000)
+  const fitToggles = await evaluate<string[]>(contents, `[...document.querySelectorAll('${SIDEBAR_EMAIL} [data-email-account-toggle]')].map((el) => el.dataset.emailAccountToggle)`)
+  // Uma conta por vez, esperando a seta virar: o `toggle` grava a lista a partir das recolhidas da última renderização,
+  // então dois cliques seguidos gravam a segunda por cima da primeira e ela volta a abrir.
+  const setOpen = async (id: string, open: boolean): Promise<boolean> => {
+    const toggle = `${SIDEBAR_EMAIL} [data-email-account-toggle="${id}"]`
+    if ((await evaluate<string | null>(contents, `document.querySelector('${toggle}')?.getAttribute('aria-expanded') ?? null`)) !== String(open)) await clickSelector(contents, toggle)
+    return waitFor(contents, `document.querySelector('${toggle}')?.getAttribute('aria-expanded') === '${open}'`)
+  }
+  for (const id of fitToggles) await setOpen(id, false)
+  const fitCollapsed = await waitFor(
+    contents,
+    `[...document.querySelectorAll('${SIDEBAR_EMAIL} [data-email-account-toggle]')].every((el) => el.getAttribute('aria-expanded') === 'false') && !document.querySelector('${SIDEBAR_EMAIL} [data-email-folder]') && document.querySelector('${SIDEBAR_EMAIL} ${ownToggle} > span.tabular')?.textContent === '1'`,
+  )
+  const fit = await evaluate<{ asideRight: number; rows: number[]; badge: number | null; over: string[]; truncated: boolean[]; overflowing: string[]; restored: boolean }>(
+    contents,
+    `(() => {
+      const level = document.querySelector('${SIDEBAR_EMAIL}')
+      const asideRight = level.closest('aside').getBoundingClientRect().right
+      const labels = [...level.querySelectorAll('[data-email-account-toggle] > span.truncate')]
+      const original = labels.map((el) => el.firstChild.nodeValue)
+      labels.forEach((el, index) => { el.firstChild.nodeValue = 'Conta de teste com um nome bem comprido ' + index + ' (comprida.demais@lap.example)' })
+      const describe = (el) => el.tagName.toLowerCase() + (el.className && typeof el.className === 'string' ? '.' + el.className.trim().split(/\\s+/).slice(0, 3).join('.') : '')
+      const visible = [...level.querySelectorAll('*')].filter((el) => !el.closest('.sr-only'))
+      const over = visible.filter((el) => el.getBoundingClientRect().right > asideRight + 0.5).map(describe)
+      const overflowing = visible
+        .filter((el) => el instanceof HTMLElement && getComputedStyle(el).display !== 'inline' && el.scrollWidth > el.clientWidth + 1 && !el.classList.contains('truncate'))
+        .map(describe)
+      const result = {
+        asideRight: Math.round(asideRight),
+        rows: [...level.querySelectorAll('[data-email-account-toggle]')].map((el) => Math.round(el.getBoundingClientRect().right)),
+        badge: (() => { const badge = level.querySelector('${ownToggle} > span.tabular'); return badge ? Math.round(badge.getBoundingClientRect().right) : null })(),
+        over,
+        truncated: labels.map((el) => el.scrollWidth > el.clientWidth),
+        overflowing,
+      }
+      labels.forEach((el, index) => { el.firstChild.nodeValue = original[index] })
+      return { ...result, restored: labels.every((el, index) => el.textContent === original[index]) }
+    })()`,
+  )
+  for (const id of fitToggles) await setOpen(id, true)
+  await waitFor(contents, `document.querySelector('${ownInbox}')`)
+  await clickSelector(contents, '[data-action="email-toggle-seen"]')
+  const fitRead = await waitFor(contents, `!document.querySelector('[data-email-unread-count]')`, 8000)
+  sidebarChecks['emailFits'] = {
+    ok:
+      fitUnread &&
+      fitToggles.length === 2 &&
+      fitCollapsed &&
+      fit.rows.length === 2 &&
+      fit.rows.every((right) => right <= fit.asideRight) &&
+      fit.badge !== null &&
+      fit.badge <= fit.asideRight &&
+      fit.over.length === 0 &&
+      fit.truncated.length === 2 &&
+      fit.truncated.every(Boolean) &&
+      fit.overflowing.length === 0 &&
+      fit.restored &&
+      fitRead,
+    detail: `contas recolhidas=${fitCollapsed} (${fitToggles.length}), uma não lida na linha da conta=${fitUnread}; com nomes compridos: borda direita da barra ${fit.asideRight}, linhas ${JSON.stringify(fit.rows)}, número ${fit.badge ?? 'nenhum na linha da conta recolhida'}; fora da borda ${JSON.stringify(fit.over)}; rótulos truncados ${JSON.stringify(fit.truncated)}, transbordando sem truncate ${JSON.stringify(fit.overflowing)}; nomes restaurados=${fit.restored}; lida de novo=${fitRead}`,
+  }
+
   // O print do nível Email: as duas contas, a do servidor falso com a Caixa de Entrada aberta e a com problema.
   await openEmailFolder(contents, 'inbox', 3)
   await settle(contents)
@@ -10074,7 +10144,7 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
   for (const [name, check] of Object.entries(email)) if (!check.ok) failures.push(`email ${name}: ${check.detail}`)
   for (const name of ['settings', 'list', 'reading', 'compose', 'folders', 'attachments', 'remove', 'dark', 'notify', 'assistantPending', 'assistantReply', 'assistantTask', 'assistantSearch', 'taskEmailForm', 'taskEmailRun']) if (!email[name]) failures.push(`email ${name}: não executado`)
   for (const [name, check] of Object.entries(sidebar)) if (!check.ok) failures.push(`barra lateral ${name}: ${check.detail}`)
-  for (const name of ['noAccount', 'rootItems', 'enterFirstTime', 'back', 'enterInSection', 'enterLast', 'slide', 'still', 'routeLevel', 'reducedMotion', 'badge', 'settingsEnter', 'settingsRows', 'settingsBack', 'settingsEnterInSection', 'settingsScreen', 'settingsRouteLevel', 'settingsAnchor', 'settingsDoubleMenu', 'settingsDoubleClick', 'assistantEnter', 'assistantLevel', 'assistantRowMenu', 'assistantRail', 'assistantReveal', 'assistantOpen', 'assistantSearch', 'assistantDelete', 'assistantNewChat']) {
+  for (const name of ['noAccount', 'rootItems', 'enterFirstTime', 'back', 'enterInSection', 'enterLast', 'slide', 'still', 'routeLevel', 'reducedMotion', 'badge', 'emailFits', 'settingsEnter', 'settingsRows', 'settingsBack', 'settingsEnterInSection', 'settingsScreen', 'settingsRouteLevel', 'settingsAnchor', 'settingsDoubleMenu', 'settingsDoubleClick', 'assistantEnter', 'assistantLevel', 'assistantRowMenu', 'assistantRail', 'assistantReveal', 'assistantOpen', 'assistantSearch', 'assistantDelete', 'assistantNewChat']) {
     if (!sidebar[name]) failures.push(`barra lateral ${name}: não executado`)
   }
   for (const [name, check] of Object.entries(lock)) if (!check.ok) failures.push(`bloqueio ${name}: ${check.detail}`)
