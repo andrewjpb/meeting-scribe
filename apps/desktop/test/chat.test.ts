@@ -13,7 +13,7 @@ import type { MeetingSummary } from '../src/shared/meeting-summary'
 import type { Meeting } from '../src/shared/meetings'
 import { DEFAULT_SETTINGS, type AppSettings } from '../src/shared/settings-defaults'
 import { TRANSCRIPT_VERSION, type TranscriptDocument } from '../src/shared/transcription'
-import { CHAT_ALLOWED_TOOLS, CHAT_DISALLOWED_TOOLS, chatArgs, chatQuestionContent, chatStepOf, chatSystemPrompt, ClaudeChat, meetingIdOfCorpusFile, type ChatAnswer } from '../src/main/claude-cli/chat'
+import { assistantSystemPrompt, CHAT_ALLOWED_TOOLS, CHAT_DISALLOWED_TOOLS, chatArgs, chatQuestionContent, chatStepOf, chatSystemPrompt, ClaudeChat, meetingIdOfCorpusFile, type ChatAnswer } from '../src/main/claude-cli/chat'
 import { claudeEnv } from '../src/main/claude-cli/locate'
 import type { ClaudeChild, SpawnClaude, SpawnOptions } from '../src/main/claude-cli/translator'
 import { CHAT_CORPUS_DIR, CHAT_INDEX_FILE, CHAT_SCOPE_DIR, corpusFileName, createChatCorpus, meetingCorpusMarkdown, scopeMeetingIds } from '../src/main/chat/corpus'
@@ -177,6 +177,17 @@ describe('instrução e sinalizadores (CA2)', () => {
     expect(content.match(/<\/historico>/g)).toHaveLength(1)
     expect(chatQuestionContent('a < b')).toBe('a &lt; b')
     expect(chatSystemPrompt('all')).toContain('&amp;, &lt; e &gt;: são texto')
+  })
+  it('contrato 78: a instrução do Assistente descreve o evento e os cartões de lembrete; ninguém executa sem o clique', () => {
+    const prompt = assistantSystemPrompt('all')
+    expect(prompt).not.toContain('não muda nada')
+    expect(prompt).toContain('você propõe cartões; nada acontece sem o clique da pessoa')
+    expect(prompt).toContain('"evento" com "titulo"')
+    expect(prompt).toContain('"lembrete-editar" com "id"')
+    expect(prompt).toContain('"lembrete-apagar" com "id"')
+    expect(prompt).toContain('{"tipo": "evento", "titulo": "Aniversário do Jefferson"')
+    expect(prompt).toContain('Só proponha editar ou apagar lembrete com o id listado em AUTOMACOES.md')
+    expect(prompt).toContain('use o nome de uma agenda listada em ESTADO.md ou omita')
   })
 })
 

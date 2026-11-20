@@ -15,8 +15,10 @@
 //
 // Contrato 21: os cartões de aprovação das ferramentas MCP ficam com a resposta em curso (nunca gravados); a escolha vai
 // ao main, que avisa quando o cartão sai.
+//
+// Contrato 78: "Pôr na agenda" no cartão de evento e "Salvar"/"Apagar lembrete" nos cartões de lembrete, também pelo main.
 import { create } from 'zustand'
-import type { ChatActionRef, ChatActionResult, ChatActionStateRequest } from '@shared/assistant'
+import type { ChatActionEventFields, ChatActionRef, ChatActionResult, ChatActionStateRequest } from '@shared/assistant'
 import {
   DEFAULT_CHAT_SCOPE,
   type Chat,
@@ -104,6 +106,10 @@ interface ChatState {
   createReminder: (ref: ChatActionRef, edit?: { at?: string; text?: string }) => Promise<ChatActionResult>
   /** Contrato 25: "Descartar", "Enviada" (depois do envio do WhatsApp) e "Tarefa criada". */
   setActionState: (ref: ChatActionRef, state: ChatActionStateRequest['state'], text?: string) => Promise<ChatActionResult>
+  /** Contrato 78: "Pôr na agenda" (e "Tentar de novo"), na agenda escolhida e com o que o "Editar" mudou. */
+  createEvent: (ref: ChatActionRef, calendarId: string, fields?: ChatActionEventFields) => Promise<ChatActionResult>
+  /** Contrato 78: "Salvar" (`update`, com a hora e o texto do "Editar") ou "Apagar lembrete" (`delete`). */
+  changeReminder: (ref: ChatActionRef, op: 'update' | 'delete', edit?: { at?: string; text?: string }) => Promise<ChatActionResult>
   /** Contrato 21: "Permitir uma vez", "Sempre permitir esta ferramenta" ou "Negar" num cartão de aprovação. */
   answerApproval: (chatId: string, id: string, decision: McpApprovalDecision) => Promise<boolean>
 }
@@ -365,6 +371,26 @@ export const useChat = create<ChatState>()((set, get) => {
     setActionState: async (ref, state, text) => {
       try {
         const result = await window.__scribeApi.invoke('scribe:chat-action-state', { ...ref, state, ...(text !== undefined ? { text } : {}) })
+        if (result.ok) keepChat(result.chat)
+        return result
+      } catch {
+        return { ok: false, error: 'invalid' }
+      }
+    },
+
+    createEvent: async (ref, calendarId, fields) => {
+      try {
+        const result = await window.__scribeApi.invoke('scribe:chat-action-event', { ...ref, calendarId, ...(fields ? { fields } : {}) })
+        if (result.ok) keepChat(result.chat)
+        return result
+      } catch {
+        return { ok: false, error: 'invalid' }
+      }
+    },
+
+    changeReminder: async (ref, op, edit = {}) => {
+      try {
+        const result = await window.__scribeApi.invoke('scribe:chat-action-reminder-change', { ...ref, op, ...(edit.at ? { at: edit.at } : {}), ...(edit.text !== undefined ? { text: edit.text } : {}) })
         if (result.ok) keepChat(result.chat)
         return result
       } catch {

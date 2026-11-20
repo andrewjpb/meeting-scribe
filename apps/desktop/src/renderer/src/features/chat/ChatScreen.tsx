@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState } from 'react'
-import { PageHeader } from '../../design/PageHeader'
 import { ChatConversation } from './ChatConversation'
 import { listKey, useChat } from './chatStore'
 import { CONTEXT_TARGETS, type ContextTarget } from './ContextPanel'
@@ -20,7 +19,8 @@ interface Reveal {
  * "Contexto". Contrato 67: as conversas ficam no nível Assistente da barra lateral (`ChatHistory`) e a aberta continua no
  * store; o trilho é só o "Contexto", sempre aberto numa conversa salva (o cabeçalho da conversa leva o trilho à seção) e,
  * numa conversa nova, aberto pelo botão "Contexto" (sem ele, a conversa vai até a borda da janela). Conversa e trilho
- * cabem lado a lado mesmo em 1120 px.
+ * cabem lado a lado mesmo em 1120 px. Contrato 78 (R4): sem o cabeçalho da tela; a linha da conversa (título, escopo,
+ * modelo e "Contexto") é o topo, e o trilho começa na mesma altura.
  */
 export function ChatScreen() {
   const key = listKey(null)
@@ -70,11 +70,8 @@ export function ChatScreen() {
   }, [reveal, contextSlot])
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col">
-      <div className="px-8 pt-5 pb-5">
-        <PageHeader title="Assistente" description="Pergunte ou peça qualquer coisa: reuniões, WhatsApp, email, automações e o próprio app." />
-      </div>
-      <div className="flex min-h-0 flex-1 border-t border-line">
+    <div data-chat-screen className="flex min-h-0 flex-1 flex-col">
+      <div className="flex min-h-0 flex-1">
         <section aria-label="Conversa" className="flex min-w-0 flex-1 flex-col">
           <ChatConversation
             key={selected ?? 'new'}

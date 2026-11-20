@@ -6,6 +6,8 @@
 // formulário do 23 preenchido. Sem zod e sem Node: o renderer usa as frases. Contrato 45: os cartões de email (a lista
 // que abre a tela Email e o rascunho de resposta, que só sai pelo envio com o token de clique do contrato 42). Contrato 56:
 // o cartão do lote que o Assistente moveu (`email-lote`), montado pelo main a partir do lote, nunca do texto do modelo.
+// Contrato 78: o evento no Calendário do Mac (`evento`, gravado só no clique em "Pôr na agenda") e os cartões de alterar e
+// apagar um lembrete que já existe (`lembrete-editar`, `lembrete-apagar`), que só aceitam o id de um lembrete do app.
 import { formatRunAt, wallTime, type Schedule } from './automations'
 import type { Chat } from './chat'
 
@@ -20,6 +22,14 @@ export const WHATSAPP_CHOICES_MAX = 3
 export const REMINDER_TEXT_MAX = 300
 /** Pedido sem hora: o lembrete fica para as 09:00 e o cartão diz isso. */
 export const REMINDER_DEFAULT_TIME = '09:00'
+/** Contrato 78: os limites do evento (o que passa é cortado). */
+export const EVENT_TITLE_MAX = 200
+export const EVENT_NOTES_MAX = 4000
+export const EVENT_LOCATION_MAX = 1024
+/** Sem "fim": uma hora. */
+export const EVENT_DEFAULT_DURATION_MS = 3_600_000
+/** A frase do erro de um cartão `failed`. */
+export const CHAT_ACTION_ERROR_MAX = 300
 
 /** Telas que o botão "Abrir" alcança. `alvo`: a reunião, a conversa, a aba de Configurações ou a aba das Automações. */
 export const OPEN_SCREENS = ['reuniao', 'reunioes', 'whatsapp', 'configuracoes', 'automacoes', 'gravacao'] as const
@@ -35,10 +45,13 @@ export const OPEN_SCREEN_LABELS: Readonly<Record<OpenScreen, string>> = {
 /** Abas das Automações que o "Abrir" aceita. */
 export const AUTOMATIONS_TABS = ['agentes', 'tarefas', 'execucoes'] as const
 
-/** `proposed`: o cartão espera o clique; `done`: feito (criado, enviado); `dismissed`: "Descartar". */
-export const CHAT_ACTION_STATUSES = ['proposed', 'done', 'dismissed'] as const
+/**
+ * `proposed`: o cartão espera o clique; `done`: feito (criado, enviado); `dismissed`: "Descartar". Contrato 78: `failed`,
+ * o clique não deu certo (a frase em `error`): o evento oferece "Tentar de novo"; o lembrete que sumiu fica assim.
+ */
+export const CHAT_ACTION_STATUSES = ['proposed', 'done', 'failed', 'dismissed'] as const
 export type ChatActionStatus = (typeof CHAT_ACTION_STATUSES)[number]
-export const CHAT_ACTION_KINDS = ['lembrete', 'whatsapp-resposta', 'tarefa', 'abrir', 'emails', 'email-resposta', 'email-lote'] as const
+export const CHAT_ACTION_KINDS = ['lembrete', 'whatsapp-resposta', 'tarefa', 'abrir', 'emails', 'email-resposta', 'email-lote', 'evento', 'lembrete-editar', 'lembrete-apagar'] as const
 export type ChatActionKind = (typeof CHAT_ACTION_KINDS)[number]
 
 interface ActionBase {
@@ -168,7 +181,79 @@ export interface EmailBatchAction extends ActionBase {
   account: string
 }
 
-export type ChatAction = ReminderAction | WhatsAppReplyAction | TaskAction | OpenAction | EmailListAction | EmailReplyAction | EmailBatchAction
+/** Contrato 78: uma agenda do Mac em que dá para gravar, como o cartão mostra (o id só serve para escolher). */
+export interface ChatActionCalendar {
+  id: string
+  title: string
+  /** A conta ("iCloud", "Google"). */
+  source: string
+  /** A cor que o Mac dá à agenda (`#RRGGBB`), ou `null`. */
+  color: string | null
+  isDefault: boolean
+}
+
+/** Contrato 78: o acesso ao Calendário do Mac quando o cartão foi montado. */
+export type ChatCalendarAccess = 'full' | 'not-determined' | 'denied' | 'unavailable'
+
+/**
+ * Contrato 78: `evento`, um evento no Calendário do Mac. O que o modelo escreveu já validado (início hoje ou depois, fim
+ * depois do início) e a agenda resolvida pelo nome; nada é gravado até "Pôr na agenda". Sem acesso, `calendars` vazio e
+ * `calendarId` nulo.
+ */
+export interface ChatActionEvent extends ActionBase {
+  kind: 'evento'
+  title: string
+  /** ISO 8601 (UTC). No dia inteiro, a meia-noite do dia no fuso do Mac. */
+  start: string
+  /** ISO 8601 (UTC), depois do início. No dia inteiro, a meia-noite do dia seguinte. */
+  end: string
+  allDay: boolean
+  location: string | null
+  notes: string | null
+  calendarId: string | null
+  calendarTitle: string | null
+  calendars: ChatActionCalendar[]
+  access: ChatCalendarAccess
+  /** A frase em pt-BR do clique que não deu certo (`failed`). */
+  error: string | null
+}
+
+/** Contrato 78: `lembrete-editar`, mudar a hora e/ou o texto de um lembrete das Automações. */
+export interface ChatActionReminderEdit extends ActionBase {
+  kind: 'lembrete-editar'
+  /** O id da tarefa (`ScheduledTask.id`) com `reminder`. */
+  taskId: string
+  currentText: string
+  /** ISO 8601. */
+  currentAt: string
+  /** O texto novo, ou `null` (fica o atual). */
+  text: string | null
+  /** A hora nova (ISO 8601 com o fuso), ou `null` (fica a atual). */
+  at: string | null
+  error: string | null
+}
+
+/** Contrato 78: `lembrete-apagar`, apagar um lembrete das Automações. */
+export interface ChatActionReminderDelete extends ActionBase {
+  kind: 'lembrete-apagar'
+  taskId: string
+  text: string
+  /** ISO 8601. */
+  at: string
+  error: string | null
+}
+
+export type ChatAction =
+  | ReminderAction
+  | WhatsAppReplyAction
+  | TaskAction
+  | OpenAction
+  | EmailListAction
+  | EmailReplyAction
+  | EmailBatchAction
+  | ChatActionEvent
+  | ChatActionReminderEdit
+  | ChatActionReminderDelete
 
 /** Qual cartão de qual resposta. */
 export interface ChatActionRef {
@@ -180,6 +265,29 @@ export interface ChatActionRef {
 
 /** "Criar lembrete" (com a data e o texto do "Editar", quando mudaram). */
 export interface ChatActionReminderRequest extends ChatActionRef {
+  at?: string | undefined
+  text?: string | undefined
+}
+
+/** Contrato 78: o que o "Editar" do cartão de evento mudou (o main confere de novo com as mesmas regras). */
+export interface ChatActionEventFields {
+  title?: string | undefined
+  start?: string | undefined
+  end?: string | undefined
+  allDay?: boolean | undefined
+  location?: string | null | undefined
+  notes?: string | null | undefined
+}
+
+/** Contrato 78: "Pôr na agenda" (e "Tentar de novo"), na agenda escolhida no cartão. */
+export interface ChatActionEventRequest extends ChatActionRef {
+  calendarId: string
+  fields?: ChatActionEventFields | undefined
+}
+
+/** Contrato 78: "Salvar" (`update`, com a hora e o texto do "Editar") e "Apagar lembrete" (`delete`). */
+export interface ChatActionReminderChangeRequest extends ChatActionRef {
+  op: 'update' | 'delete'
   at?: string | undefined
   text?: string | undefined
 }
@@ -227,6 +335,40 @@ export function reminderTitle(action: Pick<ReminderAction, 'at' | 'text'>, now: 
 export function reminderCreatedText(at: string, timeZone: string): string {
   return `Lembrete criado · ${reminderWhen(at, timeZone)}`
 }
+
+/** Contrato 78: "sex 20/11 · 20:00–21:00", "sex 20/11 · dia inteiro" ou, em dias diferentes, "sex 20/11 22:00 – sáb 21/11 01:00". */
+export function eventWhen(event: Pick<ChatActionEvent, 'start' | 'end' | 'allDay'>, timeZone: string): string {
+  const start = Date.parse(event.start)
+  const end = Date.parse(event.end)
+  if (Number.isNaN(start) || Number.isNaN(end)) return event.start
+  const day = formatRunAt(start, timeZone).slice(0, -6)
+  if (event.allDay) return `${day} · dia inteiro`
+  const from = wallTime(start, timeZone)
+  const to = wallTime(end, timeZone)
+  if (from.year === to.year && from.month === to.month && from.day === to.day) return `${day} · ${two(from.hour)}:${two(from.minute)}–${two(to.hour)}:${two(to.minute)}`
+  return `${formatRunAt(start, timeZone)} – ${formatRunAt(end, timeZone)}`
+}
+
+/** Contrato 78: "Evento criado · sex 20/11 20:00 · Pessoal" (no dia inteiro, "sex 20/11 (dia inteiro)"). */
+export function eventCreatedText(event: Pick<ChatActionEvent, 'start' | 'allDay'>, calendarTitle: string, timeZone: string): string {
+  const start = Date.parse(event.start)
+  const when = Number.isNaN(start) ? event.start : event.allDay ? `${formatRunAt(start, timeZone).slice(0, -6)} (dia inteiro)` : formatRunAt(start, timeZone)
+  return `Evento criado · ${when} · ${calendarTitle}`.slice(0, 200)
+}
+
+/** Contrato 78: o evento igual que o "Tentar de novo" achou na agenda (o `create` anterior tinha gravado). */
+export function eventAlreadyText(event: Pick<ChatActionEvent, 'start' | 'allDay'>, calendarTitle: string, timeZone: string): string {
+  return eventCreatedText(event, calendarTitle, timeZone).replace(/^Evento criado/, 'Evento já estava na agenda').slice(0, 200)
+}
+
+/** Contrato 78: "Lembrete alterado · qua 18/11 09:00". */
+export function reminderChangedText(at: string, timeZone: string): string {
+  return `Lembrete alterado · ${reminderWhen(at, timeZone)}`
+}
+
+export const REMINDER_DELETED_TEXT = 'Lembrete apagado'
+/** Contrato 78: o lembrete já disparou ou foi apagado entre a proposta e o clique. */
+export const REMINDER_GONE_TEXT = 'Esse lembrete não existe mais: já disparou ou foi apagado em Automações.'
 
 /** "Enviada às 19:40", na hora local. */
 export function sentText(at: number): string {
