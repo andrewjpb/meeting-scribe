@@ -78,6 +78,29 @@ A tela que antes se chamava "Perguntar".
 
 **Outlook, Hotmail e Live pessoais** ainda não funcionam: a Microsoft só aceita login moderno (OAuth) por IMAP, e isso exigiria registrar o app numa conta da Microsoft. Exchange e Microsoft 365 também ficam para depois.
 
+### Funil de vendas: contatos, empresas e oportunidades
+
+O funil de quem vende sozinho, ligado ao que o app já guarda: as reuniões, os emails e o WhatsApp. **Funil**, na barra lateral entre Email e Redes, abre as telas Oportunidades, Contatos e Empresas.
+
+- **Durante e depois da reunião**: quando o resumo termina, o app lê o que foi dito e, se a conversa foi de venda, mostra no Resumo o cartão **"Oportunidade detectada"** (ou "Atualizar oportunidade", quando já existe uma aberta), com título, empresa, contatos, etapa, valor, previsão e próximo passo já preenchidos e editáveis. **Criar** (ou Atualizar), **Vincular a existente…** e **Ignorar**: nada entra no funil sem o seu clique. "Detectar oportunidade", ao lado de "Copiar resumo", roda a leitura sob demanda, mesmo com a detecção automática desligada. No mesmo Resumo, o bloco **Participantes** mostra quem estava no convite da agenda, com o contato ligado ou o botão "+ Contato".
+- **Contatos**: a lista com a ficha de cada um (empresa, cargo, emails, telefones, notas, as oportunidades e a linha do tempo com as reuniões, os emails e as conversas do WhatsApp dessa pessoa). **Importar…** traz uma planilha **CSV** ou um arquivo **vCard** (.vcf): o app reconhece as colunas sozinho, mostra a prévia para conferir e junta quem já existe pelo email ou pelo telefone, sem repetir. A aba **Sugestões** lista quem apareceu nas reuniões, quem trocou dois ou mais emails com você nos últimos 90 dias e as conversas recentes do WhatsApp, cada um com **Adicionar** e **Ignorar**. O "+ Contato" também aparece ao lado do remetente na leitura de um email e no topo dos Detalhes de uma conversa do WhatsApp.
+- **Empresas**: a lista com a ficha (domínios, site, notas, os contatos e as oportunidades). O contato com email de um domínio da empresa entra nela sozinho; com um domínio novo, a ficha sugere criar a empresa.
+- **Oportunidades em kanban**: uma coluna por etapa (Contato, Descoberta, Proposta e Negociação, mais Ganho e Perdido, que ficam recolhidos numa faixa estreita), cada uma com a contagem e a soma dos valores, e no topo quantas estão abertas, o valor em aberto e o ganho no mês. Para mudar de etapa, **arraste o cartão**; soltar em Perdido pede o **motivo da perda** no próprio cartão. Cada cartão mostra o valor, o próximo passo com a data (em vermelho quando venceu) e o aviso **"esfriou"** quando a oportunidade ficou parada mais dias do que o combinado. "Nova oportunidade" abre um cartão no topo da primeira coluna, e "Editar etapas" renomeia, reordena, cria e apaga etapas.
+- **Detalhe da oportunidade**: os campos editáveis no lugar, a etapa, Escrever e-mail, Abrir WhatsApp, Vincular reunião, Marcar como ganha ou perdida e as abas **Linha do tempo** (reuniões, emails, conversas e cada mudança, do mais novo para o mais antigo), Reuniões e Notas. A fechada pode ser arquivada: sai do quadro e continua na ficha do contato.
+- **Assistente**: com a fonte **Funil** ligada no Contexto (ela vem desligada, porque leva ao Claude os nomes, os emails e os telefones dos contatos), pergunte "o que está esfriando?" ou "como está o funil?". Ele cita cada oportunidade como "[Funil · título]" e propõe cartões para criar uma oportunidade, mover de etapa, mudar o próximo passo ou criar um contato, que só valem no seu clique.
+- **Automações**: cada agente tem o interruptor **"Pode ler o funil"** (desligado por padrão), para "Pedir agora" e as tarefas agendadas usarem as oportunidades e os contatos.
+- **Alerta diário**: uma vez por dia, depois das 9h, uma notificação do macOS junta as oportunidades que esfriaram e as com próximo passo vencido; o clique abre o quadro.
+- **Configurações › Geral › Funil de vendas**: "Detectar oportunidades nas reuniões", "Considerar esfriada após (dias)" (padrão 7) e "Avisar oportunidades esfriadas e passos vencidos".
+- **Onde ficam os dados**: num arquivo só, `funil.json`, na pasta de dados do app, só neste Mac, com uma cópia por dia dos últimos 7 dias.
+
+![Oportunidades em kanban, com os totais, o passo vencido e o aviso "esfriou"](docs/images/funil-oportunidades-light.png)
+
+![Detalhe da oportunidade com a linha do tempo](docs/images/funil-oportunidade-light.png)
+
+![Contatos: a lista e a ficha](docs/images/funil-contatos-light.png)
+
+![Resumo da reunião com o cartão "Oportunidade detectada"](docs/images/detalhe-resumo-oportunidade-light.png)
+
 ### Redes: Instagram
 
 - **Conta por token**: em Configurações › Contas › Instagram, cole o token de acesso gerado no painel da Meta (app do tipo Business com o produto Instagram, a sua conta como testadora). Vale para conta profissional (Business ou Creator), sem Página do Facebook e sem login de terceiros. O app confere o token, mostra a conta (tipo, seguidores, validade) e renova o token sozinho antes dos 60 dias. Dá para conectar mais de uma conta.
@@ -97,7 +120,7 @@ A tela que antes se chamava "Perguntar".
 
 ### Do seu jeito
 - **Configurações em abas** (Geral, Gravação, Claude, Arquivos, Contas, Email, Plugins, Conexões, Sobre) com busca (⌘F). As abas ficam na barra lateral, e ⌘1 a ⌘9 trocam de aba com Configurações aberta.
-- **Barra lateral em dois níveis**, como os Ajustes do iOS: na raiz, Reuniões, Assistente, Email (com o total de não lidas), Redes (com uma conta do Instagram conectada), Automações, WhatsApp e Configurações. Email, Redes, Configurações e Assistente têm nível próprio, que entra deslizando com as contas e pastas, as contas e seções, as abas ou as conversas. O cabeçalho no topo do nível volta ao menu sem trocar a tela aberta.
+- **Barra lateral em dois níveis**, como os Ajustes do iOS: na raiz, Reuniões, Assistente, Email (com o total de não lidas), Funil, Redes (com uma conta do Instagram conectada), Automações, WhatsApp e Configurações. Email, Funil, Redes, Configurações e Assistente têm nível próprio, que entra deslizando com as contas e pastas, as telas do funil, as contas e seções, as abas ou as conversas. O cabeçalho no topo do nível volta ao menu sem trocar a tela aberta.
 - **Sua marca**: troque o nome e o logo do app.
 - Tema claro, escuro ou do sistema.
 - **Atualização pelo GitHub**: o app avisa quando sai versão nova, baixa, confere o arquivo e abre o instalador.
@@ -137,6 +160,7 @@ Reuniões em Markdown no seu Mac ─> agente de IA via ACP ─> resumo · análi
 | Arquivos (áudio, transcrição, resumo, anotações) | ficam no seu Mac |
 | Chaves e tokens | cifrados pelo Chaveiro do macOS |
 | Instagram | o app só fala com `graph.instagram.com` e `rupload.facebook.com`, e só baixa as miniaturas dos servidores de imagem da Meta (`*.cdninstagram.com`, `*.fbcdn.net`, só JPEG). O token e a chave secreta do S3 ficam cifrados pelo Chaveiro do macOS |
+| Funil (contatos, empresas, oportunidades) | ficam no seu Mac, em `funil.json`; só vão ao Claude com a fonte "Funil" ligada no Assistente ou com "Pode ler o funil" ligado no agente |
 | Imagens a publicar | só para o bucket S3 que você configurou, de onde saem depois que o Instagram publica |
 
 O agente **não escreve arquivos, não roda comandos e só usa os servidores MCP e os conectores do claude.ai que você ligar**, com a regra de cada ferramenta. A internet só entra onde você liga (a fonte "Internet" do Assistente e o "Pode pesquisar na internet" de cada agente): a busca é livre (até 10 por pedido), mas o app só deixa abrir uma página cujo endereço veio de um resultado dessa busca ou foi escrito por você (até 15 por pedido). Um endereço montado pelo agente, que poderia levar trechos das suas reuniões para fora, é recusado. Tradução, resumo e análise nunca acessam a internet. Nada é publicado, respondido, ocultado ou excluído no Instagram sem o seu clique na tela Redes: o Assistente só cria rascunho. Ele roda sem as suas configurações pessoais do Claude (hooks, `CLAUDE.md`, permissões globais) e só lê dentro da pasta das reuniões — o app confere cada pedido e o próprio `claude` recebe `--restricted`. O agente oficial do Claude (que tem licença proprietária da Anthropic) **não vem dentro do instalador**: o app baixa do registro do npm na primeira vez, só com o seu clique, conferindo o hash de cada pacote.

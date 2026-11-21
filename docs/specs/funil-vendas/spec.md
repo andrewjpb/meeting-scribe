@@ -499,6 +499,16 @@ Versão seguinte:
 14. Previsão de vendas ponderada por etapa (probabilidade por coluna).
 15. E-mail novo redigido pelo Assistente (cartão `email-novo`), hoje só resposta.
 
+Limitações conhecidas desta rodada (fechamento, contrato 118, 21/11/2026):
+16. O smoke do funil não restaura `funil.json` inteiro entre os blocos: cada bloco deixa eventos extras na linha
+    do tempo para os blocos seguintes (os prints e os checks contam com isso).
+17. A detecção automática de oportunidade fica desligada no smoke (R38); o cenário usa "Detectar oportunidade"
+    (R40), e a passada que roda sozinha depois do resumo só é exercitada pelos testes vitest e pelo teste navegado.
+18. "Ganho em <mês>" na linha de totais soma também as ganhas arquivadas do mês (decisão do contrato 107):
+    arquivar tira a oportunidade do quadro, não do total.
+19. A fonte Funil do Assistente vem desligada por padrão (R41): quem não ligar no painel Contexto não tem respostas
+    com os dados do funil nem citações `[Funil · …]`, e o teste navegado (passo 8) precisa ligá-la antes.
+
 ## Verificação end-to-end
 
 1. Abrir o app com `funil.json` ausente: item Funil na barra lateral; Oportunidades mostra 6 colunas vazias
