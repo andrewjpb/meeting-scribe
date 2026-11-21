@@ -1,14 +1,18 @@
-import { Copy, Download, RefreshCw, Sparkles, Terminal } from 'lucide-react'
+import { Copy, Download, Funnel, RefreshCw, Sparkles, Terminal, TriangleAlert } from 'lucide-react'
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { acpReady } from '@shared/acp'
 import { summaryDateLabel, type MeetingSummary, type SummaryError } from '@shared/meeting-summary'
+import type { MeetingAttendee, MeetingCalendar } from '@shared/meetings'
 import { useAcp } from '../../app/acpStore'
 import { useAgentLabel } from '../../app/agentLabel'
 import { useSettings } from '../../app/settingsStore'
 import { Button } from '../../design/Button'
 import { Icon } from '../../design/Icon'
 import { Note, NOTE_ACTION_CLASS } from '../../design/Note'
+import { ContactLink } from '../funil/ContactLink'
+import { useProposta } from '../funil/proposalStore'
 import { RetryNotice } from '../live/Notices'
+import { OpportunityCard } from './OpportunityCard'
 import { OpenQuestionsSection } from './OpenQuestionsSection'
 import type { AnalysesView } from './useAnalyses'
 import type { SummaryView } from './useSummary'
@@ -93,6 +97,7 @@ export function SummaryTab({
   onGenerate,
   analyses,
   onJump,
+  calendar,
 }: {
   meetingId: string
   view: SummaryView
@@ -100,6 +105,8 @@ export function SummaryTab({
   /** Análises da reunião (contrato 19); sem isto a seção "Perguntas em aberto" não aparece. */
   analyses?: { view: AnalysesView; analyze: () => void } | undefined
   onJump?: ((atMs: number) => void) | undefined
+  /** Contrato 116 (R35): o evento da agenda da reunião; com participantes, o bloco "Participantes". */
+  calendar?: MeetingCalendar | null | undefined
 }) {
   const agentLabel = useAgentLabel()
   if (view.state === 'loading') return <div className="flex-1" aria-busy="true" />
@@ -146,7 +153,7 @@ export function SummaryTab({
           <UseCommandLine />
         </div>
       )}
-      {summary && <SummaryContent meetingId={meetingId} summary={summary} onGenerate={onGenerate} />}
+      {summary && <SummaryContent meetingId={meetingId} summary={summary} onGenerate={onGenerate} attendees={calendar?.attendees ?? []} />}
     </Column>
   )
 }
@@ -160,7 +167,17 @@ function SectionTitle({ children }: { children: string }) {
   )
 }
 
-function SummaryContent({ meetingId, summary, onGenerate }: { meetingId: string; summary: MeetingSummary; onGenerate: () => void }) {
+function SummaryContent({ meetingId, summary, onGenerate, attendees }: { meetingId: string; summary: MeetingSummary; onGenerate: () => void; attendees: readonly MeetingAttendee[] }) {
+  // Contrato 116 (R39, R40): a proposta de oportunidade da reunião e o "Detectar oportunidade".
+  const proposta = useProposta(meetingId)
+  // Desligado já no clique (antes da resposta do canal): um duplo clique não dispara duas detecções.
+  const [pedindo, setPedindo] = useState(false)
+  const detectando = pedindo || (proposta.view?.detectando ?? false)
+  const detectar = (): void => {
+    if (detectando) return
+    setPedindo(true)
+    void proposta.detectar().finally(() => setPedindo(false))
+  }
   const [copyState, setCopyState] = useState<'idle' | 'copied' | 'failed'>('idle')
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
   useEffect(() => () => {
@@ -187,7 +204,15 @@ function SummaryContent({ meetingId, summary, onGenerate }: { meetingId: string;
         <Button action="regenerate-summary" variant="secondary" icon={RefreshCw} onClick={onGenerate}>
           Gerar de novo
         </Button>
+        <Button action="funil-detectar" variant="secondary" icon={Funnel} onClick={detectar} disabled={detectando}>
+          {detectando ? 'Detectando…' : 'Detectar oportunidade'}
+        </Button>
       </div>
+      {proposta.erro && (
+        <Note id="funil-proposta-falhou" icon={TriangleAlert} role="alert" className="-mt-3">
+          {proposta.erro}
+        </Note>
+      )}
 
       <section aria-label="O que aconteceu">
         <SectionTitle>O que aconteceu</SectionTitle>
@@ -217,6 +242,8 @@ function SummaryContent({ meetingId, summary, onGenerate }: { meetingId: string;
           </ul>
         </section>
       )}
+
+      {proposta.view?.arquivo && <OpportunityCard key={proposta.view.arquivo.createdAt} meetingId={meetingId} view={proposta.view} aplicar={proposta.aplicar} descartar={proposta.descartar} />}
 
       <section aria-label="Tarefas">
         <SectionTitle>Tarefas</SectionTitle>
@@ -252,9 +279,33 @@ function SummaryContent({ meetingId, summary, onGenerate }: { meetingId: string;
         )}
       </section>
 
+      {attendees.length > 0 && <Participants attendees={attendees} />}
+
       <p data-summary-footer className="text-12 text-text-faint">
         Gerado pelo Claude em <span className="tabular">{summaryDateLabel(summary.createdAt)}</span> · <span className="font-mono text-11">{summary.model}</span>
       </p>
     </>
+  )
+}
+
+/** Contrato 116 (R35): os participantes do evento da agenda; com e-mail, o contato ligado ou "+ Contato". */
+function Participants({ attendees }: { attendees: readonly MeetingAttendee[] }) {
+  return (
+    <section aria-label="Participantes" data-summary-participantes>
+      <SectionTitle>Participantes</SectionTitle>
+      <ul className="flex flex-col">
+        {attendees.map((person, index) => {
+          const email = person.email.trim()
+          const name = person.name.trim() || email.split('@')[0] || email
+          return (
+            <li key={`${email}-${index}`} data-summary-participante={email} className="flex min-h-9 items-center gap-3 border-b border-line py-1 text-13">
+              <span className="min-w-0 shrink truncate text-text select-text">{name}</span>
+              <span className="min-w-0 flex-1 truncate text-text-muted select-text">{email}</span>
+              {email && <ContactLink email={email} nome={name} origem="reuniao" />}
+            </li>
+          )
+        })}
+      </ul>
+    </section>
   )
 }

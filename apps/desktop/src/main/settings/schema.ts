@@ -15,7 +15,7 @@ import { EMAIL_SIGNATURE_MAX, type EmailSignature } from '../../shared/email-sig
 import { EMAIL_RULES_MAX, emailRuleSchema, type EmailRule } from '../../shared/email-rules'
 import { CLAUDE_CONNECTOR_NAME_MAX, CLAUDE_CONNECTORS_MAX, MCP_TOOL_NAME_MAX, MCP_TOOL_POLICIES, MCP_TOOLS_MAX, type ClaudeConnectorPrefs } from '../../shared/mcp'
 import { EMAIL_ACCOUNT_ID_PATTERN, EMAIL_ADDRESS_PATTERN, EMAIL_FOLDER_PATH_MAX, EMAIL_HOST_PATTERN, EMAIL_POLL_MINUTES, EMAIL_PROTOCOLS, EMAIL_SECURITY, type EmailAccount } from '../../shared/email'
-import { AGENT_PROFILES, CALENDAR_IDS_MAX, CALENDAR_LEAD_MINUTES, CHAT_MODELS, CLAUDE_MODELS, CLAUDE_TRANSPORTS, CLOSE_BEHAVIORS, DAILY_RUN_LIMIT_OPTIONS, DEFAULT_SETTINGS, LANGUAGE_CODES, LOCK_AFTER_MINUTES, THEME_SETTINGS, TRANSLATION_ENGINES, type AppSettings, type SettingsPatch } from '../../shared/settings-defaults'
+import { AGENT_PROFILES, CALENDAR_IDS_MAX, CALENDAR_LEAD_MINUTES, CHAT_MODELS, CLAUDE_MODELS, CLAUDE_TRANSPORTS, CLOSE_BEHAVIORS, DAILY_RUN_LIMIT_OPTIONS, DEFAULT_SETTINGS, FUNIL_DIAS_ESFRIAR_MAX, FUNIL_DIAS_ESFRIAR_MIN, LANGUAGE_CODES, LOCK_AFTER_MINUTES, THEME_SETTINGS, TRANSLATION_ENGINES, type AppSettings, type SettingsPatch } from '../../shared/settings-defaults'
 // 73: comentários
 import { REDES_POLL_MINUTES } from '../../shared/settings-defaults'
 // fim 73
@@ -111,6 +111,19 @@ const lenientConnectorsSchema = z
 
 const D = DEFAULT_SETTINGS
 
+/** Contrato 109 (R46): dias para a oportunidade aberta esfriar, inteiro de 1 a 90. */
+const funilDiasEsfriarSchema = z.number().int().min(FUNIL_DIAS_ESFRIAR_MIN).max(FUNIL_DIAS_ESFRIAR_MAX)
+/** Pelo renderer: os três campos, sempre juntos; qualquer outro valor recusa o pedido inteiro. */
+const funilPatchSchema = z.object({ detectarNasReunioes: z.boolean(), diasEsfriar: funilDiasEsfriarSchema, avisarEsfriadas: z.boolean() }).strict()
+/** No arquivo: cada campo à parte; um valor inválido volta ao padrão dele sem levar os outros dois. */
+const lenientFunilSchema = z
+  .object({
+    detectarNasReunioes: z.boolean().catch(D.funil.detectarNasReunioes),
+    diasEsfriar: funilDiasEsfriarSchema.catch(D.funil.diasEsfriar),
+    avisarEsfriadas: z.boolean().catch(D.funil.avisarEsfriadas),
+  })
+  .catch(() => ({ ...D.funil }))
+
 const lenientSchema = z.object({
   translationEnabled: z.boolean().catch(D.translationEnabled),
   translationModel: modelIdSchema.catch(D.translationModel),
@@ -170,6 +183,7 @@ const lenientSchema = z.object({
   // 73: comentários
   redesPollMinutes: z.literal(REDES_POLL_MINUTES).catch(D.redesPollMinutes),
   // fim 73
+  funil: lenientFunilSchema,
 })
 
 const patchSchema = z
@@ -225,6 +239,7 @@ const patchSchema = z
     // 73: comentários
     redesPollMinutes: z.literal(REDES_POLL_MINUTES),
     // fim 73
+    funil: funilPatchSchema,
   })
   .partial()
   .strict()

@@ -18,7 +18,7 @@
 //
 // Contrato 78: "Pôr na agenda" no cartão de evento e "Salvar"/"Apagar lembrete" nos cartões de lembrete, também pelo main.
 import { create } from 'zustand'
-import type { ChatActionEventFields, ChatActionRef, ChatActionResult, ChatActionStateRequest } from '@shared/assistant'
+import type { ChatActionEventFields, ChatActionOportunidadeCampos, ChatActionRef, ChatActionResult, ChatActionStateRequest } from '@shared/assistant'
 import {
   DEFAULT_CHAT_SCOPE,
   type Chat,
@@ -112,6 +112,8 @@ interface ChatState {
   changeReminder: (ref: ChatActionRef, op: 'update' | 'delete', edit?: { at?: string; text?: string }) => Promise<ChatActionResult>
   /** Contrato 76: "Criar rascunho" no cartão do Instagram, com a legenda e a data do "Editar" (`at: null` tira a data). */
   createInstagramDraft: (ref: ChatActionRef, edit?: { caption?: string; at?: string | null }) => Promise<ChatActionResult>
+  /** Contrato 117: "Mover", "Criar" e "Salvar" num cartão do funil (`campos`: o que o cartão de criar oportunidade mudou). */
+  funilAction: (ref: ChatActionRef, campos?: ChatActionOportunidadeCampos) => Promise<ChatActionResult>
   /** Contrato 21: "Permitir uma vez", "Sempre permitir esta ferramenta" ou "Negar" num cartão de aprovação. */
   answerApproval: (chatId: string, id: string, decision: McpApprovalDecision) => Promise<boolean>
 }
@@ -403,6 +405,16 @@ export const useChat = create<ChatState>()((set, get) => {
     createInstagramDraft: async (ref, edit = {}) => {
       try {
         const result = await window.__scribeApi.invoke('scribe:chat-action-instagram-draft', { ...ref, ...(edit.caption !== undefined ? { caption: edit.caption } : {}), ...(edit.at !== undefined ? { at: edit.at } : {}) })
+        if (result.ok) keepChat(result.chat)
+        return result
+      } catch {
+        return { ok: false, error: 'invalid' }
+      }
+    },
+
+    funilAction: async (ref, campos) => {
+      try {
+        const result = await window.__scribeApi.invoke('scribe:chat-action-funil', { ...ref, ...(campos ? { campos } : {}) })
         if (result.ok) keepChat(result.chat)
         return result
       } catch {

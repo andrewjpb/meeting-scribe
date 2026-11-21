@@ -85,6 +85,25 @@
 // Contrato 76: logo depois da tela Redes, o Instagram no Assistente (`redesAssistantChecks`): a fonte "Redes" no Contexto
 // com o `REDES.md`, o cartão "Rascunho para o Instagram" até o rascunho na fila e o editor aberto, e a ferramenta que lista
 // a fila, com o agente ACP falso.
+//
+// Contrato 112: depois do Instagram no Assistente e antes do bloqueio, o funil de vendas (`funilKanbanChecks`) com o
+// `funil.json` semeado pelas fixtures: o item e o nível Funil da barra lateral, o kanban de Oportunidades com os filtros,
+// a nova oportunidade, "Editar etapas" e o arrastar.
+//
+// Contrato 119: logo depois do kanban, o detalhe da oportunidade (`funilDetalheChecks`): a Linha do tempo com a reunião, o
+// e-mail e o evento, a "Reunião apagada", o Select de etapa, a nota, o "Escrever e-mail" até o Composer e o "Arquivar".
+//
+// Contrato 114: logo depois do detalhe, Contatos e Empresas (`funilContatosChecks`): a lista e a ficha, Empresas com o
+// "Apagar" bloqueado, a sugestão de empresa pelo domínio, o Novo contato com a mescla, as Sugestões (uma de cada canal,
+// "Adicionar" e "Ignorar") e a importação do CSV das fixtures.
+//
+// Contrato 116: logo depois de Contatos e Empresas, os botões nas telas existentes (`funilTelasExistentesChecks`): o bloco
+// Participantes e o "+ Contato" no Resumo de uma reunião semeada com agenda, "Detectar oportunidade" com o agente ACP
+// falso, o cartão "Oportunidade detectada" (aviso de duplicata, Criar e Ignorar), o "+ Contato" no Email e no WhatsApp.
+//
+// Contrato 117: logo depois dos botões nas telas existentes, o funil no Assistente (`funilAssistenteChecks`): a fonte Funil
+// (primeira e desligada; ligada, o `FUNIL.md`), os cartões "Mover" (e o do id que não existe), "Criar oportunidade" e o do
+// contato, o "Abrir" da oportunidade e o agente com "Pode ler o funil" no "Pedir agora", com o agente ACP falso.
 import { appendFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { spawn as spawnChild } from 'node:child_process'
 import { request as httpRequest } from 'node:http'
@@ -107,8 +126,10 @@ import type { Meeting } from '../shared/meetings'
 import { summaryMarkdown, type MeetingSummary } from '../shared/meeting-summary'
 import { summaryPreview } from '../shared/meetings-overview'
 import { PRIVACY_PANE_URLS } from '../shared/privacy'
+import { FUNIL_FILE, type Contato, type FunilState, type Oportunidade, type Sugestao } from '../shared/funil'
+import { formatarBRL } from '../shared/funil-logic'
 import { SETTINGS_TABS, type SettingsTab } from '../shared/routes'
-import { matchesRow, settingsIndex } from '../shared/settings-index'
+import { FUNIL_AVISAR_NAME, FUNIL_DETECTAR_NAME, FUNIL_DIAS_NAME, FUNIL_SECTION, matchesRow, settingsIndex } from '../shared/settings-index'
 import { BRAND_LOGO_INVALID_MESSAGE, BRAND_LOGO_PATTERN, DEFAULT_BRAND_NAME, DEFAULT_BRAND_SUBTITLE } from '../shared/branding'
 import { DEFAULT_SETTINGS, type AppSettings } from '../shared/settings-defaults'
 import { transcriptMarkdown } from '../shared/transcript-markdown'
@@ -124,7 +145,7 @@ import { BRANDING_DIR } from './branding/service'
 import { summaryInput, summaryLines } from './claude-cli/summary'
 import { MENU_IDS } from './menu'
 import { CHAT_CORPUS_DIR, CHAT_INDEX_FILE, CHAT_SCOPE_DIR, corpusFileSuffix } from './chat/corpus'
-import { AUTOMATIONS_FILE, EMAIL_SEARCH_FILE, GUIDE_FILE, isSourceFile, REDES_FILE, REDES_PUBLICATIONS_FILE, STATE_FILE } from './chat/sources'
+import { AUTOMATIONS_FILE, EMAIL_SEARCH_FILE, FUNIL_FILE as FUNIL_MD_FILE, GUIDE_FILE, isSourceFile, REDES_FILE, REDES_PUBLICATIONS_FILE, STATE_FILE } from './chat/sources'
 import { CHAT_EVENTS_FILE } from './chat/events-store'
 import { CHATS_DIR } from './chat/store'
 import type { FakeDriveFile } from './google/fake-google'
@@ -180,6 +201,7 @@ import { LATEST_RELEASE_URL, RELEASE_DOWNLOAD_PREFIX, RELEASE_REDIRECT_HOSTS } f
 import {
   SMOKE_AUDIO_TRANSCRIPT,
   SMOKE_FAKE_KEY,
+  SMOKE_FUNIL,
   SMOKE_GOOGLE_CLIENT_ID,
   SMOKE_GOOGLE_CLIENT_SECRET,
   SMOKE_MCP_SECRETS,
@@ -202,7 +224,7 @@ import {
 // 60 s.
 // Contrato 12 (agendas): uns 25 s.
 // Contrato 43 (email): uns 25 s.
-const TIMEOUT_MS = 600_000
+const TIMEOUT_MS = 1_200_000 // 20 min: o funil (contratos 112 a 117) acrescentou cinco blocos de checks e 26 prints
 const THEMES = ['light', 'dark'] as const
 /** Telas fotografadas em cada tema, na ordem do roteiro de `runSmoke`. */
 const SCREENS = [
@@ -2169,6 +2191,92 @@ async function summarizeSetting(contents: WebContents, userDataDir: string): Pro
       offSaved === false &&
       onSaved === true,
     detail: `"${row}" ligado=${on}; desligado -> ${offSaved}; religado -> ${onSaved}`,
+  }
+}
+
+/** Contrato 109: `settings.funil` como o main devolve pelo canal de configurações. */
+const funilSaved = (contents: WebContents): Promise<AppSettings['funil']> =>
+  evaluate<AppSettings['funil']>(contents, "window.__scribeApi.invoke('scribe:settings-get').then((s) => s.funil)")
+
+/**
+ * Contrato 109 (CA5), na aba Geral já aberta: a Section "Funil de vendas" entre "Janela" e "Bloqueio", com as três
+ * linhas do índice da busca (aba `geral`), os dois interruptores ligados e o campo de dias com 7.
+ */
+async function funilSettingsCheck(contents: WebContents): Promise<Check> {
+  const panel = '[data-settings-panel="geral"]'
+  const sections = await evaluate<string[]>(contents, `[...document.querySelectorAll('${panel} section[aria-label]')].map((el) => el.getAttribute('aria-label'))`)
+  const text = await evaluate<string>(contents, `document.querySelector('${panel}')?.innerText ?? ''`)
+  const names = [FUNIL_DETECTAR_NAME, FUNIL_DIAS_NAME, FUNIL_AVISAR_NAME]
+  const rows = await evaluate<string[]>(contents, `[...document.querySelectorAll('${panel} section[aria-label="${FUNIL_SECTION}"] [data-setting-name]')].map((el) => el.dataset.settingName)`)
+  const index = settingsIndex('Claude')
+  const indexed = names.every((name) => index.some((entry) => entry.tab === 'geral' && entry.section === FUNIL_SECTION && matchesRow(entry, name)))
+  const switches = await evaluate<(string | null)[]>(contents, `['settings-funil-detectar', 'settings-funil-avisar'].map((id) => document.querySelector('[aria-labelledby="' + id + '"]')?.getAttribute('aria-checked') ?? null)`)
+  const dias = await evaluate<string | null>(contents, `document.querySelector('${panel} [data-funil-dias]')?.value ?? null`)
+  const at = sections.indexOf(FUNIL_SECTION)
+  return {
+    ok:
+      text.includes('Funil de vendas') &&
+      at > 0 &&
+      sections[at - 1] === 'Janela' &&
+      sections[at + 1] === 'Bloqueio' &&
+      JSON.stringify(rows) === JSON.stringify(names) &&
+      indexed &&
+      JSON.stringify(switches) === JSON.stringify(['true', 'true']) &&
+      dias === '7',
+    detail: `blocos ${JSON.stringify(sections)}; linhas ${JSON.stringify(rows)}; no índice=${indexed}; interruptores ${JSON.stringify(switches)}; dias="${dias}"`,
+  }
+}
+
+/**
+ * Contrato 109 (R46): "Considerar esfriada após (dias)" fora de 1 a 90 ou vazio não grava e volta ao último valor
+ * salvo ao sair do campo; 14 com Enter grava. Termina com 7 gravado de novo.
+ */
+async function funilSettingsInvalidCheck(contents: WebContents): Promise<Check> {
+  const field = '[data-settings-panel="geral"] [data-funil-dias]'
+  const fieldIs = (value: string): Promise<boolean> => waitFor(contents, `document.querySelector('${field}')?.value === ${JSON.stringify(value)}`)
+  const savedIs = async (dias: number): Promise<boolean> => {
+    const deadline = Date.now() + 5000
+    while (Date.now() < deadline) {
+      if ((await funilSaved(contents)).diasEsfriar === dias) return true
+      await wait(50)
+    }
+    return false
+  }
+  const before = await funilSaved(contents)
+
+  await setValue(contents, field, '0')
+  await leaveField(contents, field)
+  const zeroBack = await fieldIs('7')
+  await wait(300)
+  const zeroSaved = (await funilSaved(contents)).diasEsfriar
+
+  await setValue(contents, field, '')
+  await leaveField(contents, field)
+  const emptyBack = await fieldIs('7')
+  await wait(300)
+  const emptySaved = (await funilSaved(contents)).diasEsfriar
+
+  await setValue(contents, field, '14')
+  await pressEnterIn(contents, field)
+  const fourteen = (await savedIs(14)) && (await fieldIs('14'))
+  const fourteenSaved = await funilSaved(contents)
+
+  await setValue(contents, field, '7')
+  await pressEnterIn(contents, field)
+  const restored = (await savedIs(7)) && (await fieldIs('7'))
+
+  return {
+    ok:
+      before.diasEsfriar === 7 &&
+      zeroBack &&
+      zeroSaved === 7 &&
+      emptyBack &&
+      emptySaved === 7 &&
+      fourteen &&
+      fourteenSaved.detectarNasReunioes === before.detectarNasReunioes &&
+      fourteenSaved.avisarEsfriadas === before.avisarEsfriadas &&
+      restored,
+    detail: `antes=${before.diasEsfriar}; "0" e saída -> campo 7=${zeroBack}, gravado ${zeroSaved}; vazio e saída -> campo 7=${emptyBack}, gravado ${emptySaved}; "14" e Enter -> ${fourteen} (${JSON.stringify(fourteenSaved)}); de volta a 7=${restored}`,
   }
 }
 
@@ -7615,8 +7723,9 @@ async function automationsChecks(ctx: SmokeContext, watch: (win: BrowserWindow) 
       cards &&
       JSON.stringify(seeded) === JSON.stringify(['Resumo da semana', 'Minhas tarefas', 'Pendências da reunião']) &&
       JSON.stringify(tabs) === JSON.stringify(['Agentes', 'Tarefas agendadas', 'Execuções']) &&
-      // Contrato 65: "Email" entrou entre o "Assistente" e as "Automações".
-      nav.indexOf('automacoes') === nav.indexOf('email') + 1 &&
+      // Contrato 65: "Email" entrou entre o "Assistente" e as "Automações". Contrato 112: "Funil" logo depois do "Email".
+      nav.indexOf('automacoes') === nav.indexOf('funil') + 1 &&
+      nav.indexOf('funil') === nav.indexOf('email') + 1 &&
       nav.indexOf('email') === nav.indexOf('assistente') + 1 &&
       askNowShown &&
       title === 'Automações' &&
@@ -9239,8 +9348,9 @@ async function emailChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => voi
       }
     })()`,
   )
+  // Contrato 112: 7 itens, com o "Funil".
   const denseOk =
-    dense.items.length === 6 &&
+    dense.items.length === 7 &&
     dense.items.every((height) => height === 32) &&
     dense.gaps.every((gap) => gap === 2) &&
     dense.iconGap.every((gap) => gap === 8) &&
@@ -9253,7 +9363,7 @@ async function emailChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => voi
     dense.label.tracking === 'normal' &&
     dense.footer === 126
   sidebarChecks['rootItems'] = {
-    ok: JSON.stringify(navOrder) === JSON.stringify(['reunioes', 'assistente', 'email', 'automacoes', 'whatsapp', 'configuracoes']) && rootBadge && badgeLabel === '2 não lidas' && denseOk,
+    ok: JSON.stringify(navOrder) === JSON.stringify(['reunioes', 'assistente', 'email', 'funil', 'automacoes', 'whatsapp', 'configuracoes']) && rootBadge && badgeLabel === '2 não lidas' && denseOk,
     detail: `itens ${JSON.stringify(navOrder)}; número do Email "${badgeLabel}"; alturas ${JSON.stringify(dense.items)}px, entre eles ${JSON.stringify([...new Set(dense.gaps)])}, ícone a ${JSON.stringify([...new Set(dense.iconGap)])}px do texto, ${dense.above}px acima da lista; rodapé ${dense.footer}px, Bloquear ${dense.lock}px, permissões ${JSON.stringify(dense.perms)}, rótulo ${JSON.stringify(dense.label)}`,
   }
   await clickNav(contents, 'email')
@@ -9282,7 +9392,7 @@ async function emailChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => voi
   checks['list'] = {
     ok:
       sidebar &&
-      JSON.stringify(navOrder) === JSON.stringify(['reunioes', 'assistente', 'email', 'automacoes', 'whatsapp', 'configuracoes']) &&
+      JSON.stringify(navOrder) === JSON.stringify(['reunioes', 'assistente', 'email', 'funil', 'automacoes', 'whatsapp', 'configuracoes']) &&
       listed &&
       previews &&
       rows.length === 4 &&
@@ -10843,7 +10953,8 @@ async function redesUiChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => v
     detail: `estado vazio em /redes=${empty} (título "${emptyTitle}"); nível ${JSON.stringify(emptyLevel)}; "Conectar conta" -> Contas com o foco no token=${toToken}`,
   }
 
-  // CA13: com a conta, "Redes" entre Email e Automações, sem número (nenhum não lido nesta fase).
+  // CA13: com a conta, "Redes" entre Email e Automações, sem número (nenhum não lido nesta fase). Contrato 112: o "Funil"
+  // fica entre o Email e as Redes.
   const connected = await api<RedesConnectResult>('scribe:redes-connect', { token: SMOKE_IG_TOKEN })
   await clickNav(contents, 'reunioes')
   const shown = await waitFor(contents, `${routeIs('reunioes')} && document.querySelector('${SIDEBAR_ROOT} [data-nav="redes"]') && ${oneLevel}`, 8000)
@@ -10851,7 +10962,7 @@ async function redesUiChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => v
   const at = order.indexOf('redes')
   const noBadge = await evaluate<boolean>(contents, `!document.querySelector('${SIDEBAR_ROOT} [data-nav="redes"] [data-nav-badge]')`)
   checks['navShown'] = {
-    ok: connected.ok && shown && at > 0 && order[at - 1] === 'email' && order[at + 1] === 'automacoes' && noBadge,
+    ok: connected.ok && shown && at > 0 && order[at - 1] === 'funil' && order[at + 1] === 'automacoes' && noBadge,
     detail: `conta=${connected.ok}; itens ${JSON.stringify(order)}; sem número=${noBadge}`,
   }
 
@@ -11805,6 +11916,1583 @@ async function redesAssistantChecks(ctx: SmokeContext, watch: (win: BrowserWindo
     nativeTheme.themeSource = 'system'
     win.destroy()
     console.log(`redes: assistente em ${((Date.now() - startedAt) / 1000).toFixed(1)} s`)
+  }
+}
+
+/**
+ * Contrato 112 (CA3 a CA9), numa janela que troca de tema no lugar, com o `funil.json` semeado (`smoke-fixtures.ts`, D18):
+ * o item Funil entre Email e Redes, o nível Funil com as três seções, `/funil` levando a Oportunidades, o
+ * `scribe:navigate` com `'funil'`, o kanban (colunas, cartões, "esfriou", vencidos, totais, faixas recolhidas), os
+ * filtros com os 90 dias e "Mostrar todas", a nova oportunidade com o `SearchPicker` e o aviso de duplicata, "Editar
+ * etapas" e o arrastar (mover, destacar a faixa sem abrir e o motivo da perda no cartão). Termina com as oportunidades
+ * nas etapas de antes e os nomes das etapas de antes. Prints `funil-oportunidades`, `funil-oportunidades-nova` e
+ * `funil-oportunidades-editar-etapas`, nos dois temas.
+ */
+async function funilKanbanChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => void, checks: Record<string, Check>, shots: Screenshot[]): Promise<void> {
+  const startedAt = Date.now()
+  const themeBefore = readSettings(ctx.userDataDir).theme ?? 'system'
+  nativeTheme.themeSource = 'light'
+  const win = ctx.openWindow({})
+  watch(win)
+  await loadAndWait(win)
+  const contents = win.webContents
+  if (themeBefore !== 'system') await evaluate(contents, "window.__scribeApi.invoke('scribe:settings-update', { theme: 'system' }).then(() => true)")
+  const api = <T>(channel: string, request?: unknown): Promise<T> => evaluate<T>(contents, `window.__scribeApi.invoke(${JSON.stringify(channel)}${request === undefined ? '' : `, ${JSON.stringify(request)}`})`)
+  const both = async (name: string): Promise<void> => {
+    await evaluate(contents, `document.activeElement instanceof HTMLElement && document.activeElement.blur(), true`)
+    await settle(contents)
+    shots.push(await capture(win, ctx.outDir, `${name}-light`))
+    nativeTheme.themeSource = 'dark'
+    await waitFor(contents, "document.documentElement.dataset.theme === 'dark'")
+    await settle(contents)
+    shots.push(await capture(win, ctx.outDir, `${name}-dark`))
+    nativeTheme.themeSource = 'light'
+    await waitFor(contents, "document.documentElement.dataset.theme === 'light'")
+  }
+  const { etapas: E } = SMOKE_FUNIL
+  const funilFile = join(ctx.userDataDir, FUNIL_FILE)
+  const raw = (): string => (existsSync(funilFile) ? readFileSync(funilFile, 'utf8') : '')
+  const saved = (): FunilState => JSON.parse(raw()) as FunilState
+  const SIDEBAR_FUNIL = '[data-sidebar-level="funil"]:not([data-sidebar-leaving])'
+  const OPEN_COLUMNS = '[data-funil-column]:not([data-funil-column-collapsed])'
+  const kanbanReady = `${routeIs('funil')} && document.querySelector('[data-funil-screen="oportunidades"] [data-funil-board]')`
+  const expanded = (): Promise<string[]> => evaluate<string[]>(contents, `[...document.querySelectorAll('${OPEN_COLUMNS}')].map((el) => el.dataset.funilColumn)`)
+  const cardsIn = (etapaId: string): Promise<string[]> => evaluate<string[]>(contents, `[...document.querySelectorAll('[data-funil-column="${etapaId}"] [data-funil-card]')].map((el) => el.dataset.funilCard)`)
+  const allCards = (): Promise<string[]> => evaluate<string[]>(contents, `[...document.querySelectorAll('[data-funil-card]')].map((el) => el.dataset.funilCard)`)
+  const keyIn = (selector: string, key: string): Promise<unknown> =>
+    evaluate(contents, `(document.querySelector(${JSON.stringify(selector)}) ?? document.body).dispatchEvent(new KeyboardEvent('keydown', { key: ${JSON.stringify(key)}, bubbles: true, cancelable: true })), true`)
+  /** Arrastar nativo sintético (como em `emailFoldersUiChecks`): `drop` solta; sem ele, o Esc e o `dragend` cancelam. */
+  const drag = (cardId: string, etapaId: string, drop: boolean): Promise<unknown> =>
+    evaluate(
+      contents,
+      `(() => {
+        const from = document.querySelector('[data-funil-card="${cardId}"]')
+        const to = document.querySelector('[data-funil-column="${etapaId}"]')
+        const dt = new DataTransfer()
+        window.__funilDrag = { from, dt }
+        from.dispatchEvent(new DragEvent('dragstart', { bubbles: true, cancelable: true, dataTransfer: dt }))
+        to.dispatchEvent(new DragEvent('dragenter', { bubbles: true, cancelable: true, dataTransfer: dt }))
+        to.dispatchEvent(new DragEvent('dragover', { bubbles: true, cancelable: true, dataTransfer: dt }))
+        if (${drop}) {
+          to.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: dt }))
+          from.dispatchEvent(new DragEvent('dragend', { bubbles: true, dataTransfer: dt }))
+        }
+        return true
+      })()`,
+    )
+  /**
+   * O roteador do app é em memória (`MemoryRouter`) e nenhum clique leva a `/funil` sozinho: o smoke empurra o caminho pelo
+   * `navigator` do contexto do roteador, achado subindo pela árvore do React a partir do `<main>`.
+   */
+  const routerPush = (path: string): Promise<boolean> =>
+    evaluate<boolean>(
+      contents,
+      `(() => {
+        const main = document.querySelector('main[data-route]')
+        const key = main && Object.keys(main).find((name) => name.startsWith('__reactFiber$'))
+        for (let fiber = key ? main[key] : null; fiber; fiber = fiber.return) {
+          const navigator = fiber.memoizedProps?.value?.navigator
+          if (navigator && typeof navigator.push === 'function') { navigator.push(${JSON.stringify(path)}); return true }
+        }
+        return false
+      })()`,
+    )
+  const etapasAntes = saved().etapas.map((etapa) => ({ id: etapa.id, nome: etapa.nome, tipo: etapa.tipo }))
+  // Cor e opacidade medidas no valor final, sem a transição do elemento (a janela do smoke nem sempre pinta, e a
+  // transição fica parada no começo); pelo CSSOM, que a CSP deixa (um <style> novo ela recusa).
+  const settled = (element: string, property: string): string =>
+    `(() => { const node = ${element}; if (!node) return ''; node.style.transition = 'none'; const value = getComputedStyle(node).${property}; node.style.transition = ''; return value })()`
+
+  try {
+    // funilNav (R17): na raiz, "Funil" logo depois de "Email" (e antes de "Redes" quando ela aparece).
+    await clickNav(contents, 'reunioes')
+    await waitFor(contents, routeIs('reunioes'))
+    await showRoot(contents)
+    const order = await evaluate<string[]>(contents, `[...document.querySelectorAll('${SIDEBAR_ROOT} [data-nav]')].map((el) => el.dataset.nav)`)
+    const at = order.indexOf('funil')
+    const label = await text(contents, `${SIDEBAR_ROOT} [data-nav="funil"]`)
+    checks['funilNav'] = {
+      ok: at > 0 && order[at - 1] === 'email' && (!order.includes('redes') || order[at + 1] === 'redes') && label.trim() === 'Funil',
+      detail: `itens ${JSON.stringify(order)}; rótulo "${label.trim()}"`,
+    }
+
+    // funilLevel (R18, CA7): o clique abre o nível Funil com as três seções de 28 px e Oportunidades marcada.
+    await clickNav(contents, 'funil')
+    const level = await waitFor(contents, `${kanbanReady} && document.querySelector('${SIDEBAR_FUNIL}') && !document.querySelector('[data-sidebar-leaving]')`, 8000)
+    const rows = await evaluate<{ section: string; height: number; current: string | null; text: string }[]>(
+      contents,
+      `[...document.querySelectorAll('${SIDEBAR_FUNIL} [data-funil-section]')].map((el) => ({ section: el.dataset.funilSection, height: Math.round(el.getBoundingClientRect().height), current: el.getAttribute('aria-current'), text: el.textContent.trim() }))`,
+    )
+    const focusBack = await evaluate<boolean>(contents, `document.activeElement?.matches('${SIDEBAR_FUNIL} [data-sidebar-back]') === true`)
+    checks['funilLevel'] = {
+      ok:
+        level &&
+        JSON.stringify(rows.map((row) => row.section)) === JSON.stringify(['oportunidades', 'contatos', 'empresas']) &&
+        JSON.stringify(rows.map((row) => row.text)) === JSON.stringify(['Oportunidades', 'Contatos', 'Empresas']) &&
+        rows.every((row) => row.height === 28) &&
+        rows[0]?.current === 'page' &&
+        focusBack,
+      detail: `nível Funil com o kanban=${level}; linhas ${JSON.stringify(rows)}; foco no cabeçalho-voltar=${focusBack}`,
+    }
+
+    // funilRedirect (R17): `/funil` sozinho (e uma seção que não existe) termina em `/funil/oportunidades`.
+    await clickNav(contents, 'reunioes')
+    await waitFor(contents, routeIs('reunioes'))
+    const pushed = await routerPush('/funil')
+    const redirected = await waitFor(contents, `${kanbanReady} && document.querySelector('${SIDEBAR_FUNIL} [data-funil-section="oportunidades"]')?.getAttribute('aria-current') === 'page'`, 8000)
+    await routerPush('/funil/contatos')
+    // Contrato 114: a tela Contatos no lugar do "Em preparação".
+    const contatos = await waitFor(contents, `document.querySelector('[data-funil-screen="contatos"] [data-funil-contatos]') && document.querySelector('${SIDEBAR_FUNIL} [data-funil-section="contatos"]')?.getAttribute('aria-current') === 'page'`, 8000)
+    await routerPush('/funil/negocios')
+    const invalid = await waitFor(contents, `${kanbanReady} && document.querySelector('${SIDEBAR_FUNIL} [data-funil-section="oportunidades"]')?.getAttribute('aria-current') === 'page'`, 8000)
+    checks['funilRedirect'] = {
+      ok: pushed && redirected && contatos && invalid,
+      detail: `navegação em memória=${pushed}; /funil -> Oportunidades=${redirected}; /funil/contatos -> tela Contatos=${contatos}; /funil/negocios -> Oportunidades=${invalid}`,
+    }
+
+    // funilNavigateEvent (D14): o main manda `scribe:navigate` com 'funil' e a tela vai a Oportunidades.
+    await clickNav(contents, 'reunioes')
+    await waitFor(contents, routeIs('reunioes'))
+    contents.send('scribe:navigate', 'funil')
+    const navigated = await waitFor(contents, `${kanbanReady} && document.querySelector('${SIDEBAR_FUNIL} [data-funil-section="oportunidades"]')?.getAttribute('aria-current') === 'page'`, 8000)
+    checks['funilNavigateEvent'] = { ok: navigated, detail: `scribe:navigate 'funil' -> Oportunidades com o nível Funil=${navigated}` }
+
+    // funilKanban (CA11): 4 colunas abertas, 5 cartões, 1 "esfriou" (op-integracao), 1 passo e 1 previsão vencidos
+    // (op-vistoria), "5 abertas" na linha de totais; cabeçalho de 44 px e coluna de 170 px ou mais.
+    await waitFor(contents, `document.querySelectorAll('[data-funil-card]').length === 5`, 8000)
+    const kanban = await evaluate<{
+      open: number
+      cards: string[]
+      esfriou: string[]
+      esfriouText: number
+      vencido: string[]
+      previsao: string[]
+      totais: string
+      totaisHeight: number
+      heads: number[]
+      widths: number[]
+      filtro: string | null
+      empty: number
+    }>(
+      contents,
+      `(() => {
+        const ids = (selector) => [...document.querySelectorAll(selector)].map((el) => el.closest('[data-funil-card]')?.dataset.funilCard ?? '?')
+        const board = document.querySelector('[data-funil-board]')
+        return {
+          open: document.querySelectorAll('[data-funil-column-tipo="aberta"]:not([data-funil-column-collapsed])').length,
+          cards: [...document.querySelectorAll('[data-funil-card]')].map((el) => el.dataset.funilCard),
+          esfriou: ids('[data-funil-card-esfriou]'),
+          esfriouText: (board.innerText.match(/esfriou/g) ?? []).length,
+          vencido: ids('[data-funil-card-vencido]'),
+          previsao: ids('[data-funil-card-previsao-vencida]'),
+          totais: document.querySelector('[data-funil-totais]')?.textContent ?? '',
+          totaisHeight: Math.round(document.querySelector('[data-funil-totais]')?.parentElement.getBoundingClientRect().height ?? 0),
+          heads: [...document.querySelectorAll('${OPEN_COLUMNS} [data-funil-column-head]')].map((el) => Math.round(el.getBoundingClientRect().height)),
+          widths: [...document.querySelectorAll('${OPEN_COLUMNS}')].map((el) => Math.round(el.getBoundingClientRect().width)),
+          filtro: document.querySelector('[data-funil-filtro][aria-pressed="true"]')?.dataset.funilFiltro ?? null,
+          empty: document.querySelectorAll('[data-funil-column-empty]').length,
+        }
+      })()`,
+    )
+    checks['funilKanban'] = {
+      ok:
+        kanban.open === 4 &&
+        kanban.cards.length === 5 &&
+        JSON.stringify(kanban.esfriou) === JSON.stringify(['op-integracao']) &&
+        kanban.esfriouText === 1 &&
+        JSON.stringify(kanban.vencido) === JSON.stringify(['op-vistoria']) &&
+        JSON.stringify(kanban.previsao) === JSON.stringify(['op-vistoria']) &&
+        kanban.totais.startsWith('5 abertas') &&
+        kanban.totaisHeight === 32 &&
+        kanban.heads.length === 4 &&
+        kanban.heads.every((height) => height === 44) &&
+        kanban.widths.every((width) => width >= 170) &&
+        kanban.filtro === 'abertas' &&
+        !kanban.cards.includes('op-arquivada'),
+      detail: JSON.stringify(kanban),
+    }
+    await both('funil-oportunidades')
+
+    // funilCollapsed (R22): Ganho e Perdido em faixas de 32 px, com o total da etapa (sem a arquivada).
+    const strips = await evaluate<{ id: string; width: number; count: string }[]>(
+      contents,
+      `[...document.querySelectorAll('[data-funil-column-collapsed]')].map((el) => ({ id: el.dataset.funilColumn, width: Math.round(el.getBoundingClientRect().width), count: el.querySelector('[data-funil-column-count]')?.textContent ?? '' }))`,
+    )
+    checks['funilCollapsed'] = {
+      ok: JSON.stringify(strips) === JSON.stringify([{ id: E.ganho, width: 32, count: '2' }, { id: E.perdido, width: 32, count: '1' }]),
+      detail: `faixas ${JSON.stringify(strips)}`,
+    }
+
+    // funilFiltros (R23): Ganhas e Perdidas com os 90 dias e "Mostrar todas"; Todas com as 6; a busca dentro do filtro.
+    await clickSelector(contents, '[data-funil-filtro="ganhas"]')
+    await waitFor(contents, `document.querySelectorAll('${OPEN_COLUMNS}').length === 1`)
+    const ganhasOpen = await expanded()
+    const ganhasCards = await cardsIn(E.ganho)
+    const ganhasMore = await text(contents, `[data-funil-mostrar-todas="${E.ganho}"]`)
+    await clickSelector(contents, `[data-funil-mostrar-todas="${E.ganho}"]`)
+    await waitFor(contents, `document.querySelectorAll('[data-funil-column="${E.ganho}"] [data-funil-card]').length === 2`)
+    const ganhasAll = await cardsIn(E.ganho)
+    const ganhasNoMore = await evaluate<boolean>(contents, `!document.querySelector('[data-funil-mostrar-todas]')`)
+    await clickSelector(contents, '[data-funil-filtro="perdidas"]')
+    await waitFor(contents, `document.querySelector('[data-funil-column="${E.perdido}"]:not([data-funil-column-collapsed])')`)
+    const perdidasOpen = await expanded()
+    const perdidasCards = await cardsIn(E.perdido)
+    const perdidasMore = await text(contents, `[data-funil-mostrar-todas="${E.perdido}"]`)
+    await clickSelector(contents, '[data-funil-filtro="todas"]')
+    await waitFor(contents, `document.querySelectorAll('${OPEN_COLUMNS}').length === 6`)
+    const todasOpen = await expanded()
+    const todasCards = await allCards()
+    await setValue(contents, '[data-funil-oportunidades] [data-search]', 'portal')
+    await waitFor(contents, `document.querySelectorAll('[data-funil-card]').length === 1`)
+    const portal = await allCards()
+    await setValue(contents, '[data-funil-oportunidades] [data-search]', '')
+    await clickSelector(contents, '[data-funil-filtro="abertas"]')
+    const backToOpen = await waitFor(contents, `document.querySelectorAll('[data-funil-card]').length === 5 && document.querySelectorAll('[data-funil-column-collapsed]').length === 2`)
+    checks['funilFiltros'] = {
+      ok:
+        JSON.stringify(ganhasOpen) === JSON.stringify([E.ganho]) &&
+        JSON.stringify(ganhasCards) === JSON.stringify(['op-ganha-mes']) &&
+        ganhasMore === 'Mostrar todas (2)' &&
+        JSON.stringify(ganhasAll) === JSON.stringify(['op-ganha-mes', 'op-ganha-antiga']) &&
+        ganhasNoMore &&
+        JSON.stringify(perdidasOpen) === JSON.stringify([E.perdido]) &&
+        perdidasCards.length === 0 &&
+        perdidasMore === 'Mostrar todas (1)' &&
+        todasOpen.length === 6 &&
+        !todasCards.includes('op-arquivada') &&
+        !ganhasAll.includes('op-arquivada') &&
+        JSON.stringify(portal) === JSON.stringify(['op-portal']) &&
+        backToOpen,
+      detail: `Ganhas: ${JSON.stringify(ganhasOpen)} ${JSON.stringify(ganhasCards)} "${ganhasMore}" -> ${JSON.stringify(ganhasAll)}; Perdidas: ${JSON.stringify(perdidasOpen)} ${JSON.stringify(perdidasCards)} "${perdidasMore}"; Todas: ${todasOpen.length} colunas, ${JSON.stringify(todasCards)}; "portal" -> ${JSON.stringify(portal)}; de volta a Abertas=${backToOpen}`,
+    }
+
+    // funilNova (CA12, R25, CA7 do contrato): o cartão em edição no topo da primeira coluna aberta, com o foco no
+    // Título; a Empresa pelo SearchPicker (no máximo 8 linhas de 32 px, setas e Enter) e o aviso de duplicata, que não
+    // desabilita "Criar"; Cancelar não grava nada.
+    const rawBefore = raw()
+    await clickSelector(contents, '[data-action="funil-nova"]')
+    const novaTop = await waitFor(contents, `document.querySelector('[data-funil-column="${E.contato}"] [data-funil-column-body]')?.firstElementChild?.matches('[data-funil-card-novo]') === true`)
+    const titleFocus = await waitFor(contents, `document.activeElement?.matches('[data-funil-card-novo] [data-funil-nova-titulo]') === true`)
+    await setValue(contents, '[data-funil-card-novo] [data-funil-nova-titulo]', 'Portal da franquia')
+    await both('funil-oportunidades-nova')
+    const pickerInput = '[data-funil-card-novo] [data-funil-picker="empresa"] input'
+    await evaluate(contents, `document.querySelector(${JSON.stringify(pickerInput)})?.focus(), true`)
+    await setValue(contents, pickerInput, 'Cli')
+    const listed = await waitFor(contents, `document.querySelector('[data-funil-picker="empresa"] [role="listbox"]')`)
+    const options = await evaluate<{ texts: string[]; heights: number[] }>(
+      contents,
+      `(() => { const items = [...document.querySelectorAll('[data-funil-picker="empresa"] [role="option"]')]; return { texts: items.map((el) => el.textContent.trim()), heights: items.map((el) => Math.round(el.getBoundingClientRect().height)) } })()`,
+    )
+    const selectedIndex = (): Promise<number> => evaluate<number>(contents, `[...document.querySelectorAll('[data-funil-picker="empresa"] [role="option"]')].findIndex((el) => el.getAttribute('aria-selected') === 'true')`)
+    const first = await selectedIndex()
+    await keyIn(pickerInput, 'ArrowDown')
+    const afterDown = await selectedIndex()
+    await keyIn(pickerInput, 'ArrowUp')
+    const afterUp = await selectedIndex()
+    await keyIn(pickerInput, 'Enter')
+    const chosen = await waitFor(contents, `document.querySelector(${JSON.stringify(pickerInput)})?.value === 'Cliente' && !document.querySelector('[data-funil-picker="empresa"] [role="listbox"]')`)
+    const warning = await waitFor(contents, `document.querySelector('[data-funil-aviso-duplicata]')?.textContent.includes('Portal do associado')`)
+    const warningText = await text(contents, '[data-funil-aviso-duplicata]')
+    const createEnabled = await evaluate<boolean>(contents, `document.querySelector('[data-action="funil-nova-criar"]')?.disabled === false`)
+    await clickSelector(contents, '[data-action="funil-nova-cancelar"]')
+    const gone = await waitFor(contents, `!document.querySelector('[data-funil-card-novo]')`)
+    await wait(300)
+    const nothingSaved = raw() === rawBefore
+    checks['funilNova'] = {
+      ok:
+        novaTop &&
+        titleFocus &&
+        listed &&
+        options.texts.length >= 1 &&
+        options.texts.length <= 8 &&
+        options.texts[0]?.startsWith('Cliente') === true &&
+        options.texts.at(-1) === 'Criar «Cli»' &&
+        options.heights.every((height) => height === 32) &&
+        first === 0 &&
+        afterDown === 1 &&
+        afterUp === 0 &&
+        chosen &&
+        warning &&
+        warningText === 'Já existe «Portal do associado» aberta para esta empresa' &&
+        createEnabled &&
+        gone &&
+        nothingSaved,
+      detail: `no topo de Contato=${novaTop}; foco no Título=${titleFocus}; lista=${listed} ${JSON.stringify(options)}; ativa ${first} -> ↓ ${afterDown} -> ↑ ${afterUp}; Enter escolheu "Cliente"=${chosen}; aviso "${warningText}"; Criar habilitado=${createEnabled}; Cancelar fechou=${gone}; funil.json igual=${nothingSaved}`,
+    }
+
+    // funilEtapas (CA12, R26): cabeçalhos editáveis e "+ Etapa"; "×" desabilitado com cartão e ausente em Ganho e Perdido;
+    // renomear e "Concluir" grava (uma etapa nova vazia sai pelo "×" sem gravar).
+    await clickSelector(contents, '[data-action="funil-editar-etapas"]')
+    const editing = await waitFor(contents, `document.querySelectorAll('[data-funil-etapa-nome]').length === 4 && document.querySelector('[data-action="funil-etapa-add"]') && document.querySelector('[data-funil-etapas-dica]')`)
+    const hint = await text(contents, '[data-funil-etapas-dica]')
+    await both('funil-oportunidades-editar-etapas')
+    const removeState = await evaluate<{ withCards: boolean[]; finals: number; handles: number; dimmed: boolean }>(
+      contents,
+      `(() => ({
+        withCards: ['${E.contato}', '${E.descoberta}', '${E.proposta}', '${E.negociacao}'].map((id) => document.querySelector('[data-funil-column="' + id + '"] [data-action="funil-etapa-apagar"]')?.disabled === true),
+        finals: document.querySelectorAll('[data-funil-column-tipo="ganho"] [data-action="funil-etapa-apagar"], [data-funil-column-tipo="perdido"] [data-action="funil-etapa-apagar"]').length,
+        handles: document.querySelectorAll('[data-funil-etapa-alca]').length,
+        dimmed: ${settled("document.querySelector('[data-funil-card]')", 'opacity')} === '0.6',
+      }))()`,
+    )
+    await clickSelector(contents, '[data-action="funil-etapa-add"]')
+    const added = await waitFor(contents, `document.querySelectorAll('[data-funil-etapa-nome]').length === 5 && document.activeElement?.matches('[data-funil-etapa-nome^="nova-"]') === true`)
+    const newEmpty = await evaluate<boolean>(contents, `(() => { const col = document.querySelector('[data-funil-etapa-nome^="nova-"]')?.closest('[data-funil-column]'); return col?.querySelector('[data-funil-column-empty]')?.textContent === 'Etapa vazia' && col.querySelector('[data-action="funil-etapa-apagar"]')?.disabled === false })()`)
+    await evaluate(contents, `document.querySelector('[data-funil-etapa-nome^="nova-"]')?.closest('[data-funil-column]')?.querySelector('[data-action="funil-etapa-apagar"]')?.click(), true`)
+    const removed = await waitFor(contents, `document.querySelectorAll('[data-funil-etapa-nome]').length === 4`)
+    await setValue(contents, `[data-funil-etapa-nome="${E.contato}"]`, 'Primeiro contato')
+    await clickSelector(contents, '[data-action="funil-etapas-concluir"]')
+    const renamed = await waitFor(contents, `!document.querySelector('[data-funil-etapa-nome]') && document.querySelector('[data-funil-column="${E.contato}"] [data-funil-column-head]')?.textContent.startsWith('Primeiro contato')`, 8000)
+    const savedNames = saved().etapas.map((etapa) => etapa.nome)
+    await api('scribe:funil-etapas-save', { etapas: etapasAntes })
+    const restored = await waitFor(contents, `document.querySelector('[data-funil-column="${E.contato}"] [data-funil-column-head]')?.textContent.startsWith('Contato')`, 8000)
+    checks['funilEtapas'] = {
+      ok:
+        editing &&
+        hint === 'Arraste pela alça para reordenar. Só uma etapa aberta e vazia pode ser apagada.' &&
+        removeState.withCards.every(Boolean) &&
+        removeState.finals === 0 &&
+        removeState.handles === 4 &&
+        removeState.dimmed &&
+        added &&
+        newEmpty &&
+        removed &&
+        renamed &&
+        JSON.stringify(savedNames) === JSON.stringify(['Primeiro contato', 'Descoberta', 'Proposta', 'Negociação', 'Ganho', 'Perdido']) &&
+        restored,
+      detail: `editando=${editing} "${hint}"; ${JSON.stringify(removeState)}; "+ Etapa" com o foco=${added}, vazia com "×" habilitado=${newEmpty}, apagada=${removed}; renomeada=${renamed} ${JSON.stringify(savedNames)}; nome de volta=${restored}`,
+    }
+
+    // funilDragMove (R24, R6): op-portal arrastado para Proposta muda de coluna e cria o evento `etapa`; por cima da faixa
+    // Ganho, a faixa fica destacada em --accent e continua com 32 px; o Esc cancela sem mover.
+    await drag('op-portal', E.proposta, true)
+    const moved = await waitFor(contents, `document.querySelector('[data-funil-column="${E.proposta}"] [data-funil-card="op-portal"]')`, 8000)
+    const view = await api<{ state: FunilState }>('scribe:funil-get')
+    const etapaEvent = view.state.eventos.find((evento) => evento.oportunidadeId === 'op-portal' && evento.tipo === 'etapa')
+    await drag('op-portal', E.ganho, false)
+    await waitFor(contents, `document.querySelector('[data-funil-drop-alvo]')`)
+    const target = await evaluate<{ id: string | null; width: number; accent: boolean; collapsed: boolean }>(
+      contents,
+      `(() => {
+        const el = document.querySelector('[data-funil-drop-alvo]')
+        const probe = document.createElement('span')
+        probe.style.color = 'var(--accent)'
+        document.body.append(probe)
+        const accent = getComputedStyle(probe).color
+        probe.remove()
+        return { id: el?.dataset.funilColumn ?? null, width: Math.round(el?.getBoundingClientRect().width ?? 0), accent: ${settled("el", 'borderTopColor')} === accent, collapsed: el?.hasAttribute('data-funil-column-collapsed') ?? false }
+      })()`,
+    )
+    await evaluate(contents, `(() => { const { from, dt } = window.__funilDrag; document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); from.dispatchEvent(new DragEvent('dragend', { bubbles: true, dataTransfer: dt })); return true })()`)
+    const cancelled = await waitFor(contents, `!document.querySelector('[data-funil-drop-alvo]') && document.querySelector('[data-funil-column="${E.proposta}"] [data-funil-card="op-portal"]')`)
+    const stillThere = saved().oportunidades.find((item) => item.id === 'op-portal')?.etapaId === E.proposta
+    checks['funilDragMove'] = {
+      ok: moved && etapaEvent?.de === 'Contato' && etapaEvent.para === 'Proposta' && target.id === E.ganho && target.width === 32 && target.accent && target.collapsed && cancelled && stillThere,
+      detail: `em Proposta=${moved}; evento ${JSON.stringify(etapaEvent ?? null)}; alvo ${JSON.stringify(target)}; Esc cancelou=${cancelled}, continua em Proposta=${stillThere}`,
+    }
+
+    // funilDragLost (R24): op-consultoria solto na faixa Perdido pede o motivo no cartão, ainda em Descoberta; Cancelar
+    // não grava; de novo com o motivo, "Salvar" grava `motivoPerda` e a faixa Perdido conta mais 1.
+    const lostBefore = raw()
+    const perdidoCount = (): Promise<string> => text(contents, `[data-funil-column="${E.perdido}"] [data-funil-column-count]`)
+    const countBefore = await perdidoCount()
+    await drag('op-consultoria', E.perdido, true)
+    const form = await waitFor(contents, `document.querySelector('[data-funil-column="${E.descoberta}"] [data-funil-card="op-consultoria"] [data-funil-motivo]')`)
+    const formText = await text(contents, '[data-funil-card="op-consultoria"]')
+    const motivoFocus = await waitFor(contents, `document.activeElement?.matches('[data-funil-card="op-consultoria"] [data-funil-motivo]') === true`)
+    const saveDisabled = await evaluate<boolean>(contents, `document.querySelector('[data-action="funil-motivo-salvar"]')?.disabled === true`)
+    await clickSelector(contents, '[data-action="funil-motivo-cancelar"]')
+    const formGone = await waitFor(contents, `!document.querySelector('[data-funil-motivo]') && document.querySelector('[data-funil-column="${E.descoberta}"] [data-funil-card="op-consultoria"]')`)
+    await wait(300)
+    const cancelNothing = raw() === lostBefore
+    await drag('op-consultoria', E.perdido, true)
+    await waitFor(contents, `document.querySelector('[data-funil-motivo]')`)
+    await setValue(contents, '[data-funil-motivo]', 'Escolheu outro fornecedor')
+    await clickSelector(contents, '[data-action="funil-motivo-salvar"]')
+    const lost = await waitFor(contents, `!document.querySelector('[data-funil-card="op-consultoria"]') && document.querySelector('[data-funil-column="${E.perdido}"] [data-funil-column-count]')?.textContent === '${Number(countBefore) + 1}'`, 8000)
+    const consultoria = saved().oportunidades.find((item) => item.id === 'op-consultoria')
+    checks['funilDragLost'] = {
+      ok:
+        form &&
+        formText.includes('Solto em Perdido') &&
+        motivoFocus &&
+        saveDisabled &&
+        formGone &&
+        cancelNothing &&
+        lost &&
+        consultoria?.etapaId === E.perdido &&
+        consultoria.motivoPerda === 'Escolheu outro fornecedor' &&
+        consultoria.fechadoEm !== null,
+      detail: `formulário no cartão em Descoberta=${form} "${formText.slice(0, 80)}"; foco no Motivo=${motivoFocus}; Salvar desabilitado sem motivo=${saveDisabled}; Cancelar=${formGone}, funil.json igual=${cancelNothing}; salvo=${lost} (faixa ${countBefore} -> ${await perdidoCount()}); ${JSON.stringify({ etapa: consultoria?.etapaId, motivo: consultoria?.motivoPerda })}`,
+    }
+  } finally {
+    // As oportunidades voltam às etapas da fixture (os contratos seguintes do funil partem delas).
+    await api('scribe:funil-oportunidade-move', { id: 'op-portal', etapaId: E.contato, ordem: 0 }).catch(() => undefined)
+    await api('scribe:funil-oportunidade-move', { id: 'op-consultoria', etapaId: E.descoberta, ordem: 1 }).catch(() => undefined)
+    if (themeBefore !== 'system') await evaluate(contents, `window.__scribeApi.invoke('scribe:settings-update', { theme: '${themeBefore}' }).then(() => true)`)
+    nativeTheme.themeSource = 'system'
+    win.destroy()
+    console.log(`funil: kanban em ${((Date.now() - startedAt) / 1000).toFixed(1)} s`)
+  }
+}
+
+/**
+ * O roteador do app é em memória (`MemoryRouter`): o caminho vai pelo `navigator` do contexto do roteador, achado subindo
+ * pela árvore do React a partir do `<main>` (o mesmo atalho do `funilKanbanChecks`).
+ */
+const funilRouterPush = (contents: WebContents, path: string): Promise<boolean> =>
+  evaluate<boolean>(
+    contents,
+    `(() => {
+      const main = document.querySelector('main[data-route]')
+      const key = main && Object.keys(main).find((name) => name.startsWith('__reactFiber$'))
+      for (let fiber = key ? main[key] : null; fiber; fiber = fiber.return) {
+        const navigator = fiber.memoizedProps?.value?.navigator
+        if (navigator && typeof navigator.push === 'function') { navigator.push(${JSON.stringify(path)}); return true }
+      }
+      return false
+    })()`,
+  )
+
+/**
+ * Contrato 119 (CA1 a CA5, CA13 da spec), numa janela que troca de tema no lugar, depois do `funilKanbanChecks`: o
+ * detalhe de `op-loja` com uma reunião e um e-mail ligados pelo canal (1 reunião, 1 e-mail e 1 evento na Linha do
+ * tempo, as 3 abas, o Valor em `formatarBRL`); a "Reunião apagada" e o "Desvincular"; o `Select` de etapa; a nota; o
+ * "Escrever e-mail" até o Composer endereçado; o "Abrir WhatsApp" ausente sem conversa; e o "Arquivar" de
+ * `op-ganha-mes`. Não toca em `op-integracao` nem em `op-vistoria` (o 117 usa) e termina com `op-loja` e `op-ganha-mes`
+ * de volta às etapas da fixture e sem vínculos (ficam os eventos novos: etapa, nota e a reabertura). Print
+ * `funil-oportunidade`, nos dois temas.
+ */
+async function funilDetalheChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => void, checks: Record<string, Check>, shots: Screenshot[]): Promise<void> {
+  const startedAt = Date.now()
+  const themeBefore = readSettings(ctx.userDataDir).theme ?? 'system'
+  nativeTheme.themeSource = 'light'
+  const win = ctx.openWindow({})
+  watch(win)
+  await loadAndWait(win)
+  const contents = win.webContents
+  if (themeBefore !== 'system') await evaluate(contents, "window.__scribeApi.invoke('scribe:settings-update', { theme: 'system' }).then(() => true)")
+  const api = <T>(channel: string, request?: unknown): Promise<T> => evaluate<T>(contents, `window.__scribeApi.invoke(${JSON.stringify(channel)}${request === undefined ? '' : `, ${JSON.stringify(request)}`})`)
+  const both = async (name: string): Promise<void> => {
+    await evaluate(contents, `document.activeElement instanceof HTMLElement && document.activeElement.blur(), true`)
+    await settle(contents)
+    shots.push(await capture(win, ctx.outDir, `${name}-light`))
+    nativeTheme.themeSource = 'dark'
+    await waitFor(contents, "document.documentElement.dataset.theme === 'dark'")
+    await settle(contents)
+    shots.push(await capture(win, ctx.outDir, `${name}-dark`))
+    nativeTheme.themeSource = 'light'
+    await waitFor(contents, "document.documentElement.dataset.theme === 'light'")
+  }
+  const { etapas: E } = SMOKE_FUNIL
+  const funilFile = join(ctx.userDataDir, FUNIL_FILE)
+  const saved = (): FunilState => JSON.parse(readFileSync(funilFile, 'utf8')) as FunilState
+  const op = (id: string): Oportunidade | undefined => saved().oportunidades.find((item) => item.id === id)
+  const SCREEN = '[data-funil-oportunidade="op-loja"]'
+  const items = (tipo: string): string => `document.querySelectorAll('${SCREEN} [data-funil-timeline-item="${tipo}"]').length`
+  const kanbanReady = `${routeIs('funil')} && document.querySelector('[data-funil-screen="oportunidades"] [data-funil-board]')`
+  const abrir = async (id: string): Promise<boolean> => {
+    await funilRouterPush(contents, `/funil/oportunidades/${id}`)
+    return waitFor(contents, `${routeIs('funil')} && document.querySelector('[data-funil-oportunidade="${id}"] [data-funil-timeline], [data-funil-oportunidade="${id}"] [data-tab-panel="linha"] p')`, 8000)
+  }
+  const aba = async (nome: 'linha' | 'reunioes' | 'notas'): Promise<boolean> => {
+    await clickSelector(contents, `${SCREEN} [role="tab"][data-tab="${nome}"]`)
+    return waitFor(contents, `document.querySelector('${SCREEN} [data-tab-panel="${nome}"]')`)
+  }
+  const etapaEventos = (): number => saved().eventos.filter((evento) => evento.oportunidadeId === 'op-loja' && evento.tipo === 'etapa').length
+
+  try {
+    // funilDetail (CA13): op-loja com a primeira reunião da lista e o primeiro e-mail em cache ligados pelo canal; a tela
+    // com as 3 abas, os campos e, na Linha do tempo, 1 reunião, 1 e-mail e 1 evento (o `ev-loja-etapa` da fixture).
+    const meetings = await api<Meeting[]>('scribe:meetings-list')
+    const meetingId = meetings[0]?.id ?? ''
+    const accountId = await evaluate<string>(contents, `window.__scribeApi.invoke('scribe:email-accounts').then((list) => list[0]?.account.id ?? '')`)
+    const messages = accountId ? await api<{ id: string; subject: string; date: number; from: { name: string | null; address: string }[] }[]>('scribe:email-messages', { accountId, folder: 'inbox' }) : []
+    const message = messages[0]
+    const email = message ? { accountId, id: message.id, assunto: message.subject, de: message.from[0]?.name || message.from[0]?.address || '', data: message.date } : null
+    const linked = await api<{ ok: boolean }>('scribe:funil-oportunidade-save', { oportunidade: { id: 'op-loja', titulo: 'Loja virtual', meetingIds: meetingId ? [meetingId] : [], emails: email ? [email] : [] } })
+    const opened = await abrir('op-loja')
+    const filled = await waitFor(contents, `${items('reuniao')} === 1 && ${items('email')} === 1 && ${items('evento')} === 1`, 8000)
+    const detail = await evaluate<{ tabs: number; selected: string | null; counts: Record<string, number>; valor: string; campos: string[]; subtitulo: string; etapa: string }>(
+      contents,
+      `(() => {
+        const screen = document.querySelector('${SCREEN}')
+        const count = (tipo) => screen.querySelectorAll('[data-funil-timeline-item="' + tipo + '"]').length
+        return {
+          tabs: screen.querySelectorAll('[role="tab"]').length,
+          selected: screen.querySelector('[role="tab"][aria-selected="true"]')?.textContent ?? null,
+          counts: { reuniao: count('reuniao'), email: count('email'), whatsapp: count('whatsapp'), evento: count('evento') },
+          valor: screen.querySelector('[data-funil-valor]')?.textContent ?? '',
+          campos: [...screen.querySelectorAll('[data-funil-campo]')].map((el) => el.dataset.funilCampo),
+          subtitulo: screen.querySelector('[data-funil-subtitulo]')?.textContent ?? '',
+          etapa: screen.querySelector('[data-funil-etapa-select] select')?.value ?? '',
+        }
+      })()`,
+    )
+    const valorEsperado = formatarBRL(op('op-loja')?.valor ?? null)
+    checks['funilDetail'] = {
+      ok:
+        Boolean(meetingId) &&
+        email !== null &&
+        linked.ok &&
+        opened &&
+        filled &&
+        detail.tabs === 3 &&
+        detail.selected === 'Linha do tempo' &&
+        detail.counts['reuniao'] === 1 &&
+        detail.counts['email'] === 1 &&
+        detail.counts['evento'] === 1 &&
+        detail.counts['whatsapp'] === 0 &&
+        detail.valor === valorEsperado &&
+        JSON.stringify(detail.campos) === JSON.stringify(['empresa', 'contatos', 'valor', 'previsao', 'proximo-passo', 'origem']) &&
+        detail.subtitulo.startsWith('Há 1 d em Negociação · criada em ') &&
+        detail.etapa === E.negociacao,
+      detail: `reunião ${meetingId || '(nenhuma)'}; e-mail ${email ? `${email.accountId}/${email.id}` : '(nenhum)'}; ligado=${linked.ok}; tela=${opened}; linha do tempo=${filled}; ${JSON.stringify(detail)}; valor esperado "${valorEsperado}"`,
+    }
+    await both('funil-oportunidade')
+
+    // funilReuniaoApagada (modelo, R29): um id de reunião que não existe vira "Reunião apagada" sem data e sem link; o id
+    // fica em `meetingIds` até o "Desvincular" da aba Reuniões.
+    const ghost = 'reuniao-que-nao-existe'
+    await api('scribe:funil-oportunidade-save', { oportunidade: { id: 'op-loja', titulo: 'Loja virtual', meetingIds: [meetingId, ghost].filter(Boolean) } })
+    const shown = await waitFor(contents, `document.querySelector('${SCREEN} [data-funil-timeline-apagada]')?.textContent.includes('Reunião apagada') === true`, 8000)
+    const ghostRow = await evaluate<{ link: boolean; time: boolean }>(
+      contents,
+      `(() => { const el = document.querySelector('${SCREEN} [data-funil-timeline-apagada]'); return { link: !!el?.querySelector('button, a'), time: !!el?.querySelector('time') } })()`,
+    )
+    const keptBefore = op('op-loja')?.meetingIds.includes(ghost) === true
+    const onTab = await aba('reunioes')
+    const tabRow = await waitFor(contents, `document.querySelector('${SCREEN} [data-funil-reuniao="${ghost}"][data-funil-reuniao-apagada]')?.textContent.includes('Reunião apagada') === true`)
+    await clickSelector(contents, `${SCREEN} [data-funil-reuniao="${ghost}"] [data-action="funil-desvincular"]`)
+    const unlinked = await waitFor(contents, `!document.querySelector('${SCREEN} [data-funil-reuniao="${ghost}"]') && document.querySelector('${SCREEN} [data-funil-reuniao="${meetingId}"]')`, 8000)
+    const ids = op('op-loja')?.meetingIds ?? []
+    await aba('linha')
+    checks['funilReuniaoApagada'] = {
+      ok: shown && !ghostRow.link && !ghostRow.time && keptBefore && onTab && tabRow && unlinked && JSON.stringify(ids) === JSON.stringify([meetingId]),
+      detail: `"Reunião apagada" na linha do tempo=${shown} ${JSON.stringify(ghostRow)}; id guardado=${keptBefore}; aba Reuniões=${onTab}, linha=${tabRow}; desvinculada=${unlinked}; meetingIds ${JSON.stringify(ids)}`,
+    }
+
+    // funilEtapaSelect (R27, R6): o Select de etapa leva op-loja a Proposta (evento `etapa` de Negociação para Proposta) e
+    // de volta a Negociação, no fim das colunas (op-vistoria fica onde está).
+    const etapasAntes = etapaEventos()
+    const vistoriaAntes = JSON.stringify(op('op-vistoria'))
+    await setValue(contents, `${SCREEN} [data-funil-etapa-select] select`, E.proposta, 'change')
+    const toProposta = await waitFor(contents, `document.querySelector('${SCREEN} [data-funil-subtitulo]')?.textContent.includes('em Proposta') === true`, 8000)
+    const movedTo = op('op-loja')?.etapaId
+    const evento = saved().eventos.filter((item) => item.oportunidadeId === 'op-loja' && item.tipo === 'etapa').sort((a, b) => b.at - a.at)[0]
+    const inTimeline = await waitFor(contents, `[...document.querySelectorAll('${SCREEN} [data-funil-timeline-item="evento"] [data-funil-timeline-titulo]')].some((el) => el.textContent === 'Negociação → Proposta')`, 8000)
+    await setValue(contents, `${SCREEN} [data-funil-etapa-select] select`, E.negociacao, 'change')
+    const back = await waitFor(contents, `document.querySelector('${SCREEN} [data-funil-subtitulo]')?.textContent.includes('em Negociação') === true`, 8000)
+    checks['funilEtapaSelect'] = {
+      ok: toProposta && movedTo === E.proposta && evento?.de === 'Negociação' && evento.para === 'Proposta' && inTimeline && back && op('op-loja')?.etapaId === E.negociacao && etapaEventos() === etapasAntes + 2 && JSON.stringify(op('op-vistoria')) === vistoriaAntes,
+      detail: `em Proposta=${toProposta} (${movedTo}); evento ${JSON.stringify(evento ?? null)}; na linha do tempo=${inTimeline}; de volta a Negociação=${back}; eventos etapa ${etapasAntes} -> ${etapaEventos()}; op-vistoria igual=${JSON.stringify(op('op-vistoria')) === vistoriaAntes}`,
+    }
+
+    // funilNota (R29): a nota salva aparece na aba Notas e como evento na Linha do tempo.
+    const textoNota = 'Pedir o contrato assinado até sexta'
+    await aba('notas')
+    await setValue(contents, `${SCREEN} [data-funil-nota-texto]`, textoNota)
+    await clickSelector(contents, `${SCREEN} [data-action="funil-nota-salvar"]`)
+    const listed = await waitFor(contents, `[...document.querySelectorAll('${SCREEN} [data-funil-nota]')].some((el) => el.textContent.includes(${JSON.stringify(textoNota)})) && document.querySelector('${SCREEN} [data-funil-nota-texto]')?.value === ''`, 8000)
+    const stored = saved().eventos.some((item) => item.oportunidadeId === 'op-loja' && item.tipo === 'nota' && item.texto === textoNota)
+    await aba('linha')
+    const asEvent = await waitFor(contents, `[...document.querySelectorAll('${SCREEN} [data-funil-timeline-item="evento"] [data-funil-timeline-titulo]')].some((el) => el.textContent === ${JSON.stringify(textoNota)})`, 8000)
+    checks['funilNota'] = { ok: listed && stored && asEvent, detail: `na aba Notas=${listed}; no funil.json=${stored}; na linha do tempo=${asEvent}` }
+
+    // funilWhatsAppOculto (R28): op-loja não tem conversa ligada, então "Abrir WhatsApp" não existe (com a linha do tempo
+    // já carregada, que é de onde vêm as conversas).
+    const noWhatsApp = await evaluate<boolean>(contents, `!!document.querySelector('${SCREEN} [data-funil-timeline]') && !document.querySelector('${SCREEN} [data-action="funil-abrir-whatsapp"]')`)
+    checks['funilWhatsAppOculto'] = { ok: noWhatsApp, detail: `linha do tempo carregada e sem "Abrir WhatsApp"=${noWhatsApp}` }
+
+    // funilCompose (R28, D12): "Escrever e-mail" abre o Email com a mensagem nova para rafael.lima@lojista.example, com a
+    // assinatura da conta como na "Nova mensagem"; descartar fecha e o pedido não reabre o Composer.
+    const signature = accountId ? await api<{ ok: boolean; signature?: { text: string; onNew: boolean } | null }>('scribe:email-signature-get', { accountId }) : null
+    await clickSelector(contents, `${SCREEN} [data-action="funil-escrever-email"]`)
+    const composer = await waitFor(contents, `${routeIs('email')} && document.querySelector('[data-email-composer="new"] [data-email-chip="rafael.lima@lojista.example"]')`, 8000)
+    const chips = await evaluate<string[]>(contents, `[...document.querySelectorAll('[data-email-composer="new"] [data-email-chip]')].map((el) => el.dataset.emailChip)`)
+    const body = await evaluate<string>(contents, `document.querySelector('[data-email-composer="new"] [data-email-compose-text]')?.value ?? ''`)
+    const signed = signature?.ok && signature.signature?.onNew && signature.signature.text.trim() ? body.includes(signature.signature.text.trim().split('\n')[0] ?? '') : true
+    await clickSelector(contents, '[data-action="email-discard"]')
+    await clickSelector(contents, '[data-action="email-discard-confirm"]')
+    const closed = await waitFor(contents, `!document.querySelector('[data-email-composer]')`)
+    await wait(400)
+    const stayedClosed = await evaluate<boolean>(contents, `!document.querySelector('[data-email-composer]')`)
+    checks['funilCompose'] = {
+      ok: composer && JSON.stringify(chips) === JSON.stringify(['rafael.lima@lojista.example']) && signed && closed && stayedClosed,
+      detail: `Composer novo no Email com o contato=${composer} ${JSON.stringify(chips)}; assinatura=${signed}; descartado=${closed}, não reabriu=${stayedClosed}`,
+    }
+
+    // funilArquivar (R27): sem "Arquivar" na aberta; em op-ganha-mes, Arquivar -> confirmar volta ao kanban, a oportunidade
+    // some de Ganhas (também com "Mostrar todas") e de Todas, `arquivado: true` pelo canal e o detalhe dela vira o vazio.
+    await abrir('op-loja')
+    const noArchiveOpen = await evaluate<boolean>(contents, `!!document.querySelector('${SCREEN}') && !document.querySelector('${SCREEN} [data-action="funil-arquivar"]')`)
+    const ganha = await abrir('op-ganha-mes')
+    const GANHA = '[data-funil-oportunidade="op-ganha-mes"]'
+    await clickSelector(contents, `${GANHA} [data-action="funil-arquivar"]`)
+    const confirming = await waitFor(contents, `document.querySelector('${GANHA} [data-action="funil-arquivar-confirmar"]')`)
+    await clickSelector(contents, `${GANHA} [data-action="funil-arquivar-confirmar"]`)
+    const atKanban = await waitFor(contents, `${kanbanReady} && !document.querySelector('[data-funil-oportunidade]')`, 8000)
+    await clickSelector(contents, '[data-funil-filtro="ganhas"]')
+    await waitFor(contents, `document.querySelector('[data-funil-column="${E.ganho}"]:not([data-funil-column-collapsed])')`)
+    if (await evaluate<boolean>(contents, `!!document.querySelector('[data-funil-mostrar-todas="${E.ganho}"]')`)) await clickSelector(contents, `[data-funil-mostrar-todas="${E.ganho}"]`)
+    await settle(contents)
+    const ganhas = await evaluate<string[]>(contents, `[...document.querySelectorAll('[data-funil-card]')].map((el) => el.dataset.funilCard)`)
+    await clickSelector(contents, '[data-funil-filtro="todas"]')
+    await waitFor(contents, `document.querySelectorAll('[data-funil-column]:not([data-funil-column-collapsed])').length === 6`)
+    const todas = await evaluate<string[]>(contents, `[...document.querySelectorAll('[data-funil-card]')].map((el) => el.dataset.funilCard)`)
+    const viaApi = await api<{ state: FunilState }>('scribe:funil-get')
+    const archived = viaApi.state.oportunidades.find((item) => item.id === 'op-ganha-mes')?.arquivado === true
+    await funilRouterPush(contents, '/funil/oportunidades/op-ganha-mes')
+    const empty = await waitFor(contents, `document.querySelector('[data-funil-oportunidade-vazia]')?.textContent.includes('Essa oportunidade não existe mais.') === true`, 8000)
+    checks['funilArquivar'] = {
+      ok: noArchiveOpen && ganha && confirming && atKanban && ganhas.includes('op-ganha-antiga') && !ganhas.includes('op-ganha-mes') && !todas.includes('op-ganha-mes') && archived && empty,
+      detail: `aberta sem Arquivar=${noArchiveOpen}; detalhe da ganha=${ganha}; confirmação na linha=${confirming}; de volta ao kanban=${atKanban}; Ganhas ${JSON.stringify(ganhas)}; Todas ${JSON.stringify(todas)}; arquivado pelo canal=${archived}; detalhe vazio=${empty}`,
+    }
+  } finally {
+    // op-loja sem os vínculos e em Negociação; op-ganha-mes desarquivada (reabrir tira o arquivado) e de volta ao topo de
+    // Ganho, como na fixture.
+    await api('scribe:funil-oportunidade-save', { oportunidade: { id: 'op-loja', titulo: 'Loja virtual', meetingIds: [], emails: [] } }).catch(() => undefined)
+    if (op('op-loja')?.etapaId !== E.negociacao) await api('scribe:funil-oportunidade-move', { id: 'op-loja', etapaId: E.negociacao, ordem: 0 }).catch(() => undefined)
+    if (op('op-ganha-mes')?.arquivado) {
+      await api('scribe:funil-oportunidade-move', { id: 'op-ganha-mes', etapaId: E.negociacao, ordem: 1 }).catch(() => undefined)
+      await api('scribe:funil-oportunidade-move', { id: 'op-ganha-mes', etapaId: E.ganho, ordem: 0 }).catch(() => undefined)
+    }
+    if (themeBefore !== 'system') await evaluate(contents, `window.__scribeApi.invoke('scribe:settings-update', { theme: '${themeBefore}' }).then(() => true)`)
+    nativeTheme.themeSource = 'system'
+    win.destroy()
+    console.log(`funil: detalhe da oportunidade em ${((Date.now() - startedAt) / 1000).toFixed(1)} s`)
+  }
+}
+
+/**
+ * Contrato 114 (CA1 a CA6, CA14 da spec), numa janela que troca de tema no lugar, depois do `funilDetalheChecks`: a lista
+ * de Contatos com os 4 da fixture e a ficha do primeiro; Empresas com as 2 da fixture, o "Apagar" bloqueado na que tem
+ * contato e o "Apagar" na linha de uma empresa vazia; a sugestão de empresa do Rafael Lima (`@lojista.example`), que só
+ * vira empresa no clique; o Novo contato (Criar só com nome e e-mail ou telefone) e a mescla num contato que já existe;
+ * a aba Sugestões com uma sugestão de cada canal (as outras ignoradas pelo canal), "Adicionar" e "Ignorar" (que não volta
+ * depois de recarregar); e a importação do CSV das fixtures (5 linhas de prévia, o número do botão recontado ao trocar
+ * uma coluna, o resultado). Não toca em `op-integracao` nem em `op-vistoria` (o 117 usa) e não conta eventos das
+ * oportunidades. Termina com os contatos e as empresas que criou (o novo, o adicionado da sugestão, os 4 importados, a
+ * Lojista e as 3 empresas do CSV), o Rafael ligado à Lojista e a Marina com o cargo da mescla. Prints `funil-contatos`,
+ * `funil-empresas`, `funil-contatos-novo`, `funil-contatos-sugestoes` e `funil-contatos-importar`, nos dois temas.
+ */
+async function funilContatosChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => void, checks: Record<string, Check>, shots: Screenshot[]): Promise<void> {
+  const startedAt = Date.now()
+  const themeBefore = readSettings(ctx.userDataDir).theme ?? 'system'
+  nativeTheme.themeSource = 'light'
+  const win = ctx.openWindow({})
+  watch(win)
+  await loadAndWait(win)
+  const contents = win.webContents
+  if (themeBefore !== 'system') await evaluate(contents, "window.__scribeApi.invoke('scribe:settings-update', { theme: 'system' }).then(() => true)")
+  const api = <T>(channel: string, request?: unknown): Promise<T> => evaluate<T>(contents, `window.__scribeApi.invoke(${JSON.stringify(channel)}${request === undefined ? '' : `, ${JSON.stringify(request)}`})`)
+  /** `manterFoco`: o print mostra o campo com o foco (o Novo contato vazio com o Nome focado, CA14 da spec). */
+  const both = async (name: string, manterFoco = false): Promise<void> => {
+    if (!manterFoco) await evaluate(contents, `document.activeElement instanceof HTMLElement && document.activeElement.blur(), true`)
+    await settle(contents)
+    shots.push(await capture(win, ctx.outDir, `${name}-light`))
+    nativeTheme.themeSource = 'dark'
+    await waitFor(contents, "document.documentElement.dataset.theme === 'dark'")
+    await settle(contents)
+    shots.push(await capture(win, ctx.outDir, `${name}-dark`))
+    nativeTheme.themeSource = 'light'
+    await waitFor(contents, "document.documentElement.dataset.theme === 'light'")
+  }
+  const { contatos: CT } = SMOKE_FUNIL
+  const funilFile = join(ctx.userDataDir, FUNIL_FILE)
+  const saved = (): FunilState => JSON.parse(readFileSync(funilFile, 'utf8')) as FunilState
+  const ativos = (): Contato[] => saved().contatos.filter((contato) => !contato.arquivado)
+  const ROWS = `document.querySelectorAll('[data-funil-contato-row]').length`
+  const fichaDe = (id: string): string => `[data-funil-ficha="contato"][data-funil-ficha-id="${id}"]`
+  const listaPronta = `${routeIs('funil')} && document.querySelector('[data-funil-screen="contatos"] [data-funil-contatos-lista]')`
+  const abrirContatos = async (path: string): Promise<boolean> => {
+    await funilRouterPush(contents, path)
+    return waitFor(contents, listaPronta, 8000)
+  }
+  const aba = async (nome: 'contatos' | 'sugestoes'): Promise<void> => {
+    await clickSelector(contents, `[data-funil-contatos-aba="${nome}"]`)
+    await waitFor(contents, `document.querySelector('[data-funil-contatos-aba="${nome}"]')?.getAttribute('aria-pressed') === 'true'`)
+  }
+  const segmentedText = (): Promise<string> => text(contents, '[data-funil-contatos-aba="sugestoes"]')
+
+  try {
+    // contatosLista (CA14, R30): os 4 contatos da fixture em linhas de 44 px, na ordem de `atualizadoEm` (no empate, pelo
+    // nome), cada um com o rótulo da origem, numa lista de 340 px; e o Segmented com "Sugestões N".
+    const opened = await abrirContatos('/funil/contatos')
+    await waitFor(contents, `${ROWS} === 4`, 8000)
+    const esperado = ativos()
+      .sort((a, b) => b.atualizadoEm - a.atualizadoEm || a.nome.localeCompare(b.nome, 'pt-BR'))
+      .map((contato) => contato.id)
+    const lista = await evaluate<{ ids: string[]; heights: number[]; origens: string[]; width: number; total: string; segmented: string }>(
+      contents,
+      `(() => {
+        const rows = [...document.querySelectorAll('[data-funil-contato-row]')]
+        return {
+          ids: rows.map((el) => el.dataset.funilContatoRow),
+          heights: rows.map((el) => Math.round(el.getBoundingClientRect().height)),
+          origens: rows.map((el) => el.querySelector('[data-funil-contato-origem]')?.textContent ?? ''),
+          width: Math.round(document.querySelector('[data-funil-contatos-lista]')?.getBoundingClientRect().width ?? 0),
+          total: document.querySelector('[data-funil-contatos-total]')?.textContent ?? '',
+          segmented: document.querySelector('[data-funil-contatos-aba="sugestoes"]')?.textContent ?? '',
+        }
+      })()`,
+    )
+    await waitFor(contents, `/^Sugestões \\d+$/.test(document.querySelector('[data-funil-contatos-aba="sugestoes"]')?.textContent ?? '')`, 8000)
+    const segmented = await segmentedText()
+    checks['contatosLista'] = {
+      ok:
+        opened &&
+        JSON.stringify(lista.ids) === JSON.stringify(esperado) &&
+        esperado.length === 4 &&
+        lista.heights.every((height) => height === 44) &&
+        lista.origens.every((origem) => origem === 'Manual') &&
+        lista.width === 340 &&
+        lista.total === '4 contatos · mais recentes primeiro' &&
+        /^Sugestões \d+$/.test(segmented),
+      detail: `tela=${opened}; ${JSON.stringify(lista)}; esperado ${JSON.stringify(esperado)}; Segmented "${segmented}"`,
+    }
+
+    // contatosFicha (CA14, R31): sem id na rota, a ficha do primeiro da lista, com os campos, os blocos e a linha do tempo.
+    const primeiro = esperado[0] ?? ''
+    const ficha = await waitFor(contents, `document.querySelector('${fichaDe(primeiro)} [data-funil-bloco="linha-do-tempo"] [data-funil-timeline], ${fichaDe(primeiro)} [data-funil-bloco="linha-do-tempo"] p')`, 8000)
+    const fichaInfo = await evaluate<{ campos: string[]; blocos: string[]; acoes: string[]; atual: string | null; titulo: string }>(
+      contents,
+      `(() => {
+        const el = document.querySelector('${fichaDe(primeiro)}')
+        return {
+          campos: [...(el?.querySelectorAll('[data-funil-campo]') ?? [])].map((item) => item.dataset.funilCampo),
+          blocos: [...(el?.querySelectorAll('[data-funil-bloco]') ?? [])].map((item) => item.dataset.funilBloco),
+          acoes: [...(el?.querySelectorAll('[data-funil-acoes] [data-action]') ?? [])].map((item) => item.dataset.action),
+          atual: document.querySelector('[data-funil-contato-row][aria-current="true"]')?.dataset.funilContatoRow ?? null,
+          titulo: el?.querySelector('h1')?.textContent ?? '',
+        }
+      })()`,
+    )
+    const nomePrimeiro = saved().contatos.find((contato) => contato.id === primeiro)?.nome ?? ''
+    checks['contatosFicha'] = {
+      ok:
+        ficha &&
+        fichaInfo.atual === primeiro &&
+        fichaInfo.titulo === nomePrimeiro &&
+        JSON.stringify(fichaInfo.campos) === JSON.stringify(['empresa', 'cargo', 'emails', 'telefones', 'notas']) &&
+        JSON.stringify(fichaInfo.blocos) === JSON.stringify(['oportunidades', 'linha-do-tempo']) &&
+        fichaInfo.acoes.includes('funil-contato-email') &&
+        fichaInfo.acoes.includes('funil-contato-nova-oportunidade') &&
+        fichaInfo.acoes.includes('funil-contato-arquivar'),
+      detail: `ficha do primeiro (${primeiro}, "${nomePrimeiro}") com a linha do tempo=${ficha}; ${JSON.stringify(fichaInfo)}`,
+    }
+    await both('funil-contatos')
+
+    // empresas (CA14, R34): as 2 empresas da fixture, pelo nome, e a ficha da primeira.
+    await funilRouterPush(contents, '/funil/empresas')
+    const empresasAbertas = await waitFor(contents, `document.querySelector('[data-funil-screen="empresas"] [data-funil-empresas-lista]') && document.querySelectorAll('[data-funil-empresa-row]').length === 2`, 8000)
+    const empresasEsperadas = [...saved().empresas].sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR')).map((empresa) => empresa.id)
+    const primeiraEmpresa = empresasEsperadas[0] ?? ''
+    const fichaEmpresa = await waitFor(contents, `document.querySelector('[data-funil-ficha="empresa"][data-funil-ficha-id="${primeiraEmpresa}"] [data-funil-bloco="contatos"]')`, 8000)
+    const empresasInfo = await evaluate<{ ids: string[]; heights: number[]; width: number; total: string; contatos: string[]; dominios: string[] }>(
+      contents,
+      `(() => {
+        const rows = [...document.querySelectorAll('[data-funil-empresa-row]')]
+        const ficha = document.querySelector('[data-funil-ficha="empresa"]')
+        return {
+          ids: rows.map((el) => el.dataset.funilEmpresaRow),
+          heights: rows.map((el) => Math.round(el.getBoundingClientRect().height)),
+          width: Math.round(document.querySelector('[data-funil-empresas-lista]')?.getBoundingClientRect().width ?? 0),
+          total: document.querySelector('[data-funil-empresas-total]')?.textContent ?? '',
+          contatos: [...(ficha?.querySelectorAll('[data-funil-ficha-contato]') ?? [])].map((el) => el.dataset.funilFichaContato),
+          dominios: [...(ficha?.querySelectorAll('[data-funil-dominio]') ?? [])].map((el) => el.dataset.funilDominio),
+        }
+      })()`,
+    )
+    const contatosDaPrimeira = saved()
+      .contatos.filter((contato) => contato.empresaId === primeiraEmpresa)
+      .map((contato) => contato.id)
+      .sort()
+    checks['empresas'] = {
+      ok:
+        empresasAbertas &&
+        fichaEmpresa &&
+        empresasEsperadas.length === 2 &&
+        JSON.stringify(empresasInfo.ids) === JSON.stringify(empresasEsperadas) &&
+        empresasInfo.heights.every((height) => height === 44) &&
+        empresasInfo.width === 340 &&
+        empresasInfo.total === '2 empresas' &&
+        JSON.stringify([...empresasInfo.contatos].sort()) === JSON.stringify(contatosDaPrimeira) &&
+        JSON.stringify(empresasInfo.dominios) === JSON.stringify(saved().empresas.find((empresa) => empresa.id === primeiraEmpresa)?.dominios ?? []),
+      detail: `lista=${empresasAbertas}; ficha da primeira (${primeiraEmpresa})=${fichaEmpresa}; ${JSON.stringify(empresasInfo)}; esperado ${JSON.stringify(empresasEsperadas)}, contatos ${JSON.stringify(contatosDaPrimeira)}`,
+    }
+    await both('funil-empresas')
+
+    // empresaApagarBloqueado (CA6, R34): na empresa com contato, "Apagar" desabilitado com a razão no `title`; numa empresa
+    // vazia (criada pelo canal), "Apagar" confirma na linha e a empresa some da lista e do funil.json.
+    const bloqueado = await evaluate<{ disabled: boolean; title: string }>(
+      contents,
+      `(() => { const el = document.querySelector('[data-funil-ficha="empresa"] [data-action="funil-empresa-apagar"]'); return { disabled: el?.disabled === true, title: el?.closest('[title]')?.getAttribute('title') ?? '' } })()`,
+    )
+    const vazia = await api<{ ok: boolean; id?: string | null }>('scribe:funil-empresa-save', { empresa: { nome: 'Empresa vazia do smoke', dominios: [] } })
+    const vaziaId = vazia.ok ? (vazia.id ?? '') : ''
+    await funilRouterPush(contents, `/funil/empresas/${vaziaId}`)
+    const vaziaAberta = await waitFor(contents, `document.querySelector('[data-funil-ficha="empresa"][data-funil-ficha-id="${vaziaId}"] [data-action="funil-empresa-apagar"]')?.disabled === false`, 8000)
+    await clickSelector(contents, '[data-funil-ficha="empresa"] [data-action="funil-empresa-apagar"]')
+    const confirmando = await waitFor(contents, `document.querySelector('[data-funil-ficha="empresa"] [data-action="funil-empresa-apagar-confirmar"]')`)
+    const aindaLa = saved().empresas.some((empresa) => empresa.id === vaziaId)
+    await clickSelector(contents, '[data-funil-ficha="empresa"] [data-action="funil-empresa-apagar-confirmar"]')
+    const sumiu = await waitFor(contents, `!document.querySelector('[data-funil-empresa-row="${vaziaId}"]') && document.querySelectorAll('[data-funil-empresa-row]').length === 2 && !document.querySelector('[data-funil-ficha-id="${vaziaId}"]')`, 8000)
+    checks['empresaApagarBloqueado'] = {
+      ok: bloqueado.disabled && bloqueado.title === 'A empresa tem contatos ou oportunidades.' && Boolean(vaziaId) && vaziaAberta && confirmando && aindaLa && sumiu && !saved().empresas.some((empresa) => empresa.id === vaziaId),
+      detail: `com contato: ${JSON.stringify(bloqueado)}; empresa vazia ${vaziaId || '(não criada)'} com Apagar habilitado=${vaziaAberta}, confirmação na linha=${confirmando} (ainda gravada=${aindaLa}), apagada=${sumiu}`,
+    }
+
+    // contatosEmpresaSugerida (CA4, R5): Rafael Lima, sem empresa e com e-mail @lojista.example, mostra "Sugestão: Lojista
+    // (lojista.example)"; nada é criado antes do clique; "Criar empresa" cria a Lojista com o domínio e liga o contato.
+    const empresasAntes = saved().empresas.length
+    await abrirContatos(`/funil/contatos/${CT.rafael}`)
+    const sugerida = await waitFor(contents, `document.querySelector('${fichaDe(CT.rafael)} [data-funil-empresa-sugestao]')?.textContent.includes('Sugestão: Lojista (lojista.example)') === true`, 8000)
+    await wait(300)
+    const semClique = saved().empresas.length === empresasAntes && (await api<{ state: FunilState }>('scribe:funil-get')).state.empresas.length === empresasAntes
+    await clickSelector(contents, `${fichaDe(CT.rafael)} [data-action="funil-empresa-sugerida"]`)
+    const ligada = await waitFor(contents, `!document.querySelector('${fichaDe(CT.rafael)} [data-funil-empresa-sugestao]') && document.querySelector('${fichaDe(CT.rafael)} [data-funil-picker="funil-contato-empresa"] input')?.value === 'Lojista'`, 8000)
+    const viaCanal = (await api<{ state: FunilState }>('scribe:funil-get')).state
+    const lojista = viaCanal.empresas.find((empresa) => empresa.nome === 'Lojista')
+    const rafael = viaCanal.contatos.find((contato) => contato.id === CT.rafael)
+    checks['contatosEmpresaSugerida'] = {
+      ok: sugerida && semClique && ligada && lojista !== undefined && JSON.stringify(lojista.dominios) === JSON.stringify(['lojista.example']) && rafael?.empresaId === lojista.id && viaCanal.empresas.length === empresasAntes + 1,
+      detail: `sugestão na ficha=${sugerida}; nada criado antes do clique=${semClique}; ligada na tela=${ligada}; Lojista ${JSON.stringify(lojista ?? null)}; empresaId do Rafael ${rafael?.empresaId ?? null}; empresas ${empresasAntes} -> ${viaCanal.empresas.length}`,
+    }
+
+    // contatosNovo (CA5, R32): "Novo contato" abre a ficha de criação com o foco no Nome; Criar desabilitado vazio e só com o
+    // nome; com o e-mail, habilitado; Criar põe o novo na lista (5 linhas) com a ficha dele. Depois, um Novo contato com o
+    // e-mail da Marina junta os dados nela (a nota da mescla, a ficha da Marina e nenhum contato a mais).
+    await clickSelector(contents, '[data-action="funil-novo-contato"]')
+    const criacao = await waitFor(contents, `document.querySelector('[data-funil-ficha="novo-contato"]') && document.activeElement?.matches('[data-funil-novo-nome]') === true`, 8000)
+    const criarDisabled = (): Promise<boolean> => evaluate<boolean>(contents, `document.querySelector('[data-action="funil-contato-criar"]')?.disabled === true`)
+    const vazioDesabilitado = await criarDisabled()
+    // O print logo ao abrir: a ficha vazia com o Nome focado (CA14 da spec); o foco segue no Nome depois dos dois temas.
+    await both('funil-contatos-novo', true)
+    const focoNoPrint = await evaluate<boolean>(contents, `document.activeElement?.matches('[data-funil-novo-nome]') === true && document.querySelector('[data-funil-novo-nome]')?.value === ''`)
+    await setValue(contents, '[data-funil-novo-nome]', 'Beatriz Nogueira')
+    await settle(contents)
+    const soNomeDesabilitado = await criarDisabled()
+    await setValue(contents, '[data-funil-novo-email]', 'beatriz.nogueira@clinica.example')
+    const habilitado = await waitFor(contents, `document.querySelector('[data-action="funil-contato-criar"]')?.disabled === false`)
+    const antesCriar = ativos().length
+    await clickSelector(contents, '[data-action="funil-contato-criar"]')
+    const criada = await waitFor(contents, `${ROWS} === 5 && document.querySelector('[data-funil-ficha="contato"] h1')?.textContent === 'Beatriz Nogueira'`, 8000)
+    const nova = saved().contatos.find((contato) => contato.emails.includes('beatriz.nogueira@clinica.example'))
+    const fichaNova = await evaluate<string | null>(contents, `document.querySelector('[data-funil-ficha="contato"]')?.dataset.funilFichaId ?? null`)
+    // A mescla (R4): o e-mail da Marina num "novo" contato junta o cargo nela.
+    await clickSelector(contents, '[data-action="funil-novo-contato"]')
+    await waitFor(contents, `document.querySelector('[data-funil-ficha="novo-contato"]')`, 8000)
+    await setValue(contents, '[data-funil-novo-nome]', 'Marina R.')
+    await setValue(contents, '[data-funil-novo-cargo]', 'Gerente de compras')
+    await setValue(contents, '[data-funil-novo-email]', 'marina.rocha@cliente.example')
+    await waitFor(contents, `document.querySelector('[data-action="funil-contato-criar"]')?.disabled === false`)
+    const antesMescla = saved().contatos.length
+    await clickSelector(contents, '[data-action="funil-contato-criar"]')
+    const mesclou = await waitFor(contents, `document.querySelector('[data-notice="funil-contato-mesclado"]')?.textContent.includes('Esse e-mail ou telefone já era de Marina Rocha; os dados foram juntados.') === true && document.querySelector('${fichaDe(CT.marina)}')`, 8000)
+    const marina = saved().contatos.find((contato) => contato.id === CT.marina)
+    const notaMescla = await evaluate<{ nota: string; ficha: string | null; painel: string | null }>(
+      contents,
+      `({ nota: document.querySelector('[data-notice="funil-contato-mesclado"]')?.textContent ?? '', ficha: document.querySelector('[data-funil-ficha]')?.dataset.funilFichaId ?? document.querySelector('[data-funil-ficha]')?.dataset.funilFicha ?? null, painel: document.querySelector('[data-funil-contatos-painel]')?.dataset.funilContatosPainel ?? null })`,
+    )
+    checks['contatosNovo'] = {
+      ok:
+        criacao &&
+        vazioDesabilitado &&
+        focoNoPrint &&
+        soNomeDesabilitado &&
+        habilitado &&
+        criada &&
+        nova !== undefined &&
+        nova.origem === 'manual' &&
+        fichaNova === nova.id &&
+        ativos().length === antesCriar + 1 &&
+        mesclou &&
+        saved().contatos.length === antesMescla &&
+        marina?.nome === 'Marina Rocha' &&
+        marina.cargo === 'Gerente de compras',
+      detail: `ficha de criação com o foco no Nome=${criacao}; print vazio com o foco no Nome=${focoNoPrint}; Criar desabilitado vazio=${vazioDesabilitado}, só com o nome=${soNomeDesabilitado}; com o e-mail habilitado=${habilitado}; criado com 5 linhas=${criada} (${nova?.id ?? 'nenhum'}, origem ${nova?.origem ?? '-'}, ficha ${fichaNova}); mescla com a nota e a ficha da Marina=${mesclou} ${JSON.stringify(notaMescla)}, contatos ${antesMescla} -> ${saved().contatos.length}, Marina ${JSON.stringify({ nome: marina?.nome, cargo: marina?.cargo })}`,
+    }
+
+    // contatosSugestoes (CA14, R11, R33): na aba Sugestões, uma sugestão de cada canal (reunião, e-mail e WhatsApp); as
+    // outras vão para `ignorados` pelo canal `scribe:funil-ignorar`, como o "Ignorar" faria.
+    await aba('sugestoes')
+    const todas = await api<Sugestao[]>('scribe:funil-sugestoes')
+    const canais = ['reuniao', 'email', 'whatsapp'] as const
+    const ficam = canais.map((canal) => todas.find((sugestao) => sugestao.origem === canal)).filter((sugestao) => sugestao !== undefined)
+    const sobram = todas.filter((sugestao) => !ficam.includes(sugestao))
+    for (const sugestao of sobram) await api('scribe:funil-ignorar', { chave: sugestao.chave })
+    const tres = await waitFor(contents, `document.querySelectorAll('[data-funil-sugestao]').length === 3`, 8000)
+    const linhas = await evaluate<{ chaves: string[]; canais: string[]; heights: number[]; segmented: string }>(
+      contents,
+      `(() => {
+        const rows = [...document.querySelectorAll('[data-funil-sugestao]')]
+        return {
+          chaves: rows.map((el) => el.dataset.funilSugestao),
+          canais: rows.map((el) => el.dataset.funilSugestaoCanal),
+          heights: rows.map((el) => Math.round(el.getBoundingClientRect().height)),
+          segmented: document.querySelector('[data-funil-contatos-aba="sugestoes"]')?.textContent ?? '',
+        }
+      })()`,
+    )
+    checks['contatosSugestoes'] = {
+      ok: ficam.length === 3 && tres && JSON.stringify([...linhas.canais].sort()) === JSON.stringify(['email', 'reuniao', 'whatsapp']) && linhas.heights.every((height) => height === 44) && linhas.segmented === 'Sugestões 3',
+      // Só contagens e origens: a chave traz e-mail ou telefone, e o relatório não pode ter dado da agenda (contrato 12, CA11).
+      detail: `${todas.length} sugestões do main (origens ${JSON.stringify(todas.map((sugestao) => sugestao.origem))}); ficam ${ficam.length} (${JSON.stringify(ficam.map((sugestao) => sugestao.origem))}); ignoradas ${sobram.length}; 3 linhas=${tres}; ${JSON.stringify(linhas)}`,
+    }
+    await both('funil-contatos-sugestoes')
+
+    // contatosSugestaoAcoes (CA3, R12): "Adicionar" na de e-mail cria o contato com a origem do canal e a linha some;
+    // "Ignorar" na de reunião some e, depois de recarregar a tela, não volta.
+    const deEmail = ficam.find((sugestao) => sugestao.origem === 'email')
+    const deReuniao = ficam.find((sugestao) => sugestao.origem === 'reuniao')
+    let adicionada = false
+    let ignorada = false
+    let naoVoltou = false
+    let criadoPelaSugestao: Contato | undefined
+    if (deEmail && deReuniao) {
+      await clickSelector(contents, `[data-funil-sugestao="${deEmail.chave}"] [data-action="funil-sugestao-adicionar"]`)
+      adicionada = await waitFor(contents, `!document.querySelector('[data-funil-sugestao="${deEmail.chave}"]') && document.querySelectorAll('[data-funil-sugestao]').length === 2`, 8000)
+      criadoPelaSugestao = saved().contatos.find((contato) => deEmail.email !== null && contato.emails.includes(deEmail.email))
+      await clickSelector(contents, `[data-funil-sugestao="${deReuniao.chave}"] [data-action="funil-sugestao-ignorar"]`)
+      ignorada = await waitFor(contents, `!document.querySelector('[data-funil-sugestao="${deReuniao.chave}"]') && document.querySelectorAll('[data-funil-sugestao]').length === 1`, 8000)
+      await evaluate(contents, 'location.reload(), true')
+      await wait(300)
+      await loadAndWait(win)
+      await abrirContatos('/funil/contatos')
+      await aba('sugestoes')
+      await waitFor(contents, `document.querySelectorAll('[data-funil-sugestao]').length === 1`, 8000)
+      naoVoltou = await evaluate<boolean>(contents, `!document.querySelector('[data-funil-sugestao="${deReuniao.chave}"]') && document.querySelectorAll('[data-funil-sugestao]').length === 1`)
+    }
+    checks['contatosSugestaoAcoes'] = {
+      ok: adicionada && criadoPelaSugestao?.origem === 'email' && ignorada && naoVoltou && saved().ignorados.some((item) => item.chave === deReuniao?.chave),
+      detail: `Adicionar ${deEmail?.chave ?? '(sem sugestão de e-mail)'}: some=${adicionada}, contato ${criadoPelaSugestao?.id ?? 'nenhum'} com origem ${criadoPelaSugestao?.origem ?? '-'}; Ignorar ${deReuniao?.chave ?? '(sem sugestão de reunião)'}: some=${ignorada}, não voltou depois de recarregar=${naoVoltou}`,
+    }
+
+    // contatosImportar (CA14, CA2, R13 a R16): o CSV das fixtures com 5 linhas de prévia e 5 Selects; "Importar 4 contatos";
+    // E-mail -> Ignorar recontado pelo main ("Importar 3 contatos") e de volta; Importar -> "4 criados + atualizados" e
+    // "1 ignorados", e a lista cresce com os criados.
+    await aba('contatos')
+    await waitFor(contents, listaPronta, 8000)
+    await clickSelector(contents, '[data-action="funil-importar"]')
+    const previa = await waitFor(contents, `document.querySelector('[data-funil-importar="csv"]') && document.querySelectorAll('[data-funil-import-linha]').length === 5 && document.querySelectorAll('[data-funil-import-coluna]').length === 5`, 8000)
+    const botao = (): Promise<string> => text(contents, '[data-action="funil-importar-confirmar"]')
+    const quatro = await botao()
+    const emailCol = await evaluate<number>(contents, `[...document.querySelectorAll('[data-funil-import-coluna] select')].findIndex((el) => el.value === 'email')`)
+    await setValue(contents, `[data-funil-import-coluna="${emailCol}"] select`, 'ignorar', 'change')
+    const caiu = await waitFor(contents, `document.querySelector('[data-action="funil-importar-confirmar"]')?.textContent === 'Importar 3 contatos'`, 8000)
+    await setValue(contents, `[data-funil-import-coluna="${emailCol}"] select`, 'email', 'change')
+    const voltou = await waitFor(contents, `document.querySelector('[data-action="funil-importar-confirmar"]')?.textContent === 'Importar 4 contatos'`, 8000)
+    const info = await text(contents, '[data-funil-import-info]')
+    await both('funil-contatos-importar')
+    const linhasAntes = await evaluate<number>(contents, ROWS)
+    await clickSelector(contents, '[data-action="funil-importar-confirmar"]')
+    const resultadoOk = await waitFor(contents, `document.querySelector('[data-funil-import-resultado]') && !document.querySelector('[data-action="funil-importar-confirmar"]')`, 8000)
+    const resultado = await text(contents, '[data-funil-import-resultado]')
+    const numeros = /^(\d+) criados · (\d+) atualizados · (\d+) ignorados \(sem e-mail nem telefone\)$/.exec(resultado.trim())
+    const criados = Number(numeros?.[1] ?? -1)
+    const atualizados = Number(numeros?.[2] ?? -1)
+    const cresceu = await waitFor(contents, `${ROWS} === ${linhasAntes + criados}`, 8000)
+    checks['contatosImportar'] = {
+      ok: previa && quatro === 'Importar 4 contatos' && emailCol >= 0 && caiu && voltou && info === '5 linhas · separador ; · UTF-8' && resultadoOk && numeros !== null && criados + atualizados === 4 && numeros[3] === '1' && cresceu,
+      detail: `prévia com 5 linhas e 5 colunas=${previa}; botão "${quatro}"; coluna E-mail ${emailCol} -> Ignorar: 3=${caiu}, de volta 4=${voltou}; arquivo "${info}"; resultado "${resultado}"; linhas ${linhasAntes} -> +${criados}=${cresceu}`,
+    }
+  } finally {
+    if (themeBefore !== 'system') await evaluate(contents, `window.__scribeApi.invoke('scribe:settings-update', { theme: '${themeBefore}' }).then(() => true)`)
+    nativeTheme.themeSource = 'system'
+    win.destroy()
+    console.log(`funil: contatos e empresas em ${((Date.now() - startedAt) / 1000).toFixed(1)} s`)
+  }
+}
+
+/** Contrato 116: a reunião semeada com evento da agenda (3 participantes, 2 com e-mail) e resumo, só para o cartão. */
+const FUNIL_REUNIAO = 'smoke-funil-reuniao'
+const FUNIL_REUNIAO_ATTENDEES = [
+  { name: 'Marina Rocha', email: 'marina.rocha@cliente.example' },
+  { name: 'Lucas Vieira', email: 'lucas.vieira@vertice.example' },
+  { name: 'Carlos Dias', email: '' },
+]
+/** Contrato 116: a reunião semeada sem evento da agenda e com resumo (o caso "sem `calendar`, sem bloco"), apagada depois. */
+const FUNIL_REUNIAO_SEM_AGENDA = 'smoke-funil-sem-agenda'
+/** O remetente do email entregue pelo bloco: ainda não é contato. */
+const FUNIL_EMAIL_REMETENTE = { name: 'Paulo Siqueira', address: 'paulo.siqueira@fluxo.example' }
+const FUNIL_EMAIL_ASSUNTO = 'Orçamento do módulo de conciliação'
+/** A mensagem da própria conta (o remetente é o endereço da conta do email falso). */
+const FUNIL_EMAIL_PROPRIA = 'Lembrete da estimativa do módulo'
+
+/**
+ * Contrato 116 (R35 a R37, R39, R40; CA15 da spec), numa janela que troca de tema no lugar, depois do
+ * `funilContatosChecks`, com o agente ACP falso (a detecção sob demanda) e `funil.detectarNasReunioes` desligado. Semeia
+ * a reunião `smoke-funil-reuniao` (evento da agenda com 3 participantes, 2 com e-mail, e resumo): o bloco Participantes
+ * abaixo das tarefas (e uma reunião semeada sem agenda, sem o bloco, apagada depois), "+ Contato" de um participante,
+ * "Detectar oportunidade" com o botão desligado em "Detectando…", o cartão acima das tarefas com o aviso de duplicata (a proposta padrão é da
+ * empresa Cliente, que tem `op-portal`), nada gravado sem clique, "Criar" com o e-mail da Marina apagado, um contato
+ * novo com e-mail e o valor editado, e "Ignorar" numa segunda detecção. No email, uma mensagem nova de um remetente que
+ * não é contato ("+ Contato" e o link) e uma da própria conta (sem nada). No WhatsApp, os Detalhes da Ana ("+ Contato" e a
+ * ficha), do Bruno (contato só pelo telefone) e do grupo (sem bloco). Termina com o Lucas, o Carlos, o Paulo, a Ana e o
+ * Bruno no funil, a oportunidade criada pela reunião e a reunião semeada na lista. Prints `detalhe-resumo-oportunidade`,
+ * `email-leitura-contato` e `whatsapp-detalhes-contato`, nos dois temas.
+ */
+async function funilTelasExistentesChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => void, checks: Record<string, Check>, shots: Screenshot[]): Promise<void> {
+  const startedAt = Date.now()
+  const themeBefore = readSettings(ctx.userDataDir).theme ?? 'system'
+  const transportBefore = readSettings(ctx.userDataDir).claudeTransport
+  const funilBefore = readSettings(ctx.userDataDir).funil ?? DEFAULT_SETTINGS.funil
+  nativeTheme.themeSource = 'light'
+  const win = ctx.openWindow({})
+  watch(win)
+  await loadAndWait(win)
+  const contents = win.webContents
+  if (themeBefore !== 'system') await evaluate(contents, "window.__scribeApi.invoke('scribe:settings-update', { theme: 'system' }).then(() => true)")
+  // R40: "Detectar oportunidade" roda com a detecção automática desligada; o agente ACP falso responde a proposta padrão.
+  await evaluate(contents, `window.__scribeApi.invoke('scribe:settings-update', ${JSON.stringify({ claudeTransport: 'acp', funil: { ...funilBefore, detectarNasReunioes: false } })}).then(() => true)`)
+  const acpStatus = await evaluate<{ state?: string }>(contents, "window.__scribeApi.invoke('scribe:acp-status')")
+  if (acpStatus.state !== 'installed') await evaluate(contents, "window.__scribeApi.invoke('scribe:acp-install').then(() => true)")
+  const api = <T>(channel: string, request?: unknown): Promise<T> => evaluate<T>(contents, `window.__scribeApi.invoke(${JSON.stringify(channel)}${request === undefined ? '' : `, ${JSON.stringify(request)}`})`)
+  const both = async (name: string): Promise<void> => {
+    await evaluate(contents, `document.activeElement instanceof HTMLElement && document.activeElement.blur(), true`)
+    await settle(contents)
+    shots.push(await capture(win, ctx.outDir, `${name}-light`))
+    nativeTheme.themeSource = 'dark'
+    await waitFor(contents, "document.documentElement.dataset.theme === 'dark'")
+    await settle(contents)
+    shots.push(await capture(win, ctx.outDir, `${name}-dark`))
+    nativeTheme.themeSource = 'light'
+    await waitFor(contents, "document.documentElement.dataset.theme === 'light'")
+  }
+  const funilFile = join(ctx.userDataDir, FUNIL_FILE)
+  const saved = (): FunilState => JSON.parse(readFileSync(funilFile, 'utf8')) as FunilState
+  const propostaFile = join(ctx.userDataDir, 'meetings', `${FUNIL_REUNIAO}.funil.json`)
+  const proposta = (): { status?: string; oportunidadeId?: string; createdAt?: string } | null => (existsSync(propostaFile) ? (JSON.parse(readFileSync(propostaFile, 'utf8')) as { status?: string; oportunidadeId?: string; createdAt?: string }) : null)
+  const contatoPorEmail = (email: string): Contato | undefined => saved().contatos.find((contato) => !contato.arquivado && contato.emails.includes(email))
+  const CARD = '[data-funil-proposta]'
+  const resumoPronto = (id: string): string => `${routeIs('detalhe')} && document.querySelector('[data-meeting="${id}"] [data-summary="ready"] [data-summary-overview]')`
+  const abrirReuniao = async (id: string): Promise<boolean> => {
+    await funilRouterPush(contents, `/reunioes/${encodeURIComponent(id)}`)
+    return waitFor(contents, resumoPronto(id), 8000)
+  }
+
+  try {
+    // A reunião do cartão: no `meetings.json` (sem perder as pastas) e com o resumo ao lado, como as do contrato 10.
+    const meetingsFile = join(ctx.userDataDir, MEETINGS_FILE)
+    const file = JSON.parse(readFileSync(meetingsFile, 'utf8')) as { version: number; meetings: Meeting[]; folders?: unknown[] }
+    const comecou = new Date(Date.now() - 2 * 3_600_000)
+    const reuniao: Meeting = {
+      id: FUNIL_REUNIAO,
+      title: 'Conversa com o Cliente sobre o portal',
+      startedAt: comecou.toISOString(),
+      durationMs: 46 * 60_000,
+      sources: { mic: true, system: true },
+      audioPath: null,
+      transcriptPath: null,
+      calendar: { provider: 'google', eventId: 'smoke-funil', title: 'Conversa com o Cliente sobre o portal', start: comecou.toISOString(), end: new Date(comecou.getTime() + 46 * 60_000).toISOString(), attendees: FUNIL_REUNIAO_ATTENDEES, joinUrl: null },
+    }
+    // A reunião sem agenda é própria do bloco: as de `seedListMeetings` podem ganhar agenda nos blocos anteriores.
+    const semAgendaReuniao: Meeting = { id: FUNIL_REUNIAO_SEM_AGENDA, title: 'Revisão interna do portal', startedAt: new Date(comecou.getTime() - 3_600_000).toISOString(), durationMs: 20 * 60_000, sources: { mic: true, system: true }, audioPath: null, transcriptPath: null }
+    writeFileAtomicSync(meetingsFile, `${JSON.stringify({ ...file, meetings: [...file.meetings.filter((item) => item.id !== FUNIL_REUNIAO && item.id !== FUNIL_REUNIAO_SEM_AGENDA), reuniao, semAgendaReuniao] }, null, 2)}\n`)
+    const resumo: MeetingSummary = {
+      version: 1,
+      meetingId: FUNIL_REUNIAO,
+      createdAt: new Date().toISOString(),
+      model: 'claude-cli:haiku',
+      overview: 'O Cliente quer um portal do associado e pediu a proposta até o fim do mês.',
+      decisions: ['Enviar a proposta até sexta.'],
+      tasks: [{ task: 'Enviar a proposta do portal', owner: 'Você', due: 'sexta-feira' }],
+    }
+    writeFileAtomicSync(join(ctx.userDataDir, 'meetings', `${FUNIL_REUNIAO}.summary.json`), `${JSON.stringify(resumo, null, 2)}\n`)
+    writeFileAtomicSync(join(ctx.userDataDir, 'meetings', `${FUNIL_REUNIAO_SEM_AGENDA}.summary.json`), `${JSON.stringify({ ...resumo, meetingId: FUNIL_REUNIAO_SEM_AGENDA }, null, 2)}\n`)
+
+    // resumoParticipantes (CA4, R35): a reunião sem agenda (resumo, sem `calendar`) não tem o bloco e é apagada em seguida;
+    // a semeada tem 3 linhas abaixo das tarefas e 2 `ContactLink` (a Marina já é contato; o Lucas não; o Carlos, sem
+    // e-mail, só o nome). O detalhe leva só contagens: nada da agenda vai para o relatório (CA11 do contrato 12).
+    const semAgenda = await abrirReuniao(FUNIL_REUNIAO_SEM_AGENDA)
+    await settle(contents)
+    const semBloco = semAgenda && (await evaluate<boolean>(contents, `!document.querySelector('[data-summary-participantes]')`))
+    const apagada = await api<boolean>('scribe:meetings-delete', { id: FUNIL_REUNIAO_SEM_AGENDA })
+    const comAgenda = await abrirReuniao(FUNIL_REUNIAO)
+    const linksProntos = await waitFor(contents, `document.querySelectorAll('[data-summary-participantes] [data-funil-contato-link], [data-summary-participantes] [data-action="funil-mais-contato"]').length === 2`, 8000)
+    const bloco = await evaluate<{ rows: string[]; below: boolean; links: number; botoes: number; marina: string }>(
+      contents,
+      `(() => {
+        const bloco = document.querySelector('[data-summary-participantes]')
+        const tarefas = document.querySelector('[data-summary-tasks], [data-summary-no-tasks]')
+        return {
+          rows: [...(bloco?.querySelectorAll('[data-summary-participante]') ?? [])].map((el) => el.dataset.summaryParticipante),
+          below: Boolean(bloco && tarefas && tarefas.compareDocumentPosition(bloco) & Node.DOCUMENT_POSITION_FOLLOWING),
+          links: bloco?.querySelectorAll('[data-funil-contato-link]').length ?? 0,
+          botoes: bloco?.querySelectorAll('[data-action="funil-mais-contato"]').length ?? 0,
+          marina: bloco?.querySelector('[data-summary-participante="marina.rocha@cliente.example"] [data-funil-contato-link]')?.textContent ?? '',
+        }
+      })()`,
+    )
+    checks['resumoParticipantes'] = {
+      ok: semBloco && comAgenda && linksProntos && JSON.stringify(bloco.rows) === JSON.stringify(FUNIL_REUNIAO_ATTENDEES.map((item) => item.email)) && bloco.below && bloco.links === 1 && bloco.botoes === 1 && bloco.marina === 'Marina Rocha',
+      detail: `sem agenda: aberta=${semAgenda}, sem o bloco=${semBloco}, apagada depois=${apagada}; com agenda: aberta=${comAgenda}, 2 ContactLink=${linksProntos}, ${bloco.rows.length} linhas na ordem=${JSON.stringify(bloco.rows) === JSON.stringify(FUNIL_REUNIAO_ATTENDEES.map((item) => item.email))}, abaixo das tarefas=${bloco.below}, ${bloco.links} link e ${bloco.botoes} botão, link do contato que já existe=${bloco.marina === 'Marina Rocha'}`,
+    }
+
+    // resumoMaisContato (R35): "+ Contato" do Lucas cria o contato com `origem: 'reuniao'` e a linha vira o link, sem sair.
+    const contatosAntesLucas = saved().contatos.length
+    await clickSelector(contents, '[data-summary-participante="lucas.vieira@vertice.example"] [data-action="funil-mais-contato"]')
+    const virouLink = await waitFor(contents, `document.querySelector('[data-summary-participante="lucas.vieira@vertice.example"] [data-funil-contato-link]')?.textContent === 'Lucas Vieira'`, 8000)
+    const lucas = contatoPorEmail('lucas.vieira@vertice.example')
+    checks['resumoMaisContato'] = {
+      ok: virouLink && lucas?.origem === 'reuniao' && lucas.nome === 'Lucas Vieira' && saved().contatos.length === contatosAntesLucas + 1 && (await evaluate<boolean>(contents, `Boolean(${resumoPronto(FUNIL_REUNIAO)})`)),
+      detail: `link com o nome na linha=${virouLink}; contato ${lucas?.id ?? 'nenhum'} com origem ${lucas?.origem ?? '-'}; contatos ${contatosAntesLucas} -> ${saved().contatos.length}`,
+    }
+
+    // resumoDetectar (CA3, R40): com a detecção automática desligada, o botão fica desligado em "Detectando…" enquanto o
+    // agente falso responde, volta, e o cartão aparece com `acao: 'criar'`.
+    const opsAntes = saved().oportunidades.length
+    const contatosAntes = saved().contatos.length
+    await evaluate(
+      contents,
+      `(() => {
+        window.__smokeDetectando = false
+        const olhar = () => {
+          const botao = document.querySelector('[data-action="funil-detectar"]')
+          if (botao?.disabled && botao.textContent === 'Detectando…') window.__smokeDetectando = true
+        }
+        window.__smokeDetectObserver?.disconnect()
+        window.__smokeDetectObserver = new MutationObserver(olhar)
+        window.__smokeDetectObserver.observe(document.querySelector('[data-summary]'), { subtree: true, childList: true, attributes: true, characterData: true })
+        return true
+      })()`,
+    )
+    const textoAntes = await text(contents, '[data-action="funil-detectar"]')
+    await clickSelector(contents, '[data-action="funil-detectar"]')
+    const cartao = await waitFor(contents, `document.querySelector('${CARD}[data-funil-proposta="criar"]') && document.querySelector('[data-action="funil-detectar"]')?.textContent === 'Detectar oportunidade' && !document.querySelector('[data-action="funil-detectar"]').disabled`, 20_000)
+    const viuDetectando = await evaluate<boolean>(contents, `(window.__smokeDetectObserver?.disconnect(), window.__smokeDetectando === true)`)
+    checks['resumoDetectar'] = {
+      ok: textoAntes === 'Detectar oportunidade' && viuDetectando && cartao && proposta()?.status === 'proposed' && readSettings(ctx.userDataDir).funil?.detectarNasReunioes === false,
+      detail: `botão "${textoAntes}"; desligado em "Detectando…"=${viuDetectando}; cartão "criar" e o botão de volta=${cartao}; arquivo ${proposta()?.status ?? 'ausente'}; detectarNasReunioes=${String(readSettings(ctx.userDataDir).funil?.detectarNasReunioes)}`,
+    }
+
+    // resumoCartao (CA15, CA2): acima das Tarefas, com os três botões, o título, o modelo e o "Por quê"; nada gravado sem
+    // clique, nem depois de sair e voltar à aba.
+    const card = await evaluate<{ acima: boolean; botoes: string[]; titulo: string; modelo: string; porque: string; campos: Record<string, string>; chips: string[] }>(
+      contents,
+      `(() => {
+        const card = document.querySelector('${CARD}')
+        const tarefas = document.querySelector('section[aria-label="Tarefas"]')
+        return {
+          acima: Boolean(card && tarefas && card.compareDocumentPosition(tarefas) & Node.DOCUMENT_POSITION_FOLLOWING),
+          botoes: [...(card?.querySelectorAll('[data-action^="funil-proposta-"]') ?? [])].map((el) => el.dataset.action).filter((action) => ['funil-proposta-aplicar', 'funil-proposta-vincular', 'funil-proposta-ignorar'].includes(action)),
+          titulo: card?.querySelector('h3')?.textContent ?? '',
+          modelo: card?.querySelector('[data-funil-proposta-modelo]')?.textContent ?? '',
+          porque: card?.querySelector('[data-funil-proposta-porque]')?.textContent ?? '',
+          campos: {
+            titulo: card?.querySelector('[data-funil-proposta-titulo]')?.value ?? '',
+            etapa: card?.querySelector('[data-funil-proposta-etapa]')?.selectedOptions[0]?.textContent ?? '',
+            empresa: card?.querySelector('[data-funil-picker="proposta-empresa"] input')?.value ?? '',
+            valor: card?.querySelector('[data-funil-proposta-valor]')?.value ?? '',
+            passo: card?.querySelector('[data-funil-proposta-passo]')?.value ?? '',
+            aplicar: card?.querySelector('[data-action="funil-proposta-aplicar"]')?.textContent ?? '',
+          },
+          chips: [...(card?.querySelectorAll('[data-funil-proposta-contato]') ?? [])].map((el) => el.querySelector('span')?.textContent + ' <' + (el.querySelector('input')?.value ?? '') + '>'),
+        }
+      })()`,
+    )
+    await evaluate(contents, `document.querySelector('${CARD}')?.scrollIntoView({ block: 'nearest' }), true`)
+    await both('detalhe-resumo-oportunidade')
+    await funilRouterPush(contents, '/funil/contatos')
+    await waitFor(contents, routeIs('funil'), 8000)
+    const voltou = (await abrirReuniao(FUNIL_REUNIAO)) && (await waitFor(contents, `document.querySelector('${CARD}[data-funil-proposta="criar"]')`, 8000))
+    const intocado = saved().oportunidades.length === opsAntes && saved().contatos.length === contatosAntes && proposta()?.status === 'proposed'
+    checks['resumoCartao'] = {
+      ok:
+        cartao &&
+        card.acima &&
+        JSON.stringify(card.botoes) === JSON.stringify(['funil-proposta-aplicar', 'funil-proposta-vincular', 'funil-proposta-ignorar']) &&
+        card.titulo === 'Oportunidade detectada' &&
+        /^Haiku · \d{2}:\d{2}$/.test(card.modelo) &&
+        card.porque === 'Por quê: Pediram proposta para o portal.' &&
+        card.campos['titulo'] === 'Portal do associado' &&
+        card.campos['etapa'] === 'Descoberta' &&
+        card.campos['empresa'] === 'Cliente' &&
+        card.campos['valor'] === '45.000' &&
+        card.campos['passo'] === 'Enviar proposta' &&
+        card.campos['aplicar'] === 'Criar' &&
+        JSON.stringify(card.chips) === JSON.stringify(['Marina Rocha <marina.rocha@cliente.example>']) &&
+        voltou &&
+        intocado,
+      detail: `${JSON.stringify({ ...card, chips: card.chips.length, chipsCertos: JSON.stringify(card.chips) === JSON.stringify(['Marina Rocha <marina.rocha@cliente.example>']) })}; saiu e voltou com o cartão=${voltou}; funil.json igual (oportunidades ${opsAntes}, contatos ${contatosAntes}) e arquivo proposed=${intocado}`,
+    }
+
+    // resumoDuplicata (R39, R25): a empresa Cliente já tem "Portal do associado" aberta: o aviso com o link, "Criar"
+    // habilitado e "Vincular a existente…" com a duplicata já escolhida no Select.
+    const aviso = await evaluate<{ texto: string; id: string; criar: boolean }>(
+      contents,
+      `({ texto: document.querySelector('${CARD} [data-funil-aviso-duplicata]')?.textContent ?? '', id: document.querySelector('${CARD} [data-funil-aviso-duplicata]')?.dataset.funilAvisoDuplicata ?? '', criar: !document.querySelector('${CARD} [data-action="funil-proposta-aplicar"]')?.disabled })`,
+    )
+    await clickSelector(contents, `${CARD} [data-action="funil-proposta-vincular"]`)
+    const escolhida = (await waitFor(contents, `document.querySelector('${CARD} [data-funil-proposta-vincular-select]')`)) ? await evaluate<string>(contents, `document.querySelector('${CARD} [data-funil-proposta-vincular-select]').value`) : ''
+    await clickSelector(contents, `${CARD} [data-action="funil-proposta-vincular"]`)
+    const fechou = await waitFor(contents, `!document.querySelector('${CARD} [data-funil-proposta-vincular-select]')`)
+    checks['resumoDuplicata'] = {
+      ok: aviso.texto.includes('«Portal do associado»') && aviso.texto.includes('aberta para esta empresa') && aviso.id === 'op-portal' && aviso.criar && escolhida === 'op-portal' && fechou,
+      detail: `aviso "${aviso.texto}" (${aviso.id}); Criar habilitado=${aviso.criar}; Select do Vincular com ${escolhida || '(nada)'}; fechou=${fechou}`,
+    }
+
+    // resumoCriar (CA2, CA8, R39): o e-mail da Marina apagado (ela fica só citada), um contato novo pelo picker com o e-mail
+    // preenchido no chip (criado), o valor 120.000,00 e Criar.
+    await setValue(contents, `${CARD} [data-funil-proposta-email="0"]`, '')
+    await setValue(contents, `${CARD} [data-funil-picker="proposta-contatos"] input`, 'Carlos Dias')
+    await waitFor(contents, `document.querySelector('${CARD} [data-funil-picker="proposta-contatos"] [data-funil-picker-criar]')`)
+    await clickSelector(contents, `${CARD} [data-funil-picker="proposta-contatos"] [data-funil-picker-criar]`)
+    await waitFor(contents, `document.querySelector('${CARD} [data-funil-proposta-email="1"]')`)
+    await setValue(contents, `${CARD} [data-funil-proposta-email="1"]`, 'carlos.dias@cliente.example')
+    await setValue(contents, `${CARD} [data-funil-proposta-valor]`, '120.000,00')
+    const efeito = (await waitFor(contents, `document.querySelector('${CARD} [data-funil-proposta-efeito]')?.textContent === 'Cria o contato novo · Marina Rocha fica só citado na nota'`)) as boolean
+    const efeitoTexto = await text(contents, `${CARD} [data-funil-proposta-efeito]`)
+    const marinas = saved().contatos.filter((contato) => contato.nome === 'Marina Rocha').length
+    const contatosAntesCriar = saved().contatos.length
+    const opsAntesCriar = saved().oportunidades.length
+    await clickSelector(contents, `${CARD} [data-action="funil-proposta-aplicar"]`)
+    const criada = await waitFor(contents, `document.querySelector('[data-funil-proposta-feita="criada"] [data-funil-proposta-link]') && !document.querySelector('${CARD}')`, 8000)
+    const estado = saved()
+    const nova = estado.oportunidades.find((op) => op.meetingIds.includes(FUNIL_REUNIAO) && op.origem === 'reuniao')
+    const carlos = contatoPorEmail('carlos.dias@cliente.example')
+    const nota = nova ? estado.eventos.find((evento) => evento.oportunidadeId === nova.id && evento.tipo === 'nota') : undefined
+    const link = await evaluate<string>(contents, `document.querySelector('[data-funil-proposta-feita="criada"] [data-funil-proposta-link]')?.dataset.funilPropostaLink ?? ''`)
+    checks['resumoCriar'] = {
+      ok:
+        efeito &&
+        criada &&
+        nova !== undefined &&
+        nova.valor === 12_000_000 &&
+        nova.titulo === 'Portal do associado' &&
+        nova.empresaId === SMOKE_FUNIL.empresas.cliente &&
+        nova.etapaId === SMOKE_FUNIL.etapas.descoberta &&
+        estado.oportunidades.length === opsAntesCriar + 1 &&
+        nota?.texto === 'Citados na reunião: Marina Rocha' &&
+        carlos?.origem === 'reuniao' &&
+        nova.contatoIds.includes(carlos.id) &&
+        !nova.contatoIds.includes(SMOKE_FUNIL.contatos.marina) &&
+        estado.contatos.filter((contato) => contato.nome === 'Marina Rocha').length === marinas &&
+        estado.contatos.length === contatosAntesCriar + 1 &&
+        proposta()?.status === 'accepted' &&
+        proposta()?.oportunidadeId === nova.id &&
+        link === nova.id,
+      detail: `efeito certo=${efeitoTexto === 'Cria o contato novo · Marina Rocha fica só citado na nota'}; linha "Oportunidade criada"=${criada} (link ${link || '-'}); oportunidade ${nova ? JSON.stringify({ id: nova.id, titulo: nova.titulo, valor: nova.valor, empresaId: nova.empresaId, etapaId: nova.etapaId, origem: nova.origem, meetingIds: nova.meetingIds, contatoIds: nova.contatoIds }) : 'nenhuma'}; nota dos citados certa=${nota?.texto === 'Citados na reunião: Marina Rocha'}; contato novo ${carlos?.id ?? 'nenhum'} (${carlos?.origem ?? '-'}); contatos ${contatosAntesCriar} -> ${estado.contatos.length}; arquivo ${proposta()?.status ?? '-'} ${proposta()?.oportunidadeId ?? ''}`,
+    }
+
+    // resumoIgnorar (R39): detectar de novo e Ignorar: o cartão some, o arquivo fica `dismissed` e nada novo no funil.
+    const opsAntesIgnorar = saved().oportunidades.length
+    const antes = proposta()?.createdAt ?? ''
+    await clickSelector(contents, '[data-action="funil-detectar"]')
+    const deNovo = await waitFor(contents, `document.querySelector('${CARD}[data-funil-proposta="criar"]') && !document.querySelector('[data-action="funil-detectar"]').disabled`, 20_000)
+    const substituiu = proposta()?.status === 'proposed' && (proposta()?.createdAt ?? '') !== antes
+    await clickSelector(contents, `${CARD} [data-action="funil-proposta-ignorar"]`)
+    const sumiu = await waitFor(contents, `!document.querySelector('${CARD}') && !document.querySelector('[data-funil-proposta-feita]')`, 8000)
+    checks['resumoIgnorar'] = {
+      ok: deNovo && substituiu && sumiu && proposta()?.status === 'dismissed' && saved().oportunidades.length === opsAntesIgnorar,
+      detail: `cartão de novo=${deNovo}, arquivo substituído=${substituiu}; Ignorar: sumiu=${sumiu}, arquivo ${proposta()?.status ?? '-'}; oportunidades ${opsAntesIgnorar} -> ${saved().oportunidades.length}`,
+    }
+
+    // emailMaisContato (CA15, CA5, R36): uma mensagem nova de quem ainda não é contato: "+ Contato" ao lado do remetente;
+    // o clique vira o link com o nome; numa mensagem da própria conta, nem botão nem link.
+    await ctx.fixtures.email.deliver({ from: FUNIL_EMAIL_REMETENTE, subject: FUNIL_EMAIL_ASSUNTO, text: 'Bom dia, Andrew.\n\nConseguem me mandar uma estimativa do segundo módulo até terça?\n\nAbraço,\nPaulo' })
+    const caixa = await openEmailFolder(contents, 'inbox', 1)
+    const chegou = await waitFor(contents, emailRow(FUNIL_EMAIL_ASSUNTO), 10_000)
+    const aberta = chegou && (await clickEmailRow(contents, FUNIL_EMAIL_ASSUNTO))
+    const READING_HEAD = '[data-email-reading] [data-email-from]'
+    const botaoEmail = await waitFor(contents, `document.querySelector('${READING_HEAD}')?.parentElement?.querySelector('[data-action="funil-mais-contato"]')`, 8000)
+    await both('email-leitura-contato')
+    await clickSelector(contents, `[data-email-reading] [data-action="funil-mais-contato"]`)
+    const linkEmail = await waitFor(contents, `document.querySelector('[data-email-reading] [data-funil-contato-link]')?.textContent === 'Paulo Siqueira' && !document.querySelector('[data-email-reading] [data-action="funil-mais-contato"]')`, 8000)
+    const paulo = contatoPorEmail(FUNIL_EMAIL_REMETENTE.address)
+    // Mandada pela própria conta (para si mesma): nem "+ Contato" nem link.
+    await ctx.fixtures.email.deliver({ from: { name: 'Andrew Teste', address: SMOKE_EMAIL_ADDRESS }, subject: FUNIL_EMAIL_PROPRIA, text: 'Lembrete: mandar a estimativa ao Paulo.' })
+    const enviados = await waitFor(contents, emailRow(FUNIL_EMAIL_PROPRIA), 10_000)
+    const enviadaAberta = enviados && (await clickEmailRow(contents, FUNIL_EMAIL_PROPRIA))
+    await settle(contents)
+    const enviada = await evaluate<{ from: string; nada: boolean }>(
+      contents,
+      `({ from: document.querySelector('[data-email-reading] [data-email-from]')?.textContent ?? '', nada: !document.querySelector('[data-email-reading] [data-action="funil-mais-contato"]') && !document.querySelector('[data-email-reading] [data-funil-contato-link]') })`,
+    )
+    checks['emailMaisContato'] = {
+      ok: caixa && aberta && botaoEmail && linkEmail && paulo?.origem === 'email' && paulo.nome === 'Paulo Siqueira' && enviados && enviadaAberta && enviada.nada,
+      detail: `Caixa de Entrada=${caixa}, mensagem nova aberta=${aberta}; "+ Contato" ao lado do remetente=${botaoEmail}; depois do clique, o link com o nome=${linkEmail}, contato ${paulo?.id ?? 'nenhum'} (${paulo?.origem ?? '-'}); mensagem da própria conta chegou=${enviados}, sem botão nem link=${enviada.nada && enviadaAberta}`,
+    }
+
+    // whatsappContato (CA15, CA6, R37): os Detalhes da Ana (pessoa, ainda sem contato) com o bloco Contato e "+ Contato";
+    // o clique liga a ficha (conversa e telefone); o Bruno, contato só pelo telefone, mostra a ficha; o grupo, sem bloco.
+    await showRoot(contents)
+    await clickNav(contents, 'whatsapp')
+    const lista = await waitFor(contents, `document.querySelectorAll('[data-whatsapp-chat]').length === 3`, 8000)
+    const abrirConversa = async (chatId: string): Promise<boolean> => {
+      await clickSelector(contents, `[data-whatsapp-chat="${chatId}"]`)
+      const aberta = await waitFor(contents, `document.querySelector('[data-whatsapp-conversation="${chatId}"]')`, 8000)
+      if (!(await evaluate<boolean>(contents, `Boolean(document.querySelector('[data-wa-details]'))`))) await clickSelector(contents, '[data-action="toggle-whatsapp-details"]')
+      return aberta && (await waitFor(contents, `document.querySelector('[data-wa-details]')`))
+    }
+    const ana = await abrirConversa(WA_ANA)
+    const botaoWa = await waitFor(contents, `document.querySelector('[data-wa-details] [data-whatsapp-contato=""] [data-action="funil-mais-contato"]')`, 8000)
+    const blocoNoTopo = await evaluate<boolean>(contents, `document.querySelector('[data-wa-details] [data-wa-section]')?.dataset.waSection === 'contato'`)
+    // O resumo da IA da conversa (ou o aviso de desligado) antes do print, para o painel não mudar no meio.
+    await waitFor(contents, `document.querySelector('[data-wa-details] [data-wa-summary]') || document.querySelector('[data-wa-details] [data-wa-insights="off"]')`, 20_000)
+    await both('whatsapp-detalhes-contato')
+    await clickSelector(contents, '[data-wa-details] [data-whatsapp-contato] [data-action="funil-mais-contato"]')
+    const fichaAna = await waitFor(contents, `document.querySelector('[data-wa-details] [data-whatsapp-contato]')?.dataset.whatsappContato && document.querySelector('[data-wa-details] [data-whatsapp-contato] [data-funil-contato-link]')`, 8000)
+    const anaContato = saved().contatos.find((contato) => !contato.arquivado && contato.whatsappChatId === WA_ANA)
+    const brunoSalvo = await api<{ ok: boolean; id: string | null }>('scribe:funil-contato-save', { contato: { nome: 'Bruno Lima', emails: [], telefones: ['+55 11 92222-0000'] }, origem: 'manual' })
+    const bruno = await abrirConversa(WA_BRUNO)
+    const fichaBruno = brunoSalvo.ok && (await waitFor(contents, `document.querySelector('[data-wa-details] [data-whatsapp-contato="${brunoSalvo.id ?? 'x'}"] [data-funil-contato-link="${brunoSalvo.id ?? 'x'}"]')`, 8000))
+    const grupo = await abrirConversa(WA_ATLAS)
+    await settle(contents)
+    const semBlocoGrupo = grupo && (await evaluate<boolean>(contents, `Boolean(document.querySelector('[data-wa-details]')) && !document.querySelector('[data-wa-details] [data-whatsapp-contato]')`))
+    checks['whatsappContato'] = {
+      ok: lista && ana && botaoWa && blocoNoTopo && fichaAna && anaContato?.origem === 'whatsapp' && anaContato.telefones.includes('+5511911110000') && bruno && fichaBruno && semBlocoGrupo,
+      detail: `lista=${lista}; Ana com os Detalhes=${ana}, bloco no topo=${blocoNoTopo} com "+ Contato"=${botaoWa}; depois do clique, a ficha=${fichaAna}, contato ${anaContato?.id ?? 'nenhum'} (${anaContato?.origem ?? '-'}, telefone da conversa=${anaContato?.telefones.includes('+5511911110000') ?? false}); Bruno só pelo telefone (${brunoSalvo.id ?? 'não salvo'}) com a ficha=${fichaBruno}; grupo sem o bloco=${semBlocoGrupo}`,
+    }
+  } finally {
+    await evaluate(contents, `window.__scribeApi.invoke('scribe:settings-update', ${JSON.stringify({ claudeTransport: transportBefore === 'acp' ? 'acp' : 'cli', funil: funilBefore })}).then(() => true)`).catch(() => undefined)
+    if (themeBefore !== 'system') await evaluate(contents, `window.__scribeApi.invoke('scribe:settings-update', { theme: '${themeBefore}' }).then(() => true)`)
+    nativeTheme.themeSource = 'system'
+    win.destroy()
+    console.log(`funil: botões nas telas existentes em ${((Date.now() - startedAt) / 1000).toFixed(1)} s`)
+  }
+}
+
+/**
+ * Contrato 117 (CA16 da spec, R41 a R45), numa janela que troca de tema no lugar, com o agente ACP falso e o `funil.json`
+ * da fixture: a fonte Funil primeira e desligada no Contexto (sem `FUNIL.md` na pasta), ligada com o `FUNIL.md` (a
+ * `op-integracao` "esfriada", sem a arquivada); o cartão "Mover" de `op-vistoria` até a Negociação (o evento `etapa` e a
+ * nota; o segundo clique não faz nada); o cartão do id que não existe; "Criar oportunidade" com o Valor mudado no cartão; o
+ * contato; o "Abrir" da oportunidade; e o agente com "Pode ler o funil" no "Pedir agora". Não depende de contagens do
+ * funil (os blocos anteriores deixam eventos, contatos e empresas). Termina com `op-vistoria` de volta à Proposta e sem a
+ * oportunidade, o contato e o agente que criou. Print `assistente-funil`, nos dois temas.
+ */
+async function funilAssistenteChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => void, checks: Record<string, Check>, shots: Screenshot[]): Promise<void> {
+  const startedAt = Date.now()
+  const themeBefore = readSettings(ctx.userDataDir).theme ?? 'system'
+  const transportBefore = readSettings(ctx.userDataDir).claudeTransport
+  nativeTheme.themeSource = 'light'
+  const win = ctx.openWindow({})
+  watch(win)
+  await loadAndWait(win)
+  const contents = win.webContents
+  if (themeBefore !== 'system') await evaluate(contents, "window.__scribeApi.invoke('scribe:settings-update', { theme: 'system' }).then(() => true)")
+  await evaluate(contents, "window.__scribeApi.invoke('scribe:settings-update', { claudeTransport: 'acp' }).then(() => true)")
+  const acpStatus = await evaluate<{ state?: string }>(contents, "window.__scribeApi.invoke('scribe:acp-status')")
+  if (acpStatus.state !== 'installed') await evaluate(contents, "window.__scribeApi.invoke('scribe:acp-install').then(() => true)")
+  const api = <T>(channel: string, request?: unknown): Promise<T> => evaluate<T>(contents, `window.__scribeApi.invoke(${JSON.stringify(channel)}${request === undefined ? '' : `, ${JSON.stringify(request)}`})`)
+  const both = async (name: string): Promise<void> => {
+    await evaluate(contents, `document.activeElement instanceof HTMLElement && document.activeElement.blur(), true`)
+    await settle(contents)
+    shots.push(await capture(win, ctx.outDir, `${name}-light`))
+    nativeTheme.themeSource = 'dark'
+    await waitFor(contents, "document.documentElement.dataset.theme === 'dark'")
+    await settle(contents)
+    shots.push(await capture(win, ctx.outDir, `${name}-dark`))
+    nativeTheme.themeSource = 'light'
+    await waitFor(contents, "document.documentElement.dataset.theme === 'light'")
+  }
+  const { etapas } = SMOKE_FUNIL
+  const funilFile = join(ctx.userDataDir, FUNIL_FILE)
+  const saved = (): FunilState => JSON.parse(readFileSync(funilFile, 'utf8')) as FunilState
+  const chatId = (): Promise<string> => evaluate<string>(contents, `document.querySelector('[data-chat-conversation]')?.getAttribute('data-chat-conversation') ?? ''`)
+  const lastCard = (kind: string): string => `[...document.querySelectorAll('[data-chat-action="${kind}"]')].at(-1)`
+  const switchOf = `document.querySelector('[data-chat-source="funil"] [role="switch"]')`
+  type FunilCardFile = { id: string; kind: string; status: string; result: string | null; error?: string | null; oportunidadeId?: string | null; contatoId?: string | null }
+  const lastActions = async (): Promise<FunilCardFile[]> => (chatFile(ctx.userDataDir, await chatId())?.messages.at(-1)?.actions ?? []) as FunilCardFile[]
+  const lastIndex = async (): Promise<number> => (chatFile(ctx.userDataDir, await chatId())?.messages.length ?? 1) - 1
+  const criados: { oportunidade: string | null; contato: string | null; agente: string | null } = { oportunidade: null, contato: null, agente: null }
+  /** Espera uma condição do lado do main (o arquivo da conversa gravado). */
+  const until = async (check: () => boolean, ms: number): Promise<boolean> => {
+    for (const end = Date.now() + ms; Date.now() < end; await wait(100)) if (check()) return true
+    return check()
+  }
+
+  try {
+    // funilFonteDesligada (R41): numa conversa nova, a linha Funil é a primeira das Fontes e vem desligada; perguntar não
+    // leva o `FUNIL.md` à pasta.
+    await showAssistantLevel(contents)
+    await clickSelector(contents, '[data-action="chat-new"]')
+    await waitFor(contents, `document.querySelector('[data-chat-input]') && !document.querySelector('[data-chat-message]')`)
+    await clickSelector(contents, '[data-action="toggle-context"]')
+    const offByDefault = await waitFor(contents, `${switchOf}?.getAttribute('aria-checked') === 'false'`)
+    const first = await evaluate<string>(contents, `document.querySelector('[data-chat-sources] [data-chat-source]')?.getAttribute('data-chat-source') ?? ''`)
+    const sourceText = await text(contents, '[data-chat-source="funil"]')
+    const askedOff = await askChat(contents, 'Como está o funil? Tem algo para mexer hoje?')
+    const id = await chatId()
+    const scopeDir = join(ctx.userDataDir, CHAT_SCOPE_DIR, id)
+    const funilMd = join(scopeDir, FUNIL_MD_FILE)
+    const absent = !existsSync(funilMd)
+    checks['funilFonteDesligada'] = {
+      ok: offByDefault && first === 'funil' && sourceText.includes('Etapas, oportunidades abertas, ganhas e perdidas dos últimos 90 dias e até 500 contatos.') && askedOff.done && absent && askedOff.answer.includes('ligue a fonte Funil'),
+      detail: `desligada=${offByDefault}; primeira fonte "${first}"; "${sourceText}"; resposta=${askedOff.done} "${askedOff.answer.slice(0, 120)}"; sem ${FUNIL_MD_FILE}=${absent}`,
+    }
+
+    // funilFonte: ligada, a pergunta seguinte leva o `FUNIL.md` (0600), com a esfriada e sem a arquivada.
+    if (!(await evaluate<boolean>(contents, `Boolean(${switchOf})`))) await clickSelector(contents, '[data-action="toggle-context"]')
+    await clickSelector(contents, '[data-chat-source="funil"] [role="switch"]')
+    const switchedOn = await waitFor(contents, `${switchOf}?.getAttribute('aria-checked') === 'true'`)
+    const scopeSaved = await until(() => (chatFile(ctx.userDataDir, id)?.scope as { sources?: Record<string, boolean> } | undefined)?.sources?.['funil'] === true, 8000)
+    const askedOn = await askChat(contents, 'Como está o funil? Tem algo para mexer hoje?')
+    const mdText = existsSync(funilMd) ? readFileSync(funilMd, 'utf8') : ''
+    const integracao = mdText.split('\n### ').find((part) => part.startsWith('Integração Parceiro · id: op-integracao')) ?? ''
+    checks['funilFonte'] = {
+      ok: switchedOn && scopeSaved && askedOn.done && mdText.includes('Integração Parceiro') && integracao.includes('esfriada') && !mdText.includes('Manutenção anual') && mode(funilMd) === '600' && askedOn.answer.includes('[Funil · Integração Parceiro]'),
+      detail: `ligada=${switchedOn}, no escopo=${scopeSaved}; resposta=${askedOn.done} "${askedOn.answer.slice(0, 160)}"; ${FUNIL_MD_FILE} ${mdText.length} caracteres (${mode(funilMd)}), op-integracao esfriada=${integracao.includes('esfriada')}, sem a arquivada=${!mdText.includes('Manutenção anual')}`,
+    }
+
+    // funilMover (CA16): o cartão "Mover" de op-vistoria; nada muda antes do clique; "Mover" grava a etapa, o evento e a
+    // nota; o segundo clique não faz nada.
+    const eventosAntes = saved().eventos.filter((evento) => evento.oportunidadeId === 'op-vistoria').length
+    const asked = await askChat(contents, 'Mova a oportunidade op-vistoria para Negociação')
+    const card = lastCard('oportunidade-mover')
+    const proposed = await waitFor(contents, `${card}?.dataset.chatActionStatus === 'proposed'`, 8000)
+    const title = await evaluate<string>(contents, `${card}?.querySelector('[data-chat-action-title]')?.textContent ?? ''`)
+    const nota = await evaluate<string>(contents, `${card}?.querySelector('[data-chat-funil-nota]')?.textContent ?? ''`)
+    const intacta = saved().oportunidades.find((item) => item.id === 'op-vistoria')?.etapaId === etapas.proposta
+    const rawHidden = !(await evaluate<string>(contents, LAST_ANSWER)).includes('lap-acao')
+    await both('assistente-funil')
+    await evaluate(contents, `${card}?.querySelector('[data-action="chat-action-funil-mover"]')?.click(), true`)
+    const moved = await waitFor(contents, `${card}?.dataset.chatActionStatus === 'done'`, 8000)
+    const result = await evaluate<string>(contents, `${card}?.querySelector('[data-chat-action-result]')?.textContent ?? ''`)
+    const depois = saved()
+    const vistoria = depois.oportunidades.find((item) => item.id === 'op-vistoria')
+    const novos = depois.eventos.filter((evento) => evento.oportunidadeId === 'op-vistoria' && evento.at >= startedAt)
+    const moverCard = (await lastActions()).find((action) => action.kind === 'oportunidade-mover')
+    const again = await api<{ ok: boolean; error?: string }>('scribe:chat-action-funil', { chatId: id, index: await lastIndex(), actionId: moverCard?.id ?? 'x' })
+    const eventosDepois = saved().eventos.filter((evento) => evento.oportunidadeId === 'op-vistoria').length
+    checks['funilMover'] = {
+      ok:
+        asked.done &&
+        proposed &&
+        title === 'Mover App de vistoria de Proposta para Negociação' &&
+        nota === 'Nota: a Ana leva a proposta à diretoria na segunda.' &&
+        intacta &&
+        rawHidden &&
+        moved &&
+        result.includes('Movida para Negociação') &&
+        vistoria?.etapaId === etapas.negociacao &&
+        novos.some((evento) => evento.tipo === 'etapa' && evento.de === 'Proposta' && evento.para === 'Negociação') &&
+        novos.some((evento) => evento.tipo === 'nota' && evento.texto === 'a Ana leva a proposta à diretoria na segunda.') &&
+        moverCard?.status === 'done' &&
+        again.ok === false &&
+        again.error === 'done' &&
+        eventosDepois === eventosAntes + 2,
+      detail: `resposta=${asked.done}; cartão=${proposed} "${title}" "${nota}"; nada antes do clique=${intacta}; bloco escondido=${rawHidden}; depois do clique=${moved} "${result}", etapa ${vistoria?.etapaId ?? '?'}, eventos novos ${JSON.stringify(novos.map((evento) => `${evento.tipo}:${evento.texto}`))}; de novo -> ${JSON.stringify(again)}; eventos ${eventosAntes} -> ${eventosDepois}`,
+    }
+
+    // funilMoverInexistente: o id que não está no funil vira o cartão `failed`, sem botão.
+    const missingAsked = await askChat(contents, 'Mova a oportunidade nao-existe para Negociação')
+    const missingCard = lastCard('oportunidade-mover')
+    const failed = await waitFor(contents, `${missingCard}?.dataset.chatActionStatus === 'failed'`, 8000)
+    const missingError = await evaluate<string>(contents, `${missingCard}?.querySelector('[data-chat-action-error]')?.textContent ?? ''`)
+    const noButton = await evaluate<boolean>(contents, `!${missingCard}?.querySelector('[data-action="chat-action-funil-mover"]')`)
+    checks['funilMoverInexistente'] = {
+      ok: missingAsked.done && failed && missingError.includes('oportunidade não encontrada') && noButton && (await lastActions())[0]?.error === 'oportunidade não encontrada',
+      detail: `resposta=${missingAsked.done}; cartão failed=${failed} "${missingError}"; sem "Mover"=${noButton}`,
+    }
+
+    // funilCriar: o Valor mudado no cartão vale; a oportunidade nasce com a origem do Assistente.
+    const createAsked = await askChat(contents, 'Crie a oportunidade de teste')
+    const createCard = lastCard('oportunidade-criar')
+    const createShown = await waitFor(contents, `${createCard}?.dataset.chatActionStatus === 'proposed' && ${createCard}?.querySelector('[data-chat-funil-field="valor"]')?.value === '45.000'`, 8000)
+    const nadaAntes = !saved().oportunidades.some((item) => item.titulo === 'Conciliação')
+    await evaluate(contents, `(() => { const cards = document.querySelectorAll('[data-chat-action="oportunidade-criar"]'); cards[cards.length - 1]?.setAttribute('data-smoke-criar', ''); return true })()`)
+    await setValue(contents, '[data-smoke-criar] [data-chat-funil-field="valor"]', '50.000,00')
+    await evaluate(contents, `${createCard}?.querySelector('[data-action="chat-action-funil-criar"]')?.click(), true`)
+    const createdDone = await waitFor(contents, `${createCard}?.dataset.chatActionStatus === 'done'`, 8000)
+    const criada = saved().oportunidades.find((item) => item.titulo === 'Conciliação')
+    criados.oportunidade = criada?.id ?? null
+    const createdLink = await evaluate<string>(contents, `${createCard}?.querySelector('[data-chat-funil-open]')?.getAttribute('data-chat-funil-open') ?? ''`)
+    checks['funilCriar'] = {
+      ok: createAsked.done && createShown && nadaAntes && createdDone && criada?.valor === 5_000_000 && criada.origem === 'assistente' && criada.etapaId === etapas.contato && createdLink === `/funil/oportunidades/${criada.id}`,
+      detail: `resposta=${createAsked.done}; cartão com 45.000=${createShown}; nada antes=${nadaAntes}; criada=${createdDone} ${criada ? `${criada.id} valor ${criada.valor} origem ${criada.origem} etapa ${criada.etapaId}` : 'ausente'}; link "${createdLink}"`,
+    }
+
+    // funilContato: "Criar" grava o contato com a origem do Assistente.
+    const contactAsked = await askChat(contents, 'Crie o contato de teste')
+    const contactCard = lastCard('contato-criar')
+    const contactShown = await waitFor(contents, `${contactCard}?.dataset.chatActionStatus === 'proposed'`, 8000)
+    await evaluate(contents, `${contactCard}?.querySelector('[data-action="chat-action-funil-contato"]')?.click(), true`)
+    const contactDone = await waitFor(contents, `${contactCard}?.dataset.chatActionStatus === 'done'`, 8000)
+    const paulo = saved().contatos.find((item) => item.emails.includes('paulo.siqueira@cliente.example'))
+    criados.contato = paulo?.id ?? null
+    checks['funilContato'] = {
+      ok: contactAsked.done && contactShown && contactDone && paulo?.origem === 'assistente' && paulo.nome === 'Paulo Siqueira',
+      detail: `resposta=${contactAsked.done}; cartão=${contactShown}; criado=${contactDone} ${paulo ? `${paulo.id} "${paulo.nome}" origem ${paulo.origem}` : 'ausente'}`,
+    }
+
+    // funilAbrir (R20): o "Abrir" com `tela: 'oportunidade'` leva ao detalhe dela.
+    const openAsked = await askChat(contents, 'Abra a oportunidade op-portal')
+    const openCard = lastCard('abrir')
+    const openLabel = await evaluate<string>(contents, `${openCard}?.textContent ?? ''`)
+    await evaluate(contents, `${openCard}?.querySelector('[data-action="chat-action-open"]')?.click(), true`)
+    const opened = await waitFor(contents, `${routeIs('funil')} && document.querySelector('[data-funil-oportunidade="op-portal"]')`, 8000)
+    // O roteador é de memória: o caminho sai do `LocationContext` do React, como o `funilRouterPush` acha o navegador.
+    const path = await evaluate<string>(
+      contents,
+      `(() => {
+        const main = document.querySelector('main[data-route]')
+        const key = main && Object.keys(main).find((name) => name.startsWith('__reactFiber$'))
+        for (let fiber = key ? main[key] : null; fiber; fiber = fiber.return) {
+          const location = fiber.memoizedProps?.value?.location
+          if (location && typeof location.pathname === 'string') return location.pathname
+        }
+        return ''
+      })()`,
+    )
+    checks['funilAbrir'] = {
+      ok: openAsked.done && openLabel === 'Abrir «Portal do associado»' && opened && path === '/funil/oportunidades/op-portal',
+      detail: `resposta=${openAsked.done}; botão "${openLabel}"; detalhe aberto=${opened}; caminho "${path}"`,
+    }
+
+    // agenteFunil (R45): o Switch "Pode ler o funil" vem desligado; ligado, o "Pedir agora" tem o FUNIL.md na pasta;
+    // desligado, não.
+    const NAME = 'Leitor do funil'
+    await clickNav(contents, 'automacoes')
+    await waitFor(contents, routeIs('automacoes'), 8000)
+    // Um bloco anterior pode ter deixado outra aba das Automações aberta.
+    await evaluate(contents, `document.querySelector('[data-automations-tab="agentes"]') || document.querySelector('[data-tab="agentes"]')?.click(), true`)
+    await waitFor(contents, `document.querySelectorAll('[data-agent-card]').length >= 1 && document.querySelector('[data-action="agent-new"]')`, 8000)
+    await clickSelector(contents, '[data-action="agent-new"]')
+    await waitFor(contents, `document.querySelector('[data-agent-form] #agent-name')`)
+    const agentOff = await evaluate<string | null>(contents, `document.querySelector('[data-agent-funil] [role="switch"]')?.getAttribute('aria-checked') ?? null`)
+    await setValue(contents, '#agent-name', NAME)
+    await setValue(contents, '#agent-instructions', 'Responda o que está na pasta.')
+    await clickSelector(contents, '[data-agent-funil] [role="switch"]')
+    const agentOn = await waitFor(contents, `document.querySelector('[data-agent-funil] [role="switch"]')?.getAttribute('aria-checked') === 'true'`)
+    await clickSelector(contents, '[data-action="agent-save"]')
+    await waitFor(contents, `document.querySelector('[data-agent-name="${NAME}"]')`, 8000)
+    const agentsFile = (): { agents: (Record<string, unknown> & { id: string; name: string; funil?: boolean })[] } => JSON.parse(readFileSync(join(ctx.userDataDir, AGENTS_FILE), 'utf8')) as { agents: (Record<string, unknown> & { id: string; name: string; funil?: boolean })[] }
+    const agent = agentsFile().agents.find((item) => item.name === NAME)
+    criados.agente = agent?.id ?? null
+    const askNow = async (): Promise<{ answered: boolean; text: string }> => {
+      const before = new Set(readRunFiles(ctx.userDataDir).map((run) => run.id))
+      await setValue(contents, '#ask-now-agent', agent?.id ?? '', 'change')
+      await setValue(contents, '#ask-now-text', 'Quais arquivos estão na pasta?')
+      await clickSelector(contents, '[data-action="ask-now"]')
+      const answered = await waitFor(contents, `document.querySelector('[data-ask-now] [data-run-state="ok"] [data-chat-footer]')`, 30_000)
+      const run = readRunFiles(ctx.userDataDir).find((item) => item.trigger === 'ask' && !before.has(item.id))
+      await clickSelector(contents, '[data-action="ask-now-close"]')
+      await waitFor(contents, `!document.querySelector('[data-ask-now] [data-run-answer]')`)
+      return { answered, text: run?.answer?.text ?? '' }
+    }
+    const withFunil = await askNow()
+    const { createdAt: _createdAt, updatedAt: _updatedAt, ...input } = agent ?? ({ id: '', name: '' } as Record<string, unknown>)
+    const off = await api<{ ok: boolean }>('scribe:agents-save', { ...input, funil: false })
+    const withoutFunil = await askNow()
+    checks['agenteFunil'] = {
+      ok: agentOff === 'false' && agentOn && agent?.funil === true && withFunil.answered && withFunil.text.includes('FUNIL.md') && off.ok && withoutFunil.answered && withoutFunil.text.startsWith('Arquivos na pasta:') && !withoutFunil.text.includes('FUNIL.md'),
+      // Sem trechos da resposta: ela cita títulos de reunião da agenda, que não podem ir ao relatório (contrato 12, CA11).
+      detail: `desligado no novo=${agentOff}; ligado=${agentOn}, agents.json funil=${String(agent?.funil)}; com o funil=${withFunil.answered}, cita FUNIL.md=${withFunil.text.includes('FUNIL.md')}; desligado=${off.ok}, sem o funil=${withoutFunil.answered}, começa com "Arquivos na pasta:"=${withoutFunil.text.startsWith('Arquivos na pasta:')}, sem FUNIL.md=${!withoutFunil.text.includes('FUNIL.md')}`,
+    }
+  } finally {
+    // op-vistoria de volta à Proposta; a oportunidade, o contato e o agente criados aqui saem.
+    await api('scribe:funil-oportunidade-move', { id: 'op-vistoria', etapaId: etapas.proposta, ordem: 0 }).catch(() => undefined)
+    if (criados.oportunidade) await api('scribe:funil-oportunidade-delete', { id: criados.oportunidade }).catch(() => undefined)
+    if (criados.contato) await api('scribe:funil-contato-archive', { id: criados.contato }).catch(() => undefined)
+    if (criados.agente) await api('scribe:agents-delete', { id: criados.agente }).catch(() => undefined)
+    await evaluate(contents, `window.__scribeApi.invoke('scribe:settings-update', { claudeTransport: '${transportBefore}' }).then(() => true)`)
+    if (themeBefore !== 'system') await evaluate(contents, `window.__scribeApi.invoke('scribe:settings-update', { theme: '${themeBefore}' }).then(() => true)`)
+    nativeTheme.themeSource = 'system'
+    win.destroy()
+    console.log(`funil: assistente e agentes em ${((Date.now() - startedAt) / 1000).toFixed(1)} s`)
   }
 }
 
@@ -12855,6 +14543,8 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
   const redes: Record<string, Check> = {}
   /** Contrato 72: a tela Redes e o nível Redes. */
   const redesUi: Record<string, Check> = {}
+  /** Contrato 112: o nível Funil e o kanban de Oportunidades. Contrato 119: e o detalhe da oportunidade. */
+  const funil: Record<string, Check> = {}
   let analysisMeasured: AnalysisMeasured | null = null
 
   // A fixture da sessão real, reduzida pelo mesmo redutor do app: a mesma dos testes (CA4) e do smoke.
@@ -13100,6 +14790,11 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
       await openSettingsTab(contents, 'geral')
       if (!(await settingsReady(contents))) failures.push(`configuracoes/${themeName}: chave ou catálogo não carregou`)
       await shoot('configuracoes-geral', 'configuracoes')
+      // Contrato 109: a Section "Funil de vendas", depois do print (o check mexe no campo de dias e o devolve a 7).
+      if (themeName === 'light') {
+        settings['funilSettings'] = await funilSettingsCheck(contents)
+        settings['funilSettingsInvalid'] = await funilSettingsInvalidCheck(contents)
+      }
       if (!(await selectSettingsTab(contents, 'gravacao'))) failures.push(`configuracoes-gravacao/${themeName}: aba não abriu`)
       await shoot('configuracoes-gravacao', 'configuracoes')
       if (themeName === 'light') layout['configuracoes'] = layoutCheck('configuracoes', await settingsLayoutMetrics(contents))
@@ -13272,6 +14967,27 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
     // ACP falsos; antes do bloqueio (que recusa o canal novo junto com os outros cartões). Termina sem conta.
     await redesAssistantChecks(ctx, watch, redesUi, screenshots)
 
+    // Contrato 112: o item e o nível Funil e o kanban de Oportunidades, com o `funil.json` semeado; antes do bloqueio (que
+    // recusa os canais do funil junto com os outros). Termina com as oportunidades e as etapas como na fixture.
+    await funilKanbanChecks(ctx, watch, funil, screenshots)
+
+    // Contrato 119: o detalhe da oportunidade, logo depois do kanban (parte das etapas da fixture) e antes do bloqueio.
+    // Termina com op-loja e op-ganha-mes de volta às etapas da fixture.
+    await funilDetalheChecks(ctx, watch, funil, screenshots)
+
+    // Contrato 114: Contatos e Empresas, logo depois do detalhe e antes do bloqueio. Termina com os contatos e as empresas
+    // que criou (o novo, o da sugestão, os importados, a Lojista e as empresas do CSV).
+    await funilContatosChecks(ctx, watch, funil, screenshots)
+
+    // Contrato 116: "+ Contato" no Resumo, no Email e no WhatsApp e o cartão "Oportunidade detectada", logo depois de
+    // Contatos e Empresas e antes do bloqueio (o email e o WhatsApp falsos ainda conectados).
+    await funilTelasExistentesChecks(ctx, watch, funil, screenshots)
+
+    // Contrato 117: o funil no Assistente (a fonte, os cartões e o "Abrir") e o agente com "Pode ler o funil", com o agente
+    // ACP falso, logo depois das telas existentes e antes do bloqueio (que recusa o canal novo junto com os outros cartões).
+    // Termina com op-vistoria de volta à Proposta e sem a oportunidade, o contato e o agente que criou.
+    await funilAssistenteChecks(ctx, watch, funil, screenshots)
+
     // Contrato 22: bloqueio do app, por último (a senha criada vale para o userData inteiro).
     await lockChecks(ctx, watch, lock, screenshots)
 
@@ -13322,7 +15038,7 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
     if (!check) failures.push(`medidas ${name}: não executado`)
     else if (!check.ok) failures.push(`medidas ${name}: ${check.detail}`)
   }
-  for (const name of ['permissions', 'reachable', 'keyField', 'keySave', 'modelSearch', 'modelSelect', 'keyRemoveAndInvite', 'catalogOffline', 'languages', 'audio', 'recordingUsesSettings', 'appearance', 'claudeCli', 'meetingFiles', 'summarizeOnStop', 'branding', 'updates', 'addKeyLink', 'tabs']) {
+  for (const name of ['permissions', 'reachable', 'keyField', 'keySave', 'modelSearch', 'modelSelect', 'keyRemoveAndInvite', 'catalogOffline', 'languages', 'audio', 'recordingUsesSettings', 'appearance', 'claudeCli', 'meetingFiles', 'summarizeOnStop', 'branding', 'updates', 'addKeyLink', 'tabs', 'funilSettings', 'funilSettingsInvalid']) {
     if (!settings[name]) failures.push(`configurações ${name}: não executado`)
   }
   // Nenhuma chamada saiu para a AssemblyAI: todas passaram pelo gateway de fixtures.
@@ -13376,6 +15092,19 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
   // fim 74
   // Contrato 76: o Instagram no Assistente.
   for (const name of ['redesSource', 'redesDraftCard', 'redesTools']) if (!redesUi[name]) failures.push(`redes (tela) ${name}: não executado`)
+  // Contrato 112: o nível Funil e o kanban.
+  for (const [name, check] of Object.entries(funil)) if (!check.ok) failures.push(`funil ${name}: ${check.detail}`)
+  for (const name of ['funilNav', 'funilLevel', 'funilRedirect', 'funilNavigateEvent', 'funilKanban', 'funilCollapsed', 'funilFiltros', 'funilNova', 'funilEtapas', 'funilDragMove', 'funilDragLost']) {
+    if (!funil[name]) failures.push(`funil ${name}: não executado`)
+  }
+  // Contrato 119: o detalhe da oportunidade.
+  for (const name of ['funilDetail', 'funilReuniaoApagada', 'funilEtapaSelect', 'funilNota', 'funilCompose', 'funilWhatsAppOculto', 'funilArquivar']) {
+    if (!funil[name]) failures.push(`funil ${name}: não executado`)
+  }
+  // Contrato 117: o funil no Assistente e o agente com "Pode ler o funil".
+  for (const name of ['funilFonteDesligada', 'funilFonte', 'funilMover', 'funilMoverInexistente', 'funilCriar', 'funilContato', 'funilAbrir', 'agenteFunil']) {
+    if (!funil[name]) failures.push(`funil ${name}: não executado`)
+  }
   for (const [name, check] of Object.entries(invite)) if (!check.ok) failures.push(`convites ${name}: ${check.detail}`)
   for (const name of ['convite-1', 'convite-2', 'convite-3', 'convite-4', 'convite-5', 'convite-6', 'convite-7', 'convite-8', 'convite-9', 'convite-10', 'convite-11', 'convite-estados', 'convite-lista', 'convite-configuracoes', 'convite-regra-1', 'convite-regra-2', 'convite-regra-3', 'convite-sugestao-4', 'convite-sugestao-5']) if (!invite[name]) failures.push(`convites ${name}: não executado`)
   for (const [name, check] of Object.entries(lock)) if (!check.ok) failures.push(`bloqueio ${name}: ${check.detail}`)
@@ -13418,7 +15147,13 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
   // Contrato 73: +2 (os comentários com a resposta aberta, nos dois temas).
   // Contrato 75: +2 (as métricas da conta em 28 dias e a tabela das publicações, nos dois temas).
   // Contrato 76: +4 (a fonte Redes ligada no Contexto e o cartão do rascunho para o Instagram, nos dois temas).
-  const expectedShots = SCREENS.length * THEMES.length + 179
+  // Contrato 112: +6 (o kanban de Oportunidades, a nova oportunidade e "Editar etapas", nos dois temas).
+  // Contrato 119: +2 (o detalhe da oportunidade, nos dois temas).
+  // Contrato 114: +10 (Contatos, Empresas, Novo contato, Sugestões e a importação, nos dois temas).
+  // Contrato 116: +6 (o cartão "Oportunidade detectada" no Resumo, o "+ Contato" na leitura do email e o bloco Contato nos
+  // Detalhes do WhatsApp, nos dois temas).
+  // Contrato 117: +2 (o cartão "Mover" do funil no Assistente, com a fonte Funil ligada no Contexto, nos dois temas).
+  const expectedShots = SCREENS.length * THEMES.length + 205
   if (screenshots.length !== expectedShots) failures.push(`${screenshots.length} PNGs em vez de ${expectedShots}`)
   for (const shot of screenshots) {
     if (shot.name === MEETING_PROMPT_SHOT) {
@@ -13482,6 +15217,8 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
     invite,
     // Contrato 69: só os resultados e o método, o servidor e o caminho dos pedidos ao Instagram falso; nenhum token.
     redes,
+    // Contrato 112: só os resultados (as oportunidades são as fictícias da fixture).
+    funil,
     instagramFakeCalls: ctx.fixtures.instagram.calls,
     s3FakeCalls: ctx.fixtures.s3.calls,
     // Contrato 23: os resultados, as notificações, o Dock e os itens de login substitutos; nenhum texto de reunião.

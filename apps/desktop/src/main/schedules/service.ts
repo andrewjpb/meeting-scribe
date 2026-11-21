@@ -121,6 +121,11 @@ export interface AutomationsDeps {
    * Sem ele, nenhuma execução ganha ferramenta e a seção não pode ser salva.
    */
   email?: TaskEmailDeps | undefined
+  /**
+   * Contrato 115 (D15): a cada conferência, depois dos lembretes e antes da pausa (o alerta diário do funil). Uma
+   * falha só vai para o `log`.
+   */
+  onTick?: (at: number) => Promise<void>
 }
 
 export interface AutomationsService {
@@ -592,6 +597,12 @@ export function createAutomationsService(deps: AutomationsDeps): AutomationsServ
     const state = await deps.schedules.read()
     // Contrato 25: os lembretes não dependem da pausa nem do limite diário.
     await dueReminders(state.tasks, at)
+    // Contrato 115: a falha de quem pegou carona no tick não muda nada do resto da conferência.
+    try {
+      await deps.onTick?.(at)
+    } catch (error) {
+      deps.log?.(`[automações] conferência do funil falhou: ${error instanceof Error ? error.message : String(error)}`)
+    }
     if (state.paused) {
       // Pausado: a vez das tarefas "depois de cada reunião" se perde (sem registro: nada rodaria).
       pendingMeetings.length = 0

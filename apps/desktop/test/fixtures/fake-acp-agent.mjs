@@ -22,6 +22,10 @@
 //   devolve o objeto (ou o texto) da resposta; sem ela, a sugestão sai do pedido: o assunto sem "Re: ", o dia seguinte ao
 //   `<data_do_email>`, às 14:00, 60 min e o primeiro link `meet.google.com/…` do texto (sem "reunião" no texto,
 //   `found: false`).
+// - detecção de oportunidade (instrução "Você lê o resumo de uma reunião e diz se há uma oportunidade de venda.",
+//   contrato 111): devolve o JSON da proposta (`fakeFunnelProposal`), só texto, com o custo no `usage_update`; o marcador
+//   no pedido escolhe a resposta: `[funil:nenhuma]`, `{"proposta": null}`; `[funil:quebrado]`, um JSON cortado;
+//   `[funil:atualizar:<id>]`, `atualizar` com esse id; sem marcador, `criar` "Portal do associado".
 // - chat: pensa em pedaços, monta o "Plano", lê o `INDICE.md` e a reunião mais recente e procura um termo,
 //   cada leitura pedindo permissão; tenta escrever um arquivo (permissão pedida e negada), ler um arquivo
 //   fora da pasta pelo cliente (`fs/read_text_file`, recusado) e abrir um terminal (recusado); responde em
@@ -40,7 +44,14 @@
 //   … em Resolvidos" pede `listar_pastas`, depois `criar_pasta` "Resolvidos" e `mover_emails` do email do assunto pedido
 //   (ou do primeiro do `EMAILS.md`) para lá, e responde contando. Contrato 76: "escreva um post" lê o `REDES.md` (se
 //   estiver na pasta) e propõe o bloco `instagram-rascunho` para a conta dele; "liste a fila do instagram" pede a
-//   ferramenta `listar_publicacoes_instagram` e responde com as legendas do resultado.
+//   ferramenta `listar_publicacoes_instagram` e responde com as legendas do resultado. Contrato 117: o funil. "como está o
+//   funil" lê o `FUNIL.md` (se estiver na pasta) e conta as oportunidades abertas; "mova a oportunidade <id> para <etapa>"
+//   propõe `oportunidade-mover` com esse id e essa etapa e a nota "a Ana leva a proposta à diretoria na segunda."; "crie a
+//   oportunidade de teste", `oportunidade-criar` ("Conciliação", empresa "Cliente", etapa "Contato", R$ 45.000); "crie o
+//   contato de teste", `contato-criar` ("Paulo Siqueira", `paulo.siqueira@cliente.example`); "abra a oportunidade <id>",
+//   o `abrir` com `tela: 'oportunidade'` e esse id.
+// - "quais arquivos estão na pasta" (contrato 117), em qualquer chat (o agente das Automações também): responde com os nomes
+//   dos arquivos da pasta da sessão (`readdirSync(cwd)`), em ordem.
 // - internet (contrato 26), em qualquer chat (agente ou Assistente), com "pesquise" no pedido: `WebSearch` (pedindo
 //   permissão, como o adaptador) com resultados inventados no `tool_call_update` ("Título (url)", sem rede nenhuma);
 //   abre o primeiro resultado (`WebFetch`) e tenta abrir um endereço montado com o título da reunião na consulta (que o
@@ -315,6 +326,25 @@ async function assistantAnswer(question, cwd, read) {
   const email = await emailAnswer(question, cwd, read, fence)
   if (email !== null) return email
   if (/bloco inv[aá]lido/i.test(question)) return `Aqui vai um bloco quebrado.${fence('{"tipo": "lembrete", "quando": ')}`
+  // Contrato 117: o funil (o `FUNIL.md` só existe com a fonte ligada; o app confere o id e a etapa).
+  if (/como est[aá] o funil/i.test(question)) {
+    if (!has('FUNIL.md')) return 'O funil não está na pasta desta conversa: ligue a fonte Funil no Contexto.'
+    await read('FUNIL.md')
+    const abertas = readFileSync(join(cwd, 'FUNIL.md'), 'utf8')
+      .split('\n')
+      .filter((line) => /^### .+ · id: \S+$/.test(line))
+      .map((line) => /^### (.+) · id: /.exec(line)[1])
+    return `São ${abertas.length} oportunidades abertas: ${abertas.map((titulo) => `${titulo} [Funil · ${titulo}]`).join('; ')}.`
+  }
+  const move = /mova a oportunidade (\S+) para (.+?)[.!?]?$/i.exec(question)
+  if (move) {
+    if (has('FUNIL.md')) await read('FUNIL.md')
+    return `Proponho passar a oportunidade para ${move[2]}.${fence({ tipo: 'oportunidade-mover', oportunidadeId: move[1], etapa: move[2], nota: 'a Ana leva a proposta à diretoria na segunda.' })}`
+  }
+  if (/crie a oportunidade de teste/i.test(question)) return `Montei a oportunidade. Confira os campos no cartão.${fence({ tipo: 'oportunidade-criar', titulo: 'Conciliação', empresa: 'Cliente', etapa: 'Contato', valor: 45000 })}`
+  if (/crie o contato de teste/i.test(question)) return `Confirme o contato no cartão.${fence({ tipo: 'contato-criar', nome: 'Paulo Siqueira', email: 'paulo.siqueira@cliente.example' })}`
+  const openOne = /abra a oportunidade (\S+?)[.!?]?$/i.exec(question)
+  if (openOne) return `Aqui está a oportunidade.${fence({ tipo: 'abrir', tela: 'oportunidade', alvo: openOne[1] })}`
   // Contrato 78: o evento e os lembretes que já existem.
   if (/evento inv[aá]lido/i.test(question)) return `Proponho o evento.${fence({ tipo: 'evento', titulo: 'Evento de ontem', inicio: dayAt(-1, 20) })}`
   if (/anivers[aá]rio/i.test(question)) {
@@ -422,6 +452,26 @@ export function fakeInviteSuggestion(content) {
   return { found: date !== null, title: block('assunto').replace(/^(re|fw|enc):\s*/i, '') || null, date, time: '14:00', durationMinutes: 60, url }
 }
 
+/** Contrato 111: a resposta da detecção de oportunidade, escolhida pelo marcador no pedido (texto pronto para enviar). */
+export function fakeFunnelProposal(content) {
+  if (content.includes('[funil:nenhuma]')) return JSON.stringify({ proposta: null })
+  if (content.includes('[funil:quebrado]')) return '{"proposta": '
+  const proposta = {
+    acao: 'criar',
+    titulo: 'Portal do associado',
+    empresa: 'Cliente',
+    contatos: [{ nome: 'Marina Rocha', email: 'marina.rocha@cliente.example' }],
+    etapaSugerida: 'Descoberta',
+    valor: 45000,
+    previsao: null,
+    proximoPasso: { texto: 'Enviar proposta', data: null },
+    justificativa: 'Pediram proposta para o portal.',
+  }
+  const match = /\[funil:atualizar:([^\]\s]+)\]/.exec(content)
+  if (match) Object.assign(proposta, { acao: 'atualizar', oportunidadeId: match[1], etapaSugerida: 'Proposta', proximoPasso: { texto: 'Enviar proposta revisada', data: null } })
+  return JSON.stringify({ proposta })
+}
+
 export function fakeAcpAgent({ log = () => undefined, pause = 300, mcpStatus = null, inviteSuggest = null } = {}) {
   const sessions = new Map()
   let next = 0
@@ -436,6 +486,7 @@ export function fakeAcpAgent({ log = () => undefined, pause = 300, mcpStatus = n
     if (prompt.startsWith('Você lê uma conversa do WhatsApp')) return 'whatsapp-insights'
     if (prompt.startsWith('Você corrige mensagens de WhatsApp')) return 'whatsapp-correct'
     if (prompt.startsWith('Você lê um email e sugere um evento de agenda.')) return 'invite-suggest'
+    if (prompt.startsWith('Você lê o resumo de uma reunião e diz se há uma oportunidade de venda.')) return 'funnel-extract'
     return 'chat'
   }
 
@@ -585,6 +636,13 @@ export function fakeAcpAgent({ log = () => undefined, pause = 300, mcpStatus = n
         return { stopReason: 'end_turn', usage: { totalTokens: Math.ceil(content.length / 4) + 40, inputTokens: Math.ceil(content.length / 4), outputTokens: 40 } }
       }
 
+      // Contrato 111: a detecção de oportunidade, só JSON (o agente nunca grava nada no funil).
+      if (state.purpose === 'funnel-extract') {
+        await say(fakeFunnelProposal(content))
+        await update({ sessionUpdate: 'usage_update', used: 500, size: 200000, cost: { amount: 0.0007, currency: 'USD' }, _meta: { '_claude/model': modelId } })
+        return { stopReason: 'end_turn', usage: { totalTokens: Math.ceil(content.length / 4) + 60, inputTokens: Math.ceil(content.length / 4), outputTokens: 60 } }
+      }
+
       // Contrato 32: os Detalhes da conversa do WhatsApp, só JSON (o agente nunca envia nada).
       if (state.purpose === 'whatsapp-insights') {
         await sleep(pause * 2)
@@ -616,6 +674,14 @@ export function fakeAcpAgent({ log = () => undefined, pause = 300, mcpStatus = n
       if (/falhe/i.test(question)) {
         log({ event: 'refused', sessionId })
         return { stopReason: 'refusal', usage: { totalTokens: 10, inputTokens: 10, outputTokens: 0 } }
+      }
+      // Contrato 117: os arquivos da pasta da sessão (o smoke confere o `FUNIL.md` do agente com "Pode ler o funil").
+      if (/quais arquivos est[aã]o na pasta/i.test(question)) {
+        const names = readdirSync(state.cwd).sort()
+        await say(`Arquivos na pasta: ${names.join(', ') || 'nenhum'}.`)
+        state.cost += 0.001
+        await update({ sessionUpdate: 'usage_update', used: 600, size: 200000, cost: { amount: state.cost, currency: 'USD' }, _meta: { '_claude/model': modelId } })
+        return { stopReason: 'end_turn', usage: { totalTokens: 200, inputTokens: 180, outputTokens: 20 } }
       }
       const slow = /devagar/i.test(question)
       const wait = () => sleep(slow ? Math.min(pause, 100) : pause)

@@ -71,6 +71,15 @@ export const MEDIA_HOST_FIELDS = [
 export const MEDIA_HOST_PATH_STYLE_NAME = 'Endereço no caminho (path-style)'
 export const MEDIA_HOST_PATH_STYLE_DESCRIPTION = 'Ligado: endpoint/bucket/arquivo, como o R2 pede. Desligado: bucket.endpoint/arquivo.'
 
+/** Contrato 109 (R46): a Section "Funil de vendas" da aba Geral, com os nomes e as descrições da tela e da busca. */
+export const FUNIL_SECTION = 'Funil de vendas'
+export const FUNIL_DETECTAR_NAME = 'Detectar oportunidades nas reuniões'
+export const FUNIL_DETECTAR_DESCRIPTION = 'Depois do resumo, propõe criar ou atualizar uma oportunidade.'
+export const FUNIL_DIAS_NAME = 'Considerar esfriada após (dias)'
+export const FUNIL_DIAS_DESCRIPTION = 'Oportunidade aberta sem interação nesse prazo ganha o marcador esfriou.'
+export const FUNIL_AVISAR_NAME = 'Avisar oportunidades esfriadas e passos vencidos'
+export const FUNIL_AVISAR_DESCRIPTION = 'Uma notificação por dia, depois das 9h.'
+
 /** Uma linha de configuração no índice da busca. */
 export interface SettingsEntry {
   tab: SettingsTab
@@ -105,6 +114,9 @@ export function settingsIndex(agent: string): SettingsEntry[] {
     row('geral', 'Aparência', 'Tema', 'Sistema, claro ou escuro.'),
     row('geral', 'Janela', 'Ao fechar a janela', 'Na barra de menus, as tarefas agendadas continuam rodando.'),
     row('geral', 'Janela', 'Abrir ao entrar no Mac', 'Abre direto na barra de menus, sem janela.'),
+    row('geral', FUNIL_SECTION, FUNIL_DETECTAR_NAME, FUNIL_DETECTAR_DESCRIPTION),
+    row('geral', FUNIL_SECTION, FUNIL_DIAS_NAME, FUNIL_DIAS_DESCRIPTION),
+    row('geral', FUNIL_SECTION, FUNIL_AVISAR_NAME, FUNIL_AVISAR_DESCRIPTION),
     row('geral', 'Bloqueio', 'Senha do app', 'Pedida para desbloquear. Fica só neste Mac, guardada como hash.'),
     row('geral', 'Bloqueio', 'Usar Touch ID', 'Desbloquear com a digital, sem digitar a senha.', 'o Mac tem Touch ID'),
     row('geral', 'Bloqueio', 'Bloquear sozinho', 'Depois de um tempo sem uso do app.'),

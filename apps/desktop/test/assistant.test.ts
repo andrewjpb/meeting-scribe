@@ -1,6 +1,7 @@
 // Contrato 25: o Assistente. Fontes do app (CA2), blocos de ação validados no main (CA3), datas (CA4), segurança
 // (CA5: cartão nunca executa sozinho, texto de mensagem que pede ação só vira cartão, agendadas sem cartões, canais
 // recusados com o app bloqueado), o lembrete como tarefa "uma vez" sem agente das Automações e o guia do app.
+// Contrato 117 (CA8 da spec): os cartões do funil (ids e etapas pelo app), a fonte Funil (desligada por padrão) e o canal.
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs'
 import { copyFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -18,7 +19,13 @@ import type { MacCalendar } from '../src/main/mac-calendar/process'
 import type { MacCalendarCalendar, MacCalendarCreateArgs, MacCalendarError, MacCalendarEvent } from '../src/main/mac-calendar/protocol'
 import { CHAT_INDEX_FILE, CHAT_SCOPE_DIR, createChatCorpus } from '../src/main/chat/corpus'
 import { createChatService } from '../src/main/chat/service'
-import { AUTOMATIONS_FILE, automationsMarkdown, GUIDE_FILE, guideMarkdown, STATE_FILE, stateMarkdown, writeSources, type AssistantSourcesDeps } from '../src/main/chat/sources'
+import { AUTOMATIONS_FILE, automationsMarkdown, FUNIL_FILE as FUNIL_MD_FILE, GUIDE_FILE, guideMarkdown, STATE_FILE, stateMarkdown, writeSources, type AssistantSourcesDeps } from '../src/main/chat/sources'
+import { funilMarkdown } from '../src/main/funil/markdown'
+import { createFunilService, type FunilService } from '../src/main/funil/service'
+import { createFunilStore } from '../src/main/funil/store'
+import { chatSourcesOf } from '../src/shared/chat'
+import type { FunilActionResult, FunilView, Oportunidade } from '../src/shared/funil'
+import { etapasPadrao } from '../src/shared/funil-logic'
 import { chatScopeSchema, createFileChatStore } from '../src/main/chat/store'
 import { assistantSystemPrompt, chatStepOf } from '../src/main/claude-cli/chat'
 import type { ClaudeChild, SpawnClaude, SpawnOptions } from '../src/main/claude-cli/translator'
@@ -209,7 +216,8 @@ describe('cartões: só com o clique, uma vez só (CA3, CA5)', () => {
   it('os canais novos (chat-action-*) são recusados com o app bloqueado', () => {
     const channels = INVOKE_CHANNELS.filter((channel) => channel.startsWith('scribe:chat-action-'))
     // Contrato 78: o evento no Calendário e alterar ou apagar um lembrete. Contrato 76: o rascunho do Instagram.
-    expect(channels.sort()).toEqual(['scribe:chat-action-event', 'scribe:chat-action-instagram-draft', 'scribe:chat-action-reminder', 'scribe:chat-action-reminder-change', 'scribe:chat-action-state'])
+    // Contrato 117: os cartões do funil, num canal só.
+    expect(channels.sort()).toEqual(['scribe:chat-action-event', 'scribe:chat-action-funil', 'scribe:chat-action-instagram-draft', 'scribe:chat-action-reminder', 'scribe:chat-action-reminder-change', 'scribe:chat-action-state'])
     for (const channel of channels) expect(WHEN_LOCKED[channel]).toBe('refused')
     // Nenhum caminho novo de envio: o WhatsApp continua só com o `whatsapp-send` e, no contrato 39, o anexo pelo mesmo
     // guarda do clique (`whatsapp-send-media`). Contrato 42: o email entra com o `email-send`, também só com o clique.
@@ -353,7 +361,7 @@ describe('fontes do app (CA2)', () => {
     expect(guideMarkdown('Versão: {{versao}}.', '0.7.0')).toBe('Versão: 0.7.0.')
     const automations = automationsMarkdown(
       {
-        agents: [{ id: 'ag-1', name: 'Resumo da semana', description: '', icon: 'bot', color: 'blue', instructions: '', profile: 'claude', model: 'sonnet', thinkMore: false, scope: { kind: '7d' }, web: false, mcpServers: [], output: { kind: 'chat' }, createdAt: '', updatedAt: '' }],
+        agents: [{ id: 'ag-1', name: 'Resumo da semana', description: '', icon: 'bot', color: 'blue', instructions: '', profile: 'claude', model: 'sonnet', thinkMore: false, scope: { kind: '7d' }, web: false, funil: false, mcpServers: [], output: { kind: 'chat' }, createdAt: '', updatedAt: '' }],
         tasks: [],
         runs: [
           {
@@ -1094,4 +1102,241 @@ describe('peso por pergunta (CA2): cache, links físicos e ordem', () => {
     expect(warm.read).toBe(0)
     expect(calls.messages - coldCalls).toBe(0)
   }, 60_000)
+})
+
+describe('contrato 117: o funil no Assistente', () => {
+  const okId = (result: FunilActionResult): string => {
+    if (!result.ok || !result.id) throw new Error(JSON.stringify(result))
+    return result.id
+  }
+  /** O funil de verdade (store e serviço do 110) numa pasta do teste: a Ana e o "Portal do Franqueado" em Proposta. */
+  async function funilComPortal(): Promise<{ service: FunilService; etapa: (nome: string) => string; ana: string; portal: string }> {
+    const funilDir = join(dir, 'funil')
+    mkdirSync(funilDir)
+    const service = createFunilService({
+      store: createFunilStore({ dir: funilDir, now: () => NOW }),
+      meetings: { list: async () => [] },
+      summaries: { get: async () => null },
+      email: { cached: async () => [] },
+      whatsapp: { chats: async () => [], me: () => null },
+      chooseImportFile: async () => null,
+      onChange: () => undefined,
+      now: () => NOW,
+    })
+    const etapas = (await service.view()).state.etapas
+    const etapa = (nome: string): string => etapas.find((item) => item.nome === nome)?.id ?? '?'
+    const ana = okId(await service.contatoSave({ contato: { nome: 'Ana Souza', emails: ['ana@cliente.example'], telefones: ['(11) 91111-0000'] }, origem: 'manual' }))
+    const portal = okId(await service.oportunidadeSave({ oportunidade: { titulo: 'Portal do Franqueado', etapaId: etapa('Proposta'), contatoIds: [ana] } }))
+    return { service, etapa, ana, portal }
+  }
+  const chatWith = (actions: ChatAction[]): Chat => ({
+    id: 'c1',
+    meetingId: null,
+    title: 'Funil',
+    createdAt: new Date(NOW).toISOString(),
+    messages: [
+      { role: 'user', text: 'Pedido', at: new Date(NOW).toISOString() },
+      { role: 'assistant', text: 'Proposta', at: new Date(NOW).toISOString(), actions },
+    ],
+    scope: { kind: 'all', sources: { funil: true } },
+    model: null,
+    thinkMore: false,
+  })
+
+  it('CA2: oportunidade que não existe e etapa que não bate viram cartão `failed` com a razão; a etapa vale sem acento', async () => {
+    const { service, portal } = await funilComPortal()
+    const funil = resolver({ funil: () => service.view() })
+    const missing = await extractActions(`Movo.\n\n${block({ tipo: 'oportunidade-mover', oportunidadeId: 'nao-existe', etapa: 'Negociação' })}`, funil)
+    expect(missing.text).toBe('Movo.')
+    expect(missing.actions).toEqual([expect.objectContaining({ kind: 'oportunidade-mover', status: 'failed', error: 'oportunidade não encontrada' })])
+    const stage = await extractActions(block({ tipo: 'oportunidade-mover', oportunidadeId: portal, etapa: 'Fechamento' }), funil)
+    expect(stage.actions).toEqual([expect.objectContaining({ kind: 'oportunidade-mover', status: 'failed', error: 'etapa não encontrada' })])
+    const ok = await extractActions(block({ tipo: 'oportunidade-mover', oportunidadeId: portal, etapa: 'negociacao', nota: 'A Ana leva à diretoria.' }), funil)
+    expect(ok.actions[0]).toMatchObject({ kind: 'oportunidade-mover', status: 'proposed', titulo: 'Portal do Franqueado', de: 'Proposta', para: 'Negociação', nota: 'A Ana leva à diretoria.', error: null })
+    // Nada foi gravado no funil para montar os cartões.
+    expect((await service.view()).state.oportunidades.find((item) => item.id === portal)?.etapaId).toBe((await service.view()).state.etapas.find((item) => item.nome === 'Proposta')?.id)
+    expect(actionsHistory(ok.actions)).toContain('- Oportunidade movida: Portal do Franqueado para Negociação (esperando o clique)')
+  })
+
+  it('CA3: a fonte Funil começa desligada; ligada, o FUNIL.md vem com "esfriada" (0600); desligada, sai da pasta', async () => {
+    expect(chatSourcesOf({}).funil).toBe(false)
+    expect(chatScopeSchema.parse({ kind: 'all', sources: { funil: true } })).toEqual({ kind: 'all', sources: { funil: true } })
+    // Conversa antiga, sem o campo: desligada (e o `false` não fica guardado).
+    expect(chatSourcesOf(chatScopeSchema.parse({ kind: 'all' })).funil).toBe(false)
+    expect(chatScopeSchema.parse({ kind: 'all', sources: { funil: false } })).toEqual({ kind: 'all' })
+    let seq = 0
+    const etapas = etapasPadrao(() => `e-${++seq}`)
+    const parada: Oportunidade = {
+      id: 'op-parada',
+      titulo: 'Integração Parceiro',
+      empresaId: null,
+      contatoIds: [],
+      etapaId: etapas[1]?.id ?? '',
+      ordem: 0,
+      valor: 9_200_000,
+      previsao: null,
+      proximoPasso: null,
+      meetingIds: [],
+      whatsappChatIds: [],
+      emails: [],
+      origem: 'manual',
+      motivoPerda: null,
+      criadoEm: NOW - 30 * 86_400_000,
+      atualizadoEm: NOW - 8 * 86_400_000,
+      movidoEm: NOW - 8 * 86_400_000,
+      fechadoEm: null,
+      arquivado: false,
+    }
+    const view: FunilView = { state: { version: 1, contatos: [], empresas: [], oportunidades: [parada], etapas, eventos: [], ignorados: [], ultimoAvisoEm: null }, ultimas: {} }
+    let locked = false
+    const deps: AssistantSourcesDeps = {
+      state: () => Promise.resolve({ now: NOW, timeZone: SP, version: '1.0.0', recording: null, google: 'não conectada', whatsapp: 'Não instalado', automationsPaused: null, agents: [], tasks: [] }),
+      guide: () => Promise.resolve('# Guia {{versao}}'),
+      automations: () => Promise.resolve({ agents: [], tasks: [], runs: [] }),
+      funil: () => Promise.resolve(locked ? null : funilMarkdown({ view, diasEsfriar: 7, reunioes: new Map(), now: NOW, timeZone: SP })),
+    }
+    const file = join(dir, FUNIL_MD_FILE)
+    const off = await writeSources(deps, dir, { kind: 'all' })
+    expect(off.funil).toBe(false)
+    expect(existsSync(file)).toBe(false)
+    const on = await writeSources(deps, dir, { kind: 'all', sources: { funil: true } })
+    expect(on.funil).toBe(true)
+    expect(on.files).toContain(FUNIL_MD_FILE)
+    const text = readFileSync(file, 'utf8')
+    expect(text).toContain('Integração Parceiro · id: op-parada')
+    expect(text).toContain('esfriada')
+    expect((statSync(file).mode & 0o777).toString(8)).toBe('600')
+    // Bloqueado (`null`), e depois desligada: o arquivo sai da pasta.
+    locked = true
+    expect((await writeSources(deps, dir, { kind: 'all', sources: { funil: true } })).funil).toBe(false)
+    expect(existsSync(file)).toBe(false)
+    locked = false
+    await writeSources(deps, dir, { kind: 'all', sources: { funil: true } })
+    expect(existsSync(file)).toBe(true)
+    await writeSources(deps, dir, { kind: 'all' })
+    expect(existsSync(file)).toBe(false)
+  })
+
+  it('CA5: o valor em reais vira centavos; contato sem e-mail nem telefone vem `failed`; o e-mail de quem existe preenche `existenteId`; sem o funil, texto', async () => {
+    const { service, ana, portal } = await funilComPortal()
+    const funil = resolver({ funil: () => service.view() })
+    const created = await extractActions(block({ tipo: 'oportunidade-criar', titulo: 'Conciliação', empresa: 'Cliente', valor: 1234.5, contatos: [{ nome: 'Ana', email: 'ANA@cliente.example' }, { nome: 'Paulo' }] }), funil)
+    expect(created.actions[0]).toMatchObject({
+      kind: 'oportunidade-criar',
+      status: 'proposed',
+      titulo: 'Conciliação',
+      empresa: 'Cliente',
+      valor: 123450,
+      // Sem etapa, a primeira aberta.
+      etapaId: (await service.view()).state.etapas.find((item) => item.nome === 'Contato')?.id,
+      contatos: [
+        { nome: 'Ana', email: 'ana@cliente.example', contatoId: ana },
+        { nome: 'Paulo', email: null, contatoId: null },
+      ],
+      oportunidadeId: null,
+      error: null,
+    })
+    expect((created.actions[0] as { etapas: { nome: string }[] }).etapas.map((etapa) => etapa.nome)).toEqual(['Contato', 'Descoberta', 'Proposta', 'Negociação'])
+    const ganho = await extractActions(block({ tipo: 'oportunidade-criar', titulo: 'Direto no Ganho', etapa: 'Ganho' }), funil)
+    expect(ganho.actions[0]).toMatchObject({ status: 'failed', error: 'etapa não encontrada' })
+    const semCanal = await extractActions(block({ tipo: 'contato-criar', nome: 'Paulo Siqueira' }), funil)
+    expect(semCanal.actions[0]).toMatchObject({ kind: 'contato-criar', status: 'failed', error: 'Informe um e-mail ou telefone' })
+    const existente = await extractActions(block({ tipo: 'contato-criar', nome: 'Ana S.', email: 'ana@cliente.example', cargo: 'Diretora' }), funil)
+    expect(existente.actions[0]).toMatchObject({ kind: 'contato-criar', status: 'proposed', existenteId: ana, existenteNome: 'Ana Souza', cargo: 'Diretora' })
+    const porTelefone = await extractActions(block({ tipo: 'contato-criar', nome: 'Ana', telefone: '11 1111-0000' }), funil)
+    expect(porTelefone.actions[0]).toMatchObject({ existenteId: ana })
+    // O app bloqueado (o funil `null`): os blocos ficam como texto.
+    const locked = resolver({ funil: () => Promise.resolve(null) })
+    const text = block({ tipo: 'oportunidade-mover', oportunidadeId: 'x', etapa: 'Negociação' })
+    expect(await extractActions(text, locked)).toEqual({ text, actions: [] })
+    // "Abrir" a oportunidade e o contato pelo id do funil, com o nome; id que não existe fica como texto.
+    const open = await extractActions([block({ tipo: 'abrir', tela: 'oportunidade', alvo: portal }), block({ tipo: 'abrir', tela: 'contato', alvo: ana }), block({ tipo: 'abrir', tela: 'funil' })].join('\n'), funil)
+    expect(open.actions.map((action) => (action as { label: string }).label)).toEqual(['Abrir «Portal do Franqueado»', 'Abrir o contato Ana Souza', 'Abrir Funil'])
+    expect((await extractActions(block({ tipo: 'abrir', tela: 'oportunidade', alvo: 'nao-existe' }), funil)).actions).toEqual([])
+  })
+
+  it('o clique grava pelo serviço do funil uma vez só: mover (evento de etapa e nota), criar (com o que o cartão mudou) e contato', async () => {
+    const { service, portal, etapa } = await funilComPortal()
+    const extracted = await extractActions(
+      [
+        block({ tipo: 'oportunidade-mover', oportunidadeId: portal, etapa: 'Negociação', nota: 'A Ana leva à diretoria.' }),
+        block({ tipo: 'oportunidade-criar', titulo: 'Conciliação', empresa: 'Cliente', etapa: 'Contato', valor: 45000, contatos: [{ nome: 'Paulo Siqueira', email: 'paulo@cliente.example' }, { nome: 'Carlos' }] }),
+        block({ tipo: 'contato-criar', nome: 'Bruna Reis', email: 'bruna@parceiro.example', empresa: 'Parceiro' }),
+        block({ tipo: 'oportunidade-proximo-passo', oportunidadeId: portal, texto: 'Ligar para a Ana', data: '2026-11-24' }),
+      ].join('\n'),
+      resolver({ funil: () => service.view() }),
+    )
+    const store = createFileChatStore({ dir })
+    await store.save(chatWith(extracted.actions))
+    const actions = createChatActions({ store, createReminder: () => Promise.reject(new Error('não')), timeZone: () => SP, now: () => NOW, funil: service })
+    const ref = (actionId: string) => ({ chatId: 'c1', index: 1, actionId })
+    const saved = async (actionId: string): Promise<ChatAction | undefined> => (await store.get('c1'))?.messages[1]?.actions?.find((action) => action.id === actionId)
+
+    // Mover: a etapa, o evento `etapa` e a nota na linha do tempo; o segundo clique não faz nada.
+    expect((await actions.funil(ref('a1'))).ok).toBe(true)
+    expect(await saved('a1')).toMatchObject({ status: 'done', result: 'Movida para Negociação', error: null })
+    let state = (await service.view()).state
+    expect(state.oportunidades.find((item) => item.id === portal)?.etapaId).toBe(etapa('Negociação'))
+    const eventos = (): string[] => state.eventos.filter((evento) => evento.oportunidadeId === portal).map((evento) => `${evento.tipo}:${evento.texto}`)
+    expect(eventos()).toEqual(expect.arrayContaining(['etapa:Proposta → Negociação', 'nota:A Ana leva à diretoria.']))
+    const before = state.eventos.length
+    expect(await actions.funil(ref('a1'))).toEqual({ ok: false, error: 'done' })
+    state = (await service.view()).state
+    expect(state.eventos).toHaveLength(before)
+
+    // Criar, com o valor do cartão mudado: o contato com e-mail entra com a origem do Assistente; o sem e-mail, na nota.
+    expect(await actions.funil({ ...ref('a2'), campos: { valor: 5_000_000, titulo: 'x'.repeat(500) } })).toEqual({ ok: false, error: 'invalid' })
+    expect(await actions.funil({ ...ref('a1'), campos: { valor: 1 } })).toEqual({ ok: false, error: 'done' })
+    expect((await actions.funil({ ...ref('a2'), campos: { valor: 5_000_000 } })).ok).toBe(true)
+    state = (await service.view()).state
+    const criada = state.oportunidades.find((item) => item.titulo === 'Conciliação')
+    expect(criada).toMatchObject({ valor: 5_000_000, origem: 'assistente', etapaId: etapa('Contato') })
+    expect(state.empresas.find((item) => item.id === criada?.empresaId)?.nome).toBe('Cliente')
+    const paulo = state.contatos.find((item) => item.emails.includes('paulo@cliente.example'))
+    expect(paulo?.origem).toBe('assistente')
+    expect(criada?.contatoIds).toEqual([paulo?.id])
+    expect(state.eventos.some((evento) => evento.oportunidadeId === criada?.id && evento.tipo === 'nota' && evento.texto === 'Citados na conversa com o Assistente: Carlos')).toBe(true)
+    expect(await saved('a2')).toMatchObject({ status: 'done', result: 'Oportunidade criada', oportunidadeId: criada?.id, valor: 5_000_000 })
+    expect(await actions.funil(ref('a2'))).toEqual({ ok: false, error: 'done' })
+    expect((await service.view()).state.oportunidades.filter((item) => item.titulo === 'Conciliação')).toHaveLength(1)
+
+    // Contato e próximo passo.
+    expect((await actions.funil(ref('a3'))).ok).toBe(true)
+    state = (await service.view()).state
+    const bruna = state.contatos.find((item) => item.nome === 'Bruna Reis')
+    expect(bruna).toMatchObject({ origem: 'assistente', emails: ['bruna@parceiro.example'] })
+    expect(await saved('a3')).toMatchObject({ status: 'done', result: 'Contato criado', contatoId: bruna?.id })
+    expect((await actions.funil(ref('a4'))).ok).toBe(true)
+    expect((await service.view()).state.oportunidades.find((item) => item.id === portal)?.proximoPasso).toEqual({ texto: 'Ligar para a Ana', data: '2026-11-24' })
+    expect(await saved('a4')).toMatchObject({ status: 'done', result: 'Próximo passo salvo' })
+    expect(actionsHistory((await store.get('c1'))?.messages[1]?.actions)).toContain('- Contato criado: Bruna Reis (Contato criado)')
+  })
+
+  it('mover para Perdido usa a nota como motivo da perda; a oportunidade que sumiu antes do clique vira `failed`', async () => {
+    const { service, portal } = await funilComPortal()
+    const extracted = await extractActions(
+      [
+        block({ tipo: 'oportunidade-mover', oportunidadeId: portal, etapa: 'Perdido', nota: 'Orçamento adiado' }),
+        block({ tipo: 'oportunidade-proximo-passo', oportunidadeId: portal, texto: 'Ligar' }),
+        block({ tipo: 'contato-criar', nome: 'Bruna Reis', email: 'bruna@parceiro.example' }),
+      ].join('\n'),
+      resolver({ funil: () => service.view() }),
+    )
+    const store = createFileChatStore({ dir })
+    await store.save(chatWith(extracted.actions))
+    const actions = createChatActions({ store, createReminder: () => Promise.reject(new Error('não')), timeZone: () => SP, now: () => NOW, funil: service })
+    expect((await actions.funil({ chatId: 'c1', index: 1, actionId: 'a1' })).ok).toBe(true)
+    const state = (await service.view()).state
+    expect(state.oportunidades.find((item) => item.id === portal)?.motivoPerda).toBe('Orçamento adiado')
+    expect(state.eventos.some((evento) => evento.oportunidadeId === portal && evento.tipo === 'nota')).toBe(false)
+    // Perdida e arquivada entre a proposta e o clique: o próximo passo não acha mais a oportunidade.
+    expect((await service.oportunidadeArchive({ id: portal })).ok).toBe(true)
+    expect((await actions.funil({ chatId: 'c1', index: 1, actionId: 'a2' })).ok).toBe(true)
+    expect((await store.get('c1'))?.messages[1]?.actions?.[1]).toMatchObject({ status: 'failed', error: 'oportunidade não encontrada' })
+    // Sem o serviço do funil, o cartão ainda `proposed` não roda e continua esperando o clique.
+    const semFunil = createChatActions({ store, createReminder: () => Promise.reject(new Error('não')), timeZone: () => SP, now: () => NOW })
+    expect(await semFunil.funil({ chatId: 'c1', index: 1, actionId: 'a3' })).toEqual({ ok: false, error: 'invalid' })
+    expect((await store.get('c1'))?.messages[1]?.actions?.[2]).toMatchObject({ kind: 'contato-criar', status: 'proposed' })
+    expect((await service.view()).state.contatos.some((item) => item.nome === 'Bruna Reis')).toBe(false)
+  })
 })

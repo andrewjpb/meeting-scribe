@@ -1,11 +1,16 @@
 import { RefreshCw, Sparkles, X } from 'lucide-react'
 import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { useNavigate } from 'react-router'
 import { useSettings } from '../../app/settingsStore'
+import { phoneOfChatId } from '@shared/assistant'
+import { funilPath } from '@shared/routes'
 import { INSIGHTS_ERRORS, INSIGHTS_MOOD_LABELS, INSIGHTS_MOOD_NOTE, type WhatsAppInsights, type WhatsAppInsightsError } from '@shared/whatsapp-insights'
 import type { WhatsAppChat, WhatsAppMessage } from '@shared/whatsapp'
 import { Button } from '../../design/Button'
 import { Icon } from '../../design/Icon'
 import { COST_HINT } from '../chat/format'
+import { ContactLink, contatoLigado, useFunilCompartilhado } from '../funil/ContactLink'
+import { FUNIL_LINK_CLASS } from '../funil/Timeline'
 import { analysisFooterParts } from '../live/AnalysisBlock'
 import { ActivityChart, BalanceChart, MoodChart } from './Charts'
 
@@ -29,6 +34,53 @@ function Items({ items, empty, name }: { items: readonly string[]; empty: string
         </li>
       ))}
     </ul>
+  )
+}
+
+/**
+ * Contrato 116 (R37): o bloco "Contato" no topo dos Detalhes de uma conversa com uma pessoa. Com contato ligado (pela
+ * conversa ou pelo telefone), o nome como link para a ficha, o cargo e a empresa e as oportunidades dele com a etapa; sem,
+ * o nome da conversa e "+ Contato".
+ */
+function ContactSection({ chat }: { chat: WhatsAppChat }) {
+  const view = useFunilCompartilhado()
+  const navigate = useNavigate()
+  const telefone = phoneOfChatId(chat.id) ?? chat.phone ?? null
+  const contato = view ? contatoLigado(view.state.contatos, { telefone, whatsappChatId: chat.id }) : null
+  const empresa = contato?.empresaId ? view?.state.empresas.find((item) => item.id === contato.empresaId)?.nome : undefined
+  const etapas = new Map((view?.state.etapas ?? []).map((etapa) => [etapa.id, etapa.nome]))
+  const oportunidades = contato ? (view?.state.oportunidades ?? []).filter((op) => !op.arquivado && op.contatoIds.includes(contato.id)) : []
+  const subtitulo = [contato?.cargo, empresa].filter(Boolean).join(' · ')
+  return (
+    <PanelSection title="Contato" name="contato">
+      <div data-whatsapp-contato={contato?.id ?? ''} className="flex flex-col gap-1.5">
+        {contato ? (
+          <>
+            <ContactLink telefone={telefone} whatsappChatId={chat.id} nome={chat.name} origem="whatsapp" />
+            {subtitulo && <p className="text-12 text-text-muted">{subtitulo}</p>}
+            {oportunidades.length > 0 && (
+              <ul className="flex flex-col">
+                {oportunidades.map((op) => (
+                  <li key={op.id} data-whatsapp-contato-oportunidade={op.id} className="flex min-h-7 items-center gap-2 border-t border-line text-12">
+                    <span className="min-w-0 flex-1 truncate">
+                      <button type="button" className={FUNIL_LINK_CLASS} onClick={() => void navigate(funilPath('oportunidades', op.id))}>
+                        {op.titulo}
+                      </button>
+                    </span>
+                    <span className="shrink-0 text-text-muted">{etapas.get(op.etapaId) ?? ''}</span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </>
+        ) : (
+          <div className="flex items-center justify-between gap-2">
+            <span className="min-w-0 truncate text-13 text-text">{chat.name}</span>
+            <ContactLink telefone={telefone} whatsappChatId={chat.id} nome={chat.name} origem="whatsapp" />
+          </div>
+        )}
+      </div>
+    </PanelSection>
   )
 }
 
@@ -120,6 +172,8 @@ export function DetailsPanel({ chat, messages, onClose }: DetailsPanelProps) {
           <Icon icon={X} />
         </button>
       </div>
+
+      {chat.kind === 'person' && <ContactSection chat={chat} />}
 
       {!enabled ? (
         <section data-wa-insights="off" className="flex flex-col gap-2 border-b border-line px-3 py-3">

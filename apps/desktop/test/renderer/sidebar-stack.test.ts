@@ -1,8 +1,8 @@
-// Barra lateral em pilha (contrato 65, CA20; contrato 66, CA11, o nível Configurações; contrato 67, CA13, o nível Assistente): o nível de cada rota, o "voltar" que vale só para a navegação dele, o
+// Barra lateral em pilha (contrato 65, CA20; contrato 66, CA11, o nível Configurações; contrato 67, CA13, o nível Assistente; contrato 112, CA1, o nível Funil): o nível de cada rota, o "voltar" que vale só para a navegação dele, o
 // deslize entre os níveis, o último email aberto na sessão e o número do item "Email" na raiz.
 import { beforeEach, describe, expect, it } from 'vitest'
 import { EMAIL_INBOX_MAILBOX, EMAIL_SENT_MAILBOX, type EmailMessage } from '../../src/shared/email'
-import { emailFolderFromSlug, emailFolderSegment, emailPath, isRedesSection, REDES_SECTIONS, redesPath } from '../../src/shared/routes'
+import { emailFolderFromSlug, emailFolderSegment, emailPath, FUNIL_SECTIONS, funilPath, isFunilSection, isRedesSection, REDES_SECTIONS, redesPath, ROUTE_PATHS, ROUTE_REDIRECTS } from '../../src/shared/routes'
 import { activeNavId, lastEmailPath, lastRedesPath, levelFor, rememberEmailPath, rememberRedesPath, resetSidebarMemory, sectionOf, SIDEBAR_SECTIONS, SIDEBAR_SLIDE_FALLBACK_MS, SIDEBAR_SLIDE_MS, transitionOf } from '../../src/renderer/src/app/sidebarLevels'
 import { totalUnread } from '../../src/renderer/src/features/email/format'
 
@@ -122,6 +122,37 @@ describe('nível Redes (contrato 72, CA13)', () => {
     expect(lastRedesPath(['1', '2'])).toBe('/redes/2/mensagens')
     resetSidebarMemory()
     expect(lastRedesPath(['1', '2'])).toBe('/redes/1/publicacoes')
+  })
+})
+
+describe('nível Funil (contrato 112, CA1)', () => {
+  it('sectionOf: /funil e /funil/* são a seção Funil', () => {
+    expect(SIDEBAR_SECTIONS).toContain('funil')
+    expect(sectionOf('/funil')).toBe('funil')
+    expect(sectionOf('/funil/oportunidades')).toBe('funil')
+    expect(sectionOf('/funil/contatos/abc')).toBe('funil')
+    expect(sectionOf('/funilx')).toBeNull()
+  })
+
+  it('o nível, o "voltar" da mesma navegação, o item marcado e o deslize', () => {
+    expect(levelFor('/funil/empresas', null, 'k')).toBe('funil')
+    expect(levelFor('/funil/empresas', 'k', 'k')).toBe('root')
+    expect(activeNavId('/funil/oportunidades', null)).toBe('funil')
+    expect(activeNavId('/funil/oportunidades/op-1', 'funil')).toBe('funil')
+    expect(transitionOf('root', 'funil')).toBe('push')
+    expect(transitionOf('funil', 'root')).toBe('pop')
+    expect(transitionOf('funil', 'email')).toBe('push')
+  })
+
+  it('funilPath: a seção (Oportunidades por padrão) e o id codificado; só as três seções valem; nenhum redirecionamento novo', () => {
+    expect(ROUTE_PATHS.funil).toBe('/funil/:secao?/:id?')
+    expect(funilPath()).toBe('/funil/oportunidades')
+    expect(funilPath('contatos')).toBe('/funil/contatos')
+    expect(funilPath('oportunidades', 'op/1 a')).toBe('/funil/oportunidades/op%2F1%20a')
+    expect(FUNIL_SECTIONS).toEqual(['oportunidades', 'contatos', 'empresas'])
+    expect(isFunilSection('empresas')).toBe(true)
+    expect(isFunilSection('negocios')).toBe(false)
+    expect(ROUTE_REDIRECTS).toEqual([{ from: '/perguntar', to: '/assistente' }])
   })
 })
 

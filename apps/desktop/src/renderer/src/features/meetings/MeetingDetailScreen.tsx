@@ -203,7 +203,7 @@ export function MeetingDetailScreen() {
       {ready && <MeetingWhatsAppLink meetingId={ready.meeting.id} />}
       {ready && (
         <div role="tabpanel" id={tabPanelId(TABS_ID, tab)} aria-labelledby={tabId(TABS_ID, tab)} data-tab-panel={tab} className="flex min-h-0 flex-1 flex-col">
-          {tab === 'resumo' && <SummaryTab meetingId={ready.meeting.id} view={summary.view} onGenerate={summary.generate} analyses={analyses} onJump={jumpTo} />}
+          {tab === 'resumo' && <SummaryTab meetingId={ready.meeting.id} view={summary.view} onGenerate={summary.generate} analyses={analyses} onJump={jumpTo} calendar={ready.meeting.calendar} />}
           {tab === 'anotacoes' && <NotesTab meetingId={ready.meeting.id} onJump={jumpTo} />}
           {tab === 'perguntar' && <MeetingChatTab meetingId={ready.meeting.id} />}
           {tab === 'transcricao' &&

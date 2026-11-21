@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { parseSettings, parseSettingsPatch } from '../src/main/settings/schema'
 import { createFileSettingsStore, SETTINGS_FILE } from '../src/main/settings/store'
 import { applySettingsPatch, DEFAULT_SETTINGS, type AppSettings } from '../src/shared/settings-defaults'
+import { settingsIndex } from '../src/shared/settings-index'
 
 describe('esquema de configurações (CA1)', () => {
   it('padrões de N5', () => {
@@ -64,6 +65,7 @@ describe('esquema de configurações (CA1)', () => {
       // 73: comentários
       redesPollMinutes: 5,
       // fim 73
+      funil: { detectarNasReunioes: true, diasEsfriar: 7, avisarEsfriadas: true },
     })
     expect(parseSettings(undefined)).toEqual(DEFAULT_SETTINGS)
     expect(parseSettings({})).toEqual(DEFAULT_SETTINGS)
@@ -138,6 +140,7 @@ describe('esquema de configurações (CA1)', () => {
       // 73: comentários
       redesPollMinutes: 15,
       // fim 73
+      funil: { detectarNasReunioes: true, diasEsfriar: 7, avisarEsfriadas: true },
     }
     expect(parseSettings(saved)).toEqual(saved)
     // 73: comentários
@@ -184,7 +187,7 @@ describe('esquema de configurações (CA1)', () => {
   it('Claude CLI (contrato 05, CA1): motor, modelo e caminho com padrão próprio cada um', () => {
     // `settings.json` do contrato 04, sem os campos novos: carrega com os padrões deles e mantém o resto.
     const old = { translationEnabled: false, translationModel: 'gpt-oss-120b', sourceLanguage: 'es', targetLanguage: 'ja', echoCancellation: true, theme: 'dark', micDeviceId: null }
-    expect(parseSettings(old)).toEqual({ ...old, removeEcho: true, translationEngine: 'assemblyai', claudeModel: 'haiku', chatModel: 'sonnet', claudePath: null, claudeTransport: 'acp', agentProfile: 'claude', saveToFolder: true, audioFolder: null, summarizeOnStop: true, liveCards: false, whatsappInsights: true, whatsappAutoCorrect: false, whatsappNotifications: true, whatsappNotifyGroups: true, whatsappTypingSignal: false, identifySpeakers: false, meetSpeakers: true, meetingPrompt: true, navegadorPlugin: false, brandName: null, brandSubtitle: null, brandLogo: null, autoCheckUpdates: true, lockUseTouchId: false, lockAfterMinutes: 0, lockOnSystemLock: true, lockOnLaunch: false, saveToDrive: true, closeBehavior: 'tray', openAtLogin: false, scheduledRunsDailyLimit: 50, calendarAlerts: true, calendarLeadMinutes: 5, calendarNotRecordingAlert: true, calendarIds: { google: null, microsoft: null }, emailPollMinutes: 5, emailNotifications: true, emailCollapsed: [], emailFoldersCollapsed: [], emailRecentFolders: {}, inviteCalendarId: null, inviteAddOnAccept: true, inviteSuggest: false, claudeConnectors: {}, redesPollMinutes: 5 })
+    expect(parseSettings(old)).toEqual({ ...old, removeEcho: true, translationEngine: 'assemblyai', claudeModel: 'haiku', chatModel: 'sonnet', claudePath: null, claudeTransport: 'acp', agentProfile: 'claude', saveToFolder: true, audioFolder: null, summarizeOnStop: true, liveCards: false, whatsappInsights: true, whatsappAutoCorrect: false, whatsappNotifications: true, whatsappNotifyGroups: true, whatsappTypingSignal: false, identifySpeakers: false, meetSpeakers: true, meetingPrompt: true, navegadorPlugin: false, brandName: null, brandSubtitle: null, brandLogo: null, autoCheckUpdates: true, lockUseTouchId: false, lockAfterMinutes: 0, lockOnSystemLock: true, lockOnLaunch: false, saveToDrive: true, closeBehavior: 'tray', openAtLogin: false, scheduledRunsDailyLimit: 50, calendarAlerts: true, calendarLeadMinutes: 5, calendarNotRecordingAlert: true, calendarIds: { google: null, microsoft: null }, emailPollMinutes: 5, emailNotifications: true, emailCollapsed: [], emailFoldersCollapsed: [], emailRecentFolders: {}, inviteCalendarId: null, inviteAddOnAccept: true, inviteSuggest: false, claudeConnectors: {}, redesPollMinutes: 5, funil: { detectarNasReunioes: true, diasEsfriar: 7, avisarEsfriadas: true } })
     expect(parseSettings({ translationEngine: 'claude-cli', claudeModel: 'sonnet' })).toMatchObject({ translationEngine: 'claude-cli', claudeModel: 'sonnet' })
     // Fora da lista cai no padrão: só `haiku` e `sonnet`, só os dois motores.
     expect(parseSettings({ translationEngine: 'openai' }).translationEngine).toBe('assemblyai')
@@ -354,6 +357,45 @@ describe('esquema de configurações (CA1)', () => {
     expect(() => parseSettingsPatch({ claudeConnectors: { Notion: { enabled: true, tools: { soma: 'sempre' } } } })).toThrow()
     expect(() => parseSettingsPatch({ claudeConnectors: { '': { enabled: true, tools: {} } } })).toThrow()
     expect(() => parseSettingsPatch({ claudeConnectors: Object.fromEntries(Array.from({ length: 101 }, (_, n) => [`c${n}`, { enabled: false, tools: {} }])) })).toThrow()
+  })
+
+  it('Funil de vendas (contrato 109, CA1): três linhas na aba Geral, na Section "Funil de vendas"', () => {
+    const rows = settingsIndex('Claude').filter((entry) => entry.section === 'Funil de vendas')
+    expect(rows.map((entry) => [entry.tab, entry.name, entry.description])).toEqual([
+      ['geral', 'Detectar oportunidades nas reuniões', 'Depois do resumo, propõe criar ou atualizar uma oportunidade.'],
+      ['geral', 'Considerar esfriada após (dias)', 'Oportunidade aberta sem interação nesse prazo ganha o marcador esfriou.'],
+      ['geral', 'Avisar oportunidades esfriadas e passos vencidos', 'Uma notificação por dia, depois das 9h.'],
+    ])
+  })
+
+  it('Funil de vendas pelo renderer (contrato 109, CA2): dias inteiros de 1 a 90, os três campos juntos', () => {
+    const funil = { detectarNasReunioes: true, avisarEsfriadas: true }
+    expect(() => parseSettingsPatch({ funil: { ...funil, diasEsfriar: 0 } })).toThrow()
+    expect(() => parseSettingsPatch({ funil: { ...funil, diasEsfriar: 91 } })).toThrow()
+    expect(parseSettingsPatch({ funil: { ...funil, diasEsfriar: 14 } }).funil?.diasEsfriar).toBe(14)
+    expect(parseSettingsPatch({ funil: { detectarNasReunioes: false, diasEsfriar: 1, avisarEsfriadas: false } })).toEqual({ funil: { detectarNasReunioes: false, diasEsfriar: 1, avisarEsfriadas: false } })
+    expect(parseSettingsPatch({ funil: { ...funil, diasEsfriar: 90 } }).funil?.diasEsfriar).toBe(90)
+    expect(() => parseSettingsPatch({ funil: { ...funil, diasEsfriar: 7.5 } })).toThrow()
+    expect(() => parseSettingsPatch({ funil: { ...funil, diasEsfriar: '7' } })).toThrow()
+    expect(() => parseSettingsPatch({ funil: { ...funil, diasEsfriar: null } })).toThrow()
+    expect(() => parseSettingsPatch({ funil: { detectarNasReunioes: true, diasEsfriar: 7 } })).toThrow()
+    expect(() => parseSettingsPatch({ funil: { ...funil, diasEsfriar: 7, extra: 1 } })).toThrow()
+    expect(() => parseSettingsPatch({ funil: { ...funil, detectarNasReunioes: 'sim', diasEsfriar: 7 } })).toThrow()
+    // Recusa o pedido inteiro, não só o campo.
+    expect(() => parseSettingsPatch({ theme: 'dark', funil: { ...funil, diasEsfriar: 0 } })).toThrow()
+  })
+
+  it('Funil de vendas no arquivo (contrato 109, CA3): arquivo antigo vem com os padrões; campo inválido volta ao padrão dele', () => {
+    const old = { ...DEFAULT_SETTINGS, theme: 'dark' } as Record<string, unknown>
+    delete old['funil']
+    expect(parseSettings(old).funil).toEqual(DEFAULT_SETTINGS.funil)
+    expect(parseSettings(old)).toEqual({ ...DEFAULT_SETTINGS, theme: 'dark' })
+    expect(parseSettings({ funil: { detectarNasReunioes: false, diasEsfriar: 500, avisarEsfriadas: false } }).funil).toEqual({ detectarNasReunioes: false, diasEsfriar: 7, avisarEsfriadas: false })
+    expect(parseSettings({ funil: { detectarNasReunioes: false, diasEsfriar: 0, avisarEsfriadas: true } }).funil).toEqual({ detectarNasReunioes: false, diasEsfriar: 7, avisarEsfriadas: true })
+    expect(parseSettings({ funil: { detectarNasReunioes: 'não', diasEsfriar: 30, avisarEsfriadas: false } }).funil).toEqual({ detectarNasReunioes: true, diasEsfriar: 30, avisarEsfriadas: false })
+    expect(parseSettings({ funil: { diasEsfriar: 2.5 } }).funil).toEqual(DEFAULT_SETTINGS.funil)
+    expect(parseSettings({ funil: 'tudo' }).funil).toEqual(DEFAULT_SETTINGS.funil)
+    expect(parseSettings({ funil: null }).funil).toEqual(DEFAULT_SETTINGS.funil)
   })
 
   it('Marca (contrato 09, CA1): padrões nulos; arquivo antigo carrega com os padrões; inválido volta ao padrão', () => {

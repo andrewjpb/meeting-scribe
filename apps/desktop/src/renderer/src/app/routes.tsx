@@ -1,12 +1,13 @@
 // Tabela de rotas. Rota nova: id em shared/routes.ts, linha aqui; com `nav`, aparece na barra lateral.
 import type { LucideIcon } from 'lucide-react'
-import { AtSign, Bot, Mail, NotebookText, Settings, Smartphone, Sparkles } from 'lucide-react'
+import { AtSign, Bot, Funnel, Mail, NotebookText, Settings, Smartphone, Sparkles } from 'lucide-react'
 import type { ReactElement } from 'react'
 import { matchPath, Navigate } from 'react-router'
 import { ROUTE_PATHS, ROUTE_REDIRECTS, SETTINGS_ROUTE_PATTERN, type RouteId } from '@shared/routes'
 import { AutomationsScreen } from '../features/agents/AutomationsScreen'
 import { ChatScreen } from '../features/chat/ChatScreen'
 import { EmailScreen } from '../features/email/EmailScreen'
+import { FunilScreen } from '../features/funil/FunilScreen'
 import { LiveScreen } from '../features/live/LiveScreen'
 import { MeetingDetailScreen } from '../features/meetings/MeetingDetailScreen'
 import { MeetingsScreen } from '../features/meetings/MeetingsScreen'
@@ -28,6 +29,9 @@ export const APP_ROUTES: AppRoute[] = [
   // Contrato 65: "Email" na raiz da barra lateral, com o número de não lidas; o clique abre o nível com as contas e as
   // pastas (`SidebarStack` e `EmailNav`).
   { id: 'email', path: ROUTE_PATHS.email, element: <EmailScreen />, nav: { label: 'Email', icon: Mail } },
+  // Contrato 112 (R17, D13): "Funil" entre Email e Redes, sempre visível; o clique abre o nível com Oportunidades, Contatos
+  // e Empresas (`SidebarStack`).
+  { id: 'funil', path: ROUTE_PATHS.funil, element: <FunilScreen />, nav: { label: 'Funil', icon: Funnel } },
   // Contrato 72: "Redes" entre Email e Automações, só com uma conta conectada (ou a rota aberta; `Sidebar`), com a soma
   // dos não lidos; o clique abre o nível com as contas e as seções (`SidebarStack` e `RedesNav`).
   { id: 'redes', path: ROUTE_PATHS.redes, element: <RedesScreen />, nav: { label: 'Redes', icon: AtSign } },

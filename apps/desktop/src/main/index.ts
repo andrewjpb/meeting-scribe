@@ -59,6 +59,14 @@ import { createRecordingSessions, leaveButtons, RECORDING_LEAVE_MESSAGE } from '
 import { createLockService, type LockService, type TouchIdAccess } from './lock/service'
 import { createFileLockStore } from './lock/store'
 import { createFileAnalysesStore } from './meetings/analyses'
+import { autoDetect } from './funil/apply-proposal'
+import { createFunnelExtractService, type FunnelExtractService } from './funil/extract'
+import { registerFunilIpc, type FunilPropostaIpcDeps } from './funil/ipc'
+import { createFunilProposalStore } from './funil/proposals'
+import { createFunilAlerts } from './funil/alerts'
+import { funilMarkdown } from './funil/markdown'
+import { createFunilService, type FunilService } from './funil/service'
+import { createFunilStore } from './funil/store'
 import { createAiNotesService, type AiNotesService } from './meetings/ai-notes-service'
 import { createAnalysisService, type AnalysisService } from './meetings/analysis-service'
 import { createMeetingsIndex, type MeetingsIndex } from './meetings/overview'
@@ -67,7 +75,7 @@ import { createMeetingsService } from './meetings/service'
 import { createFileMeetingsStore, folderCreateSchema, folderIdSchema, folderRenameSchema, meetingMoveSchema, type MeetingsStore } from './meetings/store'
 import { createFileSummaryStore } from './meetings/summaries'
 import { createSummaryService, type SummaryService } from './meetings/summary-service'
-import { createFileTranscriptStore, type TranscriptStore } from './meetings/transcripts'
+import { createFileTranscriptStore, MEETINGS_DIR, type TranscriptStore } from './meetings/transcripts'
 import { aboutPanelOptions, buildMenuTemplate, MENU_IDS } from './menu'
 import { createMicPermissions } from './permissions'
 import { handleAppScheme, registerAppScheme } from './protocol'
@@ -387,6 +395,23 @@ function showAutomationNotice(notice: AutomationNotice): void {
   }
   item.on('click', open)
   item.on('action', open)
+  item.on('close', () => liveNotices.delete(item))
+  liveNotices.add(item)
+  item.show()
+}
+
+/** Contrato 115 (R44): o aviso diário do funil; o clique abre Funil > Oportunidades. No smoke, só uma linha de log. */
+function showFunilNotice(aviso: { title: string; body: string }): void {
+  // Bloqueado, sem as contagens (como `showAutomationNotice`).
+  const shown = lockService?.isLocked() ? { title: brandName, body: 'Há oportunidades no funil pedindo atenção.' } : aviso
+  if (smokeFixtures) return void console.log(`[funil] aviso não mostrado no smoke: ${shown.body}`)
+  if (!Notification.isSupported()) return
+  const item = new Notification({ title: shown.title, body: shown.body })
+  const open = (): void => {
+    liveNotices.delete(item)
+    sendWhenLoaded(showMainWindow(), 'scribe:navigate', 'funil')
+  }
+  item.on('click', open)
   item.on('close', () => liveNotices.delete(item))
   liveNotices.add(item)
   item.show()
@@ -917,6 +942,12 @@ interface AppServices {
   navegador: NavegadorServer
   /** Servidor MCP das ferramentas do navegador do Assistente (contrato 47). */
   navegadorMcp: NavegadorMcpServer
+  /** Contrato 110: o funil de vendas (`funil.json`), com as leituras sob demanda dos caches dos outros domínios. */
+  funil: FunilService
+  /** Contrato 113: a detecção de oportunidade nas reuniões (o serviço do 111). */
+  funnel: FunnelExtractService
+  /** Contrato 113: o que os canais `scribe:funil-proposta-*` usam (e o `proposals.remove` ao excluir a reunião). */
+  funilProposta: FunilPropostaIpcDeps
 }
 
 /**
@@ -1420,6 +1451,8 @@ function createAppServices(userData: string): AppServices {
     email: { export: (folder: string) => exportEmail(emailExport, folder) },
     // Contrato 76: o guardado das redes (sem ler a Meta); bloqueado, nada.
     redes: () => redesAssistant.sourceAccounts(),
+    // Contrato 117: o `FUNIL.md` do gerador do contrato 115; bloqueado, nada.
+    funil: async () => (lockService?.isLocked() ? null : funilMarkdownText()),
     ...devLog,
   }
   // Contrato 45: o email do Assistente. O `EMAILS.md` e as mensagens já baixadas saem do cache (sem servidor); as
@@ -1487,6 +1520,8 @@ function createAppServices(userData: string): AppServices {
     tasks: () => automations.listTasks(),
     // Contrato 76: as contas do Instagram conectadas (o id e o @).
     instagramAccounts: async () => redes.state().accounts.map((account) => ({ id: account.id, username: account.username })),
+    // Contrato 117: o funil, só para ler os ids, as etapas e os contatos do cartão; bloqueado, o bloco fica como texto.
+    funil: async () => (lockService?.isLocked() ? null : funil.view()),
     now: Date.now,
     timeZone,
   }
@@ -1542,6 +1577,8 @@ function createAppServices(userData: string): AppServices {
       if (status.state === 'ready') {
         void corpus.sync(meetingId).catch(() => undefined)
         void drive.enqueue(meetingId, ['summary']).catch(() => undefined)
+        // Contrato 113 (R38, D8): a detecção de oportunidade, fora do smoke; o resumo nunca espera por ela.
+        void autoDetect({ settings: () => settings.get(), proposals: funilPropostas, extract: funnel, smoke: smokeFixtures !== null }, meetingId).catch(() => undefined)
       }
       broadcast(appWindows(), 'scribe:summary-state', { meetingId, status })
     },
@@ -1682,7 +1719,7 @@ function createAppServices(userData: string): AppServices {
     agents: createFileAgentsStore({ dir: userData }),
     schedules: createFileSchedulesStore({ dir: userData }),
     runs: createFileRunsStore({ dir: userData }),
-    runner: createAgentRunner({ locate: () => claude.locate(), openAcp, corpus, meetings, emptyDir: join(userData, 'automations-empty'), ...devLog }),
+    runner: createAgentRunner({ locate: () => claude.locate(), openAcp, corpus, meetings, emptyDir: join(userData, 'automations-empty'), funilMarkdown: () => funilMarkdownText(), ...devLog }),
     applyOutput: (request) =>
       applyOutput(
         {
@@ -1713,6 +1750,7 @@ function createAppServices(userData: string): AppServices {
       if (event.type === 'done') trayController?.refresh()
       if (!lockService?.isLocked()) broadcast(appWindows(), 'scribe:automation-event', event)
     },
+    onTick: (at) => funilAlerts.tick(at),
     ...(smokeAutomations ? { now: () => Date.now() + smokeAutomations.skewMs } : {}),
     // Contrato 51: só a tarefa com "Pode enviar email" envia, sem clique, pelo caminho interno do email (nunca pelo IPC),
     // depois das regras da permissão a cada envio; e lê o email com as mesmas ferramentas do Assistente. Bloqueado, nada.
@@ -1838,6 +1876,46 @@ function createAppServices(userData: string): AppServices {
         return { ok: false, error: saved.problems.includes(REDES_ACCOUNT_MISSING_MESSAGE) ? 'missing' : 'invalid' }
       },
     },
+    // Contrato 117: os cartões do funil gravam só pelo serviço do funil (110), no clique.
+    funil: { view: () => funil.view(), contatoSave: (request) => funil.contatoSave(request), oportunidadeSave: (request) => funil.oportunidadeSave(request), oportunidadeMove: (request) => funil.oportunidadeMove(request), eventoAdd: (request) => funil.eventoAdd(request) },
+    ...devLog,
+  })
+  // Contrato 110: o funil lê reuniões, email e WhatsApp só pelos caches deles; bloqueado, a view não vai às janelas.
+  const funilStore = createFunilStore({ dir: userData, ...devLog })
+  const funil = createFunilService({
+    store: funilStore,
+    meetings,
+    summaries,
+    email: { cached: () => email.cached() },
+    whatsapp: { chats: () => whatsapp.chats(), me: () => whatsapp.status().me },
+    chooseImportFile: chooseFunilImportFile,
+    onChange: (view) => {
+      if (!lockService?.isLocked()) broadcast(appWindows(), 'scribe:funil-changed', view)
+    },
+    ...devLog,
+  })
+  // Contrato 115: o alerta diário (no tick das Automações) e o `FUNIL.md` dos agentes com "Pode ler o funil".
+  const funilAlerts = createFunilAlerts({ view: () => funil.view(), ultimoAviso: async () => (await funilStore.read()).ultimoAvisoEm, settings: () => settings.get(), marcar: (at) => funil.marcarAviso(at), notify: showFunilNotice, timeZone, ...devLog })
+  const funilMarkdownText = async (): Promise<string> => {
+    const [view, { funil: config }, lista] = await Promise.all([funil.view(), settings.get(), meetings.list()])
+    return funilMarkdown({ view, diasEsfriar: config.diasEsfriar, reunioes: new Map(lista.map((meeting) => [meeting.id, meeting.title])), now: Date.now(), timeZone: timeZone() })
+  }
+  // Contrato 113: a proposta de IA de cada reunião e a passada `funnel-extract`, com o mesmo motor do resumo.
+  const funilPropostas = createFunilProposalStore({ meetingsDir: join(userData, MEETINGS_DIR) })
+  const notifyProposta = (meetingId: string): void => broadcast(appWindows(), 'scribe:funil-proposta-changed', { meetingId })
+  const funnel = createFunnelExtractService({
+    settings,
+    locate: () => claude.locate(),
+    spawn: smokeClaude?.spawnSummary ?? nodeSpawnSummary,
+    openAcp,
+    acpAvailable: async () => (await acpAgent.current()).available(),
+    userData,
+    baseEnv: process.env,
+    meetings,
+    summaries,
+    funil: funilStore,
+    proposals: funilPropostas,
+    onChange: notifyProposta,
     ...devLog,
   })
   return {
@@ -1882,6 +1960,9 @@ function createAppServices(userData: string): AppServices {
     mcp,
     navegador,
     navegadorMcp,
+    funil,
+    funnel,
+    funilProposta: { funnel, proposals: funilPropostas, store: funilStore, meetings, onChange: notifyProposta },
   }
 }
 
@@ -1950,6 +2031,19 @@ async function chooseWhatsAppAttachment(): Promise<string | null> {
     buttonLabel: 'Anexar',
     properties: ['openFile'],
     filters: [{ name: 'Imagem ou vídeo', extensions: ['jpg', 'jpeg', 'png', 'webp', 'gif', 'mp4', 'mov'] }],
+  }
+  const result = mainWindow ? await dialog.showOpenDialog(mainWindow, options) : await dialog.showOpenDialog(options)
+  return result.canceled ? null : (result.filePaths[0] ?? null)
+}
+
+/** Contrato 110: "Importar…" do funil, um CSV ou vCard por vez (R13). No smoke, o CSV da fixture. */
+async function chooseFunilImportFile(): Promise<string | null> {
+  if (smokeFixtures) return smokeFixtures.funilImportFile
+  const options: OpenDialogOptions = {
+    title: 'Importar contatos',
+    buttonLabel: 'Importar',
+    properties: ['openFile'],
+    filters: [{ name: 'CSV ou vCard', extensions: ['csv', 'vcf', 'txt'] }],
   }
   const result = mainWindow ? await dialog.showOpenDialog(mainWindow, options) : await dialog.showOpenDialog(options)
   return result.canceled ? null : (result.filePaths[0] ?? null)
@@ -2048,6 +2142,7 @@ function registerIpc(services: AppServices): void {
   }))
   // Só o smoke recebe o sinal gerado; o app normal sempre capta microfone e sistema de verdade.
   handle('scribe:capture-mode', appOrigin, () => (smoke ? 'synthetic' : 'real'))
+  registerFunilIpc({ appOrigin, funil: services.funil, proposta: services.funilProposta, log: (message) => console.error(message) })
   handle('scribe:meetings-list', appOrigin, () => meetings.list())
   handle('scribe:meetings-get', appOrigin, (_event, { id }) => meetings.get(id))
   handle('scribe:meetings-create', appOrigin, async (_event, input) => {
@@ -2069,6 +2164,8 @@ function registerIpc(services: AppServices): void {
     const deleted = await meetingsService.deleteMeeting(id)
     // Contrato 24: a conversa do WhatsApp ligada a ela sai junto.
     if (deleted) await whatsapp.removeMeeting(id).catch(() => undefined)
+    // Contrato 113: a proposta de IA sai junto; `Oportunidade.meetingIds` fica (a linha do tempo mostra "Reunião apagada").
+    if (deleted) await services.funilProposta.proposals.remove(id).catch(() => undefined)
     trayController?.refresh()
     return deleted
   })
@@ -2206,6 +2303,8 @@ function registerIpc(services: AppServices): void {
       })
       .catch((): ChatActionResult => ({ ok: false, error: 'invalid' })),
   )
+  // Contrato 117: o funil só muda aqui, no clique de um cartão do funil.
+  handle('scribe:chat-action-funil', appOrigin, (_event, request) => chatActions.funil(request).catch((): ChatActionResult => ({ ok: false, error: 'invalid' })))
   // Contrato 21: o cartão de aprovação de uma ferramenta MCP e a aba "Conexões". Nenhum segredo volta por aqui.
   handle('scribe:chat-approval', appOrigin, (_event, request) => chat.answerApproval(request))
   handle('scribe:mcp-chat-servers', appOrigin, () => mcp.chatServers())
@@ -2607,6 +2706,7 @@ void app.whenReady().then(async () => {
     trayController?.dispose()
     services.claude.dispose()
     services.summary.dispose()
+    services.funnel.dispose()
     services.analysis.dispose()
     services.aiNotes.dispose()
     services.whatsappInsights.dispose()
@@ -2700,6 +2800,7 @@ void app.whenReady().then(async () => {
     trayController?.dispose()
     services.claude.dispose()
     services.summary.dispose()
+    services.funnel.dispose()
     services.analysis.dispose()
     services.aiNotes.dispose()
     services.whatsappInsights.dispose()

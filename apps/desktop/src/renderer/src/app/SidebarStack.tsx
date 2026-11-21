@@ -1,7 +1,7 @@
-import { AtSign, ChevronLeft, Mail, Settings, Sparkles, type LucideIcon } from 'lucide-react'
+import { AtSign, Building2, ChevronLeft, Funnel, Mail, Settings, Sparkles, SquareKanban, Users, type LucideIcon } from 'lucide-react'
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from 'react'
 import { NavLink } from 'react-router'
-import { settingsPath, SETTINGS_TABS } from '@shared/routes'
+import { FUNIL_SECTIONS, funilPath, settingsPath, SETTINGS_TABS, type FunilSection } from '@shared/routes'
 import { Icon } from '../design/Icon'
 import { Shortcut } from '../design/Shortcut'
 import { ChatHistory } from '../features/chat/ChatHistory'
@@ -14,9 +14,9 @@ import { SIDEBAR_SLIDE_FALLBACK_MS, transitionOf, type SidebarLevel, type Sideba
 /** Para onde vai o foco depois da troca de nível: o cabeçalho-voltar do nível novo ou o item da seção na raiz. */
 export type SidebarFocus = '[data-sidebar-back]' | `[data-nav="${SidebarSection}"]`
 
-const LEVEL_LABELS: Record<SidebarLevel, string> = { root: 'Navegação principal', email: 'Email', configuracoes: 'Configurações', assistente: 'Assistente', redes: 'Redes' }
+const LEVEL_LABELS: Record<SidebarLevel, string> = { root: 'Navegação principal', email: 'Email', configuracoes: 'Configurações', assistente: 'Assistente', redes: 'Redes', funil: 'Funil' }
 // A raiz é a lista dos itens, como o `<nav>` de antes; os níveis de seção arrumam o cabeçalho e a lista deles.
-const LEVEL_CLASSES: Record<SidebarLevel, string> = { root: 'gap-0.5', email: '', configuracoes: '', assistente: '', redes: '' }
+const LEVEL_CLASSES: Record<SidebarLevel, string> = { root: 'gap-0.5', email: '', configuracoes: '', assistente: '', redes: '', funil: '' }
 const levelClass = (level: SidebarLevel, slide: string | null): string | undefined => [LEVEL_CLASSES[level], slide].filter(Boolean).join(' ') || undefined
 
 interface Shown {
@@ -71,6 +71,8 @@ export function SidebarStack({ level, root, onBack, focusRef }: { level: Sidebar
         return <AssistantLevel onBack={onBack} />
       case 'redes':
         return <RedesLevel onBack={onBack} />
+      case 'funil':
+        return <FunilLevel onBack={onBack} />
       default: {
         const never: never = item
         return never
@@ -207,6 +209,38 @@ function RedesLevel({ onBack }: { onBack: () => void }) {
     <div className="flex min-h-0 flex-1 flex-col">
       <BackHeader icon={AtSign} label="Redes" onBack={onBack} />
       <RedesNav />
+    </div>
+  )
+}
+
+const FUNIL_SECTION_ROWS: Record<FunilSection, { label: string; icon: LucideIcon }> = {
+  oportunidades: { label: 'Oportunidades', icon: SquareKanban },
+  contatos: { label: 'Contatos', icon: Users },
+  empresas: { label: 'Empresas', icon: Building2 },
+}
+
+/**
+ * Linha de seção do Funil (contrato 112, artboard 00b): 28 px como as abas, com o ícone da seção no lugar do recuo de 28
+ * (`tabLinkClass`); a aberta marcada pelo `NavLink`, que também vale com um item aberto (`/funil/oportunidades/<id>`).
+ */
+const funilLinkClass = ({ isActive }: { isActive: boolean }): string =>
+  `flex h-[var(--side-subrow)] min-w-0 shrink-0 items-center gap-2 rounded-[var(--radius-control)] px-2.5 text-13 transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] ${
+    isActive ? 'bg-side-active font-medium text-side-text' : 'text-side-muted hover:text-side-text'
+  }`
+
+/** Nível Funil (contrato 112, R18): o cabeçalho-voltar e uma linha por seção, Oportunidades, Contatos e Empresas. */
+function FunilLevel({ onBack }: { onBack: () => void }) {
+  return (
+    <div className="flex min-h-0 flex-1 flex-col">
+      <BackHeader icon={Funnel} label="Funil" onBack={onBack} />
+      <div className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto">
+        {FUNIL_SECTIONS.map((section) => (
+          <NavLink key={section} to={funilPath(section)} data-funil-section={section} draggable={false} className={funilLinkClass}>
+            <Icon icon={FUNIL_SECTION_ROWS[section].icon} className="shrink-0" />
+            <span className="min-w-0 flex-1 truncate">{FUNIL_SECTION_ROWS[section].label}</span>
+          </NavLink>
+        ))}
+      </div>
     </div>
   )
 }

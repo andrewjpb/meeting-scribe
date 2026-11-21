@@ -1,11 +1,11 @@
-import { mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs'
+import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { createFileAgentsStore } from '../src/main/agents/store'
 import type { OutputRequest } from '../src/main/schedules/outputs'
 import type { AgentRunRequest, AgentRunResult } from '../src/main/schedules/runner'
-import { createAutomationsService, type AutomationNotice, type AutomationsService } from '../src/main/schedules/service'
+import { createAutomationsService, type AutomationNotice, type AutomationsDeps, type AutomationsService } from '../src/main/schedules/service'
 import { createFileRunsStore, createFileSchedulesStore, SCHEDULE_RUNS_DIR, SCHEDULES_FILE } from '../src/main/schedules/store'
 import { AGENTS_FILE } from '../src/main/agents/store'
 import type { AgentInput, AutomationEvent, ScheduledTask, TaskInput } from '../src/shared/automations'
@@ -29,7 +29,7 @@ let limit: number
 let service: AutomationsService
 let ids: number
 
-function setup(): void {
+function setup(extra: Pick<AutomationsDeps, 'onTick' | 'log'> = {}): void {
   pending = []
   maxConcurrent = 0
   notices = []
@@ -67,6 +67,7 @@ function setup(): void {
     now,
     newId,
     timers: { setInterval: () => 0, clearInterval: () => undefined },
+    ...extra,
   })
 }
 
@@ -152,7 +153,7 @@ describe('agentes (contrato 23, CA1 e CA2)', () => {
 
   it('nome único, modelo do perfil e excluir recusado com a lista das tarefas que usam o agente', async () => {
     const agentId = await firstAgentId()
-    const base: AgentInput = { id: null, name: 'resumo da SEMANA', description: '', icon: 'bot', color: 'blue', instructions: 'x', profile: 'claude', model: 'haiku', thinkMore: false, scope: { kind: 'all' }, web: false, mcpServers: [], output: { kind: 'chat' } }
+    const base: AgentInput = { id: null, name: 'resumo da SEMANA', description: '', icon: 'bot', color: 'blue', instructions: 'x', profile: 'claude', model: 'haiku', thinkMore: false, scope: { kind: 'all' }, web: false, funil: false, mcpServers: [], output: { kind: 'chat' } }
     expect(await service.saveAgent(base)).toEqual({ ok: false, error: 'duplicate' })
     expect(await service.saveAgent({ ...base, name: 'Novo', model: 'fable-5-2' })).toEqual({ ok: false, error: 'model' })
     const saved = await service.saveAgent({ ...base, name: 'Novo' })
@@ -163,7 +164,7 @@ describe('agentes (contrato 23, CA1 e CA2)', () => {
   })
 
   it('"Testar agora" roda o agente do formulário sem gravar nada no histórico nem aplicar a saída', async () => {
-    const input: AgentInput = { id: null, name: 'Rascunho', description: '', icon: 'bot', color: 'pink', instructions: 'Seja breve.', profile: 'claude', model: 'haiku', thinkMore: false, scope: { kind: 'none' }, web: false, mcpServers: [], output: { kind: 'file' } }
+    const input: AgentInput = { id: null, name: 'Rascunho', description: '', icon: 'bot', color: 'pink', instructions: 'Seja breve.', profile: 'claude', model: 'haiku', thinkMore: false, scope: { kind: 'none' }, web: false, funil: false, mcpServers: [], output: { kind: 'file' } }
     const started = await service.testAgent({ agent: input, text: 'Olá?' })
     expect(started.ok).toBe(true)
     await waitPending(1)
@@ -498,5 +499,53 @@ describe('lembrete alterado pelo Assistente (contrato 78)', () => {
     expect(await service.deleteTask({ id: created.task.id })).toBe(true)
     expect((await service.listTasks()).some((item) => item.id === created.task.id)).toBe(false)
     expect(await service.deleteTask({ id: created.task.id })).toBe(false)
+  })
+})
+
+describe('conferência do funil no tick (contrato 115, CA4)', () => {
+  const ana = { text: 'Responder a Ana', whatsappChatId: null, whatsappChatName: null }
+
+  it('com as tarefas pausadas, cada tick chama onTick uma vez com o horário do relógio', async () => {
+    const ats: number[] = []
+    setup({
+      onTick: (at) => {
+        ats.push(at)
+        return Promise.resolve()
+      },
+    })
+    await createTask()
+    await service.setPaused({ paused: true })
+    await service.tick()
+    clock += 30_000
+    await service.tick()
+    expect(ats).toEqual([Date.parse('2026-11-16T10:00:00Z'), Date.parse('2026-11-16T10:00:30Z')])
+    expect(pending).toEqual([])
+  })
+
+  it('onTick rejeitando não impede o lembrete nem faz o tick lançar', async () => {
+    const logs: string[] = []
+    setup({ onTick: () => Promise.reject(new Error('funil.json ilegível')), log: (message) => logs.push(message) })
+    const created = await service.createReminder({ at: '2026-11-16T07:01:00-03:00', reminder: ana })
+    if (!created.ok) throw new Error('lembrete recusado')
+    await service.setPaused({ paused: true })
+    clock = Date.parse('2026-11-16T10:01:20Z')
+    await expect(service.tick()).resolves.toBeUndefined()
+    expect(notices).toEqual([expect.objectContaining({ title: 'Lembrete', body: 'Responder a Ana', reminder: true })])
+    expect(logs).toContain('[automações] conferência do funil falhou: funil.json ilegível')
+  })
+})
+
+describe('"Pode ler o funil" no agents.json (contrato 115, CA6)', () => {
+  it('agente salvo antes (sem o campo) lê como desligado; salvar ligado grava funil: true', async () => {
+    const antigo = { id: 'ag-antigo', name: 'Antigo', description: '', icon: 'bot', color: 'blue', instructions: 'x', profile: 'claude', model: 'haiku', thinkMore: false, scope: { kind: 'all' }, web: false, mcpServers: [], output: { kind: 'chat' }, createdAt: '2026-11-01T00:00:00.000Z', updatedAt: '2026-11-01T00:00:00.000Z' }
+    writeFileSync(join(dir, AGENTS_FILE), JSON.stringify({ version: 1, agents: [antigo] }))
+    setup()
+    const [lido] = (await service.listAgents()).agents
+    expect(lido).toMatchObject({ id: 'ag-antigo', funil: false })
+    const { createdAt: _createdAt, updatedAt: _updatedAt, ...campos } = lido as NonNullable<typeof lido>
+    expect((await service.saveAgent({ ...campos, funil: true })).ok).toBe(true)
+    const gravado = JSON.parse(readFileSync(join(dir, AGENTS_FILE), 'utf8')) as { agents: { id: string; funil?: boolean }[] }
+    expect(gravado.agents.find((agent) => agent.id === 'ag-antigo')?.funil).toBe(true)
+    expect((await service.listAgents()).agents[0]?.funil).toBe(true)
   })
 })

@@ -11,6 +11,7 @@
 // com o estado de cada cartão. Arquivo sem esses campos carrega com tudo ligado e sem cartões.
 // Contrato 21: o escopo guarda os servidores MCP desligados na conversa; cada passo pode ser de uma ferramenta MCP.
 // Contrato 78: os cartões de evento e de alterar e apagar um lembrete, e o estado `failed` (com a frase do erro).
+// Contrato 117: os quatro cartões do funil de vendas (conversa antiga, sem eles, carrega como antes).
 import { randomUUID } from 'node:crypto'
 import { chmod, mkdir, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -46,10 +47,14 @@ import {
   EVENT_LOCATION_MAX,
   EVENT_NOTES_MAX,
   EVENT_TITLE_MAX,
+  FUNIL_CARD_CONTATOS_MAX,
+  FUNIL_CARD_NOTA_MAX,
+  FUNIL_CARD_PASSO_MAX,
   INSTAGRAM_DRAFT_CAPTION_MAX,
   OPEN_SCREENS,
   REMINDER_TEXT_MAX,
 } from '../../shared/assistant'
+import { FUNIL_ETAPA_NOME_MAX, FUNIL_NOME_MAX, FUNIL_NOTAS_MAX } from '../../shared/funil'
 import { EMAIL_ACCOUNT_ID_PATTERN, EMAIL_RECIPIENTS_MAX, EMAIL_SUBJECT_MAX, EMAIL_TEXT_MAX } from '../../shared/email'
 import { automationIdSchema, scheduleSchema } from '../../shared/automations-schema'
 import { MCP_SERVERS_MAX } from '../../shared/mcp'
@@ -135,6 +140,12 @@ export const calendarIdSchema = z.string().min(1).max(1024)
 /** Contrato 78: agendas graváveis guardadas num cartão de evento (as a mais ficam de fora). */
 export const CHAT_CALENDARS_MAX = 50
 const emailAccountId = z.string().regex(EMAIL_ACCOUNT_ID_PATTERN)
+/** Contrato 117: as etapas abertas guardadas num cartão de criar oportunidade. */
+const FUNIL_CARD_ETAPAS_MAX = 100
+const funilCardId = z.string().max(200)
+const funilCardDia = z.string().regex(/^\d{4}-\d{2}-\d{2}$/)
+const funilCardPasso = z.object({ texto: z.string().max(FUNIL_CARD_PASSO_MAX), data: funilCardDia.nullable() }).strict()
+const funilCardContato = z.object({ nome: z.string().max(FUNIL_NOME_MAX), email: z.string().max(320).nullable(), contatoId: funilCardId.nullable() }).strict()
 
 /** Ação proposta gravada com a resposta (contrato 25), já validada e com o que o app leu (nomes, número). */
 export const chatActionSchema = z.discriminatedUnion('kind', [
@@ -298,6 +309,66 @@ export const chatActionSchema = z.discriminatedUnion('kind', [
       caption: z.string().max(INSTAGRAM_DRAFT_CAPTION_MAX),
       at: isoDate.nullable(),
       publicationId: z.string().regex(PUBLICATION_ID_PATTERN).nullable(),
+    })
+    .strict(),
+  // Contrato 117: o funil de vendas (os ids, as etapas e os nomes lidos do funil do app).
+  z
+    .object({
+      kind: z.literal('oportunidade-criar'),
+      ...actionBase,
+      titulo: z.string().max(FUNIL_NOME_MAX),
+      empresa: z.string().max(FUNIL_NOME_MAX).nullable(),
+      contatos: z.array(funilCardContato).max(FUNIL_CARD_CONTATOS_MAX),
+      etapaId: funilCardId,
+      etapas: z.array(z.object({ id: funilCardId, nome: z.string().max(FUNIL_ETAPA_NOME_MAX) }).strict()).max(FUNIL_CARD_ETAPAS_MAX),
+      valor: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER).nullable(),
+      previsao: funilCardDia.nullable(),
+      proximoPasso: funilCardPasso.nullable(),
+      oportunidadeId: funilCardId.nullable(),
+      error: z.string().max(CHAT_ACTION_ERROR_MAX).nullable(),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal('oportunidade-mover'),
+      ...actionBase,
+      oportunidadeId: funilCardId,
+      titulo: z.string().max(FUNIL_NOME_MAX),
+      de: z.string().max(FUNIL_ETAPA_NOME_MAX),
+      paraEtapaId: funilCardId,
+      para: z.string().max(FUNIL_ETAPA_NOME_MAX),
+      nota: z.string().max(FUNIL_CARD_NOTA_MAX).nullable(),
+      error: z.string().max(CHAT_ACTION_ERROR_MAX).nullable(),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal('oportunidade-proximo-passo'),
+      ...actionBase,
+      oportunidadeId: funilCardId,
+      titulo: z.string().max(FUNIL_NOME_MAX),
+      texto: z.string().max(FUNIL_CARD_PASSO_MAX),
+      data: funilCardDia.nullable(),
+      anterior: z
+        .object({ texto: z.string().max(FUNIL_NOTAS_MAX), data: funilCardDia.nullable() })
+        .strict()
+        .nullable(),
+      error: z.string().max(CHAT_ACTION_ERROR_MAX).nullable(),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal('contato-criar'),
+      ...actionBase,
+      nome: z.string().max(FUNIL_NOME_MAX),
+      email: z.string().max(320).nullable(),
+      telefone: z.string().max(40).nullable(),
+      empresa: z.string().max(FUNIL_NOME_MAX).nullable(),
+      cargo: z.string().max(FUNIL_NOME_MAX).nullable(),
+      existenteId: funilCardId.nullable(),
+      existenteNome: z.string().max(FUNIL_NOME_MAX).nullable(),
+      contatoId: funilCardId.nullable(),
+      error: z.string().max(CHAT_ACTION_ERROR_MAX).nullable(),
     })
     .strict(),
 ])

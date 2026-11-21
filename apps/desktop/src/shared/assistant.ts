@@ -10,6 +10,8 @@
 // apagar um lembrete que já existe (`lembrete-editar`, `lembrete-apagar`), que só aceitam o id de um lembrete do app.
 // Contrato 76: o rascunho de uma publicação no Instagram (`instagram-rascunho`): o clique em "Criar rascunho" só põe o
 // rascunho na fila da conta e abre o editor na tela Redes; nada é publicado daqui.
+// Contrato 117: os cartões do funil de vendas (`oportunidade-criar`, `oportunidade-mover`, `oportunidade-proximo-passo`,
+// `contato-criar`). Ids, etapas e contatos são lidos do funil do app; nada é gravado no funil antes do clique no cartão.
 import { formatRunAt, wallTime, type Schedule } from './automations'
 import type { Chat } from './chat'
 import { CAPTION_MAX } from './redes-rules'
@@ -31,6 +33,10 @@ export const EVENT_NOTES_MAX = 4000
 export const EVENT_LOCATION_MAX = 1024
 /** Sem "fim": uma hora. */
 export const EVENT_DEFAULT_DURATION_MS = 3_600_000
+/** Contrato 117: os limites dos cartões do funil (o próximo passo e a nota numa linha; os contatos de um cartão de criar). */
+export const FUNIL_CARD_PASSO_MAX = 300
+export const FUNIL_CARD_NOTA_MAX = 1000
+export const FUNIL_CARD_CONTATOS_MAX = 10
 /** A frase do erro de um cartão `failed`. */
 export const CHAT_ACTION_ERROR_MAX = 300
 /**
@@ -39,8 +45,11 @@ export const CHAT_ACTION_ERROR_MAX = 300
  */
 export const INSTAGRAM_DRAFT_CAPTION_MAX = CAPTION_MAX * 4
 
-/** Telas que o botão "Abrir" alcança. `alvo`: a reunião, a conversa, a aba de Configurações ou a aba das Automações. */
-export const OPEN_SCREENS = ['reuniao', 'reunioes', 'whatsapp', 'configuracoes', 'automacoes', 'gravacao'] as const
+/**
+ * Telas que o botão "Abrir" alcança. `alvo`: a reunião, a conversa, a aba de Configurações ou a aba das Automações.
+ * Contrato 117 (R20): o funil (Oportunidades), uma oportunidade e um contato (`alvo`: o id).
+ */
+export const OPEN_SCREENS = ['reuniao', 'reunioes', 'whatsapp', 'configuracoes', 'automacoes', 'gravacao', 'funil', 'oportunidade', 'contato'] as const
 export type OpenScreen = (typeof OPEN_SCREENS)[number]
 export const OPEN_SCREEN_LABELS: Readonly<Record<OpenScreen, string>> = {
   reuniao: 'a reunião',
@@ -49,6 +58,9 @@ export const OPEN_SCREEN_LABELS: Readonly<Record<OpenScreen, string>> = {
   configuracoes: 'Configurações',
   automacoes: 'Automações',
   gravacao: 'Gravação',
+  funil: 'Funil',
+  oportunidade: 'a oportunidade',
+  contato: 'o contato',
 }
 /** Abas das Automações que o "Abrir" aceita. */
 export const AUTOMATIONS_TABS = ['agentes', 'tarefas', 'execucoes'] as const
@@ -59,7 +71,23 @@ export const AUTOMATIONS_TABS = ['agentes', 'tarefas', 'execucoes'] as const
  */
 export const CHAT_ACTION_STATUSES = ['proposed', 'done', 'failed', 'dismissed'] as const
 export type ChatActionStatus = (typeof CHAT_ACTION_STATUSES)[number]
-export const CHAT_ACTION_KINDS = ['lembrete', 'whatsapp-resposta', 'tarefa', 'abrir', 'emails', 'email-resposta', 'email-lote', 'evento', 'lembrete-editar', 'lembrete-apagar', 'instagram-rascunho'] as const
+export const CHAT_ACTION_KINDS = [
+  'lembrete',
+  'whatsapp-resposta',
+  'tarefa',
+  'abrir',
+  'emails',
+  'email-resposta',
+  'email-lote',
+  'evento',
+  'lembrete-editar',
+  'lembrete-apagar',
+  'instagram-rascunho',
+  'oportunidade-criar',
+  'oportunidade-mover',
+  'oportunidade-proximo-passo',
+  'contato-criar',
+] as const
 export type ChatActionKind = (typeof CHAT_ACTION_KINDS)[number]
 
 interface ActionBase {
@@ -269,6 +297,78 @@ export interface ChatActionInstagramDraft extends ActionBase {
   publicationId: string | null
 }
 
+/** Contrato 117: um contato do cartão de criar oportunidade; `contatoId`: o contato do funil com esse e-mail. */
+export interface ChatActionFunilContato {
+  nome: string
+  email: string | null
+  contatoId: string | null
+}
+
+/**
+ * Contrato 117: `oportunidade-criar`. A etapa resolvida entre as abertas (sem etapa, a primeira), o valor em centavos e os
+ * contatos ligados pelo e-mail aos que já existem. Os campos se editam no cartão; "Criar" grava pelo serviço do funil.
+ */
+export interface ChatActionOportunidadeCriar extends ActionBase {
+  kind: 'oportunidade-criar'
+  titulo: string
+  /** O nome da empresa (achada pelo nome ou criada no clique). */
+  empresa: string | null
+  contatos: ChatActionFunilContato[]
+  etapaId: string
+  /** As etapas abertas quando o cartão foi montado (o seletor do cartão). */
+  etapas: { id: string; nome: string }[]
+  /** Centavos. */
+  valor: number | null
+  /** `AAAA-MM-DD`. */
+  previsao: string | null
+  proximoPasso: { texto: string; data: string | null } | null
+  /** A oportunidade criada, depois do clique. */
+  oportunidadeId: string | null
+  error: string | null
+}
+
+/** Contrato 117: `oportunidade-mover`. `de` e `para` são os nomes das etapas, lidos do funil. Para Perdido, a nota é o motivo. */
+export interface ChatActionOportunidadeMover extends ActionBase {
+  kind: 'oportunidade-mover'
+  oportunidadeId: string
+  titulo: string
+  de: string
+  paraEtapaId: string
+  para: string
+  nota: string | null
+  error: string | null
+}
+
+/** Contrato 117: `oportunidade-proximo-passo`, com o passo de antes (lido do funil) para o "antes → depois". */
+export interface ChatActionOportunidadeProximoPasso extends ActionBase {
+  kind: 'oportunidade-proximo-passo'
+  oportunidadeId: string
+  titulo: string
+  texto: string
+  /** `AAAA-MM-DD`. */
+  data: string | null
+  anterior: { texto: string; data: string | null } | null
+  error: string | null
+}
+
+/**
+ * Contrato 117: `contato-criar`. Com o e-mail ou o telefone de um contato que já existe, `existenteId` e `existenteNome`:
+ * o clique completa esse contato (R4) em vez de criar outro.
+ */
+export interface ChatActionContatoCriar extends ActionBase {
+  kind: 'contato-criar'
+  nome: string
+  email: string | null
+  telefone: string | null
+  empresa: string | null
+  cargo: string | null
+  existenteId: string | null
+  existenteNome: string | null
+  /** O contato criado ou completado, depois do clique. */
+  contatoId: string | null
+  error: string | null
+}
+
 export type ChatAction =
   | ReminderAction
   | WhatsAppReplyAction
@@ -281,6 +381,14 @@ export type ChatAction =
   | ChatActionReminderEdit
   | ChatActionReminderDelete
   | ChatActionInstagramDraft
+  | ChatActionOportunidadeCriar
+  | ChatActionOportunidadeMover
+  | ChatActionOportunidadeProximoPasso
+  | ChatActionContatoCriar
+
+/** Contrato 117: os cartões do funil (o canal `scribe:chat-action-funil` executa pelo tipo gravado). */
+export type ChatActionFunil = ChatActionOportunidadeCriar | ChatActionOportunidadeMover | ChatActionOportunidadeProximoPasso | ChatActionContatoCriar
+export const FUNIL_ACTION_KINDS = ['oportunidade-criar', 'oportunidade-mover', 'oportunidade-proximo-passo', 'contato-criar'] as const satisfies readonly ChatActionFunil['kind'][]
 
 /** Qual cartão de qual resposta. */
 export interface ChatActionRef {
@@ -323,6 +431,23 @@ export interface ChatActionReminderChangeRequest extends ChatActionRef {
 export interface ChatActionInstagramDraftRequest extends ChatActionRef {
   caption?: string | undefined
   at?: string | null | undefined
+}
+
+/** Contrato 117: o que o cartão de criar oportunidade mudou antes do clique (o main confere de novo com as mesmas regras). */
+export interface ChatActionOportunidadeCampos {
+  titulo?: string | undefined
+  empresa?: string | null | undefined
+  etapaId?: string | undefined
+  /** Centavos. */
+  valor?: number | null | undefined
+  previsao?: string | null | undefined
+  proximoPasso?: { texto: string; data: string | null } | null | undefined
+  contatos?: ChatActionFunilContato[] | undefined
+}
+
+/** Contrato 117: "Mover", "Criar" e "Salvar" num cartão do funil (`campos`: só no de criar oportunidade). */
+export interface ChatActionFunilRequest extends ChatActionRef {
+  campos?: ChatActionOportunidadeCampos | undefined
 }
 
 /**
@@ -400,6 +525,17 @@ export function reminderChangedText(at: string, timeZone: string): string {
 }
 
 export const REMINDER_DELETED_TEXT = 'Lembrete apagado'
+/** Contrato 117 (R42): as razões de um cartão do funil que já nasce `failed` (o texto exato da spec). */
+export const FUNIL_OPORTUNIDADE_NAO_ENCONTRADA = 'oportunidade não encontrada'
+export const FUNIL_ETAPA_NAO_ENCONTRADA = 'etapa não encontrada'
+export const FUNIL_CONTATO_SEM_CANAL = 'Informe um e-mail ou telefone'
+/** Contrato 117: o cartão do funil depois do clique. */
+export const FUNIL_OPORTUNIDADE_CRIADA_TEXT = 'Oportunidade criada'
+export const FUNIL_PASSO_SALVO_TEXT = 'Próximo passo salvo'
+export const FUNIL_CONTATO_CRIADO_TEXT = 'Contato criado'
+export const FUNIL_CONTATO_COMPLETADO_TEXT = 'Contato completado'
+/** Contrato 117: "Movida para Negociação". */
+export const funilMovidaText = (para: string): string => `Movida para ${para}`.slice(0, 200)
 /** Contrato 76: o cartão do rascunho depois do clique. */
 export const INSTAGRAM_DRAFT_CREATED_TEXT = 'Rascunho criado · abra em Redes'
 /** Contrato 78: o lembrete já disparou ou foi apagado entre a proposta e o clique. */
@@ -442,6 +578,9 @@ export function openLabel(screen: OpenScreen, targetName: string | null): string
   if (screen === 'whatsapp' && targetName) return `Abrir a conversa com ${targetName}`
   if (screen === 'configuracoes' && targetName) return `Abrir Configurações › ${targetName}`
   if (screen === 'automacoes' && targetName) return `Abrir Automações › ${targetName}`
+  // Contrato 117.
+  if (screen === 'oportunidade' && targetName) return `Abrir «${targetName}»`
+  if (screen === 'contato' && targetName) return `Abrir o contato ${targetName}`
   return `Abrir ${OPEN_SCREEN_LABELS[screen]}`
 }
 

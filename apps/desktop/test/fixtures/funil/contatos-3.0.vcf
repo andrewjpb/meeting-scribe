@@ -1,0 +1,18 @@
+BEGIN:VCARD
+VERSION:3.0
+N:Martins;Helena;;;
+FN:Helena Martins
+ORG:Martins\, Costa & Cia;Vendas
+TITLE:Diretora comercial
+EMAIL;TYPE=INTERNET,WORK:helena@martins.example
+EMAIL;TYPE=INTERNET,HOME:helena.martins.pessoal@correio-muito-compr
+ ido.example
+TEL;TYPE=CELL:+55 11 96666-0003
+END:VCARD
+BEGIN:VCARD
+VERSION:3.0
+FN:Igor Nascimento
+item1.EMAIL;type=INTERNET;type=pref:igor@nascimento.example
+item1.X-ABLabel:_$!<Other>!$_
+EMAIL;TYPE=INTERNET:igor.n@outro.example
+END:VCARD
