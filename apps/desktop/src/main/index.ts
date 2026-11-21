@@ -59,6 +59,9 @@ import { createRecordingSessions, leaveButtons, RECORDING_LEAVE_MESSAGE } from '
 import { createLockService, type LockService, type TouchIdAccess } from './lock/service'
 import { createFileLockStore } from './lock/store'
 import { createFileAnalysesStore } from './meetings/analyses'
+import { registerFunilIpc } from './funil/ipc'
+import { createFunilService, type FunilService } from './funil/service'
+import { createFunilStore } from './funil/store'
 import { createAiNotesService, type AiNotesService } from './meetings/ai-notes-service'
 import { createAnalysisService, type AnalysisService } from './meetings/analysis-service'
 import { createMeetingsIndex, type MeetingsIndex } from './meetings/overview'
@@ -917,6 +920,8 @@ interface AppServices {
   navegador: NavegadorServer
   /** Servidor MCP das ferramentas do navegador do Assistente (contrato 47). */
   navegadorMcp: NavegadorMcpServer
+  /** Contrato 110: o funil de vendas (`funil.json`), com as leituras sob demanda dos caches dos outros domínios. */
+  funil: FunilService
 }
 
 /**
@@ -1840,6 +1845,19 @@ function createAppServices(userData: string): AppServices {
     },
     ...devLog,
   })
+  // Contrato 110: o funil lê reuniões, email e WhatsApp só pelos caches deles; bloqueado, a view não vai às janelas.
+  const funil = createFunilService({
+    store: createFunilStore({ dir: userData, ...devLog }),
+    meetings,
+    summaries,
+    email: { cached: () => email.cached() },
+    whatsapp: { chats: () => whatsapp.chats(), me: () => whatsapp.status().me },
+    chooseImportFile: chooseFunilImportFile,
+    onChange: (view) => {
+      if (!lockService?.isLocked()) broadcast(appWindows(), 'scribe:funil-changed', view)
+    },
+    ...devLog,
+  })
   return {
     settings: createSettingsService({ settings, secrets, gateway, mic }),
     meetings,
@@ -1882,6 +1900,7 @@ function createAppServices(userData: string): AppServices {
     mcp,
     navegador,
     navegadorMcp,
+    funil,
   }
 }
 
@@ -1950,6 +1969,19 @@ async function chooseWhatsAppAttachment(): Promise<string | null> {
     buttonLabel: 'Anexar',
     properties: ['openFile'],
     filters: [{ name: 'Imagem ou vídeo', extensions: ['jpg', 'jpeg', 'png', 'webp', 'gif', 'mp4', 'mov'] }],
+  }
+  const result = mainWindow ? await dialog.showOpenDialog(mainWindow, options) : await dialog.showOpenDialog(options)
+  return result.canceled ? null : (result.filePaths[0] ?? null)
+}
+
+/** Contrato 110: "Importar…" do funil, um CSV ou vCard por vez (R13). No smoke, o CSV da fixture. */
+async function chooseFunilImportFile(): Promise<string | null> {
+  if (smokeFixtures) return smokeFixtures.funilImportFile
+  const options: OpenDialogOptions = {
+    title: 'Importar contatos',
+    buttonLabel: 'Importar',
+    properties: ['openFile'],
+    filters: [{ name: 'CSV ou vCard', extensions: ['csv', 'vcf', 'txt'] }],
   }
   const result = mainWindow ? await dialog.showOpenDialog(mainWindow, options) : await dialog.showOpenDialog(options)
   return result.canceled ? null : (result.filePaths[0] ?? null)
@@ -2048,6 +2080,7 @@ function registerIpc(services: AppServices): void {
   }))
   // Só o smoke recebe o sinal gerado; o app normal sempre capta microfone e sistema de verdade.
   handle('scribe:capture-mode', appOrigin, () => (smoke ? 'synthetic' : 'real'))
+  registerFunilIpc({ appOrigin, funil: services.funil, log: (message) => console.error(message) })
   handle('scribe:meetings-list', appOrigin, () => meetings.list())
   handle('scribe:meetings-get', appOrigin, (_event, { id }) => meetings.get(id))
   handle('scribe:meetings-create', appOrigin, async (_event, input) => {

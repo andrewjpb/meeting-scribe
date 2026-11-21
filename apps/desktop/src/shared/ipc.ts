@@ -23,6 +23,10 @@ import type { NavegadorState } from './navegador'
 import type { AppPluginId, PluginSaveResult } from './plugins'
 import type { ClaudeConnectorTools, McpChatServer, McpCliDetails, McpOverview, McpSaveResult, McpServerInput, McpTestResult, McpToolPolicy, McpUse } from './mcp'
 import type { AiNotesRunRequest, AiNotesRunResult } from './ai-notes'
+// 110: funil
+import type { ContatoInput, ContatoOrigem, EmpresaInput, EtapaInput, FunilActionResult, FunilFalha, FunilImportAbrirResult, FunilImportConfirmarResult, FunilTimelineResult, FunilView, OportunidadeInput, Sugestao } from './funil'
+import type { CampoImport } from './funil-import'
+// fim 110
 import type { AnalysisRunRequest, AnalysisRunResult, MeetingAnalysis } from './meeting-analysis'
 import type { MeetingNote } from './meeting-notes'
 import type { SummaryStatus } from './meeting-summary'
@@ -599,6 +603,34 @@ export interface InvokeChannels {
   /** A conversa aberta na tela: deixa de ser não lida. */
   'scribe:redes-conversation-read': { request: { accountId: string; conversationId: string }; response: RedesMessagesPayload }
   // fim 74
+  // 110: funil
+  /** Contrato 110: o funil inteiro e a última interação (R7) de cada oportunidade não arquivada; exceção, `falhou`. */
+  'scribe:funil-get': { request: undefined; response: FunilView | FunilFalha }
+  /** Cria (sem `id`) ou edita; criar com e-mail ou telefone de outro contato mescla nele (R4, `mesclado: true`). */
+  'scribe:funil-contato-save': { request: { contato: ContatoInput; origem: ContatoOrigem }; response: FunilActionResult }
+  'scribe:funil-contato-archive': { request: { id: string }; response: FunilActionResult }
+  'scribe:funil-empresa-save': { request: { empresa: EmpresaInput }; response: FunilActionResult }
+  /** Recusa (`empresa-em-uso`) a empresa com contato ou oportunidade. */
+  'scribe:funil-empresa-delete': { request: { id: string }; response: FunilActionResult }
+  'scribe:funil-oportunidade-save': { request: { oportunidade: OportunidadeInput }; response: FunilActionResult }
+  /** Muda de etapa e/ou de posição na coluna (R6). */
+  'scribe:funil-oportunidade-move': { request: { id: string; etapaId: string; ordem: number; motivoPerda?: string | null | undefined }; response: FunilActionResult }
+  'scribe:funil-oportunidade-delete': { request: { id: string }; response: FunilActionResult }
+  /** Só ganha ou perdida (R27). */
+  'scribe:funil-oportunidade-archive': { request: { id: string }; response: FunilActionResult }
+  'scribe:funil-etapas-save': { request: { etapas: EtapaInput[] }; response: FunilActionResult }
+  /** Nota na oportunidade. */
+  'scribe:funil-evento-add': { request: { oportunidadeId: string; texto: string }; response: FunilActionResult }
+  /** Sugestões de contato (R11, R12), calculadas na hora pelos caches de reuniões, e-mail e WhatsApp. */
+  'scribe:funil-sugestoes': { request: undefined; response: Sugestao[] }
+  'scribe:funil-ignorar': { request: { chave: string }; response: FunilActionResult }
+  /** "Importar…": diálogo, leitura e prévia (R13 a R15). */
+  'scribe:funil-importar-abrir': { request: undefined; response: FunilImportAbrirResult }
+  /** Importa a leitura do `token` (R16); `simular` só conta. */
+  'scribe:funil-importar-confirmar': { request: { token: string; mapeamento?: CampoImport[] | undefined; simular?: boolean | undefined }; response: FunilImportConfirmarResult }
+  /** Linha do tempo de um contato ou de uma oportunidade (R8 a R10, R29). */
+  'scribe:funil-timeline': { request: { tipo: 'contato' | 'oportunidade'; id: string }; response: FunilTimelineResult }
+  // fim 110
 }
 
 /** renderer -> main, sem resposta (`__scribeApi.send` / `ipcMain.on`). */
@@ -742,6 +774,10 @@ export interface MainEvents {
   'scribe:open-email': { accountId: string; id: string; mailbox?: string; found?: boolean }
   /** Contrato 76: o rascunho que o cartão do Assistente criou: Redes › Publicações da conta, com o editor nele. Ignorado bloqueado. */
   'scribe:open-redes': { accountId: string; publicationId: string }
+  // 110: funil
+  /** Contrato 110: `funil.json` foi gravado; vai a view inteira. Não chega bloqueado. */
+  'scribe:funil-changed': FunilView
+  // fim 110
 }
 
 export type InvokeChannel = keyof InvokeChannels
@@ -990,6 +1026,24 @@ const INVOKE: Record<InvokeChannel, true> = {
   'scribe:redes-message-send': true,
   'scribe:redes-conversation-read': true,
   // fim 74
+  // 110: funil
+  'scribe:funil-get': true,
+  'scribe:funil-contato-save': true,
+  'scribe:funil-contato-archive': true,
+  'scribe:funil-empresa-save': true,
+  'scribe:funil-empresa-delete': true,
+  'scribe:funil-oportunidade-save': true,
+  'scribe:funil-oportunidade-move': true,
+  'scribe:funil-oportunidade-delete': true,
+  'scribe:funil-oportunidade-archive': true,
+  'scribe:funil-etapas-save': true,
+  'scribe:funil-evento-add': true,
+  'scribe:funil-sugestoes': true,
+  'scribe:funil-ignorar': true,
+  'scribe:funil-importar-abrir': true,
+  'scribe:funil-importar-confirmar': true,
+  'scribe:funil-timeline': true,
+  // fim 110
 }
 const RENDERER_EVENTS: Record<RendererEvent, true> = {
   'scribe:csp-violation': true,
@@ -1057,6 +1111,9 @@ const MAIN_EVENTS: Record<MainEvent, true> = {
   // 74: mensagens
   'scribe:redes-messages': true,
   // fim 74
+  // 110: funil
+  'scribe:funil-changed': true,
+  // fim 110
 }
 
 /**
@@ -1364,6 +1421,24 @@ export const WHEN_LOCKED: Readonly<Record<InvokeChannel, LockedPolicy>> = Object
   'scribe:redes-message-send': 'refused',
   'scribe:redes-conversation-read': 'refused',
   // fim 74
+  // 110: funil (R47: todos recusados)
+  'scribe:funil-get': 'refused',
+  'scribe:funil-contato-save': 'refused',
+  'scribe:funil-contato-archive': 'refused',
+  'scribe:funil-empresa-save': 'refused',
+  'scribe:funil-empresa-delete': 'refused',
+  'scribe:funil-oportunidade-save': 'refused',
+  'scribe:funil-oportunidade-move': 'refused',
+  'scribe:funil-oportunidade-delete': 'refused',
+  'scribe:funil-oportunidade-archive': 'refused',
+  'scribe:funil-etapas-save': 'refused',
+  'scribe:funil-evento-add': 'refused',
+  'scribe:funil-sugestoes': 'refused',
+  'scribe:funil-ignorar': 'refused',
+  'scribe:funil-importar-abrir': 'refused',
+  'scribe:funil-importar-confirmar': 'refused',
+  'scribe:funil-timeline': 'refused',
+  // fim 110
 })
 
 /**

@@ -2,6 +2,7 @@
 // `userData/funil.json`. Os tipos ficam aqui; o esquema zod que valida o arquivo está em `funil-schema.ts` (o
 // renderer usa só os tipos e não carrega o zod) e a lógica pura em `funil-logic.ts`. Quem grava é
 // `main/funil/store.ts`.
+import type { CampoImport, CodificacaoImport, SeparadorCsv } from './funil-import'
 
 export const FUNIL_FILE = 'funil.json'
 export const FUNIL_VERSION = 1
@@ -209,3 +210,87 @@ export interface EtapaInput {
 export type FunilErro = 'limite' | 'etapa-fixa' | 'etapa-em-uso' | 'empresa-em-uso' | 'nao-encontrado' | 'duplicado' | 'nao-fechada' | 'invalido'
 
 export type FunilResult<T> = { ok: true; value: T; state: FunilState } | { ok: false; erro: FunilErro }
+
+// ---------------------------------------------------------------------------------------------------------------
+// Contrato 110: o que o serviço e os canais do funil devolvem ao renderer.
+
+/** O funil como a tela usa: o arquivo e a última interação (R7) de cada oportunidade não arquivada, por id. */
+export interface FunilView {
+  state: FunilState
+  ultimas: Record<string, number>
+}
+
+/** `falhou`: exceção ao gravar (disco cheio, permissão); o resto vem do store ou da checagem do pedido. */
+export type FunilActionResult = { ok: true; id: string | null; mesclado?: boolean } | { ok: false; erro: FunilErro | 'falhou'; mensagem: string }
+
+/** Texto de cada erro do store, para a tela mostrar como veio. */
+export const FUNIL_ERRO_TEXTO: Record<FunilErro, string> = {
+  limite: 'O funil chegou ao limite de itens.',
+  'etapa-fixa': 'Ganho e Perdido não podem ser apagadas nem mudar de tipo.',
+  'etapa-em-uso': 'Mova as oportunidades desta etapa antes de apagá-la.',
+  'empresa-em-uso': 'Tire os contatos e as oportunidades desta empresa antes de apagá-la.',
+  'nao-encontrado': 'Esse item não existe mais. A lista foi atualizada.',
+  duplicado: 'Esse e-mail ou telefone já é de outro contato.',
+  'nao-fechada': 'Só oportunidade ganha ou perdida pode ser arquivada.',
+  invalido: 'Algum campo está fora do formato. Confira e tente de novo.',
+}
+export const FUNIL_FALHOU_TEXTO = 'Não foi possível salvar. Tente de novo.'
+export const FUNIL_EXPIRADO_TEXTO = 'A leitura do arquivo expirou. Abra o arquivo de novo.'
+/** O pedido nem chegou ao main (o renderer devolve este texto). */
+export const FUNIL_TRANSPORTE_TEXTO = 'Não foi possível falar com o app. Tente de novo.'
+
+/** Item da linha do tempo (R29). Reunião apagada: `apagada: true`, título "Reunião apagada" e `at: null` (fim da lista). */
+export type ItemLinhaDoTempo =
+  | { tipo: 'reuniao'; at: number | null; meetingId: string; titulo: string; resumo: string | null; apagada: boolean }
+  | { tipo: 'email'; at: number; accountId: string; messageId: string; mailbox: string | null; assunto: string; de: string; para: string; noCache: boolean }
+  | { tipo: 'whatsapp'; at: number; chatId: string; nome: string; ultimaMensagem: string }
+  | { tipo: 'evento'; at: number; evento: EventoFunil }
+
+/** Leitura que falhou no main (exceção), com o texto para a tela. */
+export type FunilFalha = { ok: false; erro: 'falhou'; mensagem: string }
+export const FUNIL_LEITURA_FALHOU_TEXTO = 'Não foi possível ler o funil. Tente de novo.'
+
+export type FunilTimelineResult =
+  | { ok: true; itens: ItemLinhaDoTempo[]; ultimaInteracao: number | null; whatsappChatIds: string[] }
+  | { ok: false; erro: 'nao-encontrado' | 'invalido' }
+  | FunilFalha
+
+/** Canais de onde vêm as sugestões de contato; a agenda não é fonte (R11). */
+export type SugestaoCanal = 'reuniao' | 'email' | 'whatsapp'
+
+/** Candidato a contato (R11, R12), agrupado pela chave (`email:<addr>`, `tel:<e164>` ou `wa:<chatId>`). */
+export interface Sugestao {
+  chave: string
+  nome: string
+  canais: SugestaoCanal[]
+  interacoes: number
+  ultimaEm: number
+  /** O canal com mais interações (empate: reunião, e-mail, WhatsApp). */
+  origem: ContatoOrigem
+  email: string | null
+  telefone: string | null
+  whatsappChatId: string | null
+}
+
+/** "Importar…" (R13 a R15): a prévia do arquivo escolhido; o `token` identifica a leitura guardada no main. */
+export type FunilImportAbrirResult =
+  | {
+      ok: true
+      token: string
+      arquivo: string
+      tipo: 'csv' | 'vcard'
+      separador: SeparadorCsv | null
+      codificacao: CodificacaoImport
+      colunas: string[]
+      mapeamento: CampoImport[]
+      previa: string[][]
+      total: number
+      validas: number
+    }
+  | { ok: false; erro: 'cancelado' | 'arquivo-grande' | 'linhas-demais' | 'formato' | 'falhou' }
+
+/** Confirmar (R16) ou só contar (`simulado: true`, nada gravado). */
+export type FunilImportConfirmarResult =
+  | { ok: true; simulado: false; criados: number; atualizados: number; ignorados: number }
+  | { ok: true; simulado: true; validas: number; ignorados: number }
+  | { ok: false; erro: FunilErro | 'expirado' | 'falhou'; mensagem: string }
