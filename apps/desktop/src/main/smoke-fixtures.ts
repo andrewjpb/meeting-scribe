@@ -12,6 +12,7 @@ import { createServer } from 'node:http'
 import { join } from 'node:path'
 import { gzipSync } from 'node:zlib'
 import type { BrowserWindow } from 'electron'
+import { FUNIL_FILE, FUNIL_VERSION, type Contato, type Empresa, type EventoFunil, type FunilState, type Oportunidade } from '../shared/funil'
 import { updateAssetName } from '../shared/updates'
 import type { FetchInit, FetchLike, FetchResponse } from './assemblyai/gateway'
 import type { ExecFile } from './claude-cli/locate'
@@ -404,6 +405,7 @@ function readFakeCalendarLog(file: string): Record<string, unknown>[] {
 }
 
 export function createSmokeFixtures(currentVersion: string, userDataDir: string): SmokeFixtures {
+  writeSmokeFunil(userDataDir, Date.now())
   const fixtures: SmokeFixtures = {
     updates: createSmokeUpdates(currentVersion),
     media: fakeMediaAccess('not-determined'),
@@ -620,6 +622,103 @@ function writeSmokeFunilImport(userDataDir: string): string {
   ]
   writeFileSync(file, `${linhas.join('\n')}\n`, 'utf8')
   return file
+}
+
+/** Contrato 112 (D18): os ids fixos do funil semeado, que os contratos seguintes do funil citam. */
+export const SMOKE_FUNIL = {
+  etapas: { contato: 'etapa-contato', descoberta: 'etapa-descoberta', proposta: 'etapa-proposta', negociacao: 'etapa-negociacao', ganho: 'etapa-ganho', perdido: 'etapa-perdido' },
+  empresas: { cliente: 'emp-cliente', parceiro: 'emp-parceiro' },
+  contatos: { marina: 'ct-marina', paulo: 'ct-paulo', juliana: 'ct-juliana', rafael: 'ct-rafael' },
+} as const
+
+/** `AAAA-MM-DD` no fuso do Mac (o "ontem" do passo vencido). */
+function smokeDia(at: number): string {
+  const data = new Date(at)
+  return `${data.getFullYear()}-${String(data.getMonth() + 1).padStart(2, '0')}-${String(data.getDate()).padStart(2, '0')}`
+}
+
+/**
+ * Contrato 112 (D18): `<userData>/funil.json` antes dos serviços, com datas relativas a `now`: as 6 etapas padrão, as
+ * empresas Cliente e Parceiro, quatro contatos (os remetentes do email falso e um sem empresa) e as oportunidades de ids
+ * fixos. `op-integracao` (parada há 10 dias, sem contato) é a esfriada e `op-vistoria` (passo e previsão de ontem) a
+ * vencida; o contrato 117 conta com as duas como estão. As abertas sem data especial foram atualizadas ontem.
+ */
+function writeSmokeFunil(userDataDir: string, now: number): void {
+  const DIA = 86_400_000
+  const ontem = now - DIA
+  const { etapas: e, empresas: emp, contatos: ct } = SMOKE_FUNIL
+  const empresa = (id: string, nome: string, dominio: string): Empresa => ({ id, nome, dominios: [dominio], site: null, notas: '', criadoEm: now - 60 * DIA, atualizadoEm: now - 60 * DIA })
+  const contato = (id: string, nome: string, email: string, empresaId: string | null): Contato => ({
+    id,
+    nome,
+    emails: [email],
+    telefones: [],
+    empresaId,
+    cargo: null,
+    notas: '',
+    whatsappChatId: null,
+    origem: 'manual',
+    criadoEm: now - 60 * DIA,
+    atualizadoEm: now - 60 * DIA,
+    arquivado: false,
+  })
+  const oportunidade = (id: string, titulo: string, etapaId: string, ordem: number, patch: Partial<Oportunidade>): Oportunidade => ({
+    id,
+    titulo,
+    empresaId: null,
+    contatoIds: [],
+    etapaId,
+    ordem,
+    valor: null,
+    previsao: null,
+    proximoPasso: null,
+    meetingIds: [],
+    whatsappChatIds: [],
+    emails: [],
+    origem: 'manual',
+    motivoPerda: null,
+    criadoEm: now - 30 * DIA,
+    atualizadoEm: ontem,
+    movidoEm: now - 2 * DIA,
+    fechadoEm: null,
+    arquivado: false,
+    ...patch,
+  })
+  const daqui = (dias: number): string => smokeDia(now + dias * DIA)
+  const eventos: EventoFunil[] = [{ id: 'ev-loja-etapa', oportunidadeId: 'op-loja', at: now - DIA, tipo: 'etapa', texto: 'Proposta → Negociação', de: 'Proposta', para: 'Negociação' }]
+  const state: FunilState = {
+    version: FUNIL_VERSION,
+    contatos: [
+      contato(ct.marina, 'Marina Rocha', 'marina.rocha@cliente.example', emp.cliente),
+      contato(ct.paulo, 'Paulo Nunes', 'paulo.nunes@cliente.example', emp.cliente),
+      contato(ct.juliana, 'Juliana Prado', 'juliana.prado@parceiro.example', emp.parceiro),
+      contato(ct.rafael, 'Rafael Lima', 'rafael.lima@lojista.example', null),
+    ],
+    empresas: [empresa(emp.cliente, 'Cliente', 'cliente.example'), empresa(emp.parceiro, 'Parceiro', 'parceiro.example')],
+    etapas: [
+      { id: e.contato, nome: 'Contato', tipo: 'aberta', ordem: 0 },
+      { id: e.descoberta, nome: 'Descoberta', tipo: 'aberta', ordem: 1 },
+      { id: e.proposta, nome: 'Proposta', tipo: 'aberta', ordem: 2 },
+      { id: e.negociacao, nome: 'Negociação', tipo: 'aberta', ordem: 3 },
+      { id: e.ganho, nome: 'Ganho', tipo: 'ganho', ordem: 4 },
+      { id: e.perdido, nome: 'Perdido', tipo: 'perdido', ordem: 5 },
+    ],
+    oportunidades: [
+      oportunidade('op-portal', 'Portal do associado', e.contato, 0, { empresaId: emp.cliente, contatoIds: [ct.marina], valor: 3_800_000, proximoPasso: { texto: 'Enviar estudo de escopo', data: daqui(5) }, previsao: daqui(40) }),
+      oportunidade('op-integracao', 'Integração Parceiro', e.descoberta, 0, { empresaId: emp.parceiro, valor: 9_200_000, atualizadoEm: now - 10 * DIA, movidoEm: now - 10 * DIA }),
+      oportunidade('op-consultoria', 'Consultoria fiscal', e.descoberta, 1, { empresaId: emp.cliente, contatoIds: [ct.paulo], valor: 1_250_050, proximoPasso: { texto: 'Reunião técnica', data: daqui(4) }, movidoEm: now - 3 * DIA }),
+      oportunidade('op-vistoria', 'App de vistoria', e.proposta, 0, { valor: 18_600_000, proximoPasso: { texto: 'Ligar para o comprador', data: smokeDia(ontem) }, previsao: smokeDia(ontem), movidoEm: now - 6 * DIA }),
+      oportunidade('op-loja', 'Loja virtual', e.negociacao, 0, { contatoIds: [ct.rafael], valor: 6_400_000, proximoPasso: { texto: 'Revisar contrato', data: daqui(1) }, movidoEm: now - DIA }),
+      oportunidade('op-ganha-mes', 'Site institucional', e.ganho, 0, { empresaId: emp.cliente, valor: 7_500_000, movidoEm: now - 60_000, atualizadoEm: now - 60_000, fechadoEm: now - 60_000 }),
+      oportunidade('op-ganha-antiga', 'Treinamento da equipe', e.ganho, 1, { empresaId: emp.parceiro, valor: 5_000_000, movidoEm: now - 120 * DIA, atualizadoEm: now - 120 * DIA, fechadoEm: now - 120 * DIA }),
+      oportunidade('op-perdida-antiga', 'Aplicativo de pedidos', e.perdido, 0, { valor: 2_000_000, motivoPerda: 'Orçamento adiado', movidoEm: now - 200 * DIA, atualizadoEm: now - 200 * DIA, fechadoEm: now - 200 * DIA }),
+      oportunidade('op-arquivada', 'Manutenção anual', e.ganho, 2, { empresaId: emp.cliente, valor: 1_000_000, movidoEm: now - 20 * DIA, atualizadoEm: now - 20 * DIA, fechadoEm: now - 20 * DIA, arquivado: true }),
+    ],
+    eventos,
+    ignorados: [],
+    ultimoAvisoEm: null,
+  }
+  writeFileSync(join(userDataDir, FUNIL_FILE), `${JSON.stringify(state, null, 2)}\n`, { mode: 0o600 })
 }
 
 /** Contrato 21: os segredos inventados dos servidores MCP falsos (o smoke confere que nenhum chega à tela nem ao relatório). */

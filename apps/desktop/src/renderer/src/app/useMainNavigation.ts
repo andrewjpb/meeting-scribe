@@ -1,6 +1,6 @@
 import { useEffect } from 'react'
 import { useNavigate } from 'react-router'
-import { emailPath, isSettingsTab, meetingPath, REDES_ROOT_PATH, redesPath, ROUTE_PATHS, settingsPath, type EmailNavigationState, type WhatsAppNavigationState } from '@shared/routes'
+import { emailPath, funilPath, isSettingsTab, meetingPath, REDES_ROOT_PATH, redesPath, ROUTE_PATHS, settingsPath, type EmailNavigationState, type WhatsAppNavigationState } from '@shared/routes'
 import { useAutomations } from '../features/agents/automationsStore'
 import { useRecording } from '../features/live/recordingStore'
 import { useStartRecording } from '../features/live/useStartRecording'
@@ -20,8 +20,9 @@ export function useMainNavigation(): void {
       window.__scribeApi.on('scribe:navigate', (route) => {
         // Bloqueado, o menu não leva a lugar nenhum (o main já não manda; aqui é a segunda trava).
         if (useLock.getState().status.locked) return
-        // Contrato 72: o caminho de Redes é um padrão com a conta e a seção; o destino concreto é `/redes`.
-        void navigate(route === 'redes' ? REDES_ROOT_PATH : ROUTE_PATHS[route])
+        // Contrato 72: o caminho de Redes é um padrão com a conta e a seção; o destino concreto é `/redes`. Contrato 112
+        // (D14): o do Funil também é padrão (`:secao?`); o destino é Oportunidades.
+        void navigate(route === 'redes' ? REDES_ROOT_PATH : route === 'funil' ? funilPath('oportunidades') : ROUTE_PATHS[route])
       }),
     [navigate],
   )
