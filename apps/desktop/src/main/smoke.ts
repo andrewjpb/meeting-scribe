@@ -12519,7 +12519,7 @@ async function funilDetalheChecks(ctx: SmokeContext, watch: (win: BrowserWindow)
     const stayedClosed = await evaluate<boolean>(contents, `!document.querySelector('[data-email-composer]')`)
     checks['funilCompose'] = {
       ok: composer && JSON.stringify(chips) === JSON.stringify(['rafael.lima@lojista.example']) && signed && closed && stayedClosed,
-      detail: `Composer novo no Email com o contato=${composer} ${JSON.stringify(chips)}; assinatura=${signed}; descartado=${closed}, não reabriu=${stayedClosed}`,
+      detail: `Composer novo no Email com o contato=${composer} (${chips.length} destinatário(s), sem o endereço no relatório); assinatura=${signed}; descartado=${closed}, não reabriu=${stayedClosed}`,
     }
 
     // funilArquivar (R27): sem "Arquivar" na aberta; em op-ganha-mes, Arquivar -> confirmar volta ao kanban, a oportunidade
@@ -12838,7 +12838,7 @@ async function funilContatosChecks(ctx: SmokeContext, watch: (win: BrowserWindow
     checks['contatosSugestoes'] = {
       ok: ficam.length === 3 && tres && JSON.stringify([...linhas.canais].sort()) === JSON.stringify(['email', 'reuniao', 'whatsapp']) && linhas.heights.every((height) => height === 44) && linhas.segmented === 'Sugestões 3',
       // Só contagens e origens: a chave traz e-mail ou telefone, e o relatório não pode ter dado da agenda (contrato 12, CA11).
-      detail: `${todas.length} sugestões do main (origens ${JSON.stringify(todas.map((sugestao) => sugestao.origem))}); ficam ${ficam.length} (${JSON.stringify(ficam.map((sugestao) => sugestao.origem))}); ignoradas ${sobram.length}; 3 linhas=${tres}; ${JSON.stringify(linhas)}`,
+      detail: `${todas.length} sugestões do main (origens ${JSON.stringify(todas.map((sugestao) => sugestao.origem))}); ficam ${ficam.length} (${JSON.stringify(ficam.map((sugestao) => sugestao.origem))}); ignoradas ${sobram.length}; 3 linhas=${tres}; ${JSON.stringify({ chaves: linhas.chaves.length, canais: linhas.canais, heights: linhas.heights, segmented: linhas.segmented })}`,
     }
     await both('funil-contatos-sugestoes')
 
@@ -12866,7 +12866,8 @@ async function funilContatosChecks(ctx: SmokeContext, watch: (win: BrowserWindow
     }
     checks['contatosSugestaoAcoes'] = {
       ok: adicionada && criadoPelaSugestao?.origem === 'email' && ignorada && naoVoltou && saved().ignorados.some((item) => item.chave === deReuniao?.chave),
-      detail: `Adicionar ${deEmail?.chave ?? '(sem sugestão de e-mail)'}: some=${adicionada}, contato ${criadoPelaSugestao?.id ?? 'nenhum'} com origem ${criadoPelaSugestao?.origem ?? '-'}; Ignorar ${deReuniao?.chave ?? '(sem sugestão de reunião)'}: some=${ignorada}, não voltou depois de recarregar=${naoVoltou}`,
+      // Só o canal: a chave traz e-mail ou telefone, e o relatório não pode ter dado da agenda (contrato 12, CA11).
+      detail: `Adicionar ${deEmail ? 'a sugestão de e-mail' : '(sem sugestão de e-mail)'}: some=${adicionada}, contato ${criadoPelaSugestao?.id ?? 'nenhum'} com origem ${criadoPelaSugestao?.origem ?? '-'}; Ignorar ${deReuniao ? 'a sugestão de reunião' : '(sem sugestão de reunião)'}: some=${ignorada}, não voltou depois de recarregar=${naoVoltou}`,
     }
 
     // contatosImportar (CA14, CA2, R13 a R16): o CSV das fixtures com 5 linhas de prévia e 5 Selects; "Importar 4 contatos";
