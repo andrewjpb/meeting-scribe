@@ -48,7 +48,7 @@ Três linhas `row('geral', 'Funil de vendas', …)`: "Detectar oportunidades nas
 Usar os valores (kanban, alerta, detecção: 112, 115, 113). Qualquer outra aba. Interruptor "Pode ler o funil" do agente (115).
 
 ## Gates
-`cd /Users/andrew/Documents/GitHub/meeting-scribe-funil-109/apps/desktop && SMOKE_NO_SANDBOX=1 caffeinate -dimsu pnpm gates` verde. Testes: CA1 a CA4 em `test/settings-store.test.ts` (ou no arquivo de testes do índice que já existir).
+`cd /Users/andrew/Documents/GitHub/meeting-scribe-funil-109 && SMOKE_NO_SANDBOX=1 caffeinate -dimsu pnpm gates` verde. Testes: CA1 a CA4 em `test/settings-store.test.ts` (ou no arquivo de testes do índice que já existir).
 
 ## Relatório final (formato)
 Arquivos; gates (contagens, `expectedShots` igual); onde a Section ficou no painel e a confirmação visual de `configuracoes-geral` nos dois temas; diferenças em relação ao artboard `11-configuracoes-geral-funil` e por quê.

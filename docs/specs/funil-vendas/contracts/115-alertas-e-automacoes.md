@@ -57,7 +57,7 @@ Fonte Funil do Assistente e cartões (117); smoke do "Pedir agora" com o funil (
 ## Gates
 Ajuste mecânico liberado (plan, Gates): testes existentes que quebrarem só porque `Agent` ganhou `funil` recebem `funil: false` nos objetos montados, sem mudar a asserção; liste cada arquivo no relatório.
 
-`cd /Users/andrew/Documents/GitHub/meeting-scribe-funil-115/apps/desktop && SMOKE_NO_SANDBOX=1 caffeinate -dimsu pnpm gates` verde. Testes: `test/funil-markdown.test.ts` e `test/funil-alerts.test.ts` (novos), casos novos em `test/automations-service.test.ts` e `test/automations-runner.test.ts`.
+`cd /Users/andrew/Documents/GitHub/meeting-scribe-funil-115 && SMOKE_NO_SANDBOX=1 caffeinate -dimsu pnpm gates` verde. Testes: `test/funil-markdown.test.ts` e `test/funil-alerts.test.ts` (novos), casos novos em `test/automations-service.test.ts` e `test/automations-runner.test.ts`.
 
 ## Relatório final (formato)
 Arquivos; gates (contagens); um exemplo de `FUNIL.md` gerado no teste (até 30 linhas); linhas mexidas em `index.ts`; diferenças em relação ao contrato e por quê.

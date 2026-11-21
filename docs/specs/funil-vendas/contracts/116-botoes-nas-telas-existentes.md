@@ -58,7 +58,7 @@ Só em chat `kind: 'person'`: bloco "Contato" no topo do painel (`data-whatsapp-
 Detecção em email e WhatsApp; mudar o cabeçalho da reunião; Assistente (117).
 
 ## Gates
-`cd /Users/andrew/Documents/GitHub/meeting-scribe-funil-vendas/apps/desktop && SMOKE_NO_SANDBOX=1 caffeinate -dimsu pnpm gates` verde. Smoke com os 9 checks; nenhum teste vitest novo obrigatório (lógica pura nova, se houver, vai para `test/renderer/funil-format.test.ts`).
+`cd /Users/andrew/Documents/GitHub/meeting-scribe-funil-vendas && SMOKE_NO_SANDBOX=1 caffeinate -dimsu pnpm gates` verde. Smoke com os 9 checks; nenhum teste vitest novo obrigatório (lógica pura nova, se houver, vai para `test/renderer/funil-format.test.ts`).
 
 ## Relatório final (formato)
 Arquivos; gates (contagens, `expectedShots` novo); qual reunião, email e conversa do smoke foram usados; diferenças em relação aos artboards (inclusive a ordem dos blocos da seção "Telas de impacto" da spec) e por quê; o que o revisor deve olhar em cada um dos 3 prints.

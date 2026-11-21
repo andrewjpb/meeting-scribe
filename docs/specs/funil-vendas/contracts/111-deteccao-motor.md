@@ -47,7 +47,7 @@ Feature `funil-vendas` · Wave 2 · Depende de: 107 commitado · Spec `../spec.m
 Disparo pós-resumo, canais, aplicar ou descartar (113); cartão e botão "Detectar oportunidade" (116); detecção em e-mail e WhatsApp.
 
 ## Gates
-`cd /Users/andrew/Documents/GitHub/meeting-scribe-funil-111/apps/desktop && SMOKE_NO_SANDBOX=1 caffeinate -dimsu pnpm gates` verde. Teste novo `test/funnel-extract.test.ts` (CA1 a CA8), sem rede e sem `claude` de verdade.
+`cd /Users/andrew/Documents/GitHub/meeting-scribe-funil-111 && SMOKE_NO_SANDBOX=1 caffeinate -dimsu pnpm gates` verde. Teste novo `test/funnel-extract.test.ts` (CA1 a CA8), sem rede e sem `claude` de verdade.
 
 ## Relatório final (formato)
 Arquivos; gates (contagens); a instrução de sistema completa (ela é carga de prompt: cole o texto); como o prazo e o "um por vez" foram copiados; diferenças em relação ao contrato e por quê.

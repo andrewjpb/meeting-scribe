@@ -129,7 +129,7 @@ Mesma wave: zero dependência e zero arquivo em comum, no máximo 3 contratos. N
 
 ## Gates
 
-Em todo contrato, no worktree do contrato: `cd <worktree>/apps/desktop && SMOKE_NO_SANDBOX=1 caffeinate -dimsu pnpm gates` verde (typecheck node, preload e web; eslint `--max-warnings 0`; vitest; build; smoke; nenhum literal de cor fora de `tokens.css`; `check-shapes.sh`; pytest da ponte). Smoke instável fora do escopo: rodar de novo e dizer no relatório.
+Em todo contrato, na raiz do worktree (o script `gates` está no `package.json` da raiz): `cd <worktree> && SMOKE_NO_SANDBOX=1 caffeinate -dimsu pnpm gates` verde (typecheck node, preload e web; eslint `--max-warnings 0`; vitest; build; smoke; nenhum literal de cor fora de `tokens.css`; `check-shapes.sh`; pytest da ponte). Smoke instável fora do escopo: rodar de novo e dizer no relatório.
 
 **Ajuste mecânico liberado**: testes existentes que quebrarem só porque um tipo ganhou campo obrigatório (`AppSettings.funil` no 109, `Agent.funil` no 115, `ChatSources.funil` e os `ChatAction` novos no 117) podem ser ajustados no próprio contrato, acrescentando o campo com o valor padrão, sem mudar a asserção; o relatório lista cada arquivo de teste mexido assim.
 

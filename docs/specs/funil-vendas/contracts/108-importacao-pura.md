@@ -41,7 +41,7 @@ Feature `funil-vendas` · Wave 1 · Depende de: nada · Spec `../spec.md` (R14, 
 Diálogo de arquivo e canais (110); tela de prévia e Selects (114); mescla com contatos existentes (107/110); exportação.
 
 ## Gates
-`cd /Users/andrew/Documents/GitHub/meeting-scribe-funil-108/apps/desktop && SMOKE_NO_SANDBOX=1 caffeinate -dimsu pnpm gates` verde. Teste novo `test/funil-import.test.ts` com CA1 a CA9 (as fixtures geradas no próprio teste quando forem grandes, como CA4 e CA6).
+`cd /Users/andrew/Documents/GitHub/meeting-scribe-funil-108 && SMOKE_NO_SANDBOX=1 caffeinate -dimsu pnpm gates` verde. Teste novo `test/funil-import.test.ts` com CA1 a CA9 (as fixtures geradas no próprio teste quando forem grandes, como CA4 e CA6).
 
 ## Relatório final (formato)
 Arquivos; gates (contagens); assinaturas exportadas; casos de CSV ou vCard que ficaram de fora e por quê.

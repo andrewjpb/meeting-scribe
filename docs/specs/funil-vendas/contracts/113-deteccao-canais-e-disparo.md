@@ -58,7 +58,7 @@ Feature `funil-vendas` · Wave 3 · Depende de: 110 e 111 commitados · Spec `..
 Cartão "Oportunidade detectada", botão "Detectar oportunidade" e o store do renderer (116); prompt e serviço de extração (111, já prontos).
 
 ## Gates
-`cd /Users/andrew/Documents/GitHub/meeting-scribe-funil-113/apps/desktop && SMOKE_NO_SANDBOX=1 caffeinate -dimsu pnpm gates` verde. Teste novo `test/funil-proposta.test.ts` (CA1 a CA5, CA9 a CA11, com store em diretório temporário e extração falsa); `test/lock-ipc.test.ts` verde.
+`cd /Users/andrew/Documents/GitHub/meeting-scribe-funil-113 && SMOKE_NO_SANDBOX=1 caffeinate -dimsu pnpm gates` verde. Teste novo `test/funil-proposta.test.ts` (CA1 a CA5, CA9 a CA11, com store em diretório temporário e extração falsa); `test/lock-ipc.test.ts` verde.
 
 ## Relatório final (formato)
 Arquivos; gates (contagens); os quatro canais e o evento com tipos; linhas mexidas em `index.ts` (números e uma frase cada); diferenças em relação ao contrato e por quê.

@@ -69,7 +69,7 @@ Cartão de e-mail novo (`email-novo`); detecção em email e WhatsApp; ferrament
 ## Gates
 Ajuste mecânico liberado (plan, Gates): testes existentes que quebrarem só porque `ChatSources` ganhou `funil` ou `ChatAction` ganhou os tipos novos recebem o campo com o valor padrão (ou o ramo novo no `switch` de teste), sem mudar a asserção; liste cada arquivo no relatório.
 
-`cd /Users/andrew/Documents/GitHub/meeting-scribe-funil-vendas/apps/desktop && SMOKE_NO_SANDBOX=1 caffeinate -dimsu pnpm gates` verde. Testes: CA1 a CA3 e CA5 em `test/assistant.test.ts`, CA4 em `test/chat.test.ts`; smoke com os 8 checks.
+`cd /Users/andrew/Documents/GitHub/meeting-scribe-funil-vendas && SMOKE_NO_SANDBOX=1 caffeinate -dimsu pnpm gates` verde. Testes: CA1 a CA3 e CA5 em `test/assistant.test.ts`, CA4 em `test/chat.test.ts`; smoke com os 8 checks.
 
 ## Relatório final (formato)
 Arquivos; gates (contagens, `expectedShots` novo); o trecho novo da instrução de sistema (cole: é carga de prompt); linhas mexidas em `index.ts`; diferenças em relação ao artboard `10` e por quê; o que o revisor deve olhar no print.

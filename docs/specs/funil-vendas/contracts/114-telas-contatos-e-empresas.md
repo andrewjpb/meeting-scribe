@@ -57,7 +57,7 @@ Só o que as telas precisarem (por exemplo, guardar a última `sugestoes()` e o 
 Botões nas telas de Reunião, Email e WhatsApp (116); mesclar contatos à mão; exportar; importar do Contatos do macOS.
 
 ## Gates
-`cd /Users/andrew/Documents/GitHub/meeting-scribe-funil-vendas/apps/desktop && SMOKE_NO_SANDBOX=1 caffeinate -dimsu pnpm gates` verde. Testes: CA7 em `test/renderer/funil-format.test.ts`; smoke com os 9 checks.
+`cd /Users/andrew/Documents/GitHub/meeting-scribe-funil-vendas && SMOKE_NO_SANDBOX=1 caffeinate -dimsu pnpm gates` verde. Testes: CA7 em `test/renderer/funil-format.test.ts`; smoke com os 9 checks.
 
 ## Relatório final (formato)
 Arquivos; gates (contagens, `expectedShots` novo); quais chaves o check de sugestões precisou ignorar e se a fixture ganhou algo; diferenças em relação aos artboards e por quê; o que o revisor deve olhar em cada um dos 5 prints.

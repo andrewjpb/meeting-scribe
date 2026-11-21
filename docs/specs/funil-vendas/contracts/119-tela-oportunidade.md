@@ -56,7 +56,7 @@ O botão navega para `/email` com `state: { compose: { to } }` (`to` = e-mail pr
 Kanban (112); Contatos e Empresas (114); restaurar arquivada pela interface; vincular e-mail pela interface (o modelo aceita, a tela desta versão não oferece).
 
 ## Gates
-`cd /Users/andrew/Documents/GitHub/meeting-scribe-funil-119/apps/desktop && SMOKE_NO_SANDBOX=1 caffeinate -dimsu pnpm gates` verde. Testes: CA6 em `test/renderer/funil-format.test.ts`; smoke com os 7 checks.
+`cd /Users/andrew/Documents/GitHub/meeting-scribe-funil-119 && SMOKE_NO_SANDBOX=1 caffeinate -dimsu pnpm gates` verde. Testes: CA6 em `test/renderer/funil-format.test.ts`; smoke com os 7 checks.
 
 ## Relatório final (formato)
 Arquivos; gates (contagens, `expectedShots` novo); `data-*` e `data-action` criados; API do `Timeline`; diferenças em relação ao artboard `04` e por quê; o que o revisor deve olhar no print.

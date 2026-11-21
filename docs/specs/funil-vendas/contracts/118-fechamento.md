@@ -41,7 +41,7 @@ Feature `funil-vendas` · Wave 8 · Depende de: 107 a 119 commitados · Spec `..
 Publicar os artefatos no claude.ai (coordenador); mover a spec para `_archive` (coordenador, depois do teste navegado); release, tag e `.dmg` (o build local e o teste navegado são do fechamento do plan, em sessão nova); correções maiores que a auditoria achar (viram contrato próprio).
 
 ## Gates
-`cd /Users/andrew/Documents/GitHub/meeting-scribe-funil-vendas/apps/desktop && SMOKE_NO_SANDBOX=1 caffeinate -dimsu pnpm gates` verde no início e no fim.
+`cd /Users/andrew/Documents/GitHub/meeting-scribe-funil-vendas && SMOKE_NO_SANDBOX=1 caffeinate -dimsu pnpm gates` verde no início e no fim.
 
 ## Relatório final (formato)
 Arquivos (resumo por grupo); gates (contagens, `expectedShots` final); pendências da auditoria (uma linha cada); o que o coordenador publica (caminhos em `docs/telas`) e em qual artefato; o prompt de teste navegado para a sessão nova, seguindo "Verificação end-to-end" da spec.

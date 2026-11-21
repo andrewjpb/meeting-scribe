@@ -72,7 +72,7 @@ Feature `funil-vendas` · Wave 3 · Depende de: 107, 109 e 110 commitados · Spe
 Tela Oportunidade (detalhe), Composer pré-endereçado e Arquivar (119); Contatos e Empresas (114); botões nas telas existentes (116); Assistente (117); alertas (115).
 
 ## Gates
-`cd /Users/andrew/Documents/GitHub/meeting-scribe-funil-112/apps/desktop && SMOKE_NO_SANDBOX=1 caffeinate -dimsu pnpm gates` verde. Testes: CA1 em `test/renderer/sidebar-stack.test.ts`, CA2 em `test/renderer/funil-format.test.ts` (novo); smoke com os 11 checks.
+`cd /Users/andrew/Documents/GitHub/meeting-scribe-funil-112 && SMOKE_NO_SANDBOX=1 caffeinate -dimsu pnpm gates` verde. Testes: CA1 em `test/renderer/sidebar-stack.test.ts`, CA2 em `test/renderer/funil-format.test.ts` (novo); smoke com os 11 checks.
 
 ## Relatório final (formato)
 Arquivos; gates (contagens, `expectedShots` novo); `data-*` e `data-action` criados; API do `SearchPicker` (props); diferenças em relação aos artboards e por quê; o que o revisor deve olhar em cada um dos 3 prints.

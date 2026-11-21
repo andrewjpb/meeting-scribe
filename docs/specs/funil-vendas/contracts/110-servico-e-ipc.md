@@ -2,6 +2,8 @@
 
 Feature `funil-vendas` · Wave 2 · Depende de: 107 e 108 commitados · Spec `../spec.md` (R4 na importação, R7 `ultimas`, R8 a R13, R16, R27 canal, R29 linha do tempo, R47 menos proposta; CA6) · Plan `../plan.md` (D3, D4, D5, D11, D19, D20) · Mockup: nenhum (sem tela). **Você não commita.** Worktree `/Users/andrew/Documents/GitHub/meeting-scribe-funil-110` (branch `funil-110`, a partir da ponta da `funil-vendas`). Roda em paralelo com 111: você **não** edita `src/shared/funil-proposta*.ts`, `src/main/funil/{proposals,extract}.ts`, `src/main/claude-cli/*`, `test/fixtures/fake-acp-agent.mjs`; nesta wave ninguém edita `smoke.ts` e só você edita `smoke-fixtures.ts`.
 
+> **Nota pós-108 (21/11/2026):** `LeituraImport` (contrato 108) devolve, nas duas variantes (`csv` e `vcard`), os campos `total` (linhas de dados ou cartões) e `ignorados` (sem nome ou sem e-mail/telefone). Use-os para `total`/`validas` (`validas = total - ignorados`) em vez de chamar `lerVcard` à parte.
+
 ## Pré-condições
 - Leia os contratos 107 e 108 (`src/shared/funil.ts`, `funil-logic.ts` com `normalizarTelefone`, `mesmoTelefone`, `ultimaInteracao`; `src/main/funil/store.ts`; `src/shared/funil-import.ts`) e, na spec, "Modelo de dados" (reunião apagada, `Oportunidade.emails`), R7 a R13, R16, R27, R29 e R47; no plan D3 a D5.
 - No código: `src/shared/ipc.ts` (`InvokeChannels` `:104`, `MainEvents` `:646`, `MAIN_EVENTS` `:1011`, `INVOKE` `:~830`, `WHEN_LOCKED` `:1095`); `src/main/ipc.ts:40-70` (`handle`, `broadcast`); `src/main/index.ts` (`AppServices` `:853`, `createAppServices` `:946`, `registerIpc` `:2019`, `chooseWhatsAppAttachment`/`chooseEmailAttachments` `:~1947-1975` como modelo de diálogo com `smokeFixtures`); `src/main/smoke-fixtures.ts:175,423`; `src/main/email/service.ts:~643` (`cached()`), `src/main/whatsapp/service.ts:158,169` (`status().me`, `chats()`), `src/main/meetings/summaries.ts:13-17`; `src/main/chat/actions.ts:439` (precedente `chat.phone ?? phoneOfChatId(chat.id)`); `src/renderer/src/features/redes/redesStore.ts` (store zustand que ouve evento).
@@ -61,7 +63,7 @@ Feature `funil-vendas` · Wave 2 · Depende de: 107 e 108 commitados · Spec `..
 Canais da proposta e disparo da detecção (113); canal do cartão do Assistente (117); telas (112, 119, 114, 116); alertas (115).
 
 ## Gates
-`cd /Users/andrew/Documents/GitHub/meeting-scribe-funil-110/apps/desktop && SMOKE_NO_SANDBOX=1 caffeinate -dimsu pnpm gates` verde. Testes novos: `test/funil-sugestoes.test.ts` (CA1, CA2), `test/funil-timeline.test.ts` (CA3, CA4), `test/funil-service.test.ts` (CA5 a CA7, CA9); `test/lock-ipc.test.ts` verde.
+`cd /Users/andrew/Documents/GitHub/meeting-scribe-funil-110 && SMOKE_NO_SANDBOX=1 caffeinate -dimsu pnpm gates` verde. Testes novos: `test/funil-sugestoes.test.ts` (CA1, CA2), `test/funil-timeline.test.ts` (CA3, CA4), `test/funil-service.test.ts` (CA5 a CA7, CA9); `test/lock-ipc.test.ts` verde.
 
 ## Relatório final (formato)
 Arquivos; gates (contagens); os 16 canais com a política; linhas mexidas em `index.ts`; como o serviço lê cada domínio (uma linha por dependência); diferenças em relação ao contrato e por quê.

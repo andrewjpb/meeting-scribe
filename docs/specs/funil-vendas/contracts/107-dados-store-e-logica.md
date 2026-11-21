@@ -65,7 +65,7 @@ Feature `funil-vendas` · Wave 1 · Depende de: nada · Spec `../spec.md` (Model
 Serviço, IPC, sugestões, linha do tempo e importação de arquivo (110, 108); configurações (109); telas; detecção (111). Restaurar backup pela interface.
 
 ## Gates
-`cd /Users/andrew/Documents/GitHub/meeting-scribe-funil-107/apps/desktop && SMOKE_NO_SANDBOX=1 caffeinate -dimsu pnpm gates` verde. Testes novos: `test/funil-store.test.ts` (CA1 a CA9) e `test/funil-logic.test.ts` (CA10 a CA12), com diretório temporário e `now`/`newId` injetados.
+`cd /Users/andrew/Documents/GitHub/meeting-scribe-funil-107 && SMOKE_NO_SANDBOX=1 caffeinate -dimsu pnpm gates` verde. Testes novos: `test/funil-store.test.ts` (CA1 a CA9) e `test/funil-logic.test.ts` (CA10 a CA12), com diretório temporário e `now`/`newId` injetados.
 
 ## Relatório final (formato)
 Arquivos (uma linha cada); gates (contagens, testes novos); se usou o helper do 93 ou a cópia; assinaturas exportadas de `store.ts` e `funil-logic.ts`; diferenças em relação ao contrato e por quê.
