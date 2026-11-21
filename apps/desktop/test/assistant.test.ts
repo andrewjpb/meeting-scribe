@@ -353,7 +353,7 @@ describe('fontes do app (CA2)', () => {
     expect(guideMarkdown('Versão: {{versao}}.', '0.7.0')).toBe('Versão: 0.7.0.')
     const automations = automationsMarkdown(
       {
-        agents: [{ id: 'ag-1', name: 'Resumo da semana', description: '', icon: 'bot', color: 'blue', instructions: '', profile: 'claude', model: 'sonnet', thinkMore: false, scope: { kind: '7d' }, web: false, mcpServers: [], output: { kind: 'chat' }, createdAt: '', updatedAt: '' }],
+        agents: [{ id: 'ag-1', name: 'Resumo da semana', description: '', icon: 'bot', color: 'blue', instructions: '', profile: 'claude', model: 'sonnet', thinkMore: false, scope: { kind: '7d' }, web: false, funil: false, mcpServers: [], output: { kind: 'chat' }, createdAt: '', updatedAt: '' }],
         tasks: [],
         runs: [
           {

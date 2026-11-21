@@ -49,6 +49,7 @@ export function blankAgent(): AgentInput {
     thinkMore: false,
     scope: { kind: 'all' },
     web: false,
+    funil: false,
     mcpServers: [],
     output: { kind: 'chat' },
   }
@@ -194,6 +195,12 @@ export function AgentForm({ initial, meetings, onClose }: { initial: AgentInput;
       <FormField label="Pode pesquisar na internet" labelId="agent-web" hint="Busca na web e abre as páginas que encontrar. Não abre endereços inventados.">
         <div data-agent-web>
           <Switch checked={agent.web} labelledBy="agent-web" onChange={(web) => patch({ web })} />
+        </div>
+      </FormField>
+
+      <FormField label="Pode ler o funil" labelId="agent-funil" hint="Recebe FUNIL.md com as oportunidades e os contatos em cada execução.">
+        <div data-agent-funil>
+          <Switch checked={agent.funil} labelledBy="agent-funil" onChange={(funil) => patch({ funil })} />
         </div>
       </FormField>
 

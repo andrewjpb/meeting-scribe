@@ -63,6 +63,8 @@ import { autoDetect } from './funil/apply-proposal'
 import { createFunnelExtractService, type FunnelExtractService } from './funil/extract'
 import { registerFunilIpc, type FunilPropostaIpcDeps } from './funil/ipc'
 import { createFunilProposalStore } from './funil/proposals'
+import { createFunilAlerts } from './funil/alerts'
+import { funilMarkdown } from './funil/markdown'
 import { createFunilService, type FunilService } from './funil/service'
 import { createFunilStore } from './funil/store'
 import { createAiNotesService, type AiNotesService } from './meetings/ai-notes-service'
@@ -393,6 +395,23 @@ function showAutomationNotice(notice: AutomationNotice): void {
   }
   item.on('click', open)
   item.on('action', open)
+  item.on('close', () => liveNotices.delete(item))
+  liveNotices.add(item)
+  item.show()
+}
+
+/** Contrato 115 (R44): o aviso diário do funil; o clique abre Funil > Oportunidades. No smoke, só uma linha de log. */
+function showFunilNotice(aviso: { title: string; body: string }): void {
+  // Bloqueado, sem as contagens (como `showAutomationNotice`).
+  const shown = lockService?.isLocked() ? { title: brandName, body: 'Há oportunidades no funil pedindo atenção.' } : aviso
+  if (smokeFixtures) return void console.log(`[funil] aviso não mostrado no smoke: ${shown.body}`)
+  if (!Notification.isSupported()) return
+  const item = new Notification({ title: shown.title, body: shown.body })
+  const open = (): void => {
+    liveNotices.delete(item)
+    sendWhenLoaded(showMainWindow(), 'scribe:navigate', 'funil')
+  }
+  item.on('click', open)
   item.on('close', () => liveNotices.delete(item))
   liveNotices.add(item)
   item.show()
@@ -1696,7 +1715,7 @@ function createAppServices(userData: string): AppServices {
     agents: createFileAgentsStore({ dir: userData }),
     schedules: createFileSchedulesStore({ dir: userData }),
     runs: createFileRunsStore({ dir: userData }),
-    runner: createAgentRunner({ locate: () => claude.locate(), openAcp, corpus, meetings, emptyDir: join(userData, 'automations-empty'), ...devLog }),
+    runner: createAgentRunner({ locate: () => claude.locate(), openAcp, corpus, meetings, emptyDir: join(userData, 'automations-empty'), funilMarkdown: () => funilMarkdownText(), ...devLog }),
     applyOutput: (request) =>
       applyOutput(
         {
@@ -1727,6 +1746,7 @@ function createAppServices(userData: string): AppServices {
       if (event.type === 'done') trayController?.refresh()
       if (!lockService?.isLocked()) broadcast(appWindows(), 'scribe:automation-event', event)
     },
+    onTick: (at) => funilAlerts.tick(at),
     ...(smokeAutomations ? { now: () => Date.now() + smokeAutomations.skewMs } : {}),
     // Contrato 51: só a tarefa com "Pode enviar email" envia, sem clique, pelo caminho interno do email (nunca pelo IPC),
     // depois das regras da permissão a cada envio; e lê o email com as mesmas ferramentas do Assistente. Bloqueado, nada.
@@ -1868,6 +1888,12 @@ function createAppServices(userData: string): AppServices {
     },
     ...devLog,
   })
+  // Contrato 115: o alerta diário (no tick das Automações) e o `FUNIL.md` dos agentes com "Pode ler o funil".
+  const funilAlerts = createFunilAlerts({ view: () => funil.view(), ultimoAviso: async () => (await funilStore.read()).ultimoAvisoEm, settings: () => settings.get(), marcar: (at) => funil.marcarAviso(at), notify: showFunilNotice, timeZone, ...devLog })
+  const funilMarkdownText = async (): Promise<string> => {
+    const [view, { funil: config }, lista] = await Promise.all([funil.view(), settings.get(), meetings.list()])
+    return funilMarkdown({ view, diasEsfriar: config.diasEsfriar, reunioes: new Map(lista.map((meeting) => [meeting.id, meeting.title])), now: Date.now(), timeZone: timeZone() })
+  }
   // Contrato 113: a proposta de IA de cada reunião e a passada `funnel-extract`, com o mesmo motor do resumo.
   const funilPropostas = createFunilProposalStore({ meetingsDir: join(userData, MEETINGS_DIR) })
   const notifyProposta = (meetingId: string): void => broadcast(appWindows(), 'scribe:funil-proposta-changed', { meetingId })
