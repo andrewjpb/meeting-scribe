@@ -7,6 +7,7 @@ import { ActionButton } from '../../design/ActionButton'
 import { Button } from '../../design/Button'
 import { Icon } from '../../design/Icon'
 import { Note } from '../../design/Note'
+import { ContactLink } from '../funil/ContactLink'
 import { MENU_ITEM, useInlineMenu } from '../meetings/menu'
 import { Avatar } from '../whatsapp/Avatar'
 import { bodyKey, useEmail } from './emailStore'
@@ -143,6 +144,10 @@ export function ReadingPane({ account, message, onCompose, composing, onMailto, 
   const [actionError, setActionError] = useState<string | null>(null)
   const [ask, setAsk] = useState<LinkAsk | null>(null)
   const sender = message.from[0]
+  // Contrato 116 (R36): "+ Contato" ao lado do remetente, menos quando ele é uma das contas do usuário.
+  const accounts = useEmail((store) => store.accounts)
+  const senderAddress = sender?.address.trim().toLowerCase() ?? ''
+  const ownSender = [account, ...(accounts ?? []).map((status) => status.account)].some((item) => item.address.trim().toLowerCase() === senderAddress)
   // Contrato 64 (CA14): "Sugerir evento" só com a opção ligada, o corpo já lido e sem convite; nunca com o app bloqueado.
   const suggestOn = useSettings((store) => store.settings.inviteSuggest)
   const locked = useLock((store) => store.status.locked)
@@ -256,6 +261,11 @@ export function ReadingPane({ account, message, onCompose, composing, onMailto, 
                   {addressLabel(sender)}
                 </span>
                 {sender && sender.name && <span className="truncate">{sender.address}</span>}
+                {sender && senderAddress && !ownSender && (
+                  <span className="self-center">
+                    <ContactLink email={sender.address} nome={sender.name?.trim() || sender.address.split('@')[0] || sender.address} origem="email" />
+                  </span>
+                )}
               </p>
               {message.to.length > 0 && <p data-email-to>Para: {message.to.map(addressLine).join(', ')}</p>}
               {message.cc.length > 0 && <p data-email-cc>Cc: {message.cc.map(addressLine).join(', ')}</p>}

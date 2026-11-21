@@ -96,6 +96,10 @@
 // Contrato 114: logo depois do detalhe, Contatos e Empresas (`funilContatosChecks`): a lista e a ficha, Empresas com o
 // "Apagar" bloqueado, a sugestão de empresa pelo domínio, o Novo contato com a mescla, as Sugestões (uma de cada canal,
 // "Adicionar" e "Ignorar") e a importação do CSV das fixtures.
+//
+// Contrato 116: logo depois de Contatos e Empresas, os botões nas telas existentes (`funilTelasExistentesChecks`): o bloco
+// Participantes e o "+ Contato" no Resumo de uma reunião semeada com agenda, "Detectar oportunidade" com o agente ACP
+// falso, o cartão "Oportunidade detectada" (aviso de duplicata, Criar e Ignorar), o "+ Contato" no Email e no WhatsApp.
 import { appendFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { spawn as spawnChild } from 'node:child_process'
 import { request as httpRequest } from 'node:http'
@@ -12896,6 +12900,348 @@ async function funilContatosChecks(ctx: SmokeContext, watch: (win: BrowserWindow
   }
 }
 
+/** Contrato 116: a reunião semeada com evento da agenda (3 participantes, 2 com e-mail) e resumo, só para o cartão. */
+const FUNIL_REUNIAO = 'smoke-funil-reuniao'
+const FUNIL_REUNIAO_ATTENDEES = [
+  { name: 'Marina Rocha', email: 'marina.rocha@cliente.example' },
+  { name: 'Lucas Vieira', email: 'lucas.vieira@vertice.example' },
+  { name: 'Carlos Dias', email: '' },
+]
+/** O remetente do email entregue pelo bloco: ainda não é contato. */
+const FUNIL_EMAIL_REMETENTE = { name: 'Paulo Siqueira', address: 'paulo.siqueira@fluxo.example' }
+const FUNIL_EMAIL_ASSUNTO = 'Orçamento do módulo de conciliação'
+/** A mensagem da própria conta (o remetente é o endereço da conta do email falso). */
+const FUNIL_EMAIL_PROPRIA = 'Lembrete da estimativa do módulo'
+
+/**
+ * Contrato 116 (R35 a R37, R39, R40; CA15 da spec), numa janela que troca de tema no lugar, depois do
+ * `funilContatosChecks`, com o agente ACP falso (a detecção sob demanda) e `funil.detectarNasReunioes` desligado. Semeia
+ * a reunião `smoke-funil-reuniao` (evento da agenda com 3 participantes, 2 com e-mail, e resumo): o bloco Participantes
+ * abaixo das tarefas (e a `smoke-4`, sem agenda, sem o bloco), "+ Contato" de um participante, "Detectar oportunidade"
+ * com o botão desligado em "Detectando…", o cartão acima das tarefas com o aviso de duplicata (a proposta padrão é da
+ * empresa Cliente, que tem `op-portal`), nada gravado sem clique, "Criar" com o e-mail da Marina apagado, um contato
+ * novo com e-mail e o valor editado, e "Ignorar" numa segunda detecção. No email, uma mensagem nova de um remetente que
+ * não é contato ("+ Contato" e o link) e uma da própria conta (sem nada). No WhatsApp, os Detalhes da Ana ("+ Contato" e a
+ * ficha), do Bruno (contato só pelo telefone) e do grupo (sem bloco). Termina com o Lucas, o Carlos, o Paulo, a Ana e o
+ * Bruno no funil, a oportunidade criada pela reunião e a reunião semeada na lista. Prints `detalhe-resumo-oportunidade`,
+ * `email-leitura-contato` e `whatsapp-detalhes-contato`, nos dois temas.
+ */
+async function funilTelasExistentesChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => void, checks: Record<string, Check>, shots: Screenshot[]): Promise<void> {
+  const startedAt = Date.now()
+  const themeBefore = readSettings(ctx.userDataDir).theme ?? 'system'
+  const transportBefore = readSettings(ctx.userDataDir).claudeTransport
+  const funilBefore = readSettings(ctx.userDataDir).funil ?? DEFAULT_SETTINGS.funil
+  nativeTheme.themeSource = 'light'
+  const win = ctx.openWindow({})
+  watch(win)
+  await loadAndWait(win)
+  const contents = win.webContents
+  if (themeBefore !== 'system') await evaluate(contents, "window.__scribeApi.invoke('scribe:settings-update', { theme: 'system' }).then(() => true)")
+  // R40: "Detectar oportunidade" roda com a detecção automática desligada; o agente ACP falso responde a proposta padrão.
+  await evaluate(contents, `window.__scribeApi.invoke('scribe:settings-update', ${JSON.stringify({ claudeTransport: 'acp', funil: { ...funilBefore, detectarNasReunioes: false } })}).then(() => true)`)
+  const acpStatus = await evaluate<{ state?: string }>(contents, "window.__scribeApi.invoke('scribe:acp-status')")
+  if (acpStatus.state !== 'installed') await evaluate(contents, "window.__scribeApi.invoke('scribe:acp-install').then(() => true)")
+  const api = <T>(channel: string, request?: unknown): Promise<T> => evaluate<T>(contents, `window.__scribeApi.invoke(${JSON.stringify(channel)}${request === undefined ? '' : `, ${JSON.stringify(request)}`})`)
+  const both = async (name: string): Promise<void> => {
+    await evaluate(contents, `document.activeElement instanceof HTMLElement && document.activeElement.blur(), true`)
+    await settle(contents)
+    shots.push(await capture(win, ctx.outDir, `${name}-light`))
+    nativeTheme.themeSource = 'dark'
+    await waitFor(contents, "document.documentElement.dataset.theme === 'dark'")
+    await settle(contents)
+    shots.push(await capture(win, ctx.outDir, `${name}-dark`))
+    nativeTheme.themeSource = 'light'
+    await waitFor(contents, "document.documentElement.dataset.theme === 'light'")
+  }
+  const funilFile = join(ctx.userDataDir, FUNIL_FILE)
+  const saved = (): FunilState => JSON.parse(readFileSync(funilFile, 'utf8')) as FunilState
+  const propostaFile = join(ctx.userDataDir, 'meetings', `${FUNIL_REUNIAO}.funil.json`)
+  const proposta = (): { status?: string; oportunidadeId?: string; createdAt?: string } | null => (existsSync(propostaFile) ? (JSON.parse(readFileSync(propostaFile, 'utf8')) as { status?: string; oportunidadeId?: string; createdAt?: string }) : null)
+  const contatoPorEmail = (email: string): Contato | undefined => saved().contatos.find((contato) => !contato.arquivado && contato.emails.includes(email))
+  const CARD = '[data-funil-proposta]'
+  const resumoPronto = (id: string): string => `${routeIs('detalhe')} && document.querySelector('[data-meeting="${id}"] [data-summary="ready"] [data-summary-overview]')`
+  const abrirReuniao = async (id: string): Promise<boolean> => {
+    await funilRouterPush(contents, `/reunioes/${encodeURIComponent(id)}`)
+    return waitFor(contents, resumoPronto(id), 8000)
+  }
+
+  try {
+    // A reunião do cartão: no `meetings.json` (sem perder as pastas) e com o resumo ao lado, como as do contrato 10.
+    const meetingsFile = join(ctx.userDataDir, MEETINGS_FILE)
+    const file = JSON.parse(readFileSync(meetingsFile, 'utf8')) as { version: number; meetings: Meeting[]; folders?: unknown[] }
+    const comecou = new Date(Date.now() - 2 * 3_600_000)
+    const reuniao: Meeting = {
+      id: FUNIL_REUNIAO,
+      title: 'Conversa com o Cliente sobre o portal',
+      startedAt: comecou.toISOString(),
+      durationMs: 46 * 60_000,
+      sources: { mic: true, system: true },
+      audioPath: null,
+      transcriptPath: null,
+      calendar: { provider: 'google', eventId: 'smoke-funil', title: 'Conversa com o Cliente sobre o portal', start: comecou.toISOString(), end: new Date(comecou.getTime() + 46 * 60_000).toISOString(), attendees: FUNIL_REUNIAO_ATTENDEES, joinUrl: null },
+    }
+    writeFileAtomicSync(meetingsFile, `${JSON.stringify({ ...file, meetings: [...file.meetings.filter((item) => item.id !== FUNIL_REUNIAO), reuniao] }, null, 2)}\n`)
+    const resumo: MeetingSummary = {
+      version: 1,
+      meetingId: FUNIL_REUNIAO,
+      createdAt: new Date().toISOString(),
+      model: 'claude-cli:haiku',
+      overview: 'O Cliente quer um portal do associado e pediu a proposta até o fim do mês.',
+      decisions: ['Enviar a proposta até sexta.'],
+      tasks: [{ task: 'Enviar a proposta do portal', owner: 'Você', due: 'sexta-feira' }],
+    }
+    writeFileAtomicSync(join(ctx.userDataDir, 'meetings', `${FUNIL_REUNIAO}.summary.json`), `${JSON.stringify(resumo, null, 2)}\n`)
+
+    // resumoParticipantes (CA4, R35): a `smoke-4` (resumo, sem agenda) não tem o bloco; a semeada tem 3 linhas abaixo das
+    // tarefas e 2 `ContactLink` (a Marina já é contato; o Lucas não; o Carlos, sem e-mail, só o nome).
+    const semAgenda = await abrirReuniao('smoke-4')
+    await settle(contents)
+    const semBloco = semAgenda && (await evaluate<boolean>(contents, `!document.querySelector('[data-summary-participantes]')`))
+    const comAgenda = await abrirReuniao(FUNIL_REUNIAO)
+    const linksProntos = await waitFor(contents, `document.querySelectorAll('[data-summary-participantes] [data-funil-contato-link], [data-summary-participantes] [data-action="funil-mais-contato"]').length === 2`, 8000)
+    const bloco = await evaluate<{ rows: string[]; below: boolean; links: number; botoes: number; marina: string }>(
+      contents,
+      `(() => {
+        const bloco = document.querySelector('[data-summary-participantes]')
+        const tarefas = document.querySelector('[data-summary-tasks], [data-summary-no-tasks]')
+        return {
+          rows: [...(bloco?.querySelectorAll('[data-summary-participante]') ?? [])].map((el) => el.dataset.summaryParticipante),
+          below: Boolean(bloco && tarefas && tarefas.compareDocumentPosition(bloco) & Node.DOCUMENT_POSITION_FOLLOWING),
+          links: bloco?.querySelectorAll('[data-funil-contato-link]').length ?? 0,
+          botoes: bloco?.querySelectorAll('[data-action="funil-mais-contato"]').length ?? 0,
+          marina: bloco?.querySelector('[data-summary-participante="marina.rocha@cliente.example"] [data-funil-contato-link]')?.textContent ?? '',
+        }
+      })()`,
+    )
+    checks['resumoParticipantes'] = {
+      ok: semBloco && comAgenda && linksProntos && JSON.stringify(bloco.rows) === JSON.stringify(FUNIL_REUNIAO_ATTENDEES.map((item) => item.email)) && bloco.below && bloco.links === 1 && bloco.botoes === 1 && bloco.marina === 'Marina Rocha',
+      detail: `smoke-4 sem agenda e sem o bloco=${semBloco}; reunião semeada aberta=${comAgenda}, 2 ContactLink=${linksProntos}; ${JSON.stringify(bloco)}`,
+    }
+
+    // resumoMaisContato (R35): "+ Contato" do Lucas cria o contato com `origem: 'reuniao'` e a linha vira o link, sem sair.
+    const contatosAntesLucas = saved().contatos.length
+    await clickSelector(contents, '[data-summary-participante="lucas.vieira@vertice.example"] [data-action="funil-mais-contato"]')
+    const virouLink = await waitFor(contents, `document.querySelector('[data-summary-participante="lucas.vieira@vertice.example"] [data-funil-contato-link]')?.textContent === 'Lucas Vieira'`, 8000)
+    const lucas = contatoPorEmail('lucas.vieira@vertice.example')
+    checks['resumoMaisContato'] = {
+      ok: virouLink && lucas?.origem === 'reuniao' && lucas.nome === 'Lucas Vieira' && saved().contatos.length === contatosAntesLucas + 1 && (await evaluate<boolean>(contents, `Boolean(${resumoPronto(FUNIL_REUNIAO)})`)),
+      detail: `link "Lucas Vieira" na linha=${virouLink}; contato ${lucas?.id ?? 'nenhum'} com origem ${lucas?.origem ?? '-'}; contatos ${contatosAntesLucas} -> ${saved().contatos.length}`,
+    }
+
+    // resumoDetectar (CA3, R40): com a detecção automática desligada, o botão fica desligado em "Detectando…" enquanto o
+    // agente falso responde, volta, e o cartão aparece com `acao: 'criar'`.
+    const opsAntes = saved().oportunidades.length
+    const contatosAntes = saved().contatos.length
+    await evaluate(
+      contents,
+      `(() => {
+        window.__smokeDetectando = false
+        const olhar = () => {
+          const botao = document.querySelector('[data-action="funil-detectar"]')
+          if (botao?.disabled && botao.textContent === 'Detectando…') window.__smokeDetectando = true
+        }
+        window.__smokeDetectObserver?.disconnect()
+        window.__smokeDetectObserver = new MutationObserver(olhar)
+        window.__smokeDetectObserver.observe(document.querySelector('[data-summary]'), { subtree: true, childList: true, attributes: true, characterData: true })
+        return true
+      })()`,
+    )
+    const textoAntes = await text(contents, '[data-action="funil-detectar"]')
+    await clickSelector(contents, '[data-action="funil-detectar"]')
+    const cartao = await waitFor(contents, `document.querySelector('${CARD}[data-funil-proposta="criar"]') && document.querySelector('[data-action="funil-detectar"]')?.textContent === 'Detectar oportunidade' && !document.querySelector('[data-action="funil-detectar"]').disabled`, 20_000)
+    const viuDetectando = await evaluate<boolean>(contents, `(window.__smokeDetectObserver?.disconnect(), window.__smokeDetectando === true)`)
+    checks['resumoDetectar'] = {
+      ok: textoAntes === 'Detectar oportunidade' && viuDetectando && cartao && proposta()?.status === 'proposed' && readSettings(ctx.userDataDir).funil?.detectarNasReunioes === false,
+      detail: `botão "${textoAntes}"; desligado em "Detectando…"=${viuDetectando}; cartão "criar" e o botão de volta=${cartao}; arquivo ${proposta()?.status ?? 'ausente'}; detectarNasReunioes=${String(readSettings(ctx.userDataDir).funil?.detectarNasReunioes)}`,
+    }
+
+    // resumoCartao (CA15, CA2): acima das Tarefas, com os três botões, o título, o modelo e o "Por quê"; nada gravado sem
+    // clique, nem depois de sair e voltar à aba.
+    const card = await evaluate<{ acima: boolean; botoes: string[]; titulo: string; modelo: string; porque: string; campos: Record<string, string>; chips: string[] }>(
+      contents,
+      `(() => {
+        const card = document.querySelector('${CARD}')
+        const tarefas = document.querySelector('section[aria-label="Tarefas"]')
+        return {
+          acima: Boolean(card && tarefas && card.compareDocumentPosition(tarefas) & Node.DOCUMENT_POSITION_FOLLOWING),
+          botoes: [...(card?.querySelectorAll('[data-action^="funil-proposta-"]') ?? [])].map((el) => el.dataset.action).filter((action) => ['funil-proposta-aplicar', 'funil-proposta-vincular', 'funil-proposta-ignorar'].includes(action)),
+          titulo: card?.querySelector('h3')?.textContent ?? '',
+          modelo: card?.querySelector('[data-funil-proposta-modelo]')?.textContent ?? '',
+          porque: card?.querySelector('[data-funil-proposta-porque]')?.textContent ?? '',
+          campos: {
+            titulo: card?.querySelector('[data-funil-proposta-titulo]')?.value ?? '',
+            etapa: card?.querySelector('[data-funil-proposta-etapa]')?.selectedOptions[0]?.textContent ?? '',
+            empresa: card?.querySelector('[data-funil-picker="proposta-empresa"] input')?.value ?? '',
+            valor: card?.querySelector('[data-funil-proposta-valor]')?.value ?? '',
+            passo: card?.querySelector('[data-funil-proposta-passo]')?.value ?? '',
+            aplicar: card?.querySelector('[data-action="funil-proposta-aplicar"]')?.textContent ?? '',
+          },
+          chips: [...(card?.querySelectorAll('[data-funil-proposta-contato]') ?? [])].map((el) => el.querySelector('span')?.textContent + ' <' + (el.querySelector('input')?.value ?? '') + '>'),
+        }
+      })()`,
+    )
+    await evaluate(contents, `document.querySelector('${CARD}')?.scrollIntoView({ block: 'nearest' }), true`)
+    await both('detalhe-resumo-oportunidade')
+    await funilRouterPush(contents, '/funil/contatos')
+    await waitFor(contents, routeIs('funil'), 8000)
+    const voltou = (await abrirReuniao(FUNIL_REUNIAO)) && (await waitFor(contents, `document.querySelector('${CARD}[data-funil-proposta="criar"]')`, 8000))
+    const intocado = saved().oportunidades.length === opsAntes && saved().contatos.length === contatosAntes && proposta()?.status === 'proposed'
+    checks['resumoCartao'] = {
+      ok:
+        cartao &&
+        card.acima &&
+        JSON.stringify(card.botoes) === JSON.stringify(['funil-proposta-aplicar', 'funil-proposta-vincular', 'funil-proposta-ignorar']) &&
+        card.titulo === 'Oportunidade detectada' &&
+        /^Haiku · \d{2}:\d{2}$/.test(card.modelo) &&
+        card.porque === 'Por quê: Pediram proposta para o portal.' &&
+        card.campos['titulo'] === 'Portal do associado' &&
+        card.campos['etapa'] === 'Descoberta' &&
+        card.campos['empresa'] === 'Cliente' &&
+        card.campos['valor'] === '45.000' &&
+        card.campos['passo'] === 'Enviar proposta' &&
+        card.campos['aplicar'] === 'Criar' &&
+        JSON.stringify(card.chips) === JSON.stringify(['Marina Rocha <marina.rocha@cliente.example>']) &&
+        voltou &&
+        intocado,
+      detail: `${JSON.stringify(card)}; saiu e voltou com o cartão=${voltou}; funil.json igual (oportunidades ${opsAntes}, contatos ${contatosAntes}) e arquivo proposed=${intocado}`,
+    }
+
+    // resumoDuplicata (R39, R25): a empresa Cliente já tem "Portal do associado" aberta: o aviso com o link, "Criar"
+    // habilitado e "Vincular a existente…" com a duplicata já escolhida no Select.
+    const aviso = await evaluate<{ texto: string; id: string; criar: boolean }>(
+      contents,
+      `({ texto: document.querySelector('${CARD} [data-funil-aviso-duplicata]')?.textContent ?? '', id: document.querySelector('${CARD} [data-funil-aviso-duplicata]')?.dataset.funilAvisoDuplicata ?? '', criar: !document.querySelector('${CARD} [data-action="funil-proposta-aplicar"]')?.disabled })`,
+    )
+    await clickSelector(contents, `${CARD} [data-action="funil-proposta-vincular"]`)
+    const escolhida = (await waitFor(contents, `document.querySelector('${CARD} [data-funil-proposta-vincular-select]')`)) ? await evaluate<string>(contents, `document.querySelector('${CARD} [data-funil-proposta-vincular-select]').value`) : ''
+    await clickSelector(contents, `${CARD} [data-action="funil-proposta-vincular"]`)
+    const fechou = await waitFor(contents, `!document.querySelector('${CARD} [data-funil-proposta-vincular-select]')`)
+    checks['resumoDuplicata'] = {
+      ok: aviso.texto.includes('«Portal do associado»') && aviso.texto.includes('aberta para esta empresa') && aviso.id === 'op-portal' && aviso.criar && escolhida === 'op-portal' && fechou,
+      detail: `aviso "${aviso.texto}" (${aviso.id}); Criar habilitado=${aviso.criar}; Select do Vincular com ${escolhida || '(nada)'}; fechou=${fechou}`,
+    }
+
+    // resumoCriar (CA2, CA8, R39): o e-mail da Marina apagado (ela fica só citada), um contato novo pelo picker com o e-mail
+    // preenchido no chip (criado), o valor 120.000,00 e Criar.
+    await setValue(contents, `${CARD} [data-funil-proposta-email="0"]`, '')
+    await setValue(contents, `${CARD} [data-funil-picker="proposta-contatos"] input`, 'Carlos Dias')
+    await waitFor(contents, `document.querySelector('${CARD} [data-funil-picker="proposta-contatos"] [data-funil-picker-criar]')`)
+    await clickSelector(contents, `${CARD} [data-funil-picker="proposta-contatos"] [data-funil-picker-criar]`)
+    await waitFor(contents, `document.querySelector('${CARD} [data-funil-proposta-email="1"]')`)
+    await setValue(contents, `${CARD} [data-funil-proposta-email="1"]`, 'carlos.dias@cliente.example')
+    await setValue(contents, `${CARD} [data-funil-proposta-valor]`, '120.000,00')
+    const efeito = (await waitFor(contents, `document.querySelector('${CARD} [data-funil-proposta-efeito]')?.textContent === 'Cria o contato novo · Marina Rocha fica só citado na nota'`)) as boolean
+    const efeitoTexto = await text(contents, `${CARD} [data-funil-proposta-efeito]`)
+    const marinas = saved().contatos.filter((contato) => contato.nome === 'Marina Rocha').length
+    const contatosAntesCriar = saved().contatos.length
+    const opsAntesCriar = saved().oportunidades.length
+    await clickSelector(contents, `${CARD} [data-action="funil-proposta-aplicar"]`)
+    const criada = await waitFor(contents, `document.querySelector('[data-funil-proposta-feita="criada"] [data-funil-proposta-link]') && !document.querySelector('${CARD}')`, 8000)
+    const estado = saved()
+    const nova = estado.oportunidades.find((op) => op.meetingIds.includes(FUNIL_REUNIAO) && op.origem === 'reuniao')
+    const carlos = contatoPorEmail('carlos.dias@cliente.example')
+    const nota = nova ? estado.eventos.find((evento) => evento.oportunidadeId === nova.id && evento.tipo === 'nota') : undefined
+    const link = await evaluate<string>(contents, `document.querySelector('[data-funil-proposta-feita="criada"] [data-funil-proposta-link]')?.dataset.funilPropostaLink ?? ''`)
+    checks['resumoCriar'] = {
+      ok:
+        efeito &&
+        criada &&
+        nova !== undefined &&
+        nova.valor === 12_000_000 &&
+        nova.titulo === 'Portal do associado' &&
+        nova.empresaId === SMOKE_FUNIL.empresas.cliente &&
+        nova.etapaId === SMOKE_FUNIL.etapas.descoberta &&
+        estado.oportunidades.length === opsAntesCriar + 1 &&
+        nota?.texto === 'Citados na reunião: Marina Rocha' &&
+        carlos?.origem === 'reuniao' &&
+        nova.contatoIds.includes(carlos.id) &&
+        !nova.contatoIds.includes(SMOKE_FUNIL.contatos.marina) &&
+        estado.contatos.filter((contato) => contato.nome === 'Marina Rocha').length === marinas &&
+        estado.contatos.length === contatosAntesCriar + 1 &&
+        proposta()?.status === 'accepted' &&
+        proposta()?.oportunidadeId === nova.id &&
+        link === nova.id,
+      detail: `efeito "${efeitoTexto}"; linha "Oportunidade criada"=${criada} (link ${link || '-'}); oportunidade ${nova ? JSON.stringify({ id: nova.id, titulo: nova.titulo, valor: nova.valor, empresaId: nova.empresaId, etapaId: nova.etapaId, origem: nova.origem, meetingIds: nova.meetingIds, contatoIds: nova.contatoIds }) : 'nenhuma'}; nota "${nota?.texto ?? '-'}"; Carlos ${carlos?.id ?? 'nenhum'} (${carlos?.origem ?? '-'}); contatos ${contatosAntesCriar} -> ${estado.contatos.length}; arquivo ${proposta()?.status ?? '-'} ${proposta()?.oportunidadeId ?? ''}`,
+    }
+
+    // resumoIgnorar (R39): detectar de novo e Ignorar: o cartão some, o arquivo fica `dismissed` e nada novo no funil.
+    const opsAntesIgnorar = saved().oportunidades.length
+    const antes = proposta()?.createdAt ?? ''
+    await clickSelector(contents, '[data-action="funil-detectar"]')
+    const deNovo = await waitFor(contents, `document.querySelector('${CARD}[data-funil-proposta="criar"]') && !document.querySelector('[data-action="funil-detectar"]').disabled`, 20_000)
+    const substituiu = proposta()?.status === 'proposed' && (proposta()?.createdAt ?? '') !== antes
+    await clickSelector(contents, `${CARD} [data-action="funil-proposta-ignorar"]`)
+    const sumiu = await waitFor(contents, `!document.querySelector('${CARD}') && !document.querySelector('[data-funil-proposta-feita]')`, 8000)
+    checks['resumoIgnorar'] = {
+      ok: deNovo && substituiu && sumiu && proposta()?.status === 'dismissed' && saved().oportunidades.length === opsAntesIgnorar,
+      detail: `cartão de novo=${deNovo}, arquivo substituído=${substituiu}; Ignorar: sumiu=${sumiu}, arquivo ${proposta()?.status ?? '-'}; oportunidades ${opsAntesIgnorar} -> ${saved().oportunidades.length}`,
+    }
+
+    // emailMaisContato (CA15, CA5, R36): uma mensagem nova de quem ainda não é contato: "+ Contato" ao lado do remetente;
+    // o clique vira o link com o nome; numa mensagem da própria conta, nem botão nem link.
+    await ctx.fixtures.email.deliver({ from: FUNIL_EMAIL_REMETENTE, subject: FUNIL_EMAIL_ASSUNTO, text: 'Bom dia, Andrew.\n\nConseguem me mandar uma estimativa do segundo módulo até terça?\n\nAbraço,\nPaulo' })
+    const caixa = await openEmailFolder(contents, 'inbox', 1)
+    const chegou = await waitFor(contents, emailRow(FUNIL_EMAIL_ASSUNTO), 10_000)
+    const aberta = chegou && (await clickEmailRow(contents, FUNIL_EMAIL_ASSUNTO))
+    const READING_HEAD = '[data-email-reading] [data-email-from]'
+    const botaoEmail = await waitFor(contents, `document.querySelector('${READING_HEAD}')?.parentElement?.querySelector('[data-action="funil-mais-contato"]')`, 8000)
+    await both('email-leitura-contato')
+    await clickSelector(contents, `[data-email-reading] [data-action="funil-mais-contato"]`)
+    const linkEmail = await waitFor(contents, `document.querySelector('[data-email-reading] [data-funil-contato-link]')?.textContent === 'Paulo Siqueira' && !document.querySelector('[data-email-reading] [data-action="funil-mais-contato"]')`, 8000)
+    const paulo = contatoPorEmail(FUNIL_EMAIL_REMETENTE.address)
+    // Mandada pela própria conta (para si mesma): nem "+ Contato" nem link.
+    await ctx.fixtures.email.deliver({ from: { name: 'Andrew Teste', address: SMOKE_EMAIL_ADDRESS }, subject: FUNIL_EMAIL_PROPRIA, text: 'Lembrete: mandar a estimativa ao Paulo.' })
+    const enviados = await waitFor(contents, emailRow(FUNIL_EMAIL_PROPRIA), 10_000)
+    const enviadaAberta = enviados && (await clickEmailRow(contents, FUNIL_EMAIL_PROPRIA))
+    await settle(contents)
+    const enviada = await evaluate<{ from: string; nada: boolean }>(
+      contents,
+      `({ from: document.querySelector('[data-email-reading] [data-email-from]')?.textContent ?? '', nada: !document.querySelector('[data-email-reading] [data-action="funil-mais-contato"]') && !document.querySelector('[data-email-reading] [data-funil-contato-link]') })`,
+    )
+    checks['emailMaisContato'] = {
+      ok: caixa && aberta && botaoEmail && linkEmail && paulo?.origem === 'email' && paulo.nome === 'Paulo Siqueira' && enviados && enviadaAberta && enviada.nada,
+      detail: `Caixa de Entrada=${caixa}, mensagem nova aberta=${aberta}; "+ Contato" ao lado do remetente=${botaoEmail}; depois do clique, o link "Paulo Siqueira"=${linkEmail}, contato ${paulo?.id ?? 'nenhum'} (${paulo?.origem ?? '-'}); mensagem da própria conta chegou=${enviados}, de "${enviada.from}" sem botão nem link=${enviada.nada && enviadaAberta}`,
+    }
+
+    // whatsappContato (CA15, CA6, R37): os Detalhes da Ana (pessoa, ainda sem contato) com o bloco Contato e "+ Contato";
+    // o clique liga a ficha (conversa e telefone); o Bruno, contato só pelo telefone, mostra a ficha; o grupo, sem bloco.
+    await showRoot(contents)
+    await clickNav(contents, 'whatsapp')
+    const lista = await waitFor(contents, `document.querySelectorAll('[data-whatsapp-chat]').length === 3`, 8000)
+    const abrirConversa = async (chatId: string): Promise<boolean> => {
+      await clickSelector(contents, `[data-whatsapp-chat="${chatId}"]`)
+      const aberta = await waitFor(contents, `document.querySelector('[data-whatsapp-conversation="${chatId}"]')`, 8000)
+      if (!(await evaluate<boolean>(contents, `Boolean(document.querySelector('[data-wa-details]'))`))) await clickSelector(contents, '[data-action="toggle-whatsapp-details"]')
+      return aberta && (await waitFor(contents, `document.querySelector('[data-wa-details]')`))
+    }
+    const ana = await abrirConversa(WA_ANA)
+    const botaoWa = await waitFor(contents, `document.querySelector('[data-wa-details] [data-whatsapp-contato=""] [data-action="funil-mais-contato"]')`, 8000)
+    const blocoNoTopo = await evaluate<boolean>(contents, `document.querySelector('[data-wa-details] [data-wa-section]')?.dataset.waSection === 'contato'`)
+    // O resumo da IA da conversa (ou o aviso de desligado) antes do print, para o painel não mudar no meio.
+    await waitFor(contents, `document.querySelector('[data-wa-details] [data-wa-summary]') || document.querySelector('[data-wa-details] [data-wa-insights="off"]')`, 20_000)
+    await both('whatsapp-detalhes-contato')
+    await clickSelector(contents, '[data-wa-details] [data-whatsapp-contato] [data-action="funil-mais-contato"]')
+    const fichaAna = await waitFor(contents, `document.querySelector('[data-wa-details] [data-whatsapp-contato]')?.dataset.whatsappContato && document.querySelector('[data-wa-details] [data-whatsapp-contato] [data-funil-contato-link]')`, 8000)
+    const anaContato = saved().contatos.find((contato) => !contato.arquivado && contato.whatsappChatId === WA_ANA)
+    const brunoSalvo = await api<{ ok: boolean; id: string | null }>('scribe:funil-contato-save', { contato: { nome: 'Bruno Lima', emails: [], telefones: ['+55 11 92222-0000'] }, origem: 'manual' })
+    const bruno = await abrirConversa(WA_BRUNO)
+    const fichaBruno = brunoSalvo.ok && (await waitFor(contents, `document.querySelector('[data-wa-details] [data-whatsapp-contato="${brunoSalvo.id ?? 'x'}"] [data-funil-contato-link="${brunoSalvo.id ?? 'x'}"]')`, 8000))
+    const grupo = await abrirConversa(WA_ATLAS)
+    await settle(contents)
+    const semBlocoGrupo = grupo && (await evaluate<boolean>(contents, `Boolean(document.querySelector('[data-wa-details]')) && !document.querySelector('[data-wa-details] [data-whatsapp-contato]')`))
+    checks['whatsappContato'] = {
+      ok: lista && ana && botaoWa && blocoNoTopo && fichaAna && anaContato?.origem === 'whatsapp' && anaContato.telefones.includes('+5511911110000') && bruno && fichaBruno && semBlocoGrupo,
+      detail: `lista=${lista}; Ana com os Detalhes=${ana}, bloco no topo=${blocoNoTopo} com "+ Contato"=${botaoWa}; depois do clique, a ficha=${fichaAna}, contato ${anaContato?.id ?? 'nenhum'} (${anaContato?.origem ?? '-'}, ${JSON.stringify(anaContato?.telefones ?? [])}); Bruno só pelo telefone (${brunoSalvo.id ?? 'não salvo'}) com a ficha=${fichaBruno}; grupo sem o bloco=${semBlocoGrupo}`,
+    }
+  } finally {
+    await evaluate(contents, `window.__scribeApi.invoke('scribe:settings-update', ${JSON.stringify({ claudeTransport: transportBefore === 'acp' ? 'acp' : 'cli', funil: funilBefore })}).then(() => true)`).catch(() => undefined)
+    if (themeBefore !== 'system') await evaluate(contents, `window.__scribeApi.invoke('scribe:settings-update', { theme: '${themeBefore}' }).then(() => true)`)
+    nativeTheme.themeSource = 'system'
+    win.destroy()
+    console.log(`funil: botões nas telas existentes em ${((Date.now() - startedAt) / 1000).toFixed(1)} s`)
+  }
+}
+
 /**
  * Contrato 55 (CA26), numa janela que troca de tema no lugar (cada print em claro e escuro, no mesmo estado): a árvore
  * de pastas do servidor falso na ordem D1, com a contagem; ⌘ clique em 3 mensagens ("3 selecionadas" e o resumo), o
@@ -14379,6 +14725,10 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
     // que criou (o novo, o da sugestão, os importados, a Lojista e as empresas do CSV).
     await funilContatosChecks(ctx, watch, funil, screenshots)
 
+    // Contrato 116: "+ Contato" no Resumo, no Email e no WhatsApp e o cartão "Oportunidade detectada", logo depois de
+    // Contatos e Empresas e antes do bloqueio (o email e o WhatsApp falsos ainda conectados).
+    await funilTelasExistentesChecks(ctx, watch, funil, screenshots)
+
     // Contrato 22: bloqueio do app, por último (a senha criada vale para o userData inteiro).
     await lockChecks(ctx, watch, lock, screenshots)
 
@@ -14537,7 +14887,9 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
   // Contrato 112: +6 (o kanban de Oportunidades, a nova oportunidade e "Editar etapas", nos dois temas).
   // Contrato 119: +2 (o detalhe da oportunidade, nos dois temas).
   // Contrato 114: +10 (Contatos, Empresas, Novo contato, Sugestões e a importação, nos dois temas).
-  const expectedShots = SCREENS.length * THEMES.length + 197
+  // Contrato 116: +6 (o cartão "Oportunidade detectada" no Resumo, o "+ Contato" na leitura do email e o bloco Contato nos
+  // Detalhes do WhatsApp, nos dois temas).
+  const expectedShots = SCREENS.length * THEMES.length + 203
   if (screenshots.length !== expectedShots) failures.push(`${screenshots.length} PNGs em vez de ${expectedShots}`)
   for (const shot of screenshots) {
     if (shot.name === MEETING_PROMPT_SHOT) {

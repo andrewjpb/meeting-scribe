@@ -3,6 +3,8 @@
 // Contrato 119 (CA5, CA6): o "Escrever e-mail", o "Arquivar", o subtítulo, o "Abrir WhatsApp" e o "Abrir e-mail".
 // Contrato 114 (CA7): a lista e a busca de contatos, a sugestão de empresa (R5), o texto das sugestões e o resultado e o
 // arquivo da importação.
+// Contrato 116: o contato ligado a um e-mail, telefone ou conversa (R35 a R37), a etapa pré-escolhida e o resumo do efeito
+// do cartão "Oportunidade detectada" (R39).
 import { describe, expect, it } from 'vitest'
 import type { Contato, Empresa, FunilState, ItemLinhaDoTempo, Oportunidade, Sugestao } from '../../src/shared/funil'
 import { etapasPadrao } from '../../src/shared/funil-logic'
@@ -37,6 +39,8 @@ import {
   valorParaEdicao,
   whatsappDestino,
 } from '../../src/renderer/src/features/funil/funilFormat'
+import { contatoLigado } from '../../src/renderer/src/features/funil/ContactLink'
+import { etapaInicial, textoEfeito } from '../../src/renderer/src/features/funil/proposalStore'
 
 const DIA_MS = 86_400_000
 const NOW = Date.parse('2026-11-20T15:00:00.000Z')
@@ -339,5 +343,37 @@ describe('contatos e empresas (contrato 114)', () => {
     expect(parseDominio(' @Acme.com.BR ')).toBe('acme.com.br')
     expect(parseDominio('acme')).toBeNull()
     expect(parseDominio('ana@acme.com.br')).toBeNull()
+  })
+})
+
+describe('telas existentes e cartão da proposta (contrato 116)', () => {
+  const pessoa = (id: string, patch: Partial<Contato>): Contato => ({ ...contato(id, id, null), ...patch })
+  const contatos = [
+    pessoa('ct-ana', { emails: ['ana@acme.example'], telefones: ['+5511911110000'] }),
+    pessoa('ct-bia', { telefones: ['+5521998765432'], whatsappChatId: '5521998765432@s.whatsapp.net' }),
+    pessoa('ct-arq', { emails: ['velho@acme.example'], arquivado: true }),
+  ]
+
+  it('contatoLigado: e-mail sem caixa, telefone com e sem o nono dígito, a conversa primeiro e nunca o arquivado', () => {
+    expect(contatoLigado(contatos, { email: ' Ana@ACME.example ' })?.id).toBe('ct-ana')
+    expect(contatoLigado(contatos, { telefone: '+55 11 1111-0000' })?.id).toBe('ct-ana')
+    expect(contatoLigado(contatos, { telefone: '+55 11 99999-0000', whatsappChatId: '5521998765432@s.whatsapp.net' })?.id).toBe('ct-bia')
+    expect(contatoLigado(contatos, { email: 'velho@acme.example' })).toBeNull()
+    expect(contatoLigado(contatos, { email: 'outro@acme.example', telefone: null })).toBeNull()
+    expect(contatoLigado(contatos, {})).toBeNull()
+  })
+
+  it('etapaInicial: a aberta com o nome sugerido, sem acento e sem caixa; senão a primeira aberta', () => {
+    expect(etapaInicial(etapas, 'negociacao')?.id).toBe('etapa-negociacao')
+    expect(etapaInicial(etapas, ' Proposta ')?.id).toBe('etapa-proposta')
+    expect(etapaInicial(etapas, 'Ganho')?.id).toBe('etapa-contato')
+    expect(etapaInicial([], 'Contato')).toBeNull()
+  })
+
+  it('textoEfeito: contatos novos, empresa nova e os citados sem e-mail', () => {
+    expect(textoEfeito({ contatosNovos: 2, empresaNova: true, citados: [] })).toBe('Cria os 2 contatos novos e a empresa')
+    expect(textoEfeito({ contatosNovos: 1, empresaNova: false, citados: ['Carlos Dias'] })).toBe('Cria o contato novo · Carlos Dias fica só citado na nota')
+    expect(textoEfeito({ contatosNovos: 0, empresaNova: true, citados: ['Carlos Dias', 'Ana Lima', 'Bia Reis'] })).toBe('Cria a empresa · Carlos Dias, Ana Lima e Bia Reis ficam só citados na nota')
+    expect(textoEfeito({ contatosNovos: 0, empresaNova: false, citados: ['  '] })).toBe('')
   })
 })
