@@ -2,6 +2,8 @@
 
 Feature `funil-vendas` · Wave 3 · Depende de: 110 e 111 commitados · Spec `../spec.md` (R38 disparo fora do smoke e evento, R39 e R40 no main, R47 canais `scribe:funil-proposta-*`; "Modelo de dados" reunião apagada) · Plan `../plan.md` (D4, D7, D8, D20) · Mockup: nenhum (sem tela; o cartão e o botão são do 116). **Você não commita.** Worktree `/Users/andrew/Documents/GitHub/meeting-scribe-funil-113` (branch `funil-113`, a partir da ponta da `funil-vendas`). Roda em paralelo com 112: você **não** edita `src/shared/routes.ts`, nada em `src/renderer/`, `resources/`, `smoke.ts` nem `smoke-fixtures.ts`.
 
+> **Nota pós-110 (21/11/2026):** toda gravação no funil feita por este contrato (contatos, oportunidades, eventos) passa pelo serviço `services.funil` criado no 110, nunca pelo store direto, para que o evento `scribe:funil-changed` chegue ao renderer. O serviço do 111 (`extract.ts`) exige `settings` nas deps (para o `OneShotEngine`) e `meetingsDir = userData/meetings`.
+
 ## Pré-condições
 - Leia os contratos 110 (`registerFunilIpc`, `FunilActionResult`, `FUNIL_ERRO_TEXTO`, store e serviço) e 111 (`FunilPropostaArquivo`, `createFunilProposalStore`, `createFunnelExtractService`, `detect`, `running`); na spec R38 a R40, R47 e o trecho de "Modelo de dados" sobre a proposta e a reunião apagada; no plan D8.
 - No código: `src/main/index.ts` (`createSummaryService` `:1524-1550` com o `onStatus` e o ramo `status.state === 'ready'` `:1540-1545`; `handle('scribe:meetings-delete', …)` `:2068-2074`; `services.summary.dispose()` `:2609` e `:2702`; a linha `registerFunilIpc` do 110); `src/main/funil/ipc.ts` (do 110); `src/shared/ipc.ts` (`InvokeChannels`, `INVOKE`, `WHEN_LOCKED`, `MainEvents`, `MAIN_EVENTS`); `src/main/invites/suggest.ts` (como o serviço recebe `locate`, `openAcp`, `spawn` em `index.ts`).
@@ -16,7 +18,7 @@ Feature `funil-vendas` · Wave 3 · Depende de: 110 e 111 commitados · Spec `..
 ### Fluxo (`src/main/funil/apply-proposal.ts`, novo)
 - `applyProposal(deps, request)` com `deps = { store: FunilStore; proposals: FunilProposalStore; meetings: Pick<MeetingsStore, 'get'>; now? }`:
   1. Exige `meetings/<id>.funil.json` com `status: 'proposed'`; senão `{ ok: false, erro: 'invalido', mensagem: 'Essa proposta já foi decidida.' }` (ou `nao-encontrado` sem arquivo).
-  2. Para cada contato de `campos.contatos` com e-mail (o que veio da proposta ou o que a pessoa preencheu no cartão): `store.saveContato({ nome, emails: [email], telefones: [] }, 'reuniao')` (cria ou mescla, R4) e guarda o id. Contato sem e-mail não é criado e não entra em `contatoIds`; os nomes deles viram, depois do passo 6 de criar ou atualizar, um `EventoFunil` `nota` com o texto "Citados na reunião: <nome>, <nome>" (R39).
+  2. Para cada contato de `campos.contatos` com e-mail (o que veio da proposta ou o que a pessoa preencheu no cartão): `services.funil` (o serviço do 110, nunca o store direto, para que `scribe:funil-changed` dispare): `funil.saveContato({ nome, emails: [email], telefones: [] }, 'reuniao')` (cria ou mescla, R4) e guarda o id. Contato sem e-mail não é criado e não entra em `contatoIds`; os nomes deles viram, depois do passo 6 de criar ou atualizar, um `EventoFunil` `nota` com o texto "Citados na reunião: <nome>, <nome>" (R39).
   3. Com `vincularA`: a oportunidade precisa existir e estar em etapa `aberta` (`nao-encontrado` senão); acrescenta `meetingId` a `meetingIds` e os contatos novos a `contatoIds`, nada mais.
   4. Com `proposta.acao === 'atualizar'` e `oportunidadeId`: etapa diferente → `moverOportunidade` (R6); `proximoPasso` substituído; `valor` substituído só se não for `null`; `meetingId` e contatos acrescentados.
   5. Senão (`criar`): `saveOportunidade({ titulo, empresaNome: empresa, contatoIds, etapaId, valor, previsao, proximoPasso, meetingIds: [meetingId], origem: 'reuniao' })` (D20 para a empresa).
@@ -50,7 +52,7 @@ Feature `funil-vendas` · Wave 3 · Depende de: 110 e 111 commitados · Spec `..
 
 ## Invariantes
 - O `onStatus` do resumo continua fazendo o que faz hoje (acervo, Drive, `scribe:summary-state`), na mesma ordem.
-- Os canais e políticas de bloqueio existentes não mudam; os 15 canais do 110 continuam iguais.
+- Os canais e políticas de bloqueio existentes não mudam; os 16 canais do 110 continuam iguais.
 - Nada no renderer muda; `smoke.ts` não muda; prints e `expectedShots` iguais.
 - Nada entra no funil sem um pedido `aplicar` (nenhum caminho automático chama `applyProposal`).
 
