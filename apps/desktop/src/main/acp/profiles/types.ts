@@ -9,8 +9,11 @@ import type { NavegadorFerramenta } from '../../../shared/navegador-ferramentas'
 import type { AgentProfileId } from '../../../shared/settings-defaults'
 import type { AcpPackage } from '../install'
 
-/** Contrato 64: `invite-suggest`, o "Sugerir evento" do email (sem ferramenta, sem MCP, sem web). */
-export type AcpPurpose = 'chat' | 'translate' | 'summary' | 'analysis' | 'draft' | 'ai-notes' | 'whatsapp-insights' | 'whatsapp-correct' | 'invite-suggest'
+/**
+ * Contrato 64: `invite-suggest`, o "Sugerir evento" do email (sem ferramenta, sem MCP, sem web). Contrato 111:
+ * `funnel-extract`, a detecção de oportunidade no resumo da reunião (idem).
+ */
+export type AcpPurpose = 'chat' | 'translate' | 'summary' | 'analysis' | 'draft' | 'ai-notes' | 'whatsapp-insights' | 'whatsapp-correct' | 'invite-suggest' | 'funnel-extract'
 
 /** O que a fábrica de sessões recebe (CA4d), sem nada do agente. */
 export interface AcpSessionRequest {
