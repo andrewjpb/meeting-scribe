@@ -59,7 +59,10 @@ import { createRecordingSessions, leaveButtons, RECORDING_LEAVE_MESSAGE } from '
 import { createLockService, type LockService, type TouchIdAccess } from './lock/service'
 import { createFileLockStore } from './lock/store'
 import { createFileAnalysesStore } from './meetings/analyses'
-import { registerFunilIpc } from './funil/ipc'
+import { autoDetect } from './funil/apply-proposal'
+import { createFunnelExtractService, type FunnelExtractService } from './funil/extract'
+import { registerFunilIpc, type FunilPropostaIpcDeps } from './funil/ipc'
+import { createFunilProposalStore } from './funil/proposals'
 import { createFunilService, type FunilService } from './funil/service'
 import { createFunilStore } from './funil/store'
 import { createAiNotesService, type AiNotesService } from './meetings/ai-notes-service'
@@ -70,7 +73,7 @@ import { createMeetingsService } from './meetings/service'
 import { createFileMeetingsStore, folderCreateSchema, folderIdSchema, folderRenameSchema, meetingMoveSchema, type MeetingsStore } from './meetings/store'
 import { createFileSummaryStore } from './meetings/summaries'
 import { createSummaryService, type SummaryService } from './meetings/summary-service'
-import { createFileTranscriptStore, type TranscriptStore } from './meetings/transcripts'
+import { createFileTranscriptStore, MEETINGS_DIR, type TranscriptStore } from './meetings/transcripts'
 import { aboutPanelOptions, buildMenuTemplate, MENU_IDS } from './menu'
 import { createMicPermissions } from './permissions'
 import { handleAppScheme, registerAppScheme } from './protocol'
@@ -922,6 +925,10 @@ interface AppServices {
   navegadorMcp: NavegadorMcpServer
   /** Contrato 110: o funil de vendas (`funil.json`), com as leituras sob demanda dos caches dos outros domínios. */
   funil: FunilService
+  /** Contrato 113: a detecção de oportunidade nas reuniões (o serviço do 111). */
+  funnel: FunnelExtractService
+  /** Contrato 113: o que os canais `scribe:funil-proposta-*` usam (e o `proposals.remove` ao excluir a reunião). */
+  funilProposta: FunilPropostaIpcDeps
 }
 
 /**
@@ -1547,6 +1554,8 @@ function createAppServices(userData: string): AppServices {
       if (status.state === 'ready') {
         void corpus.sync(meetingId).catch(() => undefined)
         void drive.enqueue(meetingId, ['summary']).catch(() => undefined)
+        // Contrato 113 (R38, D8): a detecção de oportunidade, fora do smoke; o resumo nunca espera por ela.
+        void autoDetect({ settings: () => settings.get(), proposals: funilPropostas, extract: funnel, smoke: smokeFixtures !== null }, meetingId).catch(() => undefined)
       }
       broadcast(appWindows(), 'scribe:summary-state', { meetingId, status })
     },
@@ -1846,8 +1855,9 @@ function createAppServices(userData: string): AppServices {
     ...devLog,
   })
   // Contrato 110: o funil lê reuniões, email e WhatsApp só pelos caches deles; bloqueado, a view não vai às janelas.
+  const funilStore = createFunilStore({ dir: userData, ...devLog })
   const funil = createFunilService({
-    store: createFunilStore({ dir: userData, ...devLog }),
+    store: funilStore,
     meetings,
     summaries,
     email: { cached: () => email.cached() },
@@ -1856,6 +1866,24 @@ function createAppServices(userData: string): AppServices {
     onChange: (view) => {
       if (!lockService?.isLocked()) broadcast(appWindows(), 'scribe:funil-changed', view)
     },
+    ...devLog,
+  })
+  // Contrato 113: a proposta de IA de cada reunião e a passada `funnel-extract`, com o mesmo motor do resumo.
+  const funilPropostas = createFunilProposalStore({ meetingsDir: join(userData, MEETINGS_DIR) })
+  const notifyProposta = (meetingId: string): void => broadcast(appWindows(), 'scribe:funil-proposta-changed', { meetingId })
+  const funnel = createFunnelExtractService({
+    settings,
+    locate: () => claude.locate(),
+    spawn: smokeClaude?.spawnSummary ?? nodeSpawnSummary,
+    openAcp,
+    acpAvailable: async () => (await acpAgent.current()).available(),
+    userData,
+    baseEnv: process.env,
+    meetings,
+    summaries,
+    funil: funilStore,
+    proposals: funilPropostas,
+    onChange: notifyProposta,
     ...devLog,
   })
   return {
@@ -1901,6 +1929,8 @@ function createAppServices(userData: string): AppServices {
     navegador,
     navegadorMcp,
     funil,
+    funnel,
+    funilProposta: { funnel, proposals: funilPropostas, store: funilStore, meetings, onChange: notifyProposta },
   }
 }
 
@@ -2080,7 +2110,7 @@ function registerIpc(services: AppServices): void {
   }))
   // Só o smoke recebe o sinal gerado; o app normal sempre capta microfone e sistema de verdade.
   handle('scribe:capture-mode', appOrigin, () => (smoke ? 'synthetic' : 'real'))
-  registerFunilIpc({ appOrigin, funil: services.funil, log: (message) => console.error(message) })
+  registerFunilIpc({ appOrigin, funil: services.funil, proposta: services.funilProposta, log: (message) => console.error(message) })
   handle('scribe:meetings-list', appOrigin, () => meetings.list())
   handle('scribe:meetings-get', appOrigin, (_event, { id }) => meetings.get(id))
   handle('scribe:meetings-create', appOrigin, async (_event, input) => {
@@ -2102,6 +2132,8 @@ function registerIpc(services: AppServices): void {
     const deleted = await meetingsService.deleteMeeting(id)
     // Contrato 24: a conversa do WhatsApp ligada a ela sai junto.
     if (deleted) await whatsapp.removeMeeting(id).catch(() => undefined)
+    // Contrato 113: a proposta de IA sai junto; `Oportunidade.meetingIds` fica (a linha do tempo mostra "Reunião apagada").
+    if (deleted) await services.funilProposta.proposals.remove(id).catch(() => undefined)
     trayController?.refresh()
     return deleted
   })
@@ -2640,6 +2672,7 @@ void app.whenReady().then(async () => {
     trayController?.dispose()
     services.claude.dispose()
     services.summary.dispose()
+    services.funnel.dispose()
     services.analysis.dispose()
     services.aiNotes.dispose()
     services.whatsappInsights.dispose()
@@ -2733,6 +2766,7 @@ void app.whenReady().then(async () => {
     trayController?.dispose()
     services.claude.dispose()
     services.summary.dispose()
+    services.funnel.dispose()
     services.analysis.dispose()
     services.aiNotes.dispose()
     services.whatsappInsights.dispose()

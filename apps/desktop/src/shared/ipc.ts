@@ -27,6 +27,9 @@ import type { AiNotesRunRequest, AiNotesRunResult } from './ai-notes'
 import type { ContatoInput, ContatoOrigem, EmpresaInput, EtapaInput, FunilActionResult, FunilFalha, FunilImportAbrirResult, FunilImportConfirmarResult, FunilTimelineResult, FunilView, OportunidadeInput, Sugestao } from './funil'
 import type { CampoImport } from './funil-import'
 // fim 110
+// 113: proposta do funil
+import type { FunilPropostaAplicarRequest, FunilPropostaAplicarResult, FunilPropostaRecusa, FunilPropostaView } from './funil-proposta'
+// fim 113
 import type { AnalysisRunRequest, AnalysisRunResult, MeetingAnalysis } from './meeting-analysis'
 import type { MeetingNote } from './meeting-notes'
 import type { SummaryStatus } from './meeting-summary'
@@ -631,6 +634,16 @@ export interface InvokeChannels {
   /** Linha do tempo de um contato ou de uma oportunidade (R8 a R10, R29). */
   'scribe:funil-timeline': { request: { tipo: 'contato' | 'oportunidade'; id: string }; response: FunilTimelineResult }
   // fim 110
+  // 113: proposta do funil
+  /** Contrato 113: a proposta de IA da reunião, se a detecção roda agora e a oportunidade aberta da mesma empresa (R39). */
+  'scribe:funil-proposta-get': { request: { meetingId: string }; response: FunilPropostaView | FunilPropostaRecusa }
+  /** "Criar" / "Atualizar" / "Vincular a existente…" (R39): só com o arquivo `proposed`; grava `accepted`. */
+  'scribe:funil-proposta-aplicar': { request: FunilPropostaAplicarRequest; response: FunilPropostaAplicarResult }
+  /** "Ignorar": `proposed` vira `dismissed`. */
+  'scribe:funil-proposta-descartar': { request: { meetingId: string }; response: { ok: boolean } }
+  /** "Detectar oportunidade" (R40): roda mesmo com o interruptor desligado e substitui o arquivo; responde na hora com `detectando: true`. */
+  'scribe:funil-proposta-detectar': { request: { meetingId: string }; response: FunilPropostaView | FunilPropostaRecusa }
+  // fim 113
 }
 
 /** renderer -> main, sem resposta (`__scribeApi.send` / `ipcMain.on`). */
@@ -778,6 +791,10 @@ export interface MainEvents {
   /** Contrato 110: `funil.json` foi gravado; vai a view inteira. Não chega bloqueado. */
   'scribe:funil-changed': FunilView
   // fim 110
+  // 113: proposta do funil
+  /** Contrato 113: `meetings/<id>.funil.json` foi gravado (detecção, "Criar" / "Atualizar" ou "Ignorar"). */
+  'scribe:funil-proposta-changed': { meetingId: string }
+  // fim 113
 }
 
 export type InvokeChannel = keyof InvokeChannels
@@ -1044,6 +1061,12 @@ const INVOKE: Record<InvokeChannel, true> = {
   'scribe:funil-importar-confirmar': true,
   'scribe:funil-timeline': true,
   // fim 110
+  // 113: proposta do funil
+  'scribe:funil-proposta-get': true,
+  'scribe:funil-proposta-aplicar': true,
+  'scribe:funil-proposta-descartar': true,
+  'scribe:funil-proposta-detectar': true,
+  // fim 113
 }
 const RENDERER_EVENTS: Record<RendererEvent, true> = {
   'scribe:csp-violation': true,
@@ -1114,6 +1137,9 @@ const MAIN_EVENTS: Record<MainEvent, true> = {
   // 110: funil
   'scribe:funil-changed': true,
   // fim 110
+  // 113: proposta do funil
+  'scribe:funil-proposta-changed': true,
+  // fim 113
 }
 
 /**
@@ -1439,6 +1465,12 @@ export const WHEN_LOCKED: Readonly<Record<InvokeChannel, LockedPolicy>> = Object
   'scribe:funil-importar-confirmar': 'refused',
   'scribe:funil-timeline': 'refused',
   // fim 110
+  // 113: proposta do funil (R47: todos recusados)
+  'scribe:funil-proposta-get': 'refused',
+  'scribe:funil-proposta-aplicar': 'refused',
+  'scribe:funil-proposta-descartar': 'refused',
+  'scribe:funil-proposta-detectar': 'refused',
+  // fim 113
 })
 
 /**
