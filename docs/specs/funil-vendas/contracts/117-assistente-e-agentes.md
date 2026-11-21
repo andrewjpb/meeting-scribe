@@ -1,0 +1,75 @@
+# Contrato 117: O Assistente e os agentes com o funil (fonte, cartões, canal)
+
+Feature `funil-vendas` · Wave 7 · Depende de: 112, 115 e 119 commitados (e 110, 114, 116) · Spec `../spec.md` (R19 parte dos cartões, R20, R41 a R43, R45 no smoke; CA8, CA16; CA17 parte) · Plan `../plan.md` (D9, D11, D16, D20) · Mockup `../mockups/Funil.dc.html` (artboard `10-assistente-funil`; os cartões `oportunidade-proximo-passo` e `contato-criar` seguem os vizinhos desse artboard; o Switch "Pode ler o funil" segue a linha "Pode pesquisar na internet" do `AgentForm`; PNGs em `../mockups/png/`). **Você não commita.** Worktree `/Users/andrew/Documents/GitHub/meeting-scribe-funil-vendas` (branch `funil-vendas`, base dd106ce). Único contrato da wave 7: dono de `smoke.ts` e `smoke-fixtures.ts`.
+
+## Pré-condições
+- **Artboard `10-assistente-funil` aprovado pelo Andrew.** Sem aprovação, pare e avise.
+- Leia na spec R20, R41 a R43 e CA8, CA16; no plan D9, D16 e D20; os contratos 110 (serviço e `FunilView`), 112 (`funilPath`, ids fixos da fixture: `op-integracao` é a esfriada e `op-vistoria` está em Proposta), 119 (tela de detalhe, destino do `abrir` com `tela: 'oportunidade'`), 115 (`funilMarkdown`, a função montada em `index.ts`, `Agent.funil`, `[data-agent-funil]`) e o 78 (`docs/specs/assistente-agenda/contracts/78-assistente-agenda.md`: como um tipo de cartão novo atravessa as camadas).
+- No código: `src/shared/assistant.ts` (`CHAT_ACTION_KINDS` `:62`, `OPEN_SCREENS` `:43`, `ChatAction` `:272`); `src/shared/chat.ts:127-150` (`CHAT_SOURCE_KINDS`, `CHAT_SOURCES_OFF_BY_DEFAULT`, `chatSourceDefault`, `chatSourcesOf`); `src/main/chat/actions.ts` (`proposedSchema` `:99`, `ActionResolver` `:131`, `resolve` `:408`, `actionsHistory` `:558`, `createChatActions` `:726`, `instagramDraft` `:968` como modelo recente); `src/main/chat/store.ts:294` (zod do cartão persistido); `src/main/chat/sources.ts` (`REDES_FILE` `:49`, `SOURCE_FILES` `:55`, `AssistantSourcesDeps` `:385`, `WrittenSources`, `writeAtomic`, `writeSources` `:430`); `src/main/claude-cli/chat.ts:133-190` (`assistantSystemPrompt`, tipos de bloco `:164`, exemplos `:176`); `src/shared/ipc.ts` (`scribe:chat-action-*` `:252-270`, `INVOKE` `:831-835`, `WHEN_LOCKED` `:1187-1193`); `src/main/index.ts` (deps das fontes `:1422`, do `ActionResolver` `:1489`, `createChatActions` `:1824`, handlers `scribe:chat-action-*`); `features/chat/ActionCards.tsx` (`OpenCard` `:359`, `ActionCard` `:1317-1336`); `features/chat/chatStore.ts`; `features/chat/SourcesSection.tsx:11-28`; `resources/assistente/guia-do-app.md` (seções `assistente` `:34` e `funil`); `test/assistant.test.ts:209-213` (lista de canais) e `:793` (guia); `test/fixtures/fake-acp-agent.mjs` (respostas do chat por regex); `src/main/smoke.ts` (`redesAssistantChecks` como modelo, `expectedShots` `:13421`).
+
+## Superfície
+
+### Tipos (`src/shared/assistant.ts`, `src/shared/chat.ts`)
+- `CHAT_ACTION_KINDS` += `'oportunidade-criar' | 'oportunidade-mover' | 'oportunidade-proximo-passo' | 'contato-criar'`; `OPEN_SCREENS` += `'funil' | 'oportunidade' | 'contato'` (R20).
+- `ChatActionOportunidadeCriar { kind; titulo; empresa: string | null; contatos: { nome: string; email: string | null; contatoId: string | null }[]; etapaId: string; etapas: { id: string; nome: string }[] /* abertas */; valor: number | null /* centavos */; previsao: string | null; proximoPasso: { texto: string; data: string | null } | null; oportunidadeId: string | null; status; result; error }`, `ChatActionOportunidadeMover { kind; oportunidadeId; titulo; de: string; paraEtapaId: string; para: string; nota: string | null; status; result; error }`, `ChatActionOportunidadeProximoPasso { kind; oportunidadeId; titulo; texto; data: string | null; anterior: { texto: string; data: string | null } | null; status; result; error }`, `ChatActionContatoCriar { kind; nome; email: string | null; telefone: string | null; empresa: string | null; cargo: string | null; existenteId: string | null; existenteNome: string | null; contatoId: string | null; status; result; error }`, todos na união `ChatAction`.
+- `CHAT_SOURCE_KINDS` += `'funil'`, **primeiro da lista** (ordem do artboard `10`), **desligado por padrão** (R41: entra em `CHAT_SOURCES_OFF_BY_DEFAULT`, como `redes`); `ChatSources` ganha `funil`.
+
+### Proposta e execução (`src/main/chat/actions.ts`, `src/main/chat/store.ts`)
+- `proposedSchema` aceita `{"tipo":"oportunidade-criar","titulo","empresa"?,"contatos"?:[{"nome","email"?}],"etapa"?,"valor"? /* reais */,"previsao"?,"proximoPasso"?:{"texto","data"?}}`, `{"tipo":"oportunidade-mover","oportunidadeId","etapa","nota"?}`, `{"tipo":"oportunidade-proximo-passo","oportunidadeId","texto","data"?}`, `{"tipo":"contato-criar","nome","email"?,"telefone"?,"empresa"?,"cargo"?}`. JSON fora desse formato vira texto, como hoje.
+- `ActionResolver.funil?: () => Promise<FunilView | null>` (`null` com o app bloqueado). `resolve` (R42): ids e nomes resolvidos **pelo app**; `oportunidadeId` que não existe (ou arquivada) → cartão com `status: 'failed'` e `error: 'oportunidade não encontrada'`; `etapa` que não bate por `semAcento` com uma etapa → `failed` com `'etapa não encontrada'`; `oportunidade-criar` sem `etapa` usa a primeira aberta; `valor` em reais vira centavos; contatos ligados a contatos existentes por e-mail (`contatoId`); `contato-criar` sem e-mail nem telefone → `failed` com `'Informe um e-mail ou telefone'` (texto exato de R42), e com e-mail ou telefone de um contato existente preenche `existenteId`/`existenteNome` (vai mesclar, R4); `funil()` devolvendo `null` → o bloco vira texto.
+- `actionsHistory`: "Oportunidade criada: <título>", "Oportunidade movida: <título> para <etapa>", "Próximo passo de <título>: <texto>", "Contato criado: <nome>" (com o estado entre parênteses, como as outras linhas).
+- `createChatActions().funil({ chatId, index, actionId, campos? })` (D9): trava `busy`, exige `proposed`, executa pelo serviço do funil conforme o `kind`: criar (contatos sem `contatoId` com `saveContato(…, 'assistente')`, depois `saveOportunidade({ …, origem: 'assistente' })`, D20 para a empresa; `campos` traz a edição do cartão e é revalidado no main com o mesmo esquema), mover (`moverOportunidade`; destino `perdido` usa `nota` como `motivoPerda`; nas outras, `nota` vira `EventoFunil` `nota`), próximo passo (`saveOportunidade({ id, proximoPasso })`), contato (`saveContato(…, 'assistente')`); grava `done` + `result` ou `failed` + `error` em pt-BR (`FUNIL_ERRO_TEXTO`).
+- `chat/store.ts`: zod dos quatro cartões persistidos; arquivo antigo continua lendo.
+
+### Canal (`src/shared/ipc.ts`, `src/main/index.ts`)
+`scribe:chat-action-funil` (`{ chatId; index; actionId; campos? }` → `ChatActionResult`) em `InvokeChannels`, `INVOKE` e `WHEN_LOCKED: 'refused'`; handler com `.catch` tipado, ao lado dos outros `chat-action-*`. Em `index.ts`, também: `AssistantSourcesDeps.funil` e `ActionResolver.funil` ligados ao serviço do funil e à função `funilMarkdown` do 115.
+
+### Fonte (`src/main/chat/sources.ts`, R41)
+`FUNIL_FILE = 'FUNIL.md'` em `SOURCE_FILES`; `AssistantSourcesDeps.funil?: () => Promise<string | null>`; `writeSources` grava `FUNIL.md` (atômico, `0o600`, só se mudou) quando a fonte está ligada e o texto não é `null`; desligada, o arquivo sai da pasta (`isSourceFile`); `WrittenSources.funil: boolean`.
+
+### Instrução e guia
+- `assistantSystemPrompt` (R42): descreve `FUNIL.md`; citações `[Funil · <título da oportunidade>]` e `[Funil · Contato <nome>]`; os quatro blocos com campos e um exemplo de `oportunidade-mover`; "só proponha mover ou mudar o próximo passo com o id listado em FUNIL.md"; "abrir" com as telas novas (`funil`, `oportunidade` com o id, `contato` com o id); a frase existente "você propõe cartões; nada acontece sem o clique da pessoa" continua.
+- `guia-do-app.md`: na seção `funil`, os quatro cartões e a fonte Funil; na seção `assistente`, a linha da fonte Funil.
+
+### Renderer (`features/chat/ActionCards.tsx`, `chatStore.ts`, `SourcesSection.tsx`)
+- `SOURCE_TEXT.funil = { name: 'Funil', description: 'Etapas, oportunidades abertas, ganhas e perdidas dos últimos 90 dias e até 500 contatos.' }` (linha do artboard `10`).
+- Cartões (R43, artboard `10`): `OportunidadeMoverCard` ("Mover **<título>** de <de> para <para>", linha "Nota: …", `Button primary` "Mover", "Descartar"); `OportunidadeCriarCard` (campos editáveis Título, Etapa, Empresa, Valor, Contatos, Previsão, Próximo passo, como o `EventCard`; "Criar", "Descartar"); `ProximoPassoCard` ("Próximo passo de **<título>**", "antes → depois", "Salvar", "Descartar"); `ContatoCriarCard` (nome, e-mail, telefone, empresa, cargo; com `existenteId`, a linha "Completa o contato <nome>"; "Criar", "Descartar"). `data-chat-action="<kind>"`; `data-action="chat-action-funil-mover|chat-action-funil-criar|chat-action-funil-passo|chat-action-funil-contato"`; `done` mostra o resultado com link para `funilPath('oportunidades', id)` ou `funilPath('contatos', id)`; `failed` mostra o erro.
+- `OpenCard` (R20): `funil` → `funilPath('oportunidades')`, `oportunidade` → `funilPath('oportunidades', alvo)`, `contato` → `funilPath('contatos', alvo)`.
+- `chatStore.ts`: `funilAction(ref, campos?)` pelo canal.
+
+### Agente falso (`test/fixtures/fake-acp-agent.mjs`)
+No propósito `chat`: "mova a oportunidade <id> para <etapa>" → bloco `oportunidade-mover` com esse id e etapa e a nota "a Ana leva a proposta à diretoria na segunda."; "crie a oportunidade de teste" → `oportunidade-criar` (título "Conciliação", empresa "Cliente", etapa "Contato", valor 45000); "crie o contato de teste" → `contato-criar` (nome "Paulo Siqueira", e-mail `paulo.siqueira@cliente.example`); "quais arquivos estão na pasta" → texto com os nomes de `readdirSync(cwd)` (para o agente das Automações).
+
+### Smoke (`src/main/smoke.ts`, bloco novo `funilAssistenteChecks` depois de `funilTelasExistentesChecks` e antes de `lockChecks`; checks obrigatórios, nesta ordem, `funilFonteDesligada`, `funilFonte`, `funilMover`, `funilMoverInexistente`, `funilCriar`, `funilContato`, `funilAbrir`, `agenteFunil`)
+- `funilFonteDesligada` (R41): numa conversa nova, o Contexto mostra a linha "Funil" **desligada** e primeira em Fontes; depois de uma pergunta, a pasta da conversa **não** tem `FUNIL.md`. `funilFonte`: ligar a linha e perguntar de novo → `FUNIL.md` existe e contém "esfriada" e "Integração Parceiro" (`op-integracao`); o título de `op-arquivada` (arquivada) não aparece. Deixe ligada para os checks seguintes.
+- `funilMover` (CA16): "mova a oportunidade op-vistoria para Negociação" → `[data-chat-action="oportunidade-mover"]` com "de Proposta para Negociação"; print `assistente-funil`; clicar Mover → `done`, a oportunidade está em Negociação e há evento `etapa` e evento `nota`; segundo clique não faz nada.
+- `funilMoverInexistente`: com id `nao-existe` → cartão `failed` com "oportunidade não encontrada".
+- `funilCriar`: cartão criar, mudar Valor para `50.000,00`, Criar → oportunidade com `valor: 5000000` e `origem: 'assistente'`. `funilContato`: cartão contato → Criar → contato com `origem: 'assistente'`.
+- `funilAbrir`: bloco `abrir` com `tela: 'oportunidade'` e um id → clicar leva a `/funil/oportunidades/<id>`.
+- `agenteFunil` (R45): em Automações, o formulário de agente mostra `[data-agent-funil]` desligado; criar um agente com o Switch ligado; "Pedir agora" com "quais arquivos estão na pasta" → a resposta contém `FUNIL.md`; com o Switch desligado, não contém.
+- Prints novos: 1 nome × 2 temas: **`expectedShots += 2`** (de `+ 203` para `+ 205`).
+
+## Critérios de aceite
+- **CA1** (CA8 da spec) `test/assistant.test.ts`: a lista de canais `scribe:chat-action-*` passa a ser exatamente `['scribe:chat-action-event', 'scribe:chat-action-funil', 'scribe:chat-action-instagram-draft', 'scribe:chat-action-reminder', 'scribe:chat-action-reminder-change', 'scribe:chat-action-state']` (ordenada) e todos recusados quando bloqueado.
+- **CA2** (CA8 da spec) Dado um bloco `lap-acao` `{"tipo":"oportunidade-mover","oportunidadeId":"nao-existe","etapa":"Negociação"}` e um `ActionResolver.funil` com o estado padrão, quando `extractActions`, então há um cartão `oportunidade-mover` com `status: 'failed'` e `error: 'oportunidade não encontrada'`; com etapa "Fechamento", `error: 'etapa não encontrada'`.
+- **CA3** (CA8 da spec, R41) `chatSourcesOf({})` devolve `funil: false`. Dado `writeSources` com a fonte ligada e um `FunilView` com uma oportunidade parada há 8 dias (`diasEsfriar` 7), então `FUNIL.md` existe na pasta, contém "esfriada" e tem modo `0o600`; com a fonte desligada, não existe; `test/assistant.test.ts:793` continua verde com `<!-- tela: funil -->`.
+- **CA4** (R42) `test/chat.test.ts`: `assistantSystemPrompt` contém `FUNIL.md`, `[Funil · ` e os quatro tipos `oportunidade-criar`, `oportunidade-mover`, `oportunidade-proximo-passo`, `contato-criar`.
+- **CA5** `test/assistant.test.ts`: `oportunidade-criar` com `valor: 1234.5` vira cartão com `valor: 123450`; `contato-criar` sem e-mail nem telefone vira `failed` com "Informe um e-mail ou telefone"; com e-mail de contato existente, `existenteId` preenchido; `funil()` devolvendo `null` faz o bloco virar texto; `createChatActions().funil` num cartão `done` não executa de novo.
+- **CA6** (CA16 da spec) O print `assistente-funil` existe nos dois temas e os oito checks passam.
+- **CA7** (CA17 da spec, parte) `expectedShots` = `SCREENS.length * THEMES.length + 205` e o número de PNGs bate.
+
+## Invariantes
+- Cartões existentes (lembrete, WhatsApp, tarefa, abrir, emails, evento, lembretes, Instagram) e as fontes existentes funcionam como hoje (testes e checks existentes verdes); a fonte Redes continua desligada por padrão; conversas antigas, sem `funil` em `ChatScope.sources`, leem a fonte Funil como desligada.
+- Nada é gravado no funil sem o clique no cartão (o `resolve` só lê).
+- Nenhum literal de cor fora de `tokens.css`; sem sombra, sem pílula, raio até 6 px; nenhum texto técnico nos cartões.
+
+## Fora de escopo desta tarefa
+Cartão de e-mail novo (`email-novo`); detecção em email e WhatsApp; ferramentas `lap-ferramenta` novas para o funil; **arquivar oportunidade pelo Assistente** (o canal `scribe:funil-oportunidade-archive` é só da tela, contrato 119; nenhum cartão novo para ele).
+
+## Gates
+Ajuste mecânico liberado (plan, Gates): testes existentes que quebrarem só porque `ChatSources` ganhou `funil` ou `ChatAction` ganhou os tipos novos recebem o campo com o valor padrão (ou o ramo novo no `switch` de teste), sem mudar a asserção; liste cada arquivo no relatório.
+
+`cd /Users/andrew/Documents/GitHub/meeting-scribe-funil-vendas/apps/desktop && SMOKE_NO_SANDBOX=1 caffeinate -dimsu pnpm gates` verde. Testes: CA1 a CA3 e CA5 em `test/assistant.test.ts`, CA4 em `test/chat.test.ts`; smoke com os 8 checks.
+
+## Relatório final (formato)
+Arquivos; gates (contagens, `expectedShots` novo); o trecho novo da instrução de sistema (cole: é carga de prompt); linhas mexidas em `index.ts`; diferenças em relação ao artboard `10` e por quê; o que o revisor deve olhar no print.
