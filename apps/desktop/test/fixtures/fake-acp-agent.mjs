@@ -22,6 +22,10 @@
 //   devolve o objeto (ou o texto) da resposta; sem ela, a sugestão sai do pedido: o assunto sem "Re: ", o dia seguinte ao
 //   `<data_do_email>`, às 14:00, 60 min e o primeiro link `meet.google.com/…` do texto (sem "reunião" no texto,
 //   `found: false`).
+// - detecção de oportunidade (instrução "Você lê o resumo de uma reunião e diz se há uma oportunidade de venda.",
+//   contrato 111): devolve o JSON da proposta (`fakeFunnelProposal`), só texto, com o custo no `usage_update`; o marcador
+//   no pedido escolhe a resposta: `[funil:nenhuma]`, `{"proposta": null}`; `[funil:quebrado]`, um JSON cortado;
+//   `[funil:atualizar:<id>]`, `atualizar` com esse id; sem marcador, `criar` "Portal do associado".
 // - chat: pensa em pedaços, monta o "Plano", lê o `INDICE.md` e a reunião mais recente e procura um termo,
 //   cada leitura pedindo permissão; tenta escrever um arquivo (permissão pedida e negada), ler um arquivo
 //   fora da pasta pelo cliente (`fs/read_text_file`, recusado) e abrir um terminal (recusado); responde em
@@ -422,6 +426,26 @@ export function fakeInviteSuggestion(content) {
   return { found: date !== null, title: block('assunto').replace(/^(re|fw|enc):\s*/i, '') || null, date, time: '14:00', durationMinutes: 60, url }
 }
 
+/** Contrato 111: a resposta da detecção de oportunidade, escolhida pelo marcador no pedido (texto pronto para enviar). */
+export function fakeFunnelProposal(content) {
+  if (content.includes('[funil:nenhuma]')) return JSON.stringify({ proposta: null })
+  if (content.includes('[funil:quebrado]')) return '{"proposta": '
+  const proposta = {
+    acao: 'criar',
+    titulo: 'Portal do associado',
+    empresa: 'Cliente',
+    contatos: [{ nome: 'Marina Rocha', email: 'marina.rocha@cliente.example' }],
+    etapaSugerida: 'Descoberta',
+    valor: 45000,
+    previsao: null,
+    proximoPasso: { texto: 'Enviar proposta', data: null },
+    justificativa: 'Pediram proposta para o portal.',
+  }
+  const match = /\[funil:atualizar:([^\]\s]+)\]/.exec(content)
+  if (match) Object.assign(proposta, { acao: 'atualizar', oportunidadeId: match[1], etapaSugerida: 'Proposta', proximoPasso: { texto: 'Enviar proposta revisada', data: null } })
+  return JSON.stringify({ proposta })
+}
+
 export function fakeAcpAgent({ log = () => undefined, pause = 300, mcpStatus = null, inviteSuggest = null } = {}) {
   const sessions = new Map()
   let next = 0
@@ -436,6 +460,7 @@ export function fakeAcpAgent({ log = () => undefined, pause = 300, mcpStatus = n
     if (prompt.startsWith('Você lê uma conversa do WhatsApp')) return 'whatsapp-insights'
     if (prompt.startsWith('Você corrige mensagens de WhatsApp')) return 'whatsapp-correct'
     if (prompt.startsWith('Você lê um email e sugere um evento de agenda.')) return 'invite-suggest'
+    if (prompt.startsWith('Você lê o resumo de uma reunião e diz se há uma oportunidade de venda.')) return 'funnel-extract'
     return 'chat'
   }
 
@@ -583,6 +608,13 @@ export function fakeAcpAgent({ log = () => undefined, pause = 300, mcpStatus = n
         await say(typeof reply === 'string' ? reply : JSON.stringify(reply))
         await update({ sessionUpdate: 'usage_update', used: 400, size: 200000, cost: { amount: 0.0006, currency: 'USD' }, _meta: { '_claude/model': modelId } })
         return { stopReason: 'end_turn', usage: { totalTokens: Math.ceil(content.length / 4) + 40, inputTokens: Math.ceil(content.length / 4), outputTokens: 40 } }
+      }
+
+      // Contrato 111: a detecção de oportunidade, só JSON (o agente nunca grava nada no funil).
+      if (state.purpose === 'funnel-extract') {
+        await say(fakeFunnelProposal(content))
+        await update({ sessionUpdate: 'usage_update', used: 500, size: 200000, cost: { amount: 0.0007, currency: 'USD' }, _meta: { '_claude/model': modelId } })
+        return { stopReason: 'end_turn', usage: { totalTokens: Math.ceil(content.length / 4) + 60, inputTokens: Math.ceil(content.length / 4), outputTokens: 60 } }
       }
 
       // Contrato 32: os Detalhes da conversa do WhatsApp, só JSON (o agente nunca envia nada).
