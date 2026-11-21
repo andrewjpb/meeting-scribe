@@ -224,7 +224,7 @@ import {
 // 60 s.
 // Contrato 12 (agendas): uns 25 s.
 // Contrato 43 (email): uns 25 s.
-const TIMEOUT_MS = 600_000
+const TIMEOUT_MS = 1_200_000 // 20 min: o funil (contratos 112 a 117) acrescentou cinco blocos de checks e 26 prints
 const THEMES = ['light', 'dark'] as const
 /** Telas fotografadas em cada tema, na ordem do roteiro de `runSmoke`. */
 const SCREENS = [
@@ -12837,7 +12837,8 @@ async function funilContatosChecks(ctx: SmokeContext, watch: (win: BrowserWindow
     )
     checks['contatosSugestoes'] = {
       ok: ficam.length === 3 && tres && JSON.stringify([...linhas.canais].sort()) === JSON.stringify(['email', 'reuniao', 'whatsapp']) && linhas.heights.every((height) => height === 44) && linhas.segmented === 'Sugestões 3',
-      detail: `${todas.length} sugestões do main (${todas.map((sugestao) => `${sugestao.chave}:${sugestao.origem}`).join(', ')}); ficam ${JSON.stringify(ficam.map((sugestao) => sugestao.chave))}; ignoradas ${JSON.stringify(sobram.map((sugestao) => sugestao.chave))}; 3 linhas=${tres}; ${JSON.stringify(linhas)}`,
+      // Só contagens e origens: a chave traz e-mail ou telefone, e o relatório não pode ter dado da agenda (contrato 12, CA11).
+      detail: `${todas.length} sugestões do main (origens ${JSON.stringify(todas.map((sugestao) => sugestao.origem))}); ficam ${ficam.length} (${JSON.stringify(ficam.map((sugestao) => sugestao.origem))}); ignoradas ${sobram.length}; 3 linhas=${tres}; ${JSON.stringify(linhas)}`,
     }
     await both('funil-contatos-sugestoes')
 
@@ -12911,6 +12912,8 @@ const FUNIL_REUNIAO_ATTENDEES = [
   { name: 'Lucas Vieira', email: 'lucas.vieira@vertice.example' },
   { name: 'Carlos Dias', email: '' },
 ]
+/** Contrato 116: a reunião semeada sem evento da agenda e com resumo (o caso "sem `calendar`, sem bloco"), apagada depois. */
+const FUNIL_REUNIAO_SEM_AGENDA = 'smoke-funil-sem-agenda'
 /** O remetente do email entregue pelo bloco: ainda não é contato. */
 const FUNIL_EMAIL_REMETENTE = { name: 'Paulo Siqueira', address: 'paulo.siqueira@fluxo.example' }
 const FUNIL_EMAIL_ASSUNTO = 'Orçamento do módulo de conciliação'
@@ -12921,8 +12924,8 @@ const FUNIL_EMAIL_PROPRIA = 'Lembrete da estimativa do módulo'
  * Contrato 116 (R35 a R37, R39, R40; CA15 da spec), numa janela que troca de tema no lugar, depois do
  * `funilContatosChecks`, com o agente ACP falso (a detecção sob demanda) e `funil.detectarNasReunioes` desligado. Semeia
  * a reunião `smoke-funil-reuniao` (evento da agenda com 3 participantes, 2 com e-mail, e resumo): o bloco Participantes
- * abaixo das tarefas (e a `smoke-4`, sem agenda, sem o bloco), "+ Contato" de um participante, "Detectar oportunidade"
- * com o botão desligado em "Detectando…", o cartão acima das tarefas com o aviso de duplicata (a proposta padrão é da
+ * abaixo das tarefas (e uma reunião semeada sem agenda, sem o bloco, apagada depois), "+ Contato" de um participante,
+ * "Detectar oportunidade" com o botão desligado em "Detectando…", o cartão acima das tarefas com o aviso de duplicata (a proposta padrão é da
  * empresa Cliente, que tem `op-portal`), nada gravado sem clique, "Criar" com o e-mail da Marina apagado, um contato
  * novo com e-mail e o valor editado, e "Ignorar" numa segunda detecção. No email, uma mensagem nova de um remetente que
  * não é contato ("+ Contato" e o link) e uma da própria conta (sem nada). No WhatsApp, os Detalhes da Ana ("+ Contato" e a
@@ -12984,7 +12987,9 @@ async function funilTelasExistentesChecks(ctx: SmokeContext, watch: (win: Browse
       transcriptPath: null,
       calendar: { provider: 'google', eventId: 'smoke-funil', title: 'Conversa com o Cliente sobre o portal', start: comecou.toISOString(), end: new Date(comecou.getTime() + 46 * 60_000).toISOString(), attendees: FUNIL_REUNIAO_ATTENDEES, joinUrl: null },
     }
-    writeFileAtomicSync(meetingsFile, `${JSON.stringify({ ...file, meetings: [...file.meetings.filter((item) => item.id !== FUNIL_REUNIAO), reuniao] }, null, 2)}\n`)
+    // A reunião sem agenda é própria do bloco: as de `seedListMeetings` podem ganhar agenda nos blocos anteriores.
+    const semAgendaReuniao: Meeting = { id: FUNIL_REUNIAO_SEM_AGENDA, title: 'Revisão interna do portal', startedAt: new Date(comecou.getTime() - 3_600_000).toISOString(), durationMs: 20 * 60_000, sources: { mic: true, system: true }, audioPath: null, transcriptPath: null }
+    writeFileAtomicSync(meetingsFile, `${JSON.stringify({ ...file, meetings: [...file.meetings.filter((item) => item.id !== FUNIL_REUNIAO && item.id !== FUNIL_REUNIAO_SEM_AGENDA), reuniao, semAgendaReuniao] }, null, 2)}\n`)
     const resumo: MeetingSummary = {
       version: 1,
       meetingId: FUNIL_REUNIAO,
@@ -12995,12 +13000,15 @@ async function funilTelasExistentesChecks(ctx: SmokeContext, watch: (win: Browse
       tasks: [{ task: 'Enviar a proposta do portal', owner: 'Você', due: 'sexta-feira' }],
     }
     writeFileAtomicSync(join(ctx.userDataDir, 'meetings', `${FUNIL_REUNIAO}.summary.json`), `${JSON.stringify(resumo, null, 2)}\n`)
+    writeFileAtomicSync(join(ctx.userDataDir, 'meetings', `${FUNIL_REUNIAO_SEM_AGENDA}.summary.json`), `${JSON.stringify({ ...resumo, meetingId: FUNIL_REUNIAO_SEM_AGENDA }, null, 2)}\n`)
 
-    // resumoParticipantes (CA4, R35): a `smoke-4` (resumo, sem agenda) não tem o bloco; a semeada tem 3 linhas abaixo das
-    // tarefas e 2 `ContactLink` (a Marina já é contato; o Lucas não; o Carlos, sem e-mail, só o nome).
-    const semAgenda = await abrirReuniao('smoke-4')
+    // resumoParticipantes (CA4, R35): a reunião sem agenda (resumo, sem `calendar`) não tem o bloco e é apagada em seguida;
+    // a semeada tem 3 linhas abaixo das tarefas e 2 `ContactLink` (a Marina já é contato; o Lucas não; o Carlos, sem
+    // e-mail, só o nome). O detalhe leva só contagens: nada da agenda vai para o relatório (CA11 do contrato 12).
+    const semAgenda = await abrirReuniao(FUNIL_REUNIAO_SEM_AGENDA)
     await settle(contents)
     const semBloco = semAgenda && (await evaluate<boolean>(contents, `!document.querySelector('[data-summary-participantes]')`))
+    const apagada = await api<boolean>('scribe:meetings-delete', { id: FUNIL_REUNIAO_SEM_AGENDA })
     const comAgenda = await abrirReuniao(FUNIL_REUNIAO)
     const linksProntos = await waitFor(contents, `document.querySelectorAll('[data-summary-participantes] [data-funil-contato-link], [data-summary-participantes] [data-action="funil-mais-contato"]').length === 2`, 8000)
     const bloco = await evaluate<{ rows: string[]; below: boolean; links: number; botoes: number; marina: string }>(
@@ -13019,7 +13027,7 @@ async function funilTelasExistentesChecks(ctx: SmokeContext, watch: (win: Browse
     )
     checks['resumoParticipantes'] = {
       ok: semBloco && comAgenda && linksProntos && JSON.stringify(bloco.rows) === JSON.stringify(FUNIL_REUNIAO_ATTENDEES.map((item) => item.email)) && bloco.below && bloco.links === 1 && bloco.botoes === 1 && bloco.marina === 'Marina Rocha',
-      detail: `smoke-4 sem agenda e sem o bloco=${semBloco}; reunião semeada aberta=${comAgenda}, 2 ContactLink=${linksProntos}; ${JSON.stringify(bloco)}`,
+      detail: `sem agenda: aberta=${semAgenda}, sem o bloco=${semBloco}, apagada depois=${apagada}; com agenda: aberta=${comAgenda}, 2 ContactLink=${linksProntos}, ${bloco.rows.length} linhas na ordem=${JSON.stringify(bloco.rows) === JSON.stringify(FUNIL_REUNIAO_ATTENDEES.map((item) => item.email))}, abaixo das tarefas=${bloco.below}, ${bloco.links} link e ${bloco.botoes} botão, link do contato que já existe=${bloco.marina === 'Marina Rocha'}`,
     }
 
     // resumoMaisContato (R35): "+ Contato" do Lucas cria o contato com `origem: 'reuniao'` e a linha vira o link, sem sair.
@@ -13029,7 +13037,7 @@ async function funilTelasExistentesChecks(ctx: SmokeContext, watch: (win: Browse
     const lucas = contatoPorEmail('lucas.vieira@vertice.example')
     checks['resumoMaisContato'] = {
       ok: virouLink && lucas?.origem === 'reuniao' && lucas.nome === 'Lucas Vieira' && saved().contatos.length === contatosAntesLucas + 1 && (await evaluate<boolean>(contents, `Boolean(${resumoPronto(FUNIL_REUNIAO)})`)),
-      detail: `link "Lucas Vieira" na linha=${virouLink}; contato ${lucas?.id ?? 'nenhum'} com origem ${lucas?.origem ?? '-'}; contatos ${contatosAntesLucas} -> ${saved().contatos.length}`,
+      detail: `link com o nome na linha=${virouLink}; contato ${lucas?.id ?? 'nenhum'} com origem ${lucas?.origem ?? '-'}; contatos ${contatosAntesLucas} -> ${saved().contatos.length}`,
     }
 
     // resumoDetectar (CA3, R40): com a detecção automática desligada, o botão fica desligado em "Detectando…" enquanto o
@@ -13107,7 +13115,7 @@ async function funilTelasExistentesChecks(ctx: SmokeContext, watch: (win: Browse
         JSON.stringify(card.chips) === JSON.stringify(['Marina Rocha <marina.rocha@cliente.example>']) &&
         voltou &&
         intocado,
-      detail: `${JSON.stringify(card)}; saiu e voltou com o cartão=${voltou}; funil.json igual (oportunidades ${opsAntes}, contatos ${contatosAntes}) e arquivo proposed=${intocado}`,
+      detail: `${JSON.stringify({ ...card, chips: card.chips.length, chipsCertos: JSON.stringify(card.chips) === JSON.stringify(['Marina Rocha <marina.rocha@cliente.example>']) })}; saiu e voltou com o cartão=${voltou}; funil.json igual (oportunidades ${opsAntes}, contatos ${contatosAntes}) e arquivo proposed=${intocado}`,
     }
 
     // resumoDuplicata (R39, R25): a empresa Cliente já tem "Portal do associado" aberta: o aviso com o link, "Criar"
@@ -13165,7 +13173,7 @@ async function funilTelasExistentesChecks(ctx: SmokeContext, watch: (win: Browse
         proposta()?.status === 'accepted' &&
         proposta()?.oportunidadeId === nova.id &&
         link === nova.id,
-      detail: `efeito "${efeitoTexto}"; linha "Oportunidade criada"=${criada} (link ${link || '-'}); oportunidade ${nova ? JSON.stringify({ id: nova.id, titulo: nova.titulo, valor: nova.valor, empresaId: nova.empresaId, etapaId: nova.etapaId, origem: nova.origem, meetingIds: nova.meetingIds, contatoIds: nova.contatoIds }) : 'nenhuma'}; nota "${nota?.texto ?? '-'}"; Carlos ${carlos?.id ?? 'nenhum'} (${carlos?.origem ?? '-'}); contatos ${contatosAntesCriar} -> ${estado.contatos.length}; arquivo ${proposta()?.status ?? '-'} ${proposta()?.oportunidadeId ?? ''}`,
+      detail: `efeito certo=${efeitoTexto === 'Cria o contato novo · Marina Rocha fica só citado na nota'}; linha "Oportunidade criada"=${criada} (link ${link || '-'}); oportunidade ${nova ? JSON.stringify({ id: nova.id, titulo: nova.titulo, valor: nova.valor, empresaId: nova.empresaId, etapaId: nova.etapaId, origem: nova.origem, meetingIds: nova.meetingIds, contatoIds: nova.contatoIds }) : 'nenhuma'}; nota dos citados certa=${nota?.texto === 'Citados na reunião: Marina Rocha'}; contato novo ${carlos?.id ?? 'nenhum'} (${carlos?.origem ?? '-'}); contatos ${contatosAntesCriar} -> ${estado.contatos.length}; arquivo ${proposta()?.status ?? '-'} ${proposta()?.oportunidadeId ?? ''}`,
     }
 
     // resumoIgnorar (R39): detectar de novo e Ignorar: o cartão some, o arquivo fica `dismissed` e nada novo no funil.
@@ -13204,7 +13212,7 @@ async function funilTelasExistentesChecks(ctx: SmokeContext, watch: (win: Browse
     )
     checks['emailMaisContato'] = {
       ok: caixa && aberta && botaoEmail && linkEmail && paulo?.origem === 'email' && paulo.nome === 'Paulo Siqueira' && enviados && enviadaAberta && enviada.nada,
-      detail: `Caixa de Entrada=${caixa}, mensagem nova aberta=${aberta}; "+ Contato" ao lado do remetente=${botaoEmail}; depois do clique, o link "Paulo Siqueira"=${linkEmail}, contato ${paulo?.id ?? 'nenhum'} (${paulo?.origem ?? '-'}); mensagem da própria conta chegou=${enviados}, de "${enviada.from}" sem botão nem link=${enviada.nada && enviadaAberta}`,
+      detail: `Caixa de Entrada=${caixa}, mensagem nova aberta=${aberta}; "+ Contato" ao lado do remetente=${botaoEmail}; depois do clique, o link com o nome=${linkEmail}, contato ${paulo?.id ?? 'nenhum'} (${paulo?.origem ?? '-'}); mensagem da própria conta chegou=${enviados}, sem botão nem link=${enviada.nada && enviadaAberta}`,
     }
 
     // whatsappContato (CA15, CA6, R37): os Detalhes da Ana (pessoa, ainda sem contato) com o bloco Contato e "+ Contato";
@@ -13235,7 +13243,7 @@ async function funilTelasExistentesChecks(ctx: SmokeContext, watch: (win: Browse
     const semBlocoGrupo = grupo && (await evaluate<boolean>(contents, `Boolean(document.querySelector('[data-wa-details]')) && !document.querySelector('[data-wa-details] [data-whatsapp-contato]')`))
     checks['whatsappContato'] = {
       ok: lista && ana && botaoWa && blocoNoTopo && fichaAna && anaContato?.origem === 'whatsapp' && anaContato.telefones.includes('+5511911110000') && bruno && fichaBruno && semBlocoGrupo,
-      detail: `lista=${lista}; Ana com os Detalhes=${ana}, bloco no topo=${blocoNoTopo} com "+ Contato"=${botaoWa}; depois do clique, a ficha=${fichaAna}, contato ${anaContato?.id ?? 'nenhum'} (${anaContato?.origem ?? '-'}, ${JSON.stringify(anaContato?.telefones ?? [])}); Bruno só pelo telefone (${brunoSalvo.id ?? 'não salvo'}) com a ficha=${fichaBruno}; grupo sem o bloco=${semBlocoGrupo}`,
+      detail: `lista=${lista}; Ana com os Detalhes=${ana}, bloco no topo=${blocoNoTopo} com "+ Contato"=${botaoWa}; depois do clique, a ficha=${fichaAna}, contato ${anaContato?.id ?? 'nenhum'} (${anaContato?.origem ?? '-'}, telefone da conversa=${anaContato?.telefones.includes('+5511911110000') ?? false}); Bruno só pelo telefone (${brunoSalvo.id ?? 'não salvo'}) com a ficha=${fichaBruno}; grupo sem o bloco=${semBlocoGrupo}`,
     }
   } finally {
     await evaluate(contents, `window.__scribeApi.invoke('scribe:settings-update', ${JSON.stringify({ claudeTransport: transportBefore === 'acp' ? 'acp' : 'cli', funil: funilBefore })}).then(() => true)`).catch(() => undefined)
@@ -13471,7 +13479,8 @@ async function funilAssistenteChecks(ctx: SmokeContext, watch: (win: BrowserWind
     const withoutFunil = await askNow()
     checks['agenteFunil'] = {
       ok: agentOff === 'false' && agentOn && agent?.funil === true && withFunil.answered && withFunil.text.includes('FUNIL.md') && off.ok && withoutFunil.answered && withoutFunil.text.startsWith('Arquivos na pasta:') && !withoutFunil.text.includes('FUNIL.md'),
-      detail: `desligado no novo=${agentOff}; ligado=${agentOn}, agents.json funil=${String(agent?.funil)}; com o funil=${withFunil.answered} "${withFunil.text.slice(0, 200)}"; desligado=${off.ok}, sem o funil=${withoutFunil.answered} "${withoutFunil.text.slice(0, 200)}"`,
+      // Sem trechos da resposta: ela cita títulos de reunião da agenda, que não podem ir ao relatório (contrato 12, CA11).
+      detail: `desligado no novo=${agentOff}; ligado=${agentOn}, agents.json funil=${String(agent?.funil)}; com o funil=${withFunil.answered}, cita FUNIL.md=${withFunil.text.includes('FUNIL.md')}; desligado=${off.ok}, sem o funil=${withoutFunil.answered}, começa com "Arquivos na pasta:"=${withoutFunil.text.startsWith('Arquivos na pasta:')}, sem FUNIL.md=${!withoutFunil.text.includes('FUNIL.md')}`,
     }
   } finally {
     // op-vistoria de volta à Proposta; a oportunidade, o contato e o agente criados aqui saem.
