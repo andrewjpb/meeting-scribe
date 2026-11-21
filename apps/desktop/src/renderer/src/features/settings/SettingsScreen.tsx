@@ -30,6 +30,7 @@ import { WhatsAppSection } from './WhatsAppSection'
 import { InstagramSection } from './InstagramSection'
 import { MediaHostSection } from './MediaHostSection'
 import { EmailSettingsTab } from './EmailSettingsTab'
+import { FunilSection } from './FunilSection'
 import { AcpAgentField } from './AcpAgentField'
 import { ApiKeyField } from './ApiKeyField'
 import { BrandSection } from './BrandSection'
@@ -308,6 +309,8 @@ function SettingsPanels({ tab }: { tab: SettingsTab }) {
                   <Switch checked={settings.openAtLogin} labelledBy="settings-open-at-login" onChange={(openAtLogin) => void update({ openAtLogin })} />
                 </SettingRow>
               </Section>
+              {/* Contrato 109: o Funil de vendas fica em Geral (as 9 abas e os atalhos ⌘1 a ⌘9 estão ocupados). */}
+              <FunilSection />
               <LockSection />
               <UpdatesSection />
             </>,
