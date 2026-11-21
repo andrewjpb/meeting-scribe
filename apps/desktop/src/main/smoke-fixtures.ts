@@ -255,6 +255,8 @@ export interface SmokeFixtures {
   chosenEmailAttachments: string[]
   /** Contrato 71: os arquivos que o diálogo "Escolher mídias" das redes devolve no smoke. */
   chosenRedesMedia: string[]
+  /** Contrato 110: o arquivo que o "Importar…" do funil "escolhe" (`<userData>/smoke-funil/contatos.csv`); `null` cancela. */
+  funilImportFile: string | null
 }
 
 export interface SmokeEmailNotify {
@@ -444,6 +446,7 @@ export function createSmokeFixtures(currentVersion: string, userDataDir: string)
     emailNotify: { notifications: [], focusedContentsId: null },
     chosenEmailAttachments: [],
     chosenRedesMedia: [],
+    funilImportFile: writeSmokeFunilImport(userDataDir),
     lock: { skewMs: 0, touchIdAvailable: true, touchIdApproves: true, touchIdPrompts: 0, power: new EventEmitter(), refresh: () => undefined },
     fetch: (url: string, init: FetchInit) => {
       const path = new URL(url).pathname
@@ -597,6 +600,26 @@ export function createSmokeAcp(
     return data
   }
   return { entry: scriptPath, args: ['--log', logPath], spawn: spawnAcp, packagesFor, download, close: () => server.close() }
+}
+
+/**
+ * Contrato 110: o CSV do "Importar…" do funil no smoke, com 5 contatos fictícios (`.example`), um deles sem e-mail nem
+ * telefone (fica de fora na importação, R16).
+ */
+function writeSmokeFunilImport(userDataDir: string): string {
+  const dir = join(userDataDir, 'smoke-funil')
+  mkdirSync(dir, { recursive: true })
+  const file = join(dir, 'contatos.csv')
+  const linhas = [
+    'Nome;E-mail;Telefone;Empresa;Cargo',
+    'Carla Mendes;carla.mendes@acme.example;(11) 98765-4321;Acme;Diretora comercial',
+    'Diego Rocha;diego.rocha@acme.example;;Acme;Comprador',
+    'Elisa Prado;;(21) 99876-5432;Prado Consultoria;Sócia',
+    'Fábio Lima;fabio.lima@lima.example;(31) 3222-1100;Lima Engenharia;Gerente',
+    'Gabriela Sousa;;;Sousa Transportes;Analista',
+  ]
+  writeFileSync(file, `${linhas.join('\n')}\n`, 'utf8')
+  return file
 }
 
 /** Contrato 21: os segredos inventados dos servidores MCP falsos (o smoke confere que nenhum chega à tela nem ao relatório). */
