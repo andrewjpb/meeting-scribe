@@ -99,6 +99,8 @@ export interface Agent {
    * escreveu no pedido). Agente salvo antes do 26 lê como `false`.
    */
   web: boolean
+  /** Contrato 115: "Pode ler o funil". Cada execução recebe `FUNIL.md` na pasta. Agente salvo antes lê como `false`. */
+  funil: boolean
   /** Conexões MCP (contrato 21). O 21 ainda não existe: fica sempre vazio e escondido. */
   mcpServers: string[]
   output: AgentOutput
@@ -692,6 +694,7 @@ export const EXAMPLE_AGENTS: readonly Omit<AgentInput, 'id'>[] = [
     thinkMore: false,
     scope: { kind: '7d' },
     web: false,
+    funil: false,
     mcpServers: [],
     output: { kind: 'chat' },
   },
@@ -710,6 +713,7 @@ export const EXAMPLE_AGENTS: readonly Omit<AgentInput, 'id'>[] = [
     thinkMore: false,
     scope: { kind: 'all' },
     web: false,
+    funil: false,
     mcpServers: [],
     output: { kind: 'chat' },
   },
@@ -729,6 +733,7 @@ export const EXAMPLE_AGENTS: readonly Omit<AgentInput, 'id'>[] = [
     thinkMore: false,
     scope: { kind: 'all' },
     web: false,
+    funil: false,
     mcpServers: [],
     output: { kind: 'note' },
   },

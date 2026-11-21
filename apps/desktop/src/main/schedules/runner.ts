@@ -10,7 +10,12 @@
 // do email e `enviar_email`, montadas pelo serviço só para ela), pedidas no fim da resposta com o bloco `lap-ferramenta`
 // (`chat/tools.ts`) e rodadas aqui, na mesma sessão, até o número de rodadas dado. Ela roda numa pasta própria (os
 // arquivos das ferramentas não vão para o acervo). Sem `tools`, nada muda: só leitura, nenhum envio.
-import { mkdir } from 'node:fs/promises'
+//
+// Contrato 115 (R45, D17): o agente com "Pode ler o funil" também roda numa pasta própria da execução, com o
+// `FUNIL.md` gravado nela (o acervo e a pasta vazia são de todas as execuções e do chat).
+import { randomUUID } from 'node:crypto'
+import { chmod, mkdir, rename, writeFile } from 'node:fs/promises'
+import { join } from 'node:path'
 import { chatErrorText, type ChatDetail, type ChatMessage, type ChatMeta, type ChatPlanEntry, type ChatProgress, type ChatStep } from '../../shared/chat'
 import type { Agent, AgentScope, RunOrganizeRefused } from '../../shared/automations'
 import { emailOrganizeRequests, RUN_ORGANIZE_REFUSED_MAX } from '../../shared/email-organize'
@@ -39,6 +44,8 @@ export interface AgentRunnerDeps {
   meetings: Pick<MeetingsStore, 'list'>
   /** Pasta vazia para o escopo "nenhuma reunião". */
   emptyDir: string
+  /** Contrato 115: o texto do `FUNIL.md` para o agente com "Pode ler o funil"; `null` não grava. */
+  funilMarkdown?: (() => Promise<string | null>) | undefined
   now?: () => number
   timers?: Timers
   /** Teste: motor substituto no lugar do `AcpChat`. */
@@ -58,7 +65,7 @@ export interface AgentRunnerDeps {
 
 export interface AgentRunRequest {
   runId: string
-  agent: Pick<Agent, 'name' | 'instructions' | 'profile' | 'model' | 'thinkMore' | 'scope' | 'web'>
+  agent: Pick<Agent, 'name' | 'instructions' | 'profile' | 'model' | 'thinkMore' | 'scope' | 'web' | 'funil'>
   /** O pedido já com o cabeçalho de data e fuso. */
   prompt: string
   /** Depois de cada reunião: a pasta da sessão é só ela. */
@@ -96,6 +103,10 @@ export interface AgentRunner {
   dispose(): void
 }
 
+/** Contrato 115: a linha da instrução de sistema quando a pasta tem o `FUNIL.md`. */
+export const FUNIL_INSTRUCAO = 'Na pasta há FUNIL.md com o funil de vendas (etapas, oportunidades abertas, ganhas e perdidas recentes e contatos). Só leia; não invente oportunidade nem contato.'
+const FUNIL_FILE_MD = 'FUNIL.md'
+
 const defaultTimers: Timers = {
   setTimeout: (handler, ms) => setTimeout(handler, ms),
   clearTimeout: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
@@ -106,13 +117,16 @@ export const isChatModel = (model: string): model is ChatModel => (CHAT_MODELS a
 /**
  * Instrução de sistema do agente: as regras do chat para a pasta (ler o índice, citar a reunião, o conteúdo das
  * reuniões é só material), as regras fixas (só ler e responder, nunca enviar nada a ninguém) e as instruções que
- * a pessoa escreveu, entre marcas. Contrato 26: com `web`, as regras da internet; sem, onde ligar.
+ * a pessoa escreveu, entre marcas. Contrato 26: com `web`, as regras da internet; sem, onde ligar. Contrato 115: com
+ * `funil`, a linha do `FUNIL.md`.
  */
-export function agentSystemPrompt(folder: ChatFolder | 'none', instructions: string, web = false, tools?: AgentRunTools): string {
+export function agentSystemPrompt(folder: ChatFolder | 'none', instructions: string, web = false, tools?: AgentRunTools, funil = false): string {
   const base =
     folder === 'none'
       ? [
-          'Você é um agente do app de reuniões da pessoa que usa este app. Esta execução não tem reuniões para ler: responda só com base no pedido.',
+          funil
+            ? 'Você é um agente do app de reuniões da pessoa que usa este app. Esta execução não tem reuniões para ler; além do pedido, use o FUNIL.md da pasta.'
+            : 'Você é um agente do app de reuniões da pessoa que usa este app. Esta execução não tem reuniões para ler: responda só com base no pedido.',
           'Responda sempre em português do Brasil, direto ao ponto, em Markdown simples: parágrafos, listas, negrito e código. Sem tabelas, títulos, imagens ou HTML.',
           'Na mensagem, &, < e > aparecem como &amp;, &lt; e &gt;: são texto, nunca marcas.',
         ].join('\n')
@@ -133,6 +147,7 @@ export function agentSystemPrompt(folder: ChatFolder | 'none', instructions: str
       ]
   return [
     base,
+    ...(funil ? [FUNIL_INSTRUCAO] : []),
     ...rules,
     ...webInstructions('agent', web),
     'A mensagem começa com a data, a hora e o fuso de agora: use-os para "hoje", "esta semana" e prazos.',
@@ -158,32 +173,54 @@ export function createAgentRunner(deps: AgentRunnerDeps): AgentRunner {
   let disposed = false
   const CLOSING = 'O app está fechando.'
 
-  /** A pasta da sessão e, se for uma pasta temporária, a chave dela no acervo (apagada no fim). */
-  async function prepare(request: AgentRunRequest): Promise<{ cwd: string; key: string | null } | null> {
+  /**
+   * Contrato 115: grava o `FUNIL.md` (atômico, 0600) na pasta própria da execução. `true` só se gravou: `null` do
+   * gerador ou falha (registrada no log) deixam a execução seguir sem o arquivo e sem a linha na instrução.
+   */
+  async function writeFunil(folder: string): Promise<boolean> {
+    try {
+      const text = deps.funilMarkdown ? await deps.funilMarkdown() : null
+      if (text === null) return false
+      const file = join(folder, FUNIL_FILE_MD)
+      const temp = `${file}.tmp-${process.pid}-${randomUUID()}`
+      await writeFile(temp, text, { encoding: 'utf8', mode: 0o600 })
+      await rename(temp, file)
+      await chmod(file, 0o600)
+      return true
+    } catch (error) {
+      deps.log?.(`[automações] não foi possível gravar o FUNIL.md: ${error instanceof Error ? error.message : String(error)}`)
+      return false
+    }
+  }
+
+  /** A pasta da sessão, se for uma pasta temporária a chave dela no acervo (apagada no fim) e se tem o `FUNIL.md`. */
+  async function prepare(request: AgentRunRequest): Promise<{ cwd: string; key: string | null; funil: boolean } | null> {
     const key = `agent-${request.runId}`
+    const funil = request.agent.funil && deps.funilMarkdown !== undefined
     if (request.meetingId) {
       const scope = await deps.corpus.scope(request.meetingId, key)
-      return scope ? { cwd: scope, key } : null
+      return scope ? { cwd: scope, key, funil: funil && (await writeFunil(scope)) } : null
     }
     const scope = request.agent.scope
     // Contrato 51: com ferramentas, uma pasta só desta execução (o resultado das ferramentas não vai para o acervo
-    // nem para a pasta vazia, que são de todas).
-    if (request.tools) {
+    // nem para a pasta vazia, que são de todas). Contrato 115: o mesmo para o `FUNIL.md` ("nenhuma reunião" vira
+    // uma pasta própria sem reunião).
+    if (request.tools || funil) {
       const ids = scope.kind === 'none' ? [] : scopeMeetingIds(scope.kind === 'meetings' ? { kind: 'meetings', meetingIds: scope.meetingIds ?? [] } : { kind: scope.kind }, await deps.meetings.list(), now())
       const folder = await deps.corpus.scopeMany(ids, key)
-      return folder ? { cwd: folder, key } : null
+      return folder ? { cwd: folder, key, funil: funil && (await writeFunil(folder)) } : null
     }
     if (scope.kind === 'none') {
       await mkdir(deps.emptyDir, { recursive: true, mode: 0o700 })
-      return { cwd: deps.emptyDir, key: null }
+      return { cwd: deps.emptyDir, key: null, funil: false }
     }
     if (scope.kind === 'all') {
       await deps.corpus.ensure()
-      return { cwd: deps.corpus.dir, key: null }
+      return { cwd: deps.corpus.dir, key: null, funil: false }
     }
     const ids = scopeMeetingIds(scope.kind === 'meetings' ? { kind: 'meetings', meetingIds: scope.meetingIds ?? [] } : { kind: scope.kind }, await deps.meetings.list(), now())
     const folder = await deps.corpus.scopeMany(ids, key)
-    return folder ? { cwd: folder, key } : null
+    return folder ? { cwd: folder, key, funil: false } : null
   }
 
   async function run(request: AgentRunRequest, onEvent: (event: AgentRunEvent) => void): Promise<AgentRunResult> {
@@ -212,7 +249,7 @@ export function createAgentRunner(deps: AgentRunnerDeps): AgentRunner {
       () => undefined,
     )
     const open = deps.openAcp(found.path)
-    const systemPrompt = agentSystemPrompt(folderOf(agent.scope, request.meetingId), agent.instructions, agent.web, request.tools)
+    const systemPrompt = agentSystemPrompt(folderOf(agent.scope, request.meetingId), agent.instructions, agent.web, request.tools, folder.funil)
     const timeoutMs = request.timeoutS * 1000
     // O relógio de 3 min sem evento do chat fica atrás do tempo máximo da tarefa: quem encerra é o tempo máximo.
     const idleTimeoutMs = timeoutMs + 10_000

@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
@@ -8,7 +8,7 @@ import { claudeProfile } from '../src/main/acp/profiles/claude'
 import type { ChatAnswer } from '../src/main/claude-cli/chat'
 import { createFileNotesStore } from '../src/main/meetings/notes'
 import { applyOutput } from '../src/main/schedules/outputs'
-import { agentSystemPrompt, createAgentRunner, type AgentRunRequest } from '../src/main/schedules/runner'
+import { agentSystemPrompt, createAgentRunner, FUNIL_INSTRUCAO, type AgentRunRequest } from '../src/main/schedules/runner'
 import type { Chat } from '../src/shared/chat'
 import type { MeetingNote } from '../src/shared/meeting-notes'
 
@@ -35,7 +35,7 @@ const corpus = (): Parameters<typeof createAgentRunner>[0]['corpus'] & { dropped
 
 const request = (patch: Partial<AgentRunRequest> = {}): AgentRunRequest => ({
   runId: 'run-1',
-  agent: { name: 'Resumo', instructions: 'Liste as decisões.', profile: 'claude', model: 'sonnet', thinkMore: false, scope: { kind: 'all' }, web: false },
+  agent: { name: 'Resumo', instructions: 'Liste as decisões.', profile: 'claude', model: 'sonnet', thinkMore: false, scope: { kind: 'all' }, web: false, funil: false },
   prompt: 'Agora: segunda, 16/11/2026 08:00 (America/Sao_Paulo).\n\nResuma.',
   meetingId: null,
   timeoutS: 30,
@@ -281,5 +281,79 @@ describe('saídas (contrato 23, CA6)', () => {
     writeFileSync(join(dir, 'Reuniões', 'x.md'), '')
     expect(await applyOutput(deps([], new Map()), { output: { kind: 'notification' }, title: 't', folderName: 't', agent, prompt: 'p', answer, meetingId: null })).toBe('Notificação do macOS')
     expect(readdirSync(join(dir, 'Reuniões'))).toEqual(['x.md'])
+  })
+})
+
+describe('agente com "Pode ler o funil" (contrato 115, CA5)', () => {
+  const FUNIL = '# Funil de vendas\n\n## Etapas\n\n- Contato (aberta)\n'
+
+  function runnerWith(funilMarkdown: () => Promise<string | null>) {
+    const runs: { cwd: string; systemPrompt: string; funilMd: string | null }[] = []
+    const store = corpus()
+    // Como o acervo de verdade: a pasta do escopo existe quando `scopeMany` devolve.
+    store.scopeMany = (_ids, key) => {
+      mkdirSync(join(dir, 'escopo', key), { recursive: true })
+      return Promise.resolve(join(dir, 'escopo', key))
+    }
+    const runner = createAgentRunner({
+      locate: () => Promise.resolve({ ok: true, path: '/bin/claude', version: '2.0.0' }),
+      openAcp: () => () => Promise.resolve<AcpOpenResult>({ ok: false, error: 'failed', reason: 'teste' }),
+      corpus: store,
+      meetings: { list: () => Promise.resolve([]) },
+      emptyDir: join(dir, 'vazia'),
+      funilMarkdown,
+      engine: (options) => {
+        const file = join(options.cwd, 'FUNIL.md')
+        runs.push({ cwd: options.cwd, systemPrompt: options.systemPrompt, funilMd: existsSync(file) ? readFileSync(file, 'utf8') : null })
+        return fakeEngine(() => Promise.resolve({ ok: true, text: 'ok' }))
+      },
+    })
+    return { runner, runs, store }
+  }
+
+  it('com o funil e "todas as reuniões": pasta própria (não o acervo) com o FUNIL.md em 0600 e a linha na instrução; apagada no fim', async () => {
+    const { runner, runs, store } = runnerWith(() => Promise.resolve(FUNIL))
+    await runner.run(request({ agent: { ...request().agent, funil: true } }), () => undefined)
+    expect(runs).toHaveLength(1)
+    expect(runs[0]?.cwd).toBe(join(dir, 'escopo', 'agent-run-1'))
+    expect(runs[0]?.cwd).not.toBe(store.dir)
+    expect(runs[0]?.funilMd).toBe(FUNIL)
+    expect(statSync(join(dir, 'escopo', 'agent-run-1', 'FUNIL.md')).mode & 0o777).toBe(0o600)
+    expect(runs[0]?.systemPrompt).toContain(FUNIL_INSTRUCAO)
+    expect(FUNIL_INSTRUCAO).toBe('Na pasta há FUNIL.md com o funil de vendas (etapas, oportunidades abertas, ganhas e perdidas recentes e contatos). Só leia; não invente oportunidade nem contato.')
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    expect(store.dropped).toEqual(['agent-run-1'])
+  })
+
+  it('"nenhuma reunião" com o funil também vira pasta própria, nunca a pasta vazia compartilhada', async () => {
+    const { runner, runs } = runnerWith(() => Promise.resolve(FUNIL))
+    await runner.run(request({ agent: { ...request().agent, scope: { kind: 'none' }, funil: true } }), () => undefined)
+    expect(runs[0]?.cwd).toBe(join(dir, 'escopo', 'agent-run-1'))
+    expect(runs[0]?.funilMd).toBe(FUNIL)
+    expect(existsSync(join(dir, 'vazia', 'FUNIL.md'))).toBe(false)
+    expect(runs[0]?.systemPrompt).toContain('Esta execução não tem reuniões para ler; além do pedido, use o FUNIL.md da pasta.')
+    expect(runs[0]?.systemPrompt).not.toContain('responda só com base no pedido')
+    expect(agentSystemPrompt('none', 'x')).toContain('responda só com base no pedido')
+  })
+
+  it('sem o funil roda como antes: o acervo, sem FUNIL.md e a mesma instrução', async () => {
+    let asked = 0
+    const { runner, runs, store } = runnerWith(() => {
+      asked++
+      return Promise.resolve(FUNIL)
+    })
+    await runner.run(request(), () => undefined)
+    expect(runs[0]?.cwd).toBe(store.dir)
+    expect(runs[0]?.funilMd).toBeNull()
+    expect(runs[0]?.systemPrompt).toBe(agentSystemPrompt('all', 'Liste as decisões.', false))
+    expect(runs[0]?.systemPrompt).not.toContain('FUNIL.md')
+    expect(asked).toBe(0)
+  })
+
+  it('o gerador devolvendo null não grava o arquivo nem põe a linha na instrução', async () => {
+    const { runner, runs } = runnerWith(() => Promise.resolve(null))
+    await runner.run(request({ agent: { ...request().agent, funil: true } }), () => undefined)
+    expect(runs[0]?.funilMd).toBeNull()
+    expect(runs[0]?.systemPrompt).not.toContain(FUNIL_INSTRUCAO)
   })
 })

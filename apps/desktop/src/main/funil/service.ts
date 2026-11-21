@@ -79,6 +79,8 @@ export interface FunilService {
   importarAbrir(): Promise<FunilImportAbrirResult>
   importarConfirmar(request: { token: string; mapeamento?: CampoImport[] | undefined; simular?: boolean | undefined }): Promise<FunilImportConfirmarResult>
   timeline(request: { tipo: 'contato' | 'oportunidade'; id: string }): Promise<FunilTimelineResult>
+  /** Contrato 115: grava `ultimoAvisoEm` (a verificação do alerta diário); falha vira exceção. Não avisa a tela. */
+  marcarAviso(at: number): Promise<void>
 }
 
 /** Uma leitura de cada cache (cabe em `FontesTimeline`). */
@@ -236,6 +238,11 @@ export function createFunilService(deps: FunilServiceDeps): FunilService {
       const { criados, atualizados } = result.value
       // A entrada que o store recusou (e-mail e telefone que não normalizam) conta como ignorada.
       return { ok: true, simulado: false, criados, atualizados, ignorados: ignorados + (entradas.length - criados - atualizados) }
+    },
+
+    async marcarAviso(at) {
+      const result = await store.setUltimoAviso(at)
+      if (!result.ok) throw new Error(FUNIL_ERRO_TEXTO[result.erro])
     },
 
     async timeline({ tipo, id }) {
