@@ -280,7 +280,8 @@ describe('canais do funil', () => {
   })
 
   it('CA8: os 16 canais existem e são recusados com o app bloqueado', () => {
-    const funil = INVOKE_CHANNELS.filter((channel) => channel.startsWith('scribe:funil-'))
+    // Os da proposta (contrato 113) são conferidos em `funil-proposta.test.ts`.
+    const funil = INVOKE_CHANNELS.filter((channel) => channel.startsWith('scribe:funil-') && !channel.startsWith('scribe:funil-proposta-'))
     expect(funil.sort()).toEqual([...CANAIS_FUNIL].sort())
     for (const channel of CANAIS_FUNIL) expect(WHEN_LOCKED[channel as keyof typeof WHEN_LOCKED]).toBe('refused')
   })

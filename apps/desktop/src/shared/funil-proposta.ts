@@ -1,7 +1,7 @@
 // Funil de vendas (contrato 111, R38): a proposta de IA de uma reunião, em `userData/meetings/<id>.funil.json`. A
 // passada `funnel-extract` lê o resumo e diz se há venda; o arquivo guarda a proposta (ou a falta dela) até a pessoa
 // aceitar ou descartar. Só os tipos e os limites: o zod fica em `funil-proposta-schema.ts`, que a tela não importa.
-import type { ProximoPasso } from './funil'
+import type { FunilErro, ProximoPasso } from './funil'
 
 export const FUNIL_PROPOSTA_VERSION = 1
 export const FUNIL_PROPOSTA_TITULO_MAX = 200
@@ -48,3 +48,46 @@ export interface FunilPropostaArquivo {
   oportunidadeId?: string
   erro?: 'format' | 'failed'
 }
+
+// ---------------------------------------------------------------------------------------------------------------
+// Contrato 113: o que os canais `scribe:funil-proposta-*` devolvem e o que o "Criar" / "Atualizar" manda.
+
+/**
+ * A proposta da reunião como a aba Resumo usa. `detectando`: a passada roda agora. `duplicata`: com `acao: 'criar'`, a
+ * primeira oportunidade aberta não arquivada da empresa da proposta (nome sem acento e sem caixa); senão `null` (R39).
+ */
+export interface FunilPropostaView {
+  arquivo: FunilPropostaArquivo | null
+  detectando: boolean
+  duplicata: { id: string; titulo: string } | null
+}
+
+/** Os campos do cartão, como a pessoa deixou. `email` preenchido no cartão vale como o da proposta. */
+export interface FunilPropostaCampos {
+  titulo: string
+  empresa: string | null
+  contatos: PropostaContato[]
+  etapaId: string
+  /** Centavos de BRL. */
+  valor: number | null
+  /** `AAAA-MM-DD`. */
+  previsao: string | null
+  proximoPasso: ProximoPasso | null
+}
+
+/** "Criar" / "Atualizar"; com `vincularA`, "Vincular a existente…" (só liga a reunião e os contatos). */
+export interface FunilPropostaAplicarRequest {
+  meetingId: string
+  campos: FunilPropostaCampos
+  vincularA?: string | undefined
+}
+
+/** `falhou`: exceção ao gravar (disco cheio, permissão), como nos outros canais do funil. */
+export type FunilPropostaAplicarResult = { ok: true; oportunidadeId: string } | { ok: false; erro: FunilErro | 'falhou'; mensagem: string }
+
+/** Pedido fora do formato (`invalido`) ou leitura que falhou no main (`falhou`), com o texto para a tela. */
+export type FunilPropostaRecusa = { ok: false; erro: 'invalido' | 'falhou'; mensagem: string }
+
+export const FUNIL_PROPOSTA_DECIDIDA_TEXTO = 'Essa proposta já foi decidida.'
+/** Nota da oportunidade com os citados sem e-mail (R39). */
+export const notaCitados = (nomes: readonly string[]): string => `Citados na reunião: ${nomes.join(', ')}`
