@@ -5,18 +5,19 @@ import { EmptyState } from '../../design/EmptyState'
 import { Icon } from '../../design/Icon'
 import { Note } from '../../design/Note'
 import { useFunil, useFunilView } from './funilStore'
+import { OportunidadeScreen } from './OportunidadeScreen'
 import { OportunidadesScreen } from './OportunidadesScreen'
 
-/** O que ainda não tem tela (Contatos e Empresas no contrato 114; o detalhe da oportunidade no 119). */
-const EM_PREPARACAO: Record<FunilSection, string> = {
-  oportunidades: 'A página de cada oportunidade ainda está sendo preparada.',
+/** O que ainda não tem tela (Contatos e Empresas no contrato 114). */
+const EM_PREPARACAO: Record<Exclude<FunilSection, 'oportunidades'>, string> = {
   contatos: 'A lista de contatos ainda está sendo preparada.',
   empresas: 'A lista de empresas ainda está sendo preparada.',
 }
 
 /**
  * Funil de vendas (contrato 112, R17): `/funil/<secao>/<id>`. Sem seção (ou uma que não existe), Oportunidades;
- * Oportunidades sem id, o kanban. Carrega a view do funil ao montar e a acompanha enquanto a tela está aberta.
+ * Oportunidades sem id, o kanban; com id, o detalhe da oportunidade (contrato 119). Carrega a view do funil ao montar e
+ * a acompanha enquanto a tela está aberta.
  */
 export function FunilScreen() {
   const { secao, id } = useParams()
@@ -26,7 +27,8 @@ export function FunilScreen() {
   if (!isFunilSection(secao)) return <Navigate to={funilPath('oportunidades')} replace />
 
   let content
-  if (secao !== 'oportunidades' || id !== undefined) content = <EmPreparacao texto={EM_PREPARACAO[secao]} />
+  if (secao !== 'oportunidades') content = <EmPreparacao texto={EM_PREPARACAO[secao]} />
+  else if (view && id !== undefined) content = <OportunidadeScreen key={id} view={view} id={id} />
   else if (view) content = <OportunidadesScreen view={view} />
   else if (error)
     content = (

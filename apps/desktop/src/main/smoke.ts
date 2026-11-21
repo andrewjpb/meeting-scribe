@@ -89,6 +89,9 @@
 // Contrato 112: depois do Instagram no Assistente e antes do bloqueio, o funil de vendas (`funilKanbanChecks`) com o
 // `funil.json` semeado pelas fixtures: o item e o nível Funil da barra lateral, o kanban de Oportunidades com os filtros,
 // a nova oportunidade, "Editar etapas" e o arrastar.
+//
+// Contrato 119: logo depois do kanban, o detalhe da oportunidade (`funilDetalheChecks`): a Linha do tempo com a reunião, o
+// e-mail e o evento, a "Reunião apagada", o Select de etapa, a nota, o "Escrever e-mail" até o Composer e o "Arquivar".
 import { appendFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { spawn as spawnChild } from 'node:child_process'
 import { request as httpRequest } from 'node:http'
@@ -111,7 +114,8 @@ import type { Meeting } from '../shared/meetings'
 import { summaryMarkdown, type MeetingSummary } from '../shared/meeting-summary'
 import { summaryPreview } from '../shared/meetings-overview'
 import { PRIVACY_PANE_URLS } from '../shared/privacy'
-import { FUNIL_FILE, type FunilState } from '../shared/funil'
+import { FUNIL_FILE, type FunilState, type Oportunidade } from '../shared/funil'
+import { formatarBRL } from '../shared/funil-logic'
 import { SETTINGS_TABS, type SettingsTab } from '../shared/routes'
 import { FUNIL_AVISAR_NAME, FUNIL_DETECTAR_NAME, FUNIL_DIAS_NAME, FUNIL_SECTION, matchesRow, settingsIndex } from '../shared/settings-index'
 import { BRAND_LOGO_INVALID_MESSAGE, BRAND_LOGO_PATTERN, DEFAULT_BRAND_NAME, DEFAULT_BRAND_SUBTITLE } from '../shared/branding'
@@ -12320,6 +12324,234 @@ async function funilKanbanChecks(ctx: SmokeContext, watch: (win: BrowserWindow) 
 }
 
 /**
+ * O roteador do app é em memória (`MemoryRouter`): o caminho vai pelo `navigator` do contexto do roteador, achado subindo
+ * pela árvore do React a partir do `<main>` (o mesmo atalho do `funilKanbanChecks`).
+ */
+const funilRouterPush = (contents: WebContents, path: string): Promise<boolean> =>
+  evaluate<boolean>(
+    contents,
+    `(() => {
+      const main = document.querySelector('main[data-route]')
+      const key = main && Object.keys(main).find((name) => name.startsWith('__reactFiber$'))
+      for (let fiber = key ? main[key] : null; fiber; fiber = fiber.return) {
+        const navigator = fiber.memoizedProps?.value?.navigator
+        if (navigator && typeof navigator.push === 'function') { navigator.push(${JSON.stringify(path)}); return true }
+      }
+      return false
+    })()`,
+  )
+
+/**
+ * Contrato 119 (CA1 a CA5, CA13 da spec), numa janela que troca de tema no lugar, depois do `funilKanbanChecks`: o
+ * detalhe de `op-loja` com uma reunião e um e-mail ligados pelo canal (1 reunião, 1 e-mail e 1 evento na Linha do
+ * tempo, as 3 abas, o Valor em `formatarBRL`); a "Reunião apagada" e o "Desvincular"; o `Select` de etapa; a nota; o
+ * "Escrever e-mail" até o Composer endereçado; o "Abrir WhatsApp" ausente sem conversa; e o "Arquivar" de
+ * `op-ganha-mes`. Não toca em `op-integracao` nem em `op-vistoria` (o 117 usa) e termina com `op-loja` e `op-ganha-mes`
+ * de volta às etapas da fixture e sem vínculos (ficam os eventos novos: etapa, nota e a reabertura). Print
+ * `funil-oportunidade`, nos dois temas.
+ */
+async function funilDetalheChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => void, checks: Record<string, Check>, shots: Screenshot[]): Promise<void> {
+  const startedAt = Date.now()
+  const themeBefore = readSettings(ctx.userDataDir).theme ?? 'system'
+  nativeTheme.themeSource = 'light'
+  const win = ctx.openWindow({})
+  watch(win)
+  await loadAndWait(win)
+  const contents = win.webContents
+  if (themeBefore !== 'system') await evaluate(contents, "window.__scribeApi.invoke('scribe:settings-update', { theme: 'system' }).then(() => true)")
+  const api = <T>(channel: string, request?: unknown): Promise<T> => evaluate<T>(contents, `window.__scribeApi.invoke(${JSON.stringify(channel)}${request === undefined ? '' : `, ${JSON.stringify(request)}`})`)
+  const both = async (name: string): Promise<void> => {
+    await evaluate(contents, `document.activeElement instanceof HTMLElement && document.activeElement.blur(), true`)
+    await settle(contents)
+    shots.push(await capture(win, ctx.outDir, `${name}-light`))
+    nativeTheme.themeSource = 'dark'
+    await waitFor(contents, "document.documentElement.dataset.theme === 'dark'")
+    await settle(contents)
+    shots.push(await capture(win, ctx.outDir, `${name}-dark`))
+    nativeTheme.themeSource = 'light'
+    await waitFor(contents, "document.documentElement.dataset.theme === 'light'")
+  }
+  const { etapas: E } = SMOKE_FUNIL
+  const funilFile = join(ctx.userDataDir, FUNIL_FILE)
+  const saved = (): FunilState => JSON.parse(readFileSync(funilFile, 'utf8')) as FunilState
+  const op = (id: string): Oportunidade | undefined => saved().oportunidades.find((item) => item.id === id)
+  const SCREEN = '[data-funil-oportunidade="op-loja"]'
+  const items = (tipo: string): string => `document.querySelectorAll('${SCREEN} [data-funil-timeline-item="${tipo}"]').length`
+  const kanbanReady = `${routeIs('funil')} && document.querySelector('[data-funil-screen="oportunidades"] [data-funil-board]')`
+  const abrir = async (id: string): Promise<boolean> => {
+    await funilRouterPush(contents, `/funil/oportunidades/${id}`)
+    return waitFor(contents, `${routeIs('funil')} && document.querySelector('[data-funil-oportunidade="${id}"] [data-funil-timeline], [data-funil-oportunidade="${id}"] [data-tab-panel="linha"] p')`, 8000)
+  }
+  const aba = async (nome: 'linha' | 'reunioes' | 'notas'): Promise<boolean> => {
+    await clickSelector(contents, `${SCREEN} [role="tab"][data-tab="${nome}"]`)
+    return waitFor(contents, `document.querySelector('${SCREEN} [data-tab-panel="${nome}"]')`)
+  }
+  const etapaEventos = (): number => saved().eventos.filter((evento) => evento.oportunidadeId === 'op-loja' && evento.tipo === 'etapa').length
+
+  try {
+    // funilDetail (CA13): op-loja com a primeira reunião da lista e o primeiro e-mail em cache ligados pelo canal; a tela
+    // com as 3 abas, os campos e, na Linha do tempo, 1 reunião, 1 e-mail e 1 evento (o `ev-loja-etapa` da fixture).
+    const meetings = await api<Meeting[]>('scribe:meetings-list')
+    const meetingId = meetings[0]?.id ?? ''
+    const accountId = await evaluate<string>(contents, `window.__scribeApi.invoke('scribe:email-accounts').then((list) => list[0]?.account.id ?? '')`)
+    const messages = accountId ? await api<{ id: string; subject: string; date: number; from: { name: string | null; address: string }[] }[]>('scribe:email-messages', { accountId, folder: 'inbox' }) : []
+    const message = messages[0]
+    const email = message ? { accountId, id: message.id, assunto: message.subject, de: message.from[0]?.name || message.from[0]?.address || '', data: message.date } : null
+    const linked = await api<{ ok: boolean }>('scribe:funil-oportunidade-save', { oportunidade: { id: 'op-loja', titulo: 'Loja virtual', meetingIds: meetingId ? [meetingId] : [], emails: email ? [email] : [] } })
+    const opened = await abrir('op-loja')
+    const filled = await waitFor(contents, `${items('reuniao')} === 1 && ${items('email')} === 1 && ${items('evento')} === 1`, 8000)
+    const detail = await evaluate<{ tabs: number; selected: string | null; counts: Record<string, number>; valor: string; campos: string[]; subtitulo: string; etapa: string }>(
+      contents,
+      `(() => {
+        const screen = document.querySelector('${SCREEN}')
+        const count = (tipo) => screen.querySelectorAll('[data-funil-timeline-item="' + tipo + '"]').length
+        return {
+          tabs: screen.querySelectorAll('[role="tab"]').length,
+          selected: screen.querySelector('[role="tab"][aria-selected="true"]')?.textContent ?? null,
+          counts: { reuniao: count('reuniao'), email: count('email'), whatsapp: count('whatsapp'), evento: count('evento') },
+          valor: screen.querySelector('[data-funil-valor]')?.textContent ?? '',
+          campos: [...screen.querySelectorAll('[data-funil-campo]')].map((el) => el.dataset.funilCampo),
+          subtitulo: screen.querySelector('[data-funil-subtitulo]')?.textContent ?? '',
+          etapa: screen.querySelector('[data-funil-etapa-select] select')?.value ?? '',
+        }
+      })()`,
+    )
+    const valorEsperado = formatarBRL(op('op-loja')?.valor ?? null)
+    checks['funilDetail'] = {
+      ok:
+        Boolean(meetingId) &&
+        email !== null &&
+        linked.ok &&
+        opened &&
+        filled &&
+        detail.tabs === 3 &&
+        detail.selected === 'Linha do tempo' &&
+        detail.counts['reuniao'] === 1 &&
+        detail.counts['email'] === 1 &&
+        detail.counts['evento'] === 1 &&
+        detail.counts['whatsapp'] === 0 &&
+        detail.valor === valorEsperado &&
+        JSON.stringify(detail.campos) === JSON.stringify(['empresa', 'contatos', 'valor', 'previsao', 'proximo-passo', 'origem']) &&
+        detail.subtitulo.startsWith('Há 1 d em Negociação · criada em ') &&
+        detail.etapa === E.negociacao,
+      detail: `reunião ${meetingId || '(nenhuma)'}; e-mail ${email ? `${email.accountId}/${email.id}` : '(nenhum)'}; ligado=${linked.ok}; tela=${opened}; linha do tempo=${filled}; ${JSON.stringify(detail)}; valor esperado "${valorEsperado}"`,
+    }
+    await both('funil-oportunidade')
+
+    // funilReuniaoApagada (modelo, R29): um id de reunião que não existe vira "Reunião apagada" sem data e sem link; o id
+    // fica em `meetingIds` até o "Desvincular" da aba Reuniões.
+    const ghost = 'reuniao-que-nao-existe'
+    await api('scribe:funil-oportunidade-save', { oportunidade: { id: 'op-loja', titulo: 'Loja virtual', meetingIds: [meetingId, ghost].filter(Boolean) } })
+    const shown = await waitFor(contents, `document.querySelector('${SCREEN} [data-funil-timeline-apagada]')?.textContent.includes('Reunião apagada') === true`, 8000)
+    const ghostRow = await evaluate<{ link: boolean; time: boolean }>(
+      contents,
+      `(() => { const el = document.querySelector('${SCREEN} [data-funil-timeline-apagada]'); return { link: !!el?.querySelector('button, a'), time: !!el?.querySelector('time') } })()`,
+    )
+    const keptBefore = op('op-loja')?.meetingIds.includes(ghost) === true
+    const onTab = await aba('reunioes')
+    const tabRow = await waitFor(contents, `document.querySelector('${SCREEN} [data-funil-reuniao="${ghost}"][data-funil-reuniao-apagada]')?.textContent.includes('Reunião apagada') === true`)
+    await clickSelector(contents, `${SCREEN} [data-funil-reuniao="${ghost}"] [data-action="funil-desvincular"]`)
+    const unlinked = await waitFor(contents, `!document.querySelector('${SCREEN} [data-funil-reuniao="${ghost}"]') && document.querySelector('${SCREEN} [data-funil-reuniao="${meetingId}"]')`, 8000)
+    const ids = op('op-loja')?.meetingIds ?? []
+    await aba('linha')
+    checks['funilReuniaoApagada'] = {
+      ok: shown && !ghostRow.link && !ghostRow.time && keptBefore && onTab && tabRow && unlinked && JSON.stringify(ids) === JSON.stringify([meetingId]),
+      detail: `"Reunião apagada" na linha do tempo=${shown} ${JSON.stringify(ghostRow)}; id guardado=${keptBefore}; aba Reuniões=${onTab}, linha=${tabRow}; desvinculada=${unlinked}; meetingIds ${JSON.stringify(ids)}`,
+    }
+
+    // funilEtapaSelect (R27, R6): o Select de etapa leva op-loja a Proposta (evento `etapa` de Negociação para Proposta) e
+    // de volta a Negociação, no fim das colunas (op-vistoria fica onde está).
+    const etapasAntes = etapaEventos()
+    const vistoriaAntes = JSON.stringify(op('op-vistoria'))
+    await setValue(contents, `${SCREEN} [data-funil-etapa-select] select`, E.proposta, 'change')
+    const toProposta = await waitFor(contents, `document.querySelector('${SCREEN} [data-funil-subtitulo]')?.textContent.includes('em Proposta') === true`, 8000)
+    const movedTo = op('op-loja')?.etapaId
+    const evento = saved().eventos.filter((item) => item.oportunidadeId === 'op-loja' && item.tipo === 'etapa').sort((a, b) => b.at - a.at)[0]
+    const inTimeline = await waitFor(contents, `[...document.querySelectorAll('${SCREEN} [data-funil-timeline-item="evento"] [data-funil-timeline-titulo]')].some((el) => el.textContent === 'Negociação → Proposta')`, 8000)
+    await setValue(contents, `${SCREEN} [data-funil-etapa-select] select`, E.negociacao, 'change')
+    const back = await waitFor(contents, `document.querySelector('${SCREEN} [data-funil-subtitulo]')?.textContent.includes('em Negociação') === true`, 8000)
+    checks['funilEtapaSelect'] = {
+      ok: toProposta && movedTo === E.proposta && evento?.de === 'Negociação' && evento.para === 'Proposta' && inTimeline && back && op('op-loja')?.etapaId === E.negociacao && etapaEventos() === etapasAntes + 2 && JSON.stringify(op('op-vistoria')) === vistoriaAntes,
+      detail: `em Proposta=${toProposta} (${movedTo}); evento ${JSON.stringify(evento ?? null)}; na linha do tempo=${inTimeline}; de volta a Negociação=${back}; eventos etapa ${etapasAntes} -> ${etapaEventos()}; op-vistoria igual=${JSON.stringify(op('op-vistoria')) === vistoriaAntes}`,
+    }
+
+    // funilNota (R29): a nota salva aparece na aba Notas e como evento na Linha do tempo.
+    const textoNota = 'Pedir o contrato assinado até sexta'
+    await aba('notas')
+    await setValue(contents, `${SCREEN} [data-funil-nota-texto]`, textoNota)
+    await clickSelector(contents, `${SCREEN} [data-action="funil-nota-salvar"]`)
+    const listed = await waitFor(contents, `[...document.querySelectorAll('${SCREEN} [data-funil-nota]')].some((el) => el.textContent.includes(${JSON.stringify(textoNota)})) && document.querySelector('${SCREEN} [data-funil-nota-texto]')?.value === ''`, 8000)
+    const stored = saved().eventos.some((item) => item.oportunidadeId === 'op-loja' && item.tipo === 'nota' && item.texto === textoNota)
+    await aba('linha')
+    const asEvent = await waitFor(contents, `[...document.querySelectorAll('${SCREEN} [data-funil-timeline-item="evento"] [data-funil-timeline-titulo]')].some((el) => el.textContent === ${JSON.stringify(textoNota)})`, 8000)
+    checks['funilNota'] = { ok: listed && stored && asEvent, detail: `na aba Notas=${listed}; no funil.json=${stored}; na linha do tempo=${asEvent}` }
+
+    // funilWhatsAppOculto (R28): op-loja não tem conversa ligada, então "Abrir WhatsApp" não existe (com a linha do tempo
+    // já carregada, que é de onde vêm as conversas).
+    const noWhatsApp = await evaluate<boolean>(contents, `!!document.querySelector('${SCREEN} [data-funil-timeline]') && !document.querySelector('${SCREEN} [data-action="funil-abrir-whatsapp"]')`)
+    checks['funilWhatsAppOculto'] = { ok: noWhatsApp, detail: `linha do tempo carregada e sem "Abrir WhatsApp"=${noWhatsApp}` }
+
+    // funilCompose (R28, D12): "Escrever e-mail" abre o Email com a mensagem nova para rafael.lima@lojista.example, com a
+    // assinatura da conta como na "Nova mensagem"; descartar fecha e o pedido não reabre o Composer.
+    const signature = accountId ? await api<{ ok: boolean; signature?: { text: string; onNew: boolean } | null }>('scribe:email-signature-get', { accountId }) : null
+    await clickSelector(contents, `${SCREEN} [data-action="funil-escrever-email"]`)
+    const composer = await waitFor(contents, `${routeIs('email')} && document.querySelector('[data-email-composer="new"] [data-email-chip="rafael.lima@lojista.example"]')`, 8000)
+    const chips = await evaluate<string[]>(contents, `[...document.querySelectorAll('[data-email-composer="new"] [data-email-chip]')].map((el) => el.dataset.emailChip)`)
+    const body = await evaluate<string>(contents, `document.querySelector('[data-email-composer="new"] [data-email-compose-text]')?.value ?? ''`)
+    const signed = signature?.ok && signature.signature?.onNew && signature.signature.text.trim() ? body.includes(signature.signature.text.trim().split('\n')[0] ?? '') : true
+    await clickSelector(contents, '[data-action="email-discard"]')
+    await clickSelector(contents, '[data-action="email-discard-confirm"]')
+    const closed = await waitFor(contents, `!document.querySelector('[data-email-composer]')`)
+    await wait(400)
+    const stayedClosed = await evaluate<boolean>(contents, `!document.querySelector('[data-email-composer]')`)
+    checks['funilCompose'] = {
+      ok: composer && JSON.stringify(chips) === JSON.stringify(['rafael.lima@lojista.example']) && signed && closed && stayedClosed,
+      detail: `Composer novo no Email com o contato=${composer} ${JSON.stringify(chips)}; assinatura=${signed}; descartado=${closed}, não reabriu=${stayedClosed}`,
+    }
+
+    // funilArquivar (R27): sem "Arquivar" na aberta; em op-ganha-mes, Arquivar -> confirmar volta ao kanban, a oportunidade
+    // some de Ganhas (também com "Mostrar todas") e de Todas, `arquivado: true` pelo canal e o detalhe dela vira o vazio.
+    await abrir('op-loja')
+    const noArchiveOpen = await evaluate<boolean>(contents, `!!document.querySelector('${SCREEN}') && !document.querySelector('${SCREEN} [data-action="funil-arquivar"]')`)
+    const ganha = await abrir('op-ganha-mes')
+    const GANHA = '[data-funil-oportunidade="op-ganha-mes"]'
+    await clickSelector(contents, `${GANHA} [data-action="funil-arquivar"]`)
+    const confirming = await waitFor(contents, `document.querySelector('${GANHA} [data-action="funil-arquivar-confirmar"]')`)
+    await clickSelector(contents, `${GANHA} [data-action="funil-arquivar-confirmar"]`)
+    const atKanban = await waitFor(contents, `${kanbanReady} && !document.querySelector('[data-funil-oportunidade]')`, 8000)
+    await clickSelector(contents, '[data-funil-filtro="ganhas"]')
+    await waitFor(contents, `document.querySelector('[data-funil-column="${E.ganho}"]:not([data-funil-column-collapsed])')`)
+    if (await evaluate<boolean>(contents, `!!document.querySelector('[data-funil-mostrar-todas="${E.ganho}"]')`)) await clickSelector(contents, `[data-funil-mostrar-todas="${E.ganho}"]`)
+    await settle(contents)
+    const ganhas = await evaluate<string[]>(contents, `[...document.querySelectorAll('[data-funil-card]')].map((el) => el.dataset.funilCard)`)
+    await clickSelector(contents, '[data-funil-filtro="todas"]')
+    await waitFor(contents, `document.querySelectorAll('[data-funil-column]:not([data-funil-column-collapsed])').length === 6`)
+    const todas = await evaluate<string[]>(contents, `[...document.querySelectorAll('[data-funil-card]')].map((el) => el.dataset.funilCard)`)
+    const viaApi = await api<{ state: FunilState }>('scribe:funil-get')
+    const archived = viaApi.state.oportunidades.find((item) => item.id === 'op-ganha-mes')?.arquivado === true
+    await funilRouterPush(contents, '/funil/oportunidades/op-ganha-mes')
+    const empty = await waitFor(contents, `document.querySelector('[data-funil-oportunidade-vazia]')?.textContent.includes('Essa oportunidade não existe mais.') === true`, 8000)
+    checks['funilArquivar'] = {
+      ok: noArchiveOpen && ganha && confirming && atKanban && ganhas.includes('op-ganha-antiga') && !ganhas.includes('op-ganha-mes') && !todas.includes('op-ganha-mes') && archived && empty,
+      detail: `aberta sem Arquivar=${noArchiveOpen}; detalhe da ganha=${ganha}; confirmação na linha=${confirming}; de volta ao kanban=${atKanban}; Ganhas ${JSON.stringify(ganhas)}; Todas ${JSON.stringify(todas)}; arquivado pelo canal=${archived}; detalhe vazio=${empty}`,
+    }
+  } finally {
+    // op-loja sem os vínculos e em Negociação; op-ganha-mes desarquivada (reabrir tira o arquivado) e de volta ao topo de
+    // Ganho, como na fixture.
+    await api('scribe:funil-oportunidade-save', { oportunidade: { id: 'op-loja', titulo: 'Loja virtual', meetingIds: [], emails: [] } }).catch(() => undefined)
+    if (op('op-loja')?.etapaId !== E.negociacao) await api('scribe:funil-oportunidade-move', { id: 'op-loja', etapaId: E.negociacao, ordem: 0 }).catch(() => undefined)
+    if (op('op-ganha-mes')?.arquivado) {
+      await api('scribe:funil-oportunidade-move', { id: 'op-ganha-mes', etapaId: E.negociacao, ordem: 1 }).catch(() => undefined)
+      await api('scribe:funil-oportunidade-move', { id: 'op-ganha-mes', etapaId: E.ganho, ordem: 0 }).catch(() => undefined)
+    }
+    if (themeBefore !== 'system') await evaluate(contents, `window.__scribeApi.invoke('scribe:settings-update', { theme: '${themeBefore}' }).then(() => true)`)
+    nativeTheme.themeSource = 'system'
+    win.destroy()
+    console.log(`funil: detalhe da oportunidade em ${((Date.now() - startedAt) / 1000).toFixed(1)} s`)
+  }
+}
+
+/**
  * Contrato 55 (CA26), numa janela que troca de tema no lugar (cada print em claro e escuro, no mesmo estado): a árvore
  * de pastas do servidor falso na ordem D1, com a contagem; ⌘ clique em 3 mensagens ("3 selecionadas" e o resumo), o
  * alvo de arrastar, o "Mover para…" por ⇧⌘M com Enter levando as 3 para "Arquivo"; arrastar uma para "Pendentes"; o erro
@@ -13366,7 +13598,7 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
   const redes: Record<string, Check> = {}
   /** Contrato 72: a tela Redes e o nível Redes. */
   const redesUi: Record<string, Check> = {}
-  /** Contrato 112: o nível Funil e o kanban de Oportunidades. */
+  /** Contrato 112: o nível Funil e o kanban de Oportunidades. Contrato 119: e o detalhe da oportunidade. */
   const funil: Record<string, Check> = {}
   let analysisMeasured: AnalysisMeasured | null = null
 
@@ -13794,6 +14026,10 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
     // recusa os canais do funil junto com os outros). Termina com as oportunidades e as etapas como na fixture.
     await funilKanbanChecks(ctx, watch, funil, screenshots)
 
+    // Contrato 119: o detalhe da oportunidade, logo depois do kanban (parte das etapas da fixture) e antes do bloqueio.
+    // Termina com op-loja e op-ganha-mes de volta às etapas da fixture.
+    await funilDetalheChecks(ctx, watch, funil, screenshots)
+
     // Contrato 22: bloqueio do app, por último (a senha criada vale para o userData inteiro).
     await lockChecks(ctx, watch, lock, screenshots)
 
@@ -13903,6 +14139,10 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
   for (const name of ['funilNav', 'funilLevel', 'funilRedirect', 'funilNavigateEvent', 'funilKanban', 'funilCollapsed', 'funilFiltros', 'funilNova', 'funilEtapas', 'funilDragMove', 'funilDragLost']) {
     if (!funil[name]) failures.push(`funil ${name}: não executado`)
   }
+  // Contrato 119: o detalhe da oportunidade.
+  for (const name of ['funilDetail', 'funilReuniaoApagada', 'funilEtapaSelect', 'funilNota', 'funilCompose', 'funilWhatsAppOculto', 'funilArquivar']) {
+    if (!funil[name]) failures.push(`funil ${name}: não executado`)
+  }
   for (const [name, check] of Object.entries(invite)) if (!check.ok) failures.push(`convites ${name}: ${check.detail}`)
   for (const name of ['convite-1', 'convite-2', 'convite-3', 'convite-4', 'convite-5', 'convite-6', 'convite-7', 'convite-8', 'convite-9', 'convite-10', 'convite-11', 'convite-estados', 'convite-lista', 'convite-configuracoes', 'convite-regra-1', 'convite-regra-2', 'convite-regra-3', 'convite-sugestao-4', 'convite-sugestao-5']) if (!invite[name]) failures.push(`convites ${name}: não executado`)
   for (const [name, check] of Object.entries(lock)) if (!check.ok) failures.push(`bloqueio ${name}: ${check.detail}`)
@@ -13946,7 +14186,8 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
   // Contrato 75: +2 (as métricas da conta em 28 dias e a tabela das publicações, nos dois temas).
   // Contrato 76: +4 (a fonte Redes ligada no Contexto e o cartão do rascunho para o Instagram, nos dois temas).
   // Contrato 112: +6 (o kanban de Oportunidades, a nova oportunidade e "Editar etapas", nos dois temas).
-  const expectedShots = SCREENS.length * THEMES.length + 185
+  // Contrato 119: +2 (o detalhe da oportunidade, nos dois temas).
+  const expectedShots = SCREENS.length * THEMES.length + 187
   if (screenshots.length !== expectedShots) failures.push(`${screenshots.length} PNGs em vez de ${expectedShots}`)
   for (const shot of screenshots) {
     if (shot.name === MEETING_PROMPT_SHOT) {

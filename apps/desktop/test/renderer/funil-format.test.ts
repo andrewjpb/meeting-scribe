@@ -1,19 +1,28 @@
 // Contrato 112 (CA2): os filtros e as colunas do kanban (R23), as fechadas nos últimos 90 dias, a busca sem acento, o
 // valor digitado em reais, a oportunidade aberta da empresa (aviso de duplicata, R25) e os resultados do SearchPicker.
+// Contrato 119 (CA5, CA6): o "Escrever e-mail", o "Arquivar", o subtítulo, o "Abrir WhatsApp" e o "Abrir e-mail".
 import { describe, expect, it } from 'vitest'
-import type { Contato, Empresa, FunilState, Oportunidade } from '../../src/shared/funil'
+import type { Contato, Empresa, FunilState, ItemLinhaDoTempo, Oportunidade } from '../../src/shared/funil'
 import { etapasPadrao } from '../../src/shared/funil-logic'
 import {
   colunasVisiveis,
+  composeDe,
+  dataHora,
   diaCurto,
+  emailDestino,
   fechadasRecentes,
   filtrarOportunidades,
   oportunidadeAbertaDaEmpresa,
   parseValor,
   PICKER_MAX,
+  podeArquivar,
   resultadosPicker,
+  textoPassoDetalhe,
   textoProximoPasso,
+  textoSubtitulo,
   textoTotais,
+  valorParaEdicao,
+  whatsappDestino,
 } from '../../src/renderer/src/features/funil/funilFormat'
 
 const DIA_MS = 86_400_000
@@ -165,5 +174,73 @@ describe('aviso de duplicata e SearchPicker (R25)', () => {
     expect(resultadosPicker(itens, 'cliente 3').criar).toBe(false)
     expect(resultadosPicker([{ id: 'a', nome: 'Ação' }], 'acao').itens).toHaveLength(1)
     expect(resultadosPicker(itens, '  ')).toEqual({ itens: [], criar: false })
+  })
+})
+
+describe('detalhe da oportunidade (contrato 119)', () => {
+  const comEmails = (emails: string[]): Pick<Contato, 'emails'> => ({ emails })
+
+  it('composeDe: o e-mail principal de cada contato, sem repetir, e o contato sem e-mail fica de fora', () => {
+    expect(composeDe([comEmails(['rafael.lima@lojista.example']), comEmails([]), comEmails(['Rafael.Lima@Lojista.example ', 'outro@lojista.example']), comEmails(['marina@cliente.example'])])).toEqual([
+      'rafael.lima@lojista.example',
+      'marina@cliente.example',
+    ])
+    expect(composeDe([comEmails([]), comEmails([])])).toEqual([])
+    expect(composeDe([])).toEqual([])
+  })
+
+  it('podeArquivar: só Ganho e Perdido', () => {
+    expect(etapas.filter((etapa) => podeArquivar(etapa)).map((etapa) => etapa.tipo)).toEqual(['ganho', 'perdido'])
+    expect(podeArquivar({ tipo: 'aberta' })).toBe(false)
+    expect(podeArquivar(null)).toBe(false)
+    expect(podeArquivar(undefined)).toBe(false)
+  })
+
+  it('textoSubtitulo: dias na etapa, a criação e a última interação com "hoje" e "ontem", como no artboard', () => {
+    // NOW = 20/11/2026 12:00 em São Paulo.
+    const op = { movidoEm: NOW - 6 * DIA_MS, criadoEm: Date.parse('2026-11-03T13:00:00.000Z') }
+    const proposta = { nome: 'Proposta' }
+    expect(textoSubtitulo(op, proposta, Date.parse('2026-11-19T18:12:00.000Z'), NOW, SP)).toBe('Há 6 d em Proposta · criada em 03/11/2026 · última interação ontem, 15:12')
+    expect(textoSubtitulo(op, proposta, NOW - 30 * 60_000, NOW, SP)).toBe('Há 6 d em Proposta · criada em 03/11/2026 · última interação hoje, 11:30')
+    expect(textoSubtitulo(op, proposta, Date.parse('2026-11-14T13:52:00.000Z'), NOW, SP)).toBe('Há 6 d em Proposta · criada em 03/11/2026 · última interação 14/11/2026')
+    expect(textoSubtitulo(op, proposta, null, NOW, SP)).toBe('Há 6 d em Proposta · criada em 03/11/2026')
+    // "ontem" é o dia anterior no fuso, não 24 h: 23:50 de ontem continua "ontem".
+    expect(textoSubtitulo(op, proposta, Date.parse('2026-11-20T02:50:00.000Z'), NOW, SP)).toBe('Há 6 d em Proposta · criada em 03/11/2026 · última interação ontem, 23:50')
+  })
+
+  it('whatsappDestino: a primeira conversa ligada vai a /whatsapp com state.chatId; sem conversa, nada', () => {
+    expect(whatsappDestino(['5511987654321@s.whatsapp.net', 'outro@s.whatsapp.net'])).toEqual({ path: '/whatsapp', state: { chatId: '5511987654321@s.whatsapp.net' } })
+    expect(whatsappDestino([])).toBeNull()
+  })
+
+  it('emailDestino: a pasta da mensagem (Entrada, Enviados ou outra) com o messageId; fora do cache, nada', () => {
+    const item = (patch: Partial<Extract<ItemLinhaDoTempo, { tipo: 'email' }>>): Extract<ItemLinhaDoTempo, { tipo: 'email' }> => ({
+      tipo: 'email',
+      at: NOW,
+      accountId: 'conta-1',
+      messageId: 'm-7',
+      mailbox: 'INBOX',
+      assunto: 'Proposta',
+      de: 'Marina',
+      para: 'Andrew',
+      noCache: false,
+      ...patch,
+    })
+    expect(emailDestino(item({}), 'Sent')).toEqual({ path: '/email/conta-1/entrada', state: { messageId: 'm-7', mailbox: 'INBOX' } })
+    expect(emailDestino(item({ mailbox: 'Sent' }), 'Sent')?.path).toBe('/email/conta-1/enviados')
+    expect(emailDestino(item({ mailbox: 'Clientes/ABF' }), 'Sent')?.path).toBe('/email/conta-1/p~Clientes%2FABF')
+    expect(emailDestino(item({ mailbox: null }), null)?.path).toBe('/email/conta-1/entrada')
+    expect(emailDestino(item({ noCache: true }), 'Sent')).toBeNull()
+  })
+
+  it('textoPassoDetalhe, dataHora e valorParaEdicao', () => {
+    expect(textoPassoDetalhe({ texto: 'Ligar para a Ana', data: '2026-11-18' }, '2026-11-20')).toEqual({ texto: 'Ligar para a Ana', data: '18/11 · vencido', vencido: true })
+    expect(textoPassoDetalhe({ texto: 'Revisar', data: '2026-11-21' }, '2026-11-20')).toEqual({ texto: 'Revisar', data: '21/11', vencido: false })
+    expect(textoPassoDetalhe(null, '2026-11-20')).toEqual({ texto: 'Sem próximo passo', data: null, vencido: false })
+    expect(dataHora(Date.parse('2026-11-14T13:40:00.000Z'), SP)).toBe('14/11 · 10:40')
+    expect(valorParaEdicao(6_400_000)).toBe('64.000')
+    expect(valorParaEdicao(1_250_050)).toBe('12.500,50')
+    expect(valorParaEdicao(null)).toBe('')
+    expect(parseValor(valorParaEdicao(18_600_000))).toBe(18_600_000)
   })
 })

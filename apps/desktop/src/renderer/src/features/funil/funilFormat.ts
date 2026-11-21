@@ -1,7 +1,10 @@
-// Formatação e filtros da tela Oportunidades (contrato 112, R21 a R25). Sem DOM: testado em
-// test/renderer/funil-format.test.ts. Os cálculos do funil (totais, esfriada, BRL) vêm de `shared/funil-logic.ts`.
-import type { Etapa, EtapaTipo, FunilState, Oportunidade, ProximoPasso } from '@shared/funil'
-import { formatarBRL, semAcento, totaisDoFunil } from '@shared/funil-logic'
+// Formatação e filtros da tela Oportunidades (contrato 112, R21 a R25) e do detalhe da oportunidade (contrato 119, R27
+// a R29). Sem DOM: testado em test/renderer/funil-format.test.ts. Os cálculos do funil (totais, esfriada, BRL) vêm de
+// `shared/funil-logic.ts`.
+import { EMAIL_INBOX_MAILBOX } from '@shared/email'
+import type { Contato, Etapa, EtapaTipo, FunilState, ItemLinhaDoTempo, Oportunidade, ProximoPasso } from '@shared/funil'
+import { diasNaEtapa, formatarBRL, normalizarEmail, passoVencido, semAcento, totaisDoFunil } from '@shared/funil-logic'
+import { emailPath, ROUTE_PATHS, type EmailNavigationState, type EmailRouteFolder, type WhatsAppNavigationState } from '@shared/routes'
 
 const DIA_MS = 86_400_000
 
@@ -128,4 +131,104 @@ export function resultadosPicker(itens: readonly PickerItem[], texto: string, es
   if (!termo) return { itens: [], criar: false }
   const achados = itens.filter((item) => !escolhidos.includes(item.id) && (chaveBusca(item.nome).includes(termo) || (item.detalhe !== undefined && chaveBusca(item.detalhe).includes(termo))))
   return { itens: achados.slice(0, PICKER_MAX), criar: !itens.some((item) => chaveBusca(item.nome) === termo) }
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// Contrato 119: o detalhe da oportunidade.
+
+/** "Escrever e-mail" (R28, D12): o e-mail principal de cada contato, sem repetir; contato sem e-mail fica de fora. */
+export function composeDe(contatos: readonly Pick<Contato, 'emails'>[]): string[] {
+  const vistos = new Set<string>()
+  for (const contato of contatos) {
+    const principal = contato.emails.map((email) => normalizarEmail(email)).find((email) => email !== null)
+    if (principal) vistos.add(principal)
+  }
+  return [...vistos]
+}
+
+/** Só oportunidade ganha ou perdida pode ser arquivada (R27). */
+export function podeArquivar(etapa: Pick<Etapa, 'tipo'> | null | undefined): boolean {
+  return etapa?.tipo === 'ganho' || etapa?.tipo === 'perdido'
+}
+
+const fusoLocal = (): string => Intl.DateTimeFormat().resolvedOptions().timeZone
+
+/** Dia, mês, ano, hora e minuto de um instante no fuso pedido, com dois dígitos (o ano com quatro). */
+function partes(at: number, timeZone: string): { dia: string; mes: string; ano: string; hora: string; minuto: string } {
+  const lista = new Intl.DateTimeFormat('en-GB', { timeZone, day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).formatToParts(new Date(at))
+  const valor = (tipo: Intl.DateTimeFormatPartTypes): string => lista.find((parte) => parte.type === tipo)?.value ?? ''
+  return { dia: valor('day'), mes: valor('month'), ano: valor('year'), hora: valor('hour'), minuto: valor('minute') }
+}
+
+/** `03/11/2026`. */
+export function dataLonga(at: number, timeZone: string = fusoLocal()): string {
+  const { dia, mes, ano } = partes(at, timeZone)
+  return `${dia}/${mes}/${ano}`
+}
+
+/** `14/11 · 10:40`, a data de cada item da linha do tempo (R29). */
+export function dataHora(at: number, timeZone: string = fusoLocal()): string {
+  const { dia, mes, hora, minuto } = partes(at, timeZone)
+  return `${dia}/${mes} · ${hora}:${minuto}`
+}
+
+/** `15/12/2026` de `2026-12-15`. */
+export function diaLongo(dia: string): string {
+  const [ano, mes, d] = dia.split('-')
+  return `${d}/${mes}/${ano}`
+}
+
+/** "hoje, 15:12", "ontem, 15:12" ou, antes disso, "18/11/2026". */
+export function quando(at: number, now: number, timeZone: string = fusoLocal()): string {
+  const alvo = partes(at, timeZone)
+  const chave = (item: { dia: string; mes: string; ano: string }): string => `${item.ano}-${item.mes}-${item.dia}`
+  const hora = `${alvo.hora}:${alvo.minuto}`
+  if (chave(alvo) === chave(partes(now, timeZone))) return `hoje, ${hora}`
+  if (chave(alvo) === chave(partes(now - DIA_MS, timeZone))) return `ontem, ${hora}`
+  return `${alvo.dia}/${alvo.mes}/${alvo.ano}`
+}
+
+/**
+ * Subtítulo do detalhe (artboard 04): "Há 6 d em Proposta · criada em 03/11/2026 · última interação ontem, 15:12". Sem
+ * a última interação, a última parte fica de fora.
+ */
+export function textoSubtitulo(oportunidade: Pick<Oportunidade, 'movidoEm' | 'criadoEm'>, etapa: Pick<Etapa, 'nome'> | null | undefined, ultima: number | null, now: number, timeZone: string = fusoLocal()): string {
+  const partesTexto = [`Há ${diasNaEtapa(oportunidade.movidoEm, now)} d em ${etapa?.nome ?? 'etapa desconhecida'}`, `criada em ${dataLonga(oportunidade.criadoEm, timeZone)}`]
+  if (ultima !== null) partesTexto.push(`última interação ${quando(ultima, now, timeZone)}`)
+  return partesTexto.join(' · ')
+}
+
+/** Destino de uma navegação: o caminho e o `state` que vai junto. */
+export interface Destino<S> {
+  path: string
+  state: S
+}
+
+/** "Abrir WhatsApp" (R28, D14): a primeira conversa ligada; sem conversa, nenhum destino (o botão nem aparece). */
+export function whatsappDestino(chatIds: readonly string[]): Destino<WhatsAppNavigationState> | null {
+  const chatId = chatIds[0]
+  return chatId ? { path: ROUTE_PATHS.whatsapp, state: { chatId } } : null
+}
+
+/**
+ * "Abrir e-mail" de um item da linha do tempo (R29): a pasta da conta onde a mensagem está (a Caixa de Entrada, os
+ * Enviados da conta ou outra pasta) com a mensagem pedida. Fora do cache (`noCache`), nenhum destino.
+ */
+export function emailDestino(item: Extract<ItemLinhaDoTempo, { tipo: 'email' }>, sentMailbox: string | null): Destino<EmailNavigationState> | null {
+  if (item.noCache) return null
+  const mailbox = item.mailbox ?? EMAIL_INBOX_MAILBOX
+  const pasta: EmailRouteFolder = mailbox.toUpperCase() === EMAIL_INBOX_MAILBOX ? 'inbox' : mailbox === sentMailbox ? 'sent' : { path: mailbox }
+  return { path: emailPath(item.accountId, pasta), state: { messageId: item.messageId, mailbox } }
+}
+
+/** Próximo passo no detalhe (artboard 04): o texto e, com data, "18/11" ou "18/11 · vencido". */
+export function textoPassoDetalhe(proximoPasso: ProximoPasso | null, hoje: string): { texto: string; data: string | null; vencido: boolean } {
+  if (!proximoPasso) return { texto: 'Sem próximo passo', data: null, vencido: false }
+  const vencido = passoVencido(proximoPasso, hoje)
+  return { texto: proximoPasso.texto, data: proximoPasso.data ? `${diaCurto(proximoPasso.data)}${vencido ? ' · vencido' : ''}` : null, vencido }
+}
+
+/** O valor no campo de edição (R25): `64.000` ou `1.250,50`, sem o "R$"; sem valor, vazio. */
+export function valorParaEdicao(centavos: number | null): string {
+  return centavos === null ? '' : formatarBRL(centavos).replace(/^R\$\s*/, '')
 }

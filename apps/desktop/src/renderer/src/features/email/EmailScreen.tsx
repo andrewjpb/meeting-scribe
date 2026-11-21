@@ -161,7 +161,10 @@ export function EmailScreen() {
   const status = accounts.find((item) => item.account.id === conta)
   const folder = emailFolderFromSlug(emailFolderSegment(location.pathname))
   if (!status || !folder) {
-    if (first) return <Navigate replace to={emailPath(first.account.id, 'inbox')} />
+    // Contrato 119 (D12): o "Escrever e-mail" do funil chega em `/email`; o pedido de mensagem nova segue para a pasta.
+    const compose = (location.state as EmailNavigationState | null)?.compose
+    const state: EmailNavigationState | undefined = compose ? { compose } : undefined
+    if (first) return <Navigate replace to={emailPath(first.account.id, 'inbox')} state={state} />
     return (
       <div className="px-8 pt-5">
         <Note
@@ -391,7 +394,7 @@ function FolderView({ account, sentMailbox, folder, pop3, nodes }: FolderViewPro
     })().finally(() => draftRequests.current(token) && setPreparing(false))
   }
 
-  const newMessage = (to: Recipient[] = []): void => {
+  const newMessage = (to: Recipient[] = [], subject = ''): void => {
     if (ownDraft && !to.length) {
       draftRequests.cancel()
       setPreparing(false)
@@ -402,10 +405,21 @@ function FolderView({ account, sentMailbox, folder, pop3, nodes }: FolderViewPro
     setPreparing(true)
     void signature()
       .then((found) => {
-        if (draftRequests.current(token)) useEmail.getState().openDraft({ ...signedDraft({ ...emptyDraft(account.id), to }, found), signed: signatureEntered(found, 'new') })
+        if (draftRequests.current(token)) useEmail.getState().openDraft({ ...signedDraft({ ...emptyDraft(account.id), to, subject }, found), signed: signatureEntered(found, 'new') })
       })
       .finally(() => draftRequests.current(token) && setPreparing(false))
   }
+
+  // Contrato 119 (D12, R28): `compose` no `state` (o "Escrever e-mail" do funil) abre a mensagem nova já endereçada, pelo
+  // mesmo `newMessage` (com a assinatura), uma vez por navegação; o pedido sai do histórico para não abrir de novo.
+  const composeSeen = useRef<string | null>(null)
+  useEffect(() => {
+    const pedido = (location.state as EmailNavigationState | null)?.compose
+    if (!pedido || composeSeen.current === location.key) return
+    composeSeen.current = location.key
+    newMessage(parseRecipients(pedido.to.join('\n')), pedido.subject ?? '')
+    void navigate(location.pathname, { replace: true, state: null })
+  })
 
   const sent = (messageId: string): void => {
     useEmail.getState().closeDraft(true)
