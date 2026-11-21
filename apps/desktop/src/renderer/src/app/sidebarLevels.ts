@@ -1,15 +1,16 @@
-// Barra lateral em pilha (contratos 65, 66, 67 e 72): de qual nível é cada rota, o deslize entre um nível e outro e o último
+// Barra lateral em pilha (contratos 65, 66, 67, 72 e 112): de qual nível é cada rota, o deslize entre um nível e outro e o último
 // email (e a última seção das redes) aberto na sessão. Sem DOM: testado em test/renderer/sidebar-stack.test.ts. O nome não
 // é `sidebarStack.ts` porque, no disco do Mac (sem distinção de maiúsculas), `./SidebarStack` resolveria para ele e não
 // para o componente.
 import { matchPath } from 'react-router'
-import { DEFAULT_REDES_SECTION, EMAIL_ROOT_PATH, isRedesSection, REDES_ROOT_PATH, redesPath, ROUTE_PATHS } from '@shared/routes'
+import { DEFAULT_REDES_SECTION, EMAIL_ROOT_PATH, FUNIL_ROOT_PATH, isRedesSection, REDES_ROOT_PATH, redesPath, ROUTE_PATHS } from '@shared/routes'
 
 /**
  * Seções com nível próprio na barra lateral (contrato 66: Configurações, com as abas; contrato 67: Assistente, com as
- * conversas; contrato 72: Redes, com as contas e as seções de cada uma).
+ * conversas; contrato 72: Redes, com as contas e as seções de cada uma; contrato 112: Funil, com Oportunidades, Contatos
+ * e Empresas).
  */
-export const SIDEBAR_SECTIONS = ['email', 'configuracoes', 'assistente', 'redes'] as const
+export const SIDEBAR_SECTIONS = ['email', 'configuracoes', 'assistente', 'redes', 'funil'] as const
 export type SidebarSection = (typeof SIDEBAR_SECTIONS)[number]
 export type SidebarLevel = 'root' | SidebarSection
 export type SidebarTransition = 'push' | 'pop' | null
@@ -27,6 +28,7 @@ const SETTINGS_SECTION_PATTERN = `${ROUTE_PATHS.configuracoes}/*`
 const ASSISTANT_SECTION_PATTERN = `${ROUTE_PATHS.assistente}/*`
 const REDES_SECTION_PATTERN = `${REDES_ROOT_PATH}/*`
 const REDES_PAGE_PATTERN = `${REDES_ROOT_PATH}/:conta/:secao`
+const FUNIL_SECTION_PATTERN = `${FUNIL_ROOT_PATH}/*`
 
 export function isSidebarSection(id: string): id is SidebarSection {
   return (SIDEBAR_SECTIONS as readonly string[]).includes(id)
@@ -34,12 +36,14 @@ export function isSidebarSection(id: string): id is SidebarSection {
 
 /**
  * A seção da rota: `email` em `/email` e `/email/*`, `configuracoes` em `/configuracoes` e `/configuracoes/*`,
- * `assistente` em `/assistente` e `/assistente/*`, `redes` em `/redes` e `/redes/*`; as outras rotas não têm nível próprio.
+ * `assistente` em `/assistente` e `/assistente/*`, `redes` em `/redes` e `/redes/*`, `funil` em `/funil` e `/funil/*`
+ * (contrato 112); as outras rotas não têm nível próprio.
  */
 export function sectionOf(pathname: string): SidebarSection | null {
   if (matchPath(EMAIL_SECTION_PATTERN, pathname)) return 'email'
   if (matchPath(SETTINGS_SECTION_PATTERN, pathname)) return 'configuracoes'
   if (matchPath(REDES_SECTION_PATTERN, pathname)) return 'redes'
+  if (matchPath(FUNIL_SECTION_PATTERN, pathname)) return 'funil'
   return matchPath(ASSISTANT_SECTION_PATTERN, pathname) ? 'assistente' : null
 }
 

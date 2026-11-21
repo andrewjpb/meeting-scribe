@@ -81,6 +81,17 @@ A assinatura da conta entra sozinha ao escrever (depois de "-- ", acima do texto
 
 Quando você pede ao Assistente para organizar o email ("organiza meus emails em resolvidos e pendentes"), a área da leitura da conta vira o painel "Organizando": o pedido, Parar, as etapas (Lendo, Decidindo, Movendo), quantas mensagens ele leu e moveu, quantas foram para Resolvidos, Pendentes e outras pastas e uma linha por assunto com o veredito, o motivo e a evidência. Clicar numa linha abre o email, e "Voltar ao andamento" traz o painel de volta. As mensagens movidas somem da lista na hora. Ele lê as 200 mensagens mais recentes da pasta; na dúvida, manda para Pendentes. Ao parar ou terminar, o painel mostra o resumo, "Desfazer as N" (devolve tudo à pasta de origem) e "Abrir no Assistente", e o topo da lista ganha a faixa "O Assistente moveu N mensagens" com Desfazer, que fica até o fim do dia ou até você fechar.
 
+<!-- tela: funil -->
+## Funil
+
+O funil de vendas do app: contatos, empresas e oportunidades, guardados só neste Mac. "Funil", na barra lateral entre Email e Redes, abre o nível Funil, com Oportunidades, Contatos e Empresas; a seta "Funil" no topo do nível volta ao menu.
+
+Em Oportunidades, o quadro com uma coluna por etapa (Contato, Descoberta, Proposta e Negociação, mais Ganho e Perdido), cada uma com o número de oportunidades e a soma dos valores. Acima do quadro, quantas estão abertas, o valor em aberto e o ganho no mês. Abertas, Ganhas, Perdidas e Todas escolhem as colunas abertas; as outras viram uma faixa estreita com o nome e o número, que abre no clique. Em Ganhas, Perdidas e Todas, Ganho e Perdido mostram só as fechadas nos últimos 90 dias, com "Mostrar todas" no fim da coluna. A busca acha pelo título, pela empresa ou pelo nome de um contato. Cada cartão mostra o título, a empresa, o valor, o próximo passo com a data (em vermelho quando venceu), há quantos dias está na etapa e "esfriou" quando ficou sem conversa por mais dias que o combinado em Configurações › Geral › Funil de vendas; o clique abre a oportunidade.
+
+Para mudar de etapa, arraste o cartão para outra coluna (ou para a faixa de Ganho ou de Perdido, que fica destacada). Soltar em Perdido pede o motivo no próprio cartão: só grava em "Salvar"; "Cancelar" (ou Esc) deixa como estava. "Nova oportunidade" abre um cartão no topo da primeira etapa com Título, Empresa (escolha da lista ou crie uma nova), Contatos, Valor e Previsão; se a empresa já tem uma oportunidade aberta, o cartão avisa, mas deixa criar. "Editar etapas" deixa renomear, reordenar pela alça, apagar uma etapa aberta e vazia e criar outra ("+ Etapa"); Ganho e Perdido só se renomeiam. "Concluir" grava.
+
+Em Contatos e Empresas, as listas com a ficha de cada um. "Importar…" traz contatos de uma planilha CSV ou de um arquivo vCard (.vcf): o app mostra uma prévia com as colunas para conferir e junta quem já existe pelo e-mail ou pelo telefone, sem repetir.
+
 <!-- tela: redes -->
 ## Redes
 

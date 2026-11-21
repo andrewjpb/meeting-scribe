@@ -1,5 +1,5 @@
 // Rotas do renderer. O main só conhece o id; o caminho é detalhe do roteador em memória.
-export type RouteId = 'reunioes' | 'assistente' | 'automacoes' | 'whatsapp' | 'email' | 'redes' | 'gravacao' | 'detalhe' | 'configuracoes'
+export type RouteId = 'reunioes' | 'assistente' | 'automacoes' | 'whatsapp' | 'email' | 'funil' | 'redes' | 'gravacao' | 'detalhe' | 'configuracoes'
 
 export const ROUTE_PATHS: Record<RouteId, string> = {
   reunioes: '/',
@@ -14,6 +14,11 @@ export const ROUTE_PATHS: Record<RouteId, string> = {
    * `emailPath(conta, pasta)`. Sem conta, a tela abre a Caixa de Entrada da primeira.
    */
   email: '/email/:conta?/:pasta?',
+  /**
+   * Funil de vendas (contrato 112, R17): Oportunidades, Contatos e Empresas, abertas pelo nível Funil da barra lateral.
+   * Padrão do roteador; o caminho concreto sai de `funilPath(secao, id)`. Sem seção, a tela vai a Oportunidades.
+   */
+  funil: '/funil/:secao?/:id?',
   /**
    * Redes (contrato 72): a seção de uma conta do Instagram, aberta pelo nível Redes da barra lateral. Padrão do roteador;
    * o caminho concreto sai de `redesPath(conta, secao)`. Sem conta, a tela abre a primeira (ou o estado vazio).
@@ -92,6 +97,29 @@ export interface EmailNavigationState {
   movedByRule?: boolean
   /** Contrato 55 (CA1): a pasta pedida não existe mais na conta; a Caixa de Entrada abre com a nota. */
   missingFolder?: string
+  /** Contrato 112 (D12, R28): abre o Composer de uma mensagem nova já endereçada (quem usa é o detalhe da oportunidade). */
+  compose?: { to: string[]; subject?: string }
+}
+
+/** Destino do item "Funil" da barra lateral (contrato 112): a tela vai a Oportunidades. */
+export const FUNIL_ROOT_PATH = '/funil'
+
+/** As seções do funil, na ordem do nível Funil (contrato 112, R17); a primeira é a padrão. */
+export const FUNIL_SECTIONS = ['oportunidades', 'contatos', 'empresas'] as const
+export type FunilSection = (typeof FUNIL_SECTIONS)[number]
+
+export function isFunilSection(value: unknown): value is FunilSection {
+  return typeof value === 'string' && (FUNIL_SECTIONS as readonly string[]).includes(value)
+}
+
+/** Caminho de uma seção do funil (`/funil/oportunidades`) ou de um item dela (`/funil/oportunidades/<id>`). */
+export function funilPath(section: FunilSection = 'oportunidades', id?: string): string {
+  return `${FUNIL_ROOT_PATH}/${section}${id === undefined ? '' : `/${encodeURIComponent(id)}`}`
+}
+
+/** `state` da navegação para Oportunidades que abre o cartão "Nova oportunidade" já preenchido (contrato 112, D14). */
+export interface FunilNavigationState {
+  nova?: { contatoIds: string[]; empresaId: string | null }
 }
 
 /** Destino do item "Redes" da barra lateral (contrato 72) na primeira vez da sessão: a tela abre a primeira conta. */

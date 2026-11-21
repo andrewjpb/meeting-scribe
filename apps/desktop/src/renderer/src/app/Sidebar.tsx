@@ -6,7 +6,7 @@ import { PermissionsBlock } from '../features/permissions/PermissionsBlock'
 import { UpdateNotice } from '../features/settings/UpdateNotice'
 import { useBranding } from './brandingStore'
 import { LockButton } from './LockButton'
-import { EMAIL_ROOT_PATH, REDES_ROOT_PATH, ROUTE_PATHS } from '@shared/routes'
+import { EMAIL_ROOT_PATH, FUNIL_ROOT_PATH, funilPath, REDES_ROOT_PATH, ROUTE_PATHS } from '@shared/routes'
 import { whatsappInstalled } from '@shared/whatsapp'
 import { useWhatsApp } from '../features/whatsapp/whatsappStore'
 import { useEmail } from '../features/email/emailStore'
@@ -17,8 +17,8 @@ import { activeNavId, isSidebarSection, lastEmailPath, lastRedesPath, levelFor, 
 import { SidebarStack, type SidebarFocus } from './SidebarStack'
 
 // O item leva ao caminho da rota (Configurações sem a aba abre a última aberta; Email, contrato 65, à última pasta aberta;
-// Redes, contrato 72, à última seção vista).
-const ROOT_PATHS: Partial<Record<string, string>> = { email: EMAIL_ROOT_PATH, redes: REDES_ROOT_PATH }
+// Redes, contrato 72, à última seção vista; Funil, contrato 112, a Oportunidades).
+const ROOT_PATHS: Partial<Record<string, string>> = { email: EMAIL_ROOT_PATH, redes: REDES_ROOT_PATH, funil: FUNIL_ROOT_PATH }
 const NAV_ITEMS = APP_ROUTES.flatMap((route) => (route.nav ? [{ ...route.nav, id: route.id, path: ROOT_PATHS[route.id] ?? ROUTE_PATHS[route.id] }] : []))
 
 /**
@@ -62,6 +62,8 @@ export function Sidebar() {
     else if (section === 'email') void navigate(lastEmailPath(useEmail.getState().accounts?.map((status) => status.account.id) ?? []))
     else if (section === 'assistente') void navigate(ROUTE_PATHS.assistente)
     else if (section === 'redes') void navigate(lastRedesPath(useRedes.getState().state?.accounts.map((account) => account.id) ?? []))
+    // Contrato 112: o Funil abre sempre em Oportunidades.
+    else if (section === 'funil') void navigate(funilPath('oportunidades'))
     else void navigate(ROUTE_PATHS.configuracoes)
   }
   const back = (): void => {
