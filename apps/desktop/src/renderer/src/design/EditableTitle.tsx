@@ -48,13 +48,16 @@ export function EditableTitle({ value, onCommit, maxLength, label = 'Título da 
     )
   }
 
+  // O `-mx-1.5` tira 12 px da largura intrínseca do botão: num invólucro que encolhe ao conteúdo (o cabeçalho da
+  // oportunidade, ao lado do Select de etapa), o título truncava com a linha livre. O `pr-3` devolve os 12 px ao `h1` e o
+  // `max-w` maior desconta; com largura definida (os outros usos), o botão fica do mesmo tamanho de antes.
   return (
-    <h1 className="min-w-0">
+    <h1 className="min-w-0 pr-3">
       <button
         type="button"
         title="Clique para renomear"
         onClick={() => setDraft(value)}
-        className={`no-drag -mx-1.5 max-w-full truncate rounded-[var(--radius-control)] border border-transparent px-1.5 text-left transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-bg-sunken ${TITLE_CLASS}`}
+        className={`no-drag -mx-1.5 max-w-[calc(100%+12px)] truncate rounded-[var(--radius-control)] border border-transparent px-1.5 text-left transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-bg-sunken ${TITLE_CLASS}`}
       >
         {value}
       </button>

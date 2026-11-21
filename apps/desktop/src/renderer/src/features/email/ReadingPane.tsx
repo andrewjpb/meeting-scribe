@@ -256,11 +256,13 @@ export function ReadingPane({ account, message, onCompose, composing, onMailto, 
           <div className="flex items-start gap-3">
             <Avatar id={sender?.address ?? message.id} name={addressLabel(sender)} size={8} />
             <div className="flex min-w-0 flex-1 flex-col gap-0.5 text-12 text-text-muted select-text">
+              {/* R36: o "+ Contato" na mesma linha do remetente. O endereço parte de largura 0 e cresce até a dele (`basis-0
+                  grow max-w-max`): a linha só quebra quando nome e botão não cabem, e o que encolhe (com reticências) é ele. */}
               <p className="flex flex-wrap items-baseline gap-x-2">
-                <span data-email-from className="text-13 font-bold text-text">
+                <span data-email-from title={addressLabel(sender)} className="max-w-full min-w-0 truncate text-13 font-bold text-text">
                   {addressLabel(sender)}
                 </span>
-                {sender && sender.name && <span className="truncate">{sender.address}</span>}
+                {sender && sender.name && <span className="max-w-max min-w-0 grow basis-0 truncate">{sender.address}</span>}
                 {sender && senderAddress && !ownSender && (
                   <span className="self-center">
                     <ContactLink email={sender.address} nome={sender.name?.trim() || sender.address.split('@')[0] || sender.address} origem="email" />

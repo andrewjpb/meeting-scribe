@@ -126,7 +126,7 @@ export function ImportarPainel({ arquivo, onTrocar, onFechar }: { arquivo: Impor
             {csv && (
               <tr className="bg-bg-sunken">
                 {arquivo.colunas.map((coluna, index) => (
-                  <td key={index} data-funil-import-coluna={index} className="px-1.5 pb-2 [&>select]:w-full [&>select]:min-w-0">
+                  <td key={index} data-funil-import-coluna={index} className="px-1.5 pb-2 [&>select]:w-full [&>select]:min-w-0 [&>select]:px-1.5">
                     <label htmlFor={`funil-import-coluna-${index}`} className="sr-only">
                       {`O que é a coluna ${coluna || index + 1}`}
                     </label>

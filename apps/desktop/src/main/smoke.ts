@@ -12111,6 +12111,33 @@ async function funilKanbanChecks(ctx: SmokeContext, watch: (win: BrowserWindow) 
         !kanban.cards.includes('op-arquivada'),
       detail: JSON.stringify(kanban),
     }
+    // funilBuscaInteira (contrato 120, CA2): o placeholder "Buscar oportunidades" cabe inteiro no campo vazio (o
+    // `scrollWidth` de um input não conta o placeholder: a largura do texto vem do canvas, na fonte do campo) e o
+    // cabeçalho continua numa linha (as ações começam antes do fim do título).
+    const busca = await evaluate<{ vazio: boolean; sw: number; cw: number; texto: number; espaco: number; umaLinha: boolean }>(
+      contents,
+      `(() => {
+        const input = document.querySelector('[data-funil-oportunidades] [data-search]')
+        const style = getComputedStyle(input)
+        const ctx2d = document.createElement('canvas').getContext('2d')
+        ctx2d.font = style.font
+        const head = input.closest('header')
+        const titulo = head.querySelector('h1').getBoundingClientRect()
+        const acoes = head.lastElementChild.getBoundingClientRect()
+        return {
+          vazio: input.value === '',
+          sw: input.scrollWidth,
+          cw: input.clientWidth,
+          texto: Math.ceil(ctx2d.measureText(input.placeholder).width),
+          espaco: Math.floor(input.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight)),
+          umaLinha: acoes.top < titulo.bottom,
+        }
+      })()`,
+    )
+    checks['funilBuscaInteira'] = {
+      ok: busca.vazio && busca.sw <= busca.cw && busca.texto > 0 && busca.texto <= busca.espaco && busca.umaLinha,
+      detail: JSON.stringify(busca),
+    }
     await both('funil-oportunidades')
 
     // funilCollapsed (R22): Ganho e Perdido em faixas de 32 px, com o total da etapa (sem a arquivada).
@@ -12235,9 +12262,19 @@ async function funilKanbanChecks(ctx: SmokeContext, watch: (win: BrowserWindow) 
         dimmed: ${settled("document.querySelector('[data-funil-card]')", 'opacity')} === '0.6',
       }))()`,
     )
+    // Contrato 120 (CA4): o "×" desabilitado com a opacidade reduzida dos `ActionButton` desabilitados; o da etapa nova,
+    // habilitado, inteiro. `cursor` padrão: o desabilitado não recebe o ponteiro e o invólucro fica no `default`.
+    const xDesabilitado = await evaluate<{ opacidade: string; ponteiro: string; cursor: string }>(
+      contents,
+      `(() => {
+        const node = document.querySelector('[data-funil-column="${E.contato}"] [data-action="funil-etapa-apagar"]')
+        return { opacidade: ${settled(`document.querySelector('[data-funil-column="${E.contato}"] [data-action="funil-etapa-apagar"]')`, 'opacity')}, ponteiro: node ? getComputedStyle(node).pointerEvents : '', cursor: node ? getComputedStyle(node.parentElement).cursor : '' }
+      })()`,
+    )
     await clickSelector(contents, '[data-action="funil-etapa-add"]')
     const added = await waitFor(contents, `document.querySelectorAll('[data-funil-etapa-nome]').length === 5 && document.activeElement?.matches('[data-funil-etapa-nome^="nova-"]') === true`)
     const newEmpty = await evaluate<boolean>(contents, `(() => { const col = document.querySelector('[data-funil-etapa-nome^="nova-"]')?.closest('[data-funil-column]'); return col?.querySelector('[data-funil-column-empty]')?.textContent === 'Etapa vazia' && col.querySelector('[data-action="funil-etapa-apagar"]')?.disabled === false })()`)
+    const xHabilitado = await evaluate<string>(contents, settled(`document.querySelector('[data-funil-etapa-nome^="nova-"]')?.closest('[data-funil-column]')?.querySelector('[data-action="funil-etapa-apagar"]')`, 'opacity'))
     await evaluate(contents, `document.querySelector('[data-funil-etapa-nome^="nova-"]')?.closest('[data-funil-column]')?.querySelector('[data-action="funil-etapa-apagar"]')?.click(), true`)
     const removed = await waitFor(contents, `document.querySelectorAll('[data-funil-etapa-nome]').length === 4`)
     await setValue(contents, `[data-funil-etapa-nome="${E.contato}"]`, 'Primeiro contato')
@@ -12261,6 +12298,10 @@ async function funilKanbanChecks(ctx: SmokeContext, watch: (win: BrowserWindow) 
         JSON.stringify(savedNames) === JSON.stringify(['Primeiro contato', 'Descoberta', 'Proposta', 'Negociação', 'Ganho', 'Perdido']) &&
         restored,
       detail: `editando=${editing} "${hint}"; ${JSON.stringify(removeState)}; "+ Etapa" com o foco=${added}, vazia com "×" habilitado=${newEmpty}, apagada=${removed}; renomeada=${renamed} ${JSON.stringify(savedNames)}; nome de volta=${restored}`,
+    }
+    checks['funilEtapaApagarAparencia'] = {
+      ok: xDesabilitado.opacidade !== '' && Number(xDesabilitado.opacidade) < 1 && xDesabilitado.ponteiro === 'none' && xDesabilitado.cursor === 'default' && xHabilitado === '1',
+      detail: `"×" desabilitado: opacidade ${xDesabilitado.opacidade || '-'}, pointer-events ${xDesabilitado.ponteiro || '-'}, cursor do invólucro ${xDesabilitado.cursor || '-'}; "×" habilitado da etapa nova: opacidade ${xHabilitado || '-'}`,
     }
 
     // funilDragMove (R24, R6): op-portal arrastado para Proposta muda de coluna e cria o evento `etapa`; por cima da faixa
@@ -12448,6 +12489,22 @@ async function funilDetalheChecks(ctx: SmokeContext, watch: (win: BrowserWindow)
         detail.subtitulo.startsWith('Há 1 d em Negociação · criada em ') &&
         detail.etapa === E.negociacao,
       detail: `reunião ${meetingId || '(nenhuma)'}; e-mail ${email ? `${email.accountId}/${email.id}` : '(nenhum)'}; ligado=${linked.ok}; tela=${opened}; linha do tempo=${filled}; ${JSON.stringify(detail)}; valor esperado "${valorEsperado}"`,
+    }
+    // funilTituloInteiro (contrato 120, CA1): "Loja virtual" inteiro ao lado do Select de etapa, sem reticências, numa linha.
+    const titulo = await evaluate<{ texto: boolean; sw: number; cw: number; mesmaLinha: boolean }>(
+      contents,
+      `(() => {
+        const button = document.querySelector('${SCREEN} h1 button')
+        const select = document.querySelector('${SCREEN} [data-funil-etapa-select] select')
+        if (!button || !select) return { texto: false, sw: -1, cw: -1, mesmaLinha: false }
+        const a = button.getBoundingClientRect()
+        const b = select.getBoundingClientRect()
+        return { texto: button.textContent === 'Loja virtual', sw: button.scrollWidth, cw: button.clientWidth, mesmaLinha: a.top < b.bottom && b.top < a.bottom }
+      })()`,
+    )
+    checks['funilTituloInteiro'] = {
+      ok: titulo.texto && titulo.sw > 0 && titulo.sw <= titulo.cw && titulo.mesmaLinha,
+      detail: JSON.stringify(titulo),
     }
     await both('funil-oportunidade')
 
@@ -12885,6 +12942,35 @@ async function funilContatosChecks(ctx: SmokeContext, watch: (win: BrowserWindow
     await setValue(contents, `[data-funil-import-coluna="${emailCol}"] select`, 'email', 'change')
     const voltou = await waitFor(contents, `document.querySelector('[data-action="funil-importar-confirmar"]')?.textContent === 'Importar 4 contatos'`, 8000)
     const info = await text(contents, '[data-funil-import-info]')
+    // contatosImportarSelects (contrato 120, CA3): cada Select de coluna mostra qualquer um dos rótulos inteiro. O
+    // `scrollWidth` de um select não mede o texto: a largura que ele precisaria vem de uma cópia sem largura imposta, na
+    // mesma célula (mesmas classes), com só a opção medida.
+    const selects = await evaluate<{ sw: number; cw: number; largura: number; precisa: number }[]>(
+      contents,
+      `[...document.querySelectorAll('[data-funil-import-coluna] select')].map((select) => {
+        let precisa = 0
+        for (const option of select.options) {
+          const copia = select.cloneNode(false)
+          copia.removeAttribute('id')
+          copia.style.position = 'fixed'
+          copia.style.left = '0'
+          copia.style.top = '0'
+          copia.style.visibility = 'hidden'
+          copia.style.width = 'auto'
+          copia.style.minWidth = '0'
+          copia.style.maxWidth = 'none'
+          copia.append(option.cloneNode(true))
+          select.parentElement.append(copia)
+          precisa = Math.max(precisa, copia.getBoundingClientRect().width)
+          copia.remove()
+        }
+        return { sw: select.scrollWidth, cw: select.clientWidth, largura: Math.round(select.getBoundingClientRect().width * 10) / 10, precisa: Math.round(precisa * 10) / 10 }
+      })`,
+    )
+    checks['contatosImportarSelects'] = {
+      ok: selects.length === 5 && selects.every((item) => item.sw <= item.cw && item.precisa > 0 && item.largura >= item.precisa),
+      detail: JSON.stringify(selects),
+    }
     await both('funil-contatos-importar')
     const linhasAntes = await evaluate<number>(contents, ROWS)
     await clickSelector(contents, '[data-action="funil-importar-confirmar"]')
@@ -13198,6 +13284,17 @@ async function funilTelasExistentesChecks(ctx: SmokeContext, watch: (win: Browse
     const aberta = chegou && (await clickEmailRow(contents, FUNIL_EMAIL_ASSUNTO))
     const READING_HEAD = '[data-email-reading] [data-email-from]'
     const botaoEmail = await waitFor(contents, `document.querySelector('${READING_HEAD}')?.parentElement?.querySelector('[data-action="funil-mais-contato"]')`, 8000)
+    // Contrato 120 (CA5): o "+ Contato" na mesma linha do nome do remetente (topos a menos de 4 px), com o nome inteiro
+    // (o que encolhe, se faltar espaço, é o endereço).
+    const linhaRemetente = await evaluate<{ topoNome: number; topoBotao: number; nomeInteiro: boolean }>(
+      contents,
+      `(() => {
+        const nome = document.querySelector('${READING_HEAD}')
+        const botao = nome?.parentElement?.querySelector('[data-action="funil-mais-contato"]')
+        return { topoNome: nome ? Math.round(nome.getBoundingClientRect().top * 10) / 10 : -1, topoBotao: botao ? Math.round(botao.getBoundingClientRect().top * 10) / 10 : -1, nomeInteiro: Boolean(nome) && nome.scrollWidth <= nome.clientWidth }
+      })()`,
+    )
+    const mesmaLinha = linhaRemetente.topoNome >= 0 && linhaRemetente.topoBotao >= 0 && Math.abs(linhaRemetente.topoNome - linhaRemetente.topoBotao) < 4 && linhaRemetente.nomeInteiro
     await both('email-leitura-contato')
     await clickSelector(contents, `[data-email-reading] [data-action="funil-mais-contato"]`)
     const linkEmail = await waitFor(contents, `document.querySelector('[data-email-reading] [data-funil-contato-link]')?.textContent === 'Paulo Siqueira' && !document.querySelector('[data-email-reading] [data-action="funil-mais-contato"]')`, 8000)
@@ -13212,8 +13309,8 @@ async function funilTelasExistentesChecks(ctx: SmokeContext, watch: (win: Browse
       `({ from: document.querySelector('[data-email-reading] [data-email-from]')?.textContent ?? '', nada: !document.querySelector('[data-email-reading] [data-action="funil-mais-contato"]') && !document.querySelector('[data-email-reading] [data-funil-contato-link]') })`,
     )
     checks['emailMaisContato'] = {
-      ok: caixa && aberta && botaoEmail && linkEmail && paulo?.origem === 'email' && paulo.nome === 'Paulo Siqueira' && enviados && enviadaAberta && enviada.nada,
-      detail: `Caixa de Entrada=${caixa}, mensagem nova aberta=${aberta}; "+ Contato" ao lado do remetente=${botaoEmail}; depois do clique, o link com o nome=${linkEmail}, contato ${paulo?.id ?? 'nenhum'} (${paulo?.origem ?? '-'}); mensagem da própria conta chegou=${enviados}, sem botão nem link=${enviada.nada && enviadaAberta}`,
+      ok: caixa && aberta && botaoEmail && mesmaLinha && linkEmail && paulo?.origem === 'email' && paulo.nome === 'Paulo Siqueira' && enviados && enviadaAberta && enviada.nada,
+      detail: `Caixa de Entrada=${caixa}, mensagem nova aberta=${aberta}; "+ Contato" ao lado do remetente=${botaoEmail}, na mesma linha=${mesmaLinha} (topos ${linhaRemetente.topoNome} e ${linhaRemetente.topoBotao}, nome inteiro=${linhaRemetente.nomeInteiro}); depois do clique, o link com o nome=${linkEmail}, contato ${paulo?.id ?? 'nenhum'} (${paulo?.origem ?? '-'}); mensagem da própria conta chegou=${enviados}, sem botão nem link=${enviada.nada && enviadaAberta}`,
     }
 
     // whatsappContato (CA15, CA6, R37): os Detalhes da Ana (pessoa, ainda sem contato) com o bloco Contato e "+ Contato";

@@ -294,12 +294,14 @@ export function OportunidadesScreen({ view }: { view: FunilView }) {
           <div className="flex min-w-0 flex-1">
             <TextField value={etapa.nome} onChange={(nome) => renomear(etapa.id, nome)} ariaLabel="Nome da etapa" maxLength={60} disabled={salvandoEtapas} data={{ 'data-funil-etapa-nome': etapa.id }} />
           </div>
-          {/* O botão desabilitado não recebe o ponteiro (`disabled:pointer-events-none`): a dica fica no invólucro. */}
+          {/* O botão desabilitado não recebe o ponteiro (`disabled:pointer-events-none`): a dica fica no invólucro. Desabilitado,
+              sai do vermelho para o tom neutro, como os demais `ActionButton` desabilitados (no escuro, o vermelho esmaecido
+              parecia ativo). */}
           <span className="inline-flex shrink-0" title={vazia ? undefined : 'Só uma etapa aberta e vazia pode ser apagada'}>
             <ActionButton
               icon={X}
               iconOnly
-              tone="danger"
+              tone={vazia && !salvandoEtapas ? 'danger' : 'normal'}
               action="funil-etapa-apagar"
               label={vazia ? `Apagar a etapa ${etapa.nome}` : 'Só uma etapa aberta e vazia pode ser apagada'}
               disabled={!vazia || salvandoEtapas}
@@ -481,8 +483,8 @@ export function OportunidadesScreen({ view }: { view: FunilView }) {
           title="Oportunidades"
           actions={
             <>
-              {/* A busca no tamanho do artboard 01, para o cabeçalho caber numa linha em 1120 px. */}
-              <div className="[&>div]:w-[200px]">
+              {/* A busca estreita, para o cabeçalho caber numa linha em 1120 px, mas com o "Buscar oportunidades" inteiro. */}
+              <div className="[&>div]:w-[208px]">
                 <SearchField value={busca} onChange={setBusca} label="Buscar oportunidades" />
               </div>
               <span id="funil-filtro-label" className="sr-only">
