@@ -1,9 +1,9 @@
-// Formatação e filtros da tela Oportunidades (contrato 112, R21 a R25) e do detalhe da oportunidade (contrato 119, R27
-// a R29). Sem DOM: testado em test/renderer/funil-format.test.ts. Os cálculos do funil (totais, esfriada, BRL) vêm de
-// `shared/funil-logic.ts`.
+// Formatação e filtros da tela Oportunidades (contrato 112, R21 a R25), do detalhe da oportunidade (contrato 119, R27
+// a R29) e das telas de Contatos e Empresas (contrato 114, R5, R16, R30 a R34). Sem DOM: testado em
+// test/renderer/funil-format.test.ts. Os cálculos do funil (totais, esfriada, BRL) vêm de `shared/funil-logic.ts`.
 import { EMAIL_INBOX_MAILBOX } from '@shared/email'
-import type { Contato, Etapa, EtapaTipo, FunilState, ItemLinhaDoTempo, Oportunidade, ProximoPasso } from '@shared/funil'
-import { diasNaEtapa, formatarBRL, normalizarEmail, passoVencido, semAcento, totaisDoFunil } from '@shared/funil-logic'
+import type { Contato, ContatoOrigem, Empresa, Etapa, EtapaTipo, FunilState, ItemLinhaDoTempo, Oportunidade, ProximoPasso, Sugestao } from '@shared/funil'
+import { diasNaEtapa, dominioDe, ehProvedorPessoal, formatarBRL, nomeEmpresaDoDominio, normalizarEmail, passoVencido, semAcento, totaisDoFunil } from '@shared/funil-logic'
 import { emailPath, ROUTE_PATHS, type EmailNavigationState, type EmailRouteFolder, type WhatsAppNavigationState } from '@shared/routes'
 
 const DIA_MS = 86_400_000
@@ -231,4 +231,137 @@ export function textoPassoDetalhe(proximoPasso: ProximoPasso | null, hoje: strin
 /** O valor no campo de edição (R25): `64.000` ou `1.250,50`, sem o "R$"; sem valor, vazio. */
 export function valorParaEdicao(centavos: number | null): string {
   return centavos === null ? '' : formatarBRL(centavos).replace(/^R\$\s*/, '')
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// Contrato 114: Contatos e Empresas.
+
+/** O `label` da origem na linha do contato (R30). */
+export const ORIGEM_ROTULO: Record<ContatoOrigem, string> = {
+  reuniao: 'Reunião',
+  email: 'E-mail',
+  whatsapp: 'WhatsApp',
+  importacao: 'Importação',
+  manual: 'Manual',
+  agenda: 'Agenda',
+  assistente: 'Assistente',
+}
+
+/** "desde 03/11/2026, pela reunião": a origem depois do "desde" do subtítulo da ficha (artboard 05). */
+const ORIGEM_FRASE: Record<ContatoOrigem, string> = {
+  reuniao: 'pela reunião',
+  email: 'pelo e-mail',
+  whatsapp: 'pelo WhatsApp',
+  importacao: 'pela importação',
+  manual: 'pelo cadastro manual',
+  agenda: 'pela agenda',
+  assistente: 'pelo Assistente',
+}
+
+/** Os contatos da lista (R30): sem os arquivados, os atualizados há menos tempo primeiro; no empate, pelo nome. */
+export function ordenarContatos(contatos: readonly Contato[]): Contato[] {
+  return contatos.filter((contato) => !contato.arquivado).sort((a, b) => b.atualizadoEm - a.atualizadoEm || a.nome.localeCompare(b.nome, 'pt-BR'))
+}
+
+/** Só os dígitos. */
+const digitos = (texto: string): string => texto.replace(/\D/g, '')
+
+/**
+ * A busca da lista de contatos (R30): nome, e-mail, telefone e nome da empresa, sem acento e sem caixa. Texto só de
+ * número (com ou sem pontuação: `(11) 98765-4321`, `11987654321`) acha também pelos dígitos do telefone guardado.
+ */
+export function filtrarContatos(contatos: readonly Contato[], empresas: readonly Pick<Empresa, 'id' | 'nome'>[], busca: string): Contato[] {
+  const termo = chaveBusca(busca)
+  if (!termo) return [...contatos]
+  const numero = /^[\d\s().+-]+$/.test(termo) ? digitos(termo) : ''
+  const nomes = new Map(empresas.map((empresa) => [empresa.id, chaveBusca(empresa.nome)]))
+  return contatos.filter((contato) => {
+    const textos = [chaveBusca(contato.nome), ...contato.emails.map(chaveBusca), ...contato.telefones.map(chaveBusca), contato.empresaId ? (nomes.get(contato.empresaId) ?? '') : '']
+    if (textos.some((texto) => texto.includes(termo))) return true
+    return numero.length > 0 && contato.telefones.some((telefone) => digitos(telefone).includes(numero))
+  })
+}
+
+/** `+5511987654321` -> `+55 11 98765-4321`; outro formato fica como está. */
+export function telefoneLegivel(telefone: string): string {
+  const br = /^\+55(\d{2})(\d{4,5})(\d{4})$/.exec(telefone)
+  return br ? `+55 ${br[1]} ${br[2]}-${br[3]}` : telefone
+}
+
+const CANAL_ROTULO: Record<Sugestao['canais'][number], string> = { reuniao: 'Reunião', email: 'E-mail', whatsapp: 'WhatsApp' }
+
+/** O canal principal da sugestão (o da `origem`, R12), entre os três que geram sugestão. */
+export function canalDaSugestao(sugestao: Pick<Sugestao, 'origem' | 'canais'>): Sugestao['canais'][number] {
+  const origem = sugestao.origem
+  return origem === 'reuniao' || origem === 'email' || origem === 'whatsapp' ? origem : (sugestao.canais[0] ?? 'email')
+}
+
+/**
+ * As duas linhas de texto de uma sugestão (R33, artboard 06): "e-mail ou telefone · <canal>" e "N interações · última em
+ * <hoje|dd/mm>".
+ */
+export function textoSugestao(sugestao: Sugestao, now: number, timeZone: string = fusoLocal()): { contato: string; interacoes: string } {
+  const endereco = sugestao.email ?? (sugestao.telefone ? telefoneLegivel(sugestao.telefone) : '')
+  const canal = CANAL_ROTULO[canalDaSugestao(sugestao)]
+  const alvo = partes(sugestao.ultimaEm, timeZone)
+  const hoje = partes(now, timeZone)
+  const dia = alvo.dia === hoje.dia && alvo.mes === hoje.mes && alvo.ano === hoje.ano ? 'hoje' : `${alvo.dia}/${alvo.mes}`
+  return {
+    contato: endereco ? `${endereco} · ${canal}` : canal,
+    interacoes: `${sugestao.interacoes} ${sugestao.interacoes === 1 ? 'interação' : 'interações'} · última em ${dia}`,
+  }
+}
+
+/**
+ * A empresa sugerida para o contato (R5): sem empresa, o primeiro e-mail de domínio que não é de provedor pessoal e que
+ * nenhuma empresa tem em `dominios`, com o nome do domínio sem o TLD. Com empresa, ou sem domínio novo, `null`.
+ */
+export function sugestaoDeEmpresa(contato: Pick<Contato, 'empresaId' | 'emails'>, empresas: readonly Pick<Empresa, 'dominios'>[]): { nome: string; dominio: string } | null {
+  if (contato.empresaId !== null) return null
+  for (const email of contato.emails) {
+    const dominio = dominioDe(email)
+    if (!dominio || ehProvedorPessoal(dominio)) continue
+    if (empresas.some((empresa) => empresa.dominios.includes(dominio))) return null
+    const nome = nomeEmpresaDoDominio(dominio)
+    if (nome) return { nome, dominio }
+  }
+  return null
+}
+
+/** O resultado da importação (R16): "16 criados · 2 atualizados · 2 ignorados (sem e-mail nem telefone)". */
+export function textoResultadoImport(resultado: { criados: number; atualizados: number; ignorados: number }): string {
+  return `${resultado.criados} criados · ${resultado.atualizados} atualizados · ${resultado.ignorados} ignorados (sem e-mail nem telefone)`
+}
+
+/** A linha do arquivo na importação (artboard 07): "20 linhas · separador ; · UTF-8" ou "vCard · 3 cartões". */
+export function textoArquivoImport(arquivo: { tipo: 'csv' | 'vcard'; total: number; separador: ',' | ';' | '\t' | null; codificacao: 'utf-8' | 'latin1' }): string {
+  if (arquivo.tipo === 'vcard') return `vCard · ${arquivo.total} ${arquivo.total === 1 ? 'cartão' : 'cartões'}`
+  const separador = arquivo.separador === '\t' ? 'tabulação' : (arquivo.separador ?? ',')
+  return `${arquivo.total} ${arquivo.total === 1 ? 'linha' : 'linhas'} · separador ${separador} · ${arquivo.codificacao === 'utf-8' ? 'UTF-8' : 'Latin-1'}`
+}
+
+/**
+ * Subtítulo da ficha do contato (artboard 05): "Diretora de Expansão · ABF · desde 03/11/2026, pela reunião". Sem cargo
+ * ou sem empresa, a parte fica de fora.
+ */
+export function textoSubtituloContato(contato: Pick<Contato, 'cargo' | 'criadoEm' | 'origem'>, empresa: string | null, timeZone: string = fusoLocal()): string {
+  return [contato.cargo, empresa, `desde ${dataLonga(contato.criadoEm, timeZone)}, ${ORIGEM_FRASE[contato.origem]}`].filter((parte) => parte).join(' · ')
+}
+
+/** As empresas da lista (R34), pelo nome. */
+export function ordenarEmpresas<T extends Pick<Empresa, 'nome'>>(empresas: readonly T[]): T[] {
+  return [...empresas].sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR'))
+}
+
+/** A busca da lista de empresas: nome e domínios, sem acento e sem caixa. */
+export function filtrarEmpresas<T extends Pick<Empresa, 'nome' | 'dominios'>>(empresas: readonly T[], busca: string): T[] {
+  const termo = chaveBusca(busca)
+  if (!termo) return [...empresas]
+  return empresas.filter((empresa) => chaveBusca(empresa.nome).includes(termo) || empresa.dominios.some((dominio) => dominio.includes(termo)))
+}
+
+/** Domínio digitado (`@Acme.com.br`, `acme.com.br`) em minúsculas e sem `@`; fora do formato, `null`. */
+export function parseDominio(texto: string): string | null {
+  const dominio = texto.trim().toLowerCase().replace(/^@/, '')
+  return /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/.test(dominio) ? dominio : null
 }

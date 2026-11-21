@@ -25,8 +25,21 @@ export type FunilFalhaTransporte = FunilFalha
 
 const FALHA: FunilFalhaTransporte = { ok: false, erro: 'falhou', mensagem: FUNIL_TRANSPORTE_TEXTO }
 
+/**
+ * Contrato 114: o que as telas de Contatos e Empresas guardam entre uma navegação e outra (cada troca de caminho remonta a
+ * tela): a aba e a busca de Contatos, a busca de Empresas e a última lista de sugestões (o "Sugestões N" não pisca).
+ */
+export interface FunilTelas {
+  contatosAba: 'contatos' | 'sugestoes'
+  contatosBusca: string
+  empresasBusca: string
+  sugestoesLista: Sugestao[] | null
+}
+
 interface FunilStoreState {
   view: FunilView | null
+  telas: FunilTelas
+  setTelas: (patch: Partial<FunilTelas>) => void
   /** A última carga falhou (texto para a tela); `null` depois de uma carga ou de um evento. */
   error: string | null
   load: () => Promise<void>
@@ -62,6 +75,8 @@ async function chamar<T, F>(run: () => Promise<T>, fallback: F): Promise<T | F> 
 export const useFunil = create<FunilStoreState>()((set) => ({
   view: null,
   error: null,
+  telas: { contatosAba: 'contatos', contatosBusca: '', empresasBusca: '', sugestoesLista: null },
+  setTelas: (patch) => set((state) => ({ telas: { ...state.telas, ...patch } })),
 
   load: async () => {
     try {

@@ -92,6 +92,10 @@
 //
 // Contrato 119: logo depois do kanban, o detalhe da oportunidade (`funilDetalheChecks`): a Linha do tempo com a reunião, o
 // e-mail e o evento, a "Reunião apagada", o Select de etapa, a nota, o "Escrever e-mail" até o Composer e o "Arquivar".
+//
+// Contrato 114: logo depois do detalhe, Contatos e Empresas (`funilContatosChecks`): a lista e a ficha, Empresas com o
+// "Apagar" bloqueado, a sugestão de empresa pelo domínio, o Novo contato com a mescla, as Sugestões (uma de cada canal,
+// "Adicionar" e "Ignorar") e a importação do CSV das fixtures.
 import { appendFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { spawn as spawnChild } from 'node:child_process'
 import { request as httpRequest } from 'node:http'
@@ -114,7 +118,7 @@ import type { Meeting } from '../shared/meetings'
 import { summaryMarkdown, type MeetingSummary } from '../shared/meeting-summary'
 import { summaryPreview } from '../shared/meetings-overview'
 import { PRIVACY_PANE_URLS } from '../shared/privacy'
-import { FUNIL_FILE, type FunilState, type Oportunidade } from '../shared/funil'
+import { FUNIL_FILE, type Contato, type FunilState, type Oportunidade, type Sugestao } from '../shared/funil'
 import { formatarBRL } from '../shared/funil-logic'
 import { SETTINGS_TABS, type SettingsTab } from '../shared/routes'
 import { FUNIL_AVISAR_NAME, FUNIL_DETECTAR_NAME, FUNIL_DIAS_NAME, FUNIL_SECTION, matchesRow, settingsIndex } from '../shared/settings-index'
@@ -12029,12 +12033,13 @@ async function funilKanbanChecks(ctx: SmokeContext, watch: (win: BrowserWindow) 
     const pushed = await routerPush('/funil')
     const redirected = await waitFor(contents, `${kanbanReady} && document.querySelector('${SIDEBAR_FUNIL} [data-funil-section="oportunidades"]')?.getAttribute('aria-current') === 'page'`, 8000)
     await routerPush('/funil/contatos')
-    const contatos = await waitFor(contents, `document.querySelector('[data-funil-screen="contatos"] [data-funil-em-preparacao]') && document.querySelector('${SIDEBAR_FUNIL} [data-funil-section="contatos"]')?.getAttribute('aria-current') === 'page'`, 8000)
+    // Contrato 114: a tela Contatos no lugar do "Em preparação".
+    const contatos = await waitFor(contents, `document.querySelector('[data-funil-screen="contatos"] [data-funil-contatos]') && document.querySelector('${SIDEBAR_FUNIL} [data-funil-section="contatos"]')?.getAttribute('aria-current') === 'page'`, 8000)
     await routerPush('/funil/negocios')
     const invalid = await waitFor(contents, `${kanbanReady} && document.querySelector('${SIDEBAR_FUNIL} [data-funil-section="oportunidades"]')?.getAttribute('aria-current') === 'page'`, 8000)
     checks['funilRedirect'] = {
       ok: pushed && redirected && contatos && invalid,
-      detail: `navegação em memória=${pushed}; /funil -> Oportunidades=${redirected}; /funil/contatos -> "Em preparação"=${contatos}; /funil/negocios -> Oportunidades=${invalid}`,
+      detail: `navegação em memória=${pushed}; /funil -> Oportunidades=${redirected}; /funil/contatos -> tela Contatos=${contatos}; /funil/negocios -> Oportunidades=${invalid}`,
     }
 
     // funilNavigateEvent (D14): o main manda `scribe:navigate` com 'funil' e a tela vai a Oportunidades.
@@ -12548,6 +12553,346 @@ async function funilDetalheChecks(ctx: SmokeContext, watch: (win: BrowserWindow)
     nativeTheme.themeSource = 'system'
     win.destroy()
     console.log(`funil: detalhe da oportunidade em ${((Date.now() - startedAt) / 1000).toFixed(1)} s`)
+  }
+}
+
+/**
+ * Contrato 114 (CA1 a CA6, CA14 da spec), numa janela que troca de tema no lugar, depois do `funilDetalheChecks`: a lista
+ * de Contatos com os 4 da fixture e a ficha do primeiro; Empresas com as 2 da fixture, o "Apagar" bloqueado na que tem
+ * contato e o "Apagar" na linha de uma empresa vazia; a sugestão de empresa do Rafael Lima (`@lojista.example`), que só
+ * vira empresa no clique; o Novo contato (Criar só com nome e e-mail ou telefone) e a mescla num contato que já existe;
+ * a aba Sugestões com uma sugestão de cada canal (as outras ignoradas pelo canal), "Adicionar" e "Ignorar" (que não volta
+ * depois de recarregar); e a importação do CSV das fixtures (5 linhas de prévia, o número do botão recontado ao trocar
+ * uma coluna, o resultado). Não toca em `op-integracao` nem em `op-vistoria` (o 117 usa) e não conta eventos das
+ * oportunidades. Termina com os contatos e as empresas que criou (o novo, o adicionado da sugestão, os 4 importados, a
+ * Lojista e as 3 empresas do CSV), o Rafael ligado à Lojista e a Marina com o cargo da mescla. Prints `funil-contatos`,
+ * `funil-empresas`, `funil-contatos-novo`, `funil-contatos-sugestoes` e `funil-contatos-importar`, nos dois temas.
+ */
+async function funilContatosChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => void, checks: Record<string, Check>, shots: Screenshot[]): Promise<void> {
+  const startedAt = Date.now()
+  const themeBefore = readSettings(ctx.userDataDir).theme ?? 'system'
+  nativeTheme.themeSource = 'light'
+  const win = ctx.openWindow({})
+  watch(win)
+  await loadAndWait(win)
+  const contents = win.webContents
+  if (themeBefore !== 'system') await evaluate(contents, "window.__scribeApi.invoke('scribe:settings-update', { theme: 'system' }).then(() => true)")
+  const api = <T>(channel: string, request?: unknown): Promise<T> => evaluate<T>(contents, `window.__scribeApi.invoke(${JSON.stringify(channel)}${request === undefined ? '' : `, ${JSON.stringify(request)}`})`)
+  /** `manterFoco`: o print mostra o campo com o foco (o Novo contato vazio com o Nome focado, CA14 da spec). */
+  const both = async (name: string, manterFoco = false): Promise<void> => {
+    if (!manterFoco) await evaluate(contents, `document.activeElement instanceof HTMLElement && document.activeElement.blur(), true`)
+    await settle(contents)
+    shots.push(await capture(win, ctx.outDir, `${name}-light`))
+    nativeTheme.themeSource = 'dark'
+    await waitFor(contents, "document.documentElement.dataset.theme === 'dark'")
+    await settle(contents)
+    shots.push(await capture(win, ctx.outDir, `${name}-dark`))
+    nativeTheme.themeSource = 'light'
+    await waitFor(contents, "document.documentElement.dataset.theme === 'light'")
+  }
+  const { contatos: CT } = SMOKE_FUNIL
+  const funilFile = join(ctx.userDataDir, FUNIL_FILE)
+  const saved = (): FunilState => JSON.parse(readFileSync(funilFile, 'utf8')) as FunilState
+  const ativos = (): Contato[] => saved().contatos.filter((contato) => !contato.arquivado)
+  const ROWS = `document.querySelectorAll('[data-funil-contato-row]').length`
+  const fichaDe = (id: string): string => `[data-funil-ficha="contato"][data-funil-ficha-id="${id}"]`
+  const listaPronta = `${routeIs('funil')} && document.querySelector('[data-funil-screen="contatos"] [data-funil-contatos-lista]')`
+  const abrirContatos = async (path: string): Promise<boolean> => {
+    await funilRouterPush(contents, path)
+    return waitFor(contents, listaPronta, 8000)
+  }
+  const aba = async (nome: 'contatos' | 'sugestoes'): Promise<void> => {
+    await clickSelector(contents, `[data-funil-contatos-aba="${nome}"]`)
+    await waitFor(contents, `document.querySelector('[data-funil-contatos-aba="${nome}"]')?.getAttribute('aria-pressed') === 'true'`)
+  }
+  const segmentedText = (): Promise<string> => text(contents, '[data-funil-contatos-aba="sugestoes"]')
+
+  try {
+    // contatosLista (CA14, R30): os 4 contatos da fixture em linhas de 44 px, na ordem de `atualizadoEm` (no empate, pelo
+    // nome), cada um com o rótulo da origem, numa lista de 340 px; e o Segmented com "Sugestões N".
+    const opened = await abrirContatos('/funil/contatos')
+    await waitFor(contents, `${ROWS} === 4`, 8000)
+    const esperado = ativos()
+      .sort((a, b) => b.atualizadoEm - a.atualizadoEm || a.nome.localeCompare(b.nome, 'pt-BR'))
+      .map((contato) => contato.id)
+    const lista = await evaluate<{ ids: string[]; heights: number[]; origens: string[]; width: number; total: string; segmented: string }>(
+      contents,
+      `(() => {
+        const rows = [...document.querySelectorAll('[data-funil-contato-row]')]
+        return {
+          ids: rows.map((el) => el.dataset.funilContatoRow),
+          heights: rows.map((el) => Math.round(el.getBoundingClientRect().height)),
+          origens: rows.map((el) => el.querySelector('[data-funil-contato-origem]')?.textContent ?? ''),
+          width: Math.round(document.querySelector('[data-funil-contatos-lista]')?.getBoundingClientRect().width ?? 0),
+          total: document.querySelector('[data-funil-contatos-total]')?.textContent ?? '',
+          segmented: document.querySelector('[data-funil-contatos-aba="sugestoes"]')?.textContent ?? '',
+        }
+      })()`,
+    )
+    await waitFor(contents, `/^Sugestões \\d+$/.test(document.querySelector('[data-funil-contatos-aba="sugestoes"]')?.textContent ?? '')`, 8000)
+    const segmented = await segmentedText()
+    checks['contatosLista'] = {
+      ok:
+        opened &&
+        JSON.stringify(lista.ids) === JSON.stringify(esperado) &&
+        esperado.length === 4 &&
+        lista.heights.every((height) => height === 44) &&
+        lista.origens.every((origem) => origem === 'Manual') &&
+        lista.width === 340 &&
+        lista.total === '4 contatos · mais recentes primeiro' &&
+        /^Sugestões \d+$/.test(segmented),
+      detail: `tela=${opened}; ${JSON.stringify(lista)}; esperado ${JSON.stringify(esperado)}; Segmented "${segmented}"`,
+    }
+
+    // contatosFicha (CA14, R31): sem id na rota, a ficha do primeiro da lista, com os campos, os blocos e a linha do tempo.
+    const primeiro = esperado[0] ?? ''
+    const ficha = await waitFor(contents, `document.querySelector('${fichaDe(primeiro)} [data-funil-bloco="linha-do-tempo"] [data-funil-timeline], ${fichaDe(primeiro)} [data-funil-bloco="linha-do-tempo"] p')`, 8000)
+    const fichaInfo = await evaluate<{ campos: string[]; blocos: string[]; acoes: string[]; atual: string | null; titulo: string }>(
+      contents,
+      `(() => {
+        const el = document.querySelector('${fichaDe(primeiro)}')
+        return {
+          campos: [...(el?.querySelectorAll('[data-funil-campo]') ?? [])].map((item) => item.dataset.funilCampo),
+          blocos: [...(el?.querySelectorAll('[data-funil-bloco]') ?? [])].map((item) => item.dataset.funilBloco),
+          acoes: [...(el?.querySelectorAll('[data-funil-acoes] [data-action]') ?? [])].map((item) => item.dataset.action),
+          atual: document.querySelector('[data-funil-contato-row][aria-current="true"]')?.dataset.funilContatoRow ?? null,
+          titulo: el?.querySelector('h1')?.textContent ?? '',
+        }
+      })()`,
+    )
+    const nomePrimeiro = saved().contatos.find((contato) => contato.id === primeiro)?.nome ?? ''
+    checks['contatosFicha'] = {
+      ok:
+        ficha &&
+        fichaInfo.atual === primeiro &&
+        fichaInfo.titulo === nomePrimeiro &&
+        JSON.stringify(fichaInfo.campos) === JSON.stringify(['empresa', 'cargo', 'emails', 'telefones', 'notas']) &&
+        JSON.stringify(fichaInfo.blocos) === JSON.stringify(['oportunidades', 'linha-do-tempo']) &&
+        fichaInfo.acoes.includes('funil-contato-email') &&
+        fichaInfo.acoes.includes('funil-contato-nova-oportunidade') &&
+        fichaInfo.acoes.includes('funil-contato-arquivar'),
+      detail: `ficha do primeiro (${primeiro}, "${nomePrimeiro}") com a linha do tempo=${ficha}; ${JSON.stringify(fichaInfo)}`,
+    }
+    await both('funil-contatos')
+
+    // empresas (CA14, R34): as 2 empresas da fixture, pelo nome, e a ficha da primeira.
+    await funilRouterPush(contents, '/funil/empresas')
+    const empresasAbertas = await waitFor(contents, `document.querySelector('[data-funil-screen="empresas"] [data-funil-empresas-lista]') && document.querySelectorAll('[data-funil-empresa-row]').length === 2`, 8000)
+    const empresasEsperadas = [...saved().empresas].sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR')).map((empresa) => empresa.id)
+    const primeiraEmpresa = empresasEsperadas[0] ?? ''
+    const fichaEmpresa = await waitFor(contents, `document.querySelector('[data-funil-ficha="empresa"][data-funil-ficha-id="${primeiraEmpresa}"] [data-funil-bloco="contatos"]')`, 8000)
+    const empresasInfo = await evaluate<{ ids: string[]; heights: number[]; width: number; total: string; contatos: string[]; dominios: string[] }>(
+      contents,
+      `(() => {
+        const rows = [...document.querySelectorAll('[data-funil-empresa-row]')]
+        const ficha = document.querySelector('[data-funil-ficha="empresa"]')
+        return {
+          ids: rows.map((el) => el.dataset.funilEmpresaRow),
+          heights: rows.map((el) => Math.round(el.getBoundingClientRect().height)),
+          width: Math.round(document.querySelector('[data-funil-empresas-lista]')?.getBoundingClientRect().width ?? 0),
+          total: document.querySelector('[data-funil-empresas-total]')?.textContent ?? '',
+          contatos: [...(ficha?.querySelectorAll('[data-funil-ficha-contato]') ?? [])].map((el) => el.dataset.funilFichaContato),
+          dominios: [...(ficha?.querySelectorAll('[data-funil-dominio]') ?? [])].map((el) => el.dataset.funilDominio),
+        }
+      })()`,
+    )
+    const contatosDaPrimeira = saved()
+      .contatos.filter((contato) => contato.empresaId === primeiraEmpresa)
+      .map((contato) => contato.id)
+      .sort()
+    checks['empresas'] = {
+      ok:
+        empresasAbertas &&
+        fichaEmpresa &&
+        empresasEsperadas.length === 2 &&
+        JSON.stringify(empresasInfo.ids) === JSON.stringify(empresasEsperadas) &&
+        empresasInfo.heights.every((height) => height === 44) &&
+        empresasInfo.width === 340 &&
+        empresasInfo.total === '2 empresas' &&
+        JSON.stringify([...empresasInfo.contatos].sort()) === JSON.stringify(contatosDaPrimeira) &&
+        JSON.stringify(empresasInfo.dominios) === JSON.stringify(saved().empresas.find((empresa) => empresa.id === primeiraEmpresa)?.dominios ?? []),
+      detail: `lista=${empresasAbertas}; ficha da primeira (${primeiraEmpresa})=${fichaEmpresa}; ${JSON.stringify(empresasInfo)}; esperado ${JSON.stringify(empresasEsperadas)}, contatos ${JSON.stringify(contatosDaPrimeira)}`,
+    }
+    await both('funil-empresas')
+
+    // empresaApagarBloqueado (CA6, R34): na empresa com contato, "Apagar" desabilitado com a razão no `title`; numa empresa
+    // vazia (criada pelo canal), "Apagar" confirma na linha e a empresa some da lista e do funil.json.
+    const bloqueado = await evaluate<{ disabled: boolean; title: string }>(
+      contents,
+      `(() => { const el = document.querySelector('[data-funil-ficha="empresa"] [data-action="funil-empresa-apagar"]'); return { disabled: el?.disabled === true, title: el?.closest('[title]')?.getAttribute('title') ?? '' } })()`,
+    )
+    const vazia = await api<{ ok: boolean; id?: string | null }>('scribe:funil-empresa-save', { empresa: { nome: 'Empresa vazia do smoke', dominios: [] } })
+    const vaziaId = vazia.ok ? (vazia.id ?? '') : ''
+    await funilRouterPush(contents, `/funil/empresas/${vaziaId}`)
+    const vaziaAberta = await waitFor(contents, `document.querySelector('[data-funil-ficha="empresa"][data-funil-ficha-id="${vaziaId}"] [data-action="funil-empresa-apagar"]')?.disabled === false`, 8000)
+    await clickSelector(contents, '[data-funil-ficha="empresa"] [data-action="funil-empresa-apagar"]')
+    const confirmando = await waitFor(contents, `document.querySelector('[data-funil-ficha="empresa"] [data-action="funil-empresa-apagar-confirmar"]')`)
+    const aindaLa = saved().empresas.some((empresa) => empresa.id === vaziaId)
+    await clickSelector(contents, '[data-funil-ficha="empresa"] [data-action="funil-empresa-apagar-confirmar"]')
+    const sumiu = await waitFor(contents, `!document.querySelector('[data-funil-empresa-row="${vaziaId}"]') && document.querySelectorAll('[data-funil-empresa-row]').length === 2 && !document.querySelector('[data-funil-ficha-id="${vaziaId}"]')`, 8000)
+    checks['empresaApagarBloqueado'] = {
+      ok: bloqueado.disabled && bloqueado.title === 'A empresa tem contatos ou oportunidades.' && Boolean(vaziaId) && vaziaAberta && confirmando && aindaLa && sumiu && !saved().empresas.some((empresa) => empresa.id === vaziaId),
+      detail: `com contato: ${JSON.stringify(bloqueado)}; empresa vazia ${vaziaId || '(não criada)'} com Apagar habilitado=${vaziaAberta}, confirmação na linha=${confirmando} (ainda gravada=${aindaLa}), apagada=${sumiu}`,
+    }
+
+    // contatosEmpresaSugerida (CA4, R5): Rafael Lima, sem empresa e com e-mail @lojista.example, mostra "Sugestão: Lojista
+    // (lojista.example)"; nada é criado antes do clique; "Criar empresa" cria a Lojista com o domínio e liga o contato.
+    const empresasAntes = saved().empresas.length
+    await abrirContatos(`/funil/contatos/${CT.rafael}`)
+    const sugerida = await waitFor(contents, `document.querySelector('${fichaDe(CT.rafael)} [data-funil-empresa-sugestao]')?.textContent.includes('Sugestão: Lojista (lojista.example)') === true`, 8000)
+    await wait(300)
+    const semClique = saved().empresas.length === empresasAntes && (await api<{ state: FunilState }>('scribe:funil-get')).state.empresas.length === empresasAntes
+    await clickSelector(contents, `${fichaDe(CT.rafael)} [data-action="funil-empresa-sugerida"]`)
+    const ligada = await waitFor(contents, `!document.querySelector('${fichaDe(CT.rafael)} [data-funil-empresa-sugestao]') && document.querySelector('${fichaDe(CT.rafael)} [data-funil-picker="funil-contato-empresa"] input')?.value === 'Lojista'`, 8000)
+    const viaCanal = (await api<{ state: FunilState }>('scribe:funil-get')).state
+    const lojista = viaCanal.empresas.find((empresa) => empresa.nome === 'Lojista')
+    const rafael = viaCanal.contatos.find((contato) => contato.id === CT.rafael)
+    checks['contatosEmpresaSugerida'] = {
+      ok: sugerida && semClique && ligada && lojista !== undefined && JSON.stringify(lojista.dominios) === JSON.stringify(['lojista.example']) && rafael?.empresaId === lojista.id && viaCanal.empresas.length === empresasAntes + 1,
+      detail: `sugestão na ficha=${sugerida}; nada criado antes do clique=${semClique}; ligada na tela=${ligada}; Lojista ${JSON.stringify(lojista ?? null)}; empresaId do Rafael ${rafael?.empresaId ?? null}; empresas ${empresasAntes} -> ${viaCanal.empresas.length}`,
+    }
+
+    // contatosNovo (CA5, R32): "Novo contato" abre a ficha de criação com o foco no Nome; Criar desabilitado vazio e só com o
+    // nome; com o e-mail, habilitado; Criar põe o novo na lista (5 linhas) com a ficha dele. Depois, um Novo contato com o
+    // e-mail da Marina junta os dados nela (a nota da mescla, a ficha da Marina e nenhum contato a mais).
+    await clickSelector(contents, '[data-action="funil-novo-contato"]')
+    const criacao = await waitFor(contents, `document.querySelector('[data-funil-ficha="novo-contato"]') && document.activeElement?.matches('[data-funil-novo-nome]') === true`, 8000)
+    const criarDisabled = (): Promise<boolean> => evaluate<boolean>(contents, `document.querySelector('[data-action="funil-contato-criar"]')?.disabled === true`)
+    const vazioDesabilitado = await criarDisabled()
+    // O print logo ao abrir: a ficha vazia com o Nome focado (CA14 da spec); o foco segue no Nome depois dos dois temas.
+    await both('funil-contatos-novo', true)
+    const focoNoPrint = await evaluate<boolean>(contents, `document.activeElement?.matches('[data-funil-novo-nome]') === true && document.querySelector('[data-funil-novo-nome]')?.value === ''`)
+    await setValue(contents, '[data-funil-novo-nome]', 'Beatriz Nogueira')
+    await settle(contents)
+    const soNomeDesabilitado = await criarDisabled()
+    await setValue(contents, '[data-funil-novo-email]', 'beatriz.nogueira@clinica.example')
+    const habilitado = await waitFor(contents, `document.querySelector('[data-action="funil-contato-criar"]')?.disabled === false`)
+    const antesCriar = ativos().length
+    await clickSelector(contents, '[data-action="funil-contato-criar"]')
+    const criada = await waitFor(contents, `${ROWS} === 5 && document.querySelector('[data-funil-ficha="contato"] h1')?.textContent === 'Beatriz Nogueira'`, 8000)
+    const nova = saved().contatos.find((contato) => contato.emails.includes('beatriz.nogueira@clinica.example'))
+    const fichaNova = await evaluate<string | null>(contents, `document.querySelector('[data-funil-ficha="contato"]')?.dataset.funilFichaId ?? null`)
+    // A mescla (R4): o e-mail da Marina num "novo" contato junta o cargo nela.
+    await clickSelector(contents, '[data-action="funil-novo-contato"]')
+    await waitFor(contents, `document.querySelector('[data-funil-ficha="novo-contato"]')`, 8000)
+    await setValue(contents, '[data-funil-novo-nome]', 'Marina R.')
+    await setValue(contents, '[data-funil-novo-cargo]', 'Gerente de compras')
+    await setValue(contents, '[data-funil-novo-email]', 'marina.rocha@cliente.example')
+    await waitFor(contents, `document.querySelector('[data-action="funil-contato-criar"]')?.disabled === false`)
+    const antesMescla = saved().contatos.length
+    await clickSelector(contents, '[data-action="funil-contato-criar"]')
+    const mesclou = await waitFor(contents, `document.querySelector('[data-notice="funil-contato-mesclado"]')?.textContent.includes('Esse e-mail ou telefone já era de Marina Rocha; os dados foram juntados.') === true && document.querySelector('${fichaDe(CT.marina)}')`, 8000)
+    const marina = saved().contatos.find((contato) => contato.id === CT.marina)
+    const notaMescla = await evaluate<{ nota: string; ficha: string | null; painel: string | null }>(
+      contents,
+      `({ nota: document.querySelector('[data-notice="funil-contato-mesclado"]')?.textContent ?? '', ficha: document.querySelector('[data-funil-ficha]')?.dataset.funilFichaId ?? document.querySelector('[data-funil-ficha]')?.dataset.funilFicha ?? null, painel: document.querySelector('[data-funil-contatos-painel]')?.dataset.funilContatosPainel ?? null })`,
+    )
+    checks['contatosNovo'] = {
+      ok:
+        criacao &&
+        vazioDesabilitado &&
+        focoNoPrint &&
+        soNomeDesabilitado &&
+        habilitado &&
+        criada &&
+        nova !== undefined &&
+        nova.origem === 'manual' &&
+        fichaNova === nova.id &&
+        ativos().length === antesCriar + 1 &&
+        mesclou &&
+        saved().contatos.length === antesMescla &&
+        marina?.nome === 'Marina Rocha' &&
+        marina.cargo === 'Gerente de compras',
+      detail: `ficha de criação com o foco no Nome=${criacao}; print vazio com o foco no Nome=${focoNoPrint}; Criar desabilitado vazio=${vazioDesabilitado}, só com o nome=${soNomeDesabilitado}; com o e-mail habilitado=${habilitado}; criado com 5 linhas=${criada} (${nova?.id ?? 'nenhum'}, origem ${nova?.origem ?? '-'}, ficha ${fichaNova}); mescla com a nota e a ficha da Marina=${mesclou} ${JSON.stringify(notaMescla)}, contatos ${antesMescla} -> ${saved().contatos.length}, Marina ${JSON.stringify({ nome: marina?.nome, cargo: marina?.cargo })}`,
+    }
+
+    // contatosSugestoes (CA14, R11, R33): na aba Sugestões, uma sugestão de cada canal (reunião, e-mail e WhatsApp); as
+    // outras vão para `ignorados` pelo canal `scribe:funil-ignorar`, como o "Ignorar" faria.
+    await aba('sugestoes')
+    const todas = await api<Sugestao[]>('scribe:funil-sugestoes')
+    const canais = ['reuniao', 'email', 'whatsapp'] as const
+    const ficam = canais.map((canal) => todas.find((sugestao) => sugestao.origem === canal)).filter((sugestao) => sugestao !== undefined)
+    const sobram = todas.filter((sugestao) => !ficam.includes(sugestao))
+    for (const sugestao of sobram) await api('scribe:funil-ignorar', { chave: sugestao.chave })
+    const tres = await waitFor(contents, `document.querySelectorAll('[data-funil-sugestao]').length === 3`, 8000)
+    const linhas = await evaluate<{ chaves: string[]; canais: string[]; heights: number[]; segmented: string }>(
+      contents,
+      `(() => {
+        const rows = [...document.querySelectorAll('[data-funil-sugestao]')]
+        return {
+          chaves: rows.map((el) => el.dataset.funilSugestao),
+          canais: rows.map((el) => el.dataset.funilSugestaoCanal),
+          heights: rows.map((el) => Math.round(el.getBoundingClientRect().height)),
+          segmented: document.querySelector('[data-funil-contatos-aba="sugestoes"]')?.textContent ?? '',
+        }
+      })()`,
+    )
+    checks['contatosSugestoes'] = {
+      ok: ficam.length === 3 && tres && JSON.stringify([...linhas.canais].sort()) === JSON.stringify(['email', 'reuniao', 'whatsapp']) && linhas.heights.every((height) => height === 44) && linhas.segmented === 'Sugestões 3',
+      detail: `${todas.length} sugestões do main (${todas.map((sugestao) => `${sugestao.chave}:${sugestao.origem}`).join(', ')}); ficam ${JSON.stringify(ficam.map((sugestao) => sugestao.chave))}; ignoradas ${JSON.stringify(sobram.map((sugestao) => sugestao.chave))}; 3 linhas=${tres}; ${JSON.stringify(linhas)}`,
+    }
+    await both('funil-contatos-sugestoes')
+
+    // contatosSugestaoAcoes (CA3, R12): "Adicionar" na de e-mail cria o contato com a origem do canal e a linha some;
+    // "Ignorar" na de reunião some e, depois de recarregar a tela, não volta.
+    const deEmail = ficam.find((sugestao) => sugestao.origem === 'email')
+    const deReuniao = ficam.find((sugestao) => sugestao.origem === 'reuniao')
+    let adicionada = false
+    let ignorada = false
+    let naoVoltou = false
+    let criadoPelaSugestao: Contato | undefined
+    if (deEmail && deReuniao) {
+      await clickSelector(contents, `[data-funil-sugestao="${deEmail.chave}"] [data-action="funil-sugestao-adicionar"]`)
+      adicionada = await waitFor(contents, `!document.querySelector('[data-funil-sugestao="${deEmail.chave}"]') && document.querySelectorAll('[data-funil-sugestao]').length === 2`, 8000)
+      criadoPelaSugestao = saved().contatos.find((contato) => deEmail.email !== null && contato.emails.includes(deEmail.email))
+      await clickSelector(contents, `[data-funil-sugestao="${deReuniao.chave}"] [data-action="funil-sugestao-ignorar"]`)
+      ignorada = await waitFor(contents, `!document.querySelector('[data-funil-sugestao="${deReuniao.chave}"]') && document.querySelectorAll('[data-funil-sugestao]').length === 1`, 8000)
+      await evaluate(contents, 'location.reload(), true')
+      await wait(300)
+      await loadAndWait(win)
+      await abrirContatos('/funil/contatos')
+      await aba('sugestoes')
+      await waitFor(contents, `document.querySelectorAll('[data-funil-sugestao]').length === 1`, 8000)
+      naoVoltou = await evaluate<boolean>(contents, `!document.querySelector('[data-funil-sugestao="${deReuniao.chave}"]') && document.querySelectorAll('[data-funil-sugestao]').length === 1`)
+    }
+    checks['contatosSugestaoAcoes'] = {
+      ok: adicionada && criadoPelaSugestao?.origem === 'email' && ignorada && naoVoltou && saved().ignorados.some((item) => item.chave === deReuniao?.chave),
+      detail: `Adicionar ${deEmail?.chave ?? '(sem sugestão de e-mail)'}: some=${adicionada}, contato ${criadoPelaSugestao?.id ?? 'nenhum'} com origem ${criadoPelaSugestao?.origem ?? '-'}; Ignorar ${deReuniao?.chave ?? '(sem sugestão de reunião)'}: some=${ignorada}, não voltou depois de recarregar=${naoVoltou}`,
+    }
+
+    // contatosImportar (CA14, CA2, R13 a R16): o CSV das fixtures com 5 linhas de prévia e 5 Selects; "Importar 4 contatos";
+    // E-mail -> Ignorar recontado pelo main ("Importar 3 contatos") e de volta; Importar -> "4 criados + atualizados" e
+    // "1 ignorados", e a lista cresce com os criados.
+    await aba('contatos')
+    await waitFor(contents, listaPronta, 8000)
+    await clickSelector(contents, '[data-action="funil-importar"]')
+    const previa = await waitFor(contents, `document.querySelector('[data-funil-importar="csv"]') && document.querySelectorAll('[data-funil-import-linha]').length === 5 && document.querySelectorAll('[data-funil-import-coluna]').length === 5`, 8000)
+    const botao = (): Promise<string> => text(contents, '[data-action="funil-importar-confirmar"]')
+    const quatro = await botao()
+    const emailCol = await evaluate<number>(contents, `[...document.querySelectorAll('[data-funil-import-coluna] select')].findIndex((el) => el.value === 'email')`)
+    await setValue(contents, `[data-funil-import-coluna="${emailCol}"] select`, 'ignorar', 'change')
+    const caiu = await waitFor(contents, `document.querySelector('[data-action="funil-importar-confirmar"]')?.textContent === 'Importar 3 contatos'`, 8000)
+    await setValue(contents, `[data-funil-import-coluna="${emailCol}"] select`, 'email', 'change')
+    const voltou = await waitFor(contents, `document.querySelector('[data-action="funil-importar-confirmar"]')?.textContent === 'Importar 4 contatos'`, 8000)
+    const info = await text(contents, '[data-funil-import-info]')
+    await both('funil-contatos-importar')
+    const linhasAntes = await evaluate<number>(contents, ROWS)
+    await clickSelector(contents, '[data-action="funil-importar-confirmar"]')
+    const resultadoOk = await waitFor(contents, `document.querySelector('[data-funil-import-resultado]') && !document.querySelector('[data-action="funil-importar-confirmar"]')`, 8000)
+    const resultado = await text(contents, '[data-funil-import-resultado]')
+    const numeros = /^(\d+) criados · (\d+) atualizados · (\d+) ignorados \(sem e-mail nem telefone\)$/.exec(resultado.trim())
+    const criados = Number(numeros?.[1] ?? -1)
+    const atualizados = Number(numeros?.[2] ?? -1)
+    const cresceu = await waitFor(contents, `${ROWS} === ${linhasAntes + criados}`, 8000)
+    checks['contatosImportar'] = {
+      ok: previa && quatro === 'Importar 4 contatos' && emailCol >= 0 && caiu && voltou && info === '5 linhas · separador ; · UTF-8' && resultadoOk && numeros !== null && criados + atualizados === 4 && numeros[3] === '1' && cresceu,
+      detail: `prévia com 5 linhas e 5 colunas=${previa}; botão "${quatro}"; coluna E-mail ${emailCol} -> Ignorar: 3=${caiu}, de volta 4=${voltou}; arquivo "${info}"; resultado "${resultado}"; linhas ${linhasAntes} -> +${criados}=${cresceu}`,
+    }
+  } finally {
+    if (themeBefore !== 'system') await evaluate(contents, `window.__scribeApi.invoke('scribe:settings-update', { theme: '${themeBefore}' }).then(() => true)`)
+    nativeTheme.themeSource = 'system'
+    win.destroy()
+    console.log(`funil: contatos e empresas em ${((Date.now() - startedAt) / 1000).toFixed(1)} s`)
   }
 }
 
@@ -14030,6 +14375,10 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
     // Termina com op-loja e op-ganha-mes de volta às etapas da fixture.
     await funilDetalheChecks(ctx, watch, funil, screenshots)
 
+    // Contrato 114: Contatos e Empresas, logo depois do detalhe e antes do bloqueio. Termina com os contatos e as empresas
+    // que criou (o novo, o da sugestão, os importados, a Lojista e as empresas do CSV).
+    await funilContatosChecks(ctx, watch, funil, screenshots)
+
     // Contrato 22: bloqueio do app, por último (a senha criada vale para o userData inteiro).
     await lockChecks(ctx, watch, lock, screenshots)
 
@@ -14187,7 +14536,8 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
   // Contrato 76: +4 (a fonte Redes ligada no Contexto e o cartão do rascunho para o Instagram, nos dois temas).
   // Contrato 112: +6 (o kanban de Oportunidades, a nova oportunidade e "Editar etapas", nos dois temas).
   // Contrato 119: +2 (o detalhe da oportunidade, nos dois temas).
-  const expectedShots = SCREENS.length * THEMES.length + 187
+  // Contrato 114: +10 (Contatos, Empresas, Novo contato, Sugestões e a importação, nos dois temas).
+  const expectedShots = SCREENS.length * THEMES.length + 197
   if (screenshots.length !== expectedShots) failures.push(`${screenshots.length} PNGs em vez de ${expectedShots}`)
   for (const shot of screenshots) {
     if (shot.name === MEETING_PROMPT_SHOT) {

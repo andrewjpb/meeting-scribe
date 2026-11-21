@@ -1,8 +1,10 @@
 // Contrato 112 (CA2): os filtros e as colunas do kanban (R23), as fechadas nos últimos 90 dias, a busca sem acento, o
 // valor digitado em reais, a oportunidade aberta da empresa (aviso de duplicata, R25) e os resultados do SearchPicker.
 // Contrato 119 (CA5, CA6): o "Escrever e-mail", o "Arquivar", o subtítulo, o "Abrir WhatsApp" e o "Abrir e-mail".
+// Contrato 114 (CA7): a lista e a busca de contatos, a sugestão de empresa (R5), o texto das sugestões e o resultado e o
+// arquivo da importação.
 import { describe, expect, it } from 'vitest'
-import type { Contato, Empresa, FunilState, ItemLinhaDoTempo, Oportunidade } from '../../src/shared/funil'
+import type { Contato, Empresa, FunilState, ItemLinhaDoTempo, Oportunidade, Sugestao } from '../../src/shared/funil'
 import { etapasPadrao } from '../../src/shared/funil-logic'
 import {
   colunasVisiveis,
@@ -11,15 +13,26 @@ import {
   diaCurto,
   emailDestino,
   fechadasRecentes,
+  filtrarContatos,
+  filtrarEmpresas,
   filtrarOportunidades,
   oportunidadeAbertaDaEmpresa,
+  ordenarContatos,
+  ordenarEmpresas,
+  parseDominio,
   parseValor,
   PICKER_MAX,
   podeArquivar,
   resultadosPicker,
+  sugestaoDeEmpresa,
+  telefoneLegivel,
+  textoArquivoImport,
   textoPassoDetalhe,
   textoProximoPasso,
+  textoResultadoImport,
   textoSubtitulo,
+  textoSubtituloContato,
+  textoSugestao,
   textoTotais,
   valorParaEdicao,
   whatsappDestino,
@@ -242,5 +255,89 @@ describe('detalhe da oportunidade (contrato 119)', () => {
     expect(valorParaEdicao(1_250_050)).toBe('12.500,50')
     expect(valorParaEdicao(null)).toBe('')
     expect(parseValor(valorParaEdicao(18_600_000))).toBe(18_600_000)
+  })
+})
+
+describe('contatos e empresas (contrato 114)', () => {
+  const pessoa = (id: string, nome: string, patch: Partial<Contato> = {}): Contato => ({ ...contato(id, nome, null), ...patch })
+  const comDominio = (id: string, nome: string, dominios: string[]): Empresa => ({ ...empresa(id, nome), dominios })
+
+  it('sugestaoDeEmpresa: Acme para ana@acme.com.br sem empresa; null para @gmail.com, com empresa do domínio ou já ligada', () => {
+    const ana = pessoa('ct-ana', 'Ana', { emails: ['ana@acme.com.br'] })
+    expect(sugestaoDeEmpresa(ana, [])).toEqual({ nome: 'Acme', dominio: 'acme.com.br' })
+    expect(sugestaoDeEmpresa(pessoa('ct-bia', 'Bia', { emails: ['bia@gmail.com'] }), [])).toBeNull()
+    expect(sugestaoDeEmpresa(ana, [comDominio('emp-acme', 'Acme Ltda', ['acme.com.br'])])).toBeNull()
+    expect(sugestaoDeEmpresa({ ...ana, empresaId: 'emp-outra' }, [])).toBeNull()
+    // O e-mail pessoal fica de fora e o seguinte, de empresa, vale.
+    expect(sugestaoDeEmpresa(pessoa('ct-rafa', 'Rafael', { emails: ['rafa@hotmail.com', 'rafael.lima@lojista.example'] }), [])).toEqual({ nome: 'Lojista', dominio: 'lojista.example' })
+    expect(sugestaoDeEmpresa(pessoa('ct-sem', 'Sem e-mail'), [])).toBeNull()
+  })
+
+  it('filtrarContatos: por nome sem acento, e-mail, empresa e telefone com ou sem pontuação', () => {
+    const lista = [
+      pessoa('ct-marcia', 'Márcia Gonçalves', { empresaId: 'emp-cliente', emails: ['marcia@cliente.example'] }),
+      pessoa('ct-ana', 'Ana Ribeiro', { telefones: ['+5511987654321'] }),
+      pessoa('ct-rafa', 'Rafael Lima', { emails: ['rafael.lima@lojista.example'] }),
+    ]
+    const ids = (busca: string): string[] => filtrarContatos(lista, state.empresas, busca).map((item) => item.id)
+    expect(ids('marcia')).toEqual(['ct-marcia'])
+    expect(ids('lojista')).toEqual(['ct-rafa'])
+    expect(ids('cliente acao')).toEqual(['ct-marcia'])
+    expect(ids('11987654321')).toEqual(['ct-ana'])
+    expect(ids('(11) 98765-4321')).toEqual(['ct-ana'])
+    expect(ids('98765')).toEqual(['ct-ana'])
+    expect(ids('')).toHaveLength(3)
+    expect(ids('ninguém')).toEqual([])
+  })
+
+  it('ordenarContatos: sem os arquivados, o atualizado há menos tempo primeiro e, no empate, pelo nome', () => {
+    const lista = [
+      pessoa('ct-b', 'Bruno', { atualizadoEm: NOW - DIA_MS }),
+      pessoa('ct-a', 'Ana', { atualizadoEm: NOW - DIA_MS }),
+      pessoa('ct-c', 'Carla', { atualizadoEm: NOW }),
+      pessoa('ct-d', 'Davi', { atualizadoEm: NOW + DIA_MS, arquivado: true }),
+    ]
+    expect(ordenarContatos(lista).map((item) => item.id)).toEqual(['ct-c', 'ct-a', 'ct-b'])
+  })
+
+  it('textoResultadoImport e textoArquivoImport, como no artboard 07', () => {
+    expect(textoResultadoImport({ criados: 16, atualizados: 2, ignorados: 2 })).toBe('16 criados · 2 atualizados · 2 ignorados (sem e-mail nem telefone)')
+    expect(textoArquivoImport({ tipo: 'csv', total: 20, separador: ';', codificacao: 'utf-8' })).toBe('20 linhas · separador ; · UTF-8')
+    expect(textoArquivoImport({ tipo: 'csv', total: 1, separador: '\t', codificacao: 'latin1' })).toBe('1 linha · separador tabulação · Latin-1')
+    expect(textoArquivoImport({ tipo: 'vcard', total: 3, separador: null, codificacao: 'utf-8' })).toBe('vCard · 3 cartões')
+  })
+
+  it('textoSugestao: "e-mail ou telefone · canal" e "N interações · última em hoje|dd/mm"', () => {
+    const sugestao = (patch: Partial<Sugestao>): Sugestao => ({
+      chave: 'email:lucas@vertice.example',
+      nome: 'Lucas Vieira',
+      canais: ['reuniao'],
+      interacoes: 2,
+      ultimaEm: NOW - 60 * 60_000,
+      origem: 'reuniao',
+      email: 'lucas@vertice.example',
+      telefone: null,
+      whatsappChatId: null,
+      ...patch,
+    })
+    expect(textoSugestao(sugestao({}), NOW, SP)).toEqual({ contato: 'lucas@vertice.example · Reunião', interacoes: '2 interações · última em hoje' })
+    expect(textoSugestao(sugestao({ canais: ['email'], origem: 'email', interacoes: 4, ultimaEm: Date.parse('2026-11-19T13:00:00.000Z') }), NOW, SP)).toEqual({ contato: 'lucas@vertice.example · E-mail', interacoes: '4 interações · última em 19/11' })
+    expect(textoSugestao(sugestao({ canais: ['whatsapp'], origem: 'whatsapp', email: null, telefone: '+5521998765432', interacoes: 1 }), NOW, SP)).toEqual({ contato: '+55 21 99876-5432 · WhatsApp', interacoes: '1 interação · última em hoje' })
+  })
+
+  it('telefoneLegivel, textoSubtituloContato, empresas (ordem e busca) e parseDominio', () => {
+    expect(telefoneLegivel('+5511987654321')).toBe('+55 11 98765-4321')
+    expect(telefoneLegivel('+551132221100')).toBe('+55 11 3222-1100')
+    expect(telefoneLegivel('+14155550100')).toBe('+14155550100')
+    const ana = pessoa('ct-ana', 'Ana', { cargo: 'Diretora de Expansão', origem: 'reuniao', criadoEm: Date.parse('2026-11-03T13:00:00.000Z') })
+    expect(textoSubtituloContato(ana, 'ABF', SP)).toBe('Diretora de Expansão · ABF · desde 03/11/2026, pela reunião')
+    expect(textoSubtituloContato({ ...ana, cargo: null, origem: 'manual' }, null, SP)).toBe('desde 03/11/2026, pelo cadastro manual')
+    const empresas = [comDominio('emp-p', 'Parceiro', ['parceiro.example']), comDominio('emp-a', 'Ação Social', ['acao.org.br']), comDominio('emp-c', 'Cliente', ['cliente.example'])]
+    expect(ordenarEmpresas(empresas).map((item) => item.id)).toEqual(['emp-a', 'emp-c', 'emp-p'])
+    expect(filtrarEmpresas(empresas, 'acao').map((item) => item.id)).toEqual(['emp-a'])
+    expect(filtrarEmpresas(empresas, 'cliente.example').map((item) => item.id)).toEqual(['emp-c'])
+    expect(parseDominio(' @Acme.com.BR ')).toBe('acme.com.br')
+    expect(parseDominio('acme')).toBeNull()
+    expect(parseDominio('ana@acme.com.br')).toBeNull()
   })
 })
