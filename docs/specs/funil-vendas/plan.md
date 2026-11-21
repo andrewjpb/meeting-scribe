@@ -249,3 +249,22 @@ Versão seguinte:
 13. **Desfazer** e **mesclar contatos à mão**.
 14. Previsão de vendas ponderada por etapa (probabilidade por coluna).
 15. E-mail novo redigido pelo Assistente (cartão `email-novo`), hoje só resposta.
+
+## Pendências
+
+Levantadas no fechamento (contrato 118) e na auditoria dos prints de 21/11/2026 (`auditoria-prints.md`, base `main a4b62ad`). Nenhuma impede o teste navegado; as de tela entram num contrato de correção depois dele, junto com o que o teste achar.
+
+### Da auditoria dos prints
+
+1. **Título da oportunidade cortado no detalhe (bloqueador).** `funil-oportunidade-*`: "Loja virtual" vira "Loja vi…" ao lado do `Select` de etapa, com a linha quase vazia. O invólucro do `EditableTitle` (`max-w-full min-w-0`) encolhe e o `Select` fica com o espaço (mínimo de 240 px). Provável: `features/funil/OportunidadeScreen.tsx`, linhas ~479–488.
+2. **Placeholder da busca do kanban cortado (menor).** `funil-oportunidades-*`, `-nova-*` e `-editar-etapas-*`: "Buscar oportunidades" perde o "s" final, encostado no "⌘F", sem reticências. Provável: rótulo do `SearchField` em `features/funil/OportunidadesScreen.tsx:486`.
+3. **Select de mapeamento cortado na importação (menor).** `funil-contatos-importar-*`: a coluna Empresa mostra "Empresɛ"; a seta nativa e o `px-2.5` não cabem em ~150 px. Provável: `features/funil/ImportarPainel.tsx:129–133`.
+4. **"×" de apagar etapa em todas as colunas (menor).** `funil-oportunidades-editar-etapas-*`: o "×" aparece desabilitado também nas etapas com cartões e, no escuro, parece clicável. R26 e o artboard 03 só o mostram na etapa aberta vazia. Provável: `features/funil/OportunidadesScreen.tsx`, linhas ~297–305.
+5. **"+ Contato" abaixo do remetente no Email (menor).** `email-leitura-contato-*`: o botão quebra para uma linha própria sob o nome e o endereço, e R36 pede "ao lado do remetente". Provável: linha do remetente em `features/email/ReadingPane.tsx:259–268`, com `features/funil/ContactLink.tsx`.
+
+### Já conhecidas
+
+6. **Smoke do 112 não restaura `funil.json` inteiro entre blocos.** Em `funilKanbanChecks` (`src/main/smoke.ts`), `op-portal` e `op-consultoria` saem de um bloco com eventos extras e os levam para os blocos seguintes. Os checks passam hoje, mas os blocos ficam dependentes da ordem em que rodam.
+7. **`notesDetail` do contrato 13 oscila sob carga.** Em `notesDetailEdits` (`src/main/smoke.ts`, ~l. 2108), `savedAfterMs` é medido depois do round-trip do `evaluate`, então o tempo inclui a latência do próprio smoke e o limite de 400 ms às vezes falha sem defeito no app.
+8. **Smoke exige a tela do Mac acesa e desbloqueada por cerca de 20 minutos.** Com a tela bloqueada, as capturas falham (foi o que adiou estes entregáveis do 118). Rodar com `SMOKE_NO_SANDBOX=1 caffeinate -dimsu pnpm gates` e sem bloquear a tela.
+9. **Arquivamento da spec depois do teste navegado.** `git mv docs/specs/funil-vendas docs/specs/_archive/funil-vendas` com `status: arquivado` é passo do coordenador, depois do teste navegado em sessão nova (wave 8, ver "Fechamento").
