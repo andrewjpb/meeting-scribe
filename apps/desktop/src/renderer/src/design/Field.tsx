@@ -8,6 +8,8 @@ interface TextFieldProps {
   value: string
   onChange: (value: string) => void
   type?: 'text' | 'password' | 'search'
+  /** Teclado sugerido (contrato 109: `numeric` no campo de dias). */
+  inputMode?: 'numeric'
   placeholder?: string
   /** Sem `<label>` visível (busca), o nome vai aqui. */
   ariaLabel?: string
@@ -23,12 +25,13 @@ interface TextFieldProps {
   data?: Readonly<Record<`data-${string}`, string>>
 }
 
-export function TextField({ id, value, onChange, type = 'text', placeholder, ariaLabel, onEnter, onBlur, maxLength, disabled = false, describedBy, data }: TextFieldProps) {
+export function TextField({ id, value, onChange, type = 'text', inputMode, placeholder, ariaLabel, onEnter, onBlur, maxLength, disabled = false, describedBy, data }: TextFieldProps) {
   return (
     <input
       id={id}
       {...data}
       type={type}
+      inputMode={inputMode}
       value={value}
       placeholder={placeholder}
       aria-label={ariaLabel}

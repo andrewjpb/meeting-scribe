@@ -46,6 +46,18 @@ export const REDES_POLL_MINUTES = [1, 5, 15, 30, 60] as const
 export type RedesPollMinutes = (typeof REDES_POLL_MINUTES)[number]
 export const REDES_POLL_MINUTES_DEFAULT: RedesPollMinutes = 5
 // fim 73
+/** Contrato 109 (R46): "Considerar esfriada após (dias)" vai de 1 a 90. */
+export const FUNIL_DIAS_ESFRIAR_MIN = 1
+export const FUNIL_DIAS_ESFRIAR_MAX = 90
+/** Contrato 109 (R46): a Section "Funil de vendas" de Configurações › Geral. */
+export interface FunilSettings {
+  /** Depois do resumo, propõe criar ou atualizar uma oportunidade. */
+  detectarNasReunioes: boolean
+  /** Dias sem interação para a oportunidade aberta ganhar o marcador "esfriou" (1 a 90). */
+  diasEsfriar: number
+  /** Uma notificação por dia com as oportunidades esfriadas e os passos vencidos. */
+  avisarEsfriadas: boolean
+}
 /** Agendas lidas de cada conta (contrato 12); `null` é só a principal. */
 export interface CalendarSelection {
   google: string[] | null
@@ -209,6 +221,8 @@ export interface AppSettings {
   /** Contrato 73: de quantos em quantos minutos o app lê os comentários (e, no 74, as mensagens) do Instagram. */
   redesPollMinutes: RedesPollMinutes
   // fim 73
+  /** Contrato 109: as configurações do Funil de vendas (Configurações › Geral). */
+  funil: FunilSettings
 }
 
 /**
@@ -275,6 +289,7 @@ export const DEFAULT_SETTINGS: Readonly<AppSettings> = Object.freeze({
   // 73: comentários
   redesPollMinutes: 5,
   // fim 73
+  funil: Object.freeze({ detectarNasReunioes: true, diasEsfriar: 7, avisarEsfriadas: true }) as FunilSettings,
 })
 
 /** Prefixo do modelo gravado na reunião quando a tradução veio do Claude CLI (`claude-cli:haiku`). */

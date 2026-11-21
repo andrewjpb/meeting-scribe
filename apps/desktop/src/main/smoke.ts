@@ -108,7 +108,7 @@ import { summaryMarkdown, type MeetingSummary } from '../shared/meeting-summary'
 import { summaryPreview } from '../shared/meetings-overview'
 import { PRIVACY_PANE_URLS } from '../shared/privacy'
 import { SETTINGS_TABS, type SettingsTab } from '../shared/routes'
-import { matchesRow, settingsIndex } from '../shared/settings-index'
+import { FUNIL_AVISAR_NAME, FUNIL_DETECTAR_NAME, FUNIL_DIAS_NAME, FUNIL_SECTION, matchesRow, settingsIndex } from '../shared/settings-index'
 import { BRAND_LOGO_INVALID_MESSAGE, BRAND_LOGO_PATTERN, DEFAULT_BRAND_NAME, DEFAULT_BRAND_SUBTITLE } from '../shared/branding'
 import { DEFAULT_SETTINGS, type AppSettings } from '../shared/settings-defaults'
 import { transcriptMarkdown } from '../shared/transcript-markdown'
@@ -2169,6 +2169,92 @@ async function summarizeSetting(contents: WebContents, userDataDir: string): Pro
       offSaved === false &&
       onSaved === true,
     detail: `"${row}" ligado=${on}; desligado -> ${offSaved}; religado -> ${onSaved}`,
+  }
+}
+
+/** Contrato 109: `settings.funil` como o main devolve pelo canal de configurações. */
+const funilSaved = (contents: WebContents): Promise<AppSettings['funil']> =>
+  evaluate<AppSettings['funil']>(contents, "window.__scribeApi.invoke('scribe:settings-get').then((s) => s.funil)")
+
+/**
+ * Contrato 109 (CA5), na aba Geral já aberta: a Section "Funil de vendas" entre "Janela" e "Bloqueio", com as três
+ * linhas do índice da busca (aba `geral`), os dois interruptores ligados e o campo de dias com 7.
+ */
+async function funilSettingsCheck(contents: WebContents): Promise<Check> {
+  const panel = '[data-settings-panel="geral"]'
+  const sections = await evaluate<string[]>(contents, `[...document.querySelectorAll('${panel} section[aria-label]')].map((el) => el.getAttribute('aria-label'))`)
+  const text = await evaluate<string>(contents, `document.querySelector('${panel}')?.innerText ?? ''`)
+  const names = [FUNIL_DETECTAR_NAME, FUNIL_DIAS_NAME, FUNIL_AVISAR_NAME]
+  const rows = await evaluate<string[]>(contents, `[...document.querySelectorAll('${panel} section[aria-label="${FUNIL_SECTION}"] [data-setting-name]')].map((el) => el.dataset.settingName)`)
+  const index = settingsIndex('Claude')
+  const indexed = names.every((name) => index.some((entry) => entry.tab === 'geral' && entry.section === FUNIL_SECTION && matchesRow(entry, name)))
+  const switches = await evaluate<(string | null)[]>(contents, `['settings-funil-detectar', 'settings-funil-avisar'].map((id) => document.querySelector('[aria-labelledby="' + id + '"]')?.getAttribute('aria-checked') ?? null)`)
+  const dias = await evaluate<string | null>(contents, `document.querySelector('${panel} [data-funil-dias]')?.value ?? null`)
+  const at = sections.indexOf(FUNIL_SECTION)
+  return {
+    ok:
+      text.includes('Funil de vendas') &&
+      at > 0 &&
+      sections[at - 1] === 'Janela' &&
+      sections[at + 1] === 'Bloqueio' &&
+      JSON.stringify(rows) === JSON.stringify(names) &&
+      indexed &&
+      JSON.stringify(switches) === JSON.stringify(['true', 'true']) &&
+      dias === '7',
+    detail: `blocos ${JSON.stringify(sections)}; linhas ${JSON.stringify(rows)}; no índice=${indexed}; interruptores ${JSON.stringify(switches)}; dias="${dias}"`,
+  }
+}
+
+/**
+ * Contrato 109 (R46): "Considerar esfriada após (dias)" fora de 1 a 90 ou vazio não grava e volta ao último valor
+ * salvo ao sair do campo; 14 com Enter grava. Termina com 7 gravado de novo.
+ */
+async function funilSettingsInvalidCheck(contents: WebContents): Promise<Check> {
+  const field = '[data-settings-panel="geral"] [data-funil-dias]'
+  const fieldIs = (value: string): Promise<boolean> => waitFor(contents, `document.querySelector('${field}')?.value === ${JSON.stringify(value)}`)
+  const savedIs = async (dias: number): Promise<boolean> => {
+    const deadline = Date.now() + 5000
+    while (Date.now() < deadline) {
+      if ((await funilSaved(contents)).diasEsfriar === dias) return true
+      await wait(50)
+    }
+    return false
+  }
+  const before = await funilSaved(contents)
+
+  await setValue(contents, field, '0')
+  await leaveField(contents, field)
+  const zeroBack = await fieldIs('7')
+  await wait(300)
+  const zeroSaved = (await funilSaved(contents)).diasEsfriar
+
+  await setValue(contents, field, '')
+  await leaveField(contents, field)
+  const emptyBack = await fieldIs('7')
+  await wait(300)
+  const emptySaved = (await funilSaved(contents)).diasEsfriar
+
+  await setValue(contents, field, '14')
+  await pressEnterIn(contents, field)
+  const fourteen = (await savedIs(14)) && (await fieldIs('14'))
+  const fourteenSaved = await funilSaved(contents)
+
+  await setValue(contents, field, '7')
+  await pressEnterIn(contents, field)
+  const restored = (await savedIs(7)) && (await fieldIs('7'))
+
+  return {
+    ok:
+      before.diasEsfriar === 7 &&
+      zeroBack &&
+      zeroSaved === 7 &&
+      emptyBack &&
+      emptySaved === 7 &&
+      fourteen &&
+      fourteenSaved.detectarNasReunioes === before.detectarNasReunioes &&
+      fourteenSaved.avisarEsfriadas === before.avisarEsfriadas &&
+      restored,
+    detail: `antes=${before.diasEsfriar}; "0" e saída -> campo 7=${zeroBack}, gravado ${zeroSaved}; vazio e saída -> campo 7=${emptyBack}, gravado ${emptySaved}; "14" e Enter -> ${fourteen} (${JSON.stringify(fourteenSaved)}); de volta a 7=${restored}`,
   }
 }
 
@@ -13100,6 +13186,11 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
       await openSettingsTab(contents, 'geral')
       if (!(await settingsReady(contents))) failures.push(`configuracoes/${themeName}: chave ou catálogo não carregou`)
       await shoot('configuracoes-geral', 'configuracoes')
+      // Contrato 109: a Section "Funil de vendas", depois do print (o check mexe no campo de dias e o devolve a 7).
+      if (themeName === 'light') {
+        settings['funilSettings'] = await funilSettingsCheck(contents)
+        settings['funilSettingsInvalid'] = await funilSettingsInvalidCheck(contents)
+      }
       if (!(await selectSettingsTab(contents, 'gravacao'))) failures.push(`configuracoes-gravacao/${themeName}: aba não abriu`)
       await shoot('configuracoes-gravacao', 'configuracoes')
       if (themeName === 'light') layout['configuracoes'] = layoutCheck('configuracoes', await settingsLayoutMetrics(contents))
@@ -13322,7 +13413,7 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
     if (!check) failures.push(`medidas ${name}: não executado`)
     else if (!check.ok) failures.push(`medidas ${name}: ${check.detail}`)
   }
-  for (const name of ['permissions', 'reachable', 'keyField', 'keySave', 'modelSearch', 'modelSelect', 'keyRemoveAndInvite', 'catalogOffline', 'languages', 'audio', 'recordingUsesSettings', 'appearance', 'claudeCli', 'meetingFiles', 'summarizeOnStop', 'branding', 'updates', 'addKeyLink', 'tabs']) {
+  for (const name of ['permissions', 'reachable', 'keyField', 'keySave', 'modelSearch', 'modelSelect', 'keyRemoveAndInvite', 'catalogOffline', 'languages', 'audio', 'recordingUsesSettings', 'appearance', 'claudeCli', 'meetingFiles', 'summarizeOnStop', 'branding', 'updates', 'addKeyLink', 'tabs', 'funilSettings', 'funilSettingsInvalid']) {
     if (!settings[name]) failures.push(`configurações ${name}: não executado`)
   }
   // Nenhuma chamada saiu para a AssemblyAI: todas passaram pelo gateway de fixtures.
