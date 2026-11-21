@@ -122,20 +122,22 @@ export type ChatWhatsAppMode = (typeof CHAT_WHATSAPP_MODES)[number]
 
 /**
  * Fontes do Assistente com interruptor (o estado atual vai sempre). `internet`: contrato 26; `email`: contrato 45; `redes`:
- * contrato 76 (o Instagram, desligada por padrão).
+ * contrato 76 (o Instagram, desligada por padrão); `funil`: contrato 117 (o funil de vendas, desligada por padrão e a
+ * primeira do painel: leva nomes, e-mails e telefones ao modelo).
  */
-export const CHAT_SOURCE_KINDS = ['whatsapp', 'email', 'redes', 'automations', 'guide', 'internet'] as const
+export const CHAT_SOURCE_KINDS = ['funil', 'whatsapp', 'email', 'redes', 'automations', 'guide', 'internet'] as const
 export type ChatSourceKind = (typeof CHAT_SOURCE_KINDS)[number]
 export type ChatSources = Record<ChatSourceKind, boolean>
-/** Contrato 76: as fontes que começam desligadas (a conversa guarda só o `true` delas). */
-export const CHAT_SOURCES_OFF_BY_DEFAULT: readonly ChatSourceKind[] = ['redes']
+/** Contrato 76: as fontes que começam desligadas (a conversa guarda só o `true` delas). Contrato 117: e o Funil. */
+export const CHAT_SOURCES_OFF_BY_DEFAULT: readonly ChatSourceKind[] = ['redes', 'funil']
 
 /** O valor de uma fonte quando a conversa não diz nada. */
 export const chatSourceDefault = (kind: ChatSourceKind): boolean => !CHAT_SOURCES_OFF_BY_DEFAULT.includes(kind)
 
-/** As fontes de um escopo, com o padrão (todas ligadas, menos a Redes). */
+/** As fontes de um escopo, com o padrão (todas ligadas, menos a Redes e o Funil). */
 export function chatSourcesOf(scope: Pick<ChatScope, 'sources'>): ChatSources {
   return {
+    funil: scope.sources?.funil === true,
     whatsapp: scope.sources?.whatsapp !== false,
     email: scope.sources?.email !== false,
     redes: scope.sources?.redes === true,
@@ -145,7 +147,7 @@ export function chatSourcesOf(scope: Pick<ChatScope, 'sources'>): ChatSources {
   }
 }
 
-/** Só o que difere do padrão fica guardado na conversa (as desligadas e, da Redes, o `true`). */
+/** Só o que difere do padrão fica guardado na conversa (as desligadas e, da Redes e do Funil, o `true`). */
 export function chatSourcesToKeep(sources: Partial<ChatSources> | undefined): Partial<ChatSources> {
   return Object.fromEntries(CHAT_SOURCE_KINDS.filter((kind) => sources?.[kind] !== undefined && sources[kind] !== chatSourceDefault(kind)).map((kind) => [kind, sources?.[kind] as boolean]))
 }

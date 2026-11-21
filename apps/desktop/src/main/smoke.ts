@@ -100,6 +100,10 @@
 // Contrato 116: logo depois de Contatos e Empresas, os botões nas telas existentes (`funilTelasExistentesChecks`): o bloco
 // Participantes e o "+ Contato" no Resumo de uma reunião semeada com agenda, "Detectar oportunidade" com o agente ACP
 // falso, o cartão "Oportunidade detectada" (aviso de duplicata, Criar e Ignorar), o "+ Contato" no Email e no WhatsApp.
+//
+// Contrato 117: logo depois dos botões nas telas existentes, o funil no Assistente (`funilAssistenteChecks`): a fonte Funil
+// (primeira e desligada; ligada, o `FUNIL.md`), os cartões "Mover" (e o do id que não existe), "Criar oportunidade" e o do
+// contato, o "Abrir" da oportunidade e o agente com "Pode ler o funil" no "Pedir agora", com o agente ACP falso.
 import { appendFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { spawn as spawnChild } from 'node:child_process'
 import { request as httpRequest } from 'node:http'
@@ -141,7 +145,7 @@ import { BRANDING_DIR } from './branding/service'
 import { summaryInput, summaryLines } from './claude-cli/summary'
 import { MENU_IDS } from './menu'
 import { CHAT_CORPUS_DIR, CHAT_INDEX_FILE, CHAT_SCOPE_DIR, corpusFileSuffix } from './chat/corpus'
-import { AUTOMATIONS_FILE, EMAIL_SEARCH_FILE, GUIDE_FILE, isSourceFile, REDES_FILE, REDES_PUBLICATIONS_FILE, STATE_FILE } from './chat/sources'
+import { AUTOMATIONS_FILE, EMAIL_SEARCH_FILE, FUNIL_FILE as FUNIL_MD_FILE, GUIDE_FILE, isSourceFile, REDES_FILE, REDES_PUBLICATIONS_FILE, STATE_FILE } from './chat/sources'
 import { CHAT_EVENTS_FILE } from './chat/events-store'
 import { CHATS_DIR } from './chat/store'
 import type { FakeDriveFile } from './google/fake-google'
@@ -13243,6 +13247,247 @@ async function funilTelasExistentesChecks(ctx: SmokeContext, watch: (win: Browse
 }
 
 /**
+ * Contrato 117 (CA16 da spec, R41 a R45), numa janela que troca de tema no lugar, com o agente ACP falso e o `funil.json`
+ * da fixture: a fonte Funil primeira e desligada no Contexto (sem `FUNIL.md` na pasta), ligada com o `FUNIL.md` (a
+ * `op-integracao` "esfriada", sem a arquivada); o cartão "Mover" de `op-vistoria` até a Negociação (o evento `etapa` e a
+ * nota; o segundo clique não faz nada); o cartão do id que não existe; "Criar oportunidade" com o Valor mudado no cartão; o
+ * contato; o "Abrir" da oportunidade; e o agente com "Pode ler o funil" no "Pedir agora". Não depende de contagens do
+ * funil (os blocos anteriores deixam eventos, contatos e empresas). Termina com `op-vistoria` de volta à Proposta e sem a
+ * oportunidade, o contato e o agente que criou. Print `assistente-funil`, nos dois temas.
+ */
+async function funilAssistenteChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => void, checks: Record<string, Check>, shots: Screenshot[]): Promise<void> {
+  const startedAt = Date.now()
+  const themeBefore = readSettings(ctx.userDataDir).theme ?? 'system'
+  const transportBefore = readSettings(ctx.userDataDir).claudeTransport
+  nativeTheme.themeSource = 'light'
+  const win = ctx.openWindow({})
+  watch(win)
+  await loadAndWait(win)
+  const contents = win.webContents
+  if (themeBefore !== 'system') await evaluate(contents, "window.__scribeApi.invoke('scribe:settings-update', { theme: 'system' }).then(() => true)")
+  await evaluate(contents, "window.__scribeApi.invoke('scribe:settings-update', { claudeTransport: 'acp' }).then(() => true)")
+  const acpStatus = await evaluate<{ state?: string }>(contents, "window.__scribeApi.invoke('scribe:acp-status')")
+  if (acpStatus.state !== 'installed') await evaluate(contents, "window.__scribeApi.invoke('scribe:acp-install').then(() => true)")
+  const api = <T>(channel: string, request?: unknown): Promise<T> => evaluate<T>(contents, `window.__scribeApi.invoke(${JSON.stringify(channel)}${request === undefined ? '' : `, ${JSON.stringify(request)}`})`)
+  const both = async (name: string): Promise<void> => {
+    await evaluate(contents, `document.activeElement instanceof HTMLElement && document.activeElement.blur(), true`)
+    await settle(contents)
+    shots.push(await capture(win, ctx.outDir, `${name}-light`))
+    nativeTheme.themeSource = 'dark'
+    await waitFor(contents, "document.documentElement.dataset.theme === 'dark'")
+    await settle(contents)
+    shots.push(await capture(win, ctx.outDir, `${name}-dark`))
+    nativeTheme.themeSource = 'light'
+    await waitFor(contents, "document.documentElement.dataset.theme === 'light'")
+  }
+  const { etapas } = SMOKE_FUNIL
+  const funilFile = join(ctx.userDataDir, FUNIL_FILE)
+  const saved = (): FunilState => JSON.parse(readFileSync(funilFile, 'utf8')) as FunilState
+  const chatId = (): Promise<string> => evaluate<string>(contents, `document.querySelector('[data-chat-conversation]')?.getAttribute('data-chat-conversation') ?? ''`)
+  const lastCard = (kind: string): string => `[...document.querySelectorAll('[data-chat-action="${kind}"]')].at(-1)`
+  const switchOf = `document.querySelector('[data-chat-source="funil"] [role="switch"]')`
+  type FunilCardFile = { id: string; kind: string; status: string; result: string | null; error?: string | null; oportunidadeId?: string | null; contatoId?: string | null }
+  const lastActions = async (): Promise<FunilCardFile[]> => (chatFile(ctx.userDataDir, await chatId())?.messages.at(-1)?.actions ?? []) as FunilCardFile[]
+  const lastIndex = async (): Promise<number> => (chatFile(ctx.userDataDir, await chatId())?.messages.length ?? 1) - 1
+  const criados: { oportunidade: string | null; contato: string | null; agente: string | null } = { oportunidade: null, contato: null, agente: null }
+  /** Espera uma condição do lado do main (o arquivo da conversa gravado). */
+  const until = async (check: () => boolean, ms: number): Promise<boolean> => {
+    for (const end = Date.now() + ms; Date.now() < end; await wait(100)) if (check()) return true
+    return check()
+  }
+
+  try {
+    // funilFonteDesligada (R41): numa conversa nova, a linha Funil é a primeira das Fontes e vem desligada; perguntar não
+    // leva o `FUNIL.md` à pasta.
+    await showAssistantLevel(contents)
+    await clickSelector(contents, '[data-action="chat-new"]')
+    await waitFor(contents, `document.querySelector('[data-chat-input]') && !document.querySelector('[data-chat-message]')`)
+    await clickSelector(contents, '[data-action="toggle-context"]')
+    const offByDefault = await waitFor(contents, `${switchOf}?.getAttribute('aria-checked') === 'false'`)
+    const first = await evaluate<string>(contents, `document.querySelector('[data-chat-sources] [data-chat-source]')?.getAttribute('data-chat-source') ?? ''`)
+    const sourceText = await text(contents, '[data-chat-source="funil"]')
+    const askedOff = await askChat(contents, 'Como está o funil? Tem algo para mexer hoje?')
+    const id = await chatId()
+    const scopeDir = join(ctx.userDataDir, CHAT_SCOPE_DIR, id)
+    const funilMd = join(scopeDir, FUNIL_MD_FILE)
+    const absent = !existsSync(funilMd)
+    checks['funilFonteDesligada'] = {
+      ok: offByDefault && first === 'funil' && sourceText.includes('Etapas, oportunidades abertas, ganhas e perdidas dos últimos 90 dias e até 500 contatos.') && askedOff.done && absent && askedOff.answer.includes('ligue a fonte Funil'),
+      detail: `desligada=${offByDefault}; primeira fonte "${first}"; "${sourceText}"; resposta=${askedOff.done} "${askedOff.answer.slice(0, 120)}"; sem ${FUNIL_MD_FILE}=${absent}`,
+    }
+
+    // funilFonte: ligada, a pergunta seguinte leva o `FUNIL.md` (0600), com a esfriada e sem a arquivada.
+    if (!(await evaluate<boolean>(contents, `Boolean(${switchOf})`))) await clickSelector(contents, '[data-action="toggle-context"]')
+    await clickSelector(contents, '[data-chat-source="funil"] [role="switch"]')
+    const switchedOn = await waitFor(contents, `${switchOf}?.getAttribute('aria-checked') === 'true'`)
+    const scopeSaved = await until(() => (chatFile(ctx.userDataDir, id)?.scope as { sources?: Record<string, boolean> } | undefined)?.sources?.['funil'] === true, 8000)
+    const askedOn = await askChat(contents, 'Como está o funil? Tem algo para mexer hoje?')
+    const mdText = existsSync(funilMd) ? readFileSync(funilMd, 'utf8') : ''
+    const integracao = mdText.split('\n### ').find((part) => part.startsWith('Integração Parceiro · id: op-integracao')) ?? ''
+    checks['funilFonte'] = {
+      ok: switchedOn && scopeSaved && askedOn.done && mdText.includes('Integração Parceiro') && integracao.includes('esfriada') && !mdText.includes('Manutenção anual') && mode(funilMd) === '600' && askedOn.answer.includes('[Funil · Integração Parceiro]'),
+      detail: `ligada=${switchedOn}, no escopo=${scopeSaved}; resposta=${askedOn.done} "${askedOn.answer.slice(0, 160)}"; ${FUNIL_MD_FILE} ${mdText.length} caracteres (${mode(funilMd)}), op-integracao esfriada=${integracao.includes('esfriada')}, sem a arquivada=${!mdText.includes('Manutenção anual')}`,
+    }
+
+    // funilMover (CA16): o cartão "Mover" de op-vistoria; nada muda antes do clique; "Mover" grava a etapa, o evento e a
+    // nota; o segundo clique não faz nada.
+    const eventosAntes = saved().eventos.filter((evento) => evento.oportunidadeId === 'op-vistoria').length
+    const asked = await askChat(contents, 'Mova a oportunidade op-vistoria para Negociação')
+    const card = lastCard('oportunidade-mover')
+    const proposed = await waitFor(contents, `${card}?.dataset.chatActionStatus === 'proposed'`, 8000)
+    const title = await evaluate<string>(contents, `${card}?.querySelector('[data-chat-action-title]')?.textContent ?? ''`)
+    const nota = await evaluate<string>(contents, `${card}?.querySelector('[data-chat-funil-nota]')?.textContent ?? ''`)
+    const intacta = saved().oportunidades.find((item) => item.id === 'op-vistoria')?.etapaId === etapas.proposta
+    const rawHidden = !(await evaluate<string>(contents, LAST_ANSWER)).includes('lap-acao')
+    await both('assistente-funil')
+    await evaluate(contents, `${card}?.querySelector('[data-action="chat-action-funil-mover"]')?.click(), true`)
+    const moved = await waitFor(contents, `${card}?.dataset.chatActionStatus === 'done'`, 8000)
+    const result = await evaluate<string>(contents, `${card}?.querySelector('[data-chat-action-result]')?.textContent ?? ''`)
+    const depois = saved()
+    const vistoria = depois.oportunidades.find((item) => item.id === 'op-vistoria')
+    const novos = depois.eventos.filter((evento) => evento.oportunidadeId === 'op-vistoria' && evento.at >= startedAt)
+    const moverCard = (await lastActions()).find((action) => action.kind === 'oportunidade-mover')
+    const again = await api<{ ok: boolean; error?: string }>('scribe:chat-action-funil', { chatId: id, index: await lastIndex(), actionId: moverCard?.id ?? 'x' })
+    const eventosDepois = saved().eventos.filter((evento) => evento.oportunidadeId === 'op-vistoria').length
+    checks['funilMover'] = {
+      ok:
+        asked.done &&
+        proposed &&
+        title === 'Mover App de vistoria de Proposta para Negociação' &&
+        nota === 'Nota: a Ana leva a proposta à diretoria na segunda.' &&
+        intacta &&
+        rawHidden &&
+        moved &&
+        result.includes('Movida para Negociação') &&
+        vistoria?.etapaId === etapas.negociacao &&
+        novos.some((evento) => evento.tipo === 'etapa' && evento.de === 'Proposta' && evento.para === 'Negociação') &&
+        novos.some((evento) => evento.tipo === 'nota' && evento.texto === 'a Ana leva a proposta à diretoria na segunda.') &&
+        moverCard?.status === 'done' &&
+        again.ok === false &&
+        again.error === 'done' &&
+        eventosDepois === eventosAntes + 2,
+      detail: `resposta=${asked.done}; cartão=${proposed} "${title}" "${nota}"; nada antes do clique=${intacta}; bloco escondido=${rawHidden}; depois do clique=${moved} "${result}", etapa ${vistoria?.etapaId ?? '?'}, eventos novos ${JSON.stringify(novos.map((evento) => `${evento.tipo}:${evento.texto}`))}; de novo -> ${JSON.stringify(again)}; eventos ${eventosAntes} -> ${eventosDepois}`,
+    }
+
+    // funilMoverInexistente: o id que não está no funil vira o cartão `failed`, sem botão.
+    const missingAsked = await askChat(contents, 'Mova a oportunidade nao-existe para Negociação')
+    const missingCard = lastCard('oportunidade-mover')
+    const failed = await waitFor(contents, `${missingCard}?.dataset.chatActionStatus === 'failed'`, 8000)
+    const missingError = await evaluate<string>(contents, `${missingCard}?.querySelector('[data-chat-action-error]')?.textContent ?? ''`)
+    const noButton = await evaluate<boolean>(contents, `!${missingCard}?.querySelector('[data-action="chat-action-funil-mover"]')`)
+    checks['funilMoverInexistente'] = {
+      ok: missingAsked.done && failed && missingError.includes('oportunidade não encontrada') && noButton && (await lastActions())[0]?.error === 'oportunidade não encontrada',
+      detail: `resposta=${missingAsked.done}; cartão failed=${failed} "${missingError}"; sem "Mover"=${noButton}`,
+    }
+
+    // funilCriar: o Valor mudado no cartão vale; a oportunidade nasce com a origem do Assistente.
+    const createAsked = await askChat(contents, 'Crie a oportunidade de teste')
+    const createCard = lastCard('oportunidade-criar')
+    const createShown = await waitFor(contents, `${createCard}?.dataset.chatActionStatus === 'proposed' && ${createCard}?.querySelector('[data-chat-funil-field="valor"]')?.value === '45.000'`, 8000)
+    const nadaAntes = !saved().oportunidades.some((item) => item.titulo === 'Conciliação')
+    await evaluate(contents, `(() => { const cards = document.querySelectorAll('[data-chat-action="oportunidade-criar"]'); cards[cards.length - 1]?.setAttribute('data-smoke-criar', ''); return true })()`)
+    await setValue(contents, '[data-smoke-criar] [data-chat-funil-field="valor"]', '50.000,00')
+    await evaluate(contents, `${createCard}?.querySelector('[data-action="chat-action-funil-criar"]')?.click(), true`)
+    const createdDone = await waitFor(contents, `${createCard}?.dataset.chatActionStatus === 'done'`, 8000)
+    const criada = saved().oportunidades.find((item) => item.titulo === 'Conciliação')
+    criados.oportunidade = criada?.id ?? null
+    const createdLink = await evaluate<string>(contents, `${createCard}?.querySelector('[data-chat-funil-open]')?.getAttribute('data-chat-funil-open') ?? ''`)
+    checks['funilCriar'] = {
+      ok: createAsked.done && createShown && nadaAntes && createdDone && criada?.valor === 5_000_000 && criada.origem === 'assistente' && criada.etapaId === etapas.contato && createdLink === `/funil/oportunidades/${criada.id}`,
+      detail: `resposta=${createAsked.done}; cartão com 45.000=${createShown}; nada antes=${nadaAntes}; criada=${createdDone} ${criada ? `${criada.id} valor ${criada.valor} origem ${criada.origem} etapa ${criada.etapaId}` : 'ausente'}; link "${createdLink}"`,
+    }
+
+    // funilContato: "Criar" grava o contato com a origem do Assistente.
+    const contactAsked = await askChat(contents, 'Crie o contato de teste')
+    const contactCard = lastCard('contato-criar')
+    const contactShown = await waitFor(contents, `${contactCard}?.dataset.chatActionStatus === 'proposed'`, 8000)
+    await evaluate(contents, `${contactCard}?.querySelector('[data-action="chat-action-funil-contato"]')?.click(), true`)
+    const contactDone = await waitFor(contents, `${contactCard}?.dataset.chatActionStatus === 'done'`, 8000)
+    const paulo = saved().contatos.find((item) => item.emails.includes('paulo.siqueira@cliente.example'))
+    criados.contato = paulo?.id ?? null
+    checks['funilContato'] = {
+      ok: contactAsked.done && contactShown && contactDone && paulo?.origem === 'assistente' && paulo.nome === 'Paulo Siqueira',
+      detail: `resposta=${contactAsked.done}; cartão=${contactShown}; criado=${contactDone} ${paulo ? `${paulo.id} "${paulo.nome}" origem ${paulo.origem}` : 'ausente'}`,
+    }
+
+    // funilAbrir (R20): o "Abrir" com `tela: 'oportunidade'` leva ao detalhe dela.
+    const openAsked = await askChat(contents, 'Abra a oportunidade op-portal')
+    const openCard = lastCard('abrir')
+    const openLabel = await evaluate<string>(contents, `${openCard}?.textContent ?? ''`)
+    await evaluate(contents, `${openCard}?.querySelector('[data-action="chat-action-open"]')?.click(), true`)
+    const opened = await waitFor(contents, `${routeIs('funil')} && document.querySelector('[data-funil-oportunidade="op-portal"]')`, 8000)
+    // O roteador é de memória: o caminho sai do `LocationContext` do React, como o `funilRouterPush` acha o navegador.
+    const path = await evaluate<string>(
+      contents,
+      `(() => {
+        const main = document.querySelector('main[data-route]')
+        const key = main && Object.keys(main).find((name) => name.startsWith('__reactFiber$'))
+        for (let fiber = key ? main[key] : null; fiber; fiber = fiber.return) {
+          const location = fiber.memoizedProps?.value?.location
+          if (location && typeof location.pathname === 'string') return location.pathname
+        }
+        return ''
+      })()`,
+    )
+    checks['funilAbrir'] = {
+      ok: openAsked.done && openLabel === 'Abrir «Portal do associado»' && opened && path === '/funil/oportunidades/op-portal',
+      detail: `resposta=${openAsked.done}; botão "${openLabel}"; detalhe aberto=${opened}; caminho "${path}"`,
+    }
+
+    // agenteFunil (R45): o Switch "Pode ler o funil" vem desligado; ligado, o "Pedir agora" tem o FUNIL.md na pasta;
+    // desligado, não.
+    const NAME = 'Leitor do funil'
+    await clickNav(contents, 'automacoes')
+    await waitFor(contents, routeIs('automacoes'), 8000)
+    // Um bloco anterior pode ter deixado outra aba das Automações aberta.
+    await evaluate(contents, `document.querySelector('[data-automations-tab="agentes"]') || document.querySelector('[data-tab="agentes"]')?.click(), true`)
+    await waitFor(contents, `document.querySelectorAll('[data-agent-card]').length >= 1 && document.querySelector('[data-action="agent-new"]')`, 8000)
+    await clickSelector(contents, '[data-action="agent-new"]')
+    await waitFor(contents, `document.querySelector('[data-agent-form] #agent-name')`)
+    const agentOff = await evaluate<string | null>(contents, `document.querySelector('[data-agent-funil] [role="switch"]')?.getAttribute('aria-checked') ?? null`)
+    await setValue(contents, '#agent-name', NAME)
+    await setValue(contents, '#agent-instructions', 'Responda o que está na pasta.')
+    await clickSelector(contents, '[data-agent-funil] [role="switch"]')
+    const agentOn = await waitFor(contents, `document.querySelector('[data-agent-funil] [role="switch"]')?.getAttribute('aria-checked') === 'true'`)
+    await clickSelector(contents, '[data-action="agent-save"]')
+    await waitFor(contents, `document.querySelector('[data-agent-name="${NAME}"]')`, 8000)
+    const agentsFile = (): { agents: (Record<string, unknown> & { id: string; name: string; funil?: boolean })[] } => JSON.parse(readFileSync(join(ctx.userDataDir, AGENTS_FILE), 'utf8')) as { agents: (Record<string, unknown> & { id: string; name: string; funil?: boolean })[] }
+    const agent = agentsFile().agents.find((item) => item.name === NAME)
+    criados.agente = agent?.id ?? null
+    const askNow = async (): Promise<{ answered: boolean; text: string }> => {
+      const before = new Set(readRunFiles(ctx.userDataDir).map((run) => run.id))
+      await setValue(contents, '#ask-now-agent', agent?.id ?? '', 'change')
+      await setValue(contents, '#ask-now-text', 'Quais arquivos estão na pasta?')
+      await clickSelector(contents, '[data-action="ask-now"]')
+      const answered = await waitFor(contents, `document.querySelector('[data-ask-now] [data-run-state="ok"] [data-chat-footer]')`, 30_000)
+      const run = readRunFiles(ctx.userDataDir).find((item) => item.trigger === 'ask' && !before.has(item.id))
+      await clickSelector(contents, '[data-action="ask-now-close"]')
+      await waitFor(contents, `!document.querySelector('[data-ask-now] [data-run-answer]')`)
+      return { answered, text: run?.answer?.text ?? '' }
+    }
+    const withFunil = await askNow()
+    const { createdAt: _createdAt, updatedAt: _updatedAt, ...input } = agent ?? ({ id: '', name: '' } as Record<string, unknown>)
+    const off = await api<{ ok: boolean }>('scribe:agents-save', { ...input, funil: false })
+    const withoutFunil = await askNow()
+    checks['agenteFunil'] = {
+      ok: agentOff === 'false' && agentOn && agent?.funil === true && withFunil.answered && withFunil.text.includes('FUNIL.md') && off.ok && withoutFunil.answered && withoutFunil.text.startsWith('Arquivos na pasta:') && !withoutFunil.text.includes('FUNIL.md'),
+      detail: `desligado no novo=${agentOff}; ligado=${agentOn}, agents.json funil=${String(agent?.funil)}; com o funil=${withFunil.answered} "${withFunil.text.slice(0, 200)}"; desligado=${off.ok}, sem o funil=${withoutFunil.answered} "${withoutFunil.text.slice(0, 200)}"`,
+    }
+  } finally {
+    // op-vistoria de volta à Proposta; a oportunidade, o contato e o agente criados aqui saem.
+    await api('scribe:funil-oportunidade-move', { id: 'op-vistoria', etapaId: etapas.proposta, ordem: 0 }).catch(() => undefined)
+    if (criados.oportunidade) await api('scribe:funil-oportunidade-delete', { id: criados.oportunidade }).catch(() => undefined)
+    if (criados.contato) await api('scribe:funil-contato-archive', { id: criados.contato }).catch(() => undefined)
+    if (criados.agente) await api('scribe:agents-delete', { id: criados.agente }).catch(() => undefined)
+    await evaluate(contents, `window.__scribeApi.invoke('scribe:settings-update', { claudeTransport: '${transportBefore}' }).then(() => true)`)
+    if (themeBefore !== 'system') await evaluate(contents, `window.__scribeApi.invoke('scribe:settings-update', { theme: '${themeBefore}' }).then(() => true)`)
+    nativeTheme.themeSource = 'system'
+    win.destroy()
+    console.log(`funil: assistente e agentes em ${((Date.now() - startedAt) / 1000).toFixed(1)} s`)
+  }
+}
+
+/**
  * Contrato 55 (CA26), numa janela que troca de tema no lugar (cada print em claro e escuro, no mesmo estado): a árvore
  * de pastas do servidor falso na ordem D1, com a contagem; ⌘ clique em 3 mensagens ("3 selecionadas" e o resumo), o
  * alvo de arrastar, o "Mover para…" por ⇧⌘M com Enter levando as 3 para "Arquivo"; arrastar uma para "Pendentes"; o erro
@@ -14729,6 +14974,11 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
     // Contatos e Empresas e antes do bloqueio (o email e o WhatsApp falsos ainda conectados).
     await funilTelasExistentesChecks(ctx, watch, funil, screenshots)
 
+    // Contrato 117: o funil no Assistente (a fonte, os cartões e o "Abrir") e o agente com "Pode ler o funil", com o agente
+    // ACP falso, logo depois das telas existentes e antes do bloqueio (que recusa o canal novo junto com os outros cartões).
+    // Termina com op-vistoria de volta à Proposta e sem a oportunidade, o contato e o agente que criou.
+    await funilAssistenteChecks(ctx, watch, funil, screenshots)
+
     // Contrato 22: bloqueio do app, por último (a senha criada vale para o userData inteiro).
     await lockChecks(ctx, watch, lock, screenshots)
 
@@ -14842,6 +15092,10 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
   for (const name of ['funilDetail', 'funilReuniaoApagada', 'funilEtapaSelect', 'funilNota', 'funilCompose', 'funilWhatsAppOculto', 'funilArquivar']) {
     if (!funil[name]) failures.push(`funil ${name}: não executado`)
   }
+  // Contrato 117: o funil no Assistente e o agente com "Pode ler o funil".
+  for (const name of ['funilFonteDesligada', 'funilFonte', 'funilMover', 'funilMoverInexistente', 'funilCriar', 'funilContato', 'funilAbrir', 'agenteFunil']) {
+    if (!funil[name]) failures.push(`funil ${name}: não executado`)
+  }
   for (const [name, check] of Object.entries(invite)) if (!check.ok) failures.push(`convites ${name}: ${check.detail}`)
   for (const name of ['convite-1', 'convite-2', 'convite-3', 'convite-4', 'convite-5', 'convite-6', 'convite-7', 'convite-8', 'convite-9', 'convite-10', 'convite-11', 'convite-estados', 'convite-lista', 'convite-configuracoes', 'convite-regra-1', 'convite-regra-2', 'convite-regra-3', 'convite-sugestao-4', 'convite-sugestao-5']) if (!invite[name]) failures.push(`convites ${name}: não executado`)
   for (const [name, check] of Object.entries(lock)) if (!check.ok) failures.push(`bloqueio ${name}: ${check.detail}`)
@@ -14889,7 +15143,8 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
   // Contrato 114: +10 (Contatos, Empresas, Novo contato, Sugestões e a importação, nos dois temas).
   // Contrato 116: +6 (o cartão "Oportunidade detectada" no Resumo, o "+ Contato" na leitura do email e o bloco Contato nos
   // Detalhes do WhatsApp, nos dois temas).
-  const expectedShots = SCREENS.length * THEMES.length + 203
+  // Contrato 117: +2 (o cartão "Mover" do funil no Assistente, com a fonte Funil ligada no Contexto, nos dois temas).
+  const expectedShots = SCREENS.length * THEMES.length + 205
   if (screenshots.length !== expectedShots) failures.push(`${screenshots.length} PNGs em vez de ${expectedShots}`)
   for (const shot of screenshots) {
     if (shot.name === MEETING_PROMPT_SHOT) {

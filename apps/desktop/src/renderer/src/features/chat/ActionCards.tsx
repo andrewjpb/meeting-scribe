@@ -11,6 +11,8 @@
 // cartão) e os cartões de alterar e apagar um lembrete, cada um pelo seu canal no main.
 // Contrato 76: o rascunho para o Instagram ("Criar rascunho" põe o rascunho na fila da conta e o main abre o editor em
 // Redes; nada é publicado daqui).
+// Contrato 117: os cartões do funil de vendas (mover, criar oportunidade, próximo passo e contato), cada um gravando pelo
+// `scribe:chat-action-funil` só no clique, e o "Abrir" para o funil, uma oportunidade e um contato.
 import {
   ArrowRight,
   Bell,
@@ -23,19 +25,22 @@ import {
   Clock,
   ExternalLink,
   FilePlus,
+  Flag,
   Globe,
   ListChecks,
   Mail,
   MapPin,
   MessageSquare,
   Pencil,
+  Plus,
   RotateCcw,
   Send,
   Settings,
   Trash2,
+  UserPlus,
   X,
 } from 'lucide-react'
-import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent } from 'react'
+import { useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent } from 'react'
 import { useNavigate } from 'react-router'
 import {
   emailSentText,
@@ -43,6 +48,7 @@ import {
   EVENT_NOTES_MAX,
   EVENT_TITLE_MAX,
   eventWhen,
+  FUNIL_CARD_PASSO_MAX,
   reminderTitle,
   reminderWhen,
   REMINDER_TEXT_MAX,
@@ -51,7 +57,14 @@ import {
   type ChatActionCalendar,
   type ChatActionEvent,
   type ChatActionEventFields,
+  type ChatActionContatoCriar,
+  type ChatActionFunil,
+  type ChatActionFunilContato,
   type ChatActionInstagramDraft,
+  type ChatActionOportunidadeCampos,
+  type ChatActionOportunidadeCriar,
+  type ChatActionOportunidadeMover,
+  type ChatActionOportunidadeProximoPasso,
   type ChatActionRef,
   type ChatActionReminderDelete,
   type ChatActionReminderEdit,
@@ -65,14 +78,19 @@ import {
 } from '@shared/assistant'
 import { EMAIL_TEXT_MAX } from '@shared/email'
 import { describeSchedule, TASK_TIMEOUT_DEFAULT_S } from '@shared/automations'
-import { emailPath, meetingPath, redesPath, ROUTE_PATHS, settingsPath, isSettingsTab, type EmailNavigationState, type WhatsAppNavigationState } from '@shared/routes'
+import { formatarBRL } from '@shared/funil-logic'
+import { emailPath, funilPath, meetingPath, redesPath, ROUTE_PATHS, settingsPath, isSettingsTab, type EmailNavigationState, type WhatsAppNavigationState } from '@shared/routes'
 import { CAPTION_MAX, captionStats } from '@shared/redes-rules'
 import { WHATSAPP_SEND_TEXT_MAX } from '@shared/whatsapp'
 import { Button } from '../../design/Button'
+import { CONTROL_CLASS } from '../../design/Field'
 import { Icon } from '../../design/Icon'
 import { Note } from '../../design/Note'
 import { useAutomations, type AutomationsTab } from '../agents/automationsStore'
 import { emailTimeLabel, sendErrorText } from '../email/format'
+import { chaveBusca, diaCurto, parseValor, telefoneLegivel, valorParaEdicao, type PickerItem } from '../funil/funilFormat'
+import { useFunilView } from '../funil/funilStore'
+import { SearchPicker } from '../funil/SearchPicker'
 import { MENU_ITEM, useInlineMenu } from '../meetings/menu'
 import { InstagramGlyph } from '../redes/InstagramGlyph'
 import { scheduleWhen } from '../redes/redesFormat'
@@ -380,6 +398,16 @@ function OpenCard({ action }: { action: OpenAction }) {
       case 'automacoes':
         if (action.target) useAutomations.getState().setTab(action.target as AutomationsTab)
         void navigate(ROUTE_PATHS.automacoes)
+        return
+      // Contrato 117 (R20).
+      case 'funil':
+        void navigate(funilPath('oportunidades'))
+        return
+      case 'oportunidade':
+        void navigate(action.target ? funilPath('oportunidades', action.target) : funilPath('oportunidades'))
+        return
+      case 'contato':
+        void navigate(action.target ? funilPath('contatos', action.target) : funilPath('contatos'))
     }
   }
   return (
@@ -1313,6 +1341,339 @@ function InstagramDraftCard({ action, actionRef }: { action: ChatActionInstagram
   )
 }
 
+// --- Contrato 117: o funil de vendas ----------------------------------------------------------------------------
+
+const FUNIL_CARD_ERRORS: Record<string, string> = {
+  done: 'Este cartão já foi usado.',
+  missing: 'Esta conversa não existe mais.',
+  invalid: 'Não foi possível concluir. Tente de novo.',
+}
+/** Só no cartão de criar oportunidade o `invalid` vem dos campos editados. */
+const FUNIL_CRIAR_INVALID = 'Confira o título, a etapa e o valor.'
+const funilFailure = (error: string, invalid?: string): string => (error === 'invalid' && invalid ? invalid : (FUNIL_CARD_ERRORS[error] ?? FUNIL_CARD_ERRORS['invalid'] ?? ''))
+const FUNIL_LABEL = 'text-13 text-text-muted'
+const FUNIL_CONTROL = `${CONTROL_CLASS} w-full min-w-0 px-2.5 select-text`
+
+/** "28/02" de `AAAA-MM-DD` (o ano só quando não é o deste ano). */
+function funilDia(dia: string): string {
+  return dia.slice(0, 4) === String(new Date().getFullYear()) ? diaCurto(dia) : `${diaCurto(dia)}/${dia.slice(0, 4)}`
+}
+
+/** O link do resultado (`done`): a oportunidade ou o contato no funil. */
+function FunilOpenLink({ to, children }: { to: string; children: string }) {
+  const navigate = useNavigate()
+  return (
+    <button type="button" data-action="chat-action-funil-open" data-chat-funil-open={to} onClick={() => void navigate(to)} className="text-12 text-accent underline decoration-1 underline-offset-3 hover:text-title">
+      {children}
+    </button>
+  )
+}
+
+/** O que vem depois do clique: o resultado com o link, ou o erro (o cartão `failed`). */
+function FunilOutcome({ action, link }: { action: ChatActionFunil; link: { to: string; label: string } | null }) {
+  if (action.status === 'failed') return action.error ? <CardError text={action.error} /> : null
+  return (
+    <div className="flex flex-wrap items-center gap-3">
+      <Outcome action={action} />
+      {action.status === 'done' && link && <FunilOpenLink to={link.to}>{link.label}</FunilOpenLink>}
+    </div>
+  )
+}
+
+/** O erro do clique que não chegou a gravar (cartão já usado, campo fora do formato). */
+function FunilFailure({ text }: { text: string | null }) {
+  if (!text) return null
+  return (
+    <p role="alert" data-chat-action-failure className="text-12 text-rec">
+      {text}
+    </p>
+  )
+}
+
+/** Clique num cartão do funil, com o erro do canal no próprio cartão. */
+function useFunilClick(actionRef: ChatActionRef, invalid?: string): { busy: boolean; failure: string | null; setFailure: (text: string | null) => void; run: (campos?: ChatActionOportunidadeCampos) => Promise<void> } {
+  const [busy, setBusy] = useState(false)
+  const [failure, setFailure] = useState<string | null>(null)
+  const run = async (campos?: ChatActionOportunidadeCampos): Promise<void> => {
+    if (busy) return
+    setBusy(true)
+    setFailure(null)
+    const result = await useChat.getState().funilAction(actionRef, campos)
+    setBusy(false)
+    if (!result.ok) setFailure(funilFailure(result.error, invalid))
+  }
+  return { busy, failure, setFailure, run }
+}
+
+/** Contrato 117 (R43, artboard 10): "Mover <título> de <etapa> para <etapa>", com a nota; "Mover" grava pelo funil. */
+function OportunidadeMoverCard({ action, actionRef }: { action: ChatActionOportunidadeMover; actionRef: ChatActionRef }) {
+  const { busy, failure, run } = useFunilClick(actionRef)
+  const proposed = action.status === 'proposed'
+  return (
+    <div data-chat-action="oportunidade-mover" data-chat-action-status={action.status} className={CARD}>
+      <p className="flex items-start gap-2 text-13 font-medium text-title">
+        <Icon icon={ArrowRight} size={14} className="mt-0.5 shrink-0 text-text-muted" />
+        {action.titulo && action.de ? (
+          <span data-chat-action-title>
+            Mover <strong className="font-bold">{action.titulo}</strong> de {action.de} para {action.para}
+          </span>
+        ) : (
+          <span data-chat-action-title>Mover oportunidade para {action.para}</span>
+        )}
+      </p>
+      {action.nota && (
+        <p data-chat-funil-nota className="pl-[22px] text-13 text-text-muted">
+          Nota: {action.nota}
+        </p>
+      )}
+      {proposed ? (
+        <div className="flex flex-wrap items-center gap-2 pl-[22px]">
+          <Button action="chat-action-funil-mover" icon={ArrowRight} onClick={() => void run()} disabled={busy}>
+            {busy ? 'Movendo…' : 'Mover'}
+          </Button>
+          <DismissButton actionRef={actionRef} disabled={busy} />
+        </div>
+      ) : (
+        <FunilOutcome action={action} link={{ to: funilPath('oportunidades', action.oportunidadeId), label: 'Abrir a oportunidade' }} />
+      )}
+      <FunilFailure text={failure} />
+    </div>
+  )
+}
+
+/** O formulário do cartão de criar oportunidade (o valor como a pessoa digita). */
+interface CriarForm {
+  titulo: string
+  empresa: PickerItem | null
+  etapaId: string
+  valor: string
+  contatos: PickerItem[]
+  previsao: string
+  passo: string
+  passoData: string
+}
+
+/**
+ * Contrato 117 (R43, artboard 10): criar uma oportunidade, com os campos editáveis antes do clique (como o `EventCard`):
+ * Título, Etapa, Empresa e Contatos pelo `SearchPicker` (D21), Valor em reais, Previsão e Próximo passo. "Criar" manda o
+ * que mudou; o main confere de novo e grava pelo serviço do funil.
+ */
+function OportunidadeCriarCard({ action, actionRef }: { action: ChatActionOportunidadeCriar; actionRef: ChatActionRef }) {
+  const ids = useId()
+  const view = useFunilView()
+  const { busy, failure, setFailure, run } = useFunilClick(actionRef, FUNIL_CRIAR_INVALID)
+  const empresaInicial = (): PickerItem | null => {
+    if (!action.empresa) return null
+    const chave = chaveBusca(action.empresa)
+    const achada = view?.state.empresas.find((item) => chaveBusca(item.nome) === chave)
+    return achada ? { id: achada.id, nome: achada.nome } : { id: 'nova', nome: action.empresa, novo: true }
+  }
+  const contatoItem = (contato: ChatActionFunilContato, index: number): PickerItem =>
+    contato.contatoId ? { id: contato.contatoId, nome: contato.nome, detalhe: contato.email ?? undefined } : { id: `novo-${index}`, nome: contato.nome, detalhe: contato.email ?? undefined, novo: true }
+  const [form, setForm] = useState<CriarForm>(() => ({
+    titulo: action.titulo,
+    empresa: empresaInicial(),
+    etapaId: action.etapaId,
+    valor: valorParaEdicao(action.valor),
+    contatos: action.contatos.map(contatoItem),
+    previsao: action.previsao ?? '',
+    passo: action.proximoPasso?.texto ?? '',
+    passoData: action.proximoPasso?.data ?? '',
+  }))
+  const [edited, setEdited] = useState(false)
+  const change = (patch: Partial<CriarForm>): void => {
+    setForm((current) => ({ ...current, ...patch }))
+    setEdited(true)
+  }
+  const proposed = action.status === 'proposed'
+  const empresas: PickerItem[] = view?.state.empresas.map((item) => ({ id: item.id, nome: item.nome, detalhe: item.dominios[0] })) ?? []
+  const pessoas: PickerItem[] = view?.state.contatos.filter((contato) => !contato.arquivado).map((contato) => ({ id: contato.id, nome: contato.nome, detalhe: contato.emails[0] })) ?? []
+
+  const create = async (): Promise<void> => {
+    if (!edited) return run()
+    const valor = form.valor.trim() ? parseValor(form.valor) : null
+    if (form.valor.trim() && valor === null) {
+      setFailure('Valor fora do formato. Use, por exemplo, 1.234,56.')
+      return
+    }
+    // Os contatos novos do cartão voltam como vieram; os escolhidos na lista, com o e-mail do funil.
+    const contatos: ChatActionFunilContato[] = form.contatos.map((item) => {
+      const original = item.novo ? action.contatos[Number(item.id.slice('novo-'.length))] : undefined
+      if (original) return original
+      const contato = view?.state.contatos.find((known) => known.id === item.id)
+      return { nome: item.nome, email: contato?.emails[0] ?? null, contatoId: item.id }
+    })
+    await run({
+      titulo: form.titulo,
+      empresa: form.empresa?.nome ?? null,
+      etapaId: form.etapaId,
+      valor,
+      contatos,
+      previsao: form.previsao || null,
+      proximoPasso: form.passo.trim() ? { texto: form.passo, data: form.passoData || null } : null,
+    })
+  }
+
+  const etapaNome = action.etapas.find((etapa) => etapa.id === action.etapaId)?.nome ?? ''
+  return (
+    <div data-chat-action="oportunidade-criar" data-chat-action-status={action.status} className={CARD}>
+      <p className="flex items-start gap-2 text-13 font-medium text-title">
+        <Icon icon={Plus} size={14} className="mt-0.5 shrink-0 text-text-muted" />
+        <span data-chat-action-title>Criar oportunidade</span>
+      </p>
+      {proposed ? (
+        <div className="grid grid-cols-[auto_minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-x-3 gap-y-2 pl-[22px]">
+          <label htmlFor={`${ids}-titulo`} className={FUNIL_LABEL}>
+            Título
+          </label>
+          <input id={`${ids}-titulo`} type="text" data-chat-funil-field="titulo" value={form.titulo} maxLength={200} onChange={(event) => change({ titulo: event.target.value })} className={FUNIL_CONTROL} />
+          <label htmlFor={`${ids}-etapa`} className={FUNIL_LABEL}>
+            Etapa
+          </label>
+          <select id={`${ids}-etapa`} data-chat-funil-field="etapa" value={form.etapaId} onChange={(event) => change({ etapaId: event.target.value })} className={FUNIL_CONTROL}>
+            {action.etapas.map((etapa) => (
+              <option key={etapa.id} value={etapa.id}>
+                {etapa.nome}
+              </option>
+            ))}
+          </select>
+          <label htmlFor={`${ids}-empresa`} className={FUNIL_LABEL}>
+            Empresa
+          </label>
+          <SearchPicker
+            nome="chat-empresa"
+            id={`${ids}-empresa`}
+            label="Empresa"
+            placeholder="Escolher ou criar…"
+            itens={empresas}
+            valor={form.empresa}
+            onChange={(empresa) => change({ empresa })}
+            onCriar={(nome) => change({ empresa: { id: 'nova', nome, novo: true } })}
+          />
+          <label htmlFor={`${ids}-valor`} className={FUNIL_LABEL}>
+            Valor (R$)
+          </label>
+          <input id={`${ids}-valor`} type="text" data-chat-funil-field="valor" value={form.valor} maxLength={20} onChange={(event) => change({ valor: event.target.value })} className={FUNIL_CONTROL} />
+          <label htmlFor={`${ids}-contatos`} className={FUNIL_LABEL}>
+            Contatos
+          </label>
+          <SearchPicker multiplo nome="chat-contatos" id={`${ids}-contatos`} label="Contatos" placeholder="Buscar" itens={pessoas} valor={form.contatos} onChange={(contatos) => change({ contatos })} />
+          <label htmlFor={`${ids}-previsao`} className={FUNIL_LABEL}>
+            Previsão
+          </label>
+          <input id={`${ids}-previsao`} type="date" data-chat-funil-field="previsao" value={form.previsao} onChange={(event) => change({ previsao: event.target.value })} className={FUNIL_CONTROL} />
+          <label htmlFor={`${ids}-passo`} className={FUNIL_LABEL}>
+            Próximo passo
+          </label>
+          <div className="col-span-3 flex gap-2">
+            <input id={`${ids}-passo`} type="text" data-chat-funil-field="passo" value={form.passo} maxLength={FUNIL_CARD_PASSO_MAX} onChange={(event) => change({ passo: event.target.value })} className={`${FUNIL_CONTROL} flex-1`} />
+            <input type="date" aria-label="Data do próximo passo" data-chat-funil-field="passoData" value={form.passoData} onChange={(event) => change({ passoData: event.target.value })} className={`${CONTROL_CLASS} w-40 shrink-0 px-2.5 select-text`} />
+          </div>
+        </div>
+      ) : (
+        <p data-chat-funil-resumo className="pl-[22px] text-13 text-text-muted">
+          {[action.titulo, etapaNome, action.empresa, action.valor === null ? null : formatarBRL(action.valor)].filter(Boolean).join(' · ')}
+        </p>
+      )}
+      {proposed ? (
+        <div className="flex flex-wrap items-center gap-2 pl-[22px]">
+          <Button action="chat-action-funil-criar" icon={Plus} onClick={() => void create()} disabled={busy || !form.titulo.trim() || !form.etapaId}>
+            {busy ? 'Criando…' : 'Criar'}
+          </Button>
+          <DismissButton actionRef={actionRef} disabled={busy} />
+        </div>
+      ) : (
+        <FunilOutcome action={action} link={action.oportunidadeId ? { to: funilPath('oportunidades', action.oportunidadeId), label: 'Abrir a oportunidade' } : null} />
+      )}
+      <FunilFailure text={failure} />
+    </div>
+  )
+}
+
+/** Contrato 117 (R43): "Próximo passo de <título>", com o de antes → o novo; "Salvar" grava pelo funil. */
+function ProximoPassoCard({ action, actionRef }: { action: ChatActionOportunidadeProximoPasso; actionRef: ChatActionRef }) {
+  const { busy, failure, run } = useFunilClick(actionRef)
+  const proposed = action.status === 'proposed'
+  const passo = (texto: string, data: string | null): string => (data ? `${texto} · ${funilDia(data)}` : texto)
+  return (
+    <div data-chat-action="oportunidade-proximo-passo" data-chat-action-status={action.status} className={CARD}>
+      <p className="flex items-start gap-2 text-13 font-medium text-title">
+        <Icon icon={Flag} size={14} className="mt-0.5 shrink-0 text-text-muted" />
+        {action.titulo ? (
+          <span data-chat-action-title>
+            Próximo passo de <strong className="font-bold">{action.titulo}</strong>
+          </span>
+        ) : (
+          <span data-chat-action-title>Próximo passo</span>
+        )}
+      </p>
+      {action.titulo && (
+        <span data-chat-funil-passo className="flex flex-wrap items-center gap-2 pl-[22px] text-13">
+          <span className="text-text-muted">{action.anterior ? passo(action.anterior.texto, action.anterior.data) : 'Sem próximo passo'}</span>
+          <Icon icon={ArrowRight} size={14} className="shrink-0 text-text-faint" />
+          <span className={proposed ? 'font-medium text-title' : 'text-text-muted'}>{passo(action.texto, action.data)}</span>
+        </span>
+      )}
+      {proposed ? (
+        <div className="flex flex-wrap items-center gap-2 pl-[22px]">
+          <Button action="chat-action-funil-passo" icon={Check} onClick={() => void run()} disabled={busy}>
+            Salvar
+          </Button>
+          <DismissButton actionRef={actionRef} disabled={busy} />
+        </div>
+      ) : (
+        <FunilOutcome action={action} link={{ to: funilPath('oportunidades', action.oportunidadeId), label: 'Abrir a oportunidade' }} />
+      )}
+      <FunilFailure text={failure} />
+    </div>
+  )
+}
+
+/**
+ * Contrato 117 (R43): criar um contato no funil (nome, e-mail, telefone, empresa, cargo). Com o e-mail ou o telefone de um
+ * contato que já existe, "Completa o contato <nome>": o clique junta os dados nele (R4) em vez de repetir.
+ */
+function ContatoCriarCard({ action, actionRef }: { action: ChatActionContatoCriar; actionRef: ChatActionRef }) {
+  const { busy, failure, run } = useFunilClick(actionRef)
+  const proposed = action.status === 'proposed'
+  const linhas = [action.email, action.telefone ? telefoneLegivel(action.telefone) : null, [action.empresa, action.cargo].filter(Boolean).join(' · ') || null].filter((item): item is string => Boolean(item))
+  return (
+    <div data-chat-action="contato-criar" data-chat-action-status={action.status} className={CARD}>
+      <p className="flex items-start gap-2 text-13 font-medium text-title">
+        <Icon icon={UserPlus} size={14} className="mt-0.5 shrink-0 text-text-muted" />
+        <span data-chat-action-title>
+          Criar contato <strong className="font-bold">{action.nome}</strong>
+        </span>
+      </p>
+      {linhas.length > 0 && (
+        <div data-chat-funil-contato className="flex flex-col gap-0.5 pl-[22px]">
+          {linhas.map((linha) => (
+            <span key={linha} className={`text-13 ${proposed ? 'text-text' : 'text-text-muted'}`}>
+              {linha}
+            </span>
+          ))}
+        </div>
+      )}
+      {proposed && action.existenteId && action.existenteNome && (
+        <p data-chat-funil-existente className="pl-[22px] text-12 text-text-muted">
+          Completa o contato {action.existenteNome}
+        </p>
+      )}
+      {proposed ? (
+        <div className="flex flex-wrap items-center gap-2 pl-[22px]">
+          <Button action="chat-action-funil-contato" icon={UserPlus} onClick={() => void run()} disabled={busy}>
+            {busy ? 'Criando…' : 'Criar'}
+          </Button>
+          <DismissButton actionRef={actionRef} disabled={busy} />
+        </div>
+      ) : (
+        <FunilOutcome action={action} link={action.contatoId ? { to: funilPath('contatos', action.contatoId), label: 'Abrir o contato' } : null} />
+      )}
+      <FunilFailure text={failure} />
+    </div>
+  )
+}
+
 /** O cartão de uma ação, pelo tipo. */
 function ActionCard({ action, actionRef, choice }: { action: ChatAction; actionRef: ChatActionRef; choice: boolean }) {
   if (action.kind === 'lembrete') return <ReminderCard action={action} actionRef={actionRef} />
@@ -1328,6 +1689,11 @@ function ActionCard({ action, actionRef, choice }: { action: ChatAction; actionR
   if (action.kind === 'lembrete-apagar') return <ReminderDeleteCard action={action} actionRef={actionRef} />
   // Contrato 76.
   if (action.kind === 'instagram-rascunho') return <InstagramDraftCard action={action} actionRef={actionRef} />
+  // Contrato 117.
+  if (action.kind === 'oportunidade-mover') return <OportunidadeMoverCard action={action} actionRef={actionRef} />
+  if (action.kind === 'oportunidade-criar') return <OportunidadeCriarCard action={action} actionRef={actionRef} />
+  if (action.kind === 'oportunidade-proximo-passo') return <ProximoPassoCard action={action} actionRef={actionRef} />
+  if (action.kind === 'contato-criar') return <ContatoCriarCard action={action} actionRef={actionRef} />
   return <OpenCard action={action} />
 }
 

@@ -17,6 +17,8 @@
 // Contrato 76: o rascunho para o Instagram. A conta é resolvida entre as conectadas (a única, ou a nomeada pelo @); o clique
 // em "Criar rascunho" só põe o rascunho, sem mídia, na fila da conta (pela função injetada, que usa o `savePublication`
 // das redes): nada daqui importa o serviço das redes, publica ou agenda.
+// Contrato 117: os cartões do funil de vendas. Oportunidade, etapa e contato são resolvidos pelo funil do app (o id que
+// não existe e a etapa que não bate viram cartão `failed` com a razão); o clique grava só pelo serviço do funil (110).
 import { randomUUID } from 'node:crypto'
 import { z } from 'zod'
 import {
@@ -33,6 +35,18 @@ import {
   EVENT_TITLE_MAX,
   eventAlreadyText,
   eventCreatedText,
+  FUNIL_ACTION_KINDS,
+  FUNIL_CARD_CONTATOS_MAX,
+  FUNIL_CARD_NOTA_MAX,
+  FUNIL_CARD_PASSO_MAX,
+  FUNIL_CONTATO_COMPLETADO_TEXT,
+  FUNIL_CONTATO_CRIADO_TEXT,
+  FUNIL_CONTATO_SEM_CANAL,
+  FUNIL_ETAPA_NAO_ENCONTRADA,
+  FUNIL_OPORTUNIDADE_CRIADA_TEXT,
+  FUNIL_OPORTUNIDADE_NAO_ENCONTRADA,
+  FUNIL_PASSO_SALVO_TEXT,
+  funilMovidaText,
   INSTAGRAM_DRAFT_CAPTION_MAX,
   INSTAGRAM_DRAFT_CREATED_TEXT,
   openLabel,
@@ -49,6 +63,9 @@ import {
   type ChatAction,
   type ChatActionCalendar,
   type ChatActionEvent,
+  type ChatActionFunil,
+  type ChatActionFunilContato,
+  type ChatActionOportunidadeCriar,
   type ChatActionResult,
   type ChatCalendarAccess,
   type EmailCardItem,
@@ -59,11 +76,14 @@ import { EMAIL_REF_PATTERN, EMAIL_TEXT_MAX, isSent, prefixedSubject, type EmailA
 import { describeSchedule, TASK_MESSAGE_MAX, TASK_NAME_MAX, wallTime, zonedInstant, type ScheduledTask, type TaskReminder, type TaskSaveResult } from '../../shared/automations'
 import { automationIdSchema, scheduleSchema } from '../../shared/automations-schema'
 import type { Chat, ChatMessage } from '../../shared/chat'
+import { FUNIL_ETAPA_NOME_MAX, FUNIL_NOME_MAX, type Etapa, type FunilActionResult, type FunilState, type FunilView, type Oportunidade } from '../../shared/funil'
+import { mesmoTelefone, normalizarEmail, normalizarTelefone, semAcento } from '../../shared/funil-logic'
 import { SETTINGS_TABS } from '../../shared/routes'
 import { WHATSAPP_CHAT_ID_PATTERN, WHATSAPP_SEND_TEXT_MAX, type WhatsAppChatKind } from '../../shared/whatsapp'
 import { normalizeWhen } from '../invites/map'
 import type { MacCalendar } from '../mac-calendar/process'
 import type { MacCalendarCreateArgs, MacCalendarError } from '../mac-calendar/protocol'
+import type { FunilService } from '../funil/service'
 import type { AutomationsService } from '../schedules/service'
 import type { ChatEventsStore } from './events-store'
 import { calendarIdSchema, CHAT_CALENDARS_MAX, chatIdSchema, type ChatStore } from './store'
@@ -95,6 +115,25 @@ const line = (max: number) =>
 const EVENT_WHEN = /^(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2})(?::(\d{2})(?:\.\d{1,9})?)?(Z|[+-]\d{2}:\d{2})?)?$/
 const eventWhenText = z.string().trim().max(40).regex(EVENT_WHEN)
 
+/** Contrato 117: um dia `AAAA-MM-DD` que existe. */
+const funilDia = z
+  .string()
+  .trim()
+  .regex(/^\d{4}-\d{2}-\d{2}$/)
+  .refine((value) => {
+    const [year = 0, month = 0, day = 0] = value.split('-').map(Number)
+    return month >= 1 && month <= 12 && day >= 1 && day <= new Date(Date.UTC(year, month, 0)).getUTCDate()
+  }, 'dia inválido')
+const funilId = z.string().trim().min(1).max(200)
+/** Texto opcional de uma linha: vazio vale como ausente. */
+const funilOpcional = (max: number) =>
+  z
+    .string()
+    .max(max * 4)
+    .nullable()
+    .optional()
+    .transform((value) => (value ? value.replace(/\s+/g, ' ').trim().slice(0, max).trim() || null : null))
+
 /** O JSON que o Claude escreve, com os nomes do contrato. Campo a mais é ignorado. */
 const proposedSchema = z.discriminatedUnion('tipo', [
   z.object({ tipo: z.literal('lembrete'), quando: zonedIso, texto: line(REMINDER_TEXT_MAX), conversaWhatsApp: whatsappChatId.nullable().optional(), horaPadrao: z.boolean().optional(), email: emailRef.nullable().optional() }),
@@ -124,8 +163,33 @@ const proposedSchema = z.discriminatedUnion('tipo', [
     legenda: z.string().max(INSTAGRAM_DRAFT_CAPTION_MAX),
     quando: zonedIso.nullable().optional(),
   }),
+  // Contrato 117: o funil de vendas. O valor vem em reais; a etapa, pelo nome; o id, copiado do FUNIL.md.
+  z.object({
+    tipo: z.literal('oportunidade-criar'),
+    titulo: line(FUNIL_NOME_MAX),
+    empresa: funilOpcional(FUNIL_NOME_MAX),
+    contatos: z
+      .array(z.object({ nome: line(FUNIL_NOME_MAX), email: z.string().max(320).nullable().optional() }))
+      .max(FUNIL_CARD_CONTATOS_MAX)
+      .optional(),
+    etapa: funilOpcional(FUNIL_ETAPA_NOME_MAX),
+    valor: z.number().min(0).max(1e12).nullable().optional(),
+    previsao: funilDia.nullable().optional(),
+    proximoPasso: z.object({ texto: line(FUNIL_CARD_PASSO_MAX), data: funilDia.nullable().optional() }).nullable().optional(),
+  }),
+  z.object({ tipo: z.literal('oportunidade-mover'), oportunidadeId: funilId, etapa: line(FUNIL_ETAPA_NOME_MAX * 2), nota: funilOpcional(FUNIL_CARD_NOTA_MAX) }),
+  z.object({ tipo: z.literal('oportunidade-proximo-passo'), oportunidadeId: funilId, texto: line(FUNIL_CARD_PASSO_MAX), data: funilDia.nullable().optional() }),
+  z.object({
+    tipo: z.literal('contato-criar'),
+    nome: line(FUNIL_NOME_MAX),
+    email: z.string().max(320).nullable().optional(),
+    telefone: z.string().max(40).nullable().optional(),
+    empresa: funilOpcional(FUNIL_NOME_MAX),
+    cargo: funilOpcional(FUNIL_NOME_MAX),
+  }),
 ])
 type Proposed = z.infer<typeof proposedSchema>
+type FunilProposed = Extract<Proposed, { tipo: ChatActionFunil['kind'] }>
 
 /** O que o main lê do app para montar o cartão. */
 export interface ActionResolver {
@@ -143,6 +207,8 @@ export interface ActionResolver {
   tasks?: () => Promise<readonly ScheduledTask[]>
   /** Contrato 76: as contas do Instagram conectadas (o id e o @), para o cartão do rascunho. */
   instagramAccounts?: () => Promise<readonly InstagramDraftAccount[]>
+  /** Contrato 117: o funil de vendas, só para ler (montar o cartão não grava nada); `null` com o app bloqueado. */
+  funil?: () => Promise<FunilView | null>
   now: () => number
   timeZone: () => string
   newId?: () => string
@@ -171,7 +237,19 @@ async function openTarget(screen: OpenScreen, target: string | null, resolver: A
     if (!target) return { target: null, name: null }
     return (AUTOMATIONS_TABS as readonly string[]).includes(target) ? { target, name: AUTOMATIONS_LABELS[target] ?? target } : null
   }
-  // Reuniões e Gravação não têm alvo.
+  // Contrato 117 (R20): a oportunidade e o contato pelo id do funil (que existe e não está arquivado), com o nome dele.
+  if (screen === 'oportunidade' || screen === 'contato') {
+    if (!target) return null
+    const state = (await resolver.funil?.().catch(() => null))?.state
+    if (!state) return null
+    if (screen === 'oportunidade') {
+      const oportunidade = oportunidadeViva(state, target)
+      return oportunidade ? { target, name: oportunidade.titulo } : null
+    }
+    const contato = state.contatos.find((item) => item.id === target && !item.arquivado)
+    return contato ? { target, name: contato.nome } : null
+  }
+  // Reuniões, Gravação e o Funil não têm alvo.
   return { target: null, name: null }
 }
 
@@ -404,6 +482,155 @@ const pendingReminder = (tasks: readonly ScheduledTask[], id: string): (Schedule
   return task as ScheduledTask & { reminder: TaskReminder; schedule: { kind: 'once'; at: string } }
 }
 
+// --- Contrato 117: o funil de vendas ----------------------------------------------------------------------------
+
+/** O nome de uma etapa comparável: sem acento, sem caixa e com espaços simples. */
+const chaveEtapa = (nome: string): string => semAcento(nome).replace(/\s+/g, ' ').trim().toLocaleLowerCase('pt-BR')
+
+/** As etapas na ordem do quadro. */
+const etapasEmOrdem = (state: FunilState): Etapa[] => [...state.etapas].sort((a, b) => a.ordem - b.ordem)
+
+/** A etapa pelo nome que o modelo escreveu (sem acento e sem caixa), entre as de `etapas`. */
+const etapaPorNome = (etapas: readonly Etapa[], nome: string): Etapa | null => etapas.find((etapa) => chaveEtapa(etapa.nome) === chaveEtapa(nome)) ?? null
+
+/** A oportunidade que o cartão pode mexer: existe e não está arquivada. */
+const oportunidadeViva = (state: FunilState, id: string): Oportunidade | null => state.oportunidades.find((item) => item.id === id && !item.arquivado) ?? null
+
+const cardText = (value: string, max: number): string => value.replace(/\s+/g, ' ').trim().slice(0, max).trim()
+
+/**
+ * Contrato 117: os contatos do cartão de criar oportunidade. O e-mail normalizado (o que não é e-mail fica sem); com o
+ * e-mail de um contato do funil, o id dele. O mesmo e-mail (ou o mesmo contato) não entra duas vezes.
+ */
+function funilContatos(input: readonly { nome: string; email?: string | null | undefined }[], state: FunilState): ChatActionFunilContato[] {
+  const contatos: ChatActionFunilContato[] = []
+  for (const item of input.slice(0, FUNIL_CARD_CONTATOS_MAX)) {
+    const nome = cardText(item.nome, FUNIL_NOME_MAX)
+    if (!nome) continue
+    const email = item.email ? normalizarEmail(item.email) : null
+    const existente = email ? state.contatos.find((contato) => !contato.arquivado && contato.emails.includes(email)) : undefined
+    if (email && contatos.some((known) => known.email === email)) continue
+    if (existente && contatos.some((known) => known.contatoId === existente.id)) continue
+    contatos.push({ nome, email, contatoId: existente?.id ?? null })
+  }
+  return contatos
+}
+
+/** Contrato 117: as outras razões de um cartão de criar oportunidade que não vale (a etapa tem o texto da R42). */
+const FUNIL_CRIAR_INVALIDO: Record<'titulo' | 'valor', string> = {
+  titulo: 'Não foi possível montar a oportunidade: o título está vazio.',
+  valor: 'Não foi possível montar a oportunidade: o valor está fora do formato.',
+}
+
+type CriarDraft = Pick<ChatActionOportunidadeCriar, 'titulo' | 'empresa' | 'contatos' | 'etapaId' | 'valor' | 'previsao' | 'proximoPasso'>
+
+/**
+ * Contrato 117 (R42): o cartão de criar oportunidade, na proposta e de novo no clique (com o que o cartão mudou). A etapa
+ * é uma das abertas do funil agora; o que não vale volta como `error` (o chamador diz qual é a razão).
+ */
+function criarDraft(input: CriarDraft, state: FunilState): CriarDraft | { error: 'titulo' | 'etapa' | 'valor' } {
+  const titulo = cardText(input.titulo, FUNIL_NOME_MAX)
+  if (!titulo) return { error: 'titulo' }
+  const etapa = etapasEmOrdem(state).find((item) => item.id === input.etapaId && item.tipo === 'aberta')
+  if (!etapa) return { error: 'etapa' }
+  if (input.valor !== null && !(Number.isSafeInteger(input.valor) && input.valor >= 0)) return { error: 'valor' }
+  const empresa = input.empresa ? cardText(input.empresa, FUNIL_NOME_MAX) || null : null
+  const passo = input.proximoPasso ? cardText(input.proximoPasso.texto, FUNIL_CARD_PASSO_MAX) : ''
+  return {
+    titulo,
+    empresa,
+    contatos: funilContatos(input.contatos, state),
+    etapaId: etapa.id,
+    valor: input.valor,
+    previsao: input.previsao,
+    proximoPasso: passo ? { texto: passo, data: input.proximoPasso?.data ?? null } : null,
+  }
+}
+
+/** As etapas abertas, como o seletor do cartão mostra. */
+const etapasAbertas = (state: FunilState): { id: string; nome: string }[] => etapasEmOrdem(state).filter((etapa) => etapa.tipo === 'aberta').map((etapa) => ({ id: etapa.id, nome: etapa.nome }))
+
+/**
+ * Contrato 117 (R42): o cartão do funil, com o que o funil do app tem agora. Oportunidade que não existe (ou arquivada) e
+ * etapa que não bate viram o cartão `failed` com a razão; `contato-criar` sem e-mail nem telefone também. Nada é gravado.
+ */
+function resolveFunil(proposed: FunilProposed, base: { id: string; status: 'proposed'; result: null }, state: FunilState): ChatAction {
+  const failed = { status: 'failed' as const }
+  const etapas = etapasEmOrdem(state)
+  switch (proposed.tipo) {
+    case 'oportunidade-criar': {
+      const abertas = etapas.filter((etapa) => etapa.tipo === 'aberta')
+      const etapa = proposed.etapa ? etapaPorNome(abertas, proposed.etapa) : (abertas[0] ?? null)
+      const valor = proposed.valor === null || proposed.valor === undefined ? null : Math.round(proposed.valor * 100)
+      const fields: CriarDraft = {
+        titulo: proposed.titulo,
+        empresa: proposed.empresa,
+        contatos: funilContatos(proposed.contatos ?? [], state),
+        etapaId: etapa?.id ?? '',
+        valor,
+        previsao: proposed.previsao ?? null,
+        proximoPasso: proposed.proximoPasso ? { texto: proposed.proximoPasso.texto, data: proposed.proximoPasso.data ?? null } : null,
+      }
+      const card = { ...base, kind: 'oportunidade-criar' as const, ...fields, etapas: etapasAbertas(state), oportunidadeId: null, error: null }
+      const draft = criarDraft(fields, state)
+      if ('error' in draft) return { ...card, ...failed, error: draft.error === 'etapa' ? FUNIL_ETAPA_NAO_ENCONTRADA : FUNIL_CRIAR_INVALIDO[draft.error] }
+      return { ...card, ...draft }
+    }
+    case 'oportunidade-mover': {
+      const oportunidade = oportunidadeViva(state, proposed.oportunidadeId)
+      const para = etapaPorNome(etapas, proposed.etapa)
+      const card = {
+        ...base,
+        kind: 'oportunidade-mover' as const,
+        oportunidadeId: proposed.oportunidadeId,
+        titulo: oportunidade?.titulo ?? '',
+        de: (oportunidade && etapas.find((etapa) => etapa.id === oportunidade.etapaId)?.nome) ?? '',
+        paraEtapaId: para?.id ?? '',
+        para: para?.nome ?? cardText(proposed.etapa, FUNIL_ETAPA_NOME_MAX),
+        nota: proposed.nota,
+        error: null,
+      }
+      if (!oportunidade) return { ...card, ...failed, error: FUNIL_OPORTUNIDADE_NAO_ENCONTRADA }
+      if (!para) return { ...card, ...failed, error: FUNIL_ETAPA_NAO_ENCONTRADA }
+      return card
+    }
+    case 'oportunidade-proximo-passo': {
+      const oportunidade = oportunidadeViva(state, proposed.oportunidadeId)
+      const card = {
+        ...base,
+        kind: 'oportunidade-proximo-passo' as const,
+        oportunidadeId: proposed.oportunidadeId,
+        titulo: oportunidade?.titulo ?? '',
+        texto: proposed.texto,
+        data: proposed.data ?? null,
+        anterior: oportunidade?.proximoPasso ? { texto: oportunidade.proximoPasso.texto, data: oportunidade.proximoPasso.data } : null,
+        error: null,
+      }
+      return oportunidade ? card : { ...card, ...failed, error: FUNIL_OPORTUNIDADE_NAO_ENCONTRADA }
+    }
+    case 'contato-criar': {
+      const email = proposed.email ? normalizarEmail(proposed.email) : null
+      const telefone = proposed.telefone ? normalizarTelefone(proposed.telefone) : null
+      // R4: o contato com o mesmo e-mail ou telefone (arquivado também: o clique traz de volta) é completado, não repetido.
+      const existente = state.contatos.find((contato) => (email !== null && contato.emails.includes(email)) || (telefone !== null && contato.telefones.some((conhecido) => mesmoTelefone(conhecido, telefone))))
+      const card = {
+        ...base,
+        kind: 'contato-criar' as const,
+        nome: proposed.nome,
+        email,
+        telefone,
+        empresa: proposed.empresa,
+        cargo: proposed.cargo,
+        existenteId: existente?.id ?? null,
+        existenteNome: existente ? cardText(existente.nome, FUNIL_NOME_MAX) : null,
+        contatoId: null,
+        error: null,
+      }
+      return email === null && telefone === null ? { ...card, ...failed, error: FUNIL_CONTATO_SEM_CANAL } : card
+    }
+  }
+}
+
 /** A ação validada, com o que o app leu; `null` se ela não vale (o bloco fica como texto). */
 async function resolve(proposed: Proposed, id: string, resolver: ActionResolver): Promise<ChatAction | null> {
   const base = { id, status: 'proposed' as const, result: null }
@@ -516,6 +743,14 @@ async function resolve(proposed: Proposed, id: string, resolver: ActionResolver)
       if (!account) return null
       return { ...base, kind: 'instagram-rascunho', accountId: account.id, username: account.username.slice(0, 100), caption, at: proposed.quando ?? null, publicationId: null }
     }
+    // Contrato 117: sem o funil (o app bloqueado), o bloco fica como texto.
+    case 'oportunidade-criar':
+    case 'oportunidade-mover':
+    case 'oportunidade-proximo-passo':
+    case 'contato-criar': {
+      const view = await resolver.funil?.().catch(() => null)
+      return view ? resolveFunil(proposed, base, view.state) : null
+    }
   }
 }
 
@@ -583,6 +818,15 @@ export function actionsHistory(actions: readonly ChatAction[] | undefined): stri
         return `- apagar o lembrete "${action.text}" (id: ${action.taskId}) de ${action.at} (${state})`
       case 'instagram-rascunho':
         return `- rascunho para o Instagram @${action.username}${action.at ? ` (data proposta ${action.at})` : ''}: "${action.caption.replace(/\s+/g, ' ').slice(0, 200)}" (${state})`
+      // Contrato 117.
+      case 'oportunidade-criar':
+        return `- Oportunidade criada: ${action.titulo} (${state})`
+      case 'oportunidade-mover':
+        return `- Oportunidade movida: ${action.titulo || action.oportunidadeId} para ${action.para} (${state})`
+      case 'oportunidade-proximo-passo':
+        return `- Próximo passo de ${action.titulo || action.oportunidadeId}: ${action.texto} (${state})`
+      case 'contato-criar':
+        return `- Contato criado: ${action.nome} (${state})`
     }
   })
   return ['[Cartões propostos nesta resposta:', ...lines, ']'].join('\n')
@@ -626,6 +870,8 @@ export interface ChatActionsDeps {
     exists: (publicationId: string) => boolean
     createDraft: (input: { accountId: string; caption: string; at: string | null; publicationId: string }) => Promise<{ ok: true; publicationId: string } | { ok: false; error: 'missing' | 'invalid' }>
   }
+  /** Contrato 117: o serviço do funil (110): a leitura e as gravações, só no clique de um cartão do funil. */
+  funil?: Pick<FunilService, 'view' | 'contatoSave' | 'oportunidadeSave' | 'oportunidadeMove' | 'eventoAdd'>
   /** Contrato 78: alterar e apagar um lembrete das Automações (só no clique). */
   reminders?: {
     list: () => Promise<readonly ScheduledTask[]>
@@ -649,6 +895,8 @@ export interface ChatActions {
    * monta abre o editor em Redes).
    */
   instagramDraft(request: unknown, onCreated?: (target: { accountId: string; publicationId: string }) => void): Promise<ChatActionResult>
+  /** Contrato 117 (D9): "Mover", "Criar" e "Salvar" nos cartões do funil, pelo tipo gravado (`campos`: o de criar). */
+  funil(request: unknown): Promise<ChatActionResult>
 }
 
 /** Contrato 78: a frase do erro do helper no cartão do evento, sem termo técnico. */
@@ -720,6 +968,29 @@ const eventRequestSchema = z
   .strict()
 const reminderChangeRequestSchema = z.object({ ...refFields, op: z.enum(['update', 'delete']), at: zonedIso.optional(), text: z.string().max(REMINDER_TEXT_MAX * 2).optional() }).strict()
 const instagramDraftRequestSchema = z.object({ ...refFields, caption: z.string().max(INSTAGRAM_DRAFT_CAPTION_MAX).optional(), at: z.iso.datetime({ offset: true }).nullable().optional() }).strict()
+/** Contrato 117: o que o cartão de criar oportunidade mudou (o valor em centavos), conferido de novo por `criarDraft`. */
+const funilCamposSchema = z
+  .object({
+    titulo: z.string().max(FUNIL_NOME_MAX * 2).optional(),
+    empresa: z.string().max(FUNIL_NOME_MAX * 2).nullable().optional(),
+    etapaId: z.string().max(200).optional(),
+    valor: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER).nullable().optional(),
+    previsao: funilDia.nullable().optional(),
+    proximoPasso: z
+      .object({ texto: z.string().max(FUNIL_CARD_PASSO_MAX * 2), data: funilDia.nullable() })
+      .strict()
+      .nullable()
+      .optional(),
+    contatos: z
+      .array(z.object({ nome: z.string().max(FUNIL_NOME_MAX * 2), email: z.string().max(320).nullable(), contatoId: z.string().max(200).nullable() }).strict())
+      .max(FUNIL_CARD_CONTATOS_MAX)
+      .optional(),
+  })
+  .strict()
+const funilRequestSchema = z.object({ ...refFields, campos: funilCamposSchema.optional() }).strict()
+const isFunilAction = (action: ChatAction): action is ChatActionFunil => (FUNIL_ACTION_KINDS as readonly string[]).includes(action.kind)
+/** Contrato 117 (R39): os contatos sem e-mail do cartão de criar ficam numa nota da oportunidade. */
+export const funilNotaCitados = (nomes: readonly string[]): string => `Citados na conversa com o Assistente: ${nomes.join(', ')}`
 
 type Ref = { chatId: string; index: number; actionId: string }
 
@@ -1000,6 +1271,123 @@ export function createChatActions(deps: ChatActionsDeps): ChatActions {
         const created = await instagram.createDraft({ accountId: current.accountId, caption, at, publicationId })
         if (!created.ok) return { ok: false, error: created.error }
         return await finish(created.publicationId, { caption, at })
+      } finally {
+        busy.delete(key)
+      }
+    },
+
+    async funil(request) {
+      const parsed = funilRequestSchema.safeParse(request)
+      if (!parsed.success) return { ok: false, error: 'invalid' }
+      const ref = parsed.data
+      const key = keyOf(ref)
+      if (busy.has(key)) return { ok: false, error: 'done' }
+      busy.add(key)
+      try {
+        const current = actionIn(await deps.store.get(ref.chatId), ref)
+        if (!current || !isFunilAction(current)) return { ok: false, error: 'missing' }
+        if (current.status !== 'proposed') return { ok: false, error: 'done' }
+        if (!deps.funil || (parsed.data.campos && current.kind !== 'oportunidade-criar')) return { ok: false, error: 'invalid' }
+        const funil = deps.funil
+        const kind = current.kind
+        /** O clique que o funil recusou: o cartão fica `failed`, com a frase do funil. */
+        const failed = (error: string): Promise<ChatActionResult> =>
+          write(ref, (action) => (action.kind === kind ? { ...action, status: 'failed', result: null, error: error.slice(0, CHAT_ACTION_ERROR_MAX) } : null))
+        const done = (change: (action: ChatActionFunil) => ChatActionFunil): Promise<ChatActionResult> => write(ref, (action) => (action.kind === kind && isFunilAction(action) ? change(action) : null))
+        const refused = (result: FunilActionResult): string | null => (result.ok ? null : result.mensagem)
+        const { state } = await funil.view()
+
+        if (current.kind === 'oportunidade-mover') {
+          // O funil pode ter mudado entre a proposta e o clique.
+          if (!oportunidadeViva(state, current.oportunidadeId)) return await failed(FUNIL_OPORTUNIDADE_NAO_ENCONTRADA)
+          const etapa = state.etapas.find((item) => item.id === current.paraEtapaId)
+          if (!etapa) return await failed(FUNIL_ETAPA_NAO_ENCONTRADA)
+          // Para Perdido, a nota é o motivo da perda; nas outras etapas, uma nota na linha do tempo.
+          const perdido = etapa.tipo === 'perdido'
+          const moved = await funil.oportunidadeMove({ id: current.oportunidadeId, etapaId: etapa.id, ordem: 0, ...(perdido ? { motivoPerda: current.nota } : {}) })
+          const movedError = refused(moved)
+          if (movedError) return await failed(movedError)
+          if (current.nota && !perdido) {
+            const nota = await funil.eventoAdd({ oportunidadeId: current.oportunidadeId, texto: current.nota })
+            if (!nota.ok) deps.log?.(`[assistente] funil: a nota da oportunidade movida não foi gravada (${nota.erro})`)
+          }
+          return await done((action) => ({ ...action, para: etapa.nome, status: 'done', result: funilMovidaText(etapa.nome), error: null }))
+        }
+
+        if (current.kind === 'oportunidade-proximo-passo') {
+          const oportunidade = oportunidadeViva(state, current.oportunidadeId)
+          if (!oportunidade) return await failed(FUNIL_OPORTUNIDADE_NAO_ENCONTRADA)
+          const saved = await funil.oportunidadeSave({ oportunidade: { id: oportunidade.id, titulo: oportunidade.titulo, proximoPasso: { texto: current.texto, data: current.data } } })
+          const savedError = refused(saved)
+          if (savedError) return await failed(savedError)
+          return await done((action) => ({ ...action, status: 'done', result: FUNIL_PASSO_SALVO_TEXT, error: null }))
+        }
+
+        if (current.kind === 'contato-criar') {
+          const saved = await funil.contatoSave({
+            contato: { nome: current.nome, emails: current.email ? [current.email] : [], telefones: current.telefone ? [current.telefone] : [], empresaNome: current.empresa, cargo: current.cargo },
+            origem: 'assistente',
+          })
+          if (!saved.ok) return await failed(saved.mensagem)
+          const contatoId = saved.id
+          const result = saved.mesclado ? FUNIL_CONTATO_COMPLETADO_TEXT : FUNIL_CONTATO_CRIADO_TEXT
+          return await done((action) => (action.kind === 'contato-criar' ? { ...action, contatoId, status: 'done', result, error: null } : action))
+        }
+
+        // `oportunidade-criar`: o que o cartão mudou passa pelas mesmas regras da proposta.
+        const campos = parsed.data.campos ?? {}
+        const draft = criarDraft(
+          {
+            titulo: campos.titulo ?? current.titulo,
+            empresa: campos.empresa === undefined ? current.empresa : campos.empresa,
+            contatos: campos.contatos ?? current.contatos,
+            etapaId: campos.etapaId ?? current.etapaId,
+            valor: campos.valor === undefined ? current.valor : campos.valor,
+            previsao: campos.previsao === undefined ? current.previsao : campos.previsao,
+            proximoPasso: campos.proximoPasso === undefined ? current.proximoPasso : campos.proximoPasso,
+          },
+          state,
+        )
+        if ('error' in draft) return { ok: false, error: 'invalid' }
+        // Os contatos com e-mail que ainda não estão no funil entram (ou completam o que já tem o e-mail, R4); os sem
+        // e-mail ficam numa nota da oportunidade (R39).
+        const contatoIds: string[] = []
+        const citados: string[] = []
+        for (const contato of draft.contatos) {
+          if (contato.contatoId) {
+            contatoIds.push(contato.contatoId)
+            continue
+          }
+          if (!contato.email) {
+            citados.push(contato.nome)
+            continue
+          }
+          const saved = await funil.contatoSave({ contato: { nome: contato.nome, emails: [contato.email], telefones: [] }, origem: 'assistente' })
+          if (!saved.ok) return await failed(saved.mensagem)
+          if (saved.id) contatoIds.push(saved.id)
+        }
+        const created = await funil.oportunidadeSave({
+          oportunidade: {
+            titulo: draft.titulo,
+            empresaNome: draft.empresa,
+            contatoIds: [...new Set(contatoIds)],
+            etapaId: draft.etapaId,
+            valor: draft.valor,
+            previsao: draft.previsao,
+            proximoPasso: draft.proximoPasso,
+            origem: 'assistente',
+          },
+        })
+        if (!created.ok) return await failed(created.mensagem)
+        const oportunidadeId = created.id
+        if (oportunidadeId && citados.length) {
+          const nota = await funil.eventoAdd({ oportunidadeId, texto: funilNotaCitados(citados) })
+          if (!nota.ok) deps.log?.(`[assistente] funil: a nota dos citados não foi gravada (${nota.erro})`)
+        }
+        return await done((action) => (action.kind === 'oportunidade-criar' ? { ...action, ...draft, oportunidadeId, status: 'done', result: FUNIL_OPORTUNIDADE_CRIADA_TEXT, error: null } : action))
+      } catch (error) {
+        deps.log?.(`[assistente] funil: ${error instanceof Error ? error.message : String(error)}`)
+        return { ok: false, error: 'invalid' }
       } finally {
         busy.delete(key)
       }

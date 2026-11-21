@@ -189,6 +189,18 @@ describe('instrução e sinalizadores (CA2)', () => {
     expect(prompt).toContain('Só proponha editar ou apagar lembrete com o id listado em AUTOMACOES.md')
     expect(prompt).toContain('use o nome de uma agenda listada em ESTADO.md ou omita')
   })
+  it('contrato 117 (R42): a instrução descreve o FUNIL.md, a citação do funil e os quatro cartões, só com o id do arquivo', () => {
+    const prompt = assistantSystemPrompt('all')
+    expect(prompt).toContain('FUNIL.md')
+    expect(prompt).toContain('[Funil · ')
+    expect(prompt).toContain('[Funil · Contato <nome>]')
+    for (const tipo of ['oportunidade-criar', 'oportunidade-mover', 'oportunidade-proximo-passo', 'contato-criar']) expect(prompt).toContain(`"${tipo}" com`)
+    expect(prompt).toContain('{"tipo": "oportunidade-mover", "oportunidadeId": "<id da oportunidade>"')
+    expect(prompt).toContain('Só proponha mover ou mudar o próximo passo com o id listado em FUNIL.md')
+    expect(prompt).toContain('funil, oportunidade ou contato')
+    expect(prompt).toContain('você propõe cartões; nada acontece sem o clique da pessoa')
+    expect(chatStepOf('Read', { file_path: '/x/FUNIL.md' })).toEqual({ tool: 'Read', label: 'Lendo o funil', meetingId: null })
+  })
 })
 
 describe('ClaudeChat com processo falso (CA2, CA3)', () => {

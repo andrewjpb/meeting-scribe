@@ -1451,6 +1451,8 @@ function createAppServices(userData: string): AppServices {
     email: { export: (folder: string) => exportEmail(emailExport, folder) },
     // Contrato 76: o guardado das redes (sem ler a Meta); bloqueado, nada.
     redes: () => redesAssistant.sourceAccounts(),
+    // Contrato 117: o `FUNIL.md` do gerador do contrato 115; bloqueado, nada.
+    funil: async () => (lockService?.isLocked() ? null : funilMarkdownText()),
     ...devLog,
   }
   // Contrato 45: o email do Assistente. O `EMAILS.md` e as mensagens já baixadas saem do cache (sem servidor); as
@@ -1518,6 +1520,8 @@ function createAppServices(userData: string): AppServices {
     tasks: () => automations.listTasks(),
     // Contrato 76: as contas do Instagram conectadas (o id e o @).
     instagramAccounts: async () => redes.state().accounts.map((account) => ({ id: account.id, username: account.username })),
+    // Contrato 117: o funil, só para ler os ids, as etapas e os contatos do cartão; bloqueado, o bloco fica como texto.
+    funil: async () => (lockService?.isLocked() ? null : funil.view()),
     now: Date.now,
     timeZone,
   }
@@ -1872,6 +1876,8 @@ function createAppServices(userData: string): AppServices {
         return { ok: false, error: saved.problems.includes(REDES_ACCOUNT_MISSING_MESSAGE) ? 'missing' : 'invalid' }
       },
     },
+    // Contrato 117: os cartões do funil gravam só pelo serviço do funil (110), no clique.
+    funil: { view: () => funil.view(), contatoSave: (request) => funil.contatoSave(request), oportunidadeSave: (request) => funil.oportunidadeSave(request), oportunidadeMove: (request) => funil.oportunidadeMove(request), eventoAdd: (request) => funil.eventoAdd(request) },
     ...devLog,
   })
   // Contrato 110: o funil lê reuniões, email e WhatsApp só pelos caches deles; bloqueado, a view não vai às janelas.
@@ -2297,6 +2303,8 @@ function registerIpc(services: AppServices): void {
       })
       .catch((): ChatActionResult => ({ ok: false, error: 'invalid' })),
   )
+  // Contrato 117: o funil só muda aqui, no clique de um cartão do funil.
+  handle('scribe:chat-action-funil', appOrigin, (_event, request) => chatActions.funil(request).catch((): ChatActionResult => ({ ok: false, error: 'invalid' })))
   // Contrato 21: o cartão de aprovação de uma ferramenta MCP e a aba "Conexões". Nenhum segredo volta por aqui.
   handle('scribe:chat-approval', appOrigin, (_event, request) => chat.answerApproval(request))
   handle('scribe:mcp-chat-servers', appOrigin, () => mcp.chatServers())

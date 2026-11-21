@@ -9,6 +9,7 @@
 // Contrato 76: as redes (`REDES.md`, desligada por padrão): as contas do Instagram, as 10 últimas publicações com as
 // métricas guardadas, a fila e os comentários e as mensagens não lidos, com os ids que as ferramentas aceitam. Legenda,
 // comentário e mensagem são de terceiros: uma linha cada, sem cerca de código. Nada de token.
+// Contrato 117: o funil (`FUNIL.md`, desligada por padrão), com o texto do gerador único do contrato 115 (D16).
 import { randomUUID } from 'node:crypto'
 import { chmod, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -51,8 +52,10 @@ export const REDES_FILE = 'REDES.md'
 export const REDES_PUBLICATIONS_FILE = 'PUBLICACOES-INSTAGRAM.md'
 export const REDES_COMMENTS_FILE = 'COMENTARIOS-INSTAGRAM.md'
 const REDES_TOOL_FILES: readonly string[] = [REDES_PUBLICATIONS_FILE, REDES_COMMENTS_FILE]
+/** Contrato 117: a fonte Funil. */
+export const FUNIL_FILE = 'FUNIL.md'
 /** Arquivos das fontes do app, na ordem em que o `INDICE.md` lista. */
-export const SOURCE_FILES = [STATE_FILE, GUIDE_FILE, AUTOMATIONS_FILE, WHATSAPP_OVERVIEW_FILE, EMAIL_OVERVIEW_FILE, EMAIL_SEARCH_FILE, REDES_FILE] as const
+export const SOURCE_FILES = [STATE_FILE, GUIDE_FILE, AUTOMATIONS_FILE, WHATSAPP_OVERVIEW_FILE, EMAIL_OVERVIEW_FILE, EMAIL_SEARCH_FILE, REDES_FILE, FUNIL_FILE] as const
 /** Execuções no `AUTOMACOES.md`. */
 export const AUTOMATION_RUNS_IN_SOURCE = 20
 /** Marca da versão no guia (`resources/assistente/guia-do-app.md`). */
@@ -396,6 +399,8 @@ export interface AssistantSourcesDeps {
   email?: { export(folder: string): Promise<string[]> }
   /** Contrato 76: o que as redes já têm guardado (sem ler a Meta); `null` com o app bloqueado ou sem conta. */
   redes?: () => Promise<readonly RedesSourceAccount[] | null>
+  /** Contrato 117: o texto do `FUNIL.md` (`funilMarkdown`, do contrato 115); `null` com o app bloqueado. */
+  funil?: () => Promise<string | null>
   log?: (message: string) => void
 }
 
@@ -407,6 +412,8 @@ export interface WrittenSources {
   email: boolean
   /** Contrato 76. */
   redes: boolean
+  /** Contrato 117. */
+  funil: boolean
 }
 
 /** Grava (atômico, 0600) só se o conteúdo mudou. */
@@ -486,7 +493,19 @@ export async function writeSources(deps: AssistantSourcesDeps, folder: string, s
     redes = written.length > 0
     files.push(...written)
   }
+  let funil = false
+  if (sources.funil && deps.funil) {
+    const read = deps.funil
+    const written = await attempt('funil', async () => {
+      const text = await read()
+      if (text === null) return []
+      await writeAtomic(join(folder, FUNIL_FILE), text)
+      return [FUNIL_FILE]
+    })
+    funil = written.length > 0
+    files.push(...written)
+  }
   const keep = new Set(files)
   for (const name of await readdir(folder).catch(() => [] as string[])) if (isSourceFile(name) && !keep.has(name)) await rm(join(folder, name), { force: true })
-  return { files, whatsapp, email, redes }
+  return { files, whatsapp, email, redes, funil }
 }
