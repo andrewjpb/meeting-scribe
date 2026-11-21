@@ -1,5 +1,6 @@
 ---
-status: aprovado
+status: arquivado
+arquivado_em: 2026-11-21
 feature: funil-vendas
 data: 2026-11-20
 semana: 2026-W47

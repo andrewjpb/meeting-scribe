@@ -1,5 +1,6 @@
 ---
-status: aprovado
+status: arquivado
+arquivado_em: 2026-11-21
 feature: funil-vendas
 tipo: prd
 data: 2026-11-20
