@@ -2136,8 +2136,9 @@ async function notesDetailEdits(contents: WebContents, ctx: SmokeContext, record
   await clickSelector(contents, '[data-notes-tab] [data-action="new-note"]')
   const created = await waitFor(contents, `document.querySelectorAll('[data-notes="grid"] [data-note]').length === 4 && document.activeElement?.matches('[data-notes="grid"] li:first-child [data-note-text]')`)
   const createdSaved = await waitFile((notes) => notes.length === 4 && notes[0]?.atMs === null)
-  // O relógio começa no renderer, no instante do evento: sob carga, a volta do `evaluate` pode atrasar mais que o
-  // debounce de 500 ms e encurtar a medida (o check caía com ~50 ms sem nenhum bug no app).
+  // O relógio começa no renderer, no instante do evento: sob carga, a volta do `evaluate` pode atrasar e encurtar a
+  // medida. Os ~50 ms que o check já mostrou eram do app: a tecla chegava antes da resposta da gravação da nova
+  // anotação e ia na carona dela, sem a espera (corrigido no `drain` do `notesStore`).
   const typedAt = await evaluate<number>(
     contents,
     `(() => {
