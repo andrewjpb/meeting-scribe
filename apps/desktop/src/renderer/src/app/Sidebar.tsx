@@ -6,19 +6,21 @@ import { PermissionsBlock } from '../features/permissions/PermissionsBlock'
 import { UpdateNotice } from '../features/settings/UpdateNotice'
 import { useBranding } from './brandingStore'
 import { LockButton } from './LockButton'
-import { EMAIL_ROOT_PATH, FUNIL_ROOT_PATH, funilPath, REDES_ROOT_PATH, ROUTE_PATHS } from '@shared/routes'
+import { EMAIL_ROOT_PATH, FUNIL_ROOT_PATH, funilPath, REDES_ROOT_PATH, ROUTE_PATHS, TAREFAS_ROOT_PATH } from '@shared/routes'
 import { whatsappInstalled } from '@shared/whatsapp'
 import { useWhatsApp } from '../features/whatsapp/whatsappStore'
 import { useEmail } from '../features/email/emailStore'
 import { totalUnread, unreadBadge } from '../features/email/format'
 import { redesUnreadTotal, useRedes } from '../features/redes/redesStore'
+import { badgeVencidas } from '../features/tarefas/tarefasFormat'
+import { useTarefas } from '../features/tarefas/tarefasStore'
 import { APP_ROUTES, routeIdOf } from './routes'
 import { activeNavId, isSidebarSection, lastEmailPath, lastRedesPath, levelFor, rememberEmailPath, rememberRedesPath, sectionOf, type SidebarSection } from './sidebarLevels'
 import { SidebarStack, type SidebarFocus } from './SidebarStack'
 
 // O item leva ao caminho da rota (Configurações sem a aba abre a última aberta; Email, contrato 65, à última pasta aberta;
-// Redes, contrato 72, à última seção vista; Funil, contrato 112, a Oportunidades).
-const ROOT_PATHS: Partial<Record<string, string>> = { email: EMAIL_ROOT_PATH, redes: REDES_ROOT_PATH, funil: FUNIL_ROOT_PATH }
+// Redes, contrato 72, à última seção vista; Funil, contrato 112, a Oportunidades; Tarefas, contrato 123, à lista).
+const ROOT_PATHS: Partial<Record<string, string>> = { email: EMAIL_ROOT_PATH, redes: REDES_ROOT_PATH, funil: FUNIL_ROOT_PATH, tarefas: TAREFAS_ROOT_PATH }
 const NAV_ITEMS = APP_ROUTES.flatMap((route) => (route.nav ? [{ ...route.nav, id: route.id, path: ROOT_PATHS[route.id] ?? ROUTE_PATHS[route.id] }] : []))
 
 /**
@@ -36,6 +38,8 @@ export function Sidebar() {
   // Contrato 72: "Redes" só com uma conta conectada, ou com a rota aberta (o estado vazio leva a Configurações).
   const redesAccounts = useRedes((state) => state.state?.accounts.length ?? 0)
   const redesUnread = useRedes((state) => redesUnreadTotal(state.unread))
+  // Contrato 123 (R1): as vencidas, da view que o `Shell` carrega e acompanha.
+  const vencidas = useTarefas((state) => badgeVencidas(state.view))
   const location = useLocation()
   const items = NAV_ITEMS.filter((item) => (item.id !== 'whatsapp' || whatsapp) && (item.id !== 'redes' || redesAccounts > 0 || sectionOf(location.pathname) === 'redes'))
   const navigate = useNavigate()
@@ -73,7 +77,7 @@ export function Sidebar() {
 
   const root = items.map((item) => {
     const active = activeId === item.id
-    const badge = item.id === 'email' ? unreadBadge(unread) : item.id === 'redes' ? unreadBadge(redesUnread) : ''
+    const badge = item.id === 'email' ? unreadBadge(unread) : item.id === 'redes' ? unreadBadge(redesUnread) : item.id === 'tarefas' ? vencidas : ''
     return (
       <Link
         key={item.id}
@@ -91,7 +95,7 @@ export function Sidebar() {
         {badge && (
           <span data-nav-badge className="shrink-0 text-12 font-medium tabular text-side-text">
             {badge}
-            <span className="sr-only">{item.id === 'redes' ? ' não lidos' : ' não lidas'}</span>
+            <span className="sr-only">{item.id === 'redes' ? ' não lidos' : item.id === 'tarefas' ? ' vencidas' : ' não lidas'}</span>
           </span>
         )}
       </Link>
