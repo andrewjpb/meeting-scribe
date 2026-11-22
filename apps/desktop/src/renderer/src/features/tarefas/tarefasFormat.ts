@@ -2,9 +2,12 @@
 // (125) e pelos botões do Resumo, do Email e do WhatsApp (126). Sem DOM: testado em test/renderer/tarefas-format.test.ts.
 // A partição Vencidas/Hoje/Próximas/Sem prazo e a contagem das vencidas vêm de `shared/tarefas-logic.ts`, a mesma
 // que o `TAREFAS.md`, o aviso "Hoje" e o serviço usam.
+import type { FunilView } from '@shared/funil'
 import { semAcento } from '@shared/funil-logic'
+import type { SummaryTask } from '@shared/meeting-summary'
 import { FEITAS_DIAS, TAREFA_TITULO_MAX, type EventoTarefa, type ResponsavelTarefa, type SugestaoTarefa, type Tarefa, type TarefaInput, type TarefasView } from '@shared/tarefas'
-import { contarVencidas, particao } from '@shared/tarefas-logic'
+import { casaComResumo, contarVencidas, particao } from '@shared/tarefas-logic'
+import { contatoLigado, type ContatoAlvo } from '../funil/ContactLink'
 
 const DIA_MS = 86_400_000
 
@@ -294,4 +297,53 @@ export function tarefaDaSugestao(sugestao: SugestaoTarefa): TarefaInput {
   if (origem.tipo === 'reuniao') return { titulo, prazo: sugestao.prazo, origem: { tipo: 'reuniao', meetingId: origem.meetingId, texto: sugestao.texto.slice(0, 1_000) }, vinculos: { meetingId: origem.meetingId } }
   if (origem.tipo === 'whatsapp') return { titulo, prazo: sugestao.prazo, origem: { tipo: 'whatsapp', chatId: origem.chatId, texto: sugestao.texto.slice(0, 1_000) }, vinculos: { whatsappChatId: origem.chatId } }
   return { titulo, prazo: sugestao.prazo, origem: { tipo: 'manual' }, vinculos: { meetingId: origem.meetingId } }
+}
+
+// Contrato 126: a tabela "Tarefas" do Resumo (R22) e a frase do vínculo do "+ Tarefa" do e-mail (R24).
+
+/** Uma linha da tabela do Resumo e a tarefa que veio dela (`null` enquanto não foi adicionada). */
+export interface LinhaResumo {
+  indice: number
+  tarefaId: string | null
+}
+
+/**
+ * Cada linha do resumo com a tarefa casada (R22, R23): mesma reunião e o mesmo texto pelo `slugTexto`. Com mais de uma
+ * (a mesma linha adicionada de novo depois de apagada a primeira), a aberta vem antes; senão, a primeira da lista.
+ */
+export function linhasDoResumo(tasks: readonly Pick<SummaryTask, 'task'>[], meetingId: string, tarefas: readonly Tarefa[]): LinhaResumo[] {
+  return tasks.map((task, indice) => {
+    const casadas = tarefas.filter((tarefa) => casaComResumo(tarefa, meetingId, task.task))
+    const tarefa = casadas.find((item) => item.status === 'aberta') ?? casadas[0]
+    return { indice, tarefaId: tarefa?.id ?? null }
+  })
+}
+
+/** Quantas linhas de "Você" ainda não viraram tarefa: com zero, "Adicionar as minhas" não aparece (R22). */
+export function pendentesMinhas(tasks: readonly Pick<SummaryTask, 'owner'>[], linhas: readonly LinhaResumo[]): number {
+  return linhas.filter((linha) => linha.tarefaId === null && tasks[linha.indice]?.owner === 'Você').length
+}
+
+/**
+ * A célula Prazo da linha (R22, artboard 10): com `dueIso`, a data real "dd/mm" e, ao lado em cinza, o que foi dito
+ * ("sexta-feira"); sem ela, só o que foi dito, como antes. Nada dito nem calculado, os dois `null` (a célula mostra "—").
+ */
+export function textoPrazoResumo(task: Pick<SummaryTask, 'due' | 'dueIso'>): { data: string | null; dito: string | null } {
+  return { data: task.dueIso ? diaCurto(task.dueIso) : null, dito: task.due }
+}
+
+/**
+ * A frase acima dos campos do "+ Tarefa" do e-mail (R24), pela mesma regra que o serviço usa ao criar (R9): o contato do
+ * remetente e, se ele tiver exatamente uma oportunidade aberta e não arquivada, ela. "Ligada a <contato> · <oportunidade>",
+ * "Ligada a <contato>" ou, sem contato (ou sem a view do funil), "Ligada a este e-mail". A oportunidade escolhida no
+ * campo do formulário vale por cima da regra (é ela que o serviço grava).
+ */
+export function fraseVinculo(funil: Pick<FunilView, 'state'> | null, alvo: ContatoAlvo, escolhida: { nome: string } | null = null): string {
+  const contato = funil ? contatoLigado(funil.state.contatos, alvo) : null
+  const base = contato ? `Ligada a ${contato.nome}` : 'Ligada a este e-mail'
+  if (escolhida) return `${base} · ${escolhida.nome}`
+  if (!funil || !contato) return base
+  const etapas = new Map(funil.state.etapas.map((etapa) => [etapa.id, etapa.tipo]))
+  const abertas = funil.state.oportunidades.filter((op) => !op.arquivado && op.contatoIds.includes(contato.id) && etapas.get(op.etapaId) === 'aberta')
+  return abertas.length === 1 && abertas[0] ? `Ligada a ${contato.nome} · ${abertas[0].titulo}` : `Ligada a ${contato.nome}`
 }

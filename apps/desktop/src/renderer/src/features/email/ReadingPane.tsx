@@ -1,14 +1,19 @@
 import { ArrowLeft, Download, ExternalLink, Folder, FolderInput, Forward, ImageOff, Mail, MailOpen, MoreHorizontal, Paperclip, Reply, ReplyAll, Sparkles, Trash2, TriangleAlert } from 'lucide-react'
 import { Component, useMemo, useState, type MouseEvent, type ReactNode } from 'react'
 import { isInbox, type EmailAccount, type EmailMessage } from '@shared/email'
+import { TAREFA_TITULO_MAX } from '@shared/tarefas'
 import { useLock } from '../../app/lockStore'
 import { useSettings } from '../../app/settingsStore'
 import { ActionButton } from '../../design/ActionButton'
 import { Button } from '../../design/Button'
 import { Icon } from '../../design/Icon'
 import { Note } from '../../design/Note'
-import { ContactLink } from '../funil/ContactLink'
+import { ContactLink, contatoLigado, useFunilCompartilhado } from '../funil/ContactLink'
+import type { PickerItem } from '../funil/funilFormat'
 import { MENU_ITEM, useInlineMenu } from '../meetings/menu'
+import { BotaoMaisTarefa, useTarefaCriada } from '../tarefas/MaisTarefa'
+import { NovaTarefaInline } from '../tarefas/NovaTarefaInline'
+import { fraseVinculo } from '../tarefas/tarefasFormat'
 import { Avatar } from '../whatsapp/Avatar'
 import { bodyKey, useEmail } from './emailStore'
 import { addressLabel, addressLine, emailFullDate, sizeLabel, type ComposeMode } from './format'
@@ -16,6 +21,9 @@ import type { FolderItem } from './folderTree'
 import { InviteCard } from './InviteCard'
 import { InviteSuggestCard, useInviteSuggest } from './InviteSuggestCard'
 import { linkify, sanitizeEmailHtml } from './sanitize'
+
+/** O assunto guardado na origem e no vínculo da tarefa (o limite do texto em `tarefas.json`). */
+const EMAIL_ASSUNTO_MAX = 1_000
 
 /** "Voltar para a lista": só na janela estreita, quando a lista e a leitura se alternam. */
 const NARROW_ONLY = 'min-[900px]:hidden'
@@ -148,6 +156,12 @@ export function ReadingPane({ account, message, onCompose, composing, onMailto, 
   const accounts = useEmail((store) => store.accounts)
   const senderAddress = sender?.address.trim().toLowerCase() ?? ''
   const ownSender = [account, ...(accounts ?? []).map((status) => status.account)].some((item) => item.address.trim().toLowerCase() === senderAddress)
+  // Contrato 126 (R24): "+ Tarefa" ao lado da data, também com o remetente já contato ou sendo uma das contas do usuário.
+  const [tarefaAberta, setTarefaAberta] = useState(false)
+  const [oportunidadeEscolhida, setOportunidadeEscolhida] = useState<PickerItem | null>(null)
+  const { criada, avisar } = useTarefaCriada()
+  const funil = useFunilCompartilhado()
+  const contatoRemetente = funil && senderAddress ? contatoLigado(funil.state.contatos, { email: senderAddress }) : null
   // Contrato 64 (CA14): "Sugerir evento" só com a opção ligada, o corpo já lido e sem convite; nunca com o app bloqueado.
   const suggestOn = useSettings((store) => store.settings.inviteSuggest)
   const locked = useLock((store) => store.status.locked)
@@ -272,10 +286,50 @@ export function ReadingPane({ account, message, onCompose, composing, onMailto, 
               {message.to.length > 0 && <p data-email-to>Para: {message.to.map(addressLine).join(', ')}</p>}
               {message.cc.length > 0 && <p data-email-cc>Cc: {message.cc.map(addressLine).join(', ')}</p>}
             </div>
-            <span data-email-date className="shrink-0 text-12 tabular text-text-faint">
-              {emailFullDate(message.date)}
-            </span>
+            <div className="flex shrink-0 items-center gap-3">
+              <BotaoMaisTarefa
+                action="email-tarefa"
+                avisoData="data-email-tarefa-criada"
+                aberto={tarefaAberta}
+                criada={criada}
+                onClick={() => {
+                  setTarefaAberta(!tarefaAberta)
+                  setOportunidadeEscolhida(null)
+                }}
+              />
+              <span data-email-date className="text-12 tabular text-text-faint">
+                {emailFullDate(message.date)}
+              </span>
+            </div>
           </div>
+          {/* R24 (artboard 11): o formulário numa caixa entre o cabeçalho e o corpo, com a frase do vínculo acima dos campos
+              (a regra R9 do serviço: o contato do remetente e a oportunidade aberta única dele). */}
+          {tarefaAberta && (
+            <div data-email-tarefa-form className="flex flex-col gap-2 rounded-[var(--radius-panel)] bg-bg-sunken p-3">
+              <p className="label">Nova tarefa</p>
+              <p data-email-tarefa-vinculo className="text-12 text-text-muted">
+                {fraseVinculo(funil, { email: senderAddress }, oportunidadeEscolhida)}
+              </p>
+              <NovaTarefaInline
+                tituloInicial={message.subject.trim().slice(0, TAREFA_TITULO_MAX)}
+                origem={{ tipo: 'email', accountId: account.id, id: message.id, assunto: message.subject.slice(0, EMAIL_ASSUNTO_MAX) }}
+                vinculosIniciais={{
+                  email: { accountId: account.id, id: message.id, assunto: message.subject.slice(0, EMAIL_ASSUNTO_MAX), mailbox: isInbox(message) ? null : message.mailbox },
+                  ...(contatoRemetente ? { contatoIds: [contatoRemetente.id] } : {}),
+                }}
+                onOportunidade={setOportunidadeEscolhida}
+                onCriada={(id) => {
+                  setTarefaAberta(false)
+                  setOportunidadeEscolhida(null)
+                  avisar(id)
+                }}
+                onCancelar={() => {
+                  setTarefaAberta(false)
+                  setOportunidadeEscolhida(null)
+                }}
+              />
+            </div>
+          )}
           {/* Contrato 63: o cartão do convite, só com o corpo já lido e com convite (acima dos avisos do corpo). */}
           {state !== undefined && state !== 'loading' && state !== 'error' && state.invite && <InviteCard account={account} message={message} invite={state.invite} onLink={openLink} />}
           {/* Contrato 64: no mesmo lugar, a sugestão do Claude (ou a frase do erro). */}

@@ -1,9 +1,27 @@
 // Contrato 123 (CA1 a CA3): o número de vencidas da barra lateral (R1), as visões Hoje, Próximas, Todas e Feitas com a
 // busca sem acento (R2, D-10), o texto do prazo e da origem (R3), os grupos do "Agrupar por" (R4, D-11), o Histórico e o
 // aviso efetivo do lembrete (R5) e o que o "Adicionar" das Sugestões cria (R26).
+// Contrato 126 (CA1): as linhas da tabela do Resumo casadas com as tarefas, "Adicionar as minhas" e o prazo da linha (R22)
+// e a frase do vínculo do "+ Tarefa" do e-mail (R24).
 import { describe, expect, it } from 'vitest'
+import type { Contato, FunilState, Oportunidade } from '../../src/shared/funil'
+import { etapasPadrao } from '../../src/shared/funil-logic'
 import type { SugestaoTarefa, Tarefa, TarefasView } from '../../src/shared/tarefas'
-import { agrupar, badgeVencidas, filtrarVisao, tarefaDaSugestao, textoEvento, textoLembrete, textoOrigem, textoPrazo, textoResponsavel } from '../../src/renderer/src/features/tarefas/tarefasFormat'
+import {
+  agrupar,
+  badgeVencidas,
+  filtrarVisao,
+  fraseVinculo,
+  linhasDoResumo,
+  pendentesMinhas,
+  tarefaDaSugestao,
+  textoEvento,
+  textoLembrete,
+  textoOrigem,
+  textoPrazo,
+  textoPrazoResumo,
+  textoResponsavel,
+} from '../../src/renderer/src/features/tarefas/tarefasFormat'
 
 /** Domingo, 22/11/2026. */
 const HOJE = '2026-11-22'
@@ -212,5 +230,111 @@ describe('"Adicionar" das Sugestões (R26)', () => {
     const tarefa = tarefaDaSugestao(sugestao)
     expect(tarefa).toMatchObject({ prazo: '2026-11-25', origem: { tipo: 'whatsapp', chatId: 'c1', texto: longo }, vinculos: { whatsappChatId: 'c1' } })
     expect(tarefa.titulo).toHaveLength(200)
+  })
+})
+
+describe('tabela do Resumo e "+ Tarefa" do e-mail (contrato 126, R22, R24)', () => {
+  const revisar = { task: 'Revisar a transcrição da reunião', owner: 'Você', due: 'sexta-feira', dueIso: '2026-11-27' }
+  const notas = { task: 'Enviar as notas aos participantes', owner: 'Marina Rocha', due: null, dueIso: null }
+  const orcamento = { task: 'Mandar o orçamento', owner: 'Você', due: null }
+  const tasks = [revisar, notas, orcamento]
+  const daReuniao = (meetingId: string, texto: string, patch: Partial<Tarefa> = {}): Tarefa => tarefa({ origem: { tipo: 'reuniao', meetingId, texto }, ...patch })
+
+  it('cada linha com a tarefa casada pelo texto (sem acento, caixa ou pontuação) da mesma reunião; as outras, sem', () => {
+    const casada = daReuniao('m1', 'revisar a TRANSCRICAO da reuniao!')
+    const outraReuniao = daReuniao('m2', 'Enviar as notas aos participantes')
+    const manual = tarefa({ titulo: 'Mandar o orçamento' })
+    expect(linhasDoResumo(tasks, 'm1', [outraReuniao, manual, casada])).toEqual([
+      { indice: 0, tarefaId: casada.id },
+      { indice: 1, tarefaId: null },
+      { indice: 2, tarefaId: null },
+    ])
+  })
+
+  it('com duas casadas, a aberta vem antes da feita', () => {
+    const feita = daReuniao('m1', 'Mandar o orçamento', { status: 'feita', feitaEm: NOW })
+    const aberta = daReuniao('m1', 'Mandar o orçamento')
+    expect(linhasDoResumo(tasks, 'm1', [feita, aberta])[2]).toEqual({ indice: 2, tarefaId: aberta.id })
+    expect(linhasDoResumo(tasks, 'm1', [feita])[2]).toEqual({ indice: 2, tarefaId: feita.id })
+  })
+
+  it('"Adicionar as minhas" conta só as de "Você" ainda sem tarefa', () => {
+    expect(pendentesMinhas(tasks, linhasDoResumo(tasks, 'm1', []))).toBe(2)
+    expect(pendentesMinhas(tasks, linhasDoResumo(tasks, 'm1', [daReuniao('m1', revisar.task)]))).toBe(1)
+    expect(pendentesMinhas(tasks, linhasDoResumo(tasks, 'm1', [daReuniao('m1', revisar.task), daReuniao('m1', orcamento.task)]))).toBe(0)
+    // A linha do participante não conta, com ou sem tarefa.
+    expect(pendentesMinhas([notas], linhasDoResumo([notas], 'm1', []))).toBe(0)
+  })
+
+  it('o prazo: a data real com o que foi dito; sem `dueIso`, só o dito; sem nada, os dois nulos', () => {
+    expect(textoPrazoResumo({ due: 'sexta-feira', dueIso: '2026-11-27' })).toEqual({ data: '27/11', dito: 'sexta-feira' })
+    expect(textoPrazoResumo({ due: 'sexta-feira' })).toEqual({ data: null, dito: 'sexta-feira' })
+    expect(textoPrazoResumo({ due: 'sexta-feira', dueIso: null })).toEqual({ data: null, dito: 'sexta-feira' })
+    expect(textoPrazoResumo({ due: null, dueIso: null })).toEqual({ data: null, dito: null })
+  })
+
+  describe('frase do vínculo (R24, pela regra R9)', () => {
+    let n = 0
+    const etapas = etapasPadrao(() => `etapa-${++n}`)
+    const aberta = etapas.find((etapa) => etapa.tipo === 'aberta')?.id ?? ''
+    const ganho = etapas.find((etapa) => etapa.tipo === 'ganho')?.id ?? ''
+    const contato = (id: string, nome: string, emails: string[]): Contato => ({ id, nome, emails, telefones: [], empresaId: null, cargo: null, notas: '', whatsappChatId: null, origem: 'manual', criadoEm: NOW, atualizadoEm: NOW, arquivado: false })
+    const oportunidade = (id: string, titulo: string, contatoIds: string[], patch: Partial<Oportunidade> = {}): Oportunidade => ({
+      id,
+      titulo,
+      empresaId: null,
+      contatoIds,
+      etapaId: aberta,
+      ordem: 0,
+      valor: null,
+      previsao: null,
+      proximoPasso: null,
+      meetingIds: [],
+      whatsappChatIds: [],
+      emails: [],
+      origem: 'manual',
+      motivoPerda: null,
+      criadoEm: NOW,
+      atualizadoEm: NOW,
+      movidoEm: NOW,
+      fechadoEm: null,
+      arquivado: false,
+      ...patch,
+    })
+    const funil = (oportunidades: Oportunidade[]): { state: FunilState } => ({
+      state: {
+        version: 1,
+        contatos: [contato('ct-marina', 'Marina Rocha', ['marina.rocha@cliente.example']), contato('ct-lucas', 'Lucas Vieira', ['lucas@vertice.example'])],
+        empresas: [],
+        etapas,
+        oportunidades,
+        eventos: [],
+        ignorados: [],
+        ultimoAvisoEm: null,
+      },
+    })
+    const marina = { email: 'Marina.Rocha@cliente.example' }
+
+    it('o contato do remetente com uma oportunidade aberta só: "Ligada a <contato> · <oportunidade>"', () => {
+      const view = funil([oportunidade('op-portal', 'Portal do associado', ['ct-marina']), oportunidade('op-ganha', 'Já ganha', ['ct-marina'], { etapaId: ganho }), oportunidade('op-arq', 'Arquivada', ['ct-marina'], { arquivado: true })])
+      expect(fraseVinculo(view, marina)).toBe('Ligada a Marina Rocha · Portal do associado')
+    })
+
+    it('com nenhuma ou mais de uma aberta, só o contato', () => {
+      expect(fraseVinculo(funil([]), marina)).toBe('Ligada a Marina Rocha')
+      expect(fraseVinculo(funil([oportunidade('op-a', 'A', ['ct-marina']), oportunidade('op-b', 'B', ['ct-marina'])]), marina)).toBe('Ligada a Marina Rocha')
+    })
+
+    it('a oportunidade escolhida no campo vale por cima da regra, com ou sem contato', () => {
+      const view = funil([oportunidade('op-portal', 'Portal do associado', ['ct-marina'])])
+      expect(fraseVinculo(view, marina, { nome: 'Loja virtual' })).toBe('Ligada a Marina Rocha · Loja virtual')
+      expect(fraseVinculo(view, { email: 'alguem@fora.example' }, { nome: 'Loja virtual' })).toBe('Ligada a este e-mail · Loja virtual')
+      expect(fraseVinculo(view, marina, null)).toBe('Ligada a Marina Rocha · Portal do associado')
+    })
+
+    it('remetente que não é contato, ou sem a view do funil: "Ligada a este e-mail"', () => {
+      expect(fraseVinculo(funil([oportunidade('op-portal', 'Portal do associado', ['ct-marina'])]), { email: 'alguem@fora.example' })).toBe('Ligada a este e-mail')
+      expect(fraseVinculo(null, marina)).toBe('Ligada a este e-mail')
+    })
   })
 })

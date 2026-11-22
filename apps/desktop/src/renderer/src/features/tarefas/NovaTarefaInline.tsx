@@ -20,6 +20,8 @@ export interface NovaTarefaInlineProps {
   oportunidadeFixa?: string | undefined
   onCriada: (id: string) => void
   onCancelar: () => void
+  /** Contrato 126: a oportunidade escolhida no campo (ou `null`), para quem mostra a frase do vínculo (o e-mail, R24). */
+  onOportunidade?: ((oportunidade: PickerItem | null) => void) | undefined
 }
 
 /** O dia digitado no `<input type="date">` (vazio, sem prazo). */
@@ -30,7 +32,7 @@ const prazoDe = (texto: string): string | null => (/^\d{4}-\d{2}-\d{2}$/.test(te
  * prazo e, sem `oportunidadeFixa`, a oportunidade opcional pelo `SearchPicker` do funil. Enter ou "Criar" cria com a
  * origem recebida; título vazio não cria (o botão fica desabilitado e o Enter não faz nada); Esc ou "Cancelar" fecham.
  */
-export function NovaTarefaInline({ origem = { tipo: 'manual' }, vinculosIniciais, tituloInicial = '', oportunidadeFixa, onCriada, onCancelar }: NovaTarefaInlineProps) {
+export function NovaTarefaInline({ origem = { tipo: 'manual' }, vinculosIniciais, tituloInicial = '', oportunidadeFixa, onCriada, onCancelar, onOportunidade }: NovaTarefaInlineProps) {
   const ref = useRef<HTMLDivElement>(null)
   const funil = useFunil((state) => state.view)
   const [titulo, setTitulo] = useState(tituloInicial)
@@ -119,7 +121,18 @@ export function NovaTarefaInline({ origem = { tipo: 'manual' }, vinculosIniciais
         />
         {oportunidadeFixa === undefined && (
           <div className="w-[180px]">
-            <SearchPicker nome="tarefa-nova-oportunidade" label="Oportunidade" placeholder="Oportunidade" itens={oportunidades} valor={oportunidade} disabled={salvando} onChange={setOportunidade} />
+            <SearchPicker
+              nome="tarefa-nova-oportunidade"
+              label="Oportunidade"
+              placeholder="Oportunidade"
+              itens={oportunidades}
+              valor={oportunidade}
+              disabled={salvando}
+              onChange={(item) => {
+                setOportunidade(item)
+                onOportunidade?.(item)
+              }}
+            />
           </div>
         )}
         <Button action="tarefa-nova-criar" disabled={!pronto || salvando} onClick={() => void criar()}>

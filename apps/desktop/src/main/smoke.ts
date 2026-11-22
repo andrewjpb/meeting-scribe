@@ -237,7 +237,7 @@ import {
   type SmokeFixtures,
 } from './smoke-fixtures'
 import { TAREFAS_FILE, type SugestaoTarefa, type Tarefa, type TarefasArquivo, type TarefasFalha, type TarefasView } from '../shared/tarefas'
-import { contarVencidas, deHoje, lembretePadrao, vencida } from '../shared/tarefas-logic'
+import { casaComResumo, contarVencidas, deHoje, lembretePadrao, vencida } from '../shared/tarefas-logic'
 import { AVISO_BLOQUEADO_TEXTO } from './tarefas/lembretes'
 
 // Contrato 22: o bloqueio, no fim, soma uns 25 s ao roteiro; o contrato 11 (conta Google e Drive), uns 20 s; o
@@ -1730,9 +1730,10 @@ async function summaryAfterEnd(win: BrowserWindow, ctx: SmokeContext, record: Me
       JSON.stringify(screen.tabs) === JSON.stringify(['Resumo', 'Anotações', 'Assistente', 'Transcrição', 'Áudio']) &&
       JSON.stringify(screen.sections) === JSON.stringify(['O que aconteceu', 'Decisões', 'Tarefas']) &&
       screen.decisions === summary.decisions.length &&
-      JSON.stringify(screen.rows[0]) === JSON.stringify(['Tarefa', 'Quem', 'Prazo']) &&
+      // Contrato 126 (R22): a coluna de estado à esquerda e a de ação à direita, com os nomes só para o leitor de tela.
+      JSON.stringify(screen.rows[0]) === JSON.stringify(['Feita', 'Tarefa', 'Quem', 'Prazo', 'Ação']) &&
       screen.rows.length === 3 &&
-      screen.rows[2]?.[2] === '—' &&
+      screen.rows[2]?.[3] === '—' &&
       screen.footer.startsWith('Gerado pelo Claude em ') &&
       screen.footer.endsWith('· claude-cli:haiku') &&
       screen.buttons.includes('Copiar resumo') &&
@@ -14176,6 +14177,269 @@ async function funilTelasExistentesChecks(ctx: SmokeContext, watch: (win: Browse
   }
 }
 
+/** Contrato 126 (CA4): a próxima sexta depois do dia `AAAA-MM-DD` (a reunião numa sexta leva à da semana seguinte). */
+function sextaDepois(dia: string): string {
+  const data = new Date(`${dia}T00:00:00Z`)
+  data.setUTCDate(data.getUTCDate() + ((5 - data.getUTCDay() + 7) % 7 || 7))
+  return data.toISOString().slice(0, 10)
+}
+
+/** `AAAA-MM-DD` de um instante no fuso do Mac (o dia da reunião, como o `<data_da_reuniao>` do pedido). */
+function diaLocalSmoke(iso: string): string {
+  const data = new Date(iso)
+  return `${data.getFullYear()}-${String(data.getMonth() + 1).padStart(2, '0')}-${String(data.getDate()).padStart(2, '0')}`
+}
+
+/**
+ * Contrato 126 (CA8, CA9 e CA4 da spec, R21 a R25), numa janela que troca de tema no lugar, logo depois do
+ * `funilTelasExistentesChecks` (o email e o WhatsApp falsos ainda conectados; o Paulo e a Ana já contatos). No Resumo de
+ * uma das duas reuniões gravadas no laço por tema (a que ainda não tem nenhuma linha casada; volta ao `meetings.json`, que
+ * o laço reescreve): o `dueIso` do resumo falso (CA4), "Adicionar" e a data real na linha, "Adicionar" do participante,
+ * "Adicionar as minhas" (só a de "Você"), a caixa de feito e "Gerar de novo" mantendo as duas ligadas. Na leitura do email
+ * do Paulo, "+ Tarefa" com o assunto e o contato, "Abrir e-mail" no detalhe; na mensagem da própria conta, o botão também.
+ * Nos Detalhes da Ana, "+ Tarefa" com a conversa e "Abrir conversa". Tudo medido por id; nenhum título, assunto ou
+ * e-mail no relatório. Apaga as tarefas do email e do WhatsApp no fim (as do resumo ficam). Prints
+ * `detalhe-resumo-tarefas` e `email-leitura-tarefa` nos dois temas e `whatsapp-detalhes-tarefa-light`.
+ */
+async function tarefasTelasExistentesChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => void, checks: Record<string, Check>, shots: Screenshot[], gravadas: readonly Meeting[]): Promise<void> {
+  const startedAt = Date.now()
+  const themeBefore = readSettings(ctx.userDataDir).theme ?? 'system'
+  nativeTheme.themeSource = 'light'
+  const win = ctx.openWindow({})
+  watch(win)
+  await loadAndWait(win)
+  const contents = win.webContents
+  if (themeBefore !== 'system') await evaluate(contents, "window.__scribeApi.invoke('scribe:settings-update', { theme: 'system' }).then(() => true)")
+  const api = <T>(channel: string, request?: unknown): Promise<T> => evaluate<T>(contents, `window.__scribeApi.invoke(${JSON.stringify(channel)}${request === undefined ? '' : `, ${JSON.stringify(request)}`})`)
+  const both = async (name: string): Promise<void> => {
+    await evaluate(contents, `document.activeElement instanceof HTMLElement && document.activeElement.blur(), true`)
+    await settle(contents)
+    shots.push(await capture(win, ctx.outDir, `${name}-light`))
+    nativeTheme.themeSource = 'dark'
+    await waitFor(contents, "document.documentElement.dataset.theme === 'dark'")
+    await settle(contents)
+    shots.push(await capture(win, ctx.outDir, `${name}-dark`))
+    nativeTheme.themeSource = 'light'
+    await waitFor(contents, "document.documentElement.dataset.theme === 'light'")
+  }
+  const tarefasFile = join(ctx.userDataDir, TAREFAS_FILE)
+  const tarefas = (): Tarefa[] => (existsSync(tarefasFile) ? (JSON.parse(readFileSync(tarefasFile, 'utf8')) as TarefasArquivo).tarefas : [])
+  const contatos = (): Contato[] => (JSON.parse(readFileSync(join(ctx.userDataDir, FUNIL_FILE), 'utf8')) as FunilState).contatos.filter((contato) => !contato.arquivado)
+  /** Espera no `tarefas.json` a tarefa nova (fora de `antes`) que cumpre `pronta`. */
+  const novaTarefa = async (antes: ReadonlySet<string>, pronta: (tarefa: Tarefa) => boolean): Promise<Tarefa | undefined> => {
+    for (let attempt = 0; attempt < 100; attempt++) {
+      const achada = tarefas().find((tarefa) => !antes.has(tarefa.id) && pronta(tarefa))
+      if (achada) return achada
+      await wait(50)
+    }
+    return undefined
+  }
+  const resumoFile = (id: string): string => join(ctx.userDataDir, 'meetings', `${id}${SUMMARY_SUFFIX}`)
+  const resumoDe = (id: string): MeetingSummary | null => (existsSync(resumoFile(id)) ? (JSON.parse(readFileSync(resumoFile(id), 'utf8')) as MeetingSummary) : null)
+  /** As tarefas do email e do WhatsApp, apagadas no fim (as do resumo ficam). */
+  const apagarNoFim: string[] = []
+
+  try {
+    // resumoTarefas (CA8, R21, R22; CA4): das duas gravadas, a que não tem linha casada (o 123 pode ter adicionado uma
+    // sugestão de uma delas). Ela volta ao `meetings.json` (o laço por tema o reescreve depois de gravar).
+    const livre = gravadas.find((reuniao) => {
+      const resumo = resumoDe(reuniao.id)
+      return resumo !== null && resumo.tasks.length === 2 && !tarefas().some((tarefa) => resumo.tasks.some((task) => casaComResumo(tarefa, reuniao.id, task.task)))
+    })
+    const meetingsFile = join(ctx.userDataDir, MEETINGS_FILE)
+    if (livre) {
+      const file = JSON.parse(readFileSync(meetingsFile, 'utf8')) as { version: number; meetings: Meeting[]; folders?: unknown[] }
+      if (!file.meetings.some((item) => item.id === livre.id)) writeFileAtomicSync(meetingsFile, `${JSON.stringify({ ...file, meetings: [...file.meetings, livre] }, null, 2)}\n`)
+    }
+    const MID = livre?.id ?? 'sem-reuniao'
+    const resumo = resumoDe(MID)
+    const dueEsperado = livre ? sextaDepois(diaLocalSmoke(livre.startedAt)) : ''
+    const dueIsoOk = resumo !== null && resumo.tasks[0]?.owner === 'Você' && resumo.tasks[0].dueIso === dueEsperado && resumo.tasks[1]?.dueIso === null
+    const LINHA = (indice: number): string => `[data-meeting="${MID}"] [data-summary-tasks] tr[data-summary-task="${indice}"]`
+    await funilRouterPush(contents, `/reunioes/${encodeURIComponent(MID)}`)
+    const aberta = await waitFor(contents, `${routeIs('detalhe')} && document.querySelector('${LINHA(0)} [data-action="tarefa-resumo-adicionar"]') && document.querySelector('${LINHA(1)} [data-action="tarefa-resumo-adicionar"]')`, 10_000)
+    const dataReal = dueEsperado ? `${dueEsperado.slice(8, 10)}/${dueEsperado.slice(5, 7)}` : '-'
+    const linha0 = await evaluate<{ adicionar: string; prazo: string; prazoTexto: string; minhas: boolean; estado: number }>(
+      contents,
+      `({
+        adicionar: document.querySelector('${LINHA(0)} [data-action="tarefa-resumo-adicionar"]')?.textContent ?? '',
+        prazo: document.querySelector('${LINHA(0)} [data-summary-task-prazo]')?.dataset.summaryTaskPrazo ?? '',
+        prazoTexto: document.querySelector('${LINHA(0)} [data-summary-task-prazo]')?.textContent ?? '',
+        minhas: Boolean(document.querySelector('[data-meeting="${MID}"] [data-action="tarefa-resumo-minhas"]')),
+        estado: Math.round(document.querySelector('${LINHA(0)} td')?.getBoundingClientRect().width ?? 0),
+      })`,
+    )
+    await evaluate(contents, `document.querySelector('[data-meeting="${MID}"] [data-summary-tasks]')?.scrollIntoView({ block: 'center', behavior: 'instant' }), true`)
+    await both('detalhe-resumo-tarefas')
+    // "Adicionar" na linha 1 (o participante): origem `reuniao` com o texto, a reunião nos vínculos e o responsável `nome`
+    // (ou `contato`, se o nome casar com um participante que é contato: D-16; a gravada não tem agenda).
+    const dono = resumo?.tasks[1]?.owner ?? null
+    let antes = new Set(tarefas().map((tarefa) => tarefa.id))
+    await clickSelector(contents, `${LINHA(1)} [data-action="tarefa-resumo-adicionar"]`)
+    const t1 = await novaTarefa(antes, (tarefa) => tarefa.origem.tipo === 'reuniao' && tarefa.origem.meetingId === MID)
+    const t1Ok =
+      t1 !== undefined &&
+      t1.origem.tipo === 'reuniao' &&
+      t1.origem.texto === resumo?.tasks[1]?.task &&
+      t1.vinculos.meetingId === MID &&
+      (dono === null || dono === 'Você' ? t1.responsavel.tipo === 'eu' : (t1.responsavel.tipo === 'nome' && t1.responsavel.nome === dono) || t1.responsavel.tipo === 'contato') &&
+      t1.prazo === null &&
+      tarefas().length === antes.size + 1
+    const linha1Ligada = t1 !== undefined && (await waitFor(contents, `document.querySelector('${LINHA(1)}')?.dataset.summaryTaskTarefa === ${JSON.stringify(t1.id)} && document.querySelector('${LINHA(1)} [data-tarefa-link="${t1.id}"]') && document.querySelector('${LINHA(1)} [data-tarefa-feito]')`, 8000))
+    // "Adicionar as minhas": cria só a linha 0 ("Você"), com o prazo do `dueIso`; o botão some.
+    antes = new Set(tarefas().map((tarefa) => tarefa.id))
+    const minhasAntes = await evaluate<boolean>(contents, `Boolean(document.querySelector('[data-meeting="${MID}"] [data-action="tarefa-resumo-minhas"]'))`)
+    if (minhasAntes) await clickSelector(contents, `[data-meeting="${MID}"] [data-action="tarefa-resumo-minhas"]`)
+    const t0 = await novaTarefa(antes, (tarefa) => tarefa.origem.tipo === 'reuniao' && tarefa.origem.meetingId === MID)
+    await wait(300)
+    const soUma = tarefas().filter((tarefa) => !antes.has(tarefa.id)).length === 1
+    const t0Ok = t0 !== undefined && t0.origem.tipo === 'reuniao' && t0.origem.texto === resumo?.tasks[0]?.task && t0.responsavel.tipo === 'eu' && t0.prazo === (resumo?.tasks[0]?.dueIso ?? 'x') && t0.vinculos.meetingId === MID && soUma
+    const linha0Ligada = t0 !== undefined && (await waitFor(contents, `document.querySelector('${LINHA(0)}')?.dataset.summaryTaskTarefa === ${JSON.stringify(t0.id)} && document.querySelector('${LINHA(0)} [data-tarefa-feito]')`, 8000))
+    const minhasSumiu = await waitFor(contents, `!document.querySelector('[data-meeting="${MID}"] [data-action="tarefa-resumo-minhas"]')`, 8000)
+    // A caixa da linha 0 conclui a tarefa.
+    let feita = false
+    if (t0 && linha0Ligada) {
+      await clickSelector(contents, `${LINHA(0)} [data-tarefa-feito]`)
+      for (let attempt = 0; attempt < 100 && !feita; attempt++) {
+        feita = tarefas().find((tarefa) => tarefa.id === t0.id)?.status === 'feita'
+        if (!feita) await wait(50)
+      }
+    }
+    const caixaMarcada = feita && (await waitFor(contents, `document.querySelector('${LINHA(0)} [data-tarefa-feito]')?.getAttribute('aria-checked') === 'true'`, 8000))
+    checks['resumoTarefas'] = {
+      ok: livre !== undefined && dueIsoOk && aberta && linha0.adicionar === 'Adicionar' && linha0.prazo === dataReal && linha0.prazoTexto.startsWith(dataReal) && linha0.minhas && Math.abs(linha0.estado - 32) <= 1 && t1Ok && linha1Ligada && minhasAntes && t0Ok && linha0Ligada && minhasSumiu && feita && caixaMarcada,
+      detail: JSON.stringify({ gravadas: gravadas.length, livre: livre !== undefined, dueIsoDaSextaSeguinte: dueIsoOk, aberta, adicionarNaLinha0: linha0.adicionar === 'Adicionar', dataReal: linha0.prazo === dataReal && linha0.prazoTexto.startsWith(dataReal), minhasVisivel: linha0.minhas, colunaEstado: linha0.estado, participante: t1Ok, responsavel: t1?.responsavel.tipo ?? null, linha1Ligada, minhas: t0Ok, soUma, linha0Ligada, minhasSumiu, feita, caixaMarcada }),
+    }
+
+    // resumoGerarDeNovo (R23): "Gerar de novo" com o resumo pronto de volta: as duas tarefas continuam no arquivo e as duas
+    // linhas continuam ligadas aos mesmos ids; nenhuma tarefa nasce do resumo novo.
+    const criadoAntes = resumo?.createdAt ?? ''
+    const totalAntes = tarefas().length
+    await clickSelector(contents, `[data-meeting="${MID}"] [data-action="regenerate-summary"]`)
+    let novoResumo = false
+    for (let attempt = 0; attempt < 400 && !novoResumo; attempt++) {
+      novoResumo = (resumoDe(MID)?.createdAt ?? criadoAntes) !== criadoAntes
+      if (!novoResumo) await wait(50)
+    }
+    const ligadas =
+      t0 !== undefined &&
+      t1 !== undefined &&
+      (await waitFor(
+        contents,
+        `document.querySelector('[data-meeting="${MID}"] [data-summary="ready"]') && document.querySelector('${LINHA(0)}')?.dataset.summaryTaskTarefa === ${JSON.stringify(t0.id)} && document.querySelector('${LINHA(1)}')?.dataset.summaryTaskTarefa === ${JSON.stringify(t1.id)}`,
+        15_000,
+      ))
+    await wait(300)
+    const continuam = t0 !== undefined && t1 !== undefined && [t0.id, t1.id].every((id) => tarefas().some((tarefa) => tarefa.id === id))
+    checks['resumoGerarDeNovo'] = {
+      ok: novoResumo && ligadas && continuam && tarefas().length === totalAntes,
+      detail: JSON.stringify({ resumoNovo: novoResumo, linhasLigadasAosMesmosIds: ligadas, tarefasNoArquivo: continuam, tarefasAntes: totalAntes, tarefasDepois: tarefas().length }),
+    }
+
+    // emailTarefa (CA9, R24): a mensagem do Paulo (contato desde o 116): "+ Tarefa" ao lado da data; o formulário com o
+    // assunto no título e a frase do vínculo com o contato; "Criar" grava `vinculos.email` e o contato; o aviso com o link.
+    // Na mensagem da própria conta o botão também aparece. No detalhe, "Abrir e-mail" leva à mensagem.
+    const caixa = await openEmailFolder(contents, 'inbox', 1)
+    const lida = caixa && (await clickEmailRow(contents, FUNIL_EMAIL_ASSUNTO))
+    const msgId = await evaluate<string>(contents, `document.querySelector('[data-email-reading]')?.dataset.emailReading ?? ''`)
+    const paulo = contatos().find((contato) => contato.emails.includes(FUNIL_EMAIL_REMETENTE.address))
+    const botao = await waitFor(contents, `document.querySelector('[data-email-reading] [data-action="email-tarefa"]')?.parentElement?.querySelector('[data-email-date]')`, 8000)
+    if (botao) await clickSelector(contents, '[data-email-reading] [data-action="email-tarefa"]')
+    const form = await waitFor(contents, `document.querySelector('[data-email-reading] [data-email-tarefa-form] [data-tarefas-nova-titulo]')?.value === ${JSON.stringify(FUNIL_EMAIL_ASSUNTO)}`, 8000)
+    // O corpo já lido (sem o esqueleto) antes de medir a posição da caixa e do print.
+    const corpoPronto = await waitFor(contents, `document.querySelector('[data-email-reading] [data-email-body]') && !document.querySelector('[data-email-reading] [data-email-body-loading]')`, 10_000)
+    // A view do funil pode chegar depois na janela nova: espera a frase com o contato (o nome não vai para o relatório).
+    const fraseOk = paulo !== undefined && (await waitFor(contents, `(document.querySelector('[data-email-reading] [data-email-tarefa-vinculo]')?.textContent ?? '').startsWith(${JSON.stringify(`Ligada a ${paulo.nome}`)})`, 8000))
+    const formEstado = await evaluate<{ pressionado: boolean; entreCabecalhoECorpo: boolean }>(
+      contents,
+      `(() => {
+        const form = document.querySelector('[data-email-reading] [data-email-tarefa-form]')
+        const corpo = document.querySelector('[data-email-reading] [data-email-body]')
+        const data = document.querySelector('[data-email-reading] [data-email-date]')
+        return {
+          pressionado: document.querySelector('[data-email-reading] [data-action="email-tarefa"]')?.getAttribute('aria-pressed') === 'true',
+          entreCabecalhoECorpo: Boolean(form && corpo && data && data.compareDocumentPosition(form) & Node.DOCUMENT_POSITION_FOLLOWING && form.compareDocumentPosition(corpo) & Node.DOCUMENT_POSITION_FOLLOWING),
+        }
+      })()`,
+    )
+    await both('email-leitura-tarefa')
+    antes = new Set(tarefas().map((tarefa) => tarefa.id))
+    if (form) await clickSelector(contents, '[data-email-reading] [data-email-tarefa-form] [data-action="tarefa-nova-criar"]')
+    const tEmail = await novaTarefa(antes, (tarefa) => tarefa.origem.tipo === 'email')
+    if (tEmail) apagarNoFim.push(tEmail.id)
+    const emailOk =
+      tEmail !== undefined &&
+      tEmail.origem.tipo === 'email' &&
+      tEmail.vinculos.email !== null &&
+      tEmail.vinculos.email.id === msgId &&
+      tEmail.vinculos.email.accountId === tEmail.origem.accountId &&
+      tEmail.vinculos.email.accountId !== '' &&
+      tEmail.vinculos.email.assunto === FUNIL_EMAIL_ASSUNTO &&
+      tEmail.titulo === FUNIL_EMAIL_ASSUNTO &&
+      tEmail.prazo === null &&
+      paulo !== undefined &&
+      tEmail.vinculos.contatoIds.includes(paulo.id)
+    const aviso = tEmail !== undefined && (await waitFor(contents, `document.querySelector('[data-email-reading] [data-email-tarefa-criada="${tEmail.id}"]') && !document.querySelector('[data-email-reading] [data-email-tarefa-form]')`, 8000))
+    const voltouBotao = await waitFor(contents, `document.querySelector('[data-email-reading] [data-action="email-tarefa"]') && !document.querySelector('[data-email-reading] [data-email-tarefa-criada]')`, 8000)
+    const propria = (await clickEmailRow(contents, FUNIL_EMAIL_PROPRIA)) && (await waitFor(contents, `document.querySelector('[data-email-reading] [data-action="email-tarefa"]') && !document.querySelector('[data-email-reading] [data-action="funil-mais-contato"]')`, 8000))
+    let abriuEmail = false
+    if (tEmail) {
+      await funilRouterPush(contents, `/tarefas/${tEmail.id}`)
+      if (await waitFor(contents, `document.querySelector('[data-tarefa-detalhe="${tEmail.id}"] [data-action="tarefa-abrir-email"]')`, 8000)) {
+        await clickSelector(contents, `[data-tarefa-detalhe="${tEmail.id}"] [data-action="tarefa-abrir-email"]`)
+        abriuEmail = await waitFor(contents, `${routeIs('email')} && document.querySelector('[data-email-reading="${msgId}"]')`, 10_000)
+      }
+    }
+    checks['emailTarefa'] = {
+      ok: lida && msgId !== '' && botao && form && corpoPronto && formEstado.pressionado && formEstado.entreCabecalhoECorpo && fraseOk && emailOk && aviso && voltouBotao && propria && abriuEmail,
+      detail: JSON.stringify({ lida, botaoAoLadoDaData: botao, formComOAssunto: form, corpoPronto, pressionado: formEstado.pressionado, entreCabecalhoECorpo: formEstado.entreCabecalhoECorpo, fraseComOContato: fraseOk, tarefa: emailOk, avisoComLink: aviso, botaoDeVoltaEm3s: voltouBotao, naMensagemDaPropriaConta: propria, abrirEmail: abriuEmail }),
+    }
+
+    // whatsappTarefa (CA9, R25): os Detalhes da Ana (contato desde o 116): "+ Tarefa", título "Ligar de volta", print,
+    // "Criar" com a conversa (e o contato) nos vínculos; no detalhe, "Abrir conversa" leva à conversa.
+    await showRoot(contents)
+    await clickNav(contents, 'whatsapp')
+    await waitFor(contents, `document.querySelector('[data-whatsapp-chat="${WA_ANA}"]')`, 8000)
+    await clickSelector(contents, `[data-whatsapp-chat="${WA_ANA}"]`)
+    const conversa = await waitFor(contents, `document.querySelector('[data-whatsapp-conversation="${WA_ANA}"]')`, 8000)
+    if (!(await evaluate<boolean>(contents, `Boolean(document.querySelector('[data-wa-details]'))`))) await clickSelector(contents, '[data-action="toggle-whatsapp-details"]')
+    const botaoWa = await waitFor(contents, `document.querySelector('[data-wa-details] [data-wa-section="contato"] [data-action="whatsapp-tarefa"]')`, 8000)
+    if (botaoWa) await clickSelector(contents, '[data-wa-details] [data-action="whatsapp-tarefa"]')
+    const formWa = await waitFor(contents, `document.querySelector('[data-wa-details] [data-whatsapp-tarefa-form] [data-tarefas-nova-titulo]')?.value === ''`, 8000)
+    if (formWa) await setValue(contents, '[data-wa-details] [data-whatsapp-tarefa-form] [data-tarefas-nova-titulo]', 'Ligar de volta')
+    // O resumo da IA da conversa (ou o aviso de desligado) antes do print, para o painel não mudar no meio.
+    await waitFor(contents, `document.querySelector('[data-wa-details] [data-wa-summary]') || document.querySelector('[data-wa-details] [data-wa-insights="off"]')`, 20_000)
+    await settle(contents)
+    shots.push(await capture(win, ctx.outDir, 'whatsapp-detalhes-tarefa-light'))
+    const ana = contatos().find((contato) => contato.whatsappChatId === WA_ANA)
+    antes = new Set(tarefas().map((tarefa) => tarefa.id))
+    if (formWa) await clickSelector(contents, '[data-wa-details] [data-whatsapp-tarefa-form] [data-action="tarefa-nova-criar"]')
+    const tWa = await novaTarefa(antes, (tarefa) => tarefa.origem.tipo === 'whatsapp')
+    if (tWa) apagarNoFim.push(tWa.id)
+    const waOk = tWa !== undefined && tWa.origem.tipo === 'whatsapp' && tWa.origem.chatId === WA_ANA && tWa.vinculos.whatsappChatId === WA_ANA && tWa.titulo === 'Ligar de volta' && (ana === undefined || tWa.vinculos.contatoIds.includes(ana.id))
+    const avisoWa = tWa !== undefined && (await waitFor(contents, `document.querySelector('[data-wa-details] [data-whatsapp-tarefa-criada="${tWa.id}"]') && !document.querySelector('[data-wa-details] [data-whatsapp-tarefa-form]')`, 8000))
+    let abriuConversa = false
+    if (tWa) {
+      await funilRouterPush(contents, `/tarefas/${tWa.id}`)
+      if (await waitFor(contents, `document.querySelector('[data-tarefa-detalhe="${tWa.id}"] [data-action="tarefa-abrir-conversa"]')`, 8000)) {
+        await clickSelector(contents, `[data-tarefa-detalhe="${tWa.id}"] [data-action="tarefa-abrir-conversa"]`)
+        abriuConversa = await waitFor(contents, `${routeIs('whatsapp')} && document.querySelector('[data-whatsapp-conversation="${WA_ANA}"]')`, 10_000)
+      }
+    }
+    checks['whatsappTarefa'] = {
+      ok: conversa && botaoWa && formWa && waOk && avisoWa && abriuConversa,
+      detail: JSON.stringify({ conversa, botaoNoBlocoContato: botaoWa, formComTituloVazio: formWa, tarefa: waOk, contatoNosVinculos: ana !== undefined && tWa !== undefined && tWa.vinculos.contatoIds.includes(ana.id), avisoComLink: avisoWa, abrirConversa: abriuConversa }),
+    }
+  } finally {
+    // As do email e do WhatsApp saem; as do resumo ficam (D17: os blocos seguintes medem pela view).
+    for (const id of apagarNoFim) await api('scribe:tarefas-apagar', { id }).catch(() => undefined)
+    if (themeBefore !== 'system') await evaluate(contents, `window.__scribeApi.invoke('scribe:settings-update', { theme: '${themeBefore}' }).then(() => true)`).catch(() => undefined)
+    nativeTheme.themeSource = 'system'
+    win.destroy()
+    console.log(`tarefas: Resumo, Email e WhatsApp em ${((Date.now() - startedAt) / 1000).toFixed(1)} s`)
+  }
+}
+
 /**
  * Contrato 117 (CA16 da spec, R41 a R45), numa janela que troca de tema no lugar, com o agente ACP falso e o `funil.json`
  * da fixture: a fonte Funil primeira e desligada no Contexto (sem `FUNIL.md` na pasta), ligada com o `FUNIL.md` (a
@@ -15469,6 +15733,8 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
   const funil: Record<string, Check> = {}
   /** Contrato 123: a tela Tarefas, o item da barra lateral, ⌘⇧T e o lembrete. */
   const tarefasTela: Record<string, Check> = {}
+  /** Contrato 126: as reuniões gravadas no laço por tema (uma por tema, com o resumo falso), para o Resumo com as tarefas. */
+  const gravadas: Meeting[] = []
   let analysisMeasured: AnalysisMeasured | null = null
 
   // A fixture da sessão real, reduzida pelo mesmo redutor do app: a mesma dos testes (CA4) e do smoke.
@@ -15586,6 +15852,7 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
       await waitFor(contents, routeIs('detalhe'))
       const saved = readMeetings(ctx.userDataDir)
       const record = saved[0]
+      if (record) gravadas.push(record)
       // Contrato 08: o resumo sai sozinho (claude falso) e o detalhe abre na aba "Resumo".
       const summaryResult = await summaryAfterEnd(win, ctx, record, endedAt, themeName === 'light')
       recording[themeName === 'light' ? 'summary' : 'summaryDark'] = summaryResult.check
@@ -15921,6 +16188,11 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
     // Contatos e Empresas e antes do bloqueio (o email e o WhatsApp falsos ainda conectados).
     await funilTelasExistentesChecks(ctx, watch, funil, screenshots)
 
+    // Contrato 126: as Tarefas no Resumo de uma reunião gravada no laço, na leitura do email e nos Detalhes do WhatsApp,
+    // logo depois das telas existentes do funil (o email e o WhatsApp falsos ainda conectados; o Paulo e a Ana já
+    // contatos) e antes do bloqueio. Termina com as duas tarefas do resumo e sem as do email e do WhatsApp.
+    await tarefasTelasExistentesChecks(ctx, watch, tarefasTela, screenshots, gravadas)
+
     // Contrato 117: o funil no Assistente (a fonte, os cartões e o "Abrir") e o agente com "Pode ler o funil", com o agente
     // ACP falso, logo depois das telas existentes e antes do bloqueio (que recusa o canal novo junto com os outros cartões).
     // Termina com op-vistoria de volta à Proposta e sem a oportunidade, o contato e o agente que criou.
@@ -16033,6 +16305,8 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
   // Contrato 112: o nível Funil e o kanban.
   for (const [name, check] of Object.entries(funil)) if (!check.ok) failures.push(`funil ${name}: ${check.detail}`)
   for (const [name, check] of Object.entries(tarefasTela)) if (!check.ok) failures.push(`tarefas ${name}: ${check.detail}`)
+  // Contrato 126: o Resumo, o email e o WhatsApp.
+  for (const name of ['resumoTarefas', 'resumoGerarDeNovo', 'emailTarefa', 'whatsappTarefa']) if (!tarefasTela[name]) failures.push(`tarefas ${name}: não executado`)
   for (const name of ['funilNav', 'funilLevel', 'funilRedirect', 'funilNavigateEvent', 'funilKanban', 'funilCollapsed', 'funilFiltros', 'funilNova', 'funilEtapas', 'funilDragMove', 'funilDragLost']) {
     if (!funil[name]) failures.push(`funil ${name}: não executado`)
   }
@@ -16095,7 +16369,9 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
   // Contrato 123: +9 (Todas agrupadas por oportunidade, o detalhe, a nova tarefa e as Sugestões, nos dois temas, e Hoje
   // vazia, só no claro).
   // Contrato 125: +1 (a ficha do contato com o bloco Tarefas, só no claro).
-  const expectedShots = SCREENS.length * THEMES.length + 215
+  // Contrato 126: +5 (a tabela de tarefas do Resumo e o "+ Tarefa" na leitura do email, nos dois temas, e o "+ Tarefa" nos
+  // Detalhes do WhatsApp, só no claro).
+  const expectedShots = SCREENS.length * THEMES.length + 220
   if (screenshots.length !== expectedShots) failures.push(`${screenshots.length} PNGs em vez de ${expectedShots}`)
   for (const shot of screenshots) {
     if (shot.name === MEETING_PROMPT_SHOT) {

@@ -86,6 +86,7 @@ import { fakeAiNotes } from './fake-ai-notes.mjs'
 import { fakeAnalysis } from './fake-analysis.mjs'
 import { fakeCorrection } from './fake-correct.mjs'
 import { fakeDraft } from './fake-draft.mjs'
+import { fridayAfterMeeting } from './fake-summary-due.mjs'
 import { fakeWhatsAppInsights } from './fake-whatsapp-insights.mjs'
 
 export const FAKE_ACP_VERSION = '0.107.0-falso'
@@ -601,8 +602,8 @@ export function fakeAcpAgent({ log = () => undefined, pause = 300, mcpStatus = n
           overview: `Reunião com ${lines.length} falas de ${speakers.join(' e ')}, resumida pelo agente. A conversa tratou da captura do microfone e do áudio do sistema durante a gravação.`,
           decisions: ['Manter a captura do microfone separada do áudio do sistema.'],
           tasks: [
-            { task: 'Revisar a transcrição da reunião', owner: 'Você', due: 'sexta-feira' },
-            { task: 'Enviar as notas aos participantes', owner: participant, due: null },
+            { task: 'Revisar a transcrição da reunião', owner: 'Você', due: 'sexta-feira', dueIso: fridayAfterMeeting(content) },
+            { task: 'Enviar as notas aos participantes', owner: participant, due: null, dueIso: null },
           ],
         }
         const text = `\`\`\`json\n${JSON.stringify(summary, null, 2)}\n\`\`\``
