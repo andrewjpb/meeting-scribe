@@ -16,6 +16,7 @@ import type { NavegadorState } from '../shared/navegador'
 import type { AppPluginId, PluginSaveResult } from '../shared/plugins'
 import { privacyPaneUrl } from '../shared/privacy'
 import type { MainEvents } from '../shared/ipc'
+import type { AvisoTarefa } from '../shared/tarefas'
 import type { AgentProfileId, AppSettings } from '../shared/settings-defaults'
 import type { TranscriptDocument } from '../shared/transcription'
 import { WHATSAPP_CHAT_ID_PATTERN, whatsappStateLabel, type WhatsAppMessage } from '../shared/whatsapp'
@@ -67,6 +68,10 @@ import { createFunilAlerts } from './funil/alerts'
 import { funilMarkdown } from './funil/markdown'
 import { createFunilService, type FunilService } from './funil/service'
 import { createFunilStore } from './funil/store'
+import { registerTarefasIpc } from './tarefas/ipc'
+import { avisoMostrado, createDestinoPendente } from './tarefas/lembretes'
+import { createTarefasService, type TarefasService } from './tarefas/service'
+import { createTarefasStore } from './tarefas/store'
 import { createAiNotesService, type AiNotesService } from './meetings/ai-notes-service'
 import { createAnalysisService, type AnalysisService } from './meetings/analysis-service'
 import { createMeetingsIndex, type MeetingsIndex } from './meetings/overview'
@@ -239,6 +244,10 @@ const agentNotes = new Map<string, Set<string>>()
 const NO_NOTES: ReadonlySet<string> = new Set()
 /** "Abrir ao entrar no Mac": o último valor aplicado (só muda o item de login quando a pessoa troca). */
 let loginItemApplied: boolean | null = null
+/** Contrato 122 (R12, D7): o "Abrir" de uma tarefa pedido com o app bloqueado, mandado ao desbloquear. */
+const destinoTarefa = createDestinoPendente()
+/** Contrato 122: o serviço das tarefas, para reemitir a view ao desbloquear (o tick do dia pode ter rodado bloqueado). */
+let tarefasService: TarefasService | null = null
 
 /**
  * ⌘W ou ⌘Q com gravação em andamento: diálogo nativo. Bloqueado, só "Cancelar"; desbloqueado, também
@@ -289,6 +298,8 @@ function applyLockStatus(status: LockStatus): void {
   const item = Menu.getApplicationMenu()?.getMenuItemById(MENU_IDS.lock)
   if (item) item.enabled = status.canLock && !status.locked
   broadcast(appWindows(), 'scribe:lock-state', status)
+  // Contrato 122 (R12): o "Abrir" de uma tarefa pedido bloqueado chega agora, depois do estado desbloqueado.
+  if (!status.locked) destinoTarefa.desbloqueou((id) => sendWhenLoaded(mainWindow ?? showMainWindow(), 'scribe:open-tarefa', { id }))
   // Contrato 24: bloqueado, nada do WhatsApp chega às janelas; ao desbloquear, o estado de agora.
   if (!status.locked && whatsappService) broadcast(appWindows(), 'scribe:whatsapp-state', whatsappService.status())
   // Contrato 42: o mesmo para as contas de email.
@@ -307,6 +318,15 @@ function applyLockStatus(status: LockStatus): void {
   }
   // Contrato 12: o mesmo para as próximas reuniões e a faixa da agenda.
   if (!status.locked && calendarService) broadcast(appWindows(), 'scribe:calendar-state', calendarService.view())
+  // Contrato 122 (R12): a lista de agora, com o dia de hoje (a virada e os lembretes podem ter acontecido bloqueado).
+  if (!status.locked && tarefasService) {
+    void tarefasService.view().then(
+      (view) => {
+        if (!lockService?.isLocked()) broadcast(appWindows(), 'scribe:tarefas-changed', view)
+      },
+      (error: unknown) => console.error('[tarefas] view ao desbloquear:', error instanceof Error ? error.message : String(error)),
+    )
+  }
 }
 
 /** "Bloquear" pelo menu ou ⌘⇧L, pelo `powerMonitor` ou por falta de uso; só bloqueia com senha ou Touch ID. */
@@ -356,7 +376,7 @@ function showMainWindow(): BrowserWindow {
 }
 
 /** Manda ao renderer depois que a página carregou (janela recém-aberta). */
-function sendWhenLoaded<C extends 'scribe:navigate' | 'scribe:open-run' | 'scribe:open-whatsapp' | 'scribe:open-meeting' | 'scribe:open-settings' | 'scribe:open-email'>(
+function sendWhenLoaded<C extends 'scribe:navigate' | 'scribe:open-run' | 'scribe:open-whatsapp' | 'scribe:open-meeting' | 'scribe:open-settings' | 'scribe:open-email' | 'scribe:open-tarefa'>(
   win: BrowserWindow,
   channel: C,
   payload: MainEvents[C],
@@ -392,6 +412,38 @@ function showAutomationNotice(notice: AutomationNotice): void {
     // Achado só no servidor (CA7): não está na INBOX do app; o "Abrir" vai ao lembrete, que diz a pasta.
     else if (notice.email && !notice.email.mailbox) sendWhenLoaded(showMainWindow(), 'scribe:open-email', { accountId: notice.email.accountId, id: notice.email.messageId })
     else sendWhenLoaded(showMainWindow(), 'scribe:open-run', { runId: notice.runId })
+  }
+  item.on('click', open)
+  item.on('action', open)
+  item.on('close', () => liveNotices.delete(item))
+  liveNotices.add(item)
+  item.show()
+}
+
+/**
+ * Contrato 122 (D7): o "Abrir" de uma tarefa (`null`, a lista). A janela vem para a frente; com o app bloqueado, o
+ * destino fica guardado no main e vai ao desbloquear (`applyLockStatus`). O aviso "Hoje" (124) usa este caminho.
+ */
+function openTarefa(id: string | null): void {
+  const win = showMainWindow()
+  destinoTarefa.abrir(id, lockService?.isLocked() ?? false, (destino) => sendWhenLoaded(win, 'scribe:open-tarefa', { id: destino }))
+}
+
+/**
+ * Contrato 122 (R12, D6): a notificação "Tarefa" de um lembrete, com "Abrir". Bloqueado, sem o título (só a marca e
+ * "Você tem uma tarefa com lembrete"). No smoke, o substituto registra, com o "Abrir", e nada aparece.
+ */
+function showTarefaNotice(aviso: AvisoTarefa): void {
+  const shown = avisoMostrado(aviso, lockService?.isLocked() ?? false, brandName)
+  if (smokeFixtures) {
+    smokeFixtures.tarefas.notifications.push({ ...shown, open: () => openTarefa(aviso.tarefaId) })
+    return
+  }
+  if (!Notification.isSupported()) return
+  const item = new Notification({ title: shown.title, body: shown.body, actions: [{ type: 'button', text: 'Abrir' }] })
+  const open = (): void => {
+    liveNotices.delete(item)
+    openTarefa(aviso.tarefaId)
   }
   item.on('click', open)
   item.on('action', open)
@@ -948,6 +1000,8 @@ interface AppServices {
   funnel: FunnelExtractService
   /** Contrato 113: o que os canais `scribe:funil-proposta-*` usam (e o `proposals.remove` ao excluir a reunião). */
   funilProposta: FunilPropostaIpcDeps
+  /** Contrato 122: as tarefas (`tarefas.json`), com os lembretes no tick das Automações. */
+  tarefas: TarefasService
 }
 
 /**
@@ -1386,9 +1440,11 @@ function createAppServices(userData: string): AppServices {
   inviteSuggestChannels = inviteSuggest
   // Contrato 32: os Detalhes da conversa (resumo, humor, pendências) pelo mesmo motor, numa execução curta sem
   // ferramenta nenhuma. Só lê as mensagens; o resultado fica em `whatsapp/insights.json`.
+  // Contrato 122: o mesmo cache também é lido pelas sugestões das tarefas.
+  const insightsCache = createInsightsCache(join(userData, WHATSAPP_DIR, INSIGHTS_FILE))
   const whatsappInsights = createInsightsService({
     settings,
-    cache: createInsightsCache(join(userData, WHATSAPP_DIR, INSIGHTS_FILE)),
+    cache: insightsCache,
     locate: () => claude.locate(),
     chat: (chatId) => whatsapp.findChat(chatId),
     messages: (chatId, max) => whatsapp.lastMessages(chatId, max),
@@ -1750,7 +1806,11 @@ function createAppServices(userData: string): AppServices {
       if (event.type === 'done') trayController?.refresh()
       if (!lockService?.isLocked()) broadcast(appWindows(), 'scribe:automation-event', event)
     },
-    onTick: (at) => funilAlerts.tick(at),
+    // Contrato 122 (D6): os lembretes das tarefas no mesmo tick, depois do aviso do funil.
+    onTick: async (at) => {
+      await funilAlerts.tick(at)
+      await tarefas.dispararLembretes(at)
+    },
     ...(smokeAutomations ? { now: () => Date.now() + smokeAutomations.skewMs } : {}),
     // Contrato 51: só a tarefa com "Pode enviar email" envia, sem clique, pelo caminho interno do email (nunca pelo IPC),
     // depois das regras da permissão a cada envio; e lê o email com as mesmas ferramentas do Assistente. Bloqueado, nada.
@@ -1896,6 +1956,26 @@ function createAppServices(userData: string): AppServices {
   })
   // Contrato 115: o alerta diário (no tick das Automações) e o `FUNIL.md` dos agentes com "Pode ler o funil".
   const funilAlerts = createFunilAlerts({ view: () => funil.view(), ultimoAviso: async () => (await funilStore.read()).ultimoAvisoEm, settings: () => settings.get(), marcar: (at) => funil.marcarAviso(at), notify: showFunilNotice, timeZone, ...devLog })
+  // Contrato 122: as tarefas leem funil, reuniões, análises e WhatsApp só pelos caches; bloqueado, a view não vai às janelas.
+  const tarefas = createTarefasService({
+    store: createTarefasStore({ dir: userData, ...devLog }),
+    funil: { state: () => funilStore.read() },
+    meetings,
+    summaries,
+    analyses: { list: (id) => analysis.list(id) },
+    insights: insightsCache,
+    whatsapp: { chats: () => whatsapp.chats() },
+    settings: () => settings.get(),
+    timeZone,
+    notify: showTarefaNotice,
+    onChange: (view) => {
+      if (!lockService?.isLocked()) broadcast(appWindows(), 'scribe:tarefas-changed', view)
+    },
+    // No smoke, o mesmo relógio adiantado do tick: a view e o tick concordam sobre o dia de hoje.
+    ...(smokeAutomations ? { now: () => Date.now() + smokeAutomations.skewMs } : {}),
+    ...devLog,
+  })
+  tarefasService = tarefas
   const funilMarkdownText = async (): Promise<string> => {
     const [view, { funil: config }, lista] = await Promise.all([funil.view(), settings.get(), meetings.list()])
     return funilMarkdown({ view, diasEsfriar: config.diasEsfriar, reunioes: new Map(lista.map((meeting) => [meeting.id, meeting.title])), now: Date.now(), timeZone: timeZone() })
@@ -1963,6 +2043,7 @@ function createAppServices(userData: string): AppServices {
     funil,
     funnel,
     funilProposta: { funnel, proposals: funilPropostas, store: funilStore, meetings, onChange: notifyProposta },
+    tarefas,
   }
 }
 
@@ -2143,6 +2224,7 @@ function registerIpc(services: AppServices): void {
   // Só o smoke recebe o sinal gerado; o app normal sempre capta microfone e sistema de verdade.
   handle('scribe:capture-mode', appOrigin, () => (smoke ? 'synthetic' : 'real'))
   registerFunilIpc({ appOrigin, funil: services.funil, proposta: services.funilProposta, log: (message) => console.error(message) })
+  registerTarefasIpc({ appOrigin, tarefas: services.tarefas, log: (message) => console.error(message) })
   handle('scribe:meetings-list', appOrigin, () => meetings.list())
   handle('scribe:meetings-get', appOrigin, (_event, { id }) => meetings.get(id))
   handle('scribe:meetings-create', appOrigin, async (_event, input) => {

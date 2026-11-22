@@ -226,6 +226,8 @@ export interface SmokeFixtures {
   whatsapp: { indexDir: string; requirements: string }
   /** Automações (contrato 23): relógio, notificações, ícone da barra de menus, Dock e "abrir ao entrar" substitutos. */
   automations: SmokeAutomations
+  /** Contrato 122: as notificações "Tarefa" que o app mostraria (com o "Abrir"), separadas das das Automações. */
+  tarefas: { notifications: { title: string; body: string; tarefaId: string | null; open: () => void }[] }
   /** Microsoft falsa (contrato 12): token, perfil, foto e agendas em memória; nada sai da máquina. */
   microsoft: FakeMicrosoft
   /** Contrato 69: o Instagram falso (perfil e renovação do token) e o relógio das redes; nada sai da máquina. */
@@ -431,6 +433,7 @@ export function createSmokeFixtures(currentVersion: string, userDataDir: string)
     google: createFakeGoogle({ clientId: SMOKE_GOOGLE_CLIENT_ID, clientSecret: SMOKE_GOOGLE_CLIENT_SECRET, profile: { name: 'Andrea Teste', email: 'andrea.teste@example.com' } }),
     whatsapp: writeFakeIndex(join(userDataDir, 'whatsapp-indice-falso')),
     automations: { skewMs: 0, notifications: [], trayImages: [], trayTitles: [], dock: { hides: 0, shows: 0 }, loginItems: [], quitRequests: 0 },
+    tarefas: { notifications: [] },
     microsoft: createFakeMicrosoft({ clientId: SMOKE_MICROSOFT_CLIENT_ID, profile: { name: 'Bruno Teste', email: 'bruno.teste@example.com' } }),
     instagram: createFakeInstagram(),
     s3: createFakeS3({ endpoint: SMOKE_S3_ENDPOINT, bucket: SMOKE_S3_BUCKET, publicBaseUrl: SMOKE_S3_PUBLIC_BASE_URL, accessKeyId: SMOKE_S3_ACCESS_KEY_ID, secretAccessKey: SMOKE_S3_SECRET_ACCESS_KEY, strictSignature: true }),

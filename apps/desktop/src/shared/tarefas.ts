@@ -175,3 +175,62 @@ export interface SugestaoTarefa {
   /** Quem a fonte aponta, como veio (o resumo diz "Você"). */
   responsavelTexto: string | null
 }
+
+// Contrato 122: o que o serviço, os canais e o store do renderer trocam.
+
+/** Exceção ao gravar (o canal responde `falhou` com este texto). */
+export const TAREFAS_FALHOU_TEXTO = 'Não foi possível salvar. Tente de novo.'
+/** Exceção ao montar a lista (`scribe:tarefas-get`). */
+export const TAREFAS_LEITURA_FALHOU_TEXTO = 'Não foi possível ler as tarefas. Tente de novo.'
+/** O pedido nem chegou ao main (ou a resposta não voltou). */
+export const TAREFAS_TRANSPORTE_TEXTO = 'Não foi possível falar com o app. Tente de novo.'
+
+/**
+ * A lista inteira para a tela (D5): as tarefas, o dia de hoje no fuso do Mac e o nome de cada oportunidade, contato,
+ * reunião e conversa citados nas tarefas (só esses ids), resolvidos no main pelos caches.
+ */
+export interface TarefasView {
+  tarefas: Tarefa[]
+  /** `AAAA-MM-DD`. */
+  hoje: string
+  nomes: {
+    oportunidades: Record<string, string>
+    contatos: Record<string, string>
+    reunioes: Record<string, string>
+    whatsapp: Record<string, string>
+  }
+}
+
+/** A leitura falhou (`scribe:tarefas-get`) ou o pedido não chegou ao main. */
+export interface TarefasFalha {
+  ok: false
+  erro: 'falhou'
+  mensagem: string
+}
+
+/** Resposta de uma gravação: o id da tarefa (`null` ao apagar e ao ignorar) ou o erro com o texto para a tela. */
+export type TarefasActionResult = { ok: true; id: string | null } | { ok: false; erro: TarefasErro | 'falhou'; mensagem: string }
+
+/** "Adicionar" do resumo (R22): o índice de cada linha criada e o id da tarefa; linha já adicionada não volta aqui. */
+export type TarefasResumoResult = { ok: true; criadas: { indice: number; id: string }[] } | { ok: false; erro: TarefasErro | 'falhou'; mensagem: string }
+
+/**
+ * Edição parcial pelo canal: como `TarefaPatch`, mas o lembrete pedido como no `TarefaInput` (`'padrao'`, `'nenhum'`
+ * ou epoch ms). Sem `lembrete` e com prazo novo, o lembrete padrão acompanha o prazo (R11).
+ */
+export type TarefaSalvar = { id: string } & Omit<TarefaPatch, 'lembreteEm'> & { lembrete?: 'padrao' | 'nenhum' | number | undefined }
+
+/** Gancho do funil (R10): a tarefa ligada a uma oportunidade foi criada, concluída ou mudou de prazo. */
+export interface EventoOportunidade {
+  oportunidadeId: string
+  tarefaId: string
+  acao: 'criada' | 'feita' | 'prazo'
+  titulo: string
+}
+
+/** Notificação de uma tarefa (R12); `tarefaId` `null` abre a lista. */
+export interface AvisoTarefa {
+  title: string
+  body: string
+  tarefaId: string | null
+}
