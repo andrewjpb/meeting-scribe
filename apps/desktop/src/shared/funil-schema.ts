@@ -65,7 +65,8 @@ const oportunidadeSchema = z.object({
   ordem: z.number().int().min(0),
   valor: z.number().int().min(0).nullable(),
   previsao: dia.nullable(),
-  proximoPasso: z.object({ texto: z.string().min(1).max(FUNIL_NOTAS_MAX), data: dia.nullable() }).nullable(),
+  // Contrato 124 (R35): legado, só a migração lê; o store não grava mais.
+  proximoPasso: z.object({ texto: z.string().min(1).max(FUNIL_NOTAS_MAX), data: dia.nullable() }).nullable().exactOptional(),
   meetingIds: vinculos,
   whatsappChatIds: vinculos,
   emails: z
@@ -84,10 +85,11 @@ const eventoSchema = z.object({
   id,
   oportunidadeId: id,
   at,
-  tipo: z.enum(['criada', 'etapa', 'valor', 'proximo-passo', 'nota', 'vinculo', 'ganho', 'perdido', 'reaberta']),
+  tipo: z.enum(['criada', 'etapa', 'valor', 'proximo-passo', 'nota', 'vinculo', 'ganho', 'perdido', 'reaberta', 'tarefa']),
   texto: z.string().max(FUNIL_NOTAS_MAX),
   de: z.string().max(FUNIL_ETAPA_NOME_MAX).exactOptional(),
   para: z.string().max(FUNIL_ETAPA_NOME_MAX).exactOptional(),
+  tarefa: z.object({ id, acao: z.enum(['criada', 'feita', 'prazo']) }).exactOptional(),
 })
 
 export const funilStateSchema = z.object({

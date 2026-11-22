@@ -25,6 +25,7 @@ import { createFunilService, type FunilService } from '../src/main/funil/service
 import { createFunilStore } from '../src/main/funil/store'
 import { chatSourcesOf } from '../src/shared/chat'
 import type { FunilActionResult, FunilView, Oportunidade } from '../src/shared/funil'
+import type { Tarefa, TarefaInput, TarefaSalvar, TarefasActionResult } from '../src/shared/tarefas'
 import { etapasPadrao } from '../src/shared/funil-logic'
 import { CHATS_DIR, chatScopeSchema, createFileChatStore } from '../src/main/chat/store'
 import { assistantSystemPrompt, chatStepOf } from '../src/main/claude-cli/chat'
@@ -1140,9 +1141,42 @@ describe('contrato 117: o funil no Assistente', () => {
     return result.id
   }
   /** O funil de verdade (store e serviço do 110) numa pasta do teste: a Ana e o "Portal do Franqueado" em Proposta. */
-  async function funilComPortal(): Promise<{ service: FunilService; etapa: (nome: string) => string; ana: string; portal: string }> {
+/** Contrato 124: o serviço das tarefas falso, com memória (o funil deduplica o passo pelas tarefas abertas). */
+  function tarefasFalsas() {
+    const lista: Tarefa[] = []
+    const criar = vi.fn(async (input: TarefaInput): Promise<TarefasActionResult> => {
+      const id = `tarefa-${lista.length + 1}`
+      lista.push({
+        id,
+        titulo: input.titulo,
+        detalhe: '',
+        status: 'aberta',
+        importante: false,
+        prazo: input.prazo ?? null,
+        lembreteEm: null,
+        lembreteDisparadoEm: null,
+        responsavel: { tipo: 'eu' },
+        origem: input.origem,
+        vinculos: { oportunidadeId: input.vinculos?.oportunidadeId ?? null, contatoIds: [], empresaId: null, meetingId: null, email: null, whatsappChatId: null },
+        historico: [],
+        criadaEm: 0,
+        atualizadaEm: 0,
+        feitaEm: null,
+      })
+      return { ok: true, id }
+    })
+    const salvar = vi.fn(async (request: TarefaSalvar): Promise<TarefasActionResult> => {
+      const tarefa = lista.find((item) => item.id === request.id)
+      if (tarefa && request.prazo !== undefined) tarefa.prazo = request.prazo
+      return { ok: true, id: request.id }
+    })
+    return { lista, criar, salvar, todas: async (): Promise<Tarefa[]> => lista.map((tarefa) => ({ ...tarefa })) }
+  }
+  async function funilComPortal(): Promise<{ service: FunilService; etapa: (nome: string) => string; ana: string; portal: string; tarefas: ReturnType<typeof tarefasFalsas> }> {
     const funilDir = join(dir, 'funil')
     mkdirSync(funilDir)
+    // Contrato 124: o próximo passo vira tarefa pelo serviço das tarefas (falso aqui).
+    const tarefas = tarefasFalsas()
     const service = createFunilService({
       store: createFunilStore({ dir: funilDir, now: () => NOW }),
       meetings: { list: async () => [] },
@@ -1151,13 +1185,14 @@ describe('contrato 117: o funil no Assistente', () => {
       whatsapp: { chats: async () => [], me: () => null },
       chooseImportFile: async () => null,
       onChange: () => undefined,
+      tarefas: { todas: tarefas.todas, criar: tarefas.criar, salvar: tarefas.salvar },
       now: () => NOW,
     })
     const etapas = (await service.view()).state.etapas
     const etapa = (nome: string): string => etapas.find((item) => item.nome === nome)?.id ?? '?'
     const ana = okId(await service.contatoSave({ contato: { nome: 'Ana Souza', emails: ['ana@cliente.example'], telefones: ['(11) 91111-0000'] }, origem: 'manual' }))
     const portal = okId(await service.oportunidadeSave({ oportunidade: { titulo: 'Portal do Franqueado', etapaId: etapa('Proposta'), contatoIds: [ana] } }))
-    return { service, etapa, ana, portal }
+    return { service, etapa, ana, portal, tarefas }
   }
   const chatWith = (actions: ChatAction[]): Chat => ({
     id: 'c1',
@@ -1217,13 +1252,13 @@ describe('contrato 117: o funil no Assistente', () => {
       fechadoEm: null,
       arquivado: false,
     }
-    const view: FunilView = { state: { version: 1, contatos: [], empresas: [], oportunidades: [parada], etapas, eventos: [], ignorados: [], ultimoAvisoEm: null }, ultimas: {} }
+    const view: FunilView = { state: { version: 1, contatos: [], empresas: [], oportunidades: [parada], etapas, eventos: [], ignorados: [], ultimoAvisoEm: null }, ultimas: {}, proximosPassos: { 'op-parada': null } }
     let locked = false
     const deps: AssistantSourcesDeps = {
       state: () => Promise.resolve({ now: NOW, timeZone: SP, version: '1.0.0', recording: null, google: 'não conectada', whatsapp: 'Não instalado', automationsPaused: null, agents: [], tasks: [] }),
       guide: () => Promise.resolve('# Guia {{versao}}'),
       automations: () => Promise.resolve({ agents: [], tasks: [], runs: [] }),
-      funil: () => Promise.resolve(locked ? null : funilMarkdown({ view, diasEsfriar: 7, reunioes: new Map(), now: NOW, timeZone: SP })),
+      funil: () => Promise.resolve(locked ? null : funilMarkdown({ view, tarefas: [], diasEsfriar: 7, reunioes: new Map(), now: NOW, timeZone: SP })),
     }
     const file = join(dir, FUNIL_MD_FILE)
     const off = await writeSources(deps, dir, { kind: 'all' })
@@ -1286,7 +1321,7 @@ describe('contrato 117: o funil no Assistente', () => {
   })
 
   it('o clique grava pelo serviço do funil uma vez só: mover (evento de etapa e nota), criar (com o que o cartão mudou) e contato', async () => {
-    const { service, portal, etapa } = await funilComPortal()
+    const { service, portal, etapa, tarefas } = await funilComPortal()
     const extracted = await extractActions(
       [
         block({ tipo: 'oportunidade-mover', oportunidadeId: portal, etapa: 'Negociação', nota: 'A Ana leva à diretoria.' }),
@@ -1337,9 +1372,32 @@ describe('contrato 117: o funil no Assistente', () => {
     expect(bruna).toMatchObject({ origem: 'assistente', emails: ['bruna@parceiro.example'] })
     expect(await saved('a3')).toMatchObject({ status: 'done', result: 'Contato criado', contatoId: bruna?.id })
     expect((await actions.funil(ref('a4'))).ok).toBe(true)
-    expect((await service.view()).state.oportunidades.find((item) => item.id === portal)?.proximoPasso).toEqual({ texto: 'Ligar para a Ana', data: '2026-11-24' })
+    // Contrato 124: o passo não é gravado na oportunidade; vira tarefa ligada a ela.
+    expect((await service.view()).state.oportunidades.find((item) => item.id === portal)).not.toHaveProperty('proximoPasso')
+    expect(tarefas.criar).toHaveBeenCalledTimes(1)
+    expect(tarefas.criar.mock.calls[0]?.[0]).toMatchObject({ titulo: 'Ligar para a Ana', prazo: '2026-11-24', origem: { tipo: 'funil', oportunidadeId: portal } })
     expect(await saved('a4')).toMatchObject({ status: 'done', result: 'Próximo passo salvo' })
     expect(actionsHistory((await store.get('c1'))?.messages[1]?.actions)).toContain('- Contato criado: Bruna Reis (Contato criado)')
+  })
+
+  it('contrato 124: o cartão de próximo passo repetido não duplica a tarefa; com outra data, muda o prazo dela', async () => {
+    const { service, portal, tarefas } = await funilComPortal()
+    const extracted = await extractActions(
+      [
+        block({ tipo: 'oportunidade-proximo-passo', oportunidadeId: portal, texto: 'Ligar para a Ana', data: '2026-11-24' }),
+        block({ tipo: 'oportunidade-proximo-passo', oportunidadeId: portal, texto: 'ligar para a ANA', data: '2026-11-24' }),
+        block({ tipo: 'oportunidade-proximo-passo', oportunidadeId: portal, texto: 'Ligar para a Ana', data: '2026-11-26' }),
+      ].join('\n'),
+      resolver({ funil: () => service.view() }),
+    )
+    const store = createFileChatStore({ dir })
+    await store.save(chatWith(extracted.actions))
+    const actions = createChatActions({ store, createReminder: () => Promise.reject(new Error('não')), timeZone: () => SP, now: () => NOW, funil: service })
+    const ids = extracted.actions.map((action) => action.id)
+    for (const actionId of ids) expect((await actions.funil({ chatId: 'c1', index: 1, actionId })).ok).toBe(true)
+    expect(tarefas.criar).toHaveBeenCalledTimes(1)
+    expect(tarefas.salvar).toHaveBeenCalledTimes(1)
+    expect(tarefas.lista.map((tarefa) => [tarefa.titulo, tarefa.prazo, tarefa.vinculos.oportunidadeId])).toEqual([['Ligar para a Ana', '2026-11-26', portal]])
   })
 
   it('mover para Perdido usa a nota como motivo da perda; a oportunidade que sumiu antes do clique vira `failed`', async () => {

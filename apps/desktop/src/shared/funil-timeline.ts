@@ -1,10 +1,13 @@
 // Linha do tempo do funil (contrato 110, R8 a R10 e R29): reuniões, e-mails e conversas do WhatsApp ligados a um
 // contato ou a uma oportunidade, mais o histórico da oportunidade, e a última interação (R7) de cada oportunidade
 // para o `FunilView`. Módulo puro: recebe o que o serviço leu dos caches (reuniões, e-mail, WhatsApp) e devolve a
-// lista; o resumo da reunião (`resumo`) o serviço preenche depois, só para as reuniões da lista.
+// lista; o resumo da reunião (`resumo`) o serviço preenche depois, só para as reuniões da lista. Contrato 124 (R18): as
+// tarefas entram como itens `tarefa` (na oportunidade pelos eventos `tarefa`, no contato pelos vínculos), com a origem
+// resumida pelos nomes das reuniões e das conversas que já vêm nas fontes.
 import type { Contato, EventoFunil, FunilState, ItemLinhaDoTempo, Oportunidade } from './funil'
 import { chaveTelefone, normalizarEmail, normalizarTelefone, ultimaInteracao } from './funil-logic'
 import { telefoneDoChat } from './funil-sugestoes'
+import type { Tarefa } from './tarefas'
 
 const DIA_MS = 86_400_000
 /** A oportunidade mostra os e-mails dos contatos a partir de `criadoEm` menos estes dias (R9). */
@@ -43,6 +46,11 @@ export interface FontesTimeline {
   /** Endereços das contas do usuário: nunca ligam um e-mail a um contato (R9). */
   contasEmail: readonly string[]
   whatsapp: readonly ChatFonte[]
+}
+
+/** Contrato 124: as tarefas do arquivo (o serviço lê pelo serviço das tarefas); ausente vale nenhuma. */
+export interface TarefasTimeline {
+  tarefas?: readonly Tarefa[] | undefined
 }
 
 export interface TimelineResultado {
@@ -187,12 +195,57 @@ function maiorData(itens: readonly ItemLinhaDoTempo[]): number | null {
   return maior
 }
 
-/** Linha do tempo de um contato: reuniões em que ele participou, e-mails com ele e as conversas dele (R8 a R10). */
-export function timelineDoContato(input: FontesTimeline & { contato: Contato }): TimelineResultado {
+/**
+ * Origem da tarefa em pt-BR (R18), com o título da reunião e o nome da conversa das fontes; reunião ou conversa que
+ * não está mais nelas fica sem o nome.
+ */
+export function origemResumida(tarefa: Pick<Tarefa, 'origem'>, fontes: Pick<FontesTimeline, 'reunioes' | 'whatsapp'>): string {
+  const { origem } = tarefa
+  switch (origem.tipo) {
+    case 'manual':
+      return 'criada por você'
+    case 'reuniao': {
+      const titulo = fontes.reunioes.find((reuniao) => reuniao.id === origem.meetingId)?.title
+      return titulo ? `da reunião ${titulo}` : 'de uma reunião'
+    }
+    case 'whatsapp': {
+      const nome = fontes.whatsapp.find((chat) => chat.id === origem.chatId)?.name
+      return nome ? `da conversa com ${nome}` : 'de uma conversa do WhatsApp'
+    }
+    case 'email':
+      return origem.assunto ? `do e-mail ${origem.assunto}` : 'de um e-mail'
+    case 'assistente':
+      return 'pelo Assistente'
+    case 'automacao':
+      return 'por um agente'
+    case 'funil':
+      return 'da oportunidade'
+    case 'migracao':
+      return origem.de === 'proximo-passo' ? 'do próximo passo antigo' : 'de um lembrete antigo'
+  }
+}
+
+/** Item `tarefa` de uma tarefa que existe. */
+function itemTarefa(tarefa: Tarefa, at: number, acao: 'criada' | 'feita', fontes: FontesTimeline): ItemLinhaDoTempo {
+  return { tipo: 'tarefa', at, tarefaId: tarefa.id, titulo: tarefa.titulo, prazo: tarefa.prazo, origem: origemResumida(tarefa, fontes), acao, existe: true }
+}
+
+/**
+ * Linha do tempo de um contato: reuniões em que ele participou, e-mails com ele e as conversas dele (R8 a R10).
+ * Contrato 124 (R18): as tarefas com o contato nos vínculos, criada e (fechada como feita) feita. A última interação
+ * continua só com reuniões, e-mails e conversas.
+ */
+export function timelineDoContato(input: FontesTimeline & TarefasTimeline & { contato: Contato }): TimelineResultado {
   const indice = indexar(input)
   const ligacoes = ligados(indice, [input.contato], { meetingIds: [], whatsappChatIds: [], desde: null })
-  const itens = ordenar(itensBase(indice, ligacoes))
-  return { itens, ultimaInteracao: maiorData(itens), whatsappChatIds: ligacoes.whatsappChatIds }
+  const base = itensBase(indice, ligacoes)
+  const ultima = maiorData(base)
+  for (const tarefa of input.tarefas ?? []) {
+    if (!tarefa.vinculos.contatoIds.includes(input.contato.id)) continue
+    base.push(itemTarefa(tarefa, tarefa.criadaEm, 'criada', input))
+    if (tarefa.status === 'feita' && tarefa.feitaEm !== null) base.push(itemTarefa(tarefa, tarefa.feitaEm, 'feita', input))
+  }
+  return { itens: ordenar(base), ultimaInteracao: ultima, whatsappChatIds: ligacoes.whatsappChatIds }
 }
 
 /** Quando os e-mails derivados da oportunidade começam (R9). */
@@ -214,7 +267,7 @@ function ultimaDe(indice: Indice, oportunidade: Oportunidade, ligacoes: Ligados)
  * dias), as reuniões vinculadas (a que não existe mais vira "Reunião apagada"), os e-mails vinculados (o que saiu
  * do cache aparece pelo resumo guardado, com `noCache`), as conversas vinculadas e o histórico dela.
  */
-export function timelineDaOportunidade(input: FontesTimeline & { oportunidade: Oportunidade; contatos: readonly Contato[]; eventos: readonly EventoFunil[] }): TimelineResultado {
+export function timelineDaOportunidade(input: FontesTimeline & TarefasTimeline & { oportunidade: Oportunidade; contatos: readonly Contato[]; eventos: readonly EventoFunil[] }): TimelineResultado {
   const { oportunidade } = input
   const indice = indexar(input)
   const contatos = input.contatos.filter((contato) => oportunidade.contatoIds.includes(contato.id))
@@ -229,7 +282,20 @@ export function timelineDaOportunidade(input: FontesTimeline & { oportunidade: O
     if (mensagem) itens.push(itemEmail(mensagem))
     else itens.push({ tipo: 'email', at: email.data, accountId: email.accountId, messageId: email.id, mailbox: null, assunto: email.assunto, de: email.de, para: '', noCache: true })
   }
-  for (const evento of input.eventos) if (evento.oportunidadeId === oportunidade.id) itens.push({ tipo: 'evento', at: evento.at, evento })
+  const tarefas = new Map((input.tarefas ?? []).map((tarefa) => [tarefa.id, tarefa]))
+  for (const evento of input.eventos) {
+    if (evento.oportunidadeId !== oportunidade.id) continue
+    if (evento.tipo !== 'tarefa') {
+      itens.push({ tipo: 'evento', at: evento.at, evento })
+      continue
+    }
+    // Contrato 124 (R18): criada e feita viram item `tarefa`; a mudança de prazo fica só no histórico.
+    if (!evento.tarefa || evento.tarefa.acao === 'prazo') continue
+    const { id, acao } = evento.tarefa
+    const tarefa = tarefas.get(id)
+    if (tarefa) itens.push(itemTarefa(tarefa, evento.at, acao, input))
+    else itens.push({ tipo: 'tarefa', at: evento.at, tarefaId: id, titulo: evento.texto, prazo: null, origem: '', acao, existe: false })
+  }
   return { itens: ordenar(itens), ultimaInteracao: ultimaDe(indice, oportunidade, ligacoes), whatsappChatIds: ligacoes.whatsappChatIds }
 }
 

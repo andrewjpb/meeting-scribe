@@ -4,6 +4,10 @@
 // `FunilResult`. Antes da primeira gravação de cada dia, cópia `funil.json.bak-<AAAA-MM-DD>` (as 7 mais recentes,
 // R1). Arquivo inválido vira `funil.json.corrupt-<stamp>` e o funil parte vazio (R2). O log não leva dado de
 // contato. Sem Electron.
+//
+// Contrato 124 (D9 a D11): o próximo passo não é mais gravado (vem das tarefas); `registrarTarefa` grava o evento
+// `tarefa` (R10) e os adaptadores da migração R35 (`legado`, `backupMigracao`, `limparLegado`, `restaurarMigracao`)
+// ficam aqui, chamados só por `main/tarefas/migracao.ts` pelo `index.ts`.
 import { randomUUID } from 'node:crypto'
 import { mkdir, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -36,10 +40,11 @@ import {
   type Ignorado,
   type Oportunidade,
   type OportunidadeInput,
-  type ProximoPasso,
 } from '../../shared/funil'
 import { chaveTelefone, ehProvedorPessoal, dominioDe, etapasPadrao, formatarBRL, normalizarEmail, normalizarTelefone, semAcento } from '../../shared/funil-logic'
 import { funilStateSchema } from '../../shared/funil-schema'
+import type { EventoOportunidade } from '../../shared/tarefas'
+import type { PassoLegado } from '../tarefas/migracao'
 
 export interface FunilStore {
   /** Cópia do estado; arquivo ausente vale o funil vazio com as etapas padrão (sem gravar). */
@@ -62,6 +67,16 @@ export interface FunilStore {
   /** Uma escrita só; cada entrada pela regra de `saveContato` (a que não passa fica de fora). */
   importarContatos(entradas: ContatoInput[], origem: ContatoOrigem): Promise<FunilResult<{ criados: number; atualizados: number }>>
   setUltimoAviso(at: number): Promise<FunilResult<number>>
+  /** Contrato 124 (R10): o evento `tarefa` da oportunidade (`texto` = o título) e `atualizadoEm` (conta como interação). */
+  registrarTarefa(input: EventoOportunidade): Promise<FunilResult<EventoFunil>>
+  /** Migração R35: as oportunidades com `proximoPasso` gravado; `aberta` = etapa aberta e não arquivada. */
+  legado(): Promise<PassoLegado[]>
+  /** Migração R35: copia `funil.json` para `funil.json.bak-tarefas-<AAAA-MM-DD>` (0600); sem arquivo, nada. */
+  backupMigracao(): Promise<void>
+  /** Migração R35: tira a chave `proximoPasso` de todas as oportunidades, numa escrita. */
+  limparLegado(): Promise<void>
+  /** Migração R35: volta `funil.json` da cópia feita por `backupMigracao` e esquece o cache. */
+  restaurarMigracao(): Promise<void>
 }
 
 export interface FunilStoreOptions {
@@ -95,6 +110,9 @@ const codigo = (error: unknown): unknown => (error instanceof Error && 'code' in
 
 const DIA = /^\d{4}-\d{2}-\d{2}$/
 const BACKUP_PREFIXO = `${FUNIL_FILE}.bak-`
+/** Contrato 124: a cópia de antes da migração R35 (`funil.json.bak-tarefas-<AAAA-MM-DD>`), fora da rotação das 7. */
+const BACKUP_MIGRACAO_PREFIXO = `${FUNIL_FILE}.bak-tarefas-`
+const ACOES_TAREFA: readonly string[] = ['criada', 'feita', 'prazo']
 
 /** `AAAA-MM-DD` no fuso do Mac. */
 function diaLocal(at: number): string {
@@ -165,14 +183,6 @@ function excedeLimite(state: FunilState): boolean {
 const valorValido = (valor: number | null): boolean => valor === null || (Number.isSafeInteger(valor) && valor >= 0)
 const diaValido = (dia: string | null): boolean => dia === null || (typeof dia === 'string' && DIA.test(dia))
 
-/** Próximo passo aparado; texto vazio vira `null`; data fora de `AAAA-MM-DD` não passa. */
-function proximoPassoDe(passo: ProximoPasso | null): Passo<ProximoPasso | null> {
-  if (passo === null) return certo(null)
-  const texto = typeof passo.texto === 'string' ? passo.texto.trim() : ''
-  if (!diaValido(passo.data)) return falha('invalido')
-  return certo(texto ? { texto, data: passo.data } : null)
-}
-
 const unicosEmails = (emails: Oportunidade['emails']): Oportunidade['emails'] => {
   const vistos = new Set<string>()
   return emails.filter((email) => {
@@ -189,6 +199,8 @@ export function createFunilStore({ dir, now = Date.now, newId = randomUUID, log 
   let cache: FunilState | null = null
   /** Dia em que a cópia diária já foi conferida. */
   let backupConferido: string | null = null
+  /** A cópia da migração R35 feita nesta execução (o `restaurarMigracao` volta dela). */
+  let copiaMigracao: string | null = null
 
   const vazio = (): FunilState => ({ version: FUNIL_VERSION, contatos: [], empresas: [], oportunidades: [], etapas: etapasPadrao(newId), eventos: [], ignorados: [], ultimoAvisoEm: null })
 
@@ -265,7 +277,7 @@ export function createFunilStore({ dir, now = Date.now, newId = randomUUID, log 
     })
   }
 
-  function evento(draft: FunilState, oportunidadeId: string, at: number, tipo: EventoFunilTipo, texto: string, extra: { de?: string; para?: string } = {}): EventoFunil {
+  function evento(draft: FunilState, oportunidadeId: string, at: number, tipo: EventoFunilTipo, texto: string, extra: Pick<EventoFunil, 'de' | 'para' | 'tarefa'> = {}): EventoFunil {
     const novo: EventoFunil = { id: newId(), oportunidadeId, at, tipo, texto, ...extra }
     draft.eventos.push(novo)
     return novo
@@ -481,8 +493,7 @@ export function createFunilStore({ dir, now = Date.now, newId = randomUUID, log 
         if (!titulo || titulo.length > FUNIL_NOME_MAX) return falha('invalido')
         if (input.valor !== undefined && !valorValido(input.valor)) return falha('invalido')
         if (input.previsao !== undefined && !diaValido(input.previsao)) return falha('invalido')
-        const passo = input.proximoPasso === undefined ? undefined : proximoPassoDe(input.proximoPasso)
-        if (passo && !passo.ok) return passo
+        // Contrato 124 (D9): `input.proximoPasso` é ignorado aqui; o serviço do funil o transforma em tarefa.
         const contatoIds = input.contatoIds === undefined ? undefined : unicos(input.contatoIds)
         if (contatoIds && !contatoIds.every((id) => draft.contatos.some((contato) => contato.id === id))) return falha('nao-encontrado')
         const empresa = empresaDaEntrada(draft, indexar(draft), input, at)
@@ -495,7 +506,6 @@ export function createFunilStore({ dir, now = Date.now, newId = randomUUID, log 
               : draft.etapas.find((item) => item.id === input.etapaId)
           if (!etapa) return input.etapaId === undefined ? falha('invalido') : falha('nao-encontrado')
           const valor = input.valor ?? null
-          const proximoPasso = passo?.value ?? null
           const oportunidade: Oportunidade = {
             id: newId(),
             titulo,
@@ -505,7 +515,6 @@ export function createFunilStore({ dir, now = Date.now, newId = randomUUID, log 
             ordem: 0,
             valor,
             previsao: input.previsao ?? null,
-            proximoPasso,
             meetingIds: unicos(input.meetingIds ?? []),
             whatsappChatIds: unicos(input.whatsappChatIds ?? []),
             emails: unicosEmails(input.emails ?? []),
@@ -521,7 +530,6 @@ export function createFunilStore({ dir, now = Date.now, newId = randomUUID, log 
           inserir(draft, oportunidade, etapa.id, 0)
           evento(draft, oportunidade.id, at, 'criada', `Criada em ${etapa.nome}`)
           if (valor !== null) evento(draft, oportunidade.id, at, 'valor', formatarBRL(valor))
-          if (proximoPasso) evento(draft, oportunidade.id, at, 'proximo-passo', proximoPasso.texto)
           return certo(oportunidade)
         }
 
@@ -537,10 +545,6 @@ export function createFunilStore({ dir, now = Date.now, newId = randomUUID, log 
           evento(draft, oportunidade.id, at, 'valor', formatarBRL(input.valor))
         }
         if (input.previsao !== undefined) oportunidade.previsao = input.previsao
-        if (passo && JSON.stringify(passo.value) !== JSON.stringify(oportunidade.proximoPasso)) {
-          oportunidade.proximoPasso = passo.value
-          if (passo.value) evento(draft, oportunidade.id, at, 'proximo-passo', passo.value.texto)
-        }
         if (input.meetingIds !== undefined) oportunidade.meetingIds = unicos(input.meetingIds)
         if (input.whatsappChatIds !== undefined) oportunidade.whatsappChatIds = unicos(input.whatsappChatIds)
         if (input.emails !== undefined) oportunidade.emails = unicosEmails(input.emails)
@@ -647,5 +651,71 @@ export function createFunilStore({ dir, now = Date.now, newId = randomUUID, log 
         draft.ultimoAvisoEm = at
         return certo(at)
       }),
+
+    registrarTarefa: ({ oportunidadeId, tarefaId, acao, titulo }) =>
+      mutate((draft, at) => {
+        if (typeof tarefaId !== 'string' || !tarefaId || tarefaId.length > 200 || !ACOES_TAREFA.includes(acao) || typeof titulo !== 'string') return falha('invalido')
+        const oportunidade = draft.oportunidades.find((item) => item.id === oportunidadeId)
+        if (!oportunidade) return falha('nao-encontrado')
+        oportunidade.atualizadoEm = at
+        return certo(evento(draft, oportunidade.id, at, 'tarefa', titulo.slice(0, FUNIL_NOTAS_MAX), { tarefa: { id: tarefaId, acao } }))
+      }),
+
+    legado: () =>
+      serial(async () => {
+        const state = await load()
+        const tipos = new Map(state.etapas.map((etapa) => [etapa.id, etapa.tipo]))
+        const passos: PassoLegado[] = []
+        for (const oportunidade of state.oportunidades) {
+          const passo = oportunidade.proximoPasso
+          if (!passo) continue
+          passos.push({
+            oportunidadeId: oportunidade.id,
+            texto: passo.texto,
+            data: passo.data,
+            aberta: !oportunidade.arquivado && tipos.get(oportunidade.etapaId) === 'aberta',
+            contatoIds: [...oportunidade.contatoIds],
+            empresaId: oportunidade.empresaId,
+          })
+        }
+        return passos
+      }),
+
+    backupMigracao: () =>
+      serial(async () => {
+        let atual: Buffer
+        try {
+          atual = await readFile(file)
+        } catch (error) {
+          if (codigo(error) === 'ENOENT') return
+          throw error
+        }
+        const nome = `${BACKUP_MIGRACAO_PREFIXO}${diaLocal(now())}`
+        await atomicCopy(nome, atual)
+        copiaMigracao = nome
+      }),
+
+    limparLegado: async () => {
+      const result = await mutate((draft) => {
+        for (const oportunidade of draft.oportunidades) delete oportunidade.proximoPasso
+        return certo(null)
+      })
+      if (!result.ok) throw new Error(`limpeza do próximo passo recusada (${result.erro})`)
+    },
+
+    restaurarMigracao: () =>
+      serial(async () => {
+        if (copiaMigracao === null) throw new Error('sem a cópia da migração')
+        await atomicCopy(FUNIL_FILE, await readFile(join(dir, copiaMigracao)))
+        cache = null
+      }),
+  }
+
+  /** Grava os bytes em `dir/<nome>` (temporário + `rename`, 0600). */
+  async function atomicCopy(nome: string, bytes: Buffer): Promise<void> {
+    const destino = join(dir, nome)
+    const temp = `${destino}.tmp-${process.pid}-${randomUUID()}`
+    await writeFile(temp, bytes, { mode: 0o600 })
+    await rename(temp, destino)
   }
 }

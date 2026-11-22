@@ -225,6 +225,38 @@ describe('fila das operações que leem e gravam (devolução do 122)', () => {
   })
 })
 
+describe('ordem do gancho e do onChange (contrato 124)', () => {
+  it('com tarefa ligada, o onChange só sai depois de o gancho terminar, com o estado relido (inclui a gravação feita no gancho)', async () => {
+    const ordem: string[] = []
+    let ctx: ReturnType<typeof setup> | null = null
+    ctx = setup({
+      fakes: { funil: funilState({ oportunidades: [oportunidade('op1')] }) },
+      onOportunidade: async (evento) => {
+        await new Promise((resolve) => setTimeout(resolve, 5))
+        ordem.push(`gancho ${evento.acao} com ${ctx?.views.length ?? -1} avisos`)
+      },
+    })
+    const id = okId(await ctx.service.criar({ titulo: 'Proposta', origem: { tipo: 'manual' }, vinculos: { oportunidadeId: 'op1' } }))
+    expect(ordem).toEqual(['gancho criada com 0 avisos'])
+    expect(ctx.views).toHaveLength(1)
+    expect(ctx.views[0]?.tarefas.map((item) => item.id)).toEqual([id])
+
+    okId(await ctx.service.salvar({ id, prazo: '2026-11-30' }))
+    okId(await ctx.service.status({ id, status: 'feita' }))
+    expect(ordem).toEqual(['gancho criada com 0 avisos', 'gancho prazo com 1 avisos', 'gancho feita com 2 avisos'])
+    expect(ctx.views).toHaveLength(3)
+    expect(ctx.views[2]?.tarefas[0]?.status).toBe('feita')
+  })
+
+  it('sem tarefa ligada a oportunidade, o onChange sai como antes (um por gravação) e o gancho não é chamado', async () => {
+    const chamadas: string[] = []
+    const ctx = setup({ onOportunidade: async () => void chamadas.push('gancho') })
+    okId(await ctx.service.criar({ titulo: 'Solta', origem: { tipo: 'manual' } }))
+    expect(ctx.views).toHaveLength(1)
+    expect(chamadas).toEqual([])
+  })
+})
+
 describe('vínculos da oportunidade (CA2, R9)', () => {
   it('a oportunidade traz contatos e empresa; o contato traz a oportunidade só se tiver exatamente uma aberta', async () => {
     const ctx = setup({

@@ -8,7 +8,7 @@ import { claudeProfile } from '../src/main/acp/profiles/claude'
 import type { ChatAnswer } from '../src/main/claude-cli/chat'
 import { createFileNotesStore } from '../src/main/meetings/notes'
 import { applyOutput } from '../src/main/schedules/outputs'
-import { agentSystemPrompt, createAgentRunner, FUNIL_INSTRUCAO, type AgentRunRequest } from '../src/main/schedules/runner'
+import { agentSystemPrompt, createAgentRunner, FUNIL_INSTRUCAO, TAREFAS_INSTRUCAO, type AgentRunRequest } from '../src/main/schedules/runner'
 import type { Chat } from '../src/shared/chat'
 import type { MeetingNote } from '../src/shared/meeting-notes'
 
@@ -35,7 +35,7 @@ const corpus = (): Parameters<typeof createAgentRunner>[0]['corpus'] & { dropped
 
 const request = (patch: Partial<AgentRunRequest> = {}): AgentRunRequest => ({
   runId: 'run-1',
-  agent: { name: 'Resumo', instructions: 'Liste as decisões.', profile: 'claude', model: 'sonnet', thinkMore: false, scope: { kind: 'all' }, web: false, funil: false },
+  agent: { name: 'Resumo', instructions: 'Liste as decisões.', profile: 'claude', model: 'sonnet', thinkMore: false, scope: { kind: 'all' }, web: false, funil: false, tarefas: false },
   prompt: 'Agora: segunda, 16/11/2026 08:00 (America/Sao_Paulo).\n\nResuma.',
   meetingId: null,
   timeoutS: 30,
@@ -355,5 +355,86 @@ describe('agente com "Pode ler o funil" (contrato 115, CA5)', () => {
     await runner.run(request({ agent: { ...request().agent, funil: true } }), () => undefined)
     expect(runs[0]?.funilMd).toBeNull()
     expect(runs[0]?.systemPrompt).not.toContain(FUNIL_INSTRUCAO)
+  })
+})
+
+describe('agente com "Pode ler as tarefas" (contrato 124, CA8)', () => {
+  const TAREFAS = '# Tarefas\n\n## Vencidas\n\nNenhuma.\n'
+
+  function runnerWith(tarefasMarkdown: () => Promise<string | null>) {
+    const runs: { cwd: string; systemPrompt: string; tarefasMd: string | null; mode: number | null }[] = []
+    const store = corpus()
+    // Como o acervo de verdade: a pasta do escopo existe quando `scopeMany` devolve e some no `dropScope`.
+    store.scopeMany = (_ids, key) => {
+      mkdirSync(join(dir, 'escopo', key), { recursive: true })
+      return Promise.resolve(join(dir, 'escopo', key))
+    }
+    store.dropScope = (key) => {
+      store.dropped.push(key)
+      rmSync(join(dir, 'escopo', key), { recursive: true, force: true })
+      return Promise.resolve()
+    }
+    const runner = createAgentRunner({
+      locate: () => Promise.resolve({ ok: true, path: '/bin/claude', version: '2.0.0' }),
+      openAcp: () => () => Promise.resolve<AcpOpenResult>({ ok: false, error: 'failed', reason: 'teste' }),
+      corpus: store,
+      meetings: { list: () => Promise.resolve([]) },
+      emptyDir: join(dir, 'vazia'),
+      funilMarkdown: () => Promise.resolve('# Funil\n'),
+      tarefasMarkdown,
+      engine: (options) => {
+        const file = join(options.cwd, 'TAREFAS.md')
+        const existe = existsSync(file)
+        runs.push({ cwd: options.cwd, systemPrompt: options.systemPrompt, tarefasMd: existe ? readFileSync(file, 'utf8') : null, mode: existe ? statSync(file).mode & 0o777 : null })
+        return fakeEngine(() => Promise.resolve({ ok: true, text: 'ok' }))
+      },
+    })
+    return { runner, runs, store }
+  }
+
+  it('com as tarefas: TAREFAS.md 0600 na pasta própria, a linha na instrução e a pasta apagada no fim', async () => {
+    const { runner, runs, store } = runnerWith(() => Promise.resolve(TAREFAS))
+    await runner.run(request({ agent: { ...request().agent, tarefas: true } }), () => undefined)
+    expect(runs).toHaveLength(1)
+    expect(runs[0]?.cwd).toBe(join(dir, 'escopo', 'agent-run-1'))
+    expect(runs[0]?.cwd).not.toBe(store.dir)
+    expect(runs[0]?.tarefasMd).toBe(TAREFAS)
+    expect(runs[0]?.mode).toBe(0o600)
+    expect(runs[0]?.systemPrompt).toContain(TAREFAS_INSTRUCAO)
+    expect(runs[0]?.systemPrompt).not.toContain(FUNIL_INSTRUCAO)
+    expect(TAREFAS_INSTRUCAO).toBe('Na pasta há TAREFAS.md com as tarefas abertas (vencidas, de hoje, próximas e sem prazo). Só leia; não invente tarefa.')
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    expect(store.dropped).toEqual(['agent-run-1'])
+    expect(existsSync(join(dir, 'escopo', 'agent-run-1'))).toBe(false)
+  })
+
+  it('com o funil e as tarefas, "nenhuma reunião": os dois arquivos e as duas linhas', async () => {
+    const { runner, runs } = runnerWith(() => Promise.resolve(TAREFAS))
+    await runner.run(request({ agent: { ...request().agent, scope: { kind: 'none' }, funil: true, tarefas: true } }), () => undefined)
+    expect(runs[0]?.tarefasMd).toBe(TAREFAS)
+    expect(runs[0]?.systemPrompt).toContain(FUNIL_INSTRUCAO)
+    expect(runs[0]?.systemPrompt).toContain(TAREFAS_INSTRUCAO)
+    expect(runs[0]?.systemPrompt).toContain('além do pedido, use o FUNIL.md e o TAREFAS.md da pasta.')
+  })
+
+  it('sem as tarefas: nem o arquivo nem a linha, e o gerador não é chamado', async () => {
+    let asked = 0
+    const { runner, runs, store } = runnerWith(() => {
+      asked++
+      return Promise.resolve(TAREFAS)
+    })
+    await runner.run(request(), () => undefined)
+    expect(runs[0]?.cwd).toBe(store.dir)
+    expect(runs[0]?.tarefasMd).toBeNull()
+    expect(runs[0]?.systemPrompt).not.toContain('TAREFAS.md')
+    expect(asked).toBe(0)
+  })
+
+  it('o gerador devolvendo null: a execução segue sem o arquivo e sem a linha', async () => {
+    const { runner, runs } = runnerWith(() => Promise.resolve(null))
+    await runner.run(request({ agent: { ...request().agent, tarefas: true } }), () => undefined)
+    expect(runs).toHaveLength(1)
+    expect(runs[0]?.tarefasMd).toBeNull()
+    expect(runs[0]?.systemPrompt).not.toContain(TAREFAS_INSTRUCAO)
   })
 })

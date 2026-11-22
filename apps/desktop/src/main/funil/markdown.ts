@@ -1,8 +1,11 @@
 // O `FUNIL.md` (contrato 115, R41, D16): o gerador único do texto que o modelo lê, usado pelas execuções de agente
 // com "Pode ler o funil" (R45) e pela fonte Funil do Assistente (contrato 117). Puro: recebe a view do serviço, os
-// títulos das reuniões, o relógio e o fuso, e devolve o Markdown. Arquivada nunca entra (R27).
+// títulos das reuniões, o relógio e o fuso, e devolve o Markdown. Arquivada nunca entra (R27). Contrato 124 (R16): a
+// linha "Próximo passo" virou "Tarefas abertas", com as tarefas recebidas na entrada.
 import type { Etapa, FunilView, Oportunidade } from '../../shared/funil'
 import { esfriada, formatarBRL } from '../../shared/funil-logic'
+import type { Tarefa } from '../../shared/tarefas'
+import { abertasDaOportunidade } from '../../shared/tarefas-logic'
 
 const DIA_MS = 86_400_000
 /** Ganhas e perdidas que entram, pelo `fechadoEm`. */
@@ -10,6 +13,8 @@ export const FUNIL_MD_FECHADAS_DIAS = 90
 export const FUNIL_MD_CONTATOS_MAX = 500
 export const FUNIL_MD_TRUNCADA = 'lista truncada; peça pelo nome'
 const VAZIO = '—'
+/** Tarefas abertas listadas por oportunidade (R16). */
+export const FUNIL_MD_TAREFAS_MAX = 5
 
 /** `AAAA-MM-DD` de um instante no fuso pedido. */
 export function diaNoFuso(at: number, timeZone: string): string {
@@ -20,6 +25,12 @@ export function diaNoFuso(at: number, timeZone: string): string {
 function dataBR(dia: string): string {
   const partes = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dia)
   return partes ? `${partes[3]}/${partes[2]}/${partes[1]}` : dia
+}
+
+/** `AAAA-MM-DD` como `DD/MM`; fora do formato, como veio. */
+function diaMes(dia: string): string {
+  const partes = /^\d{4}-(\d{2})-(\d{2})$/.exec(dia)
+  return partes ? `${partes[2]}/${partes[1]}` : dia
 }
 
 /** `DD/MM/AAAA HH:MM` no fuso pedido. */
@@ -34,8 +45,8 @@ const linha = (texto: string): string => texto.replace(/\s*\n\s*/g, ' ').trim()
 
 const tipoDaEtapa = (etapa: Etapa): string => (etapa.tipo === 'aberta' ? 'aberta' : 'final')
 
-export function funilMarkdown(input: { view: FunilView; diasEsfriar: number; reunioes: ReadonlyMap<string, string>; now: number; timeZone: string }): string {
-  const { view, diasEsfriar, reunioes, now, timeZone } = input
+export function funilMarkdown(input: { view: FunilView; tarefas: readonly Tarefa[]; diasEsfriar: number; reunioes: ReadonlyMap<string, string>; now: number; timeZone: string }): string {
+  const { view, tarefas, diasEsfriar, reunioes, now, timeZone } = input
   const { state } = view
   const etapas = [...state.etapas].sort((a, b) => a.ordem - b.ordem)
   const etapaPorId = new Map(etapas.map((etapa) => [etapa.id, etapa]))
@@ -43,6 +54,15 @@ export function funilMarkdown(input: { view: FunilView; diasEsfriar: number; reu
   const empresaPorId = new Map(state.empresas.map((empresa) => [empresa.id, empresa.nome]))
   const contatoPorId = new Map(state.contatos.map((contato) => [contato.id, contato]))
   const empresaDe = (id: string | null): string => (id === null ? VAZIO : linha(empresaPorId.get(id) ?? VAZIO))
+  // As tarefas de cada oportunidade separadas uma vez (o funil pode ter milhares de oportunidades e de tarefas).
+  const tarefasPorOportunidade = new Map<string, Tarefa[]>()
+  for (const tarefa of tarefas) {
+    const id = tarefa.vinculos.oportunidadeId
+    if (id === null) continue
+    const lista = tarefasPorOportunidade.get(id)
+    if (lista) lista.push(tarefa)
+    else tarefasPorOportunidade.set(id, [tarefa])
+  }
   const ultimaDe = (oportunidade: Oportunidade): number => view.ultimas[oportunidade.id] ?? Math.max(oportunidade.movidoEm, oportunidade.atualizadoEm)
 
   const saida: string[] = ['# Funil de vendas', '', `Gerado em ${dataHora(now, timeZone)} (${timeZone}).`, '', '## Etapas', '']
@@ -59,7 +79,9 @@ export function funilMarkdown(input: { view: FunilView; diasEsfriar: number; reu
       .map((id) => contatoPorId.get(id))
       .filter((contato) => contato !== undefined)
       .map((contato) => (contato.emails[0] ? `${linha(contato.nome)} <${contato.emails[0]}>` : linha(contato.nome)))
-    const passo = oportunidade.proximoPasso
+    const abertasDela = abertasDaOportunidade(tarefasPorOportunidade.get(oportunidade.id) ?? [], oportunidade.id)
+      .slice(0, FUNIL_MD_TAREFAS_MAX)
+      .map((tarefa) => (tarefa.prazo ? `${linha(tarefa.titulo)} (até ${diaMes(tarefa.prazo)})` : linha(tarefa.titulo)))
     const ultima = view.ultimas[oportunidade.id]
     const ligadas = oportunidade.meetingIds.map((id) => `${id} · ${linha(reunioes.get(id) ?? 'Reunião apagada')}`)
     saida.push(
@@ -70,7 +92,7 @@ export function funilMarkdown(input: { view: FunilView; diasEsfriar: number; reu
       `- Etapa: ${linha(etapa.nome)}`,
       `- Valor: ${formatarBRL(oportunidade.valor)}`,
       `- Previsão: ${oportunidade.previsao ? dataBR(oportunidade.previsao) : VAZIO}`,
-      `- Próximo passo: ${passo ? `${linha(passo.texto)}${passo.data ? ` (até ${dataBR(passo.data)})` : ''}` : VAZIO}`,
+      `- Tarefas abertas: ${abertasDela.length ? abertasDela.join('; ') : VAZIO}`,
       `- Última interação: ${ultima === undefined ? VAZIO : dataHora(ultima, timeZone)}`,
     )
     if (esfriada(oportunidade, etapa, ultimaDe(oportunidade), diasEsfriar, now)) saida.push('- **esfriada**')

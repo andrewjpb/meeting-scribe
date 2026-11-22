@@ -94,10 +94,14 @@ function aberta(oportunidade: Oportunidade, state: FunilState): boolean {
 
 const unicos = (ids: readonly string[]): string[] => [...new Set(ids)]
 
-/** O que sai da fila: a resposta e as tarefas ligadas a uma oportunidade que pedem o gancho (R10). */
+/**
+ * O que sai da fila: a resposta e as tarefas ligadas a uma oportunidade que pedem o gancho (R10). Com gancho, `state`
+ * é o estado gravado e o aviso da tela (`onChange`) fica para depois dele (contrato 124).
+ */
 interface NaFila<T> {
   resposta: T
   ligadas: Tarefa[]
+  state?: TarefasArquivo | undefined
 }
 
 /** Uma promessa encadeada: cada tarefa começa depois que a anterior termina (com sucesso ou não). */
@@ -121,10 +125,21 @@ export function createTarefasService(deps: TarefasServiceDeps): TarefasService {
    */
   const fila = serialQueue()
 
-  /** Roda na fila e, depois de sair dela, chama o gancho para cada tarefa ligada. */
+  /** A gravação pede o gancho do funil: alguma tarefa ligada a uma oportunidade e o gancho existe. */
+  const pedeGancho = (ligadas: readonly Tarefa[]): boolean => deps.onOportunidade !== undefined && ligadas.some((tarefa) => tarefa.vinculos.oportunidadeId)
+
+  /**
+   * Roda na fila e, depois de sair dela, chama o gancho para cada tarefa ligada. Contrato 124: com gancho, o
+   * `onChange` só sai depois de todos terminarem (o funil, avisado por ele, já lê o evento `tarefa` gravado), com o
+   * estado relido do store (outra gravação pode ter passado pela fila enquanto o gancho rodava).
+   */
   async function emFila<T>(acao: EventoOportunidade['acao'], run: () => Promise<NaFila<T>>): Promise<T> {
-    const { resposta, ligadas } = await fila(run)
+    const { resposta, ligadas, state } = await fila(run)
     for (const tarefa of ligadas) await gancho(tarefa, acao)
+    if (state) {
+      const atual = await store.read().catch(() => null)
+      await avisar(atual?.ok ? atual.value : state)
+    }
     return resposta
   }
 
@@ -207,6 +222,13 @@ export function createTarefasService(deps: TarefasServiceDeps): TarefasService {
     return { ok: true, id: id(result.value) }
   }
 
+  /** Uma gravação na fila: sem gancho, avisa a tela aqui mesmo; com gancho, o aviso fica para o `emFila`. */
+  async function naFila<T>(result: TarefasResult<T>, id: (value: T) => string | null, ligadas: Tarefa[]): Promise<NaFila<TarefasActionResult>> {
+    if (!result.ok) return { resposta: erro(result.erro), ligadas: [] }
+    if (!pedeGancho(ligadas)) return { resposta: await gravar(result, id), ligadas }
+    return { resposta: { ok: true, id: id(result.value) }, ligadas, state: result.state }
+  }
+
   /**
    * Vínculos ao criar (R9): com oportunidade, os contatos e a empresa dela entram; sem oportunidade e com um contato
    * só, a oportunidade entra (com os contatos e a empresa dela) se ele tiver exatamente uma aberta e não arquivada.
@@ -259,7 +281,7 @@ export function createTarefasService(deps: TarefasServiceDeps): TarefasService {
           vinculos: await vinculosDe(input.vinculos),
         }
         const result = await store.criar(nova)
-        return { resposta: await gravar(result, (tarefa) => tarefa.id), ligadas: result.ok ? [result.value] : [] }
+        return naFila(result, (tarefa) => tarefa.id, result.ok ? [result.value] : [])
       }),
 
     salvar: ({ id, lembrete, ...campos }) =>
@@ -274,7 +296,7 @@ export function createTarefasService(deps: TarefasServiceDeps): TarefasService {
           patch.lembreteEm = recalcularLembrete({ lembreteEm: atual.lembreteEm, prazoAntigo: atual.prazo, prazoNovo: campos.prazo, hora: config.horaLembrete, lembrarNoPrazo: config.lembrarNoPrazo, timeZone: deps.timeZone() })
         }
         const result = await store.salvar(id, patch)
-        return { resposta: await gravar(result, (tarefa) => tarefa.id), ligadas: result.ok && result.value.prazo !== atual.prazo ? [result.value] : [] }
+        return naFila(result, (tarefa) => tarefa.id, result.ok && result.value.prazo !== atual.prazo ? [result.value] : [])
       }),
 
     status: ({ id, status }) =>
@@ -282,7 +304,7 @@ export function createTarefasService(deps: TarefasServiceDeps): TarefasService {
         const antes = (await ler()).tarefas.find((tarefa) => tarefa.id === id)
         const result = await store.status(id, status)
         // Reabrir e cancelar não chamam o gancho (D-15); concluir de novo a que já estava feita também não.
-        return { resposta: await gravar(result, (tarefa) => tarefa.id), ligadas: result.ok && status === 'feita' && antes?.status !== 'feita' ? [result.value] : [] }
+        return naFila(result, (tarefa) => tarefa.id, result.ok && status === 'feita' && antes?.status !== 'feita' ? [result.value] : [])
       }),
 
     apagar: async ({ id }) => gravar(await store.apagar(id), () => null),
@@ -353,8 +375,9 @@ export function createTarefasService(deps: TarefasServiceDeps): TarefasService {
         })
         const result = await store.criarVarias(entradas)
         if (!result.ok) return { resposta: erro(result.erro), ligadas: [] }
-        await avisar(result.state)
-        return { resposta: { ok: true, criadas: result.value.map((tarefa, posicao) => ({ indice: novas[posicao] as number, id: tarefa.id })) }, ligadas: result.value }
+        const comGancho = pedeGancho(result.value)
+        if (!comGancho) await avisar(result.state)
+        return { resposta: { ok: true, criadas: result.value.map((tarefa, posicao) => ({ indice: novas[posicao] as number, id: tarefa.id })) }, ligadas: result.value, ...(comGancho ? { state: result.state } : {}) }
       }),
 
     async dispararLembretes(at) {

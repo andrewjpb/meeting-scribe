@@ -1,7 +1,7 @@
 import { Archive, Check, ChevronLeft, CircleX, Link as LinkIcon, Mail, Plus, SearchX, Smartphone, TriangleAlert, Unlink, X } from 'lucide-react'
 import { useEffect, useId, useRef, useState, type FocusEvent, type ReactNode, type RefObject } from 'react'
 import { Link, useNavigate } from 'react-router'
-import { FUNIL_NOME_MAX, FUNIL_NOTAS_MAX, type FunilFalha, type FunilTimelineResult, type FunilView, type Oportunidade, type OportunidadeInput } from '@shared/funil'
+import { FUNIL_NOME_MAX, FUNIL_NOTAS_MAX, type FunilFalha, type FunilTimelineResult, type FunilView, type Oportunidade, type OportunidadeInput, type ProximoPasso } from '@shared/funil'
 import { formatarBRL } from '@shared/funil-logic'
 import type { Meeting } from '@shared/meetings'
 import { EMAIL_ROOT_PATH, funilPath, meetingPath, type EmailNavigationState } from '@shared/routes'
@@ -271,7 +271,10 @@ export function OportunidadeScreen({ view, id }: { view: FunilView; id: string }
     </div>
   )
 
-  const passo = textoPassoDetalhe(oportunidade.proximoPasso, hoje)
+  // Contrato 124 (D9): o passo derivado das tarefas; "Salvar" do campo manda `proximoPasso`, que vira tarefa no main.
+  const proximoPasso = view.proximosPassos[oportunidade.id] ?? null
+  const passoAtual = proximoPasso ? { texto: proximoPasso.texto, data: proximoPasso.data } : null
+  const passo = textoPassoDetalhe(proximoPasso, hoje)
   const origemMeeting = oportunidade.origem === 'reuniao' ? (oportunidade.meetingIds[0] ?? null) : null
   const origemTitulo = origemMeeting ? (reunioes?.find((meeting) => meeting.id === origemMeeting)?.title ?? null) : null
   const empresas: PickerItem[] = state.empresas.map((item) => ({ id: item.id, nome: item.nome, detalhe: item.dominios[0] }))
@@ -418,7 +421,7 @@ export function OportunidadeScreen({ view, id }: { view: FunilView; id: string }
       'proximo-passo',
       'Próximo passo',
       <>
-        <span className={`truncate ${oportunidade.proximoPasso ? '' : 'text-text-muted'}`}>{passo.texto}</span>
+        <span className={`truncate ${proximoPasso ? '' : 'text-text-muted'}`}>{passo.texto}</span>
         {passo.data && (
           <span data-funil-passo-vencido={passo.vencido ? '' : undefined} className={`shrink-0 text-12 whitespace-nowrap tabular ${passo.vencido ? 'text-rec' : 'text-text-muted'}`}>
             {passo.data}
@@ -426,11 +429,11 @@ export function OportunidadeScreen({ view, id }: { view: FunilView; id: string }
         )}
       </>,
       <CampoPasso
-        inicial={oportunidade.proximoPasso}
+        inicial={passoAtual}
         onFechar={fechar}
         onSalvar={async (texto, data) => {
-          const proximoPasso = texto.trim() ? { texto: texto.trim(), data: data || null } : null
-          if (JSON.stringify(proximoPasso) !== JSON.stringify(oportunidade.proximoPasso)) await salvar({ proximoPasso })
+          const novo = texto.trim() ? { texto: texto.trim(), data: data || null } : null
+          if (JSON.stringify(novo) !== JSON.stringify(passoAtual)) await salvar({ proximoPasso: novo })
         }}
       />,
     ),
@@ -735,7 +738,7 @@ function CampoData({ rotulo, inicial, onSalvar, onFechar }: { rotulo: string; in
 }
 
 /** Próximo passo: o texto e a data, salvos juntos ao sair do par ou no Enter; texto vazio tira o passo. */
-function CampoPasso({ inicial, onSalvar, onFechar }: { inicial: Oportunidade['proximoPasso']; onSalvar: (texto: string, data: string) => Promise<void>; onFechar: () => void }) {
+function CampoPasso({ inicial, onSalvar, onFechar }: { inicial: ProximoPasso | null; onSalvar: (texto: string, data: string) => Promise<void>; onFechar: () => void }) {
   const ref = useFocoInicial<HTMLDivElement>()
   const [texto, setTexto] = useState(inicial?.texto ?? '')
   const [data, setData] = useState(inicial?.data ?? '')

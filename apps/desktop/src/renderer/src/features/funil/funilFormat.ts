@@ -84,8 +84,8 @@ export function textoTotais(state: FunilState, now: number, timeZone: string): s
   return `${totais.abertas} ${totais.abertas === 1 ? 'aberta' : 'abertas'} · ${formatarBRL(totais.emAberto)} em aberto · ${formatarBRL(totais.ganhoNoMes)} ganho em ${mes}`
 }
 
-/** O próximo passo do cartão (R23): o texto e a data curta, ou "Sem próximo passo". */
-export function textoProximoPasso(proximoPasso: ProximoPasso | null): { texto: string; data: string | null } {
+/** O próximo passo do cartão (R23; contrato 124: o derivado das tarefas): o texto e a data curta, ou "Sem próximo passo". */
+export function textoProximoPasso(proximoPasso: Pick<ProximoPasso, 'texto' | 'data'> | null): { texto: string; data: string | null } {
   if (!proximoPasso) return { texto: 'Sem próximo passo', data: null }
   return { texto: proximoPasso.texto, data: proximoPasso.data ? diaCurto(proximoPasso.data) : null }
 }
@@ -221,8 +221,8 @@ export function emailDestino(item: Extract<ItemLinhaDoTempo, { tipo: 'email' }>,
   return { path: emailPath(item.accountId, pasta), state: { messageId: item.messageId, mailbox } }
 }
 
-/** Próximo passo no detalhe (artboard 04): o texto e, com data, "18/11" ou "18/11 · vencido". */
-export function textoPassoDetalhe(proximoPasso: ProximoPasso | null, hoje: string): { texto: string; data: string | null; vencido: boolean } {
+/** Próximo passo no detalhe (artboard 04; contrato 124: o derivado): o texto e, com data, "18/11" ou "18/11 · vencido". */
+export function textoPassoDetalhe(proximoPasso: Pick<ProximoPasso, 'texto' | 'data'> | null, hoje: string): { texto: string; data: string | null; vencido: boolean } {
   if (!proximoPasso) return { texto: 'Sem próximo passo', data: null, vencido: false }
   const vencido = passoVencido(proximoPasso, hoje)
   return { texto: proximoPasso.texto, data: proximoPasso.data ? `${diaCurto(proximoPasso.data)}${vencido ? ' · vencido' : ''}` : null, vencido }

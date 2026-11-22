@@ -557,7 +557,7 @@ const etapasAbertas = (state: FunilState): { id: string; nome: string }[] => eta
  * Contrato 117 (R42): o cartão do funil, com o que o funil do app tem agora. Oportunidade que não existe (ou arquivada) e
  * etapa que não bate viram o cartão `failed` com a razão; `contato-criar` sem e-mail nem telefone também. Nada é gravado.
  */
-function resolveFunil(proposed: FunilProposed, base: { id: string; status: 'proposed'; result: null }, state: FunilState): ChatAction {
+function resolveFunil(proposed: FunilProposed, base: { id: string; status: 'proposed'; result: null }, state: FunilState, proximosPassos: FunilView['proximosPassos']): ChatAction {
   const failed = { status: 'failed' as const }
   const etapas = etapasEmOrdem(state)
   switch (proposed.tipo) {
@@ -599,6 +599,8 @@ function resolveFunil(proposed: FunilProposed, base: { id: string; status: 'prop
     }
     case 'oportunidade-proximo-passo': {
       const oportunidade = oportunidadeViva(state, proposed.oportunidadeId)
+      // Contrato 124 (D9): o passo de agora é o derivado das tarefas.
+      const passo = oportunidade ? (proximosPassos[oportunidade.id] ?? null) : null
       const card = {
         ...base,
         kind: 'oportunidade-proximo-passo' as const,
@@ -606,7 +608,7 @@ function resolveFunil(proposed: FunilProposed, base: { id: string; status: 'prop
         titulo: oportunidade?.titulo ?? '',
         texto: proposed.texto,
         data: proposed.data ?? null,
-        anterior: oportunidade?.proximoPasso ? { texto: oportunidade.proximoPasso.texto, data: oportunidade.proximoPasso.data } : null,
+        anterior: passo ? { texto: passo.texto, data: passo.data } : null,
         error: null,
       }
       return oportunidade ? card : { ...card, ...failed, error: FUNIL_OPORTUNIDADE_NAO_ENCONTRADA }
@@ -752,7 +754,7 @@ async function resolve(proposed: Proposed, id: string, resolver: ActionResolver)
     case 'oportunidade-proximo-passo':
     case 'contato-criar': {
       const view = await resolver.funil?.().catch(() => null)
-      return view ? resolveFunil(proposed, base, view.state) : null
+      return view ? resolveFunil(proposed, base, view.state, view.proximosPassos) : null
     }
   }
 }
