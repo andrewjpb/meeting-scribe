@@ -346,6 +346,34 @@ describe('uma execução do claude (CA2)', () => {
   })
 })
 
+describe('prazo em AAAA-MM-DD nas tarefas (contrato 121, CA11)', () => {
+  const task = { task: 'Enviar a proposta', owner: 'Você', due: 'sexta' }
+  const parse = (extra: Record<string, unknown>) => summaryContentSchema.parse({ ...CONTENT, tasks: [{ ...task, ...extra }] }).tasks[0]
+
+  it('sem dueIso a tarefa não ganha a chave; data real fica; texto ou data inválida viram null sem reprovar', () => {
+    expect(parse({})).toEqual(task)
+    expect(parse({})).not.toHaveProperty('dueIso')
+    expect(parse({ dueIso: '2026-11-28' })?.dueIso).toBe('2026-11-28')
+    expect(parse({ dueIso: 'sexta' })?.dueIso).toBeNull()
+    expect(parse({ dueIso: '2026-02-30' })?.dueIso).toBeNull()
+    expect(parse({ dueIso: 20261128 })?.dueIso).toBeNull()
+    expect(parse({ dueIso: null })?.dueIso).toBeNull()
+    expect(meetingSummarySchema.safeParse({ ...SUMMARY, tasks: [{ ...task, dueIso: 'sexta' }] }).success).toBe(true)
+  })
+
+  it('o pedido leva a data da reunião com o dia da semana; sem a data, nada', () => {
+    expect(summaryInput(['x'], [], [], [], [], '2026-11-20')).toContain('<data_da_reuniao>2026-11-20 (sexta-feira)</data_da_reuniao>')
+    expect(summaryInput(['x'], [], [], [], [])).not.toContain('data_da_reuniao')
+    expect(summaryInput(['x'])).not.toContain('data_da_reuniao')
+  })
+
+  it('a instrução pede dueIso calculado a partir da data da reunião', () => {
+    const prompt = summarySystemPrompt()
+    expect(prompt).toContain('dueIso')
+    expect(prompt).toContain('<data_da_reuniao>')
+  })
+})
+
 describe('Markdown do resumo (CA8)', () => {
   const meeting = { title: 'Planejamento', startedAt: STARTED, durationMs: 32 * 60_000 }
 

@@ -10,11 +10,15 @@ export const SUMMARY_OVERVIEW_MAX = 4_000
 export const SUMMARY_ITEMS_MAX = 50
 export const SUMMARY_TEXT_MAX = 500
 
-/** Uma tarefa combinada: `owner` e `due` ficam `null` quando ninguém foi apontado ou não houve prazo. */
+/**
+ * Uma tarefa combinada: `owner` e `due` ficam `null` quando ninguém foi apontado ou não houve prazo. `dueIso`
+ * (contrato 121, R21) é o prazo em `AAAA-MM-DD` quando ele é inequívoco; resumos antigos não têm o campo.
+ */
 export interface SummaryTask {
   task: string
   owner: string | null
   due: string | null
+  dueIso?: string | null
 }
 
 /** O que o Claude devolve: só o conteúdo, sem os campos que o app preenche. */

@@ -9,10 +9,20 @@ const item = z.string().trim().min(1).max(SUMMARY_TEXT_MAX)
 /** Quem faz e prazo: texto vazio vale como "ninguém apontado" / "sem prazo". */
 const optionalItem = z.preprocess((value) => (typeof value === 'string' && value.trim() === '' ? null : value), item.nullable())
 
+/** `AAAA-MM-DD` de uma data que existe no calendário. */
+function isoDay(value: unknown): value is string {
+  const parts = typeof value === 'string' ? /^(\d{4})-(\d{2})-(\d{2})$/.exec(value) : null
+  if (!parts) return false
+  const date = new Date(Date.UTC(Number(parts[1]), Number(parts[2]) - 1, Number(parts[3])))
+  return date.toISOString().slice(0, 10) === value
+}
+/** Prazo em `AAAA-MM-DD` (contrato 121, D13): qualquer outra coisa vira `null` e nunca reprova o resumo; ausente fica ausente. */
+const dueIso = z.preprocess((value) => (isoDay(value) ? value : null), z.string().nullable()).exactOptional()
+
 export const summaryContentSchema = z.object({
   overview: z.string().trim().min(1).max(SUMMARY_OVERVIEW_MAX),
   decisions: z.array(item).max(SUMMARY_ITEMS_MAX),
-  tasks: z.array(z.object({ task: item, owner: optionalItem, due: optionalItem })).max(SUMMARY_ITEMS_MAX),
+  tasks: z.array(z.object({ task: item, owner: optionalItem, due: optionalItem, dueIso })).max(SUMMARY_ITEMS_MAX),
 })
 
 export const meetingSummarySchema = summaryContentSchema.extend({
