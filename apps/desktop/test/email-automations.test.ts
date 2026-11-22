@@ -81,7 +81,7 @@ describe('as recusas de cada envio (CA2, CA4 e CA6)', () => {
   it('na ordem: bloqueio, pausa, revogação, conta, destinatários (Para, Cc e Cco) e teto', () => {
     expect(sendRefusal(gate(), null, to(['ana@cliente.example']), 0)).toBe(null)
     expect(sendRefusal(gate({ locked: true, paused: true }), null, to(['ana@cliente.example']), 0)).toBe('app bloqueado')
-    expect(sendRefusal(gate({ paused: true }), null, to(['ana@cliente.example']), 0)).toBe('tarefas pausadas')
+    expect(sendRefusal(gate({ paused: true }), null, to(['ana@cliente.example']), 0)).toBe('agendamentos pausados')
     expect(sendRefusal(gate({ permission: null }), null, to(['ana@cliente.example']), 0)).toBe('permissão revogada')
     expect(sendRefusal(gate({ accountAddress: null }), null, to(['ana@cliente.example']), 0)).toBe('a conta da permissão não existe mais')
     expect(sendRefusal(gate(), 'outra@lap.example', to(['ana@cliente.example']), 0)).toBe('conta não permitida: outra@lap.example')
@@ -123,7 +123,7 @@ describe('as recusas de cada envio (CA2, CA4 e CA6)', () => {
     expect((await tool.run({ para: ['ana@cliente.example'], assunto: 'x', texto: 'y' }, '/tmp')).note).toContain('(app bloqueado)')
     locked = false
     state = { paused: true, permission }
-    expect((await tool.run({ para: ['ana@cliente.example'], assunto: 'x', texto: 'y' }, '/tmp')).note).toContain('(tarefas pausadas)')
+    expect((await tool.run({ para: ['ana@cliente.example'], assunto: 'x', texto: 'y' }, '/tmp')).note).toContain('(agendamentos pausados)')
     state = { paused: false, permission }
     await tool.run({ para: ['ana@cliente.example'], assunto: 'Segundo', texto: 'y' }, '/tmp')
     expect((await tool.run({ para: ['ana@cliente.example'], assunto: 'Terceiro', texto: 'y' }, '/tmp')).note).toContain('teto de 2 envios por execução atingido')
@@ -137,7 +137,7 @@ describe('as recusas de cada envio (CA2, CA4 e CA6)', () => {
       'endereço inválido: nao-e-email',
       'pedido inválido: precisa de "para", "assunto" e "texto"',
       'app bloqueado',
-      'tarefas pausadas',
+      'agendamentos pausados',
       'ok:<m2@lap.example>',
       'teto de 2 envios por execução atingido',
       'permissão revogada',
@@ -325,7 +325,7 @@ describe('a tarefa com "Pode enviar email" (CA1 a CA5)', () => {
       'ok bia@cliente.example <m2@lap.example>',
     ])
     expect(run.answer?.steps?.map((step) => step.status)).toEqual(['completed', 'failed', 'completed'])
-    expect(notices).toContainEqual({ title: 'Tarefa: Avisar o cliente', body: 'Tarefa Avisar o cliente enviou 2 emails', runId: run.id })
+    expect(notices).toContainEqual({ title: 'Agendamento: Avisar o cliente', body: 'Agendamento Avisar o cliente enviou 2 emails', runId: run.id })
     const prompt = prompts.at(-1) ?? ''
     expect(prompt).toContain('enviar_email')
     expect(prompt).toContain('ler_email')
@@ -393,7 +393,7 @@ describe('a tarefa com "Pode enviar email" (CA1 a CA5)', () => {
     ])
     const run = await runTask(id)
     expect(sent).toHaveLength(1)
-    expect(run.emails?.map((item) => item.error)).toEqual([null, 'tarefas pausadas', 'app bloqueado', 'permissão revogada'])
+    expect(run.emails?.map((item) => item.error)).toEqual([null, 'agendamentos pausados', 'app bloqueado', 'permissão revogada'])
   })
 
   it('o teto vale por execução: a seguinte começa do zero', async () => {

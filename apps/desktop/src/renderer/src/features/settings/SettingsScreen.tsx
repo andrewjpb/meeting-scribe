@@ -31,6 +31,7 @@ import { InstagramSection } from './InstagramSection'
 import { MediaHostSection } from './MediaHostSection'
 import { EmailSettingsTab } from './EmailSettingsTab'
 import { FunilSection } from './FunilSection'
+import { TarefasSection } from './TarefasSection'
 import { AcpAgentField } from './AcpAgentField'
 import { ApiKeyField } from './ApiKeyField'
 import { BrandSection } from './BrandSection'
@@ -300,9 +301,9 @@ function SettingsPanels({ tab }: { tab: SettingsTab }) {
                   <Segmented value={settings.theme} options={THEMES} labelledBy="settings-theme" dataName="theme-option" onChange={(theme) => void update({ theme })} />
                 </SettingRow>
               </Section>
-              {/* Contrato 23: o app continua na barra de menus, com as tarefas agendadas rodando. */}
+              {/* Contrato 23: o app continua na barra de menus, com os agendamentos rodando. */}
               <Section title="Janela">
-                <SettingRow name="Ao fechar a janela" nameId="settings-close-behavior" description="Na barra de menus, as tarefas agendadas continuam rodando.">
+                <SettingRow name="Ao fechar a janela" nameId="settings-close-behavior" description="Na barra de menus, os agendamentos continuam rodando.">
                   <Segmented value={settings.closeBehavior} options={CLOSE_BEHAVIORS} labelledBy="settings-close-behavior" dataName="close-behavior-option" onChange={(closeBehavior) => void update({ closeBehavior })} />
                 </SettingRow>
                 <SettingRow name="Abrir ao entrar no Mac" nameId="settings-open-at-login" description="Abre direto na barra de menus, sem janela.">
@@ -311,6 +312,8 @@ function SettingsPanels({ tab }: { tab: SettingsTab }) {
               </Section>
               {/* Contrato 109: o Funil de vendas fica em Geral (as 9 abas e os atalhos ⌘1 a ⌘9 estão ocupados). */}
               <FunilSection />
+              {/* Contrato 128: as Tarefas logo abaixo do Funil de vendas (D16). */}
+              <TarefasSection />
               <LockSection />
               <UpdatesSection />
             </>,

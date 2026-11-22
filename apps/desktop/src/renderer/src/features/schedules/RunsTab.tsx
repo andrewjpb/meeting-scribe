@@ -37,7 +37,7 @@ export function RunsTab({ meetings }: { meetings: ChatMeetings }) {
         <Select
           id="runs-task-filter"
           value={taskFilter}
-          options={[{ value: '', label: 'Todas as tarefas' }, ...tasks.map((task) => ({ value: task.id, label: task.name }))]}
+          options={[{ value: '', label: 'Todos os agendamentos' }, ...tasks.map((task) => ({ value: task.id, label: task.name }))]}
           onChange={setTaskFilter}
         />
         <Select
@@ -57,7 +57,7 @@ export function RunsTab({ meetings }: { meetings: ChatMeetings }) {
           <thead>
             <tr className="label border-b border-line-strong">
               <th className="py-1.5 pr-4 font-medium">Data</th>
-              <th className="py-1.5 pr-4 font-medium">Tarefa</th>
+              <th className="py-1.5 pr-4 font-medium">Agendamento</th>
               <th className="py-1.5 pr-4 font-medium">Agente</th>
               <th className="py-1.5 pr-4 font-medium">Estado</th>
               <th className="py-1.5 pr-4 font-medium">Duração</th>
@@ -202,7 +202,7 @@ function RunDetail({ runId, meetings }: { runId: string; meetings: ChatMeetings 
 }
 
 /**
- * Contrato 56 (D19, quadro 17): o modelo pediu para organizar o email numa tarefa agendada. Nada se moveu (a execução não
+ * Contrato 56 (D19, quadro 17): o modelo pediu para organizar o email num agendamento. Nada se moveu (a execução não
  * tem essas ferramentas): sem cartão e sem botão, só a recusa e para onde ir.
  */
 function RunOrganizeRefused({ items }: { items: readonly RunOrganizeRefusedItem[] }) {
@@ -220,7 +220,7 @@ function RunOrganizeRefused({ items }: { items: readonly RunOrganizeRefusedItem[
               <p className="text-text">
                 <span className="font-medium text-rec">Recusado</span> · {item.request}
               </p>
-              <p className="text-12 text-text-muted">Tarefa agendada não move, não cria pasta e não apaga email. Para organizar, peça no Assistente.</p>
+              <p className="text-12 text-text-muted">Agendamento não move, não cria pasta e não apaga email. Para organizar, peça no Assistente.</p>
             </div>
           </li>
         ))}

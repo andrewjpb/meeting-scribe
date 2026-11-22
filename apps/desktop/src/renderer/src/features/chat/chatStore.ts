@@ -104,7 +104,7 @@ interface ChatState {
   copy: (id: string, index: number) => Promise<boolean>
   /** Contrato 25: "Criar lembrete" num cartão (com a data e o texto do "Editar", quando mudaram). */
   createReminder: (ref: ChatActionRef, edit?: { at?: string; text?: string }) => Promise<ChatActionResult>
-  /** Contrato 25: "Descartar", "Enviada" (depois do envio do WhatsApp) e "Tarefa criada". */
+  /** Contrato 25: "Descartar", "Enviada" (depois do envio do WhatsApp) e "Agendamento criado". */
   setActionState: (ref: ChatActionRef, state: ChatActionStateRequest['state'], text?: string) => Promise<ChatActionResult>
   /** Contrato 78: "Pôr na agenda" (e "Tentar de novo"), na agenda escolhida e com o que o "Editar" mudou. */
   createEvent: (ref: ChatActionRef, calendarId: string, fields?: ChatActionEventFields) => Promise<ChatActionResult>

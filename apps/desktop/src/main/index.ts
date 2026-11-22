@@ -377,7 +377,7 @@ const liveNotices = new Set<Notification>()
 function showAutomationNotice(notice: AutomationNotice): void {
   const locked = lockService?.isLocked() ?? false
   // Contrato 25: o lembrete bloqueado também não mostra o texto.
-  const shown = locked ? { title: brandName, body: notice.reminder ? 'Você tem um lembrete.' : 'Uma tarefa agendada terminou.', runId: notice.runId } : notice
+  const shown = locked ? { title: brandName, body: notice.reminder ? 'Você tem um lembrete.' : 'Um agendamento terminou.', runId: notice.runId } : notice
   if (smokeFixtures) {
     smokeFixtures.automations.notifications.push(shown)
     return

@@ -66,6 +66,7 @@ describe('esquema de configurações (CA1)', () => {
       redesPollMinutes: 5,
       // fim 73
       funil: { detectarNasReunioes: true, diasEsfriar: 7, avisarEsfriadas: true },
+      tarefas: { horaLembrete: '09:00', lembrarNoPrazo: true, avisoDiario: true, sugerirDasReunioes: true },
     })
     expect(parseSettings(undefined)).toEqual(DEFAULT_SETTINGS)
     expect(parseSettings({})).toEqual(DEFAULT_SETTINGS)
@@ -141,6 +142,7 @@ describe('esquema de configurações (CA1)', () => {
       redesPollMinutes: 15,
       // fim 73
       funil: { detectarNasReunioes: true, diasEsfriar: 7, avisarEsfriadas: true },
+      tarefas: { horaLembrete: '07:45', lembrarNoPrazo: false, avisoDiario: true, sugerirDasReunioes: false },
     }
     expect(parseSettings(saved)).toEqual(saved)
     // 73: comentários
@@ -187,7 +189,7 @@ describe('esquema de configurações (CA1)', () => {
   it('Claude CLI (contrato 05, CA1): motor, modelo e caminho com padrão próprio cada um', () => {
     // `settings.json` do contrato 04, sem os campos novos: carrega com os padrões deles e mantém o resto.
     const old = { translationEnabled: false, translationModel: 'gpt-oss-120b', sourceLanguage: 'es', targetLanguage: 'ja', echoCancellation: true, theme: 'dark', micDeviceId: null }
-    expect(parseSettings(old)).toEqual({ ...old, removeEcho: true, translationEngine: 'assemblyai', claudeModel: 'haiku', chatModel: 'sonnet', claudePath: null, claudeTransport: 'acp', agentProfile: 'claude', saveToFolder: true, audioFolder: null, summarizeOnStop: true, liveCards: false, whatsappInsights: true, whatsappAutoCorrect: false, whatsappNotifications: true, whatsappNotifyGroups: true, whatsappTypingSignal: false, identifySpeakers: false, meetSpeakers: true, meetingPrompt: true, navegadorPlugin: false, brandName: null, brandSubtitle: null, brandLogo: null, autoCheckUpdates: true, lockUseTouchId: false, lockAfterMinutes: 0, lockOnSystemLock: true, lockOnLaunch: false, saveToDrive: true, closeBehavior: 'tray', openAtLogin: false, scheduledRunsDailyLimit: 50, calendarAlerts: true, calendarLeadMinutes: 5, calendarNotRecordingAlert: true, calendarIds: { google: null, microsoft: null }, emailPollMinutes: 5, emailNotifications: true, emailCollapsed: [], emailFoldersCollapsed: [], emailRecentFolders: {}, inviteCalendarId: null, inviteAddOnAccept: true, inviteSuggest: false, claudeConnectors: {}, redesPollMinutes: 5, funil: { detectarNasReunioes: true, diasEsfriar: 7, avisarEsfriadas: true } })
+    expect(parseSettings(old)).toEqual({ ...old, removeEcho: true, translationEngine: 'assemblyai', claudeModel: 'haiku', chatModel: 'sonnet', claudePath: null, claudeTransport: 'acp', agentProfile: 'claude', saveToFolder: true, audioFolder: null, summarizeOnStop: true, liveCards: false, whatsappInsights: true, whatsappAutoCorrect: false, whatsappNotifications: true, whatsappNotifyGroups: true, whatsappTypingSignal: false, identifySpeakers: false, meetSpeakers: true, meetingPrompt: true, navegadorPlugin: false, brandName: null, brandSubtitle: null, brandLogo: null, autoCheckUpdates: true, lockUseTouchId: false, lockAfterMinutes: 0, lockOnSystemLock: true, lockOnLaunch: false, saveToDrive: true, closeBehavior: 'tray', openAtLogin: false, scheduledRunsDailyLimit: 50, calendarAlerts: true, calendarLeadMinutes: 5, calendarNotRecordingAlert: true, calendarIds: { google: null, microsoft: null }, emailPollMinutes: 5, emailNotifications: true, emailCollapsed: [], emailFoldersCollapsed: [], emailRecentFolders: {}, inviteCalendarId: null, inviteAddOnAccept: true, inviteSuggest: false, claudeConnectors: {}, redesPollMinutes: 5, funil: { detectarNasReunioes: true, diasEsfriar: 7, avisarEsfriadas: true }, tarefas: { horaLembrete: '09:00', lembrarNoPrazo: true, avisoDiario: true, sugerirDasReunioes: true } })
     expect(parseSettings({ translationEngine: 'claude-cli', claudeModel: 'sonnet' })).toMatchObject({ translationEngine: 'claude-cli', claudeModel: 'sonnet' })
     // Fora da lista cai no padrão: só `haiku` e `sonnet`, só os dois motores.
     expect(parseSettings({ translationEngine: 'openai' }).translationEngine).toBe('assemblyai')
@@ -363,9 +365,68 @@ describe('esquema de configurações (CA1)', () => {
     const rows = settingsIndex('Claude').filter((entry) => entry.section === 'Funil de vendas')
     expect(rows.map((entry) => [entry.tab, entry.name, entry.description])).toEqual([
       ['geral', 'Detectar oportunidades nas reuniões', 'Depois do resumo, propõe criar ou atualizar uma oportunidade.'],
-      ['geral', 'Considerar esfriada após (dias)', 'Oportunidade aberta sem interação nesse prazo ganha o marcador esfriou.'],
-      ['geral', 'Avisar oportunidades esfriadas e passos vencidos', 'Uma notificação por dia, depois das 9h.'],
+      [
+        'geral',
+        'Considerar esfriada após (dias)',
+        'Sem reunião, e-mail, WhatsApp, tarefa concluída nem mudança de etapa nesse prazo, o cartão ganha o marcador esfriou. De 1 a 90.',
+      ],
+      ['geral', 'Incluir oportunidades esfriadas no aviso Hoje', 'Soma "Funil: N esfriadas" ao aviso diário das tarefas, só quando houver alguma.'],
     ])
+  })
+
+  it('Funil de vendas (contrato 128, CA9): a busca acha "Incluir oportunidades esfriadas no aviso Hoje" na Section do funil', () => {
+    const found = settingsIndex('Claude').filter((entry) => entry.name === 'Incluir oportunidades esfriadas no aviso Hoje')
+    expect(found).toEqual([expect.objectContaining({ tab: 'geral', section: 'Funil de vendas' })])
+    expect(settingsIndex('Claude').some((entry) => entry.name === 'Avisar oportunidades esfriadas e passos vencidos')).toBe(false)
+  })
+
+  it('Tarefas (contrato 128): quatro linhas na aba Geral, na Section "Tarefas", logo depois das do funil', () => {
+    const index = settingsIndex('Claude')
+    const rows = index.filter((entry) => entry.section === 'Tarefas')
+    expect(rows.map((entry) => [entry.tab, entry.name])).toEqual([
+      ['geral', 'Hora do lembrete'],
+      ['geral', 'Lembrar no prazo'],
+      ['geral', 'Aviso diário Hoje'],
+      ['geral', 'Sugerir tarefas das reuniões'],
+    ])
+    const lastFunil = index.map((entry) => entry.section).lastIndexOf('Funil de vendas')
+    expect(index[lastFunil + 1]?.name).toBe('Hora do lembrete')
+  })
+
+  it('Tarefas pelo renderer (contrato 128, CA15 da spec): HH:MM de 00:00 a 23:59, os quatro campos juntos', () => {
+    const tarefas = { horaLembrete: '08:00', lembrarNoPrazo: false, avisoDiario: true, sugerirDasReunioes: true }
+    expect(parseSettingsPatch({ tarefas })).toEqual({ tarefas })
+    expect(parseSettingsPatch({ tarefas: { ...tarefas, horaLembrete: '00:00' } }).tarefas?.horaLembrete).toBe('00:00')
+    expect(parseSettingsPatch({ tarefas: { ...tarefas, horaLembrete: '23:59' } }).tarefas?.horaLembrete).toBe('23:59')
+    for (const hora of ['25:00', '24:00', '8:00', '08:60', '0800', '', ' 08:00', '08:00:00']) {
+      expect(() => parseSettingsPatch({ tarefas: { ...tarefas, horaLembrete: hora } })).toThrow()
+    }
+    expect(() => parseSettingsPatch({ tarefas: { ...tarefas, extra: true } })).toThrow()
+    expect(() => parseSettingsPatch({ tarefas: { horaLembrete: '08:00', lembrarNoPrazo: true, avisoDiario: true } })).toThrow()
+    expect(() => parseSettingsPatch({ tarefas: { ...tarefas, avisoDiario: 'sim' } })).toThrow()
+    // Recusa o pedido inteiro, não só o campo.
+    expect(() => parseSettingsPatch({ theme: 'dark', tarefas: { ...tarefas, horaLembrete: '25:00' } })).toThrow()
+  })
+
+  it('Tarefas no arquivo (contrato 128, CA15 da spec): arquivo antigo vem com os padrões; campo inválido volta ao padrão dele', () => {
+    expect(DEFAULT_SETTINGS.tarefas).toEqual({ horaLembrete: '09:00', lembrarNoPrazo: true, avisoDiario: true, sugerirDasReunioes: true })
+    const old = { ...DEFAULT_SETTINGS, theme: 'dark' } as Record<string, unknown>
+    delete old['tarefas']
+    expect(parseSettings(old)).toEqual({ ...DEFAULT_SETTINGS, theme: 'dark' })
+    expect(parseSettings({ tarefas: { horaLembrete: 'x', lembrarNoPrazo: false, avisoDiario: false, sugerirDasReunioes: false } }).tarefas).toEqual({
+      horaLembrete: '09:00',
+      lembrarNoPrazo: false,
+      avisoDiario: false,
+      sugerirDasReunioes: false,
+    })
+    expect(parseSettings({ tarefas: { horaLembrete: '07:30', lembrarNoPrazo: 'não', avisoDiario: true, sugerirDasReunioes: false } }).tarefas).toEqual({
+      horaLembrete: '07:30',
+      lembrarNoPrazo: true,
+      avisoDiario: true,
+      sugerirDasReunioes: false,
+    })
+    expect(parseSettings({ tarefas: 'tudo' }).tarefas).toEqual(DEFAULT_SETTINGS.tarefas)
+    expect(parseSettings({ tarefas: null }).tarefas).toEqual(DEFAULT_SETTINGS.tarefas)
   })
 
   it('Funil de vendas pelo renderer (contrato 109, CA2): dias inteiros de 1 a 90, os três campos juntos', () => {
@@ -508,6 +569,23 @@ describe('store de configurações (CA2)', () => {
     // `null` não grava; mudança inválida lança.
     expect((await allow('Figma', 'x')).claudeConnectors['Figma']).toBeUndefined()
     await expect(store.mutate(() => ({ theme: 'sepia' }) as never)).rejects.toThrow()
+  })
+
+  it('Tarefas (contrato 128, CA15 da spec): grava e relê; hora inválida ou campo a mais é recusado e o arquivo não muda', async () => {
+    const store = createFileSettingsStore({ dir })
+    expect((await store.get()).tarefas).toEqual(DEFAULT_SETTINGS.tarefas)
+    const tarefas = { horaLembrete: '08:00', lembrarNoPrazo: false, avisoDiario: true, sugerirDasReunioes: true }
+    expect((await store.update({ tarefas })).tarefas).toEqual(tarefas)
+    expect(onDisk().settings.tarefas).toEqual(tarefas)
+    expect((await createFileSettingsStore({ dir }).get()).tarefas).toEqual(tarefas)
+    const before = readFileSync(join(dir, SETTINGS_FILE), 'utf8')
+    await expect(store.update({ tarefas: { ...tarefas, horaLembrete: '25:00' } })).rejects.toThrow()
+    await expect(store.update({ tarefas: { ...tarefas, horaLembrete: '8:00' } })).rejects.toThrow()
+    await expect(store.update({ tarefas: { ...tarefas, extra: 1 } } as never)).rejects.toThrow()
+    expect(readFileSync(join(dir, SETTINGS_FILE), 'utf8')).toBe(before)
+    // Arquivo com a hora inválida (editado à mão): lê o padrão daquele campo.
+    writeFileSync(join(dir, SETTINGS_FILE), JSON.stringify({ version: 1, settings: { ...onDisk().settings, tarefas: { ...tarefas, horaLembrete: 'x' } } }))
+    expect((await createFileSettingsStore({ dir }).get()).tarefas).toEqual({ ...tarefas, horaLembrete: '09:00' })
   })
 
   it('sem arquivo valem os padrões e nada é criado', async () => {

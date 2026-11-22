@@ -138,7 +138,7 @@ const funilOpcional = (max: number) =>
 const proposedSchema = z.discriminatedUnion('tipo', [
   z.object({ tipo: z.literal('lembrete'), quando: zonedIso, texto: line(REMINDER_TEXT_MAX), conversaWhatsApp: whatsappChatId.nullable().optional(), horaPadrao: z.boolean().optional(), email: emailRef.nullable().optional() }),
   z.object({ tipo: z.literal('whatsapp-resposta'), chatId: whatsappChatId, texto: z.string().trim().min(1).max(WHATSAPP_SEND_TEXT_MAX) }),
-  z.object({ tipo: z.literal('tarefa'), nome: line(TASK_NAME_MAX), agente: z.string().trim().min(1).max(100), mensagem: z.string().trim().min(1).max(TASK_MESSAGE_MAX), schedule: scheduleSchema }),
+  z.object({ tipo: z.literal('agendamento'), nome: line(TASK_NAME_MAX), agente: z.string().trim().min(1).max(100), mensagem: z.string().trim().min(1).max(TASK_MESSAGE_MAX), schedule: scheduleSchema }),
   z.object({ tipo: z.literal('abrir'), tela: z.enum(OPEN_SCREENS), alvo: z.string().trim().max(200).nullable().optional() }),
   // Contrato 45.
   z.object({ tipo: z.literal('emails'), mensagens: z.array(emailRef).min(1).max(EMAIL_CARD_ITEMS_MAX * 2) }),
@@ -215,7 +215,9 @@ export interface ActionResolver {
 }
 
 const SETTINGS_LABELS: Readonly<Record<string, string>> = { geral: 'Geral', gravacao: 'Gravação', claude: 'Claude', arquivos: 'Arquivos', contas: 'Contas', plugins: 'Plugins', conexoes: 'Conexões', sobre: 'Sobre' }
-const AUTOMATIONS_LABELS: Readonly<Record<string, string>> = { agentes: 'Agentes', tarefas: 'Tarefas agendadas', execucoes: 'Execuções' }
+const AUTOMATIONS_LABELS: Readonly<Record<string, string>> = { agentes: 'Agentes', tarefas: 'Agendamentos', execucoes: 'Execuções' }
+/** Contrato 128 (D15): `agendamentos` é sinônimo da aba `tarefas` (o id interno não muda). */
+const AUTOMATIONS_ALIASES: Readonly<Record<string, string>> = { agendamentos: 'tarefas' }
 
 async function openTarget(screen: OpenScreen, target: string | null, resolver: ActionResolver): Promise<{ target: string | null; name: string | null } | null> {
   if (screen === 'reuniao') {
@@ -235,7 +237,8 @@ async function openTarget(screen: OpenScreen, target: string | null, resolver: A
   }
   if (screen === 'automacoes') {
     if (!target) return { target: null, name: null }
-    return (AUTOMATIONS_TABS as readonly string[]).includes(target) ? { target, name: AUTOMATIONS_LABELS[target] ?? target } : null
+    const tab = AUTOMATIONS_ALIASES[target] ?? target
+    return (AUTOMATIONS_TABS as readonly string[]).includes(tab) ? { target: tab, name: AUTOMATIONS_LABELS[tab] ?? tab } : null
   }
   // Contrato 117 (R20): a oportunidade e o contato pelo id do funil (que existe e não está arquivado), com o nome dele.
   if (screen === 'oportunidade' || screen === 'contato') {
@@ -665,14 +668,14 @@ async function resolve(proposed: Proposed, id: string, resolver: ActionResolver)
       if (!chat) return null
       return { ...base, kind: 'whatsapp-resposta', chatId: proposed.chatId, chatName: chat.name, phone: chat.kind === 'group' ? null : (chat.phone ?? phoneOfChatId(proposed.chatId)), group: chat.kind === 'group', text: proposed.texto }
     }
-    case 'tarefa': {
+    case 'agendamento': {
       const agents = (await resolver.agents?.().catch(() => [])) ?? []
       const wanted = proposed.agente.toLocaleLowerCase('pt-BR')
       const agent = agents.find((candidate) => candidate.id === proposed.agente) ?? agents.find((candidate) => candidate.name.toLocaleLowerCase('pt-BR') === wanted)
       if (!agent) return null
       // Frequência que não se descreve (cron inválido já não passa no esquema) também não vale.
       if (!describeSchedule(proposed.schedule, resolver.timeZone())) return null
-      return { ...base, kind: 'tarefa', name: proposed.nome, agentId: agent.id, agentName: agent.name, message: proposed.mensagem, schedule: proposed.schedule }
+      return { ...base, kind: 'agendamento', name: proposed.nome, agentId: agent.id, agentName: agent.name, message: proposed.mensagem, schedule: proposed.schedule }
     }
     case 'abrir': {
       const found = await openTarget(proposed.tela, proposed.alvo ?? null, resolver)
@@ -800,8 +803,8 @@ export function actionsHistory(actions: readonly ChatAction[] | undefined): stri
         return `- lembrete "${action.text}" para ${action.at}${action.email ? ` sobre o email ${action.email.label}` : ''} (${state})`
       case 'whatsapp-resposta':
         return `- resposta no WhatsApp para ${action.chatName}: "${action.text.replace(/\s+/g, ' ').slice(0, 200)}" (${state})`
-      case 'tarefa':
-        return `- tarefa "${action.name}" com o agente ${action.agentName} (${state})`
+      case 'agendamento':
+        return `- agendamento "${action.name}" com o agente ${action.agentName} (${state})`
       case 'abrir':
         return `- botão "${action.label}"`
       case 'emails':
@@ -884,7 +887,7 @@ export interface ChatActionsDeps {
 export interface ChatActions {
   /** "Criar lembrete" (com a data e o texto do "Editar"). */
   reminder(request: unknown): Promise<ChatActionResult>
-  /** "Descartar", "Enviada" (depois do envio do contrato 24) e "Tarefa criada" (depois do formulário). */
+  /** "Descartar", "Enviada" (depois do envio do contrato 24) e "Agendamento criado" (depois do formulário). */
   setState(request: unknown): Promise<ChatActionResult>
   /** Contrato 78: "Pôr na agenda" e "Tentar de novo" (com o que o "Editar" mudou). */
   event(request: unknown): Promise<ChatActionResult>
@@ -1075,7 +1078,7 @@ export function createChatActions(deps: ChatActionsDeps): ChatActions {
       // também se descarta.
       if (state === 'dismissed')
         return write(ref, (action) => (action.kind === 'abrir' || action.kind === 'emails' || action.kind === 'email-lote' ? null : { ...action, status: 'dismissed', result: DISMISSED_TEXT }), undefined, true)
-      if (state === 'task-created') return write(ref, (action) => (action.kind === 'tarefa' ? { ...action, status: 'done', result: TASK_CREATED_TEXT } : null))
+      if (state === 'task-created') return write(ref, (action) => (action.kind === 'agendamento' ? { ...action, status: 'done', result: TASK_CREATED_TEXT } : null))
       // "Enviar" passou pelo contrato 24: grava o texto que foi e a hora; as outras escolhas "É esta conversa?" com o
       // mesmo texto saem.
       const sentAt = now()

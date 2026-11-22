@@ -1,5 +1,5 @@
 // Tela "Automações" (contrato 23, pedido de 16/11 19:25): no topo, "Pedir agora" (escolhe um agente, digita o
-// pedido e roda na hora; a execução entra em "Execuções"); abaixo, as abas "Agentes", "Tarefas agendadas" e
+// pedido e roda na hora; a execução entra em "Execuções"); abaixo, as abas "Agentes", "Agendamentos" e
 // "Execuções". Tudo roda no main; a tela só pede e mostra.
 import { ArrowUp, Pause, Play } from 'lucide-react'
 import { useEffect, useState, type KeyboardEvent } from 'react'
@@ -17,7 +17,7 @@ import { AREA_CLASS, RunAnswer } from './parts'
 
 const TABS: readonly { value: AutomationsTab; label: string }[] = [
   { value: 'agentes', label: 'Agentes' },
-  { value: 'tarefas', label: 'Tarefas agendadas' },
+  { value: 'tarefas', label: 'Agendamentos' },
   { value: 'execucoes', label: 'Execuções' },
 ]
 const TABS_ID = 'automations'
@@ -33,7 +33,7 @@ export function AutomationsScreen() {
     void useAutomations.getState().load()
   }, [])
 
-  const pauseText = status.paused ? (status.pauseReason === 'limit' ? `Tarefas pausadas: o limite diário de ${status.dailyLimit} execuções foi atingido.` : 'Tarefas pausadas.') : null
+  const pauseText = status.paused ? (status.pauseReason === 'limit' ? `Agendamentos pausados: o limite diário de ${status.dailyLimit} execuções foi atingido.` : 'Agendamentos pausados.') : null
 
   return (
     <div className="flex min-h-0 flex-1 flex-col" data-automations>
@@ -48,7 +48,7 @@ export function AutomationsScreen() {
               icon={status.paused ? Play : Pause}
               onClick={() => void window.__scribeApi.invoke('scribe:automations-pause', { paused: !status.paused }).then((next) => useAutomations.setState({ status: next }))}
             >
-              {status.paused ? 'Retomar' : 'Pausar todas as tarefas'}
+              {status.paused ? 'Retomar' : 'Pausar todos os agendamentos'}
             </Button>
           }
         />

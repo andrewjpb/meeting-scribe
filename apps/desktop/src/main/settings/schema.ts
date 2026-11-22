@@ -15,7 +15,7 @@ import { EMAIL_SIGNATURE_MAX, type EmailSignature } from '../../shared/email-sig
 import { EMAIL_RULES_MAX, emailRuleSchema, type EmailRule } from '../../shared/email-rules'
 import { CLAUDE_CONNECTOR_NAME_MAX, CLAUDE_CONNECTORS_MAX, MCP_TOOL_NAME_MAX, MCP_TOOL_POLICIES, MCP_TOOLS_MAX, type ClaudeConnectorPrefs } from '../../shared/mcp'
 import { EMAIL_ACCOUNT_ID_PATTERN, EMAIL_ADDRESS_PATTERN, EMAIL_FOLDER_PATH_MAX, EMAIL_HOST_PATTERN, EMAIL_POLL_MINUTES, EMAIL_PROTOCOLS, EMAIL_SECURITY, type EmailAccount } from '../../shared/email'
-import { AGENT_PROFILES, CALENDAR_IDS_MAX, CALENDAR_LEAD_MINUTES, CHAT_MODELS, CLAUDE_MODELS, CLAUDE_TRANSPORTS, CLOSE_BEHAVIORS, DAILY_RUN_LIMIT_OPTIONS, DEFAULT_SETTINGS, FUNIL_DIAS_ESFRIAR_MAX, FUNIL_DIAS_ESFRIAR_MIN, LANGUAGE_CODES, LOCK_AFTER_MINUTES, THEME_SETTINGS, TRANSLATION_ENGINES, type AppSettings, type SettingsPatch } from '../../shared/settings-defaults'
+import { AGENT_PROFILES, CALENDAR_IDS_MAX, CALENDAR_LEAD_MINUTES, CHAT_MODELS, CLAUDE_MODELS, CLAUDE_TRANSPORTS, CLOSE_BEHAVIORS, DAILY_RUN_LIMIT_OPTIONS, DEFAULT_SETTINGS, FUNIL_DIAS_ESFRIAR_MAX, FUNIL_DIAS_ESFRIAR_MIN, LANGUAGE_CODES, LOCK_AFTER_MINUTES, TAREFAS_HORA_RE, THEME_SETTINGS, TRANSLATION_ENGINES, type AppSettings, type SettingsPatch } from '../../shared/settings-defaults'
 // 73: comentários
 import { REDES_POLL_MINUTES } from '../../shared/settings-defaults'
 // fim 73
@@ -124,6 +124,22 @@ const lenientFunilSchema = z
   })
   .catch(() => ({ ...D.funil }))
 
+/** Contrato 128 (R34): hora do lembrete em HH:MM. */
+const tarefasHoraSchema = z.string().regex(TAREFAS_HORA_RE)
+/** Pelo renderer: os quatro campos, sempre juntos; qualquer outro valor recusa o pedido inteiro. */
+const tarefasPatchSchema = z
+  .object({ horaLembrete: tarefasHoraSchema, lembrarNoPrazo: z.boolean(), avisoDiario: z.boolean(), sugerirDasReunioes: z.boolean() })
+  .strict()
+/** No arquivo: cada campo à parte; um valor inválido volta ao padrão dele sem levar os outros. */
+const lenientTarefasSchema = z
+  .object({
+    horaLembrete: tarefasHoraSchema.catch(D.tarefas.horaLembrete),
+    lembrarNoPrazo: z.boolean().catch(D.tarefas.lembrarNoPrazo),
+    avisoDiario: z.boolean().catch(D.tarefas.avisoDiario),
+    sugerirDasReunioes: z.boolean().catch(D.tarefas.sugerirDasReunioes),
+  })
+  .catch(() => ({ ...D.tarefas }))
+
 const lenientSchema = z.object({
   translationEnabled: z.boolean().catch(D.translationEnabled),
   translationModel: modelIdSchema.catch(D.translationModel),
@@ -184,6 +200,7 @@ const lenientSchema = z.object({
   redesPollMinutes: z.literal(REDES_POLL_MINUTES).catch(D.redesPollMinutes),
   // fim 73
   funil: lenientFunilSchema,
+  tarefas: lenientTarefasSchema,
 })
 
 const patchSchema = z
@@ -240,6 +257,7 @@ const patchSchema = z
     redesPollMinutes: z.literal(REDES_POLL_MINUTES),
     // fim 73
     funil: funilPatchSchema,
+    tarefas: tarefasPatchSchema,
   })
   .partial()
   .strict()

@@ -2,12 +2,12 @@
 // (CA5: cartão nunca executa sozinho, texto de mensagem que pede ação só vira cartão, agendadas sem cartões, canais
 // recusados com o app bloqueado), o lembrete como tarefa "uma vez" sem agente das Automações e o guia do app.
 // Contrato 117 (CA8 da spec): os cartões do funil (ids e etapas pelo app), a fonte Funil (desligada por padrão) e o canal.
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { copyFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { eventWhen, phoneOfChatId, REMINDER_GONE_TEXT, reminderTitle, withoutActionBlocks, withoutPendingActions, type ChatAction, type ChatActionEvent } from '../src/shared/assistant'
+import { CHAT_ACTION_KINDS, eventWhen, phoneOfChatId, REMINDER_GONE_TEXT, reminderTitle, withoutActionBlocks, withoutPendingActions, type ChatAction, type ChatActionEvent } from '../src/shared/assistant'
 import type { AutomationNotice } from '../src/main/schedules/service'
 import { createAutomationsService } from '../src/main/schedules/service'
 import { createFileRunsStore, createFileSchedulesStore, SCHEDULE_RUNS_DIR } from '../src/main/schedules/store'
@@ -26,7 +26,7 @@ import { createFunilStore } from '../src/main/funil/store'
 import { chatSourcesOf } from '../src/shared/chat'
 import type { FunilActionResult, FunilView, Oportunidade } from '../src/shared/funil'
 import { etapasPadrao } from '../src/shared/funil-logic'
-import { chatScopeSchema, createFileChatStore } from '../src/main/chat/store'
+import { CHATS_DIR, chatScopeSchema, createFileChatStore } from '../src/main/chat/store'
 import { assistantSystemPrompt, chatStepOf } from '../src/main/claude-cli/chat'
 import type { ClaudeChild, SpawnClaude, SpawnOptions } from '../src/main/claude-cli/translator'
 import { createFileMeetingsStore } from '../src/main/meetings/store'
@@ -109,7 +109,9 @@ describe('blocos de ação (CA3, CA4)', () => {
       block('{ isto não é json'),
       block({ tipo: 'enviar-email', para: 'x' }),
       block({ tipo: 'whatsapp-resposta', chatId: '5511999999999@s.whatsapp.net', texto: 'Oi' }),
-      block({ tipo: 'tarefa', nome: 'X', agente: 'Agente que não existe', mensagem: 'm', schedule: { kind: 'daily', time: '08:00' } }),
+      block({ tipo: 'agendamento', nome: 'X', agente: 'Agente que não existe', mensagem: 'm', schedule: { kind: 'daily', time: '08:00' } }),
+      // Contrato 128 (R29): o nome antigo do bloco não vale mais, nem com um agente que existe.
+      block({ tipo: 'tarefa', nome: 'Toda segunda', agente: 'resumo da semana', mensagem: 'Resuma.', schedule: { kind: 'weekly', days: [1], time: '09:00' } }),
       block({ tipo: 'lembrete', quando: '2026-11-15T09:00:00-03:00', texto: 'Ontem' }),
       block({ tipo: 'lembrete', quando: '2026-11-17T09:00:00', texto: 'Sem fuso' }),
       block({ tipo: 'abrir', tela: 'reuniao', alvo: 'nao-existe' }),
@@ -121,16 +123,24 @@ describe('blocos de ação (CA3, CA4)', () => {
     }
   })
 
-  it('até 3 escolhas "É esta conversa?"; tarefa pelo nome do agente; abrir com o rótulo do app', async () => {
+  it('até 3 escolhas "É esta conversa?"; agendamento pelo nome do agente; abrir com o rótulo do app', async () => {
     const replies = [ANA, BRUNO, GRUPO, ANA].map((chatId) => block({ tipo: 'whatsapp-resposta', chatId, texto: 'Sim' })).join('\n\n')
     const extracted = await extractActions(`Qual delas?\n\n${replies}`, resolver())
     expect(extracted.actions.map((action) => (action as { chatName: string }).chatName)).toEqual(['Ana Souza', 'Bruno Lima', 'Projeto Atlas'])
     // A quarta ficou como texto.
     expect(extracted.text).toContain(ANA)
-    const task = await extractActions(block({ tipo: 'tarefa', nome: 'Toda segunda', agente: 'resumo da semana', mensagem: 'Resuma.', schedule: { kind: 'weekly', days: [1], time: '09:00' } }), resolver())
-    expect(task.actions[0]).toMatchObject({ kind: 'tarefa', agentId: 'ag-1', agentName: 'Resumo da semana' })
+    const task = await extractActions(block({ tipo: 'agendamento', nome: 'Toda segunda', agente: 'resumo da semana', mensagem: 'Resuma.', schedule: { kind: 'weekly', days: [1], time: '09:00' } }), resolver())
+    expect(task.actions[0]).toMatchObject({ kind: 'agendamento', agentId: 'ag-1', agentName: 'Resumo da semana', name: 'Toda segunda', message: 'Resuma.' })
+    expect(CHAT_ACTION_KINDS).toContain('agendamento')
+    expect(CHAT_ACTION_KINDS).not.toContain('tarefa')
     const open = await extractActions([block({ tipo: 'abrir', tela: 'reuniao', alvo: 'm-1' }), block({ tipo: 'abrir', tela: 'configuracoes', alvo: 'claude' })].join('\n'), resolver())
     expect(open.actions.map((action) => (action as { label: string }).label)).toEqual(['Abrir «Planejamento»', 'Abrir Configurações › Claude'])
+    // Contrato 128 (D15): "agendamentos" é sinônimo da aba `tarefas` das Automações, com o nome novo.
+    const tabs = await extractActions([block({ tipo: 'abrir', tela: 'automacoes', alvo: 'agendamentos' }), block({ tipo: 'abrir', tela: 'automacoes', alvo: 'tarefas' })].join('\n'), resolver())
+    expect(tabs.actions).toEqual([
+      expect.objectContaining({ kind: 'abrir', screen: 'automacoes', target: 'tarefas', label: 'Abrir Automações › Agendamentos' }),
+      expect.objectContaining({ kind: 'abrir', screen: 'automacoes', target: 'tarefas', label: 'Abrir Automações › Agendamentos' }),
+    ])
   })
 
   it('na resposta em curso o bloco pela metade não aparece; o histórico conta o que foi feito com cada cartão', () => {
@@ -180,6 +190,22 @@ describe('cartões: só com o clique, uma vez só (CA3, CA5)', () => {
     expect(await actions.reminder(ref)).toEqual({ ok: false, error: 'done' })
     expect(await actions.setState({ ...ref, state: 'dismissed' })).toEqual({ ok: false, error: 'done' })
     expect(created).toHaveLength(1)
+  })
+
+  it('contrato 128 (R29): o cartão `tarefa` gravado antes lê como `agendamento`, com os mesmos campos, e fecha como "Agendamento criado"', async () => {
+    const store = createFileChatStore({ dir })
+    const card: ChatAction = { id: 'a1', status: 'proposed', result: null, kind: 'agendamento', name: 'Toda segunda', agentId: 'ag-1', agentName: 'Resumo da semana', message: 'Resuma.', schedule: { kind: 'weekly', days: [1], time: '09:00' } }
+    await store.save(chatWith([card]))
+    // O arquivo como o app antigo gravava: `kind: 'tarefa'`.
+    const file = join(dir, CHATS_DIR, 'c1.json')
+    const raw = JSON.parse(readFileSync(file, 'utf8')) as Chat
+    const gravado = raw.messages[1]?.actions?.[0] as unknown as Record<string, unknown>
+    gravado['kind'] = 'tarefa'
+    writeFileSync(file, JSON.stringify(raw))
+    expect((await store.get('c1'))?.messages[1]?.actions?.[0]).toEqual(card)
+    const actions = createChatActions({ store, createReminder: () => Promise.reject(new Error('não')), timeZone: () => SP, now: () => NOW })
+    expect((await actions.setState({ chatId: 'c1', index: 1, actionId: 'a1', state: 'task-created' })).ok).toBe(true)
+    expect((await store.get('c1'))?.messages[1]?.actions?.[0]).toMatchObject({ kind: 'agendamento', status: 'done', result: 'Agendamento criado' })
   })
 
   it('"Editar" troca a data e o texto; data no passado é recusada sem criar nada', async () => {
@@ -361,7 +387,7 @@ describe('fontes do app (CA2)', () => {
     expect(guideMarkdown('Versão: {{versao}}.', '0.7.0')).toBe('Versão: 0.7.0.')
     const automations = automationsMarkdown(
       {
-        agents: [{ id: 'ag-1', name: 'Resumo da semana', description: '', icon: 'bot', color: 'blue', instructions: '', profile: 'claude', model: 'sonnet', thinkMore: false, scope: { kind: '7d' }, web: false, funil: false, mcpServers: [], output: { kind: 'chat' }, createdAt: '', updatedAt: '' }],
+        agents: [{ id: 'ag-1', name: 'Resumo da semana', description: '', icon: 'bot', color: 'blue', instructions: '', profile: 'claude', model: 'sonnet', thinkMore: false, scope: { kind: '7d' }, web: false, funil: false, tarefas: false, mcpServers: [], output: { kind: 'chat' }, createdAt: '', updatedAt: '' }],
         tasks: [],
         runs: [
           {
@@ -389,6 +415,10 @@ describe('fontes do app (CA2)', () => {
       SP,
     )
     expect(automations).toContain('- Resumo da semana · id: ag-1 · modelo Sonnet · Últimos 7 dias · saída: Conversa no Assistente')
+    // Contrato 128 (R33): a seção chama-se "Agendamentos".
+    expect(automations).toContain('\n## Agendamentos\n')
+    expect(automations).toContain('Nenhum agendamento.')
+    expect(automations).not.toMatch(/[Tt]arefas? agendadas?/)
     expect(automations).toContain('pedido: "Resuma a semana."')
     expect(automations).not.toContain('```')
 
@@ -1338,5 +1368,18 @@ describe('contrato 117: o funil no Assistente', () => {
     expect(await semFunil.funil({ chatId: 'c1', index: 1, actionId: 'a3' })).toEqual({ ok: false, error: 'invalid' })
     expect((await store.get('c1'))?.messages[1]?.actions?.[2]).toMatchObject({ kind: 'contato-criar', status: 'proposed' })
     expect((await service.view()).state.contatos.some((item) => item.nome === 'Bruna Reis')).toBe(false)
+  })
+})
+
+describe('prompt do Assistente (contrato 128, R29 e R33)', () => {
+  it('o bloco das Automações chama-se "agendamento" e a aba, "agendamentos"; "tarefa" não é tipo de bloco', () => {
+    for (const prompt of [assistantSystemPrompt('all'), assistantSystemPrompt('all', 'cli')]) {
+      expect(prompt).toContain('"agendamento" com "nome", "agente"')
+      expect(prompt).toContain('vira "agendamento".')
+      expect(prompt).toContain('agentes, agendamentos ou execucoes')
+      expect(prompt).toContain('<nome do agente ou do agendamento>')
+      expect(prompt).not.toMatch(/"tarefa"/)
+      expect(prompt).not.toMatch(/[Tt]arefas? agendadas?/)
+    }
   })
 })

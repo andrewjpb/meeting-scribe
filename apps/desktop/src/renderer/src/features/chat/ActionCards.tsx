@@ -1,7 +1,7 @@
 // Cartões de ação do Assistente (contrato 25, CA3 e CA4): o que o Claude propôs no fim da resposta, já validado
 // pelo main. Nenhum cartão faz nada sozinho: "Criar lembrete" pede ao main a tarefa "uma vez" das Automações;
 // "Enviar" usa só `window.__scribeApi.whatsappSend` (o token de clique do preload do contrato 24; sem diálogo
-// nativo desde o contrato 33); "Criar tarefa" abre o formulário das Automações preenchido para revisar; "Abrir" leva à
+// nativo desde o contrato 33); "Criar agendamento" abre o formulário das Automações preenchido para revisar; "Abrir" leva à
 // tela. Depois do clique, o cartão mostra o estado, que fica gravado na conversa. Contrato 26: numa resposta que usou a
 // internet, cada cartão vem com o aviso de conferir antes. Contrato 45: os cartões de email. A lista mostra o que o main
 // leu do cache quando a resposta terminou (nada é buscado de novo ao desenhar) e o clique abre a tela Email na
@@ -351,10 +351,10 @@ function TaskCard({ action, actionRef }: { action: TaskAction; actionRef: ChatAc
     void navigate(ROUTE_PATHS.automacoes)
   }
   return (
-    <div data-chat-action="tarefa" data-chat-action-status={action.status} className={CARD}>
+    <div data-chat-action="agendamento" data-chat-action-status={action.status} className={CARD}>
       <p className="flex items-start gap-2 text-13 font-medium text-title">
         <Icon icon={ListChecks} size={14} className="mt-0.5 shrink-0 text-text-muted" />
-        <span>Tarefa · {action.name}</span>
+        <span>Agendamento · {action.name}</span>
       </p>
       <p data-chat-action-schedule className="text-12 text-text-muted">
         {describeSchedule(action.schedule, timeZone)} · agente {action.agentName}
@@ -363,7 +363,7 @@ function TaskCard({ action, actionRef }: { action: TaskAction; actionRef: ChatAc
       {action.status === 'proposed' ? (
         <div className="flex flex-wrap items-center gap-2">
           <Button action="chat-action-task-create" icon={ListChecks} onClick={open}>
-            Criar tarefa
+            Criar agendamento
           </Button>
           <DismissButton actionRef={actionRef} disabled={false} />
         </div>
@@ -634,7 +634,7 @@ function CardError({ text }: { text: string }) {
   )
 }
 
-/** "Ver em Automações", na aba Tarefas agendadas. */
+/** "Ver em Automações", na aba Agendamentos. */
 function OpenTasksLink() {
   const navigate = useNavigate()
   return (
@@ -1678,7 +1678,7 @@ function ContatoCriarCard({ action, actionRef }: { action: ChatActionContatoCria
 function ActionCard({ action, actionRef, choice }: { action: ChatAction; actionRef: ChatActionRef; choice: boolean }) {
   if (action.kind === 'lembrete') return <ReminderCard action={action} actionRef={actionRef} />
   if (action.kind === 'whatsapp-resposta') return <WhatsAppCard action={action} actionRef={actionRef} choice={choice} />
-  if (action.kind === 'tarefa') return <TaskCard action={action} actionRef={actionRef} />
+  if (action.kind === 'agendamento') return <TaskCard action={action} actionRef={actionRef} />
   if (action.kind === 'emails') return <EmailListCard action={action} />
   if (action.kind === 'email-resposta') return <EmailReplyCard action={action} actionRef={actionRef} />
   // Contrato 56: o cartão do lote que o Assistente moveu (`EmailBatchCard.tsx`).

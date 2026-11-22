@@ -173,9 +173,10 @@ export const chatActionSchema = z.discriminatedUnion('kind', [
       text: z.string().max(WHATSAPP_SEND_TEXT_MAX),
     })
     .strict(),
+  // Contrato 128 (R29, D15): o cartão `tarefa` passou a `agendamento`; o gravado antes ainda lê, já com o nome novo.
   z
     .object({
-      kind: z.literal('tarefa'),
+      kind: z.literal(['tarefa', 'agendamento']).transform((): 'agendamento' => 'agendamento'),
       ...actionBase,
       name: z.string().max(200),
       agentId: z.string().regex(/^[\w-]{1,100}$/),
