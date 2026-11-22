@@ -47,7 +47,13 @@ export function NovaTarefaInline({ origem = { tipo: 'manual' }, vinculosIniciais
   const comOportunidade = oportunidadeFixa === undefined && !compacta
 
   useEffect(() => {
-    ref.current?.querySelector<HTMLInputElement>('[data-tarefas-nova-titulo]')?.focus()
+    const input = ref.current?.querySelector<HTMLInputElement>('[data-tarefas-nova-titulo]')
+    input?.focus()
+    // Com o título já preenchido (o assunto do e-mail), o cursor no começo: o campo mostra o início do texto (contrato 130).
+    if (input?.value) {
+      input.setSelectionRange(0, 0)
+      input.scrollLeft = 0
+    }
   }, [])
 
   // As oportunidades do campo: a view do funil, carregada aqui se nenhuma tela do funil a carregou antes.
@@ -113,11 +119,11 @@ export function NovaTarefaInline({ origem = { tipo: 'manual' }, vinculosIniciais
           autoComplete="off"
           spellCheck={false}
           onChange={(event) => setTitulo(event.target.value)}
-          className={`${CONTROL_CLASS} min-w-[200px] flex-1 px-2.5 select-text placeholder:text-text-faint`}
+          className={`${CONTROL_CLASS} flex-1 px-2.5 select-text placeholder:text-text-faint ${compacta ? 'min-w-[160px]' : 'min-w-[200px]'}`}
         />
-        {/* Na compacta, prazo, Criar e Cancelar quebram juntos (nunca o Cancelar sozinho) e cabem nos 257 px do painel de
-            300 do WhatsApp: 6 entre eles e o prazo cedendo (a 123 px ele mostra "dd/mm/aaaa" inteiro; abaixo de 120, só
-            num painel mais estreito, corta o texto em vez de empurrar o Cancelar para fora da borda). */}
+        {/* Na compacta, o título fica com o espaço que sobra e prazo, Criar e Cancelar quebram juntos (nunca o Cancelar
+            sozinho): o prazo fixo em 116 px ("dd/mm/aaaa" inteiro com 6 de recuo) e 6 entre eles somam 251 px, dentro dos
+            257 do painel de 300 do WhatsApp. */}
         <div className={compacta ? 'flex min-w-0 items-center gap-1.5' : 'contents'}>
           <input
             type="date"
@@ -126,7 +132,7 @@ export function NovaTarefaInline({ origem = { tipo: 'manual' }, vinculosIniciais
             value={prazo}
             disabled={salvando}
             onChange={(event) => setPrazo(event.target.value)}
-            className={`${CONTROL_CLASS} w-[140px] px-2 select-text ${compacta ? 'min-w-[100px]' : 'min-w-0'}`}
+            className={`${CONTROL_CLASS} select-text ${compacta ? 'w-[116px] shrink-0 px-1.5' : 'w-[140px] min-w-0 px-2'}`}
           />
           {comOportunidade && (
             <div className="w-[180px]">

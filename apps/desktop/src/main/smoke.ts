@@ -14615,9 +14615,21 @@ async function tarefasTelasExistentesChecks(ctx: SmokeContext, watch: (win: Brow
       contents,
       `(() => { const el = document.querySelector('[data-email-reading] [data-email-tarefa-form]'); if (!el) return false; const cs = getComputedStyle(el); return cs.borderTopWidth === '0px' && cs.backgroundColor === 'rgba(0, 0, 0, 0)' })()`,
     )
+    // O título com o espaço que sobra (≥ 2× o prazo, fixo) e mostrando o começo do assunto, como fica no print (sem foco).
+    await evaluate(contents, `document.activeElement instanceof HTMLElement && document.activeElement.blur(), true`)
+    const tituloEmail = await evaluate<{ titulo: number; prazo: number; scrollLeft: number }>(
+      contents,
+      `(() => {
+        const form = document.querySelector('[data-email-reading] [data-email-tarefa-form]')
+        const titulo = form?.querySelector('[data-tarefas-nova-titulo]')
+        const prazo = form?.querySelector('[data-tarefas-nova-prazo]')
+        return { titulo: Math.round(titulo?.getBoundingClientRect().width ?? 0), prazo: Math.round(prazo?.getBoundingClientRect().width ?? 0), scrollLeft: Math.round(titulo?.scrollLeft ?? -1) }
+      })()`,
+    )
+    const tituloOk = tituloEmail.prazo > 0 && tituloEmail.titulo >= 2 * tituloEmail.prazo && tituloEmail.scrollLeft === 0
     checks['emailTarefaCompacta'] = {
-      ok: compactaOk(compactaEmail) && semCaixaDeFora && fraseOk,
-      detail: JSON.stringify({ ...compactaEmail, semCaixaDeFora, fraseComOEmail: fraseOk }),
+      ok: compactaOk(compactaEmail) && semCaixaDeFora && fraseOk && tituloOk,
+      detail: JSON.stringify({ ...compactaEmail, semCaixaDeFora, fraseComOEmail: fraseOk, larguraTitulo: tituloEmail.titulo, larguraPrazo: tituloEmail.prazo, tituloScrollLeft: tituloEmail.scrollLeft }),
     }
     await both('email-leitura-tarefa')
     antes = new Set(tarefas().map((tarefa) => tarefa.id))

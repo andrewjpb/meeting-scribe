@@ -21,6 +21,7 @@ Corte, sobreposição, espaço morto, desalinhamento, texto técnico (id, JSON, 
 - Nenhuma cor fora da paleta nos dois temas, nenhuma sombra, nenhuma pílula, nenhum id, JSON, "undefined" ou nome de cartão técnico na interface. Linhas de tarefa de 44, cabeçalhos de grupo de 28, controles de 32, `--rec` em vencidas e estrela em `--title` legíveis no escuro.
 - O B1 do funil (título da oportunidade cortado) e o M1 do funil (placeholder da busca do kanban) aparecem corrigidos nesta rodada.
 - **Achados:** 1 bloqueador (2 prints) e 9 menores.
+- **Segunda rodada (depois do contrato 130, `8fe3be2`):** fecharam B1, M2, M3, M4, M5, M6, M7 e M9; M1 fechou no essencial (uma caixa, uma linha, "Ligada a este e-mail · …"), com um resíduo novo, o título cortado no começo dentro de um campo mais estreito que o de data, e o nome do remetente ainda saindo duas vezes; M8 continua (Tarefas acima de Oportunidades na ficha do contato). Detalhe na seção "Segunda rodada", no fim.
 
 ### Bloqueador (quebra visível para o usuário)
 
@@ -79,3 +80,29 @@ Corte, sobreposição, espaço morto, desalinhamento, texto técnico (id, JSON, 
 | `sidebar-raiz-light.png` (regravado) | `01-barra-raiz-claro` | ok | Tarefas logo depois de Reuniões, ícone `SquareCheck`, contador "2" em 12 tabular `--side-text` igual ao "1" do Email. |
 | `sidebar-raiz-dark.png` (regravado) | `01-barra-raiz-escuro` | ok | O mesmo. |
 | `funil-oportunidades-*` (já existentes; o cartão mudou) | `16-funil-kanban-proxima-tarefa-*` | ok | Cartão com a próxima tarefa e a data ("Revisar con… 23/11" na Loja virtual), em `--rec` quando venceu ("Ligar para o… 21/11"), "Sem tarefa" na Integração Parceiro; placeholder "Buscar oportunidades" inteiro (M1 do funil corrigido). Fora da contagem. |
+
+## Segunda rodada (depois do contrato 130, base tarefas 8fe3be2)
+
+Prints de `apps/desktop/out/smoke-tarefas-r2/` (cópia da rodada final do `pnpm gates` na `tarefas` em `8fe3be2`; `report.json` com `generatedAt` 2026-11-22T12:46:58Z, 256 PNGs de 2240×1480, `failures` só com `gravação notesDetail`, flake conhecido sem relação com Tarefas). Só os prints afetados por B1 e M1–M9. Cada um foi aberto inteiro e comparado com o mesmo print de `smoke-tarefas-r1/` e com o artboard; o formulário do Email, o do WhatsApp e os Vínculos do detalhe foram recortados em resolução cheia.
+
+| print | achado | veredito | o que o print mostra agora |
+|---|---|---|---|
+| `detalhe-resumo-tarefas-light.png` | B1 | ok | Barra lateral no lugar, logo e "LAP SOFTWARE" no topo, "Reuniões" na altura de sempre; nenhuma faixa vazia no pé (Permissões e "Áudio do sistema" encostados embaixo como nas outras telas). A seção Tarefas continua enquadrada com a tabela inteira. |
+| `detalhe-resumo-tarefas-dark.png` | B1 | ok | O mesmo no escuro. |
+| `email-leitura-tarefa-light.png` | M1 | ajustar | Fechado no essencial: uma caixa só (sem a caixa dentro da caixa), título, prazo, Criar e Cancelar numa linha, sem a caixa de feito e sem o campo Oportunidade; "Ligada a este e-mail · <contato>" acima do formulário; dica curta "Enter cria · Esc cancela" numa linha. **Resíduo:** o campo do título ficou mais estreito que o de data e mostra o fim do assunto, com o começo cortado sem reticências ("…mento do módulo de conciliação"); no artboard 11 o título é o campo mais largo. Na linha do remetente o nome ainda sai duas vezes (texto e link da ficha) e o endereço continua truncado para caber o "+ Tarefa". |
+| `email-leitura-tarefa-dark.png` | M1 | ajustar | O mesmo resíduo do claro; caixa em `--bg-sunken` com fio legível, "Criar" em `--accent`. |
+| `whatsapp-detalhes-tarefa-light.png` | M2 | ok | Duas linhas (título; prazo, Criar e Cancelar), "Cancelar" dentro da borda com folga, sem a caixa de feito, dica numa linha só. "+ Tarefa" pressionado enquanto o formulário está aberto. |
+| `tarefas-detalhe-light.png` | M3, M4 | ok | M3: "Vencidas · 2", "Hoje · 1", "Depois · 10" com espaço dos dois lados do ponto, como no artboard 04. M4: "Oportunidade", "Contatos" e "Reunião" centrados na altura dos campos de 32 (recorte comparado com a rodada anterior, onde ficavam ~5 px acima). |
+| `tarefas-detalhe-dark.png` | M3, M4 | ok | O mesmo no escuro. |
+| `tarefas-nova-light.png` | M5 | ok | O campo de oportunidade tem o ícone do funil à esquerda, como no artboard 05. O × não é conferível neste print: nenhuma oportunidade foi escolhida, então o campo mostra o chevron; no artboard o × aparece com "Loja virtual" escolhida. |
+| `tarefas-nova-dark.png` | M5 | ok | O mesmo; ícone do funil legível no escuro. |
+| `tarefas-todas-agrupadas-light.png` | M6 | ok | "Sem oportunidade" com a contagem 8 à direita, na mesma coluna das contagens dos grupos com etapa. |
+| `tarefas-todas-agrupadas-dark.png` | M6 | ok | O mesmo no escuro. |
+| `tarefas-hoje-light.png` | M6 | ok | No agrupamento por prazo a contagem continua colada ao nome ("Vencidas 2", "Hoje 1"), como no artboard 02; a mudança do M6 não vazou para cá. |
+| `tarefas-hoje-dark.png` | M6 | ok | O mesmo no escuro. |
+| `funil-oportunidade-light.png` | M7 | ok | As linhas da seção Tarefas mostram só caixa, título e prazo; nenhum "Oportunidade: Loja virtual" repetido. |
+| `funil-oportunidade-dark.png` | M7 | ok | O mesmo no escuro. |
+| `funil-contato-tarefas-light.png` | M8 | ajustar | M8 continua: o bloco Tarefas vem logo depois de Notas e Oportunidades fica no pé, quase fora do quadro; no artboard 09 Oportunidades vem antes de Tarefas. |
+| `configuracoes-geral-light.png` | M9 | ok | Rolado até Tarefas com o mesmo enquadramento do escuro: fim de Janela, Funil de vendas inteiro e as quatro linhas de Tarefas (Hora do lembrete, Lembrar no prazo, Aviso diário Hoje, Sugerir tarefas das reuniões). |
+
+**Ficou para depois:** o resíduo do M1 (largura do campo do título no Email e o nome do remetente duplicado) e o M8 (ordem dos blocos na ficha do contato).
