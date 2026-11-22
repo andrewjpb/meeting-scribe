@@ -295,7 +295,7 @@ export function BlocoTarefas({ tarefas, view, vinculosIniciais, onErro }: { tare
                   {tarefa.titulo}
                 </button>
                 {tarefa.importante && (
-                  <span className="flex shrink-0 text-title" title="Importante">
+                  <span className="relative flex shrink-0 text-title" title="Importante">
                     <Icon icon={Star} size={14} className="fill-current" />
                     <span className="sr-only">Importante</span>
                   </span>

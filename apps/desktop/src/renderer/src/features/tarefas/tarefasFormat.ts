@@ -333,17 +333,16 @@ export function textoPrazoResumo(task: Pick<SummaryTask, 'due' | 'dueIso'>): { d
 }
 
 /**
- * A frase acima dos campos do "+ Tarefa" do e-mail (R24), pela mesma regra que o serviço usa ao criar (R9): o contato do
- * remetente e, se ele tiver exatamente uma oportunidade aberta e não arquivada, ela. "Ligada a <contato> · <oportunidade>",
- * "Ligada a <contato>" ou, sem contato (ou sem a view do funil), "Ligada a este e-mail". A oportunidade escolhida no
- * campo do formulário vale por cima da regra (é ela que o serviço grava).
+ * A frase acima dos campos do "+ Tarefa" do e-mail (R24), pela mesma regra que o serviço usa ao criar (R9): o e-mail, o
+ * contato do remetente e, se ele tiver exatamente uma oportunidade aberta e não arquivada, ela (contrato 130, M1).
+ * "Ligada a este e-mail · <contato> · <oportunidade>", "Ligada a este e-mail · <contato>" ou, sem contato (ou sem a
+ * view do funil), "Ligada a este e-mail".
  */
-export function fraseVinculo(funil: Pick<FunilView, 'state'> | null, alvo: ContatoAlvo, escolhida: { nome: string } | null = null): string {
+export function fraseVinculo(funil: Pick<FunilView, 'state'> | null, alvo: ContatoAlvo): string {
+  const base = 'Ligada a este e-mail'
   const contato = funil ? contatoLigado(funil.state.contatos, alvo) : null
-  const base = contato ? `Ligada a ${contato.nome}` : 'Ligada a este e-mail'
-  if (escolhida) return `${base} · ${escolhida.nome}`
   if (!funil || !contato) return base
   const etapas = new Map(funil.state.etapas.map((etapa) => [etapa.id, etapa.tipo]))
   const abertas = funil.state.oportunidades.filter((op) => !op.arquivado && op.contatoIds.includes(contato.id) && etapas.get(op.etapaId) === 'aberta')
-  return abertas.length === 1 && abertas[0] ? `Ligada a ${contato.nome} · ${abertas[0].titulo}` : `Ligada a ${contato.nome}`
+  return abertas.length === 1 && abertas[0] ? `${base} · ${contato.nome} · ${abertas[0].titulo}` : `${base} · ${contato.nome}`
 }

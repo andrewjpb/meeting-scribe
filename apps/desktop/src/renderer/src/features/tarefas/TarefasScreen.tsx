@@ -22,13 +22,17 @@ import { useTarefas, useTarefasView } from './tarefasStore'
 const AGRUPAR_CLASS =
   'no-drag h-7 w-[140px] rounded-[var(--radius-control)] border border-line-strong bg-bg-raised px-1.5 text-12 text-text transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)]'
 
-/** O cabeçalho de um grupo (R4): 28 px, o nome em --title, a etapa da oportunidade e a contagem. */
-function CabecalhoGrupo({ grupo, etapa, estreito }: { grupo: GrupoTarefas; etapa: string | null; estreito: boolean }) {
+/**
+ * O cabeçalho de um grupo (R4): 28 px, o nome em --title, a etapa da oportunidade e a contagem; agrupando por oportunidade,
+ * a contagem fica à direita em todos os grupos, "Sem oportunidade" também (contrato 130, M6); nos outros modos, colada ao
+ * nome (artboard 02). Na estreita, "Vencidas · 2": o ` · ` preservado no começo do item flex (M3).
+ */
+function CabecalhoGrupo({ grupo, etapa, estreito, contagemADireita }: { grupo: GrupoTarefas; etapa: string | null; estreito: boolean; contagemADireita: boolean }) {
   if (estreito) {
     return (
       <p data-tarefas-grupo-cabecalho className="flex h-7 items-end px-3 pb-1 text-11 font-medium text-text-muted">
         <span className="min-w-0 truncate">{grupo.nome}</span>
-        <span className="shrink-0 tabular">
+        <span className="shrink-0 whitespace-pre tabular">
           {' · '}
           <span data-tarefas-grupo-total>{grupo.tarefas.length}</span>
         </span>
@@ -39,7 +43,7 @@ function CabecalhoGrupo({ grupo, etapa, estreito }: { grupo: GrupoTarefas; etapa
     <div data-tarefas-grupo-cabecalho className="flex h-7 items-center gap-2 border-b border-line-strong px-2 text-12 font-medium text-title">
       <span className="min-w-0 truncate">{grupo.nome}</span>
       {etapa && <span className="shrink-0 font-normal text-text-muted">{etapa}</span>}
-      <span data-tarefas-grupo-total className={`shrink-0 font-normal text-text-muted tabular ${etapa === null ? '' : 'ml-auto'}`}>
+      <span data-tarefas-grupo-total className={`shrink-0 font-normal text-text-muted tabular ${contagemADireita ? 'ml-auto' : ''}`}>
         {grupo.tarefas.length}
       </span>
     </div>
@@ -173,7 +177,7 @@ export function TarefasScreen() {
     const linhas = (estreito: boolean): ReactNode =>
       grupos.map((grupo) => (
         <section key={grupo.chave} data-tarefas-grupo={grupo.chave} aria-label={grupo.nome}>
-          <CabecalhoGrupo grupo={grupo} etapa={modo === 'oportunidade' && grupo.chave !== 'sem-oportunidade' ? etapaDe(grupo.chave) : null} estreito={estreito} />
+          <CabecalhoGrupo grupo={grupo} etapa={modo === 'oportunidade' && grupo.chave !== 'sem-oportunidade' ? etapaDe(grupo.chave) : null} estreito={estreito} contagemADireita={modo === 'oportunidade'} />
           {grupo.tarefas.map((tarefa) => (
             <TarefaLinha key={tarefa.id} tarefa={tarefa} view={view} variante={estreito ? 'estreita' : 'larga'} atual={tarefa.id === id} onErro={setErro} />
           ))}
@@ -191,7 +195,7 @@ export function TarefasScreen() {
       const tarefa = view.tarefas.find((item) => item.id === id) ?? null
       return (
         <div className="mt-3 flex min-h-0 flex-1 border-t border-line">
-          <aside aria-label="Tarefas" data-tarefas-lista="estreita" className="flex w-[340px] shrink-0 flex-col overflow-y-auto border-r border-line px-2 pt-1 pb-3">
+          <aside aria-label="Tarefas" data-tarefas-lista="estreita" className="relative flex w-[340px] shrink-0 flex-col overflow-y-auto border-r border-line px-2 pt-1 pb-3">
             {lista.length === 0 && vaziaHoje ? <p className="px-3 py-3 text-13 text-text-muted">Nada para hoje.</p> : (semLinhas ?? linhas(true))}
           </aside>
           <section aria-label={tarefa?.titulo ?? 'Tarefa'} data-tarefas-painel className="min-h-0 flex-1 overflow-y-auto px-6 pt-4 pb-5">
@@ -237,7 +241,7 @@ export function TarefasScreen() {
     }
 
     return (
-      <div data-tarefas-lista="larga" className="min-h-0 flex-1 overflow-y-auto px-[var(--page-x)] pt-3 pb-5">
+      <div data-tarefas-lista="larga" className="relative min-h-0 flex-1 overflow-y-auto px-[var(--page-x)] pt-3 pb-5">
         {avisos}
         {formulario}
         {vaziaHoje ? (

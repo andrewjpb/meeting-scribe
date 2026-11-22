@@ -75,6 +75,8 @@ export interface TarefaLinhaProps {
   atual?: boolean | undefined
   /** A caixa de feito não gravou: o texto do erro, para quem usa mostrar numa `Note`. */
   onErro?: ((mensagem: string) => void) | undefined
+  /** Sem a coluna da origem (só na `larga`): a seção Tarefas da oportunidade, onde ela repetiria a própria (contrato 130, M7). */
+  ocultarOrigem?: boolean | undefined
 }
 
 /**
@@ -83,7 +85,7 @@ export interface TarefaLinhaProps {
  * --text, vencido em --rec com "há N d"). A feita e a cancelada ficam com o título riscado. O clique fora da caixa abre
  * a tarefa.
  */
-export function TarefaLinha({ tarefa, view, onAbrir, variante = 'larga', atual = false, onErro }: TarefaLinhaProps) {
+export function TarefaLinha({ tarefa, view, onAbrir, variante = 'larga', atual = false, onErro, ocultarOrigem = false }: TarefaLinhaProps) {
   const navigate = useNavigate()
   const origem = textoOrigem(tarefa, view.nomes)
   const responsavel = textoResponsavel(tarefa.responsavel, view.nomes)
@@ -102,7 +104,8 @@ export function TarefaLinha({ tarefa, view, onAbrir, variante = 'larga', atual =
   }
   const prazoMarcas = { 'data-tarefa-prazo': textoDoPrazo, 'data-tarefa-vencida': vencida ? '' : undefined }
   const estrela = tarefa.importante && (
-    <span data-tarefa-importante className="flex w-3.5 shrink-0 text-title" title="Importante">
+    // `relative`: o `sr-only` (absoluto) fica preso à estrela e não estica a raiz quando a lista rola (contrato 130, B1).
+    <span data-tarefa-importante className="relative flex w-3.5 shrink-0 text-title" title="Importante">
       <Icon icon={Star} size={14} className="fill-current" />
       <span className="sr-only">Importante</span>
     </span>
@@ -139,10 +142,12 @@ export function TarefaLinha({ tarefa, view, onAbrir, variante = 'larga', atual =
       <button type="button" className={`no-drag min-w-0 flex-1 rounded-[var(--radius-control)] text-left ${titulo}`}>
         {tarefa.titulo}
       </button>
-      <span data-tarefa-origem={origem.icone} className="flex w-[236px] min-w-0 shrink-0 items-center gap-1.5 text-12 text-text-muted">
-        <Icon icon={ORIGEM_ICONE[origem.icone]} size={14} className="shrink-0 text-text-faint" />
-        <span className="min-w-0 truncate">{origem.texto}</span>
-      </span>
+      {!ocultarOrigem && (
+        <span data-tarefa-origem={origem.icone} className="flex w-[236px] min-w-0 shrink-0 items-center gap-1.5 text-12 text-text-muted">
+          <Icon icon={ORIGEM_ICONE[origem.icone]} size={14} className="shrink-0 text-text-faint" />
+          <span className="min-w-0 truncate">{origem.texto}</span>
+        </span>
+      )}
       <span data-tarefa-responsavel={responsavel === null ? undefined : ''} className="flex w-[112px] min-w-0 shrink-0 items-center gap-1.5 text-12 text-text-muted">
         {responsavel !== null && (
           <>

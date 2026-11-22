@@ -721,8 +721,11 @@ function CampoData({ rotulo, inicial, onSalvar, onFechar }: { rotulo: string; in
   )
 }
 
-/** A lista de tarefas da seção rola sozinha passando de 5 linhas (220 px), para as abas não sumirem do cabeçalho. */
-const LISTA_TAREFAS_CLASS = 'flex max-h-[220px] flex-col overflow-y-auto'
+/**
+ * A lista de tarefas da seção rola sozinha passando de 5 linhas (220 px), para as abas não sumirem do cabeçalho; `relative`
+ * para o que é absoluto lá dentro (o `sr-only` da estrela) rolar e ser cortado com ela (contrato 130, B1).
+ */
+const LISTA_TAREFAS_CLASS = 'relative flex max-h-[220px] flex-col overflow-y-auto'
 
 /**
  * Seção Tarefas da oportunidade (contrato 125, R15, artboard 08), entre a grade de campos e as abas, no lugar do campo
@@ -748,7 +751,7 @@ function SecaoTarefas({ oportunidadeId, view, onErro }: { oportunidadeId: string
       {view && abertas.length > 0 && (
         <div data-funil-tarefas-abertas className={LISTA_TAREFAS_CLASS}>
           {abertas.map((tarefa) => (
-            <TarefaLinha key={tarefa.id} tarefa={tarefa} view={view} onErro={onErro} />
+            <TarefaLinha key={tarefa.id} tarefa={tarefa} view={view} onErro={onErro} ocultarOrigem />
           ))}
         </div>
       )}
@@ -790,7 +793,7 @@ function SecaoTarefas({ oportunidadeId, view, onErro }: { oportunidadeId: string
           {verFeitas && (
             <div data-funil-tarefas-fechadas className={LISTA_TAREFAS_CLASS}>
               {fechadas.map((tarefa) => (
-                <TarefaLinha key={tarefa.id} tarefa={tarefa} view={view} onErro={onErro} />
+                <TarefaLinha key={tarefa.id} tarefa={tarefa} view={view} onErro={onErro} ocultarOrigem />
               ))}
             </div>
           )}

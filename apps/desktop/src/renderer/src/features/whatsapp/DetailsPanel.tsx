@@ -91,6 +91,7 @@ function ContactSection({ chat }: { chat: WhatsAppChat }) {
       {tarefaAberta && (
         <div data-whatsapp-tarefa-form>
           <NovaTarefaInline
+            compacta
             origem={{ tipo: 'whatsapp', chatId: chat.id }}
             vinculosIniciais={{ whatsappChatId: chat.id, ...(contato ? { contatoIds: [contato.id] } : {}) }}
             onCriada={(id) => {

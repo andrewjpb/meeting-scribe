@@ -315,21 +315,14 @@ describe('tabela do Resumo e "+ Tarefa" do e-mail (contrato 126, R22, R24)', () 
     })
     const marina = { email: 'Marina.Rocha@cliente.example' }
 
-    it('o contato do remetente com uma oportunidade aberta só: "Ligada a <contato> · <oportunidade>"', () => {
+    it('o contato do remetente com uma oportunidade aberta só: "Ligada a este e-mail · <contato> · <oportunidade>"', () => {
       const view = funil([oportunidade('op-portal', 'Portal do associado', ['ct-marina']), oportunidade('op-ganha', 'Já ganha', ['ct-marina'], { etapaId: ganho }), oportunidade('op-arq', 'Arquivada', ['ct-marina'], { arquivado: true })])
-      expect(fraseVinculo(view, marina)).toBe('Ligada a Marina Rocha · Portal do associado')
+      expect(fraseVinculo(view, marina)).toBe('Ligada a este e-mail · Marina Rocha · Portal do associado')
     })
 
     it('com nenhuma ou mais de uma aberta, só o contato', () => {
-      expect(fraseVinculo(funil([]), marina)).toBe('Ligada a Marina Rocha')
-      expect(fraseVinculo(funil([oportunidade('op-a', 'A', ['ct-marina']), oportunidade('op-b', 'B', ['ct-marina'])]), marina)).toBe('Ligada a Marina Rocha')
-    })
-
-    it('a oportunidade escolhida no campo vale por cima da regra, com ou sem contato', () => {
-      const view = funil([oportunidade('op-portal', 'Portal do associado', ['ct-marina'])])
-      expect(fraseVinculo(view, marina, { nome: 'Loja virtual' })).toBe('Ligada a Marina Rocha · Loja virtual')
-      expect(fraseVinculo(view, { email: 'alguem@fora.example' }, { nome: 'Loja virtual' })).toBe('Ligada a este e-mail · Loja virtual')
-      expect(fraseVinculo(view, marina, null)).toBe('Ligada a Marina Rocha · Portal do associado')
+      expect(fraseVinculo(funil([]), marina)).toBe('Ligada a este e-mail · Marina Rocha')
+      expect(fraseVinculo(funil([oportunidade('op-a', 'A', ['ct-marina']), oportunidade('op-b', 'B', ['ct-marina'])]), marina)).toBe('Ligada a este e-mail · Marina Rocha')
     })
 
     it('remetente que não é contato, ou sem a view do funil: "Ligada a este e-mail"', () => {

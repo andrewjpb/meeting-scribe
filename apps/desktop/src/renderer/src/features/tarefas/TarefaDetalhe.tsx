@@ -60,15 +60,18 @@ function Linha({ nome, rotulo, rotuloId, children }: { nome: string; rotulo: str
   )
 }
 
-/** Uma linha de vínculo (artboard 04): ícone, o nome do vínculo em 96 px, o valor e a ação à direita. */
-function Vinculo({ nome, icone, rotulo, children, acao }: { nome: string; icone: LucideIcon; rotulo: string; children: ReactNode; acao?: ReactNode }) {
+/**
+ * Uma linha de vínculo (artboard 04): ícone, o nome do vínculo em 96 px, o valor e a ação à direita. Com `campo` (o valor é
+ * um campo de 32 px), o rótulo fica centrado na altura do campo (contrato 130, M4).
+ */
+function Vinculo({ nome, icone, rotulo, children, acao, campo = false }: { nome: string; icone: LucideIcon; rotulo: string; children: ReactNode; acao?: ReactNode; campo?: boolean }) {
   return (
     <div data-tarefa-vinculo={nome} className="flex min-h-8 items-start gap-2 border-b border-line py-1 text-13">
-      <span className="flex w-[120px] shrink-0 items-center gap-2 pt-1 text-12 text-text-muted">
+      <span data-tarefa-vinculo-rotulo className={`flex w-[120px] shrink-0 items-center gap-2 text-12 text-text-muted ${campo ? 'h-8' : 'pt-1'}`}>
         <Icon icon={icone} className="shrink-0" />
         {rotulo}
       </span>
-      <div className="flex min-w-0 flex-1 flex-col gap-1 pt-0.5">{children}</div>
+      <div className={`flex min-w-0 flex-1 flex-col gap-1 ${campo ? '' : 'pt-0.5'}`}>{children}</div>
       {acao}
     </div>
   )
@@ -412,6 +415,7 @@ export function TarefaDetalhe({ tarefa, view, onApagada }: { tarefa: Tarefa; vie
           nome="oportunidade"
           icone={Funnel}
           rotulo="Oportunidade"
+          campo
           acao={
             opId && oportunidade ? (
               <button type="button" data-action="tarefa-abrir-oportunidade" className={ABRIR_CLASS} onClick={() => void navigate(funilPath('oportunidades', opId))}>
@@ -431,7 +435,7 @@ export function TarefaDetalhe({ tarefa, view, onApagada }: { tarefa: Tarefa; vie
             />
           </div>
         </Vinculo>
-        <Vinculo nome="contatos" icone={Users} rotulo="Contatos">
+        <Vinculo nome="contatos" icone={Users} rotulo="Contatos" campo>
           <div className="w-full max-w-[400px]">
             <SearchPicker nome="tarefa-contatos" label="Contatos" placeholder="Contato" multiplo itens={pessoas} valor={contatosValor} onChange={(itens) => void salvar({ vinculos: { contatoIds: itens.map((item) => item.id) } })} />
           </div>

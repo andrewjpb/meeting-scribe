@@ -12377,6 +12377,20 @@ async function tarefasTelaChecks(ctx: SmokeContext, watch: (win: BrowserWindow) 
     await setValue(contents, '[data-tarefas-nova-prazo]', amanha)
     await waitFor(contents, `document.querySelector('[data-action="tarefa-nova-criar"]')?.disabled === false`)
     await both('tarefas-nova')
+    // tarefasNovaOportunidadeCampo (contrato 130, CA5, M5): o campo de oportunidade com o ícone do funil; o × só com valor
+    // (escolhe uma oportunidade, o × aparece; o × limpa e some). A tarefa continua nascendo sem oportunidade.
+    const PICKER = '[data-tarefas-nova] [data-funil-picker="tarefa-nova-oportunidade"]'
+    const pickerVazio = await evaluate<{ icone: boolean; limpar: boolean }>(contents, `({ icone: Boolean(document.querySelector('${PICKER} [data-funil-picker-icone] svg')), limpar: Boolean(document.querySelector('${PICKER} [data-funil-picker-limpar]')) })`)
+    await setValue(contents, `${PICKER} input`, 'Loja')
+    const opcao = await waitFor(contents, `document.querySelector('${PICKER} [data-funil-picker-option]')`, 5000)
+    if (opcao) await clickSelector(contents, `${PICKER} [data-funil-picker-option]`)
+    const limparComValor = opcao && (await waitFor(contents, `document.querySelector('${PICKER} [data-funil-picker-limpar]') && document.querySelector('${PICKER} input')?.value !== ''`, 5000))
+    if (limparComValor) await clickSelector(contents, `${PICKER} [data-funil-picker-limpar]`)
+    const limpou = limparComValor && (await waitFor(contents, `!document.querySelector('${PICKER} [data-funil-picker-limpar]') && document.querySelector('${PICKER} input')?.value === ''`, 5000))
+    checks['tarefasNovaOportunidadeCampo'] = {
+      ok: pickerVazio.icone && !pickerVazio.limpar && limparComValor && limpou,
+      detail: JSON.stringify({ iconeDoFunil: pickerVazio.icone, limparSemValor: pickerVazio.limpar, limparComValor, limpou }),
+    }
     const idsAntes = new Set(saved().tarefas.map((tarefa) => tarefa.id))
     await pressEnterIn(contents, '[data-tarefas-nova-titulo]')
     let criada: Tarefa | undefined
@@ -12433,6 +12447,39 @@ async function tarefasTelaChecks(ctx: SmokeContext, watch: (win: BrowserWindow) 
     await clickSelector(contents, `${DETALHE} [data-action="tarefa-apagar-cancelar"]`)
     const cancelou = (await waitFor(contents, `!document.querySelector('${DETALHE} [data-action="tarefa-apagar-confirmar"]') && document.querySelector('${DETALHE} [data-action="tarefa-apagar"]')`)) && savedTarefa(T.semana) !== undefined
     const historico = await evaluate<number>(contents, `document.querySelectorAll('${DETALHE} [data-tarefa-historico] li').length`)
+    // tarefasCabecalhoEstreito (contrato 130, CA3, M3): na lista estreita, "Vencidas · 2", com o espaço antes do ponto.
+    const cabecalhos = await evaluate<string[]>(contents, `[...document.querySelectorAll('[data-tarefas-lista="estreita"] [data-tarefas-grupo-cabecalho]')].map((el) => el.textContent ?? '')`)
+    // Todo cabeçalho com " · " (nomes de duas palavras, como "Sem prazo", também); os de uma palavra no formato do CA3.
+    const comEspacos = cabecalhos.filter((texto) => /^\S+( \S+)* · \d+$/.test(texto)).length
+    const formatoCa = cabecalhos.filter((texto) => /^\S+ · \d+$/.test(texto)).length
+    checks['tarefasCabecalhoEstreito'] = {
+      ok: cabecalhos.length > 0 && comEspacos === cabecalhos.length && formatoCa > 0,
+      detail: JSON.stringify({ cabecalhos: cabecalhos.length, comOsEspacos: comEspacos, noFormatoDoCa: formatoCa }),
+    }
+    // tarefasVinculosCentrados (contrato 130, CA4, M4): o rótulo de Oportunidade e de Contatos no centro do campo de 32 (±2).
+    const vinculos = await evaluate<{ oportunidade: number; contatos: number; alturaOportunidade: number; alturaContatos: number }>(
+      contents,
+      `(() => {
+        const centro = (el) => { if (!el) return NaN; const r = el.getBoundingClientRect(); return r.top + r.height / 2 }
+        // Sem o rótulo ou o campo, 99 (o NaN viraria null no JSON e passaria no "<= 2").
+        const diferenca = (a, b) => (Number.isFinite(a - b) ? Math.round(Math.abs(a - b) * 10) / 10 : 99)
+        const linha = (nome) => document.querySelector('${DETALHE} [data-tarefa-vinculo="' + nome + '"]')
+        const rotulo = (nome) => linha(nome)?.querySelector('[data-tarefa-vinculo-rotulo]')
+        const campoOp = linha('oportunidade')?.querySelector('[data-funil-picker] input')
+        const campoCt = linha('contatos')?.querySelector('[data-funil-picker] > div')
+        return {
+          oportunidade: diferenca(centro(rotulo('oportunidade')), centro(campoOp)),
+          contatos: diferenca(centro(rotulo('contatos')), centro(campoCt)),
+          alturaOportunidade: Math.round(campoOp?.getBoundingClientRect().height ?? 0),
+          alturaContatos: Math.round(campoCt?.getBoundingClientRect().height ?? 0),
+        }
+      })()`,
+    )
+    checks['tarefasVinculosCentrados'] = {
+      // O campo de Contatos é o `SearchPicker` múltiplo (34 px com os chips, como nas telas do funil): só a centralização.
+      ok: vinculos.oportunidade <= 2 && vinculos.contatos <= 2 && vinculos.alturaOportunidade === 32 && vinculos.alturaContatos > 0,
+      detail: JSON.stringify(vinculos),
+    }
     await both('tarefas-detalhe')
     const mais2 = somarDiasSmoke(view.hoje, 2)
     await setValue(contents, `${DETALHE} [data-tarefa-campo="prazo"]`, mais2)
@@ -12470,12 +12517,52 @@ async function tarefasTelaChecks(ctx: SmokeContext, watch: (win: BrowserWindow) 
       grupo('sem-oportunidade')?.linhas.includes(T.semana) === true &&
       grupos[grupos.length - 1]?.chave === 'sem-oportunidade' &&
       grupos.every((item) => item.altura === 28 && item.total === item.linhas.length)
+    // tarefasContagemDireita (contrato 130, CA6, M6): a contagem de "Sem oportunidade" à direita, como a dos outros grupos.
+    const direitas = await evaluate<{ chave: string; right: number }[]>(
+      contents,
+      `[...document.querySelectorAll('${LARGA} [data-tarefas-grupo]')].map((el) => ({ chave: el.dataset.tarefasGrupo, right: Math.round(el.querySelector('[data-tarefas-grupo-total]')?.getBoundingClientRect().right ?? -1) }))`,
+    )
+    const semOp = direitas.find((item) => item.chave === 'sem-oportunidade')
+    const outras = direitas.filter((item) => item.chave !== 'sem-oportunidade')
+    checks['tarefasContagemDireita'] = {
+      ok: semOp !== undefined && semOp.right > 0 && outras.length > 0 && outras.every((item) => Math.abs(item.right - semOp.right) <= 2),
+      detail: JSON.stringify({ grupos: direitas.length, semOportunidade: semOp?.right ?? -1, outras: outras.map((item) => item.right) }),
+    }
     await both('tarefas-todas-agrupadas')
     await setValue(contents, '[data-tarefas-agrupar]', 'prazo', 'change')
     const voltouPrazo = await waitFor(contents, `!document.querySelector('[data-tarefas-grupo="sem-oportunidade"]') && document.querySelector('[data-tarefas-agrupar]')?.value === 'prazo'`)
     checks['tarefasAgrupar'] = {
       ok: agruparOk && voltouPrazo,
       detail: JSON.stringify({ agrupou, grupos: grupos.length, portal: grupo('op-portal')?.linhas.includes(T.portal) === true, loja: grupo('op-loja')?.linhas.includes(T.loja) === true, semOportunidadePorUltimo: grupos[grupos.length - 1]?.chave === 'sem-oportunidade', cabecalhos28: grupos.every((item) => item.altura === 28), contagensIguais: grupos.every((item) => item.total === item.linhas.length), voltouPrazo }),
+    }
+
+    // tarefasListaSemRolarARaiz (contrato 130, B1 nas listas): a última tarefa de Todas marcada como importante (a estrela
+    // tem o `sr-only` absoluto) e trazida à vista no fim da lista larga: só a lista rola; a raiz fica no 0, sem sobra.
+    // A marca volta ao que era no fim.
+    await waitFor(contents, `document.querySelector('[data-tarefas-screen="todas"]') && document.querySelector('${LARGA} [data-tarefa]')`)
+    const ultima = (await linhas()).at(-1) ?? ''
+    const importanteAntes = ultima ? savedTarefa(ultima)?.importante === true : false
+    if (ultima && !importanteAntes) await api('scribe:tarefas-salvar', { id: ultima, importante: true })
+    const estrela = ultima !== '' && (await waitFor(contents, `document.querySelector('${LARGA} [data-tarefa="${ultima}"] [data-tarefa-importante]')`, 8000))
+    await evaluate(contents, `document.querySelector('${LARGA} [data-tarefa="${ultima}"]')?.scrollIntoView({ block: 'center', behavior: 'instant' }), true`)
+    await settle(contents)
+    const raizLista = await evaluate<{ raiz: number; sobra: number; lista: number }>(
+      contents,
+      `(() => {
+        const raiz = document.scrollingElement
+        return {
+          raiz: Math.round(raiz?.scrollTop ?? -1),
+          sobra: Math.round((raiz?.scrollHeight ?? 0) - (raiz?.clientHeight ?? 0)),
+          lista: Math.round(document.querySelector('${LARGA}')?.scrollTop ?? -1),
+        }
+      })()`,
+    )
+    if (ultima && !importanteAntes) await api('scribe:tarefas-salvar', { id: ultima, importante: false })
+    const desmarcou = ultima === '' || importanteAntes || (await savedIs(ultima, (tarefa) => tarefa?.importante === false))
+    await evaluate(contents, `(document.querySelector('${LARGA}') ?? {}).scrollTop = 0, true`)
+    checks['tarefasListaSemRolarARaiz'] = {
+      ok: estrela && raizLista.raiz === 0 && raizLista.sobra === 0 && raizLista.lista > 0 && desmarcou,
+      detail: JSON.stringify({ estrelaNaUltima: estrela, raizScrollTop: raizLista.raiz, sobraDaRaiz: raizLista.sobra, listaScrollTop: raizLista.lista, desmarcou }),
     }
 
     // tarefasSugestoes (R26, CA10 parte, D-17): "Sugestões N" com N do canal (as duas tarefas "Você" da reunião semeada no
@@ -13244,6 +13331,20 @@ async function funilDetalheChecks(ctx: SmokeContext, watch: (win: BrowserWindow)
     // Contrato 125: o print com a seção Tarefas carregada (a migrada "Revisar contrato" e a `t-loja` da fixture do 123).
     await waitFor(contents, `document.querySelector('${SCREEN} [data-funil-bloco="tarefas"] [data-tarefa="${SMOKE_TAREFAS.loja}"]') && document.querySelectorAll('${SCREEN} [data-funil-bloco="tarefas"] [data-tarefa]').length >= 2`, 8000)
     await both('funil-oportunidade')
+    // funilTarefasSemOrigem (contrato 130, CA7, M7): as linhas da seção Tarefas não repetem "Oportunidade: <a própria>".
+    const semOrigem = await evaluate<{ linhas: number; comAPropria: number; colunaOrigem: number }>(
+      contents,
+      `(() => {
+        const titulo = document.querySelector('${SCREEN} h1 button')?.textContent ?? ''
+        const linhas = [...document.querySelectorAll('${SCREEN} [data-funil-bloco="tarefas"] [data-tarefa]')]
+        return {
+          linhas: linhas.length,
+          comAPropria: titulo ? linhas.filter((el) => (el.textContent ?? '').includes('Oportunidade: ' + titulo)).length : -1,
+          colunaOrigem: linhas.filter((el) => el.querySelector('[data-tarefa-origem]')).length,
+        }
+      })()`,
+    )
+    checks['funilTarefasSemOrigem'] = { ok: semOrigem.linhas >= 2 && semOrigem.comAPropria === 0 && semOrigem.colunaOrigem === 0, detail: JSON.stringify(semOrigem) }
 
     // funilReuniaoApagada (modelo, R29): um id de reunião que não existe vira "Reunião apagada" sem data e sem link; o id
     // fica em `meetingIds` até o "Desvincular" da aba Reuniões.
@@ -14277,6 +14378,43 @@ function diaLocalSmoke(iso: string): string {
   return `${data.getFullYear()}-${String(data.getMonth() + 1).padStart(2, '0')}-${String(data.getDate()).padStart(2, '0')}`
 }
 
+/** O formulário compacto da Nova tarefa medido na tela (contrato 130, CA2): só números e booleanos. */
+interface FormCompacto {
+  achado: boolean
+  linhas: number
+  cancelarNaLinhaDoCriar: boolean
+  cancelarDentro: boolean
+  caixaDeFeito: boolean
+  campoOportunidade: boolean
+  dicaCurta: boolean
+}
+
+/** O script que mede o formulário dentro de `seletor`: as linhas de controles (pelo topo, ±4 px), a caixa, o campo e a dica. */
+function formCompacto(seletor: string): string {
+  return `(() => {
+    const form = document.querySelector(${JSON.stringify(seletor)})
+    const nova = form?.querySelector('[data-tarefas-nova]')
+    if (!nova) return { achado: false, linhas: -1, cancelarNaLinhaDoCriar: false, cancelarDentro: false, caixaDeFeito: true, campoOportunidade: true, dicaCurta: false }
+    const centro = (el) => { const r = el.getBoundingClientRect(); return r.top + r.height / 2 }
+    const controles = ['[data-tarefas-nova-titulo]', '[data-tarefas-nova-prazo]', '[data-action="tarefa-nova-criar"]', '[data-action="tarefa-nova-cancelar"]'].map((sel) => nova.querySelector(sel))
+    if (controles.some((el) => !el)) return { achado: false, linhas: -1, cancelarNaLinhaDoCriar: false, cancelarDentro: false, caixaDeFeito: true, campoOportunidade: true, dicaCurta: false }
+    const centros = controles.map(centro).sort((a, b) => a - b)
+    const linhas = centros.reduce((total, valor, indice) => (indice > 0 && valor - centros[indice - 1] > 4 ? total + 1 : total), 1)
+    return {
+      achado: true,
+      linhas,
+      cancelarNaLinhaDoCriar: Math.abs(centro(controles[2]) - centro(controles[3])) <= 2,
+      // O Cancelar não passa da borda direita do formulário (a caixa com a borda, primeiro filho do componente).
+      cancelarDentro: controles[3].getBoundingClientRect().right <= (nova.firstElementChild?.getBoundingClientRect().right ?? 0) + 0.5,
+      caixaDeFeito: Boolean(nova.querySelector('[data-tarefas-nova-caixa]')),
+      campoOportunidade: Boolean(nova.querySelector('[data-funil-picker]')),
+      dicaCurta: nova.querySelector(':scope > p')?.textContent === 'Enter cria · Esc cancela',
+    }
+  })()`
+}
+
+const compactaOk = (form: FormCompacto): boolean => form.achado && form.linhas >= 1 && form.linhas <= 2 && form.cancelarNaLinhaDoCriar && form.cancelarDentro && !form.caixaDeFeito && !form.campoOportunidade && form.dicaCurta
+
 /**
  * Contrato 126 (CA8, CA9 e CA4 da spec, R21 a R25), numa janela que troca de tema no lugar, logo depois do
  * `funilTelasExistentesChecks` (o email e o WhatsApp falsos ainda conectados; o Paulo e a Ana já contatos). No Resumo de
@@ -14356,7 +14494,28 @@ async function tarefasTelasExistentesChecks(ctx: SmokeContext, watch: (win: Brow
         estado: Math.round(document.querySelector('${LINHA(0)} td')?.getBoundingClientRect().width ?? 0),
       })`,
     )
+    // resumoTarefasEnquadramento (contrato 130, CA1, B1): a seção Tarefas trazida à vista rola só a coluna do Resumo; a raiz
+    // fica no 0, sem sobra de altura, e o logo da barra no mesmo lugar de antes (no topo, abaixo da faixa da janela).
+    const LOGO = 'aside [data-brand] img, aside [data-brand] svg'
+    const logoAntes = await evaluate<number>(contents, `Math.round(document.querySelector('${LOGO}')?.getBoundingClientRect().top ?? -1)`)
     await evaluate(contents, `document.querySelector('[data-meeting="${MID}"] [data-summary-tasks]')?.scrollIntoView({ block: 'center', behavior: 'instant' }), true`)
+    await settle(contents)
+    const enquadrado = await evaluate<{ raiz: number; sobra: number; logo: number; coluna: number }>(
+      contents,
+      `(() => {
+        const raiz = document.scrollingElement
+        return {
+          raiz: Math.round(raiz?.scrollTop ?? -1),
+          sobra: Math.round((raiz?.scrollHeight ?? 0) - (raiz?.clientHeight ?? 0)),
+          logo: Math.round(document.querySelector('${LOGO}')?.getBoundingClientRect().top ?? -1),
+          coluna: Math.round(document.querySelector('[data-meeting="${MID}"] [data-summary-scroll]')?.scrollTop ?? -1),
+        }
+      })()`,
+    )
+    checks['resumoTarefasEnquadramento'] = {
+      ok: enquadrado.raiz === 0 && enquadrado.sobra === 0 && logoAntes >= 0 && Math.abs(enquadrado.logo - logoAntes) <= 1 && enquadrado.coluna > 0,
+      detail: JSON.stringify({ raizScrollTop: enquadrado.raiz, sobraDaRaiz: enquadrado.sobra, logoTopAntes: logoAntes, logoTop: enquadrado.logo, colunaScrollTop: enquadrado.coluna }),
+    }
     await both('detalhe-resumo-tarefas')
     // "Adicionar" na linha 1 (o participante): origem `reuniao` com o texto, a reunião nos vínculos e o responsável `nome`
     // (ou `contato`, se o nome casar com um participante que é contato: D-16; a gravada não tem agenda).
@@ -14436,7 +14595,7 @@ async function tarefasTelasExistentesChecks(ctx: SmokeContext, watch: (win: Brow
     // O corpo já lido (sem o esqueleto) antes de medir a posição da caixa e do print.
     const corpoPronto = await waitFor(contents, `document.querySelector('[data-email-reading] [data-email-body]') && !document.querySelector('[data-email-reading] [data-email-body-loading]')`, 10_000)
     // A view do funil pode chegar depois na janela nova: espera a frase com o contato (o nome não vai para o relatório).
-    const fraseOk = paulo !== undefined && (await waitFor(contents, `(document.querySelector('[data-email-reading] [data-email-tarefa-vinculo]')?.textContent ?? '').startsWith(${JSON.stringify(`Ligada a ${paulo.nome}`)})`, 8000))
+    const fraseOk = paulo !== undefined && (await waitFor(contents, `(document.querySelector('[data-email-reading] [data-email-tarefa-vinculo]')?.textContent ?? '').startsWith(${JSON.stringify(`Ligada a este e-mail · ${paulo.nome}`)})`, 8000))
     const formEstado = await evaluate<{ pressionado: boolean; entreCabecalhoECorpo: boolean }>(
       contents,
       `(() => {
@@ -14449,6 +14608,17 @@ async function tarefasTelasExistentesChecks(ctx: SmokeContext, watch: (win: Brow
         }
       })()`,
     )
+    // emailTarefaCompacta (contrato 130, CA2, M1): a variante compacta, sem a caixa de feito nem o campo de oportunidade, com
+    // a dica curta, no máximo 2 linhas de controles e sem a caixa de fora (só a borda do formulário).
+    const compactaEmail = await evaluate<FormCompacto>(contents, formCompacto('[data-email-reading] [data-email-tarefa-form]'))
+    const semCaixaDeFora = await evaluate<boolean>(
+      contents,
+      `(() => { const el = document.querySelector('[data-email-reading] [data-email-tarefa-form]'); if (!el) return false; const cs = getComputedStyle(el); return cs.borderTopWidth === '0px' && cs.backgroundColor === 'rgba(0, 0, 0, 0)' })()`,
+    )
+    checks['emailTarefaCompacta'] = {
+      ok: compactaOk(compactaEmail) && semCaixaDeFora && fraseOk,
+      detail: JSON.stringify({ ...compactaEmail, semCaixaDeFora, fraseComOEmail: fraseOk }),
+    }
     await both('email-leitura-tarefa')
     antes = new Set(tarefas().map((tarefa) => tarefa.id))
     if (form) await clickSelector(contents, '[data-email-reading] [data-email-tarefa-form] [data-action="tarefa-nova-criar"]')
@@ -14497,6 +14667,9 @@ async function tarefasTelasExistentesChecks(ctx: SmokeContext, watch: (win: Brow
     // O resumo da IA da conversa (ou o aviso de desligado) antes do print, para o painel não mudar no meio.
     await waitFor(contents, `document.querySelector('[data-wa-details] [data-wa-summary]') || document.querySelector('[data-wa-details] [data-wa-insights="off"]')`, 20_000)
     await settle(contents)
+    // whatsappTarefaCompacta (contrato 130, CA2, M2): no painel de 300 px, no máximo 2 linhas e o Cancelar na linha do Criar.
+    const compactaWa = await evaluate<FormCompacto>(contents, formCompacto('[data-wa-details] [data-whatsapp-tarefa-form]'))
+    checks['whatsappTarefaCompacta'] = { ok: compactaOk(compactaWa), detail: JSON.stringify(compactaWa) }
     shots.push(await capture(win, ctx.outDir, 'whatsapp-detalhes-tarefa-light'))
     const ana = contatos().find((contato) => contato.whatsappChatId === WA_ANA)
     antes = new Set(tarefas().map((tarefa) => tarefa.id))
@@ -16267,8 +16440,33 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
       await openSettingsTab(contents, 'geral')
       if (!(await settingsReady(contents))) failures.push(`configuracoes/${themeName}: chave ou catálogo não carregou`)
       // Contrato 128 (D-2, P-1): o print da aba Geral mostra a Section "Tarefas" (rolada até ela, sem animação).
-      await evaluate(contents, `document.querySelector('[data-settings-panel="geral"] section[aria-label="${TAREFAS_SECTION}"]')?.scrollIntoView({ block: 'end', behavior: 'instant' }) ?? false`)
+      // Contrato 130 (CA8, M9): a aba ainda pode voltar ao topo depois de aberta (o efeito da troca de aba, a fonte da marca
+      // carregando); rola de novo até a seção ficar inteira na coluna e conferir, nos dois temas.
+      const SECAO_TAREFAS = `[data-settings-panel="geral"] section[aria-label="${TAREFAS_SECTION}"]`
+      const rolagemGeral = async (): Promise<{ scrollTop: number; inteira: boolean }> =>
+        evaluate(
+          contents,
+          `(() => {
+            const scroller = document.querySelector('[data-settings-scroll]')
+            const secao = document.querySelector('${SECAO_TAREFAS}')
+            if (!scroller || !secao) return { scrollTop: -1, inteira: false }
+            const a = scroller.getBoundingClientRect(), b = secao.getBoundingClientRect()
+            return { scrollTop: Math.round(scroller.scrollTop), inteira: b.top >= a.top - 1 && b.bottom <= a.bottom + 1 }
+          })()`,
+        )
+      let geral = { scrollTop: -1, inteira: false }
+      for (let attempt = 0; attempt < 10 && !(geral.scrollTop > 0 && geral.inteira); attempt++) {
+        await evaluate(contents, `document.querySelector('${SECAO_TAREFAS}')?.scrollIntoView({ block: 'end', behavior: 'instant' }) ?? false`)
+        await settle(contents)
+        geral = await rolagemGeral()
+      }
       await shoot('configuracoes-geral', 'configuracoes')
+      // Depois do print, a mesma rolagem: nada a devolveu ao topo enquanto a janela era capturada.
+      const geralDepois = await rolagemGeral()
+      settings[themeName === 'light' ? 'configuracoesGeralRolada' : 'configuracoesGeralRoladaDark'] = {
+        ok: geral.scrollTop > 0 && geral.inteira && geralDepois.scrollTop === geral.scrollTop && geralDepois.inteira,
+        detail: JSON.stringify({ scrollTop: geral.scrollTop, inteira: geral.inteira, scrollTopDepoisDoPrint: geralDepois.scrollTop, inteiraDepoisDoPrint: geralDepois.inteira }),
+      }
       // Contrato 109: a Section "Funil de vendas", depois do print (o check mexe no campo de dias e o devolve a 7).
       // Contrato 128: a Section "Tarefas" logo depois (o check mexe na hora e no "Sugerir" e os devolve aos padrões).
       if (themeName === 'light') {
@@ -16598,6 +16796,12 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
   for (const [name, check] of Object.entries(tarefasTela)) if (!check.ok) failures.push(`tarefas ${name}: ${check.detail}`)
   // Contrato 126: o Resumo, o email e o WhatsApp.
   for (const name of ['resumoTarefas', 'resumoGerarDeNovo', 'emailTarefa', 'whatsappTarefa']) if (!tarefasTela[name]) failures.push(`tarefas ${name}: não executado`)
+  // Contrato 130: os ajustes da auditoria dos prints.
+  for (const name of ['resumoTarefasEnquadramento', 'emailTarefaCompacta', 'whatsappTarefaCompacta', 'tarefasCabecalhoEstreito', 'tarefasVinculosCentrados', 'tarefasNovaOportunidadeCampo', 'tarefasContagemDireita', 'tarefasListaSemRolarARaiz']) {
+    if (!tarefasTela[name]) failures.push(`tarefas ${name}: não executado`)
+  }
+  if (!funil['funilTarefasSemOrigem']) failures.push('funil funilTarefasSemOrigem: não executado')
+  for (const name of ['configuracoesGeralRolada', 'configuracoesGeralRoladaDark']) if (!settings[name]) failures.push(`configurações ${name}: não executado`)
   // Contrato 127: as tarefas no Assistente e o agente com "Pode ler as tarefas".
   for (const name of ['tarefasFonte', 'tarefasCartaoCriar', 'tarefasCartaoConcluir', 'agenteTarefas']) if (!tarefasTela[name]) failures.push(`tarefas ${name}: não executado`)
   for (const name of ['funilNav', 'funilLevel', 'funilRedirect', 'funilNavigateEvent', 'funilKanban', 'funilCollapsed', 'funilFiltros', 'funilNova', 'funilEtapas', 'funilDragMove', 'funilDragLost']) {

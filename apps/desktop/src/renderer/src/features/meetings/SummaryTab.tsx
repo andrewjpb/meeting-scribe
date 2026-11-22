@@ -79,10 +79,14 @@ interface OpenQuestionsProps {
   onJump?: ((atMs: number) => void) | undefined
 }
 
-/** Coluna da aba: mesma largura e margens da transcrição, rolando sozinha. */
+/**
+ * Coluna da aba: mesma largura e margens da transcrição, rolando sozinha. `relative` (contrato 130, B1): o que é
+ * `absolute` lá dentro (o `sr-only` do cabeçalho da tabela de tarefas) se posiciona e é cortado por ela; sem isso, abaixo
+ * da dobra, ele esticava o documento e a janela inteira rolava junto (a barra lateral subia).
+ */
 function Column({ children, state, questions, empty = false }: { children: ReactNode; state: string; questions?: OpenQuestionsProps | undefined; empty?: boolean }) {
   return (
-    <div data-summary-scroll className="min-h-0 flex-1 overflow-y-auto px-8 pb-8">
+    <div data-summary-scroll className="relative min-h-0 flex-1 overflow-y-auto px-8 pb-8">
       <div data-summary={state} aria-live="polite" className="mx-auto flex w-full max-w-[680px] flex-col gap-6 pt-5">
         <AcpFallbackNote />
         {children}
