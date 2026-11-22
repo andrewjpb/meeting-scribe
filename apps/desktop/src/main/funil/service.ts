@@ -5,6 +5,11 @@
 // nada é escrito neles e não há timer. Sugestões e linha do tempo são calculadas quando o canal delas é chamado;
 // `ultimas` só em `view()` e depois de cada gravação bem-sucedida (para o `onChange`). Domínio desligado ou com
 // falha vale lista vazia.
+//
+// Contrato 124 (D8): as tarefas entram só por `deps.tarefas` (closures do `index.ts`, sem dependência circular). A view
+// traz o próximo passo derivado delas (`proximosPassos`), o passo que chega em `oportunidadeSave` vira tarefa, o
+// evento `tarefa` (R10) é gravado por `registrarTarefa` e a linha do tempo mostra as tarefas (R18). Título de tarefa
+// nunca vai ao log.
 import { randomUUID } from 'node:crypto'
 import { readFile, stat } from 'node:fs/promises'
 import { basename } from 'node:path'
@@ -26,11 +31,14 @@ import {
   type FunilView,
   type ItemLinhaDoTempo,
   type OportunidadeInput,
+  type ProximoPassoDerivado,
   type Sugestao,
 } from '../../shared/funil'
 import { aplicarMapeamento, IMPORT_BYTES_MAX, lerArquivo, type CampoImport, type EntradaImport, type LeituraImport } from '../../shared/funil-import'
 import { sugestoesDeContato } from '../../shared/funil-sugestoes'
 import { timelineDaOportunidade, timelineDoContato, ultimasInteracoes } from '../../shared/funil-timeline'
+import { TAREFA_TITULO_MAX, type EventoOportunidade, type Tarefa, type TarefaInput, type TarefaSalvar, type TarefasActionResult } from '../../shared/tarefas'
+import { diaValido, proximaDaOportunidade } from '../../shared/tarefas-logic'
 import type { WhatsAppChat, WhatsAppMe } from '../../shared/whatsapp'
 import type { MeetingsStore } from '../meetings/store'
 import type { SummaryStore } from '../meetings/summaries'
@@ -51,8 +59,10 @@ export interface FunilServiceDeps {
   whatsapp: { chats(): Promise<WhatsAppChat[]>; me(): WhatsAppMe | null }
   /** O diálogo "Importar contatos"; `null` cancela. */
   chooseImportFile: () => Promise<string | null>
-  /** Depois de cada gravação de `funil.json`. */
+  /** Depois de cada gravação de `funil.json` (e quando as tarefas mudam, por `notificarTarefas`). */
   onChange: (view: FunilView) => void
+  /** Contrato 124 (D8): as tarefas pelo serviço delas; o funil nunca abre `tarefas.json`. */
+  tarefas: { todas(): Promise<Tarefa[]>; criar(input: TarefaInput): Promise<TarefasActionResult>; salvar(request: TarefaSalvar): Promise<TarefasActionResult> }
   now?: () => number
   newId?: () => string
   log?: (message: string) => void
@@ -79,8 +89,10 @@ export interface FunilService {
   importarAbrir(): Promise<FunilImportAbrirResult>
   importarConfirmar(request: { token: string; mapeamento?: CampoImport[] | undefined; simular?: boolean | undefined }): Promise<FunilImportConfirmarResult>
   timeline(request: { tipo: 'contato' | 'oportunidade'; id: string }): Promise<FunilTimelineResult>
-  /** Contrato 115: grava `ultimoAvisoEm` (a verificação do alerta diário); falha vira exceção. Não avisa a tela. */
-  marcarAviso(at: number): Promise<void>
+  /** Contrato 124 (R10): o gancho das tarefas grava o evento `tarefa` e avisa a tela; erro do store vira exceção. */
+  registrarTarefa(evento: EventoOportunidade): Promise<void>
+  /** Contrato 124 (D8): as tarefas mudaram; reemite o `onChange` com a view nova, sem gravar. */
+  notificarTarefas(): Promise<void>
 }
 
 /** Uma leitura de cada cache (cabe em `FontesTimeline`). */
@@ -129,10 +141,35 @@ export function createFunilService(deps: FunilServiceDeps): FunilService {
     }
   }
 
+  /** As tarefas do arquivo; falha vale nenhuma. */
+  const tarefas = (): Promise<Tarefa[]> => seguro('tarefas', () => deps.tarefas.todas(), [])
+
+  /** D9: o passo de cada oportunidade aberta e não arquivada, pela primeira tarefa aberta ligada a ela. */
+  async function proximosPassos(state: FunilState): Promise<Record<string, ProximoPassoDerivado | null>> {
+    const abertas = new Set(state.etapas.filter((etapa) => etapa.tipo === 'aberta').map((etapa) => etapa.id))
+    const ids = state.oportunidades.filter((oportunidade) => !oportunidade.arquivado && abertas.has(oportunidade.etapaId)).map((oportunidade) => oportunidade.id)
+    if (ids.length === 0) return {}
+    const porOportunidade = new Map<string, Tarefa[]>()
+    for (const tarefa of await tarefas()) {
+      const id = tarefa.vinculos.oportunidadeId
+      if (id === null || tarefa.status !== 'aberta') continue
+      const lista = porOportunidade.get(id)
+      if (lista) lista.push(tarefa)
+      else porOportunidade.set(id, [tarefa])
+    }
+    const passos: Record<string, ProximoPassoDerivado | null> = {}
+    for (const id of ids) {
+      const tarefa = proximaDaOportunidade(porOportunidade.get(id) ?? [], id)
+      passos[id] = tarefa ? { texto: tarefa.titulo, data: tarefa.prazo, tarefaId: tarefa.id } : null
+    }
+    return passos
+  }
+
   async function montarView(state: FunilState): Promise<FunilView> {
     // Sem oportunidade aberta não há o que calcular: nenhum cache é lido.
-    if (!state.oportunidades.some((oportunidade) => !oportunidade.arquivado)) return { state, ultimas: {} }
-    return { state, ultimas: ultimasInteracoes({ ...(await fontes()), state }) }
+    if (!state.oportunidades.some((oportunidade) => !oportunidade.arquivado)) return { state, ultimas: {}, proximosPassos: {} }
+    const [lidas, passos] = await Promise.all([fontes(), proximosPassos(state)])
+    return { state, ultimas: ultimasInteracoes({ ...lidas, state }), proximosPassos: passos }
   }
 
   /** Depois de gravar: a view nova vai para o `onChange`; uma falha aqui não desfaz a gravação. */
@@ -164,7 +201,33 @@ export function createFunilService(deps: FunilServiceDeps): FunilService {
     contatoArchive: async ({ id }) => gravar(await store.arquivarContato(id), (contato) => contato.id),
     empresaSave: async ({ empresa }) => gravar(await store.saveEmpresa(empresa), (value) => value.id),
     empresaDelete: async ({ id }) => gravar(await store.deleteEmpresa(id), () => null),
-    oportunidadeSave: async ({ oportunidade }) => gravar(await store.saveOportunidade(oportunidade), (value) => value.id),
+    async oportunidadeSave({ oportunidade }) {
+      // D9: o passo não é gravado na oportunidade; com texto, vira uma tarefa ligada a ela depois de gravar. O mesmo
+      // passo de novo (a proposta aplicada outra vez, o cartão repetido) não duplica: a tarefa aberta da oportunidade
+      // com o mesmo título (aparado, sem caixa) fica, e só o prazo dela muda se vier outro.
+      const passo = oportunidade.proximoPasso
+      const texto = passo && typeof passo.texto === 'string' ? passo.texto.trim() : ''
+      // A data fora do calendário é recusada antes de gravar, como o store fazia com o passo (a tarefa a recusaria).
+      if (passo && passo.data != null && !diaValido(passo.data)) return { ok: false, erro: 'invalido', mensagem: FUNIL_ERRO_TEXTO.invalido }
+      const result = await gravar(await store.saveOportunidade(oportunidade), (value) => value.id)
+      if (!result.ok || !texto || !passo || result.id === null) return result
+      const oportunidadeId = result.id
+      const titulo = texto.slice(0, TAREFA_TITULO_MAX).trim()
+      const prazo = passo.data ?? null
+      try {
+        const chave = titulo.toLowerCase()
+        const iguais = (await tarefas()).filter((tarefa) => tarefa.status === 'aberta' && tarefa.vinculos.oportunidadeId === oportunidadeId && tarefa.titulo.trim().toLowerCase() === chave)
+        if (iguais.some((tarefa) => tarefa.prazo === prazo)) return result
+        const existente = iguais[0]
+        const feita = existente
+          ? await deps.tarefas.salvar({ id: existente.id, prazo })
+          : await deps.tarefas.criar({ titulo, prazo, lembrete: 'padrao', origem: { tipo: 'funil', oportunidadeId }, vinculos: { oportunidadeId } })
+        if (!feita.ok) log(`[funil] a tarefa do próximo passo da oportunidade ${oportunidadeId} não foi ${existente ? 'atualizada' : 'criada'} (${feita.erro})`)
+      } catch (error) {
+        log(`[funil] a tarefa do próximo passo da oportunidade ${oportunidadeId} falhou: ${error instanceof Error ? error.message : String(error)}`)
+      }
+      return result
+    },
     oportunidadeMove: async (request) => gravar(await store.moverOportunidade(request), (value) => value.id),
     oportunidadeDelete: async ({ id }) => gravar(await store.deleteOportunidade(id), () => null),
     oportunidadeArchive: async ({ id }) => gravar(await store.arquivarOportunidade(id), (value) => value.id),
@@ -240,9 +303,18 @@ export function createFunilService(deps: FunilServiceDeps): FunilService {
       return { ok: true, simulado: false, criados, atualizados, ignorados: ignorados + (entradas.length - criados - atualizados) }
     },
 
-    async marcarAviso(at) {
-      const result = await store.setUltimoAviso(at)
+    async registrarTarefa(evento) {
+      const result = await store.registrarTarefa(evento)
       if (!result.ok) throw new Error(FUNIL_ERRO_TEXTO[result.erro])
+      await avisar(result.state)
+    },
+
+    async notificarTarefas() {
+      try {
+        deps.onChange(await montarView(await store.read()))
+      } catch (error) {
+        log(`[funil] aviso das tarefas falhou: ${error instanceof Error ? error.message : String(error)}`)
+      }
     },
 
     async timeline({ tipo, id }) {
@@ -251,11 +323,13 @@ export function createFunilService(deps: FunilServiceDeps): FunilService {
       if (tipo === 'contato') {
         const contato = state.contatos.find((item) => item.id === id)
         if (!contato) return { ok: false, erro: 'nao-encontrado' }
-        resultado = timelineDoContato({ ...(await fontes()), contato })
+        const [lidas, lista] = await Promise.all([fontes(), tarefas()])
+        resultado = timelineDoContato({ ...lidas, tarefas: lista, contato })
       } else {
         const oportunidade = state.oportunidades.find((item) => item.id === id)
         if (!oportunidade) return { ok: false, erro: 'nao-encontrado' }
-        resultado = timelineDaOportunidade({ ...(await fontes()), oportunidade, contatos: state.contatos, eventos: state.eventos })
+        const [lidas, lista] = await Promise.all([fontes(), tarefas()])
+        resultado = timelineDaOportunidade({ ...lidas, tarefas: lista, oportunidade, contatos: state.contatos, eventos: state.eventos })
       }
       // O resumo só das reuniões da lista, uma leitura por reunião.
       const itens = await Promise.all(

@@ -1,7 +1,7 @@
 // Lógica pura do funil (contrato 107): normalização e comparação de e-mail e telefone (R3), domínio e empresa (R5),
 // etapas padrão, última interação e "esfriou" (R7), totais do cabeçalho e o `formatarBRL` usado por todas as telas e
 // pelo `FUNIL.md`. Sem Node e sem Electron: roda no main, no renderer e nos testes.
-import { PROVEDORES_PESSOAIS, type Empresa, type Etapa, type FunilState, type Oportunidade, type ProximoPasso } from './funil'
+import { PROVEDORES_PESSOAIS, type Empresa, type Etapa, type FunilState, type Oportunidade } from './funil'
 
 const DIA_MS = 86_400_000
 
@@ -121,9 +121,9 @@ export function esfriada(_oportunidade: Oportunidade, etapa: Etapa, ultima: numb
   return etapa.tipo === 'aberta' && now - ultima > dias * DIA_MS
 }
 
-/** Próximo passo com data antes de `hoje` (`AAAA-MM-DD` local). */
-export function passoVencido(proximoPasso: ProximoPasso | null, hoje: string): boolean {
-  return proximoPasso?.data != null && proximoPasso.data < hoje
+/** Próximo passo (o derivado das tarefas, contrato 124) com data antes de `hoje` (`AAAA-MM-DD` local). */
+export function passoVencido(passo: { data: string | null } | null | undefined, hoje: string): boolean {
+  return passo?.data != null && passo.data < hoje
 }
 
 /** Previsão antes de `hoje` (`AAAA-MM-DD` local). */

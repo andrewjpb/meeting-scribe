@@ -1,6 +1,6 @@
 import { Clock } from 'lucide-react'
 import { useEffect, useRef, type DragEvent } from 'react'
-import type { Oportunidade } from '@shared/funil'
+import type { Oportunidade, ProximoPassoDerivado } from '@shared/funil'
 import { diasNaEtapa, formatarBRL, passoVencido, previsaoVencida } from '@shared/funil-logic'
 import { Button } from '../../design/Button'
 import { TextField } from '../../design/Field'
@@ -29,6 +29,8 @@ export interface PerdaPendente {
 
 interface KanbanCardProps {
   oportunidade: Oportunidade
+  /** Contrato 124 (D9): `view.proximosPassos[oportunidade.id] ?? null`, o passo derivado das tarefas. */
+  proximoPasso: ProximoPassoDerivado | null
   empresa: string | null
   /** `esfriada()` com a última interação da view e `funil.diasEsfriar` (R7). */
   esfriou: boolean
@@ -49,7 +51,7 @@ interface KanbanCardProps {
  * próximo passo com a data (em --rec quando venceu), a previsão quando venceu e, no rodapé, "há N d nesta etapa" e
  * "esfriou". O clique (sem arrasto) abre a oportunidade; arrastar move (R24).
  */
-export function KanbanCard({ oportunidade, empresa, esfriou, now, hoje, apagado, arrastando, perda, onAbrir, onDragStart, onDragEnd }: KanbanCardProps) {
+export function KanbanCard({ oportunidade, proximoPasso, empresa, esfriou, now, hoje, apagado, arrastando, perda, onAbrir, onDragStart, onDragEnd }: KanbanCardProps) {
   const ref = useRef<HTMLDivElement>(null)
   const emPerda = perda !== null
   // O motivo pedido pelo soltar em Perdido: o foco vai para o campo.
@@ -98,8 +100,8 @@ export function KanbanCard({ oportunidade, empresa, esfriou, now, hoje, apagado,
     )
   }
 
-  const passo = textoProximoPasso(oportunidade.proximoPasso)
-  const vencido = passoVencido(oportunidade.proximoPasso, hoje)
+  const passo = textoProximoPasso(proximoPasso)
+  const vencido = passoVencido(proximoPasso, hoje)
   const previsao = oportunidade.previsao !== null && previsaoVencida(oportunidade.previsao, hoje) ? oportunidade.previsao : null
   return (
     <div
@@ -122,7 +124,7 @@ export function KanbanCard({ oportunidade, empresa, esfriou, now, hoje, apagado,
       {titulo}
       <p className="truncate text-13 text-text-muted">{empresa ?? 'Sem empresa'}</p>
       <p className="text-13 font-semibold text-title tabular">{formatarBRL(oportunidade.valor)}</p>
-      <p data-funil-card-passo data-funil-card-vencido={vencido ? '' : undefined} className={`flex min-w-0 items-center gap-1.5 text-13 ${vencido ? 'text-rec' : oportunidade.proximoPasso ? 'text-text' : 'text-text-muted'}`}>
+      <p data-funil-card-passo data-funil-card-vencido={vencido ? '' : undefined} className={`flex min-w-0 items-center gap-1.5 text-13 ${vencido ? 'text-rec' : proximoPasso ? 'text-text' : 'text-text-muted'}`}>
         <Icon icon={Clock} size={14} className={`shrink-0 ${vencido ? '' : 'text-text-muted'}`} />
         <span className="min-w-0 flex-1 truncate">{passo.texto}</span>
         {passo.data && <span className="shrink-0 tabular">{passo.data}</span>}

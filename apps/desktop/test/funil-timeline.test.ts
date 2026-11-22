@@ -1,10 +1,11 @@
 // Contrato 110 (funil-vendas, CA3 e CA4): linha do tempo de contato e de oportunidade (R8 a R10, R29). Janela de
 // e-mail da oportunidade (`criadoEm` menos 30 dias), e-mail vinculado fora do cache, reunião apagada no fim, ordem
-// por data e as três formas de ligar uma conversa do WhatsApp ao contato.
+// por data e as três formas de ligar uma conversa do WhatsApp ao contato. Contrato 124 (CA4, R18): os itens `tarefa`.
 import { describe, expect, it } from 'vitest'
 import type { Contato, Etapa, EventoFunil, Oportunidade } from '../src/shared/funil'
 import { esfriada } from '../src/shared/funil-logic'
-import { timelineDaOportunidade, timelineDoContato, ultimasInteracoes, type EmailFonte, type FontesTimeline } from '../src/shared/funil-timeline'
+import { origemResumida, timelineDaOportunidade, timelineDoContato, ultimasInteracoes, type EmailFonte, type FontesTimeline } from '../src/shared/funil-timeline'
+import type { Tarefa } from '../src/shared/tarefas'
 
 const DIA_MS = 86_400_000
 const D = Date.parse('2026-11-01T12:00:00.000Z')
@@ -163,5 +164,66 @@ describe('última interação de cada oportunidade', () => {
     const aberta: Etapa = { id: 'e1', nome: 'Contato', tipo: 'aberta', ordem: 0 }
     expect(esfriada(op, aberta, ultimas.o1 ?? 0, 7, agora)).toBe(false)
     expect(esfriada(op, aberta, op.movidoEm, 7, agora)).toBe(true)
+  })
+})
+
+describe('tarefas na linha do tempo (contrato 124, R18)', () => {
+  const tarefa = (parcial: Partial<Tarefa> & { id: string }): Tarefa => ({
+    titulo: `Tarefa ${parcial.id}`,
+    detalhe: '',
+    status: 'aberta',
+    importante: false,
+    prazo: null,
+    lembreteEm: null,
+    lembreteDisparadoEm: null,
+    responsavel: { tipo: 'eu' },
+    origem: { tipo: 'manual' },
+    vinculos: { oportunidadeId: 'o1', contatoIds: ['c1'], empresaId: null, meetingId: null, email: null, whatsappChatId: null },
+    historico: [],
+    criadaEm: D,
+    atualizadaEm: D,
+    feitaEm: null,
+    ...parcial,
+  })
+  const eventoTarefa = (id: string, at: number, tarefaId: string, acao: 'criada' | 'feita' | 'prazo', texto: string): EventoFunil => ({ id, oportunidadeId: 'o1', at, tipo: 'tarefa', texto, tarefa: { id: tarefaId, acao } })
+
+  it('CA4: na oportunidade, criada vira item com título, prazo e origem; apagada tem existe false; prazo não vira item', () => {
+    const doResumo = tarefa({ id: 't1', titulo: 'Enviar proposta', prazo: '2026-11-25', origem: { tipo: 'reuniao', meetingId: 'm1', texto: 'Enviar proposta' } })
+    const resultado = timelineDaOportunidade({
+      ...fontes({ reunioes: [{ id: 'm1', title: 'Kickoff', startedAt: new Date(D - 10 * DIA_MS).toISOString() }] }),
+      oportunidade: oportunidade({ contatoIds: [] }),
+      contatos: [],
+      eventos: [eventoTarefa('ev1', D + DIA_MS, 't1', 'criada', 'Enviar proposta'), eventoTarefa('ev2', D + 2 * DIA_MS, 't1', 'prazo', 'Enviar proposta'), eventoTarefa('ev3', D + 3 * DIA_MS, 'apagada', 'criada', 'Ligar para a Ana')],
+      tarefas: [doResumo],
+    })
+    expect(resultado.itens).toEqual([
+      { tipo: 'tarefa', at: D + 3 * DIA_MS, tarefaId: 'apagada', titulo: 'Ligar para a Ana', prazo: null, origem: '', acao: 'criada', existe: false },
+      { tipo: 'tarefa', at: D + DIA_MS, tarefaId: 't1', titulo: 'Enviar proposta', prazo: '2026-11-25', origem: 'da reunião Kickoff', acao: 'criada', existe: true },
+    ])
+  })
+
+  it('CA4: no contato, a tarefa feita com ele nos vínculos dá dois itens (feita e criada), em data decrescente', () => {
+    const feita = tarefa({ id: 't2', status: 'feita', criadaEm: D + DIA_MS, feitaEm: D + 4 * DIA_MS })
+    const deOutro = tarefa({ id: 't3', vinculos: { oportunidadeId: null, contatoIds: ['c9'], empresaId: null, meetingId: null, email: null, whatsappChatId: null } })
+    const cancelada = tarefa({ id: 't4', status: 'cancelada', criadaEm: D + 2 * DIA_MS, feitaEm: D + 5 * DIA_MS })
+    const resultado = timelineDoContato({ ...fontes(), contato: contato(), tarefas: [feita, deOutro, cancelada] })
+    expect(resultado.itens.map((item) => (item.tipo === 'tarefa' ? `${item.tarefaId}:${item.acao}:${item.at}` : item.tipo))).toEqual([
+      `t2:feita:${D + 4 * DIA_MS}`,
+      `t4:criada:${D + 2 * DIA_MS}`,
+      `t2:criada:${D + DIA_MS}`,
+    ])
+    // A última interação do contato continua só com reuniões, e-mails e conversas.
+    expect(resultado.ultimaInteracao).toBeNull()
+  })
+
+  it('origem resumida em pt-BR', () => {
+    const nomes = { reunioes: [], whatsapp: [{ id: 'w1', name: 'Ana', lastMessage: null }] }
+    expect(origemResumida({ origem: { tipo: 'manual' } }, nomes)).toBe('criada por você')
+    expect(origemResumida({ origem: { tipo: 'whatsapp', chatId: 'w1' } }, nomes)).toBe('da conversa com Ana')
+    expect(origemResumida({ origem: { tipo: 'email', accountId: 'a', id: '1', assunto: 'Orçamento' } }, nomes)).toBe('do e-mail Orçamento')
+    expect(origemResumida({ origem: { tipo: 'assistente' } }, nomes)).toBe('pelo Assistente')
+    expect(origemResumida({ origem: { tipo: 'funil', oportunidadeId: 'o1' } }, nomes)).toBe('da oportunidade')
+    expect(origemResumida({ origem: { tipo: 'migracao', de: 'proximo-passo' } }, nomes)).toBe('do próximo passo antigo')
+    expect(origemResumida({ origem: { tipo: 'migracao', de: 'lembrete' } }, nomes)).toBe('de um lembrete antigo')
   })
 })

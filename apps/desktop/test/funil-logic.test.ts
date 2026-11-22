@@ -124,9 +124,9 @@ describe('lógica do funil', () => {
       ['Ganho', 'ganho', 4],
       ['Perdido', 'perdido', 5],
     ])
-    expect(passoVencido({ texto: 'Ligar', data: '2026-11-19' }, '2026-11-20')).toBe(true)
-    expect(passoVencido({ texto: 'Ligar', data: '2026-11-20' }, '2026-11-20')).toBe(false)
-    expect(passoVencido({ texto: 'Ligar', data: null }, '2026-11-20')).toBe(false)
+    expect(passoVencido({ data: '2026-11-19' }, '2026-11-20')).toBe(true)
+    expect(passoVencido({ data: '2026-11-20' }, '2026-11-20')).toBe(false)
+    expect(passoVencido({ data: null }, '2026-11-20')).toBe(false)
     expect(passoVencido(null, '2026-11-20')).toBe(false)
     expect(previsaoVencida('2026-11-19', '2026-11-20')).toBe(true)
     expect(previsaoVencida(null, '2026-11-20')).toBe(false)

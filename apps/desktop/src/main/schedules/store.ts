@@ -2,12 +2,16 @@
 // `userData/schedules.json`; cada execução num arquivo `userData/schedule-runs/<id>.json`, com as últimas 500
 // (as mais antigas saem). Gravação atômica (temporário + `rename`) em fila, como os outros stores. Arquivo
 // inválido: o que não valida fica de fora e o resto vale. Sem Electron.
+//
+// Contrato 124 (R35, D11): os adaptadores da migração dos lembretes para tarefas (`lembretes`, `backupMigracao`,
+// `removerLembretes`, `restaurarMigracao`), chamados só por `main/tarefas/migracao.ts` pelo `index.ts`.
 import { randomUUID } from 'node:crypto'
 import { mkdir, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { z } from 'zod'
 import { RUNS_MAX, type AutomationRun, type AutomationRunListItem, type ScheduledTask } from '../../shared/automations'
 import { automationIdSchema, parseRun, taskSchema } from '../../shared/automations-schema'
+import type { LembreteLegado } from '../tarefas/migracao'
 
 export const SCHEDULES_FILE = 'schedules.json'
 export const SCHEDULE_RUNS_DIR = 'schedule-runs'
@@ -36,6 +40,17 @@ export interface SchedulesStore {
   read(): Promise<SchedulesState>
   /** Lê, muda e grava na mesma vez da fila. */
   mutate(fn: (state: SchedulesState) => SchedulesState): Promise<SchedulesState>
+  /**
+   * Migração R35: as tarefas com `reminder` (`nextRunAt` em ms). `null` quando `schedules.json` existe e é inválido
+   * (nada é regravado); ausente vale `[]`.
+   */
+  lembretes(): Promise<LembreteLegado[] | null>
+  /** Migração R35: copia `schedules.json` para `schedules.json.bak-tarefas-<AAAA-MM-DD>` (0600); sem arquivo, nada. */
+  backupMigracao(): Promise<void>
+  /** Migração R35: tira as tarefas destes ids, numa escrita. */
+  removerLembretes(ids: readonly string[]): Promise<void>
+  /** Migração R35: volta `schedules.json` da cópia feita por `backupMigracao` e esquece o cache. */
+  restaurarMigracao(): Promise<void>
 }
 
 const fileSchema = z.object({
@@ -64,10 +79,36 @@ async function atomicWrite(file: string, data: unknown): Promise<void> {
 
 const copy = (state: SchedulesState): SchedulesState => ({ ...state, tasks: state.tasks.map((task) => ({ ...task })), meetingRuns: [...state.meetingRuns] })
 
-export function createFileSchedulesStore({ dir }: { dir: string }): SchedulesStore {
+const codigo = (error: unknown): unknown => (error instanceof Error && 'code' in error ? error.code : undefined)
+
+/** `AAAA-MM-DD` no fuso do Mac. */
+function diaLocal(at: number): string {
+  const data = new Date(at)
+  return `${data.getFullYear()}-${String(data.getMonth() + 1).padStart(2, '0')}-${String(data.getDate()).padStart(2, '0')}`
+}
+
+/** O lembrete como a migração R35 o recebe; `nextRunAt` fora do formato vale `null` (não migra). */
+function lembreteDe(task: ScheduledTask): LembreteLegado | null {
+  const reminder = task.reminder
+  if (!reminder) return null
+  const proxima = task.nextRunAt === null ? Number.NaN : Date.parse(task.nextRunAt)
+  const email = reminder.email ? { accountId: reminder.email.accountId, messageId: reminder.email.messageId, label: reminder.email.label, mailbox: reminder.email.mailbox ?? null } : null
+  return { id: task.id, texto: reminder.text, nextRunAt: Number.isFinite(proxima) ? proxima : null, whatsappChatId: reminder.whatsappChatId, email }
+}
+
+export function createFileSchedulesStore({ dir, now = Date.now }: { dir: string; now?: () => number }): SchedulesStore {
   const file = join(dir, SCHEDULES_FILE)
   const serial = serialQueue()
   let cache: SchedulesState | null = null
+  /** A cópia da migração R35 feita nesta execução (o `restaurarMigracao` volta dela). */
+  let copiaMigracao: string | null = null
+
+  /** Grava os bytes no caminho (temporário + `rename`, 0600). */
+  async function atomicCopy(destino: string, bytes: Buffer): Promise<void> {
+    const temp = `${destino}.tmp-${process.pid}-${randomUUID()}`
+    await writeFile(temp, bytes, { mode: 0o600 })
+    await rename(temp, destino)
+  }
 
   async function load(): Promise<SchedulesState> {
     if (cache) return cache
@@ -92,16 +133,65 @@ export function createFileSchedulesStore({ dir }: { dir: string }): SchedulesSto
     return cache
   }
 
+  function mutate(fn: (state: SchedulesState) => SchedulesState): Promise<SchedulesState> {
+    return serial(async () => {
+      const next = fn(copy(await load()))
+      await mkdir(dir, { recursive: true })
+      const meetingRuns = next.meetingRuns.slice(-MEETING_RUNS_MAX)
+      await atomicWrite(file, { version: SCHEDULES_VERSION, tasks: next.tasks, paused: next.paused, pauseReason: next.pauseReason, limitReleasedOn: next.limitReleasedOn, meetingRuns })
+      cache = copy(next)
+      return copy(next)
+    })
+  }
+
   return {
     read: () => serial(async () => copy(await load())),
-    mutate: (fn) =>
+    mutate,
+
+    lembretes: () =>
       serial(async () => {
-        const next = fn(copy(await load()))
-        await mkdir(dir, { recursive: true })
-        const meetingRuns = next.meetingRuns.slice(-MEETING_RUNS_MAX)
-        await atomicWrite(file, { version: SCHEDULES_VERSION, tasks: next.tasks, paused: next.paused, pauseReason: next.pauseReason, limitReleasedOn: next.limitReleasedOn, meetingRuns })
-        cache = copy(next)
-        return copy(next)
+        // O arquivo cru: o `load` trata o inválido como vazio, e aqui o inválido precisa pular a migração.
+        let raw: string
+        try {
+          raw = await readFile(file, 'utf8')
+        } catch (error) {
+          if (codigo(error) === 'ENOENT') return []
+          throw error
+        }
+        let parsed: unknown
+        try {
+          parsed = JSON.parse(raw)
+        } catch {
+          return null
+        }
+        if (!fileSchema.safeParse(parsed).success) return null
+        return (await load()).tasks.map(lembreteDe).filter((lembrete) => lembrete !== null)
+      }),
+
+    backupMigracao: () =>
+      serial(async () => {
+        let atual: Buffer
+        try {
+          atual = await readFile(file)
+        } catch (error) {
+          if (codigo(error) === 'ENOENT') return
+          throw error
+        }
+        const destino = `${file}.bak-tarefas-${diaLocal(now())}`
+        await atomicCopy(destino, atual)
+        copiaMigracao = destino
+      }),
+
+    removerLembretes: async (ids) => {
+      const tirar = new Set(ids)
+      await mutate((state) => ({ ...state, tasks: state.tasks.filter((task) => !tirar.has(task.id)) }))
+    },
+
+    restaurarMigracao: () =>
+      serial(async () => {
+        if (copiaMigracao === null) throw new Error('sem a cópia da migração')
+        await atomicCopy(file, await readFile(copiaMigracao))
+        cache = null
       }),
   }
 }

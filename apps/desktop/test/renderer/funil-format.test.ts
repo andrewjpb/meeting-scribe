@@ -6,7 +6,7 @@
 // Contrato 116: o contato ligado a um e-mail, telefone ou conversa (R35 a R37), a etapa pré-escolhida e o resumo do efeito
 // do cartão "Oportunidade detectada" (R39).
 import { describe, expect, it } from 'vitest'
-import type { Contato, Empresa, FunilState, ItemLinhaDoTempo, Oportunidade, Sugestao } from '../../src/shared/funil'
+import type { Contato, Empresa, FunilState, ItemLinhaDoTempo, Oportunidade, ProximoPassoDerivado, Sugestao } from '../../src/shared/funil'
 import { etapasPadrao } from '../../src/shared/funil-logic'
 import {
   colunasVisiveis,
@@ -172,6 +172,10 @@ describe('valor, totais e próximo passo', () => {
   it('textoProximoPasso: o texto e a data curta, ou "Sem próximo passo"', () => {
     expect(textoProximoPasso(null)).toEqual({ texto: 'Sem próximo passo', data: null })
     expect(textoProximoPasso({ texto: 'Ligar', data: '2026-11-25' })).toEqual({ texto: 'Ligar', data: '25/11' })
+    // Contrato 124 (CA10): o passo derivado das tarefas (com o `tarefaId`) sai igual.
+    const derivado: ProximoPassoDerivado = { texto: 'Ligar', data: '2026-11-23', tarefaId: 't1' }
+    expect(textoProximoPasso(derivado)).toEqual({ texto: 'Ligar', data: '23/11' })
+    expect(textoPassoDetalhe(derivado, '2026-11-24')).toEqual({ texto: 'Ligar', data: '23/11 · vencido', vencido: true })
     expect(diaCurto('2026-01-09')).toBe('09/01')
   })
 })
