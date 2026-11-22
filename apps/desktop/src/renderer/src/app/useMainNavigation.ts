@@ -1,6 +1,6 @@
 import { useEffect } from 'react'
 import { useNavigate } from 'react-router'
-import { emailPath, funilPath, isSettingsTab, meetingPath, REDES_ROOT_PATH, redesPath, ROUTE_PATHS, settingsPath, type EmailNavigationState, type WhatsAppNavigationState } from '@shared/routes'
+import { emailPath, funilPath, isSettingsTab, meetingPath, REDES_ROOT_PATH, redesPath, ROUTE_PATHS, settingsPath, TAREFAS_ROOT_PATH, tarefasPath, type EmailNavigationState, type WhatsAppNavigationState } from '@shared/routes'
 import { useAutomations } from '../features/agents/automationsStore'
 import { useRecording } from '../features/live/recordingStore'
 import { useStartRecording } from '../features/live/useStartRecording'
@@ -21,8 +21,9 @@ export function useMainNavigation(): void {
         // Bloqueado, o menu não leva a lugar nenhum (o main já não manda; aqui é a segunda trava).
         if (useLock.getState().status.locked) return
         // Contrato 72: o caminho de Redes é um padrão com a conta e a seção; o destino concreto é `/redes`. Contrato 112
-        // (D14): o do Funil também é padrão (`:secao?`); o destino é Oportunidades.
-        void navigate(route === 'redes' ? REDES_ROOT_PATH : route === 'funil' ? funilPath('oportunidades') : ROUTE_PATHS[route])
+        // (D14): o do Funil também é padrão (`:secao?`); o destino é Oportunidades. Contrato 123: o de Tarefas (`:id?`)
+        // também; o destino é a lista.
+        void navigate(route === 'redes' ? REDES_ROOT_PATH : route === 'funil' ? funilPath('oportunidades') : route === 'tarefas' ? TAREFAS_ROOT_PATH : ROUTE_PATHS[route])
       }),
     [navigate],
   )
@@ -79,6 +80,17 @@ export function useMainNavigation(): void {
         if (useLock.getState().status.locked || typeof accountId !== 'string' || typeof publicationId !== 'string') return
         useRedes.getState().openEditor({ accountId, id: publicationId })
         void navigate(redesPath(accountId, 'publicacoes'))
+      }),
+    [navigate],
+  )
+
+  // Contrato 123 (D7, R12): o "Abrir" da notificação de uma tarefa (`null`, a lista). Bloqueado, o main guarda o destino
+  // e manda de novo depois do desbloqueio; aqui não se guarda nada.
+  useEffect(
+    () =>
+      window.__scribeApi.on('scribe:open-tarefa', ({ id }) => {
+        if (useLock.getState().status.locked) return
+        void navigate(tarefasPath(typeof id === 'string' && id ? id : undefined))
       }),
     [navigate],
   )

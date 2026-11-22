@@ -1,6 +1,6 @@
 // Tabela de rotas. Rota nova: id em shared/routes.ts, linha aqui; com `nav`, aparece na barra lateral.
 import type { LucideIcon } from 'lucide-react'
-import { AtSign, Bot, Funnel, Mail, NotebookText, Settings, Smartphone, Sparkles } from 'lucide-react'
+import { AtSign, Bot, Funnel, Mail, NotebookText, Settings, Smartphone, Sparkles, SquareCheck } from 'lucide-react'
 import type { ReactElement } from 'react'
 import { matchPath, Navigate } from 'react-router'
 import { ROUTE_PATHS, ROUTE_REDIRECTS, SETTINGS_ROUTE_PATTERN, type RouteId } from '@shared/routes'
@@ -13,6 +13,7 @@ import { MeetingDetailScreen } from '../features/meetings/MeetingDetailScreen'
 import { MeetingsScreen } from '../features/meetings/MeetingsScreen'
 import { RedesScreen } from '../features/redes/RedesScreen'
 import { SettingsScreen } from '../features/settings/SettingsScreen'
+import { TarefasScreen } from '../features/tarefas/TarefasScreen'
 import { WhatsAppScreen } from '../features/whatsapp/WhatsAppScreen'
 
 export interface AppRoute {
@@ -24,6 +25,9 @@ export interface AppRoute {
 
 export const APP_ROUTES: AppRoute[] = [
   { id: 'reunioes', path: ROUTE_PATHS.reunioes, element: <MeetingsScreen />, nav: { label: 'Reuniões', icon: NotebookText } },
+  // Contrato 123 (R1): "Tarefas" logo depois de "Reuniões", com o número de vencidas e sem nível em pilha (o detalhe de
+  // uma tarefa abre ao lado da lista, na mesma tela). `SquareCheck` é o `CheckSquare` da spec com o nome novo do lucide.
+  { id: 'tarefas', path: ROUTE_PATHS.tarefas, element: <TarefasScreen />, nav: { label: 'Tarefas', icon: SquareCheck } },
   // Contrato 25: "Perguntar" virou "Assistente".
   { id: 'assistente', path: ROUTE_PATHS.assistente, element: <ChatScreen />, nav: { label: 'Assistente', icon: Sparkles } },
   // Contrato 65: "Email" na raiz da barra lateral, com o número de não lidas; o clique abre o nível com as contas e as

@@ -1,8 +1,9 @@
 // Barra lateral em pilha (contrato 65, CA20; contrato 66, CA11, o nível Configurações; contrato 67, CA13, o nível Assistente; contrato 112, CA1, o nível Funil): o nível de cada rota, o "voltar" que vale só para a navegação dele, o
-// deslize entre os níveis, o último email aberto na sessão e o número do item "Email" na raiz.
+// deslize entre os níveis, o último email aberto na sessão e o número do item "Email" na raiz. Contrato 123 (CA1): Tarefas,
+// item da raiz sem nível próprio.
 import { beforeEach, describe, expect, it } from 'vitest'
 import { EMAIL_INBOX_MAILBOX, EMAIL_SENT_MAILBOX, type EmailMessage } from '../../src/shared/email'
-import { emailFolderFromSlug, emailFolderSegment, emailPath, FUNIL_SECTIONS, funilPath, isFunilSection, isRedesSection, REDES_SECTIONS, redesPath, ROUTE_PATHS, ROUTE_REDIRECTS } from '../../src/shared/routes'
+import { emailFolderFromSlug, emailFolderSegment, emailPath, FUNIL_SECTIONS, funilPath, isFunilSection, isRedesSection, REDES_SECTIONS, redesPath, ROUTE_PATHS, ROUTE_REDIRECTS, TAREFAS_ROOT_PATH, tarefasPath } from '../../src/shared/routes'
 import { activeNavId, lastEmailPath, lastRedesPath, levelFor, rememberEmailPath, rememberRedesPath, resetSidebarMemory, sectionOf, SIDEBAR_SECTIONS, SIDEBAR_SLIDE_FALLBACK_MS, SIDEBAR_SLIDE_MS, transitionOf } from '../../src/renderer/src/app/sidebarLevels'
 import { totalUnread } from '../../src/renderer/src/features/email/format'
 
@@ -152,6 +153,24 @@ describe('nível Funil (contrato 112, CA1)', () => {
     expect(FUNIL_SECTIONS).toEqual(['oportunidades', 'contatos', 'empresas'])
     expect(isFunilSection('empresas')).toBe(true)
     expect(isFunilSection('negocios')).toBe(false)
+    expect(ROUTE_REDIRECTS).toEqual([{ from: '/perguntar', to: '/assistente' }])
+  })
+})
+
+describe('Tarefas, item da raiz sem nível (contrato 123, CA1)', () => {
+  it('/tarefas e /tarefas/<id> não têm nível: a raiz fica, com Tarefas marcado', () => {
+    expect(sectionOf('/tarefas')).toBeNull()
+    expect(sectionOf('/tarefas/abc')).toBeNull()
+    expect(levelFor('/tarefas/abc', null, 'k')).toBe('root')
+    expect(activeNavId('/tarefas/abc', 'tarefas')).toBe('tarefas')
+    expect(activeNavId('/tarefas', 'tarefas')).toBe('tarefas')
+  })
+
+  it('tarefasPath: a lista e o id codificado; nenhum redirecionamento novo', () => {
+    expect(ROUTE_PATHS.tarefas).toBe('/tarefas/:id?')
+    expect(TAREFAS_ROOT_PATH).toBe('/tarefas')
+    expect(tarefasPath()).toBe('/tarefas')
+    expect(tarefasPath('t/1 a')).toBe('/tarefas/t%2F1%20a')
     expect(ROUTE_REDIRECTS).toEqual([{ from: '/perguntar', to: '/assistente' }])
   })
 })

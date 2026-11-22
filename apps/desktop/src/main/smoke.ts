@@ -228,8 +228,12 @@ import {
   SMOKE_S3_PUBLIC_BASE_URL,
   SMOKE_S3_REGION,
   SMOKE_S3_SECRET_ACCESS_KEY,
+  SMOKE_TAREFAS,
   type SmokeFixtures,
 } from './smoke-fixtures'
+import { TAREFAS_FILE, type SugestaoTarefa, type Tarefa, type TarefasArquivo, type TarefasView } from '../shared/tarefas'
+import { contarVencidas, deHoje, lembretePadrao, vencida } from '../shared/tarefas-logic'
+import { AVISO_BLOQUEADO_TEXTO } from './tarefas/lembretes'
 
 // Contrato 22: o bloqueio, no fim, soma uns 25 s ao roteiro; o contrato 11 (conta Google e Drive), uns 20 s; o
 // contrato 24 (WhatsApp, com o `venv` e o `pip` de verdade do índice local), uns 40 s; o contrato 23 (Automações), uns
@@ -258,6 +262,8 @@ const SCREENS = [
   'configuracoes-seletor',
   'configuracoes-claude',
   'configuracoes-arquivos',
+  // Contrato 123 (D-1): a tela Tarefas na visão Hoje, logo depois das Configurações.
+  'tarefas-hoje',
 ] as const
 /** Tempo de gravação até a fita encher a largura da janela (uma coluna a cada 50 ms). */
 const TAPE_FILL_MS = 12_500
@@ -3316,8 +3322,9 @@ async function probeOrigin(contents: WebContents): Promise<{ origin: string; opf
  */
 async function keyboardNavigation(contents: WebContents): Promise<Check> {
   await evaluate(contents, "document.activeElement instanceof HTMLElement && document.activeElement.blur(), true")
-  // Contrato 65: o item "Email" é mais uma parada antes de Configurações.
-  for (let i = 0; i < 8; i++) {
+  // Contrato 65: o item "Email" é mais uma parada antes de Configurações. Contrato 123: "Tarefas" também (a folga de 2
+  // continua).
+  for (let i = 0; i < 9; i++) {
     contents.sendInputEvent({ type: 'keyDown', keyCode: 'Tab' })
     contents.sendInputEvent({ type: 'keyUp', keyCode: 'Tab' })
     await wait(60)
@@ -5631,7 +5638,45 @@ async function lockChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => void
     ok: darkLocked && darkLayer.blur === 'blur(24px)' && darkLayer.inert && darkUnlocked,
     detail: `bloqueado=${darkLocked}, backdrop-filter=${darkLayer.blur}, véu ${darkLayer.veil}, inert=${darkLayer.inert}; desbloqueado=${darkUnlocked}`,
   }
+  checks['tarefasBloqueio'] = await tarefasBloqueioCheck(ctx, dark)
   dark.destroy()
+}
+
+/**
+ * Contrato 123 (R12, CA16 da spec), na janela de `lockChecks` (a última aberta, a que o "Abrir" traz de volta): o
+ * lembrete de t-sem-prazo vence logo depois do bloqueio; `scribe:tarefas-get` é recusado; o tick avisa só "Você tem uma
+ * tarefa com lembrete"; o "Abrir" fica guardado no main e, desbloqueado, a tela abre `/tarefas/t-sem-prazo` com o
+ * detalhe. Termina com t-sem-prazo sem lembrete, como na fixture.
+ */
+async function tarefasBloqueioCheck(ctx: SmokeContext, win: BrowserWindow): Promise<Check> {
+  const contents = win.webContents
+  const id = SMOKE_TAREFAS.semPrazo
+  const salvar = (lembrete: number | 'nenhum'): Promise<{ ok: boolean }> => evaluate(contents, `window.__scribeApi.invoke('scribe:tarefas-salvar', ${JSON.stringify({ id, lembrete })})`)
+  // O lembrete vence 1,5 s depois de gravado, já com o app bloqueado: o tick de 30 s não pode avisar antes do bloqueio.
+  const vence = Date.now() + 1500
+  const gravou = (await salvar(vence)).ok
+  const avisosAntes = ctx.fixtures.tarefas.notifications.length
+  pressKeys(contents, 'L', ['meta', 'shift'])
+  const bloqueou = await waitFor(contents, LOCK_LAYER)
+  const recusou = await evaluate<boolean>(contents, `window.__scribeApi.invoke('scribe:tarefas-get').then(() => false, (error) => String(error?.message ?? error).endsWith('Error: ${LOCKED_ERROR}'))`)
+  await wait(Math.max(0, vence - Date.now() + 100))
+  await ctx.automations.tick()
+  let aviso = ctx.fixtures.tarefas.notifications.slice(avisosAntes).find((item) => item.tarefaId === id)
+  for (let attempt = 0; attempt < 40 && !aviso; attempt++) {
+    await wait(50)
+    aviso = ctx.fixtures.tarefas.notifications.slice(avisosAntes).find((item) => item.tarefaId === id)
+  }
+  const generico = aviso?.body === AVISO_BLOQUEADO_TEXTO
+  aviso?.open()
+  await wait(200)
+  const seguiuBloqueado = await evaluate<boolean>(contents, `Boolean(${LOCK_LAYER})`)
+  await typeLockPassword(contents, LOCK_PASSWORD)
+  const abriu = await waitFor(contents, `!${LOCK_LAYER} && ${routeIs('tarefas')} && document.querySelector('[data-tarefa-detalhe="${id}"]')`, 8000)
+  const devolvida = (await salvar('nenhum')).ok
+  return {
+    ok: gravou && bloqueou && recusou && generico && seguiuBloqueado && abriu && devolvida,
+    detail: JSON.stringify({ lembreteGravado: gravou, bloqueou, getRecusado: recusou, avisoGenerico: generico, seguiuBloqueado, abriuATarefaDepoisDoDesbloqueio: abriu, lembreteDevolvido: devolvida }),
+  }
 }
 
 // Contrato 24: o QR fixo e a conta do serviço falso (`services/whatsapp-bridge/backend_fake.py`).
@@ -8638,8 +8683,8 @@ const EMAIL_INBOX_LINK = '[data-email-folder="inbox"]'
 const EMAIL_SENT_LINK = '[data-email-folder="sent"]'
 const EMAIL_ROWS = `document.querySelectorAll('[data-email-list] [data-email-message]')`
 const EMAIL_UNREAD = `(document.querySelector('[data-email-unread-count]')?.firstChild?.textContent ?? '')`
-/** Contrato 65: o número do item "Email" na raiz da barra lateral. */
-const NAV_BADGE = `(document.querySelector('[data-nav-badge]')?.firstChild?.textContent ?? '')`
+/** Contrato 65: o número do item "Email" na raiz da barra lateral (contrato 123: só o do Email; Tarefas também tem número). */
+const NAV_BADGE = `(document.querySelector('[data-nav="email"] [data-nav-badge]')?.firstChild?.textContent ?? '')`
 const SIDEBAR_LEVELS = `document.querySelectorAll('[data-sidebar-level]')`
 
 /**
@@ -9390,7 +9435,7 @@ async function emailChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => voi
 
   // Contrato 65 (CA4): sem conta, "Email" sem número leva à nota da tela, e o nível só com o cabeçalho e a frase.
   await showRoot(contents)
-  const noBadge = await evaluate<boolean>(contents, `Boolean(document.querySelector('${SIDEBAR_ROOT} [data-nav="email"]')) && !document.querySelector('[data-nav-badge]')`)
+  const noBadge = await evaluate<boolean>(contents, `Boolean(document.querySelector('${SIDEBAR_ROOT} [data-nav="email"]')) && !document.querySelector('[data-nav="email"] [data-nav-badge]')`)
   await clickNav(contents, 'email')
   const emptyLevel = await waitFor(
     contents,
@@ -9435,7 +9480,7 @@ async function emailChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => voi
   await showRoot(contents)
   const navOrder = await evaluate<string[]>(contents, `[...document.querySelectorAll('aside nav[aria-label="Navegação principal"] [data-nav]')].map((el) => el.dataset.nav)`)
   const rootBadge = await waitFor(contents, `${NAV_BADGE} === '2'`, 8000)
-  const badgeLabel = await evaluate<string>(contents, `document.querySelector('[data-nav-badge]')?.textContent ?? ''`)
+  const badgeLabel = await evaluate<string>(contents, `document.querySelector('[data-nav="email"] [data-nav-badge]')?.textContent ?? ''`)
   // Contrato 79 (barra densa): itens de 32 px com 2 entre eles e o ícone a 8 do texto, 16 px entre a marca e a lista;
   // no rodapé (126 px sem o aviso de versão), "Bloquear" e as permissões em linhas de 28, estas em 12 px, e o rótulo
   // "Permissões" em 11 px, caixa normal, sem espaçamento.
@@ -9459,9 +9504,9 @@ async function emailChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => voi
       }
     })()`,
   )
-  // Contrato 112: 7 itens, com o "Funil".
+  // Contrato 112: 7 itens, com o "Funil". Contrato 123: 8, com "Tarefas".
   const denseOk =
-    dense.items.length === 7 &&
+    dense.items.length === 8 &&
     dense.items.every((height) => height === 32) &&
     dense.gaps.every((gap) => gap === 2) &&
     dense.iconGap.every((gap) => gap === 8) &&
@@ -9474,7 +9519,7 @@ async function emailChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => voi
     dense.label.tracking === 'normal' &&
     dense.footer === 126
   sidebarChecks['rootItems'] = {
-    ok: JSON.stringify(navOrder) === JSON.stringify(['reunioes', 'assistente', 'email', 'funil', 'automacoes', 'whatsapp', 'configuracoes']) && rootBadge && badgeLabel === '2 não lidas' && denseOk,
+    ok: JSON.stringify(navOrder) === JSON.stringify(['reunioes', 'tarefas', 'assistente', 'email', 'funil', 'automacoes', 'whatsapp', 'configuracoes']) && rootBadge && badgeLabel === '2 não lidas' && denseOk,
     detail: `itens ${JSON.stringify(navOrder)}; número do Email "${badgeLabel}"; alturas ${JSON.stringify(dense.items)}px, entre eles ${JSON.stringify([...new Set(dense.gaps)])}, ícone a ${JSON.stringify([...new Set(dense.iconGap)])}px do texto, ${dense.above}px acima da lista; rodapé ${dense.footer}px, Bloquear ${dense.lock}px, permissões ${JSON.stringify(dense.perms)}, rótulo ${JSON.stringify(dense.label)}`,
   }
   await clickNav(contents, 'email')
@@ -9503,7 +9548,7 @@ async function emailChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => voi
   checks['list'] = {
     ok:
       sidebar &&
-      JSON.stringify(navOrder) === JSON.stringify(['reunioes', 'assistente', 'email', 'funil', 'automacoes', 'whatsapp', 'configuracoes']) &&
+      JSON.stringify(navOrder) === JSON.stringify(['reunioes', 'tarefas', 'assistente', 'email', 'funil', 'automacoes', 'whatsapp', 'configuracoes']) &&
       listed &&
       previews &&
       rows.length === 4 &&
@@ -9785,7 +9830,7 @@ async function emailChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => voi
   const forwardOk = forwardOpen && forwarded?.subject === 'Enc: Fechamento de novembro: notas para conferir' && forwarded.attachments.map((item) => `${item.name}:${item.size}`).join() === `${SMOKE_EMAIL_ATTACHMENT.name}:${Buffer.byteLength(SMOKE_EMAIL_ATTACHMENT.content)}`
   // Contrato 65 (CA3): a última não lida foi aberta acima; o número do Email some da raiz.
   await showRoot(contents)
-  const badgeGone = await waitFor(contents, `document.querySelector('${SIDEBAR_ROOT} [data-nav="email"]') && !document.querySelector('[data-nav-badge]')`)
+  const badgeGone = await waitFor(contents, `document.querySelector('${SIDEBAR_ROOT} [data-nav="email"]') && !document.querySelector('[data-nav="email"] [data-nav-badge]')`)
   sidebarChecks['badge'] = {
     ok: beforeBack.unread === '1' && afterBack.badge === beforeBack.unread && badgeGone,
     detail: `Caixa de Entrada com ${beforeBack.unread} não lida e "Email" na raiz com ${afterBack.badge}; sem não lidas, o número some=${badgeGone}`,
@@ -12027,6 +12072,401 @@ async function redesAssistantChecks(ctx: SmokeContext, watch: (win: BrowserWindo
     nativeTheme.themeSource = 'system'
     win.destroy()
     console.log(`redes: assistente em ${((Date.now() - startedAt) / 1000).toFixed(1)} s`)
+  }
+}
+
+/** Contrato 123: a reunião própria das Sugestões (fora de oportunidade), com duas tarefas "Você" no resumo. */
+const SUGESTOES_REUNIAO = 'smoke-tarefas-sugestoes'
+const SUGESTOES_TAREFAS = [
+  { task: 'Revisar o orçamento da viagem', owner: 'Você', due: null },
+  { task: 'Enviar o cronograma do piloto', owner: 'Você', due: 'quinta' },
+] as const
+
+/**
+ * Contrato 123 (CA10 parte): no começo do bloco das Tarefas, a reunião de uma hora atrás no `meetings.json` (sem perder as
+ * pastas) e o resumo dela com as duas tarefas "Você" (a segunda com o prazo daqui a 3 dias), para a aba Sugestões ter
+ * sempre uma para ignorar e outra para adicionar. Nenhuma oportunidade cita a reunião.
+ */
+function seedSugestoesReuniao(userDataDir: string): void {
+  const meetingsFile = join(userDataDir, MEETINGS_FILE)
+  const file = JSON.parse(readFileSync(meetingsFile, 'utf8')) as { version: number; meetings: Meeting[]; folders?: unknown[] }
+  const comecou = new Date(Date.now() - 3_600_000)
+  const reuniao: Meeting = { id: SUGESTOES_REUNIAO, title: 'Acompanhamento do piloto', startedAt: comecou.toISOString(), durationMs: 30 * 60_000, sources: { mic: true, system: true }, audioPath: null, transcriptPath: null }
+  writeFileAtomicSync(meetingsFile, `${JSON.stringify({ ...file, meetings: [...file.meetings.filter((item) => item.id !== SUGESTOES_REUNIAO), reuniao] }, null, 2)}\n`)
+  const daqui3 = new Date(Date.now() + 3 * 86_400_000)
+  const prazo = `${daqui3.getFullYear()}-${String(daqui3.getMonth() + 1).padStart(2, '0')}-${String(daqui3.getDate()).padStart(2, '0')}`
+  const resumo: MeetingSummary = {
+    version: 1,
+    meetingId: SUGESTOES_REUNIAO,
+    createdAt: new Date().toISOString(),
+    model: 'claude-cli:haiku',
+    overview: 'O piloto segue no prazo; faltam o orçamento da viagem e o cronograma.',
+    decisions: [],
+    tasks: SUGESTOES_TAREFAS.map((tarefa, index) => ({ task: tarefa.task, owner: tarefa.owner, due: tarefa.due, dueIso: index === 1 ? prazo : null })),
+  }
+  writeFileAtomicSync(join(userDataDir, 'meetings', `${SUGESTOES_REUNIAO}${SUMMARY_SUFFIX}`), `${JSON.stringify(resumo, null, 2)}\n`)
+}
+
+/** `AAAA-MM-DD` somado de `n` dias (em UTC, sem a troca de horário). */
+const somarDiasSmoke = (dia: string, n: number): string => new Date(Date.parse(`${dia}T00:00:00Z`) + n * 86_400_000).toISOString().slice(0, 10)
+
+/**
+ * Contrato 123 (CA2 a CA6, CA10 e CA16 da spec), numa janela que troca de tema no lugar, com o `tarefas.json` semeado
+ * (`smoke-fixtures.ts`, D17) e uma reunião com duas tarefas "Você" no resumo (`seedSugestoesReuniao`, apagada no fim): o
+ * item Tarefas logo depois de Reuniões com o número de vencidas, as visões Hoje, Próximas, Todas e Feitas, a caixa de feito, "Nova tarefa" e ⌘⇧T, o detalhe ao lado (prazo, lembrete, responsável e a confirmação
+ * do Apagar), o "Agrupar por" Oportunidade, as Sugestões, Hoje vazia e o lembrete disparado. Tudo medido por id e
+ * contado da view (`scribe:tarefas-get`), por "contém, nesta ordem relativa": depois da mescla com o 124 as tarefas
+ * migradas do funil entram nas mesmas visões. Só muda tarefas sem oportunidade (as migradas e `t-portal`/`t-loja` não
+ * geram eventos no funil); nenhum título no relatório. Prints `tarefas-nova`, `tarefas-detalhe`,
+ * `tarefas-todas-agrupadas` e `tarefas-sugestoes` nos dois temas e `tarefas-vazia-light`.
+ */
+async function tarefasTelaChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => void, checks: Record<string, Check>, shots: Screenshot[]): Promise<void> {
+  const startedAt = Date.now()
+  const themeBefore = readSettings(ctx.userDataDir).theme ?? 'system'
+  seedSugestoesReuniao(ctx.userDataDir)
+  nativeTheme.themeSource = 'light'
+  const win = ctx.openWindow({})
+  watch(win)
+  await loadAndWait(win)
+  const contents = win.webContents
+  if (themeBefore !== 'system') await evaluate(contents, "window.__scribeApi.invoke('scribe:settings-update', { theme: 'system' }).then(() => true)")
+  const api = <T>(channel: string, request?: unknown): Promise<T> => evaluate<T>(contents, `window.__scribeApi.invoke(${JSON.stringify(channel)}${request === undefined ? '' : `, ${JSON.stringify(request)}`})`)
+  const both = async (name: string): Promise<void> => {
+    await evaluate(contents, `document.activeElement instanceof HTMLElement && document.activeElement.blur(), true`)
+    await settle(contents)
+    shots.push(await capture(win, ctx.outDir, `${name}-light`))
+    nativeTheme.themeSource = 'dark'
+    await waitFor(contents, "document.documentElement.dataset.theme === 'dark'")
+    await settle(contents)
+    shots.push(await capture(win, ctx.outDir, `${name}-dark`))
+    nativeTheme.themeSource = 'light'
+    await waitFor(contents, "document.documentElement.dataset.theme === 'light'")
+  }
+  const T = SMOKE_TAREFAS
+  const file = join(ctx.userDataDir, TAREFAS_FILE)
+  const saved = (): TarefasArquivo => JSON.parse(readFileSync(file, 'utf8')) as TarefasArquivo
+  const savedTarefa = (id: string): Tarefa | undefined => saved().tarefas.find((tarefa) => tarefa.id === id)
+  /** Espera o `tarefas.json` com a tarefa como pedido (a gravação passa pelo main). */
+  const savedIs = async (id: string, pronto: (tarefa: Tarefa | undefined) => boolean): Promise<boolean> => {
+    for (let attempt = 0; attempt < 100; attempt++) {
+      if (existsSync(file) && pronto(savedTarefa(id))) return true
+      await wait(50)
+    }
+    return false
+  }
+  const lerView = (): Promise<TarefasView> => api<TarefasView>('scribe:tarefas-get')
+  const LARGA = '[data-tarefas-lista="larga"]'
+  const linhas = (scope = LARGA): Promise<string[]> => evaluate<string[]>(contents, `[...document.querySelectorAll('${scope} [data-tarefa]')].map((el) => el.dataset.tarefa)`)
+  /** `a` antes de `b` na lista (os dois presentes). */
+  const antes = (lista: readonly string[], a: string, b: string): boolean => lista.includes(a) && lista.includes(b) && lista.indexOf(a) < lista.indexOf(b)
+  const visao = async (nome: string): Promise<boolean> => {
+    await clickSelector(contents, `[data-tarefas-visao="${nome}"]`)
+    return waitFor(contents, `document.querySelector('[data-tarefas-screen="${nome}"]') && document.querySelector('[data-tarefas-visao="${nome}"]')?.getAttribute('aria-pressed') === 'true'`)
+  }
+  const tela = `${routeIs('tarefas')} && document.querySelector('[data-tarefas-screen]')`
+  const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone
+  const hora = (): string => readSettings(ctx.userDataDir).tarefas?.horaLembrete ?? DEFAULT_SETTINGS.tarefas.horaLembrete
+
+  try {
+    // tarefasNav (R1, CA2): na raiz, "Tarefas" logo depois de "Reuniões" e antes do "Assistente"; o clique abre a lista
+    // na raiz da barra (sem nível em pilha) com o item marcado.
+    await clickNav(contents, 'reunioes')
+    await waitFor(contents, routeIs('reunioes'))
+    await showRoot(contents)
+    const order = await evaluate<string[]>(contents, `[...document.querySelectorAll('${SIDEBAR_ROOT} [data-nav]')].map((el) => el.dataset.nav)`)
+    const at = order.indexOf('tarefas')
+    await clickNav(contents, 'tarefas')
+    const abriu = await waitFor(contents, `${tela} && document.querySelector('${LARGA} [data-tarefa]')`, 8000)
+    await wait(250)
+    const nav = await evaluate<{ raiz: boolean; niveis: number; marcado: boolean }>(
+      contents,
+      `({ raiz: Boolean(document.querySelector('${SIDEBAR_ROOT}')), niveis: document.querySelectorAll('[data-sidebar-level]:not([data-sidebar-level="root"])').length, marcado: document.querySelector('${SIDEBAR_ROOT} [data-nav="tarefas"]')?.getAttribute('aria-current') === 'page' })`,
+    )
+    checks['tarefasNav'] = {
+      ok: at > 0 && order[at - 1] === 'reunioes' && order[at + 1] === 'assistente' && abriu && nav.raiz && nav.niveis === 0 && nav.marcado,
+      detail: JSON.stringify({ posicao: at, depoisDeReunioes: order[at - 1] === 'reunioes', antesDoAssistente: order[at + 1] === 'assistente', abriu, ...nav }),
+    }
+
+    // tarefasBadge (R1, CA2): o número do item é a contagem de vencidas da view (uma, pelo menos, com a fixture).
+    let view = await lerView()
+    const vencidasView = contarVencidas(view.tarefas, view.hoje)
+    const badgeOk = await waitFor(contents, `(document.querySelector('${SIDEBAR_ROOT} [data-nav="tarefas"] [data-nav-badge]')?.firstChild?.textContent ?? '') === '${vencidasView}'`, 8000)
+    checks['tarefasBadge'] = { ok: vencidasView >= 1 && badgeOk, detail: JSON.stringify({ vencidas: vencidasView, numeroIgual: badgeOk }) }
+
+    // tarefasHoje (R2, R3, CA3): t-vencida antes de t-hoje e toda vencida antes de toda de hoje; a vencida em --rec com
+    // "há 2 d"; linhas de 44 px; as de outro dia fora.
+    const hojeIds = await linhas()
+    const vencidasIds = view.tarefas.filter((tarefa) => vencida(tarefa, view.hoje)).map((tarefa) => tarefa.id)
+    const deHojeIds = view.tarefas.filter((tarefa) => deHoje(tarefa, view.hoje)).map((tarefa) => tarefa.id)
+    const posicoes = (ids: string[]): number[] => ids.map((id) => hojeIds.indexOf(id))
+    const marca = await evaluate<{ vencida: boolean; atraso: boolean; rec: boolean; alturas: number[] }>(
+      contents,
+      `(() => {
+        const prazo = document.querySelector('${LARGA} [data-tarefa="${T.vencida}"] [data-tarefa-prazo]')
+        return {
+          vencida: prazo?.hasAttribute('data-tarefa-vencida') === true,
+          atraso: (prazo?.textContent ?? '').includes('há 2 d'),
+          rec: prazo?.classList.contains('text-rec') === true,
+          alturas: [...document.querySelectorAll('${LARGA} [data-tarefa]')].map((el) => Math.round(el.getBoundingClientRect().height)),
+        }
+      })()`,
+    )
+    checks['tarefasHoje'] = {
+      ok:
+        antes(hojeIds, T.vencida, T.hoje) &&
+        posicoes(vencidasIds).every((pos) => pos >= 0) &&
+        posicoes(deHojeIds).every((pos) => pos >= 0) &&
+        Math.max(...posicoes(vencidasIds)) < Math.min(...posicoes(deHojeIds)) &&
+        hojeIds.length === vencidasIds.length + deHojeIds.length &&
+        marca.vencida &&
+        marca.atraso &&
+        marca.rec &&
+        marca.alturas.length > 0 &&
+        marca.alturas.every((altura) => altura === 44) &&
+        !hojeIds.includes(T.portal) &&
+        !hojeIds.includes(T.semana),
+      detail: JSON.stringify({ linhas: hojeIds.length, vencidas: vencidasIds.length, deHoje: deHojeIds.length, vencidaAntes: antes(hojeIds, T.vencida, T.hoje), marcaVencida: marca.vencida, atraso: marca.atraso, rec: marca.rec, alturas44: marca.alturas.every((altura) => altura === 44), portalFora: !hojeIds.includes(T.portal), semanaFora: !hojeIds.includes(T.semana) }),
+    }
+
+    // tarefasVisoes (R2, CA3): Próximas com t-semana, t-loja e t-portal nesta ordem; Todas com t-sem-prazo depois de toda
+    // tarefa com prazo; Feitas com t-feita.
+    const proximasOk = await visao('proximas')
+    const proximas = await linhas()
+    const todasOk = await visao('todas')
+    const todas = await linhas()
+    const comPrazo = todas.filter((id) => view.tarefas.find((tarefa) => tarefa.id === id)?.prazo)
+    const semPrazoPos = todas.indexOf(T.semPrazo)
+    const feitasOk = await visao('feitas')
+    const feitas = await linhas()
+    checks['tarefasVisoes'] = {
+      ok:
+        proximasOk &&
+        antes(proximas, T.semana, T.loja) &&
+        antes(proximas, T.loja, T.portal) &&
+        todasOk &&
+        semPrazoPos >= 0 &&
+        comPrazo.length > 0 &&
+        comPrazo.every((id) => todas.indexOf(id) < semPrazoPos) &&
+        feitasOk &&
+        feitas.includes(T.feita),
+      detail: JSON.stringify({ proximas: proximas.length, ordemProximas: antes(proximas, T.semana, T.loja) && antes(proximas, T.loja, T.portal), todas: todas.length, semPrazoPorUltimo: semPrazoPos >= 0 && comPrazo.every((id) => todas.indexOf(id) < semPrazoPos), feitas: feitas.length, feitaNaLista: feitas.includes(T.feita) }),
+    }
+
+    // tarefasFeito (R3, CA3): a caixa de t-hoje marca feita (some de Hoje, aparece em Feitas, `tarefas.json` com `feita`);
+    // de novo, em Feitas, reabre.
+    await visao('hoje')
+    await waitFor(contents, `document.querySelector('${LARGA} [data-tarefa="${T.hoje}"]')`)
+    await clickSelector(contents, `${LARGA} [data-tarefa="${T.hoje}"] [data-tarefa-feito]`)
+    const sumiu = await waitFor(contents, `!document.querySelector('${LARGA} [data-tarefa="${T.hoje}"]')`, 8000)
+    const gravouFeita = await savedIs(T.hoje, (tarefa) => tarefa?.status === 'feita' && tarefa.feitaEm !== null)
+    await visao('feitas')
+    const emFeitas = await waitFor(contents, `document.querySelector('${LARGA} [data-tarefa="${T.hoje}"][data-tarefa-status="feita"]')`, 8000)
+    await clickSelector(contents, `${LARGA} [data-tarefa="${T.hoje}"] [data-tarefa-feito]`)
+    const reabriu = await savedIs(T.hoje, (tarefa) => tarefa?.status === 'aberta' && tarefa.feitaEm === null)
+    await visao('hoje')
+    const deVolta = await waitFor(contents, `document.querySelector('${LARGA} [data-tarefa="${T.hoje}"]')`, 8000)
+    checks['tarefasFeito'] = { ok: sumiu && gravouFeita && emFeitas && reabriu && deVolta, detail: JSON.stringify({ sumiuDeHoje: sumiu, gravouFeita, emFeitas, reabriu, deVoltaEmHoje: deVolta }) }
+
+    // tarefasNova (R6, CA4): o formulário no topo com o foco no título; Enter vazio não cria; título e prazo (amanhã) ->
+    // print -> Enter cria a manual com o prazo; ⌘⇧T a partir de Reuniões abre Tarefas com o foco no título.
+    const amanha = somarDiasSmoke(view.hoje, 1)
+    await clickSelector(contents, '[data-action="tarefa-nova"]')
+    const aberto = await waitFor(contents, `document.querySelector('[data-tarefas-nova]') && document.activeElement?.matches('[data-tarefas-nova-titulo]')`, 5000)
+    const noTopo = await evaluate<boolean>(
+      contents,
+      `(() => { const nova = document.querySelector('[data-tarefas-nova]'), primeira = document.querySelector('${LARGA} [data-tarefa]'); return Boolean(nova && primeira && (nova.compareDocumentPosition(primeira) & Node.DOCUMENT_POSITION_FOLLOWING)) })()`,
+    )
+    const totalAntes = (await lerView()).tarefas.length
+    await pressEnterIn(contents, '[data-tarefas-nova-titulo]')
+    await wait(400)
+    const vazioNaoCriou = (await lerView()).tarefas.length === totalAntes && (await evaluate<boolean>(contents, `document.querySelector('[data-action="tarefa-nova-criar"]')?.disabled === true`))
+    await setValue(contents, '[data-tarefas-nova-titulo]', 'Ligar para o contador')
+    await setValue(contents, '[data-tarefas-nova-prazo]', amanha)
+    await waitFor(contents, `document.querySelector('[data-action="tarefa-nova-criar"]')?.disabled === false`)
+    await both('tarefas-nova')
+    const idsAntes = new Set(saved().tarefas.map((tarefa) => tarefa.id))
+    await pressEnterIn(contents, '[data-tarefas-nova-titulo]')
+    let criada: Tarefa | undefined
+    for (let attempt = 0; attempt < 100 && !criada; attempt++) {
+      criada = saved().tarefas.find((tarefa) => !idsAntes.has(tarefa.id))
+      if (!criada) await wait(50)
+    }
+    const fechou = await waitFor(contents, `!document.querySelector('[data-tarefas-nova]')`)
+    await clickNav(contents, 'reunioes')
+    await waitFor(contents, routeIs('reunioes'))
+    pressKeys(contents, 'T', ['meta', 'shift'])
+    const atalho = await waitFor(contents, `${tela} && document.querySelector('[data-tarefas-nova]') && document.activeElement?.matches('[data-tarefas-nova-titulo]')`, 8000)
+    await evaluate(contents, `document.querySelector('[data-tarefas-nova-titulo]')?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })) ?? false`)
+    const escFechou = await waitFor(contents, `!document.querySelector('[data-tarefas-nova]')`)
+    checks['tarefasNova'] = {
+      ok: aberto && noTopo && vazioNaoCriou && criada?.origem.tipo === 'manual' && criada.prazo === amanha && criada.status === 'aberta' && criada.vinculos.oportunidadeId === null && fechou && atalho && escFechou,
+      detail: JSON.stringify({ abertoComFoco: aberto, noTopo, vazioNaoCriou, criada: Boolean(criada), origemManual: criada?.origem.tipo === 'manual', prazoAmanha: criada?.prazo === amanha, fechou, atalhoComFoco: atalho, escFechou }),
+    }
+
+    // tarefasDetalhe (R5, CA5): t-semana ao lado da lista; o prazo leva o lembrete padrão junto; "Em…" fica quando o prazo
+    // muda; Responsável → Contato… Paulo Nunes; "Apagar" pede a confirmação na linha e "Cancelar" mantém. Print com o
+    // detalhe aberto; depois, prazo, lembrete e responsável de volta.
+    await visao('todas')
+    await clickSelector(contents, `${LARGA} [data-tarefa="${T.semana}"]`)
+    const DETALHE = `[data-tarefa-detalhe="${T.semana}"]`
+    const detalheAbriu = await waitFor(contents, `${routeIs('tarefas')} && document.querySelector('${DETALHE}') && document.querySelector('[data-tarefas-lista="estreita"] [data-tarefa="${T.semana}"][aria-current="true"]')`, 8000)
+    const mais4 = somarDiasSmoke(view.hoje, 4)
+    await setValue(contents, `${DETALHE} [data-tarefa-campo="prazo"]`, mais4)
+    await leaveField(contents, `${DETALHE} [data-tarefa-campo="prazo"]`)
+    const padraoAcompanhou = await savedIs(T.semana, (tarefa) => tarefa?.prazo === mais4 && tarefa.lembreteEm === lembretePadrao(mais4, hora(), timeZone))
+    await setValue(contents, `${DETALHE} [data-tarefa-campo="lembrete"]`, 'em', 'change')
+    await waitFor(contents, `document.querySelector('${DETALHE} [data-tarefa-campo="lembrete-dia"]')`)
+    await setValue(contents, `${DETALHE} [data-tarefa-campo="lembrete-dia"]`, amanha)
+    await leaveField(contents, `${DETALHE} [data-tarefa-campo="lembrete-dia"]`)
+    // O dia grava com a hora que já estava no campo; a view nova chega antes da hora mudar (senão ela volta o campo).
+    await savedIs(T.semana, (tarefa) => tarefa?.lembreteEm === new Date(`${amanha}T${hora()}:00`).getTime())
+    await waitFor(contents, `document.querySelector('${DETALHE} [data-tarefa-lembrete-texto]')?.textContent.startsWith('amanhã')`)
+    await setValue(contents, `${DETALHE} [data-tarefa-campo="lembrete-hora"]`, '10:30')
+    await leaveField(contents, `${DETALHE} [data-tarefa-campo="lembrete-hora"]`)
+    const emAmanha = new Date(`${amanha}T10:30:00`).getTime()
+    const emGravou = await savedIs(T.semana, (tarefa) => tarefa?.lembreteEm === emAmanha)
+    const mais5 = somarDiasSmoke(view.hoje, 5)
+    await setValue(contents, `${DETALHE} [data-tarefa-campo="prazo"]`, mais5)
+    await leaveField(contents, `${DETALHE} [data-tarefa-campo="prazo"]`)
+    const emFicou = await savedIs(T.semana, (tarefa) => tarefa?.prazo === mais5 && tarefa.lembreteEm === emAmanha)
+    await setValue(contents, `${DETALHE} [data-tarefa-campo="responsavel"]`, 'contato', 'change')
+    await waitFor(contents, `document.querySelector('${DETALHE} [data-funil-picker="tarefa-responsavel"] input')`)
+    await setValue(contents, `${DETALHE} [data-funil-picker="tarefa-responsavel"] input`, 'Paulo')
+    await waitFor(contents, `document.querySelector('${DETALHE} [data-funil-picker-option="${SMOKE_FUNIL.contatos.paulo}"]')`)
+    await clickSelector(contents, `${DETALHE} [data-funil-picker-option="${SMOKE_FUNIL.contatos.paulo}"]`)
+    const responsavelGravou = await savedIs(T.semana, (tarefa) => tarefa?.responsavel.tipo === 'contato' && tarefa.responsavel.contatoId === SMOKE_FUNIL.contatos.paulo)
+    await clickSelector(contents, `${DETALHE} [data-action="tarefa-apagar"]`)
+    const confirmacao = await waitFor(contents, `document.querySelector('${DETALHE} [data-action="tarefa-apagar-confirmar"]') && document.querySelector('${DETALHE} [data-action="tarefa-apagar-cancelar"]')`)
+    await clickSelector(contents, `${DETALHE} [data-action="tarefa-apagar-cancelar"]`)
+    const cancelou = (await waitFor(contents, `!document.querySelector('${DETALHE} [data-action="tarefa-apagar-confirmar"]') && document.querySelector('${DETALHE} [data-action="tarefa-apagar"]')`)) && savedTarefa(T.semana) !== undefined
+    const historico = await evaluate<number>(contents, `document.querySelectorAll('${DETALHE} [data-tarefa-historico] li').length`)
+    await both('tarefas-detalhe')
+    const mais2 = somarDiasSmoke(view.hoje, 2)
+    await setValue(contents, `${DETALHE} [data-tarefa-campo="prazo"]`, mais2)
+    await leaveField(contents, `${DETALHE} [data-tarefa-campo="prazo"]`)
+    await savedIs(T.semana, (tarefa) => tarefa?.prazo === mais2)
+    await setValue(contents, `${DETALHE} [data-tarefa-campo="lembrete"]`, 'padrao', 'change')
+    await setValue(contents, `${DETALHE} [data-tarefa-campo="responsavel"]`, 'eu', 'change')
+    const devolvida = await savedIs(T.semana, (tarefa) => tarefa?.prazo === mais2 && tarefa.lembreteEm === lembretePadrao(mais2, hora(), timeZone) && tarefa.responsavel.tipo === 'eu')
+    checks['tarefasDetalhe'] = {
+      ok: detalheAbriu && padraoAcompanhou && emGravou && emFicou && responsavelGravou && confirmacao && cancelou && historico >= 3 && devolvida,
+      detail: JSON.stringify({ detalheAbriu, padraoAcompanhouOPrazo: padraoAcompanhou, emGravou, emFicouComOPrazoNovo: emFicou, responsavelContato: responsavelGravou, confirmacaoNaLinha: confirmacao, cancelarManteve: cancelou, eventosNoHistorico: historico, devolvida }),
+    }
+
+    // tarefasAgrupar (R4, só leitura): Todas por Oportunidade: o grupo de op-portal com t-portal, o de op-loja com t-loja e
+    // "Sem oportunidade" (por último) com t-semana; cabeçalhos de 28 px com a contagem das linhas do grupo.
+    await clickNav(contents, 'tarefas')
+    await waitFor(contents, `${tela} && !document.querySelector('[data-tarefa-detalhe]')`, 8000)
+    await visao('todas')
+    await setValue(contents, '[data-tarefas-agrupar]', 'oportunidade', 'change')
+    const agrupou = await waitFor(contents, `document.querySelector('[data-tarefas-grupo="op-portal"]') && document.querySelector('[data-tarefas-grupo="sem-oportunidade"]')`, 8000)
+    const grupos = await evaluate<{ chave: string; linhas: string[]; altura: number; total: number }[]>(
+      contents,
+      `[...document.querySelectorAll('${LARGA} [data-tarefas-grupo]')].map((el) => ({
+        chave: el.dataset.tarefasGrupo,
+        linhas: [...el.querySelectorAll('[data-tarefa]')].map((row) => row.dataset.tarefa),
+        altura: Math.round(el.querySelector('[data-tarefas-grupo-cabecalho]')?.getBoundingClientRect().height ?? 0),
+        total: Number(el.querySelector('[data-tarefas-grupo-total]')?.textContent ?? -1),
+      }))`,
+    )
+    const grupo = (chave: string): (typeof grupos)[number] | undefined => grupos.find((item) => item.chave === chave)
+    const agruparOk =
+      agrupou &&
+      grupo('op-portal')?.linhas.includes(T.portal) === true &&
+      grupo('op-loja')?.linhas.includes(T.loja) === true &&
+      grupo('sem-oportunidade')?.linhas.includes(T.semana) === true &&
+      grupos[grupos.length - 1]?.chave === 'sem-oportunidade' &&
+      grupos.every((item) => item.altura === 28 && item.total === item.linhas.length)
+    await both('tarefas-todas-agrupadas')
+    await setValue(contents, '[data-tarefas-agrupar]', 'prazo', 'change')
+    const voltouPrazo = await waitFor(contents, `!document.querySelector('[data-tarefas-grupo="sem-oportunidade"]') && document.querySelector('[data-tarefas-agrupar]')?.value === 'prazo'`)
+    checks['tarefasAgrupar'] = {
+      ok: agruparOk && voltouPrazo,
+      detail: JSON.stringify({ agrupou, grupos: grupos.length, portal: grupo('op-portal')?.linhas.includes(T.portal) === true, loja: grupo('op-loja')?.linhas.includes(T.loja) === true, semOportunidadePorUltimo: grupos[grupos.length - 1]?.chave === 'sem-oportunidade', cabecalhos28: grupos.every((item) => item.altura === 28), contagensIguais: grupos.every((item) => item.total === item.linhas.length), voltouPrazo }),
+    }
+
+    // tarefasSugestoes (R26, CA10 parte, D-17): "Sugestões N" com N do canal (as duas tarefas "Você" da reunião semeada no
+    // começo do bloco, fora de oportunidade, e o que mais as reuniões gravadas tiverem); print; "Ignorar" uma da reunião
+    // semeada -> N − 1 e a chave em `ignorados`; recarregar -> continua N − 1 e ela não volta; "Adicionar" a outra -> tarefa
+    // com a origem `reuniao`, a reunião nos vínculos, o prazo do resumo e sem oportunidade.
+    const rotuloSugestoes = (total: number): string => (total > 0 ? `Sugestões ${total}` : 'Sugestões')
+    const lista = await api<SugestaoTarefa[]>('scribe:tarefas-sugestoes')
+    const n = lista.length
+    const daSemeada = lista.filter((item) => item.origem.tipo === 'reuniao' && item.origem.meetingId === SUGESTOES_REUNIAO)
+    const ignorar = daSemeada.find((item) => item.texto === SUGESTOES_TAREFAS[0].task)
+    const adicionar = daSemeada.find((item) => item.texto === SUGESTOES_TAREFAS[1].task)
+    const rotuloOk = await waitFor(contents, `document.querySelector('[data-tarefas-visao="sugestoes"]')?.textContent === ${JSON.stringify(rotuloSugestoes(n))}`, 8000)
+    const abaOk = await visao('sugestoes')
+    const linhasSugestao = await waitFor(contents, `document.querySelectorAll('[data-tarefa-sugestao]').length === ${n}`, 8000)
+    await both('tarefas-sugestoes')
+    let ignorou = false
+    let naoVoltou = false
+    let adicionou = false
+    if (ignorar && adicionar) {
+      await clickSelector(contents, `[data-tarefa-sugestao=${JSON.stringify(ignorar.chave)}] [data-action="tarefa-sugestao-ignorar"]`)
+      ignorou = (await waitFor(contents, `document.querySelector('[data-tarefas-visao="sugestoes"]')?.textContent === ${JSON.stringify(rotuloSugestoes(n - 1))} && !document.querySelector('[data-tarefa-sugestao=${JSON.stringify(ignorar.chave)}]')`, 8000)) && saved().ignorados.some((item) => item.chave === ignorar.chave)
+      await evaluate(contents, 'location.reload(), true')
+      await wait(300)
+      await loadAndWait(win)
+      await clickNav(contents, 'tarefas')
+      await waitFor(contents, tela, 8000)
+      await visao('sugestoes')
+      naoVoltou =
+        (await waitFor(contents, `document.querySelector('[data-tarefas-visao="sugestoes"]')?.textContent === ${JSON.stringify(rotuloSugestoes(n - 1))} && document.querySelector('[data-tarefa-sugestao=${JSON.stringify(adicionar.chave)}]')`, 8000)) &&
+        (await evaluate<boolean>(contents, `!document.querySelector('[data-tarefa-sugestao=${JSON.stringify(ignorar.chave)}]')`)) &&
+        (await api<SugestaoTarefa[]>('scribe:tarefas-sugestoes')).every((item) => item.chave !== ignorar.chave)
+      const antesIds = new Set(saved().tarefas.map((tarefa) => tarefa.id))
+      await clickSelector(contents, `[data-tarefa-sugestao=${JSON.stringify(adicionar.chave)}] [data-action="tarefa-sugestao-adicionar"]`)
+      let nova: Tarefa | undefined
+      for (let attempt = 0; attempt < 100 && !nova; attempt++) {
+        nova = saved().tarefas.find((tarefa) => !antesIds.has(tarefa.id))
+        if (!nova) await wait(50)
+      }
+      adicionou =
+        nova !== undefined &&
+        nova.origem.tipo === 'reuniao' &&
+        nova.origem.meetingId === SUGESTOES_REUNIAO &&
+        nova.vinculos.meetingId === SUGESTOES_REUNIAO &&
+        nova.vinculos.oportunidadeId === null &&
+        nova.prazo === adicionar.prazo &&
+        adicionar.prazo !== null &&
+        (await waitFor(contents, `!document.querySelector('[data-tarefa-sugestao=${JSON.stringify(adicionar.chave)}]')`, 8000))
+    }
+    checks['tarefasSugestoes'] = {
+      ok: n >= 2 && daSemeada.length === 2 && rotuloOk && abaOk && linhasSugestao && ignorou && naoVoltou && adicionou === true,
+      detail: JSON.stringify({ sugestoes: n, daReuniaoSemeada: daSemeada.length, rotulo: rotuloOk, aba: abaOk, linhas: linhasSugestao, ignorou, naoVoltouDepoisDeRecarregar: naoVoltou, adicionou }),
+    }
+
+    // tarefasVazia (R2): cancela (sem o gancho do funil, D-15) toda tarefa de Hoje da view; Hoje mostra "Nada para hoje"
+    // com o link para Todas; print só no claro; reabre as mesmas.
+    view = await lerView()
+    const doDia = view.tarefas.filter((tarefa) => vencida(tarefa, view.hoje) || deHoje(tarefa, view.hoje)).map((tarefa) => tarefa.id)
+    for (const id of doDia) await api('scribe:tarefas-status', { id, status: 'cancelada' })
+    await visao('hoje')
+    const vazia = await waitFor(contents, `document.querySelector('[data-tarefas-vazia]')?.innerText.includes('Nada para hoje') && document.querySelector('[data-tarefas-vazia] [data-action="tarefas-ver-todas"]')`, 8000)
+    const semNumero = await waitFor(contents, `!document.querySelector('${SIDEBAR_ROOT} [data-nav="tarefas"] [data-nav-badge]')`)
+    await evaluate(contents, `document.activeElement instanceof HTMLElement && document.activeElement.blur(), true`)
+    await settle(contents)
+    shots.push(await capture(win, ctx.outDir, 'tarefas-vazia-light'))
+    for (const id of doDia) await api('scribe:tarefas-status', { id, status: 'aberta' })
+    const reabertas = doDia.every((id) => savedTarefa(id)?.status === 'aberta')
+    checks['tarefasVazia'] = { ok: doDia.length >= 2 && vazia && semNumero && reabertas, detail: JSON.stringify({ canceladas: doDia.length, nadaParaHoje: vazia, semNumeroNaBarra: semNumero, reabertas }) }
+
+    // tarefasLembrete (R12, CA6): t-hoje (lembrete 1 min no passado na fixture) avisou uma vez, com "Tarefa", e ficou
+    // marcada; o tick seguinte não repete.
+    const avisosHoje = (): number => ctx.fixtures.tarefas.notifications.filter((aviso) => aviso.title === 'Tarefa' && aviso.tarefaId === T.hoje).length
+    const antesDoTick = avisosHoje()
+    const marcada = (savedTarefa(T.hoje)?.lembreteDisparadoEm ?? null) !== null
+    await ctx.automations.tick()
+    await wait(200)
+    checks['tarefasLembrete'] = { ok: antesDoTick === 1 && marcada && avisosHoje() === 1, detail: JSON.stringify({ avisos: antesDoTick, marcada, depoisDoTick: avisosHoje() }) }
+  } finally {
+    // A reunião semeada sai (as contagens de reuniões dos blocos seguintes não mudam); a tarefa criada dela fica.
+    await api('scribe:meetings-delete', { id: SUGESTOES_REUNIAO }).catch(() => undefined)
+    if (themeBefore !== 'system') await evaluate(contents, `window.__scribeApi.invoke('scribe:settings-update', { theme: '${themeBefore}' }).then(() => true)`)
+    nativeTheme.themeSource = 'system'
+    win.destroy()
+    console.log(`tarefas: tela em ${((Date.now() - startedAt) / 1000).toFixed(1)} s`)
   }
 }
 
@@ -14754,6 +15194,8 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
   const redesUi: Record<string, Check> = {}
   /** Contrato 112: o nível Funil e o kanban de Oportunidades. Contrato 119: e o detalhe da oportunidade. */
   const funil: Record<string, Check> = {}
+  /** Contrato 123: a tela Tarefas, o item da barra lateral, ⌘⇧T e o lembrete. */
+  const tarefasTela: Record<string, Check> = {}
   let analysisMeasured: AnalysisMeasured | null = null
 
   // A fixture da sessão real, reduzida pelo mesmo redutor do app: a mesma dos testes (CA4) e do smoke.
@@ -15025,6 +15467,10 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
       if (!(await selectSettingsTab(contents, 'arquivos'))) failures.push(`configuracoes-arquivos/${themeName}: aba não abriu`)
       await waitFor(contents, `document.querySelector('section[aria-label="Arquivos da reunião"]')?.innerText.includes('~/')`)
       await shoot('configuracoes-arquivos', 'configuracoes')
+      // Contrato 123 (D-1): Tarefas pela barra lateral, na visão Hoje, com as tarefas semeadas.
+      await clickNav(contents, 'tarefas')
+      if (!(await waitFor(contents, `${routeIs('tarefas')} && document.querySelector('[data-tarefas-screen="hoje"] [data-tarefas-lista="larga"] [data-tarefa]')`, 8000))) failures.push(`tarefas-hoje/${themeName}: a lista não apareceu`)
+      await shoot('tarefas-hoje', 'tarefas')
       // Contrato 18: "Contas", "Sobre", a aba lembrada, os atalhos e a busca, no claro.
       if (themeName === 'light') settings['tabs'] = await settingsTabsChecks(contents, ctx, extraShot)
 
@@ -15181,6 +15627,11 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
     // ACP falsos; antes do bloqueio (que recusa o canal novo junto com os outros cartões). Termina sem conta.
     await redesAssistantChecks(ctx, watch, redesUi, screenshots)
 
+    // Contrato 123: a tela Tarefas com o `tarefas.json` semeado, logo antes do funil e do bloqueio (que recusa os canais
+    // das tarefas). Termina com as semeadas como na fixture (fora o lembrete de t-hoje, já disparado) e com as duas que
+    // criou (a "Nova tarefa" e a da sugestão), sem oportunidade.
+    await tarefasTelaChecks(ctx, watch, tarefasTela, screenshots)
+
     // Contrato 112: o item e o nível Funil e o kanban de Oportunidades, com o `funil.json` semeado; antes do bloqueio (que
     // recusa os canais do funil junto com os outros). Termina com as oportunidades e as etapas como na fixture.
     await funilKanbanChecks(ctx, watch, funil, screenshots)
@@ -15308,6 +15759,7 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
   for (const name of ['redesSource', 'redesDraftCard', 'redesTools']) if (!redesUi[name]) failures.push(`redes (tela) ${name}: não executado`)
   // Contrato 112: o nível Funil e o kanban.
   for (const [name, check] of Object.entries(funil)) if (!check.ok) failures.push(`funil ${name}: ${check.detail}`)
+  for (const [name, check] of Object.entries(tarefasTela)) if (!check.ok) failures.push(`tarefas ${name}: ${check.detail}`)
   for (const name of ['funilNav', 'funilLevel', 'funilRedirect', 'funilNavigateEvent', 'funilKanban', 'funilCollapsed', 'funilFiltros', 'funilNova', 'funilEtapas', 'funilDragMove', 'funilDragLost']) {
     if (!funil[name]) failures.push(`funil ${name}: não executado`)
   }
@@ -15367,7 +15819,9 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
   // Contrato 116: +6 (o cartão "Oportunidade detectada" no Resumo, o "+ Contato" na leitura do email e o bloco Contato nos
   // Detalhes do WhatsApp, nos dois temas).
   // Contrato 117: +2 (o cartão "Mover" do funil no Assistente, com a fonte Funil ligada no Contexto, nos dois temas).
-  const expectedShots = SCREENS.length * THEMES.length + 205
+  // Contrato 123: +9 (Todas agrupadas por oportunidade, o detalhe, a nova tarefa e as Sugestões, nos dois temas, e Hoje
+  // vazia, só no claro).
+  const expectedShots = SCREENS.length * THEMES.length + 214
   if (screenshots.length !== expectedShots) failures.push(`${screenshots.length} PNGs em vez de ${expectedShots}`)
   for (const shot of screenshots) {
     if (shot.name === MEETING_PROMPT_SHOT) {
@@ -15433,6 +15887,8 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
     redes,
     // Contrato 112: só os resultados (as oportunidades são as fictícias da fixture).
     funil,
+    // Contrato 123: só os resultados, com números e sim/não (nenhum título de tarefa).
+    tarefas: tarefasTela,
     instagramFakeCalls: ctx.fixtures.instagram.calls,
     s3FakeCalls: ctx.fixtures.s3.calls,
     // Contrato 23: os resultados, as notificações, o Dock e os itens de login substitutos; nenhum texto de reunião.
