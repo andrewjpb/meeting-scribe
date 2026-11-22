@@ -31,6 +31,8 @@ export type ResponsavelTarefa = { tipo: 'eu' } | { tipo: 'contato'; contatoId: s
 export type OrigemTarefa =
   /** `texto` = a tarefa do resumo, para casar a linha da tabela com a tarefa (R22). */
   | { tipo: 'reuniao'; meetingId: string; texto: string }
+  /** Contrato 131 (R1): a sugestão "a confirmar" da análise da reunião; `texto` = o item, para a sugestão não voltar. */
+  | { tipo: 'analise'; meetingId: string; texto: string }
   | { tipo: 'funil'; oportunidadeId: string }
   | { tipo: 'email'; accountId: string; id: string; assunto: string }
   | { tipo: 'whatsapp'; chatId: string; texto?: string }

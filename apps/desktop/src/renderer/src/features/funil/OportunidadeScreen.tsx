@@ -4,7 +4,7 @@ import { Link, useNavigate } from 'react-router'
 import { FUNIL_NOME_MAX, FUNIL_NOTAS_MAX, type FunilFalha, type FunilTimelineResult, type FunilView, type Oportunidade, type OportunidadeInput } from '@shared/funil'
 import { formatarBRL } from '@shared/funil-logic'
 import type { Meeting } from '@shared/meetings'
-import { EMAIL_ROOT_PATH, funilPath, meetingPath, type EmailNavigationState } from '@shared/routes'
+import { EMAIL_ROOT_PATH, funilPath, meetingPath, TAREFAS_ROOT_PATH, type EmailNavigationState, type TarefasNavigationState } from '@shared/routes'
 import type { TarefasView } from '@shared/tarefas'
 import { ActionButton } from '../../design/ActionButton'
 import { Button } from '../../design/Button'
@@ -17,6 +17,7 @@ import { tabId, tabPanelId, Tabs } from '../../design/Tabs'
 import { SearchField } from '../meetings/SearchField'
 import { NovaTarefaInline } from '../tarefas/NovaTarefaInline'
 import { TarefaLinha } from '../tarefas/TarefaLinha'
+import { filtrarVisao } from '../tarefas/tarefasFormat'
 import { useTarefasView } from '../tarefas/tarefasStore'
 import { TituloBloco } from './ContatoFicha'
 import { CANCELAR_CLASS } from './KanbanCard'
@@ -722,21 +723,49 @@ function CampoData({ rotulo, inicial, onSalvar, onFechar }: { rotulo: string; in
 }
 
 /**
- * A lista de tarefas da seção rola sozinha passando de 5 linhas (220 px), para as abas não sumirem do cabeçalho; `relative`
- * para o que é absoluto lá dentro (o `sr-only` da estrela) rolar e ser cortado com ela (contrato 130, B1).
+ * A lista de tarefas da seção não rola (contrato 131, R4): mostra no máximo `TAREFAS_NO_CABECALHO` linhas e o resto fica em
+ * "Ver todas as N tarefas", para a seção não apertar as abas e a linha do tempo. `relative` prende o que é absoluto lá
+ * dentro (o `sr-only` da estrela, contrato 130, B1).
  */
-const LISTA_TAREFAS_CLASS = 'relative flex max-h-[220px] flex-col overflow-y-auto'
+const LISTA_TAREFAS_CLASS = 'relative flex flex-col'
+
+/** Quantas tarefas abertas (e, com "Feitas" aberta, quantas fechadas) a seção mostra no cabeçalho (contrato 131, R4). */
+const TAREFAS_NO_CABECALHO = 3
+
+/** "Ver todas as N tarefas" (contrato 131, R4): uma linha de 28 px que abre Tarefas agrupada por oportunidade. */
+function VerTodasTarefas({ total, visao, acao }: { total: number; visao: 'todas' | 'feitas'; acao: string }) {
+  const navigate = useNavigate()
+  const abrir = (): void => {
+    const state: TarefasNavigationState = { agrupar: 'oportunidade', visao }
+    void navigate(TAREFAS_ROOT_PATH, { state })
+  }
+  return (
+    <button
+      type="button"
+      data-action={acao}
+      data-funil-tarefas-ver-todas={total}
+      onClick={abrir}
+      className="no-drag flex h-7 w-full items-center gap-1.5 rounded-[var(--radius-control)] px-1 text-left text-13 font-medium text-accent transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:text-title"
+    >
+      Ver todas as <span className="tabular">{total}</span> tarefas
+      <Icon icon={ChevronRight} size={14} />
+    </button>
+  )
+}
 
 /**
  * Seção Tarefas da oportunidade (contrato 125, R15, artboard 08), entre a grade de campos e as abas, no lugar do campo
  * "Próximo passo": as abertas em `TarefaLinha` (a primeira é o próximo passo do quadro), "Nova tarefa" numa linha de
  * 40 px que abre a criação em linha ligada à oportunidade e as fechadas (feitas e canceladas) recolhidas em "Feitas N".
- * O clique numa linha abre a tarefa.
+ * O clique numa linha abre a tarefa. Contrato 131 (R4): passando de 3, abertas ou fechadas, só as 3 primeiras e "Ver
+ * todas as N tarefas".
  */
 function SecaoTarefas({ oportunidadeId, view, onErro }: { oportunidadeId: string; view: TarefasView | null; onErro: (mensagem: string) => void }) {
   const [nova, setNova] = useState(false)
   const [verFeitas, setVerFeitas] = useState(false)
   const { abertas, fechadas } = tarefasDaOportunidade(view?.tarefas ?? [], oportunidadeId)
+  // O "Ver todas" das fechadas conta o que a visão Feitas mostra (os últimos 90 dias), para o número bater com a lista.
+  const feitasNaVisao = view && fechadas.length > TAREFAS_NO_CABECALHO ? filtrarVisao(view, 'feitas', '').filter((tarefa) => tarefa.vinculos.oportunidadeId === oportunidadeId).length : 0
   const resumo = abertas.length === 0 ? 'nenhuma aberta' : `${abertas.length} ${abertas.length === 1 ? 'aberta' : 'abertas'} · a primeira é o próximo passo no quadro`
   return (
     <section data-funil-bloco="tarefas" aria-label="Tarefas" className="flex flex-col">
@@ -750,11 +779,12 @@ function SecaoTarefas({ oportunidadeId, view, onErro }: { oportunidadeId: string
       </TituloBloco>
       {view && abertas.length > 0 && (
         <div data-funil-tarefas-abertas className={LISTA_TAREFAS_CLASS}>
-          {abertas.map((tarefa) => (
+          {abertas.slice(0, TAREFAS_NO_CABECALHO).map((tarefa) => (
             <TarefaLinha key={tarefa.id} tarefa={tarefa} view={view} onErro={onErro} ocultarOrigem />
           ))}
         </div>
       )}
+      {view && abertas.length > TAREFAS_NO_CABECALHO && <VerTodasTarefas total={abertas.length} visao="todas" acao="funil-tarefas-ver-todas" />}
       {nova ? (
         <div className="border-b border-line py-1.5">
           <NovaTarefaInline
@@ -792,11 +822,12 @@ function SecaoTarefas({ oportunidadeId, view, onErro }: { oportunidadeId: string
           </button>
           {verFeitas && (
             <div data-funil-tarefas-fechadas className={LISTA_TAREFAS_CLASS}>
-              {fechadas.map((tarefa) => (
+              {fechadas.slice(0, TAREFAS_NO_CABECALHO).map((tarefa) => (
                 <TarefaLinha key={tarefa.id} tarefa={tarefa} view={view} onErro={onErro} ocultarOrigem />
               ))}
             </div>
           )}
+          {verFeitas && feitasNaVisao > 0 && <VerTodasTarefas total={feitasNaVisao} visao="feitas" acao="funil-tarefas-feitas-ver-todas" />}
         </>
       )}
     </section>

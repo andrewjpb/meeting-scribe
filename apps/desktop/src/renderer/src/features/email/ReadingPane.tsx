@@ -8,7 +8,7 @@ import { ActionButton } from '../../design/ActionButton'
 import { Button } from '../../design/Button'
 import { Icon } from '../../design/Icon'
 import { Note } from '../../design/Note'
-import { ContactLink, contatoLigado, useFunilCompartilhado } from '../funil/ContactLink'
+import { ContactLink, contatoLigado, mesmoNome, useFunilCompartilhado } from '../funil/ContactLink'
 import { MENU_ITEM, useInlineMenu } from '../meetings/menu'
 import { BotaoMaisTarefa, useTarefaCriada } from '../tarefas/MaisTarefa'
 import { NovaTarefaInline } from '../tarefas/NovaTarefaInline'
@@ -160,6 +160,8 @@ export function ReadingPane({ account, message, onCompose, composing, onMailto, 
   const { criada, avisar } = useTarefaCriada()
   const funil = useFunilCompartilhado()
   const contatoRemetente = funil && senderAddress ? contatoLigado(funil.state.contatos, { email: senderAddress }) : null
+  // Contrato 131 (R5): o remetente que já é contato com o mesmo nome aparece uma vez só, como o link para a ficha.
+  const soOLink = Boolean(sender && !ownSender && contatoRemetente && mesmoNome(contatoRemetente.nome, addressLabel(sender)))
   // Contrato 64 (CA14): "Sugerir evento" só com a opção ligada, o corpo já lido e sem convite; nunca com o app bloqueado.
   const suggestOn = useSettings((store) => store.settings.inviteSuggest)
   const locked = useLock((store) => store.status.locked)
@@ -271,11 +273,18 @@ export function ReadingPane({ account, message, onCompose, composing, onMailto, 
               {/* R36: o "+ Contato" na mesma linha do remetente. O endereço parte de largura 0 e cresce até a dele (`basis-0
                   grow max-w-max`): a linha só quebra quando nome e botão não cabem, e o que encolhe (com reticências) é ele. */}
               <p className="flex flex-wrap items-baseline gap-x-2">
-                <span data-email-from title={addressLabel(sender)} className="max-w-full min-w-0 truncate text-13 font-bold text-text">
-                  {addressLabel(sender)}
-                </span>
+                {sender && soOLink ? (
+                  // Contrato 131 (R5): o nome igual ao do contato vira o próprio link (o `ContactLink` no lugar do texto).
+                  <span data-email-from title={addressLabel(sender)} className="max-w-full min-w-0 truncate">
+                    <ContactLink email={sender.address} nome={addressLabel(sender)} origem="email" />
+                  </span>
+                ) : (
+                  <span data-email-from title={addressLabel(sender)} className="max-w-full min-w-0 truncate text-13 font-bold text-text">
+                    {addressLabel(sender)}
+                  </span>
+                )}
                 {sender && sender.name && <span className="max-w-max min-w-0 grow basis-0 truncate">{sender.address}</span>}
-                {sender && senderAddress && !ownSender && (
+                {sender && senderAddress && !ownSender && !soOLink && (
                   <span className="self-center">
                     <ContactLink email={sender.address} nome={sender.name?.trim() || sender.address.split('@')[0] || sender.address} origem="email" />
                   </span>

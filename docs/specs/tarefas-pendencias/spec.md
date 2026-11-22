@@ -50,8 +50,9 @@ Qualquer outra pendência da versão seguinte (sincronização externa, mesclar 
 - **CA1** Teste unitário: adicionar sugestão de análise cria tarefa `origem.tipo === 'analise'` e `sugestoesDeTarefa` não a
   devolve mais, inclusive com a tarefa `feita`; smoke: no bloco de Sugestões, se houver sugestão de análise na semente,
   Adicionar e recarregar não a traz de volta (se a semente não tiver, acrescentar uma `toConfirm` com dono "Você").
-- **CA2** `grep -rn "createReminder\|updateReminder\|textoPassoDetalhe" apps/desktop/src` vazio; `SchedulesTab.tsx` sem
-  `task.reminder` fora do filtro; vitest verde; smoke verde.
+- **CA2** `grep -rn "createReminder\|updateReminder" apps/desktop/src/main apps/desktop/src/shared apps/desktop/src/renderer/src/features/schedules`
+  vazio e `grep -rn "textoPassoDetalhe" apps/desktop/src` vazio (o `createReminder` do cartão do Assistente em
+  `features/chat/` é outra função, viva, e fica); `SchedulesTab.tsx` sem `task.reminder` fora do filtro; vitest verde; smoke verde.
 - **CA3** `lembretesFuturos` testada com os quatro casos; `index.ts` a usa; `EMAILS.md` do smoke não traz lembrete disparado.
 - **CA4** Smoke: em `op-consultoria` com 5 abertas (criar 3 no check), o cabeçalho mostra 3 linhas e "Ver todas as 5 tarefas"
   (28 px); clicar leva a `/tarefas` em Todas agrupado por oportunidade com o grupo da oportunidade presente; com 2 abertas,

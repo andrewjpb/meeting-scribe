@@ -46,6 +46,13 @@ const porCriacao = (a: Tarefa, b: Tarefa): number => a.criadaEm - b.criadaEm || 
 export const abertasDaOportunidade = (tarefas: readonly Tarefa[], opId: string): Tarefa[] =>
   tarefas.filter((t) => t.status === 'aberta' && t.vinculos.oportunidadeId === opId).sort(porPrazo)
 
+/**
+ * Os lembretes que ainda vão avisar (contrato 131, R3): tarefas abertas com `lembreteEm` depois de `agora` e ainda não
+ * disparadas, na ordem em que vieram. Os lembretes de e-mail do Assistente (`EMAILS.md`) saem daqui.
+ */
+export const lembretesFuturos = (tarefas: readonly Tarefa[], agora: number): (Tarefa & { lembreteEm: number })[] =>
+  tarefas.filter((t): t is Tarefa & { lembreteEm: number } => t.status === 'aberta' && t.lembreteEm !== null && t.lembreteEm > agora && t.lembreteDisparadoEm === null)
+
 /** O "próximo passo" derivado da oportunidade; `null` sem tarefa aberta. */
 export const proximaDaOportunidade = (tarefas: readonly Tarefa[], opId: string): Tarefa | null => abertasDaOportunidade(tarefas, opId)[0] ?? null
 
@@ -152,6 +159,13 @@ export function responsavelDoDono(
 /** A tarefa veio desta linha do resumo (R22): mesma reunião e o mesmo texto pelo slug. */
 export const casaComResumo = (tarefa: Pick<Tarefa, 'origem'>, meetingId: string, texto: string): boolean =>
   tarefa.origem.tipo === 'reuniao' && tarefa.origem.meetingId === meetingId && slugTexto(tarefa.origem.texto) === slugTexto(texto)
+
+/**
+ * A tarefa veio desta linha da análise (contrato 131, R1): origem `analise`, mesma reunião e o mesmo texto pelo slug.
+ * Vale com qualquer status, como a do resumo: a feita e a cancelada também seguram a sugestão.
+ */
+export const casaComAnalise = (tarefa: Pick<Tarefa, 'origem'>, meetingId: string, texto: string): boolean =>
+  tarefa.origem.tipo === 'analise' && tarefa.origem.meetingId === meetingId && slugTexto(tarefa.origem.texto) === slugTexto(texto)
 
 /**
  * Prazo de um "quando" do WhatsApp (D-9): `AAAA-MM-DD` válido fica; `dd/mm` ganha o ano de hoje, ou o seguinte se a

@@ -70,8 +70,8 @@ export interface OrigemTexto {
 }
 
 /**
- * A origem como a linha mostra (R3): "Reunião: <título>", "Oportunidade: <título>", "E-mail: <assunto>", "WhatsApp:
- * <conversa>", "Assistente", "Automação" ou "Manual". A migrada mostra a origem do vínculo (oportunidade, reunião,
+ * A origem como a linha mostra (R3): "Reunião: <título>", "Análise: <título da reunião>" (contrato 131), "Oportunidade:
+ * <título>", "E-mail: <assunto>", "WhatsApp: <conversa>", "Assistente", "Automação" ou "Manual". A migrada mostra a origem do vínculo (oportunidade, reunião,
  * e-mail ou conversa, nessa ordem) ou "Manual". Nome que a view não resolveu (item apagado) fica só com o tipo.
  */
 export function textoOrigem(tarefa: Pick<Tarefa, 'origem' | 'vinculos'>, nomes: TarefasView['nomes']): OrigemTexto {
@@ -80,6 +80,8 @@ export function textoOrigem(tarefa: Pick<Tarefa, 'origem' | 'vinculos'>, nomes: 
   switch (origem.tipo) {
     case 'reuniao':
       return comNome('reuniao', 'Reunião', nomes.reunioes[origem.meetingId])
+    case 'analise':
+      return comNome('reuniao', 'Análise', nomes.reunioes[origem.meetingId])
     case 'funil':
       return comNome('oportunidade', 'Oportunidade', nomes.oportunidades[origem.oportunidadeId])
     case 'email':
@@ -177,7 +179,8 @@ function grupoDoPrazo(tarefa: Tarefa, hoje: string, domingo: string): string {
 function vinculoDe(tarefa: Tarefa, modo: Exclude<ModoAgrupar, 'prazo'>): string | null {
   if (modo === 'oportunidade') return tarefa.vinculos.oportunidadeId
   if (modo === 'contato') return tarefa.vinculos.contatoIds[0] ?? null
-  return tarefa.vinculos.meetingId ?? (tarefa.origem.tipo === 'reuniao' ? tarefa.origem.meetingId : null)
+  const { origem } = tarefa
+  return tarefa.vinculos.meetingId ?? (origem.tipo === 'reuniao' || origem.tipo === 'analise' ? origem.meetingId : null)
 }
 
 const SEM: Record<Exclude<ModoAgrupar, 'prazo'>, { chave: string; nome: string; tipo: string }> = {
@@ -288,15 +291,15 @@ export function textoLembrete(lembreteEm: number | null, disparadoEm: number | n
 }
 
 /**
- * O que "Adicionar" cria (R26): o texto como título, o prazo da sugestão e a origem dela; a do resumo e a da conversa
- * ficam também ligadas à reunião ou à conversa, e a da análise nasce manual, ligada à reunião.
+ * O que "Adicionar" cria (R26): o texto como título, o prazo da sugestão e a origem dela, ligada também à reunião ou à
+ * conversa. Contrato 131 (R1): a da análise nasce com a origem `analise` e o texto do item, para a sugestão não voltar.
  */
 export function tarefaDaSugestao(sugestao: SugestaoTarefa): TarefaInput {
   const titulo = sugestao.texto.trim().slice(0, TAREFA_TITULO_MAX)
   const { origem } = sugestao
   if (origem.tipo === 'reuniao') return { titulo, prazo: sugestao.prazo, origem: { tipo: 'reuniao', meetingId: origem.meetingId, texto: sugestao.texto.slice(0, 1_000) }, vinculos: { meetingId: origem.meetingId } }
   if (origem.tipo === 'whatsapp') return { titulo, prazo: sugestao.prazo, origem: { tipo: 'whatsapp', chatId: origem.chatId, texto: sugestao.texto.slice(0, 1_000) }, vinculos: { whatsappChatId: origem.chatId } }
-  return { titulo, prazo: sugestao.prazo, origem: { tipo: 'manual' }, vinculos: { meetingId: origem.meetingId } }
+  return { titulo, prazo: sugestao.prazo, origem: { tipo: 'analise', meetingId: origem.meetingId, texto: sugestao.texto.slice(0, 1_000) }, vinculos: { meetingId: origem.meetingId } }
 }
 
 // Contrato 126: a tabela "Tarefas" do Resumo (R22) e a frase do vínculo do "+ Tarefa" do e-mail (R24).

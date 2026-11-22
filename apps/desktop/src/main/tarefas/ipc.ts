@@ -24,6 +24,7 @@ const responsavel = z.discriminatedUnion('tipo', [
 
 const origem = z.discriminatedUnion('tipo', [
   z.object({ tipo: z.literal('reuniao'), meetingId: id, texto: curto }).strict(),
+  z.object({ tipo: z.literal('analise'), meetingId: id, texto: curto }).strict(),
   z.object({ tipo: z.literal('funil'), oportunidadeId: id }).strict(),
   z.object({ tipo: z.literal('email'), accountId: id, id: curto, assunto: curto }).strict(),
   z.object({ tipo: z.literal('whatsapp'), chatId: id, texto: curto.exactOptional() }).strict(),

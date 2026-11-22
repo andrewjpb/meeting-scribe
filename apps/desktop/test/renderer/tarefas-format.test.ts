@@ -130,6 +130,9 @@ describe('prazo, origem e responsável da linha (R3, D-11)', () => {
     expect(textoOrigem(tarefa({ origem: { tipo: 'migracao', de: 'proximo-passo' }, vinculos: vinculos({ oportunidadeId: 'op-1' }) }), n)).toMatchObject({ icone: 'oportunidade', texto: 'Oportunidade: Loja virtual' })
     expect(textoOrigem(tarefa({ origem: { tipo: 'migracao', de: 'lembrete' } }), n).texto).toBe('Manual')
     expect(textoOrigem(tarefa({ origem: { tipo: 'reuniao', meetingId: 'apagada', texto: 'x' } }), n).texto).toBe('Reunião')
+    // Contrato 131 (R1): a da análise mostra o título da reunião com o tipo "Análise".
+    expect(textoOrigem(tarefa({ origem: { tipo: 'analise', meetingId: 'm1', texto: 'x' } }), n)).toEqual({ icone: 'reuniao', texto: 'Análise: Conversa com o Cliente', nome: 'Conversa com o Cliente' })
+    expect(textoOrigem(tarefa({ origem: { tipo: 'analise', meetingId: 'apagada', texto: 'x' } }), n).texto).toBe('Análise')
   })
 
   it('o responsável só quando não é "eu"', () => {
@@ -219,9 +222,9 @@ describe('"Adicionar" das Sugestões (R26)', () => {
     expect(tarefaDaSugestao(sugestao)).toEqual({ titulo: 'Enviar o cronograma do piloto', prazo: '2026-11-25', origem: { tipo: 'reuniao', meetingId: 'm1', texto: base.texto }, vinculos: { meetingId: 'm1' } })
   })
 
-  it('da análise: manual, ligada à reunião', () => {
+  it('da análise: origem análise com o texto (para a sugestão não voltar), ligada à reunião (contrato 131)', () => {
     const sugestao: SugestaoTarefa = { ...base, prazo: null, origem: { tipo: 'analise', meetingId: 'm2', titulo: 'Piloto' } }
-    expect(tarefaDaSugestao(sugestao)).toEqual({ titulo: 'Enviar o cronograma do piloto', prazo: null, origem: { tipo: 'manual' }, vinculos: { meetingId: 'm2' } })
+    expect(tarefaDaSugestao(sugestao)).toEqual({ titulo: 'Enviar o cronograma do piloto', prazo: null, origem: { tipo: 'analise', meetingId: 'm2', texto: base.texto }, vinculos: { meetingId: 'm2' } })
   })
 
   it('da conversa: origem WhatsApp com o texto e a conversa nos vínculos; título longo cortado em 200', () => {

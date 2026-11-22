@@ -208,6 +208,10 @@ export function origemResumida(tarefa: Pick<Tarefa, 'origem'>, fontes: Pick<Font
       const titulo = fontes.reunioes.find((reuniao) => reuniao.id === origem.meetingId)?.title
       return titulo ? `da reunião ${titulo}` : 'de uma reunião'
     }
+    case 'analise': {
+      const titulo = fontes.reunioes.find((reuniao) => reuniao.id === origem.meetingId)?.title
+      return titulo ? `da análise da reunião ${titulo}` : 'da análise de uma reunião'
+    }
     case 'whatsapp': {
       const nome = fontes.whatsapp.find((chat) => chat.id === origem.chatId)?.name
       return nome ? `da conversa com ${nome}` : 'de uma conversa do WhatsApp'

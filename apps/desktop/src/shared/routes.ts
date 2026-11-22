@@ -135,9 +135,15 @@ export function tarefasPath(id?: string): string {
   return id === undefined ? TAREFAS_ROOT_PATH : `${TAREFAS_ROOT_PATH}/${encodeURIComponent(id)}`
 }
 
-/** `state` da navegação para Tarefas que abre o formulário "Nova tarefa" com o foco no título (⌘⇧T, contrato 123). */
+/**
+ * `state` da navegação para Tarefas: `nova` abre o formulário "Nova tarefa" com o foco no título (⌘⇧T, contrato 123);
+ * `agrupar` abre a lista agrupada por oportunidade na visão `visao` (padrão Todas), pelo "Ver todas as N tarefas" da
+ * oportunidade (contrato 131, R4).
+ */
 export interface TarefasNavigationState {
   nova?: boolean
+  agrupar?: 'oportunidade'
+  visao?: 'todas' | 'feitas'
 }
 
 /** Destino do item "Redes" da barra lateral (contrato 72) na primeira vez da sessão: a tela abre a primeira conta. */

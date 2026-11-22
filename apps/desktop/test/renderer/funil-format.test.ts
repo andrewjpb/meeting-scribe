@@ -36,7 +36,6 @@ import {
   telefoneLegivel,
   textoArquivoImport,
   textoItemTarefa,
-  textoPassoDetalhe,
   textoProximoPasso,
   textoResultadoImport,
   textoSubtitulo,
@@ -46,7 +45,7 @@ import {
   valorParaEdicao,
   whatsappDestino,
 } from '../../src/renderer/src/features/funil/funilFormat'
-import { contatoLigado } from '../../src/renderer/src/features/funil/ContactLink'
+import { contatoLigado, mesmoNome } from '../../src/renderer/src/features/funil/ContactLink'
 import { etapaInicial, textoEfeito } from '../../src/renderer/src/features/funil/proposalStore'
 
 const DIA_MS = 86_400_000
@@ -182,7 +181,6 @@ describe('valor, totais e próximo passo', () => {
     // Contrato 124 (CA10): o passo derivado das tarefas (com o `tarefaId`) sai igual.
     const derivado: ProximoPassoDerivado = { texto: 'Ligar', data: '2026-11-23', tarefaId: 't1' }
     expect(textoProximoPasso(derivado)).toEqual({ texto: 'Ligar', data: '23/11' })
-    expect(textoPassoDetalhe(derivado, '2026-11-24')).toEqual({ texto: 'Ligar', data: '23/11 · vencido', vencido: true })
     expect(diaCurto('2026-01-09')).toBe('09/01')
   })
 })
@@ -261,10 +259,7 @@ describe('detalhe da oportunidade (contrato 119)', () => {
     expect(emailDestino(item({ noCache: true }), 'Sent')).toBeNull()
   })
 
-  it('textoPassoDetalhe, dataHora e valorParaEdicao', () => {
-    expect(textoPassoDetalhe({ texto: 'Ligar para a Ana', data: '2026-11-18' }, '2026-11-20')).toEqual({ texto: 'Ligar para a Ana', data: '18/11 · vencido', vencido: true })
-    expect(textoPassoDetalhe({ texto: 'Revisar', data: '2026-11-21' }, '2026-11-20')).toEqual({ texto: 'Revisar', data: '21/11', vencido: false })
-    expect(textoPassoDetalhe(null, '2026-11-20')).toEqual({ texto: 'Sem próximo passo', data: null, vencido: false })
+  it('dataHora e valorParaEdicao', () => {
     expect(dataHora(Date.parse('2026-11-14T13:40:00.000Z'), SP)).toBe('14/11 · 10:40')
     expect(valorParaEdicao(6_400_000)).toBe('64.000')
     expect(valorParaEdicao(1_250_050)).toBe('12.500,50')
@@ -372,6 +367,13 @@ describe('telas existentes e cartão da proposta (contrato 116)', () => {
     expect(contatoLigado(contatos, { email: 'velho@acme.example' })).toBeNull()
     expect(contatoLigado(contatos, { email: 'outro@acme.example', telefone: null })).toBeNull()
     expect(contatoLigado(contatos, {})).toBeNull()
+  })
+
+  it('mesmoNome (contrato 131, R5): sem acento, sem caixa e com espaços simples; nomes diferentes não casam', () => {
+    expect(mesmoNome('Paulo Siqueira', 'paulo  SIQUEIRA ')).toBe(true)
+    expect(mesmoNome('João Araújo', 'Joao Araujo')).toBe(true)
+    expect(mesmoNome('Paulo Siqueira', 'Paulo S.')).toBe(false)
+    expect(mesmoNome('Ana', 'Ana Souza')).toBe(false)
   })
 
   it('etapaInicial: a aberta com o nome sugerido, sem acento e sem caixa; senão a primeira aberta', () => {

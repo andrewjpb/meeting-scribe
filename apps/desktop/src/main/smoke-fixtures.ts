@@ -805,8 +805,8 @@ export const SMOKE_LEMBRETE_LEGADO = { id: 'smoke-lembrete-legado', texto: 'Reto
 
 /**
  * Contrato 125 (D17, CA1 da spec): `<userData>/schedules.json` antes dos serviços, com um lembrete do Assistente no
- * formato de `createReminder` (`schedules/service.ts`), sem conversa nem e-mail, para daqui a 60 dias (longe do relógio
- * que o smoke adianta). A migração do boot (124) o converte em tarefa `migracao/lembrete` e o tira do arquivo.
+ * formato antigo do contrato 25 (tarefa "uma vez" sem agente, com `reminder`), sem conversa nem e-mail, para daqui a 60
+ * dias (longe do relógio que o smoke adianta). A migração do boot (124) o converte em tarefa `migracao/lembrete` e o tira do arquivo.
  */
 function writeSmokeLembreteLegado(userDataDir: string, now: number): void {
   const quando = new Date(now + 60 * 86_400_000).toISOString()

@@ -9,6 +9,7 @@ import { createAutomationsService, type AutomationNotice, type AutomationsDeps, 
 import { createFileRunsStore, createFileSchedulesStore, SCHEDULE_RUNS_DIR, SCHEDULES_FILE } from '../src/main/schedules/store'
 import { AGENTS_FILE } from '../src/main/agents/store'
 import { EXAMPLE_AGENTS, type AgentInput, type AutomationEvent, type ScheduledTask, type TaskInput } from '../src/shared/automations'
+import { semearLembrete } from './fixtures/lembrete-legado'
 
 const SP = 'America/Sao_Paulo'
 
@@ -451,57 +452,6 @@ describe('histórico (contrato 23, CA7)', () => {
   })
 })
 
-describe('lembrete alterado pelo Assistente (contrato 78)', () => {
-  const ana = { text: 'Responder a Ana', whatsappChatId: null, whatsappChatName: null }
-
-  it('muda a hora e o texto: recalcula a próxima vez, o nome acompanha e "uma vez só" fica como estava', async () => {
-    const created = await service.createReminder({ at: '2026-11-17T09:00:00-03:00', reminder: ana })
-    if (!created.ok) throw new Error('lembrete recusado')
-    const id = created.task.id
-    const moved = await service.updateReminder(id, { at: '2026-11-18T10:30:00-03:00' })
-    expect(moved.ok).toBe(true)
-    const task = (await service.listTasks()).find((item) => item.id === id)
-    expect(task).toMatchObject({ schedule: { kind: 'once', at: '2026-11-18T13:30:00.000Z' }, nextRunAt: '2026-11-18T13:30:00.000Z', runOnce: true, runOnceAction: 'disable', enabled: true, name: 'Lembrete: Responder a Ana' })
-    const renamed = await service.updateReminder(id, { text: '  Ligar   para a Ana ' })
-    expect(renamed.ok && renamed.task).toMatchObject({ name: 'Lembrete: Ligar para a Ana', message: 'Ligar para a Ana', reminder: { text: 'Ligar para a Ana' }, schedule: { kind: 'once', at: '2026-11-18T13:30:00.000Z' } })
-  })
-
-  it('recusa o passado, o que não é lembrete, o que não existe e o que já disparou', async () => {
-    const created = await service.createReminder({ at: '2026-11-16T08:00:00-03:00', reminder: ana })
-    if (!created.ok) throw new Error('lembrete recusado')
-    const id = created.task.id
-    expect(await service.updateReminder(id, { at: '2026-11-16T06:00:00-03:00' })).toEqual({ ok: false, reason: 'past' })
-    expect(await service.updateReminder(id, { at: 'amanhã' })).toEqual({ ok: false, reason: 'invalid' })
-    expect(await service.updateReminder(id, { text: '   ' })).toEqual({ ok: false, reason: 'invalid' })
-    expect(await service.updateReminder('nao-existe', { text: 'x' })).toEqual({ ok: false, reason: 'missing' })
-    const agentTask = await createTask({ enabled: false })
-    expect(await service.updateReminder(agentTask.id, { text: 'x' })).toEqual({ ok: false, reason: 'missing' })
-    // Disparou às 08:00: avisou e desligou; para o cartão, não existe mais.
-    clock = Date.parse('2026-11-16T11:00:30Z')
-    await service.tick()
-    expect((await service.listTasks()).find((item) => item.id === id)?.lastRunAt).not.toBeNull()
-    expect(await service.updateReminder(id, { at: '2026-11-17T09:00:00-03:00' })).toEqual({ ok: false, reason: 'missing' })
-  })
-
-  it('o lembrete desligado volta ligado ao ser alterado, com a próxima vez recalculada', async () => {
-    const created = await service.createReminder({ at: '2026-11-17T09:00:00-03:00', reminder: ana })
-    if (!created.ok) throw new Error('lembrete recusado')
-    const id = created.task.id
-    expect(await service.toggleTask({ id, enabled: false })).toMatchObject({ enabled: false, nextRunAt: null })
-    const moved = await service.updateReminder(id, { text: 'Responder a Ana hoje' })
-    expect(moved.ok && moved.task).toMatchObject({ enabled: true, nextRunAt: '2026-11-17T12:00:00.000Z', schedule: { kind: 'once', at: '2026-11-17T12:00:00.000Z' }, runOnce: true })
-    expect((await service.listTasks()).find((item) => item.id === id)).toMatchObject({ enabled: true, nextRunAt: '2026-11-17T12:00:00.000Z' })
-  })
-
-  it('apagar continua pelo deleteTask, que avisa a mudança', async () => {
-    const created = await service.createReminder({ at: '2026-11-17T09:00:00-03:00', reminder: ana })
-    if (!created.ok) throw new Error('lembrete recusado')
-    expect(await service.deleteTask({ id: created.task.id })).toBe(true)
-    expect((await service.listTasks()).some((item) => item.id === created.task.id)).toBe(false)
-    expect(await service.deleteTask({ id: created.task.id })).toBe(false)
-  })
-})
-
 describe('conferência do funil no tick (contrato 115, CA4)', () => {
   const ana = { text: 'Responder a Ana', whatsappChatId: null, whatsappChatName: null }
 
@@ -524,9 +474,9 @@ describe('conferência do funil no tick (contrato 115, CA4)', () => {
 
   it('onTick rejeitando não impede o lembrete nem faz o tick lançar', async () => {
     const logs: string[] = []
+    // Contrato 131: o lembrete antigo entra direto no `schedules.json` (nada cria mais esse formato), antes do serviço ler.
+    await semearLembrete(dir, { id: 'lembrete-1', at: '2026-11-16T07:01:00-03:00', reminder: ana, timeZone: SP, now: clock })
     setup({ onTick: () => Promise.reject(new Error('funil.json ilegível')), log: (message) => logs.push(message) })
-    const created = await service.createReminder({ at: '2026-11-16T07:01:00-03:00', reminder: ana })
-    if (!created.ok) throw new Error('lembrete recusado')
     await service.setPaused({ paused: true })
     clock = Date.parse('2026-11-16T10:01:20Z')
     await expect(service.tick()).resolves.toBeUndefined()

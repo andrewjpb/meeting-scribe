@@ -178,7 +178,7 @@ export function createTarefasService(deps: TarefasServiceDeps): TarefasService {
       for (const contatoId of vinculos.contatoIds) ids.contatos.add(contatoId)
       if (responsavel.tipo === 'contato') ids.contatos.add(responsavel.contatoId)
       if (vinculos.meetingId) ids.reunioes.add(vinculos.meetingId)
-      if (origem.tipo === 'reuniao') ids.reunioes.add(origem.meetingId)
+      if (origem.tipo === 'reuniao' || origem.tipo === 'analise') ids.reunioes.add(origem.meetingId)
       if (vinculos.whatsappChatId) ids.whatsapp.add(vinculos.whatsappChatId)
       if (origem.tipo === 'whatsapp') ids.whatsapp.add(origem.chatId)
     }
