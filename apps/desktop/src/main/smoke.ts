@@ -2136,8 +2136,17 @@ async function notesDetailEdits(contents: WebContents, ctx: SmokeContext, record
   await clickSelector(contents, '[data-notes-tab] [data-action="new-note"]')
   const created = await waitFor(contents, `document.querySelectorAll('[data-notes="grid"] [data-note]').length === 4 && document.activeElement?.matches('[data-notes="grid"] li:first-child [data-note-text]')`)
   const createdSaved = await waitFile((notes) => notes.length === 4 && notes[0]?.atMs === null)
-  await setValue(contents, '[data-notes="grid"] li:first-child [data-note-text]', DETAIL_NOTE_TEXT)
-  const typedAt = Date.now()
+  // O relógio começa no renderer, no instante do evento: sob carga, a volta do `evaluate` pode atrasar mais que o
+  // debounce de 500 ms e encurtar a medida (o check caía com ~50 ms sem nenhum bug no app).
+  const typedAt = await evaluate<number>(
+    contents,
+    `(() => {
+      const el = document.querySelector('[data-notes="grid"] li:first-child [data-note-text]')
+      Object.getOwnPropertyDescriptor(Object.getPrototypeOf(el), 'value').set.call(el, ${JSON.stringify(DETAIL_NOTE_TEXT)})
+      el.dispatchEvent(new Event('input', { bubbles: true }))
+      return Date.now()
+    })()`,
+  )
   const textSaved = await waitFile((notes) => notes[0]?.text === DETAIL_NOTE_TEXT)
   const savedAfterMs = Date.now() - typedAt
   await clickSelector(contents, '[data-notes="grid"] li:first-child [data-note-color="orange"]')
