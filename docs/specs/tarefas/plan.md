@@ -260,3 +260,24 @@ Decididas pelo coordenador na revisão do pacote (22/11/2026):
 - **P-1** (D-2) `configuracoes-geral` rolado até Tarefas, substituindo. **Decidido pelo coordenador: mantido.**
 - **P-2** (D-5) `vinculos.email.mailbox`. **Decidido pelo coordenador: aceito (já na spec).**
 - **P-3** (D-8) Passo migrado sem lembrete. **Decidido pelo coordenador: mantido (já na spec, R35).**
+
+## Pendências
+
+Levantadas no fechamento (contrato 129, 22/11/2026). Nenhuma é bloqueadora; cada uma vira contrato próprio quando entrar.
+
+**Do código (achados dos relatórios e das revisões dos contratos 121 a 128):**
+
+1. **Sugestão de análise adicionada pode voltar.** A sugestão que vem do `toConfirm` da análise nasce com `origem: { tipo: 'manual' }` quando é adicionada, e o `jaVirou` de `shared/tarefas-sugestoes.ts:49` só reconhece as tarefas de origem `reuniao` e `whatsapp`. Depois de adicionada, a mesma linha da análise volta à aba Sugestões até ser ignorada. Anotada na devolução do 123; nenhum contrato posterior pegou.
+2. **`createReminder` e `updateReminder` sem uso no serviço das Automações** (`main/schedules/service.ts:150,155,872,922`): desde o 127 os lembretes do Assistente são tarefas, e nada chama esses dois métodos (o `createReminder` do `chatStore` é outro, do canal do chat). Junto, os ramos de lembrete do `features/schedules/SchedulesTab.tsx` (`:102`, `:143-164`, `:186`) ficaram mortos, porque a lista já filtra `!task.reminder` na `:50`. Tirar os dois com os testes que os cobrem.
+3. **`textoPassoDetalhe` sem uso** (`features/funil/funilFormat.ts:226`): o campo Próximo passo do detalhe da oportunidade saiu no 125 e a função ficou, com os casos em `test/renderer/funil-format.test.ts`.
+4. **`NovaTarefaInline` no painel de 300 px do WhatsApp:** o campo Oportunidade (180 px) e a dica longa ("Enter cria · Esc cancela · a oportunidade é opcional e traz os contatos dela para os vínculos.") não cabem bem na largura do painel de Detalhes; o formulário quebra em várias linhas. Uma variante compacta (sem a dica longa, Oportunidade na linha de baixo) resolve.
+5. **Seção Tarefas da oportunidade dentro do cabeçalho fixo:** a seção fica entre a grade de campos e as abas, fora da área que rola. A lista das abertas tem teto de 220 px e rola por dentro, mas com muitas tarefas (mais "Nova tarefa" e "Feitas") a seção inteira passa de 300 px e aperta as abas e a linha do tempo numa janela de 740 px de altura.
+6. **Cartão `tarefa-criar`: "Editar" contorna o `ambiguo`** (achado opcional do revisor do 127, fora da devolução): com o nome da oportunidade ou do contato ambíguo, abrir "Editar" e salvar deixa criar sem passar pela escolha no `SearchPicker`.
+7. **Lembrete padrão no pulo do horário de verão** (achado opcional do revisor do 121): `lembretePadrao` pode cair num horário que não existe no dia em que o relógio adianta. Não afeta o fuso de São Paulo hoje (sem horário de verão); vale para quem usar outro fuso.
+8. **"Era padrão" depende da hora atual** (consequência da D-6, informação do revisor do 121): o recálculo decide se o lembrete era o padrão comparando com o padrão calculado com a `horaLembrete` de agora; quem muda a hora em Configurações e depois muda o prazo de uma tarefa antiga perde o recálculo daquela tarefa.
+9. **`emailExport.reminders` sem teste unitário** (achado do revisor do 129): a lista dos lembretes de e-mail que o Assistente recebe (`main/index.ts` ~1545-1552) filtra só os lembretes futuros e ainda não disparados, mas essa lógica mora no `index.ts`, sem teste unitário; só o smoke a cobre. Levar o filtro para uma função pura (em `main/tarefas/`) com vitest.
+
+**Da auditoria dos prints e do fechamento:**
+
+10. **Auditoria dos prints pendente de execução.** O `pnpm gates` do fechamento parou no smoke com "Current display surface not available for capture" (tela do Mac bloqueada); nenhum dos 19 prints novos nem dos regravados foi gerado. `auditoria-prints.md` está com `status: pendente-de-execucao` e a lista do que conferir em cada print. O CA17 da spec (smoke com `SCREENS.length * THEMES.length + 222` PNGs e `report.json` sem título nem e-mail) segue sem prova até o smoke rodar.
+11. **Artboards antigos de `docs/telas` sem o "+ Tarefa" e o bloco Tarefas:** `EmailLeitura`, `EmailLeituraContato`, `WhatsAppContato`, `FunilContatos` (ficha sem o bloco Tarefas), `FunilEmpresas` e `DetalheResumoOportunidade` (tabela de tarefas sem a coluna de estado) continuam como estavam; as telas novas e mudadas têm artboard próprio (ver `docs/telas/README.md`). Os artboards novos ainda precisam ser conferidos contra os prints quando o smoke rodar.

@@ -28,12 +28,12 @@ body{margin:0}
 </div>
 
 <nav aria-label="Navegação principal" style="flex: 1 1 auto; min-height: 0; margin-top: 16px; display: flex; flex-direction: column; gap: 2px">
-<sc-for list="{{itens}}" as="item" hint-placeholder-count="7">
+<sc-for list="{{itens}}" as="item" hint-placeholder-count="8">
 <a href="{{item.href}}" aria-current="{{item.current}}" style="flex: none; display: flex; align-items: center; gap: 8px; height: 32px; padding: 0 10px; border-radius: 4px; text-decoration: none; font-size: 13px; background: {{item.bg}}; color: {{item.fg}}">
 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true" style="flex: none; display: block"><path d="{{item.icone}}"></path></svg>
 <span style="flex: 1 1 auto; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">{{item.rotulo}}</span>
 <sc-if value="{{item.temNumero}}" hint-placeholder-val="{{false}}">
-<span style="font-size: 12px; line-height: 16px; font-weight: 500; color: #ffffff; font-variant-numeric: tabular-nums">{{item.numero}}<span style="position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap"> não lidas</span></span>
+<span style="font-size: 12px; line-height: 16px; font-weight: 500; color: #ffffff; font-variant-numeric: tabular-nums">{{item.numero}}<span style="position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap">{{item.sufixo}}</span></span>
 </sc-if>
 </a>
 </sc-for>
@@ -64,14 +64,17 @@ body{margin:0}
 
 </aside>
 </x-dc>
-<script type="text/x-dc" data-dc-script data-props='{"ativo":{"editor":"enum","options":["reunioes","assistente","email","funil","automacoes","whatsapp","configuracoes"],"default":"reunioes"},"naoLidas":{"editor":"int","min":0,"max":9999,"default":3},"$preview":{"width":224,"height":740}}'>
+<script type="text/x-dc" data-dc-script data-props='{"ativo":{"editor":"enum","options":["reunioes","tarefas","assistente","email","funil","automacoes","whatsapp","configuracoes"],"default":"reunioes"},"naoLidas":{"editor":"int","min":0,"max":9999,"default":3},"vencidas":{"editor":"int","min":0,"max":9999,"default":2},"$preview":{"width":224,"height":740}}'>
 class Component extends DCLogic {
   renderVals() {
     var ativo = this.props.ativo ?? 'reunioes';
     var naoLidas = this.props.naoLidas ?? 2;
     var numero = naoLidas > 999 ? '999+' : String(naoLidas);
+    // Feature tarefas (22/11/2026): o número de tarefas vencidas ao lado de Tarefas, no padrão do não-lido do Email.
+    var vencidas = this.props.vencidas ?? 2;
     var base = [
       { id: 'reunioes', rotulo: 'Reuniões', href: 'Main.dc.html', icone: 'M2 6h4M2 10h4M2 14h4M2 18h4M6 2h12a2 2 0 0 1 2 2v16a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2zM9.5 8h5M9.5 12H16M9.5 16H14' },
+      { id: 'tarefas', rotulo: 'Tarefas', href: 'TarefasHoje.dc.html', icone: 'M5 3h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2zM9 12l2 2 4-4' },
       { id: 'assistente', rotulo: 'Assistente', href: 'AssistenteConversa.dc.html', icone: 'M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .963 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.581a.5.5 0 0 1 0 .964L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.963 0zM20 3v4M22 5h-4M4 17v2M5 18H3' },
       { id: 'email', rotulo: 'Email', href: 'Email.dc.html', icone: 'M4 4h16a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2zM22 7l-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7' },
       { id: 'funil', rotulo: 'Funil', href: 'FunilOportunidades.dc.html', icone: 'M10 20a1 1 0 0 0 .553.895l2 1A1 1 0 0 0 14 21v-7a2 2 0 0 1 .517-1.341L21.74 4.67A1 1 0 0 0 21 3H3a1 1 0 0 0-.742 1.67l7.225 7.989A2 2 0 0 1 10 14z' },
@@ -88,8 +91,9 @@ class Component extends DCLogic {
         current: on ? 'page' : undefined,
         bg: on ? 'rgba(255,255,255,0.12)' : 'transparent',
         fg: on ? '#ffffff' : '#a8b5cc',
-        temNumero: item.id === 'email' && naoLidas > 0,
-        numero: numero
+        temNumero: (item.id === 'email' && naoLidas > 0) || (item.id === 'tarefas' && vencidas > 0),
+        numero: item.id === 'tarefas' ? (vencidas > 999 ? '999+' : String(vencidas)) : numero,
+        sufixo: item.id === 'tarefas' ? ' vencidas' : ' não lidas'
       };
     });
     return { itens: itens };
