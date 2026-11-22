@@ -1,5 +1,6 @@
 ---
-status: aprovado
+status: arquivado
+arquivado_em: 2026-11-22
 feature: tarefas-pendencias
 tipo: spec
 data: 2026-11-22
