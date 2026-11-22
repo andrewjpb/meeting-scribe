@@ -47,6 +47,7 @@ import { FAKE_AI_NOTES_DELAY_MS, fakeAiNotes } from './fake-ai-notes.mjs'
 import { FAKE_ANALYSIS_DELAY_MS, fakeAnalysis } from './fake-analysis.mjs'
 import { FAKE_CORRECT_SLOW_MS, fakeCorrection, isSlowCorrection } from './fake-correct.mjs'
 import { fakeDraft } from './fake-draft.mjs'
+import { fridayAfterMeeting } from './fake-summary-due.mjs'
 import { FAKE_INSIGHTS_DELAY_MS, fakeWhatsAppInsights } from './fake-whatsapp-insights.mjs'
 
 const args = process.argv.slice(2)
@@ -361,8 +362,8 @@ if (args[0] === 'mcp') {
       overview: `Reunião com ${lines.length} falas de ${speakers.join(' e ')}. A conversa tratou da captura do microfone e do áudio do sistema durante a gravação.`,
       decisions: ['Manter a captura do microfone separada do áudio do sistema.'],
       tasks: [
-        { task: 'Revisar a transcrição da reunião', owner: 'Você', due: 'sexta-feira' },
-        { task: 'Enviar as notas aos participantes', owner: participant, due: null },
+        { task: 'Revisar a transcrição da reunião', owner: 'Você', due: 'sexta-feira', dueIso: fridayAfterMeeting(input) },
+        { task: 'Enviar as notas aos participantes', owner: participant, due: null, dueIso: null },
       ],
     }
     process.stdout.write(

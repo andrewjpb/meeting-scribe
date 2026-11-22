@@ -1,4 +1,7 @@
-import { Route, Routes, useLocation } from 'react-router'
+import { useEffect } from 'react'
+import { Route, Routes, useLocation, useNavigate } from 'react-router'
+import { TAREFAS_ROOT_PATH, type TarefasNavigationState } from '@shared/routes'
+import { useLock } from './lockStore'
 import { APP_ROUTES, redirectElement, REDIRECTS, routeIdOf } from './routes'
 import { Sidebar } from './Sidebar'
 import { useMainNavigation } from './useMainNavigation'
@@ -8,6 +11,12 @@ import { useRedesSync } from '../features/redes/redesStore'
 import { CalendarBanner } from '../features/calendar/CalendarBanner'
 import { useCalendarSync } from '../features/calendar/calendarStore'
 import { useMeetSync } from '../features/live/meetStore'
+import { useTarefas } from '../features/tarefas/tarefasStore'
+
+/** ⌘⇧T sem outro modificador (contrato 123, D19): abre Tarefas com o formulário "Nova tarefa". */
+export function isNovaTarefaShortcut(event: Pick<KeyboardEvent, 'code' | 'metaKey' | 'shiftKey' | 'altKey' | 'ctrlKey'>): boolean {
+  return event.code === 'KeyT' && event.metaKey && event.shiftKey && !event.altKey && !event.ctrlKey
+}
 
 /**
  * Esqueleto da janela: barra lateral azul à esquerda, área principal em `--bg`. A faixa arrastável de
@@ -16,6 +25,7 @@ import { useMeetSync } from '../features/live/meetStore'
  */
 export function Shell() {
   const location = useLocation()
+  const navigate = useNavigate()
   useMainNavigation()
   useWhatsAppSync()
   // Contrato 43: as contas de email e as não lidas de cada uma, para a barra lateral.
@@ -26,10 +36,30 @@ export function Shell() {
   useCalendarSync()
   // Contrato 27: a extensão do Meet; os eventos de fala valem em qualquer tela durante a gravação.
   useMeetSync()
+  // Contrato 123 (R1): as tarefas carregadas uma vez e acompanhadas, para o número de vencidas da barra lateral aparecer
+  // sem abrir a tela.
+  useEffect(() => {
+    const { load, watch } = useTarefas.getState()
+    const off = watch()
+    void load()
+    return off
+  }, [])
+  // Contrato 123 (D19): ⌘⇧T, desbloqueado, leva a Tarefas com "Nova tarefa" aberto e o foco no título.
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent): void => {
+      if (!isNovaTarefaShortcut(event) || event.repeat) return
+      event.preventDefault()
+      if (useLock.getState().status.locked) return
+      const state: TarefasNavigationState = { nova: true }
+      void navigate(TAREFAS_ROOT_PATH, { state })
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [navigate])
   const routeId = routeIdOf(location.pathname)
-  // Trocar de aba em Configurações (ou de pasta no email, contrato 43, ou de seção nas redes, contrato 72) não remonta a
-  // tela (nem refaz a transição de rota).
-  const routeKey = routeId === 'configuracoes' || routeId === 'email' || routeId === 'redes' ? routeId : location.pathname
+  // Trocar de aba em Configurações (ou de pasta no email, contrato 43, ou de seção nas redes, contrato 72, ou de tarefa,
+  // contrato 123, que guarda a visão, a busca e o agrupamento) não remonta a tela (nem refaz a transição de rota).
+  const routeKey = routeId === 'configuracoes' || routeId === 'email' || routeId === 'redes' || routeId === 'tarefas' ? routeId : location.pathname
 
   return (
     <div className="flex h-full">

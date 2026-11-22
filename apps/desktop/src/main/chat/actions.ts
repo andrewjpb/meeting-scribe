@@ -19,6 +19,10 @@
 // das redes): nada daqui importa o serviço das redes, publica ou agenda.
 // Contrato 117: os cartões do funil de vendas. Oportunidade, etapa e contato são resolvidos pelo funil do app (o id que
 // não existe e a etapa que não bate viram cartão `failed` com a razão); o clique grava só pelo serviço do funil (110).
+// Contrato 127: as tarefas. O cartão `lembrete` cria uma tarefa com `lembreteEm` (não mais a tarefa "uma vez" das
+// Automações) e `lembrete-editar`/`-apagar` mexem na tarefa aberta com lembrete; os cartões `tarefa-criar`, `-concluir` e
+// `-adiar` resolvem o id (inteiro ou curto) nas tarefas do app e a oportunidade e o contato pelo nome no funil. O clique
+// grava só pelo serviço das tarefas (122).
 import { randomUUID } from 'node:crypto'
 import { z } from 'zod'
 import {
@@ -45,12 +49,12 @@ import {
   FUNIL_ETAPA_NAO_ENCONTRADA,
   FUNIL_OPORTUNIDADE_CRIADA_TEXT,
   FUNIL_OPORTUNIDADE_NAO_ENCONTRADA,
-  FUNIL_PASSO_SALVO_TEXT,
   funilMovidaText,
   INSTAGRAM_DRAFT_CAPTION_MAX,
   INSTAGRAM_DRAFT_CREATED_TEXT,
   openLabel,
   OPEN_SCREENS,
+  OPORTUNIDADE_FECHADA_TEXT,
   phoneOfChatId,
   REMINDER_TEXT_MAX,
   reminderChangedText,
@@ -58,6 +62,15 @@ import {
   REMINDER_DELETED_TEXT,
   REMINDER_GONE_TEXT,
   sentText,
+  TAREFA_ACTION_KINDS,
+  TAREFA_ESCOLHA_CONTATO_TEXT,
+  TAREFA_ESCOLHA_OPORTUNIDADE_TEXT,
+  TAREFA_GONE_TEXT,
+  tarefaAdiadaText,
+  tarefaConcluidaText,
+  tarefaCriadaText,
+  tarefaJaExistiaText,
+  tarefaPrazoAtualizadoText,
   TASK_CREATED_TEXT,
   WHATSAPP_CHOICES_MAX,
   type ChatAction,
@@ -67,24 +80,27 @@ import {
   type ChatActionFunilContato,
   type ChatActionOportunidadeCriar,
   type ChatActionResult,
+  type ChatActionTarefa,
   type ChatCalendarAccess,
   type EmailCardItem,
   type OpenScreen,
   type ReminderEmail,
 } from '../../shared/assistant'
 import { EMAIL_REF_PATTERN, EMAIL_TEXT_MAX, isSent, prefixedSubject, type EmailAccountStatus, type EmailMessage } from '../../shared/email'
-import { describeSchedule, TASK_MESSAGE_MAX, TASK_NAME_MAX, wallTime, zonedInstant, type ScheduledTask, type TaskReminder, type TaskSaveResult } from '../../shared/automations'
+import { describeSchedule, TASK_MESSAGE_MAX, TASK_NAME_MAX, wallTime, zonedInstant } from '../../shared/automations'
 import { automationIdSchema, scheduleSchema } from '../../shared/automations-schema'
 import type { Chat, ChatMessage } from '../../shared/chat'
 import { FUNIL_ETAPA_NOME_MAX, FUNIL_NOME_MAX, type Etapa, type FunilActionResult, type FunilState, type FunilView, type Oportunidade } from '../../shared/funil'
 import { mesmoTelefone, normalizarEmail, normalizarTelefone, semAcento } from '../../shared/funil-logic'
 import { SETTINGS_TABS } from '../../shared/routes'
+import { TAREFA_DETALHE_MAX, TAREFA_ID_CURTO, TAREFA_TITULO_MAX, type Tarefa } from '../../shared/tarefas'
+import { diaNoFuso, diaValido } from '../../shared/tarefas-logic'
 import { WHATSAPP_CHAT_ID_PATTERN, WHATSAPP_SEND_TEXT_MAX, type WhatsAppChatKind } from '../../shared/whatsapp'
 import { normalizeWhen } from '../invites/map'
 import type { MacCalendar } from '../mac-calendar/process'
 import type { MacCalendarCreateArgs, MacCalendarError } from '../mac-calendar/protocol'
 import type { FunilService } from '../funil/service'
-import type { AutomationsService } from '../schedules/service'
+import type { TarefasService } from '../tarefas/service'
 import type { ChatEventsStore } from './events-store'
 import { calendarIdSchema, CHAT_CALENDARS_MAX, chatIdSchema, type ChatStore } from './store'
 import { captionStats } from '../../shared/redes-rules'
@@ -125,6 +141,8 @@ const funilDia = z
     return month >= 1 && month <= 12 && day >= 1 && day <= new Date(Date.UTC(year, month, 0)).getUTCDate()
   }, 'dia inválido')
 const funilId = z.string().trim().min(1).max(200)
+/** Contrato 127: o id de uma tarefa (o uuid, ou os 8 primeiros caracteres dele). */
+const tarefaIdSchema = z.string().trim().regex(/^[\w-]{1,100}$/)
 /** Texto opcional de uma linha: vazio vale como ausente. */
 const funilOpcional = (max: number) =>
   z
@@ -138,7 +156,7 @@ const funilOpcional = (max: number) =>
 const proposedSchema = z.discriminatedUnion('tipo', [
   z.object({ tipo: z.literal('lembrete'), quando: zonedIso, texto: line(REMINDER_TEXT_MAX), conversaWhatsApp: whatsappChatId.nullable().optional(), horaPadrao: z.boolean().optional(), email: emailRef.nullable().optional() }),
   z.object({ tipo: z.literal('whatsapp-resposta'), chatId: whatsappChatId, texto: z.string().trim().min(1).max(WHATSAPP_SEND_TEXT_MAX) }),
-  z.object({ tipo: z.literal('tarefa'), nome: line(TASK_NAME_MAX), agente: z.string().trim().min(1).max(100), mensagem: z.string().trim().min(1).max(TASK_MESSAGE_MAX), schedule: scheduleSchema }),
+  z.object({ tipo: z.literal('agendamento'), nome: line(TASK_NAME_MAX), agente: z.string().trim().min(1).max(100), mensagem: z.string().trim().min(1).max(TASK_MESSAGE_MAX), schedule: scheduleSchema }),
   z.object({ tipo: z.literal('abrir'), tela: z.enum(OPEN_SCREENS), alvo: z.string().trim().max(200).nullable().optional() }),
   // Contrato 45.
   z.object({ tipo: z.literal('emails'), mensagens: z.array(emailRef).min(1).max(EMAIL_CARD_ITEMS_MAX * 2) }),
@@ -187,6 +205,17 @@ const proposedSchema = z.discriminatedUnion('tipo', [
     empresa: funilOpcional(FUNIL_NOME_MAX),
     cargo: funilOpcional(FUNIL_NOME_MAX),
   }),
+  // Contrato 127 (R28): as tarefas. A oportunidade e o contato pelo nome; o id, inteiro ou curto, copiado do TAREFAS.md.
+  z.object({
+    tipo: z.literal('tarefa-criar'),
+    titulo: line(TAREFA_TITULO_MAX),
+    prazo: funilDia.nullable().optional(),
+    lembrete: zonedIso.nullable().optional(),
+    oportunidade: funilOpcional(FUNIL_NOME_MAX),
+    contato: funilOpcional(FUNIL_NOME_MAX),
+  }),
+  z.object({ tipo: z.literal('tarefa-concluir'), id: tarefaIdSchema }),
+  z.object({ tipo: z.literal('tarefa-adiar'), id: tarefaIdSchema, prazo: funilDia }),
 ])
 type Proposed = z.infer<typeof proposedSchema>
 type FunilProposed = Extract<Proposed, { tipo: ChatActionFunil['kind'] }>
@@ -203,8 +232,11 @@ export interface ActionResolver {
   calendar?: Pick<MacCalendar, 'status' | 'calendars'>
   /** Contrato 78: a agenda padrão de Configurações › Email › Convites (`inviteCalendarId`). */
   preferredCalendar?: () => Promise<string | null>
-  /** Contrato 78: as tarefas das Automações (o lembrete que o cartão de alterar ou apagar aceita). */
-  tasks?: () => Promise<readonly ScheduledTask[]>
+  /**
+   * Contrato 127: as tarefas do app, só para ler (o lembrete que o cartão de alterar ou apagar aceita, a tarefa de concluir,
+   * adiar ou abrir); `null` com o app bloqueado.
+   */
+  tarefas?: () => Promise<readonly Tarefa[] | null>
   /** Contrato 76: as contas do Instagram conectadas (o id e o @), para o cartão do rascunho. */
   instagramAccounts?: () => Promise<readonly InstagramDraftAccount[]>
   /** Contrato 117: o funil de vendas, só para ler (montar o cartão não grava nada); `null` com o app bloqueado. */
@@ -215,7 +247,9 @@ export interface ActionResolver {
 }
 
 const SETTINGS_LABELS: Readonly<Record<string, string>> = { geral: 'Geral', gravacao: 'Gravação', claude: 'Claude', arquivos: 'Arquivos', contas: 'Contas', plugins: 'Plugins', conexoes: 'Conexões', sobre: 'Sobre' }
-const AUTOMATIONS_LABELS: Readonly<Record<string, string>> = { agentes: 'Agentes', tarefas: 'Tarefas agendadas', execucoes: 'Execuções' }
+const AUTOMATIONS_LABELS: Readonly<Record<string, string>> = { agentes: 'Agentes', tarefas: 'Agendamentos', execucoes: 'Execuções' }
+/** Contrato 128 (D15): `agendamentos` é sinônimo da aba `tarefas` (o id interno não muda). */
+const AUTOMATIONS_ALIASES: Readonly<Record<string, string>> = { agendamentos: 'tarefas' }
 
 async function openTarget(screen: OpenScreen, target: string | null, resolver: ActionResolver): Promise<{ target: string | null; name: string | null } | null> {
   if (screen === 'reuniao') {
@@ -235,7 +269,8 @@ async function openTarget(screen: OpenScreen, target: string | null, resolver: A
   }
   if (screen === 'automacoes') {
     if (!target) return { target: null, name: null }
-    return (AUTOMATIONS_TABS as readonly string[]).includes(target) ? { target, name: AUTOMATIONS_LABELS[target] ?? target } : null
+    const tab = AUTOMATIONS_ALIASES[target] ?? target
+    return (AUTOMATIONS_TABS as readonly string[]).includes(tab) ? { target: tab, name: AUTOMATIONS_LABELS[tab] ?? tab } : null
   }
   // Contrato 117 (R20): a oportunidade e o contato pelo id do funil (que existe e não está arquivado), com o nome dele.
   if (screen === 'oportunidade' || screen === 'contato') {
@@ -249,7 +284,14 @@ async function openTarget(screen: OpenScreen, target: string | null, resolver: A
     const contato = state.contatos.find((item) => item.id === target && !item.arquivado)
     return contato ? { target, name: contato.nome } : null
   }
-  // Reuniões, Gravação e o Funil não têm alvo.
+  // Contrato 127 (R30): a tarefa pelo id inteiro ou curto (aberta ou não), com o título dela; o alvo vira o id inteiro.
+  if (screen === 'tarefa') {
+    if (!target) return null
+    const tarefas = await resolver.tarefas?.().catch(() => null)
+    const tarefa = tarefas ? tarefaPorId(tarefas, target, () => true) : null
+    return tarefa ? { target: tarefa.id, name: tarefa.titulo } : null
+  }
+  // Reuniões, Gravação, o Funil e as Tarefas não têm alvo.
   return { target: null, name: null }
 }
 
@@ -475,11 +517,62 @@ export async function calendarOverview(
   return { access, calendars: calendars.map((item) => ({ title: item.title, source: item.source, isDefault: item.id === chosen?.id })) }
 }
 
-/** O lembrete das Automações que ainda não disparou (o que já avisou não existe mais para o cartão). */
-const pendingReminder = (tasks: readonly ScheduledTask[], id: string): (ScheduledTask & { reminder: TaskReminder; schedule: { kind: 'once'; at: string } }) | null => {
-  const task = tasks.find((item) => item.id === id)
-  if (!task?.reminder || task.schedule.kind !== 'once' || task.lastRunAt !== null) return null
-  return task as ScheduledTask & { reminder: TaskReminder; schedule: { kind: 'once'; at: string } }
+// --- Contrato 127: as tarefas --------------------------------------------------------------------------------------
+
+/**
+ * Contrato 127 (D-13): a tarefa do id inteiro, ou do curto (8 caracteres) que casa com exatamente uma, entre as que passam
+ * no `filtro` (por padrão, as abertas). Nenhuma ou mais de uma: `null`.
+ */
+export function tarefaPorId(tarefas: readonly Tarefa[], id: string, filtro: (tarefa: Tarefa) => boolean = (tarefa) => tarefa.status === 'aberta'): Tarefa | null {
+  const candidatas = tarefas.filter((tarefa) => filtro(tarefa) && (tarefa.id === id || (id.length === TAREFA_ID_CURTO && tarefa.id.startsWith(id))))
+  return candidatas.length === 1 ? (candidatas[0] ?? null) : null
+}
+
+/** Contrato 127 (R13, D-14): o lembrete que os cartões de alterar e apagar aceitam: a tarefa aberta com `lembreteEm`. */
+const comLembrete = (tarefa: Tarefa): boolean => tarefa.status === 'aberta' && tarefa.lembreteEm !== null
+
+/** Contrato 127: o item do funil com o nome (sem acento, sem caixa), só se for exatamente um. */
+function unicoPorNome<T>(itens: readonly T[], nomeDe: (item: T) => string, nome: string): T | null {
+  const achados = itens.filter((item) => chaveEtapa(nomeDe(item)) === chaveEtapa(nome))
+  return achados.length === 1 ? (achados[0] ?? null) : null
+}
+
+type TarefaProposed = Extract<Proposed, { tipo: ChatActionTarefa['kind'] }>
+
+/**
+ * Contrato 127 (R28): o cartão das tarefas, com o que o app tem agora. No de criar, a oportunidade (aberta, não arquivada) e
+ * o contato (não arquivado) pelo nome; nenhum ou mais de um com o nome (ou o funil indisponível) vira `ambiguo`, a
+ * oportunidade primeiro. Nos de concluir e adiar, o id que não casa com exatamente uma tarefa aberta nasce `failed`.
+ */
+async function resolveTarefa(proposed: TarefaProposed, base: { id: string; status: 'proposed'; result: null }, tarefas: readonly Tarefa[], resolver: ActionResolver): Promise<ChatAction | null> {
+  if (proposed.tipo === 'tarefa-criar') {
+    const lembreteEm = proposed.lembrete ? Date.parse(proposed.lembrete) : null
+    if (lembreteEm !== null && lembreteEm <= resolver.now()) return null
+    const state = proposed.oportunidade || proposed.contato ? ((await resolver.funil?.().catch(() => null))?.state ?? null) : null
+    let oportunidade: { id: string; titulo: string } | null = null
+    let contato: { id: string; nome: string } | null = null
+    let ambiguo: { campo: 'oportunidade' | 'contato'; texto: string } | null = null
+    let ambiguoContato: string | null = null
+    if (proposed.oportunidade) {
+      const abertas = state ? state.oportunidades.filter((item) => !item.arquivado && state.etapas.find((etapa) => etapa.id === item.etapaId)?.tipo === 'aberta') : []
+      const achada = unicoPorNome(abertas, (item) => item.titulo, proposed.oportunidade)
+      if (achada) oportunidade = { id: achada.id, titulo: cardText(achada.titulo, FUNIL_NOME_MAX) }
+      else ambiguo = { campo: 'oportunidade', texto: proposed.oportunidade }
+    }
+    if (proposed.contato) {
+      const achado = unicoPorNome(state ? state.contatos.filter((item) => !item.arquivado) : [], (item) => item.nome, proposed.contato)
+      if (achado) contato = { id: achado.id, nome: cardText(achado.nome, FUNIL_NOME_MAX) }
+      // Com a oportunidade já por escolher, o contato citado fica à parte (o cartão pede os dois).
+      else if (ambiguo) ambiguoContato = proposed.contato
+      else ambiguo = { campo: 'contato', texto: proposed.contato }
+    }
+    return { ...base, kind: 'tarefa-criar', titulo: proposed.titulo, prazo: proposed.prazo ?? null, lembreteEm, oportunidade, contato, ambiguo, ...(ambiguoContato ? { ambiguoContato } : {}), tarefaId: null, error: null }
+  }
+  const tarefa = tarefaPorId(tarefas, proposed.id)
+  const failed = tarefa ? {} : { status: 'failed' as const, error: TAREFA_GONE_TEXT }
+  const ref = { tarefaId: tarefa?.id ?? proposed.id, titulo: tarefa?.titulo ?? '', error: null }
+  if (proposed.tipo === 'tarefa-concluir') return { ...base, kind: 'tarefa-concluir', ...ref, ...failed }
+  return { ...base, kind: 'tarefa-adiar', ...ref, prazoAntes: tarefa?.prazo ?? null, prazo: proposed.prazo, ...failed }
 }
 
 // --- Contrato 117: o funil de vendas ----------------------------------------------------------------------------
@@ -596,6 +689,7 @@ function resolveFunil(proposed: FunilProposed, base: { id: string; status: 'prop
     }
     case 'oportunidade-proximo-passo': {
       const oportunidade = oportunidadeViva(state, proposed.oportunidadeId)
+      // Contrato 127 (R17): o clique cria uma tarefa; o passo de antes não entra mais no cartão.
       const card = {
         ...base,
         kind: 'oportunidade-proximo-passo' as const,
@@ -603,7 +697,7 @@ function resolveFunil(proposed: FunilProposed, base: { id: string; status: 'prop
         titulo: oportunidade?.titulo ?? '',
         texto: proposed.texto,
         data: proposed.data ?? null,
-        anterior: oportunidade?.proximoPasso ? { texto: oportunidade.proximoPasso.texto, data: oportunidade.proximoPasso.data } : null,
+        anterior: null,
         error: null,
       }
       return oportunidade ? card : { ...card, ...failed, error: FUNIL_OPORTUNIDADE_NAO_ENCONTRADA }
@@ -665,14 +759,14 @@ async function resolve(proposed: Proposed, id: string, resolver: ActionResolver)
       if (!chat) return null
       return { ...base, kind: 'whatsapp-resposta', chatId: proposed.chatId, chatName: chat.name, phone: chat.kind === 'group' ? null : (chat.phone ?? phoneOfChatId(proposed.chatId)), group: chat.kind === 'group', text: proposed.texto }
     }
-    case 'tarefa': {
+    case 'agendamento': {
       const agents = (await resolver.agents?.().catch(() => [])) ?? []
       const wanted = proposed.agente.toLocaleLowerCase('pt-BR')
       const agent = agents.find((candidate) => candidate.id === proposed.agente) ?? agents.find((candidate) => candidate.name.toLocaleLowerCase('pt-BR') === wanted)
       if (!agent) return null
       // Frequência que não se descreve (cron inválido já não passa no esquema) também não vale.
       if (!describeSchedule(proposed.schedule, resolver.timeZone())) return null
-      return { ...base, kind: 'tarefa', name: proposed.nome, agentId: agent.id, agentName: agent.name, message: proposed.mensagem, schedule: proposed.schedule }
+      return { ...base, kind: 'agendamento', name: proposed.nome, agentId: agent.id, agentName: agent.name, message: proposed.mensagem, schedule: proposed.schedule }
     }
     case 'abrir': {
       const found = await openTarget(proposed.tela, proposed.alvo ?? null, resolver)
@@ -723,17 +817,18 @@ async function resolve(proposed: Proposed, id: string, resolver: ActionResolver)
       const chosen = chooseCalendar(calendars, proposed.agenda ?? null, preferred)
       return { ...base, kind: 'evento', ...draft, calendarId: chosen?.id ?? null, calendarTitle: chosen?.title ?? null, calendars, access, error: null }
     }
+    // Contrato 127 (R13, D-14): o lembrete é o de uma tarefa aberta (já disparado ou não), pelo id inteiro ou curto.
     case 'lembrete-editar': {
       if (proposed.quando === undefined && proposed.texto === undefined) return null
       if (proposed.quando !== undefined && Date.parse(proposed.quando) <= resolver.now()) return null
-      const task = pendingReminder((await resolver.tasks?.().catch(() => [])) ?? [], proposed.id)
-      if (!task) return null
-      return { ...base, kind: 'lembrete-editar', taskId: task.id, currentText: task.reminder.text, currentAt: task.schedule.at, text: proposed.texto ?? null, at: proposed.quando ?? null, error: null }
+      const tarefa = tarefaPorId((await resolver.tarefas?.().catch(() => null)) ?? [], proposed.id, comLembrete)
+      if (!tarefa) return null
+      return { ...base, kind: 'lembrete-editar', taskId: tarefa.id, currentText: tarefa.titulo, currentAt: new Date(tarefa.lembreteEm ?? 0).toISOString(), text: proposed.texto ?? null, at: proposed.quando ?? null, error: null }
     }
     case 'lembrete-apagar': {
-      const task = pendingReminder((await resolver.tasks?.().catch(() => [])) ?? [], proposed.id)
-      if (!task) return null
-      return { ...base, kind: 'lembrete-apagar', taskId: task.id, text: task.reminder.text, at: task.schedule.at, error: null }
+      const tarefa = tarefaPorId((await resolver.tarefas?.().catch(() => null)) ?? [], proposed.id, comLembrete)
+      if (!tarefa) return null
+      return { ...base, kind: 'lembrete-apagar', taskId: tarefa.id, text: tarefa.titulo, at: new Date(tarefa.lembreteEm ?? 0).toISOString(), error: null }
     }
     case 'instagram-rascunho': {
       const caption = instagramCaption(proposed.legenda)
@@ -750,6 +845,13 @@ async function resolve(proposed: Proposed, id: string, resolver: ActionResolver)
     case 'contato-criar': {
       const view = await resolver.funil?.().catch(() => null)
       return view ? resolveFunil(proposed, base, view.state) : null
+    }
+    // Contrato 127: sem as tarefas (o app bloqueado), o bloco fica como texto.
+    case 'tarefa-criar':
+    case 'tarefa-concluir':
+    case 'tarefa-adiar': {
+      const tarefas = await resolver.tarefas?.().catch(() => null)
+      return tarefas ? resolveTarefa(proposed, base, tarefas, resolver) : null
     }
   }
 }
@@ -800,8 +902,8 @@ export function actionsHistory(actions: readonly ChatAction[] | undefined): stri
         return `- lembrete "${action.text}" para ${action.at}${action.email ? ` sobre o email ${action.email.label}` : ''} (${state})`
       case 'whatsapp-resposta':
         return `- resposta no WhatsApp para ${action.chatName}: "${action.text.replace(/\s+/g, ' ').slice(0, 200)}" (${state})`
-      case 'tarefa':
-        return `- tarefa "${action.name}" com o agente ${action.agentName} (${state})`
+      case 'agendamento':
+        return `- agendamento "${action.name}" com o agente ${action.agentName} (${state})`
       case 'abrir':
         return `- botão "${action.label}"`
       case 'emails':
@@ -827,6 +929,13 @@ export function actionsHistory(actions: readonly ChatAction[] | undefined): stri
         return `- Próximo passo de ${action.titulo || action.oportunidadeId}: ${action.texto} (${state})`
       case 'contato-criar':
         return `- Contato criado: ${action.nome} (${state})`
+      // Contrato 127.
+      case 'tarefa-criar':
+        return `- criar a tarefa "${action.titulo}"${action.prazo ? ` com prazo ${action.prazo}` : ''}${action.oportunidade ? ` ligada à oportunidade ${action.oportunidade.titulo}` : ''} (${state})`
+      case 'tarefa-concluir':
+        return `- concluir a tarefa "${action.titulo || action.tarefaId}" (${state})`
+      case 'tarefa-adiar':
+        return `- adiar a tarefa "${action.titulo || action.tarefaId}" para ${action.prazo} (${state})`
     }
   })
   return ['[Cartões propostos nesta resposta:', ...lines, ']'].join('\n')
@@ -852,8 +961,6 @@ export async function markEmailBatchCard(store: Pick<ChatStore, 'mutate'>, chatI
 
 export interface ChatActionsDeps {
   store: Pick<ChatStore, 'get' | 'mutate'>
-  /** Automações (23): a tarefa "uma vez" sem agente. */
-  createReminder: (input: { at: string; reminder: TaskReminder }) => Promise<TaskSaveResult>
   timeZone: () => string
   now?: () => number
   /** Contrato 78: o Calendário do Mac, que grava o evento só no clique em "Pôr na agenda". */
@@ -872,19 +979,18 @@ export interface ChatActionsDeps {
   }
   /** Contrato 117: o serviço do funil (110): a leitura e as gravações, só no clique de um cartão do funil. */
   funil?: Pick<FunilService, 'view' | 'contatoSave' | 'oportunidadeSave' | 'oportunidadeMove' | 'eventoAdd'>
-  /** Contrato 78: alterar e apagar um lembrete das Automações (só no clique). */
-  reminders?: {
-    list: () => Promise<readonly ScheduledTask[]>
-    update: AutomationsService['updateReminder']
-    remove: (id: string) => Promise<boolean>
-  }
+  /**
+   * Contrato 127: o serviço das tarefas (122), só no clique: o lembrete criado como tarefa, alterar e apagar o lembrete de
+   * uma tarefa e os cartões das tarefas.
+   */
+  tarefas?: Pick<TarefasService, 'todas' | 'criar' | 'salvar' | 'status' | 'apagar'>
   log?: (message: string) => void
 }
 
 export interface ChatActions {
   /** "Criar lembrete" (com a data e o texto do "Editar"). */
   reminder(request: unknown): Promise<ChatActionResult>
-  /** "Descartar", "Enviada" (depois do envio do contrato 24) e "Tarefa criada" (depois do formulário). */
+  /** "Descartar", "Enviada" (depois do envio do contrato 24) e "Agendamento criado" (depois do formulário). */
   setState(request: unknown): Promise<ChatActionResult>
   /** Contrato 78: "Pôr na agenda" e "Tentar de novo" (com o que o "Editar" mudou). */
   event(request: unknown): Promise<ChatActionResult>
@@ -897,6 +1003,8 @@ export interface ChatActions {
   instagramDraft(request: unknown, onCreated?: (target: { accountId: string; publicationId: string }) => void): Promise<ChatActionResult>
   /** Contrato 117 (D9): "Mover", "Criar" e "Salvar" nos cartões do funil, pelo tipo gravado (`campos`: o de criar). */
   funil(request: unknown): Promise<ChatActionResult>
+  /** Contrato 127 (D14): "Criar", "Concluir" e "Adiar" nos cartões das tarefas, pelo tipo gravado (`campos`: o de criar). */
+  tarefa(request: unknown): Promise<ChatActionResult>
 }
 
 /** Contrato 78: a frase do erro do helper no cartão do evento, sem termo técnico. */
@@ -989,6 +1097,20 @@ const funilCamposSchema = z
   .strict()
 const funilRequestSchema = z.object({ ...refFields, campos: funilCamposSchema.optional() }).strict()
 const isFunilAction = (action: ChatAction): action is ChatActionFunil => (FUNIL_ACTION_KINDS as readonly string[]).includes(action.kind)
+/** Contrato 127: o que o "Editar" do cartão de criar tarefa mudou, conferido de novo no clique (as regras do 121). */
+const tarefaCamposSchema = z
+  .object({
+    titulo: z.string().max(TAREFA_TITULO_MAX * 2).optional(),
+    prazo: z.string().max(20).nullable().optional(),
+    lembreteEm: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER).nullable().optional(),
+    oportunidadeId: z.string().max(200).nullable().optional(),
+    contatoId: z.string().max(200).nullable().optional(),
+  })
+  .strict()
+const tarefaRequestSchema = z.object({ ...refFields, campos: tarefaCamposSchema.optional() }).strict()
+const isTarefaAction = (action: ChatAction): action is ChatActionTarefa => (TAREFA_ACTION_KINDS as readonly string[]).includes(action.kind)
+/** Contrato 127: o erro do serviço das tarefas como o canal devolve (o limite é o `full` do lembrete). */
+const tarefaErro = (erro: string): 'full' | 'invalid' => (erro === 'limite' ? 'full' : 'invalid')
 /** Contrato 117 (R39): os contatos sem e-mail do cartão de criar ficam numa nota da oportunidade. */
 export const funilNotaCitados = (nomes: readonly string[]): string => `Citados na conversa com o Assistente: ${nomes.join(', ')}`
 
@@ -1057,9 +1179,23 @@ export function createChatActions(deps: ChatActionsDeps): ChatActions {
         const text = (parsed.data.text ?? current.text).replace(/\s+/g, ' ').trim()
         if (!text || text.length > REMINDER_TEXT_MAX) return { ok: false, error: 'invalid' }
         if (Date.parse(at) <= now()) return { ok: false, error: 'past' }
-        const created = await deps.createReminder({ at, reminder: { text, whatsappChatId: current.whatsappChatId, whatsappChatName: current.whatsappChatName, ...(current.email ? { email: current.email } : {}) } })
-        if (!created.ok) return { ok: false, error: created.error === 'past' ? 'past' : created.error === 'full' ? 'full' : 'invalid' }
-        return await write(ref, (action) => (action.kind === 'lembrete' ? { ...action, at, text, status: 'done', result: reminderCreatedText(at, deps.timeZone()) } : null))
+        if (!deps.tarefas) return { ok: false, error: 'invalid' }
+        // Contrato 127 (R13, D-7): a tarefa do lembrete, com o prazo no dia local do aviso e os vínculos da conversa e do
+        // email. O título leva até 200 caracteres; o resto do texto vai para o detalhe.
+        const when = Date.parse(at)
+        const titulo = text.slice(0, TAREFA_TITULO_MAX).trim()
+        const email = current.email ? { accountId: current.email.accountId, id: current.email.messageId, assunto: current.email.label, mailbox: current.email.mailbox ?? null } : null
+        const created = await deps.tarefas.criar({
+          titulo,
+          detalhe: text.slice(TAREFA_TITULO_MAX).trim().slice(0, TAREFA_DETALHE_MAX),
+          prazo: diaNoFuso(when, deps.timeZone()),
+          lembrete: when,
+          origem: { tipo: 'assistente' },
+          vinculos: { whatsappChatId: current.whatsappChatId, email },
+        })
+        if (!created.ok) return { ok: false, error: tarefaErro(created.erro) }
+        const tarefaId = created.id
+        return await write(ref, (action) => (action.kind === 'lembrete' ? { ...action, at, text, tarefaId, status: 'done', result: reminderCreatedText(at, deps.timeZone()) } : null))
       } finally {
         busy.delete(key)
       }
@@ -1075,7 +1211,7 @@ export function createChatActions(deps: ChatActionsDeps): ChatActions {
       // também se descarta.
       if (state === 'dismissed')
         return write(ref, (action) => (action.kind === 'abrir' || action.kind === 'emails' || action.kind === 'email-lote' ? null : { ...action, status: 'dismissed', result: DISMISSED_TEXT }), undefined, true)
-      if (state === 'task-created') return write(ref, (action) => (action.kind === 'tarefa' ? { ...action, status: 'done', result: TASK_CREATED_TEXT } : null))
+      if (state === 'task-created') return write(ref, (action) => (action.kind === 'agendamento' ? { ...action, status: 'done', result: TASK_CREATED_TEXT } : null))
       // "Enviar" passou pelo contrato 24: grava o texto que foi e a hora; as outras escolhas "É esta conversa?" com o
       // mesmo texto saem.
       const sentAt = now()
@@ -1207,14 +1343,17 @@ export function createChatActions(deps: ChatActionsDeps): ChatActions {
         const kind = parsed.data.op === 'update' ? 'lembrete-editar' : 'lembrete-apagar'
         if (!current || current.kind !== kind) return { ok: false, error: 'missing' }
         if (current.status !== 'proposed') return { ok: false, error: 'done' }
-        if (!deps.reminders) return { ok: false, error: 'invalid' }
+        if (!deps.tarefas) return { ok: false, error: 'invalid' }
+        const tarefas = deps.tarefas
         const timeZone = deps.timeZone()
-        // Já disparou ou foi apagado entre a proposta e o clique: o cartão fica assim, sem tentar de novo.
+        // Contrato 127 (R13): a tarefa foi concluída ou apagada entre a proposta e o clique: o cartão fica assim.
         const gone = (): Promise<ChatActionResult> =>
           write(ref, (action) => (action.kind === 'lembrete-editar' || action.kind === 'lembrete-apagar' ? { ...action, status: 'failed', result: null, error: REMINDER_GONE_TEXT } : null))
+        const tarefa = (await tarefas.todas()).find((item) => item.id === current.taskId && comLembrete(item))
+        if (!tarefa) return await gone()
         if (current.kind === 'lembrete-apagar') {
-          const task = pendingReminder(await deps.reminders.list(), current.taskId)
-          if (!task || !(await deps.reminders.remove(task.id))) return await gone()
+          const removed = await tarefas.apagar({ id: tarefa.id })
+          if (!removed.ok) return removed.erro === 'nao-encontrado' ? await gone() : { ok: false, error: 'invalid' }
           return await write(ref, (action) => (action.kind === 'lembrete-apagar' ? { ...action, status: 'done', result: REMINDER_DELETED_TEXT, error: null } : null))
         }
         if (current.kind !== 'lembrete-editar') return { ok: false, error: 'missing' }
@@ -1222,10 +1361,13 @@ export function createChatActions(deps: ChatActionsDeps): ChatActions {
         const text = parsed.data.text ?? current.text ?? undefined
         if (at === undefined && text === undefined) return { ok: false, error: 'invalid' }
         if (at !== undefined && Date.parse(at) <= now()) return { ok: false, error: 'past' }
-        const changed = await deps.reminders.update(current.taskId, { ...(at !== undefined ? { at } : {}), ...(text !== undefined ? { text } : {}) })
-        if (!changed.ok) return changed.reason === 'missing' ? await gone() : { ok: false, error: changed.reason }
-        const savedAt = changed.task.schedule.kind === 'once' ? changed.task.schedule.at : (at ?? current.currentAt)
-        const savedText = changed.task.reminder?.text ?? text ?? current.currentText
+        const titulo = text === undefined ? undefined : text.replace(/\s+/g, ' ').trim().slice(0, TAREFA_TITULO_MAX).trim()
+        if (titulo === '') return { ok: false, error: 'invalid' }
+        // D-14: o lembrete novo zera o disparo (o store faz isso quando `lembreteEm` muda).
+        const changed = await tarefas.salvar({ id: tarefa.id, ...(at !== undefined ? { lembrete: Date.parse(at) } : {}), ...(titulo !== undefined && titulo !== tarefa.titulo ? { titulo } : {}) })
+        if (!changed.ok) return changed.erro === 'nao-encontrado' ? await gone() : { ok: false, error: 'invalid' }
+        const savedAt = at === undefined ? current.currentAt : new Date(Date.parse(at)).toISOString()
+        const savedText = titulo ?? current.currentText
         return await write(ref, (action) =>
           action.kind === 'lembrete-editar'
             ? { ...action, at: savedAt, text: savedText === action.currentText ? action.text : savedText, status: 'done', result: reminderChangedText(savedAt, timeZone), error: null }
@@ -1317,10 +1459,16 @@ export function createChatActions(deps: ChatActionsDeps): ChatActions {
         if (current.kind === 'oportunidade-proximo-passo') {
           const oportunidade = oportunidadeViva(state, current.oportunidadeId)
           if (!oportunidade) return await failed(FUNIL_OPORTUNIDADE_NAO_ENCONTRADA)
+          // Contrato 127 (R17): ganha ou perdida não recebe tarefa; aberta, o passo vira tarefa pelo funil (124).
+          if (state.etapas.find((etapa) => etapa.id === oportunidade.etapaId)?.tipo !== 'aberta') return await failed(OPORTUNIDADE_FECHADA_TEXT)
           const saved = await funil.oportunidadeSave({ oportunidade: { id: oportunidade.id, titulo: oportunidade.titulo, proximoPasso: { texto: current.texto, data: current.data } } })
           const savedError = refused(saved)
           if (savedError) return await failed(savedError)
-          return await done((action) => ({ ...action, status: 'done', result: FUNIL_PASSO_SALVO_TEXT, error: null }))
+          // Contrato 127 (R17): o `done` diz o que aconteceu com a tarefa do passo; a que falhou deixa o cartão `failed`.
+          const tarefa = saved.ok ? saved.tarefa : undefined
+          if (tarefa?.acao === 'falhou') return await failed(tarefa.mensagem)
+          const result = tarefa?.acao === 'atualizada' ? tarefaPrazoAtualizadoText(current.texto) : tarefa?.acao === 'existente' ? tarefaJaExistiaText(current.texto) : tarefaCriadaText(current.texto)
+          return await done((action) => ({ ...action, status: 'done', result, error: null }))
         }
 
         if (current.kind === 'contato-criar') {
@@ -1387,6 +1535,86 @@ export function createChatActions(deps: ChatActionsDeps): ChatActions {
         return await done((action) => (action.kind === 'oportunidade-criar' ? { ...action, ...draft, oportunidadeId, status: 'done', result: FUNIL_OPORTUNIDADE_CRIADA_TEXT, error: null } : action))
       } catch (error) {
         deps.log?.(`[assistente] funil: ${error instanceof Error ? error.message : String(error)}`)
+        return { ok: false, error: 'invalid' }
+      } finally {
+        busy.delete(key)
+      }
+    },
+
+    async tarefa(request) {
+      const parsed = tarefaRequestSchema.safeParse(request)
+      if (!parsed.success) return { ok: false, error: 'invalid' }
+      const ref = parsed.data
+      const key = keyOf(ref)
+      if (busy.has(key)) return { ok: false, error: 'done' }
+      busy.add(key)
+      try {
+        const current = actionIn(await deps.store.get(ref.chatId), ref)
+        if (!current || !isTarefaAction(current)) return { ok: false, error: 'missing' }
+        if (current.status !== 'proposed') return { ok: false, error: 'done' }
+        if (!deps.tarefas || (parsed.data.campos && current.kind !== 'tarefa-criar')) return { ok: false, error: 'invalid' }
+        const tarefas = deps.tarefas
+        const kind = current.kind
+        /** O clique que não pode mais valer: o cartão fica `failed`, com a frase. */
+        const failed = (error: string): Promise<ChatActionResult> =>
+          write(ref, (action) => (action.kind === kind ? { ...action, status: 'failed', result: null, error: error.slice(0, CHAT_ACTION_ERROR_MAX) } : null))
+
+        if (current.kind === 'tarefa-concluir' || current.kind === 'tarefa-adiar') {
+          // A tarefa pode ter fechado ou sumido entre a proposta e o clique.
+          const aberta = (await tarefas.todas()).find((item) => item.id === current.tarefaId && item.status === 'aberta')
+          if (!aberta) return await failed(TAREFA_GONE_TEXT)
+          const result = current.kind === 'tarefa-concluir' ? await tarefas.status({ id: aberta.id, status: 'feita' }) : await tarefas.salvar({ id: aberta.id, prazo: current.prazo })
+          if (!result.ok) return result.erro === 'nao-encontrado' || result.erro === 'fechada' ? await failed(TAREFA_GONE_TEXT) : { ok: false, error: 'invalid' }
+          return await write(ref, (action) =>
+            action.kind === 'tarefa-concluir'
+              ? { ...action, titulo: aberta.titulo, status: 'done', result: tarefaConcluidaText(aberta.titulo), error: null }
+              : action.kind === 'tarefa-adiar'
+                ? { ...action, titulo: aberta.titulo, prazoAntes: aberta.prazo, status: 'done', result: tarefaAdiadaText(action.prazo), error: null }
+                : null,
+          )
+        }
+
+        // `tarefa-criar`: o que o "Editar" mudou passa pelas regras do 121 (título de 1 a 200, dia que existe, lembrete no
+        // futuro) e a oportunidade e o contato escolhidos têm de existir no funil.
+        const campos = parsed.data.campos ?? {}
+        const titulo = (campos.titulo ?? current.titulo).replace(/\s+/g, ' ').trim()
+        if (!titulo || titulo.length > TAREFA_TITULO_MAX) return { ok: false, error: 'invalid' }
+        const prazo = campos.prazo === undefined ? current.prazo : campos.prazo
+        if (prazo !== null && !diaValido(prazo)) return { ok: false, error: 'invalid' }
+        const lembreteEm = campos.lembreteEm === undefined ? current.lembreteEm : campos.lembreteEm
+        if (lembreteEm !== null && lembreteEm <= now()) return { ok: false, error: 'past' }
+        if (current.ambiguo?.campo === 'oportunidade' && campos.oportunidadeId === undefined) return await failed(TAREFA_ESCOLHA_OPORTUNIDADE_TEXT)
+        if ((current.ambiguo?.campo === 'contato' || current.ambiguoContato) && campos.contatoId === undefined) return await failed(TAREFA_ESCOLHA_CONTATO_TEXT)
+        let oportunidade = campos.oportunidadeId === undefined ? current.oportunidade : null
+        let contato = campos.contatoId === undefined ? current.contato : null
+        if (campos.oportunidadeId || campos.contatoId) {
+          const state = (await deps.funil?.view())?.state
+          if (!state) return { ok: false, error: 'invalid' }
+          if (campos.oportunidadeId) {
+            const achada = oportunidadeViva(state, campos.oportunidadeId)
+            if (!achada) return { ok: false, error: 'invalid' }
+            oportunidade = { id: achada.id, titulo: cardText(achada.titulo, FUNIL_NOME_MAX) }
+          }
+          if (campos.contatoId) {
+            const achado = state.contatos.find((item) => item.id === campos.contatoId && !item.arquivado)
+            if (!achado) return { ok: false, error: 'invalid' }
+            contato = { id: achado.id, nome: cardText(achado.nome, FUNIL_NOME_MAX) }
+          }
+        }
+        const created = await tarefas.criar({
+          titulo,
+          prazo,
+          lembrete: lembreteEm ?? 'padrao',
+          origem: { tipo: 'assistente' },
+          vinculos: { oportunidadeId: oportunidade?.id ?? null, contatoIds: contato ? [contato.id] : [] },
+        })
+        if (!created.ok) return { ok: false, error: tarefaErro(created.erro) }
+        const tarefaId = created.id
+        return await write(ref, (action) =>
+          action.kind === 'tarefa-criar' ? { ...action, titulo, prazo, lembreteEm, oportunidade, contato, ambiguo: null, ambiguoContato: null, tarefaId, status: 'done', result: tarefaCriadaText(titulo), error: null } : null,
+        )
+      } catch (error) {
+        deps.log?.(`[assistente] tarefas: ${error instanceof Error ? error.message : String(error)}`)
         return { ok: false, error: 'invalid' }
       } finally {
         busy.delete(key)

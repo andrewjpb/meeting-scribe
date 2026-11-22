@@ -12,9 +12,10 @@ import { Icon } from '../../design/Icon'
 import { Note, NOTE_ACTION_CLASS } from '../../design/Note'
 import { PageHeader } from '../../design/PageHeader'
 import { SearchField } from '../meetings/SearchField'
-import { ADICIONAR_CLASS, BlocoOportunidades, CampoSalvo, ErroCampo, LinhaCampo, NotasSalvas, TituloBloco } from './ContatoFicha'
+import { useTarefasView } from '../tarefas/tarefasStore'
+import { ADICIONAR_CLASS, BlocoOportunidades, BlocoTarefas, CampoSalvo, ErroCampo, LinhaCampo, NotasSalvas, TituloBloco } from './ContatoFicha'
 import { IlustracaoVazia, Vazio } from './ContatosScreen'
-import { dataLonga, filtrarEmpresas, ordenarEmpresas, parseDominio } from './funilFormat'
+import { dataLonga, filtrarEmpresas, ordenarEmpresas, parseDominio, tarefasDaEmpresa } from './funilFormat'
 import { useFunil } from './funilStore'
 import { CANCELAR_CLASS } from './KanbanCard'
 import { FUNIL_LINK_CLASS } from './Timeline'
@@ -147,7 +148,8 @@ export function EmpresasScreen({ view, id }: { view: FunilView; id: string | und
 
 /**
  * Ficha da empresa (R34, artboard 08): o nome editável, o subtítulo, "Nova oportunidade" e "Apagar" (só sem contatos e
- * sem oportunidades; confirma na linha), os domínios em chips, o site, as notas e os blocos Contatos e Oportunidades.
+ * sem oportunidades; confirma na linha), os domínios em chips, o site, as notas e os blocos Tarefas (contrato 125),
+ * Contatos e Oportunidades.
  */
 function EmpresaFicha({ view, empresa, onApagada }: { view: FunilView; empresa: Empresa; onApagada: () => void }) {
   const navigate = useNavigate()
@@ -156,6 +158,8 @@ function EmpresaFicha({ view, empresa, onApagada }: { view: FunilView; empresa: 
   const [erro, setErro] = useState<string | null>(null)
   const [apagando, setApagando] = useState(false)
   const [ocupado, setOcupado] = useState(false)
+  // Contrato 125 (R19): as tarefas abertas ligadas à empresa.
+  const tarefas = useTarefasView()
   const contatos = state.contatos.filter((contato) => contato.empresaId === id).sort((a, b) => Number(a.arquivado) - Number(b.arquivado) || a.nome.localeCompare(b.nome, 'pt-BR'))
   const oportunidades = state.oportunidades.filter((item) => item.empresaId === id).sort((a, b) => b.criadoEm - a.criadoEm)
   const bloqueada = contatos.length > 0 || oportunidades.length > 0
@@ -237,6 +241,7 @@ function EmpresaFicha({ view, empresa, onApagada }: { view: FunilView; empresa: 
           <NotasSalvas valor={empresa.notas} rotulo="Notas" onSalvar={(notas) => salvarComAviso({ notas })} />
         </LinhaCampo>
       </div>
+      <BlocoTarefas key={id} tarefas={tarefasDaEmpresa(tarefas?.tarefas ?? [], id)} view={tarefas} vinculosIniciais={{ empresaId: id }} onErro={setErro} />
       <section data-funil-bloco="contatos" aria-label="Contatos">
         <TituloBloco>Contatos</TituloBloco>
         {contatos.length === 0 ? (

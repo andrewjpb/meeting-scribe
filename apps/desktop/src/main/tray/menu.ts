@@ -201,7 +201,7 @@ export function trayMenuTemplate(state: TrayState, handlers: TrayHandlers): Menu
   const plugins: MenuItemConstructorOptions[] = state.plugins.length ? [{ id: TRAY_IDS.plugins, label: pluginsLabel(state.plugins), click: handlers.openPlugins }] : []
   const next: MenuItemConstructorOptions[] = state.next.length
     ? state.next.slice(0, 3).map((task, index) => ({ id: `${TRAY_IDS.next}-${index}`, label: `${task.name} · ${task.when}`, enabled: false }))
-    : [{ id: `${TRAY_IDS.next}-0`, label: state.paused ? 'Tarefas pausadas' : 'Nenhuma tarefa agendada', enabled: false }]
+    : [{ id: `${TRAY_IDS.next}-0`, label: state.paused ? 'Agendamentos pausados' : 'Nenhum agendamento', enabled: false }]
   return [
     { id: TRAY_IDS.open, label: `Abrir ${state.brandName}`, click: handlers.open },
     ...recording,
@@ -220,7 +220,7 @@ export function trayMenuTemplate(state: TrayState, handlers: TrayHandlers): Menu
         { type: 'separator' },
         ...next,
         { type: 'separator' },
-        { id: TRAY_IDS.pause, label: state.paused ? 'Retomar' : 'Pausar todas as tarefas', click: handlers.togglePause },
+        { id: TRAY_IDS.pause, label: state.paused ? 'Retomar' : 'Pausar todos os agendamentos', click: handlers.togglePause },
       ],
     },
     { id: TRAY_IDS.lock, label: 'Bloquear', enabled: state.canLock, click: handlers.lock },
@@ -342,7 +342,7 @@ export function createTrayController(deps: TrayControllerDeps): TrayController {
 
   const tip = (): string => {
     const state = deps.state()
-    return state.locked ? `${state.brandName} — bloqueado` : icon === 'running' ? `${state.brandName} — tarefa rodando` : state.brandName
+    return state.locked ? `${state.brandName} — bloqueado` : icon === 'running' ? `${state.brandName} — agendamento rodando` : state.brandName
   }
   tray.setToolTip(tip())
   void rebuild()

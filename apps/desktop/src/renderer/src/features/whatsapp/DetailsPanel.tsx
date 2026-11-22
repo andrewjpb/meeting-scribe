@@ -12,6 +12,8 @@ import { COST_HINT } from '../chat/format'
 import { ContactLink, contatoLigado, useFunilCompartilhado } from '../funil/ContactLink'
 import { FUNIL_LINK_CLASS } from '../funil/Timeline'
 import { analysisFooterParts } from '../live/AnalysisBlock'
+import { BotaoMaisTarefa, useTarefaCriada } from '../tarefas/MaisTarefa'
+import { NovaTarefaInline } from '../tarefas/NovaTarefaInline'
 import { ActivityChart, BalanceChart, MoodChart } from './Charts'
 
 function PanelSection({ title, children, name }: { title: string; children: ReactNode; name: string }) {
@@ -40,7 +42,8 @@ function Items({ items, empty, name }: { items: readonly string[]; empty: string
 /**
  * Contrato 116 (R37): o bloco "Contato" no topo dos Detalhes de uma conversa com uma pessoa. Com contato ligado (pela
  * conversa ou pelo telefone), o nome como link para a ficha, o cargo e a empresa e as oportunidades dele com a etapa; sem,
- * o nome da conversa e "+ Contato".
+ * o nome da conversa e "+ Contato". Contrato 126 (R25, artboard 12): nas duas variantes, "+ Tarefa" abaixo, que abre a
+ * "Nova tarefa" em linha ligada à conversa (e ao contato, quando existe).
  */
 function ContactSection({ chat }: { chat: WhatsAppChat }) {
   const view = useFunilCompartilhado()
@@ -51,6 +54,8 @@ function ContactSection({ chat }: { chat: WhatsAppChat }) {
   const etapas = new Map((view?.state.etapas ?? []).map((etapa) => [etapa.id, etapa.nome]))
   const oportunidades = contato ? (view?.state.oportunidades ?? []).filter((op) => !op.arquivado && op.contatoIds.includes(contato.id)) : []
   const subtitulo = [contato?.cargo, empresa].filter(Boolean).join(' · ')
+  const [tarefaAberta, setTarefaAberta] = useState(false)
+  const { criada, avisar } = useTarefaCriada()
   return (
     <PanelSection title="Contato" name="contato">
       <div data-whatsapp-contato={contato?.id ?? ''} className="flex flex-col gap-1.5">
@@ -80,6 +85,23 @@ function ContactSection({ chat }: { chat: WhatsAppChat }) {
           </div>
         )}
       </div>
+      <div className="flex">
+        <BotaoMaisTarefa action="whatsapp-tarefa" avisoData="data-whatsapp-tarefa-criada" aberto={tarefaAberta} criada={criada} onClick={() => setTarefaAberta(!tarefaAberta)} />
+      </div>
+      {tarefaAberta && (
+        <div data-whatsapp-tarefa-form>
+          <NovaTarefaInline
+            compacta
+            origem={{ tipo: 'whatsapp', chatId: chat.id }}
+            vinculosIniciais={{ whatsappChatId: chat.id, ...(contato ? { contatoIds: [contato.id] } : {}) }}
+            onCriada={(id) => {
+              setTarefaAberta(false)
+              avisar(id)
+            }}
+            onCancelar={() => setTarefaAberta(false)}
+          />
+        </div>
+      )}
     </PanelSection>
   )
 }

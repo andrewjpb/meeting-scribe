@@ -49,7 +49,11 @@
 //   propõe `oportunidade-mover` com esse id e essa etapa e a nota "a Ana leva a proposta à diretoria na segunda."; "crie a
 //   oportunidade de teste", `oportunidade-criar` ("Conciliação", empresa "Cliente", etapa "Contato", R$ 45.000); "crie o
 //   contato de teste", `contato-criar` ("Paulo Siqueira", `paulo.siqueira@cliente.example`); "abra a oportunidade <id>",
-//   o `abrir` com `tela: 'oportunidade'` e esse id.
+//   o `abrir` com `tela: 'oportunidade'` e esse id. Contrato 127: as tarefas. "o que tenho para hoje" lê o `TAREFAS.md` (se
+//   estiver na pasta) e responde com a primeira linha de "## Vencidas" (ou, sem nenhuma, de "## Hoje") e a citação
+//   "[Tarefa · <título>]"; "crie a tarefa <x> para sexta ligada à <oportunidade>" propõe `tarefa-criar` com o título, o
+//   prazo da próxima sexta (AAAA-MM-DD) e a oportunidade pelo nome; "conclua a tarefa <id>", `tarefa-concluir`; "adie a
+//   tarefa <id> para <AAAA-MM-DD>", `tarefa-adiar`. Os lembretes ("adie o lembrete", "apague o lembrete") leem o `ESTADO.md`.
 // - "quais arquivos estão na pasta" (contrato 117), em qualquer chat (o agente das Automações também): responde com os nomes
 //   dos arquivos da pasta da sessão (`readdirSync(cwd)`), em ordem.
 // - internet (contrato 26), em qualquer chat (agente ou Assistente), com "pesquise" no pedido: `WebSearch` (pedindo
@@ -86,6 +90,7 @@ import { fakeAiNotes } from './fake-ai-notes.mjs'
 import { fakeAnalysis } from './fake-analysis.mjs'
 import { fakeCorrection } from './fake-correct.mjs'
 import { fakeDraft } from './fake-draft.mjs'
+import { fridayAfterMeeting } from './fake-summary-due.mjs'
 import { fakeWhatsAppInsights } from './fake-whatsapp-insights.mjs'
 
 export const FAKE_ACP_VERSION = '0.107.0-falso'
@@ -345,6 +350,36 @@ async function assistantAnswer(question, cwd, read) {
   if (/crie o contato de teste/i.test(question)) return `Confirme o contato no cartão.${fence({ tipo: 'contato-criar', nome: 'Paulo Siqueira', email: 'paulo.siqueira@cliente.example' })}`
   const openOne = /abra a oportunidade (\S+?)[.!?]?$/i.exec(question)
   if (openOne) return `Aqui está a oportunidade.${fence({ tipo: 'abrir', tela: 'oportunidade', alvo: openOne[1] })}`
+  // Contrato 127: as tarefas (o `TAREFAS.md` só existe com a fonte ligada; o app confere o id e a oportunidade).
+  if (/o que tenho para hoje/i.test(question)) {
+    if (!has('TAREFAS.md')) return 'As tarefas não estão na pasta desta conversa: ligue a fonte Tarefas no Contexto.'
+    await read('TAREFAS.md')
+    const sections = readFileSync(join(cwd, 'TAREFAS.md'), 'utf8').split('\n## ')
+    const firstOf = (name) => (sections.find((part) => part.startsWith(`${name}\n`)) ?? '').split('\n').find((line) => line.startsWith('- '))
+    const line = firstOf('Vencidas') ?? firstOf('Hoje')
+    if (!line) return 'Nada vencido nem para hoje.'
+    const titulo = line.slice(2).split(' · ')[1] ?? ''
+    return `A primeira da lista é ${titulo} [Tarefa · ${titulo}].`
+  }
+  const newTask = /crie a tarefa (.+?) para sexta ligada (?:à|ao|a) (.+?)[.!?]?$/i.exec(question)
+  if (newTask) {
+    if (has('TAREFAS.md')) await read('TAREFAS.md')
+    const now = new Date()
+    const friday = new Date(now.getFullYear(), now.getMonth(), now.getDate() + ((5 - now.getDay() + 7) % 7 || 7))
+    const prazo = `${friday.getFullYear()}-${String(friday.getMonth() + 1).padStart(2, '0')}-${String(friday.getDate()).padStart(2, '0')}`
+    const titulo = newTask[1].charAt(0).toUpperCase() + newTask[1].slice(1)
+    return `Montei a tarefa para sexta. Confira no cartão.${fence({ tipo: 'tarefa-criar', titulo, prazo, oportunidade: newTask[2] })}`
+  }
+  const doneTask = /conclua a tarefa ([\w-]+)/i.exec(question)
+  if (doneTask) {
+    if (has('TAREFAS.md')) await read('TAREFAS.md')
+    return `Confirme no cartão para eu concluir a tarefa.${fence({ tipo: 'tarefa-concluir', id: doneTask[1] })}`
+  }
+  const laterTask = /adie a tarefa ([\w-]+) para (\d{4}-\d{2}-\d{2})/i.exec(question)
+  if (laterTask) {
+    if (has('TAREFAS.md')) await read('TAREFAS.md')
+    return `Confirme no cartão para eu mudar o prazo.${fence({ tipo: 'tarefa-adiar', id: laterTask[1], prazo: laterTask[2] })}`
+  }
   // Contrato 78: o evento e os lembretes que já existem.
   if (/evento inv[aá]lido/i.test(question)) return `Proponho o evento.${fence({ tipo: 'evento', titulo: 'Evento de ontem', inicio: dayAt(-1, 20) })}`
   if (/anivers[aá]rio/i.test(question)) {
@@ -353,7 +388,7 @@ async function assistantAnswer(question, cwd, read) {
   }
   const postpone = /adie o lembrete ([\w-]+)/i.exec(question)
   if (postpone) {
-    if (has('AUTOMACOES.md')) await read('AUTOMACOES.md')
+    await read('ESTADO.md')
     const hour = Number(/(\d{1,2}) ?h\b/i.exec(question)?.[1] ?? 9)
     const days = /depois de amanh[ãa]/i.test(question) ? 2 : 1
     return `Mudo o lembrete para ${days === 2 ? 'depois de amanhã' : 'amanhã'} às ${String(hour).padStart(2, '0')}:00. O texto continua o mesmo.${fence({ tipo: 'lembrete-editar', id: postpone[1], quando: dayAt(days, hour) })}`
@@ -374,7 +409,7 @@ async function assistantAnswer(question, cwd, read) {
   }
   const drop = /apague o lembrete ([\w-]+)/i.exec(question)
   if (drop) {
-    if (has('AUTOMACOES.md')) await read('AUTOMACOES.md')
+    await read('ESTADO.md')
     return `Confirme no cartão para eu apagar o lembrete.${fence({ tipo: 'lembrete-apagar', id: drop[1] })}`
   }
   if (/pendente/i.test(question)) {
@@ -601,8 +636,8 @@ export function fakeAcpAgent({ log = () => undefined, pause = 300, mcpStatus = n
           overview: `Reunião com ${lines.length} falas de ${speakers.join(' e ')}, resumida pelo agente. A conversa tratou da captura do microfone e do áudio do sistema durante a gravação.`,
           decisions: ['Manter a captura do microfone separada do áudio do sistema.'],
           tasks: [
-            { task: 'Revisar a transcrição da reunião', owner: 'Você', due: 'sexta-feira' },
-            { task: 'Enviar as notas aos participantes', owner: participant, due: null },
+            { task: 'Revisar a transcrição da reunião', owner: 'Você', due: 'sexta-feira', dueIso: fridayAfterMeeting(content) },
+            { task: 'Enviar as notas aos participantes', owner: participant, due: null, dueIso: null },
           ],
         }
         const text = `\`\`\`json\n${JSON.stringify(summary, null, 2)}\n\`\`\``

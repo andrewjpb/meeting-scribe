@@ -1,4 +1,4 @@
-// Automações (contrato 23): agentes, tarefas agendadas e execuções. O que o renderer, o main e o smoke
+// Automações (contrato 23): agentes, agendamentos e execuções. O que o renderer, o main e o smoke
 // compartilham: os tipos, os limites, o cálculo do próximo horário (com fuso e horário de verão) e as frases
 // em português ("Toda sexta às 17:00"). Sem zod (o esquema fica em `automations-schema.ts`, só no main), sem
 // Node: o renderer usa as mesmas funções na prévia "Próximas 5 execuções".
@@ -101,6 +101,11 @@ export interface Agent {
   web: boolean
   /** Contrato 115: "Pode ler o funil". Cada execução recebe `FUNIL.md` na pasta. Agente salvo antes lê como `false`. */
   funil: boolean
+  /**
+   * Contrato 128 (R31): "Pode ler as tarefas". Cada execução recebe `TAREFAS.md` na pasta (o runner liga no 124).
+   * Agente salvo antes lê como `false`.
+   */
+  tarefas: boolean
   /** Conexões MCP (contrato 21). O 21 ainda não existe: fica sempre vazio e escondido. */
   mcpServers: string[]
   output: AgentOutput
@@ -695,25 +700,24 @@ export const EXAMPLE_AGENTS: readonly Omit<AgentInput, 'id'>[] = [
     scope: { kind: '7d' },
     web: false,
     funil: false,
+    tarefas: false,
     mcpServers: [],
     output: { kind: 'chat' },
   },
   {
     name: 'Minhas tarefas',
-    description: 'As tarefas em que o dono é "Você", com o prazo.',
+    description: 'As suas tarefas abertas, do TAREFAS.md: vencidas e de hoje primeiro, com o prazo e a origem.',
     icon: 'list-checks',
     color: 'green',
-    instructions: [
-      'Liste só as tarefas em que o dono é "Você" (a pessoa que usa o app), de todas as reuniões.',
-      'Para cada tarefa: o que fazer, o prazo (ou "sem prazo") e a reunião citada.',
-      'Ordene pelo prazo, as mais urgentes primeiro.',
-    ].join('\n'),
+    instructions:
+      'Liste as minhas tarefas abertas, começando pelas vencidas e pelas de hoje. Use o TAREFAS.md; diga o prazo de cada uma e de onde veio (reunião, oportunidade, e-mail ou conversa).',
     profile: 'claude',
     model: 'haiku',
     thinkMore: false,
     scope: { kind: 'all' },
     web: false,
     funil: false,
+    tarefas: true,
     mcpServers: [],
     output: { kind: 'chat' },
   },
@@ -734,6 +738,7 @@ export const EXAMPLE_AGENTS: readonly Omit<AgentInput, 'id'>[] = [
     scope: { kind: 'all' },
     web: false,
     funil: false,
+    tarefas: false,
     mcpServers: [],
     output: { kind: 'note' },
   },

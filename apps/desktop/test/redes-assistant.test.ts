@@ -452,7 +452,6 @@ describe('cartão instagram-rascunho', () => {
       let accounts = one
       const actions = createChatActions({
         store,
-        createReminder: () => Promise.reject(new Error('não')),
         timeZone: () => SP,
         now: () => NOW,
         instagram: {

@@ -16,6 +16,7 @@ import type { NavegadorState } from '../shared/navegador'
 import type { AppPluginId, PluginSaveResult } from '../shared/plugins'
 import { privacyPaneUrl } from '../shared/privacy'
 import type { MainEvents } from '../shared/ipc'
+import type { AvisoTarefa } from '../shared/tarefas'
 import type { AgentProfileId, AppSettings } from '../shared/settings-defaults'
 import type { TranscriptDocument } from '../shared/transcription'
 import { WHATSAPP_CHAT_ID_PATTERN, whatsappStateLabel, type WhatsAppMessage } from '../shared/whatsapp'
@@ -63,10 +64,16 @@ import { autoDetect } from './funil/apply-proposal'
 import { createFunnelExtractService, type FunnelExtractService } from './funil/extract'
 import { registerFunilIpc, type FunilPropostaIpcDeps } from './funil/ipc'
 import { createFunilProposalStore } from './funil/proposals'
-import { createFunilAlerts } from './funil/alerts'
 import { funilMarkdown } from './funil/markdown'
 import { createFunilService, type FunilService } from './funil/service'
 import { createFunilStore } from './funil/store'
+import { registerTarefasIpc } from './tarefas/ipc'
+import { createAvisoHoje } from './tarefas/hoje'
+import { avisoMostrado, createDestinoPendente } from './tarefas/lembretes'
+import { tarefasMarkdown } from './tarefas/markdown'
+import { migrarTarefas } from './tarefas/migracao'
+import { createTarefasService, type TarefasService } from './tarefas/service'
+import { createTarefasStore } from './tarefas/store'
 import { createAiNotesService, type AiNotesService } from './meetings/ai-notes-service'
 import { createAnalysisService, type AnalysisService } from './meetings/analysis-service'
 import { createMeetingsIndex, type MeetingsIndex } from './meetings/overview'
@@ -239,6 +246,10 @@ const agentNotes = new Map<string, Set<string>>()
 const NO_NOTES: ReadonlySet<string> = new Set()
 /** "Abrir ao entrar no Mac": o último valor aplicado (só muda o item de login quando a pessoa troca). */
 let loginItemApplied: boolean | null = null
+/** Contrato 122 (R12, D7): o "Abrir" de uma tarefa pedido com o app bloqueado, mandado ao desbloquear. */
+const destinoTarefa = createDestinoPendente()
+/** Contrato 122: o serviço das tarefas, para reemitir a view ao desbloquear (o tick do dia pode ter rodado bloqueado). */
+let tarefasService: TarefasService | null = null
 
 /**
  * ⌘W ou ⌘Q com gravação em andamento: diálogo nativo. Bloqueado, só "Cancelar"; desbloqueado, também
@@ -289,6 +300,8 @@ function applyLockStatus(status: LockStatus): void {
   const item = Menu.getApplicationMenu()?.getMenuItemById(MENU_IDS.lock)
   if (item) item.enabled = status.canLock && !status.locked
   broadcast(appWindows(), 'scribe:lock-state', status)
+  // Contrato 122 (R12): o "Abrir" de uma tarefa pedido bloqueado chega agora, depois do estado desbloqueado.
+  if (!status.locked) destinoTarefa.desbloqueou((id) => sendWhenLoaded(mainWindow ?? showMainWindow(), 'scribe:open-tarefa', { id }))
   // Contrato 24: bloqueado, nada do WhatsApp chega às janelas; ao desbloquear, o estado de agora.
   if (!status.locked && whatsappService) broadcast(appWindows(), 'scribe:whatsapp-state', whatsappService.status())
   // Contrato 42: o mesmo para as contas de email.
@@ -307,6 +320,15 @@ function applyLockStatus(status: LockStatus): void {
   }
   // Contrato 12: o mesmo para as próximas reuniões e a faixa da agenda.
   if (!status.locked && calendarService) broadcast(appWindows(), 'scribe:calendar-state', calendarService.view())
+  // Contrato 122 (R12): a lista de agora, com o dia de hoje (a virada e os lembretes podem ter acontecido bloqueado).
+  if (!status.locked && tarefasService) {
+    void tarefasService.view().then(
+      (view) => {
+        if (!lockService?.isLocked()) broadcast(appWindows(), 'scribe:tarefas-changed', view)
+      },
+      (error: unknown) => console.error('[tarefas] view ao desbloquear:', error instanceof Error ? error.message : String(error)),
+    )
+  }
 }
 
 /** "Bloquear" pelo menu ou ⌘⇧L, pelo `powerMonitor` ou por falta de uso; só bloqueia com senha ou Touch ID. */
@@ -356,7 +378,7 @@ function showMainWindow(): BrowserWindow {
 }
 
 /** Manda ao renderer depois que a página carregou (janela recém-aberta). */
-function sendWhenLoaded<C extends 'scribe:navigate' | 'scribe:open-run' | 'scribe:open-whatsapp' | 'scribe:open-meeting' | 'scribe:open-settings' | 'scribe:open-email'>(
+function sendWhenLoaded<C extends 'scribe:navigate' | 'scribe:open-run' | 'scribe:open-whatsapp' | 'scribe:open-meeting' | 'scribe:open-settings' | 'scribe:open-email' | 'scribe:open-tarefa'>(
   win: BrowserWindow,
   channel: C,
   payload: MainEvents[C],
@@ -377,7 +399,7 @@ const liveNotices = new Set<Notification>()
 function showAutomationNotice(notice: AutomationNotice): void {
   const locked = lockService?.isLocked() ?? false
   // Contrato 25: o lembrete bloqueado também não mostra o texto.
-  const shown = locked ? { title: brandName, body: notice.reminder ? 'Você tem um lembrete.' : 'Uma tarefa agendada terminou.', runId: notice.runId } : notice
+  const shown = locked ? { title: brandName, body: notice.reminder ? 'Você tem um lembrete.' : 'Um agendamento terminou.', runId: notice.runId } : notice
   if (smokeFixtures) {
     smokeFixtures.automations.notifications.push(shown)
     return
@@ -400,18 +422,57 @@ function showAutomationNotice(notice: AutomationNotice): void {
   item.show()
 }
 
-/** Contrato 115 (R44): o aviso diário do funil; o clique abre Funil > Oportunidades. No smoke, só uma linha de log. */
-function showFunilNotice(aviso: { title: string; body: string }): void {
-  // Bloqueado, sem as contagens (como `showAutomationNotice`).
-  const shown = lockService?.isLocked() ? { title: brandName, body: 'Há oportunidades no funil pedindo atenção.' } : aviso
-  if (smokeFixtures) return void console.log(`[funil] aviso não mostrado no smoke: ${shown.body}`)
+/**
+ * Contrato 122 (D7): o "Abrir" de uma tarefa (`null`, a lista). A janela vem para a frente; com o app bloqueado, o
+ * destino fica guardado no main e vai ao desbloquear (`applyLockStatus`). O aviso "Hoje" (124) usa este caminho.
+ */
+function openTarefa(id: string | null): void {
+  const win = showMainWindow()
+  destinoTarefa.abrir(id, lockService?.isLocked() ?? false, (destino) => sendWhenLoaded(win, 'scribe:open-tarefa', { id: destino }))
+}
+
+/**
+ * Contrato 122 (R12, D6): a notificação "Tarefa" de um lembrete, com "Abrir". Bloqueado, sem o título (só a marca e
+ * "Você tem uma tarefa com lembrete"). No smoke, o substituto registra, com o "Abrir", e nada aparece.
+ */
+function showTarefaNotice(aviso: AvisoTarefa): void {
+  const shown = avisoMostrado(aviso, lockService?.isLocked() ?? false, brandName)
+  if (smokeFixtures) {
+    smokeFixtures.tarefas.notifications.push({ ...shown, open: () => openTarefa(aviso.tarefaId) })
+    return
+  }
   if (!Notification.isSupported()) return
-  const item = new Notification({ title: shown.title, body: shown.body })
+  const item = new Notification({ title: shown.title, body: shown.body, actions: [{ type: 'button', text: 'Abrir' }] })
   const open = (): void => {
     liveNotices.delete(item)
-    sendWhenLoaded(showMainWindow(), 'scribe:navigate', 'funil')
+    openTarefa(aviso.tarefaId)
   }
   item.on('click', open)
+  item.on('action', open)
+  item.on('close', () => liveNotices.delete(item))
+  liveNotices.add(item)
+  item.show()
+}
+
+/**
+ * Contrato 124 (R32, D-12): o aviso diário "Hoje", com "Abrir", que leva à lista das tarefas pelo caminho do 122
+ * (`openTarefa(null)`, que guarda o destino enquanto o app está bloqueado). Bloqueado, sem as contagens. No smoke, o
+ * substituto registra, com o "Abrir", e nada aparece.
+ */
+function showHojeNotice(aviso: { title: string; body: string }): void {
+  const shown = lockService?.isLocked() ? { title: brandName, body: 'Há tarefas pedindo atenção.' } : aviso
+  if (smokeFixtures) {
+    smokeFixtures.tarefas.notifications.push({ ...shown, tarefaId: null, open: () => openTarefa(null) })
+    return
+  }
+  if (!Notification.isSupported()) return
+  const item = new Notification({ title: shown.title, body: shown.body, actions: [{ type: 'button', text: 'Abrir' }] })
+  const open = (): void => {
+    liveNotices.delete(item)
+    openTarefa(null)
+  }
+  item.on('click', open)
+  item.on('action', open)
   item.on('close', () => liveNotices.delete(item))
   liveNotices.add(item)
   item.show()
@@ -948,6 +1009,13 @@ interface AppServices {
   funnel: FunnelExtractService
   /** Contrato 113: o que os canais `scribe:funil-proposta-*` usam (e o `proposals.remove` ao excluir a reunião). */
   funilProposta: FunilPropostaIpcDeps
+  /** Contrato 122: as tarefas (`tarefas.json`), com os lembretes no tick das Automações. */
+  tarefas: TarefasService
+  /**
+   * Contrato 124 (R35, D11): a migração única do próximo passo e dos lembretes para tarefas, no boot, antes do
+   * bloqueio, do IPC e das Automações. Nunca lança; a falha vai ao log (só o passo) e o app segue.
+   */
+  migrarTarefas(): Promise<void>
 }
 
 /**
@@ -1386,9 +1454,11 @@ function createAppServices(userData: string): AppServices {
   inviteSuggestChannels = inviteSuggest
   // Contrato 32: os Detalhes da conversa (resumo, humor, pendências) pelo mesmo motor, numa execução curta sem
   // ferramenta nenhuma. Só lê as mensagens; o resultado fica em `whatsapp/insights.json`.
+  // Contrato 122: o mesmo cache também é lido pelas sugestões das tarefas.
+  const insightsCache = createInsightsCache(join(userData, WHATSAPP_DIR, INSIGHTS_FILE))
   const whatsappInsights = createInsightsService({
     settings,
-    cache: createInsightsCache(join(userData, WHATSAPP_DIR, INSIGHTS_FILE)),
+    cache: insightsCache,
     locate: () => claude.locate(),
     chat: (chatId) => whatsapp.findChat(chatId),
     messages: (chatId, max) => whatsapp.lastMessages(chatId, max),
@@ -1453,6 +1523,15 @@ function createAppServices(userData: string): AppServices {
     redes: () => redesAssistant.sourceAccounts(),
     // Contrato 117: o `FUNIL.md` do gerador do contrato 115; bloqueado, nada.
     funil: async () => (lockService?.isLocked() ? null : funilMarkdownText()),
+    // Contrato 127 (R27): o `TAREFAS.md` do gerador do contrato 121; bloqueado, nada.
+    tarefas: async () => (lockService?.isLocked() ? null : tarefasMarkdownText()),
+    // Contrato 127 (R13): os lembretes do `ESTADO.md`, das tarefas abertas com aviso; bloqueado, nenhum.
+    lembretes: async () =>
+      lockService?.isLocked()
+        ? null
+        : (await tarefas.todas()).flatMap((tarefa) =>
+            tarefa.status === 'aberta' && tarefa.lembreteEm !== null ? [{ id: tarefa.id, titulo: tarefa.titulo, lembreteEm: tarefa.lembreteEm, disparado: tarefa.lembreteDisparadoEm !== null }] : [],
+          ),
     ...devLog,
   }
   // Contrato 45: o email do Assistente. O `EMAILS.md` e as mensagens já baixadas saem do cache (sem servidor); as
@@ -1461,11 +1540,16 @@ function createAppServices(userData: string): AppServices {
   const emailExport = {
     cached: () => email.cached(),
     body: (accountId: string, message: EmailMessage) => email.cachedBody(accountId, message),
-    reminders: async () =>
-      (await automations.listTasks()).flatMap((task) => {
-        const next = task.nextRunAt ? Date.parse(task.nextRunAt) : Number.NaN
-        return task.enabled && task.reminder?.email && !Number.isNaN(next) ? [{ accountId: task.reminder.email.accountId, messageId: task.reminder.email.messageId, mailbox: task.reminder.email.mailbox ?? null, when: formatRunAt(next, task.timezone) }] : []
-      }),
+    // Contrato 127 (R13): os lembretes de email são as tarefas abertas ligadas a uma mensagem, com o aviso no fuso; só os
+    // que ainda vão avisar (no futuro e não disparados), como os das Automações antes.
+    reminders: async () => {
+      const agora = Date.now()
+      return (await tarefas.todas()).flatMap((tarefa) =>
+        tarefa.status === 'aberta' && tarefa.vinculos.email && tarefa.lembreteEm !== null && tarefa.lembreteEm > agora && tarefa.lembreteDisparadoEm === null
+          ? [{ accountId: tarefa.vinculos.email.accountId, messageId: tarefa.vinculos.email.id, mailbox: tarefa.vinculos.email.mailbox, when: formatRunAt(tarefa.lembreteEm, timeZone()) }]
+          : [],
+      )
+    },
     locked: emailLocked,
   }
   const emailTools = createEmailTools({
@@ -1517,7 +1601,8 @@ function createAppServices(userData: string): AppServices {
       calendars: () => macCalendar.calendars(),
     },
     preferredCalendar: async () => (await settings.get()).inviteCalendarId,
-    tasks: () => automations.listTasks(),
+    // Contrato 127: as tarefas, só para ler (o lembrete, a tarefa de concluir, adiar ou abrir); bloqueado, o bloco fica como texto.
+    tarefas: async () => (lockService?.isLocked() ? null : tarefas.todas()),
     // Contrato 76: as contas do Instagram conectadas (o id e o @).
     instagramAccounts: async () => redes.state().accounts.map((account) => ({ id: account.id, username: account.username })),
     // Contrato 117: o funil, só para ler os ids, as etapas e os contatos do cartão; bloqueado, o bloco fica como texto.
@@ -1715,11 +1800,23 @@ function createAppServices(userData: string): AppServices {
   // da pasta); as saídas ficam neste Mac. O WhatsApp não entra aqui: nenhum agente alcança o envio dele. O email só
   // com a permissão do contrato 51. No smoke, o relógio do agendador é o que o smoke adianta.
   const smokeAutomations = smokeFixtures?.automations
+  // Contrato 124: o mesmo store das Automações é o que a migração R35 lê e limpa (um cache só).
+  const schedulesStore = createFileSchedulesStore({ dir: userData })
   const automations = createAutomationsService({
     agents: createFileAgentsStore({ dir: userData }),
-    schedules: createFileSchedulesStore({ dir: userData }),
+    schedules: schedulesStore,
     runs: createFileRunsStore({ dir: userData }),
-    runner: createAgentRunner({ locate: () => claude.locate(), openAcp, corpus, meetings, emptyDir: join(userData, 'automations-empty'), funilMarkdown: () => funilMarkdownText(), ...devLog }),
+    runner: createAgentRunner({
+      locate: () => claude.locate(),
+      openAcp,
+      corpus,
+      meetings,
+      emptyDir: join(userData, 'automations-empty'),
+      funilMarkdown: () => funilMarkdownText(),
+      // Contrato 124 (R31): o `TAREFAS.md` dos agentes com "Pode ler as tarefas".
+      tarefasMarkdown: () => tarefasMarkdownText(),
+      ...devLog,
+    }),
     applyOutput: (request) =>
       applyOutput(
         {
@@ -1750,7 +1847,11 @@ function createAppServices(userData: string): AppServices {
       if (event.type === 'done') trayController?.refresh()
       if (!lockService?.isLocked()) broadcast(appWindows(), 'scribe:automation-event', event)
     },
-    onTick: (at) => funilAlerts.tick(at),
+    // Contrato 122 (D6): os lembretes das tarefas no mesmo tick. Contrato 124 (R32): antes deles, o aviso "Hoje".
+    onTick: async (at) => {
+      await avisoHoje.tick(at)
+      await tarefas.dispararLembretes(at)
+    },
     ...(smokeAutomations ? { now: () => Date.now() + smokeAutomations.skewMs } : {}),
     // Contrato 51: só a tarefa com "Pode enviar email" envia, sem clique, pelo caminho interno do email (nunca pelo IPC),
     // depois das regras da permissão a cada envio; e lê o email com as mesmas ferramentas do Assistente. Bloqueado, nada.
@@ -1856,16 +1957,21 @@ function createAppServices(userData: string): AppServices {
     ...devLog,
   })
   navegadorServer = navegador
-  // Contrato 25: o clique nos cartões do Assistente. O lembrete é a tarefa "uma vez" sem agente das Automações.
-  // Contrato 78: o evento no Calendário do Mac (gravado só no clique, registrado em `chat-events.json`) e alterar ou apagar
-  // um lembrete das Automações.
+  // Contrato 25: o clique nos cartões do Assistente. Contrato 78: o evento no Calendário do Mac (gravado só no clique,
+  // registrado em `chat-events.json`). Contrato 127: o lembrete cria uma tarefa com aviso; alterar e apagar o lembrete e os
+  // cartões das tarefas gravam pelo serviço das tarefas (por closures, resolvidas na hora do clique).
   const chatActions = createChatActions({
     store: chatStore,
-    createReminder: (input) => automations.createReminder(input),
     timeZone,
     calendar: macCalendar,
     events: createChatEventsStore(userData, devLog),
-    reminders: { list: () => automations.listTasks(), update: (id, change) => automations.updateReminder(id, change), remove: (id) => automations.deleteTask({ id }) },
+    tarefas: {
+      todas: () => tarefas.todas(),
+      criar: (input) => tarefas.criar(input),
+      salvar: (request) => tarefas.salvar(request),
+      status: (request) => tarefas.status(request),
+      apagar: (request) => tarefas.apagar(request),
+    },
     // Contrato 76: o rascunho do Instagram sem mídia, pelo `savePublication` das redes (nunca publica nem agenda).
     instagram: {
       accounts: () => redes.state().accounts.map((account) => ({ id: account.id, username: account.username })),
@@ -1892,14 +1998,64 @@ function createAppServices(userData: string): AppServices {
     onChange: (view) => {
       if (!lockService?.isLocked()) broadcast(appWindows(), 'scribe:funil-changed', view)
     },
+    // Contrato 124 (D8): as tarefas por closures, resolvidas na hora da chamada (sem dependência circular).
+    tarefas: { todas: () => tarefas.todas(), criar: (input) => tarefas.criar(input), salvar: (request) => tarefas.salvar(request) },
     ...devLog,
   })
-  // Contrato 115: o alerta diário (no tick das Automações) e o `FUNIL.md` dos agentes com "Pode ler o funil".
-  const funilAlerts = createFunilAlerts({ view: () => funil.view(), ultimoAviso: async () => (await funilStore.read()).ultimoAvisoEm, settings: () => settings.get(), marcar: (at) => funil.marcarAviso(at), notify: showFunilNotice, timeZone, ...devLog })
+  // Contrato 122: as tarefas leem funil, reuniões, análises e WhatsApp só pelos caches; bloqueado, a view não vai às janelas.
+  const tarefasStore = createTarefasStore({ dir: userData, ...devLog })
+  const tarefas = createTarefasService({
+    store: tarefasStore,
+    funil: { state: () => funilStore.read() },
+    meetings,
+    summaries,
+    analyses: { list: (id) => analysis.list(id) },
+    insights: insightsCache,
+    whatsapp: { chats: () => whatsapp.chats() },
+    settings: () => settings.get(),
+    timeZone,
+    notify: showTarefaNotice,
+    onChange: (view) => {
+      if (!lockService?.isLocked()) broadcast(appWindows(), 'scribe:tarefas-changed', view)
+      // Contrato 124 (D8): o próximo passo derivado do funil muda junto.
+      void funil.notificarTarefas()
+    },
+    // Contrato 124 (R10): a tarefa ligada a uma oportunidade grava o evento `tarefa` no funil.
+    onOportunidade: (evento) => funil.registrarTarefa(evento),
+    // No smoke, o mesmo relógio adiantado do tick: a view e o tick concordam sobre o dia de hoje.
+    ...(smokeAutomations ? { now: () => Date.now() + smokeAutomations.skewMs } : {}),
+    ...devLog,
+  })
+  tarefasService = tarefas
+  // Contrato 115: o `FUNIL.md` dos agentes com "Pode ler o funil" (contrato 124, R16: com as tarefas abertas).
   const funilMarkdownText = async (): Promise<string> => {
-    const [view, { funil: config }, lista] = await Promise.all([funil.view(), settings.get(), meetings.list()])
-    return funilMarkdown({ view, diasEsfriar: config.diasEsfriar, reunioes: new Map(lista.map((meeting) => [meeting.id, meeting.title])), now: Date.now(), timeZone: timeZone() })
+    const [view, { funil: config }, lista, abertas] = await Promise.all([funil.view(), settings.get(), meetings.list(), tarefas.todas().catch(() => [])])
+    return funilMarkdown({ view, tarefas: abertas, diasEsfriar: config.diasEsfriar, reunioes: new Map(lista.map((meeting) => [meeting.id, meeting.title])), now: Date.now(), timeZone: timeZone() })
   }
+  // Contrato 124 (R31, D21): o `TAREFAS.md` dos agentes, pelo gerador único, com os nomes e o dia de hoje da view.
+  const tarefasMarkdownText = async (): Promise<string> => {
+    const view = await tarefas.view()
+    const nomes = { oportunidades: new Map(Object.entries(view.nomes.oportunidades)), contatos: new Map(Object.entries(view.nomes.contatos)), reunioes: new Map(Object.entries(view.nomes.reunioes)) }
+    return tarefasMarkdown({ tarefas: view.tarefas, nomes, hoje: view.hoje, timeZone: timeZone() })
+  }
+  // Contrato 124 (R32, D12): o aviso diário "Hoje" no tick das Automações, no lugar do alerta do funil.
+  const avisoHoje = createAvisoHoje({
+    settings: () => settings.get(),
+    ultimoAvisoHojeEm: async () => {
+      const lido = await tarefasStore.read()
+      if (!lido.ok) throw new Error(`leitura das tarefas recusada (${lido.erro})`)
+      return lido.value.ultimoAvisoHojeEm
+    },
+    view: () => funil.view(),
+    tarefas: () => tarefas.todas(),
+    marcarAvisoHoje: async (at) => {
+      const marcado = await tarefasStore.marcarAvisoHoje(at)
+      if (!marcado.ok) throw new Error(`aviso "Hoje" não marcado (${marcado.erro})`)
+    },
+    notify: showHojeNotice,
+    timeZone,
+    ...devLog,
+  })
   // Contrato 113: a proposta de IA de cada reunião e a passada `funnel-extract`, com o mesmo motor do resumo.
   const funilPropostas = createFunilProposalStore({ meetingsDir: join(userData, MEETINGS_DIR) })
   const notifyProposta = (meetingId: string): void => broadcast(appWindows(), 'scribe:funil-proposta-changed', { meetingId })
@@ -1963,6 +2119,26 @@ function createAppServices(userData: string): AppServices {
     funil,
     funnel,
     funilProposta: { funnel, proposals: funilPropostas, store: funilStore, meetings, onChange: notifyProposta },
+    tarefas,
+    async migrarTarefas() {
+      try {
+        const result = await migrarTarefas({
+          tarefas: tarefasStore,
+          funil: { legado: () => funilStore.legado(), backup: () => funilStore.backupMigracao(), limpar: () => funilStore.limparLegado(), restaurar: () => funilStore.restaurarMigracao() },
+          schedules: {
+            lembretes: () => schedulesStore.lembretes(),
+            backup: () => schedulesStore.backupMigracao(),
+            remover: (ids) => schedulesStore.removerLembretes(ids),
+            restaurar: () => schedulesStore.restaurarMigracao(),
+          },
+          timeZone,
+          ...devLog,
+        })
+        if (!result.ok) console.error(`[tarefas] migração falhou no passo ${result.passo}; a lista segue sem as migradas`)
+      } catch (error) {
+        console.error(`[tarefas] migração falhou: ${error instanceof Error ? error.message : String(error)}`)
+      }
+    },
   }
 }
 
@@ -2143,6 +2319,7 @@ function registerIpc(services: AppServices): void {
   // Só o smoke recebe o sinal gerado; o app normal sempre capta microfone e sistema de verdade.
   handle('scribe:capture-mode', appOrigin, () => (smoke ? 'synthetic' : 'real'))
   registerFunilIpc({ appOrigin, funil: services.funil, proposta: services.funilProposta, log: (message) => console.error(message) })
+  registerTarefasIpc({ appOrigin, tarefas: services.tarefas, log: (message) => console.error(message) })
   handle('scribe:meetings-list', appOrigin, () => meetings.list())
   handle('scribe:meetings-get', appOrigin, (_event, { id }) => meetings.get(id))
   handle('scribe:meetings-create', appOrigin, async (_event, input) => {
@@ -2305,6 +2482,8 @@ function registerIpc(services: AppServices): void {
   )
   // Contrato 117: o funil só muda aqui, no clique de um cartão do funil.
   handle('scribe:chat-action-funil', appOrigin, (_event, request) => chatActions.funil(request).catch((): ChatActionResult => ({ ok: false, error: 'invalid' })))
+  // Contrato 127 (D14): "Criar", "Concluir" e "Adiar" nos cartões das tarefas, pelo serviço das tarefas.
+  handle('scribe:chat-action-tarefa', appOrigin, (_event, request) => chatActions.tarefa(request).catch((): ChatActionResult => ({ ok: false, error: 'invalid' })))
   // Contrato 21: o cartão de aprovação de uma ferramenta MCP e a aba "Conexões". Nenhum segredo volta por aqui.
   handle('scribe:chat-approval', appOrigin, (_event, request) => chat.answerApproval(request))
   handle('scribe:mcp-chat-servers', appOrigin, () => mcp.chatServers())
@@ -2661,6 +2840,8 @@ void app.whenReady().then(async () => {
   if (!isDev) handleAppScheme(ses, rendererRoot)
   const userData = app.getPath('userData')
   const services = createAppServices(userData)
+  // Contrato 124 (R35): a migração única para tarefas antes do bloqueio, do IPC e das Automações.
+  await services.migrarTarefas()
   chatService = services.chat
   lockService = services.lock
   // Antes da primeira janela: o IPC já recusa o conteúdo se o app abrir bloqueado (CA6).

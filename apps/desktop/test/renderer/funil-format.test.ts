@@ -5,8 +5,11 @@
 // arquivo da importação.
 // Contrato 116: o contato ligado a um e-mail, telefone ou conversa (R35 a R37), a etapa pré-escolhida e o resumo do efeito
 // do cartão "Oportunidade detectada" (R39).
+// Contrato 125 (CA1): "Sem tarefa" no cartão (R14), as tarefas da oportunidade, do contato e da empresa (R15, R19) e o
+// texto do item `tarefa` da linha do tempo (R18).
 import { describe, expect, it } from 'vitest'
-import type { Contato, Empresa, FunilState, ItemLinhaDoTempo, Oportunidade, Sugestao } from '../../src/shared/funil'
+import type { Contato, Empresa, FunilState, ItemLinhaDoTempo, Oportunidade, ProximoPassoDerivado, Sugestao } from '../../src/shared/funil'
+import type { Tarefa } from '../../src/shared/tarefas'
 import { etapasPadrao } from '../../src/shared/funil-logic'
 import {
   colunasVisiveis,
@@ -27,8 +30,12 @@ import {
   podeArquivar,
   resultadosPicker,
   sugestaoDeEmpresa,
+  tarefasDaEmpresa,
+  tarefasDaOportunidade,
+  tarefasDoContato,
   telefoneLegivel,
   textoArquivoImport,
+  textoItemTarefa,
   textoPassoDetalhe,
   textoProximoPasso,
   textoResultadoImport,
@@ -169,9 +176,13 @@ describe('valor, totais e próximo passo', () => {
     expect(textoTotais(state, NOW, SP)).toBe('3 abertas · R$ 114.500,50 em aberto · R$ 75.000 ganho em novembro')
   })
 
-  it('textoProximoPasso: o texto e a data curta, ou "Sem próximo passo"', () => {
-    expect(textoProximoPasso(null)).toEqual({ texto: 'Sem próximo passo', data: null })
+  it('textoProximoPasso: o texto e a data curta, ou "Sem tarefa" (contrato 125, R14)', () => {
+    expect(textoProximoPasso(null)).toEqual({ texto: 'Sem tarefa', data: null })
     expect(textoProximoPasso({ texto: 'Ligar', data: '2026-11-25' })).toEqual({ texto: 'Ligar', data: '25/11' })
+    // Contrato 124 (CA10): o passo derivado das tarefas (com o `tarefaId`) sai igual.
+    const derivado: ProximoPassoDerivado = { texto: 'Ligar', data: '2026-11-23', tarefaId: 't1' }
+    expect(textoProximoPasso(derivado)).toEqual({ texto: 'Ligar', data: '23/11' })
+    expect(textoPassoDetalhe(derivado, '2026-11-24')).toEqual({ texto: 'Ligar', data: '23/11 · vencido', vencido: true })
     expect(diaCurto('2026-01-09')).toBe('09/01')
   })
 })
@@ -375,5 +386,63 @@ describe('telas existentes e cartão da proposta (contrato 116)', () => {
     expect(textoEfeito({ contatosNovos: 1, empresaNova: false, citados: ['Carlos Dias'] })).toBe('Cria o contato novo · Carlos Dias fica só citado na nota')
     expect(textoEfeito({ contatosNovos: 0, empresaNova: true, citados: ['Carlos Dias', 'Ana Lima', 'Bia Reis'] })).toBe('Cria a empresa · Carlos Dias, Ana Lima e Bia Reis ficam só citados na nota')
     expect(textoEfeito({ contatosNovos: 0, empresaNova: false, citados: ['  '] })).toBe('')
+  })
+})
+
+describe('tarefas no funil (contrato 125, CA1)', () => {
+  let seqTarefa = 0
+  const tarefa = (id: string, patch: Partial<Tarefa> = {}): Tarefa => ({
+    id,
+    titulo: id,
+    detalhe: '',
+    status: 'aberta',
+    importante: false,
+    prazo: null,
+    lembreteEm: null,
+    lembreteDisparadoEm: null,
+    responsavel: { tipo: 'eu' },
+    origem: { tipo: 'manual' },
+    vinculos: { oportunidadeId: null, contatoIds: [], empresaId: null, meetingId: null, email: null, whatsappChatId: null },
+    historico: [],
+    criadaEm: ++seqTarefa,
+    atualizadaEm: seqTarefa,
+    feitaEm: null,
+    ...patch,
+  })
+  const vinculos = (patch: Partial<Tarefa['vinculos']>): Tarefa['vinculos'] => ({ oportunidadeId: null, contatoIds: [], empresaId: null, meetingId: null, email: null, whatsappChatId: null, ...patch })
+  const ids = (lista: readonly Tarefa[]): string[] => lista.map((item) => item.id)
+  const daLoja = (id: string, patch: Partial<Tarefa> = {}): Tarefa => tarefa(id, { vinculos: vinculos({ oportunidadeId: 'op-loja', contatoIds: ['ct-rafael'], empresaId: 'emp-cliente' }), ...patch })
+  const tarefas = [
+    daLoja('sem-prazo'),
+    daLoja('dia-25', { prazo: '2026-11-25' }),
+    daLoja('dia-23', { prazo: '2026-11-23' }),
+    daLoja('dia-23-depois', { prazo: '2026-11-23' }),
+    daLoja('feita-ontem', { status: 'feita', prazo: '2026-11-20', feitaEm: NOW - DIA_MS }),
+    daLoja('cancelada-hoje', { status: 'cancelada', feitaEm: NOW }),
+    tarefa('outra-op', { prazo: '2026-11-21', vinculos: vinculos({ oportunidadeId: 'op-portal', contatoIds: ['ct-marina'] }) }),
+    tarefa('so-contato', { prazo: '2026-11-22', vinculos: vinculos({ contatoIds: ['ct-rafael'] }) }),
+    tarefa('so-contato-feita', { status: 'feita', feitaEm: NOW, vinculos: vinculos({ contatoIds: ['ct-rafael'], empresaId: 'emp-cliente' }) }),
+  ]
+
+  it('tarefasDaOportunidade: as abertas por prazo (sem prazo por último, empate pela criação) e as fechadas à parte', () => {
+    const { abertas, fechadas } = tarefasDaOportunidade(tarefas, 'op-loja')
+    expect(ids(abertas)).toEqual(['dia-23', 'dia-23-depois', 'dia-25', 'sem-prazo'])
+    expect(ids(fechadas)).toEqual(['cancelada-hoje', 'feita-ontem'])
+    expect(tarefasDaOportunidade(tarefas, 'op-nenhuma')).toEqual({ abertas: [], fechadas: [] })
+  })
+
+  it('tarefasDoContato e tarefasDaEmpresa: só as abertas com o contato (ou a empresa) nos vínculos, por prazo', () => {
+    expect(ids(tarefasDoContato(tarefas, 'ct-rafael'))).toEqual(['so-contato', 'dia-23', 'dia-23-depois', 'dia-25', 'sem-prazo'])
+    expect(ids(tarefasDoContato(tarefas, 'ct-marina'))).toEqual(['outra-op'])
+    expect(tarefasDoContato(tarefas, 'ct-ninguem')).toEqual([])
+    expect(ids(tarefasDaEmpresa(tarefas, 'emp-cliente'))).toEqual(['dia-23', 'dia-23-depois', 'dia-25', 'sem-prazo'])
+  })
+
+  it('textoItemTarefa: "Tarefa criada" ou "Tarefa concluída", com a origem e o prazo', () => {
+    expect(textoItemTarefa({ acao: 'criada', origem: 'criada por você', prazo: '2026-11-25' })).toEqual({ rotulo: 'Tarefa criada', linha: 'Criada por você · até 25/11' })
+    expect(textoItemTarefa({ acao: 'feita', origem: 'da reunião Kickoff', prazo: null })).toEqual({ rotulo: 'Tarefa concluída', linha: 'Da reunião Kickoff' })
+    // A tarefa apagada chega sem origem e sem prazo: só o rótulo.
+    expect(textoItemTarefa({ acao: 'feita', origem: '', prazo: null })).toEqual({ rotulo: 'Tarefa concluída', linha: null })
+    expect(textoItemTarefa({ acao: 'criada', origem: '', prazo: '2026-12-01' })).toEqual({ rotulo: 'Tarefa criada', linha: 'até 01/12' })
   })
 })

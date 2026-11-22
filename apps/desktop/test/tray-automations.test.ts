@@ -51,7 +51,7 @@ describe('ícone na barra de menus (contrato 23, CA8 e CA9)', () => {
     const template = trayMenuTemplate(state(), handlers(calls))
     expect(labels(template)).toEqual(['Abrir LAP Reuniões', 'Nova gravação', '—', 'Nenhuma reunião hoje', '—', 'Recentes', '—', 'Avisar quando uma reunião começar', 'Automações', 'Bloquear', '—', 'Sair'])
     const automations = submenu(template, 'Automações')
-    expect(labels(automations)).toEqual(['Abrir Automações', '—', 'Resumo da semana · sex 17:00', 'Minhas tarefas · ter 08:00', 'Outra · qua 08:00', '—', 'Pausar todas as tarefas'])
+    expect(labels(automations)).toEqual(['Abrir Automações', '—', 'Resumo da semana · sex 17:00', 'Minhas tarefas · ter 08:00', 'Outra · qua 08:00', '—', 'Pausar todos os agendamentos'])
     for (const item of [...template, ...automations]) (item.click as (() => void) | undefined)?.()
     expect(calls).toEqual(['open', 'newRecording', 'toggleMeetingPrompt', 'lock', 'quit', 'automations', 'togglePause'])
   })
@@ -60,7 +60,7 @@ describe('ícone na barra de menus (contrato 23, CA8 e CA9)', () => {
     const template = trayMenuTemplate(state({ recording: { elapsedMs: 754_000, title: null }, paused: true, next: [] }), handlers([]))
     expect(labels(template).slice(0, 5)).toEqual(['Abrir LAP Reuniões', 'Gravando · 12:34', 'Abrir gravação', 'Encerrar', '—'])
     expect(labels(template)).not.toContain('Nova gravação')
-    expect(labels(submenu(template, 'Automações'))).toEqual(['Abrir Automações', '—', 'Tarefas pausadas', '—', 'Retomar'])
+    expect(labels(submenu(template, 'Automações'))).toEqual(['Abrir Automações', '—', 'Agendamentos pausados', '—', 'Retomar'])
     expect(elapsedLabel(3_723_000)).toBe('1:02:03')
   })
 

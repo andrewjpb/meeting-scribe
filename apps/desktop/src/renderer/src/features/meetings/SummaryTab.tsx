@@ -1,17 +1,23 @@
-import { Copy, Download, Funnel, RefreshCw, Sparkles, Terminal, TriangleAlert } from 'lucide-react'
+import { Copy, Download, ExternalLink, Funnel, ListChecks, Plus, RefreshCw, Sparkles, Terminal, TriangleAlert } from 'lucide-react'
 import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { useNavigate } from 'react-router'
 import { acpReady } from '@shared/acp'
 import { summaryDateLabel, type MeetingSummary, type SummaryError } from '@shared/meeting-summary'
 import type { MeetingAttendee, MeetingCalendar } from '@shared/meetings'
+import { tarefasPath } from '@shared/routes'
 import { useAcp } from '../../app/acpStore'
 import { useAgentLabel } from '../../app/agentLabel'
 import { useSettings } from '../../app/settingsStore'
+import { ActionButton } from '../../design/ActionButton'
 import { Button } from '../../design/Button'
 import { Icon } from '../../design/Icon'
 import { Note, NOTE_ACTION_CLASS } from '../../design/Note'
 import { ContactLink } from '../funil/ContactLink'
 import { useProposta } from '../funil/proposalStore'
 import { RetryNotice } from '../live/Notices'
+import { CaixaFeito } from '../tarefas/TarefaLinha'
+import { linhasDoResumo, pendentesMinhas, textoPrazoResumo } from '../tarefas/tarefasFormat'
+import { useTarefas, useTarefasView } from '../tarefas/tarefasStore'
 import { OpportunityCard } from './OpportunityCard'
 import { OpenQuestionsSection } from './OpenQuestionsSection'
 import type { AnalysesView } from './useAnalyses'
@@ -73,10 +79,14 @@ interface OpenQuestionsProps {
   onJump?: ((atMs: number) => void) | undefined
 }
 
-/** Coluna da aba: mesma largura e margens da transcrição, rolando sozinha. */
+/**
+ * Coluna da aba: mesma largura e margens da transcrição, rolando sozinha. `relative` (contrato 130, B1): o que é
+ * `absolute` lá dentro (o `sr-only` do cabeçalho da tabela de tarefas) se posiciona e é cortado por ela; sem isso, abaixo
+ * da dobra, ele esticava o documento e a janela inteira rolava junto (a barra lateral subia).
+ */
 function Column({ children, state, questions, empty = false }: { children: ReactNode; state: string; questions?: OpenQuestionsProps | undefined; empty?: boolean }) {
   return (
-    <div data-summary-scroll className="min-h-0 flex-1 overflow-y-auto px-8 pb-8">
+    <div data-summary-scroll className="relative min-h-0 flex-1 overflow-y-auto px-8 pb-8">
       <div data-summary={state} aria-live="polite" className="mx-auto flex w-full max-w-[680px] flex-col gap-6 pt-5">
         <AcpFallbackNote />
         {children}
@@ -158,10 +168,18 @@ export function SummaryTab({
   )
 }
 
-function SectionTitle({ children }: { children: string }) {
+/** Título de bloco com o fio de 2×20; `action` (contrato 126) fica à direita, numa linha de 28 px mesmo vazia. */
+function SectionTitle({ children, action }: { children: string; action?: ReactNode }) {
   return (
     <>
-      <h2 className="text-14 leading-5 font-semibold text-title">{children}</h2>
+      {action === undefined ? (
+        <h2 className="text-14 leading-5 font-semibold text-title">{children}</h2>
+      ) : (
+        <div className="flex min-h-7 items-center justify-between gap-3">
+          <h2 className="text-14 leading-5 font-semibold text-title">{children}</h2>
+          {action}
+        </div>
+      )}
       <span aria-hidden="true" className="mt-2 mb-3 block h-0.5 w-5 bg-title" />
     </>
   )
@@ -245,39 +263,7 @@ function SummaryContent({ meetingId, summary, onGenerate, attendees }: { meeting
 
       {proposta.view?.arquivo && <OpportunityCard key={proposta.view.arquivo.createdAt} meetingId={meetingId} view={proposta.view} aplicar={proposta.aplicar} descartar={proposta.descartar} />}
 
-      <section aria-label="Tarefas">
-        <SectionTitle>Tarefas</SectionTitle>
-        {summary.tasks.length === 0 ? (
-          <p data-summary-no-tasks className="text-13 text-text-muted">
-            Nenhuma tarefa combinada.
-          </p>
-        ) : (
-          <table data-summary-tasks className="w-full table-fixed border-collapse text-left">
-            <thead>
-              <tr className="label border-b border-line-strong">
-                <th scope="col" className="py-1.5 pr-4 font-medium">
-                  Tarefa
-                </th>
-                <th scope="col" className="w-40 py-1.5 pr-4 font-medium">
-                  Quem
-                </th>
-                <th scope="col" className="w-32 py-1.5 font-medium">
-                  Prazo
-                </th>
-              </tr>
-            </thead>
-            <tbody>
-              {summary.tasks.map((task, index) => (
-                <tr key={index} className="border-b border-line align-top text-13 text-text select-text">
-                  <td className="py-1.5 pr-4">{task.task}</td>
-                  <td className={`py-1.5 pr-4 ${task.owner ? 'font-medium' : 'text-text-muted'}`}>{task.owner ?? '—'}</td>
-                  <td className={`py-1.5 tabular ${task.due ? '' : 'text-text-muted'}`}>{task.due ?? '—'}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </section>
+      <TasksSection meetingId={meetingId} tasks={summary.tasks} />
 
       {attendees.length > 0 && <Participants attendees={attendees} />}
 
@@ -285,6 +271,109 @@ function SummaryContent({ meetingId, summary, onGenerate, attendees }: { meeting
         Gerado pelo Claude em <span className="tabular">{summaryDateLabel(summary.createdAt)}</span> · <span className="font-mono text-11">{summary.model}</span>
       </p>
     </>
+  )
+}
+
+/**
+ * "Tarefas" do resumo (contrato 08; contrato 126, R22, R23, artboard 10): a coluna de estado de 32 px à esquerda (a caixa
+ * de feito da tarefa que veio da linha), Tarefa, Quem, Prazo (a data real e o que foi dito, em cinza) e, à direita,
+ * "Adicionar" ou o ícone que abre a tarefa. A linha casa com a tarefa pelo texto, então "Gerar de novo" não desliga
+ * nada. "Adicionar as minhas" no título, enquanto houver linha de "Você" sem tarefa. Nada é criado sem clique.
+ */
+function TasksSection({ meetingId, tasks }: { meetingId: string; tasks: MeetingSummary['tasks'] }) {
+  const view = useTarefasView()
+  const navigate = useNavigate()
+  const [ocupado, setOcupado] = useState(false)
+  const [erro, setErro] = useState<string | null>(null)
+  // Sem a view (antes da primeira carga) não se sabe o que já é tarefa: nem "Adicionar" nem a caixa, para não piscar.
+  const linhas = view ? linhasDoResumo(tasks, meetingId, view.tarefas) : null
+  const porId = new Map((view?.tarefas ?? []).map((tarefa) => [tarefa.id, tarefa]))
+  const minhas = linhas ? pendentesMinhas(tasks, linhas) : 0
+
+  const adicionar = async (indices: number[] | 'minhas'): Promise<void> => {
+    if (ocupado) return
+    setOcupado(true)
+    setErro(null)
+    const result = await useTarefas.getState().adicionarDoResumo(meetingId, indices)
+    setOcupado(false)
+    if (!result.ok) setErro(result.mensagem)
+  }
+
+  const acaoMinhas =
+    minhas > 0 ? (
+      <ActionButton icon={ListChecks} label="Adicionar as minhas" action="tarefa-resumo-minhas" disabled={ocupado} onClick={() => void adicionar('minhas')} />
+    ) : null
+
+  return (
+    <section aria-label="Tarefas">
+      <SectionTitle action={tasks.length > 0 ? acaoMinhas : undefined}>Tarefas</SectionTitle>
+      {tasks.length === 0 ? (
+        <p data-summary-no-tasks className="text-13 text-text-muted">
+          Nenhuma tarefa combinada.
+        </p>
+      ) : (
+        <table data-summary-tasks className="w-full table-fixed border-collapse text-left">
+          <thead>
+            <tr className="label border-b border-line-strong">
+              <th scope="col" className="w-8 py-1.5 font-medium">
+                <span className="sr-only">Feita</span>
+              </th>
+              <th scope="col" className="py-1.5 pr-4 font-medium">
+                Tarefa
+              </th>
+              <th scope="col" className="w-36 py-1.5 pr-4 font-medium">
+                Quem
+              </th>
+              <th scope="col" className="w-36 py-1.5 pr-4 font-medium">
+                Prazo
+              </th>
+              <th scope="col" className="w-[100px] py-1.5 font-medium">
+                <span className="sr-only">Ação</span>
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            {tasks.map((task, index) => {
+              const tarefaId = linhas?.[index]?.tarefaId ?? null
+              const tarefa = tarefaId === null ? undefined : porId.get(tarefaId)
+              const prazo = textoPrazoResumo(task)
+              return (
+                <tr key={index} data-summary-task={index} data-summary-task-tarefa={tarefa?.id} className="border-b border-line align-middle text-13 text-text select-text">
+                  <td className="py-1.5">
+                    <span className="flex">{tarefa && <CaixaFeito tarefa={tarefa} data={{ 'data-tarefa-feito': '' }} onErro={setErro} />}</span>
+                  </td>
+                  <td className="py-1.5 pr-4">{task.task}</td>
+                  <td className={`py-1.5 pr-4 ${task.owner ? 'font-medium' : 'text-text-muted'}`}>{task.owner ?? '—'}</td>
+                  <td data-summary-task-prazo={prazo.data ?? ''} className={`py-1.5 pr-4 tabular ${prazo.data || prazo.dito ? '' : 'text-text-muted'}`}>
+                    {prazo.data ? (
+                      <>
+                        {prazo.data}
+                        {prazo.dito && <span className="text-text-muted"> {prazo.dito}</span>}
+                      </>
+                    ) : (
+                      (prazo.dito ?? '—')
+                    )}
+                  </td>
+                  <td className="py-1.5 text-right">
+                    {linhas &&
+                      (tarefa ? (
+                        <ActionButton icon={ExternalLink} label="Abrir tarefa" action="tarefa-resumo-abrir" iconOnly data={{ 'data-tarefa-link': tarefa.id }} onClick={() => void navigate(tarefasPath(tarefa.id))} />
+                      ) : (
+                        <ActionButton icon={Plus} label="Adicionar" action="tarefa-resumo-adicionar" data={{ 'data-summary-task-index': String(index) }} disabled={ocupado} onClick={() => void adicionar([index])} />
+                      ))}
+                  </td>
+                </tr>
+              )
+            })}
+          </tbody>
+        </table>
+      )}
+      {erro && (
+        <Note id="tarefa-resumo-erro" icon={TriangleAlert} role="alert" className="mt-3">
+          {erro}
+        </Note>
+      )}
+    </section>
   )
 }
 

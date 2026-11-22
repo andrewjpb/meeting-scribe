@@ -12,6 +12,7 @@ import { FUNIL_PROPOSTA_DECIDIDA_TEXTO, type FunilPropostaArquivo, type FunilPro
 import { INVOKE_CHANNELS, MAIN_EVENT_CHANNELS, WHEN_LOCKED } from '../src/shared/ipc'
 import type { Meeting } from '../src/shared/meetings'
 import { DEFAULT_SETTINGS } from '../src/shared/settings-defaults'
+import type { Tarefa, TarefaInput, TarefaSalvar, TarefasActionResult } from '../src/shared/tarefas'
 
 // O registro do main com um `ipcMain` falso, como em `funil-service.test.ts`.
 const invokeHandlers = new Map<string, (event: unknown, ...args: unknown[]) => unknown>()
@@ -39,11 +40,45 @@ afterEach(() => {
   invokeHandlers.clear()
 })
 
+/** Contrato 124: o serviço das tarefas falso, com memória (o funil deduplica o passo pelas tarefas abertas). */
+function tarefasFalsas() {
+  const lista: Tarefa[] = []
+  const criar = vi.fn(async (input: TarefaInput): Promise<TarefasActionResult> => {
+    const id = `tarefa-${lista.length + 1}`
+    lista.push({
+      id,
+      titulo: input.titulo,
+      detalhe: '',
+      status: 'aberta',
+      importante: false,
+      prazo: input.prazo ?? null,
+      lembreteEm: null,
+      lembreteDisparadoEm: null,
+      responsavel: { tipo: 'eu' },
+      origem: input.origem,
+      vinculos: { oportunidadeId: input.vinculos?.oportunidadeId ?? null, contatoIds: [], empresaId: null, meetingId: null, email: null, whatsappChatId: null },
+      historico: [],
+      criadaEm: 0,
+      atualizadaEm: 0,
+      feitaEm: null,
+    })
+    return { ok: true, id }
+  })
+  const salvar = vi.fn(async (request: TarefaSalvar): Promise<TarefasActionResult> => {
+    const tarefa = lista.find((item) => item.id === request.id)
+    if (tarefa && request.prazo !== undefined) tarefa.prazo = request.prazo
+    return { ok: true, id: request.id }
+  })
+  return { lista, criar, salvar, todas: async (): Promise<Tarefa[]> => lista.map((tarefa) => ({ ...tarefa })) }
+}
+
 function setup() {
   const dir = mkdtempSync(join(tmpdir(), 'funil-proposta-'))
   dirs.push(dir)
   const store = createFunilStore({ dir })
   const views: FunilView[] = []
+  // Contrato 124: o próximo passo aplicado vira tarefa pelo serviço das tarefas (falso aqui).
+  const tarefas = tarefasFalsas()
   const funil = createFunilService({
     store,
     meetings: { list: async () => [] },
@@ -52,10 +87,11 @@ function setup() {
     whatsapp: { chats: async () => [], me: () => null },
     chooseImportFile: async () => null,
     onChange: (view) => void views.push(view),
+    tarefas: { todas: tarefas.todas, criar: tarefas.criar, salvar: tarefas.salvar },
   })
   const proposals = createFunilProposalStore({ meetingsDir: join(dir, 'meetings') })
   const meetings = { get: async (id: string) => (id === MEETING ? ({ id } as unknown as Meeting) : null) }
-  return { dir, store, funil, proposals, meetings, views, deps: { store, funil, proposals, meetings }, file: join(dir, 'funil.json') }
+  return { dir, store, funil, proposals, meetings, views, tarefas, deps: { store, funil, proposals, meetings }, file: join(dir, 'funil.json') }
 }
 
 function arquivo(proposta: Partial<PropostaOportunidade> = {}, status: FunilPropostaArquivo['status'] = 'proposed'): FunilPropostaArquivo {
@@ -149,11 +185,31 @@ describe('applyProposal', () => {
     const depois = await ctx.store.read()
     const op = depois.oportunidades.find((item) => item.id === id)
     expect(op?.etapaId).toBe(etapa(depois, 'Proposta'))
-    expect(op?.proximoPasso).toEqual(passo)
+    // Contrato 124: o passo não é gravado na oportunidade; vira tarefa ligada a ela.
+    expect(op).not.toHaveProperty('proximoPasso')
+    expect(ctx.tarefas.criar).toHaveBeenCalledTimes(1)
+    expect(ctx.tarefas.criar.mock.calls[0]?.[0]).toMatchObject({ titulo: 'Reunião com o jurídico', prazo: '2026-12-02', origem: { tipo: 'funil', oportunidadeId: id } })
     expect(op?.meetingIds).toContain(MEETING)
     expect(op?.valor).toBe(1_000_000)
     expect(depois.eventos.filter((evento) => evento.oportunidadeId === id && evento.tipo === 'etapa')).toEqual([expect.objectContaining({ de: 'Descoberta', para: 'Proposta' })])
     expect(await ctx.proposals.get(MEETING)).toMatchObject({ status: 'accepted', oportunidadeId: id })
+  })
+
+  it('contrato 124: "atualizar" aplicada de novo com o mesmo passo não duplica a tarefa; com outra data, muda o prazo dela', async () => {
+    const ctx = setup()
+    const id = await oportunidade(ctx, { titulo: 'Cliente · Portal', empresaNome: 'Cliente', etapa: 'Descoberta' })
+    const aplicar = async (passo: { texto: string; data: string | null }) => {
+      await ctx.proposals.save(arquivo({ acao: 'atualizar', oportunidadeId: id }))
+      const state = await ctx.store.read()
+      return applyProposal(ctx.deps, { meetingId: MEETING, campos: campos(state, { proximoPasso: passo }) })
+    }
+    expect(await aplicar({ texto: 'Reunião com o jurídico', data: '2026-12-02' })).toEqual({ ok: true, oportunidadeId: id })
+    expect(await aplicar({ texto: 'reunião com o JURÍDICO', data: '2026-12-02' })).toEqual({ ok: true, oportunidadeId: id })
+    expect(ctx.tarefas.criar).toHaveBeenCalledTimes(1)
+    expect(ctx.tarefas.salvar).not.toHaveBeenCalled()
+    expect(await aplicar({ texto: 'Reunião com o jurídico', data: '2026-12-09' })).toEqual({ ok: true, oportunidadeId: id })
+    expect(ctx.tarefas.criar).toHaveBeenCalledTimes(1)
+    expect(ctx.tarefas.lista.map((tarefa) => [tarefa.titulo, tarefa.prazo, tarefa.vinculos.oportunidadeId])).toEqual([['Reunião com o jurídico', '2026-12-09', id]])
   })
 
   it('CA3: vincular a uma ganha recusa e deixa proposed; a uma aberta só muda reuniões e contatos', async () => {

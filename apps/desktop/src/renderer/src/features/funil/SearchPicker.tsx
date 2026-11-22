@@ -1,4 +1,4 @@
-import { ChevronDown, Plus, X } from 'lucide-react'
+import { ChevronDown, Plus, X, type LucideIcon } from 'lucide-react'
 import { useId, useState, type KeyboardEvent } from 'react'
 import { CONTROL_CLASS } from '../../design/Field'
 import { Icon } from '../../design/Icon'
@@ -17,9 +17,16 @@ interface SearchPickerBase {
   disabled?: boolean | undefined
 }
 
-/** Um só (Empresa): o escolhido aparece no campo. Vários (Contatos): chips com "×" acima do campo. */
+/**
+ * Um só (Empresa): o escolhido aparece no campo; com `icone`, o ícone à esquerda e, com `limpar` (o nome acessível do
+ * botão), o "×" no lugar da seta enquanto há escolhido (contrato 130, a oportunidade da Nova tarefa). Vários (Contatos):
+ * chips com "×" acima do campo.
+ */
 export type SearchPickerProps = SearchPickerBase &
-  ({ multiplo?: false | undefined; valor: PickerItem | null; onChange: (item: PickerItem | null) => void } | { multiplo: true; valor: readonly PickerItem[]; onChange: (itens: PickerItem[]) => void })
+  (
+    | { multiplo?: false | undefined; valor: PickerItem | null; onChange: (item: PickerItem | null) => void; icone?: LucideIcon | undefined; limpar?: string | undefined }
+    | { multiplo: true; valor: readonly PickerItem[]; onChange: (itens: PickerItem[]) => void }
+  )
 
 type Opcao = { tipo: 'item'; item: PickerItem } | { tipo: 'criar'; texto: string }
 
@@ -106,7 +113,7 @@ export function SearchPicker(props: SearchPickerProps) {
       className={
         props.multiplo
           ? 'h-6 min-w-[60px] flex-1 bg-transparent px-1.5 text-13 text-text select-text placeholder:text-text-faint focus-visible:outline-none'
-          : `${CONTROL_CLASS} w-full min-w-0 pr-8 pl-2.5 select-text placeholder:text-text-faint`
+          : `${CONTROL_CLASS} w-full min-w-0 pr-8 ${props.icone ? 'pl-8' : 'pl-2.5'} select-text placeholder:text-text-faint`
       }
     />
   )
@@ -134,8 +141,26 @@ export function SearchPicker(props: SearchPickerProps) {
         </div>
       ) : (
         <div className="relative flex min-w-0">
+          {props.icone && (
+            <span data-funil-picker-icone="" className="pointer-events-none absolute top-2 left-2.5 flex text-text-muted">
+              <Icon icon={props.icone} />
+            </span>
+          )}
           {input}
-          <Icon icon={ChevronDown} className="pointer-events-none absolute top-2 right-2.5 text-text-muted" />
+          {props.limpar && props.valor ? (
+            <button
+              type="button"
+              aria-label={props.limpar}
+              data-funil-picker-limpar=""
+              disabled={disabled}
+              onClick={() => props.onChange(null)}
+              className="no-drag absolute top-1 right-1 inline-flex size-6 items-center justify-center rounded-[var(--radius-control)] text-text-muted hover:text-title"
+            >
+              <Icon icon={X} size={14} />
+            </button>
+          ) : (
+            <Icon icon={ChevronDown} className="pointer-events-none absolute top-2 right-2.5 text-text-muted" />
+          )}
         </div>
       )}
       {aberto && (

@@ -8,7 +8,7 @@ import type { AgentRunRequest, AgentRunResult } from '../src/main/schedules/runn
 import { createAutomationsService, type AutomationNotice, type AutomationsDeps, type AutomationsService } from '../src/main/schedules/service'
 import { createFileRunsStore, createFileSchedulesStore, SCHEDULE_RUNS_DIR, SCHEDULES_FILE } from '../src/main/schedules/store'
 import { AGENTS_FILE } from '../src/main/agents/store'
-import type { AgentInput, AutomationEvent, ScheduledTask, TaskInput } from '../src/shared/automations'
+import { EXAMPLE_AGENTS, type AgentInput, type AutomationEvent, type ScheduledTask, type TaskInput } from '../src/shared/automations'
 
 const SP = 'America/Sao_Paulo'
 
@@ -153,7 +153,7 @@ describe('agentes (contrato 23, CA1 e CA2)', () => {
 
   it('nome único, modelo do perfil e excluir recusado com a lista das tarefas que usam o agente', async () => {
     const agentId = await firstAgentId()
-    const base: AgentInput = { id: null, name: 'resumo da SEMANA', description: '', icon: 'bot', color: 'blue', instructions: 'x', profile: 'claude', model: 'haiku', thinkMore: false, scope: { kind: 'all' }, web: false, funil: false, mcpServers: [], output: { kind: 'chat' } }
+    const base: AgentInput = { id: null, name: 'resumo da SEMANA', description: '', icon: 'bot', color: 'blue', instructions: 'x', profile: 'claude', model: 'haiku', thinkMore: false, scope: { kind: 'all' }, web: false, funil: false, tarefas: false, mcpServers: [], output: { kind: 'chat' } }
     expect(await service.saveAgent(base)).toEqual({ ok: false, error: 'duplicate' })
     expect(await service.saveAgent({ ...base, name: 'Novo', model: 'fable-5-2' })).toEqual({ ok: false, error: 'model' })
     const saved = await service.saveAgent({ ...base, name: 'Novo' })
@@ -164,7 +164,7 @@ describe('agentes (contrato 23, CA1 e CA2)', () => {
   })
 
   it('"Testar agora" roda o agente do formulário sem gravar nada no histórico nem aplicar a saída', async () => {
-    const input: AgentInput = { id: null, name: 'Rascunho', description: '', icon: 'bot', color: 'pink', instructions: 'Seja breve.', profile: 'claude', model: 'haiku', thinkMore: false, scope: { kind: 'none' }, web: false, funil: false, mcpServers: [], output: { kind: 'file' } }
+    const input: AgentInput = { id: null, name: 'Rascunho', description: '', icon: 'bot', color: 'pink', instructions: 'Seja breve.', profile: 'claude', model: 'haiku', thinkMore: false, scope: { kind: 'none' }, web: false, funil: false, tarefas: false, mcpServers: [], output: { kind: 'file' } }
     const started = await service.testAgent({ agent: input, text: 'Olá?' })
     expect(started.ok).toBe(true)
     await waitPending(1)
@@ -196,8 +196,8 @@ describe('agendador (contrato 23, CA5)', () => {
     expect(saved?.lastResultPreview).toContain('Resposta de')
     expect(runsOnDisk()).toEqual([expect.objectContaining({ status: 'ok', trigger: 'schedule', taskId: task.id })])
     expect(outputs).toHaveLength(1)
-    expect(outputs[0]).toMatchObject({ title: 'Tarefa: Resumo de sexta', output: { kind: 'chat' } })
-    expect(notices).toEqual([expect.objectContaining({ title: 'Tarefa: Resumo de sexta' })])
+    expect(outputs[0]).toMatchObject({ title: 'Agendamento: Resumo de sexta', output: { kind: 'chat' } })
+    expect(notices).toEqual([expect.objectContaining({ title: 'Agendamento: Resumo de sexta' })])
   })
 
   it('uma por tarefa: com a anterior rodando, a vez vira skipped; no máximo 2 ao mesmo tempo no total', async () => {
@@ -256,7 +256,7 @@ describe('agendador (contrato 23, CA5)', () => {
     }
     const [paused] = await service.listTasks()
     expect(paused).toMatchObject({ autoPaused: true, consecutiveFailures: 3, nextRunAt: null, lastStatus: 'timeout' })
-    expect(notices.at(-1)?.title).toBe('Tarefa pausada: Resumo de sexta')
+    expect(notices.at(-1)?.title).toBe('Agendamento pausado: Resumo de sexta')
     // Pausada, o horário não roda.
     clock = Date.parse('2026-11-17T11:00:10Z')
     await service.tick()
@@ -293,7 +293,7 @@ describe('agendador (contrato 23, CA5)', () => {
     expect(pending).toHaveLength(0)
     const status = await service.status()
     expect(status).toMatchObject({ paused: true, pauseReason: 'limit', runsToday: 1, dailyLimit: 1 })
-    expect(notices.at(-1)?.title).toBe('Tarefas pausadas')
+    expect(notices.at(-1)?.title).toBe('Agendamentos pausados')
     // "Rodar agora" (com a pessoa olhando) não conta e roda mesmo pausado.
     expect((await service.runNow({ id: task.id })).ok).toBe(true)
     await waitPending(1)
@@ -547,5 +547,27 @@ describe('"Pode ler o funil" no agents.json (contrato 115, CA6)', () => {
     const gravado = JSON.parse(readFileSync(join(dir, AGENTS_FILE), 'utf8')) as { agents: { id: string; funil?: boolean }[] }
     expect(gravado.agents.find((agent) => agent.id === 'ag-antigo')?.funil).toBe(true)
     expect((await service.listAgents()).agents[0]?.funil).toBe(true)
+  })
+})
+
+describe('"Pode ler as tarefas" no agents.json (contrato 128, R31)', () => {
+  it('agente salvo antes (sem o campo) lê como desligado; salvar ligado grava tarefas: true', async () => {
+    const antigo = { id: 'ag-antigo', name: 'Antigo', description: '', icon: 'bot', color: 'blue', instructions: 'x', profile: 'claude', model: 'haiku', thinkMore: false, scope: { kind: 'all' }, web: false, funil: false, mcpServers: [], output: { kind: 'chat' }, createdAt: '2026-11-01T00:00:00.000Z', updatedAt: '2026-11-01T00:00:00.000Z' }
+    writeFileSync(join(dir, AGENTS_FILE), JSON.stringify({ version: 1, agents: [antigo] }))
+    setup()
+    const [lido] = (await service.listAgents()).agents
+    expect(lido).toMatchObject({ id: 'ag-antigo', tarefas: false })
+    const { createdAt: _createdAt, updatedAt: _updatedAt, ...campos } = lido as NonNullable<typeof lido>
+    expect((await service.saveAgent({ ...campos, tarefas: true })).ok).toBe(true)
+    const gravado = JSON.parse(readFileSync(join(dir, AGENTS_FILE), 'utf8')) as { agents: { id: string; tarefas?: boolean }[] }
+    expect(gravado.agents.find((agent) => agent.id === 'ag-antigo')?.tarefas).toBe(true)
+    expect((await service.listAgents()).agents[0]?.tarefas).toBe(true)
+  })
+
+  it('o modelo "Minhas tarefas" vem com tarefas: true e lê o TAREFAS.md; os outros, false', () => {
+    const porNome = Object.fromEntries(EXAMPLE_AGENTS.map((agent) => [agent.name, agent]))
+    expect(porNome['Minhas tarefas']?.tarefas).toBe(true)
+    expect(porNome['Minhas tarefas']?.instructions).toContain('TAREFAS.md')
+    expect(EXAMPLE_AGENTS.filter((agent) => agent.name !== 'Minhas tarefas').every((agent) => agent.tarefas === false)).toBe(true)
   })
 })

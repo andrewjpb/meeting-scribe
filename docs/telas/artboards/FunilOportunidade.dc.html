@@ -2,7 +2,7 @@
 <html lang="pt-BR">
 <head>
 <meta charset="utf-8">
-<title>Funil · Oportunidade (detalhe)</title>
+<title>Funil › Oportunidade com a seção Tarefas</title>
 <script src="./support.js"></script>
 </head>
 <body>
@@ -14,6 +14,7 @@ body{margin:0}
 --note-yellow:#fff4c2;--note-yellow-text:#4a3b00;--note-pink:#fce1ec;--note-pink-text:#5c1a35;--note-green:#ddf3e1;--note-green-text:#173f22;--note-blue:#dceafb;--note-blue-text:#0e2f5c;--note-purple:#eae1f8;--note-purple-text:#33205a;--note-orange:#ffe6d1;--note-orange-text:#5a2a06}
 .app{--side-bg:#0a2a5e;--side-text:#ffffff;--side-muted:#a8b5cc;--side-active:rgba(255,255,255,0.12);--side-divider:rgba(255,255,255,0.2);--side-ok:#3b82f6;--logo-tile:#ffffff;--logo-mark:#0a2a5e;--logo-dot:#3b82f6;
 position:relative;display:flex;width:1120px;height:740px;overflow:hidden;background:var(--bg);color:var(--text);font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;font-size:13px;line-height:20px;-webkit-font-smoothing:antialiased;text-align:left}
+.app.solo{width:224px}
 .app *{box-sizing:border-box}
 .app p,.app h1,.app h2,.app h3,.app ul,.app ol{margin:0;padding:0}
 .app ul,.app ol{list-style:none}
@@ -26,7 +27,32 @@ position:relative;display:flex;width:1120px;height:740px;overflow:hidden;backgro
 .lbl{font-size:11px;line-height:16px;font-weight:500;color:var(--text-muted)}
 .s12{font-size:12px;line-height:16px}
 .lnk{color:var(--accent);text-decoration:underline;text-decoration-thickness:1px;text-underline-offset:3px}
-
+/* barra lateral (SidebarRaiz/SidebarEmail, densa) */
+.side{flex:0 0 224px;width:224px;height:740px;display:flex;flex-direction:column;padding:0 12px;background:var(--side-bg);color:var(--side-text);border-right:1px solid var(--side-edge)}
+.side .lights{flex:none;height:52px;padding:18px 0 0 6px;display:flex;gap:8px}.side .lights i{width:12px;height:12px;border-radius:50%;background:rgba(255,255,255,0.22)}
+.side .brand{flex:none;display:flex;align-items:center;gap:10px;height:36px;padding:0 8px}
+.side .brand p{display:flex;flex-direction:column;gap:2px}.side .brand b{font-size:15px;line-height:20px;letter-spacing:-0.2px}.side .brand small{font-size:10px;line-height:14px;font-weight:500;letter-spacing:.14em;color:var(--side-muted)}
+.side nav{flex:1 1 auto;min-height:0;margin-top:16px;display:flex;flex-direction:column;gap:2px;overflow:hidden}
+.srow{flex:none;display:flex;align-items:center;gap:8px;height:32px;padding:0 10px;border-radius:4px;color:var(--side-muted)}
+.srow.on{background:var(--side-active);color:var(--side-text)}
+.srow .n{font-size:12px;line-height:16px;font-weight:500;color:var(--side-text)}
+.sback{flex:none;display:flex;align-items:center;gap:8px;height:32px;padding:0 10px;border-radius:4px;color:var(--side-text);font-weight:500}
+.ssub{flex:none;display:flex;align-items:center;gap:8px;height:28px;padding:0 10px 0 18px;border-radius:4px;color:var(--side-muted)}
+.ssub.on{background:var(--side-active);color:var(--side-text)}
+.ssub.flat{padding-left:10px}
+.sgrp{flex:none;display:flex;align-items:center;gap:8px;height:28px;padding:0 10px;color:var(--side-muted)}
+.ssearch{flex:none;display:flex;align-items:center;gap:8px;height:28px;margin:4px 0;padding:0 8px;border-radius:4px;background:var(--side-active);color:var(--side-muted)}
+.sday{margin:0;padding:8px 10px 4px 28px;font-size:11px;line-height:16px;font-weight:500;color:var(--side-muted)}
+.sconv{flex:none;display:flex;align-items:center;height:28px;padding:0 4px 0 28px;border-radius:4px;color:var(--side-muted)}
+.sconv.on{background:var(--side-active);color:var(--side-text);font-weight:500}
+.sfoot{flex:none;display:flex;flex-direction:column;margin-top:4px;padding-top:4px;border-top:1px solid var(--side-divider)}
+.slock{display:flex;align-items:center;gap:8px;height:28px;padding:0 10px;margin-bottom:4px;color:var(--side-muted)}
+.slock kbd{font-family:inherit;font-size:12px;opacity:.8}
+.sperm{display:flex;flex-direction:column;padding:4px;border-top:1px solid rgba(255,255,255,0.12)}
+.sperm .t{padding-top:4px;font-size:11px;line-height:16px;font-weight:500;color:var(--side-muted)}
+.sperm .r{display:flex;align-items:center;gap:8px;height:28px;font-size:12px;line-height:16px}
+.sperm .r i{width:6px;height:6px;background:var(--side-ok);flex:none}
+.sperm .r span:last-child{color:var(--side-muted)}
 /* área principal */
 .main{flex:1 1 0;min-width:0;height:740px;display:flex;flex-direction:column;overflow:hidden;background:var(--bg)}
 .ph{flex:none;padding:20px 32px 0}
@@ -70,7 +96,6 @@ position:relative;display:flex;width:1120px;height:740px;overflow:hidden;backgro
 .note{display:flex;align-items:center;gap:10px;padding:8px 12px;border-left:3px solid var(--title);background:var(--bg-sunken);font-size:13px}
 .note .ic{color:var(--text-muted)}
 .sq{display:inline-block;width:6px;height:6px;flex:none}
-
 /* kanban */
 .tots{flex:none;display:flex;align-items:center;justify-content:space-between;gap:16px;height:32px;margin:12px 32px 0}
 .tots p{font-size:12px;line-height:16px;color:var(--text-muted)}
@@ -105,7 +130,6 @@ position:relative;display:flex;width:1120px;height:740px;overflow:hidden;backgro
 .strip.add{background:transparent;border:1px dashed var(--line-strong);color:var(--accent)}
 .strip.add .v{color:var(--accent);font-weight:500}
 .hscroll{position:absolute;left:256px;right:32px;bottom:8px;height:4px;border-radius:2px;background:var(--line)}
-
 /* detalhe */
 .dh{flex:none;padding:20px 32px 0;border-bottom:1px solid var(--line)}
 .back{display:inline-flex;align-items:center;gap:6px;height:16px;font-size:12px;line-height:16px;color:var(--accent)}
@@ -125,7 +149,6 @@ position:relative;display:flex;width:1120px;height:740px;overflow:hidden;backgro
 .tli .h b{font-size:13px;line-height:20px;font-weight:500;color:var(--title)}
 .tli .h time{margin-left:auto;font-size:12px;line-height:16px;color:var(--text-faint);font-variant-numeric:tabular-nums;white-space:nowrap}
 .tli .d{font-size:12px;line-height:16px;color:var(--text-muted)}
-
 /* lista + ficha */
 .split{flex:1 1 0;min-height:0;display:flex;margin-top:12px;border-top:1px solid var(--line)}
 .list{flex:0 0 340px;width:340px;display:flex;flex-direction:column;border-right:1px solid var(--line);padding:4px 8px}
@@ -156,7 +179,6 @@ position:relative;display:flex;width:1120px;height:740px;overflow:hidden;backgro
 .imp td{height:30px;padding:0 6px;border-bottom:1px solid var(--line);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .imp tr:last-child td{border-bottom:0}
 .imp td.ig{color:var(--text-faint)}
-
 .sec2{display:flex;flex-direction:column}
 .sec2 h2{font-size:14px;line-height:20px;font-weight:600;color:var(--title)}
 .sec2 .bar{display:block;width:20px;height:2px;margin:8px 0 12px;background:var(--title)}
@@ -214,25 +236,56 @@ position:relative;display:flex;width:1120px;height:740px;overflow:hidden;backgro
 .dsec h3{font-size:11px;line-height:16px;font-weight:500;color:var(--text-muted)}
 .dot{display:flex;align-items:flex-start;gap:8px;font-size:13px}
 .dot .sq{margin-top:7px;background:var(--title)}
+/* tarefas (feature tarefas) */
+.cb{flex:none;width:16px;height:16px;display:flex;align-items:center;justify-content:center;border:1px solid var(--text-faint);border-radius:3px;background:var(--bg-raised);color:transparent}
+.cb.on{background:var(--accent);border-color:var(--accent);color:var(--on-accent)}
+.cb.dim{opacity:.5}
+.tbar{flex:none;display:flex;align-items:center;justify-content:space-between;gap:16px;padding:12px 32px 0}
+.tbar .ag{display:flex;align-items:center;gap:8px}
+.tlist{flex:1 1 0;min-height:0;overflow:hidden;padding:12px 32px 20px}
+.gh{display:flex;align-items:center;gap:8px;height:28px;padding:0 8px;border-bottom:1px solid var(--line-strong);font-size:12px;line-height:16px;font-weight:500;color:var(--title)}
+.gh .c{color:var(--text-muted);font-weight:400;font-variant-numeric:tabular-nums}
+.gh+.tr{border-top:0}
+.tr{display:flex;align-items:center;gap:12px;height:44px;padding:0 8px;border-bottom:1px solid var(--line)}
+.tr.on{background:var(--bg-sunken)}
+.tr .t{flex:1 1 0;min-width:0;font-size:13px;line-height:20px;font-weight:500;color:var(--title);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tr.done .t{color:var(--text-muted);font-weight:400;text-decoration:line-through}
+.tr .o{flex:0 0 236px;width:236px;display:flex;align-items:center;gap:6px;font-size:12px;line-height:16px;color:var(--text-muted);min-width:0}
+.tr .o .ic{color:var(--text-faint)}
+.tr .rs{flex:0 0 112px;width:112px;display:flex;align-items:center;gap:6px;font-size:12px;line-height:16px;color:var(--text-muted);min-width:0}
+.tr .rs .ic{color:var(--text-faint)}
+.tr .st{flex:0 0 14px;width:14px;color:var(--title)}
+.tr .pz{flex:0 0 92px;width:92px;text-align:right;font-size:12px;line-height:16px;color:var(--text-muted);font-variant-numeric:tabular-nums;white-space:nowrap}
+.tr .pz.hoje{color:var(--text);font-weight:500}
+.tr .pz.venc{color:var(--rec);font-weight:500}
+.tr.sm{height:32px;gap:10px;padding:0}
+.tl2{display:flex;align-items:flex-start;gap:10px;min-height:44px;padding:6px 12px;border-radius:4px}
+.tl2.on{background:var(--bg-sunken)}
+.tl2 .cb{margin-top:2px}
+.tl2 .c{flex:1 1 0;min-width:0;display:flex;flex-direction:column}
+.tl2 .c b{font-size:13px;line-height:20px;font-weight:500;color:var(--title);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tl2 .c span{font-size:12px;line-height:16px;color:var(--text-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tl2 .c span.venc{color:var(--rec)}
+.nf{display:flex;align-items:center;gap:8px;padding:6px 8px;border:1px solid var(--line-strong);border-radius:4px;background:var(--bg-raised)}
+.nrow{display:flex;align-items:center;gap:8px;height:40px;padding:0 8px;border-bottom:1px solid var(--line)}
+.tog{display:flex;align-items:center;gap:6px;height:28px;padding:0 8px;font-size:12px;line-height:16px;font-weight:500;color:var(--text-muted)}
+.vin{display:flex;align-items:center;gap:8px;min-height:32px;border-bottom:1px solid var(--line);font-size:13px}
+.vin .k{flex:0 0 96px;font-size:12px;line-height:16px;color:var(--text-muted)}
+.vin .ic{color:var(--text-muted)}
+.tt{width:100%;border-collapse:collapse;table-layout:fixed;font-size:13px;line-height:20px}
+.tt th{height:28px;padding:0 8px;text-align:left;font-size:12px;line-height:16px;font-weight:500;color:var(--text-muted);border-bottom:1px solid var(--line-strong)}
+.tt td{height:44px;padding:0 8px;border-bottom:1px solid var(--line);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;vertical-align:middle}
+.tt td.ac{text-align:right;overflow:visible}
+.kv{display:grid;grid-template-columns:96px 1fr;row-gap:4px;column-gap:8px;padding-left:24px;font-size:13px;line-height:20px}
+.kv span:nth-child(odd){font-size:12px;color:var(--text-muted)}
+.ff{display:flex;flex-direction:column;gap:4px}
+.ff .l{font-size:12px;line-height:16px;font-weight:500;color:var(--text)}
+.ff .h{font-size:12px;line-height:16px;color:var(--text-muted)}
+.ff.hl{margin:0 -8px;padding:6px 8px;border-radius:4px;background:var(--hl)}
+.ill{width:56px;height:56px;display:flex;align-items:center;justify-content:center;border:1px dashed var(--line-strong);border-radius:6px;color:var(--text-muted)}
 </style>
 </helmet>
-<div class="app t-light" data-artboard="04"><dc-import name="SidebarFunil" secao="oportunidades" hint-size="224px,740px"></dc-import><main class="main"><header class="dh">
-<span class="back"><svg class="ic " width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg>Oportunidades</span>
-<div class="dtitle"><div class="drow" style="flex:1 1 0;min-width:0;gap:12px"><h1>ABF · Portal do Franqueado</h1><span class="inp sm" style="width:140px"><span class="fl">Proposta</span><svg class="ic " width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></span></div><span class="btn dan ">Apagar</span></div>
-<p class="dmeta">Há 6 d em Proposta · criada em 03/11/2026 · última interação ontem, 15:12</p>
-<div class="drow" style="margin-top:10px"><span class="ab "><svg class="ic " width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><path d="M4 4h16a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2zM22 7l-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7"/></svg>Escrever e-mail</span><span class="ab "><svg class="ic " width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><path d="M7 2h10a2 2 0 0 1 2 2v16a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2zM12 18h.01"/></svg>Abrir WhatsApp</span><span class="ab "><svg class="ic " width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>Vincular reunião</span><span class="ab "><svg class="ic " width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>Marcar como ganha</span><span class="ab "><svg class="ic " width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="m15 9-6 6M9 9l6 6"/></svg>Marcar como perdida</span></div>
-<div class="fgrid">
-<div><div class="fr"><span class="k">Empresa</span><span class="v"><span class="lnk">ABF</span></span></div><div class="fr"><span class="k">Contatos</span><span class="v"><span class="chips"><span class="chip ">Ana Ribeiro<svg class="ic " width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"/></svg></span><span class="chip ">Marcos Teixeira<svg class="ic " width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"/></svg></span><span class="addl"><svg class="ic " width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><path d="M5 12h14M12 5v14"/></svg>Contato</span></span></span></div><div class="fr"><span class="k">Valor</span><span class="v"><span class="tn">R$ 186.000</span></span></div></div>
-<div><div class="fr"><span class="k">Previsão</span><span class="v"><span class="tn">15/12/2026</span></span></div><div class="fr"><span class="k">Próximo passo</span><span class="v"><span class="fl">Ligar para a Ana sobre a proposta</span><span class="tn red s12" style="white-space:nowrap">18/11 · vencido</span></span></div><div class="fr"><span class="k">Origem</span><span class="v"><span class="fl">Reunião · <span class="lnk">Kickoff ABF</span></span></span></div></div>
-</div>
-<div style="margin-top:8px"><div class="tabs" role="tablist"><span class="on" role="tab">Linha do tempo</span><span role="tab">Reuniões</span><span role="tab">Notas</span></div></div>
-</header>
-<div style="flex:1 1 0;min-height:0;overflow:hidden;padding:4px 32px 20px"><ol class="tl" style="max-width:760px">
-<li class="tli"><span class="b"><svg class="ic " width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><path d="M7 2h10a2 2 0 0 1 2 2v16a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2zM12 18h.01"/></svg></span><div class="c"><p class="h"><span class="lbl">WhatsApp</span><b class="ell">Ana Ribeiro</b><time>19/11 · 15:12</time></p><p class="d">Recebi a proposta do portal. Vou levar para a diretoria na segunda.</p><p class="s12"><span class="lnk">Abrir conversa</span></p></div></li>
-<li class="tli"><span class="b"><svg class="ic " width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M3 12h6M15 12h6"/></svg></span><div class="c"><p class="h"><span class="lbl">Etapa</span><b class="ell">Descoberta → Proposta</b><time>14/11 · 10:52</time></p><p class="d">Movida por você no quadro.</p></div></li>
-<li class="tli"><span class="b"><svg class="ic " width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><path d="M4 4h16a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2zM22 7l-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7"/></svg></span><div class="c"><p class="h"><span class="lbl">E-mail</span><b class="ell">Proposta comercial · Portal do Franqueado</b><time>14/11 · 10:40</time></p><p class="d">De você para ana.ribeiro@abf.com.br, marcos.teixeira@abf.com.br · 1 anexo</p><p class="s12"><span class="lnk">Abrir e-mail</span></p></div></li>
-<li class="tli"><span class="b"><svg class="ic " width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><path d="M2 6h4M2 10h4M2 14h4M2 18h4M6 2h12a2 2 0 0 1 2 2v16a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2zM9.5 8h5M9.5 12H16M9.5 16H14"/></svg></span><div class="c"><p class="h"><span class="lbl">Reunião</span><b class="ell">Discovery do Portal do Franqueado</b><time>11/11 · 16:00</time></p><p class="d">Levantamos os quatro módulos do portal e o piloto com 30 franqueados em março.</p><p class="s12"><span class="lnk">Abrir resumo</span></p></div></li>
-</ol></div></main></div>
+<div class="app t-light" data-artboard="08"><dc-import name="SidebarFunil" secao="oportunidades" hint-size="224px,740px"></dc-import><main class="main"><header class="dh"><span class="back"><svg class="ic " width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg>Oportunidades</span><div class="dtitle"><div class="drow" style="flex:1 1 0;min-width:0;gap:12px"><h1>Loja virtual</h1><span class="inp sm" style="width:140px"><span class="fl">Negociação</span><svg class="ic " width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></span></div><span class="btn dan ">Apagar</span></div><p class="dmeta">Há 1 d em Negociação · criada em 22/10/2026 · última interação hoje, 09:12</p><div class="drow" style="margin-top:10px"><span class="ab "><svg class="ic " width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><path d="M4 4h16a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2zM22 7l-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7"/></svg>Escrever e-mail</span><span class="ab "><svg class="ic " width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><path d="M7 2h10a2 2 0 0 1 2 2v16a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2zM12 18h.01"/></svg>Abrir WhatsApp</span><span class="ab "><svg class="ic " width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>Vincular reunião</span><span class="ab "><svg class="ic " width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>Marcar como ganha</span><span class="ab "><svg class="ic " width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="m15 9-6 6M9 9l6 6"/></svg>Marcar como perdida</span></div><div class="fgrid"><div><div class="fr"><span class="k">Empresa</span><span class="v mut">Sem empresa</span></div><div class="fr"><span class="k">Contatos</span><span class="v"><span class="chips"><span class="chip ">Rafael Lima<svg class="ic " width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"/></svg></span><span class="addl"><svg class="ic " width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><path d="M5 12h14M12 5v14"/></svg>Contato</span></span></span></div><div class="fr"><span class="k">Valor</span><span class="v"><span class="tn">R$ 64.000</span></span></div></div><div><div class="fr"><span class="k">Previsão</span><span class="v"><span class="tn">15/12/2026</span></span></div><div class="fr"><span class="k">Origem</span><span class="v">Criada no funil</span></div></div></div><section style="margin-top:12px" aria-label="Tarefas"><div style="display:flex;align-items:baseline;gap:8px;padding-bottom:4px;border-bottom:1px solid var(--line-strong)"><h2 class="lbl">Tarefas</h2><span class="lbl tn" style="font-weight:400">3 abertas · a primeira é o próximo passo no quadro</span></div><div class="tr"><span class="cb"></span><span class="t">Enviar a proposta revisada</span><span class="rs"></span><span class="st"></span><span class="pz venc">21/11 · há 2 d</span></div><div class="tr"><span class="cb"></span><span class="t">Revisar contrato</span><span class="rs"></span><span class="st"><svg class="ic " width="14" height="14" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><path d="M11.525 2.295a.53.53 0 0 1 .95 0l2.31 4.679a2.123 2.123 0 0 0 1.595 1.16l5.166.756a.53.53 0 0 1 .294.904l-3.736 3.638a2.123 2.123 0 0 0-.611 1.878l.882 5.14a.53.53 0 0 1-.771.56l-4.618-2.428a2.122 2.122 0 0 0-1.973 0L6.396 21.01a.53.53 0 0 1-.77-.56l.881-5.139a2.122 2.122 0 0 0-.611-1.879L2.16 9.795a.53.53 0 0 1 .294-.906l5.165-.755a2.122 2.122 0 0 0 1.597-1.16z"/></svg></span><span class="pz hoje">hoje</span></div><div class="tr"><span class="cb"></span><span class="t">Mandar o acesso do ambiente de testes</span><span class="rs"></span><span class="st"></span><span class="pz">25/11</span></div><div class="nrow"><span style="width:16px;display:flex;justify-content:center;color:var(--text-faint)"><svg class="ic " width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><path d="M5 12h14M12 5v14"/></svg></span><span class="inp sm" style="flex:1 1 0"><span class="phd">Nova tarefa</span></span><span class="inp sm tn" style="width:120px"><span class="phd">Prazo</span><svg class="ic " width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><path d="M8 2v3"/><path d="M16 2v3"/><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18"/></svg></span><span class="ab dis">Criar</span></div><div class="tog"><svg class="ic " width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg>Feitas <span class="tn" style="font-weight:400">2</span></div></section><div style="margin-top:4px"><div class="tabs" role="tablist"><span class="on" role="tab">Linha do tempo</span><span role="tab">Reuniões</span><span role="tab">Notas</span></div></div></header><div style="flex:1 1 0;min-height:0;overflow:hidden;padding:4px 32px 20px"><ol class="tl" style="max-width:760px"><li class="tli"><span class="b"><svg class="ic " width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><path d="M21 10.656V19a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h12.344"/><path d="m9 11 3 3L22 4"/></svg></span><div class="c"><p class="h"><span class="lbl">Tarefa</span><b class="ell">Mandar o acesso do ambiente de testes</b><time>hoje · 09:12</time></p><p class="d">Criada por você na conversa com Rafael Lima · prazo 25/11</p><p class="s12"><span class="lnk">Abrir tarefa</span></p></div></li><li class="tli"><span class="b"><svg class="ic " width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><path d="M21 10.656V19a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h12.344"/><path d="m9 11 3 3L22 4"/></svg></span><div class="c"><p class="h"><span class="lbl">Tarefa</span><b class="ell">Ligar para o Rafael sobre o desconto</b><time>21/11 · 17:40</time></p><p class="d">Feita por você</p></div></li></ol></div></main></div>
 </x-dc>
 </body>
 </html>

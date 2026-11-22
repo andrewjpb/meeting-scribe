@@ -31,7 +31,7 @@ import type { NotesStore } from '../meetings/notes'
 import type { MeetingsStore } from '../meetings/store'
 import type { SummaryStore } from '../meetings/summaries'
 import type { TranscriptStore } from '../meetings/transcripts'
-import { AUTOMATIONS_FILE, EMAIL_SEARCH_FILE, FUNIL_FILE, GUIDE_FILE, isSourceFile, REDES_FILE, STATE_FILE } from './sources'
+import { AUTOMATIONS_FILE, EMAIL_SEARCH_FILE, FUNIL_FILE, GUIDE_FILE, isSourceFile, REDES_FILE, STATE_FILE, TAREFAS_FILE } from './sources'
 
 export const CHAT_CORPUS_DIR = 'chat-corpus'
 export const CHAT_INDEX_FILE = 'INDICE.md'
@@ -117,7 +117,7 @@ export function corpusIndexLine(meeting: Meeting, summary: MeetingSummary | null
 const SOURCE_DESCRIPTIONS: Readonly<Record<string, string>> = {
   [STATE_FILE]: 'o estado do app agora: a data, a hora e o fuso, a gravação em andamento, a conta Google, o WhatsApp, a versão e as automações ligadas.',
   [GUIDE_FILE]: 'o guia do app: cada tela, cada aba de Configurações, os atalhos e o que cada recurso faz e não faz.',
-  [AUTOMATIONS_FILE]: 'os agentes, as tarefas agendadas (próxima e última execução) e as últimas 20 execuções.',
+  [AUTOMATIONS_FILE]: 'os agentes, os agendamentos (próxima e última execução) e as últimas 20 execuções.',
   [WHATSAPP_OVERVIEW_FILE]: `uma linha por conversa do WhatsApp com mensagem nos últimos ${WHATSAPP_RECENT_DAYS} dias, com as não lidas, quem mandou a última e "pendente de resposta".`,
   // Contrato 45.
   [EMAIL_OVERVIEW_FILE]: `uma linha por email recebido nos últimos ${EMAIL_RECENT_DAYS} dias, por conta, com a referência, quem mandou, o assunto, a idade, se foi lido, "pendente de resposta" e o arquivo com o corpo (quando já baixado).`,
@@ -126,6 +126,8 @@ const SOURCE_DESCRIPTIONS: Readonly<Record<string, string>> = {
   [REDES_FILE]: 'as contas do Instagram conectadas, as 10 últimas publicações (com as métricas guardadas), a fila de rascunhos e agendadas e os comentários e as mensagens não lidos, com os ids.',
   // Contrato 117.
   [FUNIL_FILE]: 'o funil de vendas: as etapas, as oportunidades abertas (com o id), as ganhas e perdidas dos últimos 90 dias e até 500 contatos (com o id).',
+  // Contrato 127.
+  [TAREFAS_FILE]: 'as tarefas abertas (até 200): vencidas, de hoje, próximas e sem prazo, cada uma com o id curto, o prazo, o responsável e os vínculos (oportunidade, contatos, reunião), e os lembretes.',
 }
 
 /**

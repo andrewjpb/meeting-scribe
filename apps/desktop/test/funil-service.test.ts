@@ -1,6 +1,7 @@
 // Contrato 110 (funil-vendas, CA5 a CA9): o serviço do funil sobre o store real numa pasta temporária, com os
 // outros domínios falsos e contados. Gravação e `onChange` (CA5), importação (CA6, R16), custo das leituras (CA7,
-// D3), os 16 canais recusados com o app bloqueado (CA8, R47) e o pedido fora do formato (CA9).
+// D3), os 16 canais recusados com o app bloqueado (CA8, R47) e o pedido fora do formato (CA9). Contrato 124: o
+// próximo passo derivado das tarefas (CA1) e o passo que vira tarefa (CA2), com o serviço das tarefas falso.
 import type * as FsPromises from 'node:fs/promises'
 import { existsSync, mkdtempSync, readFileSync, rmSync, truncateSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -10,6 +11,7 @@ import { FUNIL_ERRO_TEXTO, FUNIL_FALHOU_TEXTO, FUNIL_LEITURA_FALHOU_TEXTO, type 
 import { IMPORT_BYTES_MAX } from '../src/shared/funil-import'
 import { INVOKE_CHANNELS, WHEN_LOCKED } from '../src/shared/ipc'
 import type { EmailMessage } from '../src/shared/email'
+import type { Tarefa, TarefaInput, TarefaSalvar, TarefasActionResult } from '../src/shared/tarefas'
 import type { WhatsAppChat } from '../src/shared/whatsapp'
 
 // `readFile` contado: o arquivo grande demais não pode ser lido (CA6).
@@ -88,7 +90,26 @@ const emailMessage = (id: string, address: string, at: number): EmailMessage => 
   references: [],
 })
 
-function setup(opcoes: { chats?: () => Promise<WhatsAppChat[]>; arquivo?: string | null } = {}) {
+/** Uma tarefa aberta, sem prazo e sem vínculo, com o que vier por cima. */
+const tarefa = (parcial: Partial<Tarefa> & { id: string }): Tarefa => ({
+  titulo: `Tarefa ${parcial.id}`,
+  detalhe: '',
+  status: 'aberta',
+  importante: false,
+  prazo: null,
+  lembreteEm: null,
+  lembreteDisparadoEm: null,
+  responsavel: { tipo: 'eu' },
+  origem: { tipo: 'manual' },
+  vinculos: { oportunidadeId: null, contatoIds: [], empresaId: null, meetingId: null, email: null, whatsappChatId: null },
+  historico: [],
+  criadaEm: NOW,
+  atualizadaEm: NOW,
+  feitaEm: null,
+  ...parcial,
+})
+
+function setup(opcoes: { chats?: () => Promise<WhatsAppChat[]>; arquivo?: string | null; criarTarefa?: (input: TarefaInput) => Promise<TarefasActionResult> } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'funil-service-'))
   dirs.push(dir)
   let seq = 0
@@ -98,6 +119,10 @@ function setup(opcoes: { chats?: () => Promise<WhatsAppChat[]>; arquivo?: string
   const cached = vi.fn(async () => [{ status: { account: { address: 'eu@minha.example' } }, inbox: [emailMessage('1', 'cliente@x.example', NOW - DIA_MS)], sent: [] }])
   const chats = vi.fn(opcoes.chats ?? (async (): Promise<WhatsAppChat[]> => []))
   const list = vi.fn(async () => [])
+  let tarefas: Tarefa[] = []
+  const todas = vi.fn(async () => tarefas)
+  const criarTarefa = vi.fn(opcoes.criarTarefa ?? (async (): Promise<TarefasActionResult> => ({ ok: true, id: 'tarefa-nova' })))
+  const salvarTarefa = vi.fn(async (request: TarefaSalvar): Promise<TarefasActionResult> => ({ ok: true, id: request.id }))
   const service = createFunilService({
     store,
     meetings: { list },
@@ -106,10 +131,25 @@ function setup(opcoes: { chats?: () => Promise<WhatsAppChat[]>; arquivo?: string
     whatsapp: { chats, me: () => null },
     chooseImportFile: async () => arquivo,
     onChange: (view) => void views.push(view),
+    tarefas: { todas, criar: criarTarefa, salvar: salvarTarefa },
     now: () => NOW,
     newId: () => `token-${++seq}`,
   })
-  return { dir, file: join(dir, 'funil.json'), store, service, views, cached, chats, list, setArquivo: (path: string | null) => void (arquivo = path) }
+  return {
+    dir,
+    file: join(dir, 'funil.json'),
+    store,
+    service,
+    views,
+    cached,
+    chats,
+    list,
+    todas,
+    criarTarefa,
+    salvarTarefa,
+    setArquivo: (path: string | null) => void (arquivo = path),
+    setTarefas: (lista: Tarefa[]) => void (tarefas = lista),
+  }
 }
 
 const okId = (result: FunilActionResult): string => {
@@ -266,11 +306,115 @@ describe('serviço do funil: leituras sob demanda (D3)', () => {
       whatsapp: { chats: async () => [], me: () => null },
       chooseImportFile: async () => null,
       onChange: () => undefined,
+      tarefas: { todas: async () => [], criar: async () => ({ ok: true, id: null }), salvar: async () => ({ ok: true, id: null }) },
     })
     const id = okId(await service.contatoSave({ contato: { nome: 'Ana', emails: ['ana@x.example'], telefones: [] }, origem: 'manual' }))
     expect(await service.timeline({ tipo: 'oportunidade', id: 'x' })).toEqual({ ok: false, erro: 'nao-encontrado' })
     const timeline = await service.timeline({ tipo: 'contato', id })
     expect(timeline).toMatchObject({ ok: true, itens: [{ tipo: 'reuniao', meetingId: 'm1', resumo: 'Combinaram o escopo.' }] })
+  })
+})
+
+describe('serviço do funil: próximo passo derivado das tarefas (contrato 124)', () => {
+  const ligada = (id: string, oportunidadeId: string, parcial: Partial<Tarefa> = {}): Tarefa =>
+    tarefa({ id, vinculos: { oportunidadeId, contatoIds: [], empresaId: null, meetingId: null, email: null, whatsappChatId: null }, ...parcial })
+
+  it('CA1: o passo é a tarefa aberta de menor prazo; feita sai; sem tarefa vale null; fechada e arquivada não têm chave', async () => {
+    const ctx = setup()
+    const op = okId(await ctx.service.oportunidadeSave({ oportunidade: { titulo: 'Aberta' } }))
+    const fechada = okId(await ctx.service.oportunidadeSave({ oportunidade: { titulo: 'Fechada' } }))
+    const arquivada = okId(await ctx.service.oportunidadeSave({ oportunidade: { titulo: 'Arquivada' } }))
+    const ganho = (await ctx.store.read()).etapas.find((etapa) => etapa.tipo === 'ganho')?.id ?? ''
+    okId(await ctx.service.oportunidadeMove({ id: fechada, etapaId: ganho, ordem: 0 }))
+    okId(await ctx.service.oportunidadeMove({ id: arquivada, etapaId: ganho, ordem: 0 }))
+    okId(await ctx.service.oportunidadeArchive({ id: arquivada }))
+
+    ctx.setTarefas([ligada('t25', op, { prazo: '2026-11-25' }), ligada('t23', op, { prazo: '2026-11-23' }), ligada('tf', fechada, { prazo: '2026-11-01' })])
+    let view = await ctx.service.view()
+    expect(view.proximosPassos[op]).toEqual({ texto: 'Tarefa t23', data: '2026-11-23', tarefaId: 't23' })
+    expect(view.proximosPassos).not.toHaveProperty(fechada)
+    expect(view.proximosPassos).not.toHaveProperty(arquivada)
+
+    ctx.setTarefas([ligada('t25', op, { prazo: '2026-11-25' }), ligada('t23', op, { prazo: '2026-11-23', status: 'feita', feitaEm: NOW })])
+    view = await ctx.service.view()
+    expect(view.proximosPassos[op]).toEqual({ texto: 'Tarefa t25', data: '2026-11-25', tarefaId: 't25' })
+
+    ctx.setTarefas([ligada('t25', op, { prazo: '2026-11-25', status: 'cancelada', feitaEm: NOW })])
+    view = await ctx.service.view()
+    expect(view.proximosPassos[op]).toBeNull()
+    expect(Object.keys(view.proximosPassos)).toEqual([op])
+    // Uma leitura das tarefas por view.
+    ctx.todas.mockClear()
+    await ctx.service.view()
+    expect(ctx.todas).toHaveBeenCalledTimes(1)
+  })
+
+  it('CA1: as tarefas falhando valem nenhuma (o passo fica null)', async () => {
+    const ctx = setup()
+    const op = okId(await ctx.service.oportunidadeSave({ oportunidade: { titulo: 'Aberta' } }))
+    ctx.todas.mockRejectedValueOnce(new Error('tarefas.json ilegível'))
+    expect((await ctx.service.view()).proximosPassos).toEqual({ [op]: null })
+  })
+
+  it('CA2: o passo não é gravado na oportunidade e vira uma tarefa ligada a ela', async () => {
+    const ctx = setup()
+    const result = await ctx.service.oportunidadeSave({ oportunidade: { titulo: 'X', proximoPasso: { texto: 'Ligar', data: '2026-11-30' } } })
+    const id = okId(result)
+    const gravada = (JSON.parse(readFileSync(ctx.file, 'utf8')) as { oportunidades: Record<string, unknown>[] }).oportunidades.find((item) => item['id'] === id)
+    expect(gravada).toBeDefined()
+    expect(gravada).not.toHaveProperty('proximoPasso')
+    expect(ctx.criarTarefa).toHaveBeenCalledTimes(1)
+    expect(ctx.criarTarefa).toHaveBeenCalledWith({ titulo: 'Ligar', prazo: '2026-11-30', lembrete: 'padrao', origem: { tipo: 'funil', oportunidadeId: id }, vinculos: { oportunidadeId: id } })
+  })
+
+  it('CA2: a tarefa falhando (erro ou exceção) não muda o resultado da oportunidade; passo null não cria tarefa', async () => {
+    const recusa = setup({ criarTarefa: async () => ({ ok: false, erro: 'limite', mensagem: 'cheio' }) })
+    expect((await recusa.service.oportunidadeSave({ oportunidade: { titulo: 'X', proximoPasso: { texto: 'Ligar', data: '2026-11-30' } } })).ok).toBe(true)
+    const excecao = setup({ criarTarefa: () => Promise.reject(new Error('disco cheio')) })
+    expect((await excecao.service.oportunidadeSave({ oportunidade: { titulo: 'X', proximoPasso: { texto: 'Ligar', data: null } } })).ok).toBe(true)
+    expect(excecao.criarTarefa).toHaveBeenCalledTimes(1)
+
+    const semPasso = setup()
+    expect((await semPasso.service.oportunidadeSave({ oportunidade: { titulo: 'X', proximoPasso: null } })).ok).toBe(true)
+    expect((await semPasso.service.oportunidadeSave({ oportunidade: { titulo: 'Y', proximoPasso: { texto: '   ', data: null } } })).ok).toBe(true)
+    expect(semPasso.criarTarefa).not.toHaveBeenCalled()
+    // Data fora do calendário é recusada antes de gravar.
+    expect(await semPasso.service.oportunidadeSave({ oportunidade: { titulo: 'Z', proximoPasso: { texto: 'Ligar', data: '2026-02-30' } } })).toEqual({ ok: false, erro: 'invalido', mensagem: FUNIL_ERRO_TEXTO.invalido })
+    expect((await semPasso.store.read()).oportunidades.map((item) => item.titulo)).toEqual(['X', 'Y'])
+  })
+
+  it('o mesmo passo de novo não duplica: mesmo título (sem caixa) e prazo não faz nada; prazo diferente atualiza a tarefa aberta', async () => {
+    const ctx = setup()
+    const op = okId(await ctx.service.oportunidadeSave({ oportunidade: { titulo: 'Aberta' } }))
+    ctx.setTarefas([
+      ligada('feita', op, { titulo: 'Ligar para a Ana', prazo: '2026-11-01', status: 'feita', feitaEm: NOW }),
+      ligada('t1', op, { titulo: 'Ligar para a Ana ', prazo: '2026-11-30' }),
+      ligada('outra-op', 'op-x', { titulo: 'Ligar para a Ana', prazo: '2026-11-25' }),
+    ])
+    expect((await ctx.service.oportunidadeSave({ oportunidade: { id: op, titulo: 'Aberta', proximoPasso: { texto: '  ligar PARA a ana ', data: '2026-11-30' } } })).ok).toBe(true)
+    expect(ctx.criarTarefa).not.toHaveBeenCalled()
+    expect(ctx.salvarTarefa).not.toHaveBeenCalled()
+    expect((await ctx.service.oportunidadeSave({ oportunidade: { id: op, titulo: 'Aberta', proximoPasso: { texto: 'Ligar para a Ana', data: '2026-11-25' } } })).ok).toBe(true)
+    expect(ctx.criarTarefa).not.toHaveBeenCalled()
+    expect(ctx.salvarTarefa).toHaveBeenCalledExactlyOnceWith({ id: 't1', prazo: '2026-11-25' })
+    // Título diferente cria outra.
+    expect((await ctx.service.oportunidadeSave({ oportunidade: { id: op, titulo: 'Aberta', proximoPasso: { texto: 'Enviar proposta', data: null } } })).ok).toBe(true)
+    expect(ctx.criarTarefa).toHaveBeenCalledTimes(1)
+  })
+
+  it('registrarTarefa grava o evento e avisa a tela; oportunidade que sumiu vira exceção; notificarTarefas só reemite a view', async () => {
+    const ctx = setup()
+    const op = okId(await ctx.service.oportunidadeSave({ oportunidade: { titulo: 'Aberta' } }))
+    const antes = ctx.views.length
+    await ctx.service.registrarTarefa({ oportunidadeId: op, tarefaId: 't1', acao: 'criada', titulo: 'Ligar' })
+    expect(ctx.views.length).toBe(antes + 1)
+    expect((await ctx.store.read()).eventos.at(-1)).toMatchObject({ oportunidadeId: op, tipo: 'tarefa', texto: 'Ligar', tarefa: { id: 't1', acao: 'criada' } })
+    await expect(ctx.service.registrarTarefa({ oportunidadeId: 'sumiu', tarefaId: 't1', acao: 'feita', titulo: 'Ligar' })).rejects.toThrow(FUNIL_ERRO_TEXTO['nao-encontrado'])
+    const conteudo = readFileSync(ctx.file, 'utf8')
+    ctx.setTarefas([tarefa({ id: 't1', prazo: '2026-11-21', vinculos: { oportunidadeId: op, contatoIds: [], empresaId: null, meetingId: null, email: null, whatsappChatId: null } })])
+    await ctx.service.notificarTarefas()
+    expect(ctx.views.at(-1)?.proximosPassos[op]).toMatchObject({ tarefaId: 't1', data: '2026-11-21' })
+    expect(readFileSync(ctx.file, 'utf8')).toBe(conteudo)
   })
 })
 

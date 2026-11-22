@@ -468,7 +468,7 @@ describe('onde vale (CA6)', () => {
     await runner.run(
       {
         runId: 'run-1',
-        agent: { name: 'Resumo', instructions: 'Liste.', profile: 'claude', model: 'sonnet', thinkMore: false, scope: { kind: 'all' }, web: false, funil: false },
+        agent: { name: 'Resumo', instructions: 'Liste.', profile: 'claude', model: 'sonnet', thinkMore: false, scope: { kind: 'all' }, web: false, funil: false, tarefas: false },
         prompt: 'Resuma.',
         meetingId: null,
         timeoutS: 30,

@@ -363,6 +363,7 @@ export function OportunidadesScreen({ view }: { view: FunilView }) {
               <KanbanCard
                 key={item.id}
                 oportunidade={item}
+                proximoPasso={view.proximosPassos[item.id] ?? null}
                 empresa={item.empresaId ? (empresas.get(item.empresaId) ?? null) : null}
                 esfriou={etapaReal ? esfriada(item, etapaReal, ultimas[item.id] ?? Math.max(item.movidoEm, item.atualizadoEm), diasEsfriar, now) : false}
                 now={now}

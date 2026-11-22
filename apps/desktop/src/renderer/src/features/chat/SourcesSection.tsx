@@ -9,11 +9,13 @@ import { useWhatsApp } from '../whatsapp/whatsappStore'
 import { WhatsAppScopeSection } from './WhatsAppScopeSection'
 
 const SOURCE_TEXT: Readonly<Record<ChatSourceKind, { name: string; description: string }>> = {
+  // Contrato 127 (R27): o texto do artboard 13.
+  tarefas: { name: 'Tarefas', description: 'Abertas: vencidas, hoje, próximas e sem prazo (até 200), com os vínculos.' },
   funil: { name: 'Funil', description: 'Etapas, oportunidades abertas, ganhas e perdidas dos últimos 90 dias e até 500 contatos.' },
   whatsapp: { name: 'WhatsApp', description: `As conversas com mensagem nos últimos ${WHATSAPP_RECENT_DAYS} dias (até ${WHATSAPP_RECENT_CHATS_MAX}), com o que está pendente de resposta.` },
   email: { name: 'Email', description: 'Os emails recebidos nos últimos 30 dias, com o que está pendente de resposta, e a busca em todas as pastas do servidor.' },
   redes: { name: 'Redes', description: 'Contas, as 10 últimas publicações com métricas e os comentários e mensagens não lidos.' },
-  automations: { name: 'Automações', description: 'Agentes, tarefas agendadas e as últimas 20 execuções.' },
+  automations: { name: 'Automações', description: 'Agentes, agendamentos e as últimas 20 execuções.' },
   guide: { name: 'Guia do app', description: 'Cada tela, cada aba de Configurações, os atalhos e o que cada recurso faz.' },
   internet: { name: 'Internet', description: 'Busca na web quando a pergunta pedir. Os links aparecem na resposta.' },
 }
@@ -37,7 +39,8 @@ function SourceRow({ kind, checked, onChange, unavailable }: { kind: ChatSourceK
  * "Fontes" do painel "Contexto" do Assistente (contrato 25, CA2): além das reuniões, o WhatsApp (só com ele conectado
  * ou com conversas já escolhidas), o Email (contrato 45, só com conta de email), as Redes (contrato 76, só com conta do
  * Instagram), as Automações, o Guia do app e (contrato 26) a Internet, cada um com interruptor, todos ligados por padrão
- * menos as Redes. Contrato 117: o Funil, primeiro e desligado por padrão (leva nomes, e-mails e telefones ao modelo).
+ * menos as Redes. Contrato 117: o Funil, desligado por padrão (leva nomes, e-mails e telefones ao modelo). Contrato 127: as
+ * Tarefas, a primeira e ligada por padrão.
  * No WhatsApp, "Conversas recentes" (o padrão) ou "Só estas conversas" (a escolha manual do contrato 24). O estado
  * atual (data, hora, fuso e conexões) vai sempre. A troca vale a partir da próxima pergunta.
  */
@@ -71,6 +74,7 @@ export function SourcesSection({ scope, onScope }: { scope: ChatScope; onScope: 
   return (
     <section aria-label="Fontes" data-chat-sources className="flex flex-col gap-2 border-b border-line px-3 py-3">
       <h3 className="label">Fontes</h3>
+      <SourceRow kind="tarefas" checked={sources.tarefas} onChange={(on) => toggle('tarefas', on)} />
       <SourceRow kind="funil" checked={sources.funil} onChange={(on) => toggle('funil', on)} />
       {showWhatsApp && (
         <>

@@ -1,11 +1,16 @@
 // Rotas do renderer. O main só conhece o id; o caminho é detalhe do roteador em memória.
-export type RouteId = 'reunioes' | 'assistente' | 'automacoes' | 'whatsapp' | 'email' | 'funil' | 'redes' | 'gravacao' | 'detalhe' | 'configuracoes'
+export type RouteId = 'reunioes' | 'tarefas' | 'assistente' | 'automacoes' | 'whatsapp' | 'email' | 'funil' | 'redes' | 'gravacao' | 'detalhe' | 'configuracoes'
 
 export const ROUTE_PATHS: Record<RouteId, string> = {
   reunioes: '/',
+  /**
+   * Tarefas (contrato 123, R1): a lista única, com o detalhe ao lado quando há id. Padrão do roteador; o caminho concreto
+   * sai de `tarefasPath(id)`.
+   */
+  tarefas: '/tarefas/:id?',
   /** Assistente (contratos 15 e 25): pergunta sobre o app inteiro e propõe ações. */
   assistente: '/assistente',
-  /** Agentes, tarefas agendadas e execuções (contrato 23). */
+  /** Agentes, agendamentos e execuções (contrato 23). */
   automacoes: '/automacoes',
   /** WhatsApp pessoal (contrato 24): só aparece na barra lateral com o serviço instalado. */
   whatsapp: '/whatsapp',
@@ -120,6 +125,19 @@ export function funilPath(section: FunilSection = 'oportunidades', id?: string):
 /** `state` da navegação para Oportunidades que abre o cartão "Nova oportunidade" já preenchido (contrato 112, D14). */
 export interface FunilNavigationState {
   nova?: { contatoIds: string[]; empresaId: string | null }
+}
+
+/** Destino do item "Tarefas" da barra lateral (contrato 123): a lista, na visão Hoje. */
+export const TAREFAS_ROOT_PATH = '/tarefas'
+
+/** Caminho da lista (`/tarefas`) ou de uma tarefa com o detalhe ao lado (`/tarefas/<id>`). */
+export function tarefasPath(id?: string): string {
+  return id === undefined ? TAREFAS_ROOT_PATH : `${TAREFAS_ROOT_PATH}/${encodeURIComponent(id)}`
+}
+
+/** `state` da navegação para Tarefas que abre o formulário "Nova tarefa" com o foco no título (⌘⇧T, contrato 123). */
+export interface TarefasNavigationState {
+  nova?: boolean
 }
 
 /** Destino do item "Redes" da barra lateral (contrato 72) na primeira vez da sessão: a tela abre a primeira conta. */

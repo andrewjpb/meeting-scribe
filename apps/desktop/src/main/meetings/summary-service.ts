@@ -83,6 +83,13 @@ export interface SummaryService {
 const meetingIdSchema = z.string().min(1).max(200)
 const generateSchema = z.object({ meetingId: meetingIdSchema, auto: z.boolean().optional() }).strict()
 
+/** `AAAA-MM-DD` de um instante ISO no fuso do processo; data ilegível, nada. */
+function localDay(iso: string): string | undefined {
+  const date = new Date(iso)
+  if (Number.isNaN(date.getTime())) return undefined
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
+}
+
 interface Job {
   /** Ao encerrar a gravação: sem `claude`, nada acontece. Um pedido pela tela no meio vira manual. */
   auto: boolean
@@ -131,7 +138,10 @@ export function createSummaryService(deps: SummaryServiceDeps): SummaryService {
     const openLines = openQuestionLines(await analysesOf(meetingId))
     const whatsappLines = (await deps.whatsappMaterial?.(meetingId).catch(() => [])) ?? []
     // Contrato 12 (CA9): os nomes dos convidados do evento da agenda, para o "Quem" (sem inventar).
-    const participantLines = summaryParticipantLines((await deps.meetings.get(meetingId).catch(() => null))?.calendar?.attendees ?? [])
+    const current = await deps.meetings.get(meetingId).catch(() => null)
+    const participantLines = summaryParticipantLines(current?.calendar?.attendees ?? [])
+    // Contrato 121 (D13): o dia local do início, para o Claude calcular o `dueIso` das tarefas.
+    const meetingDate = current ? localDay(current.startedAt) : undefined
     const found = await deps.locate().catch((): ClaudeLocateResult => ({ ok: false, error: 'not-found' }))
     if (job.cancelled) return
     if (!found.ok) {
@@ -150,7 +160,7 @@ export function createSummaryService(deps: SummaryServiceDeps): SummaryService {
       acpDir: ACP_SUMMARY_DIR,
       systemPrompt: summarySystemPrompt(),
       parse: parseSummaryResult,
-      input: summaryInput(input, noteLines, openLines, whatsappLines, participantLines),
+      input: summaryInput(input, noteLines, openLines, whatsappLines, participantLines, meetingDate),
       label: 'resumo',
       timeoutMs: deps.timeoutMs,
       signal: job.abort.signal,

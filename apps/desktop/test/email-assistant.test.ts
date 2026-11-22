@@ -15,6 +15,7 @@ import { createChatCorpus } from '../src/main/chat/corpus'
 import { createChatService } from '../src/main/chat/service'
 import { EMAIL_SEARCH_FILE, writeSources } from '../src/main/chat/sources'
 import { createFileChatStore } from '../src/main/chat/store'
+import { tarefasServico } from './fixtures/tarefas-servico'
 import { toolCallOf, toolFollowUp, toolsInstructions, type AssistantTool } from '../src/main/chat/tools'
 import { assistantSystemPrompt } from '../src/main/claude-cli/chat'
 import type { ClaudeChild, SpawnClaude, SpawnOptions } from '../src/main/claude-cli/translator'
@@ -235,7 +236,7 @@ describe('cartões de email (CA2, CA3, CA4)', () => {
     expect(broken.actions).toEqual([])
   })
 
-  it('o lembrete de responder um email leva a mensagem para a tarefa das Automações', async () => {
+  it('o lembrete de responder um email leva a mensagem para a tarefa (contrato 127: `vinculos.email`)', async () => {
     const { actions } = await extractActions(block({ tipo: 'lembrete', quando: '2026-11-20T09:00:00-03:00', texto: 'Responder Marina Rocha', email: ref, horaPadrao: true }), resolver())
     expect(actions).toMatchObject([{ kind: 'lembrete', email: { accountId: ACCOUNT, messageId: '3', label: 'Marina Rocha · Proposta revisada' } }])
     const store = createFileChatStore({ dir })
@@ -253,10 +254,19 @@ describe('cartões de email (CA2, CA3, CA4)', () => {
       thinkMore: false,
     }
     await store.save(chat)
-    const created: unknown[] = []
-    const chatActions = createChatActions({ store, createReminder: (input) => (created.push(input), Promise.resolve({ ok: true, task: {} as never })), timeZone: () => SP, now: () => NOW })
+    const { service, chamadas } = tarefasServico(join(dir, 'tarefas'), () => NOW)
+    const chatActions = createChatActions({ store, tarefas: service, timeZone: () => SP, now: () => NOW })
     expect((await chatActions.reminder({ chatId: 'c1', index: 1, actionId: 'a1' })).ok).toBe(true)
-    expect(created).toEqual([{ at: '2026-11-20T09:00:00-03:00', reminder: { text: 'Responder Marina Rocha', whatsappChatId: null, whatsappChatName: null, email: { accountId: ACCOUNT, messageId: '3', label: 'Marina Rocha · Proposta revisada' } } }])
+    expect(chamadas.criar).toEqual([
+      {
+        titulo: 'Responder Marina Rocha',
+        detalhe: '',
+        prazo: '2026-11-20',
+        lembrete: Date.parse('2026-11-20T09:00:00-03:00'),
+        origem: { tipo: 'assistente' },
+        vinculos: { whatsappChatId: null, email: { accountId: ACCOUNT, id: '3', assunto: 'Marina Rocha · Proposta revisada', mailbox: null } },
+      },
+    ])
   })
 
   it('"Enviado às hh:mm" só grava o estado (o envio é do clique, no preload); a lista não tem "Descartar"', async () => {
@@ -265,7 +275,7 @@ describe('cartões de email (CA2, CA3, CA4)', () => {
     const store = createFileChatStore({ dir })
     const all: ChatAction[] = [...reply, ...list]
     await store.save({ id: 'c1', meetingId: null, title: 'T', createdAt: new Date(NOW).toISOString(), messages: [{ role: 'user', text: 'p', at: new Date(NOW).toISOString() }, { role: 'assistant', text: 'r', at: new Date(NOW).toISOString(), actions: all }], scope: { kind: 'all' }, model: null, thinkMore: false })
-    const chatActions = createChatActions({ store, createReminder: () => Promise.reject(new Error('não')), timeZone: () => SP, now: () => new Date(2026, 10, 19, 10, 5).getTime() })
+    const chatActions = createChatActions({ store, timeZone: () => SP, now: () => new Date(2026, 10, 19, 10, 5).getTime() })
     const sent = await chatActions.setState({ chatId: 'c1', index: 1, actionId: 'a1', state: 'sent', text: 'Recebi, obrigado!' })
     expect(sent.ok).toBe(true)
     const saved = (await store.get('c1'))?.messages[1]?.actions?.[0]

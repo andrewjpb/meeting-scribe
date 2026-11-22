@@ -5,12 +5,12 @@
 // `TOOL_ROUNDS_MAX` rodadas por pergunta; depois disso, ou com um bloco inválido, a resposta fica como veio.
 //
 // Cada conjunto de ferramentas é dado por quem monta a conversa: o Assistente interativo recebe as do email (buscar e
-// ler, só leitura). Contrato 51: só a execução de uma tarefa agendada com "Pode enviar email" recebe também
+// ler, só leitura). Contrato 51: só a execução de um agendamento com "Pode enviar email" recebe também
 // `enviar_email` (`schedules/email-send.ts`), que envia sem clique dentro da permissão dada antes; as outras execuções
 // agendadas não recebem nenhuma, e o Assistente nunca recebe o envio.
 //
 // Contrato 56: o Assistente interativo recebe também as de organizar o email (`listar_conversas`, `listar_pastas`,
-// `criar_pasta`, `mover_emails`, `informar_progresso`), que nunca vão a uma tarefa agendada. A ferramenta recebe o
+// `criar_pasta`, `mover_emails`, `informar_progresso`), que nunca vão a um agendamento. A ferramenta recebe o
 // contexto do turno (a conversa, o pedido e o sinal do "Parar"); a que muda o email (`changes`) recusa sem ele. O turno
 // que usa uma ferramenta com `rounds` passa a ter até essas rodadas; as com o mesmo `stepId` viram um passo só na tela;
 // e o cartão que o main monta (`actions`) entra no fim da resposta, nunca pelo texto do modelo.
@@ -34,7 +34,7 @@ export interface ToolResult {
   actions?: ChatAction[] | undefined
 }
 
-/** Contrato 56: o turno do chat em que a ferramenta roda. Sem ele (tarefa agendada), nada que muda o email roda. */
+/** Contrato 56: o turno do chat em que a ferramenta roda. Sem ele (agendamento), nada que muda o email roda. */
 export interface ToolContext {
   chatId: string
   /** Um por pergunta: as chamadas do mesmo turno somam no mesmo lote. */

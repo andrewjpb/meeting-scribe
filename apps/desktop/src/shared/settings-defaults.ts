@@ -58,6 +58,19 @@ export interface FunilSettings {
   /** Uma notificação por dia com as oportunidades esfriadas e os passos vencidos. */
   avisarEsfriadas: boolean
 }
+/** Contrato 128 (R34): "Hora do lembrete" em HH:MM, de 00:00 a 23:59. */
+export const TAREFAS_HORA_RE = /^([01]\d|2[0-3]):[0-5]\d$/
+/** Contrato 128 (R34): a Section "Tarefas" de Configurações › Geral. */
+export interface TarefasSettings {
+  /** Hora (HH:MM) do lembrete padrão de uma tarefa com prazo e do aviso "Hoje". */
+  horaLembrete: string
+  /** Toda tarefa com prazo ganha um lembrete no dia, na hora acima. */
+  lembrarNoPrazo: boolean
+  /** Uma notificação por dia com as vencidas e as de hoje. */
+  avisoDiario: boolean
+  /** As tarefas do resumo e os "a confirmar" da pessoa aparecem em Tarefas › Sugestões. */
+  sugerirDasReunioes: boolean
+}
 /** Agendas lidas de cada conta (contrato 12); `null` é só a principal. */
 export interface CalendarSelection {
   google: string[] | null
@@ -164,7 +177,7 @@ export interface AppSettings {
    */
   saveToDrive: boolean
   /**
-   * Contrato 23: fechar a janela deixa o app só no ícone da barra de menus (sem Dock), com as tarefas agendadas
+   * Contrato 23: fechar a janela deixa o app só no ícone da barra de menus (sem Dock), com os agendamentos
    * rodando; ou sai do app.
    */
   closeBehavior: CloseBehavior
@@ -223,6 +236,8 @@ export interface AppSettings {
   // fim 73
   /** Contrato 109: as configurações do Funil de vendas (Configurações › Geral). */
   funil: FunilSettings
+  /** Contrato 128: as configurações das Tarefas (Configurações › Geral). */
+  tarefas: TarefasSettings
 }
 
 /**
@@ -290,6 +305,7 @@ export const DEFAULT_SETTINGS: Readonly<AppSettings> = Object.freeze({
   redesPollMinutes: 5,
   // fim 73
   funil: Object.freeze({ detectarNasReunioes: true, diasEsfriar: 7, avisarEsfriadas: true }) as FunilSettings,
+  tarefas: Object.freeze({ horaLembrete: '09:00', lembrarNoPrazo: true, avisoDiario: true, sugerirDasReunioes: true }) as TarefasSettings,
 })
 
 /** Prefixo do modelo gravado na reunião quando a tradução veio do Claude CLI (`claude-cli:haiku`). */

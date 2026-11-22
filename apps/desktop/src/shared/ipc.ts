@@ -1,7 +1,7 @@
 // Contrato das mensagens entre main e renderer. Canal novo entra aqui primeiro: no mapa do
 // sentido certo e na lista de canais permitidos logo abaixo (o preload recusa o que não estiver nela).
 import type { AcpAgentStatus } from './acp'
-import type { ChatActionEventRequest, ChatActionFunilRequest, ChatActionInstagramDraftRequest, ChatActionReminderChangeRequest, ChatActionReminderRequest, ChatActionResult, ChatActionStateRequest } from './assistant'
+import type { ChatActionEventRequest, ChatActionFunilRequest, ChatActionInstagramDraftRequest, ChatActionReminderChangeRequest, ChatActionReminderRequest, ChatActionResult, ChatActionStateRequest, ChatActionTarefaRequest } from './assistant'
 import type { AgentDeleteResult, AgentInput, AgentSaveResult, AgentsList, AutomationEvent, AutomationRun, AutomationRunListItem, AutomationsStatus, RunStartResult, RunStatus, ScheduledTask, TaskInput, TaskSaveResult } from './automations'
 import type { DriveMeetingStatus, GoogleAccountStatus, GoogleClientSaveResult, MicrosoftAccountStatus, MicrosoftClientSaveResult } from './accounts'
 import type { CalendarListResult, CalendarView } from './calendar'
@@ -30,6 +30,9 @@ import type { CampoImport } from './funil-import'
 // 113: proposta do funil
 import type { FunilPropostaAplicarRequest, FunilPropostaAplicarResult, FunilPropostaRecusa, FunilPropostaView } from './funil-proposta'
 // fim 113
+// 122: tarefas
+import type { SugestaoTarefa, TarefaInput, TarefaSalvar, TarefasActionResult, TarefasFalha, TarefasResumoResult, TarefaStatus, TarefasView } from './tarefas'
+// fim 122
 import type { AnalysisRunRequest, AnalysisRunResult, MeetingAnalysis } from './meeting-analysis'
 import type { MeetingNote } from './meeting-notes'
 import type { SummaryStatus } from './meeting-summary'
@@ -281,6 +284,12 @@ export interface InvokeChannels {
    * que o funil recusa vira o cartão `failed`, com a frase.
    */
   'scribe:chat-action-funil': { request: ChatActionFunilRequest; response: ChatActionResult }
+  /**
+   * Contrato 127 (D14): "Criar", "Concluir" e "Adiar" nos cartões das tarefas, pelo tipo gravado (`campos`: o que o cartão
+   * de criar tarefa mudou, conferido de novo no main). Grava pelo serviço das tarefas; cartão já usado devolve `done`; a
+   * tarefa que fechou ou sumiu vira o cartão `failed`, com a frase.
+   */
+  'scribe:chat-action-tarefa': { request: ChatActionTarefaRequest; response: ChatActionResult }
   /** Contrato 21: "Permitir uma vez", "Sempre permitir esta ferramenta" ou "Negar" no cartão de uma ferramenta MCP. */
   'scribe:chat-approval': { request: ChatApprovalAnswer; response: boolean }
   /** Contrato 21: a linha "Conexões" do painel Contexto (os servidores MCP ligados para o chat). */
@@ -650,6 +659,24 @@ export interface InvokeChannels {
   /** "Detectar oportunidade" (R40): roda mesmo com o interruptor desligado e substitui o arquivo; responde na hora com `detectando: true`. */
   'scribe:funil-proposta-detectar': { request: { meetingId: string }; response: FunilPropostaView | FunilPropostaRecusa }
   // fim 113
+  // 122: tarefas
+  /** Contrato 122: a lista inteira, o dia de hoje e os nomes dos vínculos (D5); exceção, `falhou`. */
+  'scribe:tarefas-get': { request: undefined; response: TarefasView | TarefasFalha }
+  /** Nova tarefa; o lembrete padrão e os vínculos da oportunidade (R9, R11) são resolvidos no main. */
+  'scribe:tarefas-criar': { request: TarefaInput; response: TarefasActionResult }
+  /** Edição parcial (R37): só o que vier muda. */
+  'scribe:tarefas-salvar': { request: TarefaSalvar; response: TarefasActionResult }
+  /** Concluir, cancelar ou reabrir (R8). */
+  'scribe:tarefas-status': { request: { id: string; status: TarefaStatus }; response: TarefasActionResult }
+  /** Remove sem lixeira (R8). */
+  'scribe:tarefas-apagar': { request: { id: string }; response: TarefasActionResult }
+  /** A aba Sugestões, calculada a cada pedido (R26); exceção, lista vazia. */
+  'scribe:tarefas-sugestoes': { request: undefined; response: SugestaoTarefa[] }
+  /** "Ignorar" de uma sugestão: não volta (R26). */
+  'scribe:tarefas-ignorar': { request: { chave: string }; response: TarefasActionResult }
+  /** "Adicionar" e "Adicionar as minhas" do resumo (R22, R23). */
+  'scribe:tarefas-adicionar-do-resumo': { request: { meetingId: string; indices: number[] | 'minhas' }; response: TarefasResumoResult }
+  // fim 122
 }
 
 /** renderer -> main, sem resposta (`__scribeApi.send` / `ipcMain.on`). */
@@ -801,6 +828,12 @@ export interface MainEvents {
   /** Contrato 113: `meetings/<id>.funil.json` foi gravado (detecção, "Criar" / "Atualizar" ou "Ignorar"). */
   'scribe:funil-proposta-changed': { meetingId: string }
   // fim 113
+  // 122: tarefas
+  /** Contrato 122: `tarefas.json` foi gravado ou o dia virou (R12); vai a view inteira. Não chega bloqueado. */
+  'scribe:tarefas-changed': TarefasView
+  /** "Abrir" da notificação de uma tarefa (D7); `null` abre a lista. Bloqueado, o main guarda e manda ao desbloquear. */
+  'scribe:open-tarefa': { id: string | null }
+  // fim 122
 }
 
 export type InvokeChannel = keyof InvokeChannels
@@ -893,6 +926,7 @@ const INVOKE: Record<InvokeChannel, true> = {
   'scribe:chat-action-reminder-change': true,
   'scribe:chat-action-instagram-draft': true,
   'scribe:chat-action-funil': true,
+  'scribe:chat-action-tarefa': true,
   'scribe:chat-approval': true,
   'scribe:mcp-chat-servers': true,
   'scribe:mcp-overview': true,
@@ -1074,6 +1108,16 @@ const INVOKE: Record<InvokeChannel, true> = {
   'scribe:funil-proposta-descartar': true,
   'scribe:funil-proposta-detectar': true,
   // fim 113
+  // 122: tarefas
+  'scribe:tarefas-get': true,
+  'scribe:tarefas-criar': true,
+  'scribe:tarefas-salvar': true,
+  'scribe:tarefas-status': true,
+  'scribe:tarefas-apagar': true,
+  'scribe:tarefas-sugestoes': true,
+  'scribe:tarefas-ignorar': true,
+  'scribe:tarefas-adicionar-do-resumo': true,
+  // fim 122
 }
 const RENDERER_EVENTS: Record<RendererEvent, true> = {
   'scribe:csp-violation': true,
@@ -1147,6 +1191,10 @@ const MAIN_EVENTS: Record<MainEvent, true> = {
   // 113: proposta do funil
   'scribe:funil-proposta-changed': true,
   // fim 113
+  // 122: tarefas
+  'scribe:tarefas-changed': true,
+  'scribe:open-tarefa': true,
+  // fim 122
 }
 
 /**
@@ -1283,6 +1331,7 @@ export const WHEN_LOCKED: Readonly<Record<InvokeChannel, LockedPolicy>> = Object
   'scribe:chat-action-instagram-draft': 'refused',
   // Contrato 117: os cartões do funil, recusados com o app bloqueado como os outros cartões.
   'scribe:chat-action-funil': 'refused',
+  'scribe:chat-action-tarefa': 'refused',
   // Contrato 21: as conexões MCP não aparecem nem mudam com o app bloqueado; o cartão sem resposta nega em 2 min.
   'scribe:chat-approval': 'refused',
   'scribe:mcp-chat-servers': 'refused',
@@ -1480,6 +1529,16 @@ export const WHEN_LOCKED: Readonly<Record<InvokeChannel, LockedPolicy>> = Object
   'scribe:funil-proposta-descartar': 'refused',
   'scribe:funil-proposta-detectar': 'refused',
   // fim 113
+  // 122: tarefas (R36: todos recusados)
+  'scribe:tarefas-get': 'refused',
+  'scribe:tarefas-criar': 'refused',
+  'scribe:tarefas-salvar': 'refused',
+  'scribe:tarefas-status': 'refused',
+  'scribe:tarefas-apagar': 'refused',
+  'scribe:tarefas-sugestoes': 'refused',
+  'scribe:tarefas-ignorar': 'refused',
+  'scribe:tarefas-adicionar-do-resumo': 'refused',
+  // fim 122
 })
 
 /**

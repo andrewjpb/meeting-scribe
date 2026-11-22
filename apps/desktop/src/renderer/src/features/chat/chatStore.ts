@@ -18,7 +18,7 @@
 //
 // Contrato 78: "Pôr na agenda" no cartão de evento e "Salvar"/"Apagar lembrete" nos cartões de lembrete, também pelo main.
 import { create } from 'zustand'
-import type { ChatActionEventFields, ChatActionOportunidadeCampos, ChatActionRef, ChatActionResult, ChatActionStateRequest } from '@shared/assistant'
+import type { ChatActionEventFields, ChatActionOportunidadeCampos, ChatActionRef, ChatActionResult, ChatActionStateRequest, ChatActionTarefaCampos } from '@shared/assistant'
 import {
   DEFAULT_CHAT_SCOPE,
   type Chat,
@@ -104,7 +104,7 @@ interface ChatState {
   copy: (id: string, index: number) => Promise<boolean>
   /** Contrato 25: "Criar lembrete" num cartão (com a data e o texto do "Editar", quando mudaram). */
   createReminder: (ref: ChatActionRef, edit?: { at?: string; text?: string }) => Promise<ChatActionResult>
-  /** Contrato 25: "Descartar", "Enviada" (depois do envio do WhatsApp) e "Tarefa criada". */
+  /** Contrato 25: "Descartar", "Enviada" (depois do envio do WhatsApp) e "Agendamento criado". */
   setActionState: (ref: ChatActionRef, state: ChatActionStateRequest['state'], text?: string) => Promise<ChatActionResult>
   /** Contrato 78: "Pôr na agenda" (e "Tentar de novo"), na agenda escolhida e com o que o "Editar" mudou. */
   createEvent: (ref: ChatActionRef, calendarId: string, fields?: ChatActionEventFields) => Promise<ChatActionResult>
@@ -114,6 +114,8 @@ interface ChatState {
   createInstagramDraft: (ref: ChatActionRef, edit?: { caption?: string; at?: string | null }) => Promise<ChatActionResult>
   /** Contrato 117: "Mover", "Criar" e "Salvar" num cartão do funil (`campos`: o que o cartão de criar oportunidade mudou). */
   funilAction: (ref: ChatActionRef, campos?: ChatActionOportunidadeCampos) => Promise<ChatActionResult>
+  /** Contrato 127: "Criar", "Concluir" e "Adiar" num cartão das tarefas (`campos`: o que o cartão de criar tarefa mudou). */
+  tarefaAction: (ref: ChatActionRef, campos?: ChatActionTarefaCampos) => Promise<ChatActionResult>
   /** Contrato 21: "Permitir uma vez", "Sempre permitir esta ferramenta" ou "Negar" num cartão de aprovação. */
   answerApproval: (chatId: string, id: string, decision: McpApprovalDecision) => Promise<boolean>
 }
@@ -415,6 +417,16 @@ export const useChat = create<ChatState>()((set, get) => {
     funilAction: async (ref, campos) => {
       try {
         const result = await window.__scribeApi.invoke('scribe:chat-action-funil', { ...ref, ...(campos ? { campos } : {}) })
+        if (result.ok) keepChat(result.chat)
+        return result
+      } catch {
+        return { ok: false, error: 'invalid' }
+      }
+    },
+
+    tarefaAction: async (ref, campos) => {
+      try {
+        const result = await window.__scribeApi.invoke('scribe:chat-action-tarefa', { ...ref, ...(campos ? { campos } : {}) })
         if (result.ok) keepChat(result.chat)
         return result
       } catch {

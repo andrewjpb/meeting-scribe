@@ -47,7 +47,7 @@ export const PROVEDORES_PESSOAIS: readonly string[] = [
 export type ContatoOrigem = 'manual' | 'importacao' | 'reuniao' | 'email' | 'whatsapp' | 'agenda' | 'assistente'
 export type OportunidadeOrigem = 'manual' | 'reuniao' | 'assistente'
 export type EtapaTipo = 'aberta' | 'ganho' | 'perdido'
-export type EventoFunilTipo = 'criada' | 'etapa' | 'valor' | 'proximo-passo' | 'nota' | 'vinculo' | 'ganho' | 'perdido' | 'reaberta'
+export type EventoFunilTipo = 'criada' | 'etapa' | 'valor' | 'proximo-passo' | 'nota' | 'vinculo' | 'ganho' | 'perdido' | 'reaberta' | 'tarefa'
 
 export interface Contato {
   id: string
@@ -100,6 +100,14 @@ export interface ProximoPasso {
   data: string | null
 }
 
+/** Contrato 124 (D9): o próximo passo da oportunidade, derivado da primeira tarefa aberta ligada a ela. */
+export interface ProximoPassoDerivado {
+  texto: string
+  /** `AAAA-MM-DD`. */
+  data: string | null
+  tarefaId: string
+}
+
 export interface Oportunidade {
   id: string
   titulo: string
@@ -112,7 +120,8 @@ export interface Oportunidade {
   valor: number | null
   /** `AAAA-MM-DD`. */
   previsao: string | null
-  proximoPasso: ProximoPasso | null
+  /** @deprecated Legado (R35): só a migração lê; nunca mais gravado. A tela usa FunilView.proximosPassos. */
+  proximoPasso?: ProximoPasso | null
   /** Fica o id mesmo de reunião apagada (a linha do tempo mostra "Reunião apagada"). */
   meetingIds: string[]
   whatsappChatIds: string[]
@@ -136,6 +145,8 @@ export interface EventoFunil {
   texto: string
   de?: string
   para?: string
+  /** Contrato 124 (R10, D10): a tarefa ligada que foi criada, concluída ou mudou de prazo (`texto` = o título). */
+  tarefa?: { id: string; acao: 'criada' | 'feita' | 'prazo' }
 }
 
 /** Sugestão dispensada: `email:<addr>`, `tel:<e164>`, `wa:<chatId>` ou `reuniao:<meetingId>`. */
@@ -153,7 +164,7 @@ export interface FunilState {
   etapas: Etapa[]
   eventos: EventoFunil[]
   ignorados: Ignorado[]
-  /** Último aviso de oportunidades esfriadas. */
+  /** Último aviso de oportunidades esfriadas (contrato 115). Sem uso desde o contrato 124: o aviso "Hoje" usa `tarefas.json`. */
   ultimoAvisoEm: number | null
 }
 
@@ -218,10 +229,21 @@ export type FunilResult<T> = { ok: true; value: T; state: FunilState } | { ok: f
 export interface FunilView {
   state: FunilState
   ultimas: Record<string, number>
+  /**
+   * Contrato 124 (D9): o próximo passo de cada oportunidade aberta e não arquivada, derivado das tarefas
+   * (`proximaDaOportunidade`); `null` sem tarefa aberta. Fechada ou arquivada não tem chave.
+   */
+  proximosPassos: Record<string, ProximoPassoDerivado | null>
 }
 
+/**
+ * Contrato 127 (R17): o que aconteceu com a tarefa do próximo passo no `oportunidadeSave` (só quando veio um passo com
+ * texto): criada, prazo da existente atualizado, a mesma já existia ou falhou (com a frase do serviço das tarefas).
+ */
+export type TarefaDoPasso = { acao: 'criada' | 'atualizada' | 'existente'; id: string } | { acao: 'falhou'; mensagem: string }
+
 /** `falhou`: exceção ao gravar (disco cheio, permissão); o resto vem do store ou da checagem do pedido. */
-export type FunilActionResult = { ok: true; id: string | null; mesclado?: boolean } | { ok: false; erro: FunilErro | 'falhou'; mensagem: string }
+export type FunilActionResult = { ok: true; id: string | null; mesclado?: boolean; tarefa?: TarefaDoPasso } | { ok: false; erro: FunilErro | 'falhou'; mensagem: string }
 
 /** Texto de cada erro do store, para a tela mostrar como veio. */
 export const FUNIL_ERRO_TEXTO: Record<FunilErro, string> = {
@@ -245,6 +267,11 @@ export type ItemLinhaDoTempo =
   | { tipo: 'email'; at: number; accountId: string; messageId: string; mailbox: string | null; assunto: string; de: string; para: string; noCache: boolean }
   | { tipo: 'whatsapp'; at: number; chatId: string; nome: string; ultimaMensagem: string }
   | { tipo: 'evento'; at: number; evento: EventoFunil }
+  /**
+   * Contrato 124 (R18): tarefa criada ou concluída. `origem` resumida em pt-BR ("da reunião Kickoff"); apagada:
+   * o título do evento, `prazo: null` e `existe: false`.
+   */
+  | { tipo: 'tarefa'; at: number; tarefaId: string; titulo: string; prazo: string | null; origem: string; acao: 'criada' | 'feita'; existe: boolean }
 
 /** Leitura que falhou no main (exceção), com o texto para a tela. */
 export type FunilFalha = { ok: false; erro: 'falhou'; mensagem: string }

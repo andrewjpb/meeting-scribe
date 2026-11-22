@@ -314,6 +314,15 @@ describe('canais com o app bloqueado (contrato 22, CA4)', () => {
     await expect(invoke('scribe:meeting-prompt-state')).resolves.toBe('resposta')
   })
 
+  it('contrato 127 (CA16): o canal dos cartões das tarefas é recusado bloqueado, antes do handler', async () => {
+    locked = true
+    expect(WHEN_LOCKED['scribe:chat-action-tarefa']).toBe('refused')
+    await expect(Promise.resolve().then(() => invokeHandlers.get('scribe:chat-action-tarefa')?.(trusted, { chatId: 'c1', index: 1, actionId: 'a1' }))).rejects.toThrow(/^locked$/)
+    expect(calls).toEqual([])
+    locked = false
+    await expect(invoke('scribe:chat-action-tarefa')).resolves.toBe('resposta')
+  })
+
   it('contrato 69: todos os canais das redes são recusados bloqueado, antes do handler', async () => {
     const channels = INVOKE_CHANNELS.filter((channel) => channel.startsWith('scribe:redes-'))
     expect(channels.sort()).toEqual([

@@ -1,13 +1,14 @@
 // Contrato 107 (funil-vendas, CA1 a CA9): o store de `funil.json`. Normalização e mescla de contatos (R3, R4),
 // empresa pelo domínio (R5), quarentena (R2), etapas fixas, mudança de etapa (R6), arquivar (R27), cópia diária
-// (R1), limites, fila e posição na coluna.
+// (R1), limites, fila e posição na coluna. Contrato 124: o passo não é mais gravado, o evento `tarefa` (R10) e os
+// adaptadores da migração R35.
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { createFunilStore } from '../src/main/funil/store'
-import { FUNIL_CONTATOS_MAX, type Contato, type FunilResult, type FunilState } from '../src/shared/funil'
-import { etapasPadrao } from '../src/shared/funil-logic'
+import { FUNIL_CONTATOS_MAX, type Contato, type FunilResult, type FunilState, type Oportunidade } from '../src/shared/funil'
+import { etapasPadrao, ultimaInteracao } from '../src/shared/funil-logic'
 
 const DIA_MS = 86_400_000
 const NOW = Date.parse('2026-11-20T15:00:00.000Z')
@@ -268,10 +269,10 @@ describe('store do funil', () => {
     expect(await store.saveOportunidade({ titulo: '' })).toEqual({ ok: false, erro: 'invalido' })
   })
 
-  it('oportunidade: eventos de valor e próximo passo, reunião que não existe e mover dentro da coluna', async () => {
+  it('oportunidade: evento de valor, reunião que não existe e mover dentro da coluna', async () => {
     const { store } = setup()
-    const op = ok(await store.saveOportunidade({ titulo: 'Portal', valor: 125_050, proximoPasso: { texto: 'Ligar', data: '2026-11-25' }, meetingIds: ['reuniao-apagada'] }))
-    expect(op.state.eventos.map((item) => item.tipo)).toEqual(['criada', 'valor', 'proximo-passo'])
+    const op = ok(await store.saveOportunidade({ titulo: 'Portal', valor: 125_050, meetingIds: ['reuniao-apagada'] }))
+    expect(op.state.eventos.map((item) => item.tipo)).toEqual(['criada', 'valor'])
     expect(op.value.meetingIds).toEqual(['reuniao-apagada'])
     const created = ok(await store.saveOportunidade({ titulo: 'Loja' }))
     const other = created.value
@@ -288,6 +289,63 @@ describe('store do funil', () => {
     const after = await store.read()
     expect(after.eventos.map((item) => item.oportunidadeId)).toEqual([other.id])
     expect(after.oportunidades.map((item) => [item.id, item.ordem])).toEqual([[other.id, 0]])
+  })
+
+  it('CA3 (contrato 124): registrarTarefa grava o evento `tarefa`, conta como interação; passo no input não é gravado', async () => {
+    const { store, file, setNow } = setup()
+    const op = ok(await store.saveOportunidade({ titulo: 'Portal', proximoPasso: { texto: 'Ligar', data: '2026-11-25' } }))
+    expect(op.value).not.toHaveProperty('proximoPasso')
+    expect(op.state.eventos.map((item) => item.tipo)).toEqual(['criada'])
+    const editada = ok(await store.saveOportunidade({ id: op.value.id, titulo: 'Portal', proximoPasso: { texto: 'Enviar proposta', data: null } }))
+    expect(editada.state.eventos.some((item) => item.tipo === 'proximo-passo')).toBe(false)
+    expect((JSON.parse(readFileSync(file, 'utf8')) as FunilState).oportunidades[0]).not.toHaveProperty('proximoPasso')
+
+    const depois = NOW + 3 * DIA_MS
+    setNow(depois)
+    const registrado = ok(await store.registrarTarefa({ oportunidadeId: op.value.id, tarefaId: 't1', acao: 'criada', titulo: 'Ligar para a Ana' }))
+    expect(registrado.value).toMatchObject({ oportunidadeId: op.value.id, at: depois, tipo: 'tarefa', texto: 'Ligar para a Ana', tarefa: { id: 't1', acao: 'criada' } })
+    const oportunidade = registrado.state.oportunidades[0]
+    expect(oportunidade?.atualizadoEm).toBe(depois)
+    expect(oportunidade && ultimaInteracao({ oportunidade, reunioes: [], emails: [], whatsapp: [] })).toBe(depois)
+    expect(await store.registrarTarefa({ oportunidadeId: 'nao-existe', tarefaId: 't1', acao: 'feita', titulo: 'x' })).toEqual({ ok: false, erro: 'nao-encontrado' })
+    // O arquivo relido valida (o esquema aceita o evento novo).
+    expect((await createFunilStore({ dir: join(file, '..') }).read()).eventos.at(-1)?.tarefa).toEqual({ id: 't1', acao: 'criada' })
+  })
+
+  it('migração R35 (contrato 124): legado, cópia 0600, limpeza numa escrita e restauração', async () => {
+    const { dir, file, store } = setup()
+    const base = ok(await store.saveOportunidade({ titulo: 'Base' }))
+    const ganho = etapa(base.state, 'Ganho')
+    // Passos gravados antes do contrato 124, direto no arquivo.
+    const antigo = JSON.parse(readFileSync(file, 'utf8')) as FunilState
+    const molde = antigo.oportunidades[0] as Oportunidade
+    antigo.oportunidades = [
+      { ...molde, id: 'op-a', contatoIds: [], proximoPasso: { texto: 'Ligar', data: '2026-11-25' } },
+      { ...molde, id: 'op-g', etapaId: ganho.id, proximoPasso: { texto: 'Faturar', data: null } },
+      { ...molde, id: 'op-x', proximoPasso: null },
+    ]
+    writeFileSync(file, JSON.stringify(antigo))
+    const fresh = createFunilStore({ dir, now: () => NOW })
+    expect(await fresh.legado()).toEqual([
+      { oportunidadeId: 'op-a', texto: 'Ligar', data: '2026-11-25', aberta: true, contatoIds: [], empresaId: null },
+      { oportunidadeId: 'op-g', texto: 'Faturar', data: null, aberta: false, contatoIds: [], empresaId: null },
+    ])
+    await fresh.backupMigracao()
+    const copia = join(dir, `funil.json.bak-tarefas-${dia(NOW)}`)
+    expect(readFileSync(copia, 'utf8')).toBe(JSON.stringify(antigo))
+    expect(statSync(copia).mode & 0o777).toBe(0o600)
+    await fresh.limparLegado()
+    expect((JSON.parse(readFileSync(file, 'utf8')) as FunilState).oportunidades.every((item) => !('proximoPasso' in item))).toBe(true)
+    expect(await fresh.legado()).toEqual([])
+    await fresh.restaurarMigracao()
+    expect(readFileSync(file, 'utf8')).toBe(JSON.stringify(antigo))
+    expect((await fresh.legado()).map((passo) => passo.oportunidadeId)).toEqual(['op-a', 'op-g'])
+
+    // Sem arquivo, a cópia não faz nada; restaurar sem cópia falha.
+    const vazio = setup()
+    await vazio.store.backupMigracao()
+    expect(readdirSync(vazio.dir)).toEqual([])
+    await expect(vazio.store.restaurarMigracao()).rejects.toThrow()
   })
 
   it('importação: uma escrita, cria e mescla pela regra de saveContato', async () => {

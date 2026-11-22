@@ -12,6 +12,7 @@
 // Contrato 21: o escopo guarda os servidores MCP desligados na conversa; cada passo pode ser de uma ferramenta MCP.
 // Contrato 78: os cartões de evento e de alterar e apagar um lembrete, e o estado `failed` (com a frase do erro).
 // Contrato 117: os quatro cartões do funil de vendas (conversa antiga, sem eles, carrega como antes).
+// Contrato 127: os três cartões das tarefas e a tarefa criada pelo cartão do lembrete (`tarefaId`, ausente nos antigos).
 import { randomUUID } from 'node:crypto'
 import { chmod, mkdir, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -55,6 +56,7 @@ import {
   REMINDER_TEXT_MAX,
 } from '../../shared/assistant'
 import { FUNIL_ETAPA_NOME_MAX, FUNIL_NOME_MAX, FUNIL_NOTAS_MAX } from '../../shared/funil'
+import { TAREFA_TITULO_MAX } from '../../shared/tarefas'
 import { EMAIL_ACCOUNT_ID_PATTERN, EMAIL_RECIPIENTS_MAX, EMAIL_SUBJECT_MAX, EMAIL_TEXT_MAX } from '../../shared/email'
 import { automationIdSchema, scheduleSchema } from '../../shared/automations-schema'
 import { MCP_SERVERS_MAX } from '../../shared/mcp'
@@ -146,6 +148,8 @@ const funilCardId = z.string().max(200)
 const funilCardDia = z.string().regex(/^\d{4}-\d{2}-\d{2}$/)
 const funilCardPasso = z.object({ texto: z.string().max(FUNIL_CARD_PASSO_MAX), data: funilCardDia.nullable() }).strict()
 const funilCardContato = z.object({ nome: z.string().max(FUNIL_NOME_MAX), email: z.string().max(320).nullable(), contatoId: funilCardId.nullable() }).strict()
+/** Contrato 127: o id de uma tarefa num cartão (o uuid do `tarefas.json`). */
+const tarefaCardId = z.string().regex(/^[\w-]{1,100}$/)
 
 /** Ação proposta gravada com a resposta (contrato 25), já validada e com o que o app leu (nomes, número). */
 export const chatActionSchema = z.discriminatedUnion('kind', [
@@ -160,6 +164,8 @@ export const chatActionSchema = z.discriminatedUnion('kind', [
       defaultTime: z.boolean(),
       // Contrato 45.
       email: z.object({ accountId: emailAccountId, messageId: z.string().min(1).max(1000), label: z.string().max(300), mailbox: z.string().max(200).nullable().optional() }).strict().nullable().optional(),
+      // Contrato 127.
+      tarefaId: tarefaCardId.nullable().optional(),
     })
     .strict(),
   z
@@ -173,9 +179,10 @@ export const chatActionSchema = z.discriminatedUnion('kind', [
       text: z.string().max(WHATSAPP_SEND_TEXT_MAX),
     })
     .strict(),
+  // Contrato 128 (R29, D15): o cartão `tarefa` passou a `agendamento`; o gravado antes ainda lê, já com o nome novo.
   z
     .object({
-      kind: z.literal('tarefa'),
+      kind: z.literal(['tarefa', 'agendamento']).transform((): 'agendamento' => 'agendamento'),
       ...actionBase,
       name: z.string().max(200),
       agentId: z.string().regex(/^[\w-]{1,100}$/),
@@ -368,6 +375,45 @@ export const chatActionSchema = z.discriminatedUnion('kind', [
       existenteId: funilCardId.nullable(),
       existenteNome: z.string().max(FUNIL_NOME_MAX).nullable(),
       contatoId: funilCardId.nullable(),
+      error: z.string().max(CHAT_ACTION_ERROR_MAX).nullable(),
+    })
+    .strict(),
+  // Contrato 127: as tarefas (os nomes e os títulos lidos do app).
+  z
+    .object({
+      kind: z.literal('tarefa-criar'),
+      ...actionBase,
+      titulo: z.string().max(TAREFA_TITULO_MAX),
+      prazo: funilCardDia.nullable(),
+      lembreteEm: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER).nullable(),
+      oportunidade: z.object({ id: funilCardId, titulo: z.string().max(FUNIL_NOME_MAX) }).strict().nullable(),
+      contato: z.object({ id: funilCardId, nome: z.string().max(FUNIL_NOME_MAX) }).strict().nullable(),
+      ambiguo: z
+        .object({ campo: z.enum(['oportunidade', 'contato']), texto: z.string().max(FUNIL_NOME_MAX) })
+        .strict()
+        .nullable(),
+      ambiguoContato: z.string().max(FUNIL_NOME_MAX).nullable().optional(),
+      tarefaId: tarefaCardId.nullable(),
+      error: z.string().max(CHAT_ACTION_ERROR_MAX).nullable(),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal('tarefa-concluir'),
+      ...actionBase,
+      tarefaId: tarefaCardId,
+      titulo: z.string().max(TAREFA_TITULO_MAX),
+      error: z.string().max(CHAT_ACTION_ERROR_MAX).nullable(),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal('tarefa-adiar'),
+      ...actionBase,
+      tarefaId: tarefaCardId,
+      titulo: z.string().max(TAREFA_TITULO_MAX),
+      prazoAntes: funilCardDia.nullable(),
+      prazo: funilCardDia,
       error: z.string().max(CHAT_ACTION_ERROR_MAX).nullable(),
     })
     .strict(),

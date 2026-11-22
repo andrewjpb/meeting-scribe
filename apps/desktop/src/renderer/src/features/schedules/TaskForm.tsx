@@ -1,4 +1,4 @@
-// Formulário de tarefa agendada (contrato 23, CA4): nome, agente, mensagem, frequência por seletores simples
+// Formulário de agendamento (contrato 23, CA4): nome, agente, mensagem, frequência por seletores simples
 // (com "Avançado: expressão cron"), fuso, saída, avisos, tempo máximo, "Rodar uma vez só" e a prévia "Próximas 5
 // execuções". Na tarefa nova, as sugestões prontas preenchem o formulário (a pessoa ainda salva).
 //
@@ -92,11 +92,11 @@ const TASK_ERRORS: Record<string, string> = {
   agent: 'Escolha um agente que exista.',
   cron: 'Expressão cron inválida.',
   timezone: 'Fuso desconhecido. Use um nome como America/Sao_Paulo.',
-  missing: 'Esta tarefa não existe mais.',
-  full: 'Limite de tarefas atingido.',
+  missing: 'Este agendamento não existe mais.',
+  full: 'Limite de agendamentos atingido.',
   past: 'A data de “Uma vez em” já passou. Escolha um horário no futuro.',
   email: 'A conta de email escolhida em “Pode enviar email” não está mais no app.',
-  invalid: 'Confira os campos da tarefa.',
+  invalid: 'Confira os campos do agendamento.',
 }
 
 /** Contrato 51: o rascunho da seção "Pode enviar email" (a lista como foi digitada). */
@@ -190,9 +190,9 @@ export function TaskForm({ initial, meetings, onClose, onSaved }: { initial: Tas
       <div className="flex items-center gap-2">
         <button type="button" data-action="task-form-back" onClick={onClose} className={QUIET_BUTTON}>
           <Icon icon={ArrowLeft} size={14} />
-          Tarefas agendadas
+          Agendamentos
         </button>
-        <h2 className="text-15 font-bold text-title">{initial.id ? 'Editar tarefa' : 'Nova tarefa'}</h2>
+        <h2 className="text-15 font-bold text-title">{initial.id ? 'Editar agendamento' : 'Novo agendamento'}</h2>
       </div>
 
       {initial.id === null && (
@@ -321,7 +321,7 @@ export function TaskForm({ initial, meetings, onClose, onSaved }: { initial: Tas
       )}
       <div className="flex items-center gap-2">
         <Button action="task-save" onClick={() => void save()} disabled={!valid || saving}>
-          Salvar tarefa
+          Salvar agendamento
         </Button>
         <Button action="task-cancel" variant="secondary" onClick={onClose}>
           Cancelar
@@ -368,7 +368,7 @@ function EmailSection({
           <p className="text-12 text-text-muted">
             {none
               ? 'Conecte uma conta de email em Configurações › Contas para ligar.'
-              : 'Ligar e salvar é a sua permissão: nas execuções desta tarefa, o agente envia email sem pedir o seu clique, só desta conta e só para a lista abaixo. Desligar ou excluir a tarefa corta na hora.'}
+              : 'Ligar e salvar é a sua permissão: nas execuções deste agendamento, o agente envia email sem pedir o seu clique, só desta conta e só para a lista abaixo. Desligar ou excluir o agendamento corta na hora.'}
           </p>
           {draft.on && zone && (
             <p data-task-email-granted className="text-12 text-text-muted tabular">
