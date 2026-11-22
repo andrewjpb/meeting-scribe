@@ -3,7 +3,7 @@
 // `sugestoesDeTarefa` a cada pedido da aba; nada é gravado além do que a pessoa ignora.
 import type { SummaryTask } from './meeting-summary'
 import { SUGESTOES_DIAS, SUGESTOES_MAX, type SugestaoIgnorada, type SugestaoTarefa, type Tarefa } from './tarefas'
-import { casaComResumo, chaveSugestao, prazoDoQuando, slugTexto } from './tarefas-logic'
+import { casaComAnalise, casaComResumo, chaveSugestao, prazoDoQuando, slugTexto } from './tarefas-logic'
 import { semAcento } from './funil-logic'
 
 const DIA_MS = 86_400_000
@@ -37,10 +37,14 @@ const ehVoce = (owner: string | null | undefined): boolean => semAcento(owner ??
 export function sugestoesDeTarefa(input: SugestoesInput): SugestaoTarefa[] {
   const desde = input.now - SUGESTOES_DIAS * DIA_MS
   const ignorados = new Set(input.ignorados.map((item) => item.chave))
-  /** Títulos já usados por tarefas de cada reunião e conversa (`reuniao:<id>` / `whatsapp:<id>`), pelo slug. */
+  /**
+   * Títulos já usados por tarefas de cada reunião e conversa (`reuniao:<id>` / `whatsapp:<id>`), pelo slug. A tarefa que
+   * veio da análise (contrato 131) conta para a reunião dela, como a do resumo.
+   */
   const titulos = new Map<string, Set<string>>()
   for (const tarefa of input.tarefas) {
-    const ref = tarefa.origem.tipo === 'reuniao' ? `reuniao:${tarefa.origem.meetingId}` : tarefa.origem.tipo === 'whatsapp' ? `whatsapp:${tarefa.origem.chatId}` : null
+    const { origem } = tarefa
+    const ref = origem.tipo === 'reuniao' || origem.tipo === 'analise' ? `reuniao:${origem.meetingId}` : origem.tipo === 'whatsapp' ? `whatsapp:${origem.chatId}` : null
     if (ref === null) continue
     const lista = titulos.get(ref) ?? new Set<string>()
     lista.add(slugTexto(tarefa.titulo))
@@ -69,6 +73,8 @@ export function sugestoesDeTarefa(input: SugestoesInput): SugestaoTarefa[] {
       for (const item of reuniao.toConfirm) {
         const owner = item.owner?.trim() ?? ''
         if ((owner && !ehVoce(owner)) || jaVirou(ref, item.text)) continue
+        // Contrato 131 (R1): a adicionada guarda o texto da análise na origem; com o título mudado depois, não volta.
+        if (input.tarefas.some((existente) => casaComAnalise(existente, reuniao.id, item.text))) continue
         candidatas.push({
           chave: chaveSugestao('analise', reuniao.id, item.text),
           texto: item.text,

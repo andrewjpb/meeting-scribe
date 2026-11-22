@@ -117,6 +117,41 @@ describe('anotações do detalhe (notesStore)', () => {
     expect(dirty()).toBe(false)
   })
 
+  it('digitar enquanto a gravação da nova anotação ainda volta do main: o texto espera os 500 ms (não pega carona na volta)', async () => {
+    let release: (value: boolean) => void = () => undefined
+    invoke.mockImplementationOnce(() => new Promise<boolean>((resolve) => (release = resolve)))
+    store().create('m1')
+    const id = entry()?.notes[0]?.id ?? ''
+    await vi.advanceTimersByTimeAsync(0)
+    expect(saves().map((save) => save.notes.length)).toEqual([2])
+    store().change('m1', id, { text: 'Logo depois' })
+    release(true)
+    await vi.advanceTimersByTimeAsync(499)
+    expect(saves()).toHaveLength(1)
+    expect(dirty()).toBe(true)
+    await vi.advanceTimersByTimeAsync(1)
+    expect(saves().map((save) => save.notes[0]?.text)).toEqual(['', 'Logo depois'])
+    expect(dirty()).toBe(false)
+  })
+
+  it('tecla, "sair do card" (flush) e outra tecla enquanto a criação ainda volta do main: no fim tudo salvo, com o texto completo', async () => {
+    let release: (value: boolean) => void = () => undefined
+    invoke.mockImplementationOnce(() => new Promise<boolean>((resolve) => (release = resolve)))
+    store().create('m1')
+    const id = entry()?.notes[0]?.id ?? ''
+    await vi.advanceTimersByTimeAsync(0)
+    store().change('m1', id, { text: 'Primeira' })
+    const left = store().flush('m1')
+    store().change('m1', id, { text: 'Primeira e segunda' })
+    release(true)
+    await left
+    expect(dirty()).toBe(false)
+    expect(saves().at(-1)?.notes[0]?.text).toBe('Primeira e segunda')
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(dirty()).toBe(false)
+    expect(saves().at(-1)?.notes[0]?.text).toBe('Primeira e segunda')
+  })
+
   it('reunião que não existe mais (resposta falsa): nada pendente e nenhum aviso', async () => {
     invoke.mockResolvedValueOnce(false)
     store().change('m1', 'a', { text: 'Sem reunião' })

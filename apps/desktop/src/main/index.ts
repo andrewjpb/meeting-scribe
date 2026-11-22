@@ -17,6 +17,7 @@ import type { AppPluginId, PluginSaveResult } from '../shared/plugins'
 import { privacyPaneUrl } from '../shared/privacy'
 import type { MainEvents } from '../shared/ipc'
 import type { AvisoTarefa } from '../shared/tarefas'
+import { lembretesFuturos } from '../shared/tarefas-logic'
 import type { AgentProfileId, AppSettings } from '../shared/settings-defaults'
 import type { TranscriptDocument } from '../shared/transcription'
 import { WHATSAPP_CHAT_ID_PATTERN, whatsappStateLabel, type WhatsAppMessage } from '../shared/whatsapp'
@@ -1541,15 +1542,12 @@ function createAppServices(userData: string): AppServices {
     cached: () => email.cached(),
     body: (accountId: string, message: EmailMessage) => email.cachedBody(accountId, message),
     // Contrato 127 (R13): os lembretes de email são as tarefas abertas ligadas a uma mensagem, com o aviso no fuso; só os
-    // que ainda vão avisar (no futuro e não disparados), como os das Automações antes.
-    reminders: async () => {
-      const agora = Date.now()
-      return (await tarefas.todas()).flatMap((tarefa) =>
-        tarefa.status === 'aberta' && tarefa.vinculos.email && tarefa.lembreteEm !== null && tarefa.lembreteEm > agora && tarefa.lembreteDisparadoEm === null
-          ? [{ accountId: tarefa.vinculos.email.accountId, messageId: tarefa.vinculos.email.id, mailbox: tarefa.vinculos.email.mailbox, when: formatRunAt(tarefa.lembreteEm, timeZone()) }]
-          : [],
-      )
-    },
+    // que ainda vão avisar (no futuro e não disparados), como os das Automações antes. Contrato 131: o filtro é o
+    // `lembretesFuturos`, com teste.
+    reminders: async () =>
+      lembretesFuturos(await tarefas.todas(), Date.now()).flatMap((tarefa) =>
+        tarefa.vinculos.email ? [{ accountId: tarefa.vinculos.email.accountId, messageId: tarefa.vinculos.email.id, mailbox: tarefa.vinculos.email.mailbox, when: formatRunAt(tarefa.lembreteEm, timeZone()) }] : [],
+      ),
     locked: emailLocked,
   }
   const emailTools = createEmailTools({

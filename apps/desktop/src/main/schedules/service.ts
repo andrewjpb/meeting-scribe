@@ -15,9 +15,11 @@
 //
 // Contrato 25: o lembrete do Assistente é uma tarefa "uma vez" sem agente (`reminder`): no horário, só a
 // notificação do macOS com o texto (o "Abrir" leva à conversa do WhatsApp, quando há); nenhum Claude roda, nada
-// entra no histórico de execuções nem conta no limite diário. Só nasce do clique em "Criar lembrete". O lembrete roda
-// também com as tarefas pausadas (pela pessoa ou pelo limite); perdido (app fechado, Mac dormindo, religado depois da
-// data), avisa atrasado assim que o app confere, com qualquer atraso, e desliga.
+// entra no histórico de execuções nem conta no limite diário. O lembrete roda também com as tarefas pausadas (pela
+// pessoa ou pelo limite); perdido (app fechado, Mac dormindo, religado depois da data), avisa atrasado assim que o app
+// confere, com qualquer atraso, e desliga. Desde o contrato 127 os lembretes do Assistente são tarefas e nada cria mais
+// este formato (o 131 tirou os dois métodos que o gravavam): só o que restar num `schedules.json` antigo, até a
+// migração, passa por aqui.
 //
 // Contrato 51: a tarefa com "Pode enviar email" (a permissão gravada nela ao salvar, com a data) roda com as ferramentas
 // de leitura do email e `enviar_email`, montadas só para aquela execução (`email-send.ts`); cada envio confere a
@@ -39,8 +41,6 @@ import {
   SCHEDULER_TICK_MS,
   TASK_ERROR_MAX,
   TASK_MESSAGE_MAX,
-  TASK_NAME_MAX,
-  TASK_TIMEOUT_MIN_S,
   TASKS_MAX,
   wallTime,
   formatRunAt,
@@ -62,7 +62,7 @@ import {
   type ScheduledTask,
   type TaskSaveResult,
 } from '../../shared/automations'
-import { agentInputSchema, automationIdSchema, taskInputSchema, taskReminderSchema } from '../../shared/automations-schema'
+import { agentInputSchema, automationIdSchema, taskInputSchema } from '../../shared/automations-schema'
 import { emailsLabel, TASK_EMAIL_MAX_PER_RUN_MAX, type RunEmail, type TaskEmailInput, type TaskEmailPermission } from '../../shared/task-email'
 import type { AgentsStore } from '../agents/store'
 import { TOOL_ROUNDS_MAX } from '../chat/tools'
@@ -146,13 +146,6 @@ export interface AutomationsService {
   saveTask(input: unknown): Promise<TaskSaveResult>
   deleteTask(input: unknown): Promise<boolean>
   toggleTask(input: unknown): Promise<ScheduledTask | null>
-  /** Contrato 25: "Criar lembrete" no cartão do Assistente; só com o clique da pessoa. */
-  createReminder(input: unknown): Promise<TaskSaveResult>
-  /**
-   * Contrato 78: "Salvar" no cartão de alterar um lembrete do Assistente; só com o clique da pessoa. Só tarefa com
-   * `reminder` que ainda não disparou (`missing`); a hora nova no futuro (`past`). O lembrete desligado volta ligado.
-   */
-  updateReminder(id: string, change: { at?: string; text?: string }): Promise<ReminderUpdateResult>
   /** "Rodar agora": com a pessoa olhando, fora da pausa e do limite. */
   runNow(input: unknown): Promise<RunStartResult>
   /** "Pedir agora": um agente e um pedido, na hora; entra em "Execuções". */
@@ -169,8 +162,6 @@ export interface AutomationsService {
   settled(): Promise<void>
   dispose(): void
 }
-
-export type ReminderUpdateResult = { ok: true; task: ScheduledTask } | { ok: false; reason: 'missing' | 'past' | 'invalid' }
 
 interface Job {
   runId: string
@@ -202,14 +193,6 @@ const messageSchema = z
   .max(TASK_MESSAGE_MAX)
   .refine((value) => value.trim() !== '')
 const askSchema = z.object({ agentId: automationIdSchema, text: messageSchema }).strict()
-/** Horário com o fuso explícito (`…-03:00` ou `…Z`). */
-const zonedIso = z
-  .string()
-  .max(40)
-  .regex(/(Z|[+-]\d{2}:\d{2})$/)
-  .refine((value) => !Number.isNaN(Date.parse(value)), 'data inválida')
-const reminderInputSchema = z.object({ at: zonedIso, reminder: taskReminderSchema }).strict()
-const reminderChangeSchema = z.object({ id: automationIdSchema, at: zonedIso.optional(), text: taskReminderSchema.shape.text.optional() }).strict()
 const testSchema = z.object({ agent: agentInputSchema, text: messageSchema }).strict()
 const runsFilterSchema = z
   .object({ taskId: automationIdSchema.optional(), status: z.enum(RUN_STATUSES).optional() })
@@ -227,12 +210,6 @@ const defaultTimers: IntervalTimers = {
 
 const clipError = (text: string): string => (text.length > TASK_ERROR_MAX ? `${text.slice(0, TASK_ERROR_MAX - 1)}…` : text)
 const failed = (status: RunStatus): boolean => status === 'error' || status === 'timeout'
-
-/** "Lembrete: <texto>", cortado no limite do nome da tarefa. */
-function reminderName(line: string): string {
-  const label = `Lembrete: ${line}`
-  return label.length <= TASK_NAME_MAX ? label : `${label.slice(0, TASK_NAME_MAX - 1).trimEnd()}…`
-}
 
 export function createAutomationsService(deps: AutomationsDeps): AutomationsService {
   const now = deps.now ?? Date.now
@@ -867,99 +844,6 @@ export function createAutomationsService(deps: AutomationsDeps): AutomationsServ
       })
       if (saved) changed()
       return saved
-    },
-
-    async createReminder(input) {
-      const parsed = reminderInputSchema.safeParse(input)
-      if (!parsed.success) return { ok: false, error: 'invalid' }
-      const at = now()
-      const { reminder } = parsed.data
-      const when = Date.parse(parsed.data.at)
-      if (when <= at) return { ok: false, error: 'past' }
-      const line = reminder.text.replace(/\s+/g, ' ').trim()
-      const name = reminderName(line)
-      let saved: ScheduledTask | null = null
-      let full = false
-      await deps.schedules.mutate((state) => {
-        if (state.tasks.length >= TASKS_MAX) {
-          full = true
-          return state
-        }
-        const task: ScheduledTask = {
-          id: newId(),
-          name,
-          agentId: '',
-          message: line,
-          schedule: { kind: 'once', at: new Date(when).toISOString() },
-          timezone: deps.timeZone(),
-          enabled: true,
-          runOnce: true,
-          runOnceAction: 'disable',
-          timeoutS: TASK_TIMEOUT_MIN_S,
-          notify: 'always',
-          output: null,
-          reminder: { ...reminder, text: reminder.text.trim() },
-          email: null,
-          lastRunAt: null,
-          nextRunAt: new Date(when).toISOString(),
-          lastStatus: null,
-          lastResultPreview: null,
-          lastError: null,
-          consecutiveFailures: 0,
-          autoPaused: false,
-          createdAt: iso(at),
-          updatedAt: iso(at),
-        }
-        saved = task
-        return { ...state, tasks: [...state.tasks, task] }
-      })
-      if (full) return { ok: false, error: 'full' }
-      if (!saved) return { ok: false, error: 'invalid' }
-      changed()
-      return { ok: true, task: saved }
-    },
-
-    async updateReminder(id, change) {
-      const parsed = reminderChangeSchema.safeParse({ id, ...change })
-      if (!parsed.success) return { ok: false, reason: 'invalid' }
-      const text = parsed.data.text?.replace(/\s+/g, ' ').trim()
-      if (text === '') return { ok: false, reason: 'invalid' }
-      const at = now()
-      const when = parsed.data.at === undefined ? null : Date.parse(parsed.data.at)
-      if (when !== null && when <= at) return { ok: false, reason: 'past' }
-      let saved: ScheduledTask | null = null
-      let reason = null as 'missing' | 'past' | null
-      await deps.schedules.mutate((state) => {
-        const current = state.tasks.find((task) => task.id === parsed.data.id)
-        // Só o lembrete que ainda não disparou: o que já avisou (ou foi apagado) não existe mais para o cartão.
-        if (!current?.reminder || current.schedule.kind !== 'once' || current.lastRunAt !== null) {
-          reason = 'missing'
-          return state
-        }
-        const next = when ?? Date.parse(current.schedule.at)
-        if (next <= at) {
-          reason = 'past'
-          return state
-        }
-        const nextIso = new Date(next).toISOString()
-        // `runOnce`, `runOnceAction` e o resto do lembrete (a conversa, o email) ficam como estavam. O desligado religa:
-        // alterar é a intenção de usar.
-        const task: ScheduledTask = {
-          ...current,
-          ...(text !== undefined ? { name: reminderName(text), message: text, reminder: { ...current.reminder, text } } : {}),
-          schedule: { kind: 'once', at: nextIso },
-          enabled: true,
-          autoPaused: false,
-          nextRunAt: nextIso,
-          updatedAt: iso(at),
-        }
-        saved = task
-        return { ...state, tasks: state.tasks.map((known) => (known.id === task.id ? task : known)) }
-      })
-      if (reason) return { ok: false, reason }
-      if (!saved) return { ok: false, reason: 'missing' }
-      changed()
-      return { ok: true, task: saved }
     },
 
     async runNow(input) {

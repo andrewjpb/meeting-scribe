@@ -1,15 +1,18 @@
 // Contrato 121 (tarefas, CA4 a CA6): os derivados (vencida, próxima da oportunidade, partição), o lembrete padrão e
-// o recálculo (R11, D-6), o slug, o dono do resumo → responsável (R22, D-16) e o prazo do "quando" (D-9).
+// o recálculo (R11, D-6), o slug, o dono do resumo → responsável (R22, D-16) e o prazo do "quando" (D-9). Contrato 131:
+// os lembretes futuros do `EMAILS.md` (R3) e a tarefa que veio da análise (R1).
 import { describe, expect, it } from 'vitest'
 import type { Tarefa } from '../src/shared/tarefas'
 import {
   abertasDaOportunidade,
+  casaComAnalise,
   casaComResumo,
   chaveSugestao,
   contarVencidas,
   deHoje,
   diaNoFuso,
   lembretePadrao,
+  lembretesFuturos,
   particao,
   prazoDoQuando,
   proximaDaOportunidade,
@@ -157,6 +160,15 @@ describe('slug, dono do resumo e prazo do quando (CA6)', () => {
     expect(casaComResumo(tarefa(), 'm1', 'Enviar a proposta')).toBe(false)
   })
 
+  it('casa com a análise só pela origem analise, pela reunião e pelo slug do texto, com qualquer status', () => {
+    const t = tarefa({ status: 'feita', origem: { tipo: 'analise', meetingId: 'm1', texto: 'Confirmar o orçamento.' } })
+    expect(casaComAnalise(t, 'm1', 'confirmar o ORCAMENTO')).toBe(true)
+    expect(casaComAnalise(t, 'm2', 'Confirmar o orçamento')).toBe(false)
+    expect(casaComAnalise(t, 'm1', 'Confirmar a data')).toBe(false)
+    expect(casaComAnalise(tarefa({ origem: { tipo: 'reuniao', meetingId: 'm1', texto: 'Confirmar o orçamento' } }), 'm1', 'Confirmar o orçamento')).toBe(false)
+    expect(casaComResumo(t, 'm1', 'Confirmar o orçamento')).toBe(false)
+  })
+
   it('prazo do quando: AAAA-MM-DD, dd/mm com virada de ano, o resto sem prazo', () => {
     expect(prazoDoQuando('sexta', HOJE)).toBeNull()
     expect(prazoDoQuando('28/11', HOJE)).toBe('2026-11-28')
@@ -166,5 +178,20 @@ describe('slug, dono do resumo e prazo do quando (CA6)', () => {
     expect(prazoDoQuando('2026-02-30', HOJE)).toBeNull()
     expect(prazoDoQuando('31/02', HOJE)).toBeNull()
     expect(prazoDoQuando(undefined, HOJE)).toBeNull()
+  })
+})
+
+describe('lembretes futuros do EMAILS.md (contrato 131, CA3)', () => {
+  const AGORA = Date.parse('2026-11-22T12:00:00.000Z')
+
+  it('só a aberta com o aviso depois de agora e ainda não disparado; vencido, disparado e feito ficam de fora', () => {
+    const vencido = tarefa({ lembreteEm: AGORA - 60_000 })
+    const disparado = tarefa({ lembreteEm: AGORA + 60_000, lembreteDisparadoEm: AGORA - 1 })
+    const feito = tarefa({ status: 'feita', feitaEm: AGORA - 1, lembreteEm: AGORA + 60_000 })
+    const futuro = tarefa({ lembreteEm: AGORA + 60_000 })
+    const semLembrete = tarefa()
+    const agoraExato = tarefa({ lembreteEm: AGORA })
+    expect(lembretesFuturos([vencido, disparado, feito, futuro, semLembrete, agoraExato], AGORA).map((t) => t.id)).toEqual([futuro.id])
+    expect(lembretesFuturos([], AGORA)).toEqual([])
   })
 })

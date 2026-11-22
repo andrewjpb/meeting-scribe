@@ -136,7 +136,7 @@ import { summaryPreview } from '../shared/meetings-overview'
 import { PRIVACY_PANE_URLS } from '../shared/privacy'
 import { FUNIL_FILE, type Contato, type FunilState, type Oportunidade, type Sugestao } from '../shared/funil'
 import { formatarBRL } from '../shared/funil-logic'
-import { SETTINGS_TABS, type SettingsTab } from '../shared/routes'
+import { SETTINGS_TABS, TAREFAS_ROOT_PATH, type SettingsTab } from '../shared/routes'
 import {
   FUNIL_AVISAR_NAME,
   FUNIL_DETECTAR_NAME,
@@ -240,7 +240,7 @@ import {
   SMOKE_TAREFAS,
   type SmokeFixtures,
 } from './smoke-fixtures'
-import { TAREFAS_FILE, type SugestaoTarefa, type Tarefa, type TarefasArquivo, type TarefasFalha, type TarefasView } from '../shared/tarefas'
+import { TAREFAS_FILE, type SugestaoTarefa, type Tarefa, type TarefasActionResult, type TarefasArquivo, type TarefasFalha, type TarefasView } from '../shared/tarefas'
 import { casaComResumo, contarVencidas, deHoje, lembretePadrao, vencida } from '../shared/tarefas-logic'
 import { AVISO_BLOQUEADO_TEXTO } from './tarefas/lembretes'
 
@@ -2136,8 +2136,9 @@ async function notesDetailEdits(contents: WebContents, ctx: SmokeContext, record
   await clickSelector(contents, '[data-notes-tab] [data-action="new-note"]')
   const created = await waitFor(contents, `document.querySelectorAll('[data-notes="grid"] [data-note]').length === 4 && document.activeElement?.matches('[data-notes="grid"] li:first-child [data-note-text]')`)
   const createdSaved = await waitFile((notes) => notes.length === 4 && notes[0]?.atMs === null)
-  // O relógio começa no renderer, no instante do evento: sob carga, a volta do `evaluate` pode atrasar mais que o
-  // debounce de 500 ms e encurtar a medida (o check caía com ~50 ms sem nenhum bug no app).
+  // O relógio começa no renderer, no instante do evento: sob carga, a volta do `evaluate` pode atrasar e encurtar a
+  // medida. Os ~50 ms que o check já mostrou eram do app: a tecla chegava antes da resposta da gravação da nova
+  // anotação e ia na carona dela, sem a espera (corrigido no `drain` do `notesStore`).
   const typedAt = await evaluate<number>(
     contents,
     `(() => {
@@ -6904,7 +6905,16 @@ async function assistantChecks(ctx: SmokeContext, watch: (win: BrowserWindow) =>
   await waitFor(contents, routeIs('automacoes'), 8000)
   await evaluate(contents, `document.querySelector('[data-tab="tarefas"]')?.click(), true`)
   const tabShown = await waitFor(contents, `document.querySelector('[data-automations-tab="tarefas"] [data-tasks-tab]')`, 8000)
-  const noReminderRow = tabShown && (await evaluate<boolean>(contents, `!document.querySelector('[data-task-reminder]')`))
+  // Contrato 131: a linha não marca mais o lembrete (o ramo morto saiu). No lugar da procura por `[data-task-row]` de um
+  // lembrete (vazia, já que nenhum existe), dois fatos: as Automações não têm lembrete nenhum (o cartão criou tarefa e a
+  // migração do boot tirou o antigo) e a lista mostra exatamente os agendamentos que ficam depois do filtro.
+  const automacoes = await ctx.automations.listTasks()
+  const semLembreteNasAutomacoes = automacoes.every((task) => !task.reminder)
+  const agendamentosIds = automacoes.filter((task) => !task.reminder).map((task) => task.id).sort()
+  const noReminderRow =
+    tabShown &&
+    semLembreteNasAutomacoes &&
+    (await evaluate<boolean>(contents, `JSON.stringify([...document.querySelectorAll('[data-automations-tab="tarefas"] [data-task-row]')].map((el) => el.dataset.taskRow).sort()) === ${JSON.stringify(JSON.stringify(agendamentosIds))}`))
   const lembrete = {
     pedido: reminder.done,
     cartao: proposed,
@@ -10237,7 +10247,32 @@ async function emailAssistantChecks(ctx: SmokeContext, watch: (win: BrowserWindo
   const created = await waitFor(contents, `${reminderCard}?.dataset.chatActionStatus === 'done'`)
   const tarefa = readTarefasFile(ctx.userDataDir).find((item) => !tarefasBefore.has(item.id) && item.vinculos.email?.accountId === accountId)
   const tasksAfter = (await ctx.automations.listTasks()).length
+  // Contrato 131 (CA3, R3): o `EMAILS.md` só marca o lembrete que ainda vai avisar (`lembretesFuturos`). Uma tarefa com o
+  // lembrete já disparado (aviso no passado e o tick das Automações) no e-mail da Marina e uma feita (aviso futuro) em
+  // outra mensagem não aparecem como "lembrete marcado"; a da Juliana (futura) aparece. As duas saem no fim.
+  const invocar = <T>(channel: string, request: unknown): Promise<T> => evaluate<T>(contents, `window.__scribeApi.invoke(${JSON.stringify(channel)}, ${JSON.stringify(request)})`)
+  const emailDe = (item: { id: string; subject: string }): { accountId: string; id: string; assunto: string; mailbox: null } => ({ accountId, id: item.id, assunto: item.subject, mailbox: null })
+  const outra = (await inbox()).find((item) => item.id !== marina?.id && item.id !== tarefa?.vinculos.email?.id)
+  const disparada = marina ? await invocar<TarefasActionResult>('scribe:tarefas-criar', { titulo: 'Retornar a Marina', origem: { tipo: 'manual' }, lembrete: Date.now() - 60_000, vinculos: { email: emailDe(marina) } }) : null
+  const feita = outra ? await invocar<TarefasActionResult>('scribe:tarefas-criar', { titulo: 'Responder a mensagem', origem: { tipo: 'manual' }, lembrete: Date.now() + 2 * 86_400_000, vinculos: { email: emailDe(outra) } }) : null
+  if (feita?.ok && feita.id) await invocar('scribe:tarefas-status', { id: feita.id, status: 'feita' })
+  await ctx.automations.tick()
+  const salvaPorId = (id: string | null | undefined): Tarefa | undefined => readTarefasFile(ctx.userDataDir).find((item) => item.id === id)
+  const disparadaSalva = disparada?.ok ? salvaPorId(disparada.id) : undefined
+  const feitaSalva = feita?.ok ? salvaPorId(feita.id) : undefined
   await askChat(contents, 'O que tenho de email pendente?')
+  const linhaDo = (assunto: string | undefined): string | undefined => (assunto === undefined ? undefined : overviewOf().split('\n').find((line) => line.startsWith('- ref: ') && line.includes(`assunto: "${assunto}"`)))
+  const linhaMarina = linhaDo(marina?.subject)
+  const linhaOutra = linhaDo(outra?.subject)
+  const lembretesFuturosNoEmail = {
+    disparadaGravada: disparadaSalva !== undefined && disparadaSalva.status === 'aberta' && disparadaSalva.lembreteDisparadoEm !== null,
+    feitaGravada: feitaSalva !== undefined && feitaSalva.status === 'feita' && feitaSalva.lembreteDisparadoEm === null && (feitaSalva.lembreteEm ?? 0) > Date.now(),
+    linhaDaDisparada: linhaMarina !== undefined,
+    linhaDaFeita: linhaOutra !== undefined,
+    disparadaSemMarca: linhaMarina !== undefined && !linhaMarina.includes(' · lembrete marcado: '),
+    feitaSemMarca: linhaOutra !== undefined && !linhaOutra.includes(' · lembrete marcado: '),
+  }
+  for (const criada of [disparada, feita]) if (criada?.ok && criada.id) await invocar('scribe:tarefas-apagar', { id: criada.id })
   const julianaLine = overviewOf()
     .split('\n')
     .find((line) => line.includes('de: Juliana Prado'))
@@ -10267,6 +10302,7 @@ async function emailAssistantChecks(ctx: SmokeContext, watch: (win: BrowserWindo
       lembreteEmail.marcadoNoEmail,
     detail: JSON.stringify(lembreteEmail),
   }
+  checks['assistantEmailLembretesFuturos'] = { ok: lembreteEmail.marcadoNoEmail && Object.values(lembretesFuturosNoEmail).every(Boolean), detail: JSON.stringify({ futuraMarcada: lembreteEmail.marcadoNoEmail, ...lembretesFuturosNoEmail }) }
 
   // CA7: a busca além do cache, pelas ferramentas do app; nada muda de lida.
   const seenBefore = JSON.stringify((await inbox()).map((item) => [item.id, item.seen]))
@@ -12183,11 +12219,14 @@ const SUGESTOES_TAREFAS = [
   { task: 'Revisar o orçamento da viagem', owner: 'Você', due: null },
   { task: 'Enviar o cronograma do piloto', owner: 'Você', due: 'quinta' },
 ] as const
+/** Contrato 131 (CA1): o item "a confirmar" com dono "Você" da análise da mesma reunião, para a sugestão da análise. */
+const SUGESTOES_ANALISE = { text: 'Confirmar a data do treinamento', owner: 'Você' } as const
 
 /**
  * Contrato 123 (CA10 parte): no começo do bloco das Tarefas, a reunião de uma hora atrás no `meetings.json` (sem perder as
  * pastas) e o resumo dela com as duas tarefas "Você" (a segunda com o prazo daqui a 3 dias), para a aba Sugestões ter
- * sempre uma para ignorar e outra para adicionar. Nenhuma oportunidade cita a reunião.
+ * sempre uma para ignorar e outra para adicionar. Nenhuma oportunidade cita a reunião. Contrato 131 (CA1): e uma análise
+ * com um item "a confirmar" de "Você" (`SUGESTOES_ANALISE`), para a aba ter também a sugestão da análise.
  */
 function seedSugestoesReuniao(userDataDir: string): void {
   const meetingsFile = join(userDataDir, MEETINGS_FILE)
@@ -12207,6 +12246,22 @@ function seedSugestoesReuniao(userDataDir: string): void {
     tasks: SUGESTOES_TAREFAS.map((tarefa, index) => ({ task: tarefa.task, owner: tarefa.owner, due: tarefa.due, dueIso: index === 1 ? prazo : null })),
   }
   writeFileAtomicSync(join(userDataDir, 'meetings', `${SUGESTOES_REUNIAO}${SUMMARY_SUFFIX}`), `${JSON.stringify(resumo, null, 2)}\n`)
+  const analise: MeetingAnalysis = {
+    id: 'smoke-tarefas-sugestoes-analise',
+    meetingId: SUGESTOES_REUNIAO,
+    createdAt: new Date().toISOString(),
+    atMs: 20 * 60_000,
+    model: 'claude-cli:haiku',
+    costUsd: null,
+    durationMs: null,
+    openQuestions: [],
+    unclearTopics: [],
+    toConfirm: [{ ...SUGESTOES_ANALISE }],
+    suggestedQuestions: [],
+    answered: [],
+  }
+  const analises: MeetingAnalysesFile = { version: 1, meetingId: SUGESTOES_REUNIAO, analyses: [analise] }
+  writeFileAtomicSync(join(userDataDir, 'meetings', `${SUGESTOES_REUNIAO}.analyses.json`), `${JSON.stringify(analises, null, 2)}\n`)
 }
 
 /** `AAAA-MM-DD` somado de `n` dias (em UTC, sem a troca de horário). */
@@ -12621,9 +12676,48 @@ async function tarefasTelaChecks(ctx: SmokeContext, watch: (win: BrowserWindow) 
         adicionar.prazo !== null &&
         (await waitFor(contents, `!document.querySelector('[data-tarefa-sugestao=${JSON.stringify(adicionar.chave)}]')`, 8000))
     }
+    // Contrato 131 (CA1, R1): a sugestão da análise semeada vira tarefa com a origem `analise` (a reunião e o texto do
+    // item) e não volta depois de recarregar; a lista mostra "Análise: <reunião>" e o vínculo da reunião abre a reunião.
+    const daAnalise = lista.find((item) => item.origem.tipo === 'analise' && item.origem.meetingId === SUGESTOES_REUNIAO && item.texto === SUGESTOES_ANALISE.text)
+    const analise = { semeada: daAnalise !== undefined, origemAnalise: false, sumiu: false, naoVoltou: false, textoOrigem: false, abreReuniao: false, voltouATarefas: false }
+    if (daAnalise && adicionou) {
+      const antesIds = new Set(saved().tarefas.map((tarefa) => tarefa.id))
+      await clickSelector(contents, `[data-tarefa-sugestao=${JSON.stringify(daAnalise.chave)}] [data-action="tarefa-sugestao-adicionar"]`)
+      let nova: Tarefa | undefined
+      for (let attempt = 0; attempt < 100 && !nova; attempt++) {
+        nova = saved().tarefas.find((tarefa) => !antesIds.has(tarefa.id))
+        if (!nova) await wait(50)
+      }
+      analise.origemAnalise = nova?.origem.tipo === 'analise' && nova.origem.meetingId === SUGESTOES_REUNIAO && nova.origem.texto === SUGESTOES_ANALISE.text && nova.vinculos.meetingId === SUGESTOES_REUNIAO
+      analise.sumiu = await waitFor(contents, `!document.querySelector('[data-tarefa-sugestao=${JSON.stringify(daAnalise.chave)}]')`, 8000)
+      await evaluate(contents, 'location.reload(), true')
+      await wait(300)
+      await loadAndWait(win)
+      await clickNav(contents, 'tarefas')
+      await waitFor(contents, tela, 8000)
+      await visao('sugestoes')
+      analise.naoVoltou =
+        (await waitFor(contents, `document.querySelector('[data-tarefas-visao="sugestoes"]')?.textContent === ${JSON.stringify(rotuloSugestoes(n - 3))}`, 8000)) &&
+        (await evaluate<boolean>(contents, `!document.querySelector('[data-tarefa-sugestao=${JSON.stringify(daAnalise.chave)}]')`)) &&
+        (await api<SugestaoTarefa[]>('scribe:tarefas-sugestoes')).every((item) => item.chave !== daAnalise.chave)
+      if (nova) {
+        const linha = `${LARGA} [data-tarefa="${nova.id}"]`
+        await visao('todas')
+        analise.textoOrigem = await waitFor(contents, `document.querySelector('${linha} [data-tarefa-origem="reuniao"]')?.textContent === 'Análise: Acompanhamento do piloto'`, 8000)
+        await clickSelector(contents, linha)
+        const detalhe = await waitFor(contents, `document.querySelector('[data-tarefa-detalhe="${nova.id}"] [data-tarefa-vinculo="reuniao"] > div button')`, 8000)
+        if (detalhe) {
+          await clickSelector(contents, `[data-tarefa-detalhe="${nova.id}"] [data-tarefa-vinculo="reuniao"] > div button`)
+          analise.abreReuniao = await waitFor(contents, `${routeIs('detalhe')} && document.querySelector('main [data-meeting="${SUGESTOES_REUNIAO}"]')`, 8000)
+        }
+        // De volta à lista, sem o detalhe aberto (o resto do bloco usa a lista larga).
+        await funilRouterPush(contents, TAREFAS_ROOT_PATH)
+        analise.voltouATarefas = await waitFor(contents, `${tela} && !document.querySelector('[data-tarefa-detalhe]')`, 8000)
+      }
+    }
     checks['tarefasSugestoes'] = {
-      ok: n >= 2 && daSemeada.length === 2 && rotuloOk && abaOk && linhasSugestao && ignorou && naoVoltou && adicionou === true,
-      detail: JSON.stringify({ sugestoes: n, daReuniaoSemeada: daSemeada.length, rotulo: rotuloOk, aba: abaOk, linhas: linhasSugestao, ignorou, naoVoltouDepoisDeRecarregar: naoVoltou, adicionou }),
+      ok: n >= 3 && daSemeada.length === 2 && rotuloOk && abaOk && linhasSugestao && ignorou && naoVoltou && adicionou === true && Object.values(analise).every(Boolean),
+      detail: JSON.stringify({ sugestoes: n, daReuniaoSemeada: daSemeada.length, rotulo: rotuloOk, aba: abaOk, linhas: linhasSugestao, ignorou, naoVoltouDepoisDeRecarregar: naoVoltou, adicionou, analise }),
     }
 
     // tarefasVazia (R2): cancela (sem o gancho do funil, D-15) toda tarefa de Hoje da view; Hoje mostra "Nada para hoje"
@@ -13525,7 +13619,9 @@ async function funilDetalheChecks(ctx: SmokeContext, watch: (win: BrowserWindow)
         await wait(400)
         const cartaoContinua = primeira !== null && segunda !== null && (await cartaoMostra(mais2, primeira.id))
         if (primeira) await clickSelector(contents, `${SECAO} [data-tarefa="${primeira.id}"] [data-tarefa-feito]`)
-        const concluida = primeira !== null && (await waitFor(contents, `!document.querySelector('${SECAO} [data-tarefas-abertas] [data-tarefa="${primeira.id}"]') && document.querySelector('${SECAO} [data-funil-tarefas-feitas]')?.dataset.funilTarefasFeitas === '1'`, 8000))
+        // Contrato 131: o seletor das abertas é `data-funil-tarefas-abertas` (o antigo `data-tarefas-abertas` não existia e
+        // deixava a primeira metade sempre verdadeira); a lista das abertas tem que existir e não ter mais a concluída.
+        const concluida = primeira !== null && (await waitFor(contents, `!!document.querySelector('${SECAO} [data-funil-tarefas-abertas] [data-tarefa]') && !document.querySelector('${SECAO} [data-funil-tarefas-abertas] [data-tarefa="${primeira.id}"]') && document.querySelector('${SECAO} [data-funil-tarefas-feitas]')?.dataset.funilTarefasFeitas === '1'`, 8000))
         const feitas = await evaluate<{ altura: number; texto: boolean }>(
           contents,
           `(() => { const el = document.querySelector('${SECAO} [data-funil-tarefas-feitas]'); return { altura: Math.round(el?.getBoundingClientRect().height ?? 0), texto: /^Feitas\\s*1$/.test((el?.textContent ?? '').trim()) } })()`,
@@ -13545,6 +13641,42 @@ async function funilDetalheChecks(ctx: SmokeContext, watch: (win: BrowserWindow)
         if (primeira) await clickSelector(contents, `${ITENS} [data-funil-timeline-tarefa="${primeira.id}"]`)
         const abriuTarefa = primeira !== null && (await waitFor(contents, `${routeIs('tarefas')} && !!document.querySelector('[data-tarefa-detalhe="${primeira.id}"]')`, 8000))
         const caminho = abriuTarefa && primeira !== null && (await funilRouterPath(contents)) === `/tarefas/${primeira.id}`
+        // Contrato 131 (CA4, R4): com 2 abertas, nenhuma linha "Ver todas"; com 3 criadas a mais (5 abertas), só 3 linhas no
+        // cabeçalho e "Ver todas as 5 tarefas" (28 px), que abre Tarefas em Todas agrupada por oportunidade, com o grupo dela.
+        const abertasDaOp = (): number => tarefasSalvas().filter((tarefa) => tarefa.status === 'aberta' && tarefa.vinculos.oportunidadeId === OP).length
+        const VER_TODAS = `${SECAO} [data-action="funil-tarefas-ver-todas"]`
+        await abrir(OP)
+        await waitFor(contents, `!!document.querySelector('${SECAO} [data-funil-tarefas-abertas] [data-tarefa]')`, 8000)
+        const abertasAntes = abertasDaOp()
+        const semVerTodas = await evaluate<boolean>(contents, `!document.querySelector('${VER_TODAS}') && document.querySelectorAll('${SECAO} [data-funil-tarefas-abertas] [data-tarefa]').length === ${abertasAntes}`)
+        for (const titulo of ['Ligar para o financeiro', 'Separar os anexos do contrato', 'Marcar a apresentação']) {
+          const criada = await api<TarefasActionResult>('scribe:tarefas-criar', { titulo, origem: { tipo: 'funil', oportunidadeId: OP }, vinculos: { oportunidadeId: OP } })
+          if (criada.ok && criada.id) criadasNaSecao.push(criada.id)
+        }
+        const abertasDepois = abertasDaOp()
+        const verTodasPronto = await waitFor(contents, `document.querySelector('${VER_TODAS}')?.dataset.funilTarefasVerTodas === '${abertasDepois}'`, 8000)
+        const verTodas = await evaluate<{ linhas: number; altura: number; texto: boolean; rola: boolean }>(
+          contents,
+          `(() => {
+            const botao = document.querySelector('${VER_TODAS}')
+            const lista = document.querySelector('${SECAO} [data-funil-tarefas-abertas]')
+            const estilo = lista ? getComputedStyle(lista) : null
+            return {
+              linhas: lista?.querySelectorAll('[data-tarefa]').length ?? -1,
+              altura: Math.round(botao?.getBoundingClientRect().height ?? 0),
+              texto: (botao?.textContent ?? '').replace(/\\s+/g, ' ').trim() === 'Ver todas as ${abertasDepois} tarefas',
+              rola: !estilo || estilo.overflowY !== 'visible' || estilo.maxHeight !== 'none',
+            }
+          })()`,
+        )
+        if (verTodasPronto) await clickSelector(contents, VER_TODAS)
+        const agrupada =
+          verTodasPronto &&
+          (await waitFor(
+            contents,
+            `${routeIs('tarefas')} && document.querySelector('[data-tarefas-screen="todas"]') && document.querySelector('[data-tarefas-visao="todas"]')?.getAttribute('aria-pressed') === 'true' && document.querySelector('[data-tarefas-agrupar]')?.value === 'oportunidade' && !!document.querySelector('[data-tarefas-lista="larga"] [data-tarefas-grupo="${OP}"]')`,
+            8000,
+          ))
         const secao = {
           aberta,
           comMigrada,
@@ -13564,6 +13696,15 @@ async function funilDetalheChecks(ctx: SmokeContext, watch: (win: BrowserWindow)
           concluidaNaLinha: rotulos.concluida,
           abriuTarefa,
           caminho,
+          duasAbertas: abertasAntes === 2,
+          semVerTodasCom2: semVerTodas,
+          cincoAbertas: abertasDepois === 5,
+          verTodas: verTodasPronto,
+          tresLinhas: verTodas.linhas === 3,
+          verTodas28: verTodas.altura === 28,
+          verTodasTexto: verTodas.texto,
+          listaNaoRola: !verTodas.rola,
+          abriuAgrupada: agrupada,
         }
         checks['funilTarefasSecao'] = { ok: Object.values(secao).every(Boolean), detail: JSON.stringify(secao) }
       }
@@ -14321,6 +14462,22 @@ async function funilTelasExistentesChecks(ctx: SmokeContext, watch: (win: Browse
     await clickSelector(contents, `[data-email-reading] [data-action="funil-mais-contato"]`)
     const linkEmail = await waitFor(contents, `document.querySelector('[data-email-reading] [data-funil-contato-link]')?.textContent === 'Paulo Siqueira' && !document.querySelector('[data-email-reading] [data-action="funil-mais-contato"]')`, 8000)
     const paulo = contatoPorEmail(FUNIL_EMAIL_REMETENTE.address)
+    // Contrato 131 (CA5, R5): o contato tem o mesmo nome do remetente: o nome aparece uma vez só no cabeçalho, e é o link da
+    // ficha; o endereço continua ao lado.
+    const nomeUmaVez = await evaluate<{ vezes: number; noLink: boolean; endereco: boolean }>(
+      contents,
+      `(() => {
+        const linha = document.querySelector('${READING_HEAD}')?.closest('p')
+        const nos = []
+        const walker = linha ? document.createTreeWalker(linha, NodeFilter.SHOW_TEXT) : null
+        for (let no = walker?.nextNode(); no; no = walker.nextNode()) if ((no.textContent ?? '').includes(${JSON.stringify(FUNIL_EMAIL_REMETENTE.name)})) nos.push(no)
+        return {
+          vezes: nos.length,
+          noLink: nos.length === 1 && Boolean(nos[0].parentElement?.closest('[data-funil-contato-link]')),
+          endereco: [...(linha?.querySelectorAll('span') ?? [])].some((el) => el.textContent === ${JSON.stringify(FUNIL_EMAIL_REMETENTE.address)}),
+        }
+      })()`,
+    )
     // Mandada pela própria conta (para si mesma): nem "+ Contato" nem link.
     await ctx.fixtures.email.deliver({ from: { name: 'Andrew Teste', address: SMOKE_EMAIL_ADDRESS }, subject: FUNIL_EMAIL_PROPRIA, text: 'Lembrete: mandar a estimativa ao Paulo.' })
     const enviados = await waitFor(contents, emailRow(FUNIL_EMAIL_PROPRIA), 10_000)
@@ -14331,8 +14488,8 @@ async function funilTelasExistentesChecks(ctx: SmokeContext, watch: (win: Browse
       `({ from: document.querySelector('[data-email-reading] [data-email-from]')?.textContent ?? '', nada: !document.querySelector('[data-email-reading] [data-action="funil-mais-contato"]') && !document.querySelector('[data-email-reading] [data-funil-contato-link]') })`,
     )
     checks['emailMaisContato'] = {
-      ok: caixa && aberta && botaoEmail && mesmaLinha && linkEmail && paulo?.origem === 'email' && paulo.nome === 'Paulo Siqueira' && enviados && enviadaAberta && enviada.nada,
-      detail: `Caixa de Entrada=${caixa}, mensagem nova aberta=${aberta}; "+ Contato" ao lado do remetente=${botaoEmail}, na mesma linha=${mesmaLinha} (topos ${linhaRemetente.topoNome} e ${linhaRemetente.topoBotao}, nome inteiro=${linhaRemetente.nomeInteiro}); depois do clique, o link com o nome=${linkEmail}, contato ${paulo?.id ?? 'nenhum'} (${paulo?.origem ?? '-'}); mensagem da própria conta chegou=${enviados}, sem botão nem link=${enviada.nada && enviadaAberta}`,
+      ok: caixa && aberta && botaoEmail && mesmaLinha && linkEmail && paulo?.origem === 'email' && paulo.nome === 'Paulo Siqueira' && nomeUmaVez.vezes === 1 && nomeUmaVez.noLink && nomeUmaVez.endereco && enviados && enviadaAberta && enviada.nada,
+      detail: `Caixa de Entrada=${caixa}, mensagem nova aberta=${aberta}; "+ Contato" ao lado do remetente=${botaoEmail}, na mesma linha=${mesmaLinha} (topos ${linhaRemetente.topoNome} e ${linhaRemetente.topoBotao}, nome inteiro=${linhaRemetente.nomeInteiro}); depois do clique, o link com o nome=${linkEmail}, contato ${paulo?.id ?? 'nenhum'} (${paulo?.origem ?? '-'}); nome no cabeçalho ${nomeUmaVez.vezes} vez(es), no link=${nomeUmaVez.noLink}, endereço ao lado=${nomeUmaVez.endereco}; mensagem da própria conta chegou=${enviados}, sem botão nem link=${enviada.nada && enviadaAberta}`,
     }
 
     // whatsappContato (CA15, CA6, R37): os Detalhes da Ana (pessoa, ainda sem contato) com o bloco Contato e "+ Contato";
@@ -16788,7 +16945,7 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
   for (const [name, check] of Object.entries(meet)) if (!check.ok) failures.push(`meet ${name}: ${check.detail}`)
   for (const name of ['server', 'recording', 'setting', 'meetingPrompt', 'meetingPromptRecord', 'meetingPromptNever', 'micWatch']) if (!meet[name]) failures.push(`meet ${name}: não executado`)
   for (const [name, check] of Object.entries(email)) if (!check.ok) failures.push(`email ${name}: ${check.detail}`)
-  for (const name of ['settings', 'list', 'reading', 'compose', 'folders', 'attachments', 'remove', 'dark', 'notify', 'assistantPending', 'assistantReply', 'assistantTask', 'assistantSearch', 'assistantOrganize', 'taskEmailForm', 'taskEmailRun']) if (!email[name]) failures.push(`email ${name}: não executado`)
+  for (const name of ['settings', 'list', 'reading', 'compose', 'folders', 'attachments', 'remove', 'dark', 'notify', 'assistantPending', 'assistantReply', 'assistantTask', 'assistantEmailLembretesFuturos', 'assistantSearch', 'assistantOrganize', 'taskEmailForm', 'taskEmailRun']) if (!email[name]) failures.push(`email ${name}: não executado`)
   for (const [name, check] of Object.entries(sidebar)) if (!check.ok) failures.push(`barra lateral ${name}: ${check.detail}`)
   for (const name of ['noAccount', 'rootItems', 'enterFirstTime', 'back', 'enterInSection', 'enterLast', 'slide', 'still', 'routeLevel', 'reducedMotion', 'badge', 'emailFits', 'sidebarScrollFade', 'settingsEnter', 'settingsRows', 'settingsBack', 'settingsEnterInSection', 'settingsScreen', 'settingsRouteLevel', 'settingsAnchor', 'settingsDoubleMenu', 'settingsDoubleClick', 'assistantEnter', 'assistantLevel', 'assistantRowMenu', 'assistantRail', 'assistantReveal', 'assistantOpen', 'assistantSearch', 'assistantDelete', 'assistantNewChat']) {
     if (!sidebar[name]) failures.push(`barra lateral ${name}: não executado`)

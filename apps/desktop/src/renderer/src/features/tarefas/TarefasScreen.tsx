@@ -83,8 +83,19 @@ export function TarefasScreen() {
     setNova((atual) => atual + 1)
     if (visao === 'sugestoes') setVisao('hoje')
   }
+  // "Ver todas as N tarefas" da oportunidade (contrato 131, R4) chega pela navegação (`state.agrupar`): a visão pedida
+  // (Todas, ou Feitas) agrupada por oportunidade, uma vez por pedido.
+  const pedidoAgrupar = (location.state as TarefasNavigationState | null)?.agrupar ? location.key : null
+  const [agruparVisto, setAgruparVisto] = useState<string | null>(null)
+  if (pedidoAgrupar !== null && pedidoAgrupar !== agruparVisto) {
+    const state = location.state as TarefasNavigationState
+    setAgruparVisto(pedidoAgrupar)
+    setModo(state.agrupar ?? 'oportunidade')
+    setVisao(state.visao ?? 'todas')
+  }
   useEffect(() => {
-    if ((location.state as TarefasNavigationState | null)?.nova) void navigate(location.pathname, { replace: true, state: null })
+    const state = location.state as TarefasNavigationState | null
+    if (state?.nova || state?.agrupar) void navigate(location.pathname, { replace: true, state: null })
   }, [location.pathname, location.state, navigate])
 
   // As sugestões (o número da aba): ao abrir a tela, ao entrar na aba e a cada view nova; o relógio das Feitas acompanha.

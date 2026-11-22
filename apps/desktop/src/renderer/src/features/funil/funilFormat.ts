@@ -3,7 +3,7 @@
 // test/renderer/funil-format.test.ts. Os cálculos do funil (totais, esfriada, BRL) vêm de `shared/funil-logic.ts`.
 import { EMAIL_INBOX_MAILBOX } from '@shared/email'
 import type { Contato, ContatoOrigem, Empresa, Etapa, EtapaTipo, FunilState, ItemLinhaDoTempo, Oportunidade, ProximoPasso, Sugestao } from '@shared/funil'
-import { diasNaEtapa, dominioDe, ehProvedorPessoal, formatarBRL, nomeEmpresaDoDominio, normalizarEmail, passoVencido, semAcento, totaisDoFunil } from '@shared/funil-logic'
+import { diasNaEtapa, dominioDe, ehProvedorPessoal, formatarBRL, nomeEmpresaDoDominio, normalizarEmail, semAcento, totaisDoFunil } from '@shared/funil-logic'
 import { emailPath, ROUTE_PATHS, type EmailNavigationState, type EmailRouteFolder, type WhatsAppNavigationState } from '@shared/routes'
 import type { Tarefa } from '@shared/tarefas'
 
@@ -220,13 +220,6 @@ export function emailDestino(item: Extract<ItemLinhaDoTempo, { tipo: 'email' }>,
   const mailbox = item.mailbox ?? EMAIL_INBOX_MAILBOX
   const pasta: EmailRouteFolder = mailbox.toUpperCase() === EMAIL_INBOX_MAILBOX ? 'inbox' : mailbox === sentMailbox ? 'sent' : { path: mailbox }
   return { path: emailPath(item.accountId, pasta), state: { messageId: item.messageId, mailbox } }
-}
-
-/** Próximo passo no detalhe (artboard 04; contrato 124: o derivado): o texto e, com data, "18/11" ou "18/11 · vencido". */
-export function textoPassoDetalhe(proximoPasso: Pick<ProximoPasso, 'texto' | 'data'> | null, hoje: string): { texto: string; data: string | null; vencido: boolean } {
-  if (!proximoPasso) return { texto: 'Sem próximo passo', data: null, vencido: false }
-  const vencido = passoVencido(proximoPasso, hoje)
-  return { texto: proximoPasso.texto, data: proximoPasso.data ? `${diaCurto(proximoPasso.data)}${vencido ? ' · vencido' : ''}` : null, vencido }
 }
 
 /** O valor no campo de edição (R25): `64.000` ou `1.250,50`, sem o "R$"; sem valor, vazio. */

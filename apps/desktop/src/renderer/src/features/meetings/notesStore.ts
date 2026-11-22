@@ -39,7 +39,7 @@ interface MeetingNotesState {
   remove: (meetingId: string, id: string) => void
   undo: (meetingId: string) => void
   clearFocus: (meetingId: string) => void
-  /** Salva agora o que estiver pendente; termina quando não houver mais nada a gravar (ou falhar). */
+  /** Salva agora o que estiver pendente (a espera de 500 ms em curso também); termina quando não houver mais nada a gravar (ou falhar). */
   flush: (meetingId: string) => Promise<void>
   /** Reunião excluída: esquece pendências, timers e o aviso. */
   forget: (meetingId: string) => void
@@ -83,8 +83,35 @@ export const useMeetingNotes = create<MeetingNotesState>()((set, get) => {
   const update = (meetingId: string, notes: MeetingNote[], when: 'now' | 'later', extra: Partial<MeetingNotesEntry> = {}): void => {
     patchEntry(meetingId, (entry) => ({ notes, version: entry.version + 1, ...extra }))
     clearTimer(saveTimers, meetingId)
-    if (when === 'now') void get().flush(meetingId)
+    if (when === 'now') void drain(meetingId, true)
     else saveTimers.set(meetingId, setTimeout(() => void get().flush(meetingId), NOTE_SAVE_DELAY_MS))
+  }
+
+  /**
+   * Grava até não haver mais nada pendente, uma gravação por vez; quem chega depois espera a vez e grava a lista mais
+   * nova. Uma tecla digitada enquanto a gravação voltava do main deixou a espera dela marcada: o "salvar já" (criar,
+   * cor, excluir…, `keepTimer`) para ali e essa tecla vai 500 ms depois; o `flush` explícito cancela a espera e grava.
+   */
+  async function drain(meetingId: string, keepTimer: boolean): Promise<void> {
+    clearTimer(saveTimers, meetingId)
+    // Cada chamada (edição, sair do card, "Tentar de novo") é uma tentativa nova.
+    patchEntry(meetingId, (entry) => (entry.saveFailed ? { saveFailed: false } : {}))
+    for (;;) {
+      const running = inFlight.get(meetingId)
+      if (running) {
+        await running
+        continue
+      }
+      const entry = get().meetings[meetingId]
+      if (!entry || !isDirty(entry) || entry.saveFailed) return
+      if (saveTimers.has(meetingId)) {
+        if (keepTimer) return
+        clearTimer(saveTimers, meetingId)
+      }
+      const run = save(meetingId).finally(() => inFlight.delete(meetingId))
+      inFlight.set(meetingId, run)
+      await run
+    }
   }
 
   /** Uma gravação: a lista daquele instante, com uma nova tentativa se o canal falhar. */
@@ -200,23 +227,8 @@ export const useMeetingNotes = create<MeetingNotesState>()((set, get) => {
       if (get().meetings[meetingId]?.focusId) patchEntry(meetingId, { focusId: null })
     },
 
-    async flush(meetingId) {
-      clearTimer(saveTimers, meetingId)
-      // Cada chamada (edição, sair do card, "Tentar de novo") é uma tentativa nova.
-      patchEntry(meetingId, (entry) => (entry.saveFailed ? { saveFailed: false } : {}))
-      // Uma gravação por vez; quem chega depois espera a vez e grava a lista mais nova.
-      for (;;) {
-        const running = inFlight.get(meetingId)
-        if (running) {
-          await running
-          continue
-        }
-        const entry = get().meetings[meetingId]
-        if (!entry || !isDirty(entry) || entry.saveFailed) return
-        const run = save(meetingId).finally(() => inFlight.delete(meetingId))
-        inFlight.set(meetingId, run)
-        await run
-      }
+    flush(meetingId) {
+      return drain(meetingId, false)
     },
 
     forget(meetingId) {

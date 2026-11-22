@@ -1,7 +1,8 @@
 // Contrato 122 (tarefas, CA1 a CA7, CA10 e CA11): o serviço das tarefas sobre o store real numa pasta temporária, com
 // os outros domínios falsos e contados. Lembrete padrão (CA1, R11), vínculos da oportunidade (CA2, R9), gancho do
 // funil (CA3, R10), lembretes no tick (CA4, R12), "Adicionar" do resumo (CA5, R22, R23), sugestões (CA6, R26), custo
-// das leituras (CA7, D3), destino pendente do "Abrir" (CA10) e virada do dia (CA11).
+// das leituras (CA7, D3), destino pendente do "Abrir" (CA10) e virada do dia (CA11). Contrato 131 (CA1): a sugestão
+// da análise adicionada não volta.
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -451,6 +452,35 @@ describe('sugestões (CA6, R26)', () => {
     const semWhatsApp = setup({ fakes: { ...fakes, chatsFalham: true } })
     const reunioes = await semWhatsApp.service.sugestoes()
     expect(reunioes.map((item) => item.texto).sort()).toEqual(['Confirmar o orçamento', 'Enviar a proposta'])
+  })
+})
+
+describe('sugestão da análise adicionada (contrato 131, CA1)', () => {
+  it('Adicionar cria a tarefa com a origem análise e a sugestão não volta, nem com outro título, nem feita, nem relida', async () => {
+    const fakes: Partial<Fakes> = {
+      meetings: [meeting('m1', 'Reunião com a Acme', NOW - 3 * DIA_MS)],
+      analyses: new Map([['m1', [analise('m1', [{ text: 'Confirmar o orçamento' }, { text: 'Confirmar a data', owner: 'Você' }])]]]),
+    }
+    const ctx = setup({ fakes })
+    const sugestao = (await ctx.service.sugestoes()).find((item) => item.texto === 'Confirmar o orçamento')
+    if (sugestao?.origem.tipo !== 'analise') throw new Error('sem a sugestão da análise')
+    // O que o "Adicionar" da aba manda (`tarefaDaSugestao`, testada em test/renderer/tarefas-format.test.ts).
+    const criada = await ctx.service.criar({ titulo: sugestao.texto, prazo: sugestao.prazo, origem: { tipo: 'analise', meetingId: sugestao.origem.meetingId, texto: sugestao.texto }, vinculos: { meetingId: sugestao.origem.meetingId } })
+    if (!criada.ok || criada.id === null) throw new Error('não criou')
+    const tarefa = (await ctx.service.todas()).find((item) => item.id === criada.id)
+    expect(tarefa?.origem).toEqual({ tipo: 'analise', meetingId: 'm1', texto: 'Confirmar o orçamento' })
+    expect(tarefa?.vinculos.meetingId).toBe('m1')
+    expect((await ctx.service.view()).nomes.reunioes).toEqual({ m1: 'Reunião com a Acme' })
+    expect((await ctx.service.sugestoes()).map((item) => item.texto)).toEqual(['Confirmar a data'])
+
+    // O título mudado não traz a sugestão de volta (a origem guarda o texto); feita também não.
+    expect((await ctx.service.salvar({ id: criada.id, titulo: 'Fechar o orçamento com a Acme' })).ok).toBe(true)
+    expect((await ctx.service.sugestoes()).map((item) => item.texto)).toEqual(['Confirmar a data'])
+    expect((await ctx.service.status({ id: criada.id, status: 'feita' })).ok).toBe(true)
+    expect((await ctx.service.sugestoes()).map((item) => item.texto)).toEqual(['Confirmar a data'])
+    // Relido do disco por outro serviço (o "recarregar"), continua fora.
+    const outro = setup({ dir: ctx.dir, fakes })
+    expect((await outro.service.sugestoes()).map((item) => item.texto)).toEqual(['Confirmar a data'])
   })
 })
 

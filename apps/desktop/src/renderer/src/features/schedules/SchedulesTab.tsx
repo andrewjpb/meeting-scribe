@@ -8,7 +8,7 @@
 //
 // Contrato 51: a tarefa com "Pode enviar email" mostra o ícone de envio ao lado do nome e a linha com a data da
 // permissão e quantos destinatários ela tem.
-import { Bell, Copy, Pencil, Play, Plus, Send, Trash2 } from 'lucide-react'
+import { Copy, Pencil, Play, Plus, Send, Trash2 } from 'lucide-react'
 import { useState } from 'react'
 import { agoLabel, durationLabel, formatRunAt, isValidTimeZone, RUN_STATUS_LABELS, scheduleLine, TASK_NAME_MAX, type ScheduledTask, type TaskInput } from '@shared/automations'
 import { Button } from '../../design/Button'
@@ -99,7 +99,7 @@ export function SchedulesTab({ meetings }: { meetings: ChatMeetings }) {
               <TaskRow
                 key={task.id}
                 task={task}
-                agentName={task.reminder ? 'Lembrete' : (agents.find((agent) => agent.id === task.agentId)?.name ?? 'Agente excluído')}
+                agentName={agents.find((agent) => agent.id === task.agentId)?.name ?? 'Agente excluído'}
                 onEdit={() => setEditing(inputOf(task))}
                 onDuplicate={() => setEditing({ ...inputOf(task), id: null, name: `${task.name.slice(0, TASK_NAME_MAX - 8).trimEnd()} (cópia)` })}
               />
@@ -140,10 +140,9 @@ function TaskRow({ task, agentName, onEdit, onDuplicate }: { task: ScheduledTask
     return parts.join(' · ')
   })()
   return (
-    <tr data-task-row={task.id} data-task-name={task.name} data-task-reminder={task.reminder ? '' : undefined} data-task-status={task.lastStatus ?? ''} data-task-paused={task.autoPaused ? 'auto' : undefined} data-task-email={task.email ? '' : undefined} className="border-b border-line align-top text-13">
+    <tr data-task-row={task.id} data-task-name={task.name} data-task-status={task.lastStatus ?? ''} data-task-paused={task.autoPaused ? 'auto' : undefined} data-task-email={task.email ? '' : undefined} className="border-b border-line align-top text-13">
       <td className="py-1.5 pr-4">
         <span id={switchId} className="inline-flex items-center gap-1.5 font-medium text-text">
-          {task.reminder && <Icon icon={Bell} size={14} className="shrink-0 text-text-muted" />}
           {task.name}
           {permission && (
             <span data-task-email-icon title={permission} className="inline-flex shrink-0 text-text-muted">
@@ -155,13 +154,6 @@ function TaskRow({ task, agentName, onEdit, onDuplicate }: { task: ScheduledTask
         {permission && (
           <p data-task-email-line className="mt-0.5 text-12 text-text-muted tabular">
             {permission}
-          </p>
-        )}
-        {task.reminder?.whatsappChatName && <p className="mt-0.5 text-12 text-text-muted">Conversa do WhatsApp: {task.reminder.whatsappChatName}</p>}
-        {task.reminder?.email && (
-          <p className="mt-0.5 text-12 text-text-muted">
-            Email: {task.reminder.email.label}
-            {task.reminder.email.mailbox ? ` (no servidor, pasta ${task.reminder.email.mailbox})` : ''}
           </p>
         )}
         {notice && <p className="mt-0.5 text-12 text-text-muted">{notice}</p>}
@@ -182,19 +174,14 @@ function TaskRow({ task, agentName, onEdit, onDuplicate }: { task: ScheduledTask
             <Icon icon={Play} size={14} />
             Rodar agora
           </button>
-          {/* O lembrete do Assistente não tem agente nem formulário. */}
-          {!task.reminder && (
-            <>
-              <button type="button" data-action="task-edit" onClick={onEdit} className={QUIET_BUTTON}>
-                <Icon icon={Pencil} size={14} />
-                Editar
-              </button>
-              <button type="button" data-action="task-duplicate" onClick={onDuplicate} className={QUIET_BUTTON}>
-                <Icon icon={Copy} size={14} />
-                Duplicar
-              </button>
-            </>
-          )}
+          <button type="button" data-action="task-edit" onClick={onEdit} className={QUIET_BUTTON}>
+            <Icon icon={Pencil} size={14} />
+            Editar
+          </button>
+          <button type="button" data-action="task-duplicate" onClick={onDuplicate} className={QUIET_BUTTON}>
+            <Icon icon={Copy} size={14} />
+            Duplicar
+          </button>
           {confirming ? (
             <>
               <button type="button" data-action="task-delete-confirm" onClick={() => void remove()} className={`${QUIET_BUTTON} text-rec`}>

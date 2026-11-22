@@ -2,7 +2,7 @@ import { Plus } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router'
 import { FUNIL_TRANSPORTE_TEXTO, type Contato, type ContatoOrigem, type FunilView } from '@shared/funil'
-import { mesmoTelefone, normalizarEmail } from '@shared/funil-logic'
+import { mesmoTelefone, normalizarEmail, semAcento } from '@shared/funil-logic'
 import { funilPath } from '@shared/routes'
 import { rereadWhenUnlocked } from '../../app/lockStore'
 import { ActionButton } from '../../design/ActionButton'
@@ -31,6 +31,12 @@ export function contatoLigado(contatos: readonly Contato[], alvo: ContatoAlvo): 
     (telefone !== null ? ativos.find((contato) => contato.telefones.some((item) => mesmoTelefone(item, telefone))) : undefined) ??
     null
   )
+}
+
+/** Os dois nomes são o mesmo (contrato 131, R5): sem acento, sem caixa, sem espaço nas pontas e com espaços simples. */
+export function mesmoNome(a: string, b: string): boolean {
+  const chave = (nome: string): string => semAcento(nome).trim().replace(/\s+/g, ' ').toLowerCase()
+  return chave(a) === chave(b)
 }
 
 // Várias telas montam vários `ContactLink` de uma vez (um por participante): uma carga e uma assinatura só para todos.

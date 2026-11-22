@@ -112,6 +112,19 @@ describe('sugestões de tarefa (CA7)', () => {
     expect(lista.map((s) => s.chave)).toEqual(['analise:m1:confirmar-o-orcamento'])
   })
 
+  it('contrato 131 (CA1): a tarefa com a origem análise segura a sugestão pelo texto, com qualquer status e título', () => {
+    for (const status of ['aberta', 'feita', 'cancelada'] as const) {
+      const lista = sugestoesDeTarefa(input({ tarefas: [tarefa({ status, titulo: 'Outro título', origem: { tipo: 'analise', meetingId: 'm1', texto: 'Confirmar o ORÇAMENTO.' } })] }))
+      expect(lista.map((s) => s.chave)).toEqual(['whatsapp:chat-1:mandar-o-boleto', 'reuniao:m1:enviar-a-proposta'])
+    }
+    // De outra reunião, não segura.
+    const outra = sugestoesDeTarefa(input({ tarefas: [tarefa({ origem: { tipo: 'analise', meetingId: 'm2', texto: 'Confirmar o orçamento' } })] }))
+    expect(outra.map((s) => s.chave)).toContain('analise:m1:confirmar-o-orcamento')
+    // O título da tarefa da análise conta para a reunião dela, como o da do resumo.
+    const peloTitulo = sugestoesDeTarefa(input({ tarefas: [tarefa({ titulo: 'Enviar a proposta', origem: { tipo: 'analise', meetingId: 'm1', texto: 'x' } })] }))
+    expect(peloTitulo.map((s) => s.chave)).toEqual(['whatsapp:chat-1:mandar-o-boleto', 'analise:m1:confirmar-o-orcamento'])
+  })
+
   it('chave ignorada não entra', () => {
     const lista = sugestoesDeTarefa(input({ ignorados: [{ chave: 'reuniao:m1:enviar-a-proposta', em: 1 }] }))
     expect(lista.map((s) => s.chave)).toEqual(['whatsapp:chat-1:mandar-o-boleto', 'analise:m1:confirmar-o-orcamento'])

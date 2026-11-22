@@ -27,6 +27,7 @@ import { chatSourcesOf } from '../src/shared/chat'
 import type { FunilActionResult, FunilView, Oportunidade } from '../src/shared/funil'
 import type { Tarefa, TarefaInput, TarefaSalvar, TarefasActionResult } from '../src/shared/tarefas'
 import { tarefasServico } from './fixtures/tarefas-servico'
+import { semearLembrete } from './fixtures/lembrete-legado'
 import { etapasPadrao } from '../src/shared/funil-logic'
 import { CHATS_DIR, chatScopeSchema, createFileChatStore } from '../src/main/chat/store'
 import { assistantSystemPrompt, chatStepOf } from '../src/main/claude-cli/chat'
@@ -294,11 +295,13 @@ describe('lembrete nas Automações: tarefa "uma vez" sem agente', () => {
   const ana = { text: 'Responder a Ana', whatsappChatId: ANA, whatsappChatName: 'Ana Souza' }
   const runFiles = (): string[] => (existsSync(join(dir, SCHEDULE_RUNS_DIR)) ? readdirSync(join(dir, SCHEDULE_RUNS_DIR)) : [])
 
-  it('cria, aparece nas tarefas, avisa no horário com "Abrir" na conversa e não roda Claude nem entra no histórico', async () => {
+  // Contrato 131: nada cria mais o lembrete das Automações (desde o 127 é tarefa); o que restar num `schedules.json`
+  // antigo, até a migração, entra pelo `semearLembrete` e ainda avisa como antes.
+  const semear = (): Promise<unknown> => semearLembrete(dir, { id: 'lembrete-ana', at: '2026-11-17T09:00:00-03:00', reminder: ana, timeZone: SP, now: NOW })
+
+  it('o antigo aparece nas tarefas, avisa no horário com "Abrir" na conversa e não roda Claude nem entra no histórico', async () => {
+    await semear()
     const { service, clock, notices, counter } = make()
-    expect(await service.createReminder({ at: '2026-11-16T10:00:00-03:00', reminder: { text: 'Passou', whatsappChatId: null, whatsappChatName: null } })).toEqual({ ok: false, error: 'past' })
-    const created = await service.createReminder({ at: '2026-11-17T09:00:00-03:00', reminder: ana })
-    expect(created.ok).toBe(true)
     const [task] = await service.listTasks()
     expect(task).toMatchObject({ name: 'Lembrete: Responder a Ana', agentId: '', schedule: { kind: 'once' }, enabled: true, runOnce: true, reminder: { text: 'Responder a Ana', whatsappChatId: ANA } })
     expect(task?.nextRunAt).toBe(new Date('2026-11-17T12:00:00Z').toISOString())
@@ -327,9 +330,7 @@ describe('lembrete nas Automações: tarefa "uma vez" sem agente', () => {
     for (const reason of ['person', 'limit'] as const) {
       rmSync(dir, { recursive: true, force: true })
       dir = mkdtempSync(join(tmpdir(), 'assistente-'))
-      const first = make(0)
-      await first.service.createReminder({ at: '2026-11-17T09:00:00-03:00', reminder: ana })
-      first.service.dispose()
+      await semear()
       // Pausado como o agendador deixa: pela pessoa ou pelo limite diário (gravado no `schedules.json`).
       await createFileSchedulesStore({ dir }).mutate((state) => ({ ...state, paused: true, pauseReason: reason }))
       const { service, clock, notices } = make(0)
@@ -343,8 +344,8 @@ describe('lembrete nas Automações: tarefa "uma vez" sem agente', () => {
   })
 
   it('perdido por mais de 12 h (app fechado): avisa atrasado quando o app volta, desliga e não entra no histórico', async () => {
+    await semear()
     const { service, clock, notices } = make()
-    await service.createReminder({ at: '2026-11-17T09:00:00-03:00', reminder: ana })
     clock.now = Date.parse('2026-11-19T10:00:00-03:00')
     await service.tick()
     expect(notices).toEqual([{ title: 'Lembrete atrasado', body: 'Era ter 17/11 09:00 · Responder a Ana', runId: null, whatsappChatId: ANA, reminder: true }])
@@ -357,9 +358,9 @@ describe('lembrete nas Automações: tarefa "uma vez" sem agente', () => {
   })
 
   it('religado depois da data: avisa atrasado na hora e continua desligado, sem registro de execução', async () => {
+    await semear()
     const { service, clock, notices } = make()
-    const created = await service.createReminder({ at: '2026-11-17T09:00:00-03:00', reminder: ana })
-    const id = created.ok ? created.task.id : ''
+    const id = 'lembrete-ana'
     await service.toggleTask({ id, enabled: false })
     clock.now = Date.parse('2026-11-18T08:00:00-03:00')
     await service.tick()
