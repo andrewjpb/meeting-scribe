@@ -50,6 +50,7 @@ export function blankAgent(): AgentInput {
     scope: { kind: 'all' },
     web: false,
     funil: false,
+    tarefas: false,
     mcpServers: [],
     output: { kind: 'chat' },
   }
@@ -204,6 +205,12 @@ export function AgentForm({ initial, meetings, onClose }: { initial: AgentInput;
         </div>
       </FormField>
 
+      <FormField label="Pode ler as tarefas" labelId="agent-tarefas" hint="Recebe TAREFAS.md com as tarefas abertas (vencidas, hoje, próximas e sem prazo) em cada execução.">
+        <div data-agent-tarefas>
+          <Switch checked={agent.tarefas} labelledBy="agent-tarefas" onChange={(tarefas) => patch({ tarefas })} />
+        </div>
+      </FormField>
+
       {agent.scope.kind === 'meetings' && (
         <fieldset data-agent-scope-meetings className="flex max-h-56 flex-col gap-1 overflow-y-auto rounded-[var(--radius-panel)] border border-line-strong p-3">
           <legend className="px-1 text-12 text-text-muted">Reuniões escolhidas</legend>
@@ -227,7 +234,7 @@ export function AgentForm({ initial, meetings, onClose }: { initial: AgentInput;
       )}
 
       {agent.output.kind === 'note' && (
-        <FormField label="Reunião do post-it" htmlFor="agent-output-meeting" hint="Nas tarefas “Depois de cada reunião”, o post-it vai para a reunião que acabou.">
+        <FormField label="Reunião do post-it" htmlFor="agent-output-meeting" hint="Nos agendamentos “Depois de cada reunião”, o post-it vai para a reunião que acabou.">
           <Select id="agent-output-meeting" value={agent.output.meetingId ?? ''} options={meetingOptions} onChange={(meetingId) => patch({ output: { kind: 'note', meetingId: meetingId || null } })} />
         </FormField>
       )}

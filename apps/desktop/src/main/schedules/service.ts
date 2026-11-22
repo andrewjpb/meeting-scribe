@@ -22,7 +22,7 @@
 // Contrato 51: a tarefa com "Pode enviar email" (a permissão gravada nela ao salvar, com a data) roda com as ferramentas
 // de leitura do email e `enviar_email`, montadas só para aquela execução (`email-send.ts`); cada envio confere a
 // permissão de agora (revogada, pausada, app bloqueado), a conta, os destinatários e o teto. Os envios e as recusas ficam
-// na execução, e a execução que enviou avisa no fim ("Tarefa X enviou 2 emails"). Sem a seção, nada muda.
+// na execução, e a execução que enviou avisa no fim ("Agendamento X enviou 2 emails"). Sem a seção, nada muda.
 import { randomUUID } from 'node:crypto'
 import { z } from 'zod'
 import {
@@ -161,7 +161,7 @@ export interface AutomationsService {
   getRun(input: unknown): Promise<AutomationRun | null>
   rerun(input: unknown): Promise<RunStartResult>
   status(): Promise<AutomationsStatus>
-  /** "Pausar todas as tarefas" / "Retomar". */
+  /** "Pausar todos os agendamentos" / "Retomar". */
   setPaused(input: unknown): Promise<AutomationsStatus>
   /** O último estado, sem esperar o disco (o menu do ícone). */
   snapshot(): AutomationsStatus
@@ -406,7 +406,7 @@ export function createAutomationsService(deps: AutomationsDeps): AutomationsServ
       run = { ...base, status: result.status, endedAt: iso(ended), durationMs: Math.max(0, ended - started), costUsd: result.costUsd, answer: result.answer, error: result.error ? clipError(result.error) : null, ...(emails.length ? { emails: [...emails] } : {}), ...(result.organizeRefused?.length ? { organizeRefused: result.organizeRefused } : {}) }
       // A saída só com resposta; o histórico guarda de qualquer jeito.
       if (job.persist && job.output && result.status === 'ok' && result.answer.text.trim()) {
-        const title = job.task ? `Tarefa: ${job.task.name}` : `Pedir agora: ${job.agent.name}`
+        const title = job.task ? `Agendamento: ${job.task.name}` : `Pedir agora: ${job.agent.name}`
         try {
           run.outputResult = await deps.applyOutput({ output: job.output, title, folderName: job.task?.name ?? job.agent.name, agent: job.agent, prompt, answer: result.answer, meetingId: job.meetingId })
         } catch (error) {
@@ -424,7 +424,7 @@ export function createAutomationsService(deps: AutomationsDeps): AutomationsServ
       if (job.persist && !pausedNow) notifyRun(job, run)
       // Contrato 51: a execução que enviou avisa, com qualquer política de avisos.
       const sent = sends.count()
-      if (job.task && sent > 0) deps.notify({ title: `Tarefa: ${job.task.name}`, body: `Tarefa ${job.task.name} enviou ${emailsLabel(sent)}`, runId: run.id })
+      if (job.task && sent > 0) deps.notify({ title: `Agendamento: ${job.task.name}`, body: `Agendamento ${job.task.name} enviou ${emailsLabel(sent)}`, runId: run.id })
     } catch (error) {
       deps.log?.(`[automações] não foi possível gravar a execução: ${error instanceof Error ? error.message : String(error)}`)
     } finally {
@@ -459,7 +459,7 @@ export function createAutomationsService(deps: AutomationsDeps): AutomationsServ
         updatedAt: iso(now()),
       }
     })
-    if (pausedNow) deps.notify({ title: `Tarefa pausada: ${task.name}`, body: `Falhou ${AUTO_PAUSE_FAILURES} vezes seguidas. Ligue de novo em Automações quando quiser.`, runId: run.id })
+    if (pausedNow) deps.notify({ title: `Agendamento pausado: ${task.name}`, body: `Falhou ${AUTO_PAUSE_FAILURES} vezes seguidas. Ligue de novo em Automações quando quiser.`, runId: run.id })
     return pausedNow
   }
 
@@ -468,7 +468,7 @@ export function createAutomationsService(deps: AutomationsDeps): AutomationsServ
     const asOutput = ok && job.output?.kind === 'notification'
     const byPolicy = job.notify === 'always' || (job.notify === 'on-error' && failed(run.status))
     if (!asOutput && !byPolicy) return
-    const title = job.task ? `Tarefa: ${job.task.name}` : job.agent.name
+    const title = job.task ? `Agendamento: ${job.task.name}` : job.agent.name
     const body = ok ? previewOf(run.answer?.text ?? '', 120) : `Não terminou: ${run.error ?? 'erro'}`
     deps.notify({ title, body, runId: run.id })
   }
@@ -586,7 +586,7 @@ export function createAutomationsService(deps: AutomationsDeps): AutomationsServ
     if (state.limitReleasedOn !== dayOf(now()) && (await runsToday()) >= limit) {
       await deps.schedules.mutate((current) => ({ ...current, paused: true, pauseReason: 'limit' }))
       await recordSkipped(task, agent, trigger, `O limite diário de ${limit} execuções agendadas foi atingido.`)
-      deps.notify({ title: 'Tarefas pausadas', body: `O limite diário de ${limit} execuções agendadas foi atingido. Retome em Automações.`, runId: null })
+      deps.notify({ title: 'Agendamentos pausados', body: `O limite diário de ${limit} execuções agendadas foi atingido. Retome em Automações.`, runId: null })
       return
     }
     enqueue(jobFor(task, agent, trigger, meetingId))

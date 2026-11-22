@@ -75,6 +75,8 @@ const agentFields = {
   web: z.boolean().default(false),
   // Contrato 115: agente salvo antes (sem o campo) não lê o funil.
   funil: z.boolean().default(false),
+  // Contrato 128: agente salvo antes (sem o campo) não lê as tarefas.
+  tarefas: z.boolean().default(false),
   // Contrato 21 (MCP) ainda não existe: nenhuma conexão é aceita.
   mcpServers: z.array(z.string()).max(0),
   output: agentOutputSchema,

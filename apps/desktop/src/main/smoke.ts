@@ -129,7 +129,19 @@ import { PRIVACY_PANE_URLS } from '../shared/privacy'
 import { FUNIL_FILE, type Contato, type FunilState, type Oportunidade, type Sugestao } from '../shared/funil'
 import { formatarBRL } from '../shared/funil-logic'
 import { SETTINGS_TABS, type SettingsTab } from '../shared/routes'
-import { FUNIL_AVISAR_NAME, FUNIL_DETECTAR_NAME, FUNIL_DIAS_NAME, FUNIL_SECTION, matchesRow, settingsIndex } from '../shared/settings-index'
+import {
+  FUNIL_AVISAR_NAME,
+  FUNIL_DETECTAR_NAME,
+  FUNIL_DIAS_NAME,
+  FUNIL_SECTION,
+  matchesRow,
+  settingsIndex,
+  TAREFAS_AVISO_NAME,
+  TAREFAS_HORA_NAME,
+  TAREFAS_LEMBRAR_NAME,
+  TAREFAS_SECTION,
+  TAREFAS_SUGERIR_NAME,
+} from '../shared/settings-index'
 import { BRAND_LOGO_INVALID_MESSAGE, BRAND_LOGO_PATTERN, DEFAULT_BRAND_NAME, DEFAULT_BRAND_SUBTITLE } from '../shared/branding'
 import { DEFAULT_SETTINGS, type AppSettings } from '../shared/settings-defaults'
 import { transcriptMarkdown } from '../shared/transcript-markdown'
@@ -2199,8 +2211,8 @@ const funilSaved = (contents: WebContents): Promise<AppSettings['funil']> =>
   evaluate<AppSettings['funil']>(contents, "window.__scribeApi.invoke('scribe:settings-get').then((s) => s.funil)")
 
 /**
- * Contrato 109 (CA5), na aba Geral já aberta: a Section "Funil de vendas" entre "Janela" e "Bloqueio", com as três
- * linhas do índice da busca (aba `geral`), os dois interruptores ligados e o campo de dias com 7.
+ * Contrato 109 (CA5), na aba Geral já aberta: a Section "Funil de vendas" entre "Janela" e "Tarefas" (contrato 128; era
+ * "Bloqueio"), com as três linhas do índice da busca (aba `geral`), os dois interruptores ligados e o campo de dias com 7.
  */
 async function funilSettingsCheck(contents: WebContents): Promise<Check> {
   const panel = '[data-settings-panel="geral"]'
@@ -2218,7 +2230,7 @@ async function funilSettingsCheck(contents: WebContents): Promise<Check> {
       text.includes('Funil de vendas') &&
       at > 0 &&
       sections[at - 1] === 'Janela' &&
-      sections[at + 1] === 'Bloqueio' &&
+      sections[at + 1] === TAREFAS_SECTION &&
       JSON.stringify(rows) === JSON.stringify(names) &&
       indexed &&
       JSON.stringify(switches) === JSON.stringify(['true', 'true']) &&
@@ -2277,6 +2289,104 @@ async function funilSettingsInvalidCheck(contents: WebContents): Promise<Check> 
       fourteenSaved.avisarEsfriadas === before.avisarEsfriadas &&
       restored,
     detail: `antes=${before.diasEsfriar}; "0" e saída -> campo 7=${zeroBack}, gravado ${zeroSaved}; vazio e saída -> campo 7=${emptyBack}, gravado ${emptySaved}; "14" e Enter -> ${fourteen} (${JSON.stringify(fourteenSaved)}); de volta a 7=${restored}`,
+  }
+}
+
+/** Contrato 128: `settings.tarefas` como o main devolve pelo canal de configurações. */
+const tarefasSaved = (contents: WebContents): Promise<AppSettings['tarefas']> =>
+  evaluate<AppSettings['tarefas']>(contents, "window.__scribeApi.invoke('scribe:settings-get').then((s) => s.tarefas)")
+
+const TAREFAS_PANEL = '[data-settings-panel="geral"]'
+const TAREFAS_HORA_FIELD = `${TAREFAS_PANEL} [data-tarefas-hora]`
+const TAREFAS_SWITCH_IDS = ['settings-tarefas-lembrar', 'settings-tarefas-aviso', 'settings-tarefas-sugerir'] as const
+
+/** O estado dos três interruptores da Section "Tarefas", na ordem da tela. */
+const tarefasSwitches = (contents: WebContents): Promise<(string | null)[]> =>
+  evaluate<(string | null)[]>(contents, `${JSON.stringify(TAREFAS_SWITCH_IDS)}.map((id) => document.querySelector('[aria-labelledby="' + id + '"]')?.getAttribute('aria-checked') ?? null)`)
+
+/** Espera `settings.tarefas` gravado com os valores pedidos (pelo canal de configurações). */
+async function tarefasSavedIs(contents: WebContents, want: Partial<AppSettings['tarefas']>): Promise<boolean> {
+  const deadline = Date.now() + 5000
+  while (Date.now() < deadline) {
+    const saved = await tarefasSaved(contents)
+    if (Object.entries(want).every(([key, value]) => saved[key as keyof AppSettings['tarefas']] === value)) return true
+    await wait(50)
+  }
+  return false
+}
+
+/**
+ * Contrato 128 (CA15 da spec), na aba Geral já aberta: a Section "Tarefas" logo depois do "Funil de vendas", as quatro
+ * linhas na ordem e no índice da busca (aba `geral`), a hora 09:00 e os três interruptores ligados. Trocar a hora para
+ * 08:30 com Enter e desligar "Sugerir tarefas das reuniões" grava em `settings.json`; sair e voltar à aba mostra os
+ * valores gravados. Termina com 09:00 e tudo ligado de novo. `detail` só com números e booleanos.
+ */
+async function tarefasSettingsCheck(contents: WebContents, userDataDir: string): Promise<Check> {
+  const sections = await evaluate<string[]>(contents, `[...document.querySelectorAll('${TAREFAS_PANEL} section[aria-label]')].map((el) => el.getAttribute('aria-label'))`)
+  const at = sections.indexOf(TAREFAS_SECTION)
+  const afterFunil = at > 0 && sections[at - 1] === FUNIL_SECTION
+  const names = [TAREFAS_HORA_NAME, TAREFAS_LEMBRAR_NAME, TAREFAS_AVISO_NAME, TAREFAS_SUGERIR_NAME]
+  const rows = await evaluate<string[]>(contents, `[...document.querySelectorAll('${TAREFAS_PANEL} section[aria-label="${TAREFAS_SECTION}"] [data-setting-name]')].map((el) => el.dataset.settingName)`)
+  const rowsInOrder = JSON.stringify(rows) === JSON.stringify(names)
+  const index = settingsIndex('Claude')
+  const indexed = names.filter((name) => index.some((entry) => entry.tab === 'geral' && entry.section === TAREFAS_SECTION && matchesRow(entry, name))).length
+  const horaBefore = await evaluate<string | null>(contents, `document.querySelector('${TAREFAS_HORA_FIELD}')?.value ?? null`)
+  const switchesBefore = await tarefasSwitches(contents)
+  const defaults = horaBefore === '09:00' && JSON.stringify(switchesBefore) === JSON.stringify(['true', 'true', 'true'])
+
+  await setValue(contents, TAREFAS_HORA_FIELD, '08:30')
+  await pressEnterIn(contents, TAREFAS_HORA_FIELD)
+  const horaSaved = await tarefasSavedIs(contents, { horaLembrete: '08:30' })
+  await clickSelector(contents, '[aria-labelledby="settings-tarefas-sugerir"]')
+  const sugerirSaved = await tarefasSavedIs(contents, { horaLembrete: '08:30', sugerirDasReunioes: false })
+  const file = readSettings(userDataDir).tarefas
+  const inFile = file?.horaLembrete === '08:30' && file.sugerirDasReunioes === false && file.lembrarNoPrazo === true && file.avisoDiario === true
+
+  // Sair e voltar à aba: o campo e o interruptor mostram o que foi gravado.
+  const leftTab = await selectSettingsTab(contents, 'gravacao')
+  const backTab = await selectSettingsTab(contents, 'geral')
+  const horaShown = await waitFor(contents, `document.querySelector('${TAREFAS_HORA_FIELD}')?.value === '08:30'`)
+  const switchesShown = JSON.stringify(await tarefasSwitches(contents)) === JSON.stringify(['true', 'true', 'false'])
+
+  await setValue(contents, TAREFAS_HORA_FIELD, '09:00')
+  await pressEnterIn(contents, TAREFAS_HORA_FIELD)
+  await tarefasSavedIs(contents, { horaLembrete: '09:00' })
+  await clickSelector(contents, '[aria-labelledby="settings-tarefas-sugerir"]')
+  const restored = (await tarefasSavedIs(contents, { ...DEFAULT_SETTINGS.tarefas })) && (await waitFor(contents, `document.querySelector('${TAREFAS_HORA_FIELD}')?.value === '09:00'`))
+  const fileRestored = JSON.stringify(readSettings(userDataDir).tarefas) === JSON.stringify(DEFAULT_SETTINGS.tarefas)
+
+  return {
+    ok: afterFunil && rowsInOrder && indexed === names.length && defaults && horaSaved && sugerirSaved && inFile && leftTab && backTab && horaShown && switchesShown && restored && fileRestored,
+    detail: `blocos ${sections.length}, Tarefas na posição ${at}, logo depois do funil=${afterFunil}; linhas na ordem=${rowsInOrder} (${rows.length}); no índice ${indexed}/${names.length}; padrões=${defaults}; hora gravada=${horaSaved}; Sugerir desligado gravado=${sugerirSaved}; settings.json=${inFile}; saiu e voltou à aba=${leftTab && backTab}, hora mostrada=${horaShown}, interruptores mostrados=${switchesShown}; de volta aos padrões=${restored}, no arquivo=${fileRestored}`,
+  }
+}
+
+/**
+ * Contrato 128 (R34): "Hora do lembrete" fora de HH:MM (25:00) ou vazia não grava e volta a 09:00 ao sair do campo.
+ * `detail` só com números e booleanos.
+ */
+async function tarefasSettingsInvalidCheck(contents: WebContents): Promise<Check> {
+  const fieldIs = (value: string): Promise<boolean> => waitFor(contents, `document.querySelector('${TAREFAS_HORA_FIELD}')?.value === ${JSON.stringify(value)}`)
+  const before = await tarefasSaved(contents)
+
+  await setValue(contents, TAREFAS_HORA_FIELD, '25:00')
+  await pressEnterIn(contents, TAREFAS_HORA_FIELD)
+  await leaveField(contents, TAREFAS_HORA_FIELD)
+  const lateBack = await fieldIs('09:00')
+  await wait(300)
+  const lateSaved = (await tarefasSaved(contents)).horaLembrete === '09:00'
+
+  await setValue(contents, TAREFAS_HORA_FIELD, '')
+  await leaveField(contents, TAREFAS_HORA_FIELD)
+  const emptyBack = await fieldIs('09:00')
+  await wait(300)
+  const after = await tarefasSaved(contents)
+  const emptySaved = after.horaLembrete === '09:00'
+  const unchanged = JSON.stringify(after) === JSON.stringify(before)
+
+  return {
+    ok: before.horaLembrete === '09:00' && lateBack && lateSaved && emptyBack && emptySaved && unchanged,
+    detail: `antes 09:00=${before.horaLembrete === '09:00'}; "25:00" -> campo 09:00=${lateBack}, gravado 09:00=${lateSaved}; vazio -> campo 09:00=${emptyBack}, gravado 09:00=${emptySaved}; nada mudou=${unchanged}`,
   }
 }
 
@@ -6614,7 +6724,7 @@ interface SmokeActionFile {
  * Contrato 25 (CA1 a CA6), numa janela clara: "Assistente" na barra lateral (contrato 78: a tela sem título) e o campo
  * novo; "tenho algo pendente no WhatsApp?" responde citando as conversas pendentes; o painel "Contexto" com as
  * fontes; "me lembre amanhã de responder a Ana" vira cartão (data absoluta, "amanhã", 09:00 sem hora no pedido), e
- * "Criar lembrete" cria a tarefa "uma vez" sem agente, que aparece em Automações › Tarefas agendadas; clicar de
+ * "Criar lembrete" cria a tarefa "uma vez" sem agente, que aparece em Automações › Agendamentos; clicar de
  * novo não repete; "responda ao Bruno dizendo sim" vira cartão com o nome e o número lidos do app, e "Enviar" (com o
  * clique, sem diálogo desde o contrato 33) chega ao serviço falso; um bloco inválido vira texto. O bloqueio dos
  * canais novos (`chat-action-*`) fica com `lockChecks`, que chama todo canal recusado.
@@ -7639,7 +7749,7 @@ async function connectorChecks(ctx: SmokeContext, watch: (win: BrowserWindow) =>
 }
 
 // ---------------------------------------------------------------------------------------------------------
-// Contrato 23: Automações (agentes, tarefas agendadas, execuções) com o agente ACP falso e o relógio do
+// Contrato 23: Automações (agentes, agendamentos, execuções) com o agente ACP falso e o relógio do
 // agendador adiantado pelo smoke; o ícone da barra de menus, as notificações, o Dock e o "abrir ao entrar" são
 // substitutos que só registram. Nada sai da máquina e nenhum agente alcança o WhatsApp.
 
@@ -7722,7 +7832,7 @@ async function automationsChecks(ctx: SmokeContext, watch: (win: BrowserWindow) 
     ok:
       cards &&
       JSON.stringify(seeded) === JSON.stringify(['Resumo da semana', 'Minhas tarefas', 'Pendências da reunião']) &&
-      JSON.stringify(tabs) === JSON.stringify(['Agentes', 'Tarefas agendadas', 'Execuções']) &&
+      JSON.stringify(tabs) === JSON.stringify(['Agentes', 'Agendamentos', 'Execuções']) &&
       // Contrato 65: "Email" entrou entre o "Assistente" e as "Automações". Contrato 112: "Funil" logo depois do "Email".
       nav.indexOf('automacoes') === nav.indexOf('funil') + 1 &&
       nav.indexOf('funil') === nav.indexOf('email') + 1 &&
@@ -7797,7 +7907,7 @@ async function automationsChecks(ctx: SmokeContext, watch: (win: BrowserWindow) 
   const preview = await waitFor(contents, `document.querySelectorAll('[data-task-preview-item]').length === 5`)
   const hint = await text(contents, '[data-form-field="Frequência"] p.text-12')
   await settle(contents)
-  shots.push(await capture(win, ctx.outDir, 'tarefa-editar-light'))
+  shots.push(await capture(win, ctx.outDir, 'agendamento-editar-light'))
   await clickSelector(contents, '[data-action="task-save"]')
   const dailyRow = await waitFor(contents, `document.querySelector('[data-task-row][data-task-name="Resumo diário do smoke"]')`)
   await clickSelector(contents, '[data-action="task-new"]')
@@ -7809,7 +7919,8 @@ async function automationsChecks(ctx: SmokeContext, watch: (win: BrowserWindow) 
   const meetingRow = await waitFor(contents, `document.querySelector('[data-task-row][data-task-name="Pendências da reunião"]')`)
   const when = await text(contents, '[data-task-row][data-task-name="Resumo diário do smoke"] [data-task-when]')
   await settle(contents)
-  shots.push(await capture(win, ctx.outDir, 'tarefas-light'))
+  // Contrato 128 (R33): o print da aba Agendamentos (era `tarefas-light`).
+  shots.push(await capture(win, ctx.outDir, 'automacoes-agendamentos-light'))
   const tasksFile = readTaskFiles(ctx.userDataDir)
   const daily = tasksFile.find((task) => task.name === 'Resumo diário do smoke')
   checks['tasks'] = {
@@ -7823,8 +7934,8 @@ async function automationsChecks(ctx: SmokeContext, watch: (win: BrowserWindow) 
   await ctx.automations.tick()
   await automationsIdle(ctx)
   const dailyRuns = readRunFiles(ctx.userDataDir).filter((run) => run.taskId === daily?.id)
-  const chatOut = readChatFiles(ctx.userDataDir).find((chat) => chat.title === 'Tarefa: Resumo diário do smoke')
-  const dailyNotice = auto.notifications.find((notice) => notice.title === 'Tarefa: Resumo diário do smoke')
+  const chatOut = readChatFiles(ctx.userDataDir).find((chat) => chat.title === 'Agendamento: Resumo diário do smoke')
+  const dailyNotice = auto.notifications.find((notice) => notice.title === 'Agendamento: Resumo diário do smoke')
   const trayDot = auto.trayImages.slice(imagesBefore).includes('running') && auto.trayImages.at(-1) === 'idle'
   checks['scheduled'] = {
     ok:
@@ -7914,11 +8025,11 @@ async function automationsChecks(ctx: SmokeContext, watch: (win: BrowserWindow) 
       runningIcon === 'running' &&
       structure &&
       (menu[0] ?? '').startsWith('Abrir ') &&
-      ['Nova gravação', 'Bloquear', 'Automações', 'Pausar todas as tarefas', 'Sair'].every((label) => menu.includes(label)) &&
+      ['Nova gravação', 'Bloquear', 'Automações', 'Pausar todos os agendamentos', 'Sair'].every((label) => menu.includes(label)) &&
       nextLine !== undefined &&
       pauseClicked &&
       pausedMenu.includes('Retomar') &&
-      trayLabels(ctx).includes('Pausar todas as tarefas'),
+      trayLabels(ctx).includes('Pausar todos os agendamentos'),
     detail: `ícone rodando=${runningIcon}; estrutura do contrato 50=${structure} (ids ${JSON.stringify(all.map((item) => item.id).filter(Boolean))}); menu ${JSON.stringify(shownMenu)}; próxima "${nextLine ?? ''}"; pausado ${JSON.stringify(shownPaused)}`,
   }
 
@@ -7930,7 +8041,7 @@ async function automationsChecks(ctx: SmokeContext, watch: (win: BrowserWindow) 
   }
   const failTask = readTaskFiles(ctx.userDataDir).find((task) => task.id === failId)
   const failRuns = readRunFiles(ctx.userDataDir).filter((run) => run.taskId === failId)
-  const pauseNotice = auto.notifications.find((notice) => notice.title === 'Tarefa pausada: Falha')
+  const pauseNotice = auto.notifications.find((notice) => notice.title === 'Agendamento pausado: Falha')
   checks['autoPaused'] = {
     ok: failTask?.autoPaused === true && failTask.consecutiveFailures === 3 && failRuns.length === 3 && failRuns.every((run) => run.status === 'error') && pauseNotice !== undefined,
     detail: `tarefa ${JSON.stringify(failTask)}; execuções ${JSON.stringify(failRuns.map((run) => run.status))}; aviso=${Boolean(pauseNotice)}`,
@@ -10193,7 +10304,7 @@ async function emailTaskChecks(ctx: SmokeContext, watch: (win: BrowserWindow) =>
   const sentFolder = await invoke<{ subject: string; to: string[] }[]>(
     `window.__scribeApi.invoke('scribe:email-messages', { accountId: '${accountId}', folder: 'sent' }).then((list) => list.map((item) => ({ subject: item.subject, to: item.to.map((entry) => entry.address) })))`,
   )
-  const notice = auto.notifications.slice(noticesBefore).find((item) => item.title === `Tarefa: ${name}` && item.body === `Tarefa ${name} enviou 1 email`)
+  const notice = auto.notifications.slice(noticesBefore).find((item) => item.title === `Agendamento: ${name}` && item.body === `Agendamento ${name} enviou 1 email`)
 
   // A execução mostra os dois.
   await clickSelector(contents, '#automations-tab-execucoes')
@@ -14887,11 +14998,16 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
       // Contrato 18: cada aba pelo clique. "Geral" abre com o bloco "Marca" e o símbolo da LAP (contrato 09, CA2).
       await openSettingsTab(contents, 'geral')
       if (!(await settingsReady(contents))) failures.push(`configuracoes/${themeName}: chave ou catálogo não carregou`)
+      // Contrato 128 (D-2, P-1): o print da aba Geral mostra a Section "Tarefas" (rolada até ela, sem animação).
+      await evaluate(contents, `document.querySelector('[data-settings-panel="geral"] section[aria-label="${TAREFAS_SECTION}"]')?.scrollIntoView({ block: 'end', behavior: 'instant' }) ?? false`)
       await shoot('configuracoes-geral', 'configuracoes')
       // Contrato 109: a Section "Funil de vendas", depois do print (o check mexe no campo de dias e o devolve a 7).
+      // Contrato 128: a Section "Tarefas" logo depois (o check mexe na hora e no "Sugerir" e os devolve aos padrões).
       if (themeName === 'light') {
         settings['funilSettings'] = await funilSettingsCheck(contents)
         settings['funilSettingsInvalid'] = await funilSettingsInvalidCheck(contents)
+        settings['tarefasSettings'] = await tarefasSettingsCheck(contents, ctx.userDataDir)
+        settings['tarefasSettingsInvalid'] = await tarefasSettingsInvalidCheck(contents)
       }
       if (!(await selectSettingsTab(contents, 'gravacao'))) failures.push(`configuracoes-gravacao/${themeName}: aba não abriu`)
       await shoot('configuracoes-gravacao', 'configuracoes')

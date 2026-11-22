@@ -35,7 +35,7 @@ export const APP_ROUTES: AppRoute[] = [
   // Contrato 72: "Redes" entre Email e Automações, só com uma conta conectada (ou a rota aberta; `Sidebar`), com a soma
   // dos não lidos; o clique abre o nível com as contas e as seções (`SidebarStack` e `RedesNav`).
   { id: 'redes', path: ROUTE_PATHS.redes, element: <RedesScreen />, nav: { label: 'Redes', icon: AtSign } },
-  // Contrato 23: agentes, tarefas agendadas e execuções, logo abaixo do "Assistente".
+  // Contrato 23: agentes, agendamentos e execuções, logo abaixo do "Assistente".
   { id: 'automacoes', path: ROUTE_PATHS.automacoes, element: <AutomationsScreen />, nav: { label: 'Automações', icon: Bot } },
   // Contrato 24: só aparece na barra lateral com o serviço do WhatsApp instalado (`Sidebar`).
   { id: 'whatsapp', path: ROUTE_PATHS.whatsapp, element: <WhatsAppScreen />, nav: { label: 'WhatsApp', icon: Smartphone } },

@@ -74,7 +74,8 @@ export type ChatActionStatus = (typeof CHAT_ACTION_STATUSES)[number]
 export const CHAT_ACTION_KINDS = [
   'lembrete',
   'whatsapp-resposta',
-  'tarefa',
+  // Contrato 128 (R29): o antigo `tarefa` (o cartão que abre o formulário das Automações).
+  'agendamento',
   'abrir',
   'emails',
   'email-resposta',
@@ -135,9 +136,9 @@ export interface WhatsAppReplyAction extends ActionBase {
   text: string
 }
 
-/** `tarefa`: "Criar tarefa" abre o formulário das Automações preenchido. */
+/** `agendamento` (contrato 128; era `tarefa`): "Criar agendamento" abre o formulário das Automações preenchido. */
 export interface TaskAction extends ActionBase {
-  kind: 'tarefa'
+  kind: 'agendamento'
   name: string
   agentId: string
   /** O nome do agente, lido do app. */
@@ -557,7 +558,7 @@ export function emailSentText(at: number): string {
 export const EMAIL_CARD_ITEMS_MAX = 10
 
 export const DISMISSED_TEXT = 'Descartado'
-export const TASK_CREATED_TEXT = 'Tarefa criada'
+export const TASK_CREATED_TEXT = 'Agendamento criado'
 
 /**
  * Número de uma conversa a partir do id (`5511911110000@s.whatsapp.net` -> "+55 11 91111-0000"); grupo e id

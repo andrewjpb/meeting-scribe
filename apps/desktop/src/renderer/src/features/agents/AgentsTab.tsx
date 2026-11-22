@@ -1,5 +1,5 @@
 // Aba "Agentes" (contrato 23, CA2): os agentes em cartões, com "Novo agente", "Duplicar", "Editar" e "Excluir"
-// (confirma; recusado se uma tarefa usa o agente, com a lista das tarefas). O formulário abre no lugar da lista.
+// (confirma; recusado se um agendamento usa o agente, com a lista dos agendamentos). O formulário abre no lugar da lista.
 import { Copy, Pencil, Plus, Trash2, TriangleAlert } from 'lucide-react'
 import { useState } from 'react'
 import { AGENT_MODEL_LABELS, SCOPE_LABELS, type Agent, type AgentInput } from '@shared/automations'
@@ -64,7 +64,7 @@ function AgentCard({ agent, tasks, onEdit, onDuplicate }: { agent: Agent; tasks:
     if (!result.ok) setBlocked(result.tasks)
     setConfirming(false)
   }
-  const used = tasks.length === 0 ? 'Nenhuma tarefa' : tasks.length === 1 ? '1 tarefa' : `${tasks.length} tarefas`
+  const used = tasks.length === 0 ? 'Nenhum agendamento' : tasks.length === 1 ? '1 agendamento' : `${tasks.length} agendamentos`
   return (
     <li data-agent-card={agent.id} data-agent-name={agent.name} className="flex flex-col gap-2 rounded-[var(--radius-panel)] border border-line-strong bg-bg-raised p-3">
       <div className="flex items-start gap-2.5">
@@ -89,7 +89,7 @@ function AgentCard({ agent, tasks, onEdit, onDuplicate }: { agent: Agent; tasks:
       </p>
       {blocked && (
         <Note id="agent-in-use" icon={TriangleAlert} role="alert">
-          {`Não dá para excluir: usado por ${blocked.map((name) => `«${name}»`).join(', ')}. Troque o agente dessas tarefas antes.`}
+          {`Não dá para excluir: usado por ${blocked.map((name) => `«${name}»`).join(', ')}. Troque o agente desses agendamentos antes.`}
         </Note>
       )}
       <div className="-ml-2 mt-auto flex flex-wrap items-center gap-1">

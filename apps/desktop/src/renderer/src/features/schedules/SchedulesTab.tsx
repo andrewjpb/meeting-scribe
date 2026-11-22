@@ -1,4 +1,4 @@
-// Aba "Tarefas agendadas" (contrato 23, CA4): tabela com nome, agente, quando ("Toda sexta às 17:00 · próxima:
+// Aba "Agendamentos" (contrato 23, CA4; o nome é do contrato 128): tabela com nome, agente, quando ("Toda sexta às 17:00 · próxima:
 // sex 21/11 17:00"), última execução (estado, tempo e "há 2 h") e o interruptor; ações "Rodar agora", "Editar",
 // "Duplicar" e "Excluir" (confirma). O formulário abre no lugar da tabela.
 //
@@ -69,14 +69,14 @@ export function SchedulesTab({ meetings }: { meetings: ChatMeetings }) {
   return (
     <div className="flex flex-col gap-4" data-tasks-tab>
       <div className="flex items-center justify-between gap-4">
-        <p className="text-13 text-text-muted">As tarefas rodam com o app aberto, com a janela aberta ou só o ícone na barra de menus.</p>
+        <p className="text-13 text-text-muted">Os agendamentos rodam com o app aberto, com a janela aberta ou só o ícone na barra de menus.</p>
         <Button action="task-new" icon={Plus} onClick={() => setEditing(blankTask(agents))} disabled={!agents.length}>
-          Nova tarefa
+          Novo agendamento
         </Button>
       </div>
       {tasks.length === 0 ? (
         <p data-tasks-empty className="text-13 text-text-muted">
-          Nenhuma tarefa agendada. Crie uma com "Nova tarefa": as sugestões prontas aparecem no formulário.
+          Nenhum agendamento. Crie um com "Novo agendamento": as sugestões prontas aparecem no formulário.
         </p>
       ) : (
         <table className="w-full border-collapse text-left">

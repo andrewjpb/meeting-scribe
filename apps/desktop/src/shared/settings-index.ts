@@ -76,9 +76,23 @@ export const FUNIL_SECTION = 'Funil de vendas'
 export const FUNIL_DETECTAR_NAME = 'Detectar oportunidades nas reuniões'
 export const FUNIL_DETECTAR_DESCRIPTION = 'Depois do resumo, propõe criar ou atualizar uma oportunidade.'
 export const FUNIL_DIAS_NAME = 'Considerar esfriada após (dias)'
-export const FUNIL_DIAS_DESCRIPTION = 'Oportunidade aberta sem interação nesse prazo ganha o marcador esfriou.'
-export const FUNIL_AVISAR_NAME = 'Avisar oportunidades esfriadas e passos vencidos'
-export const FUNIL_AVISAR_DESCRIPTION = 'Uma notificação por dia, depois das 9h.'
+/** Contrato 128 (R32/R34): a tarefa concluída também conta como interação. */
+export const FUNIL_DIAS_DESCRIPTION = 'Sem reunião, e-mail, WhatsApp, tarefa concluída nem mudança de etapa nesse prazo, o cartão ganha o marcador esfriou. De 1 a 90.'
+/** Contrato 128 (R32/R34): o aviso do funil entra no aviso diário "Hoje" das Tarefas (mesmo valor `funil.avisarEsfriadas`). */
+export const FUNIL_AVISAR_NAME = 'Incluir oportunidades esfriadas no aviso Hoje'
+export const FUNIL_AVISAR_DESCRIPTION = 'Soma "Funil: N esfriadas" ao aviso diário das tarefas, só quando houver alguma.'
+
+/** Contrato 128 (R34): a Section "Tarefas" da aba Geral, com os nomes e as descrições da tela e da busca. */
+export const TAREFAS_SECTION = 'Tarefas'
+export const TAREFAS_SECTION_DESCRIPTION = 'As tarefas ficam em Tarefas, na barra lateral. Nada entra na lista sem o seu clique.'
+export const TAREFAS_HORA_NAME = 'Hora do lembrete'
+export const TAREFAS_HORA_DESCRIPTION = 'O lembrete padrão de uma tarefa com prazo e o aviso Hoje saem neste horário.'
+export const TAREFAS_LEMBRAR_NAME = 'Lembrar no prazo'
+export const TAREFAS_LEMBRAR_DESCRIPTION = 'Toda tarefa com prazo ganha um lembrete no dia, na hora acima. Dá para trocar ou tirar em cada tarefa.'
+export const TAREFAS_AVISO_NAME = 'Aviso diário Hoje'
+export const TAREFAS_AVISO_DESCRIPTION = 'Uma notificação por dia com as vencidas e as de hoje. Sem nada a dizer, não avisa.'
+export const TAREFAS_SUGERIR_NAME = 'Sugerir tarefas das reuniões'
+export const TAREFAS_SUGERIR_DESCRIPTION = 'As tarefas do resumo e os "a confirmar" que ficaram com você aparecem em Tarefas › Sugestões. Desligado, só as do WhatsApp.'
 
 /** Uma linha de configuração no índice da busca. */
 export interface SettingsEntry {
@@ -112,11 +126,15 @@ export function settingsIndex(agent: string): SettingsEntry[] {
     row('geral', 'Marca', 'Subtítulo', 'Abaixo do nome, na barra lateral.'),
     row('geral', 'Marca', 'Logo', 'Imagem da barra lateral e do ícone do Dock.'),
     row('geral', 'Aparência', 'Tema', 'Sistema, claro ou escuro.'),
-    row('geral', 'Janela', 'Ao fechar a janela', 'Na barra de menus, as tarefas agendadas continuam rodando.'),
+    row('geral', 'Janela', 'Ao fechar a janela', 'Na barra de menus, os agendamentos continuam rodando.'),
     row('geral', 'Janela', 'Abrir ao entrar no Mac', 'Abre direto na barra de menus, sem janela.'),
     row('geral', FUNIL_SECTION, FUNIL_DETECTAR_NAME, FUNIL_DETECTAR_DESCRIPTION),
     row('geral', FUNIL_SECTION, FUNIL_DIAS_NAME, FUNIL_DIAS_DESCRIPTION),
     row('geral', FUNIL_SECTION, FUNIL_AVISAR_NAME, FUNIL_AVISAR_DESCRIPTION),
+    row('geral', TAREFAS_SECTION, TAREFAS_HORA_NAME, TAREFAS_HORA_DESCRIPTION),
+    row('geral', TAREFAS_SECTION, TAREFAS_LEMBRAR_NAME, TAREFAS_LEMBRAR_DESCRIPTION),
+    row('geral', TAREFAS_SECTION, TAREFAS_AVISO_NAME, TAREFAS_AVISO_DESCRIPTION),
+    row('geral', TAREFAS_SECTION, TAREFAS_SUGERIR_NAME, TAREFAS_SUGERIR_DESCRIPTION),
     row('geral', 'Bloqueio', 'Senha do app', 'Pedida para desbloquear. Fica só neste Mac, guardada como hash.'),
     row('geral', 'Bloqueio', 'Usar Touch ID', 'Desbloquear com a digital, sem digitar a senha.', 'o Mac tem Touch ID'),
     row('geral', 'Bloqueio', 'Bloquear sozinho', 'Depois de um tempo sem uso do app.'),

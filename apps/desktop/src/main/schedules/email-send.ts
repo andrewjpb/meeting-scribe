@@ -58,7 +58,7 @@ export interface SendRecipients {
  */
 export function sendRefusal(gate: SendGate & { locked: boolean; accountAddress: string | null }, account: string | null, recipients: SendRecipients, attempted: number): string | null {
   if (gate.locked) return 'app bloqueado'
-  if (gate.paused) return 'tarefas pausadas'
+  if (gate.paused) return 'agendamentos pausados'
   const permission = gate.permission
   if (!permission) return 'permissão revogada'
   if (gate.accountAddress === null) return 'a conta da permissão não existe mais'

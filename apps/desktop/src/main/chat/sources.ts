@@ -156,7 +156,7 @@ export function automationsMarkdown(snapshot: AutomationsSnapshot, timeZone: str
   const lines = [
     '# Automações',
     '',
-    'Os agentes e as tarefas agendadas da tela "Automações", e as últimas execuções. Cite como [Automações · <nome do agente ou da tarefa>].',
+    'Os agentes e os agendamentos da tela "Automações", e as últimas execuções. Cite como [Automações · <nome do agente ou do agendamento>].',
     '',
     '## Agentes',
     '',
@@ -167,7 +167,7 @@ export function automationsMarkdown(snapshot: AutomationsSnapshot, timeZone: str
         )
       : ['Nenhum agente.']),
     '',
-    '## Tarefas agendadas',
+    '## Agendamentos',
     '',
     ...(snapshot.tasks.length
       ? snapshot.tasks.map((task) => {
@@ -182,7 +182,7 @@ export function automationsMarkdown(snapshot: AutomationsSnapshot, timeZone: str
           const last = task.lastStatus ? `${RUN_STATUS_LABELS[task.lastStatus]} em ${when(task.lastRunAt, task.timezone)}` : 'ainda não rodou'
           return `- ${oneLine(task.name)} · ${who} · ${describeSchedule(task.schedule, task.timezone)} · ${state} · próxima: ${when(task.nextRunAt, task.timezone)} · última: ${last}`
         })
-      : ['Nenhuma tarefa agendada.']),
+      : ['Nenhum agendamento.']),
     '',
     `## Últimas ${AUTOMATION_RUNS_IN_SOURCE} execuções`,
     '',

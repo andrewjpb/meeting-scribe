@@ -117,7 +117,7 @@ export function corpusIndexLine(meeting: Meeting, summary: MeetingSummary | null
 const SOURCE_DESCRIPTIONS: Readonly<Record<string, string>> = {
   [STATE_FILE]: 'o estado do app agora: a data, a hora e o fuso, a gravação em andamento, a conta Google, o WhatsApp, a versão e as automações ligadas.',
   [GUIDE_FILE]: 'o guia do app: cada tela, cada aba de Configurações, os atalhos e o que cada recurso faz e não faz.',
-  [AUTOMATIONS_FILE]: 'os agentes, as tarefas agendadas (próxima e última execução) e as últimas 20 execuções.',
+  [AUTOMATIONS_FILE]: 'os agentes, os agendamentos (próxima e última execução) e as últimas 20 execuções.',
   [WHATSAPP_OVERVIEW_FILE]: `uma linha por conversa do WhatsApp com mensagem nos últimos ${WHATSAPP_RECENT_DAYS} dias, com as não lidas, quem mandou a última e "pendente de resposta".`,
   // Contrato 45.
   [EMAIL_OVERVIEW_FILE]: `uma linha por email recebido nos últimos ${EMAIL_RECENT_DAYS} dias, por conta, com a referência, quem mandou, o assunto, a idade, se foi lido, "pendente de resposta" e o arquivo com o corpo (quando já baixado).`,

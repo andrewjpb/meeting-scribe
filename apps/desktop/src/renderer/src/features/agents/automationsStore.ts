@@ -1,4 +1,4 @@
-// Automações no renderer (contrato 23): agentes, tarefas, execuções e o estado do agendador, como o main
+// Automações no renderer (contrato 23): agentes, agendamentos, execuções e o estado do agendador, como o main
 // devolveu, e a resposta das execuções em curso (o mesmo formato da resposta do chat 16, por
 // `scribe:automation-event`). O agendador mora no main: aqui só fica a cópia para a tela. O store continua vivo
 // fora da tela: uma execução que termina com a pessoa em outra tela aparece pronta quando ela volta.
@@ -25,7 +25,7 @@ interface AutomationsState {
   loaded: boolean
   failure: string | null
   agents: Agent[]
-  /** Nome das tarefas que usam cada agente. */
+  /** Nome dos agendamentos que usam cada agente. */
   usage: Record<string, string[]>
   models: AgentModel[]
   /** Contrato 21 (MCP): ainda não existe, o campo fica escondido. */
@@ -41,8 +41,8 @@ interface AutomationsState {
   /** Execução aberta na aba "Execuções" (`null`: a lista). */
   openRunId: string | null
   /**
-   * Contrato 25: "Criar tarefa" num cartão do Assistente. A aba "Tarefas agendadas" abre o formulário com isto
-   * preenchido; salvar marca o cartão (`origin`) como "Tarefa criada".
+   * Contrato 25: "Criar agendamento" num cartão do Assistente. A aba "Agendamentos" abre o formulário com isto
+   * preenchido; salvar marca o cartão (`origin`) como "Agendamento criado".
    */
   taskDraft: { input: TaskInput; origin: ChatActionRef } | null
   openTaskDraft: (input: TaskInput, origin: ChatActionRef) => void
@@ -61,7 +61,7 @@ let listening = false
 let reread: (() => void) | null = null
 
 const startReason = (result: RunStartResult): string =>
-  result.ok ? '' : result.error === 'busy' ? 'Esta tarefa já está rodando.' : result.error === 'missing' ? 'O agente não existe mais.' : 'Confira o agente e o pedido.'
+  result.ok ? '' : result.error === 'busy' ? 'Este agendamento já está rodando.' : result.error === 'missing' ? 'O agente não existe mais.' : 'Confira o agente e o pedido.'
 
 async function readAll(): Promise<Partial<AutomationsState>> {
   const [agents, tasks, runs, status] = await Promise.all([
@@ -177,7 +177,7 @@ export const useAutomations = create<AutomationsState>()((set, get) => ({
 
   deleteAgent: async (id) => {
     const result = await window.__scribeApi.invoke('scribe:agents-delete', { id })
-    if (!result.ok) return { ok: false, reason: result.error === 'in-use' ? 'Usado por tarefas:' : 'Este agente não existe mais.', tasks: result.error === 'in-use' ? result.tasks : [] }
+    if (!result.ok) return { ok: false, reason: result.error === 'in-use' ? 'Usado por agendamentos:' : 'Este agente não existe mais.', tasks: result.error === 'in-use' ? result.tasks : [] }
     await useAutomations.getState().load()
     return result
   },
