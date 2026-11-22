@@ -13396,7 +13396,7 @@ async function funilDetalheChecks(ctx: SmokeContext, watch: (win: BrowserWindow)
         }
 
         const aberta = await abrir(OP)
-        const comMigrada = migrada !== null && (await waitFor(contents, `document.querySelector('${SECAO} [data-tarefa="${migrada.id}"]')?.dataset.tarefaPrazo === '${diaCurtoSmoke(mais4)}'`, 8000))
+        const comMigrada = migrada !== null && (await waitFor(contents, `document.querySelector('${SECAO} [data-tarefa="${migrada.id}"] [data-tarefa-prazo]')?.dataset.tarefaPrazo === '${diaCurtoSmoke(mais4)}'`, 8000))
         const medidas = await evaluate<{ linha: number; nova: number; titulo: boolean }>(
           contents,
           `(() => {
