@@ -1,10 +1,11 @@
-import { Archive, Check, ChevronLeft, CircleX, Link as LinkIcon, Mail, Plus, SearchX, Smartphone, TriangleAlert, Unlink, X } from 'lucide-react'
+import { Archive, Check, ChevronDown, ChevronLeft, ChevronRight, CircleX, Link as LinkIcon, Mail, Plus, SearchX, Smartphone, TriangleAlert, Unlink, X } from 'lucide-react'
 import { useEffect, useId, useRef, useState, type FocusEvent, type ReactNode, type RefObject } from 'react'
 import { Link, useNavigate } from 'react-router'
-import { FUNIL_NOME_MAX, FUNIL_NOTAS_MAX, type FunilFalha, type FunilTimelineResult, type FunilView, type Oportunidade, type OportunidadeInput, type ProximoPasso } from '@shared/funil'
+import { FUNIL_NOME_MAX, FUNIL_NOTAS_MAX, type FunilFalha, type FunilTimelineResult, type FunilView, type Oportunidade, type OportunidadeInput } from '@shared/funil'
 import { formatarBRL } from '@shared/funil-logic'
 import type { Meeting } from '@shared/meetings'
 import { EMAIL_ROOT_PATH, funilPath, meetingPath, type EmailNavigationState } from '@shared/routes'
+import type { TarefasView } from '@shared/tarefas'
 import { ActionButton } from '../../design/ActionButton'
 import { Button } from '../../design/Button'
 import { EditableTitle } from '../../design/EditableTitle'
@@ -14,8 +15,12 @@ import { Icon } from '../../design/Icon'
 import { Note, NOTE_ACTION_CLASS } from '../../design/Note'
 import { tabId, tabPanelId, Tabs } from '../../design/Tabs'
 import { SearchField } from '../meetings/SearchField'
+import { NovaTarefaInline } from '../tarefas/NovaTarefaInline'
+import { TarefaLinha } from '../tarefas/TarefaLinha'
+import { useTarefasView } from '../tarefas/tarefasStore'
+import { TituloBloco } from './ContatoFicha'
 import { CANCELAR_CLASS } from './KanbanCard'
-import { chaveBusca, composeDe, dataHora, dataLonga, diaLocal, diaLongo, parseValor, podeArquivar, textoPassoDetalhe, textoSubtitulo, valorParaEdicao, whatsappDestino, type PickerItem } from './funilFormat'
+import { chaveBusca, composeDe, dataHora, dataLonga, diaLongo, parseValor, podeArquivar, tarefasDaOportunidade, textoSubtitulo, valorParaEdicao, whatsappDestino, type PickerItem } from './funilFormat'
 import { useFunil } from './funilStore'
 import { SearchPicker } from './SearchPicker'
 import { FUNIL_LINK_CLASS, Timeline } from './Timeline'
@@ -28,7 +33,7 @@ const ABAS: { value: Aba; label: string }[] = [
 ]
 const ABAS_ID = 'funil-oportunidade'
 
-type Campo = 'empresa' | 'contatos' | 'valor' | 'previsao' | 'proximo-passo' | 'motivo'
+type Campo = 'empresa' | 'contatos' | 'valor' | 'previsao' | 'motivo'
 /** Os campos do artboard 04 (`data-funil-campo`); Origem só se lê. */
 type NomeCampo = Campo | 'origem'
 
@@ -64,8 +69,9 @@ function useFocoInicial<T extends HTMLElement>(): RefObject<T | null> {
 /**
  * Detalhe da oportunidade (contrato 119, R27 a R29, artboard 04): o cabeçalho com o título editável, a etapa e "Apagar";
  * o subtítulo com os dias na etapa e a última interação; as ações (e-mail, WhatsApp, vincular reunião, ganhar, perder e,
- * fechada, arquivar); os campos em duas colunas, cada um salvo no blur ou no Enter; e as abas Linha do tempo, Reuniões e
- * Notas. Id que não existe (ou arquivado) mostra o estado vazio com o caminho de volta ao kanban.
+ * fechada, arquivar); os campos em duas colunas, cada um salvo no blur ou no Enter; a seção Tarefas (contrato 125, no
+ * lugar do campo Próximo passo); e as abas Linha do tempo, Reuniões e Notas. Id que não existe (ou arquivado) mostra o
+ * estado vazio com o caminho de volta ao kanban.
  */
 export function OportunidadeScreen({ view, id }: { view: FunilView; id: string }) {
   const navigate = useNavigate()
@@ -89,6 +95,8 @@ export function OportunidadeScreen({ view, id }: { view: FunilView; id: string }
   const [nota, setNota] = useState('')
   const ref = useRef<HTMLDivElement>(null)
   const contatosRef = useRef<HTMLDivElement>(null)
+  // Contrato 125 (R15): as tarefas da seção Tarefas, acompanhando as gravações.
+  const tarefas = useTarefasView()
 
   useEffect(() => {
     const timer = window.setInterval(() => setNow(Date.now()), 60_000)
@@ -173,7 +181,6 @@ export function OportunidadeScreen({ view, id }: { view: FunilView; id: string }
   const ultima = linha?.ultimaInteracao ?? view.ultimas[id] ?? Math.max(oportunidade.movidoEm, oportunidade.atualizadoEm)
   const para = composeDe(contatos)
   const whatsapp = whatsappDestino(linha?.whatsappChatIds ?? [])
-  const hoje = diaLocal(now)
   const notas = state.eventos.filter((evento) => evento.oportunidadeId === id && evento.tipo === 'nota').sort((a, b) => b.at - a.at)
 
   /** Grava só o que mudou (o título vai sempre: o store exige). */
@@ -271,10 +278,6 @@ export function OportunidadeScreen({ view, id }: { view: FunilView; id: string }
     </div>
   )
 
-  // Contrato 124 (D9): o passo derivado das tarefas; "Salvar" do campo manda `proximoPasso`, que vira tarefa no main.
-  const proximoPasso = view.proximosPassos[oportunidade.id] ?? null
-  const passoAtual = proximoPasso ? { texto: proximoPasso.texto, data: proximoPasso.data } : null
-  const passo = textoPassoDetalhe(proximoPasso, hoje)
   const origemMeeting = oportunidade.origem === 'reuniao' ? (oportunidade.meetingIds[0] ?? null) : null
   const origemTitulo = origemMeeting ? (reunioes?.find((meeting) => meeting.id === origemMeeting)?.title ?? null) : null
   const empresas: PickerItem[] = state.empresas.map((item) => ({ id: item.id, nome: item.nome, detalhe: item.dominios[0] }))
@@ -414,26 +417,6 @@ export function OportunidadeScreen({ view, id }: { view: FunilView; id: string }
         onFechar={fechar}
         onSalvar={async (dia) => {
           if ((dia || null) !== oportunidade.previsao) await salvar({ previsao: dia || null })
-        }}
-      />,
-    ),
-    campo(
-      'proximo-passo',
-      'Próximo passo',
-      <>
-        <span className={`truncate ${proximoPasso ? '' : 'text-text-muted'}`}>{passo.texto}</span>
-        {passo.data && (
-          <span data-funil-passo-vencido={passo.vencido ? '' : undefined} className={`shrink-0 text-12 whitespace-nowrap tabular ${passo.vencido ? 'text-rec' : 'text-text-muted'}`}>
-            {passo.data}
-          </span>
-        )}
-      </>,
-      <CampoPasso
-        inicial={passoAtual}
-        onFechar={fechar}
-        onSalvar={async (texto, data) => {
-          const novo = texto.trim() ? { texto: texto.trim(), data: data || null } : null
-          if (JSON.stringify(novo) !== JSON.stringify(passoAtual)) await salvar({ proximoPasso: novo })
         }}
       />,
     ),
@@ -608,6 +591,7 @@ export function OportunidadeScreen({ view, id }: { view: FunilView; id: string }
           <div className="flex min-w-0 flex-col">{colunaEsquerda}</div>
           <div className="flex min-w-0 flex-col">{colunaDireita}</div>
         </div>
+        <SecaoTarefas key={id} oportunidadeId={id} view={tarefas} onErro={setErro} />
         <div className="mt-2">
           <Tabs value={aba} tabs={ABAS} onChange={setAba} label="Conteúdo da oportunidade" id={ABAS_ID} />
         </div>
@@ -737,39 +721,82 @@ function CampoData({ rotulo, inicial, onSalvar, onFechar }: { rotulo: string; in
   )
 }
 
-/** Próximo passo: o texto e a data, salvos juntos ao sair do par ou no Enter; texto vazio tira o passo. */
-function CampoPasso({ inicial, onSalvar, onFechar }: { inicial: ProximoPasso | null; onSalvar: (texto: string, data: string) => Promise<void>; onFechar: () => void }) {
-  const ref = useFocoInicial<HTMLDivElement>()
-  const [texto, setTexto] = useState(inicial?.texto ?? '')
-  const [data, setData] = useState(inicial?.data ?? '')
-  const feito = useRef(false)
-  const concluir = (): void => {
-    if (feito.current) return
-    feito.current = true
-    onFechar()
-    void onSalvar(texto, data)
-  }
+/** A lista de tarefas da seção rola sozinha passando de 5 linhas (220 px), para as abas não sumirem do cabeçalho. */
+const LISTA_TAREFAS_CLASS = 'flex max-h-[220px] flex-col overflow-y-auto'
+
+/**
+ * Seção Tarefas da oportunidade (contrato 125, R15, artboard 08), entre a grade de campos e as abas, no lugar do campo
+ * "Próximo passo": as abertas em `TarefaLinha` (a primeira é o próximo passo do quadro), "Nova tarefa" numa linha de
+ * 40 px que abre a criação em linha ligada à oportunidade e as fechadas (feitas e canceladas) recolhidas em "Feitas N".
+ * O clique numa linha abre a tarefa.
+ */
+function SecaoTarefas({ oportunidadeId, view, onErro }: { oportunidadeId: string; view: TarefasView | null; onErro: (mensagem: string) => void }) {
+  const [nova, setNova] = useState(false)
+  const [verFeitas, setVerFeitas] = useState(false)
+  const { abertas, fechadas } = tarefasDaOportunidade(view?.tarefas ?? [], oportunidadeId)
+  const resumo = abertas.length === 0 ? 'nenhuma aberta' : `${abertas.length} ${abertas.length === 1 ? 'aberta' : 'abertas'} · a primeira é o próximo passo no quadro`
   return (
-    <div
-      ref={ref}
-      className="flex w-full min-w-0 flex-wrap items-center gap-1.5"
-      onBlur={(event) => saiuDo(event) && concluir()}
-      onKeyDown={(event) => {
-        if (event.key === 'Enter') {
-          event.preventDefault()
-          concluir()
-        } else if (event.key === 'Escape') {
-          event.preventDefault()
-          feito.current = true
-          onFechar()
-        }
-      }}
-    >
-      <div className="flex min-w-[160px] flex-1">
-        <TextField value={texto} onChange={setTexto} ariaLabel="Próximo passo" maxLength={2000} data={{ 'data-funil-campo-input': '' }} />
-      </div>
-      <input type="date" aria-label="Data do próximo passo" data-funil-passo-data="" value={data} onChange={(event) => setData(event.target.value)} className={`${CONTROL_CLASS} min-w-0 px-2 select-text`} />
-    </div>
+    <section data-funil-bloco="tarefas" aria-label="Tarefas" className="flex flex-col">
+      <TituloBloco>
+        Tarefas
+        {view && (
+          <span data-funil-tarefas-resumo className="ml-2 font-normal tabular">
+            {resumo}
+          </span>
+        )}
+      </TituloBloco>
+      {view && abertas.length > 0 && (
+        <div data-funil-tarefas-abertas className={LISTA_TAREFAS_CLASS}>
+          {abertas.map((tarefa) => (
+            <TarefaLinha key={tarefa.id} tarefa={tarefa} view={view} onErro={onErro} />
+          ))}
+        </div>
+      )}
+      {nova ? (
+        <div className="border-b border-line py-1.5">
+          <NovaTarefaInline
+            oportunidadeFixa={oportunidadeId}
+            origem={{ tipo: 'funil', oportunidadeId }}
+            vinculosIniciais={{ oportunidadeId }}
+            onCriada={() => setNova(false)}
+            onCancelar={() => setNova(false)}
+          />
+        </div>
+      ) : (
+        <div className="flex h-10 items-center border-b border-line px-1">
+          <button
+            type="button"
+            data-action="funil-tarefa-nova"
+            onClick={() => setNova(true)}
+            className="no-drag inline-flex h-8 items-center gap-1.5 rounded-[var(--radius-control)] px-1.5 text-13 font-medium text-accent transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:text-title"
+          >
+            <Icon icon={Plus} size={14} />
+            Nova tarefa
+          </button>
+        </div>
+      )}
+      {view && fechadas.length > 0 && (
+        <>
+          <button
+            type="button"
+            data-funil-tarefas-feitas={fechadas.length}
+            aria-expanded={verFeitas}
+            onClick={() => setVerFeitas(!verFeitas)}
+            className="no-drag flex h-7 w-full items-center gap-1.5 rounded-[var(--radius-control)] px-1 text-left text-13 text-text-muted transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:text-title"
+          >
+            <Icon icon={verFeitas ? ChevronDown : ChevronRight} size={14} />
+            Feitas <span className="tabular">{fechadas.length}</span>
+          </button>
+          {verFeitas && (
+            <div data-funil-tarefas-fechadas className={LISTA_TAREFAS_CLASS}>
+              {fechadas.map((tarefa) => (
+                <TarefaLinha key={tarefa.id} tarefa={tarefa} view={view} onErro={onErro} />
+              ))}
+            </div>
+          )}
+        </>
+      )}
+    </section>
   )
 }
 

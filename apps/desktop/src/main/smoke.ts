@@ -104,6 +104,10 @@
 // Contrato 117: logo depois dos botões nas telas existentes, o funil no Assistente (`funilAssistenteChecks`): a fonte Funil
 // (primeira e desligada; ligada, o `FUNIL.md`), os cartões "Mover" (e o do id que não existe), "Criar oportunidade" e o do
 // contato, o "Abrir" da oportunidade e o agente com "Pode ler o funil" no "Pedir agora", com o agente ACP falso.
+//
+// Contrato 125: o funil nas telas, dentro dos três roteiros acima: a migração do boot (`funilMigracao`, com o lembrete
+// antigo semeado em `schedules.json`) e o "Sem tarefa" no kanban; a seção Tarefas da oportunidade com a Nova tarefa, a
+// caixa de feito, "Feitas" e o item `tarefa` da Linha do tempo; o bloco Tarefas nas fichas do contato e da empresa.
 import { appendFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { spawn as spawnChild } from 'node:child_process'
 import { request as httpRequest } from 'node:http'
@@ -216,6 +220,7 @@ import {
   SMOKE_FUNIL,
   SMOKE_GOOGLE_CLIENT_ID,
   SMOKE_GOOGLE_CLIENT_SECRET,
+  SMOKE_LEMBRETE_LEGADO,
   SMOKE_MCP_SECRETS,
   SMOKE_MICROSOFT_CLIENT_ID,
   SMOKE_NOT_ALLOWED_MODEL,
@@ -231,7 +236,7 @@ import {
   SMOKE_TAREFAS,
   type SmokeFixtures,
 } from './smoke-fixtures'
-import { TAREFAS_FILE, type SugestaoTarefa, type Tarefa, type TarefasArquivo, type TarefasView } from '../shared/tarefas'
+import { TAREFAS_FILE, type SugestaoTarefa, type Tarefa, type TarefasArquivo, type TarefasFalha, type TarefasView } from '../shared/tarefas'
 import { contarVencidas, deHoje, lembretePadrao, vencida } from '../shared/tarefas-logic'
 import { AVISO_BLOQUEADO_TEXTO } from './tarefas/lembretes'
 
@@ -12477,7 +12482,8 @@ async function tarefasTelaChecks(ctx: SmokeContext, watch: (win: BrowserWindow) 
  * filtros com os 90 dias e "Mostrar todas", a nova oportunidade com o `SearchPicker` e o aviso de duplicata, "Editar
  * etapas" e o arrastar (mover, destacar a faixa sem abrir e o motivo da perda no cartão). Termina com as oportunidades
  * nas etapas de antes e os nomes das etapas de antes. Prints `funil-oportunidades`, `funil-oportunidades-nova` e
- * `funil-oportunidades-editar-etapas`, nos dois temas.
+ * `funil-oportunidades-editar-etapas`, nos dois temas. Contrato 125: começa pela migração do boot (`funilMigracao`) e
+ * confere o "Sem tarefa" e a próxima tarefa de cada cartão (`funilKanbanSemTarefa`).
  */
 async function funilKanbanChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => void, checks: Record<string, Check>, shots: Screenshot[]): Promise<void> {
   const startedAt = Date.now()
@@ -12555,6 +12561,53 @@ async function funilKanbanChecks(ctx: SmokeContext, watch: (win: BrowserWindow) 
     `(() => { const node = ${element}; if (!node) return ''; node.style.transition = 'none'; const value = getComputedStyle(node).${property}; node.style.transition = ''; return value })()`
 
   try {
+    // funilMigracao (contrato 125, CA1 da spec): a migração do boot (124) converteu os 4 próximos passos da fixture do
+    // funil e o lembrete semeado em `schedules.json` em tarefas `migracao`, tirou o `proximoPasso` de `funil.json` e o
+    // lembrete semeado de `schedules.json` e deixou as duas cópias (0600). O `nextRunAt` semeado sai da cópia de
+    // `schedules.json`. Os lembretes que o Assistente cria antes deste ponto (pelo caminho antigo, até o 127) continuam
+    // no arquivo: só o semeado precisa ter saído.
+    {
+      const arquivo = JSON.parse(readFileSync(join(ctx.userDataDir, TAREFAS_FILE), 'utf8')) as TarefasArquivo
+      const dePasso = arquivo.tarefas.filter((tarefa) => tarefa.origem.tipo === 'migracao' && tarefa.origem.de === 'proximo-passo')
+      const deLembrete = arquivo.tarefas.filter((tarefa) => tarefa.origem.tipo === 'migracao' && tarefa.origem.de === 'lembrete')
+      const opsDePasso = dePasso.map((tarefa) => tarefa.vinculos.oportunidadeId ?? '').sort()
+      const nomes = readdirSync(ctx.userDataDir)
+      const copiaFunil = nomes.find((nome) => nome.startsWith(`${FUNIL_FILE}.bak-tarefas-`)) ?? null
+      const copiaSchedules = nomes.find((nome) => nome.startsWith(`${SCHEDULES_FILE}.bak-tarefas-`)) ?? null
+      const semeado = copiaSchedules
+        ? (JSON.parse(readFileSync(join(ctx.userDataDir, copiaSchedules), 'utf8')) as { tasks: { id: string; nextRunAt: string | null }[] }).tasks.find((task) => task.id === SMOKE_LEMBRETE_LEGADO.id)?.nextRunAt ?? null
+        : null
+      const lembreteEm = semeado === null ? Number.NaN : Date.parse(semeado)
+      const oportunidades = (JSON.parse(raw()) as { oportunidades: Record<string, unknown>[] }).oportunidades
+      const tasks = (JSON.parse(readFileSync(join(ctx.userDataDir, SCHEDULES_FILE), 'utf8')) as { tasks: { id: string }[] }).tasks
+      const migracao = {
+        dePasso: dePasso.length,
+        opsDePasso: JSON.stringify(opsDePasso) === JSON.stringify(['op-consultoria', 'op-loja', 'op-portal', 'op-vistoria']),
+        deLembrete: deLembrete.length,
+        lembreteEm: deLembrete[0]?.lembreteEm === lembreteEm && Number.isFinite(lembreteEm),
+        lembreteTitulo: deLembrete[0]?.titulo === SMOKE_LEMBRETE_LEGADO.texto,
+        migrado: arquivo.migradoEm !== null,
+        comProximoPasso: oportunidades.filter((oportunidade) => 'proximoPasso' in oportunidade).length,
+        lembreteNoArquivo: tasks.some((task) => task.id === SMOKE_LEMBRETE_LEGADO.id),
+        copiaFunil0600: copiaFunil !== null && mode(join(ctx.userDataDir, copiaFunil)) === '600',
+        copiaSchedules0600: copiaSchedules !== null && mode(join(ctx.userDataDir, copiaSchedules)) === '600',
+      }
+      checks['funilMigracao'] = {
+        ok:
+          migracao.dePasso === 4 &&
+          migracao.opsDePasso &&
+          migracao.deLembrete === 1 &&
+          migracao.lembreteEm &&
+          migracao.lembreteTitulo &&
+          migracao.migrado &&
+          migracao.comProximoPasso === 0 &&
+          !migracao.lembreteNoArquivo &&
+          migracao.copiaFunil0600 &&
+          migracao.copiaSchedules0600,
+        detail: JSON.stringify(migracao),
+      }
+    }
+
     // funilNav (R17): na raiz, "Funil" logo depois de "Email" (e antes de "Redes" quando ela aparece).
     await clickNav(contents, 'reunioes')
     await waitFor(contents, routeIs('reunioes'))
@@ -12661,6 +12714,28 @@ async function funilKanbanChecks(ctx: SmokeContext, watch: (win: BrowserWindow) 
         kanban.filtro === 'abertas' &&
         !kanban.cards.includes('op-arquivada'),
       detail: JSON.stringify(kanban),
+    }
+    // funilKanbanSemTarefa (contrato 125, R14): op-integracao (sem tarefa aberta) mostra "Sem tarefa" e nenhum
+    // `data-funil-card-tarefa`; as outras quatro abertas mostram o passo migrado da fixture, com o id da tarefa migrada.
+    {
+      const migradas = (JSON.parse(readFileSync(join(ctx.userDataDir, TAREFAS_FILE), 'utf8')) as TarefasArquivo).tarefas.filter((tarefa) => tarefa.origem.tipo === 'migracao' && tarefa.origem.de === 'proximo-passo')
+      const passos = await evaluate<Record<string, { texto: string; tarefa: string | null }>>(
+        contents,
+        `Object.fromEntries([...document.querySelectorAll('[data-funil-card]')].map((el) => {
+          const passo = el.querySelector('[data-funil-card-passo]')
+          return [el.dataset.funilCard, { texto: passo?.textContent ?? '', tarefa: passo?.dataset.funilCardTarefa ?? null }]
+        }))`,
+      )
+      const esperado: Record<string, string> = { 'op-portal': 'Enviar estudo de escopo', 'op-consultoria': 'Reunião técnica', 'op-vistoria': 'Ligar para o comprador', 'op-loja': 'Revisar contrato' }
+      const comTarefa = Object.entries(esperado).map(([id, texto]) => {
+        const tarefaId = migradas.find((tarefa) => tarefa.vinculos.oportunidadeId === id)?.id ?? null
+        return passos[id]?.texto.includes(texto) === true && tarefaId !== null && passos[id]?.tarefa === tarefaId
+      })
+      const semTarefa = { texto: passos['op-integracao']?.texto.includes('Sem tarefa') === true, semId: passos['op-integracao']?.tarefa === null }
+      checks['funilKanbanSemTarefa'] = {
+        ok: semTarefa.texto && semTarefa.semId && comTarefa.length === 4 && comTarefa.every(Boolean),
+        detail: JSON.stringify({ semTarefa: semTarefa.texto, semIdDeTarefa: semTarefa.semId, comPassoMigrado: comTarefa.filter(Boolean).length }),
+      }
     }
     // funilBuscaInteira (contrato 120, CA2): o placeholder "Buscar oportunidades" cabe inteiro no campo vazio (o
     // `scrollWidth` de um input não conta o placeholder: a largura do texto vem do canvas, na fonte do campo) e o
@@ -12946,6 +13021,24 @@ const funilRouterPush = (contents: WebContents, path: string): Promise<boolean> 
     })()`,
   )
 
+/** Contrato 125: o caminho atual do roteador em memória, lido do `LocationContext` do React (como no `funilAbrir`). */
+const funilRouterPath = (contents: WebContents): Promise<string> =>
+  evaluate<string>(
+    contents,
+    `(() => {
+      const main = document.querySelector('main[data-route]')
+      const key = main && Object.keys(main).find((name) => name.startsWith('__reactFiber$'))
+      for (let fiber = key ? main[key] : null; fiber; fiber = fiber.return) {
+        const location = fiber.memoizedProps?.value?.location
+        if (location && typeof location.pathname === 'string') return location.pathname
+      }
+      return ''
+    })()`,
+  )
+
+/** Contrato 125: `25/11` de `2026-11-25` (o prazo como a linha da tarefa e o cartão do kanban mostram). */
+const diaCurtoSmoke = (dia: string): string => `${dia.slice(8, 10)}/${dia.slice(5, 7)}`
+
 /**
  * Contrato 119 (CA1 a CA5, CA13 da spec), numa janela que troca de tema no lugar, depois do `funilKanbanChecks`: o
  * detalhe de `op-loja` com uma reunião e um e-mail ligados pelo canal (1 reunião, 1 e-mail e 1 evento na Linha do
@@ -12953,7 +13046,8 @@ const funilRouterPush = (contents: WebContents, path: string): Promise<boolean> 
  * "Escrever e-mail" até o Composer endereçado; o "Abrir WhatsApp" ausente sem conversa; e o "Arquivar" de
  * `op-ganha-mes`. Não toca em `op-integracao` nem em `op-vistoria` (o 117 usa) e termina com `op-loja` e `op-ganha-mes`
  * de volta às etapas da fixture e sem vínculos (ficam os eventos novos: etapa, nota e a reabertura). Print
- * `funil-oportunidade`, nos dois temas.
+ * `funil-oportunidade`, nos dois temas (com a seção Tarefas, contrato 125). Contrato 125: a seção Tarefas de
+ * `op-consultoria` (`funilTarefasSecao`), que apaga no fim as duas tarefas que cria.
  */
 async function funilDetalheChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => void, checks: Record<string, Check>, shots: Screenshot[]): Promise<void> {
   const startedAt = Date.now()
@@ -12992,6 +13086,8 @@ async function funilDetalheChecks(ctx: SmokeContext, watch: (win: BrowserWindow)
     return waitFor(contents, `document.querySelector('${SCREEN} [data-tab-panel="${nome}"]')`)
   }
   const etapaEventos = (): number => saved().eventos.filter((evento) => evento.oportunidadeId === 'op-loja' && evento.tipo === 'etapa').length
+  /** Contrato 125: as tarefas que o funilTarefasSecao cria (apagadas no fim). */
+  const criadasNaSecao: string[] = []
 
   try {
     // funilDetail (CA13): op-loja com a primeira reunião da lista e o primeiro e-mail em cache ligados pelo canal; a tela
@@ -13036,7 +13132,7 @@ async function funilDetalheChecks(ctx: SmokeContext, watch: (win: BrowserWindow)
         detail.counts['evento'] === 1 &&
         detail.counts['whatsapp'] === 0 &&
         detail.valor === valorEsperado &&
-        JSON.stringify(detail.campos) === JSON.stringify(['empresa', 'contatos', 'valor', 'previsao', 'proximo-passo', 'origem']) &&
+        JSON.stringify(detail.campos) === JSON.stringify(['empresa', 'contatos', 'valor', 'previsao', 'origem']) &&
         detail.subtitulo.startsWith('Há 1 d em Negociação · criada em ') &&
         detail.etapa === E.negociacao,
       detail: `reunião ${meetingId || '(nenhuma)'}; e-mail ${email ? `${email.accountId}/${email.id}` : '(nenhum)'}; ligado=${linked.ok}; tela=${opened}; linha do tempo=${filled}; ${JSON.stringify(detail)}; valor esperado "${valorEsperado}"`,
@@ -13057,6 +13153,8 @@ async function funilDetalheChecks(ctx: SmokeContext, watch: (win: BrowserWindow)
       ok: titulo.texto && titulo.sw > 0 && titulo.sw <= titulo.cw && titulo.mesmaLinha,
       detail: JSON.stringify(titulo),
     }
+    // Contrato 125: o print com a seção Tarefas carregada (a migrada "Revisar contrato" e a `t-loja` da fixture do 123).
+    await waitFor(contents, `document.querySelector('${SCREEN} [data-funil-bloco="tarefas"] [data-tarefa="${SMOKE_TAREFAS.loja}"]') && document.querySelectorAll('${SCREEN} [data-funil-bloco="tarefas"] [data-tarefa]').length >= 2`, 8000)
     await both('funil-oportunidade')
 
     // funilReuniaoApagada (modelo, R29): um id de reunião que não existe vira "Reunião apagada" sem data e sem link; o id
@@ -13156,7 +13254,125 @@ async function funilDetalheChecks(ctx: SmokeContext, watch: (win: BrowserWindow)
       ok: noArchiveOpen && ganha && confirming && atKanban && ganhas.includes('op-ganha-antiga') && !ganhas.includes('op-ganha-mes') && !todas.includes('op-ganha-mes') && archived && empty,
       detail: `aberta sem Arquivar=${noArchiveOpen}; detalhe da ganha=${ganha}; confirmação na linha=${confirming}; de volta ao kanban=${atKanban}; Ganhas ${JSON.stringify(ganhas)}; Todas ${JSON.stringify(todas)}; arquivado pelo canal=${archived}; detalhe vazio=${empty}`,
     }
+
+    // funilTarefasSecao (contrato 125, CA7 da spec, R15, R18): em op-consultoria, a seção Tarefas com a migrada "Reunião
+    // técnica" (hoje + 4); "Nova tarefa" com "Enviar proposta" para hoje + 2 grava `origem funil` ligada à oportunidade e
+    // o cartão do kanban passa a hoje + 2; outra para hoje + 6 não muda o cartão; concluir a de hoje + 2 pela caixa da
+    // seção volta o cartão a hoje + 4 e mostra "Feitas 1"; a Linha do tempo ganha os itens criada e concluída com "Abrir
+    // tarefa", que leva a `/tarefas/<id>`. As duas criadas são apagadas no fim (finally).
+    {
+      const OP = 'op-consultoria'
+      const SECAO = `[data-funil-oportunidade="${OP}"] [data-funil-bloco="tarefas"]`
+      const tarefasFile = join(ctx.userDataDir, TAREFAS_FILE)
+      const tarefasSalvas = (): Tarefa[] => (JSON.parse(readFileSync(tarefasFile, 'utf8')) as TarefasArquivo).tarefas
+      // A leitura das tarefas que falhou no main vem tipada (`ok: false`): o check falha sem lançar.
+      const lida = await api<TarefasView | TarefasFalha>('scribe:tarefas-get')
+      if ('ok' in lida) checks['funilTarefasSecao'] = { ok: false, detail: JSON.stringify({ leuTarefas: false }) }
+      else {
+        const { hoje } = lida
+        const mais2 = somarDiasSmoke(hoje, 2)
+        const mais4 = somarDiasSmoke(hoje, 4)
+        const migrada = tarefasSalvas().find((tarefa) => tarefa.origem.tipo === 'migracao' && tarefa.vinculos.oportunidadeId === OP) ?? null
+        /** A tarefa nova com este título, esperando a gravação no main. */
+        const criadaCom = async (titulo: string): Promise<Tarefa | null> => {
+          for (let attempt = 0; attempt < 100; attempt++) {
+            const achada = tarefasSalvas().find((tarefa) => tarefa.titulo === titulo && tarefa.vinculos.oportunidadeId === OP)
+            if (achada) return achada
+            await wait(50)
+          }
+          return null
+        }
+        /** "Nova tarefa" da seção: título e prazo, Enter no título; espera o formulário fechar. */
+        const novaTarefa = async (titulo: string, prazo: string): Promise<Tarefa | null> => {
+          await clickSelector(contents, `${SECAO} [data-action="funil-tarefa-nova"]`)
+          await waitFor(contents, `document.activeElement?.matches('${SECAO} [data-tarefas-nova-titulo]') === true`, 5000)
+          await setValue(contents, `${SECAO} [data-tarefas-nova-titulo]`, titulo)
+          await setValue(contents, `${SECAO} [data-tarefas-nova-prazo]`, prazo)
+          await waitFor(contents, `document.querySelector('${SECAO} [data-action="tarefa-nova-criar"]')?.disabled === false`)
+          await pressEnterIn(contents, `${SECAO} [data-tarefas-nova-titulo]`)
+          const criada = await criadaCom(titulo)
+          await waitFor(contents, `!document.querySelector('${SECAO} [data-tarefas-nova]') && ${criada ? `!!document.querySelector('${SECAO} [data-tarefa="${criada.id}"]')` : 'false'}`, 8000)
+          return criada
+        }
+        /** O cartão de op-consultoria no kanban mostra `dia` (e o id da tarefa); volta ao detalhe depois. */
+        const cartaoMostra = async (dia: string, tarefaId: string | null): Promise<boolean> => {
+          await funilRouterPush(contents, '/funil/oportunidades')
+          const ok = await waitFor(
+            contents,
+            `(() => { const passo = document.querySelector('[data-funil-card="${OP}"] [data-funil-card-passo]'); return Boolean(passo && passo.textContent.includes('${diaCurtoSmoke(dia)}') && passo.dataset.funilCardTarefa === ${JSON.stringify(tarefaId)}) })()`,
+            8000,
+          )
+          await abrir(OP)
+          await waitFor(contents, `!!document.querySelector('${SECAO} [data-tarefa]')`, 8000)
+          return ok
+        }
+
+        const aberta = await abrir(OP)
+        const comMigrada = migrada !== null && (await waitFor(contents, `document.querySelector('${SECAO} [data-tarefa="${migrada.id}"]')?.dataset.tarefaPrazo === '${diaCurtoSmoke(mais4)}'`, 8000))
+        const medidas = await evaluate<{ linha: number; nova: number; titulo: boolean }>(
+          contents,
+          `(() => {
+            const secao = document.querySelector('${SECAO}')
+            const linha = secao?.querySelector('[data-tarefa]')
+            const nova = secao?.querySelector('[data-action="funil-tarefa-nova"]')?.parentElement
+            return { linha: Math.round(linha?.getBoundingClientRect().height ?? 0), nova: Math.round(nova?.getBoundingClientRect().height ?? 0), titulo: (secao?.querySelector('h2')?.textContent ?? '').startsWith('Tarefas') }
+          })()`,
+        )
+        const primeira = await novaTarefa('Enviar proposta', mais2)
+        criadasNaSecao.push(...(primeira ? [primeira.id] : []))
+        const primeiraOk = primeira !== null && primeira.origem.tipo === 'funil' && primeira.origem.oportunidadeId === OP && primeira.prazo === mais2
+        const cartaoMais2 = primeira !== null && (await cartaoMostra(mais2, primeira.id))
+        const segunda = await novaTarefa('Revisar escopo com o Paulo', somarDiasSmoke(hoje, 6))
+        criadasNaSecao.push(...(segunda ? [segunda.id] : []))
+        await wait(400)
+        const cartaoContinua = primeira !== null && segunda !== null && (await cartaoMostra(mais2, primeira.id))
+        if (primeira) await clickSelector(contents, `${SECAO} [data-tarefa="${primeira.id}"] [data-tarefa-feito]`)
+        const concluida = primeira !== null && (await waitFor(contents, `!document.querySelector('${SECAO} [data-tarefas-abertas] [data-tarefa="${primeira.id}"]') && document.querySelector('${SECAO} [data-funil-tarefas-feitas]')?.dataset.funilTarefasFeitas === '1'`, 8000))
+        const feitas = await evaluate<{ altura: number; texto: boolean }>(
+          contents,
+          `(() => { const el = document.querySelector('${SECAO} [data-funil-tarefas-feitas]'); return { altura: Math.round(el?.getBoundingClientRect().height ?? 0), texto: /^Feitas\\s*1$/.test((el?.textContent ?? '').trim()) } })()`,
+        )
+        const gravouFeita = primeira !== null && tarefasSalvas().find((tarefa) => tarefa.id === primeira.id)?.status === 'feita'
+        const cartaoMais4 = migrada !== null && (await cartaoMostra(mais4, migrada.id))
+        const ITENS = `[data-funil-oportunidade="${OP}"] [data-funil-timeline-item="tarefa"]`
+        const naLinha = primeira !== null && (await waitFor(contents, `document.querySelectorAll('${ITENS} [data-funil-timeline-tarefa="${primeira.id}"]').length === 2`, 8000))
+        const rotulos = await evaluate<{ criada: boolean; concluida: boolean }>(
+          contents,
+          `(() => {
+            const itens = [...document.querySelectorAll('${ITENS}')].filter((el) => el.querySelector('[data-funil-timeline-tarefa="${primeira?.id ?? ''}"]'))
+            const textos = itens.map((el) => el.textContent)
+            return { criada: textos.some((texto) => texto.includes('Tarefa criada') && texto.includes('Abrir tarefa')), concluida: textos.some((texto) => texto.includes('Tarefa concluída') && texto.includes('Abrir tarefa')) }
+          })()`,
+        )
+        if (primeira) await clickSelector(contents, `${ITENS} [data-funil-timeline-tarefa="${primeira.id}"]`)
+        const abriuTarefa = primeira !== null && (await waitFor(contents, `${routeIs('tarefas')} && !!document.querySelector('[data-tarefa-detalhe="${primeira.id}"]')`, 8000))
+        const caminho = abriuTarefa && primeira !== null && (await funilRouterPath(contents)) === `/tarefas/${primeira.id}`
+        const secao = {
+          aberta,
+          comMigrada,
+          titulo: medidas.titulo,
+          linha44: medidas.linha === 44,
+          nova40: medidas.nova === 40,
+          primeiraOk,
+          cartaoMais2,
+          cartaoContinua,
+          concluida,
+          gravouFeita,
+          feitas28: feitas.altura === 28,
+          feitasTexto: feitas.texto,
+          cartaoMais4,
+          naLinha,
+          criadaNaLinha: rotulos.criada,
+          concluidaNaLinha: rotulos.concluida,
+          abriuTarefa,
+          caminho,
+        }
+        checks['funilTarefasSecao'] = { ok: Object.values(secao).every(Boolean), detail: JSON.stringify(secao) }
+      }
+    }
   } finally {
+    // Contrato 125: as tarefas criadas pelo funilTarefasSecao.
+    for (const id of criadasNaSecao) await api('scribe:tarefas-apagar', { id }).catch(() => undefined)
     // op-loja sem os vínculos e em Negociação; op-ganha-mes desarquivada (reabrir tira o arquivado) e de volta ao topo de
     // Ganho, como na fixture.
     await api('scribe:funil-oportunidade-save', { oportunidade: { id: 'op-loja', titulo: 'Loja virtual', meetingIds: [], emails: [] } }).catch(() => undefined)
@@ -13183,6 +13399,8 @@ async function funilDetalheChecks(ctx: SmokeContext, watch: (win: BrowserWindow)
  * oportunidades. Termina com os contatos e as empresas que criou (o novo, o adicionado da sugestão, os 4 importados, a
  * Lojista e as 3 empresas do CSV), o Rafael ligado à Lojista e a Marina com o cargo da mescla. Prints `funil-contatos`,
  * `funil-empresas`, `funil-contatos-novo`, `funil-contatos-sugestoes` e `funil-contatos-importar`, nos dois temas.
+ * Contrato 125: o bloco Tarefas nas fichas da Marina e da Cliente (`funilContatoTarefas`), com o print
+ * `funil-contato-tarefas`, só no claro; a tarefa criada é apagada.
  */
 async function funilContatosChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => void, checks: Record<string, Check>, shots: Screenshot[]): Promise<void> {
   const startedAt = Date.now()
@@ -13283,13 +13501,68 @@ async function funilContatosChecks(ctx: SmokeContext, watch: (win: BrowserWindow
         fichaInfo.atual === primeiro &&
         fichaInfo.titulo === nomePrimeiro &&
         JSON.stringify(fichaInfo.campos) === JSON.stringify(['empresa', 'cargo', 'emails', 'telefones', 'notas']) &&
-        JSON.stringify(fichaInfo.blocos) === JSON.stringify(['oportunidades', 'linha-do-tempo']) &&
+        JSON.stringify(fichaInfo.blocos) === JSON.stringify(['tarefas', 'oportunidades', 'linha-do-tempo']) &&
         fichaInfo.acoes.includes('funil-contato-email') &&
         fichaInfo.acoes.includes('funil-contato-nova-oportunidade') &&
         fichaInfo.acoes.includes('funil-contato-arquivar'),
       detail: `ficha do primeiro (${primeiro}, "${nomePrimeiro}") com a linha do tempo=${ficha}; ${JSON.stringify(fichaInfo)}`,
     }
     await both('funil-contatos')
+
+    // funilContatoTarefas (contrato 125, R19): a ficha da Marina Rocha com o bloco Tarefas (t-vencida e t-portal, em
+    // sublinhas de 32 px); "Nova tarefa" com "Agendar visita técnica", sem prazo, grava a tarefa com a Marina e, pela R9
+    // (ela tem uma só oportunidade aberta), com op-portal; print `funil-contato-tarefas` (só claro); a ficha da empresa
+    // Cliente com o bloco Tarefas e t-vencida nele. A tarefa criada é apagada no fim.
+    {
+      const MARINA = `${fichaDe(CT.marina)} [data-funil-bloco="tarefas"]`
+      const CLIENTE = `[data-funil-ficha="empresa"][data-funil-ficha-id="${SMOKE_FUNIL.empresas.cliente}"] [data-funil-bloco="tarefas"]`
+      const tarefasFile = join(ctx.userDataDir, TAREFAS_FILE)
+      const titulo = 'Agendar visita técnica'
+      let criada: Tarefa | undefined
+      try {
+        await funilRouterPush(contents, `/funil/contatos/${CT.marina}`)
+        const ficha = await waitFor(contents, `!!document.querySelector('${MARINA} [data-funil-ficha-tarefa="${SMOKE_TAREFAS.vencida}"]')`, 8000)
+        const linhas = await evaluate<{ ids: string[]; alturas: number[] }>(
+          contents,
+          `(() => {
+            const linhas = [...document.querySelectorAll('${MARINA} [data-funil-ficha-tarefa]')]
+            return { ids: linhas.map((el) => el.dataset.funilFichaTarefa), alturas: linhas.map((el) => Math.round(el.getBoundingClientRect().height)) }
+          })()`,
+        )
+        await clickSelector(contents, `${MARINA} [data-action="funil-tarefa-nova"]`)
+        const abriu = await waitFor(contents, `document.activeElement?.matches('${MARINA} [data-tarefas-nova-titulo]') === true`, 5000)
+        await setValue(contents, `${MARINA} [data-tarefas-nova-titulo]`, titulo)
+        await waitFor(contents, `document.querySelector('${MARINA} [data-action="tarefa-nova-criar"]')?.disabled === false`)
+        await pressEnterIn(contents, `${MARINA} [data-tarefas-nova-titulo]`)
+        for (let attempt = 0; attempt < 100 && !criada; attempt++) {
+          criada = (JSON.parse(readFileSync(tarefasFile, 'utf8')) as TarefasArquivo).tarefas.find((tarefa) => tarefa.titulo === titulo)
+          if (!criada) await wait(50)
+        }
+        const naFicha = criada !== undefined && (await waitFor(contents, `!document.querySelector('${MARINA} [data-tarefas-nova]') && !!document.querySelector('${MARINA} [data-funil-ficha-tarefa="${criada.id}"]')`, 8000))
+        await evaluate(contents, `document.activeElement instanceof HTMLElement && document.activeElement.blur(), true`)
+        await settle(contents)
+        shots.push(await capture(win, ctx.outDir, 'funil-contato-tarefas-light'))
+        await funilRouterPush(contents, `/funil/empresas/${SMOKE_FUNIL.empresas.cliente}`)
+        const empresa = await waitFor(contents, `!!document.querySelector('${CLIENTE} [data-funil-ficha-tarefa="${SMOKE_TAREFAS.vencida}"]')`, 8000)
+        const contato = {
+          ficha,
+          vencida: linhas.ids.includes(SMOKE_TAREFAS.vencida),
+          portal: linhas.ids.includes(SMOKE_TAREFAS.portal),
+          linhas32: linhas.alturas.length > 0 && linhas.alturas.every((altura) => altura === 32),
+          abriu,
+          criada: criada !== undefined,
+          comMarina: criada !== undefined && criada.vinculos.contatoIds.length === 1 && criada.vinculos.contatoIds[0] === CT.marina,
+          comPortal: criada?.vinculos.oportunidadeId === 'op-portal',
+          semPrazo: criada !== undefined && criada.prazo === null,
+          manual: criada?.origem.tipo === 'manual',
+          naFicha,
+          empresa,
+        }
+        checks['funilContatoTarefas'] = { ok: Object.values(contato).every(Boolean), detail: JSON.stringify(contato) }
+      } finally {
+        if (criada) await api('scribe:tarefas-apagar', { id: criada.id }).catch(() => undefined)
+      }
+    }
 
     // empresas (CA14, R34): as 2 empresas da fixture, pelo nome, e a ficha da primeira.
     await funilRouterPush(contents, '/funil/empresas')
@@ -15821,7 +16094,8 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
   // Contrato 117: +2 (o cartão "Mover" do funil no Assistente, com a fonte Funil ligada no Contexto, nos dois temas).
   // Contrato 123: +9 (Todas agrupadas por oportunidade, o detalhe, a nova tarefa e as Sugestões, nos dois temas, e Hoje
   // vazia, só no claro).
-  const expectedShots = SCREENS.length * THEMES.length + 214
+  // Contrato 125: +1 (a ficha do contato com o bloco Tarefas, só no claro).
+  const expectedShots = SCREENS.length * THEMES.length + 215
   if (screenshots.length !== expectedShots) failures.push(`${screenshots.length} PNGs em vez de ${expectedShots}`)
   for (const shot of screenshots) {
     if (shot.name === MEETING_PROMPT_SHOT) {

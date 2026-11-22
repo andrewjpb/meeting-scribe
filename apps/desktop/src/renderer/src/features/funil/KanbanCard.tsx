@@ -49,7 +49,8 @@ interface KanbanCardProps {
 /**
  * Cartão de uma oportunidade no kanban (contrato 112, R23): título em uma linha, empresa (ou "Sem empresa"), valor,
  * próximo passo com a data (em --rec quando venceu), a previsão quando venceu e, no rodapé, "há N d nesta etapa" e
- * "esfriou". O clique (sem arrasto) abre a oportunidade; arrastar move (R24).
+ * "esfriou". O clique (sem arrasto) abre a oportunidade; arrastar move (R24). Contrato 125 (R14): o passo é a próxima
+ * tarefa aberta (`data-funil-card-tarefa`) ou, sem ela, "Sem tarefa".
  */
 export function KanbanCard({ oportunidade, proximoPasso, empresa, esfriou, now, hoje, apagado, arrastando, perda, onAbrir, onDragStart, onDragEnd }: KanbanCardProps) {
   const ref = useRef<HTMLDivElement>(null)
@@ -124,7 +125,7 @@ export function KanbanCard({ oportunidade, proximoPasso, empresa, esfriou, now, 
       {titulo}
       <p className="truncate text-13 text-text-muted">{empresa ?? 'Sem empresa'}</p>
       <p className="text-13 font-semibold text-title tabular">{formatarBRL(oportunidade.valor)}</p>
-      <p data-funil-card-passo data-funil-card-vencido={vencido ? '' : undefined} className={`flex min-w-0 items-center gap-1.5 text-13 ${vencido ? 'text-rec' : proximoPasso ? 'text-text' : 'text-text-muted'}`}>
+      <p data-funil-card-passo data-funil-card-tarefa={proximoPasso?.tarefaId} data-funil-card-vencido={vencido ? '' : undefined} className={`flex min-w-0 items-center gap-1.5 text-13 ${vencido ? 'text-rec' : proximoPasso ? 'text-text' : 'text-text-muted'}`}>
         <Icon icon={Clock} size={14} className={`shrink-0 ${vencido ? '' : 'text-text-muted'}`} />
         <span className="min-w-0 flex-1 truncate">{passo.texto}</span>
         {passo.data && <span className="shrink-0 tabular">{passo.data}</span>}

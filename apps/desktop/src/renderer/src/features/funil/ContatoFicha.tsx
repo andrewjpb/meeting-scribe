@@ -1,17 +1,22 @@
-import { Archive, Building2, Lightbulb, Mail, Plus, Smartphone, TriangleAlert, X } from 'lucide-react'
+import { Archive, Building2, Lightbulb, Mail, Plus, Smartphone, Star, TriangleAlert, X } from 'lucide-react'
 import { useEffect, useId, useRef, useState, type ReactNode } from 'react'
 import { useNavigate } from 'react-router'
 import { FUNIL_EMAILS_MAX, FUNIL_NOME_MAX, FUNIL_NOTAS_MAX, FUNIL_TELEFONES_MAX, type Contato, type ContatoInput, type Etapa, type FunilFalha, type FunilTimelineResult, type FunilView, type Oportunidade } from '@shared/funil'
 import { formatarBRL, normalizarEmail, normalizarTelefone } from '@shared/funil-logic'
-import { EMAIL_ROOT_PATH, funilPath, type EmailNavigationState, type FunilNavigationState } from '@shared/routes'
+import { EMAIL_ROOT_PATH, funilPath, tarefasPath, type EmailNavigationState, type FunilNavigationState } from '@shared/routes'
+import type { Tarefa, TarefasView, VinculosTarefa } from '@shared/tarefas'
 import { ActionButton } from '../../design/ActionButton'
 import { Button } from '../../design/Button'
 import { EditableTitle } from '../../design/EditableTitle'
 import { CONTROL_CLASS, TextField } from '../../design/Field'
 import { Icon } from '../../design/Icon'
 import { Note, NOTE_ACTION_CLASS } from '../../design/Note'
+import { NovaTarefaInline } from '../tarefas/NovaTarefaInline'
+import { CaixaFeito } from '../tarefas/TarefaLinha'
+import { textoPrazo } from '../tarefas/tarefasFormat'
+import { useTarefasView } from '../tarefas/tarefasStore'
 import { CANCELAR_CLASS } from './KanbanCard'
-import { composeDe, sugestaoDeEmpresa, telefoneLegivel, textoSubtituloContato, whatsappDestino, type PickerItem } from './funilFormat'
+import { composeDe, sugestaoDeEmpresa, tarefasDoContato, telefoneLegivel, textoSubtituloContato, whatsappDestino, type PickerItem } from './funilFormat'
 import { useFunil } from './funilStore'
 import { SearchPicker } from './SearchPicker'
 import { FUNIL_LINK_CLASS, Timeline } from './Timeline'
@@ -253,13 +258,77 @@ export function BlocoOportunidades({ oportunidades, etapas, vazio }: { oportunid
   )
 }
 
+/**
+ * Bloco Tarefas da ficha do contato e da empresa (contrato 125, R19, artboard 09): as abertas em sublinhas de 32 px
+ * (caixa de feito, título, estrela de importante e prazo; o clique fora da caixa abre a tarefa) e "+ Nova tarefa", no
+ * estilo do "+ E-mail", que abre a criação em linha com os vínculos da ficha (a oportunidade entra pela R9 no serviço).
+ */
+export function BlocoTarefas({ tarefas, view, vinculosIniciais, onErro }: { tarefas: readonly Tarefa[]; view: TarefasView | null; vinculosIniciais: Partial<VinculosTarefa>; onErro: (mensagem: string) => void }) {
+  const navigate = useNavigate()
+  const [nova, setNova] = useState(false)
+  return (
+    <section data-funil-bloco="tarefas" aria-label="Tarefas">
+      <TituloBloco>
+        Tarefas
+        {view && tarefas.length > 0 && (
+          <span data-funil-tarefas-resumo className="ml-2 font-normal tabular">
+            {tarefas.length} {tarefas.length === 1 ? 'aberta' : 'abertas'}
+          </span>
+        )}
+      </TituloBloco>
+      {view === null ? null : tarefas.length === 0 ? (
+        <p className="py-2 text-13 text-text-muted">Nenhuma tarefa aberta.</p>
+      ) : (
+        <ul className="flex flex-col">
+          {tarefas.map((tarefa) => {
+            const prazo = textoPrazo(tarefa.prazo, view.hoje)
+            const cor = prazo.vencida ? 'font-medium text-rec' : tarefa.prazo === view.hoje ? 'font-medium text-text' : 'text-text-muted'
+            return (
+              <li
+                key={tarefa.id}
+                data-funil-ficha-tarefa={tarefa.id}
+                onClick={() => void navigate(tarefasPath(tarefa.id))}
+                className="flex h-8 cursor-default items-center gap-3 border-b border-line text-13 transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-bg-sunken"
+              >
+                <CaixaFeito tarefa={tarefa} data={{ 'data-tarefa-feito': '' }} onErro={onErro} />
+                <button type="button" className="no-drag min-w-0 flex-1 truncate rounded-[var(--radius-control)] text-left text-text">
+                  {tarefa.titulo}
+                </button>
+                {tarefa.importante && (
+                  <span className="flex shrink-0 text-title" title="Importante">
+                    <Icon icon={Star} size={14} className="fill-current" />
+                    <span className="sr-only">Importante</span>
+                  </span>
+                )}
+                <span className={`w-[92px] shrink-0 text-right text-12 whitespace-nowrap tabular ${cor}`}>{prazo.texto}</span>
+              </li>
+            )
+          })}
+        </ul>
+      )}
+      {view !== null &&
+        (nova ? (
+          <div className="py-2">
+            <NovaTarefaInline origem={{ tipo: 'manual' }} vinculosIniciais={vinculosIniciais} onCriada={() => setNova(false)} onCancelar={() => setNova(false)} />
+          </div>
+        ) : (
+          <button type="button" data-action="funil-tarefa-nova" onClick={() => setNova(true)} className={`${ADICIONAR_CLASS} mt-1.5`}>
+            <Icon icon={Plus} size={14} />
+            Nova tarefa
+          </button>
+        ))}
+    </section>
+  )
+}
+
 /** As oportunidades em que o contato está (as arquivadas também, R27), as mais novas primeiro. */
 const oportunidadesDo = (view: FunilView, contatoId: string): Oportunidade[] => view.state.oportunidades.filter((item) => item.contatoIds.includes(contatoId)).sort((a, b) => b.criadoEm - a.criadoEm)
 
 /**
  * Ficha do contato (contrato 114, R31, R5, artboard 05): o nome editável, o subtítulo com cargo, empresa e origem, as
  * ações (e-mail, WhatsApp, nova oportunidade e arquivar com confirmação na linha), os campos que salvam no blur ou no
- * Enter, a sugestão de empresa pelo domínio (só vira empresa no clique) e os blocos Oportunidades e Linha do tempo.
+ * Enter, a sugestão de empresa pelo domínio (só vira empresa no clique) e os blocos Tarefas (contrato 125), Oportunidades
+ * e Linha do tempo.
  */
 export function ContatoFicha({ view, contato, onArquivado }: { view: FunilView; contato: Contato; onArquivado: () => void }) {
   const navigate = useNavigate()
@@ -270,6 +339,8 @@ export function ContatoFicha({ view, contato, onArquivado }: { view: FunilView; 
   const [erro, setErro] = useState<string | null>(null)
   const [arquivando, setArquivando] = useState(false)
   const [ocupado, setOcupado] = useState(false)
+  // Contrato 125 (R19): as tarefas abertas com o contato.
+  const tarefas = useTarefasView()
 
   // A linha do tempo vem do main (os caches de reuniões, e-mails e conversas ficam lá) e é pedida de novo a cada gravação.
   useEffect(() => {
@@ -412,6 +483,7 @@ export function ContatoFicha({ view, contato, onArquivado }: { view: FunilView; 
           <NotasSalvas valor={contato.notas} rotulo="Notas" onSalvar={(notas) => salvarComAviso({ notas })} />
         </LinhaCampo>
       </div>
+      <BlocoTarefas key={id} tarefas={tarefasDoContato(tarefas?.tarefas ?? [], id)} view={tarefas} vinculosIniciais={{ contatoIds: [id] }} onErro={setErro} />
       <BlocoOportunidades oportunidades={oportunidadesDo(view, id)} etapas={state.etapas} vazio="Nenhuma oportunidade com este contato." />
       <section data-funil-bloco="linha-do-tempo" aria-label="Linha do tempo">
         <TituloBloco>Linha do tempo</TituloBloco>

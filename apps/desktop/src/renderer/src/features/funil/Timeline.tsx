@@ -1,10 +1,10 @@
 import { GitCommitHorizontal, Mail, NotebookText, Smartphone, SquareCheck, StickyNote, type LucideIcon } from 'lucide-react'
 import { useNavigate } from 'react-router'
 import type { EventoFunilTipo, ItemLinhaDoTempo } from '@shared/funil'
-import { meetingPath } from '@shared/routes'
+import { meetingPath, tarefasPath } from '@shared/routes'
 import { Icon } from '../../design/Icon'
 import { useEmail } from '../email/emailStore'
-import { dataHora, emailDestino, whatsappDestino, type Destino } from './funilFormat'
+import { dataHora, emailDestino, textoItemTarefa, whatsappDestino, type Destino } from './funilFormat'
 
 /** O link de cada item: sublinhado em --accent, como o "Abrir resumo" do artboard 04. */
 export const FUNIL_LINK_CLASS =
@@ -53,9 +53,11 @@ function linhaDe(item: ItemLinhaDoTempo, sentMailbox: (accountId: string) => str
     }
     case 'evento':
       return { icon: item.evento.tipo === 'nota' ? StickyNote : GitCommitHorizontal, rotulo: EVENTO_ROTULO[item.evento.tipo], titulo: item.evento.texto, texto: null, link: null }
-    // Contrato 124: o mínimo do item `tarefa` (a linha completa, com "Abrir tarefa", é do 125).
-    case 'tarefa':
-      return { icon: SquareCheck, rotulo: EVENTO_ROTULO.tarefa, titulo: `${item.acao === 'feita' ? 'Tarefa concluída' : 'Tarefa criada'}: ${item.titulo}`, texto: null, link: null }
+    // Contrato 125 (R18): "Tarefa criada" ou "Tarefa concluída", a origem e o prazo; "Abrir tarefa" só se ela existe.
+    case 'tarefa': {
+      const { rotulo, linha } = textoItemTarefa(item)
+      return { icon: SquareCheck, rotulo, titulo: item.titulo, texto: linha, link: item.existe ? { texto: 'Abrir tarefa', destino: { path: tarefasPath(item.tarefaId), state: null } } : null }
+    }
     default:
       return null
   }
@@ -87,7 +89,8 @@ interface TimelineProps {
 /**
  * Linha do tempo do funil (contrato 119, R29; reaproveitada pelo 114): uma linha por item, na ordem em que veio (o main
  * já ordena por data decrescente). Reunião, e-mail e conversa levam ao resumo, ao e-mail (só se ainda estiver no cache)
- * e à conversa; a reunião que não existe mais aparece como "Reunião apagada", sem data e sem link.
+ * e à conversa; a reunião que não existe mais aparece como "Reunião apagada", sem data e sem link. A tarefa (contrato
+ * 125) leva a `/tarefas/<id>` enquanto existir.
  */
 export function Timeline({ itens, compacto = false }: TimelineProps) {
   const navigate = useNavigate()
@@ -104,6 +107,8 @@ export function Timeline({ itens, compacto = false }: TimelineProps) {
         const apagada = item.tipo === 'reuniao' && item.apagada
         const data = item.at === null || apagada ? null : dataHora(item.at)
         const marcas = { 'data-funil-timeline-item': item.tipo, 'data-funil-timeline-apagada': apagada ? '' : undefined }
+        // O link de uma tarefa leva o id dela (contrato 125).
+        const tarefaId = item.tipo === 'tarefa' ? item.tarefaId : undefined
         if (compacto) {
           return (
             <li key={chave(item, index)} {...marcas} className="flex min-h-8 items-center gap-2.5 border-b border-line py-1.5 text-13">
@@ -111,7 +116,7 @@ export function Timeline({ itens, compacto = false }: TimelineProps) {
               <span className="min-w-0 flex-1 truncate text-text" title={`${linha.rotulo} · ${linha.titulo}`}>
                 {linha.rotulo} ·{' '}
                 {linha.link ? (
-                  <button type="button" className={FUNIL_LINK_CLASS} onClick={() => linha.link && abrir(linha.link.destino)}>
+                  <button type="button" data-funil-timeline-tarefa={tarefaId} className={FUNIL_LINK_CLASS} onClick={() => linha.link && abrir(linha.link.destino)}>
                     {linha.titulo}
                   </button>
                 ) : (
@@ -138,7 +143,7 @@ export function Timeline({ itens, compacto = false }: TimelineProps) {
               {linha.texto && <p className="truncate text-12 text-text-muted">{linha.texto}</p>}
               {linha.link && (
                 <p className="text-12">
-                  <button type="button" data-funil-timeline-link={item.tipo} className={FUNIL_LINK_CLASS} onClick={() => linha.link && abrir(linha.link.destino)}>
+                  <button type="button" data-funil-timeline-link={item.tipo} data-funil-timeline-tarefa={tarefaId} className={FUNIL_LINK_CLASS} onClick={() => linha.link && abrir(linha.link.destino)}>
                     {linha.link.texto}
                   </button>
                 </p>

@@ -12,6 +12,7 @@ import { createServer } from 'node:http'
 import { join } from 'node:path'
 import { gzipSync } from 'node:zlib'
 import type { BrowserWindow } from 'electron'
+import { TASK_TIMEOUT_MIN_S, type ScheduledTask } from '../shared/automations'
 import { FUNIL_FILE, FUNIL_VERSION, type Contato, type Empresa, type EventoFunil, type FunilState, type Oportunidade } from '../shared/funil'
 import { TAREFAS_FILE, TAREFAS_VERSION, type Tarefa, type TarefasArquivo } from '../shared/tarefas'
 import { lembretePadrao } from '../shared/tarefas-logic'
@@ -30,6 +31,7 @@ import type { HttpFetch, HttpResponse } from './accounts/http'
 import type { CalendarNoticeKind } from '../shared/calendar'
 import { fakeMediaAccess } from './permissions'
 import { writeFakeIndex } from './whatsapp/fake-index'
+import { SCHEDULES_FILE, SCHEDULES_VERSION, type SchedulesState } from './schedules/store'
 import type { DownloadRequest } from './updates/download'
 import { LATEST_RELEASE_URL, RELEASE_DOWNLOAD_PREFIX } from './updates/release'
 
@@ -413,6 +415,8 @@ export function createSmokeFixtures(currentVersion: string, userDataDir: string)
   writeSmokeFunil(userDataDir, now)
   // Contrato 123: as tarefas semeadas (a migração do 124 anexa as do funil depois, com `migradoEm: null`).
   writeSmokeTarefas(userDataDir, now)
+  // Contrato 125 (CA1 da spec): um lembrete antigo das Automações, que a migração do boot converte em tarefa.
+  writeSmokeLembreteLegado(userDataDir, now)
   const fixtures: SmokeFixtures = {
     updates: createSmokeUpdates(currentVersion),
     media: fakeMediaAccess('not-determined'),
@@ -794,6 +798,47 @@ function writeSmokeTarefas(userDataDir: string, now: number): void {
     ultimoAvisoHojeEm: null,
   }
   writeFileSync(join(userDataDir, TAREFAS_FILE), `${JSON.stringify(arquivo, null, 2)}\n`, { mode: 0o600 })
+}
+
+/** Contrato 125: o id e o texto do lembrete antigo semeado em `schedules.json` (o `nextRunAt` fica na cópia da migração). */
+export const SMOKE_LEMBRETE_LEGADO = { id: 'smoke-lembrete-legado', texto: 'Retornar a ligação do fornecedor' } as const
+
+/**
+ * Contrato 125 (D17, CA1 da spec): `<userData>/schedules.json` antes dos serviços, com um lembrete do Assistente no
+ * formato de `createReminder` (`schedules/service.ts`), sem conversa nem e-mail, para daqui a 60 dias (longe do relógio
+ * que o smoke adianta). A migração do boot (124) o converte em tarefa `migracao/lembrete` e o tira do arquivo.
+ */
+function writeSmokeLembreteLegado(userDataDir: string, now: number): void {
+  const quando = new Date(now + 60 * 86_400_000).toISOString()
+  const criado = new Date(now - 86_400_000).toISOString()
+  const { id, texto } = SMOKE_LEMBRETE_LEGADO
+  const lembrete: ScheduledTask = {
+    id,
+    name: texto,
+    agentId: '',
+    message: texto,
+    schedule: { kind: 'once', at: quando },
+    timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+    enabled: true,
+    runOnce: true,
+    runOnceAction: 'disable',
+    timeoutS: TASK_TIMEOUT_MIN_S,
+    notify: 'always',
+    output: null,
+    reminder: { text: texto, whatsappChatId: null, whatsappChatName: null },
+    email: null,
+    lastRunAt: null,
+    nextRunAt: quando,
+    lastStatus: null,
+    lastResultPreview: null,
+    lastError: null,
+    consecutiveFailures: 0,
+    autoPaused: false,
+    createdAt: criado,
+    updatedAt: criado,
+  }
+  const arquivo: SchedulesState & { version: typeof SCHEDULES_VERSION } = { version: SCHEDULES_VERSION, tasks: [lembrete], paused: false, pauseReason: null, limitReleasedOn: null, meetingRuns: [] }
+  writeFileSync(join(userDataDir, SCHEDULES_FILE), `${JSON.stringify(arquivo, null, 2)}\n`, { mode: 0o600 })
 }
 
 /** Contrato 21: os segredos inventados dos servidores MCP falsos (o smoke confere que nenhum chega à tela nem ao relatório). */

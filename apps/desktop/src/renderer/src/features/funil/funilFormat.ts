@@ -5,6 +5,7 @@ import { EMAIL_INBOX_MAILBOX } from '@shared/email'
 import type { Contato, ContatoOrigem, Empresa, Etapa, EtapaTipo, FunilState, ItemLinhaDoTempo, Oportunidade, ProximoPasso, Sugestao } from '@shared/funil'
 import { diasNaEtapa, dominioDe, ehProvedorPessoal, formatarBRL, nomeEmpresaDoDominio, normalizarEmail, passoVencido, semAcento, totaisDoFunil } from '@shared/funil-logic'
 import { emailPath, ROUTE_PATHS, type EmailNavigationState, type EmailRouteFolder, type WhatsAppNavigationState } from '@shared/routes'
+import type { Tarefa } from '@shared/tarefas'
 
 const DIA_MS = 86_400_000
 
@@ -84,9 +85,9 @@ export function textoTotais(state: FunilState, now: number, timeZone: string): s
   return `${totais.abertas} ${totais.abertas === 1 ? 'aberta' : 'abertas'} · ${formatarBRL(totais.emAberto)} em aberto · ${formatarBRL(totais.ganhoNoMes)} ganho em ${mes}`
 }
 
-/** O próximo passo do cartão (R23; contrato 124: o derivado das tarefas): o texto e a data curta, ou "Sem próximo passo". */
+/** O próximo passo do cartão (R23; contrato 124: o derivado das tarefas): o texto e a data curta; sem tarefa aberta, "Sem tarefa" (contrato 125, R14). */
 export function textoProximoPasso(proximoPasso: Pick<ProximoPasso, 'texto' | 'data'> | null): { texto: string; data: string | null } {
-  if (!proximoPasso) return { texto: 'Sem próximo passo', data: null }
+  if (!proximoPasso) return { texto: 'Sem tarefa', data: null }
   return { texto: proximoPasso.texto, data: proximoPasso.data ? diaCurto(proximoPasso.data) : null }
 }
 
@@ -364,4 +365,49 @@ export function filtrarEmpresas<T extends Pick<Empresa, 'nome' | 'dominios'>>(em
 export function parseDominio(texto: string): string | null {
   const dominio = texto.trim().toLowerCase().replace(/^@/, '')
   return /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/.test(dominio) ? dominio : null
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// Contrato 125: as tarefas no funil (a seção Tarefas da oportunidade, as fichas e o item `tarefa` da linha do tempo).
+
+/** Por prazo (sem prazo por último), depois pela criação e pelo id: a ordem de `abertasDaOportunidade`. */
+function porPrazo(a: Tarefa, b: Tarefa): number {
+  if (a.prazo !== b.prazo) {
+    if (a.prazo === null) return 1
+    if (b.prazo === null) return -1
+    return a.prazo < b.prazo ? -1 : 1
+  }
+  return a.criadaEm - b.criadaEm || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)
+}
+
+/**
+ * As tarefas ligadas à oportunidade (R15): as abertas por prazo (sem prazo por último; a primeira é o próximo passo do
+ * quadro) e as fechadas (feitas e canceladas), a fechada por último primeiro.
+ */
+export function tarefasDaOportunidade(tarefas: readonly Tarefa[], opId: string): { abertas: Tarefa[]; fechadas: Tarefa[] } {
+  const ligadas = tarefas.filter((tarefa) => tarefa.vinculos.oportunidadeId === opId)
+  return {
+    abertas: ligadas.filter((tarefa) => tarefa.status === 'aberta').sort(porPrazo),
+    fechadas: ligadas.filter((tarefa) => tarefa.status !== 'aberta').sort((a, b) => (b.feitaEm ?? 0) - (a.feitaEm ?? 0) || porPrazo(a, b)),
+  }
+}
+
+/** As abertas com o contato nos vínculos (R19), por prazo. */
+export function tarefasDoContato(tarefas: readonly Tarefa[], contatoId: string): Tarefa[] {
+  return tarefas.filter((tarefa) => tarefa.status === 'aberta' && tarefa.vinculos.contatoIds.includes(contatoId)).sort(porPrazo)
+}
+
+/** As abertas ligadas à empresa (R19), por prazo. */
+export function tarefasDaEmpresa(tarefas: readonly Tarefa[], empresaId: string): Tarefa[] {
+  return tarefas.filter((tarefa) => tarefa.status === 'aberta' && tarefa.vinculos.empresaId === empresaId).sort(porPrazo)
+}
+
+/**
+ * O item `tarefa` da linha do tempo (R18, artboard 08): o rótulo ("Tarefa criada" ou "Tarefa concluída") e a linha com
+ * a origem resumida e o prazo ("Criada por você · até 25/11"); sem as duas, `null`.
+ */
+export function textoItemTarefa(item: Pick<Extract<ItemLinhaDoTempo, { tipo: 'tarefa' }>, 'acao' | 'origem' | 'prazo'>): { rotulo: string; linha: string | null } {
+  const origem = item.origem.trim()
+  const partesLinha = [origem ? `${origem.charAt(0).toUpperCase()}${origem.slice(1)}` : '', item.prazo ? `até ${diaCurto(item.prazo)}` : ''].filter((parte) => parte)
+  return { rotulo: item.acao === 'feita' ? 'Tarefa concluída' : 'Tarefa criada', linha: partesLinha.length ? partesLinha.join(' · ') : null }
 }
