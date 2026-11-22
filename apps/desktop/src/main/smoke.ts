@@ -102,12 +102,16 @@
 // falso, o cartão "Oportunidade detectada" (aviso de duplicata, Criar e Ignorar), o "+ Contato" no Email e no WhatsApp.
 //
 // Contrato 117: logo depois dos botões nas telas existentes, o funil no Assistente (`funilAssistenteChecks`): a fonte Funil
-// (primeira e desligada; ligada, o `FUNIL.md`), os cartões "Mover" (e o do id que não existe), "Criar oportunidade" e o do
+// (desligada; ligada, o `FUNIL.md`), os cartões "Mover" (e o do id que não existe), "Criar oportunidade" e o do
 // contato, o "Abrir" da oportunidade e o agente com "Pode ler o funil" no "Pedir agora", com o agente ACP falso.
 //
 // Contrato 125: o funil nas telas, dentro dos três roteiros acima: a migração do boot (`funilMigracao`, com o lembrete
 // antigo semeado em `schedules.json`) e o "Sem tarefa" no kanban; a seção Tarefas da oportunidade com a Nova tarefa, a
 // caixa de feito, "Feitas" e o item `tarefa` da Linha do tempo; o bloco Tarefas nas fichas do contato e da empresa.
+//
+// Contrato 127: os lembretes do Assistente viram tarefas (`reminder`, `reminderEdit`, `reminderDelete` e o lembrete do
+// email conferem `tarefas.json`) e, logo depois do funil no Assistente, as tarefas no Assistente
+// (`tarefasAssistenteChecks`): a fonte Tarefas, os cartões de criar e concluir e o agente com "Pode ler as tarefas".
 import { appendFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { spawn as spawnChild } from 'node:child_process'
 import { request as httpRequest } from 'node:http'
@@ -161,7 +165,7 @@ import { BRANDING_DIR } from './branding/service'
 import { summaryInput, summaryLines } from './claude-cli/summary'
 import { MENU_IDS } from './menu'
 import { CHAT_CORPUS_DIR, CHAT_INDEX_FILE, CHAT_SCOPE_DIR, corpusFileSuffix } from './chat/corpus'
-import { AUTOMATIONS_FILE, EMAIL_SEARCH_FILE, FUNIL_FILE as FUNIL_MD_FILE, GUIDE_FILE, isSourceFile, REDES_FILE, REDES_PUBLICATIONS_FILE, STATE_FILE } from './chat/sources'
+import { AUTOMATIONS_FILE, EMAIL_SEARCH_FILE, FUNIL_FILE as FUNIL_MD_FILE, GUIDE_FILE, isSourceFile, REDES_FILE, REDES_PUBLICATIONS_FILE, STATE_FILE, TAREFAS_FILE as TAREFAS_MD_FILE } from './chat/sources'
 import { CHAT_EVENTS_FILE } from './chat/events-store'
 import { CHATS_DIR } from './chat/store'
 import type { FakeDriveFile } from './google/fake-google'
@@ -643,6 +647,12 @@ function readChatFiles(userDataDir: string): SmokeChatFile[] {
 }
 
 const chatFile = (userDataDir: string, id: string): SmokeChatFile | undefined => readChatFiles(userDataDir).find((chat) => chat.id === id)
+
+/** Contrato 127: as tarefas gravadas em `tarefas.json` (vazio enquanto o arquivo não existe). */
+function readTarefasFile(userDataDir: string): Tarefa[] {
+  const file = join(userDataDir, TAREFAS_FILE)
+  return existsSync(file) ? (JSON.parse(readFileSync(file, 'utf8')) as TarefasArquivo).tarefas : []
+}
 
 /**
  * Contrato 16, CA2 e CA8: uma pergunta pelo campo, olhando a resposta em curso a cada 30 ms: as linhas de
@@ -5645,6 +5655,8 @@ async function lockChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => void
     detail: `bloqueado=${darkLocked}, backdrop-filter=${darkLayer.blur}, véu ${darkLayer.veil}, inert=${darkLayer.inert}; desbloqueado=${darkUnlocked}`,
   }
   checks['tarefasBloqueio'] = await tarefasBloqueioCheck(ctx, dark)
+  // Contrato 127 (CA16): o canal dos cartões das tarefas, recusado bloqueado.
+  checks['tarefasBloqueioCartao'] = await tarefasBloqueioCartaoCheck(dark)
   dark.destroy()
 }
 
@@ -6769,6 +6781,9 @@ interface SmokeActionFile {
   chatName?: string
   phone?: string | null
   whatsappChatId?: string | null
+  /** Contrato 127: o lembrete (o instante pedido e a tarefa criada no clique). */
+  at?: string
+  tarefaId?: string | null
 }
 
 /**
@@ -6850,47 +6865,78 @@ async function assistantChecks(ctx: SmokeContext, watch: (win: BrowserWindow) =>
   await shot('assistente-contexto-light')
   checks['sources'] = { ok: sources, detail: `WhatsApp, Automações e Guia ligados, conversas recentes=${sources}` }
 
-  // CA3 e CA4: o lembrete, do cartão até a tarefa.
+  // CA3 e CA4: o lembrete, do cartão até a tarefa. Contrato 127 (R13, CA11): o clique cria uma tarefa `origem assistente` em
+  // `tarefas.json`, com o `lembreteEm` do cartão e a conversa nos vínculos; nenhuma `ScheduledTask` nova.
   const tasksBefore = (await ctx.automations.listTasks()).length
+  const tarefasBefore = new Set(readTarefasFile(ctx.userDataDir).map((item) => item.id))
   const reminder = await askChat(contents, 'Me lembre amanhã de responder a Ana')
   const card = `[...document.querySelectorAll('[data-chat-action="lembrete"]')].at(-1)`
   const proposed = await waitFor(contents, `${card}?.dataset.chatActionStatus === 'proposed'`)
   const title = await evaluate<string>(contents, `${card}?.querySelector('[data-chat-action-title]')?.textContent ?? ''`)
   const defaultTime = await evaluate<boolean>(contents, `Boolean(${card}?.querySelector('[data-chat-action-default-time]'))`)
   const rawHidden = !(await evaluate<string>(contents, LAST_ANSWER)).includes('lap-acao')
-  const createdBeforeClick = (await ctx.automations.listTasks()).length
+  const nothingBeforeClick = (await ctx.automations.listTasks()).length === tasksBefore && readTarefasFile(ctx.userDataDir).length === tarefasBefore.size
   await shot('assistente-lembrete-light')
   await evaluate(contents, `${card}?.querySelector('[data-action="chat-action-reminder-create"]')?.click()`)
   const created = await waitFor(contents, `${card}?.dataset.chatActionStatus === 'done' && (${card}?.querySelector('[data-chat-action-result]')?.textContent ?? '').startsWith('Lembrete criado · ')`)
-  const tasks = await ctx.automations.listTasks()
-  const task = tasks.find((item) => item.reminder?.whatsappChatId === WA_ANA)
+  const novas = readTarefasFile(ctx.userDataDir).filter((item) => !tarefasBefore.has(item.id))
+  const tarefa = novas.find((item) => item.vinculos.whatsappChatId === WA_ANA)
   const savedReminder = lastActions()[0]
   // Recarregar a conversa não repete: o mesmo cartão pelo canal devolve `done` e nada é criado.
   const again = await evaluate<{ ok: boolean; error?: string }>(contents, `window.__scribeApi.invoke('scribe:chat-action-reminder', { chatId: '${chatIdNow}', index: ${(chatFile(ctx.userDataDir, chatIdNow)?.messages.length ?? 1) - 1}, actionId: '${savedReminder?.id ?? 'x'}' })`)
   const tasksAfter = (await ctx.automations.listTasks()).length
+  const tarefasAfter = readTarefasFile(ctx.userDataDir).length
+  // "Ver em Tarefas" abre o detalhe da tarefa criada.
+  const openLabel = await evaluate<string>(contents, `${card}?.querySelector('[data-action="chat-action-open-tasks"]')?.textContent ?? ''`)
   await evaluate(contents, `${card}?.querySelector('[data-action="chat-action-open-tasks"]')?.click()`)
-  const listed = await waitFor(contents, `${routeIs('automacoes')} && document.querySelector('[data-automations-tab="tarefas"] [data-task-reminder][data-task-name="${task?.name ?? '?'}"]')`, 8000)
-  const when = await evaluate<string>(contents, `document.querySelector('[data-task-reminder] [data-task-when]')?.textContent ?? ''`)
+  const opened = await waitFor(contents, `${routeIs('tarefas')} && document.querySelector('[data-tarefa-detalhe="${tarefa?.id ?? '?'}"]')`, 8000)
+  // A lista de Agendamentos não mostra lembrete nenhum (R33).
+  await clickNav(contents, 'automacoes')
+  await waitFor(contents, routeIs('automacoes'), 8000)
+  await evaluate(contents, `document.querySelector('[data-tab="tarefas"]')?.click(), true`)
+  const tabShown = await waitFor(contents, `document.querySelector('[data-automations-tab="tarefas"] [data-tasks-tab]')`, 8000)
+  const noReminderRow = tabShown && (await evaluate<boolean>(contents, `!document.querySelector('[data-task-reminder]')`))
+  const lembrete = {
+    pedido: reminder.done,
+    cartao: proposed,
+    blocoEscondido: rawHidden,
+    nadaAntesDoClique: nothingBeforeClick,
+    titulo: title.startsWith('Lembrete · ') && title.includes(' 09:00 (amanhã) · Responder Ana Souza'),
+    horaPadrao: defaultTime,
+    criado: created,
+    tarefasNovas: novas.length,
+    origemAssistente: tarefa?.origem.tipo === 'assistente',
+    lembreteDoCartao: tarefa !== undefined && tarefa.lembreteEm === Date.parse(savedReminder?.at ?? ''),
+    tarefaNoCartao: tarefa !== undefined && savedReminder?.tarefaId === tarefa.id,
+    agendamentosNovos: tasksAfter - tasksBefore,
+    deNovoDone: again.ok === false && again.error === 'done',
+    tarefasDepoisDeNovo: tarefasAfter - tarefasBefore.size,
+    verEmTarefas: openLabel === 'Ver em Tarefas',
+    detalheAberto: opened,
+    semLembreteNaLista: noReminderRow,
+  }
   checks['reminder'] = {
     ok:
-      reminder.done &&
-      proposed &&
-      rawHidden &&
-      createdBeforeClick === tasksBefore &&
-      title.startsWith('Lembrete · ') &&
-      title.includes(' 09:00 (amanhã) · Responder Ana Souza') &&
-      defaultTime &&
-      created &&
-      task !== undefined &&
-      task.agentId === '' &&
-      task.schedule.kind === 'once' &&
-      tasksAfter === tasksBefore + 1 &&
-      savedReminder?.status === 'done' &&
-      again.ok === false &&
-      again.error === 'done' &&
-      listed &&
-      when.startsWith('Uma vez em '),
-    detail: `cartão=${proposed} "${title}", 09:00 avisado=${defaultTime}, bloco escondido=${rawHidden}; nada antes do clique=${createdBeforeClick === tasksBefore}; criado=${created}, tarefa ${task ? `${task.name} (${task.schedule.kind}, agente "${task.agentId}")` : 'ausente'}; de novo -> ${JSON.stringify(again)}, tarefas ${tasksBefore} -> ${tasksAfter}; em Automações=${listed} "${when}"`,
+      lembrete.pedido &&
+      lembrete.cartao &&
+      lembrete.blocoEscondido &&
+      lembrete.nadaAntesDoClique &&
+      lembrete.titulo &&
+      lembrete.horaPadrao &&
+      lembrete.criado &&
+      lembrete.tarefasNovas === 1 &&
+      lembrete.origemAssistente &&
+      lembrete.lembreteDoCartao &&
+      lembrete.tarefaNoCartao &&
+      lembrete.agendamentosNovos === 0 &&
+      lembrete.deNovoDone &&
+      lembrete.tarefasDepoisDeNovo === 1 &&
+      lembrete.verEmTarefas &&
+      lembrete.detalheAberto &&
+      lembrete.semLembreteNaLista &&
+      savedReminder?.status === 'done',
+    // Só números e booleanos: o texto do lembrete é o título da tarefa (R36).
+    detail: JSON.stringify(lembrete),
   }
   await clickNav(contents, 'assistente')
   await waitFor(contents, `${routeIs('assistente')} && document.querySelector('[data-chat-conversation="${chatIdNow}"]')`, 8000)
@@ -7123,74 +7169,89 @@ async function assistantAgendaChecks(ctx: SmokeContext, watch: (win: BrowserWind
       detail: `cartão=${noAccessShown}; aviso "${view.note}"; botão "${view.ask}"; "Pôr na agenda" desabilitado=${view.disabled}; seletor=${view.picker}; gravado access=${String(savedNoAccess?.access)} agenda=${String(savedNoAccess?.calendarId)}`,
     }
 
-    // CA6: o lembrete criado pelo cartão de sempre, adiado pelo cartão "lembrete-editar".
-    const tasksBefore = new Set((await ctx.automations.listTasks()).map((item) => item.id))
+    // CA6: o lembrete criado pelo cartão de sempre, adiado pelo cartão "lembrete-editar". Contrato 127 (R13, D-14): o
+    // lembrete é uma tarefa; o pedido usa o id curto dela, que o ESTADO.md lista na seção "Lembretes".
+    const tarefasBefore = new Set(readTarefasFile(ctx.userDataDir).map((item) => item.id))
     await askChat(contents, 'Me lembre amanhã de responder o Bruno')
     const reminderCard = lastCard('lembrete')
     await waitFor(contents, `${reminderCard}?.dataset.chatActionStatus === 'proposed'`)
     await clickIn(reminderCard, 'chat-action-reminder-create')
     await waitFor(contents, `${reminderCard}?.dataset.chatActionStatus === 'done'`, 8000)
-    const task = (await ctx.automations.listTasks()).find((item) => item.reminder && !tasksBefore.has(item.id))
-    const taskId = task?.id ?? 'sem-tarefa'
-    const reminderText = task?.reminder?.text ?? '?'
-    const oldAt = task?.schedule.kind === 'once' ? task.schedule.at : ''
+    const tarefa = readTarefasFile(ctx.userDataDir).find((item) => !tarefasBefore.has(item.id) && item.lembreteEm !== null)
+    const tarefaId = tarefa?.id ?? 'sem-tarefa'
+    const curto = tarefaId.slice(0, 8)
+    const reminderText = tarefa?.titulo ?? '?'
+    const oldAt = tarefa?.lembreteEm ? new Date(tarefa.lembreteEm).toISOString() : ''
     const scopeDir = join(ctx.userDataDir, CHAT_SCOPE_DIR, await chatId())
-    const postpone = await askChat(contents, `Adie o lembrete ${taskId} para depois de amanhã 9h`)
+    const postpone = await askChat(contents, `Adie o lembrete ${curto} para depois de amanhã 9h`)
     const stateText = existsSync(join(scopeDir, STATE_FILE)) ? readFileSync(join(scopeDir, STATE_FILE), 'utf8') : ''
-    const automationsText = existsSync(join(scopeDir, AUTOMATIONS_FILE)) ? readFileSync(join(scopeDir, AUTOMATIONS_FILE), 'utf8') : ''
     const editReminder = lastCard('lembrete-editar')
     const editShown = await waitFor(contents, `${editReminder}?.dataset.chatActionStatus === 'proposed'`)
     const change = await cardText(editReminder, '[data-chat-reminder-change-when]')
     const newAt = new Date(Date.parse(localDayAt(2, 9))).toISOString()
     const tz = macTimeZone()
     const changeOk = change.startsWith(formatRunAt(Date.parse(oldAt), tz)) && change.endsWith(formatRunAt(Date.parse(newAt), tz))
+    /** "dd/mm HH:MM" no fuso do Mac, como a seção "Lembretes" do ESTADO.md. */
+    const diaHora = (iso: string): string => {
+      const partes = new Intl.DateTimeFormat('en-GB', { timeZone: tz, month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).formatToParts(new Date(iso))
+      const parte = (tipo: Intl.DateTimeFormatPartTypes): string => partes.find((item) => item.type === tipo)?.value ?? ''
+      return `${parte('day')}/${parte('month')} ${parte('hour')}:${parte('minute')}`
+    }
     await both('assistente-lembrete-editar')
     await clickIn(editReminder, 'chat-action-reminder-save')
     const editSaved = await waitFor(contents, `${editReminder}?.dataset.chatActionStatus === 'done' && (${editReminder}?.querySelector('[data-chat-action-result]')?.textContent ?? '').startsWith('Lembrete alterado · ')`, 8000)
-    const moved = (await ctx.automations.listTasks()).find((item) => item.id === taskId)
+    const moved = readTarefasFile(ctx.userDataDir).find((item) => item.id === tarefaId)
+    // "Ver em Tarefas" leva ao detalhe da tarefa, com o lembrete.
     await clickIn(editReminder, 'chat-action-open-tasks')
-    const listed = await waitFor(contents, `${routeIs('automacoes')} && document.querySelector('[data-automations-tab="tarefas"] [data-task-reminder][data-task-name="${task?.name ?? '?'}"]')`, 8000)
-    const listedWhen = await evaluate<string>(contents, `document.querySelector('[data-task-reminder][data-task-name="${task?.name ?? '?'}"] [data-task-when]')?.textContent ?? ''`)
+    const listed = await waitFor(contents, `${routeIs('tarefas')} && document.querySelector('[data-tarefa-detalhe="${tarefaId}"] [data-tarefa-campo="lembrete"]')`, 8000)
+    const editar = {
+      tarefa: tarefa !== undefined,
+      pedido: postpone.done,
+      estadoComId: stateText.includes(`· id: ${curto}`),
+      estadoComLinha: stateText.includes(`- Lembrete: ${reminderText} · ${diaHora(oldAt)} · id: ${curto}`),
+      agendas: stateText.includes('## Agendas do Mac') && stateText.includes('- Pessoal (iCloud)') && stateText.includes('- Trabalho (iCloud), padrão'),
+      semFeriados: !stateText.includes('Feriados'),
+      semIdDeAgenda: !stateText.includes('cal-'),
+      cartao: editShown,
+      antesDepois: changeOk,
+      salvo: editSaved,
+      lembreteNovo: moved?.lembreteEm === Date.parse(newAt),
+      disparoZerado: moved?.lembreteDisparadoEm === null,
+      tituloIgual: moved?.titulo === reminderText,
+      detalheComLembrete: listed,
+    }
     checks['reminderEdit'] = {
-      ok:
-        task !== undefined &&
-        postpone.done &&
-        stateText.includes(`· id: ${taskId}`) &&
-        stateText.includes('## Agendas do Mac') &&
-        stateText.includes('- Pessoal (iCloud)') &&
-        stateText.includes('- Trabalho (iCloud), padrão') &&
-        !stateText.includes('Feriados') &&
-        !stateText.includes('cal-') &&
-        automationsText.includes(`- Lembrete: ${reminderText} · ${formatRunAt(Date.parse(oldAt), tz)} · id: ${taskId}`) &&
-        editShown &&
-        changeOk &&
-        editSaved &&
-        moved?.schedule.kind === 'once' &&
-        moved.schedule.at === newAt &&
-        moved.nextRunAt === newAt &&
-        moved.runOnce &&
-        moved.reminder?.text === reminderText &&
-        listed &&
-        listedWhen.includes(formatRunAt(Date.parse(newAt), tz).slice(4, 9)),
-      detail: `lembrete ${task ? task.id : 'ausente'} (${oldAt}); ESTADO com o id=${stateText.includes(`· id: ${taskId}`)}, agendas=${stateText.includes('## Agendas do Mac')} sem id de agenda=${!stateText.includes('cal-')}; AUTOMACOES com o id=${automationsText.includes(`id: ${taskId}`)}; cartão=${editShown} "${change}"; salvo=${editSaved} -> ${moved?.schedule.kind === 'once' ? moved.schedule.at : 'sumiu'} (próxima ${String(moved?.nextRunAt)}, uma vez só=${String(moved?.runOnce)}); em Automações=${listed} "${listedWhen}"`,
+      ok: Object.values(editar).every(Boolean),
+      // Só booleanos: o texto do lembrete é o título da tarefa (R36).
+      detail: JSON.stringify(editar),
     }
     await clickNav(contents, 'assistente')
     await waitFor(contents, `${routeIs('assistente')} && document.querySelector('[data-chat-conversation]')`, 8000)
 
-    // CA7: apagar o lembrete pelo cartão de perigo; o id que não existe mais não vira cartão.
-    await askChat(contents, `Apague o lembrete ${taskId}`)
+    // CA7: apagar o lembrete pelo cartão de perigo; o id que não existe mais não vira cartão. Contrato 127: apaga a tarefa.
+    await askChat(contents, `Apague o lembrete ${curto}`)
     const deleteCard = lastCard('lembrete-apagar')
     const deleteShown = await waitFor(contents, `${deleteCard}?.dataset.chatActionStatus === 'proposed'`)
     const question = await cardText(deleteCard, '[data-chat-action-title]')
     await both('assistente-lembrete-apagar')
     await clickIn(deleteCard, 'chat-action-reminder-delete')
     const deleted = await waitFor(contents, `${deleteCard}?.dataset.chatActionStatus === 'done' && (${deleteCard}?.querySelector('[data-chat-action-result]')?.textContent ?? '') === 'Lembrete apagado'`, 8000)
-    const gone = !(await ctx.automations.listTasks()).some((item) => item.id === taskId)
-    const repeat = await askChat(contents, `Apague o lembrete ${taskId}`)
+    const gone = !readTarefasFile(ctx.userDataDir).some((item) => item.id === tarefaId)
+    const repeat = await askChat(contents, `Apague o lembrete ${curto}`)
     const repeatCards = await evaluate<number>(contents, `${LAST_ASSISTANT}?.querySelectorAll('[data-chat-action]').length ?? -1`)
+    const apagar = {
+      cartao: deleteShown,
+      pergunta: question === `Apagar o lembrete “${reminderText}” de ${formatRunAt(Date.parse(newAt), tz)}?`,
+      apagado: deleted,
+      foraDasTarefas: gone,
+      deNovo: repeat.done,
+      cartoesDeNovo: repeatCards,
+      semAcoesDeNovo: (await lastActions()).length === 0,
+      blocoComoTexto: repeat.answer.includes('lembrete-apagar'),
+    }
     checks['reminderDelete'] = {
-      ok: deleteShown && question === `Apagar o lembrete “${reminderText}” de ${formatRunAt(Date.parse(newAt), tz)}?` && deleted && gone && repeat.done && repeatCards === 0 && (await lastActions()).length === 0 && repeat.answer.includes('lembrete-apagar'),
-      detail: `cartão=${deleteShown} "${question}"; apagado=${deleted}, fora das tarefas=${gone}; de novo: cartões=${repeatCards}, texto "${repeat.answer.slice(0, 80)}"`,
+      ok: apagar.cartao && apagar.pergunta && apagar.apagado && apagar.foraDasTarefas && apagar.deNovo && apagar.cartoesDeNovo === 0 && apagar.semAcoesDeNovo && apagar.blocoComoTexto,
+      detail: JSON.stringify(apagar),
     }
   } finally {
     if (helperBefore === null) rmSync(cal.statePath, { force: true })
@@ -10155,21 +10216,47 @@ async function emailAssistantChecks(ctx: SmokeContext, watch: (win: BrowserWindo
     detail: `cartão=${replyShown} para "${to}" assunto "${subject}"; nada antes do clique=${nothingBeforeClick}; SMTP ${sentBefore} -> ${fake.sent.length} ${JSON.stringify(last ?? null)}; In-Reply-To esperado ${marina?.messageId ?? '?'}; "Enviado"=${sentDone}`,
   }
 
-  // CA4: a tarefa de responder, ligada ao email, e ela nas pendências seguintes.
+  // CA4: a tarefa de responder, ligada ao email, e ela nas pendências seguintes. Contrato 127 (R13): a tarefa vai para
+  // `tarefas.json`, com a mensagem em `vinculos.email` (achada no app: `mailbox: null`); nenhuma `ScheduledTask` nova.
+  const tasksBefore = (await ctx.automations.listTasks()).length
+  const tarefasBefore = new Set(readTarefasFile(ctx.userDataDir).map((item) => item.id))
   const reminder = await askChat(contents, 'Cria uma tarefa pra responder o email da Juliana amanhã')
   const reminderCard = `[...document.querySelectorAll('[data-chat-action="lembrete"]')].at(-1)`
   const reminderShown = await waitFor(contents, `${reminderCard}?.dataset.chatActionStatus === 'proposed' && ${reminderCard}?.querySelector('[data-chat-action-email-label]')`)
   const label = await evaluate<string>(contents, `${reminderCard}?.querySelector('[data-chat-action-email-label]')?.textContent ?? ''`)
   await evaluate(contents, `${reminderCard}?.querySelector('[data-action="chat-action-reminder-create"]')?.click()`)
   const created = await waitFor(contents, `${reminderCard}?.dataset.chatActionStatus === 'done'`)
-  const task = (await ctx.automations.listTasks()).find((item) => item.reminder?.email?.accountId === accountId)
+  const tarefa = readTarefasFile(ctx.userDataDir).find((item) => !tarefasBefore.has(item.id) && item.vinculos.email?.accountId === accountId)
+  const tasksAfter = (await ctx.automations.listTasks()).length
   await askChat(contents, 'O que tenho de email pendente?')
   const julianaLine = overviewOf()
     .split('\n')
     .find((line) => line.includes('de: Juliana Prado'))
+  const lembreteEmail = {
+    pedido: reminder.done,
+    cartao: reminderShown,
+    rotulo: label.startsWith('Email: Juliana Prado · '),
+    criado: created,
+    tarefa: tarefa !== undefined,
+    origemAssistente: tarefa?.origem.tipo === 'assistente',
+    comLembrete: typeof tarefa?.lembreteEm === 'number',
+    mailboxNula: tarefa?.vinculos.email?.mailbox === null,
+    agendamentosNovos: tasksAfter - tasksBefore,
+    marcadoNoEmail: julianaLine?.includes(' · lembrete marcado: ') ?? false,
+  }
   checks['assistantTask'] = {
-    ok: reminder.done && reminderShown && label.startsWith('Email: Juliana Prado · ') && created && task !== undefined && task.schedule.kind === 'once' && task.agentId === '' && (julianaLine?.includes(' · lembrete marcado: ') ?? false),
-    detail: `cartão=${reminderShown} "${label}"; criado=${created}; tarefa ${task ? `${task.name} (${task.schedule.kind})` : 'ausente'}; linha seguinte "${julianaLine ?? ''}"`,
+    ok:
+      lembreteEmail.pedido &&
+      lembreteEmail.cartao &&
+      lembreteEmail.rotulo &&
+      lembreteEmail.criado &&
+      lembreteEmail.tarefa &&
+      lembreteEmail.origemAssistente &&
+      lembreteEmail.comLembrete &&
+      lembreteEmail.mailboxNula &&
+      lembreteEmail.agendamentosNovos === 0 &&
+      lembreteEmail.marcadoNoEmail,
+    detail: JSON.stringify(lembreteEmail),
   }
 
   // CA7: a busca além do cache, pelas ferramentas do app; nada muda de lida.
@@ -12565,8 +12652,8 @@ async function funilKanbanChecks(ctx: SmokeContext, watch: (win: BrowserWindow) 
     // funilMigracao (contrato 125, CA1 da spec): a migração do boot (124) converteu os 4 próximos passos da fixture do
     // funil e o lembrete semeado em `schedules.json` em tarefas `migracao`, tirou o `proximoPasso` de `funil.json` e o
     // lembrete semeado de `schedules.json` e deixou as duas cópias (0600). O `nextRunAt` semeado sai da cópia de
-    // `schedules.json`. Os lembretes que o Assistente cria antes deste ponto (pelo caminho antigo, até o 127) continuam
-    // no arquivo: só o semeado precisa ter saído.
+    // `schedules.json`. Contrato 127: os lembretes que o Assistente cria antes deste ponto já nascem tarefas
+    // (`origem assistente`), fora de `schedules.json` e fora desta contagem de `migracao`.
     {
       const arquivo = JSON.parse(readFileSync(join(ctx.userDataDir, TAREFAS_FILE), 'utf8')) as TarefasArquivo
       const dePasso = arquivo.tarefas.filter((tarefa) => tarefa.origem.tipo === 'migracao' && tarefa.origem.de === 'proximo-passo')
@@ -14491,14 +14578,14 @@ async function funilAssistenteChecks(ctx: SmokeContext, watch: (win: BrowserWind
   }
 
   try {
-    // funilFonteDesligada (R41): numa conversa nova, a linha Funil é a primeira das Fontes e vem desligada; perguntar não
-    // leva o `FUNIL.md` à pasta.
+    // funilFonteDesligada (R41): numa conversa nova, a linha Funil vem desligada; perguntar não leva o `FUNIL.md` à pasta.
+    // Contrato 127 (R27): a Tarefas passou a ser a primeira das Fontes; a Funil vem logo depois.
     await showAssistantLevel(contents)
     await clickSelector(contents, '[data-action="chat-new"]')
     await waitFor(contents, `document.querySelector('[data-chat-input]') && !document.querySelector('[data-chat-message]')`)
     await clickSelector(contents, '[data-action="toggle-context"]')
     const offByDefault = await waitFor(contents, `${switchOf}?.getAttribute('aria-checked') === 'false'`)
-    const first = await evaluate<string>(contents, `document.querySelector('[data-chat-sources] [data-chat-source]')?.getAttribute('data-chat-source') ?? ''`)
+    const first = await evaluate<string>(contents, `[...document.querySelectorAll('[data-chat-sources] [data-chat-source]')].slice(0, 2).map((el) => el.getAttribute('data-chat-source')).join(',')`)
     const sourceText = await text(contents, '[data-chat-source="funil"]')
     const askedOff = await askChat(contents, 'Como está o funil? Tem algo para mexer hoje?')
     const id = await chatId()
@@ -14506,7 +14593,7 @@ async function funilAssistenteChecks(ctx: SmokeContext, watch: (win: BrowserWind
     const funilMd = join(scopeDir, FUNIL_MD_FILE)
     const absent = !existsSync(funilMd)
     checks['funilFonteDesligada'] = {
-      ok: offByDefault && first === 'funil' && sourceText.includes('Etapas, oportunidades abertas, ganhas e perdidas dos últimos 90 dias e até 500 contatos.') && askedOff.done && absent && askedOff.answer.includes('ligue a fonte Funil'),
+      ok: offByDefault && first === 'tarefas,funil' && sourceText.includes('Etapas, oportunidades abertas, ganhas e perdidas dos últimos 90 dias e até 500 contatos.') && askedOff.done && absent && askedOff.answer.includes('ligue a fonte Funil'),
       detail: `desligada=${offByDefault}; primeira fonte "${first}"; "${sourceText}"; resposta=${askedOff.done} "${askedOff.answer.slice(0, 120)}"; sem ${FUNIL_MD_FILE}=${absent}`,
     }
 
@@ -14680,6 +14767,205 @@ async function funilAssistenteChecks(ctx: SmokeContext, watch: (win: BrowserWind
     win.destroy()
     console.log(`funil: assistente e agentes em ${((Date.now() - startedAt) / 1000).toFixed(1)} s`)
   }
+}
+
+/**
+ * Contrato 127 (CA11, CA13 da spec), com o agente ACP falso, logo depois do funil no Assistente e antes do bloqueio: a fonte
+ * Tarefas (a primeira do Contexto, ligada por padrão; "o que tenho para hoje?" leva o `TAREFAS.md` 0600 à pasta e a
+ * resposta cita a tarefa); o cartão `tarefa-criar` com a oportunidade resolvida pelo nome e o prazo da sexta (print
+ * `assistente-tarefas`, claro e escuro); "Criar" grava a tarefa `origem assistente` ligada a op-loja; `tarefa-concluir` pelo
+ * id curto conclui e o id que não existe nasce `failed`; e o agente com "Pode ler as tarefas" (o `TAREFAS.md` na pasta do
+ * "Pedir agora"). Termina sem a tarefa e o agente que criou. Os `detail` só com números e booleanos (R36).
+ */
+async function tarefasAssistenteChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => void, checks: Record<string, Check>, shots: Screenshot[]): Promise<void> {
+  const startedAt = Date.now()
+  const themeBefore = readSettings(ctx.userDataDir).theme ?? 'system'
+  const transportBefore = readSettings(ctx.userDataDir).claudeTransport
+  nativeTheme.themeSource = 'light'
+  const win = ctx.openWindow({})
+  watch(win)
+  await loadAndWait(win)
+  const contents = win.webContents
+  if (themeBefore !== 'system') await evaluate(contents, "window.__scribeApi.invoke('scribe:settings-update', { theme: 'system' }).then(() => true)")
+  await evaluate(contents, "window.__scribeApi.invoke('scribe:settings-update', { claudeTransport: 'acp' }).then(() => true)")
+  const acpStatus = await evaluate<{ state?: string }>(contents, "window.__scribeApi.invoke('scribe:acp-status')")
+  if (acpStatus.state !== 'installed') await evaluate(contents, "window.__scribeApi.invoke('scribe:acp-install').then(() => true)")
+  const api = <T>(channel: string, request?: unknown): Promise<T> => evaluate<T>(contents, `window.__scribeApi.invoke(${JSON.stringify(channel)}${request === undefined ? '' : `, ${JSON.stringify(request)}`})`)
+  const both = async (name: string): Promise<void> => {
+    await evaluate(contents, `document.activeElement instanceof HTMLElement && document.activeElement.blur(), true`)
+    await settle(contents)
+    shots.push(await capture(win, ctx.outDir, `${name}-light`))
+    nativeTheme.themeSource = 'dark'
+    await waitFor(contents, "document.documentElement.dataset.theme === 'dark'")
+    await settle(contents)
+    shots.push(await capture(win, ctx.outDir, `${name}-dark`))
+    nativeTheme.themeSource = 'light'
+    await waitFor(contents, "document.documentElement.dataset.theme === 'light'")
+  }
+  const chatId = (): Promise<string> => evaluate<string>(contents, `document.querySelector('[data-chat-conversation]')?.getAttribute('data-chat-conversation') ?? ''`)
+  const lastCard = (kind: string): string => `[...document.querySelectorAll('[data-chat-action="${kind}"]')].at(-1)`
+  type TarefaCardFile = { id: string; kind: string; status: string; result: string | null; error?: string | null; prazo?: string | null; oportunidade?: { id: string } | null; tarefaId?: string | null }
+  const lastActions = async (): Promise<TarefaCardFile[]> => (chatFile(ctx.userDataDir, await chatId())?.messages.at(-1)?.actions ?? []) as TarefaCardFile[]
+  const criados: { tarefa: string | null; agente: string | null } = { tarefa: null, agente: null }
+  /** A próxima sexta (hoje sendo sexta, a da semana que vem), como o agente falso calcula. */
+  const sexta = (): string => {
+    const now = new Date()
+    const day = new Date(now.getFullYear(), now.getMonth(), now.getDate() + ((5 - now.getDay() + 7) % 7 || 7))
+    return `${day.getFullYear()}-${String(day.getMonth() + 1).padStart(2, '0')}-${String(day.getDate()).padStart(2, '0')}`
+  }
+
+  try {
+    // tarefasFonte (CA11, R27): numa conversa nova, a linha Tarefas é a primeira das Fontes e vem ligada; "o que tenho para
+    // hoje?" leva o `TAREFAS.md` (0600) à pasta e a resposta cita uma tarefa.
+    await showAssistantLevel(contents)
+    await clickSelector(contents, '[data-action="chat-new"]')
+    await waitFor(contents, `document.querySelector('[data-chat-input]') && !document.querySelector('[data-chat-message]')`)
+    await clickSelector(contents, '[data-action="toggle-context"]')
+    const ligada = await waitFor(contents, `document.querySelector('[data-chat-source="tarefas"] [role="switch"]')?.getAttribute('aria-checked') === 'true'`)
+    const primeira = await evaluate<boolean>(contents, `document.querySelector('[data-chat-sources] [data-chat-source]')?.getAttribute('data-chat-source') === 'tarefas'`)
+    const hoje = await askChat(contents, 'O que tenho para hoje?')
+    const scopeDir = join(ctx.userDataDir, CHAT_SCOPE_DIR, await chatId())
+    const tarefasMd = join(scopeDir, TAREFAS_MD_FILE)
+    const fonte = {
+      ligadaPorPadrao: ligada,
+      primeiraDoContexto: primeira,
+      resposta: hoje.done,
+      arquivoNaPasta: existsSync(tarefasMd),
+      arquivo0600: existsSync(tarefasMd) && mode(tarefasMd) === '600',
+      citaTarefa: hoje.answer.includes('[Tarefa · '),
+    }
+    checks['tarefasFonte'] = { ok: Object.values(fonte).every(Boolean), detail: JSON.stringify(fonte) }
+
+    // tarefasCartaoCriar (CA11, R28): o cartão com op-loja resolvida pelo nome e o prazo da sexta; nada antes do clique;
+    // "Criar" grava a tarefa `origem assistente` ligada a op-loja.
+    const antes = new Set(readTarefasFile(ctx.userDataDir).map((item) => item.id))
+    const pedido = await askChat(contents, 'Crie a tarefa Mandar proposta para sexta ligada à Loja virtual')
+    const card = lastCard('tarefa-criar')
+    const proposto = await waitFor(contents, `${card}?.dataset.chatActionStatus === 'proposed'`, 8000)
+    const gravado = (await lastActions()).find((action) => action.kind === 'tarefa-criar')
+    const nadaAntes = readTarefasFile(ctx.userDataDir).length === antes.size
+    const editar = await evaluate<boolean>(contents, `Boolean(${card}?.querySelector('[data-action="tarefa-criar-editar"]'))`)
+    const oportunidadeNaTela = await evaluate<boolean>(contents, `(${card}?.querySelector('[data-chat-tarefa-valor="oportunidade"]')?.textContent ?? '').startsWith('Loja virtual')`)
+    await both('assistente-tarefas')
+    await evaluate(contents, `${card}?.querySelector('[data-action="chat-action-tarefa-criar"]')?.click(), true`)
+    const feito = await waitFor(contents, `${card}?.dataset.chatActionStatus === 'done' && (${card}?.querySelector('[data-chat-action-result]')?.textContent ?? '') === 'Tarefa criada: Mandar proposta'`, 8000)
+    const nova = readTarefasFile(ctx.userDataDir).find((item) => !antes.has(item.id) && item.titulo === 'Mandar proposta')
+    criados.tarefa = nova?.id ?? null
+    const criar = {
+      pedido: pedido.done,
+      cartao: proposto,
+      oportunidadeResolvida: gravado?.oportunidade?.id === 'op-loja',
+      prazoDaSexta: gravado?.prazo === sexta(),
+      oportunidadeNaTela,
+      botaoEditar: editar,
+      nadaAntesDoClique: nadaAntes,
+      criada: feito,
+      origemAssistente: nova?.origem.tipo === 'assistente',
+      ligadaAOpLoja: nova?.vinculos.oportunidadeId === 'op-loja',
+      prazoGravado: nova?.prazo === sexta(),
+      tarefaNoCartao: nova !== undefined && (await lastActions()).find((action) => action.kind === 'tarefa-criar')?.tarefaId === nova.id,
+    }
+    checks['tarefasCartaoCriar'] = { ok: Object.values(criar).every(Boolean), detail: JSON.stringify(criar) }
+
+    // tarefasCartaoConcluir (CA11): pelo id curto da criada, "Concluir" marca feita; o id que não existe nasce `failed`.
+    const curto = (nova?.id ?? 'semtarefa').slice(0, 8)
+    const concluirPedido = await askChat(contents, `Conclua a tarefa ${curto}`)
+    const concluirCard = lastCard('tarefa-concluir')
+    const concluirProposto = await waitFor(contents, `${concluirCard}?.dataset.chatActionStatus === 'proposed'`, 8000)
+    await evaluate(contents, `${concluirCard}?.querySelector('[data-action="chat-action-tarefa-concluir"]')?.click(), true`)
+    const concluido = await waitFor(contents, `${concluirCard}?.dataset.chatActionStatus === 'done'`, 8000)
+    const feita = readTarefasFile(ctx.userDataDir).find((item) => item.id === nova?.id)?.status === 'feita'
+    const inexistente = await askChat(contents, 'Conclua a tarefa 00000000')
+    const falhouCard = lastCard('tarefa-concluir')
+    const falhou = await waitFor(contents, `${falhouCard}?.dataset.chatActionStatus === 'failed'`, 8000)
+    const erro = await evaluate<string>(contents, `${falhouCard}?.querySelector('[data-chat-action-error]')?.textContent ?? ''`)
+    const semBotao = await evaluate<boolean>(contents, `!${falhouCard}?.querySelector('[data-action="chat-action-tarefa-concluir"]')`)
+    const concluir = {
+      pedido: concluirPedido.done,
+      cartao: concluirProposto,
+      concluido,
+      feitaNoArquivo: feita,
+      pedidoInexistente: inexistente.done,
+      inexistenteFailed: falhou,
+      frase: erro === 'Essa tarefa não existe mais',
+      semBotao,
+    }
+    checks['tarefasCartaoConcluir'] = { ok: Object.values(concluir).every(Boolean), detail: JSON.stringify(concluir) }
+
+    // agenteTarefas (CA13, R31): o Switch "Pode ler as tarefas" vem desligado; ligado, o "Pedir agora" tem o TAREFAS.md na
+    // pasta; desligado, não.
+    const NAME = 'Leitor das tarefas'
+    await clickNav(contents, 'automacoes')
+    await waitFor(contents, routeIs('automacoes'), 8000)
+    await evaluate(contents, `document.querySelector('[data-automations-tab="agentes"]') || document.querySelector('[data-tab="agentes"]')?.click(), true`)
+    await waitFor(contents, `document.querySelectorAll('[data-agent-card]').length >= 1 && document.querySelector('[data-action="agent-new"]')`, 8000)
+    await clickSelector(contents, '[data-action="agent-new"]')
+    await waitFor(contents, `document.querySelector('[data-agent-form] #agent-name')`)
+    const agentOff = await evaluate<string | null>(contents, `document.querySelector('[data-agent-tarefas] [role="switch"]')?.getAttribute('aria-checked') ?? null`)
+    await setValue(contents, '#agent-name', NAME)
+    await setValue(contents, '#agent-instructions', 'Responda o que está na pasta.')
+    await clickSelector(contents, '[data-agent-tarefas] [role="switch"]')
+    const agentOn = await waitFor(contents, `document.querySelector('[data-agent-tarefas] [role="switch"]')?.getAttribute('aria-checked') === 'true'`)
+    await clickSelector(contents, '[data-action="agent-save"]')
+    await waitFor(contents, `document.querySelector('[data-agent-name="${NAME}"]')`, 8000)
+    const agentsFile = (): { agents: (Record<string, unknown> & { id: string; name: string; tarefas?: boolean })[] } => JSON.parse(readFileSync(join(ctx.userDataDir, AGENTS_FILE), 'utf8')) as { agents: (Record<string, unknown> & { id: string; name: string; tarefas?: boolean })[] }
+    const agent = agentsFile().agents.find((item) => item.name === NAME)
+    criados.agente = agent?.id ?? null
+    const askNow = async (): Promise<{ answered: boolean; text: string }> => {
+      const before = new Set(readRunFiles(ctx.userDataDir).map((run) => run.id))
+      await setValue(contents, '#ask-now-agent', agent?.id ?? '', 'change')
+      await setValue(contents, '#ask-now-text', 'Quais arquivos estão na pasta?')
+      await clickSelector(contents, '[data-action="ask-now"]')
+      const answered = await waitFor(contents, `document.querySelector('[data-ask-now] [data-run-state="ok"] [data-chat-footer]')`, 30_000)
+      const run = readRunFiles(ctx.userDataDir).find((item) => item.trigger === 'ask' && !before.has(item.id))
+      await clickSelector(contents, '[data-action="ask-now-close"]')
+      await waitFor(contents, `!document.querySelector('[data-ask-now] [data-run-answer]')`)
+      return { answered, text: run?.answer?.text ?? '' }
+    }
+    const withTarefas = await askNow()
+    const { createdAt: _createdAt, updatedAt: _updatedAt, ...input } = agent ?? ({ id: '', name: '' } as Record<string, unknown>)
+    const off = await api<{ ok: boolean }>('scribe:agents-save', { ...input, tarefas: false })
+    const withoutTarefas = await askNow()
+    const agente = {
+      desligadoNoNovo: agentOff === 'false',
+      ligado: agentOn,
+      agentsJsonTarefas: agent?.tarefas === true,
+      comAsTarefas: withTarefas.answered,
+      citaTarefasMd: withTarefas.text.includes('TAREFAS.md'),
+      desligado: off.ok,
+      semAsTarefas: withoutTarefas.answered,
+      comecaComArquivos: withoutTarefas.text.startsWith('Arquivos na pasta:'),
+      semTarefasMd: !withoutTarefas.text.includes('TAREFAS.md'),
+    }
+    // Sem trechos da resposta: ela cita títulos de reunião da agenda, que não podem ir ao relatório (contrato 12, CA11).
+    checks['agenteTarefas'] = { ok: Object.values(agente).every(Boolean), detail: JSON.stringify(agente) }
+  } finally {
+    // A tarefa e o agente criados aqui saem.
+    if (criados.tarefa) await api('scribe:tarefas-apagar', { id: criados.tarefa }).catch(() => undefined)
+    if (criados.agente) await api('scribe:agents-delete', { id: criados.agente }).catch(() => undefined)
+    await evaluate(contents, `window.__scribeApi.invoke('scribe:settings-update', { claudeTransport: '${transportBefore}' }).then(() => true)`)
+    if (themeBefore !== 'system') await evaluate(contents, `window.__scribeApi.invoke('scribe:settings-update', { theme: '${themeBefore}' }).then(() => true)`)
+    nativeTheme.themeSource = 'system'
+    win.destroy()
+    console.log(`tarefas: assistente e agentes em ${((Date.now() - startedAt) / 1000).toFixed(1)} s`)
+  }
+}
+
+/**
+ * Contrato 127 (CA16 da spec), na janela de `lockChecks`: bloqueado, o canal dos cartões das tarefas
+ * (`scribe:chat-action-tarefa`) é recusado; desbloqueia no fim.
+ */
+async function tarefasBloqueioCartaoCheck(win: BrowserWindow): Promise<Check> {
+  const contents = win.webContents
+  pressKeys(contents, 'L', ['meta', 'shift'])
+  const bloqueou = await waitFor(contents, LOCK_LAYER)
+  const recusou = await evaluate<boolean>(
+    contents,
+    `window.__scribeApi.invoke('scribe:chat-action-tarefa', { chatId: 'c1', index: 1, actionId: 'a1' }).then(() => false, (error) => String(error?.message ?? error).endsWith('Error: ${LOCKED_ERROR}'))`,
+  )
+  await typeLockPassword(contents, LOCK_PASSWORD)
+  const desbloqueou = await waitFor(contents, `!${LOCK_LAYER}`)
+  return { ok: bloqueou && recusou && desbloqueou, detail: JSON.stringify({ bloqueou, canalRecusado: recusou, desbloqueou }) }
 }
 
 /**
@@ -16198,6 +16484,11 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
     // Termina com op-vistoria de volta à Proposta e sem a oportunidade, o contato e o agente que criou.
     await funilAssistenteChecks(ctx, watch, funil, screenshots)
 
+    // Contrato 127: as tarefas no Assistente (a fonte, os cartões) e o agente com "Pode ler as tarefas", com o agente ACP
+    // falso, logo depois do funil no Assistente e antes do bloqueio (que recusa o canal novo). Termina sem a tarefa e o
+    // agente que criou.
+    await tarefasAssistenteChecks(ctx, watch, tarefasTela, screenshots)
+
     // Contrato 22: bloqueio do app, por último (a senha criada vale para o userData inteiro).
     await lockChecks(ctx, watch, lock, screenshots)
 
@@ -16307,6 +16598,8 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
   for (const [name, check] of Object.entries(tarefasTela)) if (!check.ok) failures.push(`tarefas ${name}: ${check.detail}`)
   // Contrato 126: o Resumo, o email e o WhatsApp.
   for (const name of ['resumoTarefas', 'resumoGerarDeNovo', 'emailTarefa', 'whatsappTarefa']) if (!tarefasTela[name]) failures.push(`tarefas ${name}: não executado`)
+  // Contrato 127: as tarefas no Assistente e o agente com "Pode ler as tarefas".
+  for (const name of ['tarefasFonte', 'tarefasCartaoCriar', 'tarefasCartaoConcluir', 'agenteTarefas']) if (!tarefasTela[name]) failures.push(`tarefas ${name}: não executado`)
   for (const name of ['funilNav', 'funilLevel', 'funilRedirect', 'funilNavigateEvent', 'funilKanban', 'funilCollapsed', 'funilFiltros', 'funilNova', 'funilEtapas', 'funilDragMove', 'funilDragLost']) {
     if (!funil[name]) failures.push(`funil ${name}: não executado`)
   }
@@ -16321,7 +16614,7 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
   for (const [name, check] of Object.entries(invite)) if (!check.ok) failures.push(`convites ${name}: ${check.detail}`)
   for (const name of ['convite-1', 'convite-2', 'convite-3', 'convite-4', 'convite-5', 'convite-6', 'convite-7', 'convite-8', 'convite-9', 'convite-10', 'convite-11', 'convite-estados', 'convite-lista', 'convite-configuracoes', 'convite-regra-1', 'convite-regra-2', 'convite-regra-3', 'convite-sugestao-4', 'convite-sugestao-5']) if (!invite[name]) failures.push(`convites ${name}: não executado`)
   for (const [name, check] of Object.entries(lock)) if (!check.ok) failures.push(`bloqueio ${name}: ${check.detail}`)
-  for (const name of ['password', 'layer', 'channels', 'unlock', 'shortcutAndTouchId', 'recordingContinues', 'leaveDialog', 'endWhileLocked', 'reopen', 'reopenFromDisk', 'dark']) if (!lock[name]) failures.push(`bloqueio ${name}: não executado`)
+  for (const name of ['password', 'layer', 'channels', 'unlock', 'shortcutAndTouchId', 'recordingContinues', 'leaveDialog', 'endWhileLocked', 'reopen', 'reopenFromDisk', 'dark', 'tarefasBloqueioCartao']) if (!lock[name]) failures.push(`bloqueio ${name}: não executado`)
   // 81: densidade
   if (!lock['density']) failures.push('bloqueio density: não executado')
   // 81: densidade (fim)
@@ -16371,7 +16664,8 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
   // Contrato 125: +1 (a ficha do contato com o bloco Tarefas, só no claro).
   // Contrato 126: +5 (a tabela de tarefas do Resumo e o "+ Tarefa" na leitura do email, nos dois temas, e o "+ Tarefa" nos
   // Detalhes do WhatsApp, só no claro).
-  const expectedShots = SCREENS.length * THEMES.length + 220
+  // Contrato 127: +2 (o cartão `tarefa-criar` com a citação da tarefa no Assistente, nos dois temas).
+  const expectedShots = SCREENS.length * THEMES.length + 222
   if (screenshots.length !== expectedShots) failures.push(`${screenshots.length} PNGs em vez de ${expectedShots}`)
   for (const shot of screenshots) {
     if (shot.name === MEETING_PROMPT_SHOT) {

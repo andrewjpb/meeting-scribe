@@ -21,6 +21,8 @@ export const SUGESTOES_DIAS = 30
 export const FEITAS_DIAS = 90
 /** Linhas das quatro seções do `TAREFAS.md` (R27). */
 export const TAREFAS_MD_MAX = 200
+/** O id curto do `TAREFAS.md` e dos cartões do Assistente: os 8 primeiros caracteres do uuid (D-13, contrato 127). */
+export const TAREFA_ID_CURTO = 8
 
 export type TarefaStatus = 'aberta' | 'feita' | 'cancelada'
 

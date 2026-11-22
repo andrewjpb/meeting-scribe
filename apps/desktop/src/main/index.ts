@@ -1523,6 +1523,15 @@ function createAppServices(userData: string): AppServices {
     redes: () => redesAssistant.sourceAccounts(),
     // Contrato 117: o `FUNIL.md` do gerador do contrato 115; bloqueado, nada.
     funil: async () => (lockService?.isLocked() ? null : funilMarkdownText()),
+    // Contrato 127 (R27): o `TAREFAS.md` do gerador do contrato 121; bloqueado, nada.
+    tarefas: async () => (lockService?.isLocked() ? null : tarefasMarkdownText()),
+    // Contrato 127 (R13): os lembretes do `ESTADO.md`, das tarefas abertas com aviso; bloqueado, nenhum.
+    lembretes: async () =>
+      lockService?.isLocked()
+        ? null
+        : (await tarefas.todas()).flatMap((tarefa) =>
+            tarefa.status === 'aberta' && tarefa.lembreteEm !== null ? [{ id: tarefa.id, titulo: tarefa.titulo, lembreteEm: tarefa.lembreteEm, disparado: tarefa.lembreteDisparadoEm !== null }] : [],
+          ),
     ...devLog,
   }
   // Contrato 45: o email do Assistente. O `EMAILS.md` e as mensagens já baixadas saem do cache (sem servidor); as
@@ -1531,11 +1540,16 @@ function createAppServices(userData: string): AppServices {
   const emailExport = {
     cached: () => email.cached(),
     body: (accountId: string, message: EmailMessage) => email.cachedBody(accountId, message),
-    reminders: async () =>
-      (await automations.listTasks()).flatMap((task) => {
-        const next = task.nextRunAt ? Date.parse(task.nextRunAt) : Number.NaN
-        return task.enabled && task.reminder?.email && !Number.isNaN(next) ? [{ accountId: task.reminder.email.accountId, messageId: task.reminder.email.messageId, mailbox: task.reminder.email.mailbox ?? null, when: formatRunAt(next, task.timezone) }] : []
-      }),
+    // Contrato 127 (R13): os lembretes de email são as tarefas abertas ligadas a uma mensagem, com o aviso no fuso; só os
+    // que ainda vão avisar (no futuro e não disparados), como os das Automações antes.
+    reminders: async () => {
+      const agora = Date.now()
+      return (await tarefas.todas()).flatMap((tarefa) =>
+        tarefa.status === 'aberta' && tarefa.vinculos.email && tarefa.lembreteEm !== null && tarefa.lembreteEm > agora && tarefa.lembreteDisparadoEm === null
+          ? [{ accountId: tarefa.vinculos.email.accountId, messageId: tarefa.vinculos.email.id, mailbox: tarefa.vinculos.email.mailbox, when: formatRunAt(tarefa.lembreteEm, timeZone()) }]
+          : [],
+      )
+    },
     locked: emailLocked,
   }
   const emailTools = createEmailTools({
@@ -1587,7 +1601,8 @@ function createAppServices(userData: string): AppServices {
       calendars: () => macCalendar.calendars(),
     },
     preferredCalendar: async () => (await settings.get()).inviteCalendarId,
-    tasks: () => automations.listTasks(),
+    // Contrato 127: as tarefas, só para ler (o lembrete, a tarefa de concluir, adiar ou abrir); bloqueado, o bloco fica como texto.
+    tarefas: async () => (lockService?.isLocked() ? null : tarefas.todas()),
     // Contrato 76: as contas do Instagram conectadas (o id e o @).
     instagramAccounts: async () => redes.state().accounts.map((account) => ({ id: account.id, username: account.username })),
     // Contrato 117: o funil, só para ler os ids, as etapas e os contatos do cartão; bloqueado, o bloco fica como texto.
@@ -1942,16 +1957,21 @@ function createAppServices(userData: string): AppServices {
     ...devLog,
   })
   navegadorServer = navegador
-  // Contrato 25: o clique nos cartões do Assistente. O lembrete é a tarefa "uma vez" sem agente das Automações.
-  // Contrato 78: o evento no Calendário do Mac (gravado só no clique, registrado em `chat-events.json`) e alterar ou apagar
-  // um lembrete das Automações.
+  // Contrato 25: o clique nos cartões do Assistente. Contrato 78: o evento no Calendário do Mac (gravado só no clique,
+  // registrado em `chat-events.json`). Contrato 127: o lembrete cria uma tarefa com aviso; alterar e apagar o lembrete e os
+  // cartões das tarefas gravam pelo serviço das tarefas (por closures, resolvidas na hora do clique).
   const chatActions = createChatActions({
     store: chatStore,
-    createReminder: (input) => automations.createReminder(input),
     timeZone,
     calendar: macCalendar,
     events: createChatEventsStore(userData, devLog),
-    reminders: { list: () => automations.listTasks(), update: (id, change) => automations.updateReminder(id, change), remove: (id) => automations.deleteTask({ id }) },
+    tarefas: {
+      todas: () => tarefas.todas(),
+      criar: (input) => tarefas.criar(input),
+      salvar: (request) => tarefas.salvar(request),
+      status: (request) => tarefas.status(request),
+      apagar: (request) => tarefas.apagar(request),
+    },
     // Contrato 76: o rascunho do Instagram sem mídia, pelo `savePublication` das redes (nunca publica nem agenda).
     instagram: {
       accounts: () => redes.state().accounts.map((account) => ({ id: account.id, username: account.username })),
@@ -2462,6 +2482,8 @@ function registerIpc(services: AppServices): void {
   )
   // Contrato 117: o funil só muda aqui, no clique de um cartão do funil.
   handle('scribe:chat-action-funil', appOrigin, (_event, request) => chatActions.funil(request).catch((): ChatActionResult => ({ ok: false, error: 'invalid' })))
+  // Contrato 127 (D14): "Criar", "Concluir" e "Adiar" nos cartões das tarefas, pelo serviço das tarefas.
+  handle('scribe:chat-action-tarefa', appOrigin, (_event, request) => chatActions.tarefa(request).catch((): ChatActionResult => ({ ok: false, error: 'invalid' })))
   // Contrato 21: o cartão de aprovação de uma ferramenta MCP e a aba "Conexões". Nenhum segredo volta por aqui.
   handle('scribe:chat-approval', appOrigin, (_event, request) => chat.answerApproval(request))
   handle('scribe:mcp-chat-servers', appOrigin, () => mcp.chatServers())

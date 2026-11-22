@@ -13,6 +13,8 @@
 // Redes; nada é publicado daqui).
 // Contrato 117: os cartões do funil de vendas (mover, criar oportunidade, próximo passo e contato), cada um gravando pelo
 // `scribe:chat-action-funil` só no clique, e o "Abrir" para o funil, uma oportunidade e um contato.
+// Contrato 127: os cartões das tarefas (criar, com o "Editar" no próprio cartão; concluir; adiar), pelo
+// `scribe:chat-action-tarefa` só no clique; o lembrete cria uma tarefa e o "Ver em Tarefas" abre o detalhe dela.
 import {
   ArrowRight,
   Bell,
@@ -22,6 +24,7 @@ import {
   Check,
   ChevronDown,
   CircleAlert,
+  CircleCheck,
   Clock,
   ExternalLink,
   FilePlus,
@@ -36,11 +39,12 @@ import {
   RotateCcw,
   Send,
   Settings,
+  SquareCheck,
   Trash2,
   UserPlus,
   X,
 } from 'lucide-react'
-import { useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent } from 'react'
+import { useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
 import { useNavigate } from 'react-router'
 import {
   emailSentText,
@@ -68,6 +72,11 @@ import {
   type ChatActionRef,
   type ChatActionReminderDelete,
   type ChatActionReminderEdit,
+  type ChatActionTarefa,
+  type ChatActionTarefaAdiar,
+  type ChatActionTarefaCampos,
+  type ChatActionTarefaConcluir,
+  type ChatActionTarefaCriar,
   type ChatCalendarAccess,
   type EmailListAction,
   type EmailReplyAction,
@@ -79,17 +88,20 @@ import {
 import { EMAIL_TEXT_MAX } from '@shared/email'
 import { describeSchedule, TASK_TIMEOUT_DEFAULT_S } from '@shared/automations'
 import { formatarBRL } from '@shared/funil-logic'
-import { emailPath, funilPath, meetingPath, redesPath, ROUTE_PATHS, settingsPath, isSettingsTab, type EmailNavigationState, type WhatsAppNavigationState } from '@shared/routes'
+import { emailPath, funilPath, meetingPath, redesPath, ROUTE_PATHS, settingsPath, isSettingsTab, tarefasPath, type EmailNavigationState, type WhatsAppNavigationState } from '@shared/routes'
+import { TAREFA_TITULO_MAX } from '@shared/tarefas'
 import { CAPTION_MAX, captionStats } from '@shared/redes-rules'
 import { WHATSAPP_SEND_TEXT_MAX } from '@shared/whatsapp'
 import { Button } from '../../design/Button'
 import { CONTROL_CLASS } from '../../design/Field'
 import { Icon } from '../../design/Icon'
 import { Note } from '../../design/Note'
+import { useSettings } from '../../app/settingsStore'
 import { useAutomations, type AutomationsTab } from '../agents/automationsStore'
 import { emailTimeLabel, sendErrorText } from '../email/format'
 import { chaveBusca, diaCurto, parseValor, telefoneLegivel, valorParaEdicao, type PickerItem } from '../funil/funilFormat'
 import { useFunilView } from '../funil/funilStore'
+import { diaCurto as tarefaDiaCurto, diaEHora } from '../tarefas/tarefasFormat'
 import { SearchPicker } from '../funil/SearchPicker'
 import { MENU_ITEM, useInlineMenu } from '../meetings/menu'
 import { InstagramGlyph } from '../redes/InstagramGlyph'
@@ -144,7 +156,6 @@ function DismissButton({ actionRef, disabled }: { actionRef: ChatActionRef; disa
 }
 
 function ReminderCard({ action, actionRef }: { action: ReminderAction; actionRef: ChatActionRef }) {
-  const navigate = useNavigate()
   const [editing, setEditing] = useState(false)
   const [when, setWhen] = useState(() => localInput(action.at))
   const [text, setText] = useState(action.text)
@@ -205,19 +216,7 @@ function ReminderCard({ action, actionRef }: { action: ReminderAction; actionRef
       ) : (
         <div className="flex flex-wrap items-center gap-3">
           <Outcome action={action} />
-          {action.status === 'done' && (
-            <button
-              type="button"
-              data-action="chat-action-open-tasks"
-              onClick={() => {
-                useAutomations.getState().setTab('tarefas')
-                void navigate(ROUTE_PATHS.automacoes)
-              }}
-              className="text-12 text-accent underline decoration-1 underline-offset-3 hover:text-title"
-            >
-              Ver em Automações
-            </button>
-          )}
+          {action.status === 'done' && <OpenTasksLink tarefaId={action.tarefaId ?? null} />}
         </div>
       )}
       {failure && (
@@ -408,6 +407,13 @@ function OpenCard({ action }: { action: OpenAction }) {
         return
       case 'contato':
         void navigate(action.target ? funilPath('contatos', action.target) : funilPath('contatos'))
+        return
+      // Contrato 127 (R30).
+      case 'tarefas':
+        void navigate(tarefasPath())
+        return
+      case 'tarefa':
+        void navigate(action.target ? tarefasPath(action.target) : tarefasPath())
     }
   }
   return (
@@ -634,20 +640,17 @@ function CardError({ text }: { text: string }) {
   )
 }
 
-/** "Ver em Automações", na aba Agendamentos. */
-function OpenTasksLink() {
+/** Contrato 127 (R13): "Ver em Tarefas", no detalhe da tarefa do lembrete quando o cartão a tem; senão, a lista. */
+function OpenTasksLink({ tarefaId }: { tarefaId: string | null }) {
   const navigate = useNavigate()
   return (
     <button
       type="button"
       data-action="chat-action-open-tasks"
-      onClick={() => {
-        useAutomations.getState().setTab('tarefas')
-        void navigate(ROUTE_PATHS.automacoes)
-      }}
+      onClick={() => void navigate(tarefaId ? tarefasPath(tarefaId) : tarefasPath())}
       className="text-12 text-accent underline decoration-1 underline-offset-3 hover:text-title"
     >
-      Ver em Automações
+      Ver em Tarefas
     </button>
   )
 }
@@ -1122,7 +1125,7 @@ function ReminderEditCard({ action, actionRef }: { action: ChatActionReminderEdi
           {action.status === 'failed' && action.error && <CardError text={action.error} />}
           <div className="flex flex-wrap items-center gap-3">
             {action.status !== 'failed' && <Outcome action={action} />}
-            {action.status !== 'dismissed' && <OpenTasksLink />}
+            {action.status !== 'dismissed' && <OpenTasksLink tarefaId={action.status === 'done' ? action.taskId : null} />}
           </div>
         </>
       )}
@@ -1170,7 +1173,7 @@ function ReminderDeleteCard({ action, actionRef }: { action: ChatActionReminderD
           {action.status === 'failed' && action.error && <CardError text={action.error} />}
           <div className="flex flex-wrap items-center gap-3">
             {action.status !== 'failed' && <Outcome action={action} />}
-            {action.status !== 'dismissed' && <OpenTasksLink />}
+            {action.status !== 'dismissed' && <OpenTasksLink tarefaId={null} />}
           </div>
         </>
       )}
@@ -1590,7 +1593,7 @@ function OportunidadeCriarCard({ action, actionRef }: { action: ChatActionOportu
   )
 }
 
-/** Contrato 117 (R43): "Próximo passo de <título>", com o de antes → o novo; "Salvar" grava pelo funil. */
+/** Contrato 117 (R43): "Próximo passo de <título>"; "Salvar" grava pelo funil. Contrato 127 (R17): cria a tarefa. */
 function ProximoPassoCard({ action, actionRef }: { action: ChatActionOportunidadeProximoPasso; actionRef: ChatActionRef }) {
   const { busy, failure, run } = useFunilClick(actionRef)
   const proposed = action.status === 'proposed'
@@ -1607,11 +1610,10 @@ function ProximoPassoCard({ action, actionRef }: { action: ChatActionOportunidad
           <span data-chat-action-title>Próximo passo</span>
         )}
       </p>
+      {/* Contrato 127 (R17): o passo vira uma tarefa; o de antes não aparece mais. */}
       {action.titulo && (
-        <span data-chat-funil-passo className="flex flex-wrap items-center gap-2 pl-[22px] text-13">
-          <span className="text-text-muted">{action.anterior ? passo(action.anterior.texto, action.anterior.data) : 'Sem próximo passo'}</span>
-          <Icon icon={ArrowRight} size={14} className="shrink-0 text-text-faint" />
-          <span className={proposed ? 'font-medium text-title' : 'text-text-muted'}>{passo(action.texto, action.data)}</span>
+        <span data-chat-funil-passo className={`pl-[22px] text-13 ${proposed ? 'font-medium text-title' : 'text-text-muted'}`}>
+          {passo(action.texto, action.data)}
         </span>
       )}
       {proposed ? (
@@ -1674,6 +1676,313 @@ function ContatoCriarCard({ action, actionRef }: { action: ChatActionContatoCria
   )
 }
 
+// --- Contrato 127: as tarefas --------------------------------------------------------------------------------------
+
+const TAREFA_CARD_ERRORS: Record<string, string> = {
+  done: 'Este cartão já foi usado.',
+  missing: 'Esta conversa não existe mais.',
+  past: 'Esse lembrete já passou. Escolha outro horário.',
+  full: 'A lista chegou ao limite de tarefas.',
+  invalid: 'Não foi possível concluir. Tente de novo.',
+}
+/** Só no cartão de criar tarefa o `invalid` vem dos campos editados. */
+const TAREFA_CRIAR_INVALID = 'Confira o título, o prazo e o lembrete.'
+
+/** "sexta, 27/11/2026" de `AAAA-MM-DD` (o dia da semana sem o "-feira"). */
+function prazoLongo(dia: string): string {
+  const [ano = 1970, mes = 1, d = 1] = dia.split('-').map(Number)
+  const semana = new Intl.DateTimeFormat('pt-BR', { weekday: 'long', timeZone: 'UTC' }).format(new Date(Date.UTC(ano, mes - 1, d))).replace(/-feira$/, '')
+  return `${semana}, ${tarefaDiaCurto(dia)}/${ano}`
+}
+
+/** Clique num cartão das tarefas, com o erro do canal no próprio cartão. */
+function useTarefaClick(actionRef: ChatActionRef, invalid?: string): { busy: boolean; failure: string | null; run: (campos?: ChatActionTarefaCampos) => Promise<void> } {
+  const [busy, setBusy] = useState(false)
+  const [failure, setFailure] = useState<string | null>(null)
+  const run = async (campos?: ChatActionTarefaCampos): Promise<void> => {
+    if (busy) return
+    setBusy(true)
+    setFailure(null)
+    const result = await useChat.getState().tarefaAction(actionRef, campos)
+    setBusy(false)
+    if (!result.ok) setFailure(result.error === 'invalid' && invalid ? invalid : (TAREFA_CARD_ERRORS[result.error] ?? TAREFA_CARD_ERRORS['invalid'] ?? ''))
+  }
+  return { busy, failure, run }
+}
+
+/** O que vem depois do clique: o resultado com "Abrir a tarefa", ou o erro (o cartão `failed`). */
+function TarefaOutcome({ action, tarefaId }: { action: ChatActionTarefa; tarefaId: string | null }) {
+  const navigate = useNavigate()
+  if (action.status === 'failed') return action.error ? <CardError text={action.error} /> : null
+  return (
+    <div className="flex flex-wrap items-center gap-3 pl-[22px]">
+      <Outcome action={action} />
+      {action.status === 'done' && tarefaId && (
+        <button type="button" data-action="chat-action-tarefa-open" onClick={() => void navigate(tarefasPath(tarefaId))} className="text-12 text-accent underline decoration-1 underline-offset-3 hover:text-title">
+          Abrir a tarefa
+        </button>
+      )}
+    </div>
+  )
+}
+
+/** Um par rótulo/valor do cartão de criar tarefa (o rótulo em 13 px, cinza; o valor em 15 px). */
+function TarefaPar({ campo, rotulo, children }: { campo: string; rotulo: string; children: ReactNode }) {
+  return (
+    <>
+      <dt className="text-13 text-text-muted">{rotulo}</dt>
+      <dd data-chat-tarefa-valor={campo} className="min-w-0 text-15 text-text">
+        {children}
+      </dd>
+    </>
+  )
+}
+
+/** O formulário do "Editar" do cartão de criar tarefa (o lembrete como no `<input type="datetime-local">`). */
+interface TarefaForm {
+  titulo: string
+  prazo: string
+  lembrete: string
+  oportunidade: PickerItem | null
+  contato: PickerItem | null
+}
+
+/**
+ * Contrato 127 (R28, artboard 13): "Criar tarefa <título>", com os pares Prazo, Lembrete, Oportunidade e Contato. Com a
+ * oportunidade (ou o contato) ambígua, o `SearchPicker` pede a escolha no lugar do valor. "Editar" troca os valores por
+ * campos no próprio cartão; "Criar" manda o que mudou e o main confere de novo (as regras do 121).
+ */
+function TarefaCriarCard({ action, actionRef }: { action: ChatActionTarefaCriar; actionRef: ChatActionRef }) {
+  const ids = useId()
+  const view = useFunilView()
+  const config = useSettings((state) => state.settings.tarefas)
+  const timeZone = macTimeZone()
+  const { busy, failure, run } = useTarefaClick(actionRef, TAREFA_CRIAR_INVALID)
+  const lembreteInicial = (): string => {
+    if (action.lembreteEm === null) return ''
+    const { dia, hora } = diaEHora(action.lembreteEm, timeZone)
+    return `${dia}T${hora}`
+  }
+  const [editing, setEditing] = useState(false)
+  const [form, setForm] = useState<TarefaForm>(() => ({
+    titulo: action.titulo,
+    prazo: action.prazo ?? '',
+    lembrete: lembreteInicial(),
+    oportunidade: action.oportunidade ? { id: action.oportunidade.id, nome: action.oportunidade.titulo } : null,
+    contato: action.contato ? { id: action.contato.id, nome: action.contato.nome } : null,
+  }))
+  /** A escolha no `SearchPicker` do campo ambíguo (sem "Editar"). */
+  const [escolhido, setEscolhido] = useState<PickerItem | null>(null)
+  /** O contato escolhido quando a oportunidade e o contato ficaram os dois por escolher. */
+  const [escolhidoContato, setEscolhidoContato] = useState<PickerItem | null>(null)
+  const change = (patch: Partial<TarefaForm>): void => setForm((current) => ({ ...current, ...patch }))
+  const proposed = action.status === 'proposed'
+  const estado = view?.state
+  const abertas = estado ? estado.oportunidades.filter((item) => !item.arquivado && estado.etapas.find((etapa) => etapa.id === item.etapaId)?.tipo === 'aberta') : []
+  const oportunidades: PickerItem[] = abertas.map((item) => ({ id: item.id, nome: item.titulo, detalhe: estado?.etapas.find((etapa) => etapa.id === item.etapaId)?.nome }))
+  const contatos: PickerItem[] = estado?.contatos.filter((item) => !item.arquivado).map((item) => ({ id: item.id, nome: item.nome, detalhe: item.emails[0] })) ?? []
+  const ambiguo = proposed && !editing ? action.ambiguo : null
+  const contatoAEscolher = ambiguo ? (action.ambiguoContato ?? null) : null
+
+  const oportunidadeTexto = (): string => {
+    if (!action.oportunidade) return 'Nenhuma'
+    const oportunidade = estado?.oportunidades.find((item) => item.id === action.oportunidade?.id)
+    const etapa = oportunidade ? estado?.etapas.find((item) => item.id === oportunidade.etapaId)?.nome : undefined
+    return etapa ? `${action.oportunidade.titulo} · ${etapa}` : action.oportunidade.titulo
+  }
+  const contatoTexto = (): string => {
+    if (action.contato) return action.contato.nome
+    // R9: sem contato, a tarefa ganha os contatos da oportunidade.
+    const daOportunidade = action.oportunidade ? estado?.oportunidades.find((item) => item.id === action.oportunidade?.id)?.contatoIds[0] : undefined
+    const nome = daOportunidade ? estado?.contatos.find((item) => item.id === daOportunidade)?.nome : undefined
+    return nome ? `${nome} (da oportunidade)` : 'Nenhum'
+  }
+  const lembreteTexto = (): string => {
+    if (action.lembreteEm !== null) {
+      const { dia, hora } = diaEHora(action.lembreteEm, timeZone)
+      return `${prazoLongo(dia)}, às ${hora}`
+    }
+    return action.prazo && config.lembrarNoPrazo ? `no prazo, às ${config.horaLembrete}` : 'Sem lembrete'
+  }
+
+  const create = async (): Promise<void> => {
+    if (ambiguo) {
+      if (!escolhido || (contatoAEscolher && !escolhidoContato)) return
+      await run(ambiguo.campo === 'oportunidade' ? { oportunidadeId: escolhido.id, ...(escolhidoContato ? { contatoId: escolhidoContato.id } : {}) } : { contatoId: escolhido.id })
+      return
+    }
+    if (!editing) return run()
+    const lembrete = form.lembrete ? new Date(form.lembrete).getTime() : null
+    await run({
+      titulo: form.titulo,
+      prazo: form.prazo || null,
+      lembreteEm: lembrete !== null && Number.isFinite(lembrete) ? lembrete : null,
+      oportunidadeId: form.oportunidade?.id ?? null,
+      contatoId: form.contato?.id ?? null,
+    })
+  }
+
+  return (
+    <div data-chat-action="tarefa-criar" data-chat-action-status={action.status} {...(editing ? { 'data-editing': '' } : {})} className={CARD}>
+      <p className="flex items-start gap-2 text-15 font-medium text-title">
+        <Icon icon={SquareCheck} size={16} className="mt-0.5 shrink-0 text-text-muted" />
+        <span data-chat-action-title>
+          Criar tarefa <strong className="font-bold">{action.titulo}</strong>
+        </span>
+      </p>
+      {proposed && editing ? (
+        <div className="grid grid-cols-[auto_minmax(0,1fr)] items-center gap-x-3 gap-y-2 pl-[22px]">
+          <label htmlFor={`${ids}-titulo`} className={FUNIL_LABEL}>
+            Título
+          </label>
+          <input id={`${ids}-titulo`} type="text" data-chat-tarefa-field="titulo" value={form.titulo} maxLength={TAREFA_TITULO_MAX} onChange={(event) => change({ titulo: event.target.value })} className={FUNIL_CONTROL} />
+          <label htmlFor={`${ids}-prazo`} className={FUNIL_LABEL}>
+            Prazo
+          </label>
+          <input id={`${ids}-prazo`} type="date" data-chat-tarefa-field="prazo" value={form.prazo} onChange={(event) => change({ prazo: event.target.value })} className={`${FUNIL_CONTROL} max-w-48`} />
+          <label htmlFor={`${ids}-lembrete`} className={FUNIL_LABEL}>
+            Lembrete
+          </label>
+          <input id={`${ids}-lembrete`} type="datetime-local" data-chat-tarefa-field="lembrete" value={form.lembrete} onChange={(event) => change({ lembrete: event.target.value })} className={`${FUNIL_CONTROL} max-w-56`} />
+          <label htmlFor={`${ids}-oportunidade`} className={FUNIL_LABEL}>
+            Oportunidade
+          </label>
+          <SearchPicker nome="chat-tarefa-oportunidade" id={`${ids}-oportunidade`} label="Oportunidade" placeholder="Buscar" itens={oportunidades} valor={form.oportunidade} onChange={(oportunidade) => change({ oportunidade })} />
+          <label htmlFor={`${ids}-contato`} className={FUNIL_LABEL}>
+            Contato
+          </label>
+          <SearchPicker nome="chat-tarefa-contato" id={`${ids}-contato`} label="Contato" placeholder="Buscar" itens={contatos} valor={form.contato} onChange={(contato) => change({ contato })} />
+        </div>
+      ) : (
+        <dl data-chat-tarefa-pares className="grid grid-cols-[minmax(120px,auto)_minmax(0,1fr)] items-baseline gap-x-6 gap-y-1.5 pl-[22px]">
+          <TarefaPar campo="prazo" rotulo="Prazo">
+            {action.prazo ? prazoLongo(action.prazo) : 'Sem prazo'}
+          </TarefaPar>
+          <TarefaPar campo="lembrete" rotulo="Lembrete">
+            {lembreteTexto()}
+          </TarefaPar>
+          <TarefaPar campo="oportunidade" rotulo="Oportunidade">
+            {ambiguo?.campo === 'oportunidade' ? (
+              <span data-chat-tarefa-ambiguo="oportunidade" className="flex flex-col gap-1">
+                <span className="text-12 text-text-muted">Escolha a oportunidade de «{ambiguo.texto}»</span>
+                <SearchPicker nome="chat-tarefa-ambiguo" label="Oportunidade" placeholder="Buscar" itens={oportunidades} valor={escolhido} onChange={setEscolhido} />
+              </span>
+            ) : (
+              oportunidadeTexto()
+            )}
+          </TarefaPar>
+          <TarefaPar campo="contato" rotulo="Contato">
+            {ambiguo?.campo === 'contato' ? (
+              <span data-chat-tarefa-ambiguo="contato" className="flex flex-col gap-1">
+                <span className="text-12 text-text-muted">Escolha o contato «{ambiguo.texto}»</span>
+                <SearchPicker nome="chat-tarefa-ambiguo" label="Contato" placeholder="Buscar" itens={contatos} valor={escolhido} onChange={setEscolhido} />
+              </span>
+            ) : contatoAEscolher ? (
+              <span data-chat-tarefa-ambiguo="contato" className="flex flex-col gap-1">
+                <span className="text-12 text-text-muted">Escolha o contato «{contatoAEscolher}»</span>
+                <SearchPicker nome="chat-tarefa-ambiguo-contato" label="Contato" placeholder="Buscar" itens={contatos} valor={escolhidoContato} onChange={setEscolhidoContato} />
+              </span>
+            ) : (
+              contatoTexto()
+            )}
+          </TarefaPar>
+        </dl>
+      )}
+      {proposed ? (
+        <div className="flex flex-wrap items-center gap-2 pt-1 pl-[22px]">
+          <Button action="chat-action-tarefa-criar" icon={Plus} onClick={() => void create()} disabled={busy || (editing && !form.titulo.trim()) || (ambiguo !== null && (!escolhido || (contatoAEscolher !== null && !escolhidoContato)))}>
+            {busy ? 'Criando…' : 'Criar'}
+          </Button>
+          {!editing && (
+            <Button action="tarefa-criar-editar" variant="secondary" onClick={() => setEditing(true)}>
+              Editar
+            </Button>
+          )}
+          <DismissButton actionRef={actionRef} disabled={busy} />
+        </div>
+      ) : (
+        <TarefaOutcome action={action} tarefaId={action.tarefaId} />
+      )}
+      <FunilFailure text={failure} />
+    </div>
+  )
+}
+
+/** Contrato 127 (R28): "Concluir <título>"; "Concluir" marca a tarefa como feita. */
+function TarefaConcluirCard({ action, actionRef }: { action: ChatActionTarefaConcluir; actionRef: ChatActionRef }) {
+  const { busy, failure, run } = useTarefaClick(actionRef)
+  return (
+    <div data-chat-action="tarefa-concluir" data-chat-action-status={action.status} className={CARD}>
+      <p className="flex items-start gap-2 text-15 font-medium text-title">
+        <Icon icon={CircleCheck} size={16} className="mt-0.5 shrink-0 text-text-muted" />
+        {action.titulo ? (
+          <span data-chat-action-title>
+            Concluir <strong className="font-bold">{action.titulo}</strong>
+          </span>
+        ) : (
+          <span data-chat-action-title>Concluir tarefa</span>
+        )}
+      </p>
+      {action.titulo && (
+        <span data-chat-tarefa-mudanca className="flex flex-wrap items-center gap-2 pl-[22px] text-13">
+          <span className="text-text-muted">Aberta</span>
+          <Icon icon={ArrowRight} size={14} className="shrink-0 text-text-faint" />
+          <span className={action.status === 'proposed' ? 'font-medium text-title' : 'text-text-muted'}>Feita</span>
+        </span>
+      )}
+      {action.status === 'proposed' ? (
+        <div className="flex flex-wrap items-center gap-2 pl-[22px]">
+          <Button action="chat-action-tarefa-concluir" icon={Check} onClick={() => void run()} disabled={busy}>
+            Concluir
+          </Button>
+          <DismissButton actionRef={actionRef} disabled={busy} />
+        </div>
+      ) : (
+        <TarefaOutcome action={action} tarefaId={action.status === 'done' ? action.tarefaId : null} />
+      )}
+      <FunilFailure text={failure} />
+    </div>
+  )
+}
+
+/** Contrato 127 (R28): "Adiar <título>", com o prazo de antes → o novo; "Adiar" muda o prazo. */
+function TarefaAdiarCard({ action, actionRef }: { action: ChatActionTarefaAdiar; actionRef: ChatActionRef }) {
+  const { busy, failure, run } = useTarefaClick(actionRef)
+  const proposed = action.status === 'proposed'
+  return (
+    <div data-chat-action="tarefa-adiar" data-chat-action-status={action.status} className={CARD}>
+      <p className="flex items-start gap-2 text-15 font-medium text-title">
+        <Icon icon={Calendar} size={16} className="mt-0.5 shrink-0 text-text-muted" />
+        {action.titulo ? (
+          <span data-chat-action-title>
+            Adiar <strong className="font-bold">{action.titulo}</strong>
+          </span>
+        ) : (
+          <span data-chat-action-title>Adiar tarefa</span>
+        )}
+      </p>
+      {action.titulo && (
+        <span data-chat-tarefa-mudanca className="flex flex-wrap items-center gap-2 pl-[22px] text-13 tabular">
+          <span className="text-text-muted">{action.prazoAntes ? prazoLongo(action.prazoAntes) : 'Sem prazo'}</span>
+          <Icon icon={ArrowRight} size={14} className="shrink-0 text-text-faint" />
+          <span className={proposed ? 'font-medium text-title' : 'text-text-muted'}>{prazoLongo(action.prazo)}</span>
+        </span>
+      )}
+      {proposed ? (
+        <div className="flex flex-wrap items-center gap-2 pl-[22px]">
+          <Button action="chat-action-tarefa-adiar" icon={Calendar} onClick={() => void run()} disabled={busy}>
+            Adiar
+          </Button>
+          <DismissButton actionRef={actionRef} disabled={busy} />
+        </div>
+      ) : (
+        <TarefaOutcome action={action} tarefaId={action.status === 'done' ? action.tarefaId : null} />
+      )}
+      <FunilFailure text={failure} />
+    </div>
+  )
+}
+
 /** O cartão de uma ação, pelo tipo. */
 function ActionCard({ action, actionRef, choice }: { action: ChatAction; actionRef: ChatActionRef; choice: boolean }) {
   if (action.kind === 'lembrete') return <ReminderCard action={action} actionRef={actionRef} />
@@ -1694,6 +2003,10 @@ function ActionCard({ action, actionRef, choice }: { action: ChatAction; actionR
   if (action.kind === 'oportunidade-criar') return <OportunidadeCriarCard action={action} actionRef={actionRef} />
   if (action.kind === 'oportunidade-proximo-passo') return <ProximoPassoCard action={action} actionRef={actionRef} />
   if (action.kind === 'contato-criar') return <ContatoCriarCard action={action} actionRef={actionRef} />
+  // Contrato 127.
+  if (action.kind === 'tarefa-criar') return <TarefaCriarCard action={action} actionRef={actionRef} />
+  if (action.kind === 'tarefa-concluir') return <TarefaConcluirCard action={action} actionRef={actionRef} />
+  if (action.kind === 'tarefa-adiar') return <TarefaAdiarCard action={action} actionRef={actionRef} />
   return <OpenCard action={action} />
 }
 

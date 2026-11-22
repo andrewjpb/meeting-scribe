@@ -1,7 +1,7 @@
 // Contrato das mensagens entre main e renderer. Canal novo entra aqui primeiro: no mapa do
 // sentido certo e na lista de canais permitidos logo abaixo (o preload recusa o que não estiver nela).
 import type { AcpAgentStatus } from './acp'
-import type { ChatActionEventRequest, ChatActionFunilRequest, ChatActionInstagramDraftRequest, ChatActionReminderChangeRequest, ChatActionReminderRequest, ChatActionResult, ChatActionStateRequest } from './assistant'
+import type { ChatActionEventRequest, ChatActionFunilRequest, ChatActionInstagramDraftRequest, ChatActionReminderChangeRequest, ChatActionReminderRequest, ChatActionResult, ChatActionStateRequest, ChatActionTarefaRequest } from './assistant'
 import type { AgentDeleteResult, AgentInput, AgentSaveResult, AgentsList, AutomationEvent, AutomationRun, AutomationRunListItem, AutomationsStatus, RunStartResult, RunStatus, ScheduledTask, TaskInput, TaskSaveResult } from './automations'
 import type { DriveMeetingStatus, GoogleAccountStatus, GoogleClientSaveResult, MicrosoftAccountStatus, MicrosoftClientSaveResult } from './accounts'
 import type { CalendarListResult, CalendarView } from './calendar'
@@ -284,6 +284,12 @@ export interface InvokeChannels {
    * que o funil recusa vira o cartão `failed`, com a frase.
    */
   'scribe:chat-action-funil': { request: ChatActionFunilRequest; response: ChatActionResult }
+  /**
+   * Contrato 127 (D14): "Criar", "Concluir" e "Adiar" nos cartões das tarefas, pelo tipo gravado (`campos`: o que o cartão
+   * de criar tarefa mudou, conferido de novo no main). Grava pelo serviço das tarefas; cartão já usado devolve `done`; a
+   * tarefa que fechou ou sumiu vira o cartão `failed`, com a frase.
+   */
+  'scribe:chat-action-tarefa': { request: ChatActionTarefaRequest; response: ChatActionResult }
   /** Contrato 21: "Permitir uma vez", "Sempre permitir esta ferramenta" ou "Negar" no cartão de uma ferramenta MCP. */
   'scribe:chat-approval': { request: ChatApprovalAnswer; response: boolean }
   /** Contrato 21: a linha "Conexões" do painel Contexto (os servidores MCP ligados para o chat). */
@@ -920,6 +926,7 @@ const INVOKE: Record<InvokeChannel, true> = {
   'scribe:chat-action-reminder-change': true,
   'scribe:chat-action-instagram-draft': true,
   'scribe:chat-action-funil': true,
+  'scribe:chat-action-tarefa': true,
   'scribe:chat-approval': true,
   'scribe:mcp-chat-servers': true,
   'scribe:mcp-overview': true,
@@ -1324,6 +1331,7 @@ export const WHEN_LOCKED: Readonly<Record<InvokeChannel, LockedPolicy>> = Object
   'scribe:chat-action-instagram-draft': 'refused',
   // Contrato 117: os cartões do funil, recusados com o app bloqueado como os outros cartões.
   'scribe:chat-action-funil': 'refused',
+  'scribe:chat-action-tarefa': 'refused',
   // Contrato 21: as conexões MCP não aparecem nem mudam com o app bloqueado; o cartão sem resposta nega em 2 min.
   'scribe:chat-approval': 'refused',
   'scribe:mcp-chat-servers': 'refused',

@@ -37,7 +37,7 @@ import {
 import { aplicarMapeamento, IMPORT_BYTES_MAX, lerArquivo, type CampoImport, type EntradaImport, type LeituraImport } from '../../shared/funil-import'
 import { sugestoesDeContato } from '../../shared/funil-sugestoes'
 import { timelineDaOportunidade, timelineDoContato, ultimasInteracoes } from '../../shared/funil-timeline'
-import { TAREFA_TITULO_MAX, type EventoOportunidade, type Tarefa, type TarefaInput, type TarefaSalvar, type TarefasActionResult } from '../../shared/tarefas'
+import { TAREFA_TITULO_MAX, TAREFAS_FALHOU_TEXTO, type EventoOportunidade, type Tarefa, type TarefaInput, type TarefaSalvar, type TarefasActionResult } from '../../shared/tarefas'
 import { diaValido, proximaDaOportunidade } from '../../shared/tarefas-logic'
 import type { WhatsAppChat, WhatsAppMe } from '../../shared/whatsapp'
 import type { MeetingsStore } from '../meetings/store'
@@ -214,19 +214,26 @@ export function createFunilService(deps: FunilServiceDeps): FunilService {
       const oportunidadeId = result.id
       const titulo = texto.slice(0, TAREFA_TITULO_MAX).trim()
       const prazo = passo.data ?? null
+      // Contrato 127 (R17): a resposta diz o que aconteceu com a tarefa (o cartão do Assistente mostra isso).
       try {
         const chave = titulo.toLowerCase()
         const iguais = (await tarefas()).filter((tarefa) => tarefa.status === 'aberta' && tarefa.vinculos.oportunidadeId === oportunidadeId && tarefa.titulo.trim().toLowerCase() === chave)
-        if (iguais.some((tarefa) => tarefa.prazo === prazo)) return result
+        const mesma = iguais.find((tarefa) => tarefa.prazo === prazo)
+        if (mesma) return { ...result, tarefa: { acao: 'existente', id: mesma.id } }
         const existente = iguais[0]
         const feita = existente
           ? await deps.tarefas.salvar({ id: existente.id, prazo })
           : await deps.tarefas.criar({ titulo, prazo, lembrete: 'padrao', origem: { tipo: 'funil', oportunidadeId }, vinculos: { oportunidadeId } })
-        if (!feita.ok) log(`[funil] a tarefa do próximo passo da oportunidade ${oportunidadeId} não foi ${existente ? 'atualizada' : 'criada'} (${feita.erro})`)
+        if (!feita.ok) {
+          log(`[funil] a tarefa do próximo passo da oportunidade ${oportunidadeId} não foi ${existente ? 'atualizada' : 'criada'} (${feita.erro})`)
+          return { ...result, tarefa: { acao: 'falhou', mensagem: feita.mensagem } }
+        }
+        const id = existente?.id ?? feita.id
+        return id ? { ...result, tarefa: { acao: existente ? 'atualizada' : 'criada', id } } : result
       } catch (error) {
         log(`[funil] a tarefa do próximo passo da oportunidade ${oportunidadeId} falhou: ${error instanceof Error ? error.message : String(error)}`)
+        return { ...result, tarefa: { acao: 'falhou', mensagem: TAREFAS_FALHOU_TEXTO } }
       }
-      return result
     },
     oportunidadeMove: async (request) => gravar(await store.moverOportunidade(request), (value) => value.id),
     oportunidadeDelete: async ({ id }) => gravar(await store.deleteOportunidade(id), () => null),

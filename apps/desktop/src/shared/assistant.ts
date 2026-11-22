@@ -12,6 +12,9 @@
 // rascunho na fila da conta e abre o editor na tela Redes; nada é publicado daqui.
 // Contrato 117: os cartões do funil de vendas (`oportunidade-criar`, `oportunidade-mover`, `oportunidade-proximo-passo`,
 // `contato-criar`). Ids, etapas e contatos são lidos do funil do app; nada é gravado no funil antes do clique no cartão.
+// Contrato 127: os cartões das tarefas (`tarefa-criar`, `tarefa-concluir`, `tarefa-adiar`), pelo canal único
+// `scribe:chat-action-tarefa`; o `lembrete` passa a criar uma tarefa com aviso e `lembrete-editar`/`-apagar` operam sobre
+// tarefas abertas com lembrete (o id inteiro ou o curto, de 8 caracteres, do `TAREFAS.md`).
 import { formatRunAt, wallTime, type Schedule } from './automations'
 import type { Chat } from './chat'
 import { CAPTION_MAX } from './redes-rules'
@@ -48,8 +51,9 @@ export const INSTAGRAM_DRAFT_CAPTION_MAX = CAPTION_MAX * 4
 /**
  * Telas que o botão "Abrir" alcança. `alvo`: a reunião, a conversa, a aba de Configurações ou a aba das Automações.
  * Contrato 117 (R20): o funil (Oportunidades), uma oportunidade e um contato (`alvo`: o id).
+ * Contrato 127 (R30): a lista de tarefas e uma tarefa (`alvo`: o id inteiro ou o curto).
  */
-export const OPEN_SCREENS = ['reuniao', 'reunioes', 'whatsapp', 'configuracoes', 'automacoes', 'gravacao', 'funil', 'oportunidade', 'contato'] as const
+export const OPEN_SCREENS = ['reuniao', 'reunioes', 'whatsapp', 'configuracoes', 'automacoes', 'gravacao', 'funil', 'oportunidade', 'contato', 'tarefas', 'tarefa'] as const
 export type OpenScreen = (typeof OPEN_SCREENS)[number]
 export const OPEN_SCREEN_LABELS: Readonly<Record<OpenScreen, string>> = {
   reuniao: 'a reunião',
@@ -61,6 +65,8 @@ export const OPEN_SCREEN_LABELS: Readonly<Record<OpenScreen, string>> = {
   funil: 'Funil',
   oportunidade: 'a oportunidade',
   contato: 'o contato',
+  tarefas: 'Tarefas',
+  tarefa: 'a tarefa',
 }
 /** Abas das Automações que o "Abrir" aceita. */
 export const AUTOMATIONS_TABS = ['agentes', 'tarefas', 'execucoes'] as const
@@ -88,6 +94,10 @@ export const CHAT_ACTION_KINDS = [
   'oportunidade-mover',
   'oportunidade-proximo-passo',
   'contato-criar',
+  // Contrato 127 (R28).
+  'tarefa-criar',
+  'tarefa-concluir',
+  'tarefa-adiar',
 ] as const
 export type ChatActionKind = (typeof CHAT_ACTION_KINDS)[number]
 
@@ -99,7 +109,7 @@ interface ActionBase {
   result: string | null
 }
 
-/** `lembrete`: uma notificação do macOS no horário, como tarefa "uma vez" das Automações. */
+/** `lembrete`: uma notificação do macOS no horário. Contrato 127 (R13): o clique cria uma tarefa com `lembreteEm`. */
 export interface ReminderAction extends ActionBase {
   kind: 'lembrete'
   /** ISO 8601 com o fuso. */
@@ -113,6 +123,8 @@ export interface ReminderAction extends ActionBase {
   defaultTime: boolean
   /** Contrato 45: o lembrete de responder um email; "Abrir" da notificação leva à mensagem. */
   email?: ReminderEmail | null | undefined
+  /** Contrato 127: a tarefa criada pelo clique ("Ver em Tarefas" abre o detalhe dela); ausente nos cartões antigos. */
+  tarefaId?: string | null | undefined
 }
 
 /** Contrato 45: a mensagem de um lembrete, lida do cache do app ("Marina Rocha · Proposta revisada"). */
@@ -255,10 +267,10 @@ export interface ChatActionEvent extends ActionBase {
   error: string | null
 }
 
-/** Contrato 78: `lembrete-editar`, mudar a hora e/ou o texto de um lembrete das Automações. */
+/** Contrato 78: `lembrete-editar`, mudar a hora e/ou o texto de um lembrete. Contrato 127: o lembrete de uma tarefa. */
 export interface ChatActionReminderEdit extends ActionBase {
   kind: 'lembrete-editar'
-  /** O id da tarefa (`ScheduledTask.id`) com `reminder`. */
+  /** Contrato 127: o id inteiro da tarefa aberta com `lembreteEm` (nos cartões antigos, o de uma `ScheduledTask`). */
   taskId: string
   currentText: string
   /** ISO 8601. */
@@ -270,7 +282,7 @@ export interface ChatActionReminderEdit extends ActionBase {
   error: string | null
 }
 
-/** Contrato 78: `lembrete-apagar`, apagar um lembrete das Automações. */
+/** Contrato 78: `lembrete-apagar`, apagar um lembrete. Contrato 127: apaga a tarefa do lembrete. */
 export interface ChatActionReminderDelete extends ActionBase {
   kind: 'lembrete-apagar'
   taskId: string
@@ -340,7 +352,10 @@ export interface ChatActionOportunidadeMover extends ActionBase {
   error: string | null
 }
 
-/** Contrato 117: `oportunidade-proximo-passo`, com o passo de antes (lido do funil) para o "antes → depois". */
+/**
+ * Contrato 117: `oportunidade-proximo-passo`. Contrato 127 (R17): o clique cria uma tarefa ligada à oportunidade; o passo
+ * de antes (`anterior`) não aparece mais no cartão e sai `null` nos novos.
+ */
 export interface ChatActionOportunidadeProximoPasso extends ActionBase {
   kind: 'oportunidade-proximo-passo'
   oportunidadeId: string
@@ -370,6 +385,47 @@ export interface ChatActionContatoCriar extends ActionBase {
   error: string | null
 }
 
+/**
+ * Contrato 127 (R28): `tarefa-criar`. A oportunidade e o contato resolvidos pelo nome no funil do app; nenhum ou mais de um
+ * com o nome vira `ambiguo` (o cartão pede a escolha). `lembreteEm` `null`: o lembrete padrão do prazo. `tarefaId`: a
+ * tarefa criada, depois do clique.
+ */
+export interface ChatActionTarefaCriar extends ActionBase {
+  kind: 'tarefa-criar'
+  titulo: string
+  /** `AAAA-MM-DD`. */
+  prazo: string | null
+  /** Epoch ms. */
+  lembreteEm: number | null
+  oportunidade: { id: string; titulo: string } | null
+  contato: { id: string; nome: string } | null
+  ambiguo: { campo: 'oportunidade' | 'contato'; texto: string } | null
+  /** O contato citado que também ficou por escolher quando a oportunidade já é o `ambiguo` (ausente nos demais). */
+  ambiguoContato?: string | null | undefined
+  tarefaId: string | null
+  error: string | null
+}
+
+/** Contrato 127 (R28): `tarefa-concluir`, com o título lido das tarefas do app. */
+export interface ChatActionTarefaConcluir extends ActionBase {
+  kind: 'tarefa-concluir'
+  tarefaId: string
+  titulo: string
+  error: string | null
+}
+
+/** Contrato 127 (R28): `tarefa-adiar`, com o prazo de antes para o "antes → depois". */
+export interface ChatActionTarefaAdiar extends ActionBase {
+  kind: 'tarefa-adiar'
+  tarefaId: string
+  titulo: string
+  /** `AAAA-MM-DD`. */
+  prazoAntes: string | null
+  /** `AAAA-MM-DD`. */
+  prazo: string
+  error: string | null
+}
+
 export type ChatAction =
   | ReminderAction
   | WhatsAppReplyAction
@@ -386,10 +442,17 @@ export type ChatAction =
   | ChatActionOportunidadeMover
   | ChatActionOportunidadeProximoPasso
   | ChatActionContatoCriar
+  | ChatActionTarefaCriar
+  | ChatActionTarefaConcluir
+  | ChatActionTarefaAdiar
 
 /** Contrato 117: os cartões do funil (o canal `scribe:chat-action-funil` executa pelo tipo gravado). */
 export type ChatActionFunil = ChatActionOportunidadeCriar | ChatActionOportunidadeMover | ChatActionOportunidadeProximoPasso | ChatActionContatoCriar
 export const FUNIL_ACTION_KINDS = ['oportunidade-criar', 'oportunidade-mover', 'oportunidade-proximo-passo', 'contato-criar'] as const satisfies readonly ChatActionFunil['kind'][]
+
+/** Contrato 127 (D14): os cartões das tarefas (o canal `scribe:chat-action-tarefa` executa pelo tipo gravado). */
+export type ChatActionTarefa = ChatActionTarefaCriar | ChatActionTarefaConcluir | ChatActionTarefaAdiar
+export const TAREFA_ACTION_KINDS = ['tarefa-criar', 'tarefa-concluir', 'tarefa-adiar'] as const satisfies readonly ChatActionTarefa['kind'][]
 
 /** Qual cartão de qual resposta. */
 export interface ChatActionRef {
@@ -449,6 +512,22 @@ export interface ChatActionOportunidadeCampos {
 /** Contrato 117: "Mover", "Criar" e "Salvar" num cartão do funil (`campos`: só no de criar oportunidade). */
 export interface ChatActionFunilRequest extends ChatActionRef {
   campos?: ChatActionOportunidadeCampos | undefined
+}
+
+/** Contrato 127: o que o "Editar" do cartão de criar tarefa mudou (o main confere de novo com as regras do 121). */
+export interface ChatActionTarefaCampos {
+  titulo?: string | undefined
+  /** `AAAA-MM-DD`. */
+  prazo?: string | null | undefined
+  /** Epoch ms; `null`: o lembrete padrão do prazo. */
+  lembreteEm?: number | null | undefined
+  oportunidadeId?: string | null | undefined
+  contatoId?: string | null | undefined
+}
+
+/** Contrato 127 (D14): "Criar", "Concluir" e "Adiar" num cartão das tarefas (`campos`: só no de criar). */
+export interface ChatActionTarefaRequest extends ChatActionRef {
+  campos?: ChatActionTarefaCampos | undefined
 }
 
 /**
@@ -539,8 +618,25 @@ export const FUNIL_CONTATO_COMPLETADO_TEXT = 'Contato completado'
 export const funilMovidaText = (para: string): string => `Movida para ${para}`.slice(0, 200)
 /** Contrato 76: o cartão do rascunho depois do clique. */
 export const INSTAGRAM_DRAFT_CREATED_TEXT = 'Rascunho criado · abra em Redes'
-/** Contrato 78: o lembrete já disparou ou foi apagado entre a proposta e o clique. */
-export const REMINDER_GONE_TEXT = 'Esse lembrete não existe mais: já disparou ou foi apagado em Automações.'
+/** Contrato 78: o lembrete sumiu entre a proposta e o clique. Contrato 127: a tarefa dele foi concluída ou apagada. */
+export const REMINDER_GONE_TEXT = 'Esse lembrete não existe mais: a tarefa foi concluída ou apagada.'
+/** Contrato 127 (R28, D-13): o id que não casa com exatamente uma tarefa aberta, ou a tarefa que fechou antes do clique. */
+export const TAREFA_GONE_TEXT = 'Essa tarefa não existe mais'
+/** Contrato 127 (R17): o cartão do próximo passo numa oportunidade ganha ou perdida. */
+export const OPORTUNIDADE_FECHADA_TEXT = 'A oportunidade está fechada'
+/** Contrato 127: o clique em "Criar" com a oportunidade (ou o contato) ainda por escolher. */
+export const TAREFA_ESCOLHA_OPORTUNIDADE_TEXT = 'Escolha a oportunidade antes de criar.'
+export const TAREFA_ESCOLHA_CONTATO_TEXT = 'Escolha o contato antes de criar.'
+/** Contrato 127: "Tarefa criada: Mandar proposta". */
+export const tarefaCriadaText = (titulo: string): string => `Tarefa criada: ${titulo}`.slice(0, 200)
+/** Contrato 127 (R17): o passo que já era uma tarefa aberta com outro prazo; o prazo dela mudou. */
+export const tarefaPrazoAtualizadoText = (titulo: string): string => `Prazo da tarefa atualizado: ${titulo}`.slice(0, 200)
+/** Contrato 127 (R17): o passo que já era uma tarefa aberta com o mesmo prazo; nada mudou. */
+export const tarefaJaExistiaText = (titulo: string): string => `A tarefa já existia: ${titulo}`.slice(0, 200)
+/** Contrato 127: "Tarefa concluída: Mandar proposta". */
+export const tarefaConcluidaText = (titulo: string): string => `Tarefa concluída: ${titulo}`.slice(0, 200)
+/** Contrato 127: "Adiada para 27/11", de `AAAA-MM-DD`. */
+export const tarefaAdiadaText = (prazo: string): string => `Adiada para ${prazo.slice(8, 10)}/${prazo.slice(5, 7)}`
 
 /** "Enviada às 19:40", na hora local. */
 export function sentText(at: number): string {
@@ -582,6 +678,8 @@ export function openLabel(screen: OpenScreen, targetName: string | null): string
   // Contrato 117.
   if (screen === 'oportunidade' && targetName) return `Abrir «${targetName}»`
   if (screen === 'contato' && targetName) return `Abrir o contato ${targetName}`
+  // Contrato 127.
+  if (screen === 'tarefa' && targetName) return `Abrir a tarefa «${targetName}»`
   return `Abrir ${OPEN_SCREEN_LABELS[screen]}`
 }
 

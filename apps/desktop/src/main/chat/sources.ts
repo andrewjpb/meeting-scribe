@@ -10,6 +10,9 @@
 // métricas guardadas, a fila e os comentários e as mensagens não lidos, com os ids que as ferramentas aceitam. Legenda,
 // comentário e mensagem são de terceiros: uma linha cada, sem cerca de código. Nada de token.
 // Contrato 117: o funil (`FUNIL.md`, desligada por padrão), com o texto do gerador único do contrato 115 (D16).
+// Contrato 127: as tarefas (`TAREFAS.md`, ligada por padrão), com o texto do gerador único do contrato 121 (D21). Os
+// lembretes do `ESTADO.md` passam a ser os das tarefas abertas com aviso (R13), com o id curto, mesmo com a fonte Tarefas
+// desligada; o `AUTOMACOES.md` não lista mais lembretes.
 import { randomUUID } from 'node:crypto'
 import { chmod, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -28,6 +31,7 @@ import {
   type ScheduledTask,
 } from '../../shared/automations'
 import type { ChatCalendarAccess } from '../../shared/assistant'
+import { TAREFA_ID_CURTO } from '../../shared/tarefas'
 import { chatSourcesOf, chatWhatsAppModeOf, type ChatScope } from '../../shared/chat'
 import { EMAIL_EXPORT_PREFIX, EMAIL_OVERVIEW_FILE } from '../../shared/email'
 import { WHATSAPP_DEFAULT_SCOPE_DAYS, WHATSAPP_EXPORT_PREFIX, WHATSAPP_OVERVIEW_FILE } from '../../shared/whatsapp'
@@ -54,8 +58,10 @@ export const REDES_COMMENTS_FILE = 'COMENTARIOS-INSTAGRAM.md'
 const REDES_TOOL_FILES: readonly string[] = [REDES_PUBLICATIONS_FILE, REDES_COMMENTS_FILE]
 /** Contrato 117: a fonte Funil. */
 export const FUNIL_FILE = 'FUNIL.md'
+/** Contrato 127: a fonte Tarefas. */
+export const TAREFAS_FILE = 'TAREFAS.md'
 /** Arquivos das fontes do app, na ordem em que o `INDICE.md` lista. */
-export const SOURCE_FILES = [STATE_FILE, GUIDE_FILE, AUTOMATIONS_FILE, WHATSAPP_OVERVIEW_FILE, EMAIL_OVERVIEW_FILE, EMAIL_SEARCH_FILE, REDES_FILE, FUNIL_FILE] as const
+export const SOURCE_FILES = [STATE_FILE, GUIDE_FILE, AUTOMATIONS_FILE, WHATSAPP_OVERVIEW_FILE, EMAIL_OVERVIEW_FILE, EMAIL_SEARCH_FILE, REDES_FILE, FUNIL_FILE, TAREFAS_FILE] as const
 /** Execuções no `AUTOMACOES.md`. */
 export const AUTOMATION_RUNS_IN_SOURCE = 20
 /** Marca da versão no guia (`resources/assistente/guia-do-app.md`). */
@@ -77,13 +83,33 @@ export interface AssistantState {
   /** "Pausadas pela pessoa", "pausadas pelo limite diário" ou `null`. */
   automationsPaused: string | null
   agents: readonly Pick<Agent, 'name'>[]
-  /** Tarefas ligadas (fora da pausa automática), com a próxima vez. Contrato 78: o id, para os lembretes. */
+  /** Tarefas ligadas (fora da pausa automática), com a próxima vez. Contrato 127: as com `reminder` ficam de fora. */
   tasks: readonly Pick<ScheduledTask, 'id' | 'name' | 'enabled' | 'autoPaused' | 'nextRunAt' | 'timezone' | 'reminder'>[]
+  /**
+   * Contrato 127 (R13): as tarefas abertas com lembrete (o id inteiro, o título, o aviso em epoch ms e se já avisou), para a
+   * seção "Lembretes". Ausente, "Nenhum lembrete.".
+   */
+  lembretes?: readonly LembreteDoEstado[] | undefined
   /**
    * Contrato 78: o Calendário do Mac. As agendas graváveis (nome, conta e a que o app usa por padrão), nunca o id; sem
    * acesso, a lista vazia. Ausente, a seção não sai.
    */
   calendar?: { access: ChatCalendarAccess; calendars: readonly { title: string; source: string; isDefault: boolean }[] } | undefined
+}
+
+/** Contrato 127: uma tarefa aberta com lembrete, como o `ESTADO.md` lista. */
+export interface LembreteDoEstado {
+  id: string
+  titulo: string
+  lembreteEm: number
+  disparado: boolean
+}
+
+/** Contrato 127: "dd/mm HH:MM" no fuso. */
+function diaHoraDoLembrete(at: number, timeZone: string): string {
+  const partes = new Intl.DateTimeFormat('en-GB', { timeZone, month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).formatToParts(new Date(at))
+  const parte = (tipo: Intl.DateTimeFormatPartTypes): string => partes.find((item) => item.type === tipo)?.value ?? ''
+  return `${parte('day')}/${parte('month')} ${parte('hour')}:${parte('minute')}`
 }
 
 /** Contrato 78: a seção "Agendas do Mac" do `ESTADO.md`. */
@@ -98,8 +124,9 @@ const oneLine = (text: string): string => previewOf(text, 400)
 
 /** `ESTADO.md`: data, hora e fuso de agora, gravação, contas, versão e automações ligadas. */
 export function stateMarkdown(state: AssistantState): string {
-  const on = state.tasks.filter((task) => task.enabled && !task.autoPaused)
-  const reminders = on.filter((task) => task.reminder && task.nextRunAt && !Number.isNaN(Date.parse(task.nextRunAt)))
+  // Contrato 127 (R13): os lembretes das Automações viraram tarefas; os que restarem não entram.
+  const on = state.tasks.filter((task) => task.enabled && !task.autoPaused && !task.reminder)
+  const reminders = [...(state.lembretes ?? [])].sort((a, b) => a.lembreteEm - b.lembreteEm)
   const lines = [
     '# Estado atual do app',
     '',
@@ -119,16 +146,18 @@ export function stateMarkdown(state: AssistantState): string {
         ? on
             .map((task) => {
               const next = task.nextRunAt ? Date.parse(task.nextRunAt) : Number.NaN
-              return `${oneLine(task.name)}${task.reminder ? ' (lembrete)' : ''}${Number.isNaN(next) ? '' : ` (próxima: ${formatRunAt(next, task.timezone)})`}`
+              return `${oneLine(task.name)}${Number.isNaN(next) ? '' : ` (próxima: ${formatRunAt(next, task.timezone)})`}`
             })
             .join('; ')
         : 'nenhuma'
     }`,
-    // Contrato 78: os lembretes que ainda vão avisar, com o id (o cartão de alterar ou apagar só aceita um destes).
+    // Contrato 127 (R13): as tarefas abertas com lembrete, com o id curto (o cartão de alterar ou apagar só aceita um destes).
     '',
     '## Lembretes',
     '',
-    ...(reminders.length ? reminders.map((task) => `- Lembrete: ${oneLine(task.reminder?.text ?? task.name)} · ${formatRunAt(Date.parse(task.nextRunAt ?? ''), task.timezone)} · id: ${task.id}`) : ['Nenhum lembrete.']),
+    ...(reminders.length
+      ? reminders.map((item) => `- Lembrete: ${oneLine(item.titulo)} · ${diaHoraDoLembrete(item.lembreteEm, state.timeZone)} · id: ${item.id.slice(0, TAREFA_ID_CURTO)}${item.disparado ? ' · já avisou' : ''}`)
+      : ['Nenhum lembrete.']),
     ...(state.calendar ? ['', '## Agendas do Mac', '', ...calendarLines(state.calendar)] : []),
   ]
   return `${lines.join('\n')}\n`
@@ -149,6 +178,8 @@ export interface AutomationsSnapshot {
 /** `AUTOMACOES.md`: agentes, tarefas (próxima e última execução, estado) e as últimas 20 execuções. */
 export function automationsMarkdown(snapshot: AutomationsSnapshot, timeZone: string): string {
   const agentName = (id: string): string => snapshot.agents.find((agent) => agent.id === id)?.name ?? 'agente excluído'
+  // Contrato 127 (R13, R33): os lembretes viraram tarefas e não entram mais aqui.
+  const agendamentos = snapshot.tasks.filter((task) => !task.reminder)
   const when = (iso: string | null, zone: string): string => {
     const at = iso ? Date.parse(iso) : Number.NaN
     return Number.isNaN(at) ? 'nenhuma' : formatRunAt(at, zone)
@@ -169,14 +200,8 @@ export function automationsMarkdown(snapshot: AutomationsSnapshot, timeZone: str
     '',
     '## Agendamentos',
     '',
-    ...(snapshot.tasks.length
-      ? snapshot.tasks.map((task) => {
-          // Contrato 78: o lembrete com o id (o cartão de alterar ou apagar só aceita um destes).
-          if (task.reminder) {
-            const at = task.schedule.kind === 'once' ? task.schedule.at : task.nextRunAt
-            const state = task.lastRunAt ? `já avisou em ${when(task.lastRunAt, task.timezone)}` : task.enabled ? 'ligado' : 'desligado'
-            return `- Lembrete: ${oneLine(task.reminder.text)} · ${when(at, task.timezone)} · id: ${task.id} · só notificação, sem agente · ${state}`
-          }
+    ...(agendamentos.length
+      ? agendamentos.map((task) => {
           const state = task.autoPaused ? 'pausada depois de 3 falhas' : task.enabled ? 'ligada' : 'desligada'
           const who = `agente ${oneLine(agentName(task.agentId))}`
           const last = task.lastStatus ? `${RUN_STATUS_LABELS[task.lastStatus]} em ${when(task.lastRunAt, task.timezone)}` : 'ainda não rodou'
@@ -401,6 +426,13 @@ export interface AssistantSourcesDeps {
   redes?: () => Promise<readonly RedesSourceAccount[] | null>
   /** Contrato 117: o texto do `FUNIL.md` (`funilMarkdown`, do contrato 115); `null` com o app bloqueado. */
   funil?: () => Promise<string | null>
+  /** Contrato 127: o texto do `TAREFAS.md` (`tarefasMarkdown`, do contrato 121); `null` com o app bloqueado. */
+  tarefas?: () => Promise<string | null>
+  /**
+   * Contrato 127 (R13): as tarefas abertas com lembrete, para a seção "Lembretes" do `ESTADO.md` (vale com a fonte Tarefas
+   * desligada); `null` com o app bloqueado.
+   */
+  lembretes?: () => Promise<readonly LembreteDoEstado[] | null>
   log?: (message: string) => void
 }
 
@@ -414,6 +446,8 @@ export interface WrittenSources {
   redes: boolean
   /** Contrato 117. */
   funil: boolean
+  /** Contrato 127. */
+  tarefas: boolean
 }
 
 /** Grava (atômico, 0600) só se o conteúdo mudou. */
@@ -448,7 +482,9 @@ export async function writeSources(deps: AssistantSourcesDeps, folder: string, s
   const state = await deps.state()
   files.push(
     ...(await attempt('estado', async () => {
-      await writeAtomic(join(folder, STATE_FILE), stateMarkdown(state))
+      // Contrato 127: os lembretes que não se leem não derrubam o estado (a seção diz "Nenhum lembrete.").
+      const lembretes = (await deps.lembretes?.().catch(() => null)) ?? null
+      await writeAtomic(join(folder, STATE_FILE), stateMarkdown(lembretes ? { ...state, lembretes } : state))
       return [STATE_FILE]
     })),
   )
@@ -505,7 +541,19 @@ export async function writeSources(deps: AssistantSourcesDeps, folder: string, s
     funil = written.length > 0
     files.push(...written)
   }
+  let tarefas = false
+  if (sources.tarefas && deps.tarefas) {
+    const read = deps.tarefas
+    const written = await attempt('tarefas', async () => {
+      const text = await read()
+      if (text === null) return []
+      await writeAtomic(join(folder, TAREFAS_FILE), text)
+      return [TAREFAS_FILE]
+    })
+    tarefas = written.length > 0
+    files.push(...written)
+  }
   const keep = new Set(files)
   for (const name of await readdir(folder).catch(() => [] as string[])) if (isSourceFile(name) && !keep.has(name)) await rm(join(folder, name), { force: true })
-  return { files, whatsapp, email, redes, funil }
+  return { files, whatsapp, email, redes, funil, tarefas }
 }

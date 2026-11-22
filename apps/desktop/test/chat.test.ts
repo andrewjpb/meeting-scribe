@@ -24,6 +24,13 @@ import { createMeetingsService } from '../src/main/meetings/service'
 import { createFileMeetingsStore } from '../src/main/meetings/store'
 import { createFileSummaryStore } from '../src/main/meetings/summaries'
 import { createFileTranscriptStore } from '../src/main/meetings/transcripts'
+import { REMINDER_GONE_TEXT, type ChatAction } from '../src/shared/assistant'
+import { CHAT_SOURCE_KINDS, chatSourceDefault, chatSourcesOf } from '../src/shared/chat'
+import type { FunilState } from '../src/shared/funil'
+import { tarefasPath } from '../src/shared/routes'
+import { createChatActions, extractActions, type ActionResolver } from '../src/main/chat/actions'
+import { AUTOMATIONS_FILE, STATE_FILE, TAREFAS_FILE, writeSources, type AssistantSourcesDeps } from '../src/main/chat/sources'
+import { tarefasServico } from './fixtures/tarefas-servico'
 
 const HOME = '/Users/teste'
 const BINARY = '/Users/teste/.local/bin/claude'
@@ -186,7 +193,8 @@ describe('instrução e sinalizadores (CA2)', () => {
     expect(prompt).toContain('"lembrete-editar" com "id"')
     expect(prompt).toContain('"lembrete-apagar" com "id"')
     expect(prompt).toContain('{"tipo": "evento", "titulo": "Aniversário do Jefferson"')
-    expect(prompt).toContain('Só proponha editar ou apagar lembrete com o id listado em AUTOMACOES.md')
+    // Contrato 127 (R13): o id do lembrete é o de uma tarefa.
+    expect(prompt).toContain('Só proponha editar ou apagar lembrete com o id listado em TAREFAS.md')
     expect(prompt).toContain('use o nome de uma agenda listada em ESTADO.md ou omita')
   })
   it('contrato 117 (R42): a instrução descreve o FUNIL.md, a citação do funil e os quatro cartões, só com o id do arquivo', () => {
@@ -197,7 +205,8 @@ describe('instrução e sinalizadores (CA2)', () => {
     for (const tipo of ['oportunidade-criar', 'oportunidade-mover', 'oportunidade-proximo-passo', 'contato-criar']) expect(prompt).toContain(`"${tipo}" com`)
     expect(prompt).toContain('{"tipo": "oportunidade-mover", "oportunidadeId": "<id da oportunidade>"')
     expect(prompt).toContain('Só proponha mover ou mudar o próximo passo com o id listado em FUNIL.md')
-    expect(prompt).toContain('funil, oportunidade ou contato')
+    // Contrato 127 (R30): mais as tarefas.
+    expect(prompt).toContain('funil, oportunidade, contato, tarefas ou tarefa')
     expect(prompt).toContain('você propõe cartões; nada acontece sem o clique da pessoa')
     expect(chatStepOf('Read', { file_path: '/x/FUNIL.md' })).toEqual({ tool: 'Read', label: 'Lendo o funil', meetingId: null })
   })
@@ -1144,5 +1153,155 @@ describe('claude falso de verdade com raciocínio, passos e detalhes (contrato 1
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
+  })
+})
+
+// Contrato 127: o Assistente com as tarefas. O lembrete vira tarefa (CA2, R13, D-14), o próximo passo cria tarefa (CA3,
+// R17) e a fonte Tarefas, o `ESTADO.md` sem as Automações e o "abrir" da tarefa (CA4, R27, R30, R13).
+describe('contrato 127: o Assistente com as tarefas', () => {
+  const SP = 'America/Sao_Paulo'
+  /** Seg 16/11/2026 19:30 em São Paulo. */
+  const NOW = Date.parse('2026-11-16T19:30:00-03:00')
+  const ANA = '5511911110000@s.whatsapp.net'
+  let dir: string
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'assistente-tarefas-'))
+  })
+  afterEach(() => rmSync(dir, { recursive: true, force: true }))
+
+  const block = (json: unknown): string => `\`\`\`lap-acao\n${JSON.stringify(json)}\n\`\`\``
+  const resolver = (patch: Partial<ActionResolver> = {}): ActionResolver => ({
+    now: () => NOW,
+    timeZone: () => SP,
+    newId: (() => {
+      let n = 0
+      return () => `a${++n}`
+    })(),
+    ...patch,
+  })
+  const chatWith = (actions: ChatAction[]): Chat => ({
+    id: 'c1',
+    meetingId: null,
+    title: 'Tarefas',
+    createdAt: new Date(NOW).toISOString(),
+    messages: [
+      { role: 'user', text: 'Pedido', at: new Date(NOW).toISOString() },
+      { role: 'assistant', text: 'Proposta', at: new Date(NOW).toISOString(), actions },
+    ],
+    scope: { kind: 'all' },
+    model: null,
+    thinkMore: false,
+  })
+  const ref = (actionId: string) => ({ chatId: 'c1', index: 1, actionId })
+  const criada = (result: { ok: boolean; id?: string | null }): string => {
+    if (!result.ok || !result.id) throw new Error(JSON.stringify(result))
+    return result.id
+  }
+
+  it('CA2: o lembrete cria a tarefa com o aviso e o prazo do dia; alterar salva o instante novo; apagar apaga; a feita fica "failed"', async () => {
+    const { service, chamadas } = tarefasServico(join(dir, 'tarefas'), () => NOW)
+    const store = createFileChatStore({ dir })
+    const lembrete: ChatAction = { id: 'a1', status: 'proposed', result: null, kind: 'lembrete', at: '2026-11-17T09:00:00-03:00', text: 'Responder a Ana', whatsappChatId: ANA, whatsappChatName: 'Ana Souza', defaultTime: true }
+    await store.save(chatWith([lembrete]))
+    // Sem `createReminder` nas dependências: o clique só passa pelo serviço das tarefas.
+    const actions = createChatActions({ store, tarefas: service, timeZone: () => SP, now: () => NOW })
+    expect((await actions.reminder(ref('a1'))).ok).toBe(true)
+    expect(chamadas.criar).toEqual([
+      { titulo: 'Responder a Ana', detalhe: '', prazo: '2026-11-17', lembrete: Date.parse('2026-11-17T09:00:00-03:00'), origem: { tipo: 'assistente' }, vinculos: { whatsappChatId: ANA, email: null } },
+    ])
+    const [tarefa] = await service.todas()
+    expect(tarefa).toMatchObject({ origem: { tipo: 'assistente' }, lembreteEm: Date.parse('2026-11-17T09:00:00-03:00'), prazo: '2026-11-17', vinculos: { whatsappChatId: ANA } })
+    // O texto e o `done` do cartão não mudam; a tarefa fica no cartão para o "Ver em Tarefas".
+    expect((await store.get('c1'))?.messages[1]?.actions?.[0]).toMatchObject({ status: 'done', result: 'Lembrete criado · ter 17/11 09:00', text: 'Responder a Ana', tarefaId: tarefa?.id })
+
+    // Alterar e apagar, pelo id curto do ESTADO.md.
+    const id = tarefa?.id ?? ''
+    const outra = criada(await service.criar({ titulo: 'Ligar para o Bruno', lembrete: Date.parse('2026-11-18T10:00:00-03:00'), origem: { tipo: 'assistente' } }))
+    const using = resolver({ tarefas: () => service.todas() })
+    const edit = (await extractActions(block({ tipo: 'lembrete-editar', id: id.slice(0, 8), quando: '2026-11-19T09:00:00-03:00' }), using)).actions
+    const drop = (await extractActions(block({ tipo: 'lembrete-apagar', id: outra.slice(0, 8) }), using)).actions
+    const feita = (await extractActions(block({ tipo: 'lembrete-apagar', id }), using)).actions
+    expect(edit[0]).toMatchObject({ kind: 'lembrete-editar', taskId: id })
+    await store.save(chatWith([...edit, { ...(drop[0] as ChatAction), id: 'a2' }, { ...(feita[0] as ChatAction), id: 'a3' }]))
+    expect((await actions.reminderChange({ ...ref('a1'), op: 'update' })).ok).toBe(true)
+    expect(chamadas.salvar).toEqual([{ id, lembrete: Date.parse('2026-11-19T09:00:00-03:00') }])
+    expect((await service.todas()).find((item) => item.id === id)).toMatchObject({ lembreteEm: Date.parse('2026-11-19T09:00:00-03:00'), lembreteDisparadoEm: null })
+    expect((await actions.reminderChange({ ...ref('a2'), op: 'delete' })).ok).toBe(true)
+    expect(chamadas.apagar).toEqual([{ id: outra }])
+    expect((await service.todas()).some((item) => item.id === outra)).toBe(false)
+    // A tarefa concluída entre a proposta e o clique: "não existe mais", sem apagar nada.
+    await service.status({ id, status: 'feita' })
+    expect((await actions.reminderChange({ ...ref('a3'), op: 'delete' })).ok).toBe(true)
+    expect((await store.get('c1'))?.messages[1]?.actions?.[2]).toMatchObject({ status: 'failed', error: REMINDER_GONE_TEXT })
+    expect(REMINDER_GONE_TEXT).toBe('Esse lembrete não existe mais: a tarefa foi concluída ou apagada.')
+    expect(chamadas.apagar).toHaveLength(1)
+    // E, já feita, o id não vira cartão.
+    expect((await extractActions(block({ tipo: 'lembrete-apagar', id }), using)).actions).toEqual([])
+  })
+
+  it('CA3: o próximo passo de uma oportunidade aberta cria a tarefa pelo funil; na ganha, "failed" sem chamar o funil', async () => {
+    const etapas = [
+      { id: 'e-aberta', nome: 'Proposta', tipo: 'aberta' as const, ordem: 0 },
+      { id: 'e-ganho', nome: 'Ganho', tipo: 'ganho' as const, ordem: 1 },
+    ]
+    const oportunidade = (id: string, etapaId: string) => ({ id, titulo: `Oportunidade ${id}`, etapaId, arquivado: false }) as FunilState['oportunidades'][number]
+    const state = { etapas, oportunidades: [oportunidade('op-aberta', 'e-aberta'), oportunidade('op-ganha', 'e-ganho')], contatos: [], empresas: [], eventos: [] } as unknown as FunilState
+    const oportunidadeSave = vi.fn(async () => ({ ok: true as const, id: 'op-aberta' }))
+    const funil = { view: async () => ({ state, ultimas: {}, proximosPassos: {} }), oportunidadeSave, contatoSave: vi.fn(), oportunidadeMove: vi.fn(), eventoAdd: vi.fn() } as unknown as NonNullable<Parameters<typeof createChatActions>[0]['funil']>
+    const passo = (id: string, oportunidadeId: string): ChatAction => ({ id, status: 'proposed', result: null, kind: 'oportunidade-proximo-passo', oportunidadeId, titulo: `Oportunidade ${oportunidadeId}`, texto: 'Ligar para a Ana', data: '2026-11-20', anterior: null, error: null })
+    const store = createFileChatStore({ dir })
+    await store.save(chatWith([passo('a1', 'op-aberta'), passo('a2', 'op-ganha')]))
+    const actions = createChatActions({ store, funil, timeZone: () => SP, now: () => NOW })
+    expect((await actions.funil(ref('a1'))).ok).toBe(true)
+    expect(oportunidadeSave).toHaveBeenCalledTimes(1)
+    expect(oportunidadeSave.mock.calls[0]).toEqual([{ oportunidade: { id: 'op-aberta', titulo: 'Oportunidade op-aberta', proximoPasso: { texto: 'Ligar para a Ana', data: '2026-11-20' } } }])
+    expect((await store.get('c1'))?.messages[1]?.actions?.[0]).toMatchObject({ status: 'done', result: 'Tarefa criada: Ligar para a Ana' })
+    expect((await actions.funil(ref('a2'))).ok).toBe(true)
+    expect((await store.get('c1'))?.messages[1]?.actions?.[1]).toMatchObject({ status: 'failed', error: 'A oportunidade está fechada' })
+    expect(oportunidadeSave).toHaveBeenCalledTimes(1)
+    // O passo de antes não entra mais no cartão novo.
+    const proposto = (await extractActions(block({ tipo: 'oportunidade-proximo-passo', oportunidadeId: 'op-aberta', texto: 'Mandar contrato' }), resolver({ funil: funil.view }))).actions[0]
+    expect(proposto).toMatchObject({ kind: 'oportunidade-proximo-passo', anterior: null })
+  })
+
+  it('CA4: a fonte Tarefas é a primeira e ligada; o ESTADO.md traz os lembretes das tarefas mesmo com ela desligada; o abrir da tarefa vai ao id inteiro', async () => {
+    expect(CHAT_SOURCE_KINDS[0]).toBe('tarefas')
+    expect(chatSourceDefault('tarefas')).toBe(true)
+    expect(chatSourcesOf({}).tarefas).toBe(true)
+    const { service } = tarefasServico(join(dir, 'tarefas'), () => NOW)
+    const id = criada(await service.criar({ titulo: 'Mandar proposta', prazo: '2026-11-20', lembrete: Date.parse('2026-11-20T10:30:00-03:00'), origem: { tipo: 'assistente' } }))
+    const reminderTask = { id: 'rem-1', name: 'Lembrete: antigo', agentId: '', message: 'antigo', schedule: { kind: 'once' as const, at: '2026-12-01T12:00:00.000Z' }, timezone: SP, enabled: true, runOnce: true, runOnceAction: 'disable' as const, timeoutS: 30, notify: 'always' as const, output: null, email: null, reminder: { text: 'antigo', whatsappChatId: null, whatsappChatName: null }, autoPaused: false, nextRunAt: '2026-12-01T12:00:00.000Z', lastRunAt: null, lastStatus: null, lastResultPreview: null, lastError: null, consecutiveFailures: 0, createdAt: '', updatedAt: '' }
+    let tarefasMd: string | null = '# Tarefas\n'
+    const deps: AssistantSourcesDeps = {
+      state: () => Promise.resolve({ now: NOW, timeZone: SP, version: '1.0.0', recording: null, google: 'não conectada', whatsapp: 'Não instalado', automationsPaused: null, agents: [], tasks: [reminderTask] }),
+      guide: () => Promise.resolve('# Guia'),
+      automations: () => Promise.resolve({ agents: [], tasks: [reminderTask], runs: [] }),
+      tarefas: () => Promise.resolve(tarefasMd),
+      lembretes: async () => (await service.todas()).map((tarefa) => ({ id: tarefa.id, titulo: tarefa.titulo, lembreteEm: tarefa.lembreteEm ?? 0, disparado: tarefa.lembreteDisparadoEm !== null })),
+    }
+    const scope = join(dir, 'pasta')
+    mkdirSync(scope)
+    const off = await writeSources(deps, scope, { kind: 'all', sources: { tarefas: false } })
+    expect(off.tarefas).toBe(false)
+    expect(existsSync(join(scope, TAREFAS_FILE))).toBe(false)
+    const estado = readFileSync(join(scope, STATE_FILE), 'utf8')
+    expect(estado).toMatch(/^- Lembrete: Mandar proposta · 20\/11 10:30 · id: [\w-]{8}$/m)
+    expect(estado).toContain(`· id: ${id.slice(0, 8)}`)
+    expect(estado).not.toContain('rem-1')
+    expect(readFileSync(join(scope, AUTOMATIONS_FILE), 'utf8')).not.toContain('Lembrete')
+    const on = await writeSources(deps, scope, { kind: 'all' })
+    expect(on.tarefas).toBe(true)
+    expect((statSync(join(scope, TAREFAS_FILE)).mode & 0o777).toString(8)).toBe('600')
+    tarefasMd = null
+    expect((await writeSources(deps, scope, { kind: 'all' })).tarefas).toBe(false)
+    expect(existsSync(join(scope, TAREFAS_FILE))).toBe(false)
+
+    const using = resolver({ tarefas: () => service.todas() })
+    const [abrir] = (await extractActions(block({ tipo: 'abrir', tela: 'tarefa', alvo: id.slice(0, 8) }), using)).actions
+    expect(abrir).toMatchObject({ kind: 'abrir', screen: 'tarefa', target: id, label: 'Abrir a tarefa «Mandar proposta»' })
+    expect(tarefasPath((abrir as { target: string }).target)).toBe(`/tarefas/${id}`)
+    expect((await extractActions(block({ tipo: 'abrir', tela: 'tarefas' }), using)).actions[0]).toMatchObject({ screen: 'tarefas', target: null, label: 'Abrir Tarefas' })
+    // Sem tarefa com o id, o bloco fica como texto.
+    expect((await extractActions(block({ tipo: 'abrir', tela: 'tarefa', alvo: 'zzzzzzzz' }), using)).actions).toEqual([])
   })
 })

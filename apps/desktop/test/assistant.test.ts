@@ -7,7 +7,7 @@ import { copyFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { CHAT_ACTION_KINDS, eventWhen, phoneOfChatId, REMINDER_GONE_TEXT, reminderTitle, withoutActionBlocks, withoutPendingActions, type ChatAction, type ChatActionEvent } from '../src/shared/assistant'
+import { CHAT_ACTION_KINDS, eventWhen, phoneOfChatId, REMINDER_GONE_TEXT, reminderTitle, TAREFA_GONE_TEXT, withoutActionBlocks, withoutPendingActions, type ChatAction, type ChatActionEvent } from '../src/shared/assistant'
 import type { AutomationNotice } from '../src/main/schedules/service'
 import { createAutomationsService } from '../src/main/schedules/service'
 import { createFileRunsStore, createFileSchedulesStore, SCHEDULE_RUNS_DIR } from '../src/main/schedules/store'
@@ -26,6 +26,7 @@ import { createFunilStore } from '../src/main/funil/store'
 import { chatSourcesOf } from '../src/shared/chat'
 import type { FunilActionResult, FunilView, Oportunidade } from '../src/shared/funil'
 import type { Tarefa, TarefaInput, TarefaSalvar, TarefasActionResult } from '../src/shared/tarefas'
+import { tarefasServico } from './fixtures/tarefas-servico'
 import { etapasPadrao } from '../src/shared/funil-logic'
 import { CHATS_DIR, chatScopeSchema, createFileChatStore } from '../src/main/chat/store'
 import { assistantSystemPrompt, chatStepOf } from '../src/main/claude-cli/chat'
@@ -172,25 +173,18 @@ describe('cartões: só com o clique, uma vez só (CA3, CA5)', () => {
   it('"Criar lembrete" cria a tarefa uma vez; o segundo clique (ou recarregar) não repete', async () => {
     const store = createFileChatStore({ dir })
     await store.save(chatWith([reminder]))
-    const created: unknown[] = []
-    const actions = createChatActions({
-      store,
-      createReminder: (input) => {
-        created.push(input)
-        return Promise.resolve({ ok: true, task: {} as never })
-      },
-      timeZone: () => SP,
-      now: () => NOW,
-    })
+    // Contrato 127 (R13): o lembrete vira uma tarefa com aviso.
+    const { service, chamadas } = tarefasServico(join(dir, 'tarefas'), () => NOW)
+    const actions = createChatActions({ store, tarefas: service, timeZone: () => SP, now: () => NOW })
     const ref = { chatId: 'c1', index: 1, actionId: 'a1' }
     const first = await actions.reminder(ref)
     expect(first.ok).toBe(true)
-    expect(created).toEqual([{ at: '2026-11-17T09:00:00-03:00', reminder: { text: 'Responder a Ana', whatsappChatId: ANA, whatsappChatName: 'Ana Souza' } }])
+    expect(chamadas.criar).toHaveLength(1)
     const saved = (await store.get('c1'))?.messages[1]?.actions?.[0]
-    expect(saved).toMatchObject({ status: 'done', result: 'Lembrete criado · ter 17/11 09:00' })
+    expect(saved).toMatchObject({ status: 'done', result: 'Lembrete criado · ter 17/11 09:00', tarefaId: (await service.todas())[0]?.id })
     expect(await actions.reminder(ref)).toEqual({ ok: false, error: 'done' })
     expect(await actions.setState({ ...ref, state: 'dismissed' })).toEqual({ ok: false, error: 'done' })
-    expect(created).toHaveLength(1)
+    expect(chamadas.criar).toHaveLength(1)
   })
 
   it('contrato 128 (R29): o cartão `tarefa` gravado antes lê como `agendamento`, com os mesmos campos, e fecha como "Agendamento criado"', async () => {
@@ -204,7 +198,7 @@ describe('cartões: só com o clique, uma vez só (CA3, CA5)', () => {
     gravado['kind'] = 'tarefa'
     writeFileSync(file, JSON.stringify(raw))
     expect((await store.get('c1'))?.messages[1]?.actions?.[0]).toEqual(card)
-    const actions = createChatActions({ store, createReminder: () => Promise.reject(new Error('não')), timeZone: () => SP, now: () => NOW })
+    const actions = createChatActions({ store, timeZone: () => SP, now: () => NOW })
     expect((await actions.setState({ chatId: 'c1', index: 1, actionId: 'a1', state: 'task-created' })).ok).toBe(true)
     expect((await store.get('c1'))?.messages[1]?.actions?.[0]).toMatchObject({ kind: 'agendamento', status: 'done', result: 'Agendamento criado' })
   })
@@ -212,14 +206,15 @@ describe('cartões: só com o clique, uma vez só (CA3, CA5)', () => {
   it('"Editar" troca a data e o texto; data no passado é recusada sem criar nada', async () => {
     const store = createFileChatStore({ dir })
     await store.save(chatWith([reminder]))
-    const created: { at: string }[] = []
-    const actions = createChatActions({ store, createReminder: (input) => (created.push(input), Promise.resolve({ ok: true, task: {} as never })), timeZone: () => SP, now: () => NOW })
+    const { service, chamadas } = tarefasServico(join(dir, 'tarefas'), () => NOW)
+    const actions = createChatActions({ store, tarefas: service, timeZone: () => SP, now: () => NOW })
     const ref = { chatId: 'c1', index: 1, actionId: 'a1' }
     expect(await actions.reminder({ ...ref, at: '2026-11-16T10:00:00.000Z' })).toEqual({ ok: false, error: 'past' })
-    expect(created).toHaveLength(0)
+    expect(chamadas.criar).toHaveLength(0)
     const edited = await actions.reminder({ ...ref, at: '2026-11-20T18:00:00.000Z', text: '  Ligar   para a Ana ' })
     expect(edited.ok).toBe(true)
     expect((await store.get('c1'))?.messages[1]?.actions?.[0]).toMatchObject({ at: '2026-11-20T18:00:00.000Z', text: 'Ligar para a Ana', result: 'Lembrete criado · sex 20/11 15:00' })
+    expect((await service.todas())[0]).toMatchObject({ titulo: 'Ligar para a Ana', lembreteEm: Date.parse('2026-11-20T18:00:00.000Z'), prazo: '2026-11-20' })
   })
 
   it('"Enviada" grava o texto e a hora e descarta as outras escolhas com o mesmo texto; "Descartar" não vale para "Abrir"', async () => {
@@ -227,7 +222,7 @@ describe('cartões: só com o clique, uma vez só (CA3, CA5)', () => {
     const reply = (id: string, chatId: string, chatName: string): ChatAction => ({ id, status: 'proposed', result: null, kind: 'whatsapp-resposta', chatId, chatName, phone: null, group: false, text: 'Sim' })
     const open: ChatAction = { id: 'a4', status: 'proposed', result: null, kind: 'abrir', screen: 'automacoes', target: null, label: 'Abrir Automações' }
     await store.save(chatWith([reply('a1', ANA, 'Ana Souza'), reply('a2', BRUNO, 'Bruno Lima'), open]))
-    const actions = createChatActions({ store, createReminder: () => Promise.reject(new Error('não')), timeZone: () => SP, now: () => new Date(2026, 10, 16, 19, 40).getTime() })
+    const actions = createChatActions({ store, timeZone: () => SP, now: () => new Date(2026, 10, 16, 19, 40).getTime() })
     const sent = await actions.setState({ chatId: 'c1', index: 1, actionId: 'a1', state: 'sent', text: 'Sim, pode ser!' })
     expect(sent.ok).toBe(true)
     const saved = (await store.get('c1'))?.messages[1]?.actions ?? []
@@ -243,8 +238,16 @@ describe('cartões: só com o clique, uma vez só (CA3, CA5)', () => {
   it('os canais novos (chat-action-*) são recusados com o app bloqueado', () => {
     const channels = INVOKE_CHANNELS.filter((channel) => channel.startsWith('scribe:chat-action-'))
     // Contrato 78: o evento no Calendário e alterar ou apagar um lembrete. Contrato 76: o rascunho do Instagram.
-    // Contrato 117: os cartões do funil, num canal só.
-    expect(channels.sort()).toEqual(['scribe:chat-action-event', 'scribe:chat-action-funil', 'scribe:chat-action-instagram-draft', 'scribe:chat-action-reminder', 'scribe:chat-action-reminder-change', 'scribe:chat-action-state'])
+    // Contrato 117: os cartões do funil, num canal só. Contrato 127: os das tarefas, também.
+    expect(channels.sort()).toEqual([
+      'scribe:chat-action-event',
+      'scribe:chat-action-funil',
+      'scribe:chat-action-instagram-draft',
+      'scribe:chat-action-reminder',
+      'scribe:chat-action-reminder-change',
+      'scribe:chat-action-state',
+      'scribe:chat-action-tarefa',
+    ])
     for (const channel of channels) expect(WHEN_LOCKED[channel]).toBe('refused')
     // Nenhum caminho novo de envio: o WhatsApp continua só com o `whatsapp-send` e, no contrato 39, o anexo pelo mesmo
     // guarda do clique (`whatsapp-send-media`). Contrato 42: o email entra com o `email-send`, também só com o clique.
@@ -384,7 +387,8 @@ describe('fontes do app (CA2)', () => {
     })
     expect(state).toContain('- Agora: segunda, 16/11/2026 19:30 (America/Sao_Paulo).')
     expect(state).toContain('- Versão instalada: 0.7.0')
-    expect(state).toContain('- Tarefas ligadas: Lembrete: Ana (lembrete) (próxima: ter 17/11 09:00)')
+    // Contrato 127 (R13): o lembrete das Automações não entra mais (os lembretes são tarefas).
+    expect(state).toContain('- Tarefas ligadas: nenhuma')
     expect(guideMarkdown('Versão: {{versao}}.', '0.7.0')).toBe('Versão: 0.7.0.')
     const automations = automationsMarkdown(
       {
@@ -615,7 +619,7 @@ describe('contrato 78: evento no Calendário do Mac', () => {
     })
     await store.save(chat([proposed, { ...proposed, id: 'a2' }, { ...proposed, id: 'a3', allDay: true, start: '2026-11-18T03:00:00.000Z', end: '2026-11-19T03:00:00.000Z' }]))
     const events = createChatEventsStore(dir)
-    const actions = createChatActions({ store, createReminder: () => Promise.reject(new Error('não')), timeZone: () => SP, now: () => NOW, calendar, events })
+    const actions = createChatActions({ store, timeZone: () => SP, now: () => NOW, calendar, events })
     const ref = { chatId: 'c1', index: 1, actionId: 'a1' }
     // O "Editar" passa pelas mesmas regras: no passado, nada é gravado.
     expect(await actions.event({ ...ref, calendarId: 'cal-pessoal', fields: { start: '2026-11-15T23:00:00.000Z' } })).toEqual({ ok: false, error: 'past' })
@@ -671,7 +675,7 @@ describe('contrato 78: evento no Calendário do Mac', () => {
       thinkMore: false,
     })
     const events = createChatEventsStore(dir)
-    const actions = createChatActions({ store, createReminder: () => Promise.reject(new Error('não')), timeZone: () => SP, now: () => NOW, calendar, events })
+    const actions = createChatActions({ store, timeZone: () => SP, now: () => NOW, calendar, events })
     const ref = { chatId: 'c1', index: 1, actionId: 'a1' }
     calendar.saveThenTimeout = true
     await actions.event({ ...ref, calendarId: 'cal-pessoal' })
@@ -727,34 +731,19 @@ describe('contrato 78: evento no Calendário do Mac', () => {
   })
 })
 
-describe('contrato 78: alterar e apagar um lembrete', () => {
-  const make = () =>
-    createAutomationsService({
-      agents: createFileAgentsStore({ dir, now: () => NOW }),
-      schedules: createFileSchedulesStore({ dir }),
-      runs: createFileRunsStore({ dir }),
-      runner: { run: () => Promise.reject(new Error('o lembrete não roda agente')), dispose: () => undefined },
-      applyOutput: () => Promise.resolve(''),
-      notify: () => undefined,
-      dailyLimit: () => Promise.resolve(50),
-      timeZone: () => SP,
-      onChange: () => undefined,
-      onEvent: () => undefined,
-      now: () => NOW,
-      timers: { setInterval: () => 0, clearInterval: () => undefined },
-    })
-
-  it('só o id de um lembrete que existe vira cartão; o clique altera ou apaga; o que sumiu fica "failed"', async () => {
-    const service = make()
-    const created = await service.createReminder({ at: '2026-11-17T09:00:00-03:00', reminder: { text: 'Responder a Ana', whatsappChatId: null, whatsappChatName: null } })
-    if (!created.ok) throw new Error('lembrete recusado')
-    const id = created.task.id
-    const using = resolver({ tasks: () => service.listTasks() })
-    const edit = await extractActions(block({ tipo: 'lembrete-editar', id, quando: '2026-11-18T09:00:00-03:00' }), using)
+describe('contrato 78: alterar e apagar um lembrete (contrato 127: o lembrete de uma tarefa)', () => {
+  it('só o id de uma tarefa aberta com lembrete vira cartão; o clique altera ou apaga; o que sumiu fica "failed"', async () => {
+    const { service } = tarefasServico(join(dir, 'tarefas'), () => NOW)
+    const created = await service.criar({ titulo: 'Responder a Ana', prazo: '2026-11-17', lembrete: Date.parse('2026-11-17T09:00:00-03:00'), origem: { tipo: 'assistente' } })
+    if (!created.ok || !created.id) throw new Error('tarefa recusada')
+    const id = created.id
+    const curto = id.slice(0, 8)
+    const using = resolver({ tarefas: () => service.todas() })
+    const edit = await extractActions(block({ tipo: 'lembrete-editar', id: curto, quando: '2026-11-18T09:00:00-03:00' }), using)
     expect(edit.actions).toEqual([{ id: 'a1', status: 'proposed', result: null, kind: 'lembrete-editar', taskId: id, currentText: 'Responder a Ana', currentAt: '2026-11-17T12:00:00.000Z', text: null, at: '2026-11-18T09:00:00-03:00', error: null }])
     const drop = await extractActions(block({ tipo: 'lembrete-apagar', id }), using)
     expect(drop.actions).toEqual([{ id: 'a2', status: 'proposed', result: null, kind: 'lembrete-apagar', taskId: id, text: 'Responder a Ana', at: '2026-11-17T12:00:00.000Z', error: null }])
-    // Id inventado, hora no passado, nada a mudar e tarefa de agente: texto.
+    // Id inventado, hora no passado e nada a mudar: texto.
     for (const json of [
       { tipo: 'lembrete-editar', id: 'inventado', quando: '2026-11-18T09:00:00-03:00' },
       { tipo: 'lembrete-editar', id, quando: '2026-11-16T09:00:00-03:00' },
@@ -778,43 +767,39 @@ describe('contrato 78: alterar e apagar um lembrete', () => {
       model: null,
       thinkMore: false,
     })
-    const actions = createChatActions({
-      store,
-      createReminder: () => Promise.reject(new Error('não')),
-      timeZone: () => SP,
-      now: () => NOW,
-      reminders: { list: () => service.listTasks(), update: (taskId, change) => service.updateReminder(taskId, change), remove: (taskId) => service.deleteTask({ id: taskId }) },
-    })
+    const actions = createChatActions({ store, timeZone: () => SP, now: () => NOW, tarefas: service })
     const ref = (actionId: string) => ({ chatId: 'c1', index: 1, actionId })
     // O cartão errado para a operação, e a hora do "Editar" no passado: nada muda.
     expect(await actions.reminderChange({ ...ref('a1'), op: 'delete' })).toEqual({ ok: false, error: 'missing' })
     expect(await actions.reminderChange({ ...ref('a1'), op: 'update', at: '2026-11-16T10:00:00-03:00' })).toEqual({ ok: false, error: 'past' })
     expect((await actions.reminderChange({ ...ref('a1'), op: 'update', text: 'Ligar para a Ana' })).ok).toBe(true)
-    const task = (await service.listTasks()).find((item) => item.id === id)
-    expect(task).toMatchObject({ schedule: { kind: 'once', at: '2026-11-18T12:00:00.000Z' }, nextRunAt: '2026-11-18T12:00:00.000Z', name: 'Lembrete: Ligar para a Ana', runOnce: true })
+    expect((await service.todas()).find((item) => item.id === id)).toMatchObject({ titulo: 'Ligar para a Ana', lembreteEm: Date.parse('2026-11-18T09:00:00-03:00'), lembreteDisparadoEm: null })
     expect((await store.get('c1'))?.messages[1]?.actions?.[0]).toMatchObject({ status: 'done', result: 'Lembrete alterado · qua 18/11 09:00', at: '2026-11-18T12:00:00.000Z', text: 'Ligar para a Ana' })
     expect(await actions.reminderChange({ ...ref('a1'), op: 'update' })).toEqual({ ok: false, error: 'done' })
     expect((await actions.reminderChange({ ...ref('a2'), op: 'delete' })).ok).toBe(true)
-    expect((await service.listTasks()).some((item) => item.id === id)).toBe(false)
+    expect((await service.todas()).some((item) => item.id === id)).toBe(false)
     expect((await store.get('c1'))?.messages[1]?.actions?.[1]).toMatchObject({ status: 'done', result: 'Lembrete apagado' })
-    // Apagado entre a proposta e o clique: "não existe mais".
+    // Apagada entre a proposta e o clique: "não existe mais".
     expect((await actions.reminderChange({ ...ref('a3'), op: 'delete' })).ok).toBe(true)
     expect((await store.get('c1'))?.messages[1]?.actions?.[2]).toMatchObject({ status: 'failed', error: REMINDER_GONE_TEXT })
     expect(actionsHistory((await store.get('c1'))?.messages[1]?.actions)).toContain(`- alterar o lembrete "Responder a Ana" (id: ${id}) de 2026-11-17T12:00:00.000Z para 2026-11-18T12:00:00.000Z com o texto "Ligar para a Ana" (Lembrete alterado · qua 18/11 09:00)`)
-    service.dispose()
   })
 
-  it('o ESTADO.md e o AUTOMACOES.md trazem o id dos lembretes e as agendas pelo nome, nunca o id da agenda', () => {
+  it('o ESTADO.md traz os lembretes das tarefas com o id curto e as agendas pelo nome; o AUTOMACOES.md não lista lembretes', () => {
     const reminder = { id: 'rem-1', name: 'Lembrete: Ana', enabled: true, autoPaused: false, nextRunAt: '2026-11-17T12:00:00.000Z', timezone: SP, reminder: { text: 'Ana', whatsappChatId: null, whatsappChatName: null } }
-    const base = { now: NOW, timeZone: SP, version: '0.7.0', recording: null, google: 'não conectada', whatsapp: 'Não instalado', automationsPaused: null, agents: [], tasks: [reminder] }
+    const lembretes = [{ id: '0123abcd-0000-4000-8000-000000000000', titulo: 'Ana', lembreteEm: Date.parse('2026-11-17T12:00:00.000Z'), disparado: false }]
+    const base = { now: NOW, timeZone: SP, version: '0.7.0', recording: null, google: 'não conectada', whatsapp: 'Não instalado', automationsPaused: null, agents: [], tasks: [reminder], lembretes }
     const state = stateMarkdown({ ...base, calendar: { access: 'full', calendars: [{ title: 'Pessoal', source: 'iCloud', isDefault: false }, { title: 'Trabalho', source: 'iCloud', isDefault: true }] } })
-    expect(state).toContain('## Lembretes\n\n- Lembrete: Ana · ter 17/11 09:00 · id: rem-1')
+    expect(state).toContain('## Lembretes\n\n- Lembrete: Ana · 17/11 09:00 · id: 0123abcd')
+    expect(state).not.toContain('rem-1')
     expect(state).toContain('## Agendas do Mac\n\n- Pessoal (iCloud)\n- Trabalho (iCloud), padrão')
     expect(stateMarkdown({ ...base, calendar: { access: 'not-determined', calendars: [] } })).toContain('Sem acesso ao Calendário do Mac (peça em Configurações › Email › Convites).')
     expect(stateMarkdown({ ...base, calendar: { access: 'unavailable', calendars: [] } })).toContain('Calendário indisponível.')
     expect(stateMarkdown(base)).not.toContain('Agendas do Mac')
     const task = { ...reminder, agentId: '', message: 'Ana', schedule: { kind: 'once' as const, at: '2026-11-17T12:00:00.000Z' }, runOnce: true, runOnceAction: 'disable' as const, timeoutS: 30, notify: 'always' as const, output: null, email: null, lastRunAt: null, lastStatus: null, lastResultPreview: null, lastError: null, consecutiveFailures: 0, createdAt: '', updatedAt: '' }
-    expect(automationsMarkdown({ agents: [], tasks: [task], runs: [] }, SP)).toContain('- Lembrete: Ana · ter 17/11 09:00 · id: rem-1 · só notificação, sem agente · ligado')
+    const automations = automationsMarkdown({ agents: [], tasks: [task], runs: [] }, SP)
+    expect(automations).not.toContain('Lembrete')
+    expect(automations).toContain('Nenhum agendamento.')
   })
 })
 
@@ -1333,7 +1318,7 @@ describe('contrato 117: o funil no Assistente', () => {
     )
     const store = createFileChatStore({ dir })
     await store.save(chatWith(extracted.actions))
-    const actions = createChatActions({ store, createReminder: () => Promise.reject(new Error('não')), timeZone: () => SP, now: () => NOW, funil: service })
+    const actions = createChatActions({ store, timeZone: () => SP, now: () => NOW, funil: service })
     const ref = (actionId: string) => ({ chatId: 'c1', index: 1, actionId })
     const saved = async (actionId: string): Promise<ChatAction | undefined> => (await store.get('c1'))?.messages[1]?.actions?.find((action) => action.id === actionId)
 
@@ -1376,7 +1361,8 @@ describe('contrato 117: o funil no Assistente', () => {
     expect((await service.view()).state.oportunidades.find((item) => item.id === portal)).not.toHaveProperty('proximoPasso')
     expect(tarefas.criar).toHaveBeenCalledTimes(1)
     expect(tarefas.criar.mock.calls[0]?.[0]).toMatchObject({ titulo: 'Ligar para a Ana', prazo: '2026-11-24', origem: { tipo: 'funil', oportunidadeId: portal } })
-    expect(await saved('a4')).toMatchObject({ status: 'done', result: 'Próximo passo salvo' })
+    // Contrato 127 (R17).
+    expect(await saved('a4')).toMatchObject({ status: 'done', result: 'Tarefa criada: Ligar para a Ana' })
     expect(actionsHistory((await store.get('c1'))?.messages[1]?.actions)).toContain('- Contato criado: Bruna Reis (Contato criado)')
   })
 
@@ -1392,12 +1378,26 @@ describe('contrato 117: o funil no Assistente', () => {
     )
     const store = createFileChatStore({ dir })
     await store.save(chatWith(extracted.actions))
-    const actions = createChatActions({ store, createReminder: () => Promise.reject(new Error('não')), timeZone: () => SP, now: () => NOW, funil: service })
+    const actions = createChatActions({ store, timeZone: () => SP, now: () => NOW, funil: service })
     const ids = extracted.actions.map((action) => action.id)
     for (const actionId of ids) expect((await actions.funil({ chatId: 'c1', index: 1, actionId })).ok).toBe(true)
     expect(tarefas.criar).toHaveBeenCalledTimes(1)
     expect(tarefas.salvar).toHaveBeenCalledTimes(1)
     expect(tarefas.lista.map((tarefa) => [tarefa.titulo, tarefa.prazo, tarefa.vinculos.oportunidadeId])).toEqual([['Ligar para a Ana', '2026-11-26', portal]])
+    // Contrato 127 (R17): o `done` diz o que aconteceu com a tarefa: criada, já existia (mesmo prazo) e prazo atualizado.
+    const resultados = await Promise.all(ids.map(async (id) => (await store.get('c1'))?.messages[1]?.actions?.find((action) => action.id === id)?.result))
+    expect(resultados).toEqual(['Tarefa criada: Ligar para a Ana', 'A tarefa já existia: ligar para a ANA', 'Prazo da tarefa atualizado: Ligar para a Ana'])
+  })
+
+  it('contrato 127 (R17): a tarefa do passo que o serviço das tarefas recusa deixa o cartão `failed` com a frase dele', async () => {
+    const { service, portal, tarefas } = await funilComPortal()
+    tarefas.criar.mockResolvedValueOnce({ ok: false, erro: 'limite', mensagem: 'A lista chegou ao limite de tarefas.' })
+    const extracted = await extractActions(block({ tipo: 'oportunidade-proximo-passo', oportunidadeId: portal, texto: 'Ligar para a Ana' }), resolver({ funil: () => service.view() }))
+    const store = createFileChatStore({ dir })
+    await store.save(chatWith(extracted.actions))
+    const actions = createChatActions({ store, timeZone: () => SP, now: () => NOW, funil: service })
+    expect((await actions.funil({ chatId: 'c1', index: 1, actionId: extracted.actions[0]?.id ?? '' })).ok).toBe(true)
+    expect((await store.get('c1'))?.messages[1]?.actions?.[0]).toMatchObject({ status: 'failed', error: 'A lista chegou ao limite de tarefas.' })
   })
 
   it('mover para Perdido usa a nota como motivo da perda; a oportunidade que sumiu antes do clique vira `failed`', async () => {
@@ -1412,7 +1412,7 @@ describe('contrato 117: o funil no Assistente', () => {
     )
     const store = createFileChatStore({ dir })
     await store.save(chatWith(extracted.actions))
-    const actions = createChatActions({ store, createReminder: () => Promise.reject(new Error('não')), timeZone: () => SP, now: () => NOW, funil: service })
+    const actions = createChatActions({ store, timeZone: () => SP, now: () => NOW, funil: service })
     expect((await actions.funil({ chatId: 'c1', index: 1, actionId: 'a1' })).ok).toBe(true)
     const state = (await service.view()).state
     expect(state.oportunidades.find((item) => item.id === portal)?.motivoPerda).toBe('Orçamento adiado')
@@ -1422,7 +1422,7 @@ describe('contrato 117: o funil no Assistente', () => {
     expect((await actions.funil({ chatId: 'c1', index: 1, actionId: 'a2' })).ok).toBe(true)
     expect((await store.get('c1'))?.messages[1]?.actions?.[1]).toMatchObject({ status: 'failed', error: 'oportunidade não encontrada' })
     // Sem o serviço do funil, o cartão ainda `proposed` não roda e continua esperando o clique.
-    const semFunil = createChatActions({ store, createReminder: () => Promise.reject(new Error('não')), timeZone: () => SP, now: () => NOW })
+    const semFunil = createChatActions({ store, timeZone: () => SP, now: () => NOW })
     expect(await semFunil.funil({ chatId: 'c1', index: 1, actionId: 'a3' })).toEqual({ ok: false, error: 'invalid' })
     expect((await store.get('c1'))?.messages[1]?.actions?.[2]).toMatchObject({ kind: 'contato-criar', status: 'proposed' })
     expect((await service.view()).state.contatos.some((item) => item.nome === 'Bruna Reis')).toBe(false)
@@ -1439,5 +1439,119 @@ describe('prompt do Assistente (contrato 128, R29 e R33)', () => {
       expect(prompt).not.toMatch(/"tarefa"/)
       expect(prompt).not.toMatch(/[Tt]arefas? agendadas?/)
     }
+  })
+})
+
+// Contrato 127 (CA1, R28, D-13): os cartões das tarefas. A oportunidade e o contato pelo nome no funil; o id inteiro ou
+// curto entre as tarefas abertas; o "Editar" conferido de novo no main; o canal único `scribe:chat-action-tarefa`.
+describe('contrato 127: os cartões das tarefas', () => {
+  const ETAPAS = [
+    { id: 'e-negociacao', nome: 'Negociação', tipo: 'aberta' as const, ordem: 0 },
+    { id: 'e-ganho', nome: 'Ganho', tipo: 'ganho' as const, ordem: 1 },
+  ]
+  const oportunidade = (id: string, titulo: string, etapaId = 'e-negociacao'): Oportunidade =>
+    ({ id, titulo, etapaId, arquivado: false, contatoIds: [], empresaId: null, meetingIds: [], whatsappChatIds: [], emails: [] }) as unknown as Oportunidade
+  const view = (oportunidades: Oportunidade[]): FunilView =>
+    ({ state: { version: 1, etapas: ETAPAS, oportunidades, contatos: [{ id: 'c-rafael', nome: 'Rafael Lima', arquivado: false, emails: [] }], empresas: [], eventos: [], ignorados: [], ultimoAvisoEm: null }, ultimas: {}, proximosPassos: {} }) as unknown as FunilView
+  const chatWith = (actions: ChatAction[]): Chat => ({
+    id: 'c1',
+    meetingId: null,
+    title: 'Tarefas',
+    createdAt: new Date(NOW).toISOString(),
+    messages: [
+      { role: 'user', text: 'Pedido', at: new Date(NOW).toISOString() },
+      { role: 'assistant', text: 'Proposta', at: new Date(NOW).toISOString(), actions },
+    ],
+    scope: { kind: 'all' },
+    model: null,
+    thinkMore: false,
+  })
+  const ref = (actionId: string) => ({ chatId: 'c1', index: 1, actionId })
+
+  it('tarefa-criar: a oportunidade pelo nome sem acento e sem caixa; duas com o mesmo nome (ou nenhuma) viram "ambiguo"', async () => {
+    const { service } = tarefasServico(join(dir, 'tarefas'), () => NOW)
+    const uma = resolver({ tarefas: () => service.todas(), funil: () => Promise.resolve(view([oportunidade('op-loja', 'Loja virtual'), oportunidade('op-app', 'App de vistoria')])) })
+    const [card] = (await extractActions(block({ tipo: 'tarefa-criar', titulo: 'Mandar proposta', prazo: '2026-11-20', oportunidade: 'loja virtual', contato: 'rafael lima' }), uma)).actions
+    expect(card).toEqual({ id: 'a1', status: 'proposed', result: null, kind: 'tarefa-criar', titulo: 'Mandar proposta', prazo: '2026-11-20', lembreteEm: null, oportunidade: { id: 'op-loja', titulo: 'Loja virtual' }, contato: { id: 'c-rafael', nome: 'Rafael Lima' }, ambiguo: null, tarefaId: null, error: null })
+    const duas = resolver({ tarefas: () => service.todas(), funil: () => Promise.resolve(view([oportunidade('op-1', 'Loja virtual'), oportunidade('op-2', 'Loja Virtual')])) })
+    expect((await extractActions(block({ tipo: 'tarefa-criar', titulo: 'Mandar proposta', oportunidade: 'loja virtual' }), duas)).actions[0]).toMatchObject({ oportunidade: null, ambiguo: { campo: 'oportunidade', texto: 'loja virtual' } })
+    // Os dois por escolher: o contato citado fica à parte, para o cartão pedir também.
+    expect((await extractActions(block({ tipo: 'tarefa-criar', titulo: 'X', oportunidade: 'loja virtual', contato: 'Fulano' }), duas)).actions[0]).toMatchObject({ ambiguo: { campo: 'oportunidade' }, ambiguoContato: 'Fulano', contato: null })
+    // A ganha não conta; o app bloqueado (sem as tarefas) deixa o bloco como texto.
+    const ganha = resolver({ tarefas: () => service.todas(), funil: () => Promise.resolve(view([oportunidade('op-1', 'Loja virtual', 'e-ganho')])) })
+    expect((await extractActions(block({ tipo: 'tarefa-criar', titulo: 'X', oportunidade: 'Loja virtual' }), ganha)).actions[0]).toMatchObject({ ambiguo: { campo: 'oportunidade' } })
+    expect((await extractActions(block({ tipo: 'tarefa-criar', titulo: 'X' }), resolver({ tarefas: () => Promise.resolve(null) }))).actions).toEqual([])
+    // Nada foi criado para montar os cartões.
+    expect(await service.todas()).toEqual([])
+  })
+
+  it('tarefa-criar: o "Editar" com dia que não existe é recusado sem criar; com título novo, a tarefa nasce com ele; ambígua sem escolha fica "failed"', async () => {
+    const funil = view([oportunidade('op-loja', 'Loja virtual')])
+    const { service, chamadas } = tarefasServico(join(dir, 'tarefas'), () => NOW, () => funil.state)
+    const using = resolver({ tarefas: () => service.todas(), funil: () => Promise.resolve(funil) })
+    const [card] = (await extractActions(block({ tipo: 'tarefa-criar', titulo: 'Mandar proposta', prazo: '2026-11-20', oportunidade: 'Loja virtual' }), using)).actions
+    const [ambigua] = (await extractActions(block({ tipo: 'tarefa-criar', titulo: 'Ligar', oportunidade: 'Outra' }), using)).actions
+    const store = createFileChatStore({ dir })
+    await store.save(chatWith([card as ChatAction, { ...(ambigua as ChatAction), id: 'a2' }, { ...(ambigua as ChatAction), id: 'a3' }]))
+    const actions = createChatActions({ store, tarefas: service, funil: { view: () => Promise.resolve(funil) } as unknown as FunilService, timeZone: () => SP, now: () => NOW })
+    expect(await actions.tarefa({ ...ref('a1'), campos: { prazo: '2026-02-30' } })).toEqual({ ok: false, error: 'invalid' })
+    expect(await actions.tarefa({ ...ref('a1'), campos: { titulo: '   ' } })).toEqual({ ok: false, error: 'invalid' })
+    expect(chamadas.criar).toEqual([])
+    expect((await store.get('c1'))?.messages[1]?.actions?.[0]).toMatchObject({ status: 'proposed' })
+    expect((await actions.tarefa({ ...ref('a1'), campos: { titulo: 'Mandar a proposta revisada' } })).ok).toBe(true)
+    const [tarefa] = await service.todas()
+    expect(tarefa).toMatchObject({ titulo: 'Mandar a proposta revisada', prazo: '2026-11-20', origem: { tipo: 'assistente' }, vinculos: { oportunidadeId: 'op-loja' } })
+    expect((await store.get('c1'))?.messages[1]?.actions?.[0]).toMatchObject({ status: 'done', result: 'Tarefa criada: Mandar a proposta revisada', tarefaId: tarefa?.id })
+    expect(await actions.tarefa(ref('a1'))).toEqual({ ok: false, error: 'done' })
+    // Ambígua: sem a escolha, "failed"; com a oportunidade escolhida no cartão, cria ligada a ela.
+    expect((await actions.tarefa(ref('a2'))).ok).toBe(true)
+    expect((await store.get('c1'))?.messages[1]?.actions?.[1]).toMatchObject({ status: 'failed', error: 'Escolha a oportunidade antes de criar.' })
+    expect(await actions.tarefa({ ...ref('a3'), campos: { oportunidadeId: 'nao-existe' } })).toEqual({ ok: false, error: 'invalid' })
+    expect((await actions.tarefa({ ...ref('a3'), campos: { oportunidadeId: 'op-loja' } })).ok).toBe(true)
+    expect((await service.todas()).find((item) => item.titulo === 'Ligar')?.vinculos.oportunidadeId).toBe('op-loja')
+    expect(chamadas.criar).toHaveLength(2)
+  })
+
+  it('tarefa-concluir e tarefa-adiar: o id inexistente (ou de uma feita) nasce "failed"; o curto de uma aberta resolve; o clique conclui e adia', async () => {
+    const { service } = tarefasServico(join(dir, 'tarefas'), () => NOW)
+    const criar = async (titulo: string): Promise<string> => {
+      const result = await service.criar({ titulo, prazo: '2026-11-18', origem: { tipo: 'manual' } })
+      if (!result.ok || !result.id) throw new Error(JSON.stringify(result))
+      return result.id
+    }
+    const aberta = await criar('Revisar contrato')
+    const feita = await criar('Enviar a ata')
+    await service.status({ id: feita, status: 'feita' })
+    const using = resolver({ tarefas: () => service.todas() })
+    expect((await extractActions(block({ tipo: 'tarefa-concluir', id: '00000000' }), using)).actions[0]).toMatchObject({ kind: 'tarefa-concluir', status: 'failed', error: TAREFA_GONE_TEXT })
+    expect(TAREFA_GONE_TEXT).toBe('Essa tarefa não existe mais')
+    expect((await extractActions(block({ tipo: 'tarefa-concluir', id: feita }), using)).actions[0]).toMatchObject({ status: 'failed', error: TAREFA_GONE_TEXT })
+    const [concluir] = (await extractActions(block({ tipo: 'tarefa-concluir', id: aberta.slice(0, 8) }), using)).actions
+    expect(concluir).toMatchObject({ kind: 'tarefa-concluir', status: 'proposed', tarefaId: aberta, titulo: 'Revisar contrato', error: null })
+    const [adiar] = (await extractActions(block({ tipo: 'tarefa-adiar', id: aberta.slice(0, 8), prazo: '2026-11-27' }), using)).actions
+    expect(adiar).toMatchObject({ kind: 'tarefa-adiar', status: 'proposed', tarefaId: aberta, prazoAntes: '2026-11-18', prazo: '2026-11-27' })
+    const store = createFileChatStore({ dir })
+    await store.save(chatWith([{ ...(adiar as ChatAction), id: 'a1' }, { ...(concluir as ChatAction), id: 'a2' }, { ...(concluir as ChatAction), id: 'a3' }]))
+    const actions = createChatActions({ store, tarefas: service, timeZone: () => SP, now: () => NOW })
+    expect(await actions.tarefa({ ...ref('a2'), campos: { titulo: 'x' } })).toEqual({ ok: false, error: 'invalid' })
+    expect((await actions.tarefa(ref('a1'))).ok).toBe(true)
+    expect((await service.todas()).find((item) => item.id === aberta)?.prazo).toBe('2026-11-27')
+    expect((await store.get('c1'))?.messages[1]?.actions?.[0]).toMatchObject({ status: 'done', result: 'Adiada para 27/11' })
+    expect((await actions.tarefa(ref('a2'))).ok).toBe(true)
+    expect((await service.todas()).find((item) => item.id === aberta)?.status).toBe('feita')
+    expect((await store.get('c1'))?.messages[1]?.actions?.[1]).toMatchObject({ status: 'done', result: 'Tarefa concluída: Revisar contrato' })
+    // Fechada entre a proposta e o clique.
+    expect((await actions.tarefa(ref('a3'))).ok).toBe(true)
+    expect((await store.get('c1'))?.messages[1]?.actions?.[2]).toMatchObject({ status: 'failed', error: TAREFA_GONE_TEXT })
+    expect(actionsHistory((await store.get('c1'))?.messages[1]?.actions)).toContain('- concluir a tarefa "Revisar contrato" (Tarefa concluída: Revisar contrato)')
+  })
+
+  it('o prompt descreve a fonte, a citação e os três cartões, sem o tipo antigo', () => {
+    const prompt = assistantSystemPrompt('all')
+    expect(prompt).toContain('TAREFAS.md')
+    expect(prompt).toContain('[Tarefa · <título>]')
+    for (const tipo of ['tarefa-criar', 'tarefa-concluir', 'tarefa-adiar']) expect(prompt).toContain(`"${tipo}" com`)
+    expect(prompt).not.toMatch(/"tarefa"/)
+    expect(CHAT_ACTION_KINDS).toEqual(expect.arrayContaining(['tarefa-criar', 'tarefa-concluir', 'tarefa-adiar']))
   })
 })

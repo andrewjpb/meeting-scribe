@@ -236,8 +236,14 @@ export interface FunilView {
   proximosPassos: Record<string, ProximoPassoDerivado | null>
 }
 
+/**
+ * Contrato 127 (R17): o que aconteceu com a tarefa do próximo passo no `oportunidadeSave` (só quando veio um passo com
+ * texto): criada, prazo da existente atualizado, a mesma já existia ou falhou (com a frase do serviço das tarefas).
+ */
+export type TarefaDoPasso = { acao: 'criada' | 'atualizada' | 'existente'; id: string } | { acao: 'falhou'; mensagem: string }
+
 /** `falhou`: exceção ao gravar (disco cheio, permissão); o resto vem do store ou da checagem do pedido. */
-export type FunilActionResult = { ok: true; id: string | null; mesclado?: boolean } | { ok: false; erro: FunilErro | 'falhou'; mensagem: string }
+export type FunilActionResult = { ok: true; id: string | null; mesclado?: boolean; tarefa?: TarefaDoPasso } | { ok: false; erro: FunilErro | 'falhou'; mensagem: string }
 
 /** Texto de cada erro do store, para a tela mostrar como veio. */
 export const FUNIL_ERRO_TEXTO: Record<FunilErro, string> = {

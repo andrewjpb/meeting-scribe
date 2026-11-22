@@ -2,8 +2,9 @@
 // sex 21/11 17:00"), última execução (estado, tempo e "há 2 h") e o interruptor; ações "Rodar agora", "Editar",
 // "Duplicar" e "Excluir" (confirma). O formulário abre no lugar da tabela.
 //
-// Contrato 25: o lembrete criado pelo Assistente aparece aqui como "Lembrete" (sem agente): só liga, desliga, roda
-// agora (a notificação) e exclui. "Criar tarefa" num cartão do Assistente abre o formulário já preenchido.
+// Contrato 25: o lembrete criado pelo Assistente aparecia aqui como "Lembrete" (sem agente). Contrato 127 (R33): os
+// lembretes viraram tarefas e a lista não mostra mais nenhum. "Criar agendamento" num cartão do Assistente abre o
+// formulário já preenchido.
 //
 // Contrato 51: a tarefa com "Pode enviar email" mostra o ícone de envio ao lado do nome e a linha com a data da
 // permissão e quantos destinatários ela tem.
@@ -45,7 +46,8 @@ function emailLine(task: ScheduledTask): string | null {
 }
 
 export function SchedulesTab({ meetings }: { meetings: ChatMeetings }) {
-  const tasks = useAutomations((state) => state.tasks)
+  // Contrato 127 (R33): um lembrete que ainda reste nas Automações fica fora da lista (os lembretes são tarefas).
+  const tasks = useAutomations((state) => state.tasks).filter((task) => !task.reminder)
   const agents = useAutomations((state) => state.agents)
   // O rascunho do cartão do Assistente, se houver, abre o formulário de cara.
   const [fromChat] = useState(() => useAutomations.getState().takeTaskDraft())
