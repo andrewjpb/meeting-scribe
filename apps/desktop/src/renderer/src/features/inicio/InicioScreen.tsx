@@ -1,3 +1,4 @@
+import { RefreshCw } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router'
 import { ROUTE_PATHS } from '@shared/routes'
@@ -5,14 +6,15 @@ import { useSettings } from '../../app/settingsStore'
 import { formatElapsed } from '../../audio/clock'
 import { useRecording } from '../live/recordingStore'
 import { useElapsed } from '../live/useElapsed'
+import { Button } from '../../design/Button'
 import { useMeetingsOverview } from '../meetings/useMeetingsOverview'
 import { AgendaDia } from './AgendaDia'
 import { CartaoAutomacoes } from './CartaoAutomacoes'
 import { CartaoPendencias } from './CartaoPendencias'
 import { CartaoTarefas } from './CartaoTarefas'
 import { CartaoUltimaReuniao } from './CartaoUltimaReuniao'
-import { dataPorExtenso, horaMinuto, INICIO_LINK_CLASS, saudacao } from './inicioFormat'
-import { useInicioView } from './inicioStore'
+import { dataPorExtenso, horaMinuto, INICIO_LINK_CLASS, saudacao, TEXTO_ATUALIZAR_FALHOU, textoAtualizado } from './inicioFormat'
+import { useInicio, useInicioView } from './inicioStore'
 
 /** O relógio da tela, relido na virada de cada minuto (a marca "agora", o "faltam N min" e a saudação). */
 function useAgora(): number {
@@ -61,11 +63,41 @@ function FaixaGravando() {
 }
 
 /**
+ * O "Atualizar" do topo (contrato 146, artboards 01 a 03 do inicio-atualizar): à esquerda, "Atualizado às HH:MM" (o
+ * `atualizadoEm` da view, mantido enquanto relê) ou, quando alguma fonte não foi relida, "Não foi possível atualizar
+ * tudo." em --rec; antes da primeira view, nada. O botão é o "Atualizar" de Redes: "Atualizando…" e desabilitado durante
+ * a leitura, com o ícone parado.
+ */
+function AtualizarInicio({ atualizadoEm }: { atualizadoEm: string | null }) {
+  const atualizando = useInicio((state) => state.atualizando)
+  const falhou = useInicio((state) => state.falhou)
+  return (
+    <div className="flex shrink-0 items-center gap-3">
+      {falhou ? (
+        <span data-inicio-atualizar-falhou role="status" className="text-12 text-rec">
+          {TEXTO_ATUALIZAR_FALHOU}
+        </span>
+      ) : (
+        atualizadoEm && (
+          <span data-inicio-atualizado={atualizadoEm} className="text-12 text-text-muted tabular">
+            {textoAtualizado(atualizadoEm)}
+          </span>
+        )
+      )}
+      <Button variant="secondary" icon={RefreshCw} action="inicio-atualizar" disabled={atualizando} onClick={() => void useInicio.getState().atualizar()}>
+        {atualizando ? 'Atualizando…' : 'Atualizar'}
+      </Button>
+    </div>
+  )
+}
+
+/**
  * Tela Início (contrato 135, D1, D9, D11, D12; artboards 01 e 02): o dashboard do dia, só de leitura. Cabeçalho com a
  * saudação e a data por extenso (e a faixa da gravação em andamento); duas colunas (escolha D1): a agenda de hoje em 380
  * px à esquerda e os cartões à direita, na ordem da PRD (Tarefas, Pendências, Última reunião, Automações). Toda ação é um
  * clique explícito: concluir tarefa, abrir uma tela, começar a transcrever. Contrato 136 (D13): o bloco desligado em
- * Configurações › Geral › Início não aparece (sem a agenda, os cartões ocupam a largura toda).
+ * Configurações › Geral › Início não aparece (sem a agenda, os cartões ocupam a largura toda). Contrato 146: o
+ * "Atualizar" à direita do cabeçalho, com a base na linha da data e a borda direita na dos cartões.
  */
 export function InicioScreen() {
   const view = useInicioView()
@@ -84,6 +116,7 @@ export function InicioScreen() {
             </h1>
             <p className="text-13 text-text-muted">{dataPorExtenso(new Date(agora))}</p>
           </div>
+          <AtualizarInicio atualizadoEm={view?.atualizadoEm ?? null} />
         </header>
         <FaixaGravando />
       </div>

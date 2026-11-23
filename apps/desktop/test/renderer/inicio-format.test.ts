@@ -14,6 +14,8 @@ import {
   textoLivreAte,
   textoQuandoFoi,
   textoQuandoVai,
+  textoAtualizado,
+  textoPendencia,
   textoSemEventos,
   type ItemLinha,
 } from '../../src/renderer/src/features/inicio/inicioFormat'
@@ -155,5 +157,24 @@ describe('tela inicial e dia vazio', () => {
     expect(textoSemEventos(true, 'dev')).toBe('As agendas conectadas não têm nada marcado para hoje.')
     expect(textoSemEventos(false, 'ok')).toBe('O Calendário do Mac não tem nada marcado para hoje.')
     expect(textoSemEventos(false, 'indisponivel')).toBe('Nenhuma agenda para ler hoje.')
+  })
+})
+
+// Contrato 146 (CA3): a hora do "Atualizado às" e os textos das linhas de email em Pendências.
+describe('Atualizar e as linhas de email', () => {
+  it('"Atualizado às HH:MM" na hora local, 24 h', () => {
+    expect(textoAtualizado(iso(hoje(14, 32)))).toBe('Atualizado às 14:32')
+    expect(textoAtualizado(iso(local(2026, 11, 23, 9, 5).getTime()))).toBe('Atualizado às 09:05')
+    expect(textoAtualizado(iso(local(2026, 11, 23, 21, 0).getTime()))).toBe('Atualizado às 21:00')
+  })
+
+  it('os não lidos no singular e no plural', () => {
+    expect(`1 ${textoPendencia.emailsNaoLidos(1)}`).toBe('1 email não lido')
+    expect(`5 ${textoPendencia.emailsNaoLidos(5)}`).toBe('5 emails não lidos')
+  })
+
+  it('a pasta Pendentes com o nome da pasta', () => {
+    expect(`1 ${textoPendencia.emails(1)}`).toBe('1 email na pasta Pendentes')
+    expect(`5 ${textoPendencia.emails(5)}`).toBe('5 emails na pasta Pendentes')
   })
 })

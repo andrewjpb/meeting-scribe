@@ -1,18 +1,19 @@
-import { Calendar, ChevronRight, Mail, Smartphone, type LucideIcon } from 'lucide-react'
+import { Calendar, ChevronRight, Inbox, Mail, Smartphone, type LucideIcon } from 'lucide-react'
 import { Link } from 'react-router'
 import type { InicioPendencias } from '@shared/inicio'
 import { EMAIL_ROOT_PATH, ROUTE_PATHS } from '@shared/routes'
 import { Icon } from '../../design/Icon'
 import { INICIO_CARTAO_CABECALHO_CLASS, INICIO_CARTAO_CLASS, INICIO_CARTAO_TITULO_CLASS, textoPendencia } from './inicioFormat'
 
-/** Os não lidos (contrato 145) chegam na view, mas a linha deles só entra no contrato 146. */
-type Fonte = Exclude<keyof InicioPendencias, 'emailsNaoLidos'>
-
-/** Cada fonte, na ordem da PRD (bloco 4): o ícone (o da barra lateral) e a tela que a linha abre (o convite não tem tela). */
-const FONTES: readonly { fonte: Fonte; icone: LucideIcon; destino: string | null }[] = [
+/**
+ * Cada fonte, na ordem da PRD (bloco 4): o ícone (o da barra lateral) e a tela que a linha abre (o convite não tem tela).
+ * Contrato 146 (CA8): os não lidos da caixa de entrada por último, com o ícone da caixa de entrada, também na tela Email.
+ */
+const FONTES: readonly { fonte: keyof InicioPendencias; icone: LucideIcon; destino: string | null }[] = [
   { fonte: 'whatsapp', icone: Smartphone, destino: ROUTE_PATHS.whatsapp },
   { fonte: 'convites', icone: Calendar, destino: null },
   { fonte: 'emails', icone: Mail, destino: EMAIL_ROOT_PATH },
+  { fonte: 'emailsNaoLidos', icone: Inbox, destino: EMAIL_ROOT_PATH },
 ]
 
 const LINHA_CLASS = 'flex h-8 items-center gap-2.5 text-13 text-text'
@@ -44,7 +45,7 @@ export function CartaoPendencias({ pendencias }: { pendencias: InicioPendencias 
             </>
           )
           return (
-            <li key={fonte} data-inicio-pendencia={fonte} className="flex flex-col border-b border-line last:border-b-0">
+            <li key={fonte} data-inicio-pendencia={fonte} data-inicio-nao-lidos={fonte === 'emailsNaoLidos' ? n : undefined} className="flex flex-col border-b border-line last:border-b-0">
               {destino ? (
                 <Link to={destino} draggable={false} className={`no-drag rounded-[var(--radius-control)] hover:text-title ${LINHA_CLASS}`}>
                   {conteudo}

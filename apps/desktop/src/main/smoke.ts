@@ -3782,6 +3782,90 @@ async function inicioDedupeCheck(win: BrowserWindow, ctx: SmokeContext): Promise
   }
 }
 
+// --- Contrato 146: o "Atualizar" do topo e a linha dos emails não lidos ---------------------------------------------
+
+/**
+ * Contrato 146 (CA10a): no Início já carregado, o "Atualizar" existe, está no teclado (sem `tabindex` negativo) e
+ * habilitado; clicado, passa por desabilitado (um observador no botão registra) e volta a habilitar com "Atualizar", e o
+ * `[data-inicio-atualizado]` traz o `atualizadoEm` novo, sem o aviso de falha. Só números e booleanos no detalhe.
+ */
+async function inicioAtualizarCheck(contents: WebContents): Promise<Check> {
+  const BOTAO = `document.querySelector('[data-inicio-screen] [data-action="inicio-atualizar"]')`
+  const QUANDO = `document.querySelector('[data-inicio-atualizado]')?.dataset.inicioAtualizado`
+  const comHora = await waitFor(contents, `${routeIs('inicio')} && ${QUANDO}`, 8000)
+  const antes = await evaluate<string>(contents, `${QUANDO} ?? ''`)
+  const botao = await evaluate<{ existe: boolean; noTeclado: boolean; habilitado: boolean; rotulo: string }>(
+    contents,
+    `(() => {
+      const el = ${BOTAO}
+      return { existe: Boolean(el), noTeclado: Boolean(el) && el.tabIndex >= 0, habilitado: Boolean(el) && !el.disabled, rotulo: el?.textContent ?? '' }
+    })()`,
+  )
+  // O "Atualizando…" pode durar pouco: o observador marca se o botão chegou a ficar desabilitado com ele.
+  await evaluate(
+    contents,
+    `(() => {
+      window.__inicioAtualizando = false
+      const el = ${BOTAO}
+      if (!el) return false
+      const marca = () => { if (el.disabled && el.textContent.includes('Atualizando…')) window.__inicioAtualizando = true }
+      new MutationObserver(marca).observe(el, { attributes: true, childList: true, subtree: true, characterData: true })
+      return true
+    })()`,
+  )
+  if (botao.existe) await clickSelector(contents, '[data-inicio-screen] [data-action="inicio-atualizar"]')
+  const voltou =
+    botao.existe &&
+    (await waitFor(contents, `${QUANDO} && ${QUANDO} !== ${JSON.stringify(antes)} && !${BOTAO}.disabled && ${BOTAO}.textContent === 'Atualizar'`, 10_000))
+  const passouPorAtualizando = await evaluate<boolean>(contents, 'window.__inicioAtualizando === true')
+  const semFalha = await evaluate<boolean>(contents, `!document.querySelector('[data-inicio-atualizar-falhou]')`)
+  return {
+    ok: comHora && botao.existe && botao.noTeclado && botao.habilitado && botao.rotulo === 'Atualizar' && passouPorAtualizando && voltou && semFalha,
+    detail: JSON.stringify({ comHora, ...botao, passouPorAtualizando, horaNovaEHabilitado: voltou, semFalha }),
+  }
+}
+
+/**
+ * Contrato 146 (CA10b, spec CA2): com a conta do servidor de email falso conectada, um email não lido entregue pelo falso
+ * aparece no Início sem clique nem foco em até 5 s: a linha `[data-inicio-nao-lidos]` passa ao total da view mais um, com o
+ * texto no singular ou no plural, e "Atualizado às" muda. A caixa do smoke já tem não lidos a essa altura (as sementes e
+ * os emails dos roteiros anteriores), então o número esperado é o de antes mais um, não 1 fixo. Roda por último: o email
+ * entregue fica na caixa e nenhuma verificação depois dela conta mensagens.
+ */
+async function inicioNaoLidosCheck(ctx: SmokeContext, watch: (win: BrowserWindow) => void): Promise<Check> {
+  const win = ctx.openWindow({ theme: 'light' })
+  watch(win)
+  await loadAndWait(win)
+  const contents = win.webContents
+  await clickNav(contents, 'inicio')
+  const QUANDO = `document.querySelector('[data-inicio-atualizado]')?.dataset.inicioAtualizado`
+  const aberto = await waitFor(contents, `${routeIs('inicio')} && ${QUANDO}`, 8000)
+  const conta = await evaluate<boolean>(contents, `window.__scribeApi.invoke('scribe:email-accounts').then((list) => list.some((status) => status.state === 'connected'), () => false)`)
+  const antes = await evaluate<number>(contents, `window.__scribeApi.invoke('scribe:inicio-get').then((view) => view.pendencias.emailsNaoLidos, () => -1)`)
+  const linhaAntes = await evaluate<string>(contents, `document.querySelector('[data-inicio-nao-lidos]')?.dataset.inicioNaoLidos ?? '0'`)
+  const horaAntes = await evaluate<string>(contents, `${QUANDO} ?? ''`)
+  const esperado = antes + 1
+  const texto = `${esperado} ${esperado === 1 ? 'email não lido' : 'emails não lidos'}`
+  const desde = Date.now()
+  await ctx.fixtures.email.deliver({ from: { name: 'Paulo Nunes', address: 'paulo.nunes@cliente.example' }, subject: 'Chegou com o Início à vista', text: 'Uma mensagem nova para o Início contar.' })
+  const apareceu = await waitFor(
+    contents,
+    `(() => {
+      const linha = document.querySelector('[data-inicio-nao-lidos]')
+      return linha?.dataset.inicioNaoLidos === ${JSON.stringify(String(esperado))} && linha.textContent.trim() === ${JSON.stringify(texto)}
+    })()`,
+    5000,
+  )
+  const ms = Date.now() - desde
+  const horaMudou = await evaluate<boolean>(contents, `(${QUANDO} ?? '') !== ${JSON.stringify(horaAntes)}`)
+  const naRota = await evaluate<boolean>(contents, routeIs('inicio'))
+  win.destroy()
+  return {
+    ok: aberto && conta && antes >= 0 && linhaAntes === String(antes) && apareceu && horaMudou && naRota,
+    detail: JSON.stringify({ aberto, contaConectada: conta, naoLidosAntes: antes, linhaAntes: linhaAntes === String(antes), apareceu, ms, horaMudou, naRota }),
+  }
+}
+
 // --- Contrato 136: tela inicial, estados menores e a Section "Início" -----------------------------------------------
 
 /**
@@ -3792,7 +3876,8 @@ async function inicioDedupeCheck(win: BrowserWindow, ctx: SmokeContext): Promise
 async function inicioAberturaCheck(contents: WebContents): Promise<Check> {
   const rota = await waitFor(contents, `${routeIs('inicio')} && document.querySelector('[data-inicio-sem-eventos]')`, 8000)
   // As pendências da view: na abertura (antes dos roteiros de WhatsApp, agendas e email, que rodam depois do laço dos
-  // temas) nenhuma fonte tem o que responder; qualquer sobra aparece aqui pelo nome da fonte, sem contagem.
+  // temas) nenhuma fonte tem o que responder; qualquer sobra aparece aqui pelo nome da fonte, sem contagem. Contrato 146:
+  // `emailsNaoLidos` entra na mesma conta e fica em zero porque a conta do email falso só é adicionada em `emailChecks`.
   const pendenciasComAlgo = await evaluate<string[]>(
     contents,
     `window.__scribeApi.invoke('scribe:inicio-get').then((view) => Object.entries(view.pendencias).filter(([, n]) => n !== null && n > 0).map(([fonte]) => fonte), () => ['erro'])`,
@@ -17531,6 +17616,8 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
       await shoot('inicio-dia', 'inicio')
       if (themeName === 'light') {
         inicio['tela'] = await inicioTelaCheck(contents)
+        // Contrato 146 (CA10a): o "Atualizar" do topo, depois da tela (que exige o botão habilitado).
+        inicio['atualizar'] = await inicioAtualizarCheck(contents)
         inicio['concluir'] = await inicioConcluirCheck(contents)
       }
       restaurarMac()
@@ -17757,6 +17844,9 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
 
     // Contrato 63: os convites, por último (o passo 11 bloqueia e desbloqueia com a senha já criada).
     await inviteChecks(ctx, watch, invite, screenshots)
+
+    // Contrato 146 (CA10b): o email não lido chegando ao Início sozinho, por último (o email entregue fica na caixa).
+    inicio['naoLidos'] = await inicioNaoLidosCheck(ctx, watch)
   } catch (error) {
     failures.push(`erro: ${error instanceof Error ? (error.stack ?? error.message) : String(error)}`)
   }
@@ -17850,7 +17940,7 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
   for (const [name, check] of Object.entries(funil)) if (!check.ok) failures.push(`funil ${name}: ${check.detail}`)
   for (const [name, check] of Object.entries(tarefasTela)) if (!check.ok) failures.push(`tarefas ${name}: ${check.detail}`)
   for (const [name, check] of Object.entries(inicio)) if (!check.ok) failures.push(`início ${name}: ${check.detail}`)
-  for (const name of ['tela', 'concluir', 'gravando', 'dedupe', 'abertura', 'aberturaDark', 'semAcessoMac', 'configuracoes', 'telaInicial']) if (!inicio[name]) failures.push(`início ${name}: não executado`)
+  for (const name of ['tela', 'atualizar', 'concluir', 'gravando', 'dedupe', 'abertura', 'aberturaDark', 'semAcessoMac', 'configuracoes', 'telaInicial', 'naoLidos']) if (!inicio[name]) failures.push(`início ${name}: não executado`)
   // Contrato 126: o Resumo, o email e o WhatsApp.
   for (const name of ['resumoTarefas', 'resumoGerarDeNovo', 'emailTarefa', 'whatsappTarefa']) if (!tarefasTela[name]) failures.push(`tarefas ${name}: não executado`)
   // Contrato 130: os ajustes da auditoria dos prints.
