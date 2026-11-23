@@ -36,6 +36,9 @@ import type { SugestaoTarefa, TarefaInput, TarefaSalvar, TarefasActionResult, Ta
 // 134: inicio
 import type { InicioView } from './inicio'
 // fim 134
+// 156: painel de e-mail
+import type { EmailDashboardSuggestionKind, EmailDashboardView } from './email-dashboard'
+// fim 156
 // 138: atendimento
 import type {
   AtendimentoAgentInput,
@@ -549,6 +552,18 @@ export interface InvokeChannels {
   'scribe:email-batch-get': { request: { batchId: string }; response: EmailBatchGetResult }
   /** Contrato 56 (CA9): devolve à pasta de antes o que o Assistente moveu; nada é enviado nem apagado. */
   'scribe:email-batch-undo': { request: { batchId: string }; response: EmailBatchUndoResult }
+  // 156: painel de e-mail
+  /** Contrato 156: a visão do Painel de e-mail (só o cache e o `dashboard.json`; nada vai ao modelo). */
+  'scribe:email-dashboard-get': { request: undefined; response: EmailDashboardView }
+  /** "Analisar agora": começa a passada (só com a análise ligada) e volta logo; a visão nova chega pelo evento. */
+  'scribe:email-dashboard-run': { request: undefined; response: { started: boolean; running: boolean } }
+  /** "Ignorar" uma sugestão (resposta ou mover). */
+  'scribe:email-dashboard-ignore': { request: { accountId: string; messageKey: string; kind: EmailDashboardSuggestionKind }; response: EmailDashboardView }
+  /** A resposta sugerida foi aberta no Composer. */
+  'scribe:email-dashboard-opened': { request: { accountId: string; messageKey: string }; response: EmailDashboardView }
+  /** "Mover" um grupo, no clique: um lote `origem: 'painel'` com o Desfazer de sempre (`scribe:email-batch-undo`). */
+  'scribe:email-dashboard-apply-move': { request: { accountId: string; folder: string; messageKeys: string[] }; response: { batchId: string; moved: number } }
+  // fim 156
   /** Automações (contrato 23): os agentes, quantas tarefas usam cada um e os modelos que o perfil oferece. */
   'scribe:agents-list': { request: undefined; response: AgentsList }
   /** Criar (`id: null`) ou trocar um agente. */
@@ -852,6 +867,10 @@ export interface MainEvents {
   'scribe:email-changed': { accountId: string }
   /** Contrato 56 (CA10): o estado inteiro de um lote do Assistente a cada mudança. Não chega bloqueado. */
   'scribe:email-organize': EmailOrganizeEvent
+  // 156: painel de e-mail
+  /** Contrato 156: a visão do Painel de e-mail mudou (passada, ignorar, mover, mensagens). Não chega bloqueado. */
+  'scribe:email-dashboard-changed': EmailDashboardView
+  // fim 156
   /** Contrato 69: as redes mudaram (conta entrou, renovou, venceu, saiu; armazenamento salvo ou testado). Não chega bloqueado. */
   'scribe:redes-state': RedesState
   /** Contrato 71: a fila de publicações de uma conta mudou (vai inteira, com a cota em cache). Não chega bloqueado. */
@@ -1097,6 +1116,13 @@ const INVOKE: Record<InvokeChannel, true> = {
   'scribe:email-organize-state': true,
   'scribe:email-batch-get': true,
   'scribe:email-batch-undo': true,
+  // 156: painel de e-mail
+  'scribe:email-dashboard-get': true,
+  'scribe:email-dashboard-run': true,
+  'scribe:email-dashboard-ignore': true,
+  'scribe:email-dashboard-opened': true,
+  'scribe:email-dashboard-apply-move': true,
+  // fim 156
   'scribe:agents-list': true,
   'scribe:agents-save': true,
   'scribe:agents-delete': true,
@@ -1255,6 +1281,9 @@ const MAIN_EVENTS: Record<MainEvent, true> = {
   'scribe:email-message': true,
   'scribe:email-changed': true,
   'scribe:email-organize': true,
+  // 156: painel de e-mail
+  'scribe:email-dashboard-changed': true,
+  // fim 156
   'scribe:open-email': true,
   'scribe:open-redes': true,
   'scribe:redes-state': true,
@@ -1541,6 +1570,13 @@ export const WHEN_LOCKED: Readonly<Record<InvokeChannel, LockedPolicy>> = Object
   'scribe:email-organize-state': 'refused',
   'scribe:email-batch-get': 'refused',
   'scribe:email-batch-undo': 'refused',
+  // 156: painel de e-mail (recusados, como o resto do email; a passada diária roda no main e só começa desbloqueado)
+  'scribe:email-dashboard-get': 'refused',
+  'scribe:email-dashboard-run': 'refused',
+  'scribe:email-dashboard-ignore': 'refused',
+  'scribe:email-dashboard-opened': 'refused',
+  'scribe:email-dashboard-apply-move': 'refused',
+  // fim 156
   // Automações (contrato 23, CA10): gerenciar agentes e tarefas, testar, pedir e ver o histórico, tudo recusado com
   // o app bloqueado. O agendador não depende de canal: roda no main e as tarefas continuam rodando bloqueado.
   'scribe:agents-list': 'refused',
@@ -1740,4 +1776,15 @@ export interface ScribeApi {
   /** Contrato 73: "Excluir" um comentário (o clique da confirmação), pelo mesmo token de clique. */
   redesCommentDelete(accountId: string, commentId: string): Promise<RedesCommentActionResult>
   // fim 73
+  // 156: painel de e-mail
+  /** Contrato 156: os canais `scribe:email-dashboard-*`, pelo mesmo `invoke` (recusados com o app bloqueado). */
+  emailDashboardGet(): Promise<EmailDashboardView>
+  emailDashboardRun(): Promise<{ started: boolean; running: boolean }>
+  emailDashboardIgnore(request: InvokeChannels['scribe:email-dashboard-ignore']['request']): Promise<EmailDashboardView>
+  emailDashboardOpened(request: InvokeChannels['scribe:email-dashboard-opened']['request']): Promise<EmailDashboardView>
+  /** "Mover" no clique; nada se move sem ele. */
+  emailDashboardApplyMove(request: InvokeChannels['scribe:email-dashboard-apply-move']['request']): Promise<{ batchId: string; moved: number }>
+  /** `scribe:email-dashboard-changed`; devolve a função que para de ouvir. */
+  onEmailDashboardChanged(listener: (view: EmailDashboardView) => void): () => void
+  // fim 156
 }

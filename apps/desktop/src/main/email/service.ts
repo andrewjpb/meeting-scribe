@@ -699,6 +699,11 @@ export interface EmailService {
    */
   pendentesEmCache(): number | null
   /**
+   * Contrato 156: as pastas da conta IMAP pelo `LIST` já guardado, em árvore, sem abrir sessão. `null`: conta POP3,
+   * desconhecida ou sem `LIST` guardado.
+   */
+  foldersInCache(accountId: string): EmailFolderNode[] | null
+  /**
    * Contrato 52 (CA4): `MOVE` de até 500 UIDs; erro do servidor não tira nada do store. Contrato 56 (CA7): com
    * `uidValidity`, os UIDs valem com ele (a pasta de origem não precisa ter sido aberta no app); com `messageIds`, os que
    * chegam à INBOX não viram aviso de email novo. Com `options`, o resultado traz o `UIDVALIDITY` do destino.
@@ -2442,6 +2447,11 @@ export function createEmailService(deps: EmailServiceDeps): EmailService {
     },
 
     listFolders,
+
+    foldersInCache(accountId) {
+      const entries = folderCache.get(accountId)
+      return entries && runtimes.has(accountId) ? folderTree(entries) : null
+    },
 
     pendentesEmCache() {
       let total: number | null = null

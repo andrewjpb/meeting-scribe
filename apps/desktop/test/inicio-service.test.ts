@@ -251,7 +251,8 @@ describe('tela Início: o Calendário do Mac', () => {
     expect(index).toContain("app.on('browser-window-focus', () => macDay.invalidate())")
     expect(index).toContain('onRead: inicioChanged,')
     expect(index).toContain('onRead: inicioMacRead })')
-    expect(index).toContain('onFoldersCached: () => inicioChanged(),')
+    // Contrato 156: o mesmo aviso também leva a visão do Painel de e-mail; o do Início continua.
+    expect(index).toMatch(/onFoldersCached: \(\) => \{\n\s*inicioChanged\(\)/)
     expect(index).toMatch(/if \(!lockService\?\.isLocked\(\)\) broadcast\(appWindows\(\), 'scribe:inicio-changed', view\)/)
   })
 })

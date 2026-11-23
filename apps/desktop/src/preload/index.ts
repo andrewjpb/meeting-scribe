@@ -141,6 +141,30 @@ const api: ScribeApi = {
     return ipcRenderer.invoke('scribe:redes-comment-delete', { accountId, commentId, clickToken })
   },
   // fim 73
+  // 156: painel de e-mail
+  emailDashboardGet() {
+    return ipcRenderer.invoke('scribe:email-dashboard-get')
+  },
+  emailDashboardRun() {
+    return ipcRenderer.invoke('scribe:email-dashboard-run')
+  },
+  emailDashboardIgnore(request) {
+    return ipcRenderer.invoke('scribe:email-dashboard-ignore', { accountId: request.accountId, messageKey: request.messageKey, kind: request.kind })
+  },
+  emailDashboardOpened(request) {
+    return ipcRenderer.invoke('scribe:email-dashboard-opened', { accountId: request.accountId, messageKey: request.messageKey })
+  },
+  emailDashboardApplyMove(request) {
+    return ipcRenderer.invoke('scribe:email-dashboard-apply-move', { accountId: request.accountId, folder: request.folder, messageKeys: [...request.messageKeys] })
+  },
+  onEmailDashboardChanged(listener) {
+    const wrapped = (_event: IpcRendererEvent, view: Parameters<typeof listener>[0]): void => listener(view)
+    ipcRenderer.on('scribe:email-dashboard-changed', wrapped)
+    return () => {
+      ipcRenderer.removeListener('scribe:email-dashboard-changed', wrapped)
+    }
+  },
+  // fim 156
   on(channel, listener) {
     assertChannel(MAIN_EVENT_CHANNELS, channel)
     const wrapped = (_event: IpcRendererEvent, payload: Parameters<typeof listener>[0]): void => listener(payload)

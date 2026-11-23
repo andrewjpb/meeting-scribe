@@ -9,7 +9,7 @@ import { chmod, mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { z } from 'zod'
 import { EMAIL_ACCOUNT_ID_PATTERN, EMAIL_FOLDER_PATH_MAX } from '../../shared/email'
-import { EMAIL_BATCH_DAYS, EMAIL_BATCH_REASON_MAX, EMAIL_BATCH_REQUEST_MAX, EMAIL_BATCHES_MAX, EMAIL_VERDICTS, type EmailBatch } from '../../shared/email-organize'
+import { EMAIL_BATCH_DAYS, EMAIL_BATCH_ORIGENS, EMAIL_BATCH_REASON_MAX, EMAIL_BATCH_REQUEST_MAX, EMAIL_BATCHES_MAX, EMAIL_VERDICTS, type EmailBatch } from '../../shared/email-organize'
 
 export const EMAIL_BATCHES_FILE = 'batches.json'
 const VERSION = 1
@@ -59,6 +59,8 @@ const batchSchema = z
     totals: z.object({ read: z.number().int().min(0), total: z.number().int().min(0), outOfLimit: z.number().int().min(0) }).strict(),
     topics: z.array(topicSchema).max(TOPICS_MAX),
     items: z.array(itemSchema).max(ITEMS_MAX),
+    // Contrato 156: ausente nos lotes de antes (valem `agente`).
+    origem: z.enum(EMAIL_BATCH_ORIGENS).optional(),
   })
   .strict()
 const fileSchema = z.object({ version: z.literal(VERSION), batches: z.array(z.unknown()), folders: z.record(z.string().max(200), z.number().int().min(0).max(1000)).optional() })

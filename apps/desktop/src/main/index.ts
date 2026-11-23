@@ -128,6 +128,9 @@ import { createWhatsAppService, type WhatsAppService } from './whatsapp/service'
 import { createAgentSendAuthority } from './whatsapp/send-guard'
 import { EMAIL_DIR } from './email/email-store'
 import { createEmailBatchStore } from './email/batches'
+import { createEmailDashboardService, type EmailDashboardService } from './email/dashboard'
+import { registerEmailDashboardIpc } from './email/dashboard-ipc'
+import { createEmailDashboardStore } from './email/dashboard-store'
 import type { EmailOrganizer } from './email/organize'
 import { createEmailClickGuard, createEmailService, type EmailService } from './email/service'
 import { createRedesService, REDES_ACCOUNT_MISSING_MESSAGE, type RedesService } from './redes/service'
@@ -151,7 +154,7 @@ import { emailStateLabel, exportEmail } from './email/export'
 import { readEmailAttachments } from './email/attach'
 import { createEmailNotifier, type EmailNotice } from './email/notify'
 import { loadRemoteImages, readLimited, systemLookup, type HostLookup, type RemoteImageFetch } from './email/remote-images'
-import { EMAIL_ACCOUNT_ID_PATTERN, EMAIL_REMOTE_IMAGE_MAX_BYTES, isInbox, type EmailFolder, type EmailMessage } from '../shared/email'
+import { EMAIL_ACCOUNT_ID_PATTERN, EMAIL_REMOTE_IMAGE_MAX_BYTES, isInbox, type EmailFolder, type EmailFolderNode, type EmailMessage } from '../shared/email'
 
 // `app.setName` fixa o `userData` (~/Library/Application Support/Meeting Scribe) e o item do Chaveiro:
 // trocar este nome perderia reuniões, configurações e a chave. O nome que a pessoa vê é o da marca
@@ -1022,6 +1025,8 @@ interface AppServices {
   tarefas: TarefasService
   /** Contrato 134: a view da tela Início (agenda do dia das contas e do Mac, pendências), só leitura. */
   inicio: InicioService
+  /** Contrato 156: o Painel de e-mail (a passada, a visão, ignorar, mover e o agendamento diário). */
+  emailDashboard: EmailDashboardService
   /** Contrato 138: os agentes de atendimento e os atendimentos das conversas (`whatsapp/atendimento.json`). */
   atendimento: AtendimentoStore
   /** Contrato 138: o histórico do atendimento (`whatsapp/atendimento-log.jsonl`). */
@@ -1326,6 +1331,22 @@ function createAppServices(userData: string): AppServices {
   // Contrato 62: o serviço de convites depende do `inviteSource` do email, e o email avisa o serviço quando um REPLY sai
   // (CA16): o aviso fecha sobre esta variável, preenchida logo depois do email.
   let invites: InviteService | null = null
+  // Contrato 156: o Painel de e-mail (`email/dashboard.json`) e os lotes do Assistente (`email/batches.json`), um store
+  // de cada para o app inteiro (o lote do "Mover" do painel entra na mesma fila que o do agente). O serviço do painel
+  // nasce depois do funil (os contatos conhecidos); até lá, a mudança das mensagens não tem a quem avisar.
+  const emailDashboardStore = createEmailDashboardStore(join(userData, EMAIL_DIR), devLog)
+  const emailBatchStore = createEmailBatchStore(join(userData, EMAIL_DIR))
+  const emailDashboardRef: { current: EmailDashboardService | null } = { current: null }
+  const emailDashboardChanged = (): void => {
+    const dashboard = emailDashboardRef.current
+    if (!dashboard || lockService?.isLocked()) return
+    void dashboard
+      .view()
+      .then((view) => {
+        if (!lockService?.isLocked()) broadcast(appWindows(), 'scribe:email-dashboard-changed', view)
+      })
+      .catch(() => undefined)
+  }
   // Email (contrato 42): as contas conectam direto do main (IMAP/POP3/SMTP), com a senha cifrada no `settings.json`.
   // O autoconfig só manda o domínio ao ISPDB do Thunderbird; no smoke, nenhuma rede (a tela cai no manual).
   const email = createEmailService({
@@ -1353,13 +1374,21 @@ function createAppServices(userData: string): AppServices {
       if (!lockService?.isLocked()) broadcast(appWindows(), 'scribe:email-changed', { accountId })
       // Contrato 134: as pastas mudaram (ou a lista): os "Pendentes" do Início, pelo `LIST` guardado.
       inicioChanged()
+      // Contrato 156: a visão do painel muda quando mensagens saem da INBOX (sem chamar o modelo).
+      emailDashboardChanged()
     },
     // Contrato 134 (D8): um `LIST` novo guardado traz os "Pendentes" da tela Início sem esperar outro sincronismo.
-    onFoldersCached: () => inicioChanged(),
+    onFoldersCached: () => {
+      inicioChanged()
+      // Contrato 156: com o `LIST` guardado, os grupos de mover do painel aparecem.
+      emailDashboardChanged()
+    },
     // Contrato 56: a conta removida leva os lotes do Assistente. Contrato 62: e as linhas dela no registro de convites
     // (os eventos que estão na agenda ficam).
     onAccountRemoved: (accountId) => {
       void emailTools.organizer?.forgetAccount(accountId).catch(() => undefined)
+      // Contrato 156 (R26): a análise da conta sai com ela; sem conta nenhuma, o arquivo inteiro.
+      void (email.accounts().length ? emailDashboardStore.removeAccount(accountId) : emailDashboardStore.clear()).catch(() => undefined)
       void invites?.forgetAccount(accountId)
     },
     // Contrato 62 (CA16): o REPLY saiu; a resposta vai para o registro (um caminho só: o `reply` do resultado não é usado).
@@ -1635,7 +1664,7 @@ function createAppServices(userData: string): AppServices {
     locked: emailLocked,
     // Contrato 56: organizar o email (só o Assistente interativo); os lotes com o Desfazer em `email/batches.json`.
     organize: {
-      store: createEmailBatchStore(join(userData, EMAIL_DIR)),
+      store: emailBatchStore,
       accounts: () => email.accounts(),
       listFolders: (accountId, options) => email.listFolders(accountId, options),
       openFolder: (accountId, path) => email.openFolder(accountId, path),
@@ -2170,6 +2199,69 @@ function createAppServices(userData: string): AppServices {
     onChange: notifyProposta,
     ...devLog,
   })
+  // Contrato 156: o Painel de e-mail. A passada lê só o cache do email e baixa os corpos que faltam (até 30 por conta),
+  // pelo mesmo motor do resumo, com o modelo das Configurações › Email; o "Mover" grava o lote com o Desfazer de sempre.
+  const flatFolders = (nodes: readonly EmailFolderNode[]): EmailFolderNode[] => nodes.flatMap((node) => [...(node.noselect ? [] : [node]), ...flatFolders(node.children)])
+  const emailDashboard = createEmailDashboardService({
+    store: emailDashboardStore,
+    email: {
+      cached: () => email.cached(),
+      cachedFolders: (accountId) => {
+        const tree = email.foldersInCache(accountId)
+        return tree ? flatFolders(tree) : null
+      },
+      listFolders: async (accountId) => {
+        const listed = await email.listFolders(accountId)
+        return listed.ok && !listed.pop3 ? flatFolders(listed.folders) : null
+      },
+      cachedBody: (accountId, message) => email.cachedBody(accountId, message),
+      loadBody: async (accountId, message) => {
+        const result = await email.body({ accountId, id: message.id })
+        return result.ok ? result.body : null
+      },
+      moveMessages: (accountId, fromPath, uids, toPath, options) => email.moveMessages(accountId, fromPath, uids, toPath, options),
+      // Os e-mails dos contatos do funil, só leitura.
+      knownContacts: async () => {
+        const state = await funilStore.read()
+        return new Set(state.contatos.flatMap((contato) => contato.emails.map((address) => address.toLowerCase())))
+      },
+    },
+    batches: {
+      record: async (batch) => {
+        await emailBatchStore.mutate((batches) => ({ batches: [batch, ...batches], value: null }))
+        return batch.id
+      },
+    },
+    settings: () => settings.get(),
+    runOneShot: async (request) => {
+      const found = await claude.locate()
+      if (!found.ok) return { ok: false, error: 'failed' }
+      const { result } = await runClaudeOneShot(
+        { settings, spawn: smokeClaude?.spawnSummary ?? nodeSpawnSummary, openAcp, acpAvailable: async () => (await acpAgent.current()).available(), userData, baseEnv: process.env, ...devLog },
+        {
+          claudePath: found.path,
+          purpose: request.purpose,
+          model: request.model,
+          acpDir: 'email-dashboard',
+          systemPrompt: request.systemPrompt,
+          input: request.input,
+          parse: (text, costUsd, durationMs) => ({ ok: true, content: text, costUsd, durationMs }),
+          label: 'painel de e-mail',
+          timeoutMs: request.timeoutMs,
+          signal: request.signal,
+        },
+      )
+      return result
+    },
+    isLocked: () => lockService?.isLocked() ?? false,
+    isOnline: () => net.isOnline(),
+    now: () => Date.now(),
+    log: (line) => devLog.log?.(line),
+    onChanged: (view) => {
+      if (!lockService?.isLocked()) broadcast(appWindows(), 'scribe:email-dashboard-changed', view)
+    },
+  })
+  emailDashboardRef.current = emailDashboard
   return {
     settings: createSettingsService({ settings, secrets, gateway, mic }),
     meetings,
@@ -2217,6 +2309,7 @@ function createAppServices(userData: string): AppServices {
     funilProposta: { funnel, proposals: funilPropostas, store: funilStore, meetings, onChange: notifyProposta },
     tarefas,
     inicio,
+    emailDashboard,
     atendimento,
     atendimentoLog,
     atendimentoService,
@@ -2421,6 +2514,7 @@ function registerIpc(services: AppServices): void {
   registerFunilIpc({ appOrigin, funil: services.funil, proposta: services.funilProposta, log: (message) => console.error(message) })
   registerTarefasIpc({ appOrigin, tarefas: services.tarefas, log: (message) => console.error(message) })
   registerInicioIpc({ appOrigin, inicio: services.inicio })
+  registerEmailDashboardIpc({ appOrigin, dashboard: services.emailDashboard })
   handle('scribe:meetings-list', appOrigin, () => meetings.list())
   handle('scribe:meetings-get', appOrigin, (_event, { id }) => meetings.get(id))
   handle('scribe:meetings-create', appOrigin, async (_event, input) => {
@@ -2977,6 +3071,8 @@ void app.whenReady().then(async () => {
   void services.whatsapp.init().catch(() => undefined)
   // Contrato 42: as contas de email gravadas conectam (sem conta, nada acontece).
   void services.email.init().catch(() => undefined)
+  // Contrato 156 (D7): a passada diária do Painel de e-mail, depois do email subir; para ao sair do app.
+  const stopEmailDashboard = services.emailDashboard.startDailyScheduler()
   // Contrato 69: as contas do Instagram gravadas; o token com 7 dias ou mais é renovado já e a cada 24 h.
   void services.redes.init().catch(() => undefined)
   // Contrato 27: o servidor da extensão do Meet, com "Quem fala no Meet" ligado (padrão).
@@ -3019,6 +3115,9 @@ void app.whenReady().then(async () => {
     // Contrato 141: antes do WhatsApp, para nenhum envio do agente sair no meio da saída.
     services.atendimentoService.dispose()
     void services.whatsapp.dispose()
+    // Contrato 156: o relógio do painel para e a chamada em curso é cancelada (nada dela é gravado).
+    stopEmailDashboard()
+    services.emailDashboard.dispose()
     void services.email.dispose()
     services.redes.dispose()
     void services.meet.stop()

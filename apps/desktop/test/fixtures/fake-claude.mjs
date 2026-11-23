@@ -11,6 +11,7 @@
 // conversa do WhatsApp…", contrato 32), espera 0,6 s e devolve os Detalhes falsos (`fake-whatsapp-insights.mjs`). Com a
 // da correção ao enviar ("Você corrige mensagens de WhatsApp…", contrato 35), devolve a correção falsa (`fake-correct.mjs`).
 // Com a do atendimento ("Você responde mensagens de WhatsApp…", contrato 144), responde confirmando o recebimento.
+// Com a do Painel de e-mail ("Você lê e-mails recebidos…", contrato 156), o JSON de `fake-email-dashboard.mjs`.
 //
 // Com `--include-partial-messages` (chat "Perguntar", contrato 15): para cada pergunta, lê a pasta atual (o
 // `INDICE.md` do acervo ou o único `.md` de uma reunião), escreve a resposta em pedaços (`stream_event`),
@@ -48,6 +49,7 @@ import { FAKE_AI_NOTES_DELAY_MS, fakeAiNotes } from './fake-ai-notes.mjs'
 import { FAKE_ANALYSIS_DELAY_MS, fakeAnalysis } from './fake-analysis.mjs'
 import { FAKE_CORRECT_SLOW_MS, fakeCorrection, isSlowCorrection } from './fake-correct.mjs'
 import { fakeDraft } from './fake-draft.mjs'
+import { fakeEmailDashboard } from './fake-email-dashboard.mjs'
 import { fridayAfterMeeting } from './fake-summary-due.mjs'
 import { FAKE_INSIGHTS_DELAY_MS, fakeWhatsAppInsights } from './fake-whatsapp-insights.mjs'
 
@@ -312,6 +314,14 @@ if (args[0] === 'mcp') {
       const contact = /<contato>([^<]*)<\/contato>/.exec(input)?.[1]?.trim().split(' ')[0] || 'tudo bem'
       process.stdout.write(
         `${JSON.stringify({ type: 'result', subtype: 'success', is_error: false, duration_ms: Date.now() - started, result: JSON.stringify({ acao: 'responder', texto: `Recebido, ${contact}! Já anotei aqui.` }), usage: { input_tokens: Math.ceil(input.length / 4), output_tokens: 20 }, total_cost_usd: 0.0003 })}\n`,
+        () => process.exit(0),
+      )
+      return
+    }
+    // Contrato 156 (D9): a passada do Painel de e-mail, só o JSON determinístico de `fake-email-dashboard.mjs`.
+    if (systemPrompt.startsWith('Você lê e-mails recebidos e prepara o Painel de e-mail.')) {
+      process.stdout.write(
+        `${JSON.stringify({ type: 'result', subtype: 'success', is_error: false, duration_ms: Date.now() - started, result: fakeEmailDashboard(input), usage: { input_tokens: Math.ceil(input.length / 4), output_tokens: 80 }, total_cost_usd: 0.0012 })}\n`,
         () => process.exit(0),
       )
       return
