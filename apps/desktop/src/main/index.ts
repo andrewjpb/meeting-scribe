@@ -116,6 +116,8 @@ import { createCorrector } from './whatsapp/correct'
 import { readAttachment } from './whatsapp/attach'
 import { BRIDGE_FAKE_FILE, BRIDGE_FILES, nodeExec, PYTHON_CANDIDATES, WHATSAPP_DIR } from './whatsapp/install'
 import { INSTALL_TEST_ENV, runInstallTest } from './whatsapp/install-test'
+import { createAtendimentoLog, type AtendimentoLog } from './whatsapp/atendimento/log'
+import { createAtendimentoStore, type AtendimentoStore } from './whatsapp/atendimento/store'
 import { createInsightsCache, INSIGHTS_FILE } from './whatsapp/insights'
 import { createInsightsService, type InsightsService } from './whatsapp/insights-service'
 import { createWhatsAppNotifier, isGroupChat, shouldNotify, type NoticeHandle, type WhatsAppNotice } from './whatsapp/notify'
@@ -1016,6 +1018,10 @@ interface AppServices {
   tarefas: TarefasService
   /** Contrato 134: a view da tela Início (agenda do dia das contas e do Mac, pendências), só leitura. */
   inicio: InicioService
+  /** Contrato 138: os agentes de atendimento e os atendimentos das conversas (`whatsapp/atendimento.json`). */
+  atendimento: AtendimentoStore
+  /** Contrato 138: o histórico do atendimento (`whatsapp/atendimento-log.jsonl`). */
+  atendimentoLog: AtendimentoLog
   /**
    * Contrato 124 (R35, D11): a migração única do próximo passo e dos lembretes para tarefas, no boot, antes do
    * bloqueio, do IPC e das Automações. Nunca lança; a falha vai ao log (só o passo) e o app segue.
@@ -1475,6 +1481,9 @@ function createAppServices(userData: string): AppServices {
   // ferramenta nenhuma. Só lê as mensagens; o resultado fica em `whatsapp/insights.json`.
   // Contrato 122: o mesmo cache também é lido pelas sugestões das tarefas.
   const insightsCache = createInsightsCache(join(userData, WHATSAPP_DIR, INSIGHTS_FILE))
+  // Contrato 138: só os dados e a configuração do atendimento; nada aqui lê mensagem nem envia.
+  const atendimento = createAtendimentoStore({ dir: join(userData, WHATSAPP_DIR), ...devLog })
+  const atendimentoLog = createAtendimentoLog({ dir: join(userData, WHATSAPP_DIR) })
   const whatsappInsights = createInsightsService({
     settings,
     cache: insightsCache,
@@ -2158,6 +2167,8 @@ function createAppServices(userData: string): AppServices {
     funilProposta: { funnel, proposals: funilPropostas, store: funilStore, meetings, onChange: notifyProposta },
     tarefas,
     inicio,
+    atendimento,
+    atendimentoLog,
     async migrarTarefas() {
       try {
         const result = await migrarTarefas({
@@ -2325,7 +2336,7 @@ function openExternal(url: string): void {
 }
 
 function registerIpc(services: AppServices): void {
-  const { settings, meetings, meetingsService, meetingsIndex, tokenClient, translation, claude, files, summary, analysis, aiNotes, download, branding, updates, chat, chatActions, corpus, acp, lock, google, drive, microsoft, calendar, whatsapp, whatsappInsights, email, emailOrganizer, redes, automations, meet, meetingPrompt, pluginSave, mcp, invites, inviteSuggest } = services
+  const { settings, meetings, meetingsService, meetingsIndex, tokenClient, translation, claude, files, summary, analysis, aiNotes, download, branding, updates, chat, chatActions, corpus, acp, lock, google, drive, microsoft, calendar, whatsapp, whatsappInsights, email, emailOrganizer, redes, automations, meet, meetingPrompt, pluginSave, mcp, invites, inviteSuggest, atendimento, atendimentoLog } = services
   /** Reunião salva, renomeada ou com anotações novas: o `.md` dela no acervo do chat é reescrito. */
   const touched = (meetingId: string): void => void corpus.sync(meetingId).catch(() => undefined)
   /**
@@ -2792,6 +2803,15 @@ function registerIpc(services: AppServices): void {
   handle('scribe:agents-save', appOrigin, (_event, request) => automations.saveAgent(request))
   handle('scribe:agents-delete', appOrigin, (_event, request) => automations.deleteAgent(request))
   handle('scribe:agents-test', appOrigin, (_event, request) => automations.testAgent(request))
+  // Contrato 138: o atendimento no WhatsApp, recusado com o app bloqueado (`WHEN_LOCKED`); o store valida cada pedido.
+  handle('scribe:atendimento-state', appOrigin, async () => ({ ok: true as const, state: await atendimento.state() }))
+  handle('scribe:atendimento-agent-save', appOrigin, (_event, request) => atendimento.saveAgent(request))
+  handle('scribe:atendimento-agent-delete', appOrigin, (_event, request) => atendimento.deleteAgent(request))
+  handle('scribe:atendimento-binding-save', appOrigin, (_event, request) => atendimento.saveBinding(request))
+  handle('scribe:atendimento-binding-delete', appOrigin, (_event, request) => atendimento.deleteBinding(request))
+  handle('scribe:atendimento-pause-all', appOrigin, (_event, request) => atendimento.pauseAll(request))
+  handle('scribe:atendimento-risk-accept', appOrigin, () => atendimento.acceptRisk())
+  handle('scribe:atendimento-log-list', appOrigin, (_event, request) => atendimentoLog.list(request))
   handle('scribe:tasks-list', appOrigin, () => automations.listTasks())
   handle('scribe:tasks-save', appOrigin, (_event, request) => automations.saveTask(request))
   handle('scribe:tasks-delete', appOrigin, (_event, request) => automations.deleteTask(request))

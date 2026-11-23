@@ -36,6 +36,9 @@ import type { SugestaoTarefa, TarefaInput, TarefaSalvar, TarefasActionResult, Ta
 // 134: inicio
 import type { InicioView } from './inicio'
 // fim 134
+// 138: atendimento
+import type { AtendimentoAgentInput, AtendimentoAgentSaveResult, AtendimentoBindingInput, AtendimentoBindingSaveResult, AtendimentoFailure, AtendimentoLogListRequest, AtendimentoLogListResult, AtendimentoResult, AtendimentoState } from './atendimento'
+// fim 138
 import type { AnalysisRunRequest, AnalysisRunResult, MeetingAnalysis } from './meeting-analysis'
 import type { MeetingNote } from './meeting-notes'
 import type { SummaryStatus } from './meeting-summary'
@@ -686,6 +689,23 @@ export interface InvokeChannels {
   /** "Conceder" da linha do Calendário do Mac: pede o acesso, esquece o que leu e devolve a view de novo. */
   'scribe:inicio-mac-acesso': { request: undefined; response: InicioView }
   // fim 134
+  // 138: atendimento
+  /** Contrato 138: os agentes de atendimento, os atendimentos das conversas, a pausa geral e o aceite do risco. */
+  'scribe:atendimento-state': { request: undefined; response: { ok: true; state: AtendimentoState } | AtendimentoFailure }
+  /** Criar (`id: null`) ou trocar um agente de atendimento; nome único sem diferenciar maiúsculas. */
+  'scribe:atendimento-agent-save': { request: AtendimentoAgentInput; response: AtendimentoAgentSaveResult }
+  /** Apaga o agente; os atendimentos que o usam ficam desligados, não apagados. */
+  'scribe:atendimento-agent-delete': { request: { id: string }; response: AtendimentoResult }
+  /** Cria ou substitui o atendimento da conversa; grupo recusado, automático ligado só com o aceite do risco. */
+  'scribe:atendimento-binding-save': { request: AtendimentoBindingInput; response: AtendimentoBindingSaveResult }
+  'scribe:atendimento-binding-delete': { request: { chatId: string }; response: AtendimentoResult }
+  /** "Pausar todos os atendimentos" / "Retomar". */
+  'scribe:atendimento-pause-all': { request: { paused: boolean }; response: AtendimentoResult }
+  /** Aceite do aviso de risco do atendimento automático. */
+  'scribe:atendimento-risk-accept': { request: undefined; response: AtendimentoResult }
+  /** O histórico, do mais recente para o mais antigo. */
+  'scribe:atendimento-log-list': { request: AtendimentoLogListRequest; response: AtendimentoLogListResult }
+  // fim 138
 }
 
 /** renderer -> main, sem resposta (`__scribeApi.send` / `ipcMain.on`). */
@@ -1135,6 +1155,16 @@ const INVOKE: Record<InvokeChannel, true> = {
   'scribe:inicio-get': true,
   'scribe:inicio-mac-acesso': true,
   // fim 134
+  // 138: atendimento
+  'scribe:atendimento-state': true,
+  'scribe:atendimento-agent-save': true,
+  'scribe:atendimento-agent-delete': true,
+  'scribe:atendimento-binding-save': true,
+  'scribe:atendimento-binding-delete': true,
+  'scribe:atendimento-pause-all': true,
+  'scribe:atendimento-risk-accept': true,
+  'scribe:atendimento-log-list': true,
+  // fim 138
 }
 const RENDERER_EVENTS: Record<RendererEvent, true> = {
   'scribe:csp-violation': true,
@@ -1563,6 +1593,16 @@ export const WHEN_LOCKED: Readonly<Record<InvokeChannel, LockedPolicy>> = Object
   'scribe:inicio-get': 'refused',
   'scribe:inicio-mac-acesso': 'refused',
   // fim 134
+  // 138: atendimento (recusados, como o resto do WhatsApp)
+  'scribe:atendimento-state': 'refused',
+  'scribe:atendimento-agent-save': 'refused',
+  'scribe:atendimento-agent-delete': 'refused',
+  'scribe:atendimento-binding-save': 'refused',
+  'scribe:atendimento-binding-delete': 'refused',
+  'scribe:atendimento-pause-all': 'refused',
+  'scribe:atendimento-risk-accept': 'refused',
+  'scribe:atendimento-log-list': 'refused',
+  // fim 138
 })
 
 /**
