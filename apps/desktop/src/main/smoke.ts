@@ -142,6 +142,13 @@ import {
   FUNIL_DETECTAR_NAME,
   FUNIL_DIAS_NAME,
   FUNIL_SECTION,
+  INICIO_AGENDA_NAME,
+  INICIO_AUTOMACOES_NAME,
+  INICIO_PENDENCIAS_NAME,
+  INICIO_SECTION,
+  INICIO_TAREFAS_NAME,
+  INICIO_TELA_NAME,
+  INICIO_ULTIMA_REUNIAO_NAME,
   matchesRow,
   settingsIndex,
   TAREFAS_AVISO_NAME,
@@ -2245,8 +2252,8 @@ const funilSaved = (contents: WebContents): Promise<AppSettings['funil']> =>
   evaluate<AppSettings['funil']>(contents, "window.__scribeApi.invoke('scribe:settings-get').then((s) => s.funil)")
 
 /**
- * Contrato 109 (CA5), na aba Geral já aberta: a Section "Funil de vendas" entre "Janela" e "Tarefas" (contrato 128; era
- * "Bloqueio"), com as três linhas do índice da busca (aba `geral`), os dois interruptores ligados e o campo de dias com 7.
+ * Contrato 109 (CA5), na aba Geral já aberta: a Section "Funil de vendas" entre "Início" (contrato 136; era "Janela") e
+ * "Tarefas" (contrato 128; era "Bloqueio"), com as três linhas do índice da busca (aba `geral`), os dois interruptores ligados e o campo de dias com 7.
  */
 async function funilSettingsCheck(contents: WebContents): Promise<Check> {
   const panel = '[data-settings-panel="geral"]'
@@ -2263,7 +2270,7 @@ async function funilSettingsCheck(contents: WebContents): Promise<Check> {
     ok:
       text.includes('Funil de vendas') &&
       at > 0 &&
-      sections[at - 1] === 'Janela' &&
+      sections[at - 1] === INICIO_SECTION &&
       sections[at + 1] === TAREFAS_SECTION &&
       JSON.stringify(rows) === JSON.stringify(names) &&
       indexed &&
@@ -3585,14 +3592,32 @@ function inicioMacDoDia(now: number): MacEventoFalso[] {
   return eventos
 }
 
-/** Põe `eventos` no estado do `lap-calendar` falso (acesso total); devolve como voltar ao estado de antes. */
-function semearInicioMac(ctx: SmokeContext, eventos: MacEventoFalso[]): () => void {
+/**
+ * Põe `eventos` no estado do `lap-calendar` falso (acesso total, ou `access` quando dado: contrato 136); devolve como
+ * voltar ao estado de antes.
+ */
+function semearInicioMac(ctx: SmokeContext, eventos: MacEventoFalso[], access: 'full' | 'denied' = 'full'): () => void {
   const cal = ctx.fixtures.macCalendar
   const antes = existsSync(cal.statePath) ? readFileSync(cal.statePath, 'utf8') : null
   const raw = antes ? (JSON.parse(antes) as Record<string, unknown>) : {}
   const ids = new Set(eventos.map((evento) => evento.calendarItemIdentifier))
   const outros = (Array.isArray(raw['events']) ? (raw['events'] as Record<string, unknown>[]) : []).filter((evento) => !ids.has(String(evento['calendarItemIdentifier'])))
-  writeFileSync(cal.statePath, `${JSON.stringify({ ...raw, access: 'full', events: [...outros, ...eventos] }, null, 2)}\n`)
+  writeFileSync(cal.statePath, `${JSON.stringify({ ...raw, access, events: [...outros, ...eventos] }, null, 2)}\n`)
+  return () => {
+    if (antes === null) rmSync(cal.statePath, { force: true })
+    else writeFileSync(cal.statePath, antes)
+  }
+}
+
+/**
+ * Contrato 136: o `lap-calendar` falso com acesso total e nenhum evento (para o Início vazio da abertura não depender do
+ * que outra passada deixou no arquivo); devolve como voltar ao estado de antes.
+ */
+function esvaziarDiaDoMac(ctx: SmokeContext): () => void {
+  const cal = ctx.fixtures.macCalendar
+  const antes = existsSync(cal.statePath) ? readFileSync(cal.statePath, 'utf8') : null
+  const raw = antes ? (JSON.parse(antes) as Record<string, unknown>) : {}
+  writeFileSync(cal.statePath, `${JSON.stringify({ ...raw, access: 'full', events: [], pending: [] }, null, 2)}\n`)
   return () => {
     if (antes === null) rmSync(cal.statePath, { force: true })
     else writeFileSync(cal.statePath, antes)
@@ -3743,6 +3768,150 @@ async function inicioDedupeCheck(win: BrowserWindow, ctx: SmokeContext): Promise
   return {
     ok: junto && resultado.linhas === 1 && resultado.etiquetas === 2,
     detail: JSON.stringify({ googleEMacNaMesmaLinha: junto, ...resultado }),
+  }
+}
+
+// --- Contrato 136: tela inicial, estados menores e a Section "Início" -----------------------------------------------
+
+/**
+ * Contrato 136 (D2, D14, artboard 03): a janela abre no Início (a tela padrão), com o dia vazio: "Sem eventos hoje"
+ * (nenhum evento semeado), a contagem do cabeçalho em zero, o pé "Amanhã" e nenhuma linha do Calendário do Mac (o
+ * falso com acesso). Pendências não aparece (nenhuma fonte com o que responder). Só números e booleanos no detalhe.
+ */
+async function inicioAberturaCheck(contents: WebContents): Promise<Check> {
+  const rota = await waitFor(contents, `${routeIs('inicio')} && document.querySelector('[data-inicio-sem-eventos]')`, 8000)
+  // As pendências da view: na abertura (antes dos roteiros de WhatsApp, agendas e email, que rodam depois do laço dos
+  // temas) nenhuma fonte tem o que responder; qualquer sobra aparece aqui pelo nome da fonte, sem contagem.
+  const pendenciasComAlgo = await evaluate<string[]>(
+    contents,
+    `window.__scribeApi.invoke('scribe:inicio-get').then((view) => Object.entries(view.pendencias).filter(([, n]) => n !== null && n > 0).map(([fonte]) => fonte), () => ['erro'])`,
+  )
+  const tela = await evaluate<{ semEventos: boolean; total: number; linhas: number; amanha: boolean; linhaMac: boolean; pendencias: boolean; marcado: boolean }>(
+    contents,
+    `(() => ({
+      semEventos: Boolean(document.querySelector('[data-inicio-sem-eventos]')),
+      total: Number(document.querySelector('[data-inicio-agenda-total]')?.dataset.inicioAgendaTotal ?? -1),
+      linhas: document.querySelectorAll('[data-inicio-evento]').length,
+      amanha: Boolean(document.querySelector('[data-inicio-amanha]')),
+      linhaMac: Boolean(document.querySelector('[data-inicio-mac]')),
+      pendencias: Boolean(document.querySelector('[data-inicio-cartao="pendencias"]')),
+      marcado: document.querySelector('${SIDEBAR_ROOT} [data-nav="inicio"]')?.getAttribute('aria-current') === 'page',
+    }))()`,
+  )
+  return {
+    ok: rota && tela.semEventos && tela.total === 0 && tela.linhas === 0 && tela.amanha && !tela.linhaMac && !tela.pendencias && tela.marcado && pendenciasComAlgo.length === 0,
+    detail: JSON.stringify({ abriuNoInicio: rota, ...tela, pendenciasComAlgo }),
+  }
+}
+
+/**
+ * Contrato 136 (D5, PRD): com o falso em `denied`, a agenda mostra a linha "Calendário do Mac sem acesso — conceder"
+ * (o smoke roda com o helper falso como se fosse o app instalado, então não é a variante do `pnpm dev`); o print e,
+ * depois, o clique em "conceder" chega ao falso como `request-access`. O falso volta ao estado de antes no fim.
+ */
+async function inicioSemAcessoMacCheck(win: BrowserWindow, ctx: SmokeContext, screenshots: Screenshot[]): Promise<Check> {
+  const contents = win.webContents
+  const cal = ctx.fixtures.macCalendar
+  const restaurar = semearInicioMac(ctx, [], 'denied')
+  releDiaDoMac(win)
+  await clickNav(contents, 'tarefas')
+  await waitFor(contents, routeIs('tarefas'))
+  await clickNav(contents, 'inicio')
+  const linha = await waitFor(contents, `${routeIs('inicio')} && document.querySelector('[data-inicio-mac="sem-acesso"] [data-action="inicio-mac-conceder"]')`, 8000)
+  await evaluate(contents, 'document.activeElement instanceof HTMLElement && document.activeElement.blur(), true')
+  await settle(contents)
+  screenshots.push(await capture(win, ctx.outDir, 'inicio-sem-acesso-mac-light'))
+  const pedidosAntes = cal.log().filter((item) => item['cmd'] === 'request-access').length
+  if (linha) await clickSelector(contents, '[data-action="inicio-mac-conceder"]')
+  let pedidos = 0
+  for (let attempt = 0; attempt < 100 && pedidos === 0; attempt++) {
+    pedidos = cal.log().filter((item) => item['cmd'] === 'request-access').length - pedidosAntes
+    if (pedidos === 0) await wait(50)
+  }
+  // O falso continua em `denied` (só sai de `notDetermined`): a linha fica, com o botão de volta.
+  const continua = await waitFor(contents, `document.querySelector('[data-inicio-mac="sem-acesso"] [data-action="inicio-mac-conceder"]:not(:disabled)')`, 8000)
+  restaurar()
+  releDiaDoMac(win)
+  return {
+    ok: linha && pedidos === 1 && continua,
+    detail: JSON.stringify({ linhaSemAcesso: linha, requestAccess: pedidos, linhaDepoisDoPedido: continua }),
+  }
+}
+
+/**
+ * Contrato 136 (D13), na aba Geral: a Section "Início" logo depois de "Janela" e antes do "Funil de vendas", com as seis
+ * linhas do índice da busca na ordem, "Início" marcado na tela inicial e os cinco blocos ligados (os padrões); o print
+ * rolado até ela. Só números e booleanos no detalhe.
+ */
+async function inicioSettingsCheck(win: BrowserWindow, ctx: SmokeContext, screenshots: Screenshot[]): Promise<Check> {
+  const contents = win.webContents
+  const panel = '[data-settings-panel="geral"]'
+  await openSettingsTab(contents, 'geral')
+  const secao = await waitFor(contents, `document.querySelector('${panel} section[aria-label="${INICIO_SECTION}"]')`)
+  const sections = await evaluate<string[]>(contents, `[...document.querySelectorAll('${panel} section[aria-label]')].map((el) => el.getAttribute('aria-label'))`)
+  const at = sections.indexOf(INICIO_SECTION)
+  const names = [INICIO_TELA_NAME, INICIO_AGENDA_NAME, INICIO_TAREFAS_NAME, INICIO_PENDENCIAS_NAME, INICIO_ULTIMA_REUNIAO_NAME, INICIO_AUTOMACOES_NAME]
+  const rows = await evaluate<string[]>(contents, `[...document.querySelectorAll('${panel} section[aria-label="${INICIO_SECTION}"] [data-setting-name]')].map((el) => el.dataset.settingName)`)
+  const index = settingsIndex('Claude')
+  const indexed = names.filter((name) => index.some((entry) => entry.tab === 'geral' && entry.section === INICIO_SECTION && matchesRow(entry, name))).length
+  const telaInicio = await evaluate<boolean>(contents, `document.querySelector('[data-inicio-tela-option="inicio"]')?.getAttribute('aria-pressed') === 'true'`)
+  const ligados = await evaluate<number>(
+    contents,
+    `['agenda', 'tarefas', 'pendencias', 'ultima-reuniao', 'automacoes'].filter((id) => document.querySelector('[aria-labelledby="settings-inicio-' + id + '"]')?.getAttribute('aria-checked') === 'true').length`,
+  )
+  await scrollToSection(contents, INICIO_SECTION)
+  await evaluate(contents, 'document.activeElement instanceof HTMLElement && document.activeElement.blur(), true')
+  await settle(contents)
+  screenshots.push(await capture(win, ctx.outDir, 'configuracoes-geral-inicio-light'))
+  await evaluate(contents, "document.querySelector('[data-settings-scroll]').scrollTop = 0, true")
+  const ordem = at > 0 && sections[at - 1] === 'Janela' && sections[at + 1] === FUNIL_SECTION
+  return {
+    ok: secao && ordem && JSON.stringify(rows) === JSON.stringify(names) && indexed === names.length && telaInicio && ligados === 5,
+    detail: JSON.stringify({ secao, depoisDeJanelaAntesDoFunil: ordem, linhasNaOrdem: JSON.stringify(rows) === JSON.stringify(names), noIndice: indexed, telaInicio, blocosLigados: ligados }),
+  }
+}
+
+/**
+ * Contrato 136 (D2): com `telaInicial: 'reunioes'` gravado, a próxima janela abre em Reuniões (`/`); a preferência não
+ * muda a rota da janela já aberta. No fim volta ao padrão (`'inicio'`) e uma janela nova abre no Início de novo.
+ */
+async function inicioTelaInicialCheck(win: BrowserWindow, ctx: SmokeContext, watch: (win: BrowserWindow) => void): Promise<Check> {
+  const contents = win.webContents
+  const gravar = (telaInicial: 'inicio' | 'reunioes'): Promise<boolean> =>
+    evaluate<boolean>(
+      contents,
+      `window.__scribeApi.invoke('scribe:settings-get').then((s) => window.__scribeApi.invoke('scribe:settings-update', { inicio: { ...s.inicio, telaInicial: ${JSON.stringify(telaInicial)} } })).then(() => true, () => false)`,
+    )
+  const abrir = async (): Promise<string> => {
+    const other = ctx.openWindow({ theme: 'light' })
+    try {
+      watch(other)
+      await loadAndWait(other)
+      return await currentRoute(other.webContents)
+    } finally {
+      other.destroy()
+    }
+  }
+  const rotaAntes = await currentRoute(contents)
+  const comReunioes = async (): Promise<{ gravouReunioes: boolean; noArquivo: boolean; rotaDepois: string; abriuReunioes: boolean }> => {
+    const gravouReunioes = await gravar('reunioes')
+    const noArquivo = readSettings(ctx.userDataDir).inicio?.telaInicial === 'reunioes'
+    const rotaDepois = await currentRoute(contents)
+    return { gravouReunioes, noArquivo, rotaDepois, abriuReunioes: (await abrir()) === 'reunioes' }
+  }
+  let reunioes: Awaited<ReturnType<typeof comReunioes>>
+  try {
+    reunioes = await comReunioes()
+  } finally {
+    // Sempre de volta ao padrão, mesmo com erro no meio: com 'reunioes' gravado, toda janela seguinte abriria em Reuniões.
+    await gravar('inicio')
+  }
+  const { gravouReunioes, noArquivo, rotaDepois, abriuReunioes } = reunioes
+  const gravouInicio = readSettings(ctx.userDataDir).inicio?.telaInicial === 'inicio'
+  const abriuInicio = (await abrir()) === 'inicio'
+  return {
+    ok: gravouReunioes && noArquivo && rotaDepois === rotaAntes && abriuReunioes && gravouInicio && abriuInicio,
+    detail: JSON.stringify({ gravouReunioes, noArquivo, janelaAbertaNaoMudou: rotaDepois === rotaAntes, proximaAbriuEmReunioes: abriuReunioes, gravouInicio, voltouAoInicio: abriuInicio }),
   }
 }
 
@@ -5842,7 +6011,8 @@ async function lockChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => void
   await typeLockPassword(reopenedContents, LOCK_PASSWORD)
   const reopenedUnlocked = await waitFor(reopenedContents, `!${LOCK_LAYER} && document.querySelector('main[data-route]')`, 10_000)
   checks['reopen'] = {
-    ok: openedLocked && noScreens && reopenedTitle === lockedTitle && reopenedUnlocked && (await currentRoute(reopenedContents)) === 'reunioes',
+    // Contrato 136 (D2): desbloqueada, a janela está na tela inicial padrão (Início).
+    ok: openedLocked && noScreens && reopenedTitle === lockedTitle && reopenedUnlocked && (await currentRoute(reopenedContents)) === 'inicio',
     detail: `reaberto bloqueado=${openedLocked}, telas montadas antes do desbloqueio=${!noScreens}, título "${reopenedTitle}"; desbloqueado em ${await currentRoute(reopenedContents)}`,
   }
   // Agora desbloqueado no disco: abre livre; com "Pedir senha ao abrir" ligado, abre bloqueado.
@@ -10324,7 +10494,9 @@ async function emailChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => voi
   await loadAndWait(dark)
   const darkContents = dark.webContents
   // Contrato 65: a raiz e o nível Email com uma conta só (D1), no escuro.
-  // As contas carregam depois da janela: o print espera o número de não lidas do Email.
+  // As contas carregam depois da janela: o print espera o número de não lidas do Email. Contrato 136: a janela abre no
+  // Início; o print continua em Reuniões.
+  await clickNav(darkContents, 'reunioes')
   const darkBadge = await waitFor(darkContents, `${routeIs('reunioes')} && document.querySelector('${SIDEBAR_ROOT} [data-nav="email"]') && ${NAV_BADGE} === '1'`, 8000)
   await settle(darkContents)
   shots.push(await capture(dark, ctx.outDir, 'sidebar-raiz-dark'))
@@ -16635,8 +16807,20 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
         screenshots.push(await capture(win, ctx.outDir, `${name}-${themeName}`))
       }
 
-      // 1. Reuniões vazia, com "Permitir" no bloco de permissões. Depois o microfone fica concedido.
+      // 1. A janela abre no Início (contrato 136, D2), com o microfone "não pedido" no bloco de permissões da barra lateral
+      // (aparece em qualquer rota). Depois Reuniões vazia, e o microfone fica concedido.
       await waitFor(contents, `document.querySelector('[data-permission="mic"]')?.dataset.state === 'not-determined'`)
+      // Contrato 136 (D2, D14): o Início com o dia vazio (artboard 03), nos dois temas; Reuniões pela barra lateral logo depois.
+      // O dia do Mac é esvaziado explicitamente (o que a passada anterior deixou no falso não entra) e a tela relida.
+      const restaurarDiaVazio = esvaziarDiaDoMac(ctx)
+      releDiaDoMac(win)
+      await evaluate(contents, "window.dispatchEvent(new Event('focus')), true")
+      inicio[themeName === 'light' ? 'abertura' : 'aberturaDark'] = await inicioAberturaCheck(contents)
+      await settle(contents)
+      screenshots.push(await capture(win, ctx.outDir, `inicio-vazio-${themeName}`))
+      restaurarDiaVazio()
+      releDiaDoMac(win)
+      await clickNav(contents, 'reunioes')
       await shoot('reunioes', 'reunioes')
       if (themeName === 'light') settings['permissions'] = await permissionChecks(contents, ctx.fixtures)
       else await clickSelector(contents, '[data-action="allow-mic"]')
@@ -16888,8 +17072,8 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
       await clickNav(contents, 'tarefas')
       if (!(await waitFor(contents, `${routeIs('tarefas')} && document.querySelector('[data-tarefas-screen="hoje"] [data-tarefas-lista="larga"] [data-tarefa]')`, 8000))) failures.push(`tarefas-hoje/${themeName}: a lista não apareceu`)
       await shoot('tarefas-hoje', 'tarefas')
-      // Contrato 135 (D14): o Início pela barra lateral (o app ainda abre em Reuniões), com três eventos do Calendário do Mac
-      // em volta de agora; a janela "volta ao foco" para o dia do Mac ser lido de novo (D6). No claro, a tela e o concluir
+      // Contrato 135 (D14): o Início pela barra lateral (a janela já abriu nele, vazio: contrato 136), com três eventos do
+      // Calendário do Mac em volta de agora; a janela "volta ao foco" para o dia do Mac ser lido de novo (D6). No claro, a tela e o concluir
       // tarefa. Nos dois temas o falso volta ao arquivo de antes logo depois (cada semeadura guarda o estado que achou, e
       // nada fica semeado entre elas, então "antes" é sempre o original); a gravação, em `recordingChecks`, semeia de novo.
       const restaurarMac = semearInicioMac(ctx, inicioMacDoDia(Date.now()))
@@ -16903,6 +17087,13 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
       }
       restaurarMac()
       releDiaDoMac(win)
+      // Contrato 136: no claro, a linha do Calendário do Mac sem acesso, a Section "Início" das Configurações e a tela
+      // inicial gravada como Reuniões na próxima abertura (e de volta ao Início).
+      if (themeName === 'light') {
+        inicio['semAcessoMac'] = await inicioSemAcessoMacCheck(win, ctx, screenshots)
+        inicio['configuracoes'] = await inicioSettingsCheck(win, ctx, screenshots)
+        inicio['telaInicial'] = await inicioTelaInicialCheck(win, ctx, watch)
+      }
       // Contrato 18: "Contas", "Sobre", a aba lembrada, os atalhos e a busca, no claro.
       if (themeName === 'light') settings['tabs'] = await settingsTabsChecks(contents, ctx, extraShot)
 
@@ -17203,7 +17394,7 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
   for (const [name, check] of Object.entries(funil)) if (!check.ok) failures.push(`funil ${name}: ${check.detail}`)
   for (const [name, check] of Object.entries(tarefasTela)) if (!check.ok) failures.push(`tarefas ${name}: ${check.detail}`)
   for (const [name, check] of Object.entries(inicio)) if (!check.ok) failures.push(`início ${name}: ${check.detail}`)
-  for (const name of ['tela', 'concluir', 'gravando', 'dedupe']) if (!inicio[name]) failures.push(`início ${name}: não executado`)
+  for (const name of ['tela', 'concluir', 'gravando', 'dedupe', 'abertura', 'aberturaDark', 'semAcessoMac', 'configuracoes', 'telaInicial']) if (!inicio[name]) failures.push(`início ${name}: não executado`)
   // Contrato 126: o Resumo, o email e o WhatsApp.
   for (const name of ['resumoTarefas', 'resumoGerarDeNovo', 'emailTarefa', 'whatsappTarefa']) if (!tarefasTela[name]) failures.push(`tarefas ${name}: não executado`)
   // Contrato 130: os ajustes da auditoria dos prints.
@@ -17280,7 +17471,9 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
   // Detalhes do WhatsApp, só no claro).
   // Contrato 127: +2 (o cartão `tarefa-criar` com a citação da tarefa no Assistente, nos dois temas).
   // Contrato 135: +2 (o Início com a gravação em andamento, nos dois temas; o `inicio-dia` entrou em `SCREENS`).
-  const expectedShots = SCREENS.length * THEMES.length + 224
+  // Contrato 136: +4 (o Início vazio na abertura, nos dois temas; o Calendário do Mac sem acesso e a Section "Início" das
+  // Configurações, no claro).
+  const expectedShots = SCREENS.length * THEMES.length + 228
   if (screenshots.length !== expectedShots) failures.push(`${screenshots.length} PNGs em vez de ${expectedShots}`)
   for (const shot of screenshots) {
     if (shot.name === MEETING_PROMPT_SHOT) {

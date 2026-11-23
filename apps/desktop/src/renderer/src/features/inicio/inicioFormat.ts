@@ -2,7 +2,9 @@
 // testado em test/renderer/inicio-format.test.ts. A agenda é a linha comprimida do mockup (escolha D2): só os eventos,
 // com 08:00 e 19:00 nas pontas e um trecho "livre até HH:mm" entre eles, sem proporção com o horário, para caber o dia
 // sem rolar.
-import type { InicioChamada, InicioEvento, InicioFonte } from '@shared/inicio'
+import type { InicioChamada, InicioEvento, InicioFonte, InicioMacEstado } from '@shared/inicio'
+import { ROUTE_PATHS } from '@shared/routes'
+import type { InicioTela } from '@shared/settings-defaults'
 
 const pad = (value: number): string => String(value).padStart(2, '0')
 const MINUTO_MS = 60_000
@@ -180,6 +182,24 @@ export function linhaDoDia(eventos: readonly InicioEvento[], agora: number): Ite
   poeAgora()
   return saida
 }
+
+/** D2 (contrato 136): onde o app abre, pela preferência lida uma vez ao montar: Início (`/inicio`) ou Reuniões (`/`). */
+export function rotaInicial(tela: InicioTela): string {
+  return tela === 'reunioes' ? ROUTE_PATHS.reunioes : ROUTE_PATHS.inicio
+}
+
+/** A frase abaixo de "Sem eventos hoje" (artboard 03), só com as fontes que a agenda leu. */
+export function textoSemEventos(contas: boolean, mac: InicioMacEstado): string {
+  if (contas && mac === 'ok') return 'As agendas conectadas e o Calendário do Mac não têm nada marcado para hoje.'
+  if (contas) return 'As agendas conectadas não têm nada marcado para hoje.'
+  if (mac === 'ok') return 'O Calendário do Mac não tem nada marcado para hoje.'
+  return 'Nenhuma agenda para ler hoje.'
+}
+
+/** A linha discreta do Calendário do Mac sem acesso (PRD); "conceder" é o botão ao lado. */
+export const TEXTO_MAC_SEM_ACESSO = 'Calendário do Mac sem acesso'
+/** No `pnpm dev` o `request-access` não sai (D5): a linha explica em vez de oferecer "conceder". */
+export const TEXTO_MAC_DEV = 'Calendário do Mac sem acesso — no pnpm dev o acesso não dá para conceder, só no app instalado.'
 
 /** O link da tela (o `.lnk` do mockup): 12 px em --accent, sublinhado, sem negrito. */
 export const INICIO_LINK_CLASS =

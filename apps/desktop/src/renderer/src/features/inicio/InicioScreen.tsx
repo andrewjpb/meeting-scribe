@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router'
 import { ROUTE_PATHS } from '@shared/routes'
+import { useSettings } from '../../app/settingsStore'
 import { formatElapsed } from '../../audio/clock'
 import { useRecording } from '../live/recordingStore'
 import { useElapsed } from '../live/useElapsed'
@@ -63,13 +64,15 @@ function FaixaGravando() {
  * Tela Início (contrato 135, D1, D9, D11, D12; artboards 01 e 02): o dashboard do dia, só de leitura. Cabeçalho com a
  * saudação e a data por extenso (e a faixa da gravação em andamento); duas colunas (escolha D1): a agenda de hoje em 380
  * px à esquerda e os cartões à direita, na ordem da PRD (Tarefas, Pendências, Última reunião, Automações). Toda ação é um
- * clique explícito: concluir tarefa, abrir uma tela, começar a transcrever.
+ * clique explícito: concluir tarefa, abrir uma tela, começar a transcrever. Contrato 136 (D13): o bloco desligado em
+ * Configurações › Geral › Início não aparece (sem a agenda, os cartões ocupam a largura toda).
  */
 export function InicioScreen() {
   const view = useInicioView()
   const agora = useAgora()
   const { list: reunioes } = useMeetingsOverview()
   const gravando = useRecording((state) => state.session !== null)
+  const blocos = useSettings((state) => state.settings.inicio.blocos)
   const duracoes = useMemo(() => new Map((reunioes ?? []).map((entry) => [entry.meeting.id, entry.meeting.durationMs])), [reunioes])
   return (
     <div data-inicio-screen className="flex min-h-0 flex-1 flex-col">
@@ -85,12 +88,12 @@ export function InicioScreen() {
         <FaixaGravando />
       </div>
       <div className={`flex min-h-0 flex-1 gap-6 px-[var(--page-x)] pb-5 ${gravando ? 'pt-3' : 'pt-4'}`}>
-        <AgendaDia view={view} agora={agora} duracoes={duracoes} />
+        {blocos.agenda && <AgendaDia view={view} agora={agora} duracoes={duracoes} />}
         <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-2.5 overflow-y-auto">
-          <CartaoTarefas />
-          <CartaoPendencias pendencias={view?.pendencias ?? null} />
-          <CartaoUltimaReuniao reunioes={reunioes} agora={agora} />
-          <CartaoAutomacoes agora={agora} />
+          {blocos.tarefas && <CartaoTarefas />}
+          {blocos.pendencias && <CartaoPendencias pendencias={view?.pendencias ?? null} />}
+          {blocos.ultimaReuniao && <CartaoUltimaReuniao reunioes={reunioes} agora={agora} />}
+          {blocos.automacoes && <CartaoAutomacoes agora={agora} />}
         </div>
       </div>
     </div>

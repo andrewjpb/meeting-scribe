@@ -1,11 +1,11 @@
 import { useState, type ReactNode } from 'react'
 import { MemoryRouter } from 'react-router'
-import { ROUTE_PATHS } from '@shared/routes'
+import { rotaInicial } from '../features/inicio/inicioFormat'
 import { useUpdatesSync } from '../features/settings/updatesStore'
 import { useBrandingSync } from './brandingStore'
 import { LockScreen } from './LockScreen'
 import { useLock, useLockSync } from './lockStore'
-import { useSettingsSync } from './settingsStore'
+import { useSettings, useSettingsSync } from './settingsStore'
 import { Shell } from './Shell'
 import { useThemeSync } from './themeStore'
 
@@ -15,11 +15,14 @@ export function App() {
   useBrandingSync()
   useUpdatesSync()
   useLockSync()
+  // Contrato 136 (D2): a tela inicial lida uma vez, no primeiro render (o `boot` já esperou as configurações). Trocar a
+  // preferência vale na próxima abertura, sem navegar na hora.
+  const [initialEntries] = useState(() => [rotaInicial(useSettings.getState().settings.inicio.telaInicial)])
 
   return (
     <>
       <BehindLock>
-        <MemoryRouter initialEntries={INITIAL_ENTRIES}>
+        <MemoryRouter initialEntries={initialEntries}>
           <Shell />
         </MemoryRouter>
       </BehindLock>
@@ -27,8 +30,6 @@ export function App() {
     </>
   )
 }
-
-const INITIAL_ENTRIES = [ROUTE_PATHS.reunioes]
 
 /**
  * As telas atrás da camada de bloqueio (contrato 22). Aberto já bloqueado (CA6), elas só montam depois do

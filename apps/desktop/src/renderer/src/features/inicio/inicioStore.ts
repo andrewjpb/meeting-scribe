@@ -10,6 +10,8 @@ import { rereadWhenUnlocked } from '../../app/lockStore'
 interface InicioStoreState {
   view: InicioView | null
   load: () => Promise<void>
+  /** "Conceder" da linha do Calendário do Mac (contrato 136): pede o acesso e fica com a view relida. */
+  macAcesso: () => Promise<void>
   /** Assina `scribe:inicio-changed`; devolve o cancelamento. */
   watch: () => () => void
 }
@@ -29,6 +31,14 @@ export const useInicio = create<InicioStoreState>()((set) => ({
         reread = null
         void useInicio.getState().load()
       })
+    }
+  },
+
+  macAcesso: async () => {
+    try {
+      set({ view: await window.__scribeApi.invoke('scribe:inicio-mac-acesso') })
+    } catch {
+      // Bloqueado no meio do pedido: a tela não está à mostra; o desbloqueio relê pelo `load`.
     }
   },
 

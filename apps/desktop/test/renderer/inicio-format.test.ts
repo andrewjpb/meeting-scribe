@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest'
 import {
   dataPorExtenso,
   linhaDoDia,
+  rotaInicial,
   saudacao,
   textoAmanha,
   textoEmAndamento,
@@ -13,9 +14,12 @@ import {
   textoLivreAte,
   textoQuandoFoi,
   textoQuandoVai,
+  textoSemEventos,
   type ItemLinha,
 } from '../../src/renderer/src/features/inicio/inicioFormat'
 import type { InicioEvento } from '../../src/shared/inicio'
+import { ROUTE_PATHS } from '../../src/shared/routes'
+import { DEFAULT_SETTINGS } from '../../src/shared/settings-defaults'
 
 const local = (y: number, m: number, d: number, h = 12, min = 0): Date => new Date(y, m - 1, d, h, min)
 const hoje = (h: number, min = 0): number => local(2026, 11, 23, h, min).getTime()
@@ -133,5 +137,23 @@ describe('linha comprimida do dia (D2)', () => {
     const inteiro = evento('feriado', [0, 0], [0, 0], { diaInteiro: true })
     expect(resumo(linhaDoDia([inteiro], hoje(12, 0)))).toEqual(['evento dia todo feriado futuro', 'limite 08:00', 'agora 12:00', 'limite 19:00'])
     expect(resumo(linhaDoDia([], hoje(20, 0)))).toEqual(['limite 08:00', 'limite 19:00', 'agora 20:00'])
+  })
+})
+
+// Contrato 136 (D2, artboard 03): a tela inicial e o dia sem evento.
+describe('tela inicial e dia vazio', () => {
+  it('a preferência leva ao Início (/inicio) ou a Reuniões (/); o padrão é o Início', () => {
+    expect(rotaInicial('inicio')).toBe(ROUTE_PATHS.inicio)
+    expect(rotaInicial('reunioes')).toBe(ROUTE_PATHS.reunioes)
+    expect(ROUTE_PATHS.reunioes).toBe('/')
+    expect(rotaInicial(DEFAULT_SETTINGS.inicio.telaInicial)).toBe('/inicio')
+  })
+
+  it('"Sem eventos hoje" cita só as fontes que a agenda leu', () => {
+    expect(textoSemEventos(true, 'ok')).toBe('As agendas conectadas e o Calendário do Mac não têm nada marcado para hoje.')
+    expect(textoSemEventos(true, 'sem-acesso')).toBe('As agendas conectadas não têm nada marcado para hoje.')
+    expect(textoSemEventos(true, 'dev')).toBe('As agendas conectadas não têm nada marcado para hoje.')
+    expect(textoSemEventos(false, 'ok')).toBe('O Calendário do Mac não tem nada marcado para hoje.')
+    expect(textoSemEventos(false, 'indisponivel')).toBe('Nenhuma agenda para ler hoje.')
   })
 })

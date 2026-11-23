@@ -1,4 +1,5 @@
 import { Calendar, Mic } from 'lucide-react'
+import { useState } from 'react'
 import { Link } from 'react-router'
 import type { InicioEvento, InicioView } from '@shared/inicio'
 import { meetingPath, ROUTE_PATHS } from '@shared/routes'
@@ -7,7 +8,21 @@ import { useRecordEvent } from '../calendar/useRecordEvent'
 import { useRecording } from '../live/recordingStore'
 import { useStartRecording } from '../live/useStartRecording'
 import { durationLabel } from '../meetings/format'
-import { FONTE_ROTULO, horaMinuto, INICIO_LINK_CLASS, linhaDoDia, textoAmanha, textoEmAndamento, textoEventos, textoHorarioEvento, type EstadoEvento } from './inicioFormat'
+import {
+  FONTE_ROTULO,
+  horaMinuto,
+  INICIO_LINK_CLASS,
+  linhaDoDia,
+  TEXTO_MAC_DEV,
+  TEXTO_MAC_SEM_ACESSO,
+  textoAmanha,
+  textoEmAndamento,
+  textoEventos,
+  textoHorarioEvento,
+  textoSemEventos,
+  type EstadoEvento,
+} from './inicioFormat'
+import { useInicio } from './inicioStore'
 
 /** O nó da linha: 7 px em --title; o passado em --text-faint, o atual em --accent. */
 const NO_CLASS: Record<EstadoEvento, string> = { passado: 'bg-text-faint', atual: 'bg-accent', futuro: 'bg-title' }
@@ -96,6 +111,49 @@ function LinkGravada({ id, duracao }: { id: string; duracao: number | null }) {
   )
 }
 
+/** "Sem eventos hoje" (artboard 03): a ilustração tracejada com o calendário, o título e a frase das fontes lidas. */
+function SemEventos({ view }: { view: InicioView }) {
+  return (
+    <div data-inicio-sem-eventos className="flex min-h-0 flex-1 flex-col items-center justify-center gap-2 px-8 text-center">
+      <span aria-hidden="true" className="flex size-14 items-center justify-center rounded-[var(--radius-panel)] border border-dashed border-line-strong text-text-muted">
+        <Icon icon={Calendar} />
+      </span>
+      <p className="text-14 leading-5 font-semibold text-title">Sem eventos hoje</p>
+      <p className="max-w-[260px] text-12 text-text-muted">{textoSemEventos(view.agenda.contas, view.agenda.mac)}</p>
+    </div>
+  )
+}
+
+/**
+ * A linha discreta do Calendário do Mac sem acesso (PRD, D5): "conceder" pede o acesso pelo `scribe:inicio-mac-acesso`
+ * (a agenda segue só com as contas). No `pnpm dev` o pedido não sai, e a linha diz isso no lugar do botão.
+ */
+function LinhaMac({ mac }: { mac: 'sem-acesso' | 'dev' }) {
+  const [pedindo, setPedindo] = useState(false)
+  const conceder = (): void => {
+    setPedindo(true)
+    void useInicio
+      .getState()
+      .macAcesso()
+      .finally(() => setPedindo(false))
+  }
+  return (
+    <p data-inicio-mac={mac} className="flex min-h-8 shrink-0 items-center gap-2 border-t border-line px-2 py-1 text-12 text-text-muted">
+      <Icon icon={Calendar} size={14} className="shrink-0 text-text-faint" />
+      {mac === 'dev' ? (
+        <span className="min-w-0 flex-1">{TEXTO_MAC_DEV}</span>
+      ) : (
+        <span className="min-w-0 flex-1 truncate">
+          {TEXTO_MAC_SEM_ACESSO} —{' '}
+          <button type="button" data-action="inicio-mac-conceder" disabled={pedindo} onClick={conceder} className={`${INICIO_LINK_CLASS} disabled:opacity-60`}>
+            conceder
+          </button>
+        </span>
+      )}
+    </p>
+  )
+}
+
 interface AgendaDiaProps {
   view: InicioView | null
   agora: number
@@ -105,7 +163,8 @@ interface AgendaDiaProps {
 
 /**
  * "Agenda de hoje" (D11, artboards 01 e 02): 380 px à esquerda, a linha comprimida do dia (escolha D2) com a marca
- * "agora" relida pela tela a cada minuto e, no pé, "Amanhã: N eventos".
+ * "agora" relida pela tela a cada minuto e, no pé, "Amanhã: N eventos". Contrato 136 (artboard 03): sem evento,
+ * "Sem eventos hoje"; sem acesso ao Calendário do Mac, a linha discreta com "conceder" logo acima do pé.
  */
 export function AgendaDia({ view, agora, duracoes }: AgendaDiaProps) {
   const gravando = useRecording((state) => state.session !== null)
@@ -121,44 +180,49 @@ export function AgendaDia({ view, agora, duracoes }: AgendaDiaProps) {
           {textoEventos(eventos.length)}
         </span>
       </header>
-      <div className="min-h-0 flex-1 overflow-y-auto">
-        <ol className="relative flex flex-col gap-1.5 pt-2.5 pb-2 before:absolute before:top-[18px] before:bottom-4 before:left-[55px] before:w-px before:bg-line-strong before:content-['']">
-          {itens.map((item, index) => {
-            if (item.tipo === 'limite') {
+      {view && eventos.length === 0 ? (
+        <SemEventos view={view} />
+      ) : (
+        <div className="min-h-0 flex-1 overflow-y-auto">
+          <ol className="relative flex flex-col gap-1.5 pt-2.5 pb-2 before:absolute before:top-[18px] before:bottom-4 before:left-[55px] before:w-px before:bg-line-strong before:content-['']">
+            {itens.map((item, index) => {
+              if (item.tipo === 'limite') {
+                return (
+                  <li key={`limite-${index}`} data-inicio-limite className="relative h-4 pl-[72px]">
+                    <time className={`${HORA_CLASS} top-0 text-text-faint`}>{item.hora}</time>
+                    <span aria-hidden="true" className="absolute top-[7px] left-[52px] h-px w-[7px] bg-line-strong" />
+                  </li>
+                )
+              }
+              if (item.tipo === 'livre') {
+                return (
+                  <li key={`livre-${index}`} data-inicio-livre className="h-5 pl-[72px] text-11 leading-5 text-text-faint">
+                    {item.texto}
+                  </li>
+                )
+              }
+              if (item.tipo === 'agora') {
+                return (
+                  <li key="agora" data-inicio-agora className="relative h-4">
+                    <time className={`${HORA_CLASS} top-0 font-medium text-accent`}>{item.hora}</time>
+                    <span aria-hidden="true" className="absolute top-2 right-0 left-[52px] h-px bg-accent" />
+                    <span className="absolute -top-2 right-0 text-11 font-medium text-accent">agora</span>
+                  </li>
+                )
+              }
+              const { evento, estado } = item
               return (
-                <li key={`limite-${index}`} data-inicio-limite className="relative h-4 pl-[72px]">
-                  <time className={`${HORA_CLASS} top-0 text-text-faint`}>{item.hora}</time>
-                  <span aria-hidden="true" className="absolute top-[7px] left-[52px] h-px w-[7px] bg-line-strong" />
+                <li key={evento.id} className="relative flex items-start pl-[72px]">
+                  <time className={`${HORA_CLASS} top-2 text-text-muted`}>{item.hora}</time>
+                  <span aria-hidden="true" className={`absolute top-3 left-[52px] size-[7px] ${NO_CLASS[estado]}`} />
+                  <CartaoEvento evento={evento} estado={estado} agora={agora} gravando={gravandoId === item} duracaoGravada={evento.reuniaoId ? (duracoes.get(evento.reuniaoId) ?? null) : null} />
                 </li>
               )
-            }
-            if (item.tipo === 'livre') {
-              return (
-                <li key={`livre-${index}`} data-inicio-livre className="h-5 pl-[72px] text-11 leading-5 text-text-faint">
-                  {item.texto}
-                </li>
-              )
-            }
-            if (item.tipo === 'agora') {
-              return (
-                <li key="agora" data-inicio-agora className="relative h-4">
-                  <time className={`${HORA_CLASS} top-0 font-medium text-accent`}>{item.hora}</time>
-                  <span aria-hidden="true" className="absolute top-2 right-0 left-[52px] h-px bg-accent" />
-                  <span className="absolute -top-2 right-0 text-11 font-medium text-accent">agora</span>
-                </li>
-              )
-            }
-            const { evento, estado } = item
-            return (
-              <li key={evento.id} className="relative flex items-start pl-[72px]">
-                <time className={`${HORA_CLASS} top-2 text-text-muted`}>{item.hora}</time>
-                <span aria-hidden="true" className={`absolute top-3 left-[52px] size-[7px] ${NO_CLASS[estado]}`} />
-                <CartaoEvento evento={evento} estado={estado} agora={agora} gravando={gravandoId === item} duracaoGravada={evento.reuniaoId ? (duracoes.get(evento.reuniaoId) ?? null) : null} />
-              </li>
-            )
-          })}
-        </ol>
-      </div>
+            })}
+          </ol>
+        </div>
+      )}
+      {(view?.agenda.mac === 'sem-acesso' || view?.agenda.mac === 'dev') && <LinhaMac mac={view.agenda.mac} />}
       {view && (
         <p data-inicio-amanha={view.agenda.amanha} className="mt-auto flex h-8 shrink-0 items-center gap-2 border-t border-line-strong px-2 text-13 text-text">
           <Icon icon={Calendar} size={14} className="shrink-0 text-text-muted" />
