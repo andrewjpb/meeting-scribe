@@ -191,8 +191,8 @@ function cenario(): { store: EmailDashboardStore; accounts: Parameters<typeof bu
   return {
     store,
     accounts: [
-      { accountId: 'a', name: 'LAP', pop3: false, ownAddresses: ['eu@lap.com'], inbox: inboxA, pending: pendingA, folders: [folder('INBOX'), folder('Newsletters')] },
-      { accountId: 'b', name: 'POP', pop3: true, ownAddresses: ['eu@pop.com'], inbox: inboxB, pending: new Set(['5']), folders: [folder('INBOX'), folder('Newsletters')] },
+      { accountId: 'a', name: 'LAP', address: 'eu@lap.com', pop3: false, ownAddresses: ['eu@lap.com'], inbox: inboxA, pending: pendingA, folders: [folder('INBOX'), folder('Newsletters')] },
+      { accountId: 'b', name: 'POP', address: 'eu@pop.com', pop3: true, ownAddresses: ['eu@pop.com'], inbox: inboxB, pending: new Set(['5']), folders: [folder('INBOX'), folder('Newsletters')] },
     ],
   }
 }
@@ -213,9 +213,11 @@ describe('buildDashboardView (CA3, CA4)', () => {
     expect(view.replies[0]).toMatchObject({ accountId: 'a', messageKey: '1', reply: 'Olá, Pessoa 1,\n\nrespondo amanhã.', opened: false, from: 'Pessoa 1' })
     expect(view.moves).toEqual([])
     expect(view.accounts).toEqual([
-      { accountId: 'a', name: 'LAP', unread: 4, pending: 4, pop3: false },
-      { accountId: 'b', name: 'POP', unread: 1, pending: 1, pop3: true },
+      { accountId: 'a', name: 'LAP', address: 'eu@lap.com', unread: 4, pending: 4, pop3: false },
+      { accountId: 'b', name: 'POP', address: 'eu@pop.com', unread: 1, pending: 1, pop3: true },
     ])
+    // Contrato 170: os 6 itens das contas listadas; o "a:3" com o mover ignorado continua contando.
+    expect(view.analyzed).toBe(6)
   })
 
   it('desligada: atenção só com as pendentes não lidas (importância 0, sem motivo), sem respostas nem mover', () => {
@@ -246,7 +248,7 @@ describe('buildDashboardView (CA3, CA4)', () => {
       enabled: true,
       running: false,
       store: aberto,
-      accounts: [{ accountId: 'a', name: 'LAP', pop3: false, ownAddresses: [], inbox, pending: new Set(['1']), folders: [folder('INBOX'), folder('Archive', '\\Archive'), folder('Clientes/ABF')] }],
+      accounts: [{ accountId: 'a', name: 'LAP', address: 'eu@lap.com', pop3: false, ownAddresses: [], inbox, pending: new Set(['1']), folders: [folder('INBOX'), folder('Archive', '\\Archive'), folder('Clientes/ABF')] }],
     })
     expect(view.moves.map((g) => [g.folder, g.folderName, g.rows.length])).toEqual([
       ['Archive', 'Arquivar', 40],
@@ -255,6 +257,23 @@ describe('buildDashboardView (CA3, CA4)', () => {
     ])
     expect(view.replies).toEqual([expect.objectContaining({ messageKey: '1', opened: true })])
     expect(view.attention).toHaveLength(DASHBOARD_LIMITS.attentionRows)
+  })
+})
+
+describe('total analisado (contrato 170, CA2)', () => {
+  const conta = (accountId: string) => ({ accountId, name: 'LAP', address: 'eu@lap.com', pop3: false, ownAddresses: [], inbox: [], pending: new Set<string>(), folders: [] })
+
+  it('conta os itens das contas listadas, não a última passada; ignorar não desconta; conta que saiu não entra', () => {
+    const store = emptyDashboardStore()
+    for (const id of ['1', '2', '3', '4', '5', '6']) store.items[itemKey('a', id)] = item('a', id)
+    store.lastRun = { at: NOW, model: 'haiku', analyzed: 0, costUsd: null, error: null }
+    expect(buildDashboardView({ enabled: true, running: false, store, accounts: [conta('a')] }).analyzed).toBe(6)
+    // Desligada, o total é o mesmo.
+    expect(buildDashboardView({ enabled: false, running: false, store, accounts: [conta('a')] }).analyzed).toBe(6)
+    store.items[itemKey('z', '1')] = item('z', '1')
+    const ignorado = withIgnored(withIgnored(store, 'a', '2', 'reply', NOW), 'a', '3', 'move', NOW)
+    expect(buildDashboardView({ enabled: true, running: false, store: ignorado, accounts: [conta('a')] }).analyzed).toBe(6)
+    expect(buildDashboardView({ enabled: true, running: false, store: emptyDashboardStore(), accounts: [conta('a')] }).analyzed).toBe(0)
   })
 })
 

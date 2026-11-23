@@ -34,9 +34,10 @@ function visao(over: Partial<EmailDashboardView> = {}): EmailDashboardView {
     enabled: true,
     running: false,
     lastRun: { at: AGORA, model: 'haiku', analyzed: 38, costUsd: 0.02, error: null },
+    analyzed: 38,
     accounts: [
-      { accountId: A, name: 'LAP', unread: 5, pending: 3, pop3: false },
-      { accountId: B, name: 'Pessoal', unread: 1, pending: 0, pop3: true },
+      { accountId: A, name: 'LAP', address: 'eu@lap.example', unread: 5, pending: 3, pop3: false },
+      { accountId: B, name: 'Pessoal', address: 'eu@pessoal.example', unread: 1, pending: 0, pop3: true },
     ],
     attention: [linha(1, 5), linha(2, 4), linha(3, 4), linha(4, 3), linha(5, 3), linha(6, 2), linha(7, 2), linha(8, 1)],
     replies: [1, 2, 3, 4, 5].map((n) => ({ ...linha(n, n === 1 ? 5 : 3), reply: `Resposta ${n}.\n\nSegundo parágrafo da resposta ${n}.`, opened: n === 3 })),
@@ -284,7 +285,7 @@ describe('Painel de e-mail', () => {
     expect(rodando).toMatch(/data-action="email-painel-analisar" disabled=""[^>]*>[\s\S]*?Analisando…/)
     expect(rodando).toContain('Ainda não analisado')
     const stop = usePainel.getState().subscribe()
-    listener(visao({ running: false, lastRun: { at: AGORA, model: 'haiku', analyzed: 12, costUsd: 0.01, error: null } }))
+    listener(visao({ running: false, lastRun: { at: AGORA, model: 'haiku', analyzed: 12, costUsd: 0.01, error: null }, analyzed: 12 }))
     const pronto = render()
     expect(pronto).not.toContain('Analisando…')
     expect(pronto).toMatch(/data-action="email-painel-analisar"(?! disabled)[^>]*>[\s\S]*?Analisar agora/)
@@ -310,9 +311,27 @@ describe('Painel de e-mail', () => {
 
   it('textos do cabeçalho e das Configurações', () => {
     expect(painelSubtitulo(visao())).toBe('Analisado às 09:12 · 38 e-mails · Haiku')
-    expect(painelSubtitulo({ enabled: true, lastRun: null })).toBe('Ainda não analisado')
-    expect(textoUltimaAnalise(visao().lastRun)).toBe('Às 09:12 · 38 e-mails · US$ 0,02')
-    expect(textoUltimaAnalise(null)).toBe('Nunca')
+    expect(painelSubtitulo({ enabled: true, lastRun: null, analyzed: 0 })).toBe('Ainda não analisado')
+    expect(textoUltimaAnalise(visao().lastRun, 38)).toBe('Às 09:12 · 38 e-mails · US$ 0,02')
+    expect(textoUltimaAnalise(null, 0)).toBe('Nunca')
     expect(textoMovidos(1, 'Arquivar')).toBe('1 e-mail movido para o Arquivo')
+  })
+
+  it('contrato 170 (CA2): o subtítulo e a Última análise contam o total analisado, não a última passada', () => {
+    const idempotente = visao({ lastRun: { at: AGORA, model: 'haiku', analyzed: 0, costUsd: null, error: null }, analyzed: 6 })
+    expect(painelSubtitulo(idempotente)).toBe('Analisado às 09:12 · 6 e-mails · Haiku')
+    expect(textoUltimaAnalise(idempotente.lastRun, idempotente.analyzed)).toBe('Às 09:12 · 6 e-mails')
+    usePainel.setState({ view: idempotente })
+    expect(render()).toContain('Analisado às 09:12 · 6 e-mails · Haiku')
+    const vazio = visao({ lastRun: { at: AGORA, model: 'haiku', analyzed: 0, costUsd: null, error: null }, analyzed: 0 })
+    expect(painelSubtitulo(vazio)).toBe('Analisado às 09:12 · 0 e-mails · Haiku')
+    expect(textoUltimaAnalise(vazio.lastRun, vazio.analyzed)).toBe('Às 09:12 · 0 e-mails')
+    expect(painelSubtitulo(visao({ lastRun: null, analyzed: 6 }))).toBe('Ainda não analisado')
+    expect(textoUltimaAnalise(null, 6)).toBe('Nunca')
+  })
+
+  it('contrato 170 (CA1): a linha da conta mostra o nome, com o endereço no title', () => {
+    usePainel.setState({ view: visao() })
+    expect(render()).toMatch(/data-email-painel-conta="[^"]+"[\s\S]*?<span title="eu@lap\.example"[^>]*>LAP<\/span>/)
   })
 })

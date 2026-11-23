@@ -7,7 +7,7 @@ describe('numericDetail', () => {
     expect(numericDetail(detail)).toBe(true)
   })
 
-  it.each(['', 'assunto=Cronograma', 'analyzed=6  error=false', 'analyzed=6; error=false', 'from="Marina" n=1', 'n=1.5', 'n=-1', 'é=1'])('reprova %s', (detail) => {
+  it.each(['', 'assunto=Cronograma', 'analyzed=6  error=false', 'analyzed=6; error=false', 'from="Marina" n=1', 'n=1.5', 'n=-1', 'é=1', '=1', 'analyzed', 'analyzed=6 error'])('reprova %s', (detail) => {
     expect(numericDetail(detail)).toBe(false)
   })
 })

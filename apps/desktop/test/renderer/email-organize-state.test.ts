@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { EmailOrganizeEvent, EmailOrganizeTopic } from '../../src/shared/email-organize'
-import { folderCounts, organizeBanner, organizeView, panelBatch, readLine, undoResultText, type BatchMeta } from '../../src/renderer/src/features/email/organizeState'
+import { batchMeta, folderCounts, organizeBanner, organizeView, panelBatch, readLine, undoResultText, type BatchMeta } from '../../src/renderer/src/features/email/organizeState'
 
 const name = (path: string): string => path.split('/').join(' › ')
 const at = (hour: number, minute: number, day = 19): number => new Date(2026, 10, day, hour, minute).getTime()
@@ -42,7 +42,7 @@ const event = (patch: Partial<EmailOrganizeEvent> = {}): EmailOrganizeEvent => (
   ...patch,
 })
 
-const meta: BatchMeta = { request: 'organiza meus emails em resolvidos e pendentes', startedAt: at(14, 31), endedAt: null, fromPath: 'INBOX' }
+const meta: BatchMeta = { request: 'organiza meus emails em resolvidos e pendentes', startedAt: at(14, 31), endedAt: null, fromPath: 'INBOX', origem: 'agente' }
 
 describe('painel "Organizando" (contrato 55, CA12)', () => {
   it('contadores, etapas e o pedido', () => {
@@ -121,6 +121,19 @@ describe('faixa e Desfazer (contrato 55, CA13)', () => {
     expect(organizeBanner(event({ state: 'done', moved: 0 }), stoppedMeta, at(18, 0), new Set())).toBeNull()
     expect(organizeBanner(event({ state: 'stopped' }), stoppedMeta, at(18, 0), new Set(['b1']))).toBeNull()
     expect(organizeBanner(event({ state: 'partial-undo', moved: 4 }), stoppedMeta, at(18, 0), new Set())?.retry).toBe(true)
+  })
+
+  it('contrato 170 (CA3): o lote do Painel diz "O Painel moveu"; o resto da faixa não muda', () => {
+    const painelMeta: BatchMeta = { ...stoppedMeta, origem: 'painel' }
+    expect(organizeBanner(event({ state: 'done', moved: 3 }), painelMeta, at(18, 0), new Set())).toEqual({ batchId: 'b1', path: 'INBOX', title: 'O Painel moveu 3 mensagens', detail: 'hoje, 14:33 · concluído', retry: false, result: null })
+    expect(organizeBanner(event({ state: 'done', moved: 1 }), painelMeta, at(18, 0), new Set())?.title).toBe('O Painel moveu 1 mensagem')
+    expect(organizeBanner(event({ state: 'partial-undo', moved: 2 }), painelMeta, at(18, 0), new Set())).toMatchObject({ title: 'O Painel moveu 2 mensagens', detail: 'hoje, 14:33 · desfeito em parte', retry: true })
+    expect(organizeBanner(event({ state: 'done', moved: 3 }), { ...stoppedMeta, origem: 'agente' }, at(18, 0), new Set())?.title).toBe('O Assistente moveu 3 mensagens')
+    // O lote gravado sem `origem` (de antes do contrato 156) é do agente.
+    const semOrigem = batchMeta({ request: '', startedAt: at(14, 31), endedAt: at(14, 33), items: [] })
+    expect(semOrigem.origem).toBe('agente')
+    expect(organizeBanner(event({ state: 'done', moved: 3 }), semOrigem, at(18, 0), new Set())?.title).toBe('O Assistente moveu 3 mensagens')
+    expect(batchMeta({ request: '', startedAt: at(14, 31), endedAt: at(14, 33), items: [], origem: 'painel' }).origem).toBe('painel')
   })
 
   it('desfeito pela faixa: a frase do resultado fica, mesmo com o lote já `undone` (até o × ou os 5 s)', () => {

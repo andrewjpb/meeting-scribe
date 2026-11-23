@@ -19,7 +19,7 @@ const { registerEmailDashboardIpc } = await import('../../src/main/email/dashboa
 
 const ORIGIN = 'scribe://app'
 const trusted = { senderFrame: { url: `${ORIGIN}/index.html` } }
-const VIEW: EmailDashboardView = { enabled: true, lastRun: null, running: false, accounts: [], attention: [], replies: [], moves: [] }
+const VIEW: EmailDashboardView = { enabled: true, lastRun: null, analyzed: 0, running: false, accounts: [], attention: [], replies: [], moves: [] }
 
 let locked = false
 const calls: unknown[][] = []

@@ -14,7 +14,7 @@ import { EmailSettingsTab } from '../../src/renderer/src/features/settings/Email
 
 vi.mock('zustand', async (original) => (await import('./zustand-ssr')).withCurrentState(await original()))
 
-const view: EmailDashboardView = { enabled: true, running: false, lastRun: { at: new Date(2026, 10, 23, 9, 12).getTime(), model: 'haiku', analyzed: 38, costUsd: 0.02, error: null }, accounts: [], attention: [], replies: [], moves: [] }
+const view: EmailDashboardView = { enabled: true, running: false, lastRun: { at: new Date(2026, 10, 23, 9, 12).getTime(), model: 'haiku', analyzed: 38, costUsd: 0.02, error: null }, analyzed: 38, accounts: [], attention: [], replies: [], moves: [] }
 
 const render = (): string => renderToStaticMarkup(<EmailPainelSection />)
 
@@ -35,6 +35,11 @@ describe('Configurações › Email › Painel (CA10)', () => {
     expect(html).not.toMatch(/data-email-dashboard-model="sonnet"[^>]*disabled/)
     expect(html).toContain('Às 09:12 · 38 e-mails · US$ 0,02')
     expect(html).not.toMatch(/data-action="email-dashboard-run" disabled/)
+  })
+
+  it('contrato 170 (CA2): a Última análise conta o total analisado, não a última passada', () => {
+    usePainel.setState({ view: { ...view, lastRun: { at: new Date(2026, 10, 23, 9, 12).getTime(), model: 'haiku', analyzed: 0, costUsd: 0.02, error: null }, analyzed: 6 } })
+    expect(render()).toContain('Às 09:12 · 6 e-mails · US$ 0,02')
   })
 
   it('desligado: o Segmented e o "Analisar agora" desabilitados; desligar e escolher Sonnet gravam o objeto inteiro', () => {

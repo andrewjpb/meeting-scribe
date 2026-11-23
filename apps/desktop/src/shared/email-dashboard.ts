@@ -104,7 +104,10 @@ export interface EmailDashboardMoveGroup {
 
 export interface EmailDashboardAccountSummary {
   accountId: string
+  /** Contrato 170: o nome da conta ("De:"), ou o endereço quando ela não tem nome. */
   name: string
+  /** O endereço, para o `title` da linha da conta. */
+  address: string
   unread: number
   pending: number
   pop3: boolean
@@ -113,6 +116,8 @@ export interface EmailDashboardAccountSummary {
 export interface EmailDashboardView {
   enabled: boolean
   lastRun: EmailDashboardLastRun | null
+  /** Contrato 170: os itens analisados das contas listadas (`lastRun.analyzed` é só a última passada). */
+  analyzed: number
   running: boolean
   accounts: EmailDashboardAccountSummary[]
   attention: EmailDashboardAttentionRow[]
@@ -220,6 +225,7 @@ export function buildDashboardView(input: {
   accounts: readonly {
     accountId: string
     name: string
+    address: string
     pop3: boolean
     ownAddresses: readonly string[]
     inbox: readonly EmailMessage[]
@@ -232,11 +238,16 @@ export function buildDashboardView(input: {
   const accounts = input.accounts.map((account) => ({
     accountId: account.accountId,
     name: account.name,
+    address: account.address,
     unread: account.inbox.filter((message) => isInbox(message) && !message.seen).length,
     pending: account.pending.size,
     pop3: account.pop3,
   }))
-  const view: EmailDashboardView = { enabled: input.enabled, lastRun: store.lastRun, running: input.running, accounts, attention: [], replies: [], moves: [] }
+  // O total analisado (D2, D13): os itens das contas listadas. Ignorar uma sugestão não tira o e-mail da conta: ele
+  // continua analisado (e em Precisam de atenção).
+  const presentes = new Set(input.accounts.map((account) => account.accountId))
+  const analyzed = Object.values(store.items).filter((item) => presentes.has(item.accountId)).length
+  const view: EmailDashboardView = { enabled: input.enabled, lastRun: store.lastRun, analyzed, running: input.running, accounts, attention: [], replies: [], moves: [] }
 
   if (!input.enabled) {
     const attention: EmailDashboardAttentionRow[] = []

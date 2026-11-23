@@ -42,7 +42,7 @@ export function EmailPainelSection() {
       <SettingRow name="Modelo" nameId="settings-email-dashboard-model" description={EMAIL_DASHBOARD_MODEL_DESCRIPTION}>
         <Segmented value={config.model} options={MODELOS} labelledBy="settings-email-dashboard-model" dataName="email-dashboard-model" disabled={!config.enabled} onChange={(model) => void update(emailDashboardPatch(config, { model }))} />
       </SettingRow>
-      <SettingRow name="Última análise" description={textoUltimaAnalise(view?.lastRun ?? null)}>
+      <SettingRow name="Última análise" description={textoUltimaAnalise(view?.lastRun ?? null, view?.analyzed ?? 0)}>
         <Button action="email-dashboard-run" variant="secondary" icon={RefreshCw} disabled={!config.enabled || running} onClick={() => void usePainel.getState().run()}>
           {running ? 'Analisando…' : 'Analisar agora'}
         </Button>

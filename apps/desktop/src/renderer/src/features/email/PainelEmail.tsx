@@ -85,7 +85,9 @@ function Contas({ view }: { view: EmailDashboardView }) {
       {view.accounts.map((conta) => (
         <li key={conta.accountId} data-email-painel-conta={conta.accountId} className="flex h-7 items-center gap-2 border-b border-line text-13">
           <Icon icon={Mail} size={14} className="shrink-0 text-text-muted" />
-          <span className="min-w-0 flex-1 truncate font-medium text-title">{conta.name}</span>
+          <span title={conta.address} className="min-w-0 flex-1 truncate font-medium text-title">
+            {conta.name}
+          </span>
           <span className="shrink-0 text-12 text-text-muted tabular">{textoConta(conta)}</span>
         </li>
       ))}

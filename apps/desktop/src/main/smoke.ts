@@ -16553,10 +16553,6 @@ async function emailDashboardChecks(ctx: SmokeContext, watch: (win: BrowserWindo
   watch(win)
   await loadAndWait(win)
   const contents = win.webContents
-  if (themeBefore !== 'system') await evaluate(contents, "window.__scribeApi.invoke('scribe:settings-update', { theme: 'system' }).then(() => true)")
-  // O `claude` falso responde à passada pela linha de comando (o agente ACP falso não tem a resposta do Painel), e cada
-  // chamada fica em `claudeSpawns`: é o contador de chamadas dos checks.
-  await evaluate(contents, "window.__scribeApi.invoke('scribe:settings-update', { claudeTransport: 'cli' }).then(() => true)")
   const api = <T>(channel: string, request?: unknown): Promise<T> => evaluate<T>(contents, `window.__scribeApi.invoke(${JSON.stringify(channel)}${request === undefined ? '' : `, ${JSON.stringify(request)}`})`)
   const both = async (name: string): Promise<void> => {
     await settle(contents)
@@ -16606,6 +16602,11 @@ async function emailDashboardChecks(ctx: SmokeContext, watch: (win: BrowserWindo
   const held = (fake.mailboxes()[SMOKE_EMAIL_ARCHIVE_FOLDER]?.uids ?? []).filter((uid) => !archivedBefore.has(uid))
   const ownUids: number[] = []
   try {
+    // Contrato 170: o tema e o transporte mudam dentro do `try`, e o `finally` os devolve mesmo quando um passo falha.
+    if (themeBefore !== 'system') await evaluate(contents, "window.__scribeApi.invoke('scribe:settings-update', { theme: 'system' }).then(() => true)")
+    // O `claude` falso responde à passada pela linha de comando (o agente ACP falso não tem a resposta do Painel), e cada
+    // chamada fica em `claudeSpawns`: é o contador de chamadas dos checks.
+    await evaluate(contents, "window.__scribeApi.invoke('scribe:settings-update', { claudeTransport: 'cli' }).then(() => true)")
     await waitInbox(0)
 
     // Print B: a INBOX falsa vazia, antes de entregar (nada analisado: os três cartões vazios).
@@ -16665,7 +16666,8 @@ async function emailDashboardChecks(ctx: SmokeContext, watch: (win: BrowserWindo
     const againCalls = calls() - callsBeforeAgain
     record('dashboardIdempotent', {
       ok: again.started && again.view?.lastRun?.analyzed === 0 && againCalls === 0 && again.view.lastRun.error === null,
-      detail: `analyzed=${again.view?.lastRun?.analyzed ?? -1} calls=${againCalls} finished=${again.view !== null}`,
+      // Contrato 170: sem a passada terminada, `finished=false` e `analyzed=0` (o `numericDetail` não aceita sinal).
+      detail: `analyzed=${again.view?.lastRun?.analyzed ?? 0} calls=${againCalls} finished=${again.view !== null}`,
     })
 
     // Print D: o 1º bloco de resposta aberto por inteiro ("Ver resposta").
@@ -16701,6 +16703,7 @@ async function emailDashboardChecks(ctx: SmokeContext, watch: (win: BrowserWindo
     for (const stop = Date.now() + 5000; count('Newsletters') === newslettersBefore && Date.now() < stop; ) await wait(50)
     const moved = count('Newsletters') - newslettersBefore
     const inboxAfter = count('INBOX')
+    const newslettersAfter = count('Newsletters')
     await both('email-painel-desfazer')
     const batchId = await evaluate<string>(contents, `document.querySelector('[data-email-painel] [data-email-organize-banner]')?.dataset.emailOrganizeBanner ?? ''`)
     const batch = batchId ? await api<{ ok: boolean; batch?: { origem?: string } }>('scribe:email-batch-get', { batchId }) : null
@@ -16711,7 +16714,7 @@ async function emailDashboardChecks(ctx: SmokeContext, watch: (win: BrowserWindo
     await waitInbox(DASHBOARD_SEEDS.length)
     record('dashboardMove', {
       ok: bannerShown && moved >= 3 && inboxAfter === inboxBeforeMove - moved && origemPainel && undone,
-      detail: `moved=${moved} inboxAfter=${inboxAfter} newsletters=${moved} origemPainel=${origemPainel} undone=${undone}`,
+      detail: `moved=${moved} inboxAfter=${inboxAfter} newsletters=${newslettersAfter} origemPainel=${origemPainel} undone=${undone}`,
     })
 
     // dashboardIgnore: as que voltaram (UIDs novos) são analisadas de novo; Ignorar uma resposta e um mover os tira, e a
@@ -16732,21 +16735,33 @@ async function emailDashboardChecks(ctx: SmokeContext, watch: (win: BrowserWindo
     })
 
     // dashboardDisabled e print C: desligada, "Analisar agora" não começa, o modelo não é chamado e a tela mostra a nota.
-    await evaluate(contents, `window.__scribeApi.invoke('scribe:settings-update', { emailDashboard: { enabled: false, model: '${modelBefore}' } }).then(() => true)`)
-    const callsBeforeOff = calls()
-    const off = await api<{ started: boolean; running: boolean }>('scribe:email-dashboard-run')
-    await wait(300)
-    const offCalls = calls() - callsBeforeOff
-    await clickSelector(contents, `${SIDEBAR_EMAIL} ${EMAIL_INBOX_LINK}`)
-    await waitFor(contents, `document.querySelector('[data-email-folder-view="inbox"]')`, 8000)
-    await showPainel()
-    const noteShown = await waitFor(contents, `document.querySelector('[data-email-painel][data-email-painel-ia="desligada"] [data-notice="email-painel-ia-desligada"]')`, 8000)
-    const buttonDisabled = await evaluate<boolean>(contents, `document.querySelector('[data-action="email-painel-analisar"]')?.disabled === true`)
-    await both('email-painel-ia-desligada')
-    await evaluate(contents, `window.__scribeApi.invoke('scribe:settings-update', { emailDashboard: { enabled: true, model: '${modelBefore}' } }).then(() => true)`)
+    // Contrato 170: a análise volta ligada no `finally`, mesmo quando um passo falha; a faixa "Desfeito" do check
+    // anterior sai pelo × antes do print (ou some sozinha em até 6 s).
+    let off = { started: true, running: true }
+    let offCalls = 0
+    let noteShown = false
+    let buttonDisabled = false
+    let bannerGone = false
+    try {
+      await evaluate(contents, `window.__scribeApi.invoke('scribe:settings-update', { emailDashboard: { enabled: false, model: '${modelBefore}' } }).then(() => true)`)
+      const callsBeforeOff = calls()
+      off = await api<{ started: boolean; running: boolean }>('scribe:email-dashboard-run')
+      await wait(300)
+      offCalls = calls() - callsBeforeOff
+      await clickSelector(contents, `${SIDEBAR_EMAIL} ${EMAIL_INBOX_LINK}`)
+      await waitFor(contents, `document.querySelector('[data-email-folder-view="inbox"]')`, 8000)
+      await showPainel()
+      noteShown = await waitFor(contents, `document.querySelector('[data-email-painel][data-email-painel-ia="desligada"] [data-notice="email-painel-ia-desligada"]')`, 8000)
+      buttonDisabled = await evaluate<boolean>(contents, `document.querySelector('[data-action="email-painel-analisar"]')?.disabled === true`)
+      await evaluate(contents, `document.querySelector('[data-email-painel] [data-email-organize-banner] [data-action="email-organize-banner-close"]')?.click() ?? null`)
+      bannerGone = await waitFor(contents, `!document.querySelector('[data-email-painel] [data-email-organize-banner]')`, 6000)
+      await both('email-painel-ia-desligada')
+    } finally {
+      await evaluate(contents, `window.__scribeApi.invoke('scribe:settings-update', { emailDashboard: { enabled: true, model: '${modelBefore}' } }).then(() => true)`).catch(() => undefined)
+    }
     record('dashboardDisabled', {
-      ok: !off.started && !off.running && offCalls === 0 && noteShown && buttonDisabled,
-      detail: `started=${off.started} calls=${offCalls} noteShown=${noteShown} buttonDisabled=${buttonDisabled}`,
+      ok: !off.started && !off.running && offCalls === 0 && noteShown && buttonDisabled && bannerGone,
+      detail: `started=${off.started} calls=${offCalls} noteShown=${noteShown} buttonDisabled=${buttonDisabled} bannerGone=${bannerGone}`,
     })
 
     // Print F: Configurações › Email rolada até a seção Painel (a análise ligada de novo).

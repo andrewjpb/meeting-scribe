@@ -12,11 +12,12 @@ export const textoEmails = (n: number): string => plural(n, 'e-mail', 'e-mails')
 
 /**
  * O subtítulo do cabeçalho (D2): "Analisado às 09:12 · 38 e-mails · Haiku" ou "Ainda não analisado"; com a análise
- * desligada (D10), mais " · análise por IA desligada".
+ * desligada (D10), mais " · análise por IA desligada". Os e-mails são o total analisado (`view.analyzed`, contrato 170),
+ * não os da última passada.
  */
-export function painelSubtitulo(view: Pick<EmailDashboardView, 'enabled' | 'lastRun'> | null): string {
+export function painelSubtitulo(view: Pick<EmailDashboardView, 'enabled' | 'lastRun' | 'analyzed'> | null): string {
   const run = view?.lastRun ?? null
-  const base = run ? `Analisado às ${horaMinuto(run.at)} · ${textoEmails(run.analyzed)} · ${PAINEL_MODELO_ROTULO[run.model]}` : 'Ainda não analisado'
+  const base = run && view ? `Analisado às ${horaMinuto(run.at)} · ${textoEmails(view.analyzed)} · ${PAINEL_MODELO_ROTULO[run.model]}` : 'Ainda não analisado'
   return view && !view.enabled ? `${base} · análise por IA desligada` : base
 }
 
@@ -25,10 +26,13 @@ export function textoCusto(usd: number): string {
   return `US$ ${usd.toFixed(2).replace('.', ',')}`
 }
 
-/** A "Última análise" das Configurações (D13): "Às 09:12 · 38 e-mails · US$ 0,02" (sem o custo quando não veio) ou "Nunca". */
-export function textoUltimaAnalise(run: EmailDashboardLastRun | null): string {
+/**
+ * A "Última análise" das Configurações (D13): "Às 09:12 · 38 e-mails · US$ 0,02" (sem o custo quando não veio) ou
+ * "Nunca". `analyzed` é o total analisado da view (contrato 170).
+ */
+export function textoUltimaAnalise(run: EmailDashboardLastRun | null, analyzed: number): string {
   if (!run) return 'Nunca'
-  return [`Às ${horaMinuto(run.at)}`, textoEmails(run.analyzed), ...(run.costUsd !== null ? [textoCusto(run.costUsd)] : [])].join(' · ')
+  return [`Às ${horaMinuto(run.at)}`, textoEmails(analyzed), ...(run.costUsd !== null ? [textoCusto(run.costUsd)] : [])].join(' · ')
 }
 
 /** A linha de uma conta (D3): "5 não lidos · 3 pendentes", e " · POP3" na conta POP3. */

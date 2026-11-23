@@ -1,7 +1,7 @@
 ---
 feature: email-dashboard
 contrato: 158
-correcoes: 165
+correcoes: 170
 status: em-correcao
 data: 2026-11-23
 semana: 2026-W48
@@ -16,9 +16,9 @@ Prints de `apps/desktop/out/smoke/` gravados pelo `pnpm gates` do contrato 158 e
 
 - **14 prints:** 6 `ok`, 8 `ajustar` (os 8 pelos achados A1 e A2, que atravessam as telas com conteúdo).
 - Nenhuma cor fora da paleta nos dois temas, nenhuma sombra, nenhuma pílula, nenhum id, JSON ou "undefined". Estrutura igual ao mockup: contas no topo da coluna esquerda, "Precisam de atenção" em 380 px, respostas e organização à direita, linhas de 44, quadrado de 6 px, grupo com "Mover todos (N)", item Painel de 28 px marcado na barra.
-- Os achados viraram o **contrato 165**; a tabela abaixo é da rodada do 158 e será refeita com os prints regravados.
+- Os achados viraram o **contrato 170**; a tabela abaixo é da rodada do 158 e será refeita com os prints regravados.
 
-### Ajustar (vão ao contrato 165)
+### Ajustar (vão ao contrato 170)
 
 - **A1. Conta pelo endereço.** Linha da conta, sufixo "· conta" das linhas dos três cartões, cabeçalho do grupo ("Mover para Newsletters · andrew.teste@lap….", cortado) e apoio do banner mostram `andrew.teste@lap.example`; o mockup e a barra lateral mostram o nome ("Andrew Teste"). Origem: `main/email/dashboard.ts` `view()` usa `account.address`. Todos os prints com conteúdo.
 - **A2. "0 e-mails" no subtítulo e em Última análise.** Depois da passada idempotente, "Analisado às 19:51 · 0 e-mails · Haiku" com 6 e-mails na tela (`email-painel-resposta`, `email-painel-desfazer`, `email-painel-ia-desligada`, `config-email-painel`). O texto conta a última passada (`lastRun.analyzed`), não o que está analisado.

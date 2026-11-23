@@ -121,6 +121,8 @@ const remetente = (message: EmailMessage): string => {
 }
 const isPop3 = (cache: EmailCache): boolean => cache.status.account.incoming.protocol === 'pop3'
 const ownOf = (cache: EmailCache): string[] => [cache.status.account.address]
+/** Contrato 170: a conta pelo nome, como a barra lateral; sem nome, o endereço (na visão e no pedido ao modelo). */
+const nomeDaConta = (cache: EmailCache): string => cache.status.account.name?.trim() || cache.status.account.address
 
 export function createEmailDashboardService(deps: EmailDashboardDeps): EmailDashboardService {
   const timeoutMs = deps.callTimeoutMs ?? DASHBOARD_LIMITS.callTimeoutMs
@@ -145,7 +147,8 @@ export function createEmailDashboardService(deps: EmailDashboardDeps): EmailDash
       store,
       accounts: caches.map((cache) => ({
         accountId: cache.status.account.id,
-        name: cache.status.account.address,
+        name: nomeDaConta(cache),
+        address: cache.status.account.address,
         pop3: isPop3(cache),
         ownAddresses: ownOf(cache),
         inbox: cache.inbox,
@@ -260,7 +263,7 @@ export function createEmailDashboardService(deps: EmailDashboardDeps): EmailDash
           {
             model,
             systemPrompt: emailDashboardSystemPrompt(),
-            input: buildEmailDashboardPrompt({ accountName: cache.status.account.address, ownAddresses: ownOf(cache), folders: allowed, archive: archiveTarget, messages: promptMessages }),
+            input: buildEmailDashboardPrompt({ accountName: nomeDaConta(cache), ownAddresses: ownOf(cache), folders: allowed, archive: archiveTarget, messages: promptMessages }),
           },
           signal,
         )

@@ -1,4 +1,4 @@
-# Contrato 165 — Ajustes da auditoria dos prints do Painel
+# Contrato 170 — Ajustes da auditoria dos prints do Painel
 Feature: email-dashboard · Wave: 5 · Depende de: 158 (commitado) · Spec: `docs/specs/email-dashboard/spec.md` (R10, R13, R16, R22, "Prints exigidos") · Auditoria: `docs/specs/email-dashboard/auditoria-prints.md`
 
 Caminhos relativos a `apps/desktop/src`. Constituição: `~/CLAUDE.md` e `docs/specs/desktop-shell/design.md`. Quatro correções pequenas achadas ao comparar os 14 prints do smoke com os artboards de `mockups/png/`. Nenhuma tela nova, nenhuma mudança de layout.

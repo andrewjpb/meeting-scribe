@@ -218,6 +218,8 @@ describe('passada (contrato 156)', () => {
     const store = await h.store.load()
     expect(store.lastRun).toMatchObject({ at: NOW + 60_000, analyzed: 0, error: null })
     expect(Object.keys(store.items)).toHaveLength(10)
+    // Contrato 170 (CA2): a visão conta o que está analisado, não a última passada.
+    expect((await h.service.view()).analyzed).toBe(10)
   })
 
   it('CA3: desligada, não começa e o modelo não é chamado', async () => {
@@ -352,6 +354,31 @@ describe('passada (contrato 156)', () => {
     if (!row) throw new Error('sem resposta')
     const view = await h.service.markOpened(IMAP, row.messageKey)
     expect(view.replies.find((item) => item.messageKey === row.messageKey)?.opened).toBe(true)
+  })
+})
+
+describe('conta na visão (contrato 170, CA1)', () => {
+  it('a conta aparece pelo nome; o endereço fica em `address`; sem nome, o endereço', async () => {
+    const caches = twoAccounts()
+    const [imap] = caches
+    if (!imap) throw new Error('sem conta')
+    imap.status.account = { ...imap.status.account, name: 'Andrew Teste', address: 'andrew.teste@lap.example' }
+    const view = await harness({ caches }).service.view()
+    expect(view.accounts.map((conta) => [conta.name, conta.address])).toEqual([
+      ['Andrew Teste', 'andrew.teste@lap.example'],
+      ['pop3@lap.example', 'pop3@lap.example'],
+    ])
+  })
+
+  it('o pedido ao modelo leva a conta pelo nome; sem nome, o endereço', async () => {
+    const caches = twoAccounts()
+    const [imap] = caches
+    if (!imap) throw new Error('sem conta')
+    imap.status.account = { ...imap.status.account, name: 'Andrew Teste', address: 'andrew.teste@lap.example' }
+    const h = harness({ caches })
+    await runToEnd(h)
+    const conta = (input: string): string => /<conta>\n?([^<]*)<\/conta>/.exec(input)?.[1]?.trim() ?? ''
+    expect(h.calls.map((call) => conta(call.input))).toEqual(['Andrew Teste', 'pop3@lap.example'])
   })
 })
 
