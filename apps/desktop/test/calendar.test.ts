@@ -20,7 +20,7 @@ import {
 } from '../src/shared/calendar'
 import { DEFAULT_SETTINGS, type AppSettings } from '../src/shared/settings-defaults'
 import { confirmCancelled, evaluateAlerts, dismissAlert, rescheduled, type AlertMemory, type AlertInput } from '../src/main/calendar/alerts'
-import { CALENDAR_CACHE_FILE, createCalendarService, type CalendarAccount } from '../src/main/calendar/service'
+import { CALENDAR_CACHE_FILE, calendarWindow, createCalendarService, type CalendarAccount } from '../src/main/calendar/service'
 import { normalizeGoogleEvent } from '../src/main/google/calendar'
 import { normalizeMicrosoftEvent } from '../src/main/microsoft/calendar'
 import { summaryInput, summaryParticipantLines, summarySystemPrompt } from '../src/main/claude-cli/summary'
@@ -388,7 +388,7 @@ describe('serviço das agendas (CA4, CA9) com APIs falsas', () => {
   })
   afterEach(() => rmSync(dir, { recursive: true, force: true }))
 
-  const service = (options: { google?: boolean; microsoft?: boolean; offline?: () => boolean } = {}) =>
+  const service = (options: { google?: boolean; microsoft?: boolean; offline?: () => boolean; onRead?: () => void } = {}) =>
     createCalendarService({
       dir,
       accounts: { google: account(() => options.google ?? true), microsoft: account(() => options.microsoft ?? true) },
@@ -398,6 +398,8 @@ describe('serviço das agendas (CA4, CA9) com APIs falsas', () => {
       notify: (notice) => notices.push(notice),
       onView: (view) => views.push(view),
       now: () => clock,
+      timeZone: () => 'America/Sao_Paulo',
+      ...(options.onRead ? { onRead: options.onRead } : {}),
     })
 
   const googleRaw = { id: 'g1', summary: 'Revisão do contrato', start: { dateTime: iso(NOW + 4 * MIN) }, end: { dateTime: iso(NOW + 34 * MIN) }, attendees: [{ email: 'eu@example.com', self: true, responseStatus: 'accepted' }, { email: 'ana@example.com', displayName: 'Ana Lima' }], hangoutLink: 'https://meet.google.com/abc-defg-hij' }
@@ -421,13 +423,16 @@ describe('serviço das agendas (CA4, CA9) com APIs falsas', () => {
     expect(existsSync(join(dir, CALENDAR_CACHE_FILE))).toBe(false)
   })
 
-  it('lê as duas agendas na janela de −1 h a +24 h (Google com cancelados, Graph em UTC), avisa e mostra "Próximas" e a faixa', async () => {
+  it('lê as duas agendas do começo do dia ao fim de amanhã (Google com cancelados, Graph em UTC), avisa e mostra "Próximas" e a faixa', async () => {
     google.events.set('primary', [googleRaw])
     microsoft.events.set('default', [graphRaw])
     const calendar = service()
     await calendar.refresh()
-    expect(google.eventReads).toEqual([{ calendarId: 'primary', timeMin: iso(NOW - 60 * MIN), timeMax: iso(NOW + 24 * 60 * MIN), showDeleted: 'true' }])
-    expect(microsoft.eventReads).toEqual([{ calendarId: 'default', startDateTime: iso(NOW - 60 * MIN), endDateTime: iso(NOW + 24 * 60 * MIN), prefer: 'outlook.timezone="UTC"' }])
+    // Contrato 134 (D4): 10:00 em São Paulo; a janela vai da meia-noite de hoje à meia-noite de depois de amanhã.
+    const dayStart = '2026-11-17T03:00:00.000Z'
+    const tomorrowEnd = '2026-11-19T03:00:00.000Z'
+    expect(google.eventReads).toEqual([{ calendarId: 'primary', timeMin: dayStart, timeMax: tomorrowEnd, showDeleted: 'true' }])
+    expect(microsoft.eventReads).toEqual([{ calendarId: 'default', startDateTime: dayStart, endDateTime: tomorrowEnd, prefer: 'outlook.timezone="UTC"' }])
     expect(notices.map((notice) => `${notice.kind}:${notice.title}`).sort()).toEqual(['before:Revisão do contrato', 'not-recording:Status semanal'])
     const view = calendar.view()
     expect(view.connected).toBe(true)
@@ -552,6 +557,42 @@ describe('serviço das agendas (CA4, CA9) com APIs falsas', () => {
     expect(notices.map((notice) => notice.kind)).toEqual(['before'])
     expect(google.calls.some((path) => /\/events\/g1/.test(path))).toBe(false)
     expect(calendar.view().upcoming.map((item) => item.key)).toEqual(['google:equipe:g1-equipe'])
+  })
+
+  it('contrato 134 (D4): logo depois da meia-noite a janela começa em agora −1 h; a janela é sempre a do fuso', async () => {
+    google.events.set('primary', [])
+    clock = Date.parse('2026-11-17T03:30:00.000Z') // 00:30 em São Paulo
+    const calendar = service({ microsoft: false })
+    await calendar.refresh()
+    expect(google.eventReads).toEqual([{ calendarId: 'primary', timeMin: '2026-11-17T02:30:00.000Z', timeMax: '2026-11-19T03:00:00.000Z', showDeleted: 'true' }])
+    expect(calendarWindow(clock, 'America/Sao_Paulo')).toEqual({ from: clock - 60 * MIN, to: Date.parse('2026-11-19T03:00:00.000Z') })
+    expect(calendarWindow(NOW, 'UTC')).toEqual({ from: Date.parse('2026-11-17T00:00:00.000Z'), to: Date.parse('2026-11-19T00:00:00.000Z') })
+  })
+
+  it('contrato 134 (D4): o dia inteiro e amanhã ficam em dayEvents; avisos e "Próximas" seguem só nas 24 h; onRead a cada leitura', async () => {
+    const manha = { ...googleRaw, id: 'g-manha', summary: 'Café da manhã', start: { dateTime: '2026-11-17T11:00:00.000Z' }, end: { dateTime: '2026-11-17T11:30:00.000Z' } }
+    // Amanhã às 23:00 em São Paulo: mais de 24 h depois de agora.
+    const amanhaTarde = { ...googleRaw, id: 'g-amanha', summary: 'Fechamento', start: { dateTime: '2026-11-19T02:00:00.000Z' }, end: { dateTime: '2026-11-19T02:30:00.000Z' } }
+    microsoft.events.set('default', [{ ...graphRaw, id: 'm-copia', iCalUId: 'convite-3@example.com' }])
+    google.events.set('primary', [manha, { ...googleRaw, iCalUID: 'convite-3@example.com', start: { dateTime: iso(NOW - 3 * MIN) }, end: { dateTime: iso(NOW + 30 * MIN) } }, amanhaTarde])
+    let reads = 0
+    const calendar = service({ onRead: () => void (reads += 1) })
+    await calendar.refresh()
+    expect(reads).toBe(1)
+    // Hoje e amanhã inteiros, uma cópia por convite (o mesmo `uid` no Google e na Microsoft).
+    const day = calendar.dayEvents(Date.parse('2026-11-17T03:00:00.000Z'), Date.parse('2026-11-19T03:00:00.000Z'))
+    expect(day.map((item) => item.id).sort()).toEqual(['g-amanha', 'g-manha', 'g1'])
+    // Só hoje.
+    expect(calendar.dayEvents(Date.parse('2026-11-17T03:00:00.000Z'), Date.parse('2026-11-18T03:00:00.000Z')).map((item) => item.id).sort()).toEqual(['g-manha', 'g1'])
+    // "Próximas": a reunião de agora; nem a da manhã (acabou) nem a de amanhã à noite (depois de 24 h).
+    expect(calendar.view().upcoming.map((item) => item.title)).toEqual(['Revisão do contrato'])
+    expect(notices.map((notice) => notice.title)).not.toContain('Fechamento')
+    expect(notices.map((notice) => notice.title)).not.toContain('Café da manhã')
+    // Outra leitura sem nada mudar na tela: o onRead sai de novo (o onView não).
+    const viewsBefore = views.length
+    await calendar.refresh()
+    expect(reads).toBe(2)
+    expect(views.length).toBe(viewsBefore)
   })
 
   it('o mesmo convite no Google e na Microsoft: uma notificação e uma linha em "Próximas"', async () => {

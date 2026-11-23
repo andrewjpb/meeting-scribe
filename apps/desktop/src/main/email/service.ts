@@ -601,6 +601,8 @@ export interface EmailServiceDeps {
   onMessage: (message: EmailMessage, options: { notify: boolean }) => void
   /** A lista de uma conta mudou (sincronismo, lida, apagada, enviada): a tela relê. */
   onMessagesChanged?: (accountId: string) => void
+  /** Contrato 134 (D8): um `LIST` novo ficou guardado (os "Pendentes" da tela Início relêem pelo cache). */
+  onFoldersCached?: (accountId: string) => void
   /** Contrato 56: a conta saiu (os lotes do agente saem com ela). */
   onAccountRemoved?: (accountId: string) => void
   /**
@@ -691,6 +693,12 @@ export interface EmailService {
    */
   listFolders(accountId: string, options?: { fresh?: boolean }): Promise<EmailFoldersResult>
   /**
+   * Contrato 134 (D8): quantas mensagens há nas pastas "Pendentes" (a última parte do caminho, sem diferenciar
+   * maiúsculas nem acentos), somadas de todas as contas, só pelo `LIST` já guardado. Nunca abre sessão IMAP. `null`
+   * sem nenhuma pasta "Pendentes" com a contagem em memória.
+   */
+  pendentesEmCache(): number | null
+  /**
    * Contrato 52 (CA4): `MOVE` de até 500 UIDs; erro do servidor não tira nada do store. Contrato 56 (CA7): com
    * `uidValidity`, os UIDs valem com ele (a pasta de origem não precisa ter sido aberta no app); com `messageIds`, os que
    * chegam à INBOX não viram aviso de email novo. Com `options`, o resultado traz o `UIDVALIDITY` do destino.
@@ -752,6 +760,9 @@ interface Runtime {
   /** Contrato 52: a conexão das pastas teve a senha recusada; nenhum pedido de pastas tenta de novo até reconectar. */
   foldersAuthRefused: boolean
 }
+
+/** Contrato 134 (D8): o nome da pasta para comparar, sem acentos e em minúsculas ("Pendentes", "PENDENTES", "pendêntes"). */
+const folderLeaf = (name: string): string => name.normalize('NFD').replace(/\p{M}+/gu, '').trim().toLocaleLowerCase('pt-BR')
 
 export function createEmailService(deps: EmailServiceDeps): EmailService {
   const now = deps.now ?? Date.now
@@ -1298,7 +1309,10 @@ export function createEmailService(deps: EmailServiceDeps): EmailService {
     const entries = await withFolders(rt, 'LIST', (session) => session.list())
     if (isFailure(entries)) return entries
     if (rt.removed) return folderFailure('missing')
-    if (rt.generation === generation) folderCache.set(rt.account.id, entries)
+    if (rt.generation === generation) {
+      folderCache.set(rt.account.id, entries)
+      if (!disposed) deps.onFoldersCached?.(rt.account.id)
+    }
     const sent = entries.find((entry) => entry.specialUse === '\\Sent' && !entry.noselect)
     if (sent) await useSentMailbox(rt, sent.path).catch(() => undefined)
     return entries
@@ -2428,6 +2442,18 @@ export function createEmailService(deps: EmailServiceDeps): EmailService {
     },
 
     listFolders,
+
+    pendentesEmCache() {
+      let total: number | null = null
+      for (const entries of folderCache.values()) {
+        for (const entry of entries) {
+          if (entry.noselect || entry.total === null || folderLeaf(entry.name) !== 'pendentes') continue
+          total = (total ?? 0) + entry.total
+        }
+      }
+      return total
+    },
+
     moveMessages,
     createFolder,
     renameFolder,

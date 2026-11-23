@@ -33,6 +33,9 @@ import type { FunilPropostaAplicarRequest, FunilPropostaAplicarResult, FunilProp
 // 122: tarefas
 import type { SugestaoTarefa, TarefaInput, TarefaSalvar, TarefasActionResult, TarefasFalha, TarefasResumoResult, TarefaStatus, TarefasView } from './tarefas'
 // fim 122
+// 134: inicio
+import type { InicioView } from './inicio'
+// fim 134
 import type { AnalysisRunRequest, AnalysisRunResult, MeetingAnalysis } from './meeting-analysis'
 import type { MeetingNote } from './meeting-notes'
 import type { SummaryStatus } from './meeting-summary'
@@ -677,6 +680,12 @@ export interface InvokeChannels {
   /** "Adicionar" e "Adicionar as minhas" do resumo (R22, R23). */
   'scribe:tarefas-adicionar-do-resumo': { request: { meetingId: string; indices: number[] | 'minhas' }; response: TarefasResumoResult }
   // fim 122
+  // 134: inicio
+  /** Contrato 134 (D10): a tela Início (agenda do dia, pendências e a saudação), só leitura; nunca o link da chamada. */
+  'scribe:inicio-get': { request: undefined; response: InicioView }
+  /** "Conceder" da linha do Calendário do Mac: pede o acesso, esquece o que leu e devolve a view de novo. */
+  'scribe:inicio-mac-acesso': { request: undefined; response: InicioView }
+  // fim 134
 }
 
 /** renderer -> main, sem resposta (`__scribeApi.send` / `ipcMain.on`). */
@@ -834,6 +843,10 @@ export interface MainEvents {
   /** "Abrir" da notificação de uma tarefa (D7); `null` abre a lista. Bloqueado, o main guarda e manda ao desbloquear. */
   'scribe:open-tarefa': { id: string | null }
   // fim 122
+  // 134: inicio
+  /** Contrato 134 (D10): a agenda, uma leitura nova do Mac, mensagem do WhatsApp ou as pastas do email; a view inteira. Não chega bloqueado. */
+  'scribe:inicio-changed': InicioView
+  // fim 134
 }
 
 export type InvokeChannel = keyof InvokeChannels
@@ -1118,6 +1131,10 @@ const INVOKE: Record<InvokeChannel, true> = {
   'scribe:tarefas-ignorar': true,
   'scribe:tarefas-adicionar-do-resumo': true,
   // fim 122
+  // 134: inicio
+  'scribe:inicio-get': true,
+  'scribe:inicio-mac-acesso': true,
+  // fim 134
 }
 const RENDERER_EVENTS: Record<RendererEvent, true> = {
   'scribe:csp-violation': true,
@@ -1195,6 +1212,9 @@ const MAIN_EVENTS: Record<MainEvent, true> = {
   'scribe:tarefas-changed': true,
   'scribe:open-tarefa': true,
   // fim 122
+  // 134: inicio
+  'scribe:inicio-changed': true,
+  // fim 134
 }
 
 /**
@@ -1539,6 +1559,10 @@ export const WHEN_LOCKED: Readonly<Record<InvokeChannel, LockedPolicy>> = Object
   'scribe:tarefas-ignorar': 'refused',
   'scribe:tarefas-adicionar-do-resumo': 'refused',
   // fim 122
+  // 134: inicio (D10: recusados; o `scribe:inicio-changed` só sai desbloqueado)
+  'scribe:inicio-get': 'refused',
+  'scribe:inicio-mac-acesso': 'refused',
+  // fim 134
 })
 
 /**

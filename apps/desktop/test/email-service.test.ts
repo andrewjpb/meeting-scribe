@@ -5,7 +5,7 @@ import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { toImapMessage, type ImapConnect, type ImapMessage, type ImapSession } from '../src/main/email/imap-client'
+import { toImapMessage, type ImapConnect, type ImapFolderConnect, type ImapFolderEntry, type ImapMessage, type ImapSession } from '../src/main/email/imap-client'
 import { createEmailClickGuard, createEmailService, EMAIL_FAILURES, failureOf, type EmailService, type EmailServiceDeps } from '../src/main/email/service'
 import { createFileSettingsStore, SETTINGS_FILE } from '../src/main/settings/store'
 import type { SafeStorageLike } from '../src/main/secrets'
@@ -413,6 +413,57 @@ describe('erro por conta (contrato 42, CA6)', () => {
     await vi.waitFor(() => expect(stateOf(service, id)?.error).toBe(EMAIL_FAILURES.auth))
     await vi.advanceTimersByTimeAsync(10 * 60_000)
     expect(imap.calls.filter((call) => call.startsWith('LOGIN'))).toHaveLength(3)
+  })
+})
+
+describe('pendentes em cache (contrato 134, D8)', () => {
+  const folder = (path: string, name: string, total: number | null, noselect = false): ImapFolderEntry => ({ path, name, delimiter: '/', specialUse: null, noselect, total, unseen: 0 })
+
+  it('soma só o LIST guardado (maiúsculas e acentos não importam); nunca abre sessão IMAP; sem pasta, null', async () => {
+    const imap = fakeImap()
+    let sessions = 0
+    const entries: ImapFolderEntry[] = [
+      folder('INBOX', 'INBOX', 12),
+      folder('Pendentes', 'Pendentes', 4),
+      folder('Clientes/PENDÊNTES', 'PENDÊNTES', 3),
+      folder('Clientes/Pendentes antigos', 'Pendentes antigos', 50),
+      folder('Arquivo/Pendentes', 'Pendentes', null),
+      folder('Nó/Pendentes', 'Pendentes', null, true),
+    ]
+    const imapFolders: ImapFolderConnect = () => {
+      sessions += 1
+      return Promise.resolve({
+        list: () => Promise.resolve(entries),
+        recent: () => Promise.reject(new Error('não usado')),
+        move: () => Promise.reject(new Error('não usado')),
+        create: () => Promise.reject(new Error('não usado')),
+        rename: () => Promise.reject(new Error('não usado')),
+        delete: () => Promise.reject(new Error('não usado')),
+        close: () => Promise.resolve(),
+      })
+    }
+    const cached: string[] = []
+    const { service } = setup({ imap: imap.connect, imapFolders, onFoldersCached: (accountId) => void cached.push(accountId) })
+    expect(service.pendentesEmCache()).toBeNull()
+    const id = await addConnected(service)
+    // A conta conectou, mas o LIST ainda não foi pedido: nada em cache e nenhuma sessão das pastas.
+    expect(service.pendentesEmCache()).toBeNull()
+    expect(sessions).toBe(0)
+    const listed = await service.listFolders(id)
+    expect(listed.ok).toBe(true)
+    expect(sessions).toBe(1)
+    // O LIST novo ficou guardado: o aviso sai uma vez; o LIST lido do cache não avisa de novo.
+    expect(cached).toEqual([id])
+    expect(service.pendentesEmCache()).toBe(7)
+    expect(service.pendentesEmCache()).toBe(7)
+    await service.listFolders(id)
+    expect(sessions).toBe(1)
+    expect(cached).toEqual([id])
+    // Sem a pasta "Pendentes" no LIST guardado: null.
+    entries.splice(1, 2)
+    await service.listFolders(id, { fresh: true })
+    expect(cached).toEqual([id, id])
+    expect(service.pendentesEmCache()).toBeNull()
   })
 })
 

@@ -1,4 +1,5 @@
-// Agendas (contrato 12): junta as agendas Google e Microsoft, lê de agora −1 h a +24 h a cada 5 min, ao abrir o
+// Agendas (contrato 12): junta as agendas Google e Microsoft, lê do começo do dia (ou de agora −1 h, o que vier antes)
+// ao fim de amanhã a cada 5 min (contrato 134, D4: a tela Início mostra o dia inteiro e o "Amanhã"), ao abrir o
 // app, ao acordar o Mac e ao trocar de conta, e confere os avisos a cada 30 s (`alerts.ts`). Sem internet, usa a
 // última leitura, guardada em memória e em `userData/calendar-cache.json` (só os campos do evento, CA5, arquivo
 // 0600). Também decide de que evento é a gravação que começa (CA9) e o que a tela mostra ("Próximas" e a faixa).
@@ -27,6 +28,7 @@ import {
   type CalendarView,
 } from '../../shared/calendar'
 import type { MeetingCalendar } from '../../shared/meetings'
+import { fimDeAmanha, inicioDoDiaLocal } from '../../shared/inicio'
 import type { AppSettings } from '../../shared/settings-defaults'
 import { guardedFetch, type HttpFetch } from '../accounts/http'
 import { CalendarReadError, listGoogleCalendars, lookupGoogleEvent, readGoogleEvents, type CalendarRead, type EventLookup } from '../google/calendar'
@@ -36,11 +38,18 @@ import { confirmCancelled, dismissAlert, evaluateAlerts, rescheduled, type Alert
 export const CALENDAR_CACHE_FILE = 'calendar-cache.json'
 export const CALENDAR_REFRESH_MS = 5 * 60_000
 export const CALENDAR_TICK_MS = 30_000
-/** Janela lida (CA4): de agora −1 h a +24 h. */
+/** Janela lida (CA4): começa em agora −1 h, ou antes, no começo do dia (contrato 134, D4). */
 export const CALENDAR_WINDOW_BEFORE_MS = 3_600_000
-export const CALENDAR_WINDOW_AFTER_MS = 24 * 3_600_000
 /** "Gravar" de um evento vale para a gravação que começar até este tempo depois. */
 export const CALENDAR_PICK_MS = 2 * 60_000
+
+/**
+ * Contrato 134 (D4): a janela lida, `[min(começo do dia local, agora − 1 h), fim de amanhã local)`. Os avisos e
+ * "Próximas" continuam olhando só as 24 h seguintes (`upcomingEvents`); o resto é a agenda do dia da tela Início.
+ */
+export function calendarWindow(now: number, timeZone: string): { from: number; to: number } {
+  return { from: Math.min(inicioDoDiaLocal(now, timeZone), now - CALENDAR_WINDOW_BEFORE_MS), to: fimDeAmanha(now, timeZone) }
+}
 
 /** A conta, do ponto de vista da agenda. */
 export interface CalendarAccount {
@@ -60,7 +69,11 @@ export interface CalendarServiceDeps {
   notify: (notice: CalendarNotice) => void
   /** O que a tela mostra mudou. */
   onView: (view: CalendarView) => void
+  /** Contrato 134 (D4): o fim de cada leitura, mudando ou não a tela (a agenda do dia da tela Início relê). */
+  onRead?: () => void
   now?: () => number
+  /** Contrato 134 (D4): o fuso do começo do dia e do fim de amanhã (padrão: o do sistema). */
+  timeZone?: () => string
   /** Só contagens e erros, nunca título, participante ou token. */
   log?: (message: string) => void
 }
@@ -73,6 +86,11 @@ export interface CalendarService {
   /** Confere os avisos com a última leitura (o relógio andou). */
   tick(): Promise<void>
   view(): CalendarView
+  /**
+   * Contrato 134 (D4): os eventos da última leitura que cruzam `[from, to)`, das contas conectadas e das agendas
+   * escolhidas, uma cópia por convite (`dedupeEvents`). Cancelados e recusados vêm junto: quem usa filtra.
+   */
+  dayEvents(from: number, to: number): CalendarEvent[]
   /** As agendas de cada conta, para escolher em Configurações. */
   calendars(): Promise<CalendarListResult>
   /** "Gravar" de um evento (notificação, faixa ou "Próximas"): vale para a próxima gravação. */
@@ -115,6 +133,7 @@ const calendarKey = (provider: CalendarProvider, calendarId: string): string => 
 
 export function createCalendarService(deps: CalendarServiceDeps): CalendarService {
   const now = deps.now ?? Date.now
+  const timeZone = deps.timeZone ?? (() => Intl.DateTimeFormat().resolvedOptions().timeZone)
   const fetch = guardedFetch(deps.fetch)
   const file = join(deps.dir, CALENDAR_CACHE_FILE)
   /** Última leitura boa de cada agenda (`provider:calendarId`). */
@@ -183,8 +202,7 @@ export function createCalendarService(deps: CalendarServiceDeps): CalendarServic
 
   async function readCalendar(provider: CalendarProvider, calendarId: string): Promise<CalendarRead> {
     const account = deps.accounts[provider]
-    const from = now() - CALENDAR_WINDOW_BEFORE_MS
-    const to = now() + CALENDAR_WINDOW_AFTER_MS
+    const { from, to } = calendarWindow(now(), timeZone())
     const read = (token: string): Promise<CalendarRead> =>
       provider === 'google' ? readGoogleEvents(fetch, token, calendarId, from, to) : readMicrosoftEvents(fetch, token, calendarId, from, to, account.email())
     try {
@@ -290,6 +308,7 @@ export function createCalendarService(deps: CalendarServiceDeps): CalendarServic
     if (fresh.size || calendars.length === 0) writeCache()
     if (calendars.length) deps.log?.(`[agenda] ${fresh.size}/${calendars.length} agenda(s) lida(s), ${read} evento(s)`)
     await verify(await evaluate(fresh, cancelledKeys))
+    if (!disposed) deps.onRead?.()
   }
 
   function refresh(): Promise<void> {
@@ -356,6 +375,10 @@ export function createCalendarService(deps: CalendarServiceDeps): CalendarServic
     tick,
 
     view,
+
+    dayEvents(from, to) {
+      return currentEvents().filter((event) => Date.parse(event.end) > from && Date.parse(event.start) < to)
+    },
 
     async calendars() {
       const calendars: CalendarListItem[] = []

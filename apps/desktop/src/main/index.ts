@@ -69,6 +69,8 @@ import { funilMarkdown } from './funil/markdown'
 import { createFunilService, type FunilService } from './funil/service'
 import { createFunilStore } from './funil/store'
 import { registerTarefasIpc } from './tarefas/ipc'
+import { registerInicioIpc } from './inicio/ipc'
+import { createInicioService, createMacDay, type InicioService } from './inicio/service'
 import { createAvisoHoje } from './tarefas/hoje'
 import { avisoMostrado, createDestinoPendente } from './tarefas/lembretes'
 import { tarefasMarkdown } from './tarefas/markdown'
@@ -1012,6 +1014,8 @@ interface AppServices {
   funilProposta: FunilPropostaIpcDeps
   /** Contrato 122: as tarefas (`tarefas.json`), com os lembretes no tick das Automações. */
   tarefas: TarefasService
+  /** Contrato 134: a view da tela Início (agenda do dia das contas e do Mac, pendências), só leitura. */
+  inicio: InicioService
   /**
    * Contrato 124 (R35, D11): a migração única do próximo passo e dos lembretes para tarefas, no boot, antes do
    * bloqueio, do IPC e das Automações. Nunca lança; a falha vai ao log (só o passo) e o app segue.
@@ -1213,6 +1217,14 @@ function createAppServices(userData: string): AppServices {
     ...devLog,
   })
   mcpRef.current = mcp
+  // Contrato 134: a tela Início nasce depois da agenda; o WhatsApp, o email e a agenda avisam por aqui (bloqueado, nada).
+  const inicioRef: { current: InicioService | null } = { current: null }
+  const inicioChanged = (): void => {
+    if (!lockService?.isLocked()) inicioRef.current?.changed()
+  }
+  const inicioMacRead = (): void => {
+    if (!lockService?.isLocked()) inicioRef.current?.macRead()
+  }
   // WhatsApp pessoal (contrato 24): desligado por padrão; o serviço é processo filho, só depois de "Instalar" e
   // "Ligar". No smoke, o cliente falso (`backend_fake.py`) e um índice de pacotes falso numa pasta local: nenhum
   // neonize, nenhuma rede, nenhum número de verdade.
@@ -1273,6 +1285,8 @@ function createAppServices(userData: string): AppServices {
     // Contrato 40: a notificação sai também com o app bloqueado (sem o texto); o número do Dock é relido.
     onMessage: (message, chatName) => {
       if (!lockService?.isLocked()) broadcast(appWindows(), 'scribe:whatsapp-message', { message, chatName })
+      // Contrato 134: as pendências do WhatsApp na tela Início.
+      inicioChanged()
       notifyWhatsApp(message, chatName).catch((error: unknown) => console.error('[whatsapp] notificação:', error))
       refreshWhatsAppBadge()
     },
@@ -1321,7 +1335,11 @@ function createAppServices(userData: string): AppServices {
     },
     onMessagesChanged: (accountId) => {
       if (!lockService?.isLocked()) broadcast(appWindows(), 'scribe:email-changed', { accountId })
+      // Contrato 134: as pastas mudaram (ou a lista): os "Pendentes" do Início, pelo `LIST` guardado.
+      inicioChanged()
     },
+    // Contrato 134 (D8): um `LIST` novo guardado traz os "Pendentes" da tela Início sem esperar outro sincronismo.
+    onFoldersCached: () => inicioChanged(),
     // Contrato 56: a conta removida leva os lotes do Assistente. Contrato 62: e as linhas dela no registro de convites
     // (os eventos que estão na agenda ficam).
     onAccountRemoved: (accountId) => {
@@ -1878,9 +1896,30 @@ function createAppServices(userData: string): AppServices {
       void inviteService.reconcileAll()
       if (!lockService?.isLocked()) broadcast(appWindows(), 'scribe:calendar-state', view)
     },
+    // Contrato 134 (D4): cada leitura relê a agenda do dia da tela Início.
+    onRead: inicioChanged,
+    timeZone,
     ...devLog,
   })
   calendarService = calendar
+  // Contrato 134 (D3, D6): a tela Início. O dia do Calendário do Mac fica 5 min em memória, esquecido na volta do foco
+  // à janela e depois do "Conceder"; a view só vai às janelas desbloqueado.
+  const macDay = createMacDay({ calendar: macCalendar, reads: calendarReads, packaged: macCalendarFixture ? true : app.isPackaged, onRead: inicioMacRead })
+  app.on('browser-window-focus', () => macDay.invalidate())
+  const inicio = createInicioService({
+    calendar,
+    macDay,
+    meetings,
+    whatsapp,
+    email,
+    profiles: () => [google.status().profile, microsoft.status().profile],
+    timeZone,
+    onChange: (view) => {
+      if (!lockService?.isLocked()) broadcast(appWindows(), 'scribe:inicio-changed', view)
+    },
+    ...devLog,
+  })
+  inicioRef.current = inicio
   // Contrato 27: a extensão do Meet manda nomes e eventos de fala. Vai às janelas também com o app bloqueado: a
   // gravação continua no bloqueio e o renderer carimba cada evento quando ele chega. Nada volta à extensão.
   // Contrato 48: cada mudança também passa pelo aviso "Começar a transcrever" (a janela dele não recebe o evento).
@@ -2118,6 +2157,7 @@ function createAppServices(userData: string): AppServices {
     funnel,
     funilProposta: { funnel, proposals: funilPropostas, store: funilStore, meetings, onChange: notifyProposta },
     tarefas,
+    inicio,
     async migrarTarefas() {
       try {
         const result = await migrarTarefas({
@@ -2318,6 +2358,7 @@ function registerIpc(services: AppServices): void {
   handle('scribe:capture-mode', appOrigin, () => (smoke ? 'synthetic' : 'real'))
   registerFunilIpc({ appOrigin, funil: services.funil, proposta: services.funilProposta, log: (message) => console.error(message) })
   registerTarefasIpc({ appOrigin, tarefas: services.tarefas, log: (message) => console.error(message) })
+  registerInicioIpc({ appOrigin, inicio: services.inicio })
   handle('scribe:meetings-list', appOrigin, () => meetings.list())
   handle('scribe:meetings-get', appOrigin, (_event, { id }) => meetings.get(id))
   handle('scribe:meetings-create', appOrigin, async (_event, input) => {
