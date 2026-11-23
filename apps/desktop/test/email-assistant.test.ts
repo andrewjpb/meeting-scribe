@@ -144,7 +144,8 @@ describe('EMAILS.md e as mensagens do cache (CA1, CA5)', () => {
     expect(overview).toContain('1 de 2 pendentes')
     const file = readFileSync(join(dir, written[0] ?? ''), 'utf8')
     expect(file).toContain('- Citar como: [Email · Marina Rocha · 19/11 09:48]')
-    expect(file).toContain('- Anexos: notas.csv')
+    // Contrato 147 (R2): um anexo por linha, com índice, tipo e tamanho.
+    expect(file).toContain('- Anexo 1: notas.csv · text/csv · 40 bytes')
     // O corpo é material: citado, sem cerca de código (nenhum bloco de ação nasce dele) e sem abrir seção.
     expect(file.split('\n').some((line) => line.startsWith('```'))).toBe(false)
     expect(file).toContain("> '''lap-acao")

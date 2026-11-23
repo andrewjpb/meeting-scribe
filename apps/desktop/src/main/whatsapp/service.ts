@@ -61,7 +61,7 @@ import {
   type WhatsAppTranscribeResult,
 } from '../../shared/whatsapp'
 import { createBridgeClient, probeInstance, WhatsAppServiceError, type BridgeClient, type WhatsAppHealth } from './client'
-import { dayLines, exportChats, exportRecentWith, recentMessages, type ExportCache } from './export'
+import { dayLines, exportChats, exportRecentWith, recentMessages, savedTranscripts, type ExportCache } from './export'
 import { draftInput } from './draft'
 import { copyBridge, installBridge, isInstalled, removeBridge, WHATSAPP_PATHS, type Exec, type PackageIndex } from './install'
 import { killBridgePid, startBridge, type BridgeBackend, type BridgeProcess, type SpawnBridge } from './process'
@@ -192,6 +192,8 @@ export interface WhatsAppService {
   findChat(chatId: string): Promise<WhatsAppChat | null>
   /** Contrato 32 (Detalhes): as últimas `max` mensagens da conversa. Só leitura; nunca zera as não lidas. */
   lastMessages(chatId: string, max: number): Promise<WhatsAppMessage[]>
+  /** Contrato 147: a transcrição já guardada de um áudio (`transcripts.json`), ou `null`. Nunca baixa nem transcreve. */
+  savedTranscript(chatId: string, messageId: string): Promise<string | null>
   /** O preload registrou um clique de "Enviar" desta janela. */
   registerClick(senderId: number, token: unknown): void
   /**
@@ -733,6 +735,10 @@ export function createWhatsAppService(deps: WhatsAppServiceDeps): WhatsAppServic
       return recentMessages(client, chatId, 0, max, now() + 1)
     },
 
+    savedTranscript(chatId, messageId) {
+      return transcripts.get(chatId, messageId).catch(() => null)
+    },
+
     registerClick(senderId, token) {
       guard.register(senderId, token)
     },
@@ -878,7 +884,7 @@ export function createWhatsAppService(deps: WhatsAppServiceDeps): WhatsAppServic
       if (!chat) return { ok: false, error: 'chat' }
       const messages = await current.messages(chat.id, { before: now() + 1, limit: 40 }).catch((): WhatsAppMessage[] => [])
       const meeting = parsed.data.meetingId ? await deps.meeting(parsed.data.meetingId).catch(() => null) : null
-      const result = await deps.draft(draftInput(chat.name, parsed.data.instruction, messages, meeting))
+      const result = await deps.draft(draftInput(chat.name, parsed.data.instruction, messages, meeting, await savedTranscripts(messages, transcripts)))
       if (result.ok) return { ok: true, text: result.content }
       return { ok: false, error: result.error === 'format' ? 'failed' : result.error }
     },
@@ -905,12 +911,12 @@ export function createWhatsAppService(deps: WhatsAppServiceDeps): WhatsAppServic
       const ids = chatIds.filter((id) => chatIdSchema.safeParse(id).success).slice(0, WHATSAPP_SCOPE_CHATS_MAX)
       const list = await client.chats()
       listRead = { at: now(), chats: list }
-      return exportChats(client, folder, ids, days, now(), exportCache, list)
+      return exportChats(client, folder, ids, days, now(), exportCache, list, transcripts)
     },
 
     async exportRecent(folder) {
       if (!client || health?.state !== 'connected') return []
-      const result = await exportRecentWith(client, folder, now(), exportCache)
+      const result = await exportRecentWith(client, folder, now(), exportCache, transcripts)
       listRead = { at: now(), chats: result.chats }
       return result.files
     },
@@ -926,7 +932,7 @@ export function createWhatsAppService(deps: WhatsAppServiceDeps): WhatsAppServic
       if (!link?.useInSummary) return []
       const found = await deps.meeting(meetingId).catch(() => null)
       if (!found) return []
-      return dayLines(client, link.chatId, found.meeting.startedAt).catch(() => [])
+      return dayLines(client, link.chatId, found.meeting.startedAt, transcripts).catch(() => [])
     },
 
     async removeMeeting(meetingId) {

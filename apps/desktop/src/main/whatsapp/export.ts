@@ -7,6 +7,11 @@
 // 3 000 mensagens, as mais recentes primeiro), no mesmo formato e na mesma pasta, com o id da conversa, as não lidas,
 // quem mandou a última e se você respondeu depois da última mensagem do outro lado ("pendente de resposta"), e um
 // `CONVERSAS-WHATSAPP.md` com uma linha por conversa.
+//
+// Contrato 147 (R1): nos arquivos do Assistente, a mídia leva o id da mensagem ("[anexo: imagem · 120 KB · mídia <id>]")
+// ou "indisponível" quando o serviço não guardou as chaves; o áudio já transcrito pelo botão da tela sai com o texto
+// guardado ("[áudio transcrito: "…"]"), lido do `transcripts.json` sem rede. Os outros usos da linha (rascunho,
+// Detalhes, atendimento, resumo de reunião) ganham a transcrição, mas não o id: eles não têm como abrir a mídia.
 import { chmod, readdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
@@ -14,6 +19,7 @@ import {
   mediaLabel,
   WHATSAPP_EXPORT_MESSAGES_MAX,
   WHATSAPP_EXPORT_PREFIX,
+  WHATSAPP_MESSAGE_ID_PATTERN,
   WHATSAPP_OVERVIEW_FILE,
   WHATSAPP_RECENT_CHATS_MAX,
   WHATSAPP_RECENT_DAYS,
@@ -44,9 +50,56 @@ export function oneLine(text: string): string {
   return text.replace(/\s+/g, ' ').trim().replace(/^#+/, (marks) => marks.replace(/#/g, '＃'))
 }
 
-/** Uma mensagem: "[16/11 14:05] Ana: texto", com a mídia como "[anexo: imagem · 120 KB]". */
-export function messageLine(message: WhatsAppMessage): string {
-  const parts = [message.media ? `[anexo: ${mediaLabel(message.media)}]` : '', oneLine(message.text)].filter(Boolean)
+/** Contrato 147: a transcrição guardada vai até aqui na linha (o resto vira reticências). */
+export const TRANSCRIPT_LINE_MAX = 2000
+
+/** Contrato 147: as transcrições já guardadas (`transcripts.json`), só leitura e sem rede. */
+export interface SavedTranscripts {
+  get(chatId: string, messageId: string): Promise<string | null>
+  /** Muda quando uma transcrição entra ou o arquivo sai: o export reescreve as conversas. */
+  version?(): number
+}
+
+/** As transcrições guardadas dos áudios destas mensagens, por id. Só os áudios são procurados; falha vale como nenhuma. */
+export async function savedTranscripts(messages: readonly WhatsAppMessage[], transcripts?: Pick<SavedTranscripts, 'get'>): Promise<Map<string, string>> {
+  const found = new Map<string, string>()
+  if (!transcripts) return found
+  for (const message of messages) {
+    if (message.type !== 'audio' && message.media?.kind !== 'audio') continue
+    const text = await transcripts.get(message.chatId, message.id).catch(() => null)
+    if (text?.trim()) found.set(message.id, text)
+  }
+  return found
+}
+
+/** `[áudio transcrito: "texto"]`, numa linha, com as aspas trocadas e cortado em 2 000 caracteres. */
+export function transcriptTag(text: string): string {
+  const line = oneLine(text).replace(/"/g, "'")
+  return `[áudio transcrito: "${line.length > TRANSCRIPT_LINE_MAX ? `${line.slice(0, TRANSCRIPT_LINE_MAX - 1)}…` : line}"]`
+}
+
+export interface MessageLineOptions {
+  /** A transcrição guardada do áudio desta mensagem. */
+  transcript?: string | null | undefined
+  /** Só nos arquivos do Assistente: a mídia leva o id da mensagem (ou "indisponível"). */
+  mediaId?: boolean | undefined
+}
+
+function mediaTag(message: WhatsAppMessage, options: MessageLineOptions): string {
+  if (options.transcript?.trim()) return transcriptTag(options.transcript)
+  if (!message.media) return ''
+  if (!options.mediaId) return `[anexo: ${mediaLabel(message.media)}]`
+  // Um id fora do padrão do serviço não entra na linha (não abre linha nem colchete falso): vale como indisponível.
+  const available = message.media.downloadable !== false && WHATSAPP_MESSAGE_ID_PATTERN.test(message.id)
+  return `[anexo: ${mediaLabel(message.media)} · ${available ? `mídia ${message.id}` : 'indisponível'}]`
+}
+
+/**
+ * Uma mensagem: "[16/11 14:05] Ana: texto", com a mídia como "[anexo: imagem · 120 KB]" (no Assistente, com
+ * "· mídia <id>") e o áudio já transcrito como "[áudio transcrito: "…"]".
+ */
+export function messageLine(message: WhatsAppMessage, options: MessageLineOptions = {}): string {
+  const parts = [mediaTag(message, options), oneLine(message.text)].filter(Boolean)
   return `[${stampLabel(message.at)}] ${oneLine(message.author) || (message.fromMe ? 'Você' : 'Contato')}: ${parts.join(' ') || '(sem texto)'}`
 }
 
@@ -74,7 +127,13 @@ export function replyState(chat: Pick<WhatsAppChat, 'lastMessage'>, messages: re
   return { lastFrom: last.fromMe ? 'Você' : oneLine(last.author) || 'Contato', lastAt: last.at, pending: !last.fromMe }
 }
 
-export function chatMarkdown(chat: Pick<WhatsAppChat, 'id' | 'name' | 'kind'> & Partial<Pick<WhatsAppChat, 'unread' | 'lastMessage'>>, messages: readonly WhatsAppMessage[], days: number): string {
+/** O `.md` de uma conversa para o Assistente: a mídia com o id da mensagem e os áudios com a transcrição guardada. */
+export function chatMarkdown(
+  chat: Pick<WhatsAppChat, 'id' | 'name' | 'kind'> & Partial<Pick<WhatsAppChat, 'unread' | 'lastMessage'>>,
+  messages: readonly WhatsAppMessage[],
+  days: number,
+  transcripts: ReadonlyMap<string, string> = new Map(),
+): string {
   const reply = replyState({ lastMessage: chat.lastMessage ?? null }, messages)
   const lines = [
     `# WhatsApp: ${oneLine(chat.name)}`,
@@ -92,7 +151,7 @@ export function chatMarkdown(chat: Pick<WhatsAppChat, 'id' | 'name' | 'kind'> & 
     '',
     '## Mensagens',
     '',
-    ...(messages.length ? messages.map(messageLine) : ['Nenhuma mensagem no período.']),
+    ...(messages.length ? messages.map((message) => messageLine(message, { transcript: transcripts.get(message.id), mediaId: true })) : ['Nenhuma mensagem no período.']),
   ]
   return `${lines.join('\n')}\n`
 }
@@ -167,20 +226,30 @@ const dayKey = (at: number): string => fullStamp(at).slice(0, 10)
  * cache, a conversa sem mensagem nova desde o último export (o mesmo `lastMessage` da lista), no mesmo dia, fica
  * como está; as que saíram da lista não são apagadas aqui (quem chama remove o que sobrou).
  */
-async function exportSet(client: Pick<BridgeClient, 'messages'>, folder: string, chats: readonly WhatsAppChat[], days: number, share: number, now: number, cache?: ExportCache): Promise<{ files: string[]; read: number }> {
+async function exportSet(
+  client: Pick<BridgeClient, 'messages'>,
+  folder: string,
+  chats: readonly WhatsAppChat[],
+  days: number,
+  share: number,
+  now: number,
+  cache?: ExportCache,
+  transcripts?: SavedTranscripts,
+): Promise<{ files: string[]; read: number }> {
   const known = cache ? (cache.get(folder) ?? new Map<string, { key: string; share: number; count: number }>()) : null
   if (cache && known) cache.set(folder, known)
   const present = new Set(await readdir(folder).catch(() => [] as string[]))
   let read = 0
   const files = await inParallel(chats, EXPORT_PARALLEL, async (chat) => {
     const name = exportFileName(chat)
-    const key = `${chat.lastMessage?.at ?? 0}:${chat.lastMessage?.id ?? ''}:${chat.unread}:${days}:${dayKey(now)}`
+    // Contrato 147: uma transcrição nova (ou o arquivo apagado) também reescreve a conversa.
+    const key = `${chat.lastMessage?.at ?? 0}:${chat.lastMessage?.id ?? ''}:${chat.unread}:${days}:${dayKey(now)}:${transcripts?.version?.() ?? 0}`
     const before = known?.get(name)
     const same = before !== undefined && before.key === key && (before.share === share || (before.count < before.share && before.count <= share))
     if (same && present.has(name)) return name
     const messages = await recentMessages(client, chat.id, now - days * DAY_MS, share, now + 1)
     read++
-    await writeFileAtomic(join(folder, name), chatMarkdown(chat, messages, days))
+    await writeFileAtomic(join(folder, name), chatMarkdown(chat, messages, days, await savedTranscripts(messages, transcripts)))
     known?.set(name, { key, share, count: messages.length })
     return name
   })
@@ -191,7 +260,16 @@ async function exportSet(client: Pick<BridgeClient, 'messages'>, folder: string,
  * Escreve na pasta de escopo um `.md` por conversa escolhida (até 10), dos últimos `days` dias, com no máximo
  * 2 000 mensagens no total (divididas entre as conversas). Devolve os nomes escritos.
  */
-export async function exportChats(client: Pick<BridgeClient, 'messages' | 'chats'>, folder: string, chatIds: readonly string[], days: number, now = Date.now(), cache?: ExportCache, list?: readonly WhatsAppChat[]): Promise<string[]> {
+export async function exportChats(
+  client: Pick<BridgeClient, 'messages' | 'chats'>,
+  folder: string,
+  chatIds: readonly string[],
+  days: number,
+  now = Date.now(),
+  cache?: ExportCache,
+  list?: readonly WhatsAppChat[],
+  transcripts?: SavedTranscripts,
+): Promise<string[]> {
   if (!chatIds.length) return []
   const known = new Map((list ?? (await client.chats())).map((chat) => [chat.id, chat]))
   const chosen = chatIds.flatMap((id) => {
@@ -199,7 +277,7 @@ export async function exportChats(client: Pick<BridgeClient, 'messages' | 'chats
     return chat ? [chat] : []
   })
   if (!chosen.length) return []
-  return (await exportSet(client, folder, chosen, days, Math.floor(WHATSAPP_EXPORT_MESSAGES_MAX / chosen.length), now, cache)).files
+  return (await exportSet(client, folder, chosen, days, Math.floor(WHATSAPP_EXPORT_MESSAGES_MAX / chosen.length), now, cache, transcripts)).files
 }
 
 /** Uma linha do `CONVERSAS-WHATSAPP.md`. */
@@ -223,7 +301,7 @@ export function overviewLine(chat: WhatsAppChat, reply: ChatReplyState, file: st
  * divididas entre elas, e o `CONVERSAS-WHATSAPP.md`. Uma leitura só da lista (`chats()`, devolvida para os cartões);
  * com o cache, só as conversas com mensagem nova são lidas e reescritas. Devolve os nomes (o resumo por último).
  */
-export async function exportRecentWith(client: Pick<BridgeClient, 'messages' | 'chats'>, folder: string, now = Date.now(), cache?: ExportCache): Promise<ExportResult> {
+export async function exportRecentWith(client: Pick<BridgeClient, 'messages' | 'chats'>, folder: string, now = Date.now(), cache?: ExportCache, transcripts?: SavedTranscripts): Promise<ExportResult> {
   const since = now - WHATSAPP_RECENT_DAYS * DAY_MS
   const all = await client.chats()
   const chosen = all
@@ -232,7 +310,7 @@ export async function exportRecentWith(client: Pick<BridgeClient, 'messages' | '
     .slice(0, WHATSAPP_RECENT_CHATS_MAX)
   if (!chosen.length) return { files: [], chats: all, read: 0 }
   const share = Math.max(1, Math.floor(WHATSAPP_RECENT_MESSAGES_MAX / chosen.length))
-  const { files, read } = await exportSet(client, folder, chosen, WHATSAPP_RECENT_DAYS, share, now, cache)
+  const { files, read } = await exportSet(client, folder, chosen, WHATSAPP_RECENT_DAYS, share, now, cache, transcripts)
   const lines = chosen.map((chat, at) => overviewLine(chat, replyState(chat), files[at] ?? exportFileName(chat)))
   const pending = lines.filter((line) => line.includes(' · pendente de resposta: sim · ')).length
   const overview = [
@@ -247,18 +325,22 @@ export async function exportRecentWith(client: Pick<BridgeClient, 'messages' | '
 }
 
 /** `exportRecentWith`, só os nomes (o contrato 25 sem cache). */
-export async function exportRecent(client: Pick<BridgeClient, 'messages' | 'chats'>, folder: string, now = Date.now(), cache?: ExportCache): Promise<string[]> {
-  return (await exportRecentWith(client, folder, now, cache)).files
+export async function exportRecent(client: Pick<BridgeClient, 'messages' | 'chats'>, folder: string, now = Date.now(), cache?: ExportCache, transcripts?: SavedTranscripts): Promise<string[]> {
+  return (await exportRecentWith(client, folder, now, cache, transcripts)).files
 }
 
-/** As mensagens do dia (local) de `startedAt` numa conversa, até 500, como linhas para o resumo e a análise. */
-export async function dayLines(client: Pick<BridgeClient, 'messages'>, chatId: string, startedAt: string): Promise<string[]> {
+/**
+ * As mensagens do dia (local) de `startedAt` numa conversa, até 500, como linhas para o resumo e a análise. Contrato
+ * 147: com a transcrição guardada dos áudios, sem o id da mídia.
+ */
+export async function dayLines(client: Pick<BridgeClient, 'messages'>, chatId: string, startedAt: string, transcripts?: Pick<SavedTranscripts, 'get'>): Promise<string[]> {
   const start = new Date(startedAt)
   if (Number.isNaN(start.getTime())) return []
   const dayStart = new Date(start.getFullYear(), start.getMonth(), start.getDate()).getTime()
   const messages = await recentMessages(client, chatId, dayStart, 500, dayStart + DAY_MS)
+  const saved = await savedTranscripts(messages, transcripts)
   return messages.map((message) => {
     const date = new Date(message.at)
-    return messageLine(message).replace(/^\[[^\]]+\]/, `[${two(date.getHours())}:${two(date.getMinutes())}]`)
+    return messageLine(message, { transcript: saved.get(message.id) }).replace(/^\[[^\]]+\]/, `[${two(date.getHours())}:${two(date.getMinutes())}]`)
   })
 }

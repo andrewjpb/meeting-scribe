@@ -21,6 +21,7 @@ import {
   isSent,
   type EmailAccountStatus,
   type EmailAddress,
+  type EmailAttachmentInfo,
   type EmailBody,
   type EmailMessage,
 } from '../../shared/email'
@@ -235,6 +236,23 @@ export function overviewMarkdown(caches: readonly EmailCache[], entries: readonl
   return `${lines.join('\n')}\n`
 }
 
+/** "240 KB", "1,4 MB", "12 bytes". */
+function sizeLabel(bytes: number): string {
+  if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1).replace('.', ',')} MB`
+  if (bytes >= 1024) return `${Math.round(bytes / 1024)} KB`
+  return `${bytes} bytes`
+}
+
+/**
+ * Contrato 147 (R2): um anexo por linha, "- Anexo 1: contrato.pdf · application/pdf · 240 KB", na ordem de
+ * `EmailBody.attachments` (as imagens embutidas no corpo inclusive). O índice é a posição + 1: o mesmo email tem sempre
+ * os mesmos índices.
+ */
+export function attachmentLine(item: EmailAttachmentInfo, index: number): string {
+  const type = emailOneLine(item.contentType.split(';')[0] ?? '') || 'tipo desconhecido'
+  return `- Anexo ${index + 1}: ${emailOneLine(item.filename ?? '') || 'sem nome'} · ${type} · ${sizeLabel(item.size)}`
+}
+
 /** O `.md` de uma mensagem: cabeçalho, estado e o corpo citado. */
 export function messageMarkdown(entry: Pick<EmailEntry, 'ref' | 'status' | 'message' | 'pending' | 'reminder'>, body: EmailBody, now: number, place: string | null = null): string {
   const { message } = entry
@@ -253,7 +271,7 @@ export function messageMarkdown(entry: Pick<EmailEntry, 'ref' | 'status' | 'mess
     `- Lida: ${message.seen ? 'sim' : 'não'}`,
     ...(!isSent(message, entry.status) ? [`- Pendente de resposta: ${entry.pending ? 'sim' : 'não'}`] : []),
     ...(entry.reminder ? [`- Lembrete marcado: ${entry.reminder}`] : []),
-    ...(body.attachments.length ? [`- Anexos: ${body.attachments.map((item) => emailOneLine(item.filename ?? 'sem nome')).join(', ')}`] : []),
+    ...body.attachments.map(attachmentLine),
     `- Citar como: [Email · ${senderName(message.from[0])} · ${emailStamp(message.date)}]`,
     '',
     '## Corpo',

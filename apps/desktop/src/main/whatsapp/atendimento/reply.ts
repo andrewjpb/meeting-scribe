@@ -8,7 +8,7 @@ import { ATENDIMENTO_REASON_MAX, type AtendimentoAgent, type AtendimentoBinding 
 import { escapeTurnText } from '../../claude-cli/prompt'
 import type { OneShotParse } from '../../claude-cli/summary'
 import { runClaudeOneShot, type OneShotEngine } from '../../meetings/claude-one-shot'
-import { oneLine, stampLabel } from '../export'
+import { oneLine, stampLabel, transcriptTag } from '../export'
 
 /** Pasta vazia do ACP do atendimento, dentro de `userData/claude-cwd`. */
 export const ACP_ATENDIMENTO_DIR = 'whatsapp-atendimento'
@@ -19,7 +19,8 @@ export const REPLY_TEXT_MAX = 1000
 export const REPLY_BLOCK_START = '<conversa>'
 export const REPLY_BLOCK_END = '</conversa>'
 
-export type ReplyMessage = { id: string; fromMe: boolean; author: string; at: string; type: string; text: string }
+/** Contrato 147: `transcript` é a transcrição já guardada de um áudio (vai no histórico; a mídia pendente continua passando). */
+export type ReplyMessage = { id: string; fromMe: boolean; author: string; at: string; type: string; text: string; transcript?: string | undefined }
 export type ReplyDecision = { acao: 'responder'; texto: string } | { acao: 'passar'; motivo: string }
 export type ReplyOutcome = ReplyDecision | { acao: 'falhou'; motivo: string }
 
@@ -101,7 +102,8 @@ export function buildReplyPrompt(input: ReplyInput): { systemPrompt: string; inp
     const stamp = Number.isNaN(at) ? '??/?? ??:??' : stampLabel(at)
     const author = oneLine(message.author) || (message.fromMe ? ownerName : input.contactName) || 'Contato'
     const media = mediaOf(message.type)
-    const body = [media ? `[anexo: ${media.rotulo}]` : '', oneLine(message.text)].filter(Boolean).join(' ') || '(sem texto)'
+    const tag = media && message.type === 'audio' && message.transcript?.trim() ? transcriptTag(message.transcript) : media ? `[anexo: ${media.rotulo}]` : ''
+    const body = [tag, oneLine(message.text)].filter(Boolean).join(' ') || '(sem texto)'
     return `${pending.has(message.id) ? '(pendente) ' : ''}[${stamp}] ${oneLine(author)}: ${body}`
   })
   return {
