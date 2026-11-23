@@ -15,7 +15,7 @@ import { EMAIL_SIGNATURE_MAX, type EmailSignature } from '../../shared/email-sig
 import { EMAIL_RULES_MAX, emailRuleSchema, type EmailRule } from '../../shared/email-rules'
 import { CLAUDE_CONNECTOR_NAME_MAX, CLAUDE_CONNECTORS_MAX, MCP_TOOL_NAME_MAX, MCP_TOOL_POLICIES, MCP_TOOLS_MAX, type ClaudeConnectorPrefs } from '../../shared/mcp'
 import { EMAIL_ACCOUNT_ID_PATTERN, EMAIL_ADDRESS_PATTERN, EMAIL_FOLDER_PATH_MAX, EMAIL_HOST_PATTERN, EMAIL_POLL_MINUTES, EMAIL_PROTOCOLS, EMAIL_SECURITY, type EmailAccount } from '../../shared/email'
-import { AGENT_PROFILES, CALENDAR_IDS_MAX, CALENDAR_LEAD_MINUTES, CHAT_MODELS, CLAUDE_MODELS, CLAUDE_TRANSPORTS, CLOSE_BEHAVIORS, DAILY_RUN_LIMIT_OPTIONS, DEFAULT_SETTINGS, FUNIL_DIAS_ESFRIAR_MAX, FUNIL_DIAS_ESFRIAR_MIN, LANGUAGE_CODES, LOCK_AFTER_MINUTES, TAREFAS_HORA_RE, THEME_SETTINGS, TRANSLATION_ENGINES, type AppSettings, type SettingsPatch } from '../../shared/settings-defaults'
+import { AGENT_PROFILES, CALENDAR_IDS_MAX, CALENDAR_LEAD_MINUTES, CHAT_MODELS, CLAUDE_MODELS, CLAUDE_TRANSPORTS, CLOSE_BEHAVIORS, DAILY_RUN_LIMIT_OPTIONS, DEFAULT_SETTINGS, FUNIL_DIAS_ESFRIAR_MAX, FUNIL_DIAS_ESFRIAR_MIN, INICIO_TELAS, LANGUAGE_CODES, LOCK_AFTER_MINUTES, TAREFAS_HORA_RE, THEME_SETTINGS, TRANSLATION_ENGINES, type AppSettings, type SettingsPatch } from '../../shared/settings-defaults'
 // 73: comentários
 import { REDES_POLL_MINUTES } from '../../shared/settings-defaults'
 // fim 73
@@ -140,6 +140,28 @@ const lenientTarefasSchema = z
   })
   .catch(() => ({ ...D.tarefas }))
 
+/** Contrato 133 (inicio, D13): os cinco blocos da tela Início. */
+const inicioBlocosPatchSchema = z
+  .object({ agenda: z.boolean(), tarefas: z.boolean(), pendencias: z.boolean(), ultimaReuniao: z.boolean(), automacoes: z.boolean() })
+  .strict()
+/** Pelo renderer: a tela inicial e os cinco blocos, sempre juntos; qualquer outro valor recusa o pedido inteiro. */
+const inicioPatchSchema = z.object({ telaInicial: z.enum(INICIO_TELAS), blocos: inicioBlocosPatchSchema }).strict()
+/** No arquivo: cada campo à parte (cada bloco também); um valor inválido volta ao padrão dele sem levar os outros. */
+const lenientInicioSchema = z
+  .object({
+    telaInicial: z.enum(INICIO_TELAS).catch(D.inicio.telaInicial),
+    blocos: z
+      .object({
+        agenda: z.boolean().catch(D.inicio.blocos.agenda),
+        tarefas: z.boolean().catch(D.inicio.blocos.tarefas),
+        pendencias: z.boolean().catch(D.inicio.blocos.pendencias),
+        ultimaReuniao: z.boolean().catch(D.inicio.blocos.ultimaReuniao),
+        automacoes: z.boolean().catch(D.inicio.blocos.automacoes),
+      })
+      .catch(() => ({ ...D.inicio.blocos })),
+  })
+  .catch(() => ({ telaInicial: D.inicio.telaInicial, blocos: { ...D.inicio.blocos } }))
+
 const lenientSchema = z.object({
   translationEnabled: z.boolean().catch(D.translationEnabled),
   translationModel: modelIdSchema.catch(D.translationModel),
@@ -201,6 +223,7 @@ const lenientSchema = z.object({
   // fim 73
   funil: lenientFunilSchema,
   tarefas: lenientTarefasSchema,
+  inicio: lenientInicioSchema,
 })
 
 const patchSchema = z
@@ -258,6 +281,7 @@ const patchSchema = z
     // fim 73
     funil: funilPatchSchema,
     tarefas: tarefasPatchSchema,
+    inicio: inicioPatchSchema,
   })
   .partial()
   .strict()

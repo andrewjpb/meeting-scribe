@@ -67,6 +67,7 @@ describe('esquema de configurações (CA1)', () => {
       // fim 73
       funil: { detectarNasReunioes: true, diasEsfriar: 7, avisarEsfriadas: true },
       tarefas: { horaLembrete: '09:00', lembrarNoPrazo: true, avisoDiario: true, sugerirDasReunioes: true },
+      inicio: { telaInicial: 'inicio', blocos: { agenda: true, tarefas: true, pendencias: true, ultimaReuniao: true, automacoes: true } },
     })
     expect(parseSettings(undefined)).toEqual(DEFAULT_SETTINGS)
     expect(parseSettings({})).toEqual(DEFAULT_SETTINGS)
@@ -143,6 +144,7 @@ describe('esquema de configurações (CA1)', () => {
       // fim 73
       funil: { detectarNasReunioes: true, diasEsfriar: 7, avisarEsfriadas: true },
       tarefas: { horaLembrete: '07:45', lembrarNoPrazo: false, avisoDiario: true, sugerirDasReunioes: false },
+      inicio: { telaInicial: 'reunioes', blocos: { agenda: true, tarefas: false, pendencias: true, ultimaReuniao: false, automacoes: true } },
     }
     expect(parseSettings(saved)).toEqual(saved)
     // 73: comentários
@@ -189,7 +191,7 @@ describe('esquema de configurações (CA1)', () => {
   it('Claude CLI (contrato 05, CA1): motor, modelo e caminho com padrão próprio cada um', () => {
     // `settings.json` do contrato 04, sem os campos novos: carrega com os padrões deles e mantém o resto.
     const old = { translationEnabled: false, translationModel: 'gpt-oss-120b', sourceLanguage: 'es', targetLanguage: 'ja', echoCancellation: true, theme: 'dark', micDeviceId: null }
-    expect(parseSettings(old)).toEqual({ ...old, removeEcho: true, translationEngine: 'assemblyai', claudeModel: 'haiku', chatModel: 'sonnet', claudePath: null, claudeTransport: 'acp', agentProfile: 'claude', saveToFolder: true, audioFolder: null, summarizeOnStop: true, liveCards: false, whatsappInsights: true, whatsappAutoCorrect: false, whatsappNotifications: true, whatsappNotifyGroups: true, whatsappTypingSignal: false, identifySpeakers: false, meetSpeakers: true, meetingPrompt: true, navegadorPlugin: false, brandName: null, brandSubtitle: null, brandLogo: null, autoCheckUpdates: true, lockUseTouchId: false, lockAfterMinutes: 0, lockOnSystemLock: true, lockOnLaunch: false, saveToDrive: true, closeBehavior: 'tray', openAtLogin: false, scheduledRunsDailyLimit: 50, calendarAlerts: true, calendarLeadMinutes: 5, calendarNotRecordingAlert: true, calendarIds: { google: null, microsoft: null }, emailPollMinutes: 5, emailNotifications: true, emailCollapsed: [], emailFoldersCollapsed: [], emailRecentFolders: {}, inviteCalendarId: null, inviteAddOnAccept: true, inviteSuggest: false, claudeConnectors: {}, redesPollMinutes: 5, funil: { detectarNasReunioes: true, diasEsfriar: 7, avisarEsfriadas: true }, tarefas: { horaLembrete: '09:00', lembrarNoPrazo: true, avisoDiario: true, sugerirDasReunioes: true } })
+    expect(parseSettings(old)).toEqual({ ...old, removeEcho: true, translationEngine: 'assemblyai', claudeModel: 'haiku', chatModel: 'sonnet', claudePath: null, claudeTransport: 'acp', agentProfile: 'claude', saveToFolder: true, audioFolder: null, summarizeOnStop: true, liveCards: false, whatsappInsights: true, whatsappAutoCorrect: false, whatsappNotifications: true, whatsappNotifyGroups: true, whatsappTypingSignal: false, identifySpeakers: false, meetSpeakers: true, meetingPrompt: true, navegadorPlugin: false, brandName: null, brandSubtitle: null, brandLogo: null, autoCheckUpdates: true, lockUseTouchId: false, lockAfterMinutes: 0, lockOnSystemLock: true, lockOnLaunch: false, saveToDrive: true, closeBehavior: 'tray', openAtLogin: false, scheduledRunsDailyLimit: 50, calendarAlerts: true, calendarLeadMinutes: 5, calendarNotRecordingAlert: true, calendarIds: { google: null, microsoft: null }, emailPollMinutes: 5, emailNotifications: true, emailCollapsed: [], emailFoldersCollapsed: [], emailRecentFolders: {}, inviteCalendarId: null, inviteAddOnAccept: true, inviteSuggest: false, claudeConnectors: {}, redesPollMinutes: 5, funil: { detectarNasReunioes: true, diasEsfriar: 7, avisarEsfriadas: true }, tarefas: { horaLembrete: '09:00', lembrarNoPrazo: true, avisoDiario: true, sugerirDasReunioes: true }, inicio: { telaInicial: 'inicio', blocos: { agenda: true, tarefas: true, pendencias: true, ultimaReuniao: true, automacoes: true } } })
     expect(parseSettings({ translationEngine: 'claude-cli', claudeModel: 'sonnet' })).toMatchObject({ translationEngine: 'claude-cli', claudeModel: 'sonnet' })
     // Fora da lista cai no padrão: só `haiku` e `sonnet`, só os dois motores.
     expect(parseSettings({ translationEngine: 'openai' }).translationEngine).toBe('assemblyai')
@@ -429,6 +431,66 @@ describe('esquema de configurações (CA1)', () => {
     expect(parseSettings({ tarefas: null }).tarefas).toEqual(DEFAULT_SETTINGS.tarefas)
   })
 
+  it('Início (contrato 133, D13): padrão abre no Início com os cinco blocos; seis linhas na aba Geral, antes do funil', () => {
+    expect(DEFAULT_SETTINGS.inicio).toEqual({ telaInicial: 'inicio', blocos: { agenda: true, tarefas: true, pendencias: true, ultimaReuniao: true, automacoes: true } })
+    expect(Object.isFrozen(DEFAULT_SETTINGS.inicio.blocos)).toBe(true)
+    const index = settingsIndex('Claude')
+    const rows = index.filter((entry) => entry.section === 'Início')
+    expect(rows.map((entry) => [entry.tab, entry.name])).toEqual([
+      ['geral', 'Tela inicial'],
+      ['geral', 'Mostrar agenda de hoje'],
+      ['geral', 'Mostrar tarefas'],
+      ['geral', 'Mostrar pendências'],
+      ['geral', 'Mostrar última reunião'],
+      ['geral', 'Mostrar automações'],
+    ])
+    const lastJanela = index.map((entry) => entry.section).lastIndexOf('Janela')
+    expect(index[lastJanela + 1]?.name).toBe('Tela inicial')
+    expect(index[lastJanela + 7]?.section).toBe('Funil de vendas')
+  })
+
+  it('Início no arquivo (contrato 133, D13): arquivo antigo vem com os padrões; lixo volta ao padrão de cada campo', () => {
+    const old = { ...DEFAULT_SETTINGS, theme: 'dark' } as Record<string, unknown>
+    delete old['inicio']
+    expect(parseSettings(old)).toEqual({ ...DEFAULT_SETTINGS, theme: 'dark' })
+    const blocos = { agenda: false, tarefas: true, pendencias: false, ultimaReuniao: true, automacoes: false }
+    expect(parseSettings({ inicio: { telaInicial: 'reunioes', blocos } }).inicio).toEqual({ telaInicial: 'reunioes', blocos })
+    // Tela desconhecida volta ao Início sem levar os blocos.
+    expect(parseSettings({ inicio: { telaInicial: 'tarefas', blocos } }).inicio).toEqual({ telaInicial: 'inicio', blocos })
+    // Um bloco inválido volta ao padrão dele (ligado) sem levar os outros nem a tela.
+    expect(parseSettings({ inicio: { telaInicial: 'reunioes', blocos: { ...blocos, agenda: 'não', pendencias: 0 } } }).inicio).toEqual({
+      telaInicial: 'reunioes',
+      blocos: { ...blocos, agenda: true, pendencias: true },
+    })
+    // Bloco que falta volta ao padrão; chave a mais sai.
+    expect(parseSettings({ inicio: { telaInicial: 'reunioes', blocos: { agenda: false, extra: true } } }).inicio).toEqual({
+      telaInicial: 'reunioes',
+      blocos: { ...DEFAULT_SETTINGS.inicio.blocos, agenda: false },
+    })
+    expect(parseSettings({ inicio: { telaInicial: 'reunioes', blocos: 'todos' } }).inicio).toEqual({ telaInicial: 'reunioes', blocos: DEFAULT_SETTINGS.inicio.blocos })
+    expect(parseSettings({ inicio: 'tudo' }).inicio).toEqual(DEFAULT_SETTINGS.inicio)
+    expect(parseSettings({ inicio: null }).inicio).toEqual(DEFAULT_SETTINGS.inicio)
+    expect(parseSettings({ inicio: [1, 2] }).inicio).toEqual(DEFAULT_SETTINGS.inicio)
+  })
+
+  it('Início pelo renderer (contrato 133, D13): patch só com o inicio troca só ele; a tela e os cinco blocos vão juntos', () => {
+    const inicio = { telaInicial: 'reunioes' as const, blocos: { agenda: true, tarefas: false, pendencias: true, ultimaReuniao: true, automacoes: false } }
+    const patch = parseSettingsPatch({ inicio })
+    expect(patch).toEqual({ inicio })
+    const current = { ...DEFAULT_SETTINGS, theme: 'dark' as const }
+    expect(applySettingsPatch(current, patch)).toEqual({ ...current, inicio })
+    expect(applySettingsPatch(current, parseSettingsPatch({ theme: 'light' })).inicio).toEqual(DEFAULT_SETTINGS.inicio)
+    expect(() => parseSettingsPatch({ inicio: { ...inicio, telaInicial: 'tarefas' } })).toThrow()
+    expect(() => parseSettingsPatch({ inicio: { telaInicial: 'inicio' } })).toThrow()
+    expect(() => parseSettingsPatch({ inicio: { ...inicio, blocos: { agenda: false } } })).toThrow()
+    expect(() => parseSettingsPatch({ inicio: { ...inicio, blocos: { ...inicio.blocos, agenda: 'sim' } } })).toThrow()
+    expect(() => parseSettingsPatch({ inicio: { ...inicio, blocos: { ...inicio.blocos, extra: true } } })).toThrow()
+    expect(() => parseSettingsPatch({ inicio: { ...inicio, extra: 1 } })).toThrow()
+    expect(() => parseSettingsPatch({ inicio: null })).toThrow()
+    // Recusa o pedido inteiro, não só o campo.
+    expect(() => parseSettingsPatch({ theme: 'dark', inicio: { ...inicio, telaInicial: 'x' } })).toThrow()
+  })
+
   it('Funil de vendas pelo renderer (contrato 109, CA2): dias inteiros de 1 a 90, os três campos juntos', () => {
     const funil = { detectarNasReunioes: true, avisarEsfriadas: true }
     expect(() => parseSettingsPatch({ funil: { ...funil, diasEsfriar: 0 } })).toThrow()
@@ -586,6 +648,20 @@ describe('store de configurações (CA2)', () => {
     // Arquivo com a hora inválida (editado à mão): lê o padrão daquele campo.
     writeFileSync(join(dir, SETTINGS_FILE), JSON.stringify({ version: 1, settings: { ...onDisk().settings, tarefas: { ...tarefas, horaLembrete: 'x' } } }))
     expect((await createFileSettingsStore({ dir }).get()).tarefas).toEqual({ ...tarefas, horaLembrete: '09:00' })
+  })
+
+  it('Início (contrato 133, D13): grava e relê só o inicio sem mexer no resto; pedido inválido não muda o arquivo', async () => {
+    const store = createFileSettingsStore({ dir })
+    expect((await store.get()).inicio).toEqual(DEFAULT_SETTINGS.inicio)
+    await store.update({ theme: 'dark' })
+    const inicio = { telaInicial: 'reunioes' as const, blocos: { ...DEFAULT_SETTINGS.inicio.blocos, pendencias: false } }
+    expect(await store.update({ inicio })).toEqual({ ...DEFAULT_SETTINGS, theme: 'dark', inicio })
+    expect(onDisk().settings.inicio).toEqual(inicio)
+    expect((await createFileSettingsStore({ dir }).get()).inicio).toEqual(inicio)
+    const before = readFileSync(join(dir, SETTINGS_FILE), 'utf8')
+    await expect(store.update({ inicio: { ...inicio, telaInicial: 'tarefas' } } as never)).rejects.toThrow()
+    await expect(store.update({ inicio: { telaInicial: 'inicio' } } as never)).rejects.toThrow()
+    expect(readFileSync(join(dir, SETTINGS_FILE), 'utf8')).toBe(before)
   })
 
   it('sem arquivo valem os padrões e nada é criado', async () => {

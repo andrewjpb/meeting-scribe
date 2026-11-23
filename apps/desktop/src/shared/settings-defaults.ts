@@ -71,6 +71,16 @@ export interface TarefasSettings {
   /** As tarefas do resumo e os "a confirmar" da pessoa aparecem em Tarefas › Sugestões. */
   sugerirDasReunioes: boolean
 }
+/** Contrato 133 (inicio, D13): a tela que aparece ao abrir o app. */
+export const INICIO_TELAS = ['inicio', 'reunioes'] as const
+export type InicioTela = (typeof INICIO_TELAS)[number]
+/** Contrato 133 (inicio, D13): a Section "Início" de Configurações › Geral. */
+export interface InicioSettings {
+  /** Início (padrão) ou Reuniões (o comportamento de antes); vale na próxima abertura. */
+  telaInicial: InicioTela
+  /** Cada bloco da tela Início; desligado, não aparece. */
+  blocos: { agenda: boolean; tarefas: boolean; pendencias: boolean; ultimaReuniao: boolean; automacoes: boolean }
+}
 /** Agendas lidas de cada conta (contrato 12); `null` é só a principal. */
 export interface CalendarSelection {
   google: string[] | null
@@ -238,6 +248,8 @@ export interface AppSettings {
   funil: FunilSettings
   /** Contrato 128: as configurações das Tarefas (Configurações › Geral). */
   tarefas: TarefasSettings
+  /** Contrato 133: a tela inicial e os blocos da tela Início (Configurações › Geral). */
+  inicio: InicioSettings
 }
 
 /**
@@ -306,6 +318,10 @@ export const DEFAULT_SETTINGS: Readonly<AppSettings> = Object.freeze({
   // fim 73
   funil: Object.freeze({ detectarNasReunioes: true, diasEsfriar: 7, avisarEsfriadas: true }) as FunilSettings,
   tarefas: Object.freeze({ horaLembrete: '09:00', lembrarNoPrazo: true, avisoDiario: true, sugerirDasReunioes: true }) as TarefasSettings,
+  inicio: Object.freeze({
+    telaInicial: 'inicio',
+    blocos: Object.freeze({ agenda: true, tarefas: true, pendencias: true, ultimaReuniao: true, automacoes: true }),
+  }) as InicioSettings,
 })
 
 /** Prefixo do modelo gravado na reunião quando a tradução veio do Claude CLI (`claude-cli:haiku`). */

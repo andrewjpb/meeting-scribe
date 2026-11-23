@@ -71,6 +71,21 @@ export const MEDIA_HOST_FIELDS = [
 export const MEDIA_HOST_PATH_STYLE_NAME = 'Endereço no caminho (path-style)'
 export const MEDIA_HOST_PATH_STYLE_DESCRIPTION = 'Ligado: endpoint/bucket/arquivo, como o R2 pede. Desligado: bucket.endpoint/arquivo.'
 
+/** Contrato 133 (inicio, D13): a Section "Início" da aba Geral, com os nomes e as descrições da tela e da busca. */
+export const INICIO_SECTION = 'Início'
+export const INICIO_TELA_NAME = 'Tela inicial'
+export const INICIO_TELA_DESCRIPTION = 'A tela que aparece ao abrir o app: Início ou Reuniões. Vale na próxima abertura.'
+export const INICIO_AGENDA_NAME = 'Mostrar agenda de hoje'
+export const INICIO_AGENDA_DESCRIPTION = 'Os eventos do dia das agendas conectadas e do Calendário do Mac.'
+export const INICIO_TAREFAS_NAME = 'Mostrar tarefas'
+export const INICIO_TAREFAS_DESCRIPTION = 'As vencidas e as de hoje, com o círculo de concluir.'
+export const INICIO_PENDENCIAS_NAME = 'Mostrar pendências'
+export const INICIO_PENDENCIAS_DESCRIPTION = 'WhatsApp sem resposta, convites sem resposta e emails em Pendentes, só quando houver.'
+export const INICIO_ULTIMA_REUNIAO_NAME = 'Mostrar última reunião'
+export const INICIO_ULTIMA_REUNIAO_DESCRIPTION = 'O título, a data e a primeira linha do resumo.'
+export const INICIO_AUTOMACOES_NAME = 'Mostrar automações'
+export const INICIO_AUTOMACOES_DESCRIPTION = 'A próxima execução agendada e o aviso quando a última falhou.'
+
 /** Contrato 109 (R46): a Section "Funil de vendas" da aba Geral, com os nomes e as descrições da tela e da busca. */
 export const FUNIL_SECTION = 'Funil de vendas'
 export const FUNIL_DETECTAR_NAME = 'Detectar oportunidades nas reuniões'
@@ -128,6 +143,12 @@ export function settingsIndex(agent: string): SettingsEntry[] {
     row('geral', 'Aparência', 'Tema', 'Sistema, claro ou escuro.'),
     row('geral', 'Janela', 'Ao fechar a janela', 'Na barra de menus, os agendamentos continuam rodando.'),
     row('geral', 'Janela', 'Abrir ao entrar no Mac', 'Abre direto na barra de menus, sem janela.'),
+    row('geral', INICIO_SECTION, INICIO_TELA_NAME, INICIO_TELA_DESCRIPTION, undefined, 'início abrir tela padrão reuniões'),
+    row('geral', INICIO_SECTION, INICIO_AGENDA_NAME, INICIO_AGENDA_DESCRIPTION, undefined, 'início bloco agenda calendário'),
+    row('geral', INICIO_SECTION, INICIO_TAREFAS_NAME, INICIO_TAREFAS_DESCRIPTION, undefined, 'início bloco tarefas'),
+    row('geral', INICIO_SECTION, INICIO_PENDENCIAS_NAME, INICIO_PENDENCIAS_DESCRIPTION, undefined, 'início bloco pendências whatsapp convites email'),
+    row('geral', INICIO_SECTION, INICIO_ULTIMA_REUNIAO_NAME, INICIO_ULTIMA_REUNIAO_DESCRIPTION, undefined, 'início bloco reunião resumo'),
+    row('geral', INICIO_SECTION, INICIO_AUTOMACOES_NAME, INICIO_AUTOMACOES_DESCRIPTION, undefined, 'início bloco automações agendamento'),
     row('geral', FUNIL_SECTION, FUNIL_DETECTAR_NAME, FUNIL_DETECTAR_DESCRIPTION),
     row('geral', FUNIL_SECTION, FUNIL_DIAS_NAME, FUNIL_DIAS_DESCRIPTION),
     row('geral', FUNIL_SECTION, FUNIL_AVISAR_NAME, FUNIL_AVISAR_DESCRIPTION),
