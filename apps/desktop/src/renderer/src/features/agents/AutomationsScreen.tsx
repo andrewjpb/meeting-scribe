@@ -1,6 +1,9 @@
 // Tela "Automações" (contrato 23, pedido de 16/11 19:25): no topo, "Pedir agora" (escolhe um agente, digita o
 // pedido e roda na hora; a execução entra em "Execuções"); abaixo, as abas "Agentes", "Agendamentos" e
 // "Execuções". Tudo roda no main; a tela só pede e mostra.
+//
+// Contrato 142: a quarta aba, "Atendimento", com os agentes que respondem as conversas do WhatsApp (store próprio,
+// carregado pela aba; não espera a leitura das automações).
 import { ArrowUp, Pause, Play } from 'lucide-react'
 import { useEffect, useState, type KeyboardEvent } from 'react'
 import { TASK_MESSAGE_MAX } from '@shared/automations'
@@ -11,6 +14,7 @@ import { tabId, tabPanelId, Tabs } from '../../design/Tabs'
 import { useChatMeetings, type ChatMeetings } from '../chat/useChatMeetings'
 import { RunsTab } from '../schedules/RunsTab'
 import { SchedulesTab } from '../schedules/SchedulesTab'
+import { AtendimentoTab } from '../atendimento/AtendimentoTab'
 import { AgentsTab } from './AgentsTab'
 import { useAutomations, type AutomationsTab } from './automationsStore'
 import { AREA_CLASS, RunAnswer } from './parts'
@@ -19,6 +23,7 @@ const TABS: readonly { value: AutomationsTab; label: string }[] = [
   { value: 'agentes', label: 'Agentes' },
   { value: 'tarefas', label: 'Agendamentos' },
   { value: 'execucoes', label: 'Execuções' },
+  { value: 'atendimento', label: 'Atendimento' },
 ]
 const TABS_ID = 'automations'
 
@@ -58,7 +63,9 @@ export function AutomationsScreen() {
         </div>
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto px-8 pt-4 pb-8" role="tabpanel" id={tabPanelId(TABS_ID, tab)} aria-labelledby={tabId(TABS_ID, tab)} data-automations-tab={tab}>
-        {failure && !loaded ? (
+        {tab === 'atendimento' ? (
+          <AtendimentoTab />
+        ) : failure && !loaded ? (
           <p className="text-13 text-text-muted">{failure}</p>
         ) : !loaded ? (
           <div aria-busy="true" />

@@ -19,7 +19,8 @@ import {
 import { rereadWhenUnlocked } from '../../app/lockStore'
 import { emptyAnswer, upsertStep, type LiveAnswer } from '../chat/chatStore'
 
-export type AutomationsTab = 'agentes' | 'tarefas' | 'execucoes'
+/** Contrato 142: "Atendimento" (agentes de atendimento do WhatsApp) é a quarta. */
+export type AutomationsTab = 'agentes' | 'tarefas' | 'execucoes' | 'atendimento'
 
 interface AutomationsState {
   loaded: boolean
