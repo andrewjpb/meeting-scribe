@@ -719,7 +719,7 @@ function Conversation({ chat, initialText, detailsOpen, onDetails, atendimentoOp
       )}
       <header ref={header} className="flex h-11 shrink-0 items-center gap-2.5 border-b border-line px-5">
         <Avatar id={chat.id} name={chat.name} photo={photo} group={group} size={8} />
-        <div className="flex min-w-0 flex-1 flex-col">
+        <div className="mr-auto flex max-w-[min(360px,50%)] min-w-0 flex-col">
           <h2 data-whatsapp-chat-title className="truncate text-15 font-bold text-title">
             {chat.name}
           </h2>

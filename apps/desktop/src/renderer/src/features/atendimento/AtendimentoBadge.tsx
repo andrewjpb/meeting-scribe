@@ -66,11 +66,11 @@ export function AtendimentoBadge({ chatId }: { chatId: string }) {
     <p
       data-atendimento-badge={badge.kind}
       title={full}
-      className={`flex h-7 max-w-[280px] min-w-0 shrink items-center gap-1.5 rounded-[var(--radius-control)] border px-2 text-12 ${toneClass(badge.kind)}`}
+      className={`flex h-7 max-w-[280px] min-w-0 shrink-[1000] items-center gap-1.5 truncate rounded-[var(--radius-control)] border px-2 text-12 ${toneClass(badge.kind)}`}
     >
       {badge.kind === 'attending' ? <Icon icon={Square} size={14} className="shrink-0 fill-current" /> : <Icon icon={KIND_ICONS[badge.kind]} size={14} className="shrink-0" />}
       <span className={`min-w-0 truncate font-bold ${badge.kind === 'handed-off' ? '' : 'text-title'}`}>{badge.agentName}</span>
-      <span className="shrink-0 whitespace-nowrap">· {badge.label}</span>
+      <span className="min-w-0 truncate">· {badge.label}</span>
     </p>
   )
 }
