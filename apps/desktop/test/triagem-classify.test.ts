@@ -1,6 +1,9 @@
 // Contrato 161 (notificacoes-triagem, CA1 e CA2): o pedido da triagem (as 12 mais recentes, mídia como rótulo, o escape
 // do bloco da conversa, o corte em 4.000 caracteres e a linha do funil) e a leitura da resposta do modelo.
+import { spawn } from 'node:child_process'
+import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { TRIAGEM_TEMPLATE } from '../src/shared/automations'
 import { buildTriagemPrompt, parseTriagemResultado, TRIAGEM_BLOCK_END, TRIAGEM_BLOCK_START, triagemModel, type TriagemInput, type TriagemMensagem } from '../src/main/whatsapp/triagem/classify'
 import { TRIAGEM_CHARS_MAX } from '../src/shared/triagem'
 
@@ -122,5 +125,41 @@ describe('parseTriagemResultado (contrato 161, CA2)', () => {
 
   it('motivo ausente vale vazio', () => {
     expect(parseTriagemResultado('{"urgente":false,"ambito":"pessoal"}')).toEqual({ urgente: false, ambito: 'pessoal', motivo: '' })
+  })
+})
+
+/** Contrato 164: o `claude` falso do smoke (`test/fixtures/fake-claude.mjs`) com o pedido de verdade da triagem. */
+const FAKE = join(import.meta.dirname, 'fixtures', 'fake-claude.mjs')
+function fakeTriagem(input: TriagemInput): Promise<string> {
+  const prompt = buildTriagemPrompt(input)
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [FAKE, '-p', '--model', 'haiku', '--output-format', 'json', '--system-prompt', prompt.systemPrompt], { stdio: ['pipe', 'pipe', 'inherit'] })
+    let out = ''
+    child.stdout.setEncoding('utf8')
+    child.stdout.on('data', (chunk: string) => {
+      out += chunk
+    })
+    child.on('error', reject)
+    child.on('close', () => resolve(String((JSON.parse(out.trim()) as { result: unknown }).result)))
+    child.stdin.end(prompt.input)
+  })
+}
+
+describe('o `claude` falso do smoke com a triagem (contrato 164)', () => {
+  const comModelo = (extra: Partial<TriagemInput>): TriagemInput => entrada({ instructions: TRIAGEM_TEMPLATE.instructions, ...extra })
+
+  it('a instrução do modelo pronto começa pelo prefixo que o falso reconhece', () => {
+    expect(buildTriagemPrompt(comModelo({})).systemPrompt.startsWith('Você faz a triagem de')).toBe(true)
+  })
+
+  it('contato do funil com "hoje" na última mensagem: Urgente · Profissional, JSON que o app lê', async () => {
+    const raw = await fakeTriagem(comModelo({ messages: [msg(1, { text: 'Oi!' }), msg(2, { text: 'Preciso do orçamento até hoje.' })], funil: { contato: true, empresa: null } }))
+    expect(parseTriagemResultado(raw)).toEqual({ urgente: true, ambito: 'profissional', motivo: 'pede o orçamento até hoje' })
+  })
+
+  it('urgente só pela última mensagem; sem o funil (ou fora dele), pessoal', async () => {
+    const antes = [msg(1, { text: 'Preciso do orçamento até hoje.' }), msg(2, { text: 'tudo bem?' })]
+    expect(parseTriagemResultado(await fakeTriagem(comModelo({ messages: antes, funil: { contato: false, empresa: null } })))).toEqual({ urgente: false, ambito: 'pessoal', motivo: 'conversa casual' })
+    expect(parseTriagemResultado(await fakeTriagem(comModelo({ messages: [msg(1, { text: 'É urgente' })], funil: null })))).toMatchObject({ urgente: true, ambito: 'pessoal' })
   })
 })
