@@ -36,7 +36,7 @@ import type { MeetingsStore } from '../meetings/store'
 import type { SummaryStore } from '../meetings/summaries'
 import type { TranscriptStore } from '../meetings/transcripts'
 import { clearMediaFiles, isMediaFile, type MediaSource } from './media-files'
-import { AUTOMATIONS_FILE, EMAIL_SEARCH_FILE, FUNIL_FILE, GUIDE_FILE, isSourceFile, REDES_FILE, STATE_FILE, TAREFAS_FILE } from './sources'
+import { AUTOMATIONS_FILE, EMAIL_SEARCH_FILE, FUNIL_FILE, GUIDE_FILE, isSourceFile, PASTAS_FILE, REDES_FILE, STATE_FILE, TAREFAS_FILE } from './sources'
 
 export const CHAT_CORPUS_DIR = 'chat-corpus'
 export const CHAT_INDEX_FILE = 'INDICE.md'
@@ -133,6 +133,8 @@ const SOURCE_DESCRIPTIONS: Readonly<Record<string, string>> = {
   [FUNIL_FILE]: 'o funil de vendas: as etapas, as oportunidades abertas (com o id), as ganhas e perdidas dos últimos 90 dias e até 500 contatos (com o id).',
   // Contrato 127.
   [TAREFAS_FILE]: 'as tarefas abertas (até 200): vencidas, de hoje, próximas e sem prazo, cada uma com o id curto, o prazo, o responsável e os vínculos (oportunidade, contatos, reunião), e os lembretes.',
+  // Contrato 165.
+  [PASTAS_FILE]: 'arquivos das pastas que o usuário permitiu; cada linha tem um id para ler ou citar.',
 }
 
 /**

@@ -1,7 +1,7 @@
 // Processo principal: esquema do app, segurança da sessão, IPC, menu e janela.
 import { resolveMx } from 'node:dns/promises'
 import { readFileSync } from 'node:fs'
-import { readFile, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, realpath, writeFile } from 'node:fs/promises'
 import { basename, join } from 'node:path'
 import { app, BrowserWindow, clipboard, dialog, Menu, nativeImage, net, Notification, powerMonitor, safeStorage, screen, session, shell, systemPreferences, Tray, type MenuItemConstructorOptions, type NativeImage, type OpenDialogOptions, type SaveDialogOptions } from 'electron'
 import { DRIVE_FOLDER_URL_PREFIX } from '../shared/accounts'
@@ -40,6 +40,8 @@ import { cachedCalendarReads, calendarOverview, createChatActions, extractAction
 import { createChatEventsStore } from './chat/events-store'
 import { createChatService, type ChatService } from './chat/service'
 import { AUTOMATION_RUNS_IN_SOURCE, writeSources, type AssistantState } from './chat/sources'
+import { addAssistantFolders, createFolderIndex, removeAssistantFolder } from './chat/folders'
+import type { FolderAddResult } from '../shared/assistant-folders'
 import { createFileChatStore } from './chat/store'
 import { createGoogleAccount, type GoogleAccountService } from './google/account'
 import { createMicrosoftAccount, type MicrosoftAccountService } from './microsoft/account'
@@ -1040,6 +1042,8 @@ interface AppServices {
   atendimentoService: AtendimentoService
   /** Contrato 161: o motor da triagem do WhatsApp (etiquetas por conversa; só etiqueta, nunca envia). */
   triagem: TriagemService
+  /** Contrato 165: os canais que mudam a lista de pastas do Assistente (só o main grava `assistant.folders`). */
+  assistantFolders: { add(): Promise<FolderAddResult>; remove(request: unknown): Promise<{ ok: boolean }> }
   /**
    * Contrato 124 (R35, D11): a migração única do próximo passo e dos lembretes para tarefas, no boot, antes do
    * bloqueio, do IPC e das Automações. Nunca lança; a falha vai ao log (só o passo) e o app segue.
@@ -1628,6 +1632,21 @@ function createAppServices(userData: string): AppServices {
   }
   // Contrato 76: as ferramentas do Instagram (a fila, os comentários guardados e o rascunho sem publicar) e o `REDES.md`.
   const redesAssistant = createRedesAssistant({ service: redes, locked: () => lockService?.isLocked() ?? false, timeZone })
+  // Contrato 165: o índice das pastas que o Assistente pode ler (uma varredura guardada por 30 s para todas as conversas)
+  // e o mapa id → arquivo de cada conversa.
+  const folderIndex = createFolderIndex({ settings: async () => (await settings.get()).assistant.folders, home: app.getPath('home'), ...devLog })
+  // Contrato 165: a pasta da conversa que sai (uma ou todas) leva o mapa id → arquivo das pastas dela.
+  const scopedCorpus: ChatCorpus = {
+    ...corpus,
+    dropScope: (key) => {
+      folderIndex.forget(key)
+      return corpus.dropScope(key)
+    },
+    clearScopes: () => {
+      folderIndex.forgetAll()
+      return corpus.clearScopes()
+    },
+  }
   const assistantSources = {
     state: assistantState,
     guide: () => readFile(guidePath, 'utf8'),
@@ -1645,6 +1664,8 @@ function createAppServices(userData: string): AppServices {
     funil: async () => (lockService?.isLocked() ? null : funilMarkdownText()),
     // Contrato 127 (R27): o `TAREFAS.md` do gerador do contrato 121; bloqueado, nada.
     tarefas: async () => (lockService?.isLocked() ? null : tarefasMarkdownText()),
+    // Contrato 165: o `PASTAS.md`, só com a fonte Pastas ligada e alguma pasta na lista.
+    pastas: { index: (chatId: string) => folderIndex.markdown(chatId) },
     // Contrato 149 (CA10): a função de mídia desligada leva os arquivos de mídia da pasta.
     media: assistantMediaEnabled,
     // Contrato 127 (R13): os lembretes do `ESTADO.md`, das tarefas abertas com aviso; bloqueado, nenhum.
@@ -1757,7 +1778,7 @@ function createAppServices(userData: string): AppServices {
   }
   const chat = createChatService({
     store: chatStore,
-    corpus,
+    corpus: scopedCorpus,
     // Contrato 24: só a exportação das conversas para a pasta de escopo; o envio não chega aqui.
     whatsapp: { exportChats: (folder, chatIds, days) => whatsapp.exportChats(folder, chatIds, days) },
     assistant: {
@@ -2318,7 +2339,7 @@ function createAppServices(userData: string): AppServices {
     updates,
     chat,
     chatActions,
-    corpus,
+    corpus: scopedCorpus,
     acp: acpAgent,
     lock,
     google,
@@ -2351,6 +2372,33 @@ function createAppServices(userData: string): AppServices {
     atendimentoLog,
     atendimentoService,
     triagem,
+    assistantFolders: {
+      add: () =>
+        addAssistantFolders({
+          choose: chooseAssistantFolders,
+          update: (change) => settings.updateAssistantFolders(change),
+          context: async () => {
+            const home = await realpath(app.getPath('home'))
+            const realUserData = await realpath(userData)
+            if (!smokeFixtures) return { home, userData: realUserData }
+            // Só no smoke: a raiz das pastas sintéticas (dentro do userData temporário) pula a etapa "sensível".
+            const smokeRoot = join(userData, 'smoke-pastas')
+            await mkdir(smokeRoot, { recursive: true })
+            return { home, userData: realUserData, smokeRoot: await realpath(smokeRoot) }
+          },
+          invalidate: () => folderIndex.invalidate(),
+          dropMedia: () => corpus.dropMedia('Pasta'),
+        }),
+      remove: (request) =>
+        removeAssistantFolder(
+          {
+            update: (change) => settings.updateAssistantFolders(change),
+            invalidate: () => folderIndex.invalidate(),
+            dropMedia: () => corpus.dropMedia('Pasta'),
+          },
+          request,
+        ),
+    },
     async migrarTarefas() {
       try {
         const result = await migrarTarefas({
@@ -2471,6 +2519,14 @@ async function chooseAttachmentSavePath(defaultPath: string): Promise<string | n
 async function chooseEmailAttachments(): Promise<string[]> {
   if (smokeFixtures) return smokeFixtures.chosenEmailAttachments
   const options: OpenDialogOptions = { title: 'Anexar arquivos', buttonLabel: 'Anexar', properties: ['openFile', 'multiSelections'] }
+  const result = mainWindow ? await dialog.showOpenDialog(mainWindow, options) : await dialog.showOpenDialog(options)
+  return result.canceled ? [] : result.filePaths
+}
+
+/** Contrato 165: "Adicionar pasta…" do Assistente, uma ou várias pastas. No smoke, as da fixture. */
+async function chooseAssistantFolders(): Promise<string[]> {
+  if (smokeFixtures) return smokeFixtures.chosenAssistantFolders
+  const options: OpenDialogOptions = { title: 'Pastas que o Assistente pode ler', buttonLabel: 'Permitir leitura', properties: ['openDirectory', 'multiSelections', 'createDirectory'] }
   const result = mainWindow ? await dialog.showOpenDialog(mainWindow, options) : await dialog.showOpenDialog(options)
   return result.canceled ? [] : result.filePaths
 }
@@ -2656,6 +2712,9 @@ function registerIpc(services: AppServices): void {
   })
   handle('scribe:audio-folder', appOrigin, () => files.folder())
   handle('scribe:audio-folder-choose', appOrigin, () => files.chooseFolder())
+  // Contrato 165: a lista de pastas do Assistente só muda por aqui (o diálogo nativo e a remoção), nunca pelo patch.
+  handle('scribe:assistant-folder-add', appOrigin, () => services.assistantFolders.add())
+  handle('scribe:assistant-folder-remove', appOrigin, (_event, request) => services.assistantFolders.remove(request))
   handle('scribe:audio-begin', appOrigin, (_event, request) => files.begin(request))
   handle('scribe:audio-append', appOrigin, (_event, request) => files.append(request))
   handle('scribe:audio-finish', appOrigin, async (_event, request) => {

@@ -9,6 +9,9 @@
 import { randomUUID } from 'node:crypto'
 import { readFile, rename, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
+import { z } from 'zod'
+import { ASSISTANT_FOLDERS_MAX, type AssistantFolder } from '../../shared/assistant-folders'
+import { assistantFolderSchema } from '../../shared/assistant-folders-schema'
 import { applySettingsPatch, DEFAULT_SETTINGS, type AppSettings, type SettingsPatch } from '../../shared/settings-defaults'
 import type { EmailSignature } from '../../shared/email-signature'
 import { emailRuleListSchema, type EmailRule } from '../../shared/email-rules'
@@ -32,6 +35,12 @@ export interface SettingsStore {
   setClaudePath(path: string | null): Promise<AppSettings>
   /** Só para o main, depois do diálogo nativo de escolher pasta (`audio-files/service.ts`); `null` volta ao padrão. */
   setAudioFolder(path: string | null): Promise<AppSettings>
+  /**
+   * Contrato 165, só para o main (os canais `scribe:assistant-folder-add/-remove`): a lista nova de pastas do Assistente,
+   * calculada a partir da gravada agora, na mesma fila das gravações. Devolver a mesma lista não grava; fora do formato
+   * lança erro e nada é gravado.
+   */
+  updateAssistantFolders(change: (current: readonly AssistantFolder[]) => AssistantFolder[]): Promise<AppSettings>
   /** Só para o main, depois de copiar o logo para `userData/branding/` (`branding/service.ts`); `null` volta ao símbolo da LAP. */
   setBrandLogo(name: string | null): Promise<AppSettings>
   /** Só para o main (`email/service.ts`): as contas de email, com a senha cifrada. */
@@ -146,6 +155,15 @@ export function createFileSettingsStore({ dir, onChange, now = Date.now }: FileS
     setTranslationModel: (id) => serial(async () => commit({ ...(await load()), translationModel: modelIdSchema.parse(id) })),
     setClaudePath: (path) => serial(async () => commit({ ...(await load()), claudePath: path === null ? null : claudePathSchema.parse(path) })),
     setAudioFolder: (path) => serial(async () => commit({ ...(await load()), audioFolder: path === null ? null : audioFolderSchema.parse(path) })),
+    updateAssistantFolders: (change) =>
+      serial(async () => {
+        const current = await load()
+        const changed = change(current.assistant.folders)
+        // A mesma lista (nada mudou): nada é gravado.
+        if (changed === current.assistant.folders) return current
+        const folders = z.array(assistantFolderSchema).max(ASSISTANT_FOLDERS_MAX).parse(changed)
+        return commit({ ...current, assistant: { ...current.assistant, folders } })
+      }),
     setBrandLogo: (name) => serial(async () => commit({ ...(await load()), brandLogo: name === null ? null : brandLogoSchema.parse(name) })),
     getEmailAccounts: () =>
       serial(async () => {

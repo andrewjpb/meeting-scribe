@@ -41,6 +41,9 @@ import { REMINDER_CHAT_ID_PATTERN } from '../src/shared/automations-schema'
 import { INVOKE_CHANNELS, WHEN_LOCKED } from '../src/shared/ipc'
 import { ROUTE_PATHS, ROUTE_REDIRECTS, SETTINGS_TABS } from '../src/shared/routes'
 import { DEFAULT_SETTINGS } from '../src/shared/settings-defaults'
+// Contrato 165.
+import { isSourceFile, PASTAS_FILE } from '../src/main/chat/sources'
+import { isMediaFile, mediaFileName } from '../src/main/chat/media-files'
 import type { Chat, ChatEvent } from '../src/shared/chat'
 import { TRANSCRIPT_VERSION } from '../src/shared/transcription'
 import { WHATSAPP_CHAT_ID_PATTERN, type WhatsAppChat, type WhatsAppMessage } from '../src/shared/whatsapp'
@@ -1556,5 +1559,64 @@ describe('contrato 127: os cartões das tarefas', () => {
     for (const tipo of ['tarefa-criar', 'tarefa-concluir', 'tarefa-adiar']) expect(prompt).toContain(`"${tipo}" com`)
     expect(prompt).not.toMatch(/"tarefa"/)
     expect(CHAT_ACTION_KINDS).toEqual(expect.arrayContaining(['tarefa-criar', 'tarefa-concluir', 'tarefa-adiar']))
+  })
+})
+
+describe('fonte Pastas (contrato 165, CA7)', () => {
+  const baseDeps = (): AssistantSourcesDeps => ({
+    state: () => Promise.resolve({ now: NOW, timeZone: SP, version: '1.0.0', recording: null, google: 'não conectada', whatsapp: 'Não instalado', automationsPaused: null, agents: [], tasks: [] }),
+    guide: () => Promise.resolve('# Guia {{versao}}'),
+    automations: () => Promise.resolve({ agents: [], tasks: [], runs: [] }),
+  })
+
+  it('desligada por padrão; ligada, grava o PASTAS.md (0600) com a chave da conversa; sem pasta, não grava; desligada, saem o índice e as cópias', async () => {
+    expect(chatSourcesOf({}).pastas).toBe(false)
+    expect(chatScopeSchema.parse({ kind: 'all', sources: { pastas: false } })).toEqual({ kind: 'all' })
+    expect(chatScopeSchema.parse({ kind: 'all', sources: { pastas: true } })).toEqual({ kind: 'all', sources: { pastas: true } })
+    expect(isSourceFile(PASTAS_FILE)).toBe(true)
+    const folder = join(dir, 'conversa-1')
+    mkdirSync(folder)
+    const asked: string[] = []
+    let text: string | null = '# Pastas permitidas\n'
+    const deps: AssistantSourcesDeps = {
+      ...baseDeps(),
+      pastas: {
+        index: (chatId) => {
+          asked.push(chatId)
+          return Promise.resolve(text)
+        },
+      },
+    }
+    const on = await writeSources(deps, folder, { kind: 'all', sources: { pastas: true } })
+    expect(on.files).toContain(PASTAS_FILE)
+    expect(on.pastas).toBe(true)
+    expect(asked).toEqual(['conversa-1'])
+    expect(readFileSync(join(folder, PASTAS_FILE), 'utf8')).toBe('# Pastas permitidas\n')
+    expect((statSync(join(folder, PASTAS_FILE)).mode & 0o777).toString(8)).toBe('600')
+    // Fonte desligada por padrão: o índice não é pedido.
+    const off = await writeSources(deps, folder, { kind: 'all' })
+    expect(off.pastas).toBe(false)
+    expect(asked).toHaveLength(1)
+    expect(existsSync(join(folder, PASTAS_FILE))).toBe(false)
+    // Sem pasta na lista: nada é gravado.
+    text = null
+    const empty = await writeSources(deps, folder, { kind: 'all', sources: { pastas: true } })
+    expect(empty.files).not.toContain(PASTAS_FILE)
+    expect(empty.pastas).toBe(false)
+    expect(existsSync(join(folder, PASTAS_FILE))).toBe(false)
+    // Desligada: o índice e as cópias das pastas saem; as do email ficam.
+    text = '# Pastas permitidas\n'
+    await writeSources(deps, folder, { kind: 'all', sources: { pastas: true } })
+    const copy = mediaFileName('Pasta', 'f1\nContratos/c1.docx', 'md')
+    const email = mediaFileName('Email', 'em-1\n0', 'md')
+    writeFileSync(join(folder, copy), 'x')
+    writeFileSync(join(folder, email), 'x')
+    await writeSources(deps, folder, { kind: 'all', sources: { pastas: true } })
+    expect(readdirSync(folder)).toEqual(expect.arrayContaining([PASTAS_FILE, copy, email]))
+    await writeSources(deps, folder, { kind: 'all', sources: { pastas: false } })
+    expect(readdirSync(folder)).not.toContain(PASTAS_FILE)
+    expect(readdirSync(folder).filter((name) => isMediaFile(name))).toEqual([email])
+    // Sem a dependência (as automações), a fonte ligada não grava nada.
+    expect((await writeSources(baseDeps(), folder, { kind: 'all', sources: { pastas: true } })).pastas).toBe(false)
   })
 })

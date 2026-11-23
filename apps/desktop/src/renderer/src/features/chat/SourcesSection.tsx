@@ -15,6 +15,8 @@ const SOURCE_TEXT: Readonly<Record<ChatSourceKind, { name: string; description: 
   whatsapp: { name: 'WhatsApp', description: `As conversas com mensagem nos últimos ${WHATSAPP_RECENT_DAYS} dias (até ${WHATSAPP_RECENT_CHATS_MAX}), com o que está pendente de resposta.` },
   email: { name: 'Email', description: 'Os emails recebidos nos últimos 30 dias, com o que está pendente de resposta, e a busca em todas as pastas do servidor.' },
   redes: { name: 'Redes', description: 'Contas, as 10 últimas publicações com métricas e os comentários e mensagens não lidos.' },
+  // Contrato 165: só o texto (o mapa é por fonte); a linha entra no 167.
+  pastas: { name: 'Pastas', description: 'Arquivos das pastas que você escolheu em Configurações; só leitura' },
   automations: { name: 'Automações', description: 'Agentes, agendamentos e as últimas 20 execuções.' },
   guide: { name: 'Guia do app', description: 'Cada tela, cada aba de Configurações, os atalhos e o que cada recurso faz.' },
   internet: { name: 'Internet', description: 'Busca na web quando a pergunta pedir. Os links aparecem na resposta.' },

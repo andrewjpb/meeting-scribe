@@ -124,18 +124,18 @@ export type ChatWhatsAppMode = (typeof CHAT_WHATSAPP_MODES)[number]
  * Fontes do Assistente com interruptor (o estado atual vai sempre). `internet`: contrato 26; `email`: contrato 45; `redes`:
  * contrato 76 (o Instagram, desligada por padrão); `funil`: contrato 117 (o funil de vendas, desligada por padrão: leva
  * nomes, e-mails e telefones ao modelo); `tarefas`: contrato 127 (R27, as tarefas abertas, a primeira do painel e ligada por
- * padrão).
+ * padrão); `pastas`: contrato 165 (as pastas do Mac escolhidas em Configurações, só leitura; desligada por padrão).
  */
-export const CHAT_SOURCE_KINDS = ['tarefas', 'funil', 'whatsapp', 'email', 'redes', 'automations', 'guide', 'internet'] as const
+export const CHAT_SOURCE_KINDS = ['tarefas', 'funil', 'whatsapp', 'email', 'redes', 'pastas', 'automations', 'guide', 'internet'] as const
 export type ChatSourceKind = (typeof CHAT_SOURCE_KINDS)[number]
 export type ChatSources = Record<ChatSourceKind, boolean>
-/** Contrato 76: as fontes que começam desligadas (a conversa guarda só o `true` delas). Contrato 117: e o Funil. */
-export const CHAT_SOURCES_OFF_BY_DEFAULT: readonly ChatSourceKind[] = ['redes', 'funil']
+/** Contrato 76: as fontes que começam desligadas (a conversa guarda só o `true` delas). Contrato 117: e o Funil. Contrato 165: e as Pastas. */
+export const CHAT_SOURCES_OFF_BY_DEFAULT: readonly ChatSourceKind[] = ['redes', 'funil', 'pastas']
 
 /** O valor de uma fonte quando a conversa não diz nada. */
 export const chatSourceDefault = (kind: ChatSourceKind): boolean => !CHAT_SOURCES_OFF_BY_DEFAULT.includes(kind)
 
-/** As fontes de um escopo, com o padrão (todas ligadas, menos a Redes e o Funil; contrato 127: a Tarefas ligada). */
+/** As fontes de um escopo, com o padrão (todas ligadas, menos a Redes, o Funil e as Pastas; contrato 127: a Tarefas ligada). */
 export function chatSourcesOf(scope: Pick<ChatScope, 'sources'>): ChatSources {
   return {
     tarefas: scope.sources?.tarefas !== false,
@@ -143,6 +143,7 @@ export function chatSourcesOf(scope: Pick<ChatScope, 'sources'>): ChatSources {
     whatsapp: scope.sources?.whatsapp !== false,
     email: scope.sources?.email !== false,
     redes: scope.sources?.redes === true,
+    pastas: scope.sources?.pastas === true,
     automations: scope.sources?.automations !== false,
     guide: scope.sources?.guide !== false,
     internet: scope.sources?.internet !== false,

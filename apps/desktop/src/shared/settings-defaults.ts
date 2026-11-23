@@ -1,5 +1,6 @@
 // Configurações do app: tipos, padrões (N5 da spec) e a regra de troca de idiomas. O esquema que valida
 // o arquivo e o store que grava ficam no main (`main/settings/`); o renderer lê pelo `settingsStore`.
+import type { AssistantFolder } from './assistant-folders'
 import type { EmailPollMinutes } from './email'
 import type { ClaudeConnectorPrefs } from './mcp'
 
@@ -88,6 +89,11 @@ export interface AssistantSettings {
    * e do email. Desligado, elas não existem e nada é baixado nem transcrito pela IA.
    */
   media: boolean
+  /**
+   * As pastas do Mac que o Assistente pode ler (só leitura), com o `realpath`. Contrato 165: só muda pelos canais
+   * `scribe:assistant-folder-add/-remove`; o patch do renderer pode trazer a lista, mas ela é ignorada.
+   */
+  folders: AssistantFolder[]
 }
 /** Agendas lidas de cada conta (contrato 12); `null` é só a principal. */
 export interface CalendarSelection {
@@ -338,7 +344,7 @@ export const DEFAULT_SETTINGS: Readonly<AppSettings> = Object.freeze({
     telaInicial: 'inicio',
     blocos: Object.freeze({ agenda: true, tarefas: true, pendencias: true, ultimaReuniao: true, automacoes: true }),
   }) as InicioSettings,
-  assistant: Object.freeze({ media: true }) as AssistantSettings,
+  assistant: Object.freeze({ media: true, folders: Object.freeze([]) as unknown as AssistantFolder[] }) as AssistantSettings,
 })
 
 /** Prefixo do modelo gravado na reunião quando a tradução veio do Claude CLI (`claude-cli:haiku`). */
@@ -355,6 +361,8 @@ export function effectiveTranslationModel(settings: Pick<AppSettings, 'translati
  */
 export function applySettingsPatch(current: AppSettings, patch: SettingsPatch): AppSettings {
   const next: AppSettings = { ...current, ...patch }
+  // Contrato 165: a lista de pastas do Assistente só muda pelos canais do main; a que vier no patch é ignorada.
+  if (patch.assistant) next.assistant = { ...patch.assistant, folders: current.assistant.folders }
   if (next.sourceLanguage === next.targetLanguage) {
     if (patch.sourceLanguage !== undefined && patch.targetLanguage === undefined) next.targetLanguage = current.sourceLanguage
     else if (patch.targetLanguage !== undefined && patch.sourceLanguage === undefined) next.sourceLanguage = current.targetLanguage

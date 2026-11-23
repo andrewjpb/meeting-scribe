@@ -16,9 +16,11 @@
 // Contrato 149 (CA10): os arquivos de mídia das ferramentas (`media-files.ts`) não são fontes e ficam entre as perguntas;
 // saem os do WhatsApp com a fonte WhatsApp desligada, os do email com a fonte Email desligada e todos com a função de
 // mídia desligada.
+// Contrato 165: as pastas (`PASTAS.md`, desligada por padrão), com o índice de `folders.ts`; desligada, saem o índice e as
+// cópias dos arquivos das pastas (`Midia - Pasta - …`).
 import { randomUUID } from 'node:crypto'
 import { chmod, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
 import {
   AGENT_MODEL_LABELS,
   describeSchedule,
@@ -64,8 +66,10 @@ const REDES_TOOL_FILES: readonly string[] = [REDES_PUBLICATIONS_FILE, REDES_COMM
 export const FUNIL_FILE = 'FUNIL.md'
 /** Contrato 127: a fonte Tarefas. */
 export const TAREFAS_FILE = 'TAREFAS.md'
+/** Contrato 165: a fonte Pastas (o índice dos arquivos das pastas permitidas). */
+export const PASTAS_FILE = 'PASTAS.md'
 /** Arquivos das fontes do app, na ordem em que o `INDICE.md` lista. */
-export const SOURCE_FILES = [STATE_FILE, GUIDE_FILE, AUTOMATIONS_FILE, WHATSAPP_OVERVIEW_FILE, EMAIL_OVERVIEW_FILE, EMAIL_SEARCH_FILE, REDES_FILE, FUNIL_FILE, TAREFAS_FILE] as const
+export const SOURCE_FILES = [STATE_FILE, GUIDE_FILE, AUTOMATIONS_FILE, WHATSAPP_OVERVIEW_FILE, EMAIL_OVERVIEW_FILE, EMAIL_SEARCH_FILE, REDES_FILE, FUNIL_FILE, TAREFAS_FILE, PASTAS_FILE] as const
 /** Execuções no `AUTOMACOES.md`. */
 export const AUTOMATION_RUNS_IN_SOURCE = 20
 /** Marca da versão no guia (`resources/assistente/guia-do-app.md`). */
@@ -437,6 +441,11 @@ export interface AssistantSourcesDeps {
    * desligada); `null` com o app bloqueado.
    */
   lembretes?: () => Promise<readonly LembreteDoEstado[] | null>
+  /**
+   * Contrato 165: o texto do `PASTAS.md` desta conversa (a chave é o nome da pasta da conversa, o id dela); `null` sem
+   * pasta escolhida. Quem chama guarda o mapa id → arquivo desta conversa.
+   */
+  pastas?: { index(chatId: string): Promise<string | null> }
   /** Contrato 149: `settings.assistant.media`; desligada, os arquivos de mídia da pasta saem. Sem ela, vale ligada. */
   media?: () => Promise<boolean>
   log?: (message: string) => void
@@ -454,6 +463,8 @@ export interface WrittenSources {
   funil: boolean
   /** Contrato 127. */
   tarefas: boolean
+  /** Contrato 165. */
+  pastas: boolean
 }
 
 /** Grava (atômico, 0600) só se o conteúdo mudou. */
@@ -559,6 +570,18 @@ export async function writeSources(deps: AssistantSourcesDeps, folder: string, s
     tarefas = written.length > 0
     files.push(...written)
   }
+  let pastas = false
+  if (sources.pastas && deps.pastas) {
+    const read = deps.pastas
+    const written = await attempt('pastas', async () => {
+      const text = await read.index(basename(folder))
+      if (text === null) return []
+      await writeAtomic(join(folder, PASTAS_FILE), text)
+      return [PASTAS_FILE]
+    })
+    pastas = written.length > 0
+    files.push(...written)
+  }
   const keep = new Set(files)
   for (const name of await readdir(folder).catch(() => [] as string[])) if (isSourceFile(name) && !keep.has(name)) await rm(join(folder, name), { force: true })
   // Contrato 149 (CA10): a mídia da fonte desligada (ou de todas, com a função de mídia desligada) sai da pasta.
@@ -568,6 +591,7 @@ export async function writeSources(deps: AssistantSourcesDeps, folder: string, s
   else {
     if (!sources.whatsapp) await clearMediaFiles(folder, 'WhatsApp')
     if (!sources.email) await clearMediaFiles(folder, 'Email')
+    if (!sources.pastas) await clearMediaFiles(folder, 'Pasta')
   }
-  return { files, whatsapp, email, redes, funil, tarefas }
+  return { files, whatsapp, email, redes, funil, tarefas, pastas }
 }

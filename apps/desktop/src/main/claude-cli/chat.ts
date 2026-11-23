@@ -21,7 +21,7 @@ import { EMAIL_EXPORT_PREFIX, EMAIL_OVERVIEW_FILE, EMAIL_TEXT_MAX } from '../../
 import { WHATSAPP_EXPORT_PREFIX, WHATSAPP_OVERVIEW_FILE, WHATSAPP_SEND_TEXT_MAX } from '../../shared/whatsapp'
 import { CHAT_INDEX_FILE } from '../chat/corpus'
 import { isMediaFile } from '../chat/media-files'
-import { AUTOMATIONS_FILE, EMAIL_SEARCH_FILE, FUNIL_FILE, GUIDE_FILE, REDES_COMMENTS_FILE, REDES_FILE, REDES_PUBLICATIONS_FILE, STATE_FILE, TAREFAS_FILE } from '../chat/sources'
+import { AUTOMATIONS_FILE, EMAIL_SEARCH_FILE, FUNIL_FILE, GUIDE_FILE, PASTAS_FILE, REDES_COMMENTS_FILE, REDES_FILE, REDES_PUBLICATIONS_FILE, STATE_FILE, TAREFAS_FILE } from '../chat/sources'
 import { escapeTurnText } from './prompt'
 import { KILL_GRACE_MS, type ClaudeChild, type SpawnClaude, type Timers } from './translator'
 
@@ -311,7 +311,8 @@ const baseName = (path: string): string => path.split('/').at(-1) ?? ''
  * Contrato 149: os rótulos do `Read` num arquivo de mídia da pasta (`isMediaFile`), os únicos que saem só desses arquivos.
  * O chat usa para saber que a pergunta viu mídia sem chamar a ferramenta (o arquivo fica entre as perguntas).
  */
-export const MEDIA_READ_LABELS = ['Vendo a imagem aberta', 'Lendo o PDF aberto', 'Lendo o texto da mídia'] as const
+/** Contrato 165: e a cópia de um arquivo das pastas permitidas (`Midia - Pasta - …`). */
+export const MEDIA_READ_LABELS = ['Vendo a imagem aberta', 'Lendo o PDF aberto', 'Lendo o texto da mídia', 'Lendo um arquivo da pasta'] as const
 
 /** Contrato 149: o passo é a leitura de um arquivo de mídia da pasta. */
 export const isMediaReadStep = (step: Pick<ChatStep, 'tool' | 'label'>): boolean => step.tool === 'Read' && (MEDIA_READ_LABELS as readonly string[]).includes(step.label)
@@ -332,7 +333,11 @@ function sourceLabel(file: string): string | null {
   if (file === FUNIL_FILE) return 'Lendo o funil'
   // Contrato 127.
   if (file === TAREFAS_FILE) return 'Lendo as tarefas'
+  // Contrato 165.
+  if (file === PASTAS_FILE) return 'Lendo as pastas'
   // Contrato 149: o arquivo que uma ferramenta de mídia gravou (nunca é reunião, mesmo terminando em " - <hash>.md").
+  // Contrato 165: a cópia de um arquivo das pastas, com o rótulo dela.
+  if (isMediaFile(file, 'Pasta')) return MEDIA_READ_LABELS[3]
   if (isMediaFile(file)) return file.endsWith('.pdf') ? MEDIA_READ_LABELS[1] : file.endsWith('.md') ? MEDIA_READ_LABELS[2] : MEDIA_READ_LABELS[0]
   if (file.startsWith(EMAIL_EXPORT_PREFIX) && file.endsWith('.md')) {
     const subject = file.slice(EMAIL_EXPORT_PREFIX.length, -'.md'.length).replace(/ - em-[0-9a-f]+$/, '')

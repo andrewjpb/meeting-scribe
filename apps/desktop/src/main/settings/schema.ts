@@ -5,11 +5,13 @@
 // `claudePath` segue a mesma regra: só depois de `claude --version` responder (`setClaudePath`).
 // `audioFolder` também fica de fora: só o diálogo nativo do main a escolhe (`setAudioFolder`).
 // `brandLogo` idem: só o main grava, depois de conferir e copiar a imagem (`setBrandLogo`).
+// `assistant.folders` (contrato 165) idem: só os canais das pastas do Assistente (`updateAssistantFolders`).
 // As contas de email (contrato 42) ficam no mesmo arquivo, ao lado de `settings`, com a senha cifrada: só o main grava
 // (`setEmailAccounts`) e o renderer não as recebe junto com as configurações. As assinaturas (contrato 54) também, em
 // `emailSignatures`, por id de conta, e as regras (contrato 53), em `emailRules`.
 import { z } from 'zod'
 import { isAbsolute } from 'node:path'
+import { assistantFolderSchema } from '../../shared/assistant-folders-schema'
 import { BRAND_LOGO_PATTERN, BRAND_TEXT_MAX } from '../../shared/branding'
 import { EMAIL_SIGNATURE_MAX, type EmailSignature } from '../../shared/email-signature'
 import { EMAIL_RULES_MAX, emailRuleSchema, type EmailRule } from '../../shared/email-rules'
@@ -162,10 +164,15 @@ const lenientInicioSchema = z
   })
   .catch(() => ({ telaInicial: D.inicio.telaInicial, blocos: { ...D.inicio.blocos } }))
 
-/** Contrato 149 (ia-midia, R8): pelo renderer, o objeto inteiro; outro campo recusa o pedido. */
-const assistantPatchSchema = z.object({ media: z.boolean() }).strict()
-/** No arquivo: o arquivo de antes do 149 (sem o campo) ganha o padrão, ligado. */
-const lenientAssistantSchema = z.object({ media: z.boolean().catch(D.assistant.media) }).catch(() => ({ ...D.assistant }))
+/**
+ * Contrato 149 (ia-midia, R8): pelo renderer, o objeto inteiro; outro campo recusa o pedido. Contrato 165: `folders` pode
+ * vir junto (o renderer manda o objeto inteiro), mas só os canais do main mudam a lista: `parseSettingsPatch` a tira.
+ */
+const assistantPatchSchema = z.object({ media: z.boolean(), folders: z.array(assistantFolderSchema).optional() }).strict()
+/** No arquivo: o arquivo de antes do 149 (sem o campo) ganha o padrão, ligado; o de antes do 165, a lista vazia. */
+const lenientAssistantSchema = z
+  .object({ media: z.boolean().catch(D.assistant.media), folders: z.array(assistantFolderSchema).catch([]) })
+  .catch(() => ({ media: D.assistant.media, folders: [] }))
 
 const lenientSchema = z.object({
   translationEnabled: z.boolean().catch(D.translationEnabled),
@@ -314,6 +321,8 @@ export function parseSettingsPatch(raw: unknown): SettingsPatch {
   for (const [key, value] of Object.entries(parsed)) {
     if (value !== undefined) Object.assign(patch, { [key]: value })
   }
+  // Contrato 165: a lista de pastas do Assistente que vier no patch não vale (molde de `audioFolder`).
+  if (parsed.assistant) Object.assign(patch, { assistant: { media: parsed.assistant.media } })
   return patch
 }
 

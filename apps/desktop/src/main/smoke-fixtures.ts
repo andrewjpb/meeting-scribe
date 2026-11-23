@@ -262,6 +262,8 @@ export interface SmokeFixtures {
   chosenEmailAttachments: string[]
   /** Contrato 71: os arquivos que o diálogo "Escolher mídias" das redes devolve no smoke. */
   chosenRedesMedia: string[]
+  /** Contrato 165: as pastas que o "Adicionar pasta…" do Assistente "escolhe"; vazio cancela. */
+  chosenAssistantFolders: string[]
   /** Contrato 110: o arquivo que o "Importar…" do funil "escolhe" (`<userData>/smoke-funil/contatos.csv`); `null` cancela. */
   funilImportFile: string | null
 }
@@ -460,6 +462,7 @@ export function createSmokeFixtures(currentVersion: string, userDataDir: string)
     emailNotify: { notifications: [], focusedContentsId: null },
     chosenEmailAttachments: [],
     chosenRedesMedia: [],
+    chosenAssistantFolders: [],
     funilImportFile: writeSmokeFunilImport(userDataDir),
     lock: { skewMs: 0, touchIdAvailable: true, touchIdApproves: true, touchIdPrompts: 0, power: new EventEmitter(), refresh: () => undefined },
     fetch: (url: string, init: FetchInit) => {

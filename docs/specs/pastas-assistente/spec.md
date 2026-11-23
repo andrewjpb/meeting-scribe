@@ -41,10 +41,11 @@ Ver `prd.md`. Em uma frase: o Andrew aponta pastas do Mac; o Assistente lê só 
   - `WHEN_LOCKED: 'refused'` para os dois.
 - A2. Regras de recusa (função pura `folderRefusal(path, home, userData): reason | null` em `main/chat/folders.ts`, testada):
   - `inexistente`: não existe ou não é diretório (depois de `realpath`).
-  - `sensivel`: `/`, `/System`, `/Library`, `/private`, `/etc`, `/var`, `/usr`, `/bin`, `/sbin`, `/Applications`; a pasta pessoal (`~`) inteira; `~/Library` e qualquer coisa dentro; `userData` do app e qualquer coisa dentro; `/Volumes` em si (volumes específicos podem).
+  - `sensivel`: `/`, `/System`, `/Library`, `/private`, `/etc`, `/var`, `/usr`, `/bin`, `/sbin`, `/Applications`; a pasta pessoal (`~`) inteira **e qualquer ancestral dela** (`/Users`, `/`); `~/Library` e qualquer coisa dentro; `userData` do app, qualquer coisa dentro e qualquer ancestral; `/Volumes` em si (volumes específicos podem). Emenda de 23/11/2026 (revisão do 165): ancestral da home ou do userData é sensível porque a varredura desceria até 6 níveis dentro delas.
   - `oculta`: qualquer segmento do caminho (depois de `realpath`) começa com `.`.
   - `repetida`: já está na lista, ou é descendente de uma pasta da lista. Se for **ancestral** de pastas da lista, as descendentes são substituídas pela nova (comportamento informado na resposta como `replaced: string[]`).
-- A3. Nenhuma pasta é adicionada sem o diálogo nativo; o caminho gravado é o `realpath`.
+- A3. Nenhuma pasta é adicionada sem o diálogo nativo; o caminho gravado é o `realpath`. A raiz da pasta passa de novo por `realpath`/`lstat` a cada varredura (se virou symlink, a varredura é recusada).
+- A4. Costura exclusiva do smoke: `folderRefusal` aceita `smokeRoot?: string` no contexto; caminho dentro de `smokeRoot` pula **só** a etapa `sensivel` (`oculta` e `repetida` continuam). O `index.ts` passa `smokeRoot` somente quando `smokeFixtures` existe (`realpath(join(userData,'smoke-pastas'))`). Em produção o campo nunca é passado.
 
 ### B. Fonte "Pastas" e índice `PASTAS.md`
 
