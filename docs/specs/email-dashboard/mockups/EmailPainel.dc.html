@@ -1,0 +1,389 @@
+<!doctype html>
+<!-- Mockup estático da feature email-dashboard (23/11/2026). Para um quadro só, sem moldura: EmailPainel.dc.html?only=A..G&theme=light|dark (usado para gerar os PNGs com o Chrome headless). Sem ?only, mostra o documento com todos os quadros em claro e escuro. -->
+<html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Email — Painel</title>
+<script>(function(){var q=location.search,m=q.match(/only=([A-G])/),t=q.match(/theme=(light|dark)/);window.__only=m?m[1]:null;window.__theme=t?t[1]:"light";if(m)document.documentElement.className="only";})();</script>
+<style>
+body{margin:0;background:#D9DFE8;font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;color:#061A3D;-webkit-font-smoothing:antialiased}
+.canvas{padding:48px;display:flex;flex-direction:column;gap:56px;width:max-content}
+.doc{max-width:1180px;background:#FFFFFF;border:1px solid #C9D4E5;border-radius:6px;padding:32px 40px}
+.doc h1{margin:0;font-size:26px;line-height:32px;font-weight:700;letter-spacing:-.3px;color:#0A2A5E}
+.doc .sub{margin:6px 0 20px;color:#5B6B85;font-size:13px;line-height:1.5}
+.doc h2{margin:24px 0 4px;font-size:17px;line-height:24px;color:#0A2A5E}
+.doc .bar{display:block;width:24px;height:2px;background:#0A2A5E;margin:8px 0 12px}
+.doc ol{margin:0;padding:0;list-style:none;display:grid;grid-template-columns:1fr 1fr;gap:10px 32px}
+.doc li{font-size:13px;line-height:1.45;display:grid;grid-template-columns:40px 1fr}
+.doc li b{color:#0A2A5E}.doc li .k{font-weight:700;color:#1E5BB8}
+.doc code{font-family:Menlo,ui-monospace,monospace;font-size:11px}
+.bd>h2{margin:0 0 4px;font-size:17px;line-height:24px;color:#0A2A5E}
+.bd .cap{margin:0 0 16px;font-size:13px;line-height:1.5;color:#5B6B85;max-width:1180px}
+.pair{display:flex;gap:48px;align-items:flex-start}
+.tag{display:block;font-size:10px;font-weight:500;letter-spacing:.14em;color:#5B6B85;margin-bottom:8px}
+.fr0{border:1px solid #C9D4E5;border-radius:6px;overflow:hidden;width:max-content}
+html.only body{background:transparent}
+html.only .doc,html.only .bd>h2,html.only .bd .cap,html.only .tag{display:none}
+html.only .canvas{padding:0;gap:0}
+html.only .fr0{border:0;border-radius:0}
+html.only .pair{gap:0}
+
+/* tokens (apps/desktop/src/renderer/src/design/tokens.css) */
+.t-light{--bg:#ffffff;--bg-raised:#ffffff;--bg-sunken:#eef2f9;--line:#e3e9f2;--line-strong:#c9d4e5;--title:#0a2a5e;--text:#061a3d;--text-muted:#5b6b85;--text-faint:#7f8da6;--accent:#1e5bb8;--on-accent:#ffffff;--hl:rgba(30,91,184,0.14);--rec:#c62f34;--focus:#1e5bb8;--side-edge:transparent;
+--note-yellow:#fff4c2;--note-yellow-text:#4a3b00;--note-pink:#fce1ec;--note-pink-text:#5c1a35;--note-green:#ddf3e1;--note-green-text:#173f22;--note-blue:#dceafb;--note-blue-text:#0e2f5c;--note-orange:#ffe6d1;--note-orange-text:#5a2a06}
+.t-dark{color-scheme:dark;--bg:#061a3d;--bg-raised:#0a2a5e;--bg-sunken:#04122b;--line:rgba(201,212,229,0.14);--line-strong:rgba(201,212,229,0.28);--title:#ffffff;--text:#ffffff;--text-muted:#a8b5cc;--text-faint:#7c8cab;--accent:#5392f7;--on-accent:#061a3d;--hl:rgba(59,130,246,0.22);--rec:#f0656b;--focus:#3b82f6;--side-edge:rgba(201,212,229,0.28);
+--note-yellow:#463c12;--note-yellow-text:#fff3c4;--note-pink:#4a2133;--note-pink-text:#ffe0ec;--note-green:#1d3b26;--note-green-text:#ddf6e2;--note-blue:#163357;--note-blue-text:#dcebff;--note-orange:#4a2f14;--note-orange-text:#ffe6d1}
+.app{--side-bg:#0a2a5e;--side-text:#ffffff;--side-muted:#a8b5cc;--side-active:rgba(255,255,255,0.12);--side-divider:rgba(255,255,255,0.2);--side-ok:#3b82f6;
+position:relative;display:flex;width:1120px;height:740px;overflow:hidden;background:var(--bg);color:var(--text);font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;font-size:13px;line-height:20px;-webkit-font-smoothing:antialiased;text-align:left}
+.app *{box-sizing:border-box}
+.app p,.app h1,.app h2,.app h3,.app ul,.app ol{margin:0;padding:0}
+.app ul,.app ol{list-style:none}
+.ic{flex:none;display:block}
+.fl{flex:1 1 0;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ell{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+.tn{font-variant-numeric:tabular-nums}
+.sp{flex:1 1 0}
+.mut{color:var(--text-muted)}.fnt{color:var(--text-faint)}.ttl{color:var(--title)}
+.s12{font-size:12px;line-height:16px}
+.lnk{color:var(--accent);text-decoration:underline;text-decoration-thickness:1px;text-underline-offset:3px}
+
+/* barra lateral */
+.side{flex:0 0 224px;width:224px;height:740px;display:flex;flex-direction:column;padding:0 12px;background:var(--side-bg);color:var(--side-text);border-right:1px solid var(--side-edge)}
+.side .lights{flex:none;height:52px;padding:18px 0 0 6px;display:flex;gap:8px}.side .lights i{width:12px;height:12px;border-radius:50%;background:rgba(255,255,255,0.22)}
+.side .brand{flex:none;display:flex;align-items:center;gap:10px;height:36px;padding:0 8px}
+.side .brand p{display:flex;flex-direction:column;gap:2px}.side .brand b{font-size:15px;line-height:20px;letter-spacing:-0.2px}.side .brand small{font-size:10px;line-height:14px;font-weight:500;letter-spacing:.14em;color:var(--side-muted)}
+.side nav{flex:1 1 auto;min-height:0;margin-top:16px;display:flex;flex-direction:column;gap:2px;overflow:hidden}
+.sback{flex:none;display:flex;align-items:center;gap:8px;height:32px;padding:0 10px;margin-bottom:4px;border-radius:4px;color:var(--side-text);font-weight:500}
+.ssub{flex:none;display:flex;align-items:center;gap:8px;height:28px;padding:0 10px;border-radius:4px;color:var(--side-muted)}
+.ssub.on{background:var(--side-active);color:var(--side-text)}
+.ssub.f{padding-left:18px}
+.ssub .n{font-size:12px;line-height:16px;font-weight:500;color:var(--side-text)}
+.ssub.tab{padding-left:10px}
+.sdiv{flex:none;height:1px;margin:4px 10px;background:var(--side-active)}
+.sfoot{flex:none;display:flex;flex-direction:column;margin-top:4px;padding-top:4px;border-top:1px solid var(--side-divider)}
+.slock{display:flex;align-items:center;gap:8px;height:28px;padding:0 10px;margin-bottom:4px;color:var(--side-muted)}
+.slock kbd{font-family:inherit;font-size:12px;opacity:.8}
+.sperm{display:flex;flex-direction:column;padding:4px 4px 8px;border-top:1px solid rgba(255,255,255,0.12)}
+.sperm .t{padding-top:4px;font-size:11px;line-height:16px;font-weight:500;color:var(--side-muted)}
+.sperm .r{display:flex;align-items:center;gap:8px;height:28px;font-size:12px;line-height:16px}
+.sperm .r i{width:6px;height:6px;background:var(--side-ok);flex:none}
+.sperm .r span:last-child{color:var(--side-muted)}
+
+/* área principal e controles */
+.main{flex:1 1 0;min-width:0;height:740px;display:flex;flex-direction:column;overflow:hidden;background:var(--bg)}
+.ph{flex:none;padding:20px 32px 0}
+.ph header{display:flex;align-items:flex-end;justify-content:space-between;gap:16px}
+.hg{display:flex;flex-direction:column;gap:2px;min-width:0}
+.pt{font-size:20px;line-height:26px;font-weight:700;letter-spacing:-0.3px;color:var(--title);white-space:nowrap}
+.dt{font-size:13px;line-height:20px;color:var(--text-muted)}
+.btn{display:inline-flex;align-items:center;gap:8px;height:32px;padding:0 12px;border-radius:4px;font-size:13px;font-weight:500;white-space:nowrap;border:1px solid transparent;flex:none}
+.btn.pri{background:var(--accent);color:var(--on-accent)}
+.btn.sec{border-color:var(--line-strong);background:var(--bg-raised);color:var(--title)}
+.btn.dis{opacity:.5}
+.btn kbd{font-family:inherit;font-size:12px;font-weight:400;opacity:.8}
+.btn.ico{width:32px;padding:0;justify-content:center}
+.ab{display:inline-flex;align-items:center;gap:6px;height:28px;padding:0 8px;border-radius:4px;border:1px solid var(--line-strong);background:var(--bg-raised);color:var(--title);font-size:12px;line-height:16px;font-weight:500;white-space:nowrap;flex:none}
+
+/* painel */
+.pgrid{flex:1 1 0;min-height:0;display:flex;gap:24px;padding:16px 32px 20px}
+.colL{flex:0 0 380px;width:380px;display:flex;flex-direction:column;gap:12px;min-height:0}
+.colR{flex:1 1 0;min-width:0;display:flex;flex-direction:column;gap:10px;min-height:0;overflow:hidden}
+.colR>*{flex:none}
+.accts{flex:none;display:flex;flex-direction:column;border-top:1px solid var(--line-strong)}
+.acct{display:flex;align-items:center;gap:8px;height:28px;padding:0 2px;border-bottom:1px solid var(--line)}
+.acct b{font-weight:500;color:var(--title);font-size:13px}
+.acct .c{font-size:12px;line-height:16px;color:var(--text-muted);white-space:nowrap}
+.card{display:flex;flex-direction:column;padding:10px 12px 12px;border:1px solid var(--line-strong);border-radius:6px;background:var(--bg-raised);min-height:0}
+.colL .card{overflow:hidden}
+.ch{flex:none;display:flex;align-items:center;gap:8px;height:24px;margin-bottom:4px}
+.ch h2{font-size:14px;line-height:20px;font-weight:600;color:var(--title)}
+.ch .k{font-size:12px;line-height:16px;color:var(--text-muted)}
+.mrow{display:flex;align-items:center;gap:0;height:44px;padding:4px 0;border-bottom:1px solid var(--line)}
+.mrow:last-child{border-bottom:0}
+.gut{flex:0 0 12px;width:12px;align-self:flex-start;padding-top:7px}
+.gut i{display:block;width:6px;height:6px;background:var(--accent)}
+.mc{flex:1 1 0;min-width:0;display:flex;flex-direction:column}
+.l1{display:flex;align-items:baseline;gap:8px;min-width:0}
+.l1 .who{min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:13px;line-height:20px;font-weight:500;color:var(--title)}
+.l1 .who em{font-style:normal;font-weight:400;color:var(--text-muted);font-size:12px}
+.l1 .tm{flex:none;margin-left:auto;font-size:12px;line-height:16px;color:var(--text-muted);font-variant-numeric:tabular-nums}
+.l2{font-size:12px;line-height:16px;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.l2 span{color:var(--text-muted)}
+.calm{display:flex;align-items:center;gap:8px;height:32px;font-size:13px;color:var(--text-muted)}
+.calm .ic{color:var(--text-faint)}
+.rb{display:flex;flex-direction:column;padding-bottom:10px;border-bottom:1px solid var(--line)}
+.rb+.rb{padding-top:2px}
+.rb:last-of-type{border-bottom:0;padding-bottom:0}
+.rb .mrow{border-bottom:0}
+.rq{margin:2px 0 0 12px;padding-left:10px;border-left:2px solid var(--line-strong);font-size:13px;line-height:20px;color:var(--text);display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.rq.open{display:block;-webkit-line-clamp:unset}
+.rq.open p+p{margin-top:8px}
+.ra{display:flex;align-items:center;gap:8px;height:28px;margin:6px 0 0 12px}
+.ra .vr{font-size:12px;line-height:16px;font-weight:500;color:var(--accent)}
+.ra .op{display:inline-flex;align-items:center;gap:6px;font-size:12px;line-height:16px;color:var(--text-muted);height:28px;padding:0 4px}
+.more{display:flex;align-items:center;height:32px;margin-top:4px;border-top:1px solid var(--line);font-size:12px;font-weight:500;color:var(--accent)}
+.mg+.mg{margin-top:10px}
+.gh{display:flex;align-items:center;gap:8px;height:32px;border-bottom:1px solid var(--line-strong)}
+.gh b{font-size:13px;line-height:20px;font-weight:600;color:var(--title);white-space:nowrap}
+.gh em{font-style:normal;font-size:12px;color:var(--text-muted);white-space:nowrap}
+.mrow .acts{display:flex;gap:6px;flex:none;margin-left:12px}
+.note{display:flex;align-items:flex-start;gap:10px;padding:8px 12px;border-left:3px solid var(--title);background:var(--bg-sunken);font-size:13px;line-height:20px;color:var(--text)}
+.note .ic{margin-top:2px;color:var(--text-muted)}
+.banner{flex:none;display:flex;align-items:flex-start;gap:10px;margin:12px 32px 0;padding:10px 12px;border-left:3px solid var(--title);background:var(--bg-sunken)}
+.banner .ic.sp1{margin-top:2px;color:var(--title)}
+.banner .bt{font-size:12px;line-height:16px;font-weight:700;color:var(--title)}
+.banner .bd2{font-size:12px;line-height:16px;color:var(--text-muted)}
+.banner .un{display:inline-flex;align-items:center;gap:4px;font-size:12px;line-height:16px;font-weight:500;color:var(--accent);flex:none}
+.banner .x{flex:none;color:var(--text-muted)}
+
+/* email: lista + composer */
+.elist{flex:0 0 340px;width:340px;display:flex;flex-direction:column;border-right:1px solid var(--line);padding:8px 8px 0;min-height:0}
+.elist .top{height:36px;display:flex;align-items:center;padding:0}
+.elist .hd{display:flex;align-items:baseline;justify-content:space-between;padding:12px 12px 0}
+.elist .hd b{font-size:15px;line-height:20px;font-weight:700;color:var(--title)}
+.elist .ad{padding:0 12px;font-size:12px;line-height:16px;color:var(--text-muted)}
+.elist .gl{padding:12px 12px 4px;font-size:11px;line-height:16px;font-weight:500;color:var(--text-muted)}
+.erow{display:flex;gap:10px;padding:8px;border-radius:4px}
+.erow.on{background:var(--bg-sunken)}
+.av{flex:none;width:28px;height:28px;border-radius:4px;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700}
+.erow .c{flex:1 1 0;min-width:0;display:flex;flex-direction:column}
+.erow .a{display:flex;align-items:baseline;gap:8px}
+.erow .a b{flex:1 1 0;min-width:0;font-size:13px;line-height:20px;font-weight:700;color:var(--title);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.erow .a b.rd{font-weight:500}
+.erow .a span{font-size:12px;color:var(--text-muted)}
+.erow .s{font-size:13px;line-height:20px;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.erow .p{font-size:12px;line-height:16px;color:var(--text-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.erow .sq{display:inline-block;width:6px;height:6px;background:var(--accent);margin-right:6px;vertical-align:1px}
+.comp{flex:1 1 0;min-width:0;display:flex;flex-direction:column;min-height:0}
+.comp header{flex:none;display:flex;align-items:center;gap:12px;min-height:44px;padding:6px 20px;border-bottom:1px solid var(--line)}
+.comp header h2{flex:1 1 0;font-size:15px;line-height:20px;font-weight:700;color:var(--title)}
+.cbody{flex:1 1 0;min-height:0;display:flex;flex-direction:column;padding:4px 20px 16px}
+.fld{display:flex;align-items:center;gap:12px;min-height:32px;border-bottom:1px solid var(--line)}
+.fld label{width:56px;flex:none;font-size:12px;font-weight:500;color:var(--text-muted)}
+.chip{display:inline-flex;align-items:center;gap:4px;height:24px;padding:0 6px;border-radius:4px;border:1px solid var(--line);background:var(--bg-sunken);font-size:12px;color:var(--text)}
+.txt{flex:1 1 0;min-height:0;margin-top:12px;font-size:15px;line-height:24px;color:var(--text);white-space:pre-wrap;overflow:hidden}
+.txt .cur{display:inline-block;width:1px;height:18px;background:var(--text);vertical-align:-3px}
+.cfoot{flex:none;display:flex;align-items:center;justify-content:space-between;margin-top:12px}
+.hint{flex:none;margin-top:12px;font-size:12px;line-height:16px;color:var(--text-muted)}
+.hint a{font-weight:500;color:var(--accent);text-decoration:underline;text-decoration-thickness:1px;text-underline-offset:3px}
+
+/* configurações */
+.stop{flex:none;display:flex;align-items:center;justify-content:space-between;padding:20px 32px 8px}
+.stop h1{font-size:15px;line-height:20px;font-weight:700;color:var(--title)}
+.search{display:flex;align-items:center;gap:8px;width:240px;height:32px;padding:0 10px;border:1px solid var(--line-strong);border-radius:4px;background:var(--bg-raised);color:var(--text-faint);font-size:13px}
+.search kbd{margin-left:auto;font-family:inherit;font-size:12px}
+.scol{flex:1 1 0;min-height:0;overflow:hidden;padding:0 32px}
+.scin{max-width:760px;display:flex;flex-direction:column;gap:24px;padding:20px 0 32px}
+.sec>h2{font-size:11px;line-height:16px;font-weight:500;color:var(--text-muted);margin-bottom:4px}
+.sec>.ds{margin-top:2px;font-size:12px;line-height:16px;color:var(--text-muted)}
+.panel{margin-top:8px;display:flex;flex-direction:column;border:1px solid var(--line-strong);border-radius:6px;background:var(--bg-raised);overflow:hidden}
+.panel>*{border-bottom:1px solid var(--line);padding:0 12px}
+.panel>*:last-child{border-bottom:0}
+.srow2{display:grid;grid-template-columns:minmax(0,1fr) 340px;align-items:center;column-gap:20px;min-height:44px;padding-top:8px;padding-bottom:8px}
+.srow2 .nm{font-size:13px;line-height:20px;font-weight:500;color:var(--title)}
+.srow2 .de{font-size:12px;line-height:16px;color:var(--text-muted)}
+.srow2 .ctl{display:flex;align-items:center;gap:8px;min-width:0}
+.sw{display:flex;align-items:center;width:36px;height:20px;padding:2px;border-radius:4px;border:1px solid var(--accent);background:var(--accent);justify-content:flex-end;flex:none}
+.sw i{width:14px;height:14px;border-radius:2px;background:var(--on-accent)}
+.sw.off{border-color:var(--line-strong);background:var(--bg-sunken);justify-content:flex-start}
+.sw.off i{background:var(--text-muted)}
+.seg{display:flex;overflow:hidden;border:1px solid var(--line-strong);border-radius:4px}
+.seg span{height:28px;line-height:26px;padding:0 12px;font-size:13px;background:var(--bg-raised);color:var(--text)}
+.seg span+span{border-left:1px solid var(--line-strong)}
+.seg span.on{background:var(--title);color:var(--bg);font-weight:500}
+.frow{display:flex;align-items:center;gap:8px;height:32px;font-size:13px}
+.frow .ic{color:var(--text-muted)}
+.sel{display:flex;align-items:center;gap:8px;height:32px;width:100%;padding:0 10px;border:1px solid var(--line-strong);border-radius:4px;background:var(--bg-raised);font-size:13px;color:var(--text)}
+.sel .ic{margin-left:auto;color:var(--text-muted)}
+</style></head><body><div class="canvas" id="canvas">
+<div class="doc"><h1>Email — Painel</h1><p class="sub">Mockup da feature <code>email-dashboard</code> (spec <code>docs/specs/email-dashboard/spec.md</code>, R10–R23), 23/11/2026, semana 2026-W48. Base: a tela Email real (<code>EmailNav</code>, <code>Composer</code>, <code>OrganizeBanner</code>), os cartões do Início (<code>INICIO_CARTAO_CLASS</code>) e <code>EmailSettingsTab</code>. Dados fictícios; “agora” = segunda, 23/11/2026, 09:20. Só tokens de <code>tokens.css</code>, raio ≤ 6, sem sombra, sem pílula, sem modal, Helvetica Neue, ícones lucide 16 px traço 1,5. Quadros de 1120×740 (janela padrão); PNGs em <code>png/</code> (2x). Um quadro só: <code>?only=A..G&amp;theme=light|dark</code>.</p>
+<h2>Decisões de desenho</h2><span class="bar"></span><ol>
+<li><span class="k">D1</span><span><b>Painel na barra.</b> Primeira linha do nível Email, logo abaixo do cabeçalho-voltar, com <code>LayoutDashboard</code> 16 e recuo de 10 (como “Nova conversa” do Assistente); 28 px (<code>--side-subrow</code>), a mesma altura das linhas de conta e de pasta. Um fio de 1 px em <code>--side-active</code> separa o Painel das contas.</span></li>
+<li><span class="k">D2</span><span><b>Cabeçalho.</b> Título 20/26 e subtítulo 13 <code>--text-muted</code> à esquerda; “Analisar agora” (<code>Button secondary</code> 32 com <code>RefreshCw</code>) à direita, alinhado pela base com o subtítulo, como o “Atualizar” do Início.</span></li>
+<li><span class="k">D3</span><span><b>Contas no topo da coluna da esquerda.</b> As linhas de 28 px (nome 13/500 à esquerda; “N não lidos · N pendentes · POP3” em 12 <code>--text-muted</code> à direita) ficam acima de Precisam de atenção, não numa faixa de largura total: assim a coluna da direita ganha 96 px de altura para Respostas e Organização.</span></li>
+<li><span class="k">D4</span><span><b>Linha de mensagem única.</b> Precisam de atenção, Respostas e Organização usam a mesma linha de 44: calha de 12 px com o quadrado de 6 px em <code>--accent</code> (importância 4–5; quadrado, não círculo, como o não lido das Mensagens), remetente 13/500 <code>--title</code> e “· conta” em 12 <code>--text-muted</code>; hora à direita em 12 tabular; segunda linha 12/16 com o assunto em <code>--text</code> e “· motivo” em <code>--text-muted</code>.</span></li>
+<li><span class="k">D5</span><span><b>Bloco de resposta.</b> Linha de 44, a resposta com o filete de 2 px <code>--line-strong</code> (o mesmo da tradução) recolhida em 2 linhas, e a linha de 28 com “Ver resposta” (link 12/500) à esquerda e os <code>ActionButton</code> “Abrir no Composer” (<code>Reply</code>) e “Ignorar” à direita. Aberta: “Aberta” em 12 <code>--text-muted</code> com o ícone <code>Check</code> no lugar do primeiro botão (continua clicável).</span></li>
+<li><span class="k">D6</span><span><b>Três blocos e “Mostrar mais N”.</b> O cartão Respostas mostra os 3 primeiros e uma linha de 32 “Mostrar mais N” que abre o resto em linha (até 20, R15). Sem isso, 20 respostas empurram Organização para fora da vista.</span></li>
+<li><span class="k">D7</span><span><b>Grupo de organização.</b> Cabeçalho de 32 com fio <code>--line-strong</code>: “Mover para Newsletters” 13/600 + “· conta” 12 <code>--text-muted</code> e “Mover todos (N)” (<code>ActionButton</code> com <code>FolderInput</code>) à direita. Linhas de 44 sem hora: no lugar dela, “Mover” e “Ignorar”.</span></li>
+<li><span class="k">D8</span><span><b>Colunas e rolagem.</b> 380 px à esquerda e o resto à direita, com 24 entre elas, a partir de 900 px de <i>janela</i> (como o Início; a área útil a 1120 é de 896). A coluna da direita rola sozinha; a da esquerda rola dentro do cartão. Em 740 de altura, Organização começa abaixo da dobra: o quadro G mostra a coluna rolada até ela.</span></li>
+<li><span class="k">D9</span><span><b>Vazios.</b> Cada cartão vazio é uma linha de 32 com <code>Check</code> 14 em <code>--text-faint</code> e o texto 13 <code>--text-muted</code>, no padrão “Nada para hoje” do Início. O cartão não some.</span></li>
+<li><span class="k">D10</span><span><b>IA desligada.</b> “Analisar agora” desabilitado (opacidade 0,5), subtítulo “Ainda não analisado · análise por IA desligada”, Precisam de atenção sem quadrado e sem motivo, e a <code>Note</code> (barra de 3 px <code>--title</code>, <code>Info</code>) no topo da coluna da direita, onde estariam os dois cartões, com o link “Configurações › Email”.</span></li>
+<li><span class="k">D11</span><span><b>Desfazer.</b> O <code>OrganizeBanner</code> da tela Email, sem mudança visual: <code>Sparkles</code>, título 12/700 “4 e-mails movidos para Newsletters”, apoio “Pelo Painel, às 09:20 · LAP”, “Desfazer” com <code>Undo2</code> e o ×; entre o cabeçalho e as colunas, a 32 das laterais.</span></li>
+<li><span class="k">D12</span><span><b>Composer.</b> O de hoje, em modo Responder, sem marca nova: o texto sugerido, uma linha em branco, a assinatura da conta, outra linha em branco e “Em 23/11/2026 09:05, Rafael Lima escreveu:” com a citação em “&gt;”. A linha da assinatura fica como está.</span></li>
+<li><span class="k">D13</span><span><b>Configurações.</b> Seção “Painel” entre Avisos e Convites, com a descrição de seção; “Última análise” é uma <code>SettingRow</code> cujo texto de apoio traz “Às 09:12 · 38 e-mails · US$ 0,02” e cujo controle é o “Analisar agora”. O quadro mostra a coluna rolada até Avisos.</span></li>
+</ol></div>
+</div>
+<script>
+(function(){
+var I={
+dash:'<rect width="7" height="9" x="3" y="3" rx="1"/><rect width="7" height="5" x="14" y="3" rx="1"/><rect width="7" height="9" x="14" y="12" rx="1"/><rect width="7" height="5" x="3" y="16" rx="1"/>',
+refresh:'<path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/>',
+cl:'<path d="m15 18-6-6 6-6"/>',cd:'<path d="m6 9 6 6 6-6"/>',cr:'<path d="m9 18 6-6-6-6"/>',
+mail:'<path d="M4 4h16a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2zM22 7l-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7"/>',
+inbox:'<polyline points="22 12 16 12 14 15 10 15 8 12 2 12"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/>',
+send:'<path d="M14.536 21.686a.5.5 0 0 0 .937-.024l6.5-19a.496.496 0 0 0-.635-.635l-19 6.5a.5.5 0 0 0-.024.937l7.93 3.18a2 2 0 0 1 1.112 1.11z"/><path d="m21.854 2.147-10.94 10.939"/>',
+file:'<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/>',
+folder:'<path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/>',
+archive:'<rect width="20" height="5" x="2" y="3" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/><path d="M10 12h4"/>',
+trash:'<path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/>',
+lock:'<rect width="18" height="11" x="3" y="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>',
+pencil:'<path d="M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z"/><path d="m15 5 4 4"/>',
+search:'<circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>',
+undo:'<path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 5.5 5.5a5.5 5.5 0 0 1-5.5 5.5H11"/>',
+x:'<path d="M18 6 6 18"/><path d="m6 6 12 12"/>',
+sparkles:'<path d="M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .963 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.581a.5.5 0 0 1 0 .964L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.963 0zM20 3v4M22 5h-4M4 17v2M5 18H3"/>',
+clip:'<path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48"/>',
+gear:'<path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2zM15 12a3 3 0 1 1-6 0a3 3 0 1 1 6 0z"/>',
+info:'<circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/>',
+reply:'<polyline points="9 17 4 12 9 7"/><path d="M20 18v-2a4 4 0 0 0-4-4H4"/>',
+check:'<path d="M20 6 9 17l-5-5"/>',
+fin:'<path d="M2 9V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H20a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-1"/><path d="M2 13h10"/><path d="m9 16 3-3-3-3"/>',
+cal:'<path d="M8 2v4M16 2v4"/><rect width="18" height="18" x="3" y="4" rx="2"/><path d="M3 10h18"/>'
+};
+function ic(n,s){s=s||16;return '<svg class="ic" width="'+s+'" height="'+s+'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true">'+I[n]+'</svg>';}
+var LOGO='<svg width="28" height="28" viewBox="0 0 100 100" class="ic" aria-label="LAP"><rect x="0" y="0" width="100" height="100" rx="6" fill="#ffffff"></rect><path d="M 20 25 L 20 75 L 55 75" fill="none" stroke="#0a2a5e" stroke-width="8" stroke-linecap="square"></path><rect x="62" y="58" width="22" height="22" fill="#3b82f6"></rect></svg>';
+function side(navHtml){
+ return '<aside class="side"><div class="lights"><i></i><i></i><i></i></div><div class="brand">'+LOGO+'<p><b>LAP Reuniões</b><small>LAP SOFTWARE</small></p></div><nav>'+navHtml+'</nav>'+
+ '<div class="sfoot"><div class="slock">'+ic('lock')+'<span class="fl">Bloquear</span><kbd>⌘⇧L</kbd></div><section class="sperm"><p class="t">Permissões</p><div class="r"><i></i><span class="fl">Microfone</span><span>concedido</span></div><div class="r"><i></i><span class="fl">Áudio do sistema</span><span>ok</span></div></section></div></aside>';
+}
+function emailNav(sel){
+ var f=function(icn,l,n,on){return '<div class="ssub f'+(on?' on':'')+'">'+ic(icn)+'<span class="fl">'+l+'</span>'+(n?'<span class="n tn">'+n+'</span>':'')+'</div>';};
+ return '<div class="sback">'+ic('cl')+ic('mail')+'<span class="fl">Email</span></div>'+
+ '<div class="ssub'+(sel==='painel'?' on':'')+'">'+ic('dash')+'<span class="fl">Painel</span></div><div class="sdiv"></div>'+
+ '<div class="ssub">'+ic('cd')+'<span class="fl">LAP · andrew@lap.example</span></div>'+
+ f('inbox','Caixa de Entrada','5',sel==='inbox')+f('send','Enviados')+f('file','Rascunhos')+f('archive','Arquivo')+f('folder','Clientes')+f('folder','Newsletters')+f('trash','Lixeira')+
+ '<div class="ssub">'+ic('cr')+'<span class="fl">Contato · contato@lap.example</span><span class="n tn">2</span></div>'+
+ '<div class="ssub">'+ic('cr')+'<span class="fl">Pessoal · andrew@provedor.example</span><span class="n tn">1</span></div>';
+}
+function cfgNav(){
+ var t=['Geral','Gravação','Claude','Arquivos','Contas','Email','Plugins','Conexões','Sobre'];
+ return '<div class="sback">'+ic('cl')+ic('gear')+'<span class="fl">Configurações</span></div>'+t.map(function(x){return '<div class="ssub tab'+(x==='Email'?' on':'')+'"><span class="fl">'+x+'</span></div>';}).join('');
+}
+function ab(label,icn){return '<span class="ab">'+(icn?ic(icn,14):'')+label+'</span>';}
+function header(sub,disabled,busy){
+ return '<div class="ph"><header><div class="hg"><h1 class="pt">Painel</h1><p class="dt tn">'+sub+'</p></div><span class="btn sec'+(disabled?' dis':'')+'">'+ic('refresh')+'Analisar agora</span></header></div>';
+}
+var ACC=[['LAP','5 não lidos · 3 pendentes'],['Contato','2 não lidos · 1 pendente'],['Pessoal','1 não lido · 0 pendentes · POP3']];
+var ACC0=[['LAP','0 não lidos · 0 pendentes'],['Contato','0 não lidos · 0 pendentes'],['Pessoal','0 não lidos · 0 pendentes · POP3']];
+function accts(a){return '<div class="accts">'+a.map(function(r){return '<div class="acct">'+ic('mail',14).replace('class="ic"','class="ic mut"')+'<b class="fl">'+r[0]+'</b><span class="c tn">'+r[1]+'</span></div>';}).join('')+'</div>';}
+function row(m,right){
+ return '<div class="mrow"><span class="gut">'+(m.hi?'<i></i>':'')+'</span><div class="mc"><div class="l1"><span class="who">'+m.from+' <em>· '+m.acc+'</em></span>'+(right?'':'<span class="tm">'+m.t+'</span>')+'</div><p class="l2">'+m.subj+(m.why?'<span> · '+m.why+'</span>':'')+'</p></div>'+(right||'')+'</div>';
+}
+var ATT=[
+ {hi:1,from:'Rafael Lima',acc:'LAP',t:'09:05',subj:'Aceite da proposta do portal',why:'pede a minuta do contrato até sexta'},
+ {hi:1,from:'Financeiro Grupo Orion',acc:'LAP',t:'08:41',subj:'Boleto da mensalidade de novembro',why:'vence amanhã, R$ 4.800'},
+ {hi:1,from:'Marina Costa',acc:'Contato',t:'08:12',subj:'Cronograma da fase 2',why:'cliente pergunta o prazo da entrega'},
+ {from:'Paulo Nunes',acc:'LAP',t:'ontem',subj:'Pauta da reunião técnica',why:'quer confirmar o horário de quarta'},
+ {from:'Juliana Prado',acc:'Contato',t:'ontem',subj:'Indicação: app de vistoria',why:'contato novo, pede retorno'},
+ {from:'Banco Exemplo',acc:'Pessoal',t:'ontem',subj:'Fatura do cartão disponível',why:'vence em 01/12'},
+ {from:'Carlos Mendes',acc:'LAP',t:'20/11',subj:'Acesso ao servidor de homologação',why:'aguarda a chave de acesso'},
+ {from:'Contabilidade Ábaco',acc:'LAP',t:'20/11',subj:'Documentos do fechamento',why:'faltam 2 notas fiscais'}
+];
+var ATT_H=[
+ {from:'Rafael Lima',acc:'LAP',t:'09:05',subj:'Aceite da proposta do portal'},
+ {from:'Financeiro Grupo Orion',acc:'LAP',t:'08:41',subj:'Boleto da mensalidade de novembro'},
+ {from:'Marina Costa',acc:'Contato',t:'08:12',subj:'Cronograma da fase 2'},
+ {from:'Paulo Nunes',acc:'LAP',t:'ontem',subj:'Pauta da reunião técnica'},
+ {from:'Juliana Prado',acc:'Contato',t:'ontem',subj:'Indicação: app de vistoria'},
+ {from:'Banco Exemplo',acc:'Pessoal',t:'ontem',subj:'Fatura do cartão disponível'}
+];
+function attCard(rows,k){
+ return '<section class="card"><header class="ch"><h2>Precisam de atenção</h2><span class="sp"></span><span class="k tn">'+k+'</span></header>'+
+ (rows.length?rows.map(function(m){return row(m);}).join(''):'<div class="calm">'+ic('check',14)+'Nada precisa de atenção</div>')+'</section>';
+}
+var R1_FULL=['Oi, Rafael. Que ótima notícia, obrigado pelo aceite da proposta.','Envio a minuta do contrato até quinta-feira, com o escopo do portal, o cronograma em três fases e as condições de pagamento que combinamos na reunião.','Se o jurídico de vocês puder revisar na sexta pela manhã, conseguimos assinar no mesmo dia e começar a fase 1 na segunda, 30/11.','Qualquer ajuste no texto, me avise por aqui que eu atualizo na hora.'];
+var REP=[
+ {m:{hi:1,from:'Rafael Lima',acc:'LAP',t:'09:05',subj:'Aceite da proposta do portal',why:'pede a minuta do contrato até sexta'},r:R1_FULL.join(' ')},
+ {m:{hi:1,from:'Marina Costa',acc:'Contato',t:'08:12',subj:'Cronograma da fase 2',why:'cliente pergunta o prazo da entrega'},r:'Olá, Marina. A fase 2 está prevista para 12/12, com a homologação na semana anterior. Mando o cronograma atualizado ainda hoje, com as datas de cada entrega.'},
+ {m:{from:'Paulo Nunes',acc:'LAP',t:'ontem',subj:'Pauta da reunião técnica',why:'quer confirmar o horário de quarta'},r:'Oi, Paulo. Quarta às 10h funciona para mim. Incluo na pauta o acesso ao servidor e a migração do banco; se quiser somar algum item, me avise até terça.',opened:1}
+];
+function repBlock(x,expanded){
+ var q=expanded?'<div class="rq open">'+R1_FULL.map(function(p){return '<p>'+p+'</p>';}).join('')+'</div>':'<div class="rq">'+x.r+'</div>';
+ var first=x.opened?'<span class="op">'+ic('check',14)+'Aberta</span>':ab('Abrir no Composer','reply');
+ return '<div class="rb">'+row(x.m)+q+'<div class="ra"><span class="vr">'+(expanded?'Ver menos':'Ver resposta')+'</span><span class="sp"></span>'+first+ab('Ignorar')+'</div></div>';
+}
+function repCard(empty,expandFirst){
+ if(empty)return '<section class="card"><header class="ch"><h2>Respostas sugeridas</h2></header><div class="calm">'+ic('check',14)+'Nenhuma resposta sugerida</div></section>';
+ return '<section class="card"><header class="ch"><h2>Respostas sugeridas</h2><span class="sp"></span><span class="k tn">5 e-mails</span></header>'+REP.map(function(x,i){return repBlock(x,expandFirst&&i===0);}).join('')+'<div class="more">Mostrar mais 2</div></section>';
+}
+var NEWS=[
+ {from:'Boletim Tech Semanal',acc:'LAP',subj:'Edição 212: o que mudou no Node 24',why:'newsletter, sem ação'},
+ {from:'Agência Pixel',acc:'LAP',subj:'Webinar: tendências de UX para 2027',why:'convite de marketing'},
+ {from:'Clube de Ofertas',acc:'LAP',subj:'Black Friday: até 70% em cursos',why:'promoção'},
+ {from:'Revista Gestão',acc:'LAP',subj:'Resumo da semana',why:'newsletter, sem ação'}
+];
+var ARQ=[
+ {from:'Emissor de NF-e',acc:'Contato',subj:'Nota fiscal 1.284 emitida',why:'aviso automático já resolvido'},
+ {from:'Agenda Exemplo',acc:'Contato',subj:'Lembrete: reunião de ontem',why:'o evento já passou'}
+];
+function grp(title,acc,rows){
+ return '<div class="mg"><div class="gh"><b>'+title+'</b><em>· '+acc+'</em><span class="sp"></span>'+ab('Mover todos ('+rows.length+')','fin')+'</div>'+
+ rows.map(function(m){return row(m,'<span class="acts">'+ab('Mover')+ab('Ignorar')+'</span>');}).join('')+'</div>';
+}
+function movCard(empty,noNews){
+ if(empty)return '<section class="card"><header class="ch"><h2>Sugestões de organização</h2></header><div class="calm">'+ic('check',14)+'Caixa de Entrada em ordem</div></section>';
+ return '<section class="card"><header class="ch"><h2>Sugestões de organização</h2><span class="sp"></span><span class="k tn">'+(noNews?'2 e-mails':'6 e-mails')+'</span></header>'+(noNews?'':grp('Mover para Newsletters','LAP',NEWS))+grp('Arquivar','Contato',ARQ)+'</section>';
+}
+function painel(o){
+ var h=header(o.sub,o.off);
+ var ban=o.banner?'<div class="banner" role="status">'+ic('sparkles').replace('class="ic"','class="ic sp1"')+'<div class="fl" style="white-space:normal"><p class="bt">4 e-mails movidos para Newsletters</p><p class="bd2 tn">Pelo Painel, às 09:20 · LAP</p></div><span class="un">'+ic('undo',14)+'Desfazer</span><span class="x">'+ic('x',14)+'</span></div>':'';
+ var L=accts(o.empty?ACC0:ACC)+attCard(o.empty?[]:(o.off?ATT_H:ATT),o.empty?'':(o.off?'6 não lidos pendentes':'8 e-mails'));
+ var R;
+ if(o.off)R='<div class="note">'+ic('info')+'<p>Análise por IA desligada. Ligue em <span class="lnk">Configurações › Email</span> para ver respostas e sugestões de organização.</p></div>';
+ else R=repCard(o.empty,o.expand)+movCard(o.empty,o.banner);
+ return side(emailNav('painel'))+'<main class="main">'+h+ban+'<div class="pgrid"><div class="colL">'+L+'</div><div class="colR"'+(o.scroll?' data-scroll="bottom"':'')+'>'+R+'</div></div></main>';
+}
+function composer(){
+ var rows=[
+  {av:['RL','orange'],n:'Rafael Lima',t:'09:05',s:'Aceite da proposta do portal',p:'Bom dia, Andrew. Conversamos aqui e vamos seguir…',on:1,un:1},
+  {av:['GO','blue'],n:'Financeiro Grupo Orion',t:'08:41',s:'Boleto da mensalidade de novembro',p:'Segue o boleto com vencimento em 24/11.',un:1},
+  {av:['CM','green'],n:'Carlos Mendes',t:'08:30',s:'Acesso ao servidor de homologação',p:'Consegue me mandar a chave até amanhã?',un:1},
+  {av:['BT','purple'],n:'Boletim Tech Semanal',t:'07:00',s:'Edição 212: o que mudou no Node 24',p:'Nesta edição: o novo carregador de módulos…'}
+ ];
+ var rows2=[
+  {av:['PN','blue'],n:'Paulo Nunes',t:'17:30',s:'Pauta da reunião técnica',p:'Podemos fechar a pauta até quarta?'},
+  {av:['RG','pink'],n:'Revista Gestão',t:'16:02',s:'Resumo da semana',p:'Os cinco textos mais lidos da semana…'}
+ ];
+ function er(r){var c=r.av[1]==='purple'?'blue':r.av[1];return '<div class="erow'+(r.on?' on':'')+'"><span class="av" style="background:var(--note-'+c+');color:var(--note-'+c+'-text)">'+r.av[0]+'</span><div class="c"><div class="a"><b class="'+(r.un?'':'rd')+'">'+(r.un&&!r.on?'<i class="sq"></i>':'')+r.n+'</b><span class="tn">'+r.t+'</span></div><p class="s">'+r.s+'</p><p class="p">'+r.p+'</p></div></div>';}
+ var list='<div class="elist"><div class="top"><span class="btn pri">'+ic('pencil')+'Nova mensagem</span></div><div class="hd"><b>Caixa de Entrada</b><span class="mut s12 tn">5 não lidas</span></div><p class="ad">andrew@lap.example</p><p class="gl">Hoje</p>'+rows.map(er).join('')+'<p class="gl">Ontem</p>'+rows2.map(er).join('')+'</div>';
+ var body='Oi, Rafael. Que ótima notícia, obrigado pelo aceite da proposta.\n\nEnvio a minuta do contrato até quinta-feira, com o escopo do portal, o cronograma em três fases e as condições de pagamento que combinamos na reunião.\n\nSe o jurídico de vocês puder revisar na sexta pela manhã, conseguimos assinar no mesmo dia e começar a fase 1 na segunda, 30/11.<span class="cur"></span>\n\nAndrew Pereira\nLAP Software &amp; Consultoria\n\n<span class="mut">Em 23/11/2026 09:05, Rafael Lima escreveu:\n&gt; Bom dia, Andrew. Conversamos aqui e vamos seguir com a\n&gt; proposta do portal do associado. Consegue mandar a minuta\n&gt; do contrato até sexta?</span>';
+ var comp='<section class="comp"><header><h2>Responder</h2><span class="mut s12 ell">De: Andrew Pereira &lt;andrew@lap.example&gt;</span></header><div class="cbody">'+
+ '<div class="fld"><label>Para</label><span class="chip">rafael.lima@cliente.example'+ic('x',12).replace('class="ic"','class="ic mut"')+'</span></div>'+
+ '<div class="fld"><label>Cc</label></div>'+
+ '<div class="fld"><label>Assunto</label><span class="ttl" style="font-size:13px">Re: Aceite da proposta do portal</span></div>'+
+ '<div class="txt">'+body+'</div>'+
+ '<div class="cfoot"><span class="btn sec ico">'+ic('clip')+'</span><span style="display:flex;gap:8px"><span class="btn sec">Descartar</span><span class="btn pri">'+ic('send')+'Enviar <kbd>⌘↵</kbd></span></span></div>'+
+ '<p class="hint">Assinatura da conta LAP. Pode editar ou apagar aqui; a padrão fica em <a>Configurações › Email</a></p></div></section>';
+ return side(emailNav('inbox'))+'<main class="main" style="flex-direction:row">'+list+comp+'</main>';
+}
+function config(){
+ function sr(n,d,c){return '<div class="srow2"><div><p class="nm">'+n+'</p>'+(d?'<p class="de">'+d+'</p>':'')+'</div><div class="ctl">'+c+'</div></div>';}
+ var pastas='<section class="sec"><h2>Pastas</h2><div class="panel"><div style="padding-top:12px;padding-bottom:12px"><p class="de mut s12" style="margin-bottom:6px">As pastas da conta no servidor. Para mover mensagens, arraste para a pasta na tela de email.</p>'+
+ ['Arquivo','Clientes','Clientes / Grupo Orion','Newsletters'].map(function(x){return '<div class="frow">'+ic('folder')+'<span class="fl">'+x+'</span></div>';}).join('')+'</div></div></section>';
+ var avisos='<section class="sec" id="cfg-avisos"><h2>Avisos</h2><div class="panel">'+sr('Avisar quando chega email','Notificação do macOS para email novo na Caixa de Entrada. Uma regra com “não avisar” vale mais.','<span class="sw"><i></i></span>')+'</div></section>';
+ var painel='<section class="sec"><h2>Painel</h2><p class="ds">O Painel fica no topo do Email. Ele sugere; nada é enviado nem movido sem o seu clique.</p><div class="panel">'+
+ sr('Analisar e-mails com IA','Uma vez por dia e quando você pede, o Claude lê as Caixas de Entrada dos últimos 7 dias de todas as contas. Desligado, o Painel mostra só não lidos e pendentes.','<span class="sw"><i></i></span>')+
+ sr('Modelo','Haiku é rápido e barato. Sonnet escreve respostas melhores e custa mais.','<span class="seg"><span class="on">Haiku</span><span>Sonnet</span></span>')+
+ sr('Última análise','<span class="tn">Às 09:12 · 38 e-mails · US$ 0,02</span>','<span class="btn sec">'+ic('refresh')+'Analisar agora</span>')+'</div></section>';
+ var conv='<section class="sec"><h2>Convites</h2><div class="panel">'+sr('Agenda padrão','Onde entram os eventos aceitos.','<span class="sel">Trabalho'+ic('cd')+'</span>')+sr('Pôr na agenda ao aceitar','Ligado, Aceitar e Talvez também gravam o evento no Calendário do Mac. Dá para desligar em cada convite.','<span class="sw"><i></i></span>')+'</div></section>';
+ return side(cfgNav())+'<main class="main"><div class="stop"><h1>Email</h1><span class="search">'+ic('search')+'Buscar configuração<kbd>⌘F</kbd></span></div><div class="scol" data-scroll="avisos"><div class="scin">'+pastas+avisos+painel+conv+'</div></div></main>';
+}
+var F={
+ A:{t:'01 · Painel cheio',png:'01-painel',cap:'Email › Painel com as três contas, oito e-mails em Precisam de atenção (três com o quadrado de importância 4–5), três respostas sugeridas (a terceira já aberta) e, abaixo da dobra, Sugestões de organização com o grupo Newsletters.',b:function(){return painel({sub:'Analisado às 09:12 · 38 e-mails · Haiku'});}},
+ B:{t:'02 · Painel vazio',png:'02-vazio',cap:'Tudo em dia: as contas zeradas e cada cartão com a linha de 32 px do estado vazio.',b:function(){return painel({sub:'Analisado às 09:12 · 0 e-mails novos · Haiku',empty:1});}},
+ C:{t:'03 · IA desligada',png:'03-ia-desligada',cap:'Configurações › Email › Painel com a análise desligada: Analisar agora desabilitado, Precisam de atenção pela heurística (não lidos pendentes, sem motivo) e a nota com o link, sem os outros dois cartões.',b:function(){return painel({sub:'Ainda não analisado · análise por IA desligada',off:1});}},
+ D:{t:'04 · Resposta expandida',png:'04-resposta-expandida',cap:'“Ver resposta” no primeiro bloco: a resposta inteira em linha, em quatro parágrafos, e o link vira “Ver menos”.',b:function(){return painel({sub:'Analisado às 09:12 · 38 e-mails · Haiku',expand:1});}},
+ E:{t:'05 · Composer pré-preenchido',png:'05-composer',cap:'Depois de “Abrir no Composer”: a Caixa de Entrada da conta LAP com a mensagem selecionada e o Composer em Responder, com Para e “Re:” preenchidos, a resposta sugerida, a assinatura e a citação. Nada sai sem Enviar.',b:composer},
+ F:{t:'06 · Configurações › Email › Painel',png:'06-config',cap:'A aba Email rolada até Avisos: a seção nova Painel com o interruptor, o modelo (Haiku | Sonnet), a última análise com o custo e o Analisar agora.',b:config},
+ G:{t:'07 · Banner de Desfazer',png:'07-desfazer',cap:'Logo depois de “Mover todos (4)” no grupo Newsletters: o grupo sumiu, o banner de Desfazer aparece no topo e a coluna da direita está rolada até Sugestões de organização, onde o clique aconteceu.',b:function(){return painel({sub:'Analisado às 09:12 · 38 e-mails · Haiku',banner:1,scroll:1});}}
+};
+var cv=document.getElementById('canvas');
+function frame(k,theme){return '<div><span class="tag">'+F[k].png.toUpperCase()+'-'+(theme==='light'?'CLARO':'ESCURO')+'</span><div class="fr0"><div class="app t-'+theme+'">'+F[k].b()+'</div></div></div>';}
+var keys=window.__only?[window.__only]:Object.keys(F);
+keys.forEach(function(k){
+ var s=document.createElement('section');s.className='bd';s.id=k;
+ var themes=window.__only?[window.__theme]:['light','dark'];
+ s.innerHTML='<h2>'+F[k].t+'</h2><p class="cap">'+F[k].cap+'</p><div class="pair">'+themes.map(function(t){return frame(k,t);}).join('')+'</div>';
+ cv.appendChild(s);
+});
+document.querySelectorAll('[data-scroll="bottom"]').forEach(function(e){e.scrollTop=e.scrollHeight;});
+document.querySelectorAll('[data-scroll="avisos"]').forEach(function(e){var a=e.querySelector('#cfg-avisos');e.scrollTop=a.offsetTop-e.offsetTop-12;});
+})();
+</script></body></html>
