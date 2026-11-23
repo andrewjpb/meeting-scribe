@@ -12,7 +12,7 @@ export function EtiquetaChips({ etiqueta }: { etiqueta: Etiqueta | null }) {
       {chips.map((chip) => {
         const urgente = chip === 'Urgente'
         return (
-          <span key={chip} data-triagem-chip={urgente ? 'urgente' : chip.toLowerCase()} className={`${CHIP_CLASS} ${urgente ? 'bg-accent text-on-accent' : 'bg-bg-sunken text-text-muted'}`}>
+          <span key={chip} data-triagem-chip={urgente ? 'urgente' : chip.toLowerCase()} className={`${CHIP_CLASS} ${urgente ? 'bg-accent text-on-accent' : 'border border-line-strong text-text-muted'}`}>
             {chip}
           </span>
         )

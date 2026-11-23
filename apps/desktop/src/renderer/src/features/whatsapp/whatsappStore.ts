@@ -257,7 +257,11 @@ export const useWhatsApp = create<WhatsAppState>()((set, get) => ({
           const index = chats.findIndex((chat) => chat.id === message.chatId)
           const chat = chats[index]
           if (chat) {
-            chats[index] = { ...chat, name: chat.name === chat.id.split('@')[0] && chatName ? chatName : chat.name, lastMessage: message, unread: message.fromMe ? chat.unread : chat.unread + 1 }
+            const name = chat.name === chat.id.split('@')[0] && chatName ? chatName : chat.name
+            // Mensagem que não é mais nova que a última conhecida da conversa (o eco da lista recém-carregada, ou o
+            // histórico que a ponte entrega sem contar) não mexe na contagem nem na última mensagem.
+            const stale = chat.lastMessage !== null && (chat.lastMessage.id === message.id || message.at < chat.lastMessage.at)
+            chats[index] = stale ? { ...chat, name } : { ...chat, name, lastMessage: message, unread: message.fromMe ? chat.unread : chat.unread + 1 }
           } else chats.push({ id: message.chatId, name: chatName, kind: message.chatId.endsWith('@g.us') ? 'group' : 'person', unread: message.fromMe ? 0 : 1, lastMessage: message })
         }
         if (messages[message.chatId]) byChat.set(message.chatId, [...(byChat.get(message.chatId) ?? []), message])
