@@ -417,7 +417,7 @@ function FolderView({ account, sentMailbox, folder, pop3, nodes }: FolderViewPro
     const pedido = (location.state as EmailNavigationState | null)?.compose
     if (!pedido || composeSeen.current === location.key) return
     composeSeen.current = location.key
-    newMessage(parseRecipients(pedido.to.join('\n')), pedido.subject ?? '')
+    newMessage(parseRecipients((pedido.to ?? []).join('\n')), pedido.subject ?? '')
     void navigate(location.pathname, { replace: true, state: null })
   })
 

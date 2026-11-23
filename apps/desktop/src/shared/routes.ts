@@ -59,6 +59,22 @@ export const EMAIL_FOLDER_SLUGS = { inbox: 'entrada', sent: 'enviados' } as cons
 export const EMAIL_ROOT_PATH = '/email'
 
 /**
+ * Painel de e-mail (contrato 155, D6): `/email/painel`, na mesma rota `email` (`/email/:conta?/:pasta?`). `painel` fica
+ * reservado como primeiro segmento: nenhuma conta usa esse id (o id da conta é um UUID, `EMAIL_ACCOUNT_ID_PATTERN`).
+ */
+export const EMAIL_PAINEL_SLUG = 'painel'
+export const EMAIL_PAINEL_PATH = `${EMAIL_ROOT_PATH}/${EMAIL_PAINEL_SLUG}`
+
+export function emailPainelPath(): string {
+  return EMAIL_PAINEL_PATH
+}
+
+/** O caminho é o do Painel (`/email/painel`, com ou sem a barra no fim). */
+export function isEmailPainelPath(pathname: string): boolean {
+  return pathname === EMAIL_PAINEL_PATH || pathname === `${EMAIL_PAINEL_PATH}/`
+}
+
+/**
  * Contrato 55: as outras pastas vão num segmento com este prefixo e o path codificado (`p~Clientes%2FABF`), que nunca
  * colide com os dois slugs acima (nem com uma pasta chamada "entrada").
  */
@@ -104,8 +120,12 @@ export interface EmailNavigationState {
   movedByRule?: boolean
   /** Contrato 55 (CA1): a pasta pedida não existe mais na conta; a Caixa de Entrada abre com a nota. */
   missingFolder?: string
-  /** Contrato 112 (D12, R28): abre o Composer de uma mensagem nova já endereçada (quem usa é o detalhe da oportunidade). */
-  compose?: { to: string[]; subject?: string }
+  /**
+   * Contrato 112 (D12, R28): abre o Composer de uma mensagem nova já endereçada (quem usa é o detalhe da oportunidade).
+   * Contrato 155 (D5): com `replyTo`, abre a resposta àquela mensagem da conta; `text` vem no corpo (a resposta sugerida
+   * do Painel).
+   */
+  compose?: { to?: string[]; subject?: string; replyTo?: { messageKey: string; mailbox: string }; text?: string }
 }
 
 /** Destino do item "Funil" da barra lateral (contrato 112): a tela vai a Oportunidades. */
