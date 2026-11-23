@@ -87,7 +87,7 @@ function oneLine(name: string): string {
  * O tamanho e os bytes do arquivo, sem seguir link: o caminho que virou link entre a conferência e a
  * leitura falha. Acima de `max`, `'grande'` sem ler.
  */
-async function readNoFollow(path: string, max: number): Promise<{ size: number; bytes: Uint8Array } | 'grande' | null> {
+export async function readNoFollow(path: string, max: number): Promise<{ size: number; bytes: Uint8Array } | 'grande' | null> {
   const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW).catch(() => null)
   if (!handle) return null
   try {

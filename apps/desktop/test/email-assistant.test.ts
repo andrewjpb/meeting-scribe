@@ -222,6 +222,9 @@ describe('cartões de email (CA2, CA3, CA4)', () => {
         toLabel: 'Marina Rocha <marina@cliente.example>',
         subject: 'Re: Proposta revisada',
         text: 'Recebi, obrigado.',
+        // Contrato 168: sem anexos das pastas.
+        attachments: [],
+        missing: [],
       },
     ])
     // Já com "Re:", o assunto não repete o prefixo.

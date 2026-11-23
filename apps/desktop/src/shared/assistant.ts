@@ -18,6 +18,7 @@
 import { formatRunAt, wallTime, type Schedule } from './automations'
 import type { Chat } from './chat'
 import { CAPTION_MAX } from './redes-rules'
+import { EMAIL_ATTACH_MAX_FILES, type EmailOutgoingAttachment } from './email'
 
 /** Linguagem da cerca do bloco de ação: ```lap-acao ... ```. */
 export const ACTION_FENCE = 'lap-acao'
@@ -91,8 +92,9 @@ export const AUTOMATIONS_TABS = ['agentes', 'tarefas', 'execucoes'] as const
 /**
  * `proposed`: o cartão espera o clique; `done`: feito (criado, enviado); `dismissed`: "Descartar". Contrato 78: `failed`,
  * o clique não deu certo (a frase em `error`): o evento oferece "Tentar de novo"; o lembrete que sumiu fica assim.
+ * Contrato 168: `opened`, a resposta com anexos foi aberta no Composer (o envio é de lá, não do cartão).
  */
-export const CHAT_ACTION_STATUSES = ['proposed', 'done', 'failed', 'dismissed'] as const
+export const CHAT_ACTION_STATUSES = ['proposed', 'done', 'failed', 'dismissed', 'opened'] as const
 export type ChatActionStatus = (typeof CHAT_ACTION_STATUSES)[number]
 export const CHAT_ACTION_KINDS = [
   'lembrete',
@@ -212,6 +214,33 @@ export interface EmailListAction extends ActionBase {
 }
 
 /**
+ * Contrato 168 (pastas-assistente E1): um arquivo das pastas permitidas que vai anexo na resposta. Resolvido pelo main a
+ * partir do id do índice da conversa (`PASTAS.md`); o tamanho é o do índice e é conferido de novo ao abrir o Composer.
+ */
+export interface EmailReplyAttachment {
+  /** hash16 do índice. */
+  id: string
+  name: string
+  /** Relativo à pasta permitida, com '/'. */
+  relPath: string
+  /** O nome da pasta permitida, como o índice mostra. */
+  folderLabel: string
+  bytes: number
+  /** O item pedido, nas palavras do remetente; `null`: o modelo não disse. */
+  requested: string | null
+}
+
+/** Contrato 168: anexos numa resposta (o mesmo limite do Composer). */
+export const EMAIL_REPLY_ATTACHMENTS_MAX = EMAIL_ATTACH_MAX_FILES
+/** Contrato 168: itens pedidos que não vão anexos (os não achados e os que não couberam). */
+export const EMAIL_REPLY_MISSING_MAX = 10
+export const EMAIL_REPLY_MISSING_TEXT_MAX = 120
+/** Contrato 168: o `pedido` de um anexo. */
+export const EMAIL_REPLY_REQUESTED_MAX = 80
+/** Contrato 168: a frase do cartão aberto no Composer. */
+export const EMAIL_REPLY_OPENED_TEXT = 'Aberto no Composer'
+
+/**
  * Contrato 45: `email-resposta`, o rascunho da resposta. Destinatário, assunto ("Re:") e o Message-ID respondido são
  * lidos do cache do app, nunca do texto do modelo; o corpo é editável e só sai com o clique em "Enviar" (o
  * `emailSend` do preload, com o token de clique do contrato 42).
@@ -232,7 +261,17 @@ export interface EmailReplyAction extends ActionBase {
   toLabel: string
   subject: string
   text: string
+  /**
+   * Contrato 168: os arquivos das pastas que vão anexos. Com anexo ou item faltando, o cartão não envia: abre o Composer
+   * (`scribe:chat-action-email-compose`). Cartões antigos: `[]`.
+   */
+  attachments: EmailReplyAttachment[]
+  /** Contrato 168: o que foi pedido e não vai ("<item> (arquivo não está no índice)"); cartões antigos: `[]`. */
+  missing: string[]
 }
+
+/** Contrato 168: a resposta tem a seção Anexos (e abre no Composer em vez de enviar). */
+export const emailReplyHasAttachments = (action: Pick<EmailReplyAction, 'attachments' | 'missing'>): boolean => action.attachments.length + action.missing.length > 0
 
 /**
  * Contrato 56: `email-lote`, o que o Assistente moveu num turno (uma conta). O main anexa à resposta (o modelo nunca
@@ -556,6 +595,20 @@ export interface ChatActionStateRequest extends ChatActionRef {
   state: 'dismissed' | 'sent' | 'task-created'
   text?: string | undefined
 }
+
+/**
+ * Contrato 168 (E4): "Abrir no Composer" na resposta com anexos. O main relê cada anexo pelo índice da conversa e devolve
+ * o rascunho com os bytes; nada é enviado daqui. `skipped`: os nomes dos anexos que não foram lidos (sumiram, mudaram de
+ * tamanho, saíram da pasta permitida ou passaram do limite).
+ */
+export interface ChatActionComposeRequest extends ChatActionRef {
+  /** O texto do cartão (com a edição da pessoa), gravado no cartão aberto. */
+  text?: string | undefined
+}
+
+export type EmailComposeFromAction =
+  | { ok: true; accountId: string; mailbox: string | null; to: string[]; subject: string; text: string; inReplyTo: string | null; attachments: EmailOutgoingAttachment[]; skipped: string[] }
+  | { ok: false; error: 'nao-encontrado' | 'estado' | 'anexos' }
 
 /** `done`: o cartão já tinha sido usado (recarregar a conversa não repete a ação). */
 export type ChatActionResult = { ok: true; chat: Chat } | { ok: false; error: 'missing' | 'invalid' | 'past' | 'done' | 'full' }

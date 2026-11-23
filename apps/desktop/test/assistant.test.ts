@@ -244,8 +244,10 @@ describe('cartões: só com o clique, uma vez só (CA3, CA5)', () => {
   it('os canais novos (chat-action-*) são recusados com o app bloqueado', () => {
     const channels = INVOKE_CHANNELS.filter((channel) => channel.startsWith('scribe:chat-action-'))
     // Contrato 78: o evento no Calendário e alterar ou apagar um lembrete. Contrato 76: o rascunho do Instagram.
-    // Contrato 117: os cartões do funil, num canal só. Contrato 127: os das tarefas, também.
+    // Contrato 117: os cartões do funil, num canal só. Contrato 127: os das tarefas, também. Contrato 168: o "Abrir no
+    // Composer" da resposta com anexos (lê os anexos; não envia).
     expect(channels.sort()).toEqual([
+      'scribe:chat-action-email-compose',
       'scribe:chat-action-event',
       'scribe:chat-action-funil',
       'scribe:chat-action-instagram-draft',

@@ -45,6 +45,10 @@ import {
   CHAT_ACTION_ERROR_MAX,
   CHAT_ACTION_STATUSES,
   EMAIL_CARD_ITEMS_MAX,
+  EMAIL_REPLY_ATTACHMENTS_MAX,
+  EMAIL_REPLY_MISSING_MAX,
+  EMAIL_REPLY_MISSING_TEXT_MAX,
+  EMAIL_REPLY_REQUESTED_MAX,
   EVENT_LOCATION_MAX,
   EVENT_NOTES_MAX,
   EVENT_TITLE_MAX,
@@ -150,6 +154,17 @@ const funilCardPasso = z.object({ texto: z.string().max(FUNIL_CARD_PASSO_MAX), d
 const funilCardContato = z.object({ nome: z.string().max(FUNIL_NOME_MAX), email: z.string().max(320).nullable(), contatoId: funilCardId.nullable() }).strict()
 /** Contrato 127: o id de uma tarefa num cartão (o uuid do `tarefas.json`). */
 const tarefaCardId = z.string().regex(/^[\w-]{1,100}$/)
+/** Contrato 168: um anexo das pastas numa resposta de email (o id do índice, nunca um caminho absoluto). */
+const emailReplyAttachment = z
+  .object({
+    id: z.string().regex(/^[0-9a-f]{16}$/),
+    name: z.string().max(1000),
+    relPath: z.string().max(4096),
+    folderLabel: z.string().max(1000),
+    bytes: z.number().int().min(0),
+    requested: z.string().max(EMAIL_REPLY_REQUESTED_MAX).nullable(),
+  })
+  .strict()
 
 /** Ação proposta gravada com a resposta (contrato 25), já validada e com o que o app leu (nomes, número). */
 export const chatActionSchema = z.discriminatedUnion('kind', [
@@ -239,6 +254,9 @@ export const chatActionSchema = z.discriminatedUnion('kind', [
       toLabel: z.string().max(500),
       subject: z.string().max(EMAIL_SUBJECT_MAX),
       text: z.string().max(EMAIL_TEXT_MAX),
+      // Contrato 168: os cartões gravados antes dos anexos das pastas ficam sem nenhum.
+      attachments: z.array(emailReplyAttachment).max(EMAIL_REPLY_ATTACHMENTS_MAX).default([]),
+      missing: z.array(z.string().max(EMAIL_REPLY_MISSING_TEXT_MAX)).max(EMAIL_REPLY_MISSING_MAX).default([]),
     })
     .strict(),
   // Contrato 56: o lote que o Assistente moveu (o cartão lê o resto do `batches.json`).

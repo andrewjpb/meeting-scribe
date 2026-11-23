@@ -6,7 +6,7 @@ import { basename, join } from 'node:path'
 import { app, BrowserWindow, clipboard, dialog, Menu, nativeImage, net, Notification, powerMonitor, safeStorage, screen, session, shell, systemPreferences, Tray, type MenuItemConstructorOptions, type NativeImage, type OpenDialogOptions, type SaveDialogOptions } from 'electron'
 import { DRIVE_FOLDER_URL_PREFIX } from '../shared/accounts'
 import { ASSEMBLYAI_DASHBOARD_URL } from '../shared/assemblyai'
-import type { ChatActionResult } from '../shared/assistant'
+import type { ChatActionResult, EmailComposeFromAction } from '../shared/assistant'
 import type { AtendimentoState } from '../shared/atendimento'
 import { formatRunAt, formatRunShort, type AutomationRun } from '../shared/automations'
 import { chatSourcesOf } from '../shared/chat'
@@ -42,7 +42,7 @@ import { createChatService, type ChatService } from './chat/service'
 import { AUTOMATION_RUNS_IN_SOURCE, writeSources, type AssistantState } from './chat/sources'
 import { createFolderTools, revealFolderFile } from './chat/folder-tools'
 import { addAssistantFolders, createFolderIndex, removeAssistantFolder } from './chat/folders'
-import type { FolderAddResult } from '../shared/assistant-folders'
+import { folderLabel, type FolderAddResult } from '../shared/assistant-folders'
 import { createFileChatStore } from './chat/store'
 import { createGoogleAccount, type GoogleAccountService } from './google/account'
 import { createMicrosoftAccount, type MicrosoftAccountService } from './microsoft/account'
@@ -1791,7 +1791,16 @@ function createAppServices(userData: string): AppServices {
     whatsapp: { exportChats: (folder, chatIds, days) => whatsapp.exportChats(folder, chatIds, days) },
     assistant: {
       prepare: (folder, scope) => writeSources(assistantSources, folder, scope),
-      extract: (text) => extractActions(text, actionResolver),
+      // Contrato 168: os anexos de uma resposta de email só pelo índice das pastas desta conversa.
+      extract: (text, chatId) =>
+        extractActions(text, {
+          ...actionResolver,
+          folderFile: (id) => {
+            const entry = folderIndex.resolve(chatId, id)
+            const folder = entry ? folderIndex.folderOf(entry) : null
+            return entry && folder ? { entry, folderLabel: folderLabel(folder.path) } : null
+          },
+        }),
       // Contrato 45 (CA7): com conta de email e a fonte ligada, as ferramentas de busca e leitura. Contrato 56: e as de
       // organizar (só aqui, no Assistente interativo; as automações recebem só as de leitura).
       // Contrato 76: com a fonte Redes ligada e uma conta do Instagram, as ferramentas do Instagram.
@@ -2194,6 +2203,8 @@ function createAppServices(userData: string): AppServices {
     },
     // Contrato 117: os cartões do funil gravam só pelo serviço do funil (110), no clique.
     funil: { view: () => funil.view(), contatoSave: (request) => funil.contatoSave(request), oportunidadeSave: (request) => funil.oportunidadeSave(request), oportunidadeMove: (request) => funil.oportunidadeMove(request), eventoAdd: (request) => funil.eventoAdd(request) },
+    // Contrato 168: o "Abrir no Composer" relê os anexos pelo índice das pastas (sem seguir link, com o tamanho gravado).
+    folderIndex,
     ...devLog,
   })
   // Contrato 110: o funil lê reuniões, email e WhatsApp só pelos caches deles; bloqueado, a view não vai às janelas.
@@ -2790,6 +2801,8 @@ function registerIpc(services: AppServices): void {
   handle('scribe:chat-action-funil', appOrigin, (_event, request) => chatActions.funil(request).catch((): ChatActionResult => ({ ok: false, error: 'invalid' })))
   // Contrato 127 (D14): "Criar", "Concluir" e "Adiar" nos cartões das tarefas, pelo serviço das tarefas.
   handle('scribe:chat-action-tarefa', appOrigin, (_event, request) => chatActions.tarefa(request).catch((): ChatActionResult => ({ ok: false, error: 'invalid' })))
+  // Contrato 168 (E4): o rascunho da resposta com os anexos das pastas, para o Composer; nada é enviado daqui.
+  handle('scribe:chat-action-email-compose', appOrigin, (_event, request) => chatActions.emailCompose(request).catch((): EmailComposeFromAction => ({ ok: false, error: 'nao-encontrado' })))
   // Contrato 21: o cartão de aprovação de uma ferramenta MCP e a aba "Conexões". Nenhum segredo volta por aqui.
   handle('scribe:chat-approval', appOrigin, (_event, request) => chat.answerApproval(request))
   handle('scribe:mcp-chat-servers', appOrigin, () => mcp.chatServers())

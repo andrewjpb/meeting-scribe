@@ -37,7 +37,7 @@ Waves: 1 = {165}; 2 = {166, 167} (sem arquivo em comum: 166 é main + `shared/ch
 ## Gates desta feature
 
 - Por contrato: `pnpm --filter desktop typecheck && pnpm --filter desktop lint && pnpm --filter desktop test` (da raiz do worktree).
-- Gate completo `pnpm gates` da raiz (smoke ~25 min, tela do Mac desbloqueada, nada pesado em paralelo) ao fim da wave 2 e obrigatoriamente no 169.
+- Gate completo `pnpm gates` da raiz (smoke ~25 min, tela do Mac desbloqueada, nada pesado em paralelo) ao fim da wave 3 (cobrindo 166, 167 e 168 juntos; ajuste de 23/11/2026 para não rodar o smoke enquanto o 168 edita a mesma árvore) e obrigatoriamente no 169.
 - Regra do `detail` do smoke: só números, booleanos e textos fixos; nunca nome de arquivo real, conteúdo de arquivo ou de e-mail. Fixtures sintéticas.
 - Revisor cego por contrato (recebe só diff + contrato); uma devolução no máximo; commit só pelo agente `git-commit`, na branch `pastas-assistente`.
 - Fechamento (coordenação de versão recebida da sessão principal em 23/11/2026): triagem fecha como 0.24.0 e o Painel de e-mail provavelmente como 0.25.0, ambos na main antes desta frente. Ao fechar: reler `origin/main` e `apps/desktop/package.json`, usar a próxima versão livre, **merge da main atual nesta branch** e gate completo na ponta juntada antes de empacotar; release só com ok explícito do Andrew. Merge na main (revisar à mão `index.ts`, `ipc.ts`, `actions.ts`, `ActionCards.tsx`, `shared/assistant.ts`, `Composer.tsx` se a triagem ou o painel de e-mail tiverem entrado antes), versão pelo `release.sh`, spec para `_archive/`, cofre.

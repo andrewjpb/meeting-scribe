@@ -2,7 +2,7 @@
 // sentido certo e na lista de canais permitidos logo abaixo (o preload recusa o que não estiver nela).
 import type { AcpAgentStatus } from './acp'
 import type { FolderAddResult } from './assistant-folders'
-import type { ChatActionEventRequest, ChatActionFunilRequest, ChatActionInstagramDraftRequest, ChatActionReminderChangeRequest, ChatActionReminderRequest, ChatActionResult, ChatActionStateRequest, ChatActionTarefaRequest } from './assistant'
+import type { ChatActionEventRequest, ChatActionFunilRequest, ChatActionComposeRequest, ChatActionInstagramDraftRequest, ChatActionReminderChangeRequest, ChatActionReminderRequest, ChatActionResult, ChatActionStateRequest, ChatActionTarefaRequest, EmailComposeFromAction } from './assistant'
 import type { AgentDeleteResult, AgentInput, AgentSaveResult, AgentsList, AutomationEvent, AutomationRun, AutomationRunListItem, AutomationsStatus, RunStartResult, RunStatus, ScheduledTask, TaskInput, TaskSaveResult, TaskToggleResult } from './automations'
 import type { DriveMeetingStatus, GoogleAccountStatus, GoogleClientSaveResult, MicrosoftAccountStatus, MicrosoftClientSaveResult } from './accounts'
 import type { CalendarListResult, CalendarView } from './calendar'
@@ -322,6 +322,12 @@ export interface InvokeChannels {
    * tarefa que fechou ou sumiu vira o cartão `failed`, com a frase.
    */
   'scribe:chat-action-tarefa': { request: ChatActionTarefaRequest; response: ChatActionResult }
+  /**
+   * Contrato 168 (pastas-assistente E4): "Abrir no Composer" na resposta de email com anexos das pastas. O main relê cada
+   * anexo pelo índice da conversa (caminho real dentro da pasta permitida, sem link, com o tamanho gravado), lê os bytes
+   * sem seguir link e marca o cartão `opened`, com o texto do cartão. Nada é enviado: o envio é o "Enviar" do Composer.
+   */
+  'scribe:chat-action-email-compose': { request: ChatActionComposeRequest; response: EmailComposeFromAction }
   /** Contrato 21: "Permitir uma vez", "Sempre permitir esta ferramenta" ou "Negar" no cartão de uma ferramenta MCP. */
   'scribe:chat-approval': { request: ChatApprovalAnswer; response: boolean }
   /** Contrato 21: a linha "Conexões" do painel Contexto (os servidores MCP ligados para o chat). */
@@ -1022,6 +1028,7 @@ const INVOKE: Record<InvokeChannel, true> = {
   'scribe:chat-action-instagram-draft': true,
   'scribe:chat-action-funil': true,
   'scribe:chat-action-tarefa': true,
+  'scribe:chat-action-email-compose': true,
   'scribe:chat-approval': true,
   'scribe:mcp-chat-servers': true,
   'scribe:mcp-overview': true,
@@ -1467,6 +1474,7 @@ export const WHEN_LOCKED: Readonly<Record<InvokeChannel, LockedPolicy>> = Object
   // Contrato 117: os cartões do funil, recusados com o app bloqueado como os outros cartões.
   'scribe:chat-action-funil': 'refused',
   'scribe:chat-action-tarefa': 'refused',
+  'scribe:chat-action-email-compose': 'refused',
   // Contrato 21: as conexões MCP não aparecem nem mudam com o app bloqueado; o cartão sem resposta nega em 2 min.
   'scribe:chat-approval': 'refused',
   'scribe:mcp-chat-servers': 'refused',

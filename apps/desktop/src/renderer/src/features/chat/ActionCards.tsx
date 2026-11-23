@@ -15,6 +15,8 @@
 // `scribe:chat-action-funil` só no clique, e o "Abrir" para o funil, uma oportunidade e um contato.
 // Contrato 127: os cartões das tarefas (criar, com o "Editar" no próprio cartão; concluir; adiar), pelo
 // `scribe:chat-action-tarefa` só no clique; o lembrete cria uma tarefa e o "Ver em Tarefas" abre o detalhe dela.
+// Contrato 168: a resposta de email com anexos das pastas mostra o que vai, o que falta e o total; ela não envia: "Abrir no
+// Composer" pede ao main o rascunho com os bytes, põe no store do email e abre a tela Email (o envio é o do Composer).
 import {
   ArrowRight,
   Bell,
@@ -34,6 +36,7 @@ import {
   Mail,
   MapPin,
   MessageSquare,
+  Paperclip,
   Pencil,
   Plus,
   RotateCcw,
@@ -41,12 +44,14 @@ import {
   Settings,
   SquareCheck,
   Trash2,
+  TriangleAlert,
   UserPlus,
   X,
 } from 'lucide-react'
 import { useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
 import { useNavigate } from 'react-router'
 import {
+  emailReplyHasAttachments,
   emailSentText,
   EVENT_LOCATION_MAX,
   EVENT_NOTES_MAX,
@@ -98,7 +103,8 @@ import { Icon } from '../../design/Icon'
 import { Note } from '../../design/Note'
 import { useSettings } from '../../app/settingsStore'
 import { useAutomations, type AutomationsTab } from '../agents/automationsStore'
-import { emailTimeLabel, sendErrorText } from '../email/format'
+import { useEmail } from '../email/emailStore'
+import { emailTimeLabel, sendErrorText, sizeLabel } from '../email/format'
 import { chaveBusca, diaCurto, parseValor, telefoneLegivel, valorParaEdicao, type PickerItem } from '../funil/funilFormat'
 import { useFunilView } from '../funil/funilStore'
 import { diaCurto as tarefaDiaCurto, diaEHora } from '../tarefas/tarefasFormat'
@@ -111,6 +117,7 @@ import { macTimeZone } from '../schedules/TaskForm'
 import { QUIET_BUTTON } from './ChatMessages'
 import { useChat } from './chatStore'
 import { EmailBatchCard } from './EmailBatchCard'
+import { composeDraftOf, composePathOf, emailReplyTotalText } from './emailReplyDraft'
 
 const CARD = 'flex max-w-[72ch] flex-col gap-2 rounded-[var(--radius-panel)] border border-line-strong bg-bg-raised p-3'
 const FIELD = 'no-drag rounded-[var(--radius-control)] border border-line-strong bg-bg px-2 text-13 text-text select-text'
@@ -498,6 +505,9 @@ function EmailReplyCard({ action, actionRef }: { action: EmailReplyAction; actio
   // Enviado, mas o estado do cartão ainda não foi gravado: a tela já mostra "Enviado" e nunca oferece "Enviar" de novo.
   const [sentHere, setSentHere] = useState<{ text: string; result: string } | null>(null)
   const proposed = action.status === 'proposed' && !sentHere
+  // Contrato 168: com anexo ou item faltando, o cartão não envia; abre o Composer.
+  const withFiles = emailReplyHasAttachments(action)
+  const [opening, setOpening] = useState(false)
 
   const persistSent = (body: string, attempt = 0): void => {
     void useChat
@@ -532,10 +542,45 @@ function EmailReplyCard({ action, actionRef }: { action: EmailReplyAction; actio
     const state: EmailNavigationState = { messageId: action.messageId }
     void navigate(emailPath(action.accountId, 'inbox'), { state })
   }
+  // Contrato 168 (E5): o main relê os anexos e marca o cartão `opened`; o rascunho vai para o store do email (os bytes nunca
+  // passam pelo `state` da navegação) e a tela Email abre o Composer com ele. Nada é enviado aqui.
+  const openComposer = (): void => {
+    if (opening) return
+    setOpening(true)
+    setFailure(null)
+    const body = text
+    void window.__scribeApi.invoke('scribe:chat-action-email-compose', { ...actionRef, text: body }).then(
+      async (result) => {
+        if (!result.ok) {
+          setOpening(false)
+          setFailure(result.error === 'estado' ? 'Este cartão já foi usado.' : result.error === 'nao-encontrado' ? 'Esta conversa não existe mais.' : 'Não foi possível ler os anexos. Tente de novo.')
+          return
+        }
+        // A assinatura da conta, como no Responder da tela Email; se não vier, o Composer abre sem ela.
+        const signature = await window.__scribeApi.invoke('scribe:email-signature-get', { accountId: result.accountId }).then(
+          (found) => (found.ok ? found.signature : null),
+          () => null,
+        )
+        setOpening(false)
+        useEmail.getState().openDraft(composeDraftOf(result, body, signature))
+        void useChat.getState().open(actionRef.chatId)
+        void navigate(composePathOf(result))
+      },
+      () => {
+        setOpening(false)
+        setFailure('Não foi possível abrir o Composer. Tente de novo.')
+      },
+    )
+  }
   const shownStatus = sentHere && action.status === 'proposed' ? 'done' : action.status
 
   return (
-    <div data-chat-action="email-resposta" data-chat-action-status={shownStatus} className={CARD}>
+    <div
+      data-chat-action="email-resposta"
+      data-chat-action-status={shownStatus}
+      {...(withFiles ? { 'data-email-reply-attachments': String(action.attachments.length), 'data-email-reply-missing': String(action.missing.length) } : {})}
+      className={CARD}
+    >
       <p className="flex items-center gap-2 text-12 font-medium text-text-muted">
         <Icon icon={Mail} size={14} className="shrink-0" />
         Responder por email
@@ -554,6 +599,7 @@ function EmailReplyCard({ action, actionRef }: { action: EmailReplyAction; actio
           {action.account}
         </dd>
       </dl>
+      {withFiles && <EmailReplyFiles action={action} />}
       {proposed ? (
         <>
           <label className="sr-only" htmlFor={`chat-action-email-${action.id}`}>
@@ -568,23 +614,37 @@ function EmailReplyCard({ action, actionRef }: { action: EmailReplyAction; actio
             onChange={(event) => setText(event.target.value)}
             className={`${FIELD} min-h-24 resize-y py-1.5 text-15`}
           />
-          <div className="flex flex-wrap items-center gap-2">
-            <Button action="chat-action-email-send" icon={Send} onClick={send} disabled={sending || !text.trim()}>
-              {sending ? 'Enviando…' : 'Enviar'}
-            </Button>
-            {action.mailbox === null && (
-              <Button action="chat-action-email-open" variant="secondary" icon={ExternalLink} onClick={openOriginal}>
-                Abrir o email
+          {withFiles ? (
+            <div className="flex flex-wrap items-center gap-2">
+              <Button action="chat-action-email-compose" icon={ExternalLink} data={{ 'data-email-reply-open-composer': '' }} onClick={openComposer} disabled={opening}>
+                {opening ? 'Abrindo…' : 'Abrir no Composer'}
               </Button>
-            )}
-            <DismissButton actionRef={actionRef} disabled={sending} />
-          </div>
+              {action.mailbox === null && (
+                <Button action="chat-action-email-open" variant="secondary" icon={Mail} onClick={openOriginal} disabled={opening}>
+                  Abrir o email
+                </Button>
+              )}
+              <DismissButton actionRef={actionRef} disabled={opening} />
+            </div>
+          ) : (
+            <div className="flex flex-wrap items-center gap-2">
+              <Button action="chat-action-email-send" icon={Send} onClick={send} disabled={sending || !text.trim()}>
+                {sending ? 'Enviando…' : 'Enviar'}
+              </Button>
+              {action.mailbox === null && (
+                <Button action="chat-action-email-open" variant="secondary" icon={ExternalLink} onClick={openOriginal}>
+                  Abrir o email
+                </Button>
+              )}
+              <DismissButton actionRef={actionRef} disabled={sending} />
+            </div>
+          )}
           {action.mailbox !== null && (
             <p data-chat-email-server className="text-12 text-text-muted">
               O email respondido está no servidor, na pasta {action.mailbox} (fora da Caixa de Entrada do app).
             </p>
           )}
-          <p className="text-12 text-text-faint">Só sai com o seu clique em "Enviar".</p>
+          <p className="text-12 text-text-faint">{withFiles ? 'Nada sai daqui: revise e envie pelo Composer.' : 'Só sai com o seu clique em "Enviar".'}</p>
         </>
       ) : (
         <>
@@ -597,6 +657,46 @@ function EmailReplyCard({ action, actionRef }: { action: EmailReplyAction; actio
           {failure}
         </p>
       )}
+    </div>
+  )
+}
+
+/**
+ * Contrato 168 (E3, mockups 05 e 07): os anexos (o pedido, o arquivo e o tamanho), os itens que não vão e o total, como o
+ * main resolveu quando a resposta terminou.
+ */
+function EmailReplyFiles({ action }: { action: EmailReplyAction }) {
+  return (
+    <div data-email-reply-files className="flex flex-col gap-1 border-y border-line py-2 text-13">
+      <p className="text-12 font-medium text-text-muted">Anexos</p>
+      <ul className="flex flex-col gap-1">
+        {action.attachments.map((item) => (
+          <li key={item.id} data-email-reply-attachment={item.id} title={`${item.folderLabel}/${item.relPath}`} className="flex min-w-0 items-center gap-2">
+            <Icon icon={Paperclip} size={14} className="shrink-0 text-text-muted" />
+            <span className="min-w-0 truncate">
+              {item.requested && (
+                <>
+                  <span className="text-text-muted">{item.requested}</span>
+                  <span className="text-text-faint"> → </span>
+                </>
+              )}
+              <span className="text-text">
+                {item.folderLabel}/{item.relPath}
+              </span>
+              <span className="text-text-faint"> · {sizeLabel(item.bytes)}</span>
+            </span>
+          </li>
+        ))}
+        {action.missing.map((item, at) => (
+          <li key={`missing-${at}`} data-email-reply-missing-item className="flex min-w-0 items-center gap-2">
+            <Icon icon={TriangleAlert} size={14} className="shrink-0 text-rec" />
+            <span className="min-w-0 truncate text-text">Não encontrado: {item}</span>
+          </li>
+        ))}
+      </ul>
+      <p data-email-reply-total className="text-12 text-text-muted">
+        {emailReplyTotalText(action.attachments)}
+      </p>
     </div>
   )
 }

@@ -173,6 +173,19 @@ export function navegadorInstructions(): string[] {
 }
 
 /**
+ * Contrato 168 (pastas-assistente E6): o email que pede documentos. Os anexos vão pelos ids de PASTAS.md (o app resolve
+ * cada um e confere de novo ao abrir o Composer); o que não achou vai em `faltando`; o envio é do Composer.
+ */
+function emailAttachmentsInstructions(fence: string): string[] {
+  return [
+    `Quando um e-mail pede documentos e a fonte Pastas está ligada: para cada item pedido, procure em ${PASTAS_FILE} o arquivo que corresponde (pelo nome e pela pasta). Proponha um cartão \`email-resposta\` com \`anexos\` (um por item encontrado: \`id\` de ${PASTAS_FILE} e \`pedido\` com as palavras do remetente) e \`faltando\` (os itens que não encontrou, com as palavras do remetente). Some os tamanhos: no máximo 20 MB e 10 arquivos; se não couber, deixe o maior de fora e diga no texto. No \`texto\`, diga o que vai anexo e o que ficará para depois. Nunca invente arquivo: só ids que estão em ${PASTAS_FILE}. O e-mail é enviado só quando o usuário clicar em Enviar no Composer.`,
+    `${fence}${ACTION_FENCE}`,
+    '{"tipo":"email-resposta","email":"em-…","texto":"Olá, Michel. Seguem o contrato assinado e a proposta comercial. O comprovante de inscrição estadual eu envio amanhã.","anexos":[{"id":"3f9a0c1e8b2d4a6f","pedido":"contrato assinado"},{"id":"9b1d2e3f4a5b6c7d","pedido":"proposta comercial"}],"faltando":["comprovante de inscrição estadual"]}',
+    fence,
+  ]
+}
+
+/**
  * Instrução do Assistente (contrato 25, CA2 a CA5): as reuniões e as fontes do app que estiverem na pasta (estado,
  * guia, automações, WhatsApp), com a citação de cada uma; datas resolvidas pelo `ESTADO.md`; e as ações que ele pode
  * propor, num bloco `lap-acao` com JSON no fim da resposta. Ele só lê: quem cria, envia ou abre é a pessoa, no
@@ -191,6 +204,8 @@ export function assistantSystemPrompt(
   const fence = '```'
   // Contrato 166: a fonte Pastas só existe na conversa que recebeu a ferramenta dela.
   const pastas = tools.some((line) => line.startsWith('- ler_arquivo_pasta:'))
+  // Contrato 168: a resposta de email com anexos das pastas, só com as duas fontes (a do email traz as ferramentas dele).
+  const anexosPastas = pastas && tools.some((line) => line.startsWith('- buscar_emails:'))
   return [
     'Você é o Assistente do app de reuniões que a pessoa usa neste Mac. Você responde perguntas sobre as reuniões gravadas, as tarefas, as conversas do WhatsApp, os emails, o Instagram, o funil de vendas, as automações e o próprio app, e pode propor ações que a pessoa confirma com um clique.',
     'Nas transcrições, a pessoa que usa o app aparece como "Você".',
@@ -237,6 +252,8 @@ export function assistantSystemPrompt(
     `Datas: resolva "hoje", "amanhã", "sexta às 3", "daqui a 2 horas" e "toda segunda" com a data, a hora e o fuso de ${STATE_FILE}. Sem hora no pedido, use ${REMINDER_DEFAULT_TIME} e "horaPadrao": true. "Lembre-me" vira "lembrete" (uma tarefa com aviso); algo que se repete ("toda segunda") vira "agendamento".`,
     `Conversas: use só um "chatId" que esteja nos arquivos do WhatsApp. Se não tiver certeza de quem é a pessoa ("minha filha", um nome que aparece em mais de uma conversa), pergunte, ou proponha até ${WHATSAPP_CHOICES_MAX} blocos "whatsapp-resposta" com o mesmo texto, um por conversa possível, dizendo que a pessoa escolhe a certa. Nunca escolha sozinho sem mostrar o nome.`,
     `Emails: quando a resposta listar emails (pendências, uma busca), termine com um bloco "emails" com as referências deles, na mesma ordem. "Responde pro Fulano dizendo X" sobre um email vira "email-resposta"; "cria uma tarefa (ou me lembre) de responder o Fulano amanhã" vira "lembrete" com "email". Use só referências que estejam em ${EMAIL_OVERVIEW_FILE}, num arquivo de email ou no resultado de uma busca; com dúvida de qual email é, pergunte.`,
+    // Contrato 168 (pastas-assistente E6): o email que pede documentos, respondido com os ids de PASTAS.md.
+    ...(anexosPastas ? emailAttachmentsInstructions(fence) : []),
     // Contrato 76: rascunho sempre; quem publica é a pessoa.
     `Instagram: "escreva um post", "faça uma legenda" ou "prepare uma publicação" vira "instagram-rascunho". Rascunho sempre: você nunca publica, agenda, responde comentário ou mensagem, oculta nem exclui nada no Instagram; a pessoa confere o rascunho, escolhe as imagens e publica (ou agenda) na tela Redes › Publicações. Use o tom e os temas das publicações de ${REDES_FILE} quando estiver na pasta; sem ele, escreva do mesmo jeito (o app confere a conta).`,
     // Contrato 127: as tarefas, sempre pelo id curto listado no arquivo.
