@@ -121,6 +121,10 @@ import { createAtendimentoLog, type AtendimentoLog } from './whatsapp/atendiment
 import { generateReply } from './whatsapp/atendimento/reply'
 import { createAtendimentoService, type AtendimentoService } from './whatsapp/atendimento/service'
 import { createAtendimentoStore, type AtendimentoStore } from './whatsapp/atendimento/store'
+import { createTriagemClassifier } from './whatsapp/triagem/classify'
+import { createTriagemIpc } from './whatsapp/triagem/ipc'
+import { createTriagemService, type TriagemService } from './whatsapp/triagem/service'
+import { createTriagemStore } from './whatsapp/triagem/store'
 import { createInsightsCache, INSIGHTS_FILE } from './whatsapp/insights'
 import { createInsightsService, type InsightsService } from './whatsapp/insights-service'
 import { createWhatsAppNotifier, isGroupChat, shouldNotify, type NoticeHandle, type WhatsAppNotice } from './whatsapp/notify'
@@ -1034,6 +1038,8 @@ interface AppServices {
   atendimentoLog: AtendimentoLog
   /** Contrato 141: o serviço que responde as conversas marcadas (agenda, motor, envio do agente, propostas). */
   atendimentoService: AtendimentoService
+  /** Contrato 161: o motor da triagem do WhatsApp (etiquetas por conversa; só etiqueta, nunca envia). */
+  triagem: TriagemService
   /**
    * Contrato 124 (R35, D11): a migração única do próximo passo e dos lembretes para tarefas, no boot, antes do
    * bloqueio, do IPC e das Automações. Nunca lança; a falha vai ao log (só o passo) e o app segue.
@@ -1263,6 +1269,10 @@ function createAppServices(userData: string): AppServices {
   }
   // Contrato 141: o atendimento nasce depois do WhatsApp; as mensagens chegam a ele por aqui.
   const atendimentoRef: { current: AtendimentoService | null } = { current: null }
+  // Contrato 161: a triagem nasce depois das Automações e do funil; as mensagens chegam a ela por aqui. As etiquetas
+  // (`whatsapp/triagem.json`) saem no "Sair da conta" e no "Remover" do WhatsApp.
+  const triagemRef: { current: TriagemService | null } = { current: null }
+  const triagemStore = createTriagemStore({ dir: join(userData, WHATSAPP_DIR), ...(app.isPackaged ? {} : { devLog: (message: string) => console.log(message) }) })
   // WhatsApp pessoal (contrato 24): desligado por padrão; o serviço é processo filho, só depois de "Instalar" e
   // "Ligar". No smoke, o cliente falso (`backend_fake.py`) e um índice de pacotes falso numa pasta local: nenhum
   // neonize, nenhuma rede, nenhum número de verdade.
@@ -1327,6 +1337,8 @@ function createAppServices(userData: string): AppServices {
       inicioChanged()
       // Contrato 141: o atendimento recebe também com o app bloqueado (e continua respondendo).
       void atendimentoRef.current?.onMessage(message, chatName)
+      // Contrato 161: a triagem também etiqueta com o app bloqueado (os avisos às janelas esperam o desbloqueio).
+      void triagemRef.current?.onMessage(message, chatName)
       notifyWhatsApp(message, chatName).catch((error: unknown) => console.error('[whatsapp] notificação:', error))
       refreshWhatsAppBadge()
     },
@@ -1343,6 +1355,8 @@ function createAppServices(userData: string): AppServices {
       if (!lockService?.isLocked()) broadcast(appWindows(), 'scribe:whatsapp-presence', presence)
     },
     typingEnabled: async () => (await settings.get()).whatsappTypingSignal,
+    // Contrato 161: "Sair da conta" e "Remover" esquecem as etiquetas da triagem antes de apagar o arquivo.
+    onForget: () => triagemStore.clear(),
     // Só estados, nunca texto de mensagem.
     ...(app.isPackaged ? {} : { log: (message: string) => console.log(message) }),
   })
@@ -1980,6 +1994,8 @@ function createAppServices(userData: string): AppServices {
     onChange: (status) => {
       trayController?.refresh()
       if (!lockService?.isLocked()) broadcast(appWindows(), 'scribe:automations-changed', status)
+      // Contrato 161: tarefas, pausa ou agentes mudaram: a triagem relê o estado dela (avisa só se mudou).
+      void triagemRef.current?.status().catch(() => undefined)
     },
     // Bloqueado, nada da resposta vai às janelas; a execução continua e fica no histórico.
     onEvent: (event) => {
@@ -2163,6 +2179,55 @@ function createAppServices(userData: string): AppServices {
     tarefas: { todas: () => tarefas.todas(), criar: (input) => tarefas.criar(input), salvar: (request) => tarefas.salvar(request) },
     ...devLog,
   })
+  // Contrato 161: o motor da triagem. O modelo é o do contrato 17 (como o atendimento), com o `claude` encontrado a cada
+  // chamada; a tarefa ativa e o histórico vêm das Automações por funções (elas não importam a triagem). Bloqueado, os
+  // avisos às janelas não saem; o motor continua.
+  const triagem = createTriagemService({
+    store: triagemStore,
+    enabled: async () => (await settings.get()).whatsappTriagem,
+    automations: {
+      triagemAtiva: () => automations.triagemAtiva(),
+      triagemSituacao: () => automations.triagemSituacao(),
+      salvarExecucaoExterna: (run) => automations.salvarExecucaoExterna(run),
+      criarTriagemDoModelo: () => automations.criarTriagemDoModelo(),
+    },
+    whatsapp: {
+      lastMessages: (chatId, n) => whatsapp.lastMessages(chatId, n),
+      chat: (chatId) => whatsapp.findChat(chatId),
+      ownerName: () => whatsapp.status().me?.name ?? null,
+    },
+    funil: {
+      contatos: async () => (await funilStore.read()).contatos,
+      empresaNome: async (id) => (await funilStore.read()).empresas.find((empresa) => empresa.id === id)?.nome ?? null,
+    },
+    classify: async (input, signal) => {
+      const found = await claude.locate()
+      if (!found.ok) return { ok: false, error: 'failed' }
+      return createTriagemClassifier(
+        {
+          settings,
+          spawn: smokeClaude?.spawnSummary ?? nodeSpawnSummary,
+          openAcp,
+          acpAvailable: async () => (await acpAgent.current()).available(),
+          userData,
+          baseEnv: process.env,
+          ...devLog,
+        },
+        { claudePath: found.path },
+      )(input, signal)
+    },
+    changed: (chatId, etiqueta) => {
+      if (!lockService?.isLocked()) broadcast(appWindows(), 'scribe:triagem-changed', { chatId, etiqueta })
+    },
+    statusChanged: (status) => {
+      if (!lockService?.isLocked()) broadcast(appWindows(), 'scribe:triagem-status-changed', status)
+    },
+    locked: () => lockService?.isLocked() ?? false,
+    runs: { hojeTrigger: (trigger, exceptError) => automations.hojeTrigger(trigger, exceptError) },
+    timeZone,
+    ...devLog,
+  })
+  triagemRef.current = triagem
   // Contrato 122: as tarefas leem funil, reuniões, análises e WhatsApp só pelos caches; bloqueado, a view não vai às janelas.
   const tarefasStore = createTarefasStore({ dir: userData, ...devLog })
   const tarefas = createTarefasService({
@@ -2285,6 +2350,7 @@ function createAppServices(userData: string): AppServices {
     atendimento,
     atendimentoLog,
     atendimentoService,
+    triagem,
     async migrarTarefas() {
       try {
         const result = await migrarTarefas({
@@ -2486,6 +2552,7 @@ function registerIpc(services: AppServices): void {
   registerFunilIpc({ appOrigin, funil: services.funil, proposta: services.funilProposta, log: (message) => console.error(message) })
   registerTarefasIpc({ appOrigin, tarefas: services.tarefas, log: (message) => console.error(message) })
   registerInicioIpc({ appOrigin, inicio: services.inicio })
+  createTriagemIpc({ appOrigin, triagem: services.triagem })
   handle('scribe:meetings-list', appOrigin, () => meetings.list())
   handle('scribe:meetings-get', appOrigin, (_event, { id }) => meetings.get(id))
   handle('scribe:meetings-create', appOrigin, async (_event, input) => {
@@ -3084,6 +3151,7 @@ void app.whenReady().then(async () => {
     services.drive.dispose()
     // Contrato 141: antes do WhatsApp, para nenhum envio do agente sair no meio da saída.
     services.atendimentoService.dispose()
+    services.triagem.dispose()
     void services.whatsapp.dispose()
     void services.email.dispose()
     services.redes.dispose()
@@ -3189,6 +3257,7 @@ void app.whenReady().then(async () => {
     services.updates.dispose()
     services.drive.dispose()
     services.atendimentoService.dispose()
+    services.triagem.dispose()
     await services.whatsapp.dispose()
     await services.email.dispose()
     services.redes.dispose()

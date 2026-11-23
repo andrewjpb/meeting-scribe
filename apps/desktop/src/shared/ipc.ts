@@ -2,7 +2,7 @@
 // sentido certo e na lista de canais permitidos logo abaixo (o preload recusa o que não estiver nela).
 import type { AcpAgentStatus } from './acp'
 import type { ChatActionEventRequest, ChatActionFunilRequest, ChatActionInstagramDraftRequest, ChatActionReminderChangeRequest, ChatActionReminderRequest, ChatActionResult, ChatActionStateRequest, ChatActionTarefaRequest } from './assistant'
-import type { AgentDeleteResult, AgentInput, AgentSaveResult, AgentsList, AutomationEvent, AutomationRun, AutomationRunListItem, AutomationsStatus, RunStartResult, RunStatus, ScheduledTask, TaskInput, TaskSaveResult } from './automations'
+import type { AgentDeleteResult, AgentInput, AgentSaveResult, AgentsList, AutomationEvent, AutomationRun, AutomationRunListItem, AutomationsStatus, RunStartResult, RunStatus, ScheduledTask, TaskInput, TaskSaveResult, TaskToggleResult } from './automations'
 import type { DriveMeetingStatus, GoogleAccountStatus, GoogleClientSaveResult, MicrosoftAccountStatus, MicrosoftClientSaveResult } from './accounts'
 import type { CalendarListResult, CalendarView } from './calendar'
 import type { BrandingInfo, BrandLogoChoice } from './branding'
@@ -55,6 +55,9 @@ import type {
   AtendimentoState,
 } from './atendimento'
 // fim 138
+// 161: triagem
+import type { Etiqueta, EtiquetaPatch, TriagemStatus } from './triagem'
+// fim 161
 import type { AnalysisRunRequest, AnalysisRunResult, MeetingAnalysis } from './meeting-analysis'
 import type { MeetingNote } from './meeting-notes'
 import type { SummaryStatus } from './meeting-summary'
@@ -561,7 +564,8 @@ export interface InvokeChannels {
   'scribe:tasks-save': { request: TaskInput; response: TaskSaveResult }
   'scribe:tasks-delete': { request: { id: string }; response: boolean }
   /** Interruptor ligado/desligado; ligar tira a pausa automática. */
-  'scribe:tasks-toggle': { request: { id: string; enabled: boolean }; response: ScheduledTask | null }
+  /** Contrato 161: ligar uma segunda triagem devolve `{ ok: false, error }` com a frase da recusa. */
+  'scribe:tasks-toggle': { request: { id: string; enabled: boolean }; response: TaskToggleResult }
   /** "Rodar agora"; se a tarefa já roda, a vez vira `skipped`. */
   'scribe:tasks-run-now': { request: { id: string }; response: RunStartResult }
   /** "Pedir agora": um agente e um pedido, na hora; entra em "Execuções". */
@@ -734,6 +738,16 @@ export interface InvokeChannels {
   /** Descartar a proposta da conversa. */
   'scribe:atendimento-draft-discard': { request: { chatId: string }; response: AtendimentoDraftDiscardResult }
   // fim 141
+  // 161: triagem
+  /** Contrato 161: as etiquetas da triagem por conversa e o estado do motor. */
+  'scribe:triagem-list': { request: undefined; response: { etiquetas: Record<string, Etiqueta>; status: TriagemStatus } }
+  /** A escolha do dono numa conversa (urgente e/ou âmbito); o eixo escolhido fica fixo. */
+  'scribe:triagem-set': { request: { chatId: string; patch: EtiquetaPatch }; response: { ok: true; etiqueta: Etiqueta } | { ok: false; error: string } }
+  /** "Triar agora": sem a espera; respeita o interruptor, o agente, o teto do dia e a fila. */
+  'scribe:triagem-run': { request: { chatId: string }; response: { ok: true } | { ok: false; error: 'sem-agente' | 'desligado' | 'pausado' | 'sem-mensagens' | 'teto' | 'ocupado' } }
+  /** Cria (ou religa) o agente e a tarefa do modelo pronto "Triagem do WhatsApp". */
+  'scribe:triagem-create-from-template': { request: undefined; response: { ok: true; agentId: string; taskId: string } | { ok: false; error: string } }
+  // fim 161
 }
 
 /** renderer -> main, sem resposta (`__scribeApi.send` / `ipcMain.on`). */
@@ -899,6 +913,12 @@ export interface MainEvents {
   /** Contrato 141: a resposta agendada, a proposta ou a passagem de uma conversa mudou; relê o runtime. Não chega bloqueado. */
   'scribe:atendimento-changed': { chatId: string }
   // fim 141
+  // 161: triagem
+  /** Contrato 161: a etiqueta de uma conversa mudou (`null`: sem etiqueta). Não chega bloqueado. */
+  'scribe:triagem-changed': { chatId: string; etiqueta: Etiqueta | null }
+  /** Contrato 161: o estado do motor mudou (ligado, agente, pausa, contagem do dia). Não chega bloqueado. */
+  'scribe:triagem-status-changed': TriagemStatus
+  // fim 161
 }
 
 export type InvokeChannel = keyof InvokeChannels
@@ -1204,6 +1224,12 @@ const INVOKE: Record<InvokeChannel, true> = {
   'scribe:atendimento-draft-send': true,
   'scribe:atendimento-draft-discard': true,
   // fim 141
+  // 161: triagem
+  'scribe:triagem-list': true,
+  'scribe:triagem-set': true,
+  'scribe:triagem-run': true,
+  'scribe:triagem-create-from-template': true,
+  // fim 161
 }
 const RENDERER_EVENTS: Record<RendererEvent, true> = {
   'scribe:csp-violation': true,
@@ -1287,6 +1313,10 @@ const MAIN_EVENTS: Record<MainEvent, true> = {
   // 141: atendimento
   'scribe:atendimento-changed': true,
   // fim 141
+  // 161: triagem
+  'scribe:triagem-changed': true,
+  'scribe:triagem-status-changed': true,
+  // fim 161
 }
 
 /**
@@ -1652,6 +1682,12 @@ export const WHEN_LOCKED: Readonly<Record<InvokeChannel, LockedPolicy>> = Object
   'scribe:atendimento-draft-send': 'refused',
   'scribe:atendimento-draft-discard': 'refused',
   // fim 141
+  // 161: triagem (recusados; o motor continua etiquetando com o app bloqueado)
+  'scribe:triagem-list': 'refused',
+  'scribe:triagem-set': 'refused',
+  'scribe:triagem-run': 'refused',
+  'scribe:triagem-create-from-template': 'refused',
+  // fim 161
 })
 
 /**

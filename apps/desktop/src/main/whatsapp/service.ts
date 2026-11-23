@@ -157,6 +157,11 @@ export interface WhatsAppServiceDeps {
   onPresence?: (presence: WhatsAppPresence) => void
   /** Contrato 34: "Mostrar quando estou digitando" (padrão desligado); sem ela, o "digitando…" da sua conta nunca sai. */
   typingEnabled?: () => Promise<boolean>
+  /**
+   * Contrato 161: "Sair da conta" e "Remover" apagam as etiquetas da triagem (`triagem.json`); antes, quem guarda o cache
+   * delas o esquece (no app, o `clear()` do store da triagem).
+   */
+  onForget?: () => Promise<void> | void
   log?: (message: string) => void
   now?: () => number
 }
@@ -308,6 +313,11 @@ export function createWhatsAppService(deps: WhatsAppServiceDeps): WhatsAppServic
   const mediaRequests = new Map<string, Promise<WhatsAppMediaResult>>()
   const transcribeRequests = new Map<string, Promise<WhatsAppTranscribeResult>>()
   const transcripts = createTranscriptsCache(join(deps.root, WHATSAPP_PATHS.transcripts), now)
+  /** Contrato 161: as etiquetas da triagem saem junto com as mensagens (o cache primeiro, depois o arquivo). */
+  const forgetTriagem = async (): Promise<void> => {
+    await Promise.resolve(deps.onForget?.()).catch(() => deps.log?.('[whatsapp] não deu para esquecer as etiquetas da triagem'))
+    await rm(join(deps.root, WHATSAPP_PATHS.triagem), { force: true })
+  }
   /** Sobe a cada "Sair da conta" e "Remover": a transcrição que terminar depois não grava nada. */
   let generation = 0
 
@@ -654,6 +664,7 @@ export function createWhatsAppService(deps: WhatsAppServiceDeps): WhatsAppServic
         await rm(root(WHATSAPP_PATHS.insights), { force: true })
         await rm(root(WHATSAPP_PATHS.transcripts), { force: true })
         transcripts.forget()
+        await forgetTriagem()
         photos.clear()
         // Sessão apagada: o serviço sobe de novo, pronto para um pareamento novo.
         await stopNow(false)
@@ -668,6 +679,7 @@ export function createWhatsAppService(deps: WhatsAppServiceDeps): WhatsAppServic
         vault.remove()
         await removeBridge(deps.root)
         transcripts.forget()
+        await forgetTriagem()
         pendingRisk.install = null
         pendingRisk.pair = null
         chatNames = new Map()

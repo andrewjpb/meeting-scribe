@@ -55,6 +55,23 @@ export interface TriagemResultado {
 export type TriagemAba = 'todas' | 'nao-lidas' | 'urgentes' | 'pessoal' | 'profissional'
 export const TRIAGEM_ABAS: readonly TriagemAba[] = ['todas', 'nao-lidas', 'urgentes', 'pessoal', 'profissional']
 
+/**
+ * Contrato 161: o estado do motor para as telas. `motivo` diz por que não está ativo (prioridade: `desligado` >
+ * `sem-agente` > `pausado`); `pausado` cobre a tarefa desligada, a pausa automática e a pausa geral dos agendamentos.
+ * `hoje` são as triagens do dia, contra o `teto` (`TRIAGEM_TETO_DIARIO`).
+ */
+export interface TriagemStatus {
+  ativo: boolean
+  motivo: 'sem-agente' | 'desligado' | 'pausado' | null
+  agenteNome: string | null
+  tarefaId: string | null
+  hoje: number
+  teto: number
+}
+
+/** Contrato 161: o erro da execução registrada quando o teto do dia é atingido (uma por dia). */
+export const TRIAGEM_TETO_ERRO = 'Teto diário de triagens atingido'
+
 /** O arquivo: a chave das etiquetas é o `chatId`. */
 export interface TriagemFile {
   version: 1

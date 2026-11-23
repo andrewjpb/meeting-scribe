@@ -25,12 +25,18 @@
 // de leitura do email e `enviar_email`, montadas só para aquela execução (`email-send.ts`); cada envio confere a
 // permissão de agora (revogada, pausada, app bloqueado), a conta, os destinatários e o teto. Os envios e as recusas ficam
 // na execução, e a execução que enviou avisa no fim ("Agendamento X enviou 2 emails"). Sem a seção, nada muda.
+//
+// Contrato 161: a triagem do WhatsApp é uma tarefa "Quando chega mensagem do WhatsApp" que o relógio nunca roda; quem
+// roda é o motor da triagem (`main/whatsapp/triagem`), que lê daqui a tarefa ativa e grava cada triagem no histórico por
+// `salvarExecucaoExterna`, fora da fila e do limite diário. Só uma dessas tarefas pode estar ligada por vez. Este
+// arquivo não importa nada da triagem: ela recebe estas funções injetadas.
 import { randomUUID } from 'node:crypto'
 import { z } from 'zod'
 import {
   AGENT_PROFILE_MODELS,
   AUTO_PAUSE_FAILURES,
   AUTOMATIC_TRIGGERS,
+  dayKey,
   dueOccurrences,
   MAX_CONCURRENT_RUNS,
   MISSED_RUN_MAX_MS,
@@ -41,8 +47,11 @@ import {
   SCHEDULER_TICK_MS,
   TASK_ERROR_MAX,
   TASK_MESSAGE_MAX,
+  TASK_TIMEOUT_MIN_S,
   TASKS_MAX,
-  wallTime,
+  TRIAGEM_SCHEDULE_DEFAULTS,
+  TRIAGEM_TEMPLATE,
+  triagemUnicaError,
   formatRunAt,
   taskOutput,
   type Agent,
@@ -61,7 +70,9 @@ import {
   type RunTrigger,
   type ScheduledTask,
   type TaskSaveResult,
+  type TaskToggleResult,
 } from '../../shared/automations'
+import { TRIAGEM_AGENT_NAME } from '../../shared/triagem'
 import { agentInputSchema, automationIdSchema, taskInputSchema } from '../../shared/automations-schema'
 import { emailsLabel, TASK_EMAIL_MAX_PER_RUN_MAX, type RunEmail, type TaskEmailInput, type TaskEmailPermission } from '../../shared/task-email'
 import type { AgentsStore } from '../agents/store'
@@ -128,6 +139,19 @@ export interface AutomationsDeps {
   onTick?: (at: number) => Promise<void>
 }
 
+/** Contrato 161: a tarefa da triagem e o agente dela, e por que não está ativa (`null`: ativa). */
+export interface TriagemSituacao {
+  task: ScheduledTask | null
+  agent: Agent | null
+  motivo: 'sem-agente' | 'pausado' | null
+}
+
+export type TriagemCriarResult = { ok: true; agentId: string; taskId: string } | { ok: false; error: string }
+
+/** Contrato 161: nome e pedido da tarefa criada pelo modelo pronto (o pedido não vai ao modelo; o esquema exige texto). */
+export const TRIAGEM_TASK_NAME = 'Triagem do WhatsApp'
+export const TRIAGEM_TASK_MESSAGE = 'Classificar a conversa do WhatsApp que recebeu mensagem.'
+
 export interface AutomationsService {
   /** Abertura do app: confere já (horários perdidos) e a cada 30 s. */
   start(): void
@@ -145,7 +169,8 @@ export interface AutomationsService {
   listTasks(): Promise<ScheduledTask[]>
   saveTask(input: unknown): Promise<TaskSaveResult>
   deleteTask(input: unknown): Promise<boolean>
-  toggleTask(input: unknown): Promise<ScheduledTask | null>
+  /** Contrato 161: ligar uma segunda triagem é recusado com `{ ok: false, error }` (a frase do `saveTask`). */
+  toggleTask(input: unknown): Promise<TaskToggleResult>
   /** "Rodar agora": com a pessoa olhando, fora da pausa e do limite. */
   runNow(input: unknown): Promise<RunStartResult>
   /** "Pedir agora": um agente e um pedido, na hora; entra em "Execuções". */
@@ -158,6 +183,16 @@ export interface AutomationsService {
   setPaused(input: unknown): Promise<AutomationsStatus>
   /** O último estado, sem esperar o disco (o menu do ícone). */
   snapshot(): AutomationsStatus
+  /** Contrato 161: a tarefa "Quando chega mensagem do WhatsApp" ligada, sem pausa, com agente; senão `null`. */
+  triagemAtiva(): Promise<{ task: ScheduledTask; agent: Agent } | null>
+  /** Contrato 161: a tarefa da triagem (a ligada, senão a primeira) e o motivo de não estar ativa. */
+  triagemSituacao(): Promise<TriagemSituacao>
+  /** Contrato 161: o agente e a tarefa do modelo pronto, reaproveitando os que já existem (idempotente). */
+  criarTriagemDoModelo(): Promise<TriagemCriarResult>
+  /** Contrato 161: uma execução feita fora da fila (a triagem) entra no histórico e avisa a aba Execuções. */
+  salvarExecucaoExterna(run: AutomationRun): Promise<void>
+  /** Contrato 161: execuções de hoje com o gatilho (sem as puladas e sem as que têm o erro `exceptError`). */
+  hojeTrigger(trigger: RunTrigger, exceptError?: string): Promise<number>
   /** Teste e smoke: espera a fila e as execuções em curso terminarem. */
   settled(): Promise<void>
   dispose(): void
@@ -235,10 +270,7 @@ export function createAutomationsService(deps: AutomationsDeps): AutomationsServ
   }
 
   /** "AAAA-MM-DD" de um instante no fuso do Mac (o dia do limite diário). */
-  const dayOf = (ms: number): string => {
-    const wall = wallTime(ms, deps.timeZone())
-    return `${wall.year}-${String(wall.month).padStart(2, '0')}-${String(wall.day).padStart(2, '0')}`
-  }
+  const dayOf = (ms: number): string => dayKey(ms, deps.timeZone())
 
   /**
    * Execuções automáticas de hoje: as do histórico (as puladas não contam), as que estão rodando e as que esperam na
@@ -646,6 +678,20 @@ export function createAutomationsService(deps: AutomationsDeps): AutomationsServ
     return parsed.success ? parsed.data.id : null
   }
 
+  /** Contrato 161: outra tarefa "Quando chega mensagem do WhatsApp" ligada, que não a `id`. */
+  const outraTriagemLigada = (tasks: readonly ScheduledTask[], id: string | null): ScheduledTask | null =>
+    tasks.find((task) => task.id !== id && task.enabled && task.schedule.kind === 'whatsapp-message') ?? null
+
+  async function triagemSituacao(): Promise<TriagemSituacao> {
+    const state = await deps.schedules.read()
+    const triagens = state.tasks.filter((task) => task.schedule.kind === 'whatsapp-message' && !task.reminder)
+    const task = triagens.find((candidate) => candidate.enabled && !candidate.autoPaused) ?? triagens.find((candidate) => candidate.enabled) ?? triagens[0] ?? null
+    const agent = task ? await deps.agents.get(task.agentId) : null
+    if (!task || !agent) return { task, agent, motivo: 'sem-agente' }
+    if (!task.enabled || task.autoPaused || state.paused) return { task, agent, motivo: 'pausado' }
+    return { task, agent, motivo: null }
+  }
+
   async function startTask(id: string, trigger: RunTrigger): Promise<RunStartResult> {
     const task = (await deps.schedules.read()).tasks.find((candidate) => candidate.id === id)
     if (!task) return { ok: false, error: 'missing' }
@@ -751,7 +797,11 @@ export function createAutomationsService(deps: AutomationsDeps): AutomationsServ
       let saved: ScheduledTask | null = null
       let missing = false
       let full = false
+      let triagemLigada: ScheduledTask | null = null
       await deps.schedules.mutate((state) => {
+        // Contrato 161: uma triagem ligada por vez (a própria, numa edição, não conta).
+        triagemLigada = fields.enabled && fields.schedule.kind === 'whatsapp-message' ? outraTriagemLigada(state.tasks, id) : null
+        if (triagemLigada) return state
         if (id === null) {
           if (state.tasks.length >= TASKS_MAX) {
             full = true
@@ -795,6 +845,8 @@ export function createAutomationsService(deps: AutomationsDeps): AutomationsServ
         saved = task
         return { ...state, tasks: state.tasks.map((known) => (known.id === id ? task : known)) }
       })
+      const conflito = triagemLigada as ScheduledTask | null
+      if (conflito) return { ok: false, error: triagemUnicaError(conflito.name) }
       if (full) return { ok: false, error: 'full' }
       if (missing || !saved) return { ok: false, error: 'missing' }
       changed()
@@ -837,12 +889,21 @@ export function createAutomationsService(deps: AutomationsDeps): AutomationsServ
         changed()
         return saved
       }
-      await updateTask(id, (task) => {
-        saved = enabled
+      // Contrato 161: ligar uma segunda triagem é recusado (a pessoa desliga a outra antes); conferido na mesma gravação.
+      let triagemLigada: ScheduledTask | null = null
+      await deps.schedules.mutate((state) => {
+        const task = state.tasks.find((known) => known.id === id)
+        if (!task) return state
+        triagemLigada = enabled && task.schedule.kind === 'whatsapp-message' ? outraTriagemLigada(state.tasks, id) : null
+        if (triagemLigada) return state
+        const next: ScheduledTask = enabled
           ? { ...task, enabled, autoPaused: false, consecutiveFailures: 0, nextRunAt: nextFor(task, at), updatedAt: iso(at) }
           : { ...task, enabled, nextRunAt: null, updatedAt: iso(at) }
-        return saved
+        saved = next
+        return { ...state, tasks: state.tasks.map((known) => (known.id === id ? next : known)) }
       })
+      const conflito = triagemLigada as ScheduledTask | null
+      if (conflito) return { ok: false, error: triagemUnicaError(conflito.name) }
       if (saved) changed()
       return saved
     },
@@ -903,6 +964,83 @@ export function createAutomationsService(deps: AutomationsDeps): AutomationsServ
     },
 
     snapshot: () => last,
+
+    triagemSituacao,
+
+    async triagemAtiva() {
+      const { task, agent, motivo } = await triagemSituacao()
+      return task && agent && motivo === null ? { task, agent } : null
+    },
+
+    async criarTriagemDoModelo() {
+      const chave = (name: string): string => name.trim().toLocaleLowerCase('pt-BR')
+      let agent = (await deps.agents.list()).find((known) => chave(known.name) === chave(TRIAGEM_AGENT_NAME)) ?? null
+      if (!agent) {
+        const created = await deps.agents.save({ ...TRIAGEM_TEMPLATE, id: null })
+        if (!created.ok) return { ok: false, error: `Não foi possível criar o agente (${created.error}).` }
+        agent = created.agent
+      }
+      const agentId = agent.id
+      const at = now()
+      let taskId: string | null = null
+      let full = false
+      await deps.schedules.mutate((state) => {
+        const triagens = state.tasks.filter((task) => task.schedule.kind === 'whatsapp-message' && !task.reminder)
+        // A ligada, senão a primeira: religada, sem a pausa automática.
+        const current = triagens.find((task) => task.enabled) ?? triagens[0]
+        if (current) {
+          taskId = current.id
+          return { ...state, tasks: state.tasks.map((task) => (task.id === current.id ? { ...task, enabled: true, autoPaused: false, consecutiveFailures: 0, nextRunAt: null, updatedAt: iso(at) } : task)) }
+        }
+        if (state.tasks.length >= TASKS_MAX) {
+          full = true
+          return state
+        }
+        const task: ScheduledTask = {
+          id: newId(),
+          name: TRIAGEM_TASK_NAME,
+          agentId,
+          message: TRIAGEM_TASK_MESSAGE,
+          schedule: { ...TRIAGEM_SCHEDULE_DEFAULTS },
+          timezone: deps.timeZone(),
+          enabled: true,
+          runOnce: false,
+          runOnceAction: 'disable',
+          timeoutS: TASK_TIMEOUT_MIN_S,
+          notify: 'never',
+          output: null,
+          reminder: null,
+          email: null,
+          lastRunAt: null,
+          nextRunAt: null,
+          lastStatus: null,
+          lastResultPreview: null,
+          lastError: null,
+          consecutiveFailures: 0,
+          autoPaused: false,
+          createdAt: iso(at),
+          updatedAt: iso(at),
+        }
+        taskId = task.id
+        return { ...state, tasks: [...state.tasks, task] }
+      })
+      if (full) return { ok: false, error: 'O limite de tarefas foi atingido.' }
+      const savedId = taskId as string | null
+      if (!savedId) return { ok: false, error: 'Não foi possível criar a tarefa.' }
+      changed()
+      return { ok: true, agentId, taskId: savedId }
+    },
+
+    async salvarExecucaoExterna(run) {
+      await deps.runs.save(run)
+      if (!disposed) deps.onEvent({ type: 'done', runId: run.id, run })
+      changed()
+    },
+
+    async hojeTrigger(trigger, exceptError) {
+      const today = dayOf(now())
+      return (await deps.runs.list()).filter((run) => run.trigger === trigger && run.status !== 'skipped' && (exceptError === undefined || run.error !== exceptError) && dayOf(Date.parse(run.startedAt)) === today).length
+    },
 
     async settled() {
       while (inFlight.size || queue.length || ticking) {

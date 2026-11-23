@@ -280,7 +280,13 @@ export type AgentSaveResult = { ok: true; agent: Agent } | { ok: false; error: '
 export type AgentDeleteResult = { ok: true } | { ok: false; error: 'in-use'; tasks: string[] } | { ok: false; error: 'missing' }
 /** `past`: "Uma vez em" com a data que já passou. */
 /** `email`: a conta escolhida em "Pode enviar email" não existe (contrato 51). */
-export type TaskSaveResult = { ok: true; task: ScheduledTask } | { ok: false; error: 'invalid' | 'agent' | 'cron' | 'timezone' | 'missing' | 'full' | 'past' | 'email' }
+/** Contrato 161: uma segunda tarefa "Quando chega mensagem do WhatsApp" ligada é recusada com a frase pronta. */
+export type TaskSaveResult = { ok: true; task: ScheduledTask } | { ok: false; error: 'invalid' | 'agent' | 'cron' | 'timezone' | 'missing' | 'full' | 'past' | 'email' | TriagemUnicaError }
+export type TriagemUnicaError = `Já existe um agente de triagem ativo: ${string}`
+/** Contrato 161: ligar (pelo interruptor da lista) uma segunda triagem é recusado com a mesma frase do `saveTask`. */
+export type TaskToggleResult = ScheduledTask | null | { ok: false; error: TriagemUnicaError }
+/** Contrato 161: a frase da recusa, com o nome da tarefa que já está ligada. */
+export const triagemUnicaError = (taskName: string): TriagemUnicaError => `Já existe um agente de triagem ativo: ${taskName}`
 /** `busy`: a tarefa já roda (a vez vira `skipped`); `not-found`: sem o `claude`; `paused`: tudo pausado. */
 export type RunStartResult = { ok: true; runId: string } | { ok: false; error: 'missing' | 'busy' | 'invalid' }
 
@@ -344,6 +350,12 @@ export function isValidTimeZone(value: unknown): value is string {
   } catch {
     return false
   }
+}
+
+/** "AAAA-MM-DD" de um instante no fuso (o dia do limite diário; contrato 161: também o do teto da triagem). */
+export function dayKey(ms: number, timeZone: string): string {
+  const wall = wallTime(ms, timeZone)
+  return `${wall.year}-${String(wall.month).padStart(2, '0')}-${String(wall.day).padStart(2, '0')}`
 }
 
 /** Hora de parede de um instante num fuso. */

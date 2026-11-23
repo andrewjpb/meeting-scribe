@@ -274,7 +274,7 @@ describe('serviço do WhatsApp no main', () => {
 })
 
 describe('Sair da conta e Remover apagam o cache dos Detalhes (contrato 32)', () => {
-  const reattached = async (bridgePort: number, root: string, now: () => number = Date.now) => {
+  const reattached = async (bridgePort: number, root: string, now: () => number = Date.now, onForget?: () => void) => {
     const safe = memorySafeStorage()
     const { createVault } = await import('../src/main/accounts/vault')
     createVault(join(root, 'service.bin'), safe, (raw) => raw).write({ token: TOKEN, port: bridgePort, on: true, instanceId: INSTANCE })
@@ -283,6 +283,8 @@ describe('Sair da conta e Remover apagam o cache dos Detalhes (contrato 32)', ()
     writeFileSync(join(root, 'venv', 'bin', 'python'), '')
     writeFileSync(join(root, 'installed.json'), '{}')
     writeFileSync(join(root, 'insights.json'), '{}')
+    // Contrato 161: as etiquetas da triagem também saem.
+    writeFileSync(join(root, 'triagem.json'), '{}')
     const service = createWhatsAppService({
       root,
       bridgeSource: root,
@@ -299,6 +301,7 @@ describe('Sair da conta e Remover apagam o cache dos Detalhes (contrato 32)', ()
       meeting: () => Promise.resolve(null),
       onStatus: () => undefined,
       onMessage: () => undefined,
+      ...(onForget ? { onForget } : {}),
       now,
     })
     await service.init()
@@ -330,14 +333,17 @@ describe('Sair da conta e Remover apagam o cache dos Detalhes (contrato 32)', ()
     }
   })
 
-  it('"Sair da conta" apaga o insights.json e esquece as fotos', async () => {
+  it('"Sair da conta" apaga o insights.json e o triagem.json (contrato 161) e esquece as fotos', async () => {
     const bridge = await fakeBridge()
     const root = tempDir()
     try {
-      const service = await reattached(bridge.port, root)
+      let esquecidas = 0
+      const service = await reattached(bridge.port, root, Date.now, () => void esquecidas++)
       expect(await service.photo({ chatId: ANA })).toBe(PHOTO)
       await service.logout()
       expect(existsSync(join(root, 'insights.json'))).toBe(false)
+      expect(existsSync(join(root, 'triagem.json'))).toBe(false)
+      expect(esquecidas).toBe(1)
       expect(bridge.requests.some((request) => request.path === '/logout')).toBe(true)
       await service.dispose()
     } finally {
@@ -345,13 +351,16 @@ describe('Sair da conta e Remover apagam o cache dos Detalhes (contrato 32)', ()
     }
   })
 
-  it('"Remover" apaga o insights.json junto com a sessão', async () => {
+  it('"Remover" apaga o insights.json e o triagem.json (contrato 161) junto com a sessão', async () => {
     const bridge = await fakeBridge()
     const root = tempDir()
     try {
-      const service = await reattached(bridge.port, root)
+      let esquecidas = 0
+      const service = await reattached(bridge.port, root, Date.now, () => void esquecidas++)
       await service.remove()
       expect(existsSync(join(root, 'insights.json'))).toBe(false)
+      expect(existsSync(join(root, 'triagem.json'))).toBe(false)
+      expect(esquecidas).toBe(1)
       expect(existsSync(join(root, 'installed.json'))).toBe(false)
       await service.dispose()
     } finally {
