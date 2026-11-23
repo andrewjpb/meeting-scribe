@@ -189,7 +189,7 @@ import type { AutomationsService } from './schedules/service'
 import { SCHEDULE_RUNS_DIR, SCHEDULES_FILE } from './schedules/store'
 import { AGENTS_FILE } from './agents/store'
 import type { TrayController } from './tray/menu'
-import type { CalendarService } from './calendar/service'
+import { calendarWindow, type CalendarService } from './calendar/service'
 import { INSTAGRAM_VAULT_FILE, type RedesService } from './redes/service'
 import { MEDIA_DIR, REDES_DIR } from './redes/store'
 import { SMOKE_IG_TOKEN, SMOKE_IG_USER_ID, SMOKE_IG_USERNAME } from './redes/fake-instagram'
@@ -3718,7 +3718,8 @@ async function inicioGravandoCheck(win: BrowserWindow, ctx: SmokeContext, screen
   const faixa = await waitFor(contents, `${routeIs('inicio')} && document.querySelector('[data-inicio-gravando] [data-inicio-abrir-gravacao="faixa"]')`, 8000)
   const evento = await waitFor(contents, `document.querySelector('[data-inicio-evento][data-inicio-estado="atual"] [data-inicio-abrir-gravacao="evento"]')`, 8000)
   const semTranscrever = await evaluate<boolean>(contents, `!document.querySelector('[data-action="inicio-transcrever"]')`)
-  const fundo = `getComputedStyle(document.querySelector('[data-inicio-screen]')).backgroundColor`
+  // O fundo é o do `main` (a tela do Início é transparente por cima dele).
+  const fundo = `getComputedStyle(document.querySelector('[data-inicio-screen]').closest('main')).backgroundColor`
   await settle(contents)
   const fundoClaro = await evaluate<string>(contents, fundo)
   screenshots.push(await capture(win, ctx.outDir, 'inicio-gravando-light'))
@@ -3874,8 +3875,21 @@ async function inicioSettingsCheck(win: BrowserWindow, ctx: SmokeContext, screen
 /**
  * Contrato 136 (D2): com `telaInicial: 'reunioes'` gravado, a próxima janela abre em Reuniões (`/`); a preferência não
  * muda a rota da janela já aberta. No fim volta ao padrão (`'inicio'`) e uma janela nova abre no Início de novo.
+ * Numa janela própria e fora do laço dos temas: cada janela aberta vira a principal do app (a que o menu "Nova gravação"
+ * usa) e, fechada, deixa o app sem nenhuma; quem vem depois abre a sua.
  */
-async function inicioTelaInicialCheck(win: BrowserWindow, ctx: SmokeContext, watch: (win: BrowserWindow) => void): Promise<Check> {
+async function inicioTelaInicialCheck(ctx: SmokeContext, watch: (win: BrowserWindow) => void): Promise<Check> {
+  const win = ctx.openWindow({ theme: 'light' })
+  watch(win)
+  try {
+    await loadAndWait(win)
+    return await inicioTelaInicialNaJanela(win, ctx, watch)
+  } finally {
+    win.destroy()
+  }
+}
+
+async function inicioTelaInicialNaJanela(win: BrowserWindow, ctx: SmokeContext, watch: (win: BrowserWindow) => void): Promise<Check> {
   const contents = win.webContents
   const gravar = (telaInicial: 'inicio' | 'reunioes'): Promise<boolean> =>
     evaluate<boolean>(
@@ -5403,7 +5417,14 @@ async function calendarChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => 
   const late = await calendarNotice(ctx, 'not-recording', 'Status da obra')
   const googleRead = google.eventReads.at(-1)
   const microsoftRead = microsoft.eventReads.at(-1)
-  const windowOk = (from: string, to: string): boolean => Math.abs(Date.parse(to) - Date.parse(from) - 25 * 3_600_000) < 5_000 && Math.abs(Date.parse(from) - (Date.now() - 3_600_000)) < 60_000
+  // Contrato 134 (D4): do começo do dia (ou de agora −1 h, o que vier antes) ao fim de amanhã, no fuso do sistema.
+  const expected = calendarWindow(Date.now(), Intl.DateTimeFormat().resolvedOptions().timeZone)
+  // As duas últimas condições não dependem do calendarWindow: pegam janela encolhida mesmo se a produção regredir.
+  const windowOk = (from: string, to: string): boolean =>
+    Math.abs(Date.parse(from) - expected.from) < 60_000 &&
+    Math.abs(Date.parse(to) - expected.to) < 60_000 &&
+    Date.parse(from) <= Date.now() - 3_600_000 + 60_000 &&
+    Date.parse(to) - Date.parse(from) >= 24 * 3_600_000
   checks['notices'] = {
     ok:
       before?.title === 'Reunião em 5 min: Alinhamento com o jurídico' &&
@@ -5417,7 +5438,7 @@ async function calendarChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => 
       microsoftRead?.calendarId === 'default' &&
       microsoftRead.prefer === 'outlook.timezone="UTC"' &&
       windowOk(microsoftRead.startDateTime, microsoftRead.endDateTime),
-    detail: `"Reunião em 5 min" com hora e participantes=${Boolean(before && /^\d{2}:\d{2} · /.test(before.body))}, "Gravar"=${JSON.stringify(before?.actions ?? [])}; "não está sendo gravada"=${Boolean(late)}; Google: agenda principal, cancelados=${googleRead?.showDeleted ?? '?'}, janela −1 h a +24 h=${googleRead ? windowOk(googleRead.timeMin, googleRead.timeMax) : false}; Microsoft: calendarView=${microsoftRead?.calendarId === 'default'}, Prefer UTC=${microsoftRead?.prefer === 'outlook.timezone="UTC"'}, janela=${microsoftRead ? windowOk(microsoftRead.startDateTime, microsoftRead.endDateTime) : false}; ${notices.length} notificação(ões)`,
+    detail: `"Reunião em 5 min" com hora e participantes=${Boolean(before && /^\d{2}:\d{2} · /.test(before.body))}, "Gravar"=${JSON.stringify(before?.actions ?? [])}; "não está sendo gravada"=${Boolean(late)}; Google: agenda principal, cancelados=${googleRead?.showDeleted ?? '?'}, janela do dia a amanhã=${googleRead ? windowOk(googleRead.timeMin, googleRead.timeMax) : false}; Microsoft: calendarView=${microsoftRead?.calendarId === 'default'}, Prefer UTC=${microsoftRead?.prefer === 'outlook.timezone="UTC"'}, janela=${microsoftRead ? windowOk(microsoftRead.startDateTime, microsoftRead.endDateTime) : false}; ${notices.length} notificação(ões)`,
   }
 
   const checksReady = await waitFor(contents, `document.querySelectorAll('[data-calendar-check]').length === 3`, 8000)
@@ -13684,16 +13705,27 @@ const funilRouterPush = (contents: WebContents, path: string): Promise<boolean> 
     })()`,
   )
 
-/** Contrato 125: o caminho atual do roteador em memória, lido do `LocationContext` do React (como no `funilAbrir`). */
+/**
+ * Contrato 125: o caminho atual do roteador em memória, lido do `LocationContext` do React (também no `funilAbrir`).
+ * O `__reactFiber$` do `<main>` é o fiber de quando o nó nasceu, que depois de alguns renders pode ser a cópia antiga
+ * (`alternate`), com o caminho de antes; por isso só serve para chegar à raiz, e a busca desce pela árvore atual
+ * (`FiberRoot.current`).
+ */
 const funilRouterPath = (contents: WebContents): Promise<string> =>
   evaluate<string>(
     contents,
     `(() => {
       const main = document.querySelector('main[data-route]')
       const key = main && Object.keys(main).find((name) => name.startsWith('__reactFiber$'))
-      for (let fiber = key ? main[key] : null; fiber; fiber = fiber.return) {
+      let top = key ? main[key] : null
+      while (top?.return) top = top.return
+      const stack = top?.stateNode?.current ? [top.stateNode.current] : []
+      while (stack.length) {
+        const fiber = stack.pop()
         const location = fiber.memoizedProps?.value?.location
         if (location && typeof location.pathname === 'string') return location.pathname
+        if (fiber.sibling) stack.push(fiber.sibling)
+        if (fiber.child) stack.push(fiber.child)
       }
       return ''
     })()`,
@@ -15433,19 +15465,8 @@ async function funilAssistenteChecks(ctx: SmokeContext, watch: (win: BrowserWind
     const openLabel = await evaluate<string>(contents, `${openCard}?.textContent ?? ''`)
     await evaluate(contents, `${openCard}?.querySelector('[data-action="chat-action-open"]')?.click(), true`)
     const opened = await waitFor(contents, `${routeIs('funil')} && document.querySelector('[data-funil-oportunidade="op-portal"]')`, 8000)
-    // O roteador é de memória: o caminho sai do `LocationContext` do React, como o `funilRouterPush` acha o navegador.
-    const path = await evaluate<string>(
-      contents,
-      `(() => {
-        const main = document.querySelector('main[data-route]')
-        const key = main && Object.keys(main).find((name) => name.startsWith('__reactFiber$'))
-        for (let fiber = key ? main[key] : null; fiber; fiber = fiber.return) {
-          const location = fiber.memoizedProps?.value?.location
-          if (location && typeof location.pathname === 'string') return location.pathname
-        }
-        return ''
-      })()`,
-    )
+    // O roteador é de memória: o caminho sai do `LocationContext` do React, pela árvore atual (`funilRouterPath`).
+    const path = await funilRouterPath(contents)
     checks['funilAbrir'] = {
       ok: openAsked.done && openLabel === 'Abrir «Portal do associado»' && opened && path === '/funil/oportunidades/op-portal',
       detail: `resposta=${openAsked.done}; botão "${openLabel}"; detalhe aberto=${opened}; caminho "${path}"`,
@@ -17087,12 +17108,11 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
       }
       restaurarMac()
       releDiaDoMac(win)
-      // Contrato 136: no claro, a linha do Calendário do Mac sem acesso, a Section "Início" das Configurações e a tela
-      // inicial gravada como Reuniões na próxima abertura (e de volta ao Início).
+      // Contrato 136: no claro, a linha do Calendário do Mac sem acesso e a Section "Início" das Configurações (a tela
+      // inicial gravada vem depois do laço, em janelas próprias).
       if (themeName === 'light') {
         inicio['semAcessoMac'] = await inicioSemAcessoMacCheck(win, ctx, screenshots)
         inicio['configuracoes'] = await inicioSettingsCheck(win, ctx, screenshots)
-        inicio['telaInicial'] = await inicioTelaInicialCheck(win, ctx, watch)
       }
       // Contrato 18: "Contas", "Sobre", a aba lembrada, os atalhos e a busca, no claro.
       if (themeName === 'light') settings['tabs'] = await settingsTabsChecks(contents, ctx, extraShot)
@@ -17166,6 +17186,9 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
     settings['appearance'] = await appearanceCheck(win.webContents, ctx.userDataDir)
     theme = await themeLiveSwitch(win.webContents)
     win.destroy()
+
+    // Contrato 136 (D2): a tela inicial gravada como Reuniões na próxima abertura (e de volta ao Início).
+    inicio['telaInicial'] = await inicioTelaInicialCheck(ctx, watch)
 
     // Contrato 14: atualização pelo GitHub (API e download falsos), numa janela clara à parte.
     const updatesWin = ctx.openWindow({ theme: 'light' })
