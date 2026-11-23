@@ -40,6 +40,7 @@ import { cachedCalendarReads, calendarOverview, createChatActions, extractAction
 import { createChatEventsStore } from './chat/events-store'
 import { createChatService, type ChatService } from './chat/service'
 import { AUTOMATION_RUNS_IN_SOURCE, writeSources, type AssistantState } from './chat/sources'
+import { createFolderTools, revealFolderFile } from './chat/folder-tools'
 import { addAssistantFolders, createFolderIndex, removeAssistantFolder } from './chat/folders'
 import type { FolderAddResult } from '../shared/assistant-folders'
 import { createFileChatStore } from './chat/store'
@@ -1043,7 +1044,8 @@ interface AppServices {
   /** Contrato 161: o motor da triagem do WhatsApp (etiquetas por conversa; só etiqueta, nunca envia). */
   triagem: TriagemService
   /** Contrato 165: os canais que mudam a lista de pastas do Assistente (só o main grava `assistant.folders`). */
-  assistantFolders: { add(): Promise<FolderAddResult>; remove(request: unknown): Promise<{ ok: boolean }> }
+  /** Contrato 166: e o "Abrir" da citação de um arquivo das pastas (revela no Finder). */
+  assistantFolders: { add(): Promise<FolderAddResult>; remove(request: unknown): Promise<{ ok: boolean }>; reveal(request: unknown): Promise<{ ok: boolean; error?: 'nao-encontrado' }> }
   /**
    * Contrato 124 (R35, D11): a migração única do próximo passo e dos lembretes para tarefas, no boot, antes do
    * bloqueio, do IPC e das Automações. Nunca lança; a falha vai ao log (só o passo) e o app segue.
@@ -1090,10 +1092,13 @@ function createAppServices(userData: string): AppServices {
   // pergunta); as ferramentas conferem de novo no arquivo a cada chamada.
   // Desligada até a primeira leitura do arquivo (nada de mídia antes de saber o que a pessoa escolheu).
   let assistantMediaOn = false
+  // Contrato 166: alguma pasta na lista do Assistente (a ferramenta das pastas só existe com ela), guardado do mesmo jeito.
+  let assistantFoldersOn = false
   const settings = createFileSettingsStore({
     dir: userData,
     onChange: (next) => {
       assistantMediaOn = next.assistant.media
+      assistantFoldersOn = next.assistant.folders.length > 0
       broadcastSettings(next)
     },
   })
@@ -1101,6 +1106,7 @@ function createAppServices(userData: string): AppServices {
   void settings.get().then(
     (current) => {
       assistantMediaOn = current.assistant.media
+      assistantFoldersOn = current.assistant.folders.length > 0
     },
     () => undefined,
   )
@@ -1682,6 +1688,8 @@ function createAppServices(userData: string): AppServices {
   const emailLocked = (): boolean => lockService?.isLocked() ?? false
   // Contrato 149: o limite de mídias por pergunta, um só para as ferramentas do WhatsApp e do email.
   const assistantMediaBudget = createMediaBudget()
+  // Contrato 166: `ler_arquivo_pasta`, que abre um arquivo do `PASTAS.md` da conversa (no mesmo limite de mídias).
+  const folderTools = createFolderTools({ index: folderIndex, budget: assistantMediaBudget, home: app.getPath('home') })
   // Contrato 149: as ferramentas de mídia do WhatsApp (ver e transcrever), só do recorte exportado para a pergunta.
   const whatsappMediaTools = createWhatsAppMediaTools({
     exported: (folder, chatId, messageId) => whatsapp.exportedMedia(folder, chatId, messageId),
@@ -1798,6 +1806,8 @@ function createAppServices(userData: string): AppServices {
           whatsapp: { on: chatSourcesOf(scope).whatsapp && whatsapp.status().state === 'connected', tools: whatsappMediaTools },
           email: { on: chatSourcesOf(scope).email && email.accounts().length > 0, tools: emailTools.mediaTools },
         }),
+        // Contrato 166: com a fonte Pastas ligada e alguma pasta na lista, a leitura de um arquivo delas.
+        ...(chatSourcesOf(scope).pastas && assistantFoldersOn && !emailLocked() ? folderTools : []),
       ],
       endTurn: (turn, outcome) => emailTools.organizer?.endTurn(turn, outcome) ?? Promise.resolve(),
     },
@@ -1880,6 +1890,16 @@ function createAppServices(userData: string): AppServices {
   // Arquivos da reunião (contrato 07). No smoke, a "pasta pessoal" fica dentro do userData temporário
   // (nada vai para ~/Documents), o diálogo responde o que o smoke mandar e nada abre no Finder.
   const home = smokeUserData ? join(smokeUserData, 'home') : app.getPath('home')
+  // Contrato 166: o mesmo abridor serve o "Abrir" das citações das pastas do Assistente.
+  const fileOpener: FileOpener = smokeFixtures
+    ? {
+        openPath: (path) => {
+          smokeFixtures.openedFiles.push({ action: 'open', path })
+          return Promise.resolve('')
+        },
+        showItemInFolder: (path) => void smokeFixtures.openedFiles.push({ action: 'reveal', path }),
+      }
+    : nativeOpener
   const files = createMeetingFilesService({
     settings,
     meetings,
@@ -1889,15 +1909,7 @@ function createAppServices(userData: string): AppServices {
     home,
     documents: smokeUserData ? join(home, 'Documents') : app.getPath('documents'),
     dialog: smokeFixtures ? { chooseFolder: () => Promise.resolve(smokeFixtures.chosenFolder) } : nativeFolderDialog,
-    opener: smokeFixtures
-      ? {
-          openPath: (path) => {
-            smokeFixtures.openedFiles.push({ action: 'open', path })
-            return Promise.resolve('')
-          },
-          showItemInFolder: (path) => void smokeFixtures.openedFiles.push({ action: 'reveal', path }),
-        }
-      : nativeOpener,
+    opener: fileOpener,
   })
   const download = createMeetingDownload({
     meetings,
@@ -2398,6 +2410,7 @@ function createAppServices(userData: string): AppServices {
           },
           request,
         ),
+      reveal: (request) => revealFolderFile({ index: folderIndex, reveal: (path) => fileOpener.showItemInFolder(path) }, request),
     },
     async migrarTarefas() {
       try {
@@ -2715,6 +2728,7 @@ function registerIpc(services: AppServices): void {
   // Contrato 165: a lista de pastas do Assistente só muda por aqui (o diálogo nativo e a remoção), nunca pelo patch.
   handle('scribe:assistant-folder-add', appOrigin, () => services.assistantFolders.add())
   handle('scribe:assistant-folder-remove', appOrigin, (_event, request) => services.assistantFolders.remove(request))
+  handle('scribe:assistant-folder-reveal', appOrigin, (_event, request) => services.assistantFolders.reveal(request))
   handle('scribe:audio-begin', appOrigin, (_event, request) => files.begin(request))
   handle('scribe:audio-append', appOrigin, (_event, request) => files.append(request))
   handle('scribe:audio-finish', appOrigin, async (_event, request) => {

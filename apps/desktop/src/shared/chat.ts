@@ -342,3 +342,13 @@ export function meetingIdOfLink(href: string): string | null {
   const id = href.slice(MEETING_LINK_SCHEME.length).trim()
   return /^[\w-]{1,200}$/.test(id) ? id : null
 }
+
+/** Contrato 166 (pastas-assistente D8): a citação de um arquivo das pastas, `pasta:<id>`. */
+export const FOLDER_FILE_LINK_SCHEME = 'pasta:'
+
+/** Id do arquivo das pastas de um link `pasta:<id>` (16 caracteres hex); `null` se não for um. */
+export function folderFileIdOfLink(href: string): string | null {
+  if (!href.startsWith(FOLDER_FILE_LINK_SCHEME)) return null
+  const id = href.slice(FOLDER_FILE_LINK_SCHEME.length).trim()
+  return /^[0-9a-f]{16}$/.test(id) ? id : null
+}

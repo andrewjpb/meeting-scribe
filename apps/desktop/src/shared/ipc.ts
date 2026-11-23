@@ -211,6 +211,8 @@ export interface InvokeChannels {
   'scribe:assistant-folder-add': { request: undefined; response: FolderAddResult }
   /** Contrato 165: tira a pasta da lista e apaga as cópias lidas dela nas conversas; id desconhecido, `ok: false`. */
   'scribe:assistant-folder-remove': { request: { id: string }; response: { ok: boolean } }
+  /** Contrato 166: o "Abrir" da citação `[Pasta · …](pasta:<id>)`: o main resolve o id pelo índice da conversa e revela o arquivo no Finder. */
+  'scribe:assistant-folder-reveal': { request: { chatId: string; id: string }; response: { ok: boolean; error?: 'nao-encontrado' } }
   /** Início da gravação com "Salvar áudio e transcrição numa pasta": cria o `.part`. */
   'scribe:audio-begin': { request: { startedAt: string; title: string; extension: AudioExtension | null }; response: AudioBeginResult }
   /** Um pedaço de 5 s do gravador. */
@@ -980,6 +982,7 @@ const INVOKE: Record<InvokeChannel, true> = {
   'scribe:audio-folder-choose': true,
   'scribe:assistant-folder-add': true,
   'scribe:assistant-folder-remove': true,
+  'scribe:assistant-folder-reveal': true,
   'scribe:audio-begin': true,
   'scribe:audio-append': true,
   'scribe:audio-finish': true,
@@ -1421,6 +1424,7 @@ export const WHEN_LOCKED: Readonly<Record<InvokeChannel, LockedPolicy>> = Object
   'scribe:audio-folder-choose': 'refused',
   'scribe:assistant-folder-add': 'refused',
   'scribe:assistant-folder-remove': 'refused',
+  'scribe:assistant-folder-reveal': 'refused',
   'scribe:audio-begin': 'refused',
   'scribe:audio-finish': 'session',
   'scribe:meeting-files': 'refused',

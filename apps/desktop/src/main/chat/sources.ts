@@ -587,11 +587,9 @@ export async function writeSources(deps: AssistantSourcesDeps, folder: string, s
   // Contrato 149 (CA10): a mídia da fonte desligada (ou de todas, com a função de mídia desligada) sai da pasta.
   // Configuração que não se lê vale como função desligada (como nas ferramentas).
   const media = deps.media ? await deps.media().catch(() => false) : true
-  if (!media) await clearMediaFiles(folder)
-  else {
-    if (!sources.whatsapp) await clearMediaFiles(folder, 'WhatsApp')
-    if (!sources.email) await clearMediaFiles(folder, 'Email')
-    if (!sources.pastas) await clearMediaFiles(folder, 'Pasta')
-  }
+  if (!media || !sources.whatsapp) await clearMediaFiles(folder, 'WhatsApp')
+  if (!media || !sources.email) await clearMediaFiles(folder, 'Email')
+  // Contrato 166: as cópias das pastas seguem só a fonte Pastas, nunca a função de mídia.
+  if (!sources.pastas) await clearMediaFiles(folder, 'Pasta')
   return { files, whatsapp, email, redes, funil, tarefas, pastas }
 }

@@ -1,7 +1,7 @@
-import { ExternalLink } from 'lucide-react'
-import { useState, type ReactNode } from 'react'
+import { ExternalLink, Folder } from 'lucide-react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { useNavigate } from 'react-router'
-import { meetingIdOfLink } from '@shared/chat'
+import { folderFileIdOfLink, meetingIdOfLink } from '@shared/chat'
 import { meetingPath } from '@shared/routes'
 import { Button } from '../../design/Button'
 import { Note } from '../../design/Note'
@@ -14,11 +14,28 @@ const LINK_CLASS =
  * Resposta do Claude em Markdown simples (contrato 15, CA4), desenhada com elementos do React a partir da
  * árvore de `markdown.ts`: nenhum HTML do texto chega ao DOM. Link `meeting:<id>` vira botão que abre o
  * detalhe da reunião; link `https://` vira botão que pede confirmação antes de abrir no navegador; qualquer
- * outro link fica só o texto.
+ * outro link fica só o texto. Contrato 166: link `pasta:<id>` (um arquivo das pastas do Assistente) vira botão que pede
+ * ao main para revelar o arquivo no Finder, pelo id resolvido no índice da conversa (`chatId`); sem conversa, só o texto.
  */
-export function ChatMarkdown({ text }: { text: string }) {
+export function ChatMarkdown({ text, chatId = null }: { text: string; chatId?: string | null | undefined }) {
   const navigate = useNavigate()
   const [external, setExternal] = useState<string | null>(null)
+  // Contrato 166: o "Arquivo não encontrado" do botão que falhou, por 3 s.
+  const [missing, setMissing] = useState<string | null>(null)
+  const missingTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  useEffect(() => () => void (missingTimer.current && clearTimeout(missingTimer.current)), [])
+  const reveal = (id: string): void => {
+    if (!chatId) return
+    void window.__scribeApi.invoke('scribe:assistant-folder-reveal', { chatId, id }).then(
+      (result) => {
+        if (result.ok) return
+        setMissing(id)
+        if (missingTimer.current) clearTimeout(missingTimer.current)
+        missingTimer.current = setTimeout(() => setMissing(null), 3000)
+      },
+      () => undefined,
+    )
+  }
 
   const inline = (nodes: readonly Inline[], key = ''): ReactNode[] =>
     nodes.map((node, index) => {
@@ -32,6 +49,15 @@ export function ChatMarkdown({ text }: { text: string }) {
         return (
           <button key={id} type="button" data-meeting-link={meetingId} className={LINK_CLASS} onClick={() => void navigate(meetingPath(meetingId))}>
             {inline(node.children, `${id}-`)}
+          </button>
+        )
+      }
+      const folderFileId = chatId ? folderFileIdOfLink(node.href) : null
+      if (folderFileId) {
+        return (
+          <button key={id} type="button" data-chat-link-kind="pasta" title="Abrir no Finder" className={LINK_CLASS} onClick={() => reveal(folderFileId)}>
+            <Folder aria-hidden="true" className="mr-1 inline size-3.5 align-[-2px]" />
+            {missing === folderFileId ? 'Arquivo não encontrado' : inline(node.children, `${id}-`)}
           </button>
         )
       }
