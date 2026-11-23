@@ -1,7 +1,8 @@
-import { Paperclip, PanelRight, Reply, Search, SmilePlus, Sparkles, TriangleAlert, X } from 'lucide-react'
+import { Bot, Paperclip, PanelRight, Pause, Play, Reply, Search, SmilePlus, Sparkles, TriangleAlert, X } from 'lucide-react'
 import { useEffect, useLayoutEffect, useRef, useState, type DragEvent, type KeyboardEvent, type RefObject, type UIEvent } from 'react'
 import { Link, useLocation } from 'react-router'
 import { settingsPath, type WhatsAppNavigationState } from '@shared/routes'
+import { isGroupChat } from '@shared/atendimento'
 import type { Meeting } from '@shared/meetings'
 import {
   WHATSAPP_DRAFT_INSTRUCTION_MAX,
@@ -18,6 +19,11 @@ import { useSettings } from '../../app/settingsStore'
 import { Button } from '../../design/Button'
 import { Icon } from '../../design/Icon'
 import { Note, NOTE_ACTION_CLASS } from '../../design/Note'
+import { AtendimentoBadge, AtendimentoChip, useAtendimentoTicker } from '../atendimento/AtendimentoBadge'
+import { AtendimentoPanel, useAtendimentoChatLog } from '../atendimento/AtendimentoPanel'
+import { AtendimentoProposal } from '../atendimento/AtendimentoProposal'
+import { useAtendimento } from '../atendimento/atendimentoStore'
+import { agentMessageIds } from '../atendimento/status'
 import { AttachCard } from './AttachCard'
 import { carriesFiles, chooseDropped, DROP_FILES_MAX, previewFor, type AttachPreview } from './attach'
 import { Avatar } from './Avatar'
@@ -121,6 +127,8 @@ function ChatRow({ chat, active, onOpen }: { chat: WhatsAppChat; active: boolean
           ) : (
             <span className="min-w-0 flex-1 truncate text-12 text-text-muted">{previewText(chat.lastMessage)}</span>
           )}
+          {/* Contrato 143: a etiqueta do atendimento ligado, sem empurrar a hora nem as não lidas. */}
+          <AtendimentoChip chatId={chat.id} />
           {chat.unread > 0 && (
             <span data-whatsapp-unread className="shrink-0 rounded-[var(--radius-control)] bg-accent px-1.5 text-12 font-medium text-on-accent tabular">
               {chat.unread}
@@ -146,6 +154,8 @@ interface MessageItemProps {
   onPick: (messageId: string | null) => void
   onReact: (message: WhatsAppMessage, emoji: WhatsAppReactionEmoji) => void
   onQuote: (messageId: string) => void
+  /** Contrato 143: a mensagem minha que o agente de atendimento enviou leva o nome dele junto da hora. */
+  agentName?: string | undefined
 }
 
 const ACTION_BUTTON_CLASS =
@@ -172,7 +182,7 @@ function MessageActions({ message, picking, onReply, onPick }: Pick<MessageItemP
  * uma sequência do mesmo autor. Contrato 34: a citação em cima do texto (clicar rola até a citada, se carregada), as
  * reações embaixo do balão e, no hover, "Responder" e "Reagir" (os 6 emojis fixos; tocar na sua de novo tira).
  */
-function MessageItem({ message, first, group, photo, swapped, loaded, picking, onReply, onPick, onReact, onQuote }: MessageItemProps) {
+function MessageItem({ message, first, group, photo, swapped, loaded, picking, onReply, onPick, onReact, onQuote, agentName }: MessageItemProps) {
   const mine = message.fromMe
   const author = mine ? 'Você' : message.author
   const quote = quotedBlock(message, loaded)
@@ -215,7 +225,14 @@ function MessageItem({ message, first, group, photo, swapped, loaded, picking, o
               {message.text}
             </span>
           )}
-          <span className={`self-end text-12 tabular ${mine ? 'opacity-80' : 'text-text-faint'}`}>{clockLabel(message.at)}</span>
+          {mine && agentName ? (
+            <span data-atendimento-agent-mark className="flex items-center gap-1 self-end text-12 tabular opacity-80">
+              <Icon icon={Bot} size={14} className="shrink-0" />
+              {agentName} · {clockLabel(message.at)}
+            </span>
+          ) : (
+            <span className={`self-end text-12 tabular ${mine ? 'opacity-80' : 'text-text-faint'}`}>{clockLabel(message.at)}</span>
+          )}
         </div>
         {reactions.length > 0 && (
           <ul data-wa-reactions aria-label="Reações" className="flex flex-wrap gap-1">
@@ -309,10 +326,19 @@ interface ConversationProps {
   /** Contrato 32: o painel Detalhes está aberto (o botão do cabeçalho o abre e fecha). */
   detailsOpen: boolean
   onDetails: (open: boolean) => void
+  /** Contrato 143: o painel Atendimento (só conversa individual); um painel lateral por vez. */
+  atendimentoOpen: boolean
+  onAtendimento: (open: boolean) => void
+  /** Id da mensagem → nome do agente que a enviou (do histórico do atendimento desta conversa). */
+  agentNames: ReadonlyMap<string, string>
 }
 
+/** O botão de painel do cabeçalho ("Atendimento", "Detalhes"). */
+const PANEL_BUTTON_CLASS =
+  'no-drag inline-flex h-7 shrink-0 items-center gap-1.5 rounded-[var(--radius-control)] border border-line-strong px-2 text-12 font-medium text-title transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-bg-sunken'
+
 /** A conversa aberta: mensagens (mais antigas ao rolar para cima), o campo, "Enviar" e "Rascunho com o Claude". */
-function Conversation({ chat, initialText, detailsOpen, onDetails }: ConversationProps) {
+function Conversation({ chat, initialText, detailsOpen, onDetails, atendimentoOpen, onAtendimento, agentNames }: ConversationProps) {
   const messages = useWhatsApp((state) => state.messages[chat.id])
   const pendingAll = useWhatsApp((state) => state.pending[chat.id])
   const swapped = useWhatsApp((state) => state.swapped)
@@ -323,6 +349,7 @@ function Conversation({ chat, initialText, detailsOpen, onDetails }: Conversatio
   const header = useRef<HTMLElement | null>(null)
   const photo = usePhoto(chat.id, header, true)
   const group = chat.kind === 'group'
+  const individual = !group && !isGroupChat(chat.id)
   const phone = chatPhone(chat)
   // Contrato 34: "digitando…" no cabeçalho, a citação do envio, o seletor de reação aberto e o erro da reação.
   const typing = useWhatsApp((state) => typingLabel(state.typing, chat.id, group, Date.now()))
@@ -706,13 +733,14 @@ function Conversation({ chat, initialText, detailsOpen, onDetails }: Conversatio
             </span>
           )}
         </div>
-        <button
-          type="button"
-          data-action="toggle-whatsapp-details"
-          aria-pressed={detailsOpen}
-          onClick={() => onDetails(!detailsOpen)}
-          className={`no-drag inline-flex h-7 shrink-0 items-center gap-1.5 rounded-[var(--radius-control)] border border-line-strong px-2 text-12 font-medium text-title transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-bg-sunken ${detailsOpen ? 'bg-bg-sunken' : ''}`}
-        >
+        {individual && <AtendimentoBadge chatId={chat.id} />}
+        {individual && (
+          <button type="button" data-action="toggle-whatsapp-atendimento" aria-pressed={atendimentoOpen} onClick={() => onAtendimento(!atendimentoOpen)} className={`${PANEL_BUTTON_CLASS} ${atendimentoOpen ? 'bg-bg-sunken' : ''}`}>
+            <Icon icon={Bot} size={14} />
+            Atendimento
+          </button>
+        )}
+        <button type="button" data-action="toggle-whatsapp-details" aria-pressed={detailsOpen} onClick={() => onDetails(!detailsOpen)} className={`${PANEL_BUTTON_CLASS} ${detailsOpen ? 'bg-bg-sunken' : ''}`}>
           <Icon icon={PanelRight} size={14} />
           Detalhes
         </button>
@@ -740,6 +768,7 @@ function Conversation({ chat, initialText, detailsOpen, onDetails }: Conversatio
                 onPick={setPicking}
                 onReact={react}
                 onQuote={scrollToMessage}
+                agentName={message.fromMe ? agentNames.get(message.id) : undefined}
               />
             ))}
             {pending.map((item) => (
@@ -751,6 +780,16 @@ function Conversation({ chat, initialText, detailsOpen, onDetails }: Conversatio
         )}
       </div>
       <div className="flex shrink-0 flex-col gap-2 border-t border-line px-4 py-3">
+        {/* Contrato 143: a proposta do agente de atendimento (modo rascunho), acima de tudo o que é do campo. */}
+        {individual && (
+          <AtendimentoProposal
+            chatId={chat.id}
+            onSent={() => {
+              atBottom.current = true
+              void useWhatsApp.getState().open(chat.id)
+            }}
+          />
+        )}
         {draftOpen && (
           <div data-whatsapp-draft-panel className="flex flex-col gap-2 rounded-[var(--radius-panel)] border border-line bg-bg-sunken p-3">
             <label htmlFor="whatsapp-draft-instruction" className="text-12 font-medium text-text">
@@ -903,6 +942,56 @@ function Conversation({ chat, initialText, detailsOpen, onDetails }: Conversatio
   )
 }
 
+/**
+ * Contrato 143: abaixo da busca, quantas conversas têm atendimento ligado e "Pausar todos os atendimentos" (um clique,
+ * sem confirmação); com a pausa geral, "Todos os atendimentos pausados" e "Retomar atendimentos". Sem nenhum atendimento
+ * ligado, nada aparece.
+ */
+function AtendimentoPauseBar() {
+  const enabled = useAtendimento((state) => state.state?.bindings.filter((binding) => binding.enabled).length ?? 0)
+  const pausedAll = useAtendimento((state) => state.state?.pausedAll ?? false)
+  const [busy, setBusy] = useState(false)
+  const [failure, setFailure] = useState<string | null>(null)
+  if (enabled === 0) return null
+  const toggle = async (): Promise<void> => {
+    setBusy(true)
+    setFailure(null)
+    const result = await useAtendimento
+      .getState()
+      .pauseAll(!pausedAll)
+      .catch(() => ({ ok: false as const, reason: 'Não foi possível salvar.' }))
+    setBusy(false)
+    if (!result.ok) setFailure(result.reason)
+  }
+  return (
+    <div data-atendimento-pause-bar={pausedAll ? 'paused' : 'on'} className="flex flex-col gap-1 px-2 pb-2">
+      <div className="flex items-center gap-2">
+        {pausedAll ? (
+          <span className="min-w-0 flex-1 truncate rounded-[var(--radius-control)] border border-dashed border-line-strong px-2 py-1 text-12 text-text-muted">Todos os atendimentos pausados</span>
+        ) : (
+          <span className="min-w-0 flex-1 truncate text-12 text-text-muted tabular">{enabled === 1 ? '1 atendida' : `${enabled} atendidas`}</span>
+        )}
+        <button
+          type="button"
+          data-action="atendimento-pause-all"
+          aria-pressed={pausedAll}
+          disabled={busy}
+          onClick={() => void toggle()}
+          className={`${PANEL_BUTTON_CLASS} disabled:pointer-events-none disabled:opacity-50`}
+        >
+          <Icon icon={pausedAll ? Play : Pause} size={14} />
+          {pausedAll ? 'Retomar atendimentos' : 'Pausar todos os atendimentos'}
+        </button>
+      </div>
+      {failure && (
+        <p role="alert" className="text-12 text-rec">
+          {failure}
+        </p>
+      )}
+    </div>
+  )
+}
+
 /** O painel Detalhes da conversa aberta, com as mensagens carregadas dela. */
 function OpenDetails({ chat, onClose }: { chat: WhatsAppChat; onClose: () => void }) {
   const messages = useWhatsApp((state) => state.messages[chat.id])
@@ -932,6 +1021,24 @@ export function WhatsAppScreen() {
   const [detailsOpen, setDetailsOpen] = useState(() => detailsStartOpen(window.innerWidth))
   const [hits, setHits] = useState<{ term: string; found: WhatsAppSearchHit[] } | null>(null)
   const connected = status?.state === 'connected'
+  // Contrato 143: o painel Atendimento nunca abre sozinho; abrir um painel lateral fecha o outro.
+  const [atendimentoOpen, setAtendimentoOpen] = useState(false)
+  const openDetails = (next: boolean): void => {
+    setDetailsOpen(next)
+    if (next) setAtendimentoOpen(false)
+  }
+  const openAtendimento = (next: boolean): void => {
+    setAtendimentoOpen(next)
+    if (next) setDetailsOpen(false)
+  }
+
+  // Contrato 143: os atendimentos ao abrir a tela, e de novo a cada aviso do serviço (a pausa que ele grava na conversa
+  // muda o estado, não só o que ele sabe agora); o relógio dos selos anda enquanto a tela está montada.
+  useAtendimentoTicker()
+  useEffect(() => {
+    void useAtendimento.getState().load()
+    return window.__scribeApi.on('scribe:atendimento-changed', () => void useAtendimento.getState().load())
+  }, [])
 
   useEffect(() => {
     if (connected) void useWhatsApp.getState().loadChats()
@@ -968,6 +1075,14 @@ export function WhatsAppScreen() {
   const term = query.trim().toLocaleLowerCase('pt-BR')
   const shown = (chats ?? []).filter((chat) => !term || chat.name.toLocaleLowerCase('pt-BR').includes(term))
   const open = chats?.find((chat) => chat.id === selected) ?? null
+  const openIndividual = open !== null && open.kind !== 'group' && !isGroupChat(open.id)
+  // Em grupo, o painel Atendimento fecha.
+  if (atendimentoOpen && open && !openIndividual) setAtendimentoOpen(false)
+  const atendimentoShown = atendimentoOpen && openIndividual
+  const hasBinding = useAtendimento((state) => Boolean(open && state.state?.bindings.some((binding) => binding.chatId === open.id)))
+  const chatLog = useAtendimentoChatLog(openIndividual ? open.id : null, hasBinding)
+  const agents = useAtendimento((state) => state.state?.agents)
+  const agentNames = new Map([...agentMessageIds(chatLog)].map(([messageId, agentId]) => [messageId, agents?.find((agent) => agent.id === agentId)?.name ?? 'Agente']))
 
   return (
     // Contrato 33: sem título nem aviso no topo (o aviso do cliente não oficial fica no pareamento); as colunas
@@ -990,7 +1105,7 @@ export function WhatsAppScreen() {
         </div>
       ) : (
         <div className="flex min-h-0 flex-1">
-          <aside aria-label="Conversas do WhatsApp" className={`flex w-[300px] shrink-0 flex-col border-r border-line ${open && detailsOpen ? 'max-[1279px]:hidden' : ''}`}>
+          <aside aria-label="Conversas do WhatsApp" className={`flex w-[300px] shrink-0 flex-col border-r border-line ${open && (detailsOpen || atendimentoShown) ? 'max-[1279px]:hidden' : ''}`}>
             <div className="p-2">
               <div className="no-drag flex h-7 items-center gap-2 rounded-[var(--radius-control)] border border-line-strong bg-bg-raised px-2 text-text-faint has-[input:focus-visible]:outline-2 has-[input:focus-visible]:outline-offset-2 has-[input:focus-visible]:outline-focus">
                 <Icon icon={Search} size={14} />
@@ -1007,6 +1122,7 @@ export function WhatsAppScreen() {
                 />
               </div>
             </div>
+            <AtendimentoPauseBar />
             <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-3">
               {chats === null ? (
                 <p className="px-2 text-12 text-text-muted">Carregando…</p>
@@ -1045,8 +1161,18 @@ export function WhatsAppScreen() {
           </aside>
           {open ? (
             <>
-              <Conversation key={`${open.id}:${location.key}`} chat={open} initialText={asked?.chatId === open.id ? asked.text : undefined} detailsOpen={detailsOpen} onDetails={setDetailsOpen} />
+              <Conversation
+                key={`${open.id}:${location.key}`}
+                chat={open}
+                initialText={asked?.chatId === open.id ? asked.text : undefined}
+                detailsOpen={detailsOpen}
+                onDetails={openDetails}
+                atendimentoOpen={atendimentoShown}
+                onAtendimento={openAtendimento}
+                agentNames={agentNames}
+              />
               {detailsOpen && <OpenDetails key={open.id} chat={open} onClose={() => setDetailsOpen(false)} />}
+              {atendimentoShown && <AtendimentoPanel chat={open} log={chatLog} onClose={() => setAtendimentoOpen(false)} />}
             </>
           ) : (
             <div className="flex flex-1 items-center justify-center p-8">

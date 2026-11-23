@@ -200,3 +200,23 @@ export type AtendimentoDraftDiscardResult = { ok: true } | { ok: false; error: '
 
 /** Conversa de grupo. */
 export const isGroupChat = (chatId: string): boolean => chatId.endsWith(ATENDIMENTO_GROUP_SUFFIX)
+
+// Contrato 140; passou do `scheduler.ts` para cá no 143 (o selo da conversa, no renderer, também usa).
+
+/** "HH:MM" em minutos desde a meia-noite. */
+const minutesOf = (time: string): number => Number(time.slice(0, 2)) * 60 + Number(time.slice(3, 5))
+
+/**
+ * Dentro do horário, na hora local de `at`. `null` é sempre. Fim exclusivo. Faixa com `end` antes de `start` cruza a
+ * meia-noite e pertence ao dia em que começou. `start` igual a `end` vale o dia inteiro a partir de `start`.
+ */
+export function isWithinHours(hours: AtendimentoHours | null, at: Date): boolean {
+  if (!hours) return true
+  const day = at.getDay()
+  const minute = at.getHours() * 60 + at.getMinutes()
+  const start = minutesOf(hours.start)
+  const end = minutesOf(hours.end)
+  if (start < end) return hours.days.includes(day) && minute >= start && minute < end
+  const previous = (day + 6) % 7
+  return (hours.days.includes(day) && minute >= start) || (hours.days.includes(previous) && minute < end)
+}

@@ -3,7 +3,10 @@
 // conversa (com teto de 2 × `delayMax` desde a primeira) e conta as respostas na última hora, por conversa e no total.
 // Módulo puro: relógio, temporizador e sorteio chegam injetados. Não lê o store, não chama modelo e não envia (contrato
 // 141). Pendências ficam só na memória e se perdem ao fechar o app, como pede a spec.
-import { isGroupChat, type AtendimentoBinding, type AtendimentoHours } from '../../../shared/atendimento'
+import { isGroupChat, isWithinHours, type AtendimentoBinding } from '../../../shared/atendimento'
+
+// Contrato 143: `isWithinHours` passou para `shared/atendimento.ts` (o selo da conversa usa); reexportada daqui.
+export { isWithinHours }
 
 /** Teto de respostas automáticas somando todas as conversas, na última hora. */
 export const GLOBAL_MAX_PER_HOUR = 30
@@ -54,24 +57,6 @@ interface Pending {
   dueAt: number
   messageIds: string[]
   handle: unknown
-}
-
-/** "HH:MM" em minutos desde a meia-noite. */
-const minutesOf = (time: string): number => Number(time.slice(0, 2)) * 60 + Number(time.slice(3, 5))
-
-/**
- * Dentro do horário, na hora local de `at`. `null` é sempre. Fim exclusivo. Faixa com `end` antes de `start` cruza a
- * meia-noite e pertence ao dia em que começou. `start` igual a `end` vale o dia inteiro a partir de `start`.
- */
-export function isWithinHours(hours: AtendimentoHours | null, at: Date): boolean {
-  if (!hours) return true
-  const day = at.getDay()
-  const minute = at.getHours() * 60 + at.getMinutes()
-  const start = minutesOf(hours.start)
-  const end = minutesOf(hours.end)
-  if (start < end) return hours.days.includes(day) && minute >= start && minute < end
-  const previous = (day + 6) % 7
-  return (hours.days.includes(day) && minute >= start) || (hours.days.includes(previous) && minute < end)
 }
 
 export function createAtendimentoScheduler(deps: SchedulerDeps): AtendimentoScheduler {
