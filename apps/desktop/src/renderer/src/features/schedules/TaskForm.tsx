@@ -5,7 +5,7 @@
 // Contrato 51: a seção "Pode enviar email", desligada por padrão. Ligada, pede a conta que envia, a lista de
 // destinatários permitidos (endereços exatos e/ou domínios `@empresa.com`, de 1 a 50) e o teto por execução (padrão 5,
 // até 20). Ligar e salvar é a permissão; o main grava a data.
-import { ArrowLeft, Lightbulb, Send } from 'lucide-react'
+import { ArrowLeft, Info, Lightbulb, Send } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import {
   AGENT_OUTPUT_KINDS,
@@ -31,10 +31,12 @@ import {
 } from '@shared/automations'
 import type { EmailAccountStatus } from '@shared/email'
 import { allowEntryValid, parseAllowList, TASK_EMAIL_ALLOW_MAX, TASK_EMAIL_ALLOW_MIN, TASK_EMAIL_MAX_PER_RUN_DEFAULT, TASK_EMAIL_MAX_PER_RUN_MAX, type TaskEmailInput } from '@shared/task-email'
+import { TRIAGEM_ESPERA_SEG } from '@shared/triagem'
 import { urlsIn } from '@shared/web-urls'
 import { Button } from '../../design/Button'
 import { Select, TextField } from '../../design/Field'
 import { Icon } from '../../design/Icon'
+import { Note } from '../../design/Note'
 import { Segmented } from '../../design/Segmented'
 import { Switch } from '../../design/Switch'
 import { QUIET_BUTTON } from '../chat/ChatMessages'
@@ -87,6 +89,19 @@ const SUGGESTIONS: readonly Suggestion[] = [
     build: () => ({ name: 'Pendências da reunião', message: 'Quais são as pendências desta reunião?', schedule: { kind: 'after-meeting', delayMin: 0 }, enabled: true, runOnce: false, runOnceAction: 'disable', timeoutS: TASK_TIMEOUT_DEFAULT_S, notify: 'on-error', output: null }),
   },
 ]
+
+/**
+ * Contrato 162 (R15): o aviso do gatilho "Quando chega mensagem do WhatsApp", e a mensagem que vai quando a pessoa deixa
+ * o campo vazio nesse gatilho (o main exige uma; é a mesma da tarefa criada pelo modelo pronto).
+ */
+export const WHATSAPP_TRIGGER_NOTICE = 'Esta tarefa deixa o agente ler as últimas mensagens da conversa que recebeu a mensagem, e nada mais do WhatsApp. O agente só grava uma etiqueta; não envia nem apaga.'
+const WHATSAPP_TRIGGER_MESSAGE = 'Classificar a conversa do WhatsApp que recebeu mensagem.'
+
+/** A frase da recusa do save; a da unicidade da triagem (contrato 161) já vem pronta do main. */
+export function taskErrorText(error: string): string {
+  if (error.startsWith('Já existe um agente de triagem ativo')) return error
+  return TASK_ERRORS[error] ?? TASK_ERRORS['invalid'] ?? ''
+}
 
 const TASK_ERRORS: Record<string, string> = {
   agent: 'Escolha um agente que exista.',
@@ -155,16 +170,19 @@ export function TaskForm({ initial, meetings, onClose, onSaved }: { initial: Tas
   const agent = agents.find((candidate) => candidate.id === task.agentId)
   const webUrls = urlsIn(task.message)
   const email = emailOf(emailDraft, emailAccounts ?? [])
-  const valid = schedule !== null && task.name.trim() !== '' && task.message.trim() !== '' && agent !== undefined && task.timeoutS >= TASK_TIMEOUT_MIN_S && task.timeoutS <= TASK_TIMEOUT_MAX_S && 'email' in email
+  // Contrato 162: no gatilho do WhatsApp a mensagem é opcional (o agente recebe a conversa que chegou).
+  const whatsappTrigger = frequency.kind === 'whatsapp-message'
+  const valid = schedule !== null && task.name.trim() !== '' && (whatsappTrigger || task.message.trim() !== '') && agent !== undefined && task.timeoutS >= TASK_TIMEOUT_MIN_S && task.timeoutS <= TASK_TIMEOUT_MAX_S && 'email' in email
 
   const save = async (): Promise<void> => {
     if (!schedule || !('email' in email)) return
     setSaving(true)
     setFailure(null)
-    const result = await window.__scribeApi.invoke('scribe:tasks-save', { ...task, name: task.name.trim(), schedule, email: email.email })
+    const message = whatsappTrigger && !task.message.trim() ? WHATSAPP_TRIGGER_MESSAGE : task.message
+    const result = await window.__scribeApi.invoke('scribe:tasks-save', { ...task, name: task.name.trim(), message, schedule, email: email.email })
     setSaving(false)
     if (!result.ok) {
-      setFailure(TASK_ERRORS[result.error] ?? TASK_ERRORS['invalid'] ?? '')
+      setFailure(taskErrorText(result.error))
       return
     }
     await useAutomations.getState().load()
@@ -213,7 +231,11 @@ export function TaskForm({ initial, meetings, onClose, onSaved }: { initial: Tas
       <FormField label="Agente" htmlFor="task-agent">
         <Select id="task-agent" value={task.agentId} options={agentOptions} onChange={(agentId) => patch({ agentId })} />
       </FormField>
-      <FormField label="Mensagem" htmlFor="task-message" hint="O que pedir ao agente a cada vez. A data, a hora e o fuso vão junto, no começo.">
+      <FormField
+        label="Mensagem"
+        htmlFor="task-message"
+        hint={whatsappTrigger ? <span data-task-message-help>Opcional neste gatilho: o agente recebe a conversa que chegou.</span> : 'O que pedir ao agente a cada vez. A data, a hora e o fuso vão junto, no começo.'}
+      >
         <textarea id="task-message" rows={4} value={task.message} maxLength={TASK_MESSAGE_MAX} onChange={(event) => patch({ message: event.target.value })} className={AREA_CLASS} />
         {/* Contrato 26: os endereços da mensagem contam como digitados (o agente com internet pode abri-los). A mensagem
             pode ter vindo de um cartão do Assistente: a pessoa vê a lista antes de salvar. */}
@@ -229,7 +251,23 @@ export function TaskForm({ initial, meetings, onClose, onSaved }: { initial: Tas
           <Select id="task-frequency" value={frequency.kind} options={FREQUENCY_OPTIONS} onChange={(kind: ScheduleKind) => patchFrequency({ kind })} />
           <FrequencyControls draft={frequency} onChange={patchFrequency} />
         </div>
+        {/* Contrato 162: "Incluir grupos" e o aviso do que o agente lê, abaixo do seletor. */}
+        {whatsappTrigger && (
+          <div data-task-grupos={frequency.grupos ? 'on' : 'off'} className="flex items-center gap-2.5">
+            <Switch checked={frequency.grupos} labelledBy="task-grupos" action="task-grupos" onChange={(grupos) => patchFrequency({ grupos })} />
+            <span id="task-grupos" className="text-13 text-text">
+              Incluir grupos
+            </span>
+          </div>
+        )}
       </FormField>
+      {whatsappTrigger && (
+        <div data-task-whatsapp-aviso>
+          <Note id="task-whatsapp-aviso" icon={Info}>
+            {WHATSAPP_TRIGGER_NOTICE}
+          </Note>
+        </div>
+      )}
 
       <div className="grid grid-cols-[repeat(auto-fit,minmax(280px,1fr))] gap-4">
         <FormField label="Fuso" htmlFor="task-timezone" hint={timeZoneOk ? 'Padrão: o fuso deste Mac.' : 'Fuso desconhecido.'}>
@@ -297,22 +335,25 @@ export function TaskForm({ initial, meetings, onClose, onSaved }: { initial: Tas
         </div>
       </div>
 
-      <section aria-label="Próximas 5 execuções" data-task-preview className="flex flex-col gap-2 rounded-[var(--radius-panel)] border border-line-strong bg-bg-raised p-3">
-        <h3 className="text-13 font-medium text-text">Próximas 5 execuções</h3>
-        {frequency.kind === 'after-meeting' ? (
-          <p className="text-12 text-text-muted">Roda depois de cada reunião encerrada, com o escopo apontando para ela.</p>
-        ) : preview.length ? (
-          <ol className="flex flex-col gap-1">
-            {preview.map((at) => (
-              <li key={at} data-task-preview-item className="text-13 text-text tabular">
-                {formatRunAt(at, task.timezone)}
-              </li>
-            ))}
-          </ol>
-        ) : (
-          <p className="text-12 text-text-muted">{'error' in built ? built.error : 'Nenhum horário pela frente.'}</p>
-        )}
-      </section>
+      {/* Contrato 162: o gatilho do WhatsApp não tem próxima execução pelo relógio. */}
+      {!whatsappTrigger && (
+        <section aria-label="Próximas 5 execuções" data-task-preview className="flex flex-col gap-2 rounded-[var(--radius-panel)] border border-line-strong bg-bg-raised p-3">
+          <h3 className="text-13 font-medium text-text">Próximas 5 execuções</h3>
+          {frequency.kind === 'after-meeting' ? (
+            <p className="text-12 text-text-muted">Roda depois de cada reunião encerrada, com o escopo apontando para ela.</p>
+          ) : preview.length ? (
+            <ol className="flex flex-col gap-1">
+              {preview.map((at) => (
+                <li key={at} data-task-preview-item className="text-13 text-text tabular">
+                  {formatRunAt(at, task.timezone)}
+                </li>
+              ))}
+            </ol>
+          ) : (
+            <p className="text-12 text-text-muted">{'error' in built ? built.error : 'Nenhum horário pela frente.'}</p>
+          )}
+        </section>
+      )}
 
       {failure && (
         <p role="alert" data-task-form-error className="text-13 text-rec">
@@ -465,6 +506,23 @@ function FrequencyControls({ draft, onChange }: { draft: FrequencyDraft; onChang
         <>
           <input type="number" aria-label="Minutos depois" data-task-delay min={0} max={60} value={draft.delayMin} onChange={(event) => onChange({ delayMin: Number(event.target.value) })} className={`${INPUT_CLASS} w-20`} />
           <span className="text-13 text-text-muted">min depois</span>
+        </>
+      )
+    case 'whatsapp-message':
+      return (
+        <>
+          <span className="text-13 text-text-muted">Esperar</span>
+          <input
+            type="number"
+            aria-label="Segundos depois da última mensagem"
+            data-task-espera
+            min={TRIAGEM_ESPERA_SEG.min}
+            max={TRIAGEM_ESPERA_SEG.max}
+            value={draft.esperaSeg}
+            onChange={(event) => onChange({ esperaSeg: Number(event.target.value) })}
+            className={`${INPUT_CLASS} w-20`}
+          />
+          <span className="text-13 text-text-muted">segundos depois da última mensagem</span>
         </>
       )
     case 'cron':

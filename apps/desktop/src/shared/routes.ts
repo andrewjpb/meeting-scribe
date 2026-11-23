@@ -1,4 +1,6 @@
 // Rotas do renderer. O main só conhece o id; o caminho é detalhe do roteador em memória.
+import type { TriagemAba } from './triagem'
+
 export type RouteId = 'inicio' | 'notificacoes' | 'reunioes' | 'tarefas' | 'assistente' | 'automacoes' | 'whatsapp' | 'email' | 'funil' | 'redes' | 'gravacao' | 'detalhe' | 'configuracoes'
 
 export const ROUTE_PATHS: Record<RouteId, string> = {
@@ -49,6 +51,8 @@ export const ROUTE_REDIRECTS: readonly { from: string; to: string }[] = [{ from:
 export interface WhatsAppNavigationState {
   chatId?: string
   text?: string
+  /** Contrato 162: a aba de triagem que a lista abre (sem ela, "Todas"). */
+  aba?: TriagemAba
 }
 
 /** Pastas do email na URL (contrato 43): "Caixa de Entrada" e "Enviados". */

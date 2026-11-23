@@ -9,7 +9,7 @@
 // Contrato 51: a tarefa com "Pode enviar email" mostra o ícone de envio ao lado do nome e a linha com a data da
 // permissão e quantos destinatários ela tem.
 import { Copy, Pencil, Play, Plus, Send, Trash2 } from 'lucide-react'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { agoLabel, durationLabel, formatRunAt, isValidTimeZone, RUN_STATUS_LABELS, scheduleLine, TASK_NAME_MAX, type ScheduledTask, type TaskInput } from '@shared/automations'
 import { Button } from '../../design/Button'
 import { Icon } from '../../design/Icon'
@@ -111,13 +111,26 @@ export function SchedulesTab({ meetings }: { meetings: ChatMeetings }) {
   )
 }
 
+/** Contrato 162: quanto tempo a recusa do interruptor fica na linha. */
+const TOGGLE_ERROR_MS = 6000
+
 function TaskRow({ task, agentName, onEdit, onDuplicate }: { task: ScheduledTask; agentName: string; onEdit: () => void; onDuplicate: () => void }) {
   const lastRun = useAutomations((state) => state.runs.find((run) => run.taskId === task.id && run.status !== 'skipped') ?? null)
   const [confirming, setConfirming] = useState(false)
   const [notice, setNotice] = useState<string | null>(null)
   const switchId = `task-switch-${task.id}`
+  // Contrato 162 (adendo): ligar uma segunda triagem é recusado; o interruptor fica como estava e a frase aparece na
+  // linha por 6 s (ou até mexer de novo).
+  const [toggleError, setToggleError] = useState<string | null>(null)
+  useEffect(() => {
+    if (!toggleError) return
+    const timer = setTimeout(() => setToggleError(null), TOGGLE_ERROR_MS)
+    return () => clearTimeout(timer)
+  }, [toggleError])
   const toggle = async (enabled: boolean): Promise<void> => {
-    await window.__scribeApi.invoke('scribe:tasks-toggle', { id: task.id, enabled })
+    setToggleError(null)
+    const result = await window.__scribeApi.invoke('scribe:tasks-toggle', { id: task.id, enabled })
+    if (result && 'ok' in result && !result.ok) setToggleError(result.error)
     await useAutomations.getState().load()
   }
   const runNow = async (): Promise<void> => {
@@ -157,6 +170,11 @@ function TaskRow({ task, agentName, onEdit, onDuplicate }: { task: ScheduledTask
           </p>
         )}
         {notice && <p className="mt-0.5 text-12 text-text-muted">{notice}</p>}
+        {toggleError && (
+          <p role="alert" data-task-toggle-error className="mt-0.5 text-12 text-rec">
+            {toggleError}
+          </p>
+        )}
       </td>
       <td className="py-1.5 pr-4 text-text-muted">{agentName}</td>
       <td data-task-when className="py-1.5 pr-4 text-text tabular">

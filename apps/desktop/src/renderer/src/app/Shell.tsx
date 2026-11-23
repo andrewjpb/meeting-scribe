@@ -6,6 +6,7 @@ import { APP_ROUTES, redirectElement, REDIRECTS, routeIdOf } from './routes'
 import { Sidebar } from './Sidebar'
 import { useMainNavigation } from './useMainNavigation'
 import { useWhatsAppSync } from '../features/whatsapp/whatsappStore'
+import { useTriagemSync } from '../features/whatsapp/triagemStore'
 import { useEmailSync } from '../features/email/emailStore'
 import { useRedesSync } from '../features/redes/redesStore'
 import { CalendarBanner } from '../features/calendar/CalendarBanner'
@@ -28,6 +29,8 @@ export function Shell() {
   const navigate = useNavigate()
   useMainNavigation()
   useWhatsAppSync()
+  // Contrato 162: as etiquetas da triagem do WhatsApp (abas, chips e o Urgente das Notificações).
+  useTriagemSync()
   // Contrato 43: as contas de email e as não lidas de cada uma, para a barra lateral.
   useEmailSync()
   // Contrato 72: as contas das redes (o item "Redes" só aparece com conta) e a fila de publicações de cada uma.
