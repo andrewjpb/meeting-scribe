@@ -39,6 +39,8 @@ export interface InicioPendencias {
   whatsapp: number | null
   convites: number | null
   emails: number | null
+  /** Contrato 145 (D1): não lidos da caixa de entrada guardada, somados das contas conectadas; 0 esconde a linha. */
+  emailsNaoLidos: number
 }
 
 /** O que `scribe:inicio-get` devolve (D10). */
@@ -56,6 +58,15 @@ export interface InicioView {
   pendencias: InicioPendencias
   /** Primeiro nome do perfil da conta; `null` sem conta. */
   saudacaoNome: string | null
+  /** Contrato 145 (D4): quando o main montou esta view (ISO); o renderer só formata. */
+  atualizadoEm: string
+}
+
+/** Contrato 145 (D3): o que `scribe:inicio-atualizar` devolve; `falhou` diz que alguma fonte não foi relida. */
+export interface InicioAtualizarResult {
+  ok: true
+  view: InicioView
+  falhou: boolean
 }
 
 /** O que a agenda usa de um evento do Calendário do Mac (o `MacCalendarEvent` do helper serve). */

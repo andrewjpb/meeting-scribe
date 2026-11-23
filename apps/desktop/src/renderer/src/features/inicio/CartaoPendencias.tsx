@@ -5,7 +5,8 @@ import { EMAIL_ROOT_PATH, ROUTE_PATHS } from '@shared/routes'
 import { Icon } from '../../design/Icon'
 import { INICIO_CARTAO_CABECALHO_CLASS, INICIO_CARTAO_CLASS, INICIO_CARTAO_TITULO_CLASS, textoPendencia } from './inicioFormat'
 
-type Fonte = keyof InicioPendencias
+/** Os não lidos (contrato 145) chegam na view, mas a linha deles só entra no contrato 146. */
+type Fonte = Exclude<keyof InicioPendencias, 'emailsNaoLidos'>
 
 /** Cada fonte, na ordem da PRD (bloco 4): o ícone (o da barra lateral) e a tela que a linha abre (o convite não tem tela). */
 const FONTES: readonly { fonte: Fonte; icone: LucideIcon; destino: string | null }[] = [

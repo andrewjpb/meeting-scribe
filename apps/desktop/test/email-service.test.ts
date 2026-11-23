@@ -467,6 +467,39 @@ describe('pendentes em cache (contrato 134, D8)', () => {
   })
 })
 
+describe('não lidos em cache (contrato 145, D1)', () => {
+  it('soma os não lidos da INBOX guardada das contas conectadas; desconectada ou sem nada guardado conta 0; nunca abre sessão', async () => {
+    const seen = { flags: ['\\Seen'] }
+    const tres = fakeImap([imapMessage(1), imapMessage(2), imapMessage(3), imapMessage(4, seen)])
+    const duas = fakeImap([imapMessage(1), imapMessage(2, seen), imapMessage(3)])
+    const caiu = fakeImap([imapMessage(1), imapMessage(2)])
+    const vazia = fakeImap()
+    const byHost: Record<string, FakeImap> = { 'imap.tres.com': tres, 'imap.duas.com': duas, 'imap.caiu.com': caiu, 'imap.vazia.com': vazia }
+    let folderSessions = 0
+    const imapFolders: ImapFolderConnect = () => {
+      folderSessions += 1
+      return Promise.reject(new Error('não usado'))
+    }
+    const { service } = setup({ imap: (config) => (byHost[config.host] ?? tres).connect(config), imapFolders })
+    expect(await service.naoLidosEmCache()).toBe(0)
+    const ids: Record<string, string> = {}
+    for (const host of Object.keys(byHost)) ids[host] = await addConnected(service, account(`ana@${host.slice(5)}`, { incoming: { protocol: 'imap', host, port: 993, security: 'tls' } }))
+    expect(await service.naoLidosEmCache()).toBe(7)
+    // A conexão de uma conta caiu (e não volta): ela sai da soma, mesmo com a INBOX guardada.
+    caiu.failWith = Object.assign(new Error('connect ECONNREFUSED'), { code: 'ECONNREFUSED' })
+    caiu.drop()
+    expect(stateOf(service, ids['imap.caiu.com'] ?? '')?.state).toBe('error')
+    const logins = Object.values(byHost).map((fake) => fake.calls.filter((call) => call.startsWith('LOGIN')).length)
+    const calls = Object.values(byHost).map((fake) => fake.calls.length)
+    expect(await service.naoLidosEmCache()).toBe(5)
+    expect(await service.naoLidosEmCache()).toBe(5)
+    // Nenhum login, nenhum comando IMAP e nenhuma sessão das pastas por causa da contagem.
+    expect(Object.values(byHost).map((fake) => fake.calls.filter((call) => call.startsWith('LOGIN')).length)).toEqual(logins)
+    expect(Object.values(byHost).map((fake) => fake.calls.length)).toEqual(calls)
+    expect(folderSessions).toBe(0)
+  })
+})
+
 describe('ponte do imapflow', () => {
   it('UID, flags, envelope e o cabeçalho References (dobrado em linhas) viram a mensagem do serviço', () => {
     const fetched = {

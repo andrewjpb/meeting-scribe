@@ -34,7 +34,7 @@ import type { FunilPropostaAplicarRequest, FunilPropostaAplicarResult, FunilProp
 import type { SugestaoTarefa, TarefaInput, TarefaSalvar, TarefasActionResult, TarefasFalha, TarefasResumoResult, TarefaStatus, TarefasView } from './tarefas'
 // fim 122
 // 134: inicio
-import type { InicioView } from './inicio'
+import type { InicioAtualizarResult, InicioView } from './inicio'
 // fim 134
 // 138: atendimento
 import type {
@@ -704,6 +704,8 @@ export interface InvokeChannels {
   'scribe:inicio-get': { request: undefined; response: InicioView }
   /** "Conceder" da linha do Calendário do Mac: pede o acesso, esquece o que leu e devolve a view de novo. */
   'scribe:inicio-mac-acesso': { request: undefined; response: InicioView }
+  /** Contrato 145 (D3): relê na origem a agenda, o Calendário do Mac e as pastas do email; devolve a view de novo. */
+  'scribe:inicio-atualizar': { request: undefined; response: InicioAtualizarResult }
   // fim 134
   // 138: atendimento
   /** Contrato 138: os agentes de atendimento, os atendimentos das conversas, a pausa geral e o aceite do risco. */
@@ -1184,6 +1186,7 @@ const INVOKE: Record<InvokeChannel, true> = {
   // 134: inicio
   'scribe:inicio-get': true,
   'scribe:inicio-mac-acesso': true,
+  'scribe:inicio-atualizar': true,
   // fim 134
   // 138: atendimento
   'scribe:atendimento-state': true,
@@ -1631,6 +1634,7 @@ export const WHEN_LOCKED: Readonly<Record<InvokeChannel, LockedPolicy>> = Object
   // 134: inicio (D10: recusados; o `scribe:inicio-changed` só sai desbloqueado)
   'scribe:inicio-get': 'refused',
   'scribe:inicio-mac-acesso': 'refused',
+  'scribe:inicio-atualizar': 'refused',
   // fim 134
   // 138: atendimento (recusados, como o resto do WhatsApp)
   'scribe:atendimento-state': 'refused',

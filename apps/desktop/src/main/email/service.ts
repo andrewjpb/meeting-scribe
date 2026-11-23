@@ -699,6 +699,11 @@ export interface EmailService {
    */
   pendentesEmCache(): number | null
   /**
+   * Contrato 145 (D1): os não lidos da INBOX guardada no store (o mesmo que a tela Email lê), somados das contas
+   * conectadas. Só lê o disco: nunca abre sessão IMAP nem POP3. Conta desconectada ou sem nada guardado conta 0.
+   */
+  naoLidosEmCache(): Promise<number>
+  /**
    * Contrato 52 (CA4): `MOVE` de até 500 UIDs; erro do servidor não tira nada do store. Contrato 56 (CA7): com
    * `uidValidity`, os UIDs valem com ele (a pasta de origem não precisa ter sido aberta no app); com `messageIds`, os que
    * chegam à INBOX não viram aviso de email novo. Com `options`, o resultado traz o `UIDVALIDITY` do destino.
@@ -2450,6 +2455,16 @@ export function createEmailService(deps: EmailServiceDeps): EmailService {
           if (entry.noselect || entry.total === null || folderLeaf(entry.name) !== 'pendentes') continue
           total = (total ?? 0) + entry.total
         }
+      }
+      return total
+    },
+
+    async naoLidosEmCache() {
+      let total = 0
+      for (const rt of runtimes.values()) {
+        if (rt.removed || rt.state !== 'connected') continue
+        const data = await store.read(rt.account.id).catch(() => null)
+        total += data?.inbox.filter((message) => !message.seen).length ?? 0
       }
       return total
     },
