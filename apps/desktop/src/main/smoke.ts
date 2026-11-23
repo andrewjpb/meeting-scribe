@@ -147,6 +147,8 @@ import {
   FUNIL_AVISAR_NAME,
   FUNIL_DETECTAR_NAME,
   FUNIL_DIAS_NAME,
+  ASSISTANT_MEDIA_DESCRIPTION,
+  ASSISTANT_MEDIA_NAME,
   FUNIL_SECTION,
   INICIO_AGENDA_NAME,
   INICIO_AUTOMACOES_NAME,
@@ -178,6 +180,8 @@ import { BRANDING_DIR } from './branding/service'
 import { summaryInput, summaryLines } from './claude-cli/summary'
 import { MENU_IDS } from './menu'
 import { CHAT_CORPUS_DIR, CHAT_INDEX_FILE, CHAT_SCOPE_DIR, corpusFileSuffix } from './chat/corpus'
+import { MEDIA_FILE_PREFIX } from './chat/media-files'
+import { MEDIA_ACTION_REFUSAL } from './chat/service'
 import { AUTOMATIONS_FILE, EMAIL_SEARCH_FILE, FUNIL_FILE as FUNIL_MD_FILE, GUIDE_FILE, isSourceFile, REDES_FILE, REDES_PUBLICATIONS_FILE, STATE_FILE, TAREFAS_FILE as TAREFAS_MD_FILE } from './chat/sources'
 import { CHAT_EVENTS_FILE } from './chat/events-store'
 import { CHATS_DIR } from './chat/store'
@@ -7704,6 +7708,216 @@ async function atendimentoChecks(ctx: SmokeContext, watch: (win: BrowserWindow) 
     })
     win.destroy()
   }
+}
+
+/**
+ * Contrato 151 (ia-midia), numa janela clara, com o WhatsApp falso conectado, a conta do email falso e o agente ACP falso: a
+ * primeira vez que as ferramentas de mídia do contrato 149 rodam de ponta a ponta. Numa conversa nova do Assistente:
+ * - `imagem` (CA4): "o que tem na imagem do Bruno?" faz o agente pedir `ver_midia_whatsapp` da imagem dele (os ids saem dos
+ *   arquivos da pasta); o `Midia - WhatsApp - ….png` aparece na pasta, o passo "Abrindo uma imagem" (com o ícone de imagem,
+ *   CA3) e a resposta final;
+ * - `audio` (CA5): um áudio novo do Bruno (o antigo já foi transcrito pelo clique do contrato 37) e "transcreva o áudio do
+ *   Bruno": `transcrever_audio_whatsapp`, uma chamada à AssemblyAI falsa e o passo "Transcrevendo um áudio"; a mesma
+ *   pergunta de novo não transcreve outra vez;
+ * - `acaoRecusada` (CA7): "abra a imagem do Bruno e crie a pasta …": depois da imagem, o `criar_pasta` é recusado pelo app
+ *   (nenhuma pasta nova no servidor falso) e a resposta final chega;
+ * - `configuracoes` (CA1, CA2): a linha "A IA pode abrir imagens e transcrever áudios" logo depois de "Modelo do chat",
+ *   ligada, com a descrição; o print `configuracoes-claude-midia-light` (CA8);
+ * - `desligado` (CA6): o interruptor desligado pela tela grava `assistant.media = false`; a mesma pergunta da imagem não
+ *   gera arquivo de mídia nem transcrição, e os `Midia - …` da pasta somem; religado pela tela, volta a `true`.
+ * Só números, booleanos e os textos fixos do serviço falso no detalhe.
+ */
+async function midiaChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => void, checks: Record<string, Check>, shots: Screenshot[]): Promise<void> {
+  const fake = ctx.fixtures.email
+  const win = ctx.openWindow({ theme: 'light' })
+  watch(win)
+  await loadAndWait(win)
+  const contents = win.webContents
+  const transportBefore = readSettings(ctx.userDataDir).claudeTransport
+  await evaluate(contents, "window.__scribeApi.invoke('scribe:settings-update', { claudeTransport: 'acp' }).then(() => true)")
+  await showAssistantLevel(contents)
+  await clickSelector(contents, '[data-action="chat-new"]')
+  await waitFor(contents, `document.querySelector('[data-chat-input]') && !document.querySelector('[data-chat-message]')`)
+
+  /** Como o `askChat`, com mais tempo: as rodadas de ferramenta e a AssemblyAI falsa demoram mais que uma resposta só. */
+  const ask = async (question: string): Promise<{ done: boolean; answer: string }> => {
+    const before = await evaluate<number>(contents, `document.querySelectorAll('[data-chat-message="assistant"]:not([data-chat-streaming])').length`)
+    await setValue(contents, '[data-chat-input]', question)
+    await pressEnterIn(contents, '[data-chat-input]')
+    const done = await waitFor(contents, `${CHAT_DONE} && document.querySelectorAll('[data-chat-message="assistant"]:not([data-chat-streaming])').length > ${before}`, 40_000)
+    return { done, answer: await evaluate<string>(contents, LAST_ANSWER) }
+  }
+  let chatId = ''
+  const scopeDir = (): string => join(ctx.userDataDir, CHAT_SCOPE_DIR, chatId)
+  const mediaFiles = (): string[] => (chatId && existsSync(scopeDir()) ? readdirSync(scopeDir()).filter((name) => name.startsWith(MEDIA_FILE_PREFIX)).sort() : [])
+  const lastSteps = (): { label: string; status?: string }[] => (chatFile(ctx.userDataDir, chatId)?.messages.at(-1)?.steps ?? []) as { label: string; status?: string }[]
+  /** O ícone (a classe do lucide) do passo da última resposta que começa com `label`, com "Raciocínio e passos" aberto. */
+  const stepIconOf = async (label: string): Promise<string> => {
+    await evaluate(contents, `(() => { const b = ${LAST_ASSISTANT}?.querySelector('[data-action="toggle-reasoning"]'); if (b?.getAttribute('aria-expanded') === 'false') b.click(); return true })()`)
+    await waitFor(contents, `Boolean(${LAST_ASSISTANT}?.querySelector('[data-chat-steps]'))`, 3000)
+    return evaluate<string>(
+      contents,
+      `[...(${LAST_ASSISTANT}?.querySelectorAll('[data-chat-step]') ?? [])].find((el) => el.textContent.trim().startsWith(${JSON.stringify(label)}))?.querySelector('svg')?.getAttribute('class') ?? ''`,
+    )
+  }
+
+  // CA4: a imagem do Bruno.
+  const filesBefore = mediaFiles()
+  const image = await ask('O que tem na imagem do Bruno?')
+  chatId = await evaluate<string>(contents, `document.querySelector('[data-chat-conversation]')?.getAttribute('data-chat-conversation') ?? ''`)
+  const afterImage = mediaFiles()
+  const imageSteps = lastSteps()
+  const opened = imageSteps.find((step) => step.label.startsWith('Abrindo uma imagem'))
+  const imageIcon = await stepIconOf('Abrindo uma imagem')
+  const imagem = {
+    resposta: image.done,
+    respostaFinal: image.answer.includes('Pela imagem que o Bruno mandou'),
+    semBloco: !image.answer.includes('lap-ferramenta'),
+    png: afterImage.filter((name) => /^Midia - WhatsApp - [0-9a-f]{16}\.png$/.test(name)).length,
+    antes: filesBefore.length,
+    modo600: afterImage.every((name) => mode(join(scopeDir(), name)) === '600'),
+    passoAbrindo: opened?.status === 'completed',
+    passoLeitura: imageSteps.some((step) => step.label === 'Vendo a imagem aberta'),
+    iconeImagem: imageIcon.includes('lucide-image'),
+  }
+  checks['imagem'] = {
+    ok: imagem.resposta && imagem.respostaFinal && imagem.semBloco && imagem.png === 1 && imagem.antes === 0 && imagem.modo600 && imagem.passoAbrindo && imagem.passoLeitura && imagem.iconeImagem,
+    detail: `${JSON.stringify(imagem)}; passos ${JSON.stringify(imageSteps.map((step) => `${step.label.replace(/«.*»/, '«…»')} (${step.status ?? '-'})`))}; ícone "${imageIcon}"; resposta "${image.answer.slice(0, 160)}"`,
+  }
+
+  // CA5: um áudio novo do Bruno, transcrito pela ferramenta; a mesma pergunta de novo não transcreve outra vez.
+  const incoming = (await ctx.whatsapp.fake('incoming', { chatId: WA_BRUNO, author: 'Bruno Lima', type: 'audio', text: '', media: { seconds: 2 } })) as { id?: string }
+  let arrived = false
+  for (let attempt = 0; attempt < 40 && !arrived; attempt++) {
+    arrived = await evaluate<boolean>(
+      contents,
+      `window.__scribeApi.invoke('scribe:whatsapp-chats').then((list) => list.some((chat) => chat.id === '${WA_BRUNO}' && chat.lastMessage?.id === ${JSON.stringify(incoming.id ?? '?')}))`,
+    )
+    if (!arrived) await wait(200)
+  }
+  const uploadsBefore = ctx.fixtures.audioUploads.length
+  const audio = await ask('Transcreva o áudio do Bruno')
+  const uploadsAfterFirst = ctx.fixtures.audioUploads.length
+  const audioSteps = lastSteps()
+  const transcribing = audioSteps.find((step) => step.label.startsWith('Transcrevendo um áudio'))
+  const audioIcon = await stepIconOf('Transcrevendo um áudio')
+  const transcriptFiles = mediaFiles().filter((name) => name.startsWith('Midia - WhatsApp - ') && name.endsWith('.md'))
+  const again = await ask('Transcreva o áudio do Bruno')
+  const uploadsAfterSecond = ctx.fixtures.audioUploads.length
+  const audioCheck = {
+    chegou: arrived,
+    resposta: audio.done,
+    respostaComTexto: audio.answer.includes(SMOKE_AUDIO_TRANSCRIPT),
+    chamadasAssemblyAI: uploadsAfterFirst - uploadsBefore,
+    uploadWav: ctx.fixtures.audioUploads.at(-1)?.wav === true,
+    transcricaoNaPasta: transcriptFiles.length,
+    passoTranscrevendo: transcribing?.status === 'completed',
+    iconeAudio: audioIcon.includes('lucide-audio-lines'),
+    segunda: again.done && again.answer.includes(SMOKE_AUDIO_TRANSCRIPT),
+    chamadasNaSegunda: uploadsAfterSecond - uploadsAfterFirst,
+  }
+  checks['audio'] = {
+    ok:
+      audioCheck.chegou &&
+      audioCheck.resposta &&
+      audioCheck.respostaComTexto &&
+      audioCheck.chamadasAssemblyAI === 1 &&
+      audioCheck.uploadWav &&
+      audioCheck.transcricaoNaPasta === 1 &&
+      audioCheck.passoTranscrevendo &&
+      audioCheck.iconeAudio &&
+      audioCheck.segunda &&
+      audioCheck.chamadasNaSegunda === 0,
+    detail: `${JSON.stringify(audioCheck)}; passos ${JSON.stringify(audioSteps.map((step) => `${step.label.replace(/«.*»/, '«…»')} (${step.status ?? '-'})`))}; ícone "${audioIcon}"; resposta "${audio.answer.slice(0, 160)}"; segunda "${again.answer.slice(0, 120)}"`,
+  }
+
+  // CA7: no turno em que a imagem foi aberta, o `criar_pasta` pedido em seguida é recusado; nada muda no servidor.
+  const boxesBefore = Object.keys(fake.mailboxes()).sort()
+  const refused = await ask('Abra a imagem do Bruno e crie a pasta que ela pede')
+  const boxesAfter = Object.keys(fake.mailboxes()).sort()
+  const refusedSteps = lastSteps()
+  const refusal = {
+    resposta: refused.done,
+    respostaComRecusa: refused.answer.includes(MEDIA_ACTION_REFUSAL.split(' Diga')[0] ?? MEDIA_ACTION_REFUSAL),
+    imagemAberta: refusedSteps.some((step) => step.label.startsWith('Abrindo uma imagem') && step.status === 'completed'),
+    passoRecusado: refusedSteps.some((step) => step.label.endsWith(': recusado depois de uma mídia') && step.status === 'failed'),
+    pastasIguais: JSON.stringify(boxesAfter) === JSON.stringify(boxesBefore),
+    semPastaNova: !boxesAfter.includes('Pedido da imagem'),
+  }
+  checks['acaoRecusada'] = {
+    ok: Object.values(refusal).every(Boolean),
+    detail: `${JSON.stringify(refusal)}; passos ${JSON.stringify(refusedSteps.map((step) => `${step.label.replace(/«.*»/, '«…»')} (${step.status ?? '-'})`))}; resposta "${refused.answer.slice(0, 200)}"`,
+  }
+
+  // CA1, CA2 e CA8: a linha nas Configurações (outra janela clara, a conversa fica aberta nesta) e o print.
+  const settingsWin = ctx.openWindow({ theme: 'light' })
+  watch(settingsWin)
+  await loadAndWait(settingsWin)
+  const sc = settingsWin.webContents
+  const toggle = '[data-setting="assistant-media"]'
+  await openSettingsTab(sc, 'claude')
+  await waitFor(sc, `document.querySelector('${toggle}')`)
+  const rows = await evaluate<string[]>(sc, `[...document.querySelectorAll('[data-settings-panel="claude"] section[aria-label="Chat e resumo"] [data-setting-name]')].map((el) => el.dataset.settingName)`)
+  const row = await evaluate<{ name: string; description: string; checked: string | null; labelled: string }>(
+    sc,
+    `(() => { const t = document.querySelector('${toggle}'); const r = t?.closest('[data-setting-row]'); return { name: r?.dataset.settingName ?? '', description: r?.dataset.settingDescription ?? '', checked: t?.getAttribute('aria-checked') ?? null, labelled: document.getElementById(t?.getAttribute('aria-labelledby') ?? '')?.textContent ?? '' } })()`,
+  )
+  const indexed = settingsIndex('Claude').some((entry) => entry.tab === 'claude' && entry.section === 'Chat e resumo' && entry.name === ASSISTANT_MEDIA_NAME)
+  await scrollToSection(sc, 'Chat e resumo')
+  await evaluate(sc, 'document.activeElement instanceof HTMLElement && document.activeElement.blur(), true')
+  await settle(sc)
+  shots.push(await capture(settingsWin, ctx.outDir, 'configuracoes-claude-midia-light'))
+  const settingsRow = {
+    depoisDoModelo: rows.indexOf(ASSISTANT_MEDIA_NAME) === rows.indexOf('Modelo do chat') + 1 && rows.includes(ASSISTANT_MEDIA_NAME),
+    nome: row.name === ASSISTANT_MEDIA_NAME && row.labelled === ASSISTANT_MEDIA_NAME,
+    descricao: row.description === ASSISTANT_MEDIA_DESCRIPTION,
+    ligadoPorPadrao: row.checked === 'true',
+    naBusca: indexed,
+  }
+
+  // CA6: desligado pela tela; a mesma pergunta da imagem não abre nada e os arquivos de mídia saem da pasta.
+  const mediaBeforeOff = mediaFiles().length
+  await clickSelector(sc, toggle)
+  const offShown = await waitFor(sc, `document.querySelector('${toggle}')?.getAttribute('aria-checked') === 'false'`)
+  let offSaved = false
+  for (let attempt = 0; attempt < 30 && !offSaved; attempt++) {
+    offSaved = readSettings(ctx.userDataDir).assistant?.media === false
+    if (!offSaved) await wait(100)
+  }
+  checks['configuracoes'] = {
+    ok: Object.values(settingsRow).every(Boolean) && offShown && offSaved,
+    detail: `${JSON.stringify(settingsRow)}; linhas ${JSON.stringify(rows)}; desligado na tela=${offShown}, gravado=${offSaved}`,
+  }
+  const uploadsBeforeOff = ctx.fixtures.audioUploads.length
+  const off = await ask('O que tem na imagem do Bruno?')
+  const afterOff = mediaFiles()
+  const offSteps = lastSteps()
+  const uploadsAfterOff = ctx.fixtures.audioUploads.length
+  // Religa pela tela, no fim.
+  await clickSelector(sc, toggle)
+  const onShown = await waitFor(sc, `document.querySelector('${toggle}')?.getAttribute('aria-checked') === 'true'`)
+  let onSaved = false
+  for (let attempt = 0; attempt < 30 && !onSaved; attempt++) {
+    onSaved = readSettings(ctx.userDataDir).assistant?.media === true
+    if (!onSaved) await wait(100)
+  }
+  settingsWin.destroy()
+  const desligado = {
+    resposta: off.done,
+    midiasAntes: mediaBeforeOff,
+    midiasDepois: afterOff.length,
+    semPassoDeMidia: !offSteps.some((step) => /^(Abrindo uma (imagem|mídia)|Transcrevendo um áudio|Vendo a imagem aberta)/.test(step.label)),
+    semTranscricao: uploadsAfterOff === uploadsBeforeOff,
+    religadoNaTela: onShown,
+    religadoGravado: onSaved,
+  }
+  checks['desligado'] = {
+    ok: desligado.resposta && desligado.midiasAntes > 0 && desligado.midiasDepois === 0 && desligado.semPassoDeMidia && desligado.semTranscricao && desligado.religadoNaTela && desligado.religadoGravado,
+    detail: `${JSON.stringify(desligado)}; passos ${JSON.stringify(offSteps.map((step) => `${step.label.replace(/«.*»/, '«…»')} (${step.status ?? '-'})`))}; resposta "${off.answer.slice(0, 120)}"`,
+  }
+
+  await evaluate(contents, `window.__scribeApi.invoke('scribe:settings-update', { claudeTransport: '${transportBefore === 'acp' ? 'acp' : 'cli'}' }).then(() => true)`)
+  win.destroy()
 }
 
 /**
@@ -17290,6 +17504,8 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
   const tarefasTela: Record<string, Check> = {}
   /** Contrato 135: a tela Início (a tela, concluir tarefa, gravando e a junção conta × Mac). */
   const inicio: Record<string, Check> = {}
+  /** Contrato 151: a mídia no Assistente (as ferramentas de ponta a ponta, o interruptor e a ação recusada). */
+  const midia: Record<string, Check> = {}
   /** Contrato 126: as reuniões gravadas no laço por tema (uma por tema, com o resumo falso), para o Resumo com as tarefas. */
   const gravadas: Meeting[] = []
   let analysisMeasured: AnalysisMeasured | null = null
@@ -17775,6 +17991,9 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
     // Contrato 55: as telas de pastas, mover, assinatura, regras e o painel "Organizando"; antes do bloqueio.
     await emailFoldersUiChecks(ctx, watch, email, screenshots)
 
+    // Contrato 151: a mídia no Assistente, com o WhatsApp falso e a conta do email falso ainda conectados; antes do bloqueio.
+    await midiaChecks(ctx, watch, midia, screenshots)
+
     // Contrato 69: o Instagram por token e o armazenamento de mídia, com o Instagram falso; antes do bloqueio (que recusa
     // os canais novos junto com os outros). Termina sem conta e sem armazenamento.
     await redesChecks(ctx, watch, redes, screenshots)
@@ -17962,6 +18181,9 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
   for (const name of ['funilFonteDesligada', 'funilFonte', 'funilMover', 'funilMoverInexistente', 'funilCriar', 'funilContato', 'funilAbrir', 'agenteFunil']) {
     if (!funil[name]) failures.push(`funil ${name}: não executado`)
   }
+  // Contrato 151: a mídia no Assistente.
+  for (const [name, check] of Object.entries(midia)) if (!check.ok) failures.push(`mídia ${name}: ${check.detail}`)
+  for (const name of ['imagem', 'audio', 'acaoRecusada', 'configuracoes', 'desligado']) if (!midia[name]) failures.push(`mídia ${name}: não executado`)
   for (const [name, check] of Object.entries(invite)) if (!check.ok) failures.push(`convites ${name}: ${check.detail}`)
   for (const name of ['convite-1', 'convite-2', 'convite-3', 'convite-4', 'convite-5', 'convite-6', 'convite-7', 'convite-8', 'convite-9', 'convite-10', 'convite-11', 'convite-estados', 'convite-lista', 'convite-configuracoes', 'convite-regra-1', 'convite-regra-2', 'convite-regra-3', 'convite-sugestao-4', 'convite-sugestao-5']) if (!invite[name]) failures.push(`convites ${name}: não executado`)
   for (const [name, check] of Object.entries(lock)) if (!check.ok) failures.push(`bloqueio ${name}: ${check.detail}`)
@@ -18021,7 +18243,8 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
   // Configurações, no claro).
   // Contrato 144: +9 (o painel Atendimento da conversa e a aba Atendimento das Automações, nos dois temas; o selo no
   // cabeçalho e na lista, a proposta do agente, o aviso de risco, o formulário do agente com o teste e o histórico, no claro).
-  const expectedShots = SCREENS.length * THEMES.length + 237
+  // Contrato 151: +1 (a seção "Chat e resumo" com o interruptor "A IA pode abrir imagens e transcrever áudios", no claro).
+  const expectedShots = SCREENS.length * THEMES.length + 238
   if (screenshots.length !== expectedShots) failures.push(`${screenshots.length} PNGs em vez de ${expectedShots}`)
   for (const shot of screenshots) {
     if (shot.name === MEETING_PROMPT_SHOT) {
@@ -18092,6 +18315,8 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
     tarefas: tarefasTela,
     // Contrato 135: só os resultados (números e booleanos; nenhum título de evento ou tarefa).
     inicio,
+    // Contrato 151: só os resultados (números, booleanos e os textos fixos do serviço falso).
+    midia,
     instagramFakeCalls: ctx.fixtures.instagram.calls,
     s3FakeCalls: ctx.fixtures.s3.calls,
     // Contrato 23: os resultados, as notificações, o Dock e os itens de login substitutos; nenhum texto de reunião.

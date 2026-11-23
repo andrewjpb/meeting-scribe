@@ -9,7 +9,7 @@ import {
   type SettingsNavigationState,
   type SettingsTab,
 } from '@shared/routes'
-import { LIVE_CARDS_DESCRIPTION, MEET_SPEAKERS_DESCRIPTION, MEETING_PROMPT_DESCRIPTION, WHATSAPP_AUTO_CORRECT_DESCRIPTION, WHATSAPP_INSIGHTS_DESCRIPTION } from '@shared/settings-index'
+import { ASSISTANT_MEDIA_DESCRIPTION, ASSISTANT_MEDIA_NAME, LIVE_CARDS_DESCRIPTION, MEET_SPEAKERS_DESCRIPTION, MEETING_PROMPT_DESCRIPTION, WHATSAPP_AUTO_CORRECT_DESCRIPTION, WHATSAPP_INSIGHTS_DESCRIPTION } from '@shared/settings-index'
 import { DAILY_RUN_LIMIT_OPTIONS, LANGUAGE_CODES, type ChatModel, type ClaudeModel, type ClaudeTransport, type CloseBehavior, type DailyRunLimitOption, type LanguageCode, type ThemeSetting, type TranslationEngine } from '@shared/settings-defaults'
 import { useAgentLabel } from '../../app/agentLabel'
 import { useSettings } from '../../app/settingsStore'
@@ -428,6 +428,10 @@ function SettingsPanels({ tab }: { tab: SettingsTab }) {
               <Section title="Chat e resumo">
                 <SettingRow name="Modelo do chat" nameId="settings-chat-model" description="Usado no Assistente. O Opus responde melhor e demora mais.">
                   <Segmented value={settings.chatModel} options={CHAT_MODELS} labelledBy="settings-chat-model" dataName="chat-model-option" onChange={(chatModel) => void update({ chatModel })} />
+                </SettingRow>
+                {/* Contrato 151: as ferramentas de mídia do Assistente (`assistant.media`); desligado, elas não existem para a IA. */}
+                <SettingRow name={ASSISTANT_MEDIA_NAME} nameId="settings-assistant-media" description={ASSISTANT_MEDIA_DESCRIPTION}>
+                  <Switch checked={settings.assistant.media} labelledBy="settings-assistant-media" setting="assistant-media" onChange={(media) => void update({ assistant: { ...settings.assistant, media } })} />
                 </SettingRow>
                 <SettingRow name="Resumir ao encerrar" nameId="settings-summarize" description="Ao encerrar, o Claude lê a transcrição e escreve o resumo, as decisões e as tarefas.">
                   <Switch checked={settings.summarizeOnStop} labelledBy="settings-summarize" onChange={(summarizeOnStop) => void update({ summarizeOnStop })} />

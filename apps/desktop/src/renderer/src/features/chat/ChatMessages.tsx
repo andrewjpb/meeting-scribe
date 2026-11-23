@@ -1,4 +1,4 @@
-import { Check, ChevronDown, ChevronRight, Copy, Download, FileText, FolderSearch, Globe, ListTree, Plug, RotateCcw, Search, ShieldOff, Square, SquareCheck, SquareDot, Terminal, type LucideIcon } from 'lucide-react'
+import { AudioLines, Check, ChevronDown, ChevronRight, Copy, Download, FileText, FolderSearch, Globe, Image as ImageGlyph, ListTree, Paperclip, Plug, RotateCcw, Search, ShieldOff, Square, SquareCheck, SquareDot, Terminal, type LucideIcon } from 'lucide-react'
 import { useState } from 'react'
 import { useNavigate } from 'react-router'
 import { withoutPendingActions } from '@shared/assistant'
@@ -15,15 +15,23 @@ import { ActionCards } from './ActionCards'
 import type { LiveAnswer } from './chatStore'
 import { ChatMarkdown } from './ChatMarkdown'
 import { McpApprovalCard } from './McpApprovalCard'
-import { answerTimeLabel, answerTokens, consultedLabel, COST_HINT, costLabel, modelLabel, tokensLabel } from './format'
+import { answerTimeLabel, answerTokens, consultedLabel, COST_HINT, costLabel, mediaStepKind, modelLabel, tokensLabel, type MediaStepKind } from './format'
 import type { ChatMeetings } from './useChatMeetings'
 
 /** Botão discreto das ações da resposta e do rodapé. */
 export const QUIET_BUTTON =
   'no-drag inline-flex h-7 items-center gap-1.5 rounded-[var(--radius-control)] px-2 text-12 text-text-muted transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-bg-sunken hover:text-title disabled:pointer-events-none disabled:opacity-50'
 
-/** Ícone de cada passo: o índice, uma reunião, uma busca, a lista de arquivos, a internet (contrato 26), o MCP (contrato 21) e o navegador (contrato 47). */
+/** Contrato 151: o ícone dos passos de mídia (imagem, PDF ou texto da mídia, áudio e anexo de email). */
+const MEDIA_STEP_ICON: Record<MediaStepKind, LucideIcon> = { image: ImageGlyph, pdf: FileText, text: FileText, audio: AudioLines, attachment: Paperclip }
+
+/**
+ * Ícone de cada passo: o índice, uma reunião, uma busca, a lista de arquivos, a internet (contrato 26), o MCP (contrato 21),
+ * o navegador (contrato 47) e a mídia (contrato 151).
+ */
 function stepIcon(step: ChatStep): LucideIcon {
+  const media = mediaStepKind(step)
+  if (media) return MEDIA_STEP_ICON[media]
   if (step.tool === 'Mcp') return step.status === 'failed' ? ShieldOff : Plug
   if (step.tool === 'WebFetch' && step.status === 'failed') return ShieldOff
   if (step.tool === 'WebSearch' || step.tool === 'WebFetch' || step.tool.startsWith('navegador_')) return Globe
