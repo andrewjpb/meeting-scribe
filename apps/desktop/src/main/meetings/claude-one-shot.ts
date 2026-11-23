@@ -4,7 +4,8 @@
 // a instrução e a leitura de cada um. O rascunho do WhatsApp (contrato 24), os Detalhes da conversa (contrato 32) e a
 // correção ao enviar (contrato 35) também, sem ferramenta nenhuma. E o "Sugerir evento" do email (contrato 64), sempre
 // com o Haiku, que lê só o texto do email aberto e devolve um JSON. E a detecção de oportunidade (contrato 111), também
-// com o Haiku, que lê o resumo da reunião e devolve um JSON.
+// com o Haiku, que lê o resumo da reunião e devolve um JSON. E a resposta do atendimento no WhatsApp (contrato 139), sem
+// ferramenta nenhuma, que lê só a conversa atendida e devolve um JSON.
 import { mkdir } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { ClaudeModel } from '../../shared/settings-defaults'
@@ -31,7 +32,7 @@ export interface OneShotEngine {
 
 export interface OneShotRequest<T> {
   claudePath: string
-  purpose: 'summary' | 'analysis' | 'draft' | 'ai-notes' | 'whatsapp-insights' | 'whatsapp-correct' | 'invite-suggest' | 'funnel-extract'
+  purpose: 'summary' | 'analysis' | 'draft' | 'ai-notes' | 'whatsapp-insights' | 'whatsapp-correct' | 'invite-suggest' | 'funnel-extract' | 'whatsapp-atendimento'
   /** Modelo fixo, no lugar do das Configurações (a correção do WhatsApp, contrato 35, e a sugestão do contrato 64 são sempre o Haiku). */
   model?: ClaudeModel | undefined
   /** Pasta vazia do ACP dentro de `claude-cwd`. */
