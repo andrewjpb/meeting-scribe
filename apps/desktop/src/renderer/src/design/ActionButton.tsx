@@ -3,7 +3,8 @@ import { Icon } from './Icon'
 
 /**
  * Botão da barra de ações da leitura: compacto (28 px), ícone e rótulo, como o "Detalhes" do WhatsApp. `iconOnly`: só
- * o ícone, com o rótulo no `aria-label` e na dica (CA7: as ações secundárias, para a barra caber numa linha).
+ * o ícone, com o rótulo no `aria-label` e na dica (CA7: as ações secundárias, para a barra caber numa linha). Contrato 157:
+ * sem `icon`, só o rótulo (o "Ignorar" e o "Mover" do Painel de e-mail).
  */
 export function ActionButton({
   icon,
@@ -15,7 +16,7 @@ export function ActionButton({
   disabled = false,
   data,
 }: {
-  icon: LucideIcon
+  icon?: LucideIcon | undefined
   label: string
   action: string
   onClick: () => void
@@ -35,7 +36,7 @@ export function ActionButton({
       {...(iconOnly ? { 'aria-label': label, title: label } : {})}
       className={`no-drag inline-flex h-7 shrink-0 items-center gap-1.5 rounded-[var(--radius-control)] border border-line-strong text-12 font-medium whitespace-nowrap transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-bg-sunken disabled:pointer-events-none disabled:opacity-50 ${iconOnly ? 'w-7 justify-center' : 'px-2'} ${tone === 'danger' ? 'text-rec' : 'text-title'}`}
     >
-      <Icon icon={icon} size={14} />
+      {icon && <Icon icon={icon} size={14} />}
       {!iconOnly && label}
     </button>
   )

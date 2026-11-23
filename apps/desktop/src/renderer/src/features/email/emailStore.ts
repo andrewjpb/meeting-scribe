@@ -463,6 +463,18 @@ export const useEmail = create<EmailState>()((set, get) => {
 })
 
 /**
+ * Contrato 157 (R16): a mensagem que o Painel pediu para responder, na lista guardada da pasta (ou, fora dela, no cache
+ * do main por `scribe:email-messages`); `null` se ela saiu de lá.
+ */
+export async function findReplyTarget(accountId: string, replyTo: { messageKey: string; mailbox: string }): Promise<EmailMessage | null> {
+  const folder: EmailRouteFolder = replyTo.mailbox.toUpperCase() === EMAIL_INBOX_MAILBOX ? 'inbox' : { path: replyTo.mailbox }
+  const find = (list: readonly EmailMessage[] | undefined): EmailMessage | null => list?.find((message) => message.id === replyTo.messageKey) ?? null
+  const listed = find(useEmail.getState().folders[folderKey(accountId, folder)])
+  if (listed) return listed
+  return find(await window.__scribeApi.invoke('scribe:email-messages', folder === 'inbox' ? { accountId, folder: 'inbox' } : { accountId, mailbox: replyTo.mailbox }).catch((): EmailMessage[] => []))
+}
+
+/**
  * Relê as listas de uma conta depois de uma mudança. A aberta (fora a INBOX) vem do que o main guardou da pasta, sem ir
  * ao servidor: o mover e o lote do Assistente já atualizam esse cache, e quem relê do servidor é o watch de 5 min do
  * contrato 52 (ou abrir a pasta de novo). As outras guardadas saem (são relidas ao abrir).

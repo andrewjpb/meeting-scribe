@@ -1,8 +1,8 @@
-import { ChevronDown, ChevronRight, CircleAlert, FilePen, Folder, FolderPlus, Inbox, Lock, Pencil, Send, Trash2 } from 'lucide-react'
+import { ChevronDown, ChevronRight, CircleAlert, FilePen, Folder, FolderPlus, Inbox, LayoutDashboard, Lock, Pencil, Send, Trash2 } from 'lucide-react'
 import { useRef, useState, type DragEvent, type KeyboardEvent, type MouseEvent } from 'react'
 import { createPortal } from 'react-dom'
 import { NavLink, useLocation, useNavigate } from 'react-router'
-import { emailFolderFromSlug, emailFolderSegment, emailPath, type EmailRouteFolder } from '@shared/routes'
+import { emailFolderFromSlug, emailFolderSegment, emailPainelPath, emailPath, type EmailRouteFolder } from '@shared/routes'
 import type { EmailAccount, EmailFolderNode } from '@shared/email'
 import { useSettings } from '../../app/settingsStore'
 import { Button } from '../../design/Button'
@@ -294,6 +294,18 @@ export function EmailNav() {
 
   return (
     <div className="relative flex min-h-0 flex-1 flex-col">
+      {/* Contrato 157 (R10, D1): o Painel na primeira linha, com o recuo das contas e o fio em --side-active antes delas. */}
+      <NavLink
+        to={emailPainelPath()}
+        end
+        draggable={false}
+        data-email-painel-link
+        className={({ isActive }) => `${ROW} no-drag shrink-0 ${isActive ? 'bg-side-active text-side-text' : 'text-side-muted hover:text-side-text'}`}
+      >
+        <Icon icon={LayoutDashboard} className="shrink-0" />
+        <span className="min-w-0 flex-1 truncate">Painel</span>
+      </NavLink>
+      <div aria-hidden="true" className="mx-2.5 my-1 h-px shrink-0 bg-side-active" />
       <div ref={listRef} data-email-nav className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto">
         {accounts.map(({ account, state, error }) => {
           // Contrato 65 (D1): com uma conta só, a linha dela fica sem a seta e as pastas aparecem sempre.

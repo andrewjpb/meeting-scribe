@@ -15,10 +15,10 @@ import { redesUnreadTotal, useRedes } from '../features/redes/redesStore'
 import { badgeVencidas } from '../features/tarefas/tarefasFormat'
 import { useTarefas } from '../features/tarefas/tarefasStore'
 import { APP_ROUTES, routeIdOf } from './routes'
-import { activeNavId, isSidebarSection, lastEmailPath, lastRedesPath, levelFor, rememberEmailPath, rememberRedesPath, sectionOf, type SidebarSection } from './sidebarLevels'
+import { activeNavId, emailNavTarget, isSidebarSection, lastRedesPath, levelFor, rememberEmailPath, rememberRedesPath, sectionOf, type SidebarSection } from './sidebarLevels'
 import { SidebarStack, type SidebarFocus } from './SidebarStack'
 
-// O item leva ao caminho da rota (Configurações sem a aba abre a última aberta; Email, contrato 65, à última pasta aberta;
+// O item leva ao caminho da rota (Configurações sem a aba abre a última aberta; Email, contrato 157, ao Painel;
 // Redes, contrato 72, à última seção vista; Funil, contrato 112, a Oportunidades; Tarefas, contrato 123, à lista).
 const ROOT_PATHS: Partial<Record<string, string>> = { email: EMAIL_ROOT_PATH, redes: REDES_ROOT_PATH, funil: FUNIL_ROOT_PATH, tarefas: TAREFAS_ROOT_PATH }
 const NAV_ITEMS = APP_ROUTES.flatMap((route) => (route.nav ? [{ ...route.nav, id: route.id, path: ROOT_PATHS[route.id] ?? ROUTE_PATHS[route.id] }] : []))
@@ -55,15 +55,20 @@ export function Sidebar() {
     rememberRedesPath(location.pathname)
   }, [location.pathname])
 
-  // Item de seção: na seção, só mostra o nível de novo (rota, mensagem, aba e conversa abertas iguais); de fora, o Email
-  // abre a última pasta aberta, Configurações, `/configuracoes`, que o `SettingsScreen` leva à última aba vista, e o
+  // Item de seção: na seção, só mostra o nível de novo (rota, mensagem, aba e conversa abertas iguais); de fora,
+  // Configurações, `/configuracoes`, que o `SettingsScreen` leva à última aba vista, e o
   // Assistente (contrato 67), `/assistente`, com a conversa que estava aberta no store; Redes (contrato 72), a última seção
-  // vista (na primeira vez, as publicações da primeira conta).
+  // vista (na primeira vez, as publicações da primeira conta). O Email (contrato 157, R11) vai ao Painel, e do Painel à
+  // última pasta aberta.
   const openSection = (section: SidebarSection) => (event: MouseEvent): void => {
     event.preventDefault()
     focusRef.current = '[data-sidebar-back]'
-    if (sectionOf(location.pathname) === section) setPoppedKey(null)
-    else if (section === 'email') void navigate(lastEmailPath(useEmail.getState().accounts?.map((status) => status.account.id) ?? []))
+    if (section === 'email') {
+      // Contrato 157 (R11): o Painel; do Painel, a última pasta (sem conta, como antes).
+      const target = emailNavTarget(location.pathname, useEmail.getState().accounts?.map((status) => status.account.id) ?? null)
+      if (target === null) setPoppedKey(null)
+      else void navigate(target)
+    } else if (sectionOf(location.pathname) === section) setPoppedKey(null)
     else if (section === 'assistente') void navigate(ROUTE_PATHS.assistente)
     else if (section === 'redes') void navigate(lastRedesPath(useRedes.getState().state?.accounts.map((account) => account.id) ?? []))
     // Contrato 112: o Funil abre sempre em Oportunidades.

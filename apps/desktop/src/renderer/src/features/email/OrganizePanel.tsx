@@ -193,22 +193,20 @@ export function OrganizePanel({ view, onOpen, where, onBack }: OrganizePanelProp
 
 /**
  * A faixa no topo da lista da pasta organizada (contrato 55, CA13, D7): "O Assistente moveu N mensagens", quando, Desfazer
- * e fechar (×). Desfeito, vira a frase do resultado e some em 5 s; com falha, "Tentar de novo".
+ * e fechar (×). Desfeito, vira a frase do resultado e some em 5 s; com falha, "Tentar de novo". Contrato 157 (D11): o
+ * Painel usa a mesma faixa com o próprio Desfazer (`onUndo`), o próprio × (`onClose`) e as margens dele.
  */
-export function OrganizeBanner({ banner, where }: { banner: BannerView; where: string }) {
+export function OrganizeBanner({ banner, where, onUndo, onClose, className = 'mx-2 mb-1' }: { banner: BannerView; where: string; onUndo?: () => Promise<void>; onClose?: () => void; className?: string }) {
   const [busy, setBusy] = useState(false)
   const result = banner.result
   const run = (): void => {
     setBusy(true)
-    void useEmail
-      .getState()
-      .undoFromBanner(banner.batchId, where)
-      .finally(() => setBusy(false))
+    void (onUndo ? onUndo() : useEmail.getState().undoFromBanner(banner.batchId, where)).finally(() => setBusy(false))
   }
   const state = { busy, text: result?.text ?? null, failed: result?.failed ?? false }
   const retry = banner.retry || state.failed
   return (
-    <div data-email-organize-banner={banner.batchId} role="status" className="mx-2 mb-1 flex items-start gap-2.5 border-l-3 border-title bg-bg-sunken px-3 py-2.5">
+    <div data-email-organize-banner={banner.batchId} role="status" className={`${className} flex items-start gap-2.5 border-l-3 border-title bg-bg-sunken px-3 py-2.5`}>
       <Icon icon={Sparkles} className="mt-0.5 shrink-0 text-title" />
       <div className="flex min-w-0 flex-1 flex-col gap-0.5">
         {state.text ? (
@@ -228,7 +226,7 @@ export function OrganizeBanner({ banner, where }: { banner: BannerView; where: s
           {state.busy ? 'Desfazendo…' : retry ? 'Tentar de novo' : 'Desfazer'}
         </button>
       )}
-      <button type="button" data-action="email-organize-banner-close" aria-label="Fechar o aviso" onClick={() => useEmail.getState().dismissBanner(banner.batchId)} className="no-drag inline-flex size-5 shrink-0 items-center justify-center text-text-muted hover:text-title">
+      <button type="button" data-action="email-organize-banner-close" aria-label="Fechar o aviso" onClick={() => (onClose ? onClose() : useEmail.getState().dismissBanner(banner.batchId))} className="no-drag inline-flex size-5 shrink-0 items-center justify-center text-text-muted hover:text-title">
         <Icon icon={X} size={14} />
       </button>
     </div>

@@ -10438,9 +10438,10 @@ async function emailChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => voi
     detail: `itens ${JSON.stringify(navOrder)}; número do Email "${badgeLabel}"; alturas ${JSON.stringify(dense.items)}px, entre eles ${JSON.stringify([...new Set(dense.gaps)])}, ícone a ${JSON.stringify([...new Set(dense.iconGap)])}px do texto, ${dense.above}px acima da lista; rodapé ${dense.footer}px, Bloquear ${dense.lock}px, permissões ${JSON.stringify(dense.perms)}, rótulo ${JSON.stringify(dense.label)}`,
   }
   await clickNav(contents, 'email')
-  const firstTime = await waitFor(contents, `${routeIs('email')} && document.querySelector('[data-email-folder-view="inbox"]') && document.querySelector('${SIDEBAR_EMAIL} [data-email-folder="inbox"][data-email-folder-account="${accountId}"]')?.getAttribute('aria-current') === 'page'`, 8000)
+  // Contrato 157 (R11): de fora do Email, o Painel (era a Caixa de Entrada da primeira conta), com a linha Painel marcada.
+  const firstTime = await waitFor(contents, `${routeIs('email')} && document.querySelector('main [data-email-painel]') && document.querySelector('${SIDEBAR_EMAIL} [data-email-painel-link]')?.getAttribute('aria-current') === 'page'`, 8000)
   const focusBack = await evaluate<boolean>(contents, `document.activeElement?.matches('${SIDEBAR_EMAIL} [data-sidebar-back]') === true`)
-  sidebarChecks['enterFirstTime'] = { ok: firstTime && focusBack, detail: `de Configurações, a Caixa de Entrada da primeira conta=${firstTime}; foco no cabeçalho-voltar=${focusBack}` }
+  sidebarChecks['enterFirstTime'] = { ok: firstTime && focusBack, detail: `de Configurações, o Painel=${firstTime}; foco no cabeçalho-voltar=${focusBack}` }
 
   // Barra lateral: com uma conta (D1 do contrato 65), a linha dela sem seta, as pastas sempre e as não lidas; a lista em
   // duas colunas.
@@ -10546,15 +10547,20 @@ async function emailChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => voi
   const rootShown = await waitFor(contents, `document.querySelector('${SIDEBAR_ROOT}') && ${SIDEBAR_LEVELS}.length === 1`)
   const afterBack = await sidebarView()
   await clickNav(contents, 'email')
-  const levelAgain = await waitFor(contents, `document.querySelector('${SIDEBAR_EMAIL}') && ${SIDEBAR_LEVELS}.length === 1`)
+  // Contrato 157 (R11): numa pasta do Email, "Email" leva ao Painel (era só mostrar o nível, sem navegar).
+  const levelAgain = await waitFor(contents, `document.querySelector('${SIDEBAR_EMAIL}') && ${SIDEBAR_LEVELS}.length === 1 && document.querySelector('main [data-email-painel]')`, 8000)
   const afterEnter = await sidebarView()
+  // E, no Painel, "Email" de novo volta à última pasta (a Caixa de Entrada); a mensagem é aberta de novo para o Responder.
+  await clickNav(contents, 'email')
+  const backToFolder = await waitFor(contents, `${routeIs('email')} && document.querySelector('[data-email-folder-view="inbox"]') && document.querySelector('${SIDEBAR_EMAIL}') && ${SIDEBAR_LEVELS}.length === 1`, 8000)
+  const reopened = await clickEmailRow(contents, EMAIL_HTML_SUBJECT)
   sidebarChecks['back'] = {
     ok: rootShown && beforeBack.subject === EMAIL_HTML_SUBJECT && afterBack.route === 'email' && afterBack.subject === beforeBack.subject && afterBack.current === 'page' && afterBack.focus === 'email',
     detail: `raiz=${rootShown}; rota ${beforeBack.route} -> ${afterBack.route}; mensagem "${beforeBack.subject}" -> "${afterBack.subject}"; "Email" com aria-current="${afterBack.current}"; foco em ${afterBack.focus}`,
   }
   sidebarChecks['enterInSection'] = {
-    ok: levelAgain && afterEnter.route === 'email' && afterEnter.subject === beforeBack.subject && afterEnter.focus === 'back',
-    detail: `nível Email sem navegar=${levelAgain}; rota ${afterEnter.route}; mensagem "${afterEnter.subject}"; foco em ${afterEnter.focus}`,
+    ok: levelAgain && afterEnter.route === 'email' && afterEnter.subject === '' && afterEnter.focus === 'back' && backToFolder && reopened,
+    detail: `de uma pasta, o Painel no nível Email=${levelAgain}; rota ${afterEnter.route}; foco em ${afterEnter.focus}; do Painel, de volta à Caixa de Entrada=${backToFolder}, mensagem aberta de novo=${reopened}`,
   }
 
   // Responder: "Re:", a citação e um anexo local; Enviar sem diálogo, e a mensagem em Enviados.
@@ -10616,9 +10622,13 @@ async function emailChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => voi
   await settle(contents)
   shots.push(await capture(win, ctx.outDir, 'sidebar-raiz-light'))
   const push = await evaluate<SlideView>(contents, slideScript(`${SIDEBAR_ROOT} [data-nav="email"]`, 'push'))
-  const lastFolder = await waitFor(contents, `${routeIs('email')} && document.querySelector('[data-email-folder-view="sent"]') && document.querySelector('${SIDEBAR_EMAIL} ${EMAIL_SENT_LINK}')?.getAttribute('aria-current') === 'page'`, 8000)
-  sidebarChecks['enterLast'] = { ok: push.after.level === 'email' && lastFolder, detail: `de Reuniões, a última pasta aberta (Enviados)=${lastFolder}` }
+  // Contrato 157 (R11): de Reuniões, o Painel; com a raiz à mostra, "Email" no Painel leva à última pasta (Enviados).
+  const painelFirst = await waitFor(contents, `${routeIs('email')} && document.querySelector('main [data-email-painel]') && document.querySelector('${SIDEBAR_EMAIL} [data-email-painel-link]')?.getAttribute('aria-current') === 'page'`, 8000)
   const pop = await evaluate<SlideView>(contents, slideScript(SIDEBAR_BACK, 'pop'))
+  await clickNav(contents, 'email')
+  const lastFolder = await waitFor(contents, `${routeIs('email')} && document.querySelector('[data-email-folder-view="sent"]') && document.querySelector('${SIDEBAR_EMAIL} ${EMAIL_SENT_LINK}')?.getAttribute('aria-current') === 'page'`, 8000)
+  sidebarChecks['enterLast'] = { ok: push.after.level === 'email' && painelFirst && lastFolder, detail: `de Reuniões, o Painel=${painelFirst}; do Painel, a última pasta aberta (Enviados)=${lastFolder}` }
+  await showRoot(contents)
   // Dois cliques seguidos (entrar e voltar): termina com um nível só, a raiz.
   const twice = await evaluate<{ count: number; level: string; sliding: boolean }>(
     contents,
@@ -10839,23 +10849,25 @@ async function emailChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => voi
   for (const id of fitToggles) await setOpen(id, true)
   await waitFor(contents, `document.querySelector('${ownInbox}')`)
   // Contrato 79 (barra densa): cabeçalho-voltar de 32 com 4 abaixo dele; contas e pastas em linhas de 28 (a seta da
-  // subpasta centrada na linha, a 6 px do topo).
-  const rowSizes = await evaluate<{ header: number; below: number; accounts: number[]; folders: number[]; toggles: number[] }>(
+  // subpasta centrada na linha, a 6 px do topo). Contrato 157 (D1): a linha Painel de 28 vem logo abaixo do cabeçalho (os
+  // 4 px passam a ser até ela), com o fio de 1 px antes das contas.
+  const rowSizes = await evaluate<{ header: number; below: number; painel: number; accounts: number[]; folders: number[]; toggles: number[] }>(
     contents,
     `(() => {
       const level = document.querySelector('${SIDEBAR_EMAIL}')
       const round = (n) => Math.round(n * 10) / 10
-      const back = level.querySelector('[data-sidebar-back]').getBoundingClientRect(), nav = level.querySelector('[data-email-nav]').getBoundingClientRect()
+      const back = level.querySelector('[data-sidebar-back]').getBoundingClientRect(), painel = level.querySelector('[data-email-painel-link]').getBoundingClientRect()
       return {
         header: round(back.height),
-        below: round(nav.top - back.bottom),
+        below: round(painel.top - back.bottom),
+        painel: round(painel.height),
         accounts: [...level.querySelectorAll('[data-email-account-toggle], [data-email-account-header]')].map((el) => round(el.getBoundingClientRect().height)),
         folders: [...level.querySelectorAll('[data-email-folder]')].map((el) => round(el.getBoundingClientRect().height)),
         toggles: [...level.querySelectorAll('[data-email-folder-toggle]')].map((el) => round(el.getBoundingClientRect().top - el.parentElement.getBoundingClientRect().top)),
       }
     })()`,
   )
-  const rowSizesOk = rowSizes.header === 32 && rowSizes.below === 4 && rowSizes.accounts.length === 2 && rowSizes.accounts.every((height) => height === 28) && rowSizes.folders.length > 0 && rowSizes.folders.every((height) => height === 28) && rowSizes.toggles.every((top) => top === 6)
+  const rowSizesOk = rowSizes.header === 32 && rowSizes.below === 4 && rowSizes.painel === 28 && rowSizes.accounts.length === 2 && rowSizes.accounts.every((height) => height === 28) && rowSizes.folders.length > 0 && rowSizes.folders.every((height) => height === 28) && rowSizes.toggles.every((top) => top === 6)
   await clickSelector(contents, '[data-action="email-toggle-seen"]')
   const fitRead = await waitFor(contents, `!document.querySelector('[data-email-unread-count]')`, 8000)
   sidebarChecks['emailFits'] = {
@@ -10874,7 +10886,7 @@ async function emailChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => voi
       fit.restored &&
       rowSizesOk &&
       fitRead,
-    detail: `contas recolhidas=${fitCollapsed} (${fitToggles.length}), uma não lida na linha da conta=${fitUnread}; com nomes compridos: borda direita da barra ${fit.asideRight}, linhas ${JSON.stringify(fit.rows)}, número ${fit.badge ?? 'nenhum na linha da conta recolhida'}; fora da borda ${JSON.stringify(fit.over)}; rótulos truncados ${JSON.stringify(fit.truncated)}, transbordando sem truncate ${JSON.stringify(fit.overflowing)}; nomes restaurados=${fit.restored}; cabeçalho ${rowSizes.header}px com ${rowSizes.below}px abaixo, contas ${JSON.stringify(rowSizes.accounts)}px, pastas ${JSON.stringify([...new Set(rowSizes.folders)])}px (${rowSizes.folders.length}), seta da subpasta a ${JSON.stringify([...new Set(rowSizes.toggles)])}px do topo; lida de novo=${fitRead}`,
+    detail: `contas recolhidas=${fitCollapsed} (${fitToggles.length}), uma não lida na linha da conta=${fitUnread}; com nomes compridos: borda direita da barra ${fit.asideRight}, linhas ${JSON.stringify(fit.rows)}, número ${fit.badge ?? 'nenhum na linha da conta recolhida'}; fora da borda ${JSON.stringify(fit.over)}; rótulos truncados ${JSON.stringify(fit.truncated)}, transbordando sem truncate ${JSON.stringify(fit.overflowing)}; nomes restaurados=${fit.restored}; cabeçalho ${rowSizes.header}px com ${rowSizes.below}px abaixo, Painel ${rowSizes.painel}px, contas ${JSON.stringify(rowSizes.accounts)}px, pastas ${JSON.stringify([...new Set(rowSizes.folders)])}px (${rowSizes.folders.length}), seta da subpasta a ${JSON.stringify([...new Set(rowSizes.toggles)])}px do topo; lida de novo=${fitRead}`,
   }
 
   // Contrato 68 (C): com a janela baixa, a lista do nível Email não cabe e o pé dela esmaece (24 px, sem receber
