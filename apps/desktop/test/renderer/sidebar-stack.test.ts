@@ -3,7 +3,7 @@
 // item da raiz sem nível próprio. Contrato 135 (D1): Início, o primeiro item da raiz, também sem nível.
 import { beforeEach, describe, expect, it } from 'vitest'
 import { EMAIL_INBOX_MAILBOX, EMAIL_SENT_MAILBOX, type EmailMessage } from '../../src/shared/email'
-import { emailFolderFromSlug, emailFolderSegment, emailPath, FUNIL_SECTIONS, funilPath, isFunilSection, isRedesSection, REDES_SECTIONS, redesPath, ROUTE_PATHS, ROUTE_REDIRECTS, TAREFAS_ROOT_PATH, tarefasPath } from '../../src/shared/routes'
+import { emailFolderFromSlug, emailFolderSegment, emailPath, FUNIL_SECTIONS, funilPath, isFunilSection, isRedesSection, NOTIFICACOES_ROOT_PATH, REDES_SECTIONS, redesPath, ROUTE_PATHS, ROUTE_REDIRECTS, TAREFAS_ROOT_PATH, tarefasPath } from '../../src/shared/routes'
 import { activeNavId, lastEmailPath, lastRedesPath, levelFor, rememberEmailPath, rememberRedesPath, resetSidebarMemory, sectionOf, SIDEBAR_SECTIONS, SIDEBAR_SLIDE_FALLBACK_MS, SIDEBAR_SLIDE_MS, transitionOf } from '../../src/renderer/src/app/sidebarLevels'
 import { totalUnread } from '../../src/renderer/src/features/email/format'
 // A tabela de rotas importa todas as telas (JSX): o teste lê a ordem dos `nav` no texto do próprio arquivo.
@@ -189,7 +189,17 @@ describe('Início, primeiro item da raiz sem nível (contrato 135, D1)', () => {
 
   it('a tabela de rotas põe "Início" (ícone House) antes de todos os outros itens da barra', () => {
     const itens = [...tabelaDeRotas.matchAll(/nav: \{ label: '([^']+)', icon: (\w+) \}/g)].map((match) => `${match[1]}:${match[2]}`)
-    expect(itens).toEqual(['Início:House', 'Reuniões:NotebookText', 'Tarefas:SquareCheck', 'Assistente:Sparkles', 'Email:Mail', 'Funil:Funnel', 'Redes:AtSign', 'Automações:Bot', 'WhatsApp:Smartphone', 'Configurações:Settings'])
+    expect(itens).toEqual(['Início:House', 'Notificações:Bell', 'Reuniões:NotebookText', 'Tarefas:SquareCheck', 'Assistente:Sparkles', 'Email:Mail', 'Funil:Funnel', 'Redes:AtSign', 'Automações:Bot', 'WhatsApp:Smartphone', 'Configurações:Settings'])
+  })
+})
+
+describe('Notificações, item plano logo depois do Início (contrato 160, CA5)', () => {
+  it('/notificacoes não tem nível: a raiz fica, com Notificações marcado', () => {
+    expect(ROUTE_PATHS.notificacoes).toBe('/notificacoes')
+    expect(NOTIFICACOES_ROOT_PATH).toBe('/notificacoes')
+    expect(sectionOf('/notificacoes')).toBeNull()
+    expect(levelFor('/notificacoes', null, 'k')).toBe('root')
+    expect(activeNavId('/notificacoes', 'notificacoes')).toBe('notificacoes')
   })
 })
 

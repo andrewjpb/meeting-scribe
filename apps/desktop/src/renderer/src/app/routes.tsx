@@ -1,6 +1,6 @@
 // Tabela de rotas. Rota nova: id em shared/routes.ts, linha aqui; com `nav`, aparece na barra lateral.
 import type { LucideIcon } from 'lucide-react'
-import { AtSign, Bot, Funnel, House, Mail, NotebookText, Settings, Smartphone, Sparkles, SquareCheck } from 'lucide-react'
+import { AtSign, Bell, Bot, Funnel, House, Mail, NotebookText, Settings, Smartphone, Sparkles, SquareCheck } from 'lucide-react'
 import type { ReactElement } from 'react'
 import { matchPath, Navigate } from 'react-router'
 import { ROUTE_PATHS, ROUTE_REDIRECTS, SETTINGS_ROUTE_PATTERN, type RouteId } from '@shared/routes'
@@ -12,6 +12,7 @@ import { InicioScreen } from '../features/inicio/InicioScreen'
 import { LiveScreen } from '../features/live/LiveScreen'
 import { MeetingDetailScreen } from '../features/meetings/MeetingDetailScreen'
 import { MeetingsScreen } from '../features/meetings/MeetingsScreen'
+import { NotificacoesScreen } from '../features/notificacoes/NotificacoesScreen'
 import { RedesScreen } from '../features/redes/RedesScreen'
 import { SettingsScreen } from '../features/settings/SettingsScreen'
 import { TarefasScreen } from '../features/tarefas/TarefasScreen'
@@ -27,6 +28,8 @@ export interface AppRoute {
 export const APP_ROUTES: AppRoute[] = [
   // Contrato 135 (D1): "Início" no topo, acima de "Reuniões", sem número e sem nível em pilha.
   { id: 'inicio', path: ROUTE_PATHS.inicio, element: <InicioScreen />, nav: { label: 'Início', icon: House } },
+  // Contrato 160: "Notificações" logo depois do Início, com o total por ler; rota plana, sem nível em pilha.
+  { id: 'notificacoes', path: ROUTE_PATHS.notificacoes, element: <NotificacoesScreen />, nav: { label: 'Notificações', icon: Bell } },
   { id: 'reunioes', path: ROUTE_PATHS.reunioes, element: <MeetingsScreen />, nav: { label: 'Reuniões', icon: NotebookText } },
   // Contrato 123 (R1): "Tarefas" logo depois de "Reuniões", com o número de vencidas e sem nível em pilha (o detalhe de
   // uma tarefa abre ao lado da lista, na mesma tela). `SquareCheck` é o `CheckSquare` da spec com o nome novo do lucide.

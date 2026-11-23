@@ -1,9 +1,9 @@
 import { Calendar, ChevronRight, Inbox, Mail, Smartphone, type LucideIcon } from 'lucide-react'
 import { Link } from 'react-router'
 import type { InicioPendencias } from '@shared/inicio'
-import { EMAIL_ROOT_PATH, ROUTE_PATHS } from '@shared/routes'
+import { EMAIL_ROOT_PATH, NOTIFICACOES_ROOT_PATH, ROUTE_PATHS } from '@shared/routes'
 import { Icon } from '../../design/Icon'
-import { INICIO_CARTAO_CABECALHO_CLASS, INICIO_CARTAO_CLASS, INICIO_CARTAO_TITULO_CLASS, textoPendencia } from './inicioFormat'
+import { INICIO_CARTAO_CABECALHO_CLASS, INICIO_CARTAO_CLASS, INICIO_CARTAO_TITULO_CLASS, INICIO_LINK_CLASS, textoPendencia } from './inicioFormat'
 
 /**
  * Cada fonte, na ordem da PRD (bloco 4): o ícone (o da barra lateral) e a tela que a linha abre (o convite não tem tela).
@@ -20,7 +20,8 @@ const LINHA_CLASS = 'flex h-8 items-center gap-2.5 text-13 text-text'
 
 /**
  * Pendências (D8, artboard 01): uma linha por fonte, só quando há o que responder (`null` é a fonte desligada, zero é
- * nada pendente). Sem nenhuma linha, o cartão não aparece. As contagens chegam prontas do main.
+ * nada pendente). Sem nenhuma linha, o cartão não aparece. As contagens chegam prontas do main. Contrato 160: "Ver
+ * notificações" no cabeçalho abre a tela Notificações.
  */
 export function CartaoPendencias({ pendencias }: { pendencias: InicioPendencias | null }) {
   const linhas = FONTES.flatMap((item) => {
@@ -32,6 +33,11 @@ export function CartaoPendencias({ pendencias }: { pendencias: InicioPendencias 
     <section data-inicio-cartao="pendencias" aria-label="Pendências" className={INICIO_CARTAO_CLASS}>
       <header className={INICIO_CARTAO_CABECALHO_CLASS}>
         <h2 className={INICIO_CARTAO_TITULO_CLASS}>Pendências</h2>
+        <span className="flex-1" />
+        {/* Contrato 160 (mockup 09): a lista do que está por ler, como o "Abrir Tarefas" do cartão de Tarefas. */}
+        <Link to={NOTIFICACOES_ROOT_PATH} draggable={false} data-inicio-abrir="notificacoes" className={INICIO_LINK_CLASS}>
+          Ver notificações
+        </Link>
       </header>
       <ul className="flex flex-col">
         {linhas.map(({ fonte, icone, destino, n }) => {

@@ -14,6 +14,7 @@ import { totalUnread, unreadBadge } from '../features/email/format'
 import { redesUnreadTotal, useRedes } from '../features/redes/redesStore'
 import { badgeVencidas } from '../features/tarefas/tarefasFormat'
 import { useTarefas } from '../features/tarefas/tarefasStore'
+import { useNotificacoes } from '../features/notificacoes/notificacoesSelectors'
 import { APP_ROUTES, routeIdOf } from './routes'
 import { activeNavId, isSidebarSection, lastEmailPath, lastRedesPath, levelFor, rememberEmailPath, rememberRedesPath, sectionOf, type SidebarSection } from './sidebarLevels'
 import { SidebarStack, type SidebarFocus } from './SidebarStack'
@@ -40,6 +41,8 @@ export function Sidebar() {
   const redesUnread = useRedes((state) => redesUnreadTotal(state.unread))
   // Contrato 123 (R1): as vencidas, da view que o `Shell` carrega e acompanha.
   const vencidas = useTarefas((state) => badgeVencidas(state.view))
+  // Contrato 160: o total da tela Notificações (não lidas do WhatsApp + e-mails não lidos), pelo mesmo hook dela.
+  const notificacoes = useNotificacoes().contagem.total
   const location = useLocation()
   const items = NAV_ITEMS.filter((item) => (item.id !== 'whatsapp' || whatsapp) && (item.id !== 'redes' || redesAccounts > 0 || sectionOf(location.pathname) === 'redes'))
   const navigate = useNavigate()
@@ -77,7 +80,7 @@ export function Sidebar() {
 
   const root = items.map((item) => {
     const active = activeId === item.id
-    const badge = item.id === 'email' ? unreadBadge(unread) : item.id === 'redes' ? unreadBadge(redesUnread) : item.id === 'tarefas' ? vencidas : ''
+    const badge = item.id === 'email' ? unreadBadge(unread) : item.id === 'redes' ? unreadBadge(redesUnread) : item.id === 'tarefas' ? vencidas : item.id === 'notificacoes' ? unreadBadge(notificacoes) : ''
     return (
       <Link
         key={item.id}
@@ -95,7 +98,7 @@ export function Sidebar() {
         {badge && (
           <span data-nav-badge className="shrink-0 text-12 font-medium tabular text-side-text">
             {badge}
-            <span className="sr-only">{item.id === 'redes' ? ' não lidos' : item.id === 'tarefas' ? ' vencidas' : ' não lidas'}</span>
+            <span className="sr-only">{item.id === 'redes' ? ' não lidos' : item.id === 'tarefas' ? ' vencidas' : item.id === 'notificacoes' ? ' por ler' : ' não lidas'}</span>
           </span>
         )}
       </Link>
