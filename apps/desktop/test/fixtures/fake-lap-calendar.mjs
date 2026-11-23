@@ -35,7 +35,7 @@ import process from 'node:process'
 import { URL } from 'node:url'
 
 if (process.argv.includes('--version')) {
-  process.stdout.write('lap-calendar 1 (falso)\n')
+  process.stdout.write('lap-calendar 2 (falso)\n')
   process.exit(0)
 }
 if (process.argv.length > 2) {
@@ -43,7 +43,7 @@ if (process.argv.length > 2) {
   process.exit(64)
 }
 
-const VERSION = 'lap-calendar 1'
+const VERSION = 'lap-calendar 2'
 const MAX_REQUEST_LINE = 64 * 1024
 const MAX_TITLE = 1024
 const MAX_LOCATION = 1024
@@ -51,9 +51,11 @@ const MAX_NOTES = 4000
 const MAX_URL = 2048
 const MAX_EXDATES = 500
 const MAX_MATCHES = 50
+const MAX_LIST = 200
+const MAX_LIST_WINDOW_MS = 35 * 86_400_000
 const MAX_RECURRENCE_LIST = 366
 const DAY_MS = 86_400_000
-const COMMANDS = new Set(['status', 'request-access', 'calendars', 'refresh', 'find', 'create', 'update', 'remove'])
+const COMMANDS = new Set(['status', 'request-access', 'calendars', 'refresh', 'find', 'list', 'create', 'update', 'remove'])
 const WEEKDAYS = new Set(['MO', 'TU', 'WE', 'TH', 'FR', 'SA', 'SU'])
 
 const STATE_FILE = process.env['FAKE_LAP_CALENDAR_STATE']
@@ -449,6 +451,29 @@ function find(state, args) {
   return { matches }
 }
 
+/**
+ * `list` (contrato 132, inicio): as ocorrências que cruzam `[start, end)`, menos as das agendas `birthdays`, pelo
+ * início, no máximo 200.
+ */
+function list(state, args) {
+  const f = fields(args, ['start', 'end'], ['start', 'end'])
+  const start = requiredWhen(f, 'start', false)
+  const end = requiredWhen(f, 'end', false)
+  if (!(end.ms > start.ms)) throw invalid('dates', 'O fim tem de vir depois do início.')
+  if (end.ms - start.ms > MAX_LIST_WINDOW_MS) throw invalid('dates', 'A janela passa de 35 dias.')
+  requireFullAccess(state)
+  const birthdays = new Set(state.calendars.filter((calendar) => calendar.sourceType === 'birthdays').map((calendar) => calendar.id))
+  const events = state.events
+    .filter((event) => !birthdays.has(event.calendarId))
+    .flatMap(occurrences)
+    .map((occ) => ({ occ, from: parseWhen(occ.event.start).ms, to: parseWhen(occ.event.end).ms }))
+    .filter(({ from, to }) => from < end.ms && to > start.ms)
+    .sort((a, b) => a.from - b.from || (a.occ.event.calendarItemIdentifier < b.occ.event.calendarItemIdentifier ? -1 : a.occ.event.calendarItemIdentifier > b.occ.event.calendarItemIdentifier ? 1 : 0))
+    .slice(0, MAX_LIST)
+    .map(({ occ }) => eventOut(state, occ))
+  return { events }
+}
+
 function availabilityFor(calendar, requested) {
   if (requested === 'tentative' && calendar.availabilities.includes('tentative')) return { availability: 'tentative', fallback: false }
   if (calendar.availabilities.includes('busy')) return { availability: 'busy', fallback: requested !== 'busy' }
@@ -665,6 +690,8 @@ function run(cmd, args) {
     }
     case 'find':
       return { result: find(state, args) }
+    case 'list':
+      return { result: list(state, args) }
     default: {
       const result = cmd === 'create' ? create(state, args) : cmd === 'update' ? update(state, args) : remove(state, args)
       saveState(state)

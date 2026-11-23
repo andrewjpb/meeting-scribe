@@ -16,6 +16,7 @@ import { existsSync, mkdirSync, statSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import {
   MAC_CALENDAR_ARGS_SCHEMAS,
+  MAC_CALENDAR_DATES_ISSUE,
   MAC_CALENDAR_MAX_REQUEST_LINE,
   MAC_CALENDAR_MAX_RESPONSE_LINE,
   parseMacCalendarResponse,
@@ -24,6 +25,7 @@ import {
   type MacCalendarError,
   type MacCalendarErrorReason,
   type MacCalendarFindArgs,
+  type MacCalendarListArgs,
   type MacCalendarOutcome,
   type MacCalendarRemoveArgs,
   type MacCalendarResults,
@@ -45,6 +47,7 @@ export const MAC_CALENDAR_TIMEOUTS_MS: Readonly<Record<MacCalendarCmd, number>> 
   calendars: 10_000,
   refresh: 10_000,
   find: 10_000,
+  list: 10_000,
   create: 15_000,
   update: 15_000,
   remove: 15_000,
@@ -94,6 +97,8 @@ export interface MacCalendar {
   calendars(): MacCalendarCall<MacCalendarResults['calendars']>
   refresh(): MacCalendarCall<MacCalendarResults['refresh']>
   find(args: MacCalendarFindArgs): MacCalendarCall<MacCalendarResults['find']>
+  /** Contrato 132 (inicio): os eventos de `[start, end)` em todas as agendas menos a de aniversários, até 200. */
+  list(args: MacCalendarListArgs): MacCalendarCall<MacCalendarResults['list']>
   create(args: MacCalendarCreateArgs): MacCalendarCall<MacCalendarResults['create']>
   update(args: MacCalendarUpdateArgs): MacCalendarCall<MacCalendarResults['update']>
   remove(args: MacCalendarRemoveArgs): MacCalendarCall<MacCalendarResults['remove']>
@@ -113,6 +118,7 @@ const MESSAGES: Partial<Record<MacCalendarErrorReason, string>> = {
   disposed: 'O Calendário do Mac foi desligado.',
   'line-too-long': 'A requisição passou de 64 KiB.',
   schema: 'A requisição está fora do formato.',
+  dates: 'O fim tem de vir depois do início, e a janela vai até 35 dias.',
 }
 
 function failure(code: MacCalendarError['code'], reason: MacCalendarErrorReason): { ok: false; error: MacCalendarError } {
@@ -348,9 +354,12 @@ export function createMacCalendar(options: MacCalendarOptions): MacCalendar {
     if (!supported) return Promise.resolve(unavailable('platform'))
     if (cmd === 'request-access' && !options.packaged) return Promise.resolve(unavailable('dev'))
     if (gaveUp) return Promise.resolve(unavailable('gave-up'))
-    if (!MAC_CALENDAR_ARGS_SCHEMAS[cmd].safeParse(args).success) {
-      log(`[mac-calendar] ${cmd}: invalid/schema (não enviada)`)
-      return Promise.resolve(failure('invalid', 'schema'))
+    const parsed = MAC_CALENDAR_ARGS_SCHEMAS[cmd].safeParse(args)
+    if (!parsed.success) {
+      // A janela do `list` fora da ordem ou grande demais tem o mesmo `reason` que o helper devolveria.
+      const reason = parsed.error.issues.some((issue) => issue.message === MAC_CALENDAR_DATES_ISSUE) ? 'dates' : 'schema'
+      log(`[mac-calendar] ${cmd}: invalid/${reason} (não enviada)`)
+      return Promise.resolve(failure('invalid', reason))
     }
     if (queue.length + (inFlight ? 1 : 0) >= MAC_CALENDAR_MAX_PENDING) {
       log(`[mac-calendar] ${cmd}: unavailable/busy`)
@@ -374,6 +383,7 @@ export function createMacCalendar(options: MacCalendarOptions): MacCalendar {
     calendars: () => call('calendars', {}),
     refresh: () => call('refresh', {}),
     find: (args) => call('find', args),
+    list: (args) => call('list', args),
     create: (args) => call('create', args),
     update: (args) => call('update', args),
     remove: (args) => call('remove', args),

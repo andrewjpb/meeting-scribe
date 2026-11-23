@@ -29,6 +29,8 @@ import {
   type SpawnMacCalendar,
 } from '../src/main/mac-calendar/process'
 import {
+  MAC_CALENDAR_MAX_LIST,
+  MAC_CALENDAR_MAX_LIST_WINDOW_MS,
   MAC_CALENDAR_MAX_NOTES,
   MAC_CALENDAR_MAX_REQUEST_LINE,
   MAC_CALENDAR_MAX_RESPONSE_LINE,
@@ -152,6 +154,10 @@ const CREATE: MacCalendarCreateArgs = {
   availability: 'busy',
 }
 
+/** O dia 22/11/2026 em São Paulo (UTC−3). */
+const LIST = { start: '2026-11-22T03:00:00Z', end: '2026-11-23T03:00:00Z' }
+const BIRTHDAYS = { id: 'cal-aniversarios', title: 'Aniversários', sourceId: 'src-niver', sourceTitle: 'Outros', sourceType: 'birthdays', writable: false, availabilities: [], color: null, isDefault: false }
+
 const SERIES = { ...CREATE, title: 'Diária', recurrence: { freq: 'daily', count: 5 } }
 
 const expectError = (raw: Raw, code: string, reason: string, id: string | null): void => {
@@ -193,7 +199,7 @@ const TABLE: Case[] = [
     async run(ctx) {
       const helper = ctx.start()
       const raw = await helper.send({ v: 1, id: 'a1', cmd: 'status', args: {} })
-      expect(raw.line).toMatch(/^\{"id":"a1","ok":true,"result":\{"access":"(full|writeOnly|denied|restricted|notDetermined)","version":"lap-calendar 1"\},"v":1\}$/)
+      expect(raw.line).toMatch(/^\{"id":"a1","ok":true,"result":\{"access":"(full|writeOnly|denied|restricted|notDetermined)","version":"lap-calendar 2"\},"v":1\}$/)
       await helper.close()
     },
   },
@@ -645,10 +651,114 @@ const TABLE: Case[] = [
       await Promise.resolve()
       const version = spawnSync(file, [...args, '--version'], { encoding: 'utf8', input: '' })
       expect(version.status).toBe(0)
-      expect(version.stdout).toMatch(ctx.real ? /^lap-calendar 1\n$/ : /^lap-calendar 1 \(falso\)\n$/)
+      expect(version.stdout).toMatch(ctx.real ? /^lap-calendar 2\n$/ : /^lap-calendar 2 \(falso\)\n$/)
       const other = spawnSync(file, [...args, '--outro'], { encoding: 'utf8', input: '' })
       expect(other.status).toBe(64)
       expect(other.stderr).toContain('uso: lap-calendar')
+    },
+  },
+  {
+    ca: 'C132',
+    title: 'list: args fora do formato (chave a mais, sem start, data em vez de instante) são schema; fim ≤ início ou janela de mais de 35 dias, dates',
+    readOnly: true,
+    async run(ctx) {
+      const helper = ctx.start()
+      expectError(await call(helper, 'list', { ...LIST, extra: 1 }), 'invalid', 'schema', `r${counter}`)
+      expectError(await call(helper, 'list', { end: LIST.end }), 'invalid', 'schema', `r${counter}`)
+      expectError(await call(helper, 'list', { ...LIST, start: '2026-11-22' }), 'invalid', 'schema', `r${counter}`)
+      expectError(await call(helper, 'list', { ...LIST, end: 7 }), 'invalid', 'schema', `r${counter}`)
+      expectError(await call(helper, 'list', { start: LIST.end, end: LIST.start }), 'invalid', 'dates', `r${counter}`)
+      expectError(await call(helper, 'list', { start: LIST.start, end: LIST.start }), 'invalid', 'dates', `r${counter}`)
+      expectError(await call(helper, 'list', { start: LIST.start, end: '2026-12-27T03:00:01Z' }), 'invalid', 'dates', `r${counter}`)
+      await helper.close()
+    },
+  },
+  {
+    ca: 'C132',
+    title: 'list: janela de exatamente 35 dias é aceita',
+    async run(ctx) {
+      const helper = ctx.start(state({ events: [accountEvent({ start: '2026-12-26T12:00:00Z', end: '2026-12-26T13:00:00Z' })] }))
+      expect(MAC_CALENDAR_MAX_LIST_WINDOW_MS).toBe(35 * 86_400_000)
+      const { events } = expectOk(await call(helper, 'list', { start: LIST.start, end: '2026-12-27T03:00:00Z' }), 'list')
+      expect(events.map((item: any) => item.title)).toEqual(['Revisão do contrato'])
+      await helper.close()
+    },
+  },
+  {
+    ca: 'C132',
+    title: 'list: dia inteiro na borda da janela (meia-noite UTC no falso)',
+    async run(ctx) {
+      // Como no `find`, o falso põe o dia inteiro na meia-noite UTC; o helper de verdade, na meia-noite local. Com a
+      // janela do dia 22 em São Paulo (03:00Z a 03:00Z), o dia 23 entra no falso (00:00Z < 03:00Z) e fica de fora no
+      // Mac (a meia-noite local do 23 é 03:00Z, o fim exclusivo); o dia 21 fica de fora nos dois.
+      const allDay = (day: string, next: string) => accountEvent({ eventIdentifier: `dia-${day}`, calendarItemIdentifier: `dia-${day}`, title: `Dia ${day}`, allDay: true, timeZone: null, start: day, end: next })
+      const helper = ctx.start(state({ events: [allDay('2026-11-21', '2026-11-22'), allDay('2026-11-22', '2026-11-23'), allDay('2026-11-23', '2026-11-24')] }))
+      const { events } = expectOk(await call(helper, 'list', LIST), 'list')
+      expect(events.map((item: any) => [item.title, item.start, item.end, item.allDay, item.timeZone])).toEqual([
+        ['Dia 2026-11-22', '2026-11-22', '2026-11-23', true, null],
+        ['Dia 2026-11-23', '2026-11-23', '2026-11-24', true, null],
+      ])
+      await helper.close()
+    },
+  },
+  {
+    ca: 'C132',
+    title: 'list: só o que cruza a janela, pelo início, ocorrências da série, sem aniversários e nada gravado',
+    async run(ctx) {
+      const events = [
+        accountEvent({ eventIdentifier: 'tarde', calendarItemIdentifier: 'tarde', title: 'Tarde', start: '2026-11-22T18:00:00Z', end: '2026-11-22T19:00:00Z' }),
+        accountEvent({ eventIdentifier: 'cedo', calendarItemIdentifier: 'cedo', title: 'Cedo', start: '2026-11-22T11:00:00Z', end: '2026-11-22T12:00:00Z' }),
+        accountEvent({ eventIdentifier: 'virada', calendarItemIdentifier: 'virada', title: 'Virada', start: '2026-11-22T02:00:00Z', end: '2026-11-22T04:00:00Z' }),
+        accountEvent({ eventIdentifier: 'antes', calendarItemIdentifier: 'antes', title: 'Antes', start: '2026-11-22T01:00:00Z', end: '2026-11-22T03:00:00Z' }),
+        accountEvent({ eventIdentifier: 'depois', calendarItemIdentifier: 'depois', title: 'Depois', start: '2026-11-23T03:00:00Z', end: '2026-11-23T04:00:00Z' }),
+        accountEvent({ eventIdentifier: 'serie', calendarItemIdentifier: 'serie', title: 'Diária', start: '2026-11-20T15:00:00Z', end: '2026-11-20T15:30:00Z', recurrence: { freq: 'daily', interval: 1, count: 5 } }),
+        accountEvent({ eventIdentifier: 'niver', calendarItemIdentifier: 'niver', title: 'Aniversário', calendarId: 'cal-aniversarios', start: '2026-11-22T12:00:00Z', end: '2026-11-22T13:00:00Z' }),
+      ]
+      const helper = ctx.start(state({ calendars: [...CALENDARS, BIRTHDAYS], events }))
+      const before = readFileSync(ctx.stateFile, 'utf8')
+      const { events: listed } = expectOk(await call(helper, 'list', LIST), 'list')
+      expect(listed.map((item: any) => [item.title, item.start, item.occurrence])).toEqual([
+        ['Virada', '2026-11-22T02:00:00Z', null],
+        ['Cedo', '2026-11-22T11:00:00Z', null],
+        ['Diária', '2026-11-22T15:00:00Z', '2026-11-22T15:00:00Z'],
+        ['Tarde', '2026-11-22T18:00:00Z', null],
+      ])
+      expect(listed[0]).toMatchObject({ calendarId: 'cal-trabalho', calendarTitle: 'Trabalho', sourceTitle: 'iCloud', recurring: false })
+      expect(expectOk(await call(helper, 'list', { start: '2026-11-25T00:00:00.500Z', end: '2026-11-26T00:00:00Z' }), 'list').events).toEqual([])
+      expect(readFileSync(ctx.stateFile, 'utf8')).toBe(before)
+      await helper.close()
+    },
+  },
+  {
+    ca: 'C132',
+    title: 'list: no máximo 200 eventos, os primeiros pelo início',
+    async run(ctx) {
+      const events = Array.from({ length: 250 }, (_, index) => {
+        const minute = String(index % 60).padStart(2, '0')
+        const hour = String(3 + Math.floor(index / 60)).padStart(2, '0')
+        return accountEvent({ eventIdentifier: `ev-${index}`, calendarItemIdentifier: `item-${String(index).padStart(3, '0')}`, title: `Evento ${index}`, start: `2026-11-22T${hour}:${minute}:00Z`, end: `2026-11-22T${hour}:${minute}:30Z` })
+      })
+      const helper = ctx.start(state({ events: events.reverse() }))
+      const { events: listed } = expectOk(await call(helper, 'list', LIST), 'list')
+      expect(listed).toHaveLength(MAC_CALENDAR_MAX_LIST)
+      expect(listed.map((item: any) => item.title)).toEqual(Array.from({ length: MAC_CALENDAR_MAX_LIST }, (_, index) => `Evento ${index}`))
+      await helper.close()
+    },
+  },
+  {
+    ca: 'C132',
+    title: 'list sem acesso completo: denied/restricted, como os outros comandos de leitura',
+    async run(ctx) {
+      for (const [access, code, reason] of [
+        ['denied', 'denied', 'denied'],
+        ['notDetermined', 'denied', 'not-determined'],
+        ['writeOnly', 'denied', 'write-only'],
+        ['restricted', 'restricted', 'restricted'],
+      ] as const) {
+        const helper = ctx.start(state({ access, events: [accountEvent({ start: '2026-11-22T12:00:00Z', end: '2026-11-22T13:00:00Z' })] }))
+        expectError(await call(helper, 'list', LIST), code, reason, `r${counter}`)
+        await helper.close()
+      }
     },
   },
 ]
@@ -793,7 +903,7 @@ describe('cliente do lap-calendar', () => {
     const dev = client({ packaged: false, command: () => Promise.resolve(fakeCommand({ FAKE_LAP_CALENDAR_LOG: log })) })
     expect(await dev.calendar.requestAccess()).toMatchObject({ ok: false, error: { code: 'unavailable', reason: 'dev' } })
     expect(dev.spawned()).toBe(0)
-    expect(await dev.calendar.status()).toEqual({ ok: true, value: { access: 'full', version: 'lap-calendar 1' } })
+    expect(await dev.calendar.status()).toEqual({ ok: true, value: { access: 'full', version: 'lap-calendar 2' } })
     expect(readFileSync(log, 'utf8').trim().split('\n').map((line) => (JSON.parse(line) as { cmd: string }).cmd)).toEqual(['status'])
     await dev.calendar.dispose()
     for (const outcome of [await dev.calendar.status(), await dev.calendar.refresh(), await dev.calendar.remove({ ids: { eventIdentifier: 'x' }, span: 'future' })]) {
@@ -803,7 +913,7 @@ describe('cliente do lap-calendar', () => {
 
   it('CA12 — a API inteira com o falso, e nenhum método rejeita', async () => {
     const { calendar } = client({ command: () => Promise.resolve(fakeCommand({ FAKE_LAP_CALENDAR_STATE: stateFile(state()) })) })
-    expect(Object.keys(calendar).sort()).toEqual(['calendars', 'create', 'dispose', 'find', 'refresh', 'remove', 'requestAccess', 'status', 'update'])
+    expect(Object.keys(calendar).sort()).toEqual(['calendars', 'create', 'dispose', 'find', 'list', 'refresh', 'remove', 'requestAccess', 'status', 'update'])
     expect((await calendar.calendars()).ok).toBe(true)
     expect((await calendar.refresh()).ok).toBe(true)
     const created = await calendar.create(CREATE)
@@ -850,10 +960,10 @@ describe('cliente do lap-calendar', () => {
       ids.push(id)
       if (index === 3) {
         // id desconhecido e id repetido: descartados com log; a promessa espera a dela.
-        mock.reply(ok('nao-e-esse', { access: 'full', version: 'lap-calendar 1' }))
-        mock.reply(ok(ids[0] ?? '', { access: 'full', version: 'lap-calendar 1' }))
+        mock.reply(ok('nao-e-esse', { access: 'full', version: 'lap-calendar 2' }))
+        mock.reply(ok(ids[0] ?? '', { access: 'full', version: 'lap-calendar 2' }))
       }
-      mock.reply(ok(id, { access: index % 2 ? 'denied' : 'full', version: 'lap-calendar 1' }))
+      mock.reply(ok(id, { access: index % 2 ? 'denied' : 'full', version: 'lap-calendar 2' }))
     }
     const outcomes = await Promise.all(calls)
     expect(new Set(ids).size).toBe(10)
@@ -893,14 +1003,14 @@ describe('cliente do lap-calendar', () => {
   })
 
   it('CA14 — prazos exportados; o helper que não responde: timeout, o processo morre e a fila segue no novo', async () => {
-    expect(MAC_CALENDAR_TIMEOUTS_MS).toEqual({ status: 10_000, calendars: 10_000, refresh: 10_000, find: 10_000, create: 15_000, update: 15_000, remove: 15_000, 'request-access': 120_000 })
+    expect(MAC_CALENDAR_TIMEOUTS_MS).toEqual({ status: 10_000, calendars: 10_000, refresh: 10_000, find: 10_000, list: 10_000, create: 15_000, update: 15_000, remove: 15_000, 'request-access': 120_000 })
     expect(MAC_CALENDAR_KILL_AFTER_MS).toBe(3_000)
     const log = join(dir, 'hang.jsonl')
     const { calendar, spawned, logs } = client({ command: () => Promise.resolve(fakeCommand({ FAKE_LAP_CALENDAR_HANG: 'find', FAKE_LAP_CALENDAR_LOG: log })), timeouts: { find: 300 } })
     const hung = calendar.find(FIND)
     const after = calendar.status()
     expect(await hung).toMatchObject({ ok: false, error: { code: 'unavailable', reason: 'timeout' } })
-    expect(await after).toEqual({ ok: true, value: { access: 'full', version: 'lap-calendar 1' } })
+    expect(await after).toEqual({ ok: true, value: { access: 'full', version: 'lap-calendar 2' } })
     expect(spawned()).toBe(2)
     expect(logs.some((message) => message.includes('find') && message.includes('timeout'))).toBe(true)
     await calendar.dispose()
@@ -932,12 +1042,13 @@ describe('cliente do lap-calendar', () => {
     const mock = mockChild()
     const mocked = createMacCalendar({ platform: 'darwin', arch: 'arm64', systemVersion: '26.6.0', packaged: true, command: () => Promise.resolve(fakeCommand()), spawn: () => mock.child, log: (message) => void logs.push(message) })
     const answers = [
-      (id: string) => ok(id, { access: 'full', version: 'lap-calendar 2' }),
-      (id: string) => ok(id, { access: 'full', version: 'lap-calendar 1', segredo: 'Título secreto' }),
-      (id: string) => ok(id, { access: 'tudo', version: 'lap-calendar 1' }),
+      // O helper de antes do `list` (contrato 132) é recusado: a versão é conferida no `status`.
+      (id: string) => ok(id, { access: 'full', version: 'lap-calendar 1' }),
+      (id: string) => ok(id, { access: 'full', version: 'lap-calendar 2', segredo: 'Título secreto' }),
+      (id: string) => ok(id, { access: 'tudo', version: 'lap-calendar 2' }),
       (id: string) => JSON.stringify({ id, ok: false, v: 1, error: { code: 'denied', reason: 'eventkit', message: 'x' } }),
       () => 'Título secreto da reunião',
-      (id: string) => ok(id, { access: 'full', version: 'lap-calendar 1', lixo: 'x'.repeat(MAC_CALENDAR_MAX_RESPONSE_LINE) }),
+      (id: string) => ok(id, { access: 'full', version: 'lap-calendar 2', lixo: 'x'.repeat(MAC_CALENDAR_MAX_RESPONSE_LINE) }),
     ]
     for (const [index, answer] of answers.entries()) {
       const pending = mocked.status()
@@ -947,7 +1058,7 @@ describe('cliente do lap-calendar', () => {
     }
     const fine = mocked.status()
     await vi.waitFor(() => expect(mock.written).toHaveLength(answers.length + 1))
-    mock.reply(ok(idOf(mock.written[answers.length]), { access: 'full', version: 'lap-calendar 1' }))
+    mock.reply(ok(idOf(mock.written[answers.length]), { access: 'full', version: 'lap-calendar 2' }))
     expect(await fine).toMatchObject({ ok: true })
     expect(logs.join('\n')).not.toContain('secreto')
     await mocked.dispose()
@@ -1015,9 +1126,55 @@ describe('cliente do lap-calendar', () => {
     expect(mock.signals).toEqual(['SIGTERM'])
   })
 
+  it('C132 — list pelo cliente: a janela, denied tipado e args fora do esquema não saem do cliente', async () => {
+    const log = join(dir, 'list.jsonl')
+    const events = [
+      accountEvent({ eventIdentifier: 'dentro', calendarItemIdentifier: 'dentro', title: 'Dentro', start: '2026-11-22T12:00:00Z', end: '2026-11-22T13:00:00Z' }),
+      accountEvent({ eventIdentifier: 'fora', calendarItemIdentifier: 'fora', title: 'Fora', start: '2026-11-23T12:00:00Z', end: '2026-11-23T13:00:00Z' }),
+    ]
+    const { calendar } = client({ command: () => Promise.resolve(fakeCommand({ FAKE_LAP_CALENDAR_STATE: stateFile(state({ events })), FAKE_LAP_CALENDAR_LOG: log })) })
+    const listed = await calendar.list(LIST)
+    expect(listed.ok && listed.value.events.map((item) => item.title)).toEqual(['Dentro'])
+    const invalidArgs = [{ ...LIST, extra: 1 }, { start: LIST.start }, { ...LIST, start: '2026-11-22' }]
+    for (const args of invalidArgs) {
+      expect(await calendar.list(args as unknown as typeof LIST)).toMatchObject({ ok: false, error: { code: 'invalid', reason: 'schema' } })
+    }
+    // Fim ≤ início e janela de mais de 35 dias: o mesmo `invalid`/`dates` do helper, sem sair do cliente.
+    for (const args of [{ start: LIST.end, end: LIST.start }, { start: LIST.start, end: LIST.start }, { start: LIST.start, end: '2026-12-27T03:00:01Z' }]) {
+      expect(await calendar.list(args)).toMatchObject({ ok: false, error: { code: 'invalid', reason: 'dates' } })
+    }
+    expect(readFileSync(log, 'utf8').trim().split('\n').map((line) => (JSON.parse(line) as { cmd: string }).cmd)).toEqual(['list'])
+    await calendar.dispose()
+
+    const denied = client({ command: () => Promise.resolve(fakeCommand({ FAKE_LAP_CALENDAR_STATE: stateFile(state({ access: 'denied', events })) })) })
+    expect(await denied.calendar.list(LIST)).toMatchObject({ ok: false, error: { code: 'denied', reason: 'denied' } })
+    await denied.calendar.dispose()
+  })
+
+  it('C132 — resposta do list com mais de 200 eventos ou evento fora do formato: bad-response', async () => {
+    const event = { allDay: false, availability: 'busy', calendarId: 'c', calendarItemIdentifier: 'i', calendarTitle: 'T', end: '2026-11-22T13:00:00Z', eventIdentifier: null, externalIdentifier: null, occurrence: null, recurring: false, sourceTitle: 'S', start: '2026-11-22T12:00:00Z', timeZone: null, title: 'x', url: null }
+    for (const result of [{ events: Array.from({ length: MAC_CALENDAR_MAX_LIST + 1 }, () => event) }, { events: [{ ...event, segredo: 1 }] }, { events: [], extra: 1 }]) {
+      const mock = mockChild()
+      const calendar = createMacCalendar({ platform: 'darwin', arch: 'arm64', systemVersion: '26.6.0', packaged: true, command: () => Promise.resolve(fakeCommand()), spawn: () => mock.child })
+      const pending = calendar.list(LIST)
+      await vi.waitFor(() => expect(mock.written).toHaveLength(1))
+      mock.reply(ok(idOf(mock.written[0]), result))
+      expect(await pending).toMatchObject({ ok: false, error: { code: 'unavailable', reason: 'bad-response' } })
+      await calendar.dispose()
+    }
+    const mock = mockChild()
+    const calendar = createMacCalendar({ platform: 'darwin', arch: 'arm64', systemVersion: '26.6.0', packaged: true, command: () => Promise.resolve(fakeCommand()), spawn: () => mock.child })
+    const pending = calendar.list(LIST)
+    await vi.waitFor(() => expect(mock.written).toHaveLength(1))
+    mock.reply(ok(idOf(mock.written[0]), { events: Array.from({ length: MAC_CALENDAR_MAX_LIST }, () => event) }))
+    const outcome = await pending
+    expect(outcome.ok && outcome.value.events).toHaveLength(MAC_CALENDAR_MAX_LIST)
+    await calendar.dispose()
+  })
+
   it('CA19 — os três cenários do falso: acesso negado, UID que a conta já pôs, cópia que aparece no segundo refresh', async () => {
     const denied = client({ command: () => Promise.resolve(fakeCommand({ FAKE_LAP_CALENDAR_STATE: stateFile(state({ access: 'denied' })) })) })
-    expect(await denied.calendar.status()).toEqual({ ok: true, value: { access: 'denied', version: 'lap-calendar 1' } })
+    expect(await denied.calendar.status()).toEqual({ ok: true, value: { access: 'denied', version: 'lap-calendar 2' } })
     expect(await denied.calendar.calendars()).toMatchObject({ ok: false, error: { code: 'denied', reason: 'denied' } })
     expect(await denied.calendar.create(CREATE)).toMatchObject({ ok: false, error: { code: 'denied', reason: 'denied' } })
     expect(await denied.calendar.requestAccess()).toEqual({ ok: true, value: { access: 'denied', granted: false } })

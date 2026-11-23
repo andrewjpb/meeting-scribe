@@ -508,7 +508,7 @@ describe('contrato 78: evento no Calendário do Mac', () => {
         return Promise.resolve({ ok: true, value: { matches: fake.stored.filter((item) => item.title === args.title && item.start === args.start).map((item) => ({ ...item, match: 'title-start' as const })) } })
       },
       status: () =>
-        Promise.resolve(access === 'broken' ? { ok: false, error: { code: 'unavailable', reason: 'no-binary', message: '' } } : { ok: true, value: { access, version: 'lap-calendar 1' } }),
+        Promise.resolve(access === 'broken' ? { ok: false, error: { code: 'unavailable', reason: 'no-binary', message: '' } } : { ok: true, value: { access, version: 'lap-calendar 2' } }),
       calendars: () => Promise.resolve({ ok: true, value: { calendars: CALENDARS } }),
       create: (args) => {
         const error = fake.failNext.shift()
@@ -701,7 +701,7 @@ describe('contrato 78: evento no Calendário do Mac', () => {
     const counted = {
       status: () => {
         reads++
-        return Promise.resolve({ ok: true as const, value: { access, version: 'lap-calendar 1' as const } })
+        return Promise.resolve({ ok: true as const, value: { access, version: 'lap-calendar 2' as const } })
       },
       calendars: () => {
         reads++

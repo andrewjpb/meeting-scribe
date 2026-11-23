@@ -20,7 +20,7 @@
 import EventKit
 import Foundation
 
-let version = "lap-calendar 1"
+let version = "lap-calendar 2"
 
 let arguments = CommandLine.arguments.dropFirst()
 if arguments == ["--version"] {
@@ -42,8 +42,11 @@ let maxNotes = 4000
 let maxURL = 2048
 let maxExdates = 500
 let maxMatches = 50
+let maxList = 200
 let maxRecurrenceList = 366
 let day: TimeInterval = 86_400
+/** A janela do `list`, até 35 dias (MAC_CALENDAR_MAX_LIST_WINDOW_MS). */
+let maxListWindow: TimeInterval = 35 * day
 
 // MARK: Erros
 
@@ -560,6 +563,25 @@ func find(_ args: Fields) throws -> [String: Any] {
   return ["matches": matches]
 }
 
+/**
+ * `list` (contrato 132, inicio): os eventos que cruzam `[start, end)`, em todas as agendas menos a de aniversários,
+ * pelo início, no máximo `maxList`. Nunca grava.
+ */
+func list(_ args: Fields) throws -> [String: Any] {
+  let start = try requiredWhen(args, "start", allDay: false)
+  let end = try requiredWhen(args, "end", allDay: false)
+  guard end.moment > start.moment else { throw invalid("dates", "O fim tem de vir depois do início.") }
+  guard end.moment.timeIntervalSince(start.moment) <= maxListWindow else { throw invalid("dates", "A janela passa de 35 dias.") }
+  try requireFullAccess()
+  let found = events(from: start.moment, to: end.moment, in: nil)
+    .filter { $0.calendar?.type != .birthday && $0.calendar?.source?.sourceType != .birthdays }
+    .sorted { (left: EKEvent, right: EKEvent) -> Bool in
+      let (a, b): (Date, Date) = (left.startDate, right.startDate)
+      return a == b ? left.calendarItemIdentifier < right.calendarItemIdentifier : a < b
+    }
+  return ["events": found.prefix(maxList).map(eventOut)]
+}
+
 /** O EventKit recusou ao gravar: os casos que o protocolo nomeia; o resto é `unavailable`/`eventkit`. */
 func saveFailure(_ error: Error, updating: Bool) -> Failure {
   if let error = error as? EKError {
@@ -825,7 +847,7 @@ func remove(_ args: Fields) throws -> [String: Any] {
 
 // MARK: Requisição e resposta
 
-let commands: Set<String> = ["status", "request-access", "calendars", "refresh", "find", "create", "update", "remove"]
+let commands: Set<String> = ["status", "request-access", "calendars", "refresh", "find", "list", "create", "update", "remove"]
 
 func run(_ cmd: String, _ rawArgs: Any?) throws -> [String: Any] {
   switch cmd {
@@ -845,6 +867,7 @@ func run(_ cmd: String, _ rawArgs: Any?) throws -> [String: Any] {
   case "find":
     let args = try Fields(rawArgs, allowed: ["uid", "title", "start", "end", "allDay", "ids", "recurrenceId"], required: ["uid", "title", "start", "end", "allDay"])
     return try find(args)
+  case "list": return try list(Fields(rawArgs, allowed: ["start", "end"], required: ["start", "end"]))
   case "create": return try create(Fields(rawArgs, allowed: createKeys))
   case "update": return try update(Fields(rawArgs, allowed: ["ids", "recurrenceId", "span", "fields"]))
   default: return try remove(Fields(rawArgs, allowed: ["ids", "recurrenceId", "span"]))

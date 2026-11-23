@@ -4,7 +4,7 @@
 import { z } from 'zod'
 
 export const MAC_CALENDAR_PROTOCOL_VERSION = 1
-export const MAC_CALENDAR_VERSION = 'lap-calendar 1'
+export const MAC_CALENDAR_VERSION = 'lap-calendar 2'
 
 /** Linha de requisição (sem o `\n`), em bytes UTF-8. */
 export const MAC_CALENDAR_MAX_REQUEST_LINE = 64 * 1024
@@ -21,8 +21,14 @@ export const MAC_CALENDAR_MAX_MATCHES = 50
 export const MAC_CALENDAR_MAX_RECURRENCE_LIST = 366
 /** O `find` olha a janela `[start − 1 dia, end + 1 dia]`. */
 export const MAC_CALENDAR_FIND_MARGIN_MS = 86_400_000
+/** Contrato 132 (inicio): o `list` devolve no máximo isto, os primeiros pelo início. */
+export const MAC_CALENDAR_MAX_LIST = 200
+/** A janela do `list` vai até 35 dias (o Início pede dois); maior que isso é `invalid`/`dates`, como fim ≤ início. */
+export const MAC_CALENDAR_MAX_LIST_WINDOW_MS = 35 * 86_400_000
+/** A mensagem do `refine` do `list` que o cliente devolve como `invalid`/`dates` (o mesmo `reason` do helper). */
+export const MAC_CALENDAR_DATES_ISSUE = 'janela fora da ordem ou maior que 35 dias'
 
-export const MAC_CALENDAR_COMMANDS = ['status', 'request-access', 'calendars', 'refresh', 'find', 'create', 'update', 'remove'] as const
+export const MAC_CALENDAR_COMMANDS = ['status', 'request-access', 'calendars', 'refresh', 'find', 'list', 'create', 'update', 'remove'] as const
 export type MacCalendarCmd = (typeof MAC_CALENDAR_COMMANDS)[number]
 
 // --- Valores -----------------------------------------------------------------------------------------------------
@@ -106,6 +112,16 @@ export const findArgsSchema = z
   .strict()
 export type MacCalendarFindArgs = z.infer<typeof findArgsSchema>
 
+/** Contrato 132 (inicio): os eventos que cruzam `[start, end)`, só leitura; o fim depois do início, até 35 dias. */
+export const listArgsSchema = z
+  .object({ start: instantInSchema, end: instantInSchema })
+  .strict()
+  .refine((args) => {
+    const span = Date.parse(args.end) - Date.parse(args.start)
+    return span > 0 && span <= MAC_CALENDAR_MAX_LIST_WINDOW_MS
+  }, MAC_CALENDAR_DATES_ISSUE)
+export type MacCalendarListArgs = z.infer<typeof listArgsSchema>
+
 export const createArgsSchema = z
   .object({
     calendarId: identifierSchema,
@@ -153,6 +169,7 @@ export const MAC_CALENDAR_ARGS_SCHEMAS = {
   calendars: emptyArgs,
   refresh: emptyArgs,
   find: findArgsSchema,
+  list: listArgsSchema,
   create: createArgsSchema,
   update: updateArgsSchema,
   remove: removeArgsSchema,
@@ -221,6 +238,7 @@ export const MAC_CALENDAR_RESULT_SCHEMAS = {
   calendars: z.object({ calendars: z.array(calendarOutSchema) }).strict(),
   refresh: z.object({ requestedAt: instantOutSchema }).strict(),
   find: z.object({ matches: z.array(matchSchema).max(MAC_CALENDAR_MAX_MATCHES) }).strict(),
+  list: z.object({ events: z.array(eventOutSchema).max(MAC_CALENDAR_MAX_LIST) }).strict(),
   create: writeResultSchema,
   update: writeResultSchema,
   remove: z
