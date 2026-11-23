@@ -1,7 +1,7 @@
 // Lógica pura do funil (contrato 107): normalização e comparação de e-mail e telefone (R3), domínio e empresa (R5),
 // etapas padrão, última interação e "esfriou" (R7), totais do cabeçalho e o `formatarBRL` usado por todas as telas e
 // pelo `FUNIL.md`. Sem Node e sem Electron: roda no main, no renderer e nos testes.
-import { PROVEDORES_PESSOAIS, type Empresa, type Etapa, type FunilState, type Oportunidade } from './funil'
+import { PROVEDORES_PESSOAIS, type Contato, type Empresa, type Etapa, type FunilState, type Oportunidade } from './funil'
 
 const DIA_MS = 86_400_000
 
@@ -170,4 +170,29 @@ const brl = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' 
 export function formatarBRL(centavos: number | null): string {
   if (centavos === null) return '\u2014'
   return centavos % 100 === 0 ? brlInteiro.format(centavos / 100) : brl.format(centavos / 100)
+}
+
+/** Quem acha o contato: o e-mail (normalizado), o telefone (E.164) ou a conversa do WhatsApp. */
+export interface ContatoAlvo {
+  email?: string | null | undefined
+  telefone?: string | null | undefined
+  whatsappChatId?: string | null | undefined
+}
+
+/**
+ * O contato não arquivado ligado ao alvo (contrato 116, R35 a R37): primeiro pela conversa do WhatsApp, depois pelo e-mail
+ * e por último pelo telefone (com e sem o nono dígito, R3). Sem nenhum, `null`. Contrato 159: saiu do `ContactLink` do
+ * renderer para cá, para o main (a triagem do WhatsApp) usar a mesma regra.
+ */
+export function contatoLigado(contatos: readonly Contato[], alvo: ContatoAlvo): Contato | null {
+  const ativos = contatos.filter((contato) => !contato.arquivado)
+  const chatId = alvo.whatsappChatId ?? null
+  const email = alvo.email ? normalizarEmail(alvo.email) : null
+  const telefone = alvo.telefone ?? null
+  return (
+    (chatId !== null ? ativos.find((contato) => contato.whatsappChatId === chatId) : undefined) ??
+    (email !== null ? ativos.find((contato) => contato.emails.some((item) => normalizarEmail(item) === email)) : undefined) ??
+    (telefone !== null ? ativos.find((contato) => contato.telefones.some((item) => mesmoTelefone(item, telefone))) : undefined) ??
+    null
+  )
 }

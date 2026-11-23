@@ -9090,7 +9090,7 @@ async function automationsChecks(ctx: SmokeContext, watch: (win: BrowserWindow) 
   checks['screen'] = {
     ok:
       cards &&
-      JSON.stringify(seeded) === JSON.stringify(['Resumo da semana', 'Minhas tarefas', 'Pendências da reunião']) &&
+      JSON.stringify(seeded) === JSON.stringify(['Resumo da semana', 'Minhas tarefas', 'Pendências da reunião', 'Triagem do WhatsApp']) &&
       JSON.stringify(tabs) === JSON.stringify(['Agentes', 'Agendamentos', 'Execuções', 'Atendimento']) &&
       // Contrato 65: "Email" entrou entre o "Assistente" e as "Automações". Contrato 112: "Funil" logo depois do "Email".
       nav.indexOf('automacoes') === nav.indexOf('funil') + 1 &&

@@ -1,5 +1,24 @@
 import { describe, expect, it } from 'vitest'
-import { agoLabel, describeCron, describeSchedule, dueOccurrences, formatRunAt, nextRunAfter, nextRuns, parseCron, promptHeader, scheduleLine, zonedInstant, type Schedule } from '../src/shared/automations'
+import {
+  agoLabel,
+  AUTOMATIC_TRIGGERS,
+  describeCron,
+  describeSchedule,
+  dueOccurrences,
+  EXAMPLE_AGENTS,
+  formatRunAt,
+  nextRunAfter,
+  nextRuns,
+  parseCron,
+  promptHeader,
+  RUN_TRIGGER_LABELS,
+  RUN_TRIGGERS,
+  scheduleLine,
+  TRIAGEM_SCHEDULE_DEFAULTS,
+  TRIAGEM_TEMPLATE,
+  zonedInstant,
+  type Schedule,
+} from '../src/shared/automations'
 import { agentInputSchema, scheduleSchema, taskInputSchema } from '../src/shared/automations-schema'
 
 const NY = 'America/New_York'
@@ -175,5 +194,35 @@ describe('validação (contrato 23, CA1 e CA3)', () => {
     expect(scheduleSchema.safeParse({ kind: 'cron', expr: '0 8 * * 1-5' }).success).toBe(true)
     expect(scheduleSchema.safeParse({ kind: 'cron', expr: '0 8 * *' }).success).toBe(false)
     expect(scheduleSchema.safeParse({ kind: 'after-meeting', delayMin: 61 }).success).toBe(false)
+  })
+})
+
+describe('Triagem do WhatsApp (contrato 159, CA6 e CA10)', () => {
+  it('"Quando chega mensagem do WhatsApp": espera de 5 a 600 s e grupos booleano; nunca tem horário', () => {
+    const schedule: Schedule = { kind: 'whatsapp-message', esperaSeg: 30, grupos: false }
+    expect(scheduleSchema.safeParse(schedule).success).toBe(true)
+    expect(scheduleSchema.safeParse(TRIAGEM_SCHEDULE_DEFAULTS).success).toBe(true)
+    expect(TRIAGEM_SCHEDULE_DEFAULTS).toEqual(schedule)
+    expect(scheduleSchema.safeParse({ ...schedule, esperaSeg: 4 }).success).toBe(false)
+    expect(scheduleSchema.safeParse({ ...schedule, esperaSeg: 601 }).success).toBe(false)
+    expect(scheduleSchema.safeParse({ ...schedule, esperaSeg: 30.5 }).success).toBe(false)
+    expect(scheduleSchema.safeParse({ kind: 'whatsapp-message', esperaSeg: 30 }).success).toBe(false)
+    expect(nextRunAfter(schedule, SP, at('2026-11-16T10:00:00Z'))).toBeNull()
+    expect(nextRuns(schedule, SP, at('2026-11-16T10:00:00Z'))).toEqual([])
+    expect(describeSchedule(schedule, SP)).toBe('Quando chega mensagem do WhatsApp')
+  })
+
+  it('o gatilho "whatsapp" aparece como "WhatsApp" e fica fora do limite diário', () => {
+    expect(RUN_TRIGGERS).toContain('whatsapp')
+    expect(RUN_TRIGGER_LABELS.whatsapp).toBe('WhatsApp')
+    expect(AUTOMATIC_TRIGGERS).not.toContain('whatsapp')
+  })
+
+  it('o modelo pronto "Triagem do WhatsApp" está entre os exemplos (o último) e passa no esquema do agente', () => {
+    const triagem = EXAMPLE_AGENTS.find((agent) => agent.name === 'Triagem do WhatsApp')
+    expect(triagem).toMatchObject({ funil: true, web: false, tarefas: false, model: 'haiku', thinkMore: false, mcpServers: [] })
+    expect(EXAMPLE_AGENTS.at(-1)).toBe(TRIAGEM_TEMPLATE)
+    expect(TRIAGEM_TEMPLATE.instructions.startsWith('Você faz a triagem de conversas do WhatsApp do dono do app.')).toBe(true)
+    expect(agentInputSchema.safeParse({ id: null, ...TRIAGEM_TEMPLATE }).success).toBe(true)
   })
 })

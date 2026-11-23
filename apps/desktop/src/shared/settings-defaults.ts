@@ -152,6 +152,11 @@ export interface AppSettings {
    */
   whatsappTypingSignal: boolean
   /**
+   * "Triagem do WhatsApp por agente" (contrato 159, padrão ligado): o agente de triagem das Automações etiqueta cada
+   * conversa que recebe mensagem (urgente, pessoal, profissional). Desligado, o motor não chama a IA.
+   */
+  whatsappTriagem: boolean
+  /**
    * Separa os participantes por voz ("Participante A", "B"…). Desligado (padrão desde 15/11/2026), o
    * áudio dos participantes vira "Participantes" e os trechos se dividem só pelas pausas.
    */
@@ -294,6 +299,7 @@ export const DEFAULT_SETTINGS: Readonly<AppSettings> = Object.freeze({
   whatsappNotifications: true,
   whatsappNotifyGroups: true,
   whatsappTypingSignal: false,
+  whatsappTriagem: true,
   identifySpeakers: false,
   meetSpeakers: true,
   meetingPrompt: true,

@@ -588,7 +588,8 @@ export function createAutomationsService(deps: AutomationsDeps): AutomationsServ
     const due: { task: ScheduledTask; trigger: RunTrigger; run: boolean; extra: number }[] = []
     const nextRuns = new Map<string, string | null>()
     for (const task of state.tasks) {
-      if (!task.enabled || task.autoPaused || task.schedule.kind === 'after-meeting' || task.reminder) continue
+      // Contrato 159: "Quando chega mensagem do WhatsApp" nunca vence pelo relógio (nem como horário perdido).
+      if (!task.enabled || task.autoPaused || task.schedule.kind === 'after-meeting' || task.schedule.kind === 'whatsapp-message' || task.reminder) continue
       if (task.nextRunAt === null) {
         const next = nextFor(task, at)
         if (next !== null) nextRuns.set(task.id, next)

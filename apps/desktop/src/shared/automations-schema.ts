@@ -38,6 +38,7 @@ import { CHAT_SCOPE_MEETINGS_MAX, CHAT_TEXT_MAX } from './chat'
 import { EMAIL_ACCOUNT_ID_PATTERN, EMAIL_SUBJECT_MAX } from './email'
 import { RUN_ORGANIZE_REFUSED_MAX } from './email-organize'
 import { AGENT_PROFILES } from './settings-defaults'
+import { TRIAGEM_ESPERA_SEG } from './triagem'
 import { allowEntryValid, normalizeAllowEntry, RUN_EMAILS_MAX, TASK_EMAIL_ALLOW_MAX, TASK_EMAIL_ALLOW_MIN, TASK_EMAIL_MAX_PER_RUN_MAX, type RunEmail, type TaskEmailInput, type TaskEmailPermission } from './task-email'
 
 export const automationIdSchema = z.string().regex(/^[\w-]{1,100}$/)
@@ -113,6 +114,8 @@ export const scheduleSchema = z.discriminatedUnion('kind', [
     })
     .strict(),
   z.object({ kind: z.literal('after-meeting'), delayMin: z.number().int().min(0).max(AFTER_MEETING_MAX_DELAY) }).strict(),
+  // Contrato 159: "Quando chega mensagem do WhatsApp" (a triagem).
+  z.object({ kind: z.literal('whatsapp-message'), esperaSeg: z.number().int().min(TRIAGEM_ESPERA_SEG.min).max(TRIAGEM_ESPERA_SEG.max), grupos: z.boolean() }).strict(),
 ])
 
 const taskFields = {

@@ -140,12 +140,13 @@ afterEach(async () => {
 describe('agentes (contrato 23, CA1 e CA2)', () => {
   it('os três de exemplo entram na primeira vez, em agents.json, e podem ser apagados para sempre', async () => {
     const { agents, models, mcp } = await service.listAgents()
-    expect(agents.map((agent) => agent.name)).toEqual(['Resumo da semana', 'Minhas tarefas', 'Pendências da reunião'])
+    // Contrato 159: o modelo pronto "Triagem do WhatsApp" entra por último.
+    expect(agents.map((agent) => agent.name)).toEqual(['Resumo da semana', 'Minhas tarefas', 'Pendências da reunião', 'Triagem do WhatsApp'])
     expect(agents[0]?.scope).toEqual({ kind: '7d' })
     expect(models).toEqual(['haiku', 'sonnet', 'opus'])
     expect(mcp).toBe(false)
     const file = JSON.parse(readFileSync(join(dir, AGENTS_FILE), 'utf8')) as { version: number; agents: unknown[] }
-    expect(file.agents).toHaveLength(3)
+    expect(file.agents).toHaveLength(4)
     for (const agent of agents) expect(await service.deleteAgent({ id: agent.id })).toEqual({ ok: true })
     // Reaberto do disco: continua vazio (os exemplos não voltam).
     setup()
@@ -302,6 +303,21 @@ describe('agendador (contrato 23, CA5)', () => {
     const resumed = await service.setPaused({ paused: false })
     expect(resumed).toMatchObject({ paused: false, pauseReason: null })
     expect(Date.parse((await service.listTasks())[0]?.nextRunAt ?? '')).toBe(clock + 5 * 60_000)
+  })
+
+  it('Triagem do WhatsApp (contrato 159, CA6): a tarefa "Quando chega mensagem do WhatsApp" não tem próximo horário e o relógio nunca a roda', async () => {
+    const agentId = await firstAgentId('Triagem do WhatsApp')
+    const saved = await service.saveTask(taskInput(agentId, { name: 'Triagem', schedule: { kind: 'whatsapp-message', esperaSeg: 30, grupos: false } }))
+    expect(saved.ok && saved.task.nextRunAt).toBeNull()
+    await service.tick()
+    service.meetingEnded('reuniao-1')
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    clock += 2 * 24 * 60 * 60_000
+    await service.tick()
+    await service.settled()
+    expect(pending).toHaveLength(0)
+    expect(runsOnDisk()).toEqual([])
+    expect((await service.listTasks())[0]?.nextRunAt).toBeNull()
   })
 
   it('depois de cada reunião: roda com a reunião que acabou, depois do atraso', async () => {

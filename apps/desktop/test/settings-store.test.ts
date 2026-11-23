@@ -33,6 +33,7 @@ describe('esquema de configurações (CA1)', () => {
       whatsappNotifications: true,
       whatsappNotifyGroups: true,
       whatsappTypingSignal: false,
+      whatsappTriagem: true,
       identifySpeakers: false,
       meetSpeakers: true,
       meetingPrompt: true,
@@ -111,6 +112,7 @@ describe('esquema de configurações (CA1)', () => {
       whatsappNotifications: false,
       whatsappNotifyGroups: false,
       whatsappTypingSignal: true,
+      whatsappTriagem: false,
       identifySpeakers: true,
       meetSpeakers: false,
       meetingPrompt: false,
@@ -193,7 +195,7 @@ describe('esquema de configurações (CA1)', () => {
   it('Claude CLI (contrato 05, CA1): motor, modelo e caminho com padrão próprio cada um', () => {
     // `settings.json` do contrato 04, sem os campos novos: carrega com os padrões deles e mantém o resto.
     const old = { translationEnabled: false, translationModel: 'gpt-oss-120b', sourceLanguage: 'es', targetLanguage: 'ja', echoCancellation: true, theme: 'dark', micDeviceId: null }
-    expect(parseSettings(old)).toEqual({ ...old, removeEcho: true, translationEngine: 'assemblyai', claudeModel: 'haiku', chatModel: 'sonnet', claudePath: null, claudeTransport: 'acp', agentProfile: 'claude', saveToFolder: true, audioFolder: null, summarizeOnStop: true, liveCards: false, whatsappInsights: true, whatsappAutoCorrect: false, whatsappNotifications: true, whatsappNotifyGroups: true, whatsappTypingSignal: false, identifySpeakers: false, meetSpeakers: true, meetingPrompt: true, navegadorPlugin: false, brandName: null, brandSubtitle: null, brandLogo: null, autoCheckUpdates: true, lockUseTouchId: false, lockAfterMinutes: 0, lockOnSystemLock: true, lockOnLaunch: false, saveToDrive: true, closeBehavior: 'tray', openAtLogin: false, scheduledRunsDailyLimit: 50, calendarAlerts: true, calendarLeadMinutes: 5, calendarNotRecordingAlert: true, calendarIds: { google: null, microsoft: null }, emailPollMinutes: 5, emailNotifications: true, emailCollapsed: [], emailFoldersCollapsed: [], emailRecentFolders: {}, inviteCalendarId: null, inviteAddOnAccept: true, inviteSuggest: false, claudeConnectors: {}, redesPollMinutes: 5, funil: { detectarNasReunioes: true, diasEsfriar: 7, avisarEsfriadas: true }, tarefas: { horaLembrete: '09:00', lembrarNoPrazo: true, avisoDiario: true, sugerirDasReunioes: true }, inicio: { telaInicial: 'inicio', blocos: { agenda: true, tarefas: true, pendencias: true, ultimaReuniao: true, automacoes: true } }, assistant: { media: true } })
+    expect(parseSettings(old)).toEqual({ ...old, removeEcho: true, translationEngine: 'assemblyai', claudeModel: 'haiku', chatModel: 'sonnet', claudePath: null, claudeTransport: 'acp', agentProfile: 'claude', saveToFolder: true, audioFolder: null, summarizeOnStop: true, liveCards: false, whatsappInsights: true, whatsappAutoCorrect: false, whatsappNotifications: true, whatsappNotifyGroups: true, whatsappTypingSignal: false, whatsappTriagem: true, identifySpeakers: false, meetSpeakers: true, meetingPrompt: true, navegadorPlugin: false, brandName: null, brandSubtitle: null, brandLogo: null, autoCheckUpdates: true, lockUseTouchId: false, lockAfterMinutes: 0, lockOnSystemLock: true, lockOnLaunch: false, saveToDrive: true, closeBehavior: 'tray', openAtLogin: false, scheduledRunsDailyLimit: 50, calendarAlerts: true, calendarLeadMinutes: 5, calendarNotRecordingAlert: true, calendarIds: { google: null, microsoft: null }, emailPollMinutes: 5, emailNotifications: true, emailCollapsed: [], emailFoldersCollapsed: [], emailRecentFolders: {}, inviteCalendarId: null, inviteAddOnAccept: true, inviteSuggest: false, claudeConnectors: {}, redesPollMinutes: 5, funil: { detectarNasReunioes: true, diasEsfriar: 7, avisarEsfriadas: true }, tarefas: { horaLembrete: '09:00', lembrarNoPrazo: true, avisoDiario: true, sugerirDasReunioes: true }, inicio: { telaInicial: 'inicio', blocos: { agenda: true, tarefas: true, pendencias: true, ultimaReuniao: true, automacoes: true } }, assistant: { media: true } })
     expect(parseSettings({ translationEngine: 'claude-cli', claudeModel: 'sonnet' })).toMatchObject({ translationEngine: 'claude-cli', claudeModel: 'sonnet' })
     // Fora da lista cai no padrão: só `haiku` e `sonnet`, só os dois motores.
     expect(parseSettings({ translationEngine: 'openai' }).translationEngine).toBe('assemblyai')
@@ -511,6 +513,20 @@ describe('esquema de configurações (CA1)', () => {
     expect(() => parseSettingsPatch({ assistant: { media: true, extra: 1 } })).toThrow()
   })
 
+  it('Triagem do WhatsApp (contrato 159, CA8): padrão ligado; arquivo de antes ganha o padrão; lixo volta ao padrão; pelo renderer, booleano estrito', () => {
+    expect(DEFAULT_SETTINGS.whatsappTriagem).toBe(true)
+    const old: Record<string, unknown> = { ...DEFAULT_SETTINGS }
+    delete old['whatsappTriagem']
+    expect(parseSettings(old).whatsappTriagem).toBe(true)
+    expect(parseSettings({ whatsappTriagem: false }).whatsappTriagem).toBe(false)
+    expect(parseSettings({ whatsappTriagem: 'não' }).whatsappTriagem).toBe(true)
+    expect(parseSettingsPatch({ whatsappTriagem: false })).toEqual({ whatsappTriagem: false })
+    expect(() => parseSettingsPatch({ whatsappTriagem: 'sim' })).toThrow()
+    const entry = settingsIndex('Claude').find((row) => row.name === 'Triagem do WhatsApp por agente')
+    expect(entry).toMatchObject({ tab: 'claude', section: 'Chat e resumo' })
+    expect(entry?.description).toBe('O agente de triagem das Automações etiqueta cada conversa que recebe mensagem (urgente, pessoal, profissional). Só grava etiquetas no seu Mac; nunca envia nem apaga.')
+  })
+
   it('Funil de vendas pelo renderer (contrato 109, CA2): dias inteiros de 1 a 90, os três campos juntos', () => {
     const funil = { detectarNasReunioes: true, avisarEsfriadas: true }
     expect(() => parseSettingsPatch({ funil: { ...funil, diasEsfriar: 0 } })).toThrow()
@@ -687,6 +703,7 @@ describe('store de configurações (CA2)', () => {
   it('sem arquivo valem os padrões e nada é criado', async () => {
     const store = createFileSettingsStore({ dir })
     expect(await store.get()).toEqual(DEFAULT_SETTINGS)
+    expect((await store.get()).whatsappTriagem).toBe(true)
     expect(readdirSync(dir)).toEqual([])
   })
 
