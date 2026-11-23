@@ -239,7 +239,7 @@ describe('cartões: só com o clique, uma vez só (CA3, CA5)', () => {
   it('os canais novos (chat-action-*) são recusados com o app bloqueado', () => {
     const channels = INVOKE_CHANNELS.filter((channel) => channel.startsWith('scribe:chat-action-'))
     // Contrato 78: o evento no Calendário e alterar ou apagar um lembrete. Contrato 76: o rascunho do Instagram.
-    // Contrato 117: os cartões do funil, num canal só. Contrato 127: os das tarefas, também.
+    // Contrato 117: os cartões do funil, num canal só. Contrato 127: os das tarefas, também. Contrato 163: os da triagem.
     expect(channels.sort()).toEqual([
       'scribe:chat-action-event',
       'scribe:chat-action-funil',
@@ -248,6 +248,7 @@ describe('cartões: só com o clique, uma vez só (CA3, CA5)', () => {
       'scribe:chat-action-reminder-change',
       'scribe:chat-action-state',
       'scribe:chat-action-tarefa',
+      'scribe:chat-action-triagem',
     ])
     for (const channel of channels) expect(WHEN_LOCKED[channel]).toBe('refused')
     // Nenhum caminho novo de envio: o WhatsApp continua só com o `whatsapp-send` e, no contrato 39, o anexo pelo mesmo
@@ -1556,5 +1557,22 @@ describe('contrato 127: os cartões das tarefas', () => {
     for (const tipo of ['tarefa-criar', 'tarefa-concluir', 'tarefa-adiar']) expect(prompt).toContain(`"${tipo}" com`)
     expect(prompt).not.toMatch(/"tarefa"/)
     expect(CHAT_ACTION_KINDS).toEqual(expect.arrayContaining(['tarefa-criar', 'tarefa-concluir', 'tarefa-adiar']))
+  })
+})
+
+describe('contrato 163 (CA8): a triagem do WhatsApp na instrução', () => {
+  it('descreve os dois cartões, Notificações e as abas no "abrir" e a regra de só etiquetar', () => {
+    const prompt = assistantSystemPrompt('all')
+    expect(prompt).toContain('"triagem-agente"')
+    expect(prompt).toContain('"triagem-etiqueta"')
+    expect(prompt).toContain('gravacao, notificacoes, funil')
+    expect(prompt).toContain('no whatsapp, o id da conversa ou uma aba: nao-lidas, urgentes, pessoal ou profissional')
+    expect(prompt).toContain('A triagem só etiqueta')
+    expect(prompt).toContain('para mandar mensagem, continua sendo "whatsapp-resposta"')
+    expect(prompt).toContain('Para "o que está urgente?", leia CONVERSAS-WHATSAPP.md')
+    expect(prompt).toContain('para "o que ficou sem resposta?"')
+    expect(CHAT_ACTION_KINDS).toEqual(expect.arrayContaining(['triagem-agente', 'triagem-etiqueta']))
+    expect(WHEN_LOCKED['scribe:chat-action-triagem']).toBe('refused')
+    expect(INVOKE_CHANNELS).toContain('scribe:chat-action-triagem')
   })
 })

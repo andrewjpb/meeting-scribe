@@ -16,6 +16,8 @@
 // Contrato 149 (CA10): os arquivos de mídia das ferramentas (`media-files.ts`) não são fontes e ficam entre as perguntas;
 // saem os do WhatsApp com a fonte WhatsApp desligada, os do email com a fonte Email desligada e todos com a função de
 // mídia desligada.
+// Contrato 163: o `AUTOMACOES.md` ganha a seção "Triagem do WhatsApp" (o agente, o estado, o gatilho, as triagens do dia e
+// as urgentes de agora), para o modelo responder e propor `triagem-agente`.
 import { randomUUID } from 'node:crypto'
 import { chmod, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -34,6 +36,7 @@ import {
   type ScheduledTask,
 } from '../../shared/automations'
 import type { ChatCalendarAccess } from '../../shared/assistant'
+import type { TriagemStatus } from '../../shared/triagem'
 import { TAREFA_ID_CURTO } from '../../shared/tarefas'
 import { chatSourcesOf, chatWhatsAppModeOf, type ChatScope } from '../../shared/chat'
 import { EMAIL_EXPORT_PREFIX, EMAIL_OVERVIEW_FILE } from '../../shared/email'
@@ -177,6 +180,30 @@ export interface AutomationsSnapshot {
   tasks: readonly ScheduledTask[]
   /** As mais recentes primeiro, com o pedido e a resposta. */
   runs: readonly AutomationRun[]
+  /**
+   * Contrato 163: a triagem do WhatsApp (o estado do motor, as conversas urgentes agora e o gatilho da tarefa; `null`
+   * sem tarefa). Ausente: a seção não sai.
+   */
+  triagem?: { status: TriagemStatus; urgentes: number; esperaSeg: number | null; grupos: boolean | null } | undefined
+}
+
+const TRIAGEM_ESTADOS: Readonly<Record<NonNullable<TriagemStatus['motivo']>, string>> = { 'sem-agente': 'sem agente', desligado: 'desligada nas Configurações', pausado: 'pausado' }
+
+/** Contrato 163: a seção "Triagem do WhatsApp" do `AUTOMACOES.md`. */
+function triagemLines(triagem: NonNullable<AutomationsSnapshot['triagem']>): string[] {
+  const { status } = triagem
+  return [
+    '',
+    '## Triagem do WhatsApp',
+    '',
+    `- agente: ${status.agenteNome ? oneLine(status.agenteNome) : 'nenhum'}`,
+    `- estado: ${status.motivo === null ? 'ativo' : TRIAGEM_ESTADOS[status.motivo]}`,
+    `- espera: ${triagem.esperaSeg === null ? '—' : `${triagem.esperaSeg} s depois da última mensagem`} · grupos: ${triagem.grupos === null ? '—' : triagem.grupos ? 'sim' : 'não'}`,
+    `- triagens hoje: ${status.hoje} de ${status.teto}`,
+    `- urgentes agora: ${triagem.urgentes}`,
+    '',
+    'A triagem só etiqueta as conversas (urgente; pessoal ou profissional); a etiqueta de cada uma está em CONVERSAS-WHATSAPP.md. Para criar ou mudar o agente, proponha `triagem-agente`.',
+  ]
 }
 
 /** `AUTOMACOES.md`: agentes, tarefas (próxima e última execução, estado) e as últimas 20 execuções. */
@@ -232,6 +259,7 @@ export function automationsMarkdown(snapshot: AutomationsSnapshot, timeZone: str
           return parts.filter(Boolean).join(' · ')
         })
       : ['Nenhuma execução.']),
+    ...(snapshot.triagem ? triagemLines(snapshot.triagem) : []),
   ]
   return `${lines.join('\n')}\n`
 }
@@ -421,6 +449,7 @@ export interface AssistantSourcesDeps {
   automations: () => Promise<AutomationsSnapshot>
   /** Só leitura: as conversas recentes ou as escolhidas (contrato 24). */
   whatsapp?: {
+    /** Contrato 163: o `CONVERSAS-WHATSAPP.md` com as etiquetas da triagem (quem monta passa o store dela). */
     exportRecent(folder: string): Promise<string[]>
     exportChats(folder: string, chatIds: readonly string[], days: number): Promise<string[]>
   }
