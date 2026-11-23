@@ -117,6 +117,17 @@ Uma lista só, guardada no seu Mac, com o que sai das reuniões, das oportunidad
 - **Configurações › Geral › Tarefas**: "Hora do lembrete" (padrão 09:00), "Lembrar no prazo", "Aviso diário Hoje" e "Sugerir tarefas das reuniões".
 - **Onde ficam os dados**: num arquivo só, `tarefas.json`, na pasta de dados do app, só neste Mac, com uma cópia por dia dos últimos 7 dias. Na primeira abertura desta versão, o app leva para a lista, uma única vez, o próximo passo de cada oportunidade aberta e os lembretes ainda por vir, e guarda antes uma cópia do funil e das Automações (`funil.json.bak-tarefas-<dia>` e `schedules.json.bak-tarefas-<dia>`).
 
+### Início: o seu dia numa tela
+
+A primeira tela da barra lateral e a que aparece ao abrir o app: o que tem na agenda, o que vence hoje e o que ficou sem resposta, num lugar só. **Só mostra**: toda ação é um clique seu (concluir uma tarefa, abrir uma tela, começar a transcrição), e nada é enviado, aceito ou mudado a partir dela.
+
+- **Agenda de hoje**: os eventos do dia das agendas Google e Microsoft conectadas e do **Calendário do Mac**, numa linha do tempo com "livre até" entre eles e a marca "agora". O mesmo evento em duas agendas aparece uma vez só, com as duas etiquetas. O evento em andamento ganha **Transcrever** (o mesmo do aviso da agenda) e o já gravado, o link para a reunião. No pé, "Amanhã: N eventos". O Início nunca cria, edita ou apaga evento. Sem o acesso ao Calendário do Mac, a linha "Calendário do Mac sem acesso — conceder" pede o acesso ao macOS.
+- **Tarefas**: as vencidas em destaque e até 6 de hoje, com a caixa de concluir.
+- **Pendências**, só quando há: conversas do WhatsApp sem resposta, convites da agenda sem resposta e os emails da pasta Pendentes.
+- **Última reunião** (com a primeira frase do resumo) e **Automações** (a próxima execução e o aviso quando a última falhou).
+- Só lê o que você já conectou: nenhuma rede nova, nada guardado além da preferência. Fonte desligada não aparece.
+- **Configurações › Geral › Início**: a tela inicial (Início ou Reuniões) e quais blocos aparecem.
+
 ### Redes: Instagram
 
 - **Conta por token**: em Configurações › Contas › Instagram, cole o token de acesso gerado no painel da Meta (app do tipo Business com o produto Instagram, a sua conta como testadora). Vale para conta profissional (Business ou Creator), sem Página do Facebook e sem login de terceiros. O app confere o token, mostra a conta (tipo, seguidores, validade) e renova o token sozinho antes dos 60 dias. Dá para conectar mais de uma conta.
