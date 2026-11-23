@@ -71,7 +71,7 @@ import { createFunilService, type FunilService } from './funil/service'
 import { createFunilStore } from './funil/store'
 import { registerTarefasIpc } from './tarefas/ipc'
 import { registerInicioIpc } from './inicio/ipc'
-import { createInicioService, createMacDay, type InicioService } from './inicio/service'
+import { createInicioService, createMacDay, inicioNoDesbloqueio, type InicioService } from './inicio/service'
 import { createAvisoHoje } from './tarefas/hoje'
 import { avisoMostrado, createDestinoPendente } from './tarefas/lembretes'
 import { tarefasMarkdown } from './tarefas/markdown'
@@ -259,6 +259,8 @@ let loginItemApplied: boolean | null = null
 const destinoTarefa = createDestinoPendente()
 /** Contrato 122: o serviço das tarefas, para reemitir a view ao desbloquear (o tick do dia pode ter rodado bloqueado). */
 let tarefasService: TarefasService | null = null
+/** Contrato 145 (D5): o `inicioChanged` do `createServices`, para o desbloqueio reler o Início. */
+let inicioChangedRef: ((opcoes?: { forcar?: boolean }) => void) | null = null
 
 /**
  * ⌘W ou ⌘Q com gravação em andamento: diálogo nativo. Bloqueado, só "Cancelar"; desbloqueado, também
@@ -338,6 +340,8 @@ function applyLockStatus(status: LockStatus): void {
       (error: unknown) => console.error('[tarefas] view ao desbloquear:', error instanceof Error ? error.message : String(error)),
     )
   }
+  // Contrato 145 (D5): o que chegou durante o bloqueio aparece no Início (uma releitura, só na passagem para desbloqueado).
+  inicioNoDesbloqueio(wasLocked, status.locked, () => inicioChangedRef?.({ forcar: true }))
 }
 
 /** "Bloquear" pelo menu ou ⌘⇧L, pelo `powerMonitor` ou por falta de uso; só bloqueia com senha ou Touch ID. */
@@ -1231,9 +1235,10 @@ function createAppServices(userData: string): AppServices {
   mcpRef.current = mcp
   // Contrato 134: a tela Início nasce depois da agenda; o WhatsApp, o email e a agenda avisam por aqui (bloqueado, nada).
   const inicioRef: { current: InicioService | null } = { current: null }
-  const inicioChanged = (): void => {
-    if (!lockService?.isLocked()) inicioRef.current?.changed()
+  const inicioChanged = (opcoes?: { forcar?: boolean }): void => {
+    if (!lockService?.isLocked()) inicioRef.current?.changed(opcoes?.forcar === true ? { forcar: true } : undefined)
   }
+  inicioChangedRef = inicioChanged
   const inicioMacRead = (): void => {
     if (!lockService?.isLocked()) inicioRef.current?.macRead()
   }
@@ -1506,6 +1511,7 @@ function createAppServices(userData: string): AppServices {
       agentPresence: (chatId, state) => whatsapp.agentPresence(chatId, state),
       clickSend: (senderId, request, onText) => whatsapp.send(senderId, request, onText),
       ownerName: () => whatsapp.status().me?.name ?? null,
+      transcript: (chatId, messageId) => whatsapp.savedTranscript(chatId, messageId),
     },
     authority: createAgentSendAuthority(),
     reply: async (input, signal) => {
@@ -1540,6 +1546,7 @@ function createAppServices(userData: string): AppServices {
     locate: () => claude.locate(),
     chat: (chatId) => whatsapp.findChat(chatId),
     messages: (chatId, max) => whatsapp.lastMessages(chatId, max),
+    transcript: (chatId, messageId) => whatsapp.savedTranscript(chatId, messageId),
     enabled: async () => (await settings.get()).whatsappInsights,
     spawn: smokeClaude?.spawnSummary ?? nodeSpawnSummary,
     openAcp,
@@ -1971,6 +1978,7 @@ function createAppServices(userData: string): AppServices {
     meetings,
     whatsapp,
     email,
+    pendencias: async () => (await settings.get()).inicio.blocos.pendencias,
     profiles: () => [google.status().profile, microsoft.status().profile],
     timeZone,
     onChange: (view) => {
