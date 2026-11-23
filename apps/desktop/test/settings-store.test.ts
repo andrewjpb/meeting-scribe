@@ -68,6 +68,7 @@ describe('esquema de configurações (CA1)', () => {
       funil: { detectarNasReunioes: true, diasEsfriar: 7, avisarEsfriadas: true },
       tarefas: { horaLembrete: '09:00', lembrarNoPrazo: true, avisoDiario: true, sugerirDasReunioes: true },
       inicio: { telaInicial: 'inicio', blocos: { agenda: true, tarefas: true, pendencias: true, ultimaReuniao: true, automacoes: true } },
+      assistant: { media: true },
     })
     expect(parseSettings(undefined)).toEqual(DEFAULT_SETTINGS)
     expect(parseSettings({})).toEqual(DEFAULT_SETTINGS)
@@ -145,6 +146,7 @@ describe('esquema de configurações (CA1)', () => {
       funil: { detectarNasReunioes: true, diasEsfriar: 7, avisarEsfriadas: true },
       tarefas: { horaLembrete: '07:45', lembrarNoPrazo: false, avisoDiario: true, sugerirDasReunioes: false },
       inicio: { telaInicial: 'reunioes', blocos: { agenda: true, tarefas: false, pendencias: true, ultimaReuniao: false, automacoes: true } },
+      assistant: { media: false },
     }
     expect(parseSettings(saved)).toEqual(saved)
     // 73: comentários
@@ -191,7 +193,7 @@ describe('esquema de configurações (CA1)', () => {
   it('Claude CLI (contrato 05, CA1): motor, modelo e caminho com padrão próprio cada um', () => {
     // `settings.json` do contrato 04, sem os campos novos: carrega com os padrões deles e mantém o resto.
     const old = { translationEnabled: false, translationModel: 'gpt-oss-120b', sourceLanguage: 'es', targetLanguage: 'ja', echoCancellation: true, theme: 'dark', micDeviceId: null }
-    expect(parseSettings(old)).toEqual({ ...old, removeEcho: true, translationEngine: 'assemblyai', claudeModel: 'haiku', chatModel: 'sonnet', claudePath: null, claudeTransport: 'acp', agentProfile: 'claude', saveToFolder: true, audioFolder: null, summarizeOnStop: true, liveCards: false, whatsappInsights: true, whatsappAutoCorrect: false, whatsappNotifications: true, whatsappNotifyGroups: true, whatsappTypingSignal: false, identifySpeakers: false, meetSpeakers: true, meetingPrompt: true, navegadorPlugin: false, brandName: null, brandSubtitle: null, brandLogo: null, autoCheckUpdates: true, lockUseTouchId: false, lockAfterMinutes: 0, lockOnSystemLock: true, lockOnLaunch: false, saveToDrive: true, closeBehavior: 'tray', openAtLogin: false, scheduledRunsDailyLimit: 50, calendarAlerts: true, calendarLeadMinutes: 5, calendarNotRecordingAlert: true, calendarIds: { google: null, microsoft: null }, emailPollMinutes: 5, emailNotifications: true, emailCollapsed: [], emailFoldersCollapsed: [], emailRecentFolders: {}, inviteCalendarId: null, inviteAddOnAccept: true, inviteSuggest: false, claudeConnectors: {}, redesPollMinutes: 5, funil: { detectarNasReunioes: true, diasEsfriar: 7, avisarEsfriadas: true }, tarefas: { horaLembrete: '09:00', lembrarNoPrazo: true, avisoDiario: true, sugerirDasReunioes: true }, inicio: { telaInicial: 'inicio', blocos: { agenda: true, tarefas: true, pendencias: true, ultimaReuniao: true, automacoes: true } } })
+    expect(parseSettings(old)).toEqual({ ...old, removeEcho: true, translationEngine: 'assemblyai', claudeModel: 'haiku', chatModel: 'sonnet', claudePath: null, claudeTransport: 'acp', agentProfile: 'claude', saveToFolder: true, audioFolder: null, summarizeOnStop: true, liveCards: false, whatsappInsights: true, whatsappAutoCorrect: false, whatsappNotifications: true, whatsappNotifyGroups: true, whatsappTypingSignal: false, identifySpeakers: false, meetSpeakers: true, meetingPrompt: true, navegadorPlugin: false, brandName: null, brandSubtitle: null, brandLogo: null, autoCheckUpdates: true, lockUseTouchId: false, lockAfterMinutes: 0, lockOnSystemLock: true, lockOnLaunch: false, saveToDrive: true, closeBehavior: 'tray', openAtLogin: false, scheduledRunsDailyLimit: 50, calendarAlerts: true, calendarLeadMinutes: 5, calendarNotRecordingAlert: true, calendarIds: { google: null, microsoft: null }, emailPollMinutes: 5, emailNotifications: true, emailCollapsed: [], emailFoldersCollapsed: [], emailRecentFolders: {}, inviteCalendarId: null, inviteAddOnAccept: true, inviteSuggest: false, claudeConnectors: {}, redesPollMinutes: 5, funil: { detectarNasReunioes: true, diasEsfriar: 7, avisarEsfriadas: true }, tarefas: { horaLembrete: '09:00', lembrarNoPrazo: true, avisoDiario: true, sugerirDasReunioes: true }, inicio: { telaInicial: 'inicio', blocos: { agenda: true, tarefas: true, pendencias: true, ultimaReuniao: true, automacoes: true } }, assistant: { media: true } })
     expect(parseSettings({ translationEngine: 'claude-cli', claudeModel: 'sonnet' })).toMatchObject({ translationEngine: 'claude-cli', claudeModel: 'sonnet' })
     // Fora da lista cai no padrão: só `haiku` e `sonnet`, só os dois motores.
     expect(parseSettings({ translationEngine: 'openai' }).translationEngine).toBe('assemblyai')
@@ -489,6 +491,24 @@ describe('esquema de configurações (CA1)', () => {
     expect(() => parseSettingsPatch({ inicio: null })).toThrow()
     // Recusa o pedido inteiro, não só o campo.
     expect(() => parseSettingsPatch({ theme: 'dark', inicio: { ...inicio, telaInicial: 'x' } })).toThrow()
+  })
+
+  it('mídia do Assistente (contrato 149, R8): padrão ligado; arquivo de antes ganha o padrão; lixo volta ao padrão; pelo renderer, o objeto inteiro', () => {
+    expect(DEFAULT_SETTINGS.assistant).toEqual({ media: true })
+    expect(Object.isFrozen(DEFAULT_SETTINGS.assistant)).toBe(true)
+    // Migração: quem já tem configurações salvas (sem o campo) fica com a função ligada.
+    const old = { ...DEFAULT_SETTINGS, theme: 'dark' } as Record<string, unknown>
+    delete old['assistant']
+    expect(parseSettings(old)).toEqual({ ...DEFAULT_SETTINGS, theme: 'dark' })
+    expect(parseSettings({ assistant: { media: false } }).assistant).toEqual({ media: false })
+    expect(parseSettings({ assistant: { media: 'não' } }).assistant).toEqual({ media: true })
+    expect(parseSettings({ assistant: null }).assistant).toEqual({ media: true })
+    expect(parseSettings({ assistant: { media: false, extra: 1 } }).assistant).toEqual({ media: false })
+    expect(parseSettingsPatch({ assistant: { media: false } })).toEqual({ assistant: { media: false } })
+    expect(applySettingsPatch(DEFAULT_SETTINGS, parseSettingsPatch({ assistant: { media: false } })).assistant).toEqual({ media: false })
+    expect(() => parseSettingsPatch({ assistant: { media: 'sim' } })).toThrow()
+    expect(() => parseSettingsPatch({ assistant: {} })).toThrow()
+    expect(() => parseSettingsPatch({ assistant: { media: true, extra: 1 } })).toThrow()
   })
 
   it('Funil de vendas pelo renderer (contrato 109, CA2): dias inteiros de 1 a 90, os três campos juntos', () => {

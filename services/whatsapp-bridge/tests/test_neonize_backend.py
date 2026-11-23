@@ -396,6 +396,27 @@ def test_media_messages_keep_the_serialized_message_and_audio_seconds(fake_neoni
     assert bridge.messages[-1][0]['mediaProto'] == b'serializada:imageMessage'
 
 
+def test_document_with_caption_is_a_document_with_the_caption_and_the_download_key(fake_neonize, tmp_path):
+    # Contrato 149: o documento enviado com legenda chega embrulhado; vira documento, a legenda é o texto e a mensagem de
+    # dentro (a que o `download_any` reconhece) é a guardada. Ao vivo e do histórico.
+    _, bridge, client = started(tmp_path)
+    source = Obj(Chat=jid('5511922220000', 's.whatsapp.net'), Sender=jid('5511922220000', 's.whatsapp.net'), IsFromMe=False, IsGroup=False)
+    document = Obj(caption='Segue o contrato assinado', mimetype='application/pdf', fileLength=2048, fileName='contrato.pdf', title='')
+    wrapped = Proto(conversation='', documentWithCaptionMessage=Obj(message=Proto(documentMessage=document)))
+    assert media_of(wrapped) == ('document', 'Segue o contrato assinado', {'kind': 'document', 'mime': 'application/pdf', 'size': 2048, 'name': 'contrato.pdf'})
+    client.handlers['MessageEv'](client, Obj(Info=Obj(MessageSource=source, ID='DOC2', Pushname='Bruno', Timestamp=1), Message=wrapped))
+    message = bridge.messages[-1][0]
+    assert (message['type'], message['text']) == ('document', 'Segue o contrato assinado')
+    assert message['mediaProto'] == b'serializada:documentMessage'
+    web = Obj(key=Obj(ID='H10', fromMe=False, participant=''), message=wrapped, messageTimestamp=1, pushName='Bruno', participant='')
+    conversation = Obj(ID='5511922220000@s.whatsapp.net', name='Bruno', displayName='', messages=[Obj(message=web)])
+    client.handlers['HistorySyncEv'](client, Obj(Data=Obj(conversations=[conversation])))
+    assert bridge.messages[-1][0]['type'] == 'document' and bridge.messages[-1][0]['mediaProto'] == b'serializada:documentMessage'
+    # O embrulho sem documento dentro fica como estava (outro tipo), sem chave.
+    empty = Proto(conversation='', documentWithCaptionMessage=Obj(message=Proto(conversation='')))
+    assert media_of(empty)[0] == 'other'
+
+
 @pytest.fixture()
 def fake_download(monkeypatch, fake_neonize):
     """`neonize.exc.DownloadError` e o `waE2E.Message` com `FromString`, sem neonize."""

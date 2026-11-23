@@ -14,7 +14,8 @@ import { EMAIL_BATCHES_MAX, type EmailBatch, type EmailOrganizeEvent } from '../
 import { DEFAULT_SETTINGS } from '../src/shared/settings-defaults'
 import { markEmailBatchCard } from '../src/main/chat/actions'
 import { createChatCorpus } from '../src/main/chat/corpus'
-import { createChatService } from '../src/main/chat/service'
+import { createMediaBudget, mediaFileName } from '../src/main/chat/media-files'
+import { createChatService, MEDIA_ACTION_REFUSAL } from '../src/main/chat/service'
 import { EMAIL_CONVERSATIONS_FILE, EMAIL_FOLDERS_FILE, EMAIL_MOVE_FILE } from '../src/main/chat/sources'
 import { createFileChatStore } from '../src/main/chat/store'
 import { toolsInstructions, type AssistantTool, type ToolContext, type ToolResult } from '../src/main/chat/tools'
@@ -30,6 +31,7 @@ import { createFileSummaryStore } from '../src/main/meetings/summaries'
 import { createFileTranscriptStore } from '../src/main/meetings/transcripts'
 import type { SafeStorageLike } from '../src/main/secrets'
 import { createFileSettingsStore } from '../src/main/settings/store'
+import { createWhatsAppMediaTools } from '../src/main/whatsapp/assistant-tools'
 
 const fakeSafeStorage: SafeStorageLike = {
   isEncryptionAvailable: () => true,
@@ -577,6 +579,10 @@ class FakeChild implements ClaudeChild {
     for (const line of [{ type: 'stream_event', event: { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text } } }, { type: 'result', subtype: 'success', is_error: false, result: text, total_cost_usd: 0 }])
       for (const listener of this.dataListeners) listener(`${JSON.stringify(line)}\n`)
   }
+  /** Contrato 149: uma linha qualquer do `stream-json` (o `Read` da IA num arquivo da pasta). */
+  emit(line: Record<string, unknown>): void {
+    for (const listener of this.dataListeners) listener(`${JSON.stringify(line)}\n`)
+  }
 }
 
 const block = (json: Record<string, unknown>): string => `Vou seguir.\n\n\`\`\`lap-ferramenta\n${JSON.stringify(json)}\n\`\`\``
@@ -830,5 +836,84 @@ describe('devolução da revisão (M1, M2, M3, M5, M6)', () => {
     await h.run('mover_emails', { destino: 'Resolvidos', assuntos: [topic([refs[0] as string], 'primeira, movida'), topic([refs[1] as string], 'segunda')] }, context)
     await h.tools.organizer?.endTurn(context, 'done')
     expect(h.batches()[0]?.topics.map((item) => item.motivo)).toEqual(['primeira, movida', 'segunda'])
+  })
+})
+
+describe('mídia no turno (contrato 149, CA13)', () => {
+  const PNG_BYTES = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(16, 1)])
+  const CHAT = '5511922220000@s.whatsapp.net'
+
+  /** As ferramentas de verdade do email (leitura e organizar) e a de ver mídia do WhatsApp, com o serviço falso. */
+  async function harness() {
+    const h = await setup({ fake: { folders: [{ path: 'Resolvidos' }] } })
+    await h.run('buscar_emails', { assunto: 'Contrato de parceria' }, null)
+    const ref = /ref: (em-[0-9a-f]{12}) .*pasta Arquivo/.exec(readFileSync(join(h.folder, 'BUSCA-EMAILS.md'), 'utf8'))?.[1] ?? ''
+    const downloads: string[] = []
+    const media = createWhatsAppMediaTools({
+      exported: () => Promise.resolve({ chatName: 'Bruno Lima', media: { kind: 'image', mime: 'image/png', size: PNG_BYTES.byteLength, seconds: null, name: null, downloadable: true, author: 'Bruno Lima', at: NOW } }),
+      media: (chatId, messageId) => (downloads.push(`${chatId}/${messageId}`), Promise.resolve({ ok: true, mime: 'image/png', bytes: PNG_BYTES })),
+      savedTranscript: () => Promise.resolve(null),
+      transcribe: () => Promise.resolve({ ok: false, error: 'failed' }),
+      locked: () => false,
+      account: () => '+5511900000000',
+      enabled: () => Promise.resolve(true),
+      budget: createMediaBudget(),
+    })
+    const dir = mkdtempSync(join(tmpdir(), 'scribe-midia-acao-'))
+    cleanups.push(() => rmSync(dir, { recursive: true, force: true }))
+    const chat = chatHarness(dir, () => [...h.tools.tools, ...h.tools.organizeTools, ...media])
+    const move = block({ ferramenta: 'mover_emails', destino: 'Resolvidos', assuntos: [{ emails: [ref], assunto: 'Contrato de parceria', veredito: 'resolvido', motivo: 'assinado', evidencia: 'contrato assinado' }] })
+    return { h, chat, move, downloads, dir }
+  }
+
+  it('depois de ver_midia_whatsapp, mover_emails é recusado com a nota e nada se move; as de leitura seguem', async () => {
+    const { h, chat, move, downloads } = await harness()
+    const sent = (await chat.service.send({ chatId: null, meetingId: null, text: 'veja o print do Bruno e organize meus emails' })) as { chat: Chat }
+    const proc = await chat.child()
+    await chat.written(1)
+    proc.answer(block({ ferramenta: 'ver_midia_whatsapp', conversa: CHAT, midia: 'm8' }))
+    await chat.written(2)
+    proc.answer(move)
+    await chat.written(3)
+    expect(proc.written[2]).toContain(MEDIA_ACTION_REFUSAL)
+    // Leitura continua depois da mídia.
+    proc.answer(block({ ferramenta: 'buscar_emails', assunto: 'Contrato' }))
+    await chat.written(4)
+    expect(proc.written[3]).toContain('BUSCA-EMAILS.md')
+    proc.answer('Pela imagem, eu moveria o contrato para Resolvidos; confirme numa nova pergunta.')
+    await chat.service.settled(sent.chat.id)
+    expect(downloads).toEqual([`${CHAT}/m8`])
+    expect(h.fake.mailboxes()['Resolvidos']?.uids ?? []).toEqual([])
+    expect(h.batches()).toEqual([])
+    const saved = (await chat.store.get(sent.chat.id))?.messages.at(-1)
+    expect(saved?.steps?.map((step) => step.status)).toEqual(['completed', 'failed', 'completed'])
+  })
+
+  it('sem mídia no turno, mover_emails funciona como antes', async () => {
+    const { h, chat, move } = await harness()
+    const sent = (await chat.service.send({ chatId: null, meetingId: null, text: 'organize meus emails' })) as { chat: Chat }
+    const proc = await chat.child()
+    await chat.written(1)
+    proc.answer(move)
+    await chat.written(2)
+    expect(proc.written[1]).not.toContain(MEDIA_ACTION_REFUSAL)
+    proc.answer('Movi.')
+    await chat.service.settled(sent.chat.id)
+    expect(h.fake.mailboxes()['Resolvidos']?.uids).toHaveLength(1)
+  })
+
+  it('ler um arquivo "Midia - …" que ficou na pasta (sem chamar a ferramenta) também bloqueia o que muda', async () => {
+    const { h, chat, move, downloads } = await harness()
+    const sent = (await chat.service.send({ chatId: null, meetingId: null, text: 'veja de novo o print e organize' })) as { chat: Chat }
+    const proc = await chat.child()
+    await chat.written(1)
+    proc.emit({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 'r1', name: 'Read', input: { file_path: join(proc.options.cwd, mediaFileName('WhatsApp', `${CHAT}\nm8`, 'png')) } }] } })
+    proc.answer(move)
+    await chat.written(2)
+    expect(proc.written[1]).toContain(MEDIA_ACTION_REFUSAL)
+    proc.answer('Confirme numa nova pergunta.')
+    await chat.service.settled(sent.chat.id)
+    expect(downloads).toEqual([])
+    expect(h.fake.mailboxes()['Resolvidos']?.uids ?? []).toEqual([])
   })
 })

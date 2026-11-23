@@ -13,6 +13,9 @@
 // Contrato 127: as tarefas (`TAREFAS.md`, ligada por padrão), com o texto do gerador único do contrato 121 (D21). Os
 // lembretes do `ESTADO.md` passam a ser os das tarefas abertas com aviso (R13), com o id curto, mesmo com a fonte Tarefas
 // desligada; o `AUTOMACOES.md` não lista mais lembretes.
+// Contrato 149 (CA10): os arquivos de mídia das ferramentas (`media-files.ts`) não são fontes e ficam entre as perguntas;
+// saem os do WhatsApp com a fonte WhatsApp desligada, os do email com a fonte Email desligada e todos com a função de
+// mídia desligada.
 import { randomUUID } from 'node:crypto'
 import { chmod, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -36,6 +39,7 @@ import { chatSourcesOf, chatWhatsAppModeOf, type ChatScope } from '../../shared/
 import { EMAIL_EXPORT_PREFIX, EMAIL_OVERVIEW_FILE } from '../../shared/email'
 import { WHATSAPP_DEFAULT_SCOPE_DAYS, WHATSAPP_EXPORT_PREFIX, WHATSAPP_OVERVIEW_FILE } from '../../shared/whatsapp'
 import type { MediaInsights, Publication, PublicationType, RedesAccount, RedesCommentsPayload, RedesMessagesPayload, RedesMetricsState } from '../../shared/redes'
+import { clearMediaFiles } from './media-files'
 
 export const STATE_FILE = 'ESTADO.md'
 export const GUIDE_FILE = 'GUIA-DO-APP.md'
@@ -433,6 +437,8 @@ export interface AssistantSourcesDeps {
    * desligada); `null` com o app bloqueado.
    */
   lembretes?: () => Promise<readonly LembreteDoEstado[] | null>
+  /** Contrato 149: `settings.assistant.media`; desligada, os arquivos de mídia da pasta saem. Sem ela, vale ligada. */
+  media?: () => Promise<boolean>
   log?: (message: string) => void
 }
 
@@ -555,5 +561,13 @@ export async function writeSources(deps: AssistantSourcesDeps, folder: string, s
   }
   const keep = new Set(files)
   for (const name of await readdir(folder).catch(() => [] as string[])) if (isSourceFile(name) && !keep.has(name)) await rm(join(folder, name), { force: true })
+  // Contrato 149 (CA10): a mídia da fonte desligada (ou de todas, com a função de mídia desligada) sai da pasta.
+  // Configuração que não se lê vale como função desligada (como nas ferramentas).
+  const media = deps.media ? await deps.media().catch(() => false) : true
+  if (!media) await clearMediaFiles(folder)
+  else {
+    if (!sources.whatsapp) await clearMediaFiles(folder, 'WhatsApp')
+    if (!sources.email) await clearMediaFiles(folder, 'Email')
+  }
   return { files, whatsapp, email, redes, funil, tarefas }
 }

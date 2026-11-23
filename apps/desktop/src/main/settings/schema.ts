@@ -162,6 +162,11 @@ const lenientInicioSchema = z
   })
   .catch(() => ({ telaInicial: D.inicio.telaInicial, blocos: { ...D.inicio.blocos } }))
 
+/** Contrato 149 (ia-midia, R8): pelo renderer, o objeto inteiro; outro campo recusa o pedido. */
+const assistantPatchSchema = z.object({ media: z.boolean() }).strict()
+/** No arquivo: o arquivo de antes do 149 (sem o campo) ganha o padrão, ligado. */
+const lenientAssistantSchema = z.object({ media: z.boolean().catch(D.assistant.media) }).catch(() => ({ ...D.assistant }))
+
 const lenientSchema = z.object({
   translationEnabled: z.boolean().catch(D.translationEnabled),
   translationModel: modelIdSchema.catch(D.translationModel),
@@ -224,6 +229,7 @@ const lenientSchema = z.object({
   funil: lenientFunilSchema,
   tarefas: lenientTarefasSchema,
   inicio: lenientInicioSchema,
+  assistant: lenientAssistantSchema,
 })
 
 const patchSchema = z
@@ -282,6 +288,7 @@ const patchSchema = z
     funil: funilPatchSchema,
     tarefas: tarefasPatchSchema,
     inicio: inicioPatchSchema,
+    assistant: assistantPatchSchema,
   })
   .partial()
   .strict()

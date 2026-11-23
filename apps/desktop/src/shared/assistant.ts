@@ -23,6 +23,23 @@ import { CAPTION_MAX } from './redes-rules'
 export const ACTION_FENCE = 'lap-acao'
 /** Contrato 45 (CA7): o pedido de uma ferramenta do app (`src/main/chat/tools.ts`): ```lap-ferramenta ... ```. */
 export const TOOL_FENCE = 'lap-ferramenta'
+/**
+ * Contrato 149 (R7): os limites das ferramentas de mídia do Assistente (`ver_midia_whatsapp`, `transcrever_audio_whatsapp`,
+ * `ler_anexo_email`). Por pergunta, até 8 mídias; imagem e PDF até 20 MB; áudio e vídeo até 64 MB e 30 minutos (quando a
+ * duração é conhecida); o texto de um anexo de texto puro é cortado em 20.000 caracteres.
+ */
+export const ASSISTANT_MEDIA_PER_QUESTION_MAX = 8
+export const ASSISTANT_MEDIA_IMAGE_BYTES_MAX = 20 * 1024 * 1024
+export const ASSISTANT_MEDIA_AUDIO_BYTES_MAX = 64 * 1024 * 1024
+export const ASSISTANT_MEDIA_AUDIO_SECONDS_MAX = 30 * 60
+/**
+ * Contrato 149: o teto dos bytes de um áudio do WhatsApp conferido depois do download (a duração e o tamanho declarados vêm
+ * de quem mandou): 16 MB cabem 30 minutos de áudio comprimido do WhatsApp. Vídeo e anexo de email seguem com os 64 MB.
+ */
+export const ASSISTANT_MEDIA_AUDIO_DOWNLOADED_BYTES_MAX = 16 * 1024 * 1024
+export const ASSISTANT_MEDIA_TEXT_CHARS_MAX = 20_000
+/** Contrato 149: os nomes das ferramentas de mídia (só existem com `settings.assistant.media` ligado). */
+export const ASSISTANT_MEDIA_TOOLS = ['ver_midia_whatsapp', 'transcrever_audio_whatsapp', 'ler_anexo_email'] as const
 /** Cartões numa resposta; os blocos a mais viram texto. */
 export const ACTIONS_PER_MESSAGE_MAX = 6
 /** "É esta conversa?": no máximo 3 cartões de resposta no WhatsApp numa resposta. */

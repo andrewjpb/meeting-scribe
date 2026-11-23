@@ -199,6 +199,11 @@ export const WHATSAPP_MEDIA_MAX = 64 * 1024 * 1024
  * documento e figurinha, mas eles ficam fora daqui: a tela ainda não sabe mostrar os dois depois de baixados.
  */
 export const WHATSAPP_DOWNLOADABLE_KINDS = ['image', 'video', 'audio'] as const satisfies readonly WhatsAppMessageType[]
+/**
+ * Contrato 149: o que o Assistente pode pedir ao serviço (ver ou transcrever), com a função "A IA pode abrir imagens e
+ * transcrever áudios" ligada. Outra lista que a da tela: o botão "Baixar" continua só com imagem, vídeo e áudio.
+ */
+export const WHATSAPP_ASSISTANT_MEDIA_KINDS = ['image', 'sticker', 'document', 'audio', 'video'] as const satisfies readonly WhatsAppMessageType[]
 /** Contrato 37: texto da transcrição guardado (o resto é cortado). */
 export const WHATSAPP_TRANSCRIPT_MAX = 20_000
 

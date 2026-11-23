@@ -147,6 +147,8 @@ import { createInviteService, type InviteService } from './invites/service'
 import { createInviteSuggester, createInviteSuggestChannels, type InviteSuggestChannels } from './invites/suggest'
 import { INVITE_ERROR_MESSAGES } from '../shared/invite-state'
 import { createEmailTools } from './email/assistant-tools'
+import { createWhatsAppMediaTools } from './whatsapp/assistant-tools'
+import { createMediaBudget, mediaToolsFor } from './chat/media-files'
 import { emailStateLabel, exportEmail } from './email/export'
 import { readEmailAttachments } from './email/attach'
 import { createEmailNotifier, type EmailNotice } from './email/notify'
@@ -1074,8 +1076,25 @@ function createAppServices(userData: string): AppServices {
   const gateway = createGatewayClient({ fetch: fetchImpl, getApiKey: () => secrets.getApiKey() })
   const fileTranscriber = createFileTranscriber({ fetch: fetchImpl, getApiKey: () => secrets.getApiKey() })
   const mic = createMicPermissions(smokeFixtures ? smokeFixtures.media : process.platform === 'darwin' ? systemPreferences : null)
-  const settings = createFileSettingsStore({ dir: userData, onChange: broadcastSettings })
+  // Contrato 149: a função de mídia do Assistente, guardada aqui para a lista de ferramentas (lida sem esperar a cada
+  // pergunta); as ferramentas conferem de novo no arquivo a cada chamada.
+  // Desligada até a primeira leitura do arquivo (nada de mídia antes de saber o que a pessoa escolheu).
+  let assistantMediaOn = false
+  const settings = createFileSettingsStore({
+    dir: userData,
+    onChange: (next) => {
+      assistantMediaOn = next.assistant.media
+      broadcastSettings(next)
+    },
+  })
   readSettings = () => settings.get()
+  void settings.get().then(
+    (current) => {
+      assistantMediaOn = current.assistant.media
+    },
+    () => undefined,
+  )
+  const assistantMediaEnabled = async (): Promise<boolean> => (await settings.get()).assistant.media
   const meetings = createFileMeetingsStore({ dir: userData })
   const transcripts = createFileTranscriptStore({ dir: userData })
   const summaries = createFileSummaryStore({ dir: userData })
@@ -1366,6 +1385,8 @@ function createAppServices(userData: string): AppServices {
     onAccountRemoved: (accountId) => {
       void emailTools.organizer?.forgetAccount(accountId).catch(() => undefined)
       void invites?.forgetAccount(accountId)
+      // Contrato 149 (CA10): os anexos que o Assistente abriu saem das pastas das conversas.
+      void corpus.dropMedia('Email').catch(() => undefined)
     },
     // Contrato 62 (CA16): o REPLY saiu; a resposta vai para o registro (um caminho só: o `reply` do resultado não é usado).
     onInviteReplied: (event) => void invites?.recordReply(event).catch(() => undefined),
@@ -1610,6 +1631,8 @@ function createAppServices(userData: string): AppServices {
     funil: async () => (lockService?.isLocked() ? null : funilMarkdownText()),
     // Contrato 127 (R27): o `TAREFAS.md` do gerador do contrato 121; bloqueado, nada.
     tarefas: async () => (lockService?.isLocked() ? null : tarefasMarkdownText()),
+    // Contrato 149 (CA10): a função de mídia desligada leva os arquivos de mídia da pasta.
+    media: assistantMediaEnabled,
     // Contrato 127 (R13): os lembretes do `ESTADO.md`, das tarefas abertas com aviso; bloqueado, nenhum.
     lembretes: async () =>
       lockService?.isLocked()
@@ -1622,6 +1645,22 @@ function createAppServices(userData: string): AppServices {
   // Contrato 45: o email do Assistente. O `EMAILS.md` e as mensagens já baixadas saem do cache (sem servidor); as
   // ferramentas `buscar_emails` e `ler_email` (CA7) vão ao servidor IMAP só para leitura. Bloqueado (CA5), nada disso.
   const emailLocked = (): boolean => lockService?.isLocked() ?? false
+  // Contrato 149: o limite de mídias por pergunta, um só para as ferramentas do WhatsApp e do email.
+  const assistantMediaBudget = createMediaBudget()
+  // Contrato 149: as ferramentas de mídia do WhatsApp (ver e transcrever), só do recorte exportado para a pergunta.
+  const whatsappMediaTools = createWhatsAppMediaTools({
+    exported: (folder, chatId, messageId) => whatsapp.exportedMedia(folder, chatId, messageId),
+    media: (chatId, messageId) => whatsapp.media({ chatId, messageId }),
+    savedTranscript: (chatId, messageId) => whatsapp.savedTranscript(chatId, messageId),
+    transcribe: (chatId, messageId) => whatsapp.assistantTranscribe(chatId, messageId),
+    locked: emailLocked,
+    account: () => {
+      const current = whatsapp.status()
+      return current.state === 'connected' ? (current.me?.phone ?? null) : null
+    },
+    enabled: assistantMediaEnabled,
+    budget: assistantMediaBudget,
+  })
   const emailExport = {
     cached: () => email.cached(),
     body: (accountId: string, message: EmailMessage) => email.cachedBody(accountId, message),
@@ -1659,6 +1698,16 @@ function createAppServices(userData: string): AppServices {
         if (saved && !lockService?.isLocked()) broadcast(appWindows(), 'scribe:chat-event', { type: 'done', chatId: saved.id, chat: saved })
       },
       ...devLog,
+    },
+    // Contrato 149: `ler_anexo_email` (o anexo pela posição, a transcrição pela AssemblyAI e o limite da pergunta).
+    media: {
+      attachment: async (found, index) => {
+        const result = await email.attachment({ accountId: found.status.account.id, id: found.message.id, index })
+        return result.ok ? { ok: true, bytes: result.bytes } : result
+      },
+      transcribe: (bytes) => fileTranscriber.transcribe(bytes),
+      enabled: assistantMediaEnabled,
+      budget: assistantMediaBudget,
     },
   })
   // Contrato 56 (CA11): o lote que ficou `running` (o app caiu no meio) vira `stopped`.
@@ -1703,9 +1752,17 @@ function createAppServices(userData: string): AppServices {
       // Contrato 45 (CA7): com conta de email e a fonte ligada, as ferramentas de busca e leitura. Contrato 56: e as de
       // organizar (só aqui, no Assistente interativo; as automações recebem só as de leitura).
       // Contrato 76: com a fonte Redes ligada e uma conta do Instagram, as ferramentas do Instagram.
+      // Contrato 149: com a função de mídia ligada, as de mídia (as do WhatsApp com a fonte WhatsApp, a do anexo com a do
+      // email); desligada, elas não existem e um pedido forjado com esses nomes não acha ferramenta.
       tools: (scope) => [
         ...(chatSourcesOf(scope).email && email.accounts().length > 0 && !emailLocked() ? [...emailTools.tools, ...emailTools.organizeTools] : []),
         ...(chatSourcesOf(scope).redes && redes.state().accounts.length > 0 && !emailLocked() ? redesAssistant.tools : []),
+        ...mediaToolsFor({
+          enabled: assistantMediaOn,
+          locked: emailLocked(),
+          whatsapp: { on: chatSourcesOf(scope).whatsapp && whatsapp.status().state === 'connected', tools: whatsappMediaTools },
+          email: { on: chatSourcesOf(scope).email && email.accounts().length > 0, tools: emailTools.mediaTools },
+        }),
       ],
       endTurn: (turn, outcome) => emailTools.organizer?.endTurn(turn, outcome) ?? Promise.resolve(),
     },
@@ -2679,8 +2736,9 @@ function registerIpc(services: AppServices): void {
   handle('scribe:whatsapp-start', appOrigin, () => whatsapp.start())
   handle('scribe:whatsapp-stop', appOrigin, () => whatsapp.stop())
   handle('scribe:whatsapp-pair', appOrigin, (_event, request) => whatsapp.pair(request))
-  handle('scribe:whatsapp-logout', appOrigin, () => whatsapp.logout())
-  handle('scribe:whatsapp-remove', appOrigin, () => whatsapp.remove())
+  // Contrato 149 (CA10): "Sair" e "Remover" levam também as mídias que o Assistente abriu nas pastas das conversas.
+  handle('scribe:whatsapp-logout', appOrigin, () => whatsapp.logout().finally(() => corpus.dropMedia('WhatsApp').catch(() => undefined)))
+  handle('scribe:whatsapp-remove', appOrigin, () => whatsapp.remove().finally(() => corpus.dropMedia('WhatsApp').catch(() => undefined)))
   handle('scribe:whatsapp-chats', appOrigin, () => whatsapp.chats().catch(() => []))
   // Contrato 40: abrir a conversa zera as não lidas dela; o número do Dock é relido.
   handle('scribe:whatsapp-messages', appOrigin, (_event, request) =>

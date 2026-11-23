@@ -8,7 +8,8 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { WHATSAPP_MEDIA_MAX, WHATSAPP_TRANSCRIPT_MAX } from '../src/shared/whatsapp'
+import { ASSISTANT_MEDIA_AUDIO_DOWNLOADED_BYTES_MAX } from '../src/shared/assistant'
+import { WHATSAPP_ASSISTANT_MEDIA_KINDS, WHATSAPP_DOWNLOADABLE_KINDS, WHATSAPP_MEDIA_MAX, WHATSAPP_TRANSCRIPT_MAX } from '../src/shared/whatsapp'
 import { createVault } from '../src/main/accounts/vault'
 import type { FetchInit, FetchLike, FetchResponse } from '../src/main/assemblyai/gateway'
 import { createFileTranscriber, FileTranscriptError } from '../src/main/assemblyai/transcript'
@@ -116,6 +117,10 @@ describe('cliente: a mídia em bytes (contrato 37)', () => {
       a1: bytes('audio/ogg; codecs=opus', WAV),
       i1: bytes('image/png', PNG),
       html: bytes('text/html', Buffer.from('<script>alert(1)</script>')),
+      fonte: bytes('font/woff2', Buffer.from('wOF2')),
+      pdf: bytes('application/pdf', Buffer.from('%PDF-1.4\n')),
+      docx: bytes('application/vnd.openxmlformats-officedocument.wordprocessingml.document', Buffer.from('PK')),
+      webp: bytes('image/webp', Buffer.from('RIFF\0\0\0\0WEBPVP8 ')),
       vazio: bytes('image/png', Buffer.alloc(0)),
       gone: error(410, 'gone'),
       big: error(413, 'too-big'),
@@ -127,8 +132,14 @@ describe('cliente: a mídia em bytes (contrato 37)', () => {
       expect(Buffer.compare(audio.bytes, WAV)).toBe(0)
       expect(bridge.requests.at(-1)).toBe(`/chats/${encodeURIComponent(ANA)}/messages/a1/media`)
       expect((await client.media(ANA, 'i1')).mime).toBe('image/png')
-      // Só áudio, imagem e vídeo: outro tipo (HTML) nunca passa.
-      await expect(client.media(ANA, 'html')).rejects.toMatchObject({ status: 200, code: 'mime' })
+      // Contrato 149: também o que o serviço devolve para documento e figurinha (`application/*`, `text/*`, `image/webp`,
+      // subtipo até 100). O tipo daqui não decide o que a mídia é: são os bytes (`chat/media-files.ts`).
+      expect((await client.media(ANA, 'pdf')).mime).toBe('application/pdf')
+      expect((await client.media(ANA, 'docx')).mime).toBe('application/vnd.openxmlformats-officedocument.wordprocessingml.document')
+      expect((await client.media(ANA, 'webp')).mime).toBe('image/webp')
+      expect((await client.media(ANA, 'html')).mime).toBe('text/html')
+      // Outra família de tipo nunca passa.
+      await expect(client.media(ANA, 'fonte')).rejects.toMatchObject({ status: 200, code: 'mime' })
       await expect(client.media(ANA, 'vazio')).rejects.toMatchObject({ code: 'empty' })
       await expect(client.media(ANA, 'gone')).rejects.toMatchObject({ status: 410, code: 'gone' })
       await expect(client.media(ANA, 'big')).rejects.toMatchObject({ status: 413, code: 'too-big' })
@@ -343,6 +354,73 @@ describe('serviço: "Transcrever" (contrato 37)', () => {
       // "Remover" leva o arquivo junto.
       await service.remove()
       expect(existsSync(join(root, TRANSCRIPTS_FILE))).toBe(false)
+      await service.dispose()
+    } finally {
+      bridge.server.close()
+    }
+  })
+})
+
+describe('contrato 149: documento e figurinha pelo canal da mídia, e a transcrição do Assistente (CA3, CA15)', () => {
+  const BRUNO = '5511922220000@s.whatsapp.net'
+  const PDF_BYTES = Buffer.from('%PDF-1.4\n%%EOF\n', 'latin1')
+  const WEBP_BYTES = Buffer.concat([Buffer.from('RIFF\x20\0\0\0WEBPVP8 ', 'latin1'), Buffer.alloc(16, 1)])
+
+  it('o PDF (m9) e a figurinha (m10) do Bruno chegam com o tipo certo; a tela continua sem "Baixar" para os dois', async () => {
+    const bridge = await fakeBridge({ m9: bytes('application/pdf', PDF_BYTES), m10: bytes('image/webp', WEBP_BYTES) })
+    const root = tempDir()
+    try {
+      const service = await reattached(bridge.port, root)
+      const pdf = await service.media({ chatId: BRUNO, messageId: 'm9' })
+      expect(pdf.ok && pdf.mime === 'application/pdf' && Buffer.compare(Buffer.from(pdf.bytes), PDF_BYTES) === 0).toBe(true)
+      const sticker = await service.media({ chatId: BRUNO, messageId: 'm10' })
+      expect(sticker.ok && sticker.mime === 'image/webp').toBe(true)
+      expect(bridge.requests).toContain(`/chats/${encodeURIComponent(BRUNO)}/messages/m9/media`)
+      await service.dispose()
+    } finally {
+      bridge.server.close()
+    }
+    // O botão "Baixar" da tela segue a lista de antes; a do Assistente é outra.
+    expect([...WHATSAPP_DOWNLOADABLE_KINDS]).toEqual(['image', 'video', 'audio'])
+    expect([...WHATSAPP_ASSISTANT_MEDIA_KINDS].sort()).toEqual(['audio', 'document', 'image', 'sticker', 'video'])
+  })
+
+  it('assistantTranscribe: a guardada sem rede; a fala do vídeo também transcreve e guarda; o "Transcrever" da tela segue só com áudio', async () => {
+    const bridge = await fakeBridge({ a1: bytes('audio/wav', WAV), v1: bytes('video/mp4', Buffer.concat([Buffer.from('\0\0\0\x18ftypmp42', 'latin1'), Buffer.alloc(16)])) })
+    const root = tempDir()
+    const sent: number[] = []
+    try {
+      const service = await reattached(bridge.port, root, (input) => (sent.push(input.byteLength), Promise.resolve('Fala transcrita')))
+      // O botão da tela recusa o vídeo, como antes.
+      expect(await service.transcribe({ chatId: ANA, messageId: 'v1' })).toEqual({ ok: false, error: 'unavailable' })
+      expect(await service.assistantTranscribe(ANA, 'v1')).toEqual({ ok: true, text: 'Fala transcrita' })
+      expect(await service.savedTranscript(ANA, 'v1')).toBe('Fala transcrita')
+      expect(await service.assistantTranscribe(ANA, 'a1')).toEqual({ ok: true, text: 'Fala transcrita' })
+      const calls = sent.length
+      // Guardada: nenhuma ida à AssemblyAI.
+      expect(await service.assistantTranscribe(ANA, 'a1')).toEqual({ ok: true, text: 'Fala transcrita' })
+      expect(sent).toHaveLength(calls)
+      expect(calls).toBe(2)
+      expect(await service.assistantTranscribe('sem-arroba', 'a1')).toEqual({ ok: false, error: 'unavailable' })
+      await service.dispose()
+    } finally {
+      bridge.server.close()
+    }
+  })
+
+  it('assistantTranscribe confere os bytes do áudio baixado contra o teto dos 30 minutos (16 MB): acima, nada vai à AssemblyAI', async () => {
+    const big = Buffer.concat([WAV, Buffer.alloc(ASSISTANT_MEDIA_AUDIO_DOWNLOADED_BYTES_MAX)])
+    const bridge = await fakeBridge({ grande: bytes('audio/ogg', big) })
+    const root = tempDir()
+    const sent: number[] = []
+    try {
+      const service = await reattached(bridge.port, root, (input) => (sent.push(input.byteLength), Promise.resolve('texto')))
+      expect(await service.assistantTranscribe(ANA, 'grande')).toEqual({ ok: false, error: 'too-big' })
+      expect(sent).toEqual([])
+      expect(await service.savedTranscript(ANA, 'grande')).toBeNull()
+      // O "Transcrever" da tela não muda.
+      expect(await service.transcribe({ chatId: ANA, messageId: 'grande' })).toEqual({ ok: true, text: 'texto' })
+      expect(await service.exportedMedia(root, ANA, 'a1')).toBeNull()
       await service.dispose()
     } finally {
       bridge.server.close()

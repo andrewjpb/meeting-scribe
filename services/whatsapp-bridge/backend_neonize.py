@@ -12,7 +12,9 @@
 # download) e o áudio, a duração; `download_media` reconstrói a mensagem e baixa pelo `download_any` do neonize, só
 # quando a pessoa clica no app. `DownloadError` (endereço expirado, arquivo apagado e também falha passageira, que o
 # whatsmeow não distingue) vira `MediaGone`; o app mostra o aviso e deixa clicar de novo. Contrato 148: documento e
-# figurinha guardam a mensagem serializada do mesmo jeito (o `download_any` do whatsmeow baixa os dois).
+# figurinha guardam a mensagem serializada do mesmo jeito (o `download_any` do whatsmeow baixa os dois). Contrato 149: o
+# documento enviado com legenda (`documentWithCaptionMessage`) é documento, com a legenda como texto e a mensagem de dentro
+# guardada para o download.
 #
 # Contrato 39: `send_media` envia imagem ou vídeo pelo `send_message`; a mensagem montada volta serializada para o eco do
 # serviço baixar depois, como uma recebida. A imagem sai do `build_image_message` do neonize (só bytes locais e o PIL). O
@@ -167,8 +169,20 @@ def contact_name(info):
     return getattr(info, 'FullName', '') or getattr(info, 'FirstName', '') or getattr(info, 'PushName', '') or getattr(info, 'BusinessName', '') or ''
 
 
+def unwrapped(message):
+    """Contrato 149: o documento enviado com legenda chega embrulhado (`documentWithCaptionMessage.message`, com o
+    `documentMessage` dentro): devolve a mensagem de dentro; qualquer outra volta como veio."""
+    if message is None or not _present(message, 'documentWithCaptionMessage'):
+        return message
+    wrapper = message.documentWithCaptionMessage
+    inner = wrapper.message if _present(wrapper, 'message') else None
+    return inner if inner is not None and _present(inner, 'documentMessage') else message
+
+
 def media_of(message):
-    """(tipo, texto, mídia) de uma mensagem do WhatsApp (`waE2E.Message`)."""
+    """(tipo, texto, mídia) de uma mensagem do WhatsApp (`waE2E.Message`). Contrato 149: o documento com legenda é
+    documento, com a legenda como texto."""
+    message = unwrapped(message)
     if message is None:
         return 'other', '', None
     if getattr(message, 'conversation', ''):
@@ -210,6 +224,7 @@ CONTEXT_FIELDS = ('extendedTextMessage', 'imageMessage', 'videoMessage', 'audioM
 
 def reply_of(message):
     """Contrato 34: `(id da citada, trecho)` quando a mensagem responde outra; senão `(None, '')`."""
+    message = unwrapped(message)
     if message is None:
         return None, ''
     for field in CONTEXT_FIELDS:
@@ -256,8 +271,9 @@ def media_proto(kind, message):
 
 
 def with_proto(message, kind, source):
-    """A mensagem do serviço com `mediaProto`, quando há o que baixar."""
-    proto = media_proto(kind, source)
+    """A mensagem do serviço com `mediaProto`, quando há o que baixar. Contrato 149: do documento com legenda, a mensagem
+    de dentro (a que o `download_any` reconhece)."""
+    proto = media_proto(kind, unwrapped(source))
     if proto is not None:
         message['mediaProto'] = bytes(proto)
     return message

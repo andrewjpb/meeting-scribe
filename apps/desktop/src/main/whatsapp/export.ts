@@ -12,6 +12,9 @@
 // ou "indisponível" quando o serviço não guardou as chaves; o áudio já transcrito pelo botão da tela sai com o texto
 // guardado ("[áudio transcrito: "…"]"), lido do `transcripts.json` sem rede. Os outros usos da linha (rascunho,
 // Detalhes, atendimento, resumo de reunião) ganham a transcrição, mas não o id: eles não têm como abrir a mídia.
+//
+// Contrato 149: o cache do export guarda também a conversa e as mídias de cada arquivo; `exportedMedia` é o recorte que as
+// ferramentas de mídia do Assistente conferem (a conversa e a mensagem têm de estar num arquivo da pasta da pergunta).
 import { chmod, readdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
@@ -25,6 +28,7 @@ import {
   WHATSAPP_RECENT_DAYS,
   WHATSAPP_RECENT_MESSAGES_MAX,
   type WhatsAppChat,
+  type WhatsAppMedia,
   type WhatsAppMessage,
 } from '../../shared/whatsapp'
 import type { BridgeClient } from './client'
@@ -175,12 +179,76 @@ export async function recentMessages(client: Pick<BridgeClient, 'messages'>, cha
 /** Conversas lidas ao mesmo tempo do serviço (o `messages()` de cada uma). */
 export const EXPORT_PARALLEL = 4
 
+/** Contrato 149: uma mídia que está num arquivo exportado (o que a ferramenta do Assistente pode pedir). */
+export interface ExportedMedia {
+  kind: WhatsAppMedia['kind']
+  /** O tipo declarado por quem mandou: só orienta (o que a mídia é, decidem os bytes). */
+  mime: string | null
+  size: number | null
+  seconds: number | null
+  /** O nome do documento, como veio: só para a resposta da ferramenta, nunca para nome de arquivo nem log. */
+  name: string | null
+  downloadable: boolean
+  author: string
+  at: number
+}
+
+/** Contrato 149: a conversa e a mídia de um arquivo exportado para a pasta. */
+export interface ExportedChatMedia {
+  chatName: string
+  media: ExportedMedia
+}
+
 /**
  * O que já foi exportado em cada pasta: por arquivo, a chave (a última mensagem, as não lidas, o período e o dia), a
  * parte das mensagens pedida e quantas vieram. Mesma chave, o arquivo lá e o mesmo resultado com a parte de agora (a
- * mesma parte, ou a conversa coube inteira e ainda cabe): a conversa não é lida de novo.
+ * mesma parte, ou a conversa coube inteira e ainda cabe): a conversa não é lida de novo. Contrato 149: e a conversa e as
+ * mídias que o arquivo traz (o recorte que as ferramentas de mídia conferem).
  */
-export type ExportCache = Map<string, Map<string, { key: string; share: number; count: number }>>
+export type ExportCache = Map<string, Map<string, ExportCacheEntry>>
+export interface ExportCacheEntry {
+  key: string
+  share: number
+  count: number
+  chatId?: string | undefined
+  chatName?: string | undefined
+  media?: ReadonlyMap<string, ExportedMedia> | undefined
+}
+
+/** Contrato 149: as mídias das mensagens de um arquivo, por id da mensagem. */
+function exportedMediaOf(messages: readonly WhatsAppMessage[]): Map<string, ExportedMedia> {
+  const found = new Map<string, ExportedMedia>()
+  for (const message of messages) {
+    if (!message.media || !WHATSAPP_MESSAGE_ID_PATTERN.test(message.id)) continue
+    found.set(message.id, {
+      kind: message.media.kind,
+      mime: message.media.mime,
+      size: message.media.size,
+      seconds: message.media.seconds ?? null,
+      name: message.media.name,
+      downloadable: message.media.downloadable !== false,
+      author: message.fromMe ? 'Você' : oneLine(message.author) || 'Contato',
+      at: message.at,
+    })
+  }
+  return found
+}
+
+/**
+ * Contrato 149 (CA5): a mídia de uma conversa, se ela está num arquivo exportado para esta pasta e o arquivo ainda está lá
+ * (o mesmo conjunto que `writeSources` deixou para a pergunta). Fora disso, `null`.
+ */
+export async function exportedMedia(cache: ExportCache, folder: string, chatId: string, messageId: string): Promise<ExportedChatMedia | null> {
+  const known = cache.get(folder)
+  if (!known) return null
+  const present = new Set(await readdir(folder).catch(() => [] as string[]))
+  for (const [file, entry] of known) {
+    if (entry.chatId !== chatId || !present.has(file)) continue
+    const media = entry.media?.get(messageId)
+    if (media) return { chatName: entry.chatName ?? '', media }
+  }
+  return null
+}
 
 /** O que a exportação leu: os arquivos (os de agora, mantidos ou reescritos) e a lista das conversas. */
 export interface ExportResult {
@@ -236,7 +304,7 @@ async function exportSet(
   cache?: ExportCache,
   transcripts?: SavedTranscripts,
 ): Promise<{ files: string[]; read: number }> {
-  const known = cache ? (cache.get(folder) ?? new Map<string, { key: string; share: number; count: number }>()) : null
+  const known = cache ? (cache.get(folder) ?? new Map<string, ExportCacheEntry>()) : null
   if (cache && known) cache.set(folder, known)
   const present = new Set(await readdir(folder).catch(() => [] as string[]))
   let read = 0
@@ -250,7 +318,7 @@ async function exportSet(
     const messages = await recentMessages(client, chat.id, now - days * DAY_MS, share, now + 1)
     read++
     await writeFileAtomic(join(folder, name), chatMarkdown(chat, messages, days, await savedTranscripts(messages, transcripts)))
-    known?.set(name, { key, share, count: messages.length })
+    known?.set(name, { key, share, count: messages.length, chatId: chat.id, chatName: chat.name, media: exportedMediaOf(messages) })
     return name
   })
   return { files, read }

@@ -14,8 +14,13 @@
 // contexto do turno (a conversa, o pedido e o sinal do "Parar"); a que muda o email (`changes`) recusa sem ele. O turno
 // que usa uma ferramenta com `rounds` passa a ter até essas rodadas; as com o mesmo `stepId` viram um passo só na tela;
 // e o cartão que o main monta (`actions`) entra no fim da resposta, nunca pelo texto do modelo.
+//
+// Contrato 149: as ferramentas de mídia (`media`), só com a função de mídia ligada: cada uma leva o turno até
+// `rounds` (a 9ª mídia da pergunta é recusada pela própria ferramenta), não entra na frase das rodadas de organizar o email
+// e traz para a instrução como e quando pedir mídia (`mediaToolsInstructions`).
 import { z } from 'zod'
 import { TOOL_FENCE, type ChatAction } from '../../shared/assistant'
+import { mediaToolsInstructions } from '../claude-cli/chat'
 
 export { TOOL_FENCE } from '../../shared/assistant'
 /** Rodadas de ferramenta numa pergunta; a 5ª fica como texto. */
@@ -64,6 +69,8 @@ export interface AssistantTool {
    * lista ("uma que cria um rascunho no Instagram, sem publicar").
    */
   creates?: string | undefined
+  /** Contrato 149: ferramenta de mídia (abre imagem, PDF ou anexo, ou transcreve áudio). Só leitura. */
+  media?: boolean | undefined
 }
 
 /** O bloco ```lap-ferramenta … ``` numa linha própria. */
@@ -119,7 +126,8 @@ export function toolsInstructions(tools: readonly AssistantTool[], options: { ro
         : 'só de leitura'
   const kind = `${reading}${creating.map((phrase) => `, e ${phrase}`).join('')}`
   const result = options.sends ? 'O app roda a ferramenta e devolve o resultado (o nome de um arquivo da pasta para ler, ou uma linha dizendo se o envio saiu ou foi recusado); aí você continua.' : 'O app roda a ferramenta, grava o resultado num arquivo da pasta e devolve o nome dele; aí você lê o arquivo e responde.'
-  const longer = Math.max(0, ...tools.map((tool) => tool.rounds ?? 0))
+  // Contrato 149: as rodadas a mais das ferramentas de mídia são para as mídias da pergunta, não para organizar o email.
+  const longer = Math.max(0, ...tools.filter((tool) => !tool.media).map((tool) => tool.rounds ?? 0))
   const rounds = options.rounds ?? TOOL_ROUNDS_MAX
   const limit = longer > rounds ? `Até ${rounds} ferramentas por pergunta (até ${longer} quando a pessoa pediu para organizar o email).` : `Até ${rounds} ferramentas por pergunta.`
   return [
@@ -130,5 +138,10 @@ export function toolsInstructions(tools: readonly AssistantTool[], options: { ro
         ]
       : []),
     ...tools.map((tool) => `- ${tool.name}: ${tool.describe}`),
+    // Contrato 149 (CA11): só com as ferramentas de mídia na conversa.
+    ...mediaToolsInstructions({
+      whatsapp: tools.some((tool) => tool.media && tool.name.endsWith('_whatsapp')),
+      email: tools.some((tool) => tool.media && tool.name.endsWith('_email')),
+    }),
   ]
 }

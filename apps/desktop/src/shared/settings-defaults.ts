@@ -81,6 +81,14 @@ export interface InicioSettings {
   /** Cada bloco da tela Início; desligado, não aparece. */
   blocos: { agenda: boolean; tarefas: boolean; pendencias: boolean; ultimaReuniao: boolean; automacoes: boolean }
 }
+/** Contrato 149 (ia-midia, R8): o que o Assistente pode fazer além de ler os arquivos da pasta. */
+export interface AssistantSettings {
+  /**
+   * "A IA pode abrir imagens e transcrever áudios" (padrão ligado): o Assistente ganha as ferramentas de mídia do WhatsApp
+   * e do email. Desligado, elas não existem e nada é baixado nem transcrito pela IA.
+   */
+  media: boolean
+}
 /** Agendas lidas de cada conta (contrato 12); `null` é só a principal. */
 export interface CalendarSelection {
   google: string[] | null
@@ -250,6 +258,8 @@ export interface AppSettings {
   tarefas: TarefasSettings
   /** Contrato 133: a tela inicial e os blocos da tela Início (Configurações › Geral). */
   inicio: InicioSettings
+  /** Contrato 149: as ferramentas de mídia do Assistente. */
+  assistant: AssistantSettings
 }
 
 /**
@@ -322,6 +332,7 @@ export const DEFAULT_SETTINGS: Readonly<AppSettings> = Object.freeze({
     telaInicial: 'inicio',
     blocos: Object.freeze({ agenda: true, tarefas: true, pendencias: true, ultimaReuniao: true, automacoes: true }),
   }) as InicioSettings,
+  assistant: Object.freeze({ media: true }) as AssistantSettings,
 })
 
 /** Prefixo do modelo gravado na reunião quando a tradução veio do Claude CLI (`claude-cli:haiku`). */
