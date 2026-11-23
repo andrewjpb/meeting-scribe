@@ -11,7 +11,8 @@
 # Contrato 37: imagem, vídeo e áudio guardam a mensagem do WhatsApp serializada (`mediaProto`, com as chaves do
 # download) e o áudio, a duração; `download_media` reconstrói a mensagem e baixa pelo `download_any` do neonize, só
 # quando a pessoa clica no app. `DownloadError` (endereço expirado, arquivo apagado e também falha passageira, que o
-# whatsmeow não distingue) vira `MediaGone`; o app mostra o aviso e deixa clicar de novo.
+# whatsmeow não distingue) vira `MediaGone`; o app mostra o aviso e deixa clicar de novo. Contrato 148: documento e
+# figurinha guardam a mensagem serializada do mesmo jeito (o `download_any` do whatsmeow baixa os dois).
 #
 # Contrato 39: `send_media` envia imagem ou vídeo pelo `send_message`; a mensagem montada volta serializada para o eco do
 # serviço baixar depois, como uma recebida. A imagem sai do `build_image_message` do neonize (só bytes locais e o PIL). O
@@ -240,7 +241,8 @@ def reaction_of(message):
 
 
 def media_proto(kind, message):
-    """Contrato 37: a mensagem serializada (as chaves do download) da imagem, do vídeo ou do áudio; senão `None`."""
+    """Contrato 37: a mensagem serializada (as chaves do download) da imagem, do vídeo, do áudio, do documento ou da
+    figurinha (contrato 148); senão `None`."""
     if kind not in DOWNLOADABLE_KINDS or message is None:
         return None
     serialize = getattr(message, 'SerializeToString', None)

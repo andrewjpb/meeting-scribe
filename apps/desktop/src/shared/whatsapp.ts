@@ -194,7 +194,10 @@ export const WHATSAPP_OVERVIEW_FILE = 'CONVERSAS-WHATSAPP.md'
 export const WHATSAPP_MESSAGE_ID_PATTERN = /^[A-Za-z0-9_.:+-]{1,200}$/
 /** Contrato 37: o maior arquivo que baixa no clique. */
 export const WHATSAPP_MEDIA_MAX = 64 * 1024 * 1024
-/** Contrato 37: tipos que baixam no clique (documento e figurinha ficam de fora). */
+/**
+ * Contrato 37: tipos que a tela do WhatsApp baixa no clique. Desde o contrato 148 o serviço também guarda as chaves de
+ * documento e figurinha, mas eles ficam fora daqui: a tela ainda não sabe mostrar os dois depois de baixados.
+ */
 export const WHATSAPP_DOWNLOADABLE_KINDS = ['image', 'video', 'audio'] as const satisfies readonly WhatsAppMessageType[]
 /** Contrato 37: texto da transcrição guardado (o resto é cortado). */
 export const WHATSAPP_TRANSCRIPT_MAX = 20_000

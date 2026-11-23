@@ -363,6 +363,7 @@ class Proto(Obj):
 
 def test_media_messages_keep_the_serialized_message_and_audio_seconds(fake_neonize, tmp_path):
     # Contrato 37: imagem, vídeo e áudio guardam a mensagem serializada (as chaves do download); o áudio, a duração.
+    # Contrato 148: documento e figurinha também.
     _, bridge, client = started(tmp_path)
     source = Obj(Chat=jid('5511922220000', 's.whatsapp.net'), Sender=jid('5511922220000', 's.whatsapp.net'), IsFromMe=False, IsGroup=False)
     info = Obj(MessageSource=source, ID='AUD1', Pushname='Bruno', Timestamp=1_763_300_000)
@@ -371,10 +372,23 @@ def test_media_messages_keep_the_serialized_message_and_audio_seconds(fake_neoni
     message = bridge.messages[-1][0]
     assert message['mediaProto'] == b'serializada:audioMessage'
     assert message['media'] == {'kind': 'audio', 'mime': 'audio/ogg; codecs=opus', 'size': 4096, 'name': None, 'seconds': 12}
-    # Documento não guarda as chaves (fora do contrato).
+    # Contrato 148: documento e figurinha também guardam as chaves, e nada é baixado ao receber.
+    def boom(message):
+        raise AssertionError('baixou sem o clique')
+
+    client.download_any = boom
     document = Obj(caption='', mimetype='application/pdf', fileLength=10, fileName='a.pdf', title='')
     client.handlers['MessageEv'](client, Obj(Info=Obj(MessageSource=source, ID='DOC1', Pushname='Bruno', Timestamp=1), Message=Proto(conversation='', documentMessage=document)))
-    assert 'mediaProto' not in bridge.messages[-1][0]
+    message = bridge.messages[-1][0]
+    assert message['mediaProto'] == b'serializada:documentMessage'
+    assert message['media'] == {'kind': 'document', 'mime': 'application/pdf', 'size': 10, 'name': 'a.pdf'}
+    sticker = Obj(mimetype='image/webp', fileLength=26)
+    client.handlers['MessageEv'](client, Obj(Info=Obj(MessageSource=source, ID='STK1', Pushname='Bruno', Timestamp=1), Message=Proto(conversation='', stickerMessage=sticker)))
+    message = bridge.messages[-1][0]
+    assert message['type'] == 'sticker' and message['mediaProto'] == b'serializada:stickerMessage'
+    # Mensagem sem mídia nenhuma continua sem as chaves.
+    client.handlers['MessageEv'](client, Obj(Info=Obj(MessageSource=source, ID='OTH1', Pushname='Bruno', Timestamp=1), Message=Proto(conversation='')))
+    assert bridge.messages[-1][0]['type'] == 'other' and 'mediaProto' not in bridge.messages[-1][0]
     # Do histórico também.
     web = Obj(key=Obj(ID='H9', fromMe=False, participant=''), message=Proto(conversation='', imageMessage=Obj(caption='', mimetype='image/jpeg', fileLength=99)), messageTimestamp=1, pushName='Ana', participant='')
     conversation = Obj(ID='5511911110000@s.whatsapp.net', name='Ana Souza', displayName='', messages=[Obj(message=web)])
@@ -410,6 +424,9 @@ def test_download_media_rebuilds_the_message_and_maps_expired_to_gone(fake_downl
     client.download_any = lambda message: asked.append(message) or b'bytes do audio'
     assert backend.download_media('audio', b'chaves') == b'bytes do audio'
     assert asked == [('mensagem', b'chaves')]
+    # Contrato 148: documento e figurinha pelo mesmo `download_any`.
+    assert backend.download_media('document', b'pdf') == b'bytes do audio' and backend.download_media('sticker', b'webp') == b'bytes do audio'
+    assert asked[1:] == [('mensagem', b'pdf'), ('mensagem', b'webp')]
 
     def expired(message):
         raise fake_download('download failed with status code 410')

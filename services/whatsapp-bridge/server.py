@@ -6,7 +6,8 @@
 # rota que envia é `POST /chats/:id/send`, e o app só a chama depois do clique da pessoa.
 #
 # Contrato 37: `GET /chats/:id/messages/:msg/media` baixa a imagem, o vídeo ou o áudio de uma mensagem, só quando o
-# app pede (no clique da pessoa), e responde os bytes (não JSON). Guarda em `<data-dir>/media/` por 7 dias.
+# app pede (no clique da pessoa), e responde os bytes (não JSON). Guarda em `<data-dir>/media/` por 7 dias. Contrato 148:
+# também o documento (com o mime que a mensagem declara) e a figurinha (sempre `image/webp`), com as mesmas regras.
 #
 # Contrato 39: `POST /chats/:id/send-media` envia uma imagem ou um vídeo (os bytes no corpo; o tipo em `X-Media-Mime`, o
 # nome em `X-Media-Name` e a legenda em `X-Caption`, os dois com `encodeURIComponent`). Como o texto, só depois do clique
@@ -59,7 +60,10 @@ MEDIA_TTL_S = 7 * 24 * 3600
 MEDIA_DIR = 'media'
 # `fullmatch`: o `$` aceitaria um `\n` no fim, e o mime vai para o cabeçalho da resposta.
 MEDIA_MIME = re.compile(r'(audio|image|video)/[\w.+-]{1,60}(; ?[\w.+-]{1,40}=[\w.+"-]{1,40}){0,3}', re.ASCII)
-MEDIA_DEFAULT_MIME = {'image': 'image/jpeg', 'video': 'video/mp4', 'audio': 'audio/ogg'}
+MEDIA_DEFAULT_MIME = {'image': 'image/jpeg', 'video': 'video/mp4', 'audio': 'audio/ogg', 'document': 'application/octet-stream', 'sticker': 'image/webp'}
+# Contrato 148: o documento pode ser de qualquer tipo de arquivo (PDF, planilha, texto, imagem mandada como arquivo); o
+# subtipo vai até 100 caracteres (os do Office passam de 60). Mesmo `fullmatch`: nada de quebra de linha no cabeçalho.
+DOCUMENT_MIME = re.compile(r'(application|audio|font|image|model|text|video)/[\w.+-]{1,100}(; ?[\w.+-]{1,40}=[\w.+"-]{1,40}){0,3}', re.ASCII)
 # Contrato 39: o que dá para enviar, e o limite de cada tipo.
 SEND_MIMES = ('image/jpeg', 'image/png', 'image/webp', 'image/gif', 'video/mp4', 'video/quicktime')
 SEND_IMAGE_MAX = 16 * 1024 * 1024
@@ -89,6 +93,18 @@ def sniff_media(data):
             return 'video/quicktime'
         return 'video/mp4' if len(brand) == 4 and MP4_BRANDS.fullmatch(brand) else None
     return None
+
+
+def media_mime(kind, mime):
+    """O `Content-Type` da mídia baixada: o mime guardado, se for seguro e do tipo da mensagem; senão o padrão do tipo.
+    Contrato 148: o documento aceita qualquer tipo de arquivo; a figurinha é sempre `image/webp`."""
+    if kind == 'sticker':
+        return MEDIA_DEFAULT_MIME['sticker']
+    if not isinstance(mime, str):
+        return MEDIA_DEFAULT_MIME[kind]
+    if kind == 'document':
+        return mime if DOCUMENT_MIME.fullmatch(mime) else MEDIA_DEFAULT_MIME[kind]
+    return mime if MEDIA_MIME.fullmatch(mime) and mime.startswith(f'{kind}/') else MEDIA_DEFAULT_MIME[kind]
 
 
 def log(message):
@@ -250,7 +266,7 @@ class Bridge:
         if source is None:
             return ('missing',)
         kind, mime, size, proto = source
-        mime = mime if isinstance(mime, str) and MEDIA_MIME.fullmatch(mime) and mime.startswith(f'{kind}/') else MEDIA_DEFAULT_MIME[kind]
+        mime = media_mime(kind, mime)
         if isinstance(size, int) and size > MEDIA_MAX:
             return ('too-big',)
         path = self._media_file(chat_id, message_id)
