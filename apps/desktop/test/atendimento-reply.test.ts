@@ -197,6 +197,8 @@ describe('motor de resposta do atendimento (contrato 139)', () => {
     expect(parseReplyDecision('{"acao":"responder","texto":"Oi, Ana!"}')).toEqual({ acao: 'responder', texto: 'Oi, Ana!' })
     expect(parseReplyDecision('```json\n{"acao":"passar","motivo":"pediu preço"}\n```')).toEqual({ acao: 'passar', motivo: 'pediu preço' })
     expect(parseReplyDecision('```\n{"acao":"responder","texto":"  Oi  "}\n```')).toEqual({ acao: 'responder', texto: 'Oi' })
+    // A cerca com \r\n (ou espaço depois da linguagem) também vale.
+    expect(parseReplyDecision('```json  \r\n{"acao":"passar","motivo":"pediu preço"}\r\n```')).toEqual({ acao: 'passar', motivo: 'pediu preço' })
     expect(parseReplyDecision(`{"acao":"responder","texto":"${'x'.repeat(1000)}"}`)).toEqual({ acao: 'responder', texto: 'x'.repeat(1000) })
     for (const bad of [
       'Oi, Ana!',

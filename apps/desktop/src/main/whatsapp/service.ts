@@ -23,6 +23,10 @@
 // é envio: `react` gasta o seu próprio token de clique no mesmo guarda, e só com um dos 6 emojis fixos. O "digitando…" da
 // sua conta (`typing`) não é mensagem e não passa pelo guarda, mas só sai com "Mostrar quando estou digitando" ligado
 // (`typingEnabled`, lido a cada vez); desligado, nada vai ao serviço.
+//
+// Contrato 141: o agente de atendimento envia por `agentSend`, só com a `AgentSendProof` que a autoridade da montagem
+// do app entrega ao serviço de atendimento; o cliente confere e gasta a prova. Esse envio não passa pela correção do
+// contrato 35. O "digitando…" do agente (`agentPresence`) segue o interruptor do atendimento, não o da tela.
 import { randomBytes, randomUUID } from 'node:crypto'
 import { existsSync } from 'node:fs'
 import { chmod, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
@@ -61,7 +65,7 @@ import { dayLines, exportChats, exportRecentWith, recentMessages, type ExportCac
 import { draftInput } from './draft'
 import { copyBridge, installBridge, isInstalled, removeBridge, WHATSAPP_PATHS, type Exec, type PackageIndex } from './install'
 import { killBridgePid, startBridge, type BridgeBackend, type BridgeProcess, type SpawnBridge } from './process'
-import { createSendGuard, type SendGuard } from './send-guard'
+import { createSendGuard, type AgentSendProof, type SendGuard } from './send-guard'
 import { checkAttachment, WHATSAPP_ATTACH_MIMES, WHATSAPP_ATTACH_NAME_MAX, type WhatsAppSendMediaResult } from '../../shared/whatsapp-attach'
 import { clipTranscript, createTranscriptsCache } from './transcripts'
 
@@ -190,14 +194,21 @@ export interface WhatsAppService {
   lastMessages(chatId: string, max: number): Promise<WhatsAppMessage[]>
   /** O preload registrou um clique de "Enviar" desta janela. */
   registerClick(senderId: number, token: unknown): void
-  /** Só com o token de clique (uso único, 10 s) da mesma janela. Em todo envio. */
-  send(senderId: number, request: unknown): Promise<WhatsAppSendResult>
+  /**
+   * Só com o token de clique (uso único, 10 s) da mesma janela. Em todo envio. Contrato 141: `onText` recebe o texto que
+   * vai sair (depois da correção), para o atendimento reconhecer o eco da proposta enviada.
+   */
+  send(senderId: number, request: unknown, onText?: (text: string) => void): Promise<WhatsAppSendResult>
   /** Contrato 39: a imagem ou o vídeo, com a mesma prova de clique do `send`; a legenda não passa pela correção. */
   sendMedia(senderId: number, request: unknown): Promise<WhatsAppSendMediaResult>
   /** Contrato 34: reagir (um dos 6 emojis; vazio tira a sua), com o token de clique próprio, como um envio. */
   react(senderId: number, request: unknown): Promise<WhatsAppReactResult>
   /** Contrato 34: o "digitando…" da sua conta; só com o interruptor ligado. Nunca lança; `false` quando nada saiu. */
   typing(request: unknown): Promise<boolean>
+  /** Contrato 141: o envio do agente de atendimento, só com a prova dele; sem a correção ao enviar. */
+  agentSend(proof: AgentSendProof, chatId: string, text: string): Promise<WhatsAppSendResult>
+  /** Contrato 141: o "digitando…" do agente (o interruptor é o do atendimento). Nunca lança; `false` quando nada saiu. */
+  agentPresence(chatId: string, state: 'composing' | 'paused'): Promise<boolean>
   forgetSender(senderId: number): void
   draft(request: unknown): Promise<WhatsAppDraftResult>
   link(meetingId: unknown): Promise<WhatsAppMeetingLink | null>
@@ -726,7 +737,7 @@ export function createWhatsAppService(deps: WhatsAppServiceDeps): WhatsAppServic
       guard.register(senderId, token)
     },
 
-    async send(senderId, request) {
+    async send(senderId, request, onText) {
       const raw = (request ?? {}) as { clickToken?: unknown; chatId?: unknown }
       const parsed = sendSchema.safeParse(request)
       // O token é gasto mesmo com o resto inválido: não serve para uma segunda tentativa.
@@ -743,6 +754,7 @@ export function createWhatsAppService(deps: WhatsAppServiceDeps): WhatsAppServic
       // Contrato 35: a correção vem depois da prova gasta e antes do envio; ela vale durante a correção (nada de segundo
       // token). Qualquer falha devolve o original: o clique nunca se perde.
       const text = deps.correct ? await deps.correct(parsed.data.text).catch(() => parsed.data.text) : parsed.data.text
+      onText?.(text)
       try {
         // Contrato 34: a resposta cita a mensagem; a que o serviço não tem sai sem citação.
         const id = await current.send(proof, parsed.data.chatId, text, parsed.data.replyToId)
@@ -822,6 +834,32 @@ export function createWhatsAppService(deps: WhatsAppServiceDeps): WhatsAppServic
       if (!(await deps.typingEnabled().catch(() => false))) return false
       try {
         await current.presence(parsed.data.chatId, parsed.data.state)
+        return true
+      } catch {
+        return false
+      }
+    },
+
+    async agentSend(proof, chatId, text) {
+      if (!chatIdSchema.safeParse(chatId).success || !text.trim() || text.length > WHATSAPP_SEND_TEXT_MAX) return { ok: false, error: 'invalid' }
+      if (!client || health?.state !== 'connected') return { ok: false, error: 'state' }
+      const current = client
+      try {
+        const id = await current.send(proof, chatId, text)
+        deps.log?.('[whatsapp] mensagem enviada pelo agente de atendimento')
+        return { ok: true, id }
+      } catch (failure) {
+        if (failure instanceof WhatsAppServiceError && failure.code === 'click') return { ok: false, error: 'click' }
+        if (failure instanceof WhatsAppServiceError && failure.status === 409) return { ok: false, error: 'state' }
+        return { ok: false, error: 'failed' }
+      }
+    },
+
+    async agentPresence(chatId, state) {
+      if (!chatIdSchema.safeParse(chatId).success || !client || health?.state !== 'connected') return false
+      const current = client
+      try {
+        await current.presence(chatId, state)
         return true
       } catch {
         return false

@@ -149,5 +149,54 @@ export interface AtendimentoLogListRequest {
   chatId?: string
 }
 
+// Contrato 141: o serviço que liga as mensagens ao agente. O estado de cada conversa em memória (a resposta agendada,
+// a proposta do modo rascunho, a passagem para o dono) não vai para o disco e se perde ao fechar o app.
+
+/** A proposta do modo rascunho: uma por conversa, a nova substitui a anterior. */
+export interface AtendimentoDraft {
+  text: string
+  at: string
+  agentId: string
+}
+
+/** O que o serviço sabe agora de uma conversa com atendimento. */
+export interface AtendimentoRuntimeEntry {
+  /** Hora agendada da resposta (ISO), ou `null` sem pendência. */
+  dueAt: string | null
+  draft: AtendimentoDraft | null
+  /** Quando o agente passou a conversa para o dono (ou falhou); zera quando o dono responde. */
+  handedOffAt: string | null
+}
+
+/** `scribe:atendimento-runtime`: por `chatId`. */
+export type AtendimentoRuntime = Record<string, AtendimentoRuntimeEntry>
+
+/** A decisão do agente: responder com um texto ou passar a conversa para o dono. */
+export type AtendimentoDecision = { acao: 'responder'; texto: string } | { acao: 'passar'; motivo: string }
+
+/** Mensagem de exemplo do "Testar agente". */
+export const ATENDIMENTO_TEST_MESSAGE_MAX = 2000
+
+/** `scribe:atendimento-agent-test`: os campos do formulário do agente, o "Quem é esta pessoa" e uma mensagem de exemplo. */
+export interface AtendimentoAgentTestRequest {
+  agent: Omit<AtendimentoAgentInput, 'id'> & { id?: string | null }
+  about: string
+  message: string
+}
+
+export type AtendimentoAgentTestResult = { ok: true; decision: AtendimentoDecision } | { ok: false; error: 'invalid' | 'failed' }
+
+/** `scribe:atendimento-draft-send`: o texto da proposta (pode ter sido editado), com o token de clique do preload. */
+export interface AtendimentoDraftSendRequest {
+  chatId: string
+  text: string
+  clickToken: string
+}
+
+/** Como o `scribe:whatsapp-send`; `no-draft`: a conversa não tem proposta. */
+export type AtendimentoDraftSendResult = { ok: true; id: string } | { ok: false; error: 'click' | 'state' | 'invalid' | 'failed' | 'no-draft' }
+
+export type AtendimentoDraftDiscardResult = { ok: true } | { ok: false; error: 'invalid' | 'not-found' }
+
 /** Conversa de grupo. */
 export const isGroupChat = (chatId: string): boolean => chatId.endsWith(ATENDIMENTO_GROUP_SUFFIX)

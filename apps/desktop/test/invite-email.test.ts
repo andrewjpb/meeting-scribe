@@ -925,6 +925,8 @@ describe('N1 estático (CA15)', () => {
 
   it('os canais de envio e resposta são os de antes mais scribe:invite-reply', () => {
     expect(INVOKE_CHANNELS.filter((channel) => /send|reply/.test(channel)).sort()).toEqual([
+      // Contrato 141: enviar a proposta do atendimento, pelo mesmo token de clique do `whatsapp-send`.
+      'scribe:atendimento-draft-send',
       'scribe:chat-send',
       'scribe:email-send',
       'scribe:invite-reply',

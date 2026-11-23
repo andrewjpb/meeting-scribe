@@ -269,7 +269,8 @@ describe('canais do atendimento', () => {
       expect(INVOKE_CHANNELS).toContain(channel)
       expect(WHEN_LOCKED[channel]).toBe('refused')
     }
-    expect(INVOKE_CHANNELS.filter((channel) => channel.startsWith('scribe:atendimento-'))).toHaveLength(CANAIS.length)
+    // Contrato 141: mais os quatro do serviço (runtime, testar agente, enviar e descartar a proposta).
+    expect(INVOKE_CHANNELS.filter((channel) => channel.startsWith('scribe:atendimento-'))).toHaveLength(CANAIS.length + 4)
   })
 
   it('CA15: pedido fora do formato devolve invalid sem lançar', async () => {

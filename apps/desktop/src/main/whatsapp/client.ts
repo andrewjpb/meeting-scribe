@@ -12,6 +12,10 @@
 // Contrato 34: a resposta (`send` com `replyToId`) e a reação (`react`) só com a prova de clique; a presença
 // ("digitando…", `presence`) não é mensagem e não leva prova (o serviço do main só chama com o interruptor ligado). A
 // citação, as reações e o "digitando…" que chegam são dados conferidos aqui: emoji só como texto curto, sem controle.
+//
+// Contrato 141: o texto (`send`, sem citação) também sai com a prova do agente de atendimento (`AgentSendProof`), gasta
+// aqui: emitida pela autoridade, dentro dos 30 s, uma vez só e para a mesma conversa. Anexo e reação continuam só com o
+// clique.
 import { request as httpRequest, type IncomingMessage } from 'node:http'
 import { z } from 'zod'
 import {
@@ -29,7 +33,7 @@ import {
   type WhatsAppSearchHit,
   type WhatsAppServiceState,
 } from '../../shared/whatsapp'
-import { isSendProof, type SendProof } from './send-guard'
+import { isSendProof, spendAgentSendProof, type AgentSendProof, type SendProof } from './send-guard'
 
 export const WHATSAPP_HOST = '127.0.0.1'
 const REQUEST_TIMEOUT_MS = 15_000
@@ -139,8 +143,11 @@ export interface BridgeClient {
   photo(chatId: string): Promise<string | null>
   /** Contrato 37: os bytes da mídia de uma mensagem (até 64 MB). Lança `WhatsAppServiceError` (404, 410, 413…). */
   media(chatId: string, messageId: string): Promise<{ mime: string; bytes: Buffer }>
-  /** Só com a prova de um clique de verdade, para a mesma conversa. Contrato 34: com `replyToId`, como resposta. */
-  send(proof: SendProof, chatId: string, text: string, replyToId?: string): Promise<string>
+  /**
+   * Só com a prova de um clique de verdade, para a mesma conversa. Contrato 34: com `replyToId`, como resposta. Contrato
+   * 141: ou com a prova do agente de atendimento (uso único, 30 s, a mesma conversa), sem citação.
+   */
+  send(proof: SendProof | AgentSendProof, chatId: string, text: string, replyToId?: string): Promise<string>
   /** Contrato 34: reagir (emoji vazio tira a sua), com a mesma prova de clique. Devolve as reações da mensagem. */
   react(proof: SendProof, chatId: string, messageId: string, emoji: WhatsAppReactionEmoji | ''): Promise<WhatsAppReaction[]>
   /** Contrato 34: "digitando…" ou "parou" da sua conta. Não é mensagem (sem prova); só com o interruptor ligado. */
@@ -300,7 +307,8 @@ export function createBridgeClient(port: number, token: string): BridgeClient {
     photo: async (chatId) => (await call('GET', `/chats/${chatPath(chatId)}/photo`, photoSchema)).photo,
     media: (chatId, messageId) => callBinary(`/chats/${chatPath(chatId)}/messages/${encodeURIComponent(messageId)}/media`),
     send: async (proof, chatId, text, replyToId) => {
-      if (!isSendProof(proof) || proof.chatId !== chatId) throw new WhatsAppServiceError(0, 'click')
+      const clicked = isSendProof(proof) && proof.chatId === chatId
+      if (!clicked && (!spendAgentSendProof(proof, chatId) || replyToId !== undefined)) throw new WhatsAppServiceError(0, 'click')
       return (await call('POST', `/chats/${chatPath(chatId)}/send`, sendSchema, replyToId ? { text, replyToId } : { text })).id
     },
     react: async (proof, chatId, messageId, emoji) => {

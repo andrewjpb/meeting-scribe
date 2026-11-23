@@ -37,7 +37,23 @@ import type { SugestaoTarefa, TarefaInput, TarefaSalvar, TarefasActionResult, Ta
 import type { InicioView } from './inicio'
 // fim 134
 // 138: atendimento
-import type { AtendimentoAgentInput, AtendimentoAgentSaveResult, AtendimentoBindingInput, AtendimentoBindingSaveResult, AtendimentoFailure, AtendimentoLogListRequest, AtendimentoLogListResult, AtendimentoResult, AtendimentoState } from './atendimento'
+import type {
+  AtendimentoAgentInput,
+  AtendimentoAgentSaveResult,
+  AtendimentoAgentTestRequest,
+  AtendimentoAgentTestResult,
+  AtendimentoBindingInput,
+  AtendimentoBindingSaveResult,
+  AtendimentoDraftDiscardResult,
+  AtendimentoDraftSendRequest,
+  AtendimentoDraftSendResult,
+  AtendimentoFailure,
+  AtendimentoLogListRequest,
+  AtendimentoLogListResult,
+  AtendimentoResult,
+  AtendimentoRuntime,
+  AtendimentoState,
+} from './atendimento'
 // fim 138
 import type { AnalysisRunRequest, AnalysisRunResult, MeetingAnalysis } from './meeting-analysis'
 import type { MeetingNote } from './meeting-notes'
@@ -706,6 +722,16 @@ export interface InvokeChannels {
   /** O histórico, do mais recente para o mais antigo. */
   'scribe:atendimento-log-list': { request: AtendimentoLogListRequest; response: AtendimentoLogListResult }
   // fim 138
+  // 141: atendimento
+  /** Contrato 141: por conversa, a resposta agendada, a proposta do modo rascunho e a passagem para o dono (só memória). */
+  'scribe:atendimento-runtime': { request: undefined; response: AtendimentoRuntime }
+  /** "Testar agente": a decisão do motor para a mensagem de exemplo. Não grava, não agenda, não envia e não notifica. */
+  'scribe:atendimento-agent-test': { request: AtendimentoAgentTestRequest; response: AtendimentoAgentTestResult }
+  /** Enviar a proposta: só pelo `atendimentoDraftSend` do preload, com o token de clique do `scribe:whatsapp-send`. */
+  'scribe:atendimento-draft-send': { request: AtendimentoDraftSendRequest; response: AtendimentoDraftSendResult }
+  /** Descartar a proposta da conversa. */
+  'scribe:atendimento-draft-discard': { request: { chatId: string }; response: AtendimentoDraftDiscardResult }
+  // fim 141
 }
 
 /** renderer -> main, sem resposta (`__scribeApi.send` / `ipcMain.on`). */
@@ -867,6 +893,10 @@ export interface MainEvents {
   /** Contrato 134 (D10): a agenda, uma leitura nova do Mac, mensagem do WhatsApp ou as pastas do email; a view inteira. Não chega bloqueado. */
   'scribe:inicio-changed': InicioView
   // fim 134
+  // 141: atendimento
+  /** Contrato 141: a resposta agendada, a proposta ou a passagem de uma conversa mudou; relê o runtime. Não chega bloqueado. */
+  'scribe:atendimento-changed': { chatId: string }
+  // fim 141
 }
 
 export type InvokeChannel = keyof InvokeChannels
@@ -1165,6 +1195,12 @@ const INVOKE: Record<InvokeChannel, true> = {
   'scribe:atendimento-risk-accept': true,
   'scribe:atendimento-log-list': true,
   // fim 138
+  // 141: atendimento
+  'scribe:atendimento-runtime': true,
+  'scribe:atendimento-agent-test': true,
+  'scribe:atendimento-draft-send': true,
+  'scribe:atendimento-draft-discard': true,
+  // fim 141
 }
 const RENDERER_EVENTS: Record<RendererEvent, true> = {
   'scribe:csp-violation': true,
@@ -1245,6 +1281,9 @@ const MAIN_EVENTS: Record<MainEvent, true> = {
   // 134: inicio
   'scribe:inicio-changed': true,
   // fim 134
+  // 141: atendimento
+  'scribe:atendimento-changed': true,
+  // fim 141
 }
 
 /**
@@ -1603,6 +1642,12 @@ export const WHEN_LOCKED: Readonly<Record<InvokeChannel, LockedPolicy>> = Object
   'scribe:atendimento-risk-accept': 'refused',
   'scribe:atendimento-log-list': 'refused',
   // fim 138
+  // 141: atendimento (recusados; o serviço continua respondendo com o app bloqueado)
+  'scribe:atendimento-runtime': 'refused',
+  'scribe:atendimento-agent-test': 'refused',
+  'scribe:atendimento-draft-send': 'refused',
+  'scribe:atendimento-draft-discard': 'refused',
+  // fim 141
 })
 
 /**
@@ -1667,6 +1712,11 @@ export interface ScribeApi {
   whatsappSendMedia(request: Omit<WhatsAppSendMediaRequest, 'clickToken'>): Promise<WhatsAppSendMediaResult>
   /** Contrato 34: reagir é envio: o mesmo token de clique do `whatsappSend`, gerado só com a ativação do usuário viva. */
   whatsappReact(request: Omit<WhatsAppReactRequest, 'clickToken'>): Promise<WhatsAppReactResult>
+  /**
+   * Contrato 141: "Enviar" a proposta do agente de atendimento, com o mesmo token de clique do `whatsappSend` (ativação
+   * viva no frame, registrada no main antes do pedido). Sem clique de verdade, recusado e a proposta fica.
+   */
+  atendimentoDraftSend(request: Omit<AtendimentoDraftSendRequest, 'clickToken'>): Promise<AtendimentoDraftSendResult>
   /** Contrato 42: o "Enviar" do email, com o mesmo desenho do `whatsappSend` (ativação viva, token de clique). */
   emailSend(request: Omit<EmailSendRequest, 'clickToken'>): Promise<EmailSendResult>
   /** Contrato 61: "Aceitar", "Talvez" ou "Recusar" de um convite, pelo mesmo token de clique do `emailSend`. */

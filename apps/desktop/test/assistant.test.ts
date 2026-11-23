@@ -261,6 +261,8 @@ describe('cartões: só com o clique, uma vez só (CA3, CA5)', () => {
       // Contrato 74: a resposta da mensagem direta do Instagram (token de clique das redes, recusada bloqueado).
       'scribe:redes-message-send',
       // fim 74
+      // Contrato 141: enviar a proposta do atendimento, pelo mesmo token de clique do `whatsapp-send`.
+      'scribe:atendimento-draft-send',
     ])
   })
 })

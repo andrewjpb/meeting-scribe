@@ -17,11 +17,12 @@ import {
   ATENDIMENTO_NEVER_MAX,
   ATENDIMENTO_PAUSE_ON_MY_REPLY_MAX,
   ATENDIMENTO_REASON_MAX,
+  ATENDIMENTO_TEST_MESSAGE_MAX,
   ATENDIMENTO_TIME_PATTERN,
   ATENDIMENTO_TONE_MAX,
   ATENDIMENTO_VERSION,
 } from './atendimento'
-import { WHATSAPP_CHAT_ID_PATTERN } from './whatsapp'
+import { WHATSAPP_CHAT_ID_PATTERN, WHATSAPP_SEND_TEXT_MAX } from './whatsapp'
 
 export const atendimentoIdSchema = z.string().regex(/^[\w-]{1,100}$/)
 export const atendimentoChatIdSchema = z.string().regex(WHATSAPP_CHAT_ID_PATTERN)
@@ -132,3 +133,17 @@ export const atendimentoLogListRequestSchema = z
   .object({ limit: z.number().int().min(1).max(ATENDIMENTO_LOG_LIST_MAX).optional(), chatId: atendimentoChatIdSchema.optional() })
   .strict()
   .optional()
+
+/** Contrato 141: "Testar agente", com os campos do formulário (o `id` é opcional: agente ainda não salvo). */
+export const atendimentoAgentTestRequestSchema = z
+  .object({
+    agent: z.object({ id: atendimentoIdSchema.nullable().optional(), ...agentFields, tone: agentFields.tone.default(''), never: agentFields.never.default('') }).strict(),
+    about: about.default(''),
+    message: z.string().trim().min(1).max(ATENDIMENTO_TEST_MESSAGE_MAX),
+  })
+  .strict()
+
+/** Contrato 141: enviar a proposta, com o token de clique (o mesmo esquema do `scribe:whatsapp-send`). */
+export const atendimentoDraftSendRequestSchema = z
+  .object({ chatId: atendimentoChatIdSchema, text: z.string().max(WHATSAPP_SEND_TEXT_MAX).refine((value) => value.trim() !== ''), clickToken: z.string().max(100) })
+  .strict()

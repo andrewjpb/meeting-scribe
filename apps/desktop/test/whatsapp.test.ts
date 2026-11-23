@@ -445,7 +445,15 @@ describe('nenhum caminho fora do clique alcança o envio (CA4)', () => {
     // que clicou; nenhum outro arquivo chama `whatsapp.send(`.
     expect(all.filter(({ text }) => /confirmWhatsAppSend|sendDialogText/.test(text)).map(({ file }) => file)).toEqual([])
     const serviceSends = all.flatMap(({ file, text }) => (text.match(/\bwhatsapp\.send(?:Media)?\([^\n]*/g) ?? []).map((call) => `${file}: ${call}`))
-    expect(serviceSends).toEqual(['main/index.ts: whatsapp.send(event.sender.id, request))', 'main/index.ts: whatsapp.sendMedia(event.sender.id, request))'])
+    // Contrato 141: a proposta do atendimento sai pelo mesmo envio com clique (o serviço de atendimento recebe só esta
+    // função, montada no main, e repassa a janela e o token que vieram do canal `scribe:atendimento-draft-send`).
+    expect(serviceSends).toEqual(['main/index.ts: whatsapp.send(senderId, request, onText),', 'main/index.ts: whatsapp.send(event.sender.id, request))', 'main/index.ts: whatsapp.sendMedia(event.sender.id, request))'])
+    expect(all.find(({ file }) => file === 'main/index.ts')?.text).toContain('clickSend: (senderId, request, onText) => whatsapp.send(senderId, request, onText),')
+    expect(all.find(({ file }) => file === 'main/index.ts')?.text).toContain("handle('scribe:atendimento-draft-send', appOrigin, (event, request) => atendimentoService.draftSend(event.sender.id, request))")
+    const preloadText = all.find(({ file }) => file === 'preload/index.ts')?.text ?? ''
+    const draftPath = preloadText.slice(preloadText.indexOf('atendimentoDraftSend('), preloadText.indexOf("'scribe:atendimento-draft-send'"))
+    expect(draftPath).toContain('navigator.userActivation.isActive')
+    expect(draftPath).toContain("ipcRenderer.send('scribe:whatsapp-click', clickToken)")
     expect(all.find(({ file }) => file === 'main/index.ts')?.text).toContain("handle('scribe:whatsapp-send', appOrigin, (event, request) => whatsapp.send(event.sender.id, request))")
     expect(all.find(({ file }) => file === 'main/index.ts')?.text).toContain("handle('scribe:whatsapp-send-media', appOrigin, (event, request) => whatsapp.sendMedia(event.sender.id, request))")
     // O smoke só chama para conferir que o envio sem clique é recusado.
@@ -514,7 +522,18 @@ describe('nenhum caminho fora do clique alcança o envio (CA4)', () => {
 
   it('o guarda do clique e o envio do cliente só existem no serviço do WhatsApp', () => {
     const guardUsers = all.filter(({ text }) => /createSendGuard|send-guard'/.test(text)).map(({ file }) => file)
-    expect(guardUsers.sort()).toEqual(['main/whatsapp/client.ts', 'main/whatsapp/send-guard.ts', 'main/whatsapp/service.ts'].sort())
+    // Contrato 141: a montagem cria a autoridade da prova do agente e o serviço de atendimento recebe só ela (os tipos).
+    expect(guardUsers.sort()).toEqual(['main/index.ts', 'main/whatsapp/atendimento/service.ts', 'main/whatsapp/client.ts', 'main/whatsapp/send-guard.ts', 'main/whatsapp/service.ts'].sort())
+    // O conjunto EXATO de nomes que cada um traz de send-guard: qualquer nome a mais (o guarda do clique, gastar a prova…)
+    // quebra. Toda menção a send-guard nesses arquivos tem de ser uma dessas cláusulas de import (nada de `import()`).
+    const guardImports = (file: string): string[] => {
+      const text = all.find((item) => item.file === file)?.text ?? ''
+      const clauses = [...text.matchAll(/import\s+(type\s+)?\{([^}]*)\}\s+from\s+'[^']*\/send-guard'/g)]
+      expect(clauses.length, file).toBe(text.split('send-guard').length - 1)
+      return clauses.flatMap((clause) => (clause[2] ?? '').split(',').map((name) => `${clause[1] ? 'type ' : ''}${name.trim()}`)).filter((name) => !/^(type )?$/.test(name)).sort()
+    }
+    expect(guardImports('main/index.ts')).toEqual(['createAgentSendAuthority'])
+    expect(guardImports('main/whatsapp/atendimento/service.ts')).toEqual(['type AgentSendAuthority', 'type AgentSendProof'])
     const sendCalls = all.filter(({ text }) => /\bclient\.send\(|current\.send\(proof/.test(text)).map(({ file }) => file)
     expect(sendCalls).toEqual(['main/whatsapp/service.ts'])
     // Chat, resumo, análise, agentes (ACP) e o motor do Claude não importam o serviço do WhatsApp.

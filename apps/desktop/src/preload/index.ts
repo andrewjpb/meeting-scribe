@@ -64,6 +64,13 @@ const api: ScribeApi = {
     ipcRenderer.send('scribe:whatsapp-click', clickToken)
     return ipcRenderer.invoke('scribe:whatsapp-react', { chatId: request.chatId, messageId: request.messageId, emoji: request.emoji, clickToken })
   },
+  // Contrato 141: enviar a proposta do agente de atendimento é envio com clique: a mesma ativação viva e o mesmo token.
+  atendimentoDraftSend(request) {
+    if (!navigator.userActivation.isActive) return Promise.resolve({ ok: false, error: 'click' })
+    const clickToken = crypto.randomUUID()
+    ipcRenderer.send('scribe:whatsapp-click', clickToken)
+    return ipcRenderer.invoke('scribe:atendimento-draft-send', { chatId: request.chatId, text: request.text, clickToken })
+  },
   // Contrato 42: o envio do email pelo mesmo caminho: a mesma ativação viva e um token de clique próprio.
   emailSend(request) {
     if (!navigator.userActivation.isActive) return Promise.resolve({ ok: false, error: 'click' })

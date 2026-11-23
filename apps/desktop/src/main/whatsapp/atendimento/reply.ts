@@ -125,7 +125,7 @@ const isRecord = (value: unknown): value is Record<string, unknown> => typeof va
 /** O JSON único pedido (puro ou numa cerca de código); qualquer outra coisa é `null`. */
 export function parseReplyDecision(raw: string): ReplyDecision | null {
   let text = raw.trim()
-  const fenced = /^```[a-z]*\n([\s\S]*?)\n?```$/i.exec(text)
+  const fenced = /^```[a-z]*[ \t]*\r?\n([\s\S]*?)\r?\n?```$/i.exec(text)
   if (fenced) text = (fenced[1] ?? '').trim()
   let value: unknown
   try {

@@ -64,3 +64,52 @@ export function createSendGuard(now: () => number = Date.now, ttlMs = WHATSAPP_C
     },
   }
 }
+
+// Contrato 141: a prova de envio do agente de atendimento, a única exceção ao "nenhuma IA envia" (decisão do dono em
+// 23/11/2026, só para as conversas marcadas). A autoridade é criada uma vez, na montagem do app, e entregue só ao
+// serviço de atendimento; cada prova vale para uma conversa, uma vez e por 30 s. Grupo nunca recebe prova. As provas
+// emitidas ficam num `WeakMap` deste módulo: objeto parecido, prova vencida, já usada ou de outra conversa não envia.
+
+/** Validade de uma `AgentSendProof`. */
+export const AGENT_PROOF_TTL_MS = 30_000
+
+const AGENT_PROOF = Symbol('whatsapp-agent-send-proof')
+
+/** Prova de envio do agente de atendimento, de uso único. Só `AgentSendAuthority.issue` cria. */
+export interface AgentSendProof {
+  readonly [AGENT_PROOF]: true
+  readonly chatId: string
+}
+
+export interface AgentSendAuthority {
+  /** A prova para um envio do agente nesta conversa, ou `null` (grupo ou id inválido). */
+  issue(chatId: string): AgentSendProof | null
+}
+
+/** As provas do agente ainda não gastas: o relógio da autoridade que emitiu e quando vencem. */
+const agentProofs = new WeakMap<object, { now: () => number; expiresAt: number }>()
+
+export function isAgentSendProof(value: unknown): value is AgentSendProof {
+  return typeof value === 'object' && value !== null && (value as Partial<AgentSendProof>)[AGENT_PROOF] === true
+}
+
+export function createAgentSendAuthority(now: () => number = Date.now, ttlMs = AGENT_PROOF_TTL_MS): AgentSendAuthority {
+  return {
+    issue(chatId) {
+      if (typeof chatId !== 'string' || !chatId.includes('@') || chatId.endsWith('@g.us')) return null
+      const proof: AgentSendProof = Object.freeze({ [AGENT_PROOF]: true as const, chatId })
+      agentProofs.set(proof, { now, expiresAt: now() + ttlMs })
+      return proof
+    },
+  }
+}
+
+/** Gasta a prova do agente: `true` só se foi emitida pela autoridade, não venceu, não foi usada e é desta conversa. */
+export function spendAgentSendProof(proof: unknown, chatId: string): boolean {
+  if (!isAgentSendProof(proof)) return false
+  const entry = agentProofs.get(proof)
+  if (!entry) return false
+  // Tentativa com uma prova emitida a gasta, mesmo recusada.
+  agentProofs.delete(proof)
+  return entry.now() <= entry.expiresAt && proof.chatId === chatId
+}

@@ -7,6 +7,7 @@ import { app, BrowserWindow, clipboard, dialog, Menu, nativeImage, net, Notifica
 import { DRIVE_FOLDER_URL_PREFIX } from '../shared/accounts'
 import { ASSEMBLYAI_DASHBOARD_URL } from '../shared/assemblyai'
 import type { ChatActionResult } from '../shared/assistant'
+import type { AtendimentoState } from '../shared/atendimento'
 import { formatRunAt, formatRunShort, type AutomationRun } from '../shared/automations'
 import { chatSourcesOf } from '../shared/chat'
 import { brandTexts, DEFAULT_BRAND_NAME } from '../shared/branding'
@@ -117,11 +118,14 @@ import { readAttachment } from './whatsapp/attach'
 import { BRIDGE_FAKE_FILE, BRIDGE_FILES, nodeExec, PYTHON_CANDIDATES, WHATSAPP_DIR } from './whatsapp/install'
 import { INSTALL_TEST_ENV, runInstallTest } from './whatsapp/install-test'
 import { createAtendimentoLog, type AtendimentoLog } from './whatsapp/atendimento/log'
+import { generateReply } from './whatsapp/atendimento/reply'
+import { createAtendimentoService, type AtendimentoService } from './whatsapp/atendimento/service'
 import { createAtendimentoStore, type AtendimentoStore } from './whatsapp/atendimento/store'
 import { createInsightsCache, INSIGHTS_FILE } from './whatsapp/insights'
 import { createInsightsService, type InsightsService } from './whatsapp/insights-service'
 import { createWhatsAppNotifier, isGroupChat, shouldNotify, type NoticeHandle, type WhatsAppNotice } from './whatsapp/notify'
 import { createWhatsAppService, type WhatsAppService } from './whatsapp/service'
+import { createAgentSendAuthority } from './whatsapp/send-guard'
 import { EMAIL_DIR } from './email/email-store'
 import { createEmailBatchStore } from './email/batches'
 import type { EmailOrganizer } from './email/organize'
@@ -1022,6 +1026,8 @@ interface AppServices {
   atendimento: AtendimentoStore
   /** Contrato 138: o histórico do atendimento (`whatsapp/atendimento-log.jsonl`). */
   atendimentoLog: AtendimentoLog
+  /** Contrato 141: o serviço que responde as conversas marcadas (agenda, motor, envio do agente, propostas). */
+  atendimentoService: AtendimentoService
   /**
    * Contrato 124 (R35, D11): a migração única do próximo passo e dos lembretes para tarefas, no boot, antes do
    * bloqueio, do IPC e das Automações. Nunca lança; a falha vai ao log (só o passo) e o app segue.
@@ -1231,6 +1237,8 @@ function createAppServices(userData: string): AppServices {
   const inicioMacRead = (): void => {
     if (!lockService?.isLocked()) inicioRef.current?.macRead()
   }
+  // Contrato 141: o atendimento nasce depois do WhatsApp; as mensagens chegam a ele por aqui.
+  const atendimentoRef: { current: AtendimentoService | null } = { current: null }
   // WhatsApp pessoal (contrato 24): desligado por padrão; o serviço é processo filho, só depois de "Instalar" e
   // "Ligar". No smoke, o cliente falso (`backend_fake.py`) e um índice de pacotes falso numa pasta local: nenhum
   // neonize, nenhuma rede, nenhum número de verdade.
@@ -1293,6 +1301,8 @@ function createAppServices(userData: string): AppServices {
       if (!lockService?.isLocked()) broadcast(appWindows(), 'scribe:whatsapp-message', { message, chatName })
       // Contrato 134: as pendências do WhatsApp na tela Início.
       inicioChanged()
+      // Contrato 141: o atendimento recebe também com o app bloqueado (e continua respondendo).
+      void atendimentoRef.current?.onMessage(message, chatName)
       notifyWhatsApp(message, chatName).catch((error: unknown) => console.error('[whatsapp] notificação:', error))
       refreshWhatsAppBadge()
     },
@@ -1484,6 +1494,46 @@ function createAppServices(userData: string): AppServices {
   // Contrato 138: só os dados e a configuração do atendimento; nada aqui lê mensagem nem envia.
   const atendimento = createAtendimentoStore({ dir: join(userData, WHATSAPP_DIR), ...devLog })
   const atendimentoLog = createAtendimentoLog({ dir: join(userData, WHATSAPP_DIR) })
+  // Contrato 141: o serviço do atendimento. A autoridade da prova de envio do agente nasce aqui e vai só para ele; o
+  // motor é o do contrato 139, com o `claude` encontrado (como o rascunho). A passagem para o dono notifica pelo mesmo
+  // mecanismo das mensagens do WhatsApp; o aviso às janelas só sai com o app desbloqueado.
+  const atendimentoService = createAtendimentoService({
+    store: atendimento,
+    history: atendimentoLog,
+    whatsapp: {
+      lastMessages: (chatId, max) => whatsapp.lastMessages(chatId, max),
+      agentSend: (proof, chatId, text) => whatsapp.agentSend(proof, chatId, text),
+      agentPresence: (chatId, state) => whatsapp.agentPresence(chatId, state),
+      clickSend: (senderId, request, onText) => whatsapp.send(senderId, request, onText),
+      ownerName: () => whatsapp.status().me?.name ?? null,
+    },
+    authority: createAgentSendAuthority(),
+    reply: async (input, signal) => {
+      const found = await claude.locate()
+      if (!found.ok) return { acao: 'falhou', motivo: 'o Claude não foi encontrado' }
+      return generateReply(
+        {
+          settings,
+          spawn: smokeClaude?.spawnSummary ?? nodeSpawnSummary,
+          openAcp,
+          acpAvailable: async () => (await acpAgent.current()).available(),
+          userData,
+          baseEnv: process.env,
+          ...devLog,
+        },
+        input,
+        { claudePath: found.path, signal },
+      )
+    },
+    notify: (notice) => void showWhatsAppNotice({ ...notice, count: 1, icon: null }),
+    appName: () => brandName,
+    locked: () => lockService?.isLocked() ?? false,
+    changed: (chatId) => {
+      if (!lockService?.isLocked()) broadcast(appWindows(), 'scribe:atendimento-changed', { chatId })
+    },
+    ...devLog,
+  })
+  atendimentoRef.current = atendimentoService
   const whatsappInsights = createInsightsService({
     settings,
     cache: insightsCache,
@@ -2169,6 +2219,7 @@ function createAppServices(userData: string): AppServices {
     inicio,
     atendimento,
     atendimentoLog,
+    atendimentoService,
     async migrarTarefas() {
       try {
         const result = await migrarTarefas({
@@ -2336,7 +2387,7 @@ function openExternal(url: string): void {
 }
 
 function registerIpc(services: AppServices): void {
-  const { settings, meetings, meetingsService, meetingsIndex, tokenClient, translation, claude, files, summary, analysis, aiNotes, download, branding, updates, chat, chatActions, corpus, acp, lock, google, drive, microsoft, calendar, whatsapp, whatsappInsights, email, emailOrganizer, redes, automations, meet, meetingPrompt, pluginSave, mcp, invites, inviteSuggest, atendimento, atendimentoLog } = services
+  const { settings, meetings, meetingsService, meetingsIndex, tokenClient, translation, claude, files, summary, analysis, aiNotes, download, branding, updates, chat, chatActions, corpus, acp, lock, google, drive, microsoft, calendar, whatsapp, whatsappInsights, email, emailOrganizer, redes, automations, meet, meetingPrompt, pluginSave, mcp, invites, inviteSuggest, atendimento, atendimentoLog, atendimentoService } = services
   /** Reunião salva, renomeada ou com anotações novas: o `.md` dela no acervo do chat é reescrito. */
   const touched = (meetingId: string): void => void corpus.sync(meetingId).catch(() => undefined)
   /**
@@ -2806,12 +2857,24 @@ function registerIpc(services: AppServices): void {
   // Contrato 138: o atendimento no WhatsApp, recusado com o app bloqueado (`WHEN_LOCKED`); o store valida cada pedido.
   handle('scribe:atendimento-state', appOrigin, async () => ({ ok: true as const, state: await atendimento.state() }))
   handle('scribe:atendimento-agent-save', appOrigin, (_event, request) => atendimento.saveAgent(request))
-  handle('scribe:atendimento-agent-delete', appOrigin, (_event, request) => atendimento.deleteAgent(request))
-  handle('scribe:atendimento-binding-save', appOrigin, (_event, request) => atendimento.saveBinding(request))
-  handle('scribe:atendimento-binding-delete', appOrigin, (_event, request) => atendimento.deleteBinding(request))
-  handle('scribe:atendimento-pause-all', appOrigin, (_event, request) => atendimento.pauseAll(request))
+  // Contrato 141: excluir o agente, salvar ou apagar o atendimento e pausar todos avisam o serviço, que descarta o que
+  // não vale mais (pendência, resposta em preparo, proposta).
+  const atendimentoSaved = <T extends { ok: boolean; state?: AtendimentoState }>(result: T): T => {
+    if (result.ok && result.state) atendimentoService.stateChanged(result.state)
+    return result
+  }
+  handle('scribe:atendimento-agent-delete', appOrigin, async (_event, request) => atendimentoSaved(await atendimento.deleteAgent(request)))
+  handle('scribe:atendimento-binding-save', appOrigin, async (_event, request) => atendimentoSaved(await atendimento.saveBinding(request)))
+  handle('scribe:atendimento-binding-delete', appOrigin, async (_event, request) => atendimentoSaved(await atendimento.deleteBinding(request)))
+  handle('scribe:atendimento-pause-all', appOrigin, async (_event, request) => atendimentoSaved(await atendimento.pauseAll(request)))
   handle('scribe:atendimento-risk-accept', appOrigin, () => atendimento.acceptRisk())
   handle('scribe:atendimento-log-list', appOrigin, (_event, request) => atendimentoLog.list(request))
+  // Contrato 141: o runtime, o "Testar agente" e a proposta. Enviar a proposta é envio com clique: o token vem do preload
+  // (`atendimentoDraftSend`) e o serviço do WhatsApp o gasta, como no `scribe:whatsapp-send`.
+  handle('scribe:atendimento-runtime', appOrigin, () => atendimentoService.runtime())
+  handle('scribe:atendimento-agent-test', appOrigin, (_event, request) => atendimentoService.testAgent(request))
+  handle('scribe:atendimento-draft-send', appOrigin, (event, request) => atendimentoService.draftSend(event.sender.id, request))
+  handle('scribe:atendimento-draft-discard', appOrigin, (_event, request) => atendimentoService.draftDiscard(request))
   handle('scribe:tasks-list', appOrigin, () => automations.listTasks())
   handle('scribe:tasks-save', appOrigin, (_event, request) => automations.saveTask(request))
   handle('scribe:tasks-delete', appOrigin, (_event, request) => automations.deleteTask(request))
@@ -2953,6 +3016,8 @@ void app.whenReady().then(async () => {
     services.chat.dispose()
     services.updates.dispose()
     services.drive.dispose()
+    // Contrato 141: antes do WhatsApp, para nenhum envio do agente sair no meio da saída.
+    services.atendimentoService.dispose()
     void services.whatsapp.dispose()
     void services.email.dispose()
     services.redes.dispose()
@@ -3047,6 +3112,7 @@ void app.whenReady().then(async () => {
     services.chat.dispose()
     services.updates.dispose()
     services.drive.dispose()
+    services.atendimentoService.dispose()
     await services.whatsapp.dispose()
     await services.email.dispose()
     services.redes.dispose()
