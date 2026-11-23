@@ -2,7 +2,7 @@
 // sentido certo e na lista de canais permitidos logo abaixo (o preload recusa o que não estiver nela).
 import type { AcpAgentStatus } from './acp'
 import type { FolderAddResult } from './assistant-folders'
-import type { ChatActionEventRequest, ChatActionFunilRequest, ChatActionComposeRequest, ChatActionInstagramDraftRequest, ChatActionReminderChangeRequest, ChatActionReminderRequest, ChatActionResult, ChatActionStateRequest, ChatActionTarefaRequest, EmailComposeFromAction } from './assistant'
+import type { ChatActionEventRequest, ChatActionFunilRequest, ChatActionComposeRequest, ChatActionInstagramDraftRequest, ChatActionReminderChangeRequest, ChatActionReminderRequest, ChatActionResult, ChatActionStateRequest, ChatActionTarefaRequest, ChatActionTriagemRequest, EmailComposeFromAction } from './assistant'
 import type { AgentDeleteResult, AgentInput, AgentSaveResult, AgentsList, AutomationEvent, AutomationRun, AutomationRunListItem, AutomationsStatus, RunStartResult, RunStatus, ScheduledTask, TaskInput, TaskSaveResult, TaskToggleResult } from './automations'
 import type { DriveMeetingStatus, GoogleAccountStatus, GoogleClientSaveResult, MicrosoftAccountStatus, MicrosoftClientSaveResult } from './accounts'
 import type { CalendarListResult, CalendarView } from './calendar'
@@ -328,6 +328,8 @@ export interface InvokeChannels {
    * sem seguir link e marca o cartão `opened`, com o texto do cartão. Nada é enviado: o envio é o "Enviar" do Composer.
    */
   'scribe:chat-action-email-compose': { request: ChatActionComposeRequest; response: EmailComposeFromAction }
+  /** Contrato 163: os cartões da triagem do WhatsApp (criar, editar, pausar e retomar o agente; aplicar a etiqueta). */
+  'scribe:chat-action-triagem': { request: ChatActionTriagemRequest; response: ChatActionResult }
   /** Contrato 21: "Permitir uma vez", "Sempre permitir esta ferramenta" ou "Negar" no cartão de uma ferramenta MCP. */
   'scribe:chat-approval': { request: ChatApprovalAnswer; response: boolean }
   /** Contrato 21: a linha "Conexões" do painel Contexto (os servidores MCP ligados para o chat). */
@@ -1029,6 +1031,7 @@ const INVOKE: Record<InvokeChannel, true> = {
   'scribe:chat-action-funil': true,
   'scribe:chat-action-tarefa': true,
   'scribe:chat-action-email-compose': true,
+  'scribe:chat-action-triagem': true,
   'scribe:chat-approval': true,
   'scribe:mcp-chat-servers': true,
   'scribe:mcp-overview': true,
@@ -1475,6 +1478,8 @@ export const WHEN_LOCKED: Readonly<Record<InvokeChannel, LockedPolicy>> = Object
   'scribe:chat-action-funil': 'refused',
   'scribe:chat-action-tarefa': 'refused',
   'scribe:chat-action-email-compose': 'refused',
+  // Contrato 163: os cartões da triagem, recusados com o app bloqueado como os outros cartões.
+  'scribe:chat-action-triagem': 'refused',
   // Contrato 21: as conexões MCP não aparecem nem mudam com o app bloqueado; o cartão sem resposta nega em 2 min.
   'scribe:chat-approval': 'refused',
   'scribe:mcp-chat-servers': 'refused',

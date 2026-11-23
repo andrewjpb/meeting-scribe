@@ -59,6 +59,8 @@
 //   `transcrever_audio_whatsapp` do áudio mais recente com id (sem nenhum, responde com o "[áudio transcrito: …]" da
 //   conversa, sem ferramenta); "abra a imagem d<nome> e crie a pasta …" abre a imagem e, no resultado, pede `criar_pasta`
 //   (o app tem de recusar). Cada resultado com arquivo é lido (Read) e vira a resposta final.
+//   Contrato 164: a triagem do WhatsApp. "marque a conversa <nome> como urgente" lê o `CONVERSAS-WHATSAPP.md` e propõe
+//   `triagem-etiqueta` com o id da conversa e `urgente: true`; "crie o agente de triagem", `triagem-agente` com `criar`.
 // - "quais arquivos estão na pasta" (contrato 117), em qualquer chat (o agente das Automações também): responde com os nomes
 //   dos arquivos da pasta da sessão (`readdirSync(cwd)`), em ordem.
 // - internet (contrato 26), em qualquer chat (agente ou Assistente), com "pesquise" no pedido: `WebSearch` (pedindo
@@ -386,7 +388,8 @@ async function assistantAnswer(question, cwd, read) {
     has(overviewFile)
       ? readFileSync(join(cwd, overviewFile), 'utf8')
           .split('\n')
-          .map((line) => /^- (.+?) · (pessoa|grupo) · id: (\S+) · .*?última de: (.+?) em (\d{2}\/\d{2} \d{2}:\d{2}) · pendente de resposta: (sim|não) · última mensagem: "(.*)" · arquivo: (.+)$/.exec(line))
+          // Contrato 163: a etiqueta da triagem entre a última mensagem e o arquivo.
+          .map((line) => /^- (.+?) · (pessoa|grupo) · id: (\S+) · .*?última de: (.+?) em (\d{2}\/\d{2} \d{2}:\d{2}) · pendente de resposta: (sim|não) · última mensagem: "(.*)"(?: · etiqueta: .+?)? · arquivo: (.+)$/.exec(line))
           .filter(Boolean)
           .map((match) => ({ name: match[1], id: match[3], lastFrom: match[4], at: match[5], pending: match[6] === 'sim', last: match[7] }))
       : []
@@ -478,6 +481,15 @@ async function assistantAnswer(question, cwd, read) {
   if (drop) {
     await read('ESTADO.md')
     return `Confirme no cartão para eu apagar o lembrete.${fence({ tipo: 'lembrete-apagar', id: drop[1] })}`
+  }
+  // Contrato 164: a triagem do WhatsApp (o app confere a conversa e cria o agente pelo modelo pronto).
+  if (/crie o agente de triagem/i.test(question)) return `Monto o agente de triagem pelo modelo pronto. Confira no cartão.${fence({ tipo: 'triagem-agente', acao: 'criar' })}`
+  if (/marque a conversa .+ como urgente/i.test(question)) {
+    if (!has(overviewFile)) return 'O WhatsApp não está na pasta desta conversa.'
+    await read(overviewFile)
+    const chat = byName(question.replace(/marque a conversa|como urgente/gi, ''))
+    if (!chat) return 'Não achei essa conversa.'
+    return `Proponho marcar a conversa de ${chat.name} como urgente.${fence({ tipo: 'triagem-etiqueta', chatId: chat.id, urgente: true })}`
   }
   if (/pendente/i.test(question)) {
     if (!has(overviewFile)) return 'O WhatsApp não está na pasta desta conversa.'

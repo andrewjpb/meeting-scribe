@@ -42,6 +42,7 @@ import { createVault, type Vault } from '../accounts/vault'
 import { FileTranscriptError } from '../assemblyai/transcript'
 import type { MeetingSummary } from '../../shared/meeting-summary'
 import type { Meeting } from '../../shared/meetings'
+import type { Etiqueta } from '../../shared/triagem'
 import {
   WHATSAPP_CHAT_ID_PATTERN,
   WHATSAPP_DRAFT_INSTRUCTION_MAX,
@@ -229,9 +230,9 @@ export interface WhatsAppService {
   exportChats(folder: string, chatIds: readonly string[], days: number): Promise<string[]>
   /**
    * Assistente (contrato 25, CA2): as conversas dos últimos 14 dias e o resumo delas, relendo só as que têm mensagem
-   * nova desde o último export daquela pasta. Só leitura; conectado.
+   * nova desde o último export daquela pasta. Só leitura; conectado. Contrato 163: com as etiquetas da triagem no resumo.
    */
-  exportRecent(folder: string): Promise<string[]>
+  exportRecent(folder: string, etiquetas?: Readonly<Record<string, Etiqueta>>): Promise<string[]>
   /** A lista de conversas lida pela última exportação (até 2 min), ou lida agora: o nome nos cartões do Assistente. */
   knownChats(): Promise<WhatsAppChat[]>
   /** Contrato 149 (CA5): a mídia, se a conversa está num arquivo exportado para esta pasta e a mensagem está nele. */
@@ -943,9 +944,9 @@ export function createWhatsAppService(deps: WhatsAppServiceDeps): WhatsAppServic
       return exportChats(client, folder, ids, days, now(), exportCache, list, transcripts)
     },
 
-    async exportRecent(folder) {
+    async exportRecent(folder, etiquetas) {
       if (!client || health?.state !== 'connected') return []
-      const result = await exportRecentWith(client, folder, now(), exportCache, transcripts)
+      const result = await exportRecentWith(client, folder, now(), exportCache, transcripts, etiquetas)
       listRead = { at: now(), chats: result.chats }
       return result.files
     },

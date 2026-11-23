@@ -1659,9 +1659,20 @@ function createAppServices(userData: string): AppServices {
     automations: async () => {
       const [agents, tasks, items] = await Promise.all([automations.listAgents(), automations.listTasks(), automations.listRuns({})])
       const runs = await Promise.all(items.slice(0, AUTOMATION_RUNS_IN_SOURCE).map((item) => automations.getRun({ id: item.id })))
-      return { agents: agents.agents, tasks, runs: runs.filter((run): run is AutomationRun => run !== null) }
+      // Contrato 163: a seção da triagem (o estado do motor, o gatilho da tarefa dela e as urgentes de agora).
+      const triagemAgora = triagemRef.current
+      const triagem = triagemAgora
+        ? await Promise.all([triagemAgora.status(), automations.triagemSituacao(), triagemStore.list()])
+            .then(([status, situacao, etiquetas]) => {
+              const schedule = situacao.task?.schedule.kind === 'whatsapp-message' ? situacao.task.schedule : null
+              return { status, urgentes: Object.values(etiquetas).filter((etiqueta) => etiqueta.urgente).length, esperaSeg: schedule?.esperaSeg ?? null, grupos: schedule?.grupos ?? null }
+            })
+            .catch(() => undefined)
+        : undefined
+      return { agents: agents.agents, tasks, runs: runs.filter((run): run is AutomationRun => run !== null), triagem }
     },
-    whatsapp: { exportRecent: (folder: string) => whatsapp.exportRecent(folder), exportChats: (folder: string, chatIds: readonly string[], days: number) => whatsapp.exportChats(folder, chatIds, days) },
+    // Contrato 163: o resumo das conversas leva as etiquetas da triagem.
+    whatsapp: { exportRecent: async (folder: string) => whatsapp.exportRecent(folder, await triagemStore.list().catch(() => ({}))), exportChats: (folder: string, chatIds: readonly string[], days: number) => whatsapp.exportChats(folder, chatIds, days) },
     // Contrato 45: o cache do email (só leitura do store; bloqueado, nada).
     email: { export: (folder: string) => exportEmail(emailExport, folder) },
     // Contrato 76: o guardado das redes (sem ler a Meta); bloqueado, nada.
@@ -1781,6 +1792,14 @@ function createAppServices(userData: string): AppServices {
     instagramAccounts: async () => redes.state().accounts.map((account) => ({ id: account.id, username: account.username })),
     // Contrato 117: o funil, só para ler os ids, as etapas e os contatos do cartão; bloqueado, o bloco fica como texto.
     funil: async () => (lockService?.isLocked() ? null : funil.view()),
+    // Contrato 163: a triagem, só para ler (o estado, o agente e a tarefa; as etiquetas); bloqueado, o bloco fica como texto.
+    triagem: async () => {
+      const motor = triagemRef.current
+      if (lockService?.isLocked() || !motor) return null
+      const [status, situacao] = await Promise.all([motor.status(), automations.triagemSituacao()])
+      return { status, agent: situacao.agent, task: situacao.task }
+    },
+    triagemEtiquetas: async () => (lockService?.isLocked() ? null : triagemStore.list()),
     now: Date.now,
     timeZone,
   }
@@ -2205,6 +2224,19 @@ function createAppServices(userData: string): AppServices {
     funil: { view: () => funil.view(), contatoSave: (request) => funil.contatoSave(request), oportunidadeSave: (request) => funil.oportunidadeSave(request), oportunidadeMove: (request) => funil.oportunidadeMove(request), eventoAdd: (request) => funil.eventoAdd(request) },
     // Contrato 168: o "Abrir no Composer" relê os anexos pelo índice das pastas (sem seguir link, com o tamanho gravado).
     folderIndex,
+    // Contrato 163: os cartões da triagem gravam pelas Automações (o agente e a tarefa, com as regras delas) e pelo `set` da
+    // triagem (a etiqueta); por closures, resolvidas na hora do clique (o motor nasce depois). Nada aqui envia mensagem.
+    triagem: {
+      situacao: async () => {
+        const { agent, task, motivo } = await automations.triagemSituacao()
+        return { agent, task, motivo }
+      },
+      createFromTemplate: () => triagem.createFromTemplate(),
+      saveAgent: (input) => automations.saveAgent(input),
+      saveTask: (input) => automations.saveTask(input),
+      toggleTask: (input) => automations.toggleTask(input),
+      set: (chatId, patch) => triagem.set(chatId, patch),
+    },
     ...devLog,
   })
   // Contrato 110: o funil lê reuniões, email e WhatsApp só pelos caches deles; bloqueado, a view não vai às janelas.
@@ -2803,6 +2835,8 @@ function registerIpc(services: AppServices): void {
   handle('scribe:chat-action-tarefa', appOrigin, (_event, request) => chatActions.tarefa(request).catch((): ChatActionResult => ({ ok: false, error: 'invalid' })))
   // Contrato 168 (E4): o rascunho da resposta com os anexos das pastas, para o Composer; nada é enviado daqui.
   handle('scribe:chat-action-email-compose', appOrigin, (_event, request) => chatActions.emailCompose(request).catch((): EmailComposeFromAction => ({ ok: false, error: 'nao-encontrado' })))
+  // Contrato 163: os cartões da triagem do WhatsApp (o agente e a etiqueta), recusados com o app bloqueado.
+  handle('scribe:chat-action-triagem', appOrigin, (_event, request) => chatActions.triagem(request).catch((): ChatActionResult => ({ ok: false, error: 'invalid' })))
   // Contrato 21: o cartão de aprovação de uma ferramenta MCP e a aba "Conexões". Nenhum segredo volta por aqui.
   handle('scribe:chat-approval', appOrigin, (_event, request) => chat.answerApproval(request))
   handle('scribe:mcp-chat-servers', appOrigin, () => mcp.chatServers())

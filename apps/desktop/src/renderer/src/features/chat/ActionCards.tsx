@@ -17,9 +17,12 @@
 // `scribe:chat-action-tarefa` só no clique; o lembrete cria uma tarefa e o "Ver em Tarefas" abre o detalhe dela.
 // Contrato 168: a resposta de email com anexos das pastas mostra o que vai, o que falta e o total; ela não envia: "Abrir no
 // Composer" pede ao main o rascunho com os bytes, põe no store do email e abre a tela Email (o envio é o do Composer).
+// Contrato 163: os cartões da triagem do WhatsApp (o agente e a etiqueta de uma conversa), pelo `scribe:chat-action-triagem`
+// só no clique; nenhum dos dois envia mensagem. O "Abrir" leva também a Notificações e às abas do WhatsApp.
 import {
   ArrowRight,
   Bell,
+  Bot,
   Calendar,
   CalendarCheck,
   CalendarPlus,
@@ -37,12 +40,15 @@ import {
   MapPin,
   MessageSquare,
   Paperclip,
+  Pause,
   Pencil,
+  Play,
   Plus,
   RotateCcw,
   Send,
   Settings,
   SquareCheck,
+  Tag,
   Trash2,
   TriangleAlert,
   UserPlus,
@@ -82,6 +88,9 @@ import {
   type ChatActionTarefaCampos,
   type ChatActionTarefaConcluir,
   type ChatActionTarefaCriar,
+  type ChatActionTriagemAgente,
+  type ChatActionTriagemEtiqueta,
+  type TriagemAgenteAcao,
   type ChatCalendarAccess,
   type EmailListAction,
   type EmailReplyAction,
@@ -89,9 +98,11 @@ import {
   type ReminderAction,
   type TaskAction,
   type WhatsAppReplyAction,
+  whatsappOpenState,
 } from '@shared/assistant'
 import { EMAIL_TEXT_MAX } from '@shared/email'
-import { describeSchedule, TASK_TIMEOUT_DEFAULT_S } from '@shared/automations'
+import { AGENT_MODEL_LABELS, describeSchedule, TASK_TIMEOUT_DEFAULT_S, TRIAGEM_TEMPLATE } from '@shared/automations'
+import { chipsDe, etiquetaVazia, TRIAGEM_AGENT_NAME, TRIAGEM_ESPERA_SEG } from '@shared/triagem'
 import { formatarBRL } from '@shared/funil-logic'
 import { emailPath, funilPath, meetingPath, redesPath, ROUTE_PATHS, settingsPath, isSettingsTab, tarefasPath, type EmailNavigationState, type WhatsAppNavigationState } from '@shared/routes'
 import { TAREFA_TITULO_MAX } from '@shared/tarefas'
@@ -394,8 +405,8 @@ function OpenCard({ action }: { action: OpenAction }) {
         void navigate(ROUTE_PATHS.gravacao)
         return
       case 'whatsapp': {
-        const state: WhatsAppNavigationState = action.target ? { chatId: action.target } : {}
-        void navigate(ROUTE_PATHS.whatsapp, { state })
+        // Contrato 163: o alvo pode ser uma aba da triagem (sem conversa); senão, é o id da conversa.
+        void navigate(ROUTE_PATHS.whatsapp, { state: whatsappOpenState(action.target) })
         return
       }
       case 'configuracoes':
@@ -421,6 +432,10 @@ function OpenCard({ action }: { action: OpenAction }) {
         return
       case 'tarefa':
         void navigate(action.target ? tarefasPath(action.target) : tarefasPath())
+        return
+      // Contrato 163.
+      case 'notificacoes':
+        void navigate(ROUTE_PATHS.notificacoes)
     }
   }
   return (
@@ -2083,6 +2098,191 @@ function TarefaAdiarCard({ action, actionRef }: { action: ChatActionTarefaAdiar;
   )
 }
 
+// --- Contrato 163: a triagem do WhatsApp ----------------------------------------------------------------------------
+
+const TRIAGEM_CARD_ERRORS: Record<string, string> = {
+  done: 'Este cartão já foi usado.',
+  missing: 'Esta conversa não existe mais.',
+  invalid: 'Não foi possível concluir. Tente de novo.',
+}
+const TRIAGEM_TITULOS: Readonly<Record<TriagemAgenteAcao, string>> = {
+  criar: 'Criar agente de triagem do WhatsApp',
+  editar: 'Atualizar o agente de triagem do WhatsApp',
+  pausar: 'Pausar o agente de triagem do WhatsApp',
+  retomar: 'Retomar o agente de triagem do WhatsApp',
+}
+const TRIAGEM_BOTOES: Readonly<Record<TriagemAgenteAcao, { label: string; icon: typeof Plus }>> = {
+  criar: { label: 'Criar agente', icon: Plus },
+  editar: { label: 'Salvar', icon: Check },
+  pausar: { label: 'Pausar', icon: Pause },
+  retomar: { label: 'Retomar', icon: Play },
+}
+const TRIAGEM_AVISOS: Readonly<Record<string, string>> = {
+  'ja-existe': 'Já existe; vou atualizar.',
+  desligado: 'A triagem está desligada em Configurações.',
+  'sem-agente': 'Não há agente de triagem. Peça para criar o agente primeiro.',
+  'agendamentos-pausados': 'Os agendamentos estão pausados; retome-os nas Automações.',
+  'conversa-nao-encontrada': 'Essa conversa não está no WhatsApp conectado.',
+}
+
+/** Clique num cartão da triagem, com o erro do canal no próprio cartão. */
+function useTriagemClick(actionRef: ChatActionRef): { busy: boolean; failure: string | null; run: () => Promise<void> } {
+  const [busy, setBusy] = useState(false)
+  const [failure, setFailure] = useState<string | null>(null)
+  const run = async (): Promise<void> => {
+    if (busy) return
+    setBusy(true)
+    setFailure(null)
+    const result = await useChat.getState().triagemAction(actionRef)
+    setBusy(false)
+    if (!result.ok) setFailure(TRIAGEM_CARD_ERRORS[result.error] ?? TRIAGEM_CARD_ERRORS['invalid'] ?? '')
+  }
+  return { busy, failure, run }
+}
+
+/** Um par rótulo/valor dos cartões da triagem (o rótulo em 13 px, cinza, em cima; o valor em 15 px). */
+function TriagemPar({ campo, rotulo, children }: { campo: string; rotulo: string; children: ReactNode }) {
+  return (
+    <div className="flex flex-col gap-0.5">
+      <dt className="text-13 text-text-muted">{rotulo}</dt>
+      <dd data-chat-triagem-valor={campo} className="min-w-0 text-15 text-text">
+        {children}
+      </dd>
+    </div>
+  )
+}
+
+function TriagemAvisos({ avisos }: { avisos: readonly string[] }) {
+  if (!avisos.length) return null
+  return (
+    <div className="flex flex-col gap-1 pl-[22px]">
+      {avisos.map((aviso) => (
+        <p key={aviso} data-chat-triagem-aviso={aviso} className="flex items-start gap-1.5 text-12 text-text-muted">
+          <Icon icon={CircleAlert} size={14} className="mt-px shrink-0" />
+          <span>{TRIAGEM_AVISOS[aviso] ?? aviso}</span>
+        </p>
+      ))}
+    </div>
+  )
+}
+
+/** O que vem depois do clique num cartão da triagem: o resultado, ou o erro (o cartão `failed`). */
+function TriagemOutcome({ action }: { action: ChatActionTriagemAgente | ChatActionTriagemEtiqueta }) {
+  if (action.status === 'failed') return action.error ? <CardError text={action.error} /> : null
+  return (
+    <div className="pl-[22px]">
+      <Outcome action={action} />
+    </div>
+  )
+}
+
+/**
+ * Contrato 163 (mockup 07): "Criar agente de triagem do WhatsApp", com Nome, Modelo, Gatilho e Permissões (sem as
+ * instruções). Sem o agente, os valores do modelo pronto; o gatilho mostra o que vai ficar (o pedido sobre o de agora).
+ */
+function TriagemAgenteCard({ action, actionRef }: { action: ChatActionTriagemAgente; actionRef: ChatActionRef }) {
+  const { busy, failure, run } = useTriagemClick(actionRef)
+  // Sem a tarefa, o gatilho padrão do modelo pronto (30 s, sem grupos).
+  const esperaSeg = action.pedido.esperaSeg ?? action.tarefa?.esperaSeg ?? TRIAGEM_ESPERA_SEG.padrao
+  const grupos = action.pedido.grupos ?? action.tarefa?.grupos ?? false
+  const navigate = useNavigate()
+  const botao = TRIAGEM_BOTOES[action.acao]
+  const semAgente = action.avisos.includes('sem-agente')
+  // O "criar" de um agente que já existe, sem nada a mudar: o botão leva ao agente (e o clique registra que nada mudou).
+  const nadaAMudar = action.avisos.includes('ja-existe') && action.pedido.instrucoes === null && action.pedido.esperaSeg === null && action.pedido.grupos === null
+  const abrirAgente = async (): Promise<void> => {
+    await run()
+    useAutomations.getState().setTab('agentes')
+    void navigate(ROUTE_PATHS.automacoes)
+  }
+  return (
+    <div data-chat-action="triagem-agente" data-chat-action-kind="triagem-agente" data-chat-action-status={action.status} className={CARD}>
+      <p className="flex items-start gap-2 text-15 font-medium text-title">
+        <Icon icon={Bot} size={16} className="mt-0.5 shrink-0 text-text-muted" />
+        <span data-chat-action-title>{TRIAGEM_TITULOS[action.acao]}</span>
+      </p>
+      <dl data-chat-triagem-pares className="flex flex-col gap-2 pl-[22px]">
+        <TriagemPar campo="nome" rotulo="Nome">
+          {action.agente?.nome ?? TRIAGEM_AGENT_NAME}
+        </TriagemPar>
+        <TriagemPar campo="modelo" rotulo="Modelo">
+          {AGENT_MODEL_LABELS[action.agente?.modelo ?? TRIAGEM_TEMPLATE.model]}
+        </TriagemPar>
+        <TriagemPar campo="gatilho" rotulo="Gatilho">
+          {`${describeSchedule({ kind: 'whatsapp-message', esperaSeg, grupos }, 'UTC')} · espera ${esperaSeg} s · ${grupos ? 'com grupos' : 'sem grupos'}`}
+        </TriagemPar>
+        <TriagemPar campo="permissoes" rotulo="Permissões">
+          {action.permissoes.join(' · ')}
+        </TriagemPar>
+      </dl>
+      {action.status === 'proposed' && <TriagemAvisos avisos={action.avisos} />}
+      {action.status === 'proposed' ? (
+        <div className="flex flex-wrap items-center gap-2 pl-[22px]">
+          {nadaAMudar ? (
+            <Button action="chat-action-triagem-abrir-agente" variant="secondary" icon={ExternalLink} onClick={() => void abrirAgente()} disabled={busy}>
+              Abrir agente
+            </Button>
+          ) : (
+            <Button action={`chat-action-triagem-${action.acao}`} icon={botao.icon} onClick={() => void run()} disabled={busy || semAgente}>
+              {botao.label}
+            </Button>
+          )}
+          <DismissButton actionRef={actionRef} disabled={busy} />
+        </div>
+      ) : (
+        <TriagemOutcome action={action} />
+      )}
+      <FunilFailure text={failure} />
+    </div>
+  )
+}
+
+/** Contrato 163 (mockup 07): "Etiquetar conversa <nome> como Urgente · Profissional", com as etiquetas e "Aplicar". */
+function TriagemEtiquetaCard({ action, actionRef }: { action: ChatActionTriagemEtiqueta; actionRef: ChatActionRef }) {
+  const { busy, failure, run } = useTriagemClick(actionRef)
+  const chips = chipsDe({ ...etiquetaVazia(0), ...action.depois })
+  const nome = action.chat?.name ?? action.chatId.split('@')[0] ?? action.chatId
+  return (
+    <div data-chat-action="triagem-etiqueta" data-chat-action-kind="triagem-etiqueta" data-chat-action-status={action.status} className={CARD}>
+      <p className="flex items-start gap-2 text-15 font-medium text-title">
+        <Icon icon={Tag} size={16} className="mt-0.5 shrink-0 text-text-muted" />
+        <span data-chat-action-title>{chips.length ? `Etiquetar conversa ${nome} como ${chips.join(' · ')}` : `Limpar a etiqueta da conversa ${nome}`}</span>
+      </p>
+      <dl data-chat-triagem-pares className="flex flex-col gap-2 pl-[22px]">
+        <TriagemPar campo="etiqueta" rotulo="Etiqueta">
+          {chips.length ? (
+            <span className="flex flex-wrap items-center gap-1.5">
+              {chips.map((chip) => (
+                <span
+                  key={chip}
+                  data-chat-triagem-chip={chip}
+                  className={`flex h-5 shrink-0 items-center rounded-[var(--radius-control)] px-1.5 text-11 font-medium ${chip === 'Urgente' ? 'bg-accent text-on-accent' : 'bg-bg-sunken text-text-muted'}`}
+                >
+                  {chip}
+                </span>
+              ))}
+            </span>
+          ) : (
+            'Sem etiqueta'
+          )}
+        </TriagemPar>
+      </dl>
+      {action.status === 'proposed' && <TriagemAvisos avisos={action.avisos} />}
+      {action.status === 'proposed' ? (
+        <div className="flex flex-wrap items-center gap-2 pl-[22px]">
+          <Button action="chat-action-triagem-aplicar" icon={Check} onClick={() => void run()} disabled={busy || !action.chat}>
+            Aplicar
+          </Button>
+          <DismissButton actionRef={actionRef} disabled={busy} />
+        </div>
+      ) : (
+        <TriagemOutcome action={action} />
+      )}
+      <FunilFailure text={failure} />
+    </div>
+  )
+}
+
 /** O cartão de uma ação, pelo tipo. */
 function ActionCard({ action, actionRef, choice }: { action: ChatAction; actionRef: ChatActionRef; choice: boolean }) {
   if (action.kind === 'lembrete') return <ReminderCard action={action} actionRef={actionRef} />
@@ -2107,6 +2307,9 @@ function ActionCard({ action, actionRef, choice }: { action: ChatAction; actionR
   if (action.kind === 'tarefa-criar') return <TarefaCriarCard action={action} actionRef={actionRef} />
   if (action.kind === 'tarefa-concluir') return <TarefaConcluirCard action={action} actionRef={actionRef} />
   if (action.kind === 'tarefa-adiar') return <TarefaAdiarCard action={action} actionRef={actionRef} />
+  // Contrato 163.
+  if (action.kind === 'triagem-agente') return <TriagemAgenteCard action={action} actionRef={actionRef} />
+  if (action.kind === 'triagem-etiqueta') return <TriagemEtiquetaCard action={action} actionRef={actionRef} />
   return <OpenCard action={action} />
 }
 

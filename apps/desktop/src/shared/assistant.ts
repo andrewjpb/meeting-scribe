@@ -15,10 +15,15 @@
 // Contrato 127: os cartões das tarefas (`tarefa-criar`, `tarefa-concluir`, `tarefa-adiar`), pelo canal único
 // `scribe:chat-action-tarefa`; o `lembrete` passa a criar uma tarefa com aviso e `lembrete-editar`/`-apagar` operam sobre
 // tarefas abertas com lembrete (o id inteiro ou o curto, de 8 caracteres, do `TAREFAS.md`).
-import { formatRunAt, wallTime, type Schedule } from './automations'
+// Contrato 163: os cartões da triagem do WhatsApp (`triagem-agente`, `triagem-etiqueta`), pelo canal único
+// `scribe:chat-action-triagem`; a triagem só etiqueta: nenhum dos dois envia mensagem. O "Abrir" ganha Notificações e as
+// abas do WhatsApp como alvo.
+import { formatRunAt, wallTime, type AgentModel, type Schedule } from './automations'
 import type { Chat } from './chat'
 import { CAPTION_MAX } from './redes-rules'
 import { EMAIL_ATTACH_MAX_FILES, type EmailOutgoingAttachment } from './email'
+import type { WhatsAppNavigationState } from './routes'
+import type { Etiqueta, TriagemAba, TriagemAmbito } from './triagem'
 
 /** Linguagem da cerca do bloco de ação: ```lap-acao ... ```. */
 export const ACTION_FENCE = 'lap-acao'
@@ -70,8 +75,9 @@ export const INSTAGRAM_DRAFT_CAPTION_MAX = CAPTION_MAX * 4
  * Telas que o botão "Abrir" alcança. `alvo`: a reunião, a conversa, a aba de Configurações ou a aba das Automações.
  * Contrato 117 (R20): o funil (Oportunidades), uma oportunidade e um contato (`alvo`: o id).
  * Contrato 127 (R30): a lista de tarefas e uma tarefa (`alvo`: o id inteiro ou o curto).
+ * Contrato 163: Notificações (sem alvo); no WhatsApp, o `alvo` pode ser também uma aba da triagem (`TRIAGEM_OPEN_TABS`).
  */
-export const OPEN_SCREENS = ['reuniao', 'reunioes', 'whatsapp', 'configuracoes', 'automacoes', 'gravacao', 'funil', 'oportunidade', 'contato', 'tarefas', 'tarefa'] as const
+export const OPEN_SCREENS = ['reuniao', 'reunioes', 'whatsapp', 'configuracoes', 'automacoes', 'gravacao', 'funil', 'oportunidade', 'contato', 'tarefas', 'tarefa', 'notificacoes'] as const
 export type OpenScreen = (typeof OPEN_SCREENS)[number]
 export const OPEN_SCREEN_LABELS: Readonly<Record<OpenScreen, string>> = {
   reuniao: 'a reunião',
@@ -85,7 +91,20 @@ export const OPEN_SCREEN_LABELS: Readonly<Record<OpenScreen, string>> = {
   contato: 'o contato',
   tarefas: 'Tarefas',
   tarefa: 'a tarefa',
+  notificacoes: 'Notificações',
 }
+/** Contrato 163: as abas do WhatsApp que o "Abrir" aceita como `alvo` (a "Todas" é a tela sem alvo). */
+export const TRIAGEM_OPEN_TABS = ['nao-lidas', 'urgentes', 'pessoal', 'profissional'] as const satisfies readonly TriagemAba[]
+export type TriagemOpenTab = (typeof TRIAGEM_OPEN_TABS)[number]
+export const TRIAGEM_OPEN_TAB_LABELS: Readonly<Record<TriagemOpenTab, string>> = { 'nao-lidas': 'Não lidas', urgentes: 'Urgentes', pessoal: 'Pessoal', profissional: 'Profissional' }
+export const isTriagemOpenTab = (value: string | null | undefined): value is TriagemOpenTab => (TRIAGEM_OPEN_TABS as readonly (string | null | undefined)[]).includes(value)
+/** Contrato 163: o `state` do "Abrir" na tela WhatsApp: a aba da triagem (sem conversa), a conversa (o id) ou nada. */
+export function whatsappOpenState(target: string | null): WhatsAppNavigationState {
+  if (isTriagemOpenTab(target)) return { aba: target }
+  return target ? { chatId: target } : {}
+}
+/** Contrato 163: "Abrir WhatsApp › Urgentes". */
+export const triagemTabOpenLabel = (tab: TriagemOpenTab): string => `Abrir WhatsApp › ${TRIAGEM_OPEN_TAB_LABELS[tab]}`
 /** Abas das Automações que o "Abrir" aceita. */
 export const AUTOMATIONS_TABS = ['agentes', 'tarefas', 'execucoes'] as const
 
@@ -117,6 +136,9 @@ export const CHAT_ACTION_KINDS = [
   'tarefa-criar',
   'tarefa-concluir',
   'tarefa-adiar',
+  // Contrato 163.
+  'triagem-agente',
+  'triagem-etiqueta',
 ] as const
 export type ChatActionKind = (typeof CHAT_ACTION_KINDS)[number]
 
@@ -482,6 +504,51 @@ export interface ChatActionTarefaAdiar extends ActionBase {
   error: string | null
 }
 
+/** Contrato 163: o que o cartão do agente de triagem faz no clique. */
+export const TRIAGEM_AGENTE_ACOES = ['criar', 'editar', 'pausar', 'retomar'] as const
+export type TriagemAgenteAcao = (typeof TRIAGEM_AGENTE_ACOES)[number]
+/**
+ * `ja-existe`: o "criar" virou "editar"; `sem-agente`: não há agente para editar, pausar ou retomar; `desligado`: o
+ * interruptor das Configurações; `agendamentos-pausados`: a pausa geral das Automações (retomar o agente não basta).
+ */
+export const TRIAGEM_AGENTE_AVISOS = ['ja-existe', 'sem-agente', 'desligado', 'agendamentos-pausados'] as const
+export type TriagemAgenteAviso = (typeof TRIAGEM_AGENTE_AVISOS)[number]
+/** Contrato 163: os primeiros caracteres das instruções que o cartão guarda (mais o "…"). */
+export const TRIAGEM_INSTRUCOES_PREVIEW = 140
+
+/**
+ * Contrato 163: `triagem-agente`, criar, editar, pausar ou retomar o agente "Triagem do WhatsApp" e a tarefa dele. `agente`
+ * e `tarefa` são os de agora, lidos das Automações (`null`: não existe; o cartão mostra os valores do modelo pronto);
+ * `pedido` é o que o modelo pediu para mudar (`null`: fica como está). As instruções não aparecem no cartão.
+ */
+export interface ChatActionTriagemAgente extends ActionBase {
+  kind: 'triagem-agente'
+  acao: TriagemAgenteAcao
+  agente: { id: string; nome: string; modelo: AgentModel } | null
+  tarefa: { id: string; esperaSeg: number; grupos: boolean; enabled: boolean } | null
+  pedido: { instrucoes: string | null; esperaSeg: number | null; grupos: boolean | null }
+  permissoes: string[]
+  instrucoesPreview: string
+  avisos: TriagemAgenteAviso[]
+  error: string | null
+}
+
+/**
+ * Contrato 163: `triagem-etiqueta`, a escolha do dono numa conversa (o mesmo `set` da tela do WhatsApp). `chat` lido do
+ * app (`null`: a conversa não existe e o botão fica desabilitado); `antes`, a etiqueta de agora; `depois`, a prévia;
+ * `pedido`, os eixos pedidos (`null`: não mexe; `ambito: 'nenhum'` limpa o âmbito).
+ */
+export interface ChatActionTriagemEtiqueta extends ActionBase {
+  kind: 'triagem-etiqueta'
+  chatId: string
+  chat: { id: string; name: string; kind: 'person' | 'group' } | null
+  antes: Etiqueta | null
+  depois: { urgente: boolean; ambito: TriagemAmbito | null }
+  pedido: { urgente: boolean | null; ambito: TriagemAmbito | 'nenhum' | null }
+  avisos: 'conversa-nao-encontrada'[]
+  error: string | null
+}
+
 export type ChatAction =
   | ReminderAction
   | WhatsAppReplyAction
@@ -501,6 +568,8 @@ export type ChatAction =
   | ChatActionTarefaCriar
   | ChatActionTarefaConcluir
   | ChatActionTarefaAdiar
+  | ChatActionTriagemAgente
+  | ChatActionTriagemEtiqueta
 
 /** Contrato 117: os cartões do funil (o canal `scribe:chat-action-funil` executa pelo tipo gravado). */
 export type ChatActionFunil = ChatActionOportunidadeCriar | ChatActionOportunidadeMover | ChatActionOportunidadeProximoPasso | ChatActionContatoCriar
@@ -509,6 +578,10 @@ export const FUNIL_ACTION_KINDS = ['oportunidade-criar', 'oportunidade-mover', '
 /** Contrato 127 (D14): os cartões das tarefas (o canal `scribe:chat-action-tarefa` executa pelo tipo gravado). */
 export type ChatActionTarefa = ChatActionTarefaCriar | ChatActionTarefaConcluir | ChatActionTarefaAdiar
 export const TAREFA_ACTION_KINDS = ['tarefa-criar', 'tarefa-concluir', 'tarefa-adiar'] as const satisfies readonly ChatActionTarefa['kind'][]
+
+/** Contrato 163: os cartões da triagem (o canal `scribe:chat-action-triagem` executa pelo tipo gravado). */
+export type ChatActionTriagem = ChatActionTriagemAgente | ChatActionTriagemEtiqueta
+export const TRIAGEM_ACTION_KINDS = ['triagem-agente', 'triagem-etiqueta'] as const satisfies readonly ChatActionTriagem['kind'][]
 
 /** Qual cartão de qual resposta. */
 export interface ChatActionRef {
@@ -585,6 +658,9 @@ export interface ChatActionTarefaCampos {
 export interface ChatActionTarefaRequest extends ChatActionRef {
   campos?: ChatActionTarefaCampos | undefined
 }
+
+/** Contrato 163: "Criar agente", "Salvar", "Pausar", "Retomar" e "Aplicar" nos cartões da triagem (nada a editar). */
+export type ChatActionTriagemRequest = ChatActionRef
 
 /**
  * Estado depois do clique que não cria nada no main: "Descartar"; "Enviar" que já passou pelo contrato 24 (`sent`,
@@ -707,6 +783,22 @@ export const tarefaJaExistiaText = (titulo: string): string => `A tarefa já exi
 export const tarefaConcluidaText = (titulo: string): string => `Tarefa concluída: ${titulo}`.slice(0, 200)
 /** Contrato 127: "Adiada para 27/11", de `AAAA-MM-DD`. */
 export const tarefaAdiadaText = (prazo: string): string => `Adiada para ${prazo.slice(8, 10)}/${prazo.slice(5, 7)}`
+
+/** Contrato 163: os cartões da triagem depois do clique. */
+export const TRIAGEM_AGENTE_RESULT: Readonly<Record<TriagemAgenteAcao, string>> = {
+  criar: 'Agente de triagem criado',
+  editar: 'Agente de triagem atualizado',
+  pausar: 'Agente de triagem pausado',
+  retomar: 'Agente de triagem retomado',
+}
+/** O "criar" de um agente que já existia, sem nada a mudar (ou com os mesmos valores). */
+export const TRIAGEM_JA_EXISTIA_TEXT = 'O agente de triagem já existia; nada mudou.'
+/** O "retomar" com a pausa geral dos agendamentos: a tarefa volta a ligar, o motor segue parado. */
+export const TRIAGEM_RETOMADO_PAUSADOS_TEXT = 'Agente de triagem retomado; os agendamentos continuam pausados.'
+export const TRIAGEM_SEM_AGENTE_TEXT = 'Não há agente de triagem. Peça para criar o agente primeiro.'
+export const TRIAGEM_CONVERSA_NAO_ENCONTRADA_TEXT = 'Essa conversa não está no WhatsApp conectado.'
+/** "Etiqueta aplicada: Urgente · Profissional", ou "Etiqueta limpa" sem etiqueta nenhuma. */
+export const triagemEtiquetaText = (chips: readonly string[]): string => (chips.length ? `Etiqueta aplicada: ${chips.join(' · ')}` : 'Etiqueta limpa')
 
 /** "Enviada às 19:40", na hora local. */
 export function sentText(at: number): string {

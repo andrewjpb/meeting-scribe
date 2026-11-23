@@ -14,7 +14,7 @@ export interface FrequencyDraft {
   onceAt: string
   delayMin: number
   cron: string
-  /** Contrato 159: "Quando chega mensagem do WhatsApp" (sem controle no formulário ainda: só preserva o que veio). */
+  /** Contrato 159: "Quando chega mensagem do WhatsApp" (os controles do formulário chegam no contrato 162). */
   esperaSeg: number
   grupos: boolean
 }
@@ -27,6 +27,8 @@ export const FREQUENCY_OPTIONS: readonly { value: ScheduleKind; label: string }[
   { value: 'monthly', label: 'Todo mês no dia' },
   { value: 'once', label: 'Uma vez em' },
   { value: 'after-meeting', label: 'Depois de cada reunião' },
+  // Contrato 162: a triagem do WhatsApp (sem próxima execução pelo relógio).
+  { value: 'whatsapp-message', label: 'Quando chega mensagem do WhatsApp' },
   { value: 'cron', label: 'Avançado: expressão cron' },
 ]
 

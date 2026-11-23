@@ -15,6 +15,9 @@
 //
 // Contrato 149: o cache do export guarda também a conversa e as mídias de cada arquivo; `exportedMedia` é o recorte que as
 // ferramentas de mídia do Assistente conferem (a conversa e a mensagem têm de estar num arquivo da pasta da pergunta).
+//
+// Contrato 163: cada linha do `CONVERSAS-WHATSAPP.md` leva a etiqueta da triagem ("Urgente · Profissional", ou "—") e o
+// cabeçalho conta as urgentes e as pendentes de resposta. As etiquetas chegam de quem chama (o store da triagem).
 import { chmod, readdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
@@ -31,6 +34,7 @@ import {
   type WhatsAppMedia,
   type WhatsAppMessage,
 } from '../../shared/whatsapp'
+import { chipsDe, type Etiqueta } from '../../shared/triagem'
 import type { BridgeClient } from './client'
 
 const DAY_MS = 86_400_000
@@ -348,8 +352,9 @@ export async function exportChats(
   return (await exportSet(client, folder, chosen, days, Math.floor(WHATSAPP_EXPORT_MESSAGES_MAX / chosen.length), now, cache, transcripts)).files
 }
 
-/** Uma linha do `CONVERSAS-WHATSAPP.md`. */
-export function overviewLine(chat: WhatsAppChat, reply: ChatReplyState, file: string): string {
+/** Uma linha do `CONVERSAS-WHATSAPP.md`. Contrato 163: com a etiqueta da triagem (`null`: "—"). */
+export function overviewLine(chat: WhatsAppChat, reply: ChatReplyState, file: string, etiqueta: Etiqueta | null = null): string {
+  const chips = chipsDe(etiqueta)
   const last = chat.lastMessage ? oneLine(chat.lastMessage.text || (chat.lastMessage.media ? `[anexo: ${mediaLabel(chat.lastMessage.media)}]` : '')) : ''
   const preview = last.length > 120 ? `${last.slice(0, 119)}…` : last
   return [
@@ -360,6 +365,7 @@ export function overviewLine(chat: WhatsAppChat, reply: ChatReplyState, file: st
     `última de: ${reply.lastFrom ?? 'ninguém'}${reply.lastAt !== null ? ` em ${stampLabel(reply.lastAt)}` : ''}`,
     `pendente de resposta: ${reply.pending ? 'sim' : 'não'}`,
     `última mensagem: "${preview.replace(/"/g, "'")}"`,
+    `etiqueta: ${chips.length ? chips.join(' · ') : '—'}`,
     `arquivo: ${file}`,
   ].join(' · ')
 }
@@ -369,7 +375,14 @@ export function overviewLine(chat: WhatsAppChat, reply: ChatReplyState, file: st
  * divididas entre elas, e o `CONVERSAS-WHATSAPP.md`. Uma leitura só da lista (`chats()`, devolvida para os cartões);
  * com o cache, só as conversas com mensagem nova são lidas e reescritas. Devolve os nomes (o resumo por último).
  */
-export async function exportRecentWith(client: Pick<BridgeClient, 'messages' | 'chats'>, folder: string, now = Date.now(), cache?: ExportCache, transcripts?: SavedTranscripts): Promise<ExportResult> {
+export async function exportRecentWith(
+  client: Pick<BridgeClient, 'messages' | 'chats'>,
+  folder: string,
+  now = Date.now(),
+  cache?: ExportCache,
+  transcripts?: SavedTranscripts,
+  etiquetas?: Readonly<Record<string, Etiqueta>>,
+): Promise<ExportResult> {
   const since = now - WHATSAPP_RECENT_DAYS * DAY_MS
   const all = await client.chats()
   const chosen = all
@@ -379,12 +392,15 @@ export async function exportRecentWith(client: Pick<BridgeClient, 'messages' | '
   if (!chosen.length) return { files: [], chats: all, read: 0 }
   const share = Math.max(1, Math.floor(WHATSAPP_RECENT_MESSAGES_MAX / chosen.length))
   const { files, read } = await exportSet(client, folder, chosen, WHATSAPP_RECENT_DAYS, share, now, cache, transcripts)
-  const lines = chosen.map((chat, at) => overviewLine(chat, replyState(chat), files[at] ?? exportFileName(chat)))
+  const lines = chosen.map((chat, at) => overviewLine(chat, replyState(chat), files[at] ?? exportFileName(chat), etiquetas?.[chat.id] ?? null))
   const pending = lines.filter((line) => line.includes(' · pendente de resposta: sim · ')).length
+  const urgentes = chosen.filter((chat) => etiquetas?.[chat.id]?.urgente === true).length
   const overview = [
     `# Conversas do WhatsApp (últimos ${WHATSAPP_RECENT_DAYS} dias)`,
     '',
-    `Uma linha por conversa, da mais recente para a mais antiga: nome · tipo · id · não lidas · quem mandou a última · pendente de resposta · a última mensagem · arquivo. "Pendente de resposta: sim" quer dizer que a última mensagem é do outro lado (você não respondeu depois dela). ${pending} de ${lines.length} pendentes.`,
+    `Urgentes: ${urgentes} · Pendentes de resposta: ${pending} de ${lines.length}`,
+    '',
+    `Uma linha por conversa, da mais recente para a mais antiga: nome · tipo · id · não lidas · quem mandou a última · pendente de resposta · a última mensagem · etiqueta · arquivo. "Pendente de resposta: sim" quer dizer que a última mensagem é do outro lado (você não respondeu depois dela). "Etiqueta" é a da triagem do WhatsApp: "Urgente" (pede atenção hoje) e o âmbito, "Pessoal" ou "Profissional"; "—" quando a conversa não tem etiqueta.`,
     '',
     ...lines,
   ]
@@ -393,8 +409,15 @@ export async function exportRecentWith(client: Pick<BridgeClient, 'messages' | '
 }
 
 /** `exportRecentWith`, só os nomes (o contrato 25 sem cache). */
-export async function exportRecent(client: Pick<BridgeClient, 'messages' | 'chats'>, folder: string, now = Date.now(), cache?: ExportCache, transcripts?: SavedTranscripts): Promise<string[]> {
-  return (await exportRecentWith(client, folder, now, cache, transcripts)).files
+export async function exportRecent(
+  client: Pick<BridgeClient, 'messages' | 'chats'>,
+  folder: string,
+  now = Date.now(),
+  cache?: ExportCache,
+  transcripts?: SavedTranscripts,
+  etiquetas?: Readonly<Record<string, Etiqueta>>,
+): Promise<string[]> {
+  return (await exportRecentWith(client, folder, now, cache, transcripts, etiquetas)).files
 }
 
 /**
