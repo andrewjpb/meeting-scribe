@@ -1,11 +1,13 @@
 // Barra lateral em pilha (contrato 65, CA20; contrato 66, CA11, o nível Configurações; contrato 67, CA13, o nível Assistente; contrato 112, CA1, o nível Funil): o nível de cada rota, o "voltar" que vale só para a navegação dele, o
 // deslize entre os níveis, o último email aberto na sessão e o número do item "Email" na raiz. Contrato 123 (CA1): Tarefas,
-// item da raiz sem nível próprio.
+// item da raiz sem nível próprio. Contrato 135 (D1): Início, o primeiro item da raiz, também sem nível.
 import { beforeEach, describe, expect, it } from 'vitest'
 import { EMAIL_INBOX_MAILBOX, EMAIL_SENT_MAILBOX, type EmailMessage } from '../../src/shared/email'
 import { emailFolderFromSlug, emailFolderSegment, emailPath, FUNIL_SECTIONS, funilPath, isFunilSection, isRedesSection, REDES_SECTIONS, redesPath, ROUTE_PATHS, ROUTE_REDIRECTS, TAREFAS_ROOT_PATH, tarefasPath } from '../../src/shared/routes'
 import { activeNavId, lastEmailPath, lastRedesPath, levelFor, rememberEmailPath, rememberRedesPath, resetSidebarMemory, sectionOf, SIDEBAR_SECTIONS, SIDEBAR_SLIDE_FALLBACK_MS, SIDEBAR_SLIDE_MS, transitionOf } from '../../src/renderer/src/app/sidebarLevels'
 import { totalUnread } from '../../src/renderer/src/features/email/format'
+// A tabela de rotas importa todas as telas (JSX): o teste lê a ordem dos `nav` no texto do próprio arquivo.
+import tabelaDeRotas from '../../src/renderer/src/app/routes.tsx?raw'
 
 type Unread = Pick<EmailMessage, 'seen' | 'mailbox'>
 const inbox = (unread: number, read = 1): Unread[] => [...Array.from({ length: unread }, () => ({ seen: false, mailbox: EMAIL_INBOX_MAILBOX })), ...Array.from({ length: read }, () => ({ seen: true, mailbox: EMAIL_INBOX_MAILBOX }))]
@@ -172,6 +174,22 @@ describe('Tarefas, item da raiz sem nível (contrato 123, CA1)', () => {
     expect(tarefasPath()).toBe('/tarefas')
     expect(tarefasPath('t/1 a')).toBe('/tarefas/t%2F1%20a')
     expect(ROUTE_REDIRECTS).toEqual([{ from: '/perguntar', to: '/assistente' }])
+  })
+})
+
+describe('Início, primeiro item da raiz sem nível (contrato 135, D1)', () => {
+  it('/inicio não tem nível: a raiz fica, com Início marcado; "/" continua sendo Reuniões', () => {
+    expect(ROUTE_PATHS.inicio).toBe('/inicio')
+    expect(ROUTE_PATHS.reunioes).toBe('/')
+    expect(sectionOf('/inicio')).toBeNull()
+    expect(levelFor('/inicio', null, 'k')).toBe('root')
+    expect(activeNavId('/inicio', 'inicio')).toBe('inicio')
+    expect(ROUTE_REDIRECTS).toEqual([{ from: '/perguntar', to: '/assistente' }])
+  })
+
+  it('a tabela de rotas põe "Início" (ícone House) antes de todos os outros itens da barra', () => {
+    const itens = [...tabelaDeRotas.matchAll(/nav: \{ label: '([^']+)', icon: (\w+) \}/g)].map((match) => `${match[1]}:${match[2]}`)
+    expect(itens).toEqual(['Início:House', 'Reuniões:NotebookText', 'Tarefas:SquareCheck', 'Assistente:Sparkles', 'Email:Mail', 'Funil:Funnel', 'Redes:AtSign', 'Automações:Bot', 'WhatsApp:Smartphone', 'Configurações:Settings'])
   })
 })
 

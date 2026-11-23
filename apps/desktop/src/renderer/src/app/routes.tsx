@@ -1,6 +1,6 @@
 // Tabela de rotas. Rota nova: id em shared/routes.ts, linha aqui; com `nav`, aparece na barra lateral.
 import type { LucideIcon } from 'lucide-react'
-import { AtSign, Bot, Funnel, Mail, NotebookText, Settings, Smartphone, Sparkles, SquareCheck } from 'lucide-react'
+import { AtSign, Bot, Funnel, House, Mail, NotebookText, Settings, Smartphone, Sparkles, SquareCheck } from 'lucide-react'
 import type { ReactElement } from 'react'
 import { matchPath, Navigate } from 'react-router'
 import { ROUTE_PATHS, ROUTE_REDIRECTS, SETTINGS_ROUTE_PATTERN, type RouteId } from '@shared/routes'
@@ -8,6 +8,7 @@ import { AutomationsScreen } from '../features/agents/AutomationsScreen'
 import { ChatScreen } from '../features/chat/ChatScreen'
 import { EmailScreen } from '../features/email/EmailScreen'
 import { FunilScreen } from '../features/funil/FunilScreen'
+import { InicioScreen } from '../features/inicio/InicioScreen'
 import { LiveScreen } from '../features/live/LiveScreen'
 import { MeetingDetailScreen } from '../features/meetings/MeetingDetailScreen'
 import { MeetingsScreen } from '../features/meetings/MeetingsScreen'
@@ -24,6 +25,8 @@ export interface AppRoute {
 }
 
 export const APP_ROUTES: AppRoute[] = [
+  // Contrato 135 (D1): "Início" no topo, acima de "Reuniões", sem número e sem nível em pilha.
+  { id: 'inicio', path: ROUTE_PATHS.inicio, element: <InicioScreen />, nav: { label: 'Início', icon: House } },
   { id: 'reunioes', path: ROUTE_PATHS.reunioes, element: <MeetingsScreen />, nav: { label: 'Reuniões', icon: NotebookText } },
   // Contrato 123 (R1): "Tarefas" logo depois de "Reuniões", com o número de vencidas e sem nível em pilha (o detalhe de
   // uma tarefa abre ao lado da lista, na mesma tela). `SquareCheck` é o `CheckSquare` da spec com o nome novo do lucide.

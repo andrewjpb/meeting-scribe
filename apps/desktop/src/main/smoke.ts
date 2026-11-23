@@ -273,6 +273,8 @@ const SCREENS = [
   'configuracoes-arquivos',
   // Contrato 123 (D-1): a tela Tarefas na visão Hoje, logo depois das Configurações.
   'tarefas-hoje',
+  // Contrato 135 (D14): a tela Início pela barra lateral, logo depois de Tarefas, com o dia do Calendário do Mac semeado.
+  'inicio-dia',
 ] as const
 /** Tempo de gravação até a fita encher a largura da janela (uma coluna a cada 50 ms). */
 const TAPE_FILL_MS = 12_500
@@ -3348,9 +3350,9 @@ async function probeOrigin(contents: WebContents): Promise<{ origin: string; opf
  */
 async function keyboardNavigation(contents: WebContents): Promise<Check> {
   await evaluate(contents, "document.activeElement instanceof HTMLElement && document.activeElement.blur(), true")
-  // Contrato 65: o item "Email" é mais uma parada antes de Configurações. Contrato 123: "Tarefas" também (a folga de 2
-  // continua).
-  for (let i = 0; i < 9; i++) {
+  // Contrato 65: o item "Email" é mais uma parada antes de Configurações. Contrato 123: "Tarefas" também. Contrato 135:
+  // "Início" também: sem WhatsApp e Redes (ainda escondidos aqui), Configurações é a 8ª parada; 10 mantêm a folga de 2.
+  for (let i = 0; i < 10; i++) {
     contents.sendInputEvent({ type: 'keyDown', keyCode: 'Tab' })
     contents.sendInputEvent({ type: 'keyUp', keyCode: 'Tab' })
     await wait(60)
@@ -3541,6 +3543,209 @@ async function pressSpace(contents: WebContents): Promise<void> {
   contents.sendInputEvent({ type: 'keyUp', keyCode: 'Space' })
 }
 
+// --- Contrato 135: a tela Início ----------------------------------------------------------------------------------
+
+/** Um evento no estado do `lap-calendar` falso (o falso completa o resto). */
+interface MacEventoFalso {
+  calendarItemIdentifier: string
+  eventIdentifier: string
+  externalIdentifier: string | null
+  title: string
+  /** Instante UTC ou, no dia inteiro, `YYYY-MM-DD` (o fim é exclusivo). */
+  start: string
+  end: string
+  allDay?: boolean
+}
+
+/** O dia local `YYYY-MM-DD` de `ms` mais `dias`. */
+function diaDoInicio(ms: number, dias = 0): string {
+  const data = new Date(ms)
+  const dia = new Date(data.getFullYear(), data.getMonth(), data.getDate() + dias)
+  return `${dia.getFullYear()}-${String(dia.getMonth() + 1).padStart(2, '0')}-${String(dia.getDate()).padStart(2, '0')}`
+}
+
+/** Instante no formato do helper (`…:00Z`, sem os milissegundos), arredondado ao minuto. */
+const macInstante = (ms: number): string => new Date(Math.floor(ms / 60_000) * 60_000).toISOString().replace('.000Z', 'Z')
+
+/**
+ * Contrato 135 (D14): o dia do Calendário do Mac para a tela Início, em volta de `now` e só dentro do dia local, a
+ * qualquer hora: um que está acontecendo (sempre, cortado na meia-noite de cada lado, de modo que nunca começa ontem nem
+ * termina amanhã), um que já passou e um que ainda vai começar (só quando cabem no dia). Títulos inventados.
+ */
+function inicioMacDoDia(now: number): MacEventoFalso[] {
+  const dia = new Date(now)
+  const comeco = new Date(dia.getFullYear(), dia.getMonth(), dia.getDate()).getTime()
+  const fim = new Date(dia.getFullYear(), dia.getMonth(), dia.getDate() + 1).getTime()
+  const evento = (id: string, title: string, de: number, ate: number): MacEventoFalso => ({ calendarItemIdentifier: id, eventIdentifier: id, externalIdentifier: null, title, start: macInstante(de), end: macInstante(ate) })
+  const MIN = 60_000
+  // `fim` é a meia-noite exata (exclusiva): terminar nela ainda é hoje, e ela vem sempre depois de agora.
+  const eventos = [evento('inicio-mac-atual', 'Revisão do contrato de eventos', Math.max(comeco, now - 20 * MIN), Math.min(fim, now + 40 * MIN))]
+  if (now - 240 * MIN >= comeco) eventos.unshift(evento('inicio-mac-passado', 'Conversa com a gráfica', now - 240 * MIN, now - 210 * MIN))
+  if (now + 150 * MIN <= fim) eventos.push(evento('inicio-mac-futuro', 'Proposta do portal do associado', now + 120 * MIN, now + 150 * MIN))
+  return eventos
+}
+
+/** Põe `eventos` no estado do `lap-calendar` falso (acesso total); devolve como voltar ao estado de antes. */
+function semearInicioMac(ctx: SmokeContext, eventos: MacEventoFalso[]): () => void {
+  const cal = ctx.fixtures.macCalendar
+  const antes = existsSync(cal.statePath) ? readFileSync(cal.statePath, 'utf8') : null
+  const raw = antes ? (JSON.parse(antes) as Record<string, unknown>) : {}
+  const ids = new Set(eventos.map((evento) => evento.calendarItemIdentifier))
+  const outros = (Array.isArray(raw['events']) ? (raw['events'] as Record<string, unknown>[]) : []).filter((evento) => !ids.has(String(evento['calendarItemIdentifier'])))
+  writeFileSync(cal.statePath, `${JSON.stringify({ ...raw, access: 'full', events: [...outros, ...eventos] }, null, 2)}\n`)
+  return () => {
+    if (antes === null) rmSync(cal.statePath, { force: true })
+    else writeFileSync(cal.statePath, antes)
+  }
+}
+
+/** A janela "volta ao foco": o dia do Mac guardado em memória é esquecido e a próxima leitura vai ao helper (D6). */
+function releDiaDoMac(win: BrowserWindow): void {
+  app.emit('browser-window-focus', { preventDefault: () => undefined }, win)
+}
+
+/**
+ * Contrato 135 (D1, D11): Início o primeiro da barra e marcado; a agenda com a marca "agora", as pontas, o atual com
+ * "Transcrever" e o total do cabeçalho igual às linhas; o cartão Tarefas com as vencidas da view; a última reunião; e
+ * todo link e botão da tela alcançável pelo teclado (nenhum `tabindex` negativo). Só números e booleanos no detalhe.
+ */
+async function inicioTelaCheck(contents: WebContents): Promise<Check> {
+  await showRoot(contents)
+  const vencidasView = await evaluate<number>(contents, `window.__scribeApi.invoke('scribe:tarefas-get').then((view) => 'ok' in view ? -1 : view.tarefas.filter((t) => t.status === 'aberta' && t.prazo !== null && t.prazo < view.hoje).length)`)
+  const tela = await evaluate<{ primeiro: boolean; marcado: boolean; linhas: number; total: number; agora: number; limites: number; atuais: number; transcrever: number; vencidas: number; ultima: boolean; amanha: boolean; focaveis: number; foraDoTeclado: number; largura: number }>(
+    contents,
+    `(() => {
+      const main = document.querySelector('[data-inicio-screen]')
+      const nav = [...document.querySelectorAll('${SIDEBAR_ROOT} [data-nav]')]
+      const agenda = document.querySelector('[data-inicio-agenda]')
+      const interativos = main ? [...main.querySelectorAll('a[href], button')] : []
+      return {
+        primeiro: nav[0]?.dataset.nav === 'inicio',
+        marcado: nav[0]?.getAttribute('aria-current') === 'page',
+        linhas: document.querySelectorAll('[data-inicio-evento]').length,
+        total: Number(document.querySelector('[data-inicio-agenda-total]')?.dataset.inicioAgendaTotal ?? -1),
+        agora: document.querySelectorAll('[data-inicio-agora]').length,
+        limites: document.querySelectorAll('[data-inicio-limite]').length,
+        atuais: document.querySelectorAll('[data-inicio-evento][data-inicio-estado="atual"]').length,
+        transcrever: document.querySelectorAll('[data-inicio-evento][data-inicio-estado="atual"] [data-action="inicio-transcrever"]').length,
+        vencidas: Number(document.querySelector('[data-inicio-vencidas]')?.dataset.inicioVencidas ?? 0),
+        ultima: Boolean(document.querySelector('[data-inicio-cartao="ultima-reuniao"] [data-inicio-abrir="ultima-reuniao"]')),
+        amanha: Boolean(document.querySelector('[data-inicio-amanha]')),
+        focaveis: interativos.length,
+        foraDoTeclado: interativos.filter((el) => el.tabIndex < 0 || el.disabled).length,
+        largura: Math.round(agenda?.getBoundingClientRect().width ?? 0),
+      }
+    })()`,
+  )
+  return {
+    ok:
+      tela.primeiro &&
+      tela.marcado &&
+      tela.linhas >= 1 &&
+      tela.total === tela.linhas &&
+      tela.agora === 1 &&
+      tela.atuais >= 1 &&
+      tela.transcrever === tela.atuais &&
+      tela.vencidas === vencidasView &&
+      tela.ultima &&
+      tela.amanha &&
+      tela.focaveis > 0 &&
+      tela.foraDoTeclado === 0 &&
+      tela.largura === 380,
+    detail: JSON.stringify({ ...tela, vencidasView }),
+  }
+}
+
+/**
+ * Contrato 135 (D9, D14): uma tarefa de hoje criada agora aparece no cartão Tarefas; a caixa a conclui pelo canal de
+ * sempre e ela some do cartão e da visão Hoje da tela Tarefas. No fim ela é apagada (as outras verificações não a veem).
+ */
+async function inicioConcluirCheck(contents: WebContents): Promise<Check> {
+  const api = <T>(channel: string, request?: unknown): Promise<T> => evaluate<T>(contents, `window.__scribeApi.invoke(${JSON.stringify(channel)}${request === undefined ? '' : `, ${JSON.stringify(request)}`})`)
+  const hoje = await evaluate<string>(contents, `window.__scribeApi.invoke('scribe:tarefas-get').then((view) => view.hoje ?? '')`)
+  const criada = await api<TarefasActionResult>('scribe:tarefas-criar', { titulo: 'Conferir a pauta do Início', origem: { tipo: 'manual' }, prazo: hoje, lembrete: 'nenhum' })
+  const id = criada.ok ? (criada.id ?? '') : ''
+  const linha = `document.querySelector('[data-inicio-cartao="tarefas"] [data-inicio-tarefa="${id}"]')`
+  const noCartao = id !== '' && (await waitFor(contents, `${routeIs('inicio')} && ${linha}`, 8000))
+  if (noCartao) await clickSelector(contents, `[data-inicio-cartao="tarefas"] [data-inicio-tarefa="${id}"] [data-inicio-tarefa-feito]`)
+  const saiuDoCartao = noCartao && (await waitFor(contents, `!${linha}`, 8000))
+  const status = await evaluate<string>(contents, `window.__scribeApi.invoke('scribe:tarefas-get').then((view) => view.tarefas?.find((t) => t.id === ${JSON.stringify(id)})?.status ?? '')`)
+  await clickNav(contents, 'tarefas')
+  const telaTarefas = await waitFor(contents, `${routeIs('tarefas')} && document.querySelector('[data-tarefas-screen="hoje"] [data-tarefas-lista="larga"] [data-tarefa]')`, 8000)
+  const foraDaTela = telaTarefas && (await evaluate<boolean>(contents, `!document.querySelector('[data-tarefas-screen="hoje"] [data-tarefa="${id}"]')`))
+  const apagada = id !== '' && (await api<TarefasActionResult>('scribe:tarefas-apagar', { id })).ok
+  return {
+    ok: criada.ok && noCartao && saiuDoCartao && status === 'feita' && telaTarefas && foraDaTela && apagada,
+    detail: JSON.stringify({ criada: criada.ok, noCartao, saiuDoCartao, feita: status === 'feita', telaTarefas, foraDaTela, apagada }),
+  }
+}
+
+/**
+ * Contrato 135 (D9, D14, artboard 02): com a gravação em andamento, o Início mostra a faixa "Gravando agora" e o evento
+ * atual marcado como gravando (sem "Transcrever"); prints nos dois temas e "Abrir gravação" da faixa volta à gravação.
+ */
+async function inicioGravandoCheck(win: BrowserWindow, ctx: SmokeContext, screenshots: Screenshot[], bothLive: string): Promise<Check> {
+  const contents = win.webContents
+  // O dia do Mac semeado de novo agora (o do laço já foi desfeito, e a hora pode ter mudado desde então).
+  const restaurar = semearInicioMac(ctx, inicioMacDoDia(Date.now()))
+  releDiaDoMac(win)
+  await clickNav(contents, 'inicio')
+  const faixa = await waitFor(contents, `${routeIs('inicio')} && document.querySelector('[data-inicio-gravando] [data-inicio-abrir-gravacao="faixa"]')`, 8000)
+  const evento = await waitFor(contents, `document.querySelector('[data-inicio-evento][data-inicio-estado="atual"] [data-inicio-abrir-gravacao="evento"]')`, 8000)
+  const semTranscrever = await evaluate<boolean>(contents, `!document.querySelector('[data-action="inicio-transcrever"]')`)
+  const fundo = `getComputedStyle(document.querySelector('[data-inicio-screen]')).backgroundColor`
+  await settle(contents)
+  const fundoClaro = await evaluate<string>(contents, fundo)
+  screenshots.push(await capture(win, ctx.outDir, 'inicio-gravando-light'))
+  // `nativeTheme.themeSource` não serve: o `?theme=light` da URL desta janela vence a aparência do macOS (`parseForcedTheme`).
+  await evaluate(contents, `(document.documentElement.dataset.theme = 'dark', true)`)
+  await settle(contents)
+  const fundoEscuro = await evaluate<string>(contents, fundo)
+  screenshots.push(await capture(win, ctx.outDir, 'inicio-gravando-dark'))
+  await evaluate(contents, `(document.documentElement.dataset.theme = 'light', true)`)
+  const escuroAplicado = fundoClaro !== '' && fundoEscuro !== '' && fundoClaro !== fundoEscuro
+  await clickSelector(contents, '[data-inicio-abrir-gravacao="faixa"]')
+  const voltou = await waitFor(contents, `${routeIs('gravacao')} && ${bothLive}`, 8000)
+  restaurar()
+  releDiaDoMac(win)
+  return {
+    ok: faixa && evento && semTranscrever && escuroAplicado && voltou,
+    detail: JSON.stringify({ faixa, eventoGravando: evento, semTranscrever, escuroAplicado, abrirGravacaoVoltou: voltou }),
+  }
+}
+
+/**
+ * Contrato 135 (D7, D14): o mesmo evento numa conta e no Calendário do Mac vira uma linha só no Início, com as duas
+ * etiquetas. Um evento de dia inteiro de hoje, posto só para isto no Google falso (sem UID, então a junção é pelo título
+ * e pelo dia), e a cópia dele no Mac: não depende da hora em que o smoke roda (nem perto da meia-noite) e não dispara
+ * aviso, faixa nem "Próximas" (dia inteiro não é reunião, `isMeetingEvent`). No fim, o Google e o Mac voltam ao de antes.
+ */
+async function inicioDedupeCheck(win: BrowserWindow, ctx: SmokeContext): Promise<Check> {
+  const contents = win.webContents
+  const google = ctx.fixtures.google
+  const antes = google.events.get('primary') ?? []
+  const agora = Date.now()
+  const hoje = diaDoInicio(agora)
+  const amanha = diaDoInicio(agora, 1)
+  const titulo = 'Plantão de atendimento da equipe'
+  google.events.set('primary', [...antes, { id: 'inicio-dia-inteiro', status: 'confirmed', summary: titulo, start: { date: hoje }, end: { date: amanha } }])
+  await ctx.calendar.refresh()
+  const restaurar = semearInicioMac(ctx, [{ calendarItemIdentifier: 'inicio-mac-copia', eventIdentifier: 'inicio-mac-copia', externalIdentifier: null, title: titulo, start: hoje, end: amanha, allDay: true }])
+  releDiaDoMac(win)
+  await clickNav(contents, 'inicio')
+  const linhas = `[...document.querySelectorAll('[data-inicio-evento]')].filter((el) => el.querySelector('b')?.textContent === ${JSON.stringify(titulo)})`
+  const junto = await waitFor(contents, `${routeIs('inicio')} && ${linhas}.some((el) => el.dataset.inicioFontes === 'google mac')`, 8000)
+  const resultado = await evaluate<{ linhas: number; etiquetas: number }>(contents, `(() => { const found = ${linhas}; return { linhas: found.length, etiquetas: found[0]?.querySelectorAll('[data-inicio-fonte]').length ?? 0 } })()`)
+  restaurar()
+  releDiaDoMac(win)
+  google.events.set('primary', antes)
+  await ctx.calendar.refresh()
+  return {
+    ok: junto && resultado.linhas === 1 && resultado.etiquetas === 2,
+    detail: JSON.stringify({ googleEMacNaMesmaLinha: junto, ...resultado }),
+  }
+}
+
 /**
  * Tema claro: "Nova gravação" do cabeçalho, pausa (cronômetro, fita e quadros parados, trilhas
  * vivas), barra de espaço, aviso de silêncio do sistema, encerrar, excluir com confirmação e o menu
@@ -3552,6 +3757,7 @@ async function recordingChecks(
   navigation: Record<string, Check>,
   recording: Record<string, Check>,
   screenshots: Screenshot[],
+  inicio: Record<string, Check>,
 ): Promise<void> {
   const contents = win.webContents
   const bothLive = `${probeJs('state()?.mic')} === 'live' && ${probeJs('state()?.system')} === 'live'`
@@ -3565,6 +3771,10 @@ async function recordingChecks(
     detail: `"Nova gravação" do cabeçalho de Reuniões -> rota ${await currentRoute(contents)}, captura ${JSON.stringify(await captureState(contents))}`,
   }
   await wait(1200)
+
+  // Contrato 135 (D14, artboard 02): o Início com a gravação em andamento, nos dois temas (o escuro trocando o tema no
+  // lugar: a janela do laço tem o tema forçado na URL), e "Abrir gravação" da faixa volta para ela.
+  inicio['gravando'] = await inicioGravandoCheck(win, ctx, screenshots, bothLive)
 
   await clickSelector(contents, '[data-action="toggle-pause"]')
   await waitFor(contents, `${probeJs('state()?.phase')} === 'paused'`)
@@ -4933,7 +5143,7 @@ async function endCalendarRecording(contents: WebContents, ctx: SmokeContext, id
  * "Entrar na chamada"; "Gravar" pela faixa (título do evento, `calendar` na reunião, "Da agenda" no detalhe);
  * "Gravar" pela notificação e o evento cancelado no meio ("A gravação continua."); e "Sair" das duas contas.
  */
-async function calendarChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => void, checks: Record<string, Check>, shots: Screenshot[]): Promise<void> {
+async function calendarChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => void, checks: Record<string, Check>, shots: Screenshot[], inicio: Record<string, Check>): Promise<void> {
   const google = ctx.fixtures.google
   const microsoft = ctx.fixtures.microsoft
   const notices = ctx.fixtures.calendar.notifications
@@ -5052,6 +5262,9 @@ async function calendarChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => 
     ok: checksReady && checked['google:primary'] === true && checked['google:equipe@group.calendar.google.com'] === false && checked['microsoft:default'] === true && lead === '5' && JSON.stringify(switches) === JSON.stringify(['true', 'true']),
     detail: `agendas na tela=${checksReady} ${JSON.stringify(Object.values(checked))}; "Avisar antes"=${lead} min; interruptores ${JSON.stringify(switches)}`,
   }
+
+  // Contrato 135 (D7, D14): um evento do Google com a cópia no Calendário do Mac vira uma linha só no Início.
+  inicio['dedupe'] = await inicioDedupeCheck(win, ctx)
 
   // Reuniões: a faixa e "Próximas".
   await clickNav(contents, 'reunioes')
@@ -9590,9 +9803,9 @@ async function emailChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => voi
       }
     })()`,
   )
-  // Contrato 112: 7 itens, com o "Funil". Contrato 123: 8, com "Tarefas".
+  // Contrato 112: 7 itens, com o "Funil". Contrato 123: 8, com "Tarefas". Contrato 135: 9, com "Início".
   const denseOk =
-    dense.items.length === 8 &&
+    dense.items.length === 9 &&
     dense.items.every((height) => height === 32) &&
     dense.gaps.every((gap) => gap === 2) &&
     dense.iconGap.every((gap) => gap === 8) &&
@@ -9605,7 +9818,7 @@ async function emailChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => voi
     dense.label.tracking === 'normal' &&
     dense.footer === 126
   sidebarChecks['rootItems'] = {
-    ok: JSON.stringify(navOrder) === JSON.stringify(['reunioes', 'tarefas', 'assistente', 'email', 'funil', 'automacoes', 'whatsapp', 'configuracoes']) && rootBadge && badgeLabel === '2 não lidas' && denseOk,
+    ok: JSON.stringify(navOrder) === JSON.stringify(['inicio', 'reunioes', 'tarefas', 'assistente', 'email', 'funil', 'automacoes', 'whatsapp', 'configuracoes']) && rootBadge && badgeLabel === '2 não lidas' && denseOk,
     detail: `itens ${JSON.stringify(navOrder)}; número do Email "${badgeLabel}"; alturas ${JSON.stringify(dense.items)}px, entre eles ${JSON.stringify([...new Set(dense.gaps)])}, ícone a ${JSON.stringify([...new Set(dense.iconGap)])}px do texto, ${dense.above}px acima da lista; rodapé ${dense.footer}px, Bloquear ${dense.lock}px, permissões ${JSON.stringify(dense.perms)}, rótulo ${JSON.stringify(dense.label)}`,
   }
   await clickNav(contents, 'email')
@@ -9634,7 +9847,7 @@ async function emailChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => voi
   checks['list'] = {
     ok:
       sidebar &&
-      JSON.stringify(navOrder) === JSON.stringify(['reunioes', 'tarefas', 'assistente', 'email', 'funil', 'automacoes', 'whatsapp', 'configuracoes']) &&
+      JSON.stringify(navOrder) === JSON.stringify(['inicio', 'reunioes', 'tarefas', 'assistente', 'email', 'funil', 'automacoes', 'whatsapp', 'configuracoes']) &&
       listed &&
       previews &&
       rows.length === 4 &&
@@ -16370,6 +16583,8 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
   const funil: Record<string, Check> = {}
   /** Contrato 123: a tela Tarefas, o item da barra lateral, ⌘⇧T e o lembrete. */
   const tarefasTela: Record<string, Check> = {}
+  /** Contrato 135: a tela Início (a tela, concluir tarefa, gravando e a junção conta × Mac). */
+  const inicio: Record<string, Check> = {}
   /** Contrato 126: as reuniões gravadas no laço por tema (uma por tema, com o resumo falso), para o Resumo com as tarefas. */
   const gravadas: Meeting[] = []
   let analysisMeasured: AnalysisMeasured | null = null
@@ -16673,6 +16888,21 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
       await clickNav(contents, 'tarefas')
       if (!(await waitFor(contents, `${routeIs('tarefas')} && document.querySelector('[data-tarefas-screen="hoje"] [data-tarefas-lista="larga"] [data-tarefa]')`, 8000))) failures.push(`tarefas-hoje/${themeName}: a lista não apareceu`)
       await shoot('tarefas-hoje', 'tarefas')
+      // Contrato 135 (D14): o Início pela barra lateral (o app ainda abre em Reuniões), com três eventos do Calendário do Mac
+      // em volta de agora; a janela "volta ao foco" para o dia do Mac ser lido de novo (D6). No claro, a tela e o concluir
+      // tarefa. Nos dois temas o falso volta ao arquivo de antes logo depois (cada semeadura guarda o estado que achou, e
+      // nada fica semeado entre elas, então "antes" é sempre o original); a gravação, em `recordingChecks`, semeia de novo.
+      const restaurarMac = semearInicioMac(ctx, inicioMacDoDia(Date.now()))
+      releDiaDoMac(win)
+      await clickNav(contents, 'inicio')
+      if (!(await waitFor(contents, `${routeIs('inicio')} && document.querySelectorAll('[data-inicio-evento][data-inicio-fontes="mac"]').length >= 1 && document.querySelector('[data-inicio-cartao="tarefas"]')`, 8000))) failures.push(`inicio-dia/${themeName}: a agenda ou as tarefas não apareceram`)
+      await shoot('inicio-dia', 'inicio')
+      if (themeName === 'light') {
+        inicio['tela'] = await inicioTelaCheck(contents)
+        inicio['concluir'] = await inicioConcluirCheck(contents)
+      }
+      restaurarMac()
+      releDiaDoMac(win)
       // Contrato 18: "Contas", "Sobre", a aba lembrada, os atalhos e a busca, no claro.
       if (themeName === 'light') settings['tabs'] = await settingsTabsChecks(contents, ctx, extraShot)
 
@@ -16680,7 +16910,7 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
 
       if (themeName === 'light') {
         await transcriptionChecks(win, recording)
-        await recordingChecks(win, ctx, navigation, recording, screenshots)
+        await recordingChecks(win, ctx, navigation, recording, screenshots, inicio)
         await settingsChecks(win, ctx, settings)
         await clickNav(contents, 'configuracoes')
         await waitFor(contents, routeIs('configuracoes'))
@@ -16759,7 +16989,7 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
     await googleChecks(ctx, watch, google, screenshots)
 
     // Contrato 12: agendas Google e Microsoft falsas, logo depois do Google (que termina com as duas contas fora).
-    await calendarChecks(ctx, watch, calendar, screenshots)
+    await calendarChecks(ctx, watch, calendar, screenshots, inicio)
 
     // Contrato 24: WhatsApp com o serviço falso, antes do bloqueio (que também recusa os canais dele).
     await whatsappChecks(ctx, watch, whatsapp, screenshots)
@@ -16972,6 +17202,8 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
   // Contrato 112: o nível Funil e o kanban.
   for (const [name, check] of Object.entries(funil)) if (!check.ok) failures.push(`funil ${name}: ${check.detail}`)
   for (const [name, check] of Object.entries(tarefasTela)) if (!check.ok) failures.push(`tarefas ${name}: ${check.detail}`)
+  for (const [name, check] of Object.entries(inicio)) if (!check.ok) failures.push(`início ${name}: ${check.detail}`)
+  for (const name of ['tela', 'concluir', 'gravando', 'dedupe']) if (!inicio[name]) failures.push(`início ${name}: não executado`)
   // Contrato 126: o Resumo, o email e o WhatsApp.
   for (const name of ['resumoTarefas', 'resumoGerarDeNovo', 'emailTarefa', 'whatsappTarefa']) if (!tarefasTela[name]) failures.push(`tarefas ${name}: não executado`)
   // Contrato 130: os ajustes da auditoria dos prints.
@@ -17047,7 +17279,8 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
   // Contrato 126: +5 (a tabela de tarefas do Resumo e o "+ Tarefa" na leitura do email, nos dois temas, e o "+ Tarefa" nos
   // Detalhes do WhatsApp, só no claro).
   // Contrato 127: +2 (o cartão `tarefa-criar` com a citação da tarefa no Assistente, nos dois temas).
-  const expectedShots = SCREENS.length * THEMES.length + 222
+  // Contrato 135: +2 (o Início com a gravação em andamento, nos dois temas; o `inicio-dia` entrou em `SCREENS`).
+  const expectedShots = SCREENS.length * THEMES.length + 224
   if (screenshots.length !== expectedShots) failures.push(`${screenshots.length} PNGs em vez de ${expectedShots}`)
   for (const shot of screenshots) {
     if (shot.name === MEETING_PROMPT_SHOT) {
@@ -17115,6 +17348,8 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
     funil,
     // Contrato 123: só os resultados, com números e sim/não (nenhum título de tarefa).
     tarefas: tarefasTela,
+    // Contrato 135: só os resultados (números e booleanos; nenhum título de evento ou tarefa).
+    inicio,
     instagramFakeCalls: ctx.fixtures.instagram.calls,
     s3FakeCalls: ctx.fixtures.s3.calls,
     // Contrato 23: os resultados, as notificações, o Dock e os itens de login substitutos; nenhum texto de reunião.

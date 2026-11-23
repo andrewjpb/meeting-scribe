@@ -1,7 +1,9 @@
 // Rotas do renderer. O main só conhece o id; o caminho é detalhe do roteador em memória.
-export type RouteId = 'reunioes' | 'tarefas' | 'assistente' | 'automacoes' | 'whatsapp' | 'email' | 'funil' | 'redes' | 'gravacao' | 'detalhe' | 'configuracoes'
+export type RouteId = 'inicio' | 'reunioes' | 'tarefas' | 'assistente' | 'automacoes' | 'whatsapp' | 'email' | 'funil' | 'redes' | 'gravacao' | 'detalhe' | 'configuracoes'
 
 export const ROUTE_PATHS: Record<RouteId, string> = {
+  /** Início (contrato 135): o dashboard do dia, primeiro item da barra lateral. `/` continua sendo Reuniões. */
+  inicio: '/inicio',
   reunioes: '/',
   /**
    * Tarefas (contrato 123, R1): a lista única, com o detalhe ao lado quando há id. Padrão do roteador; o caminho concreto
