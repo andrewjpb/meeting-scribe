@@ -3098,6 +3098,16 @@ void app.whenReady().then(async () => {
       meet: services.meet,
       navegador: services.navegador,
       redes: services.redes,
+      // Contrato 144: o atendimento no WhatsApp. O smoke lê o estado e tira a pausa que a resposta "minha" gravou (não há
+      // botão "Retomar agora"); o aviso às janelas é o mesmo do serviço.
+      atendimento: {
+        state: () => services.atendimento.state(),
+        clearPause: async (chatId) => {
+          const ok = await services.atendimento.setPausedUntil(chatId, null)
+          broadcast(appWindows(), 'scribe:atendimento-changed', { chatId })
+          return ok
+        },
+      },
     })
     // `app.exit` não passa por `will-quit`.
     services.calendar.dispose()

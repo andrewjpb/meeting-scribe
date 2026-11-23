@@ -18,6 +18,7 @@
 # 'reaction', ...}` e a presença (`send_presence`) fica em `presences` (`POST /_fake/presences`). `POST /_fake/incoming`
 # aceita `replyToId` (a mensagem nova responde outra), `reaction: {messageId, emoji}` (alguém reage, ou tira com emoji
 # vazio; nenhuma mensagem nova) e `presence: 'composing' | 'paused'` (alguém digitando; nenhuma mensagem nova).
+# Contrato 144: `fromMe: true` entrega uma mensagem minha que não saiu do app (respondida no celular).
 import base64
 import math
 import os
@@ -271,11 +272,13 @@ class FakeBackend:
                 }
                 if isinstance(given.get('seconds'), int):
                     media['seconds'] = given['seconds']
+            # Contrato 144: `fromMe: true` faz o papel de uma resposta minha escrita no celular (não saiu do app).
+            mine = body.get('fromMe') is True
             message = {
                 'id': message_id,
                 'chatId': str(body.get('chatId') or SEED_CHATS[0][0]),
-                'author': str(body.get('author') or 'Ana Souza'),
-                'fromMe': False,
+                'author': FAKE_ME['name'] if mine else str(body.get('author') or 'Ana Souza'),
+                'fromMe': mine,
                 'at': now_ms(),
                 'type': kind,
                 'text': str(body.get('text') or ''),

@@ -112,6 +112,12 @@
 // Contrato 127: os lembretes do Assistente viram tarefas (`reminder`, `reminderEdit`, `reminderDelete` e o lembrete do
 // email conferem `tarefas.json`) e, logo depois do funil no Assistente, as tarefas no Assistente
 // (`tarefasAssistenteChecks`): a fonte Tarefas, os cartões de criar e concluir e o agente com "Pode ler as tarefas".
+//
+// Contrato 144: logo depois do WhatsApp, o atendimento (`atendimentoChecks`) com o WhatsApp falso e o `claude` falso, que
+// responde confirmando o recebimento: o agente "Recados" criado e testado em Automações › Atendimento, a conversa da Ana
+// marcada pelo painel com o aviso de risco, a resposta sozinha, o Bruno sem atendimento e o grupo sem o botão, a proposta
+// do modo rascunho enviada pelo clique, a pausa pela resposta minha vinda do celular falso, "Pausar todos os
+// atendimentos", o histórico sem texto de mensagem e a exclusão do agente. Termina sem agente nem atendimento.
 import { appendFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { spawn as spawnChild } from 'node:child_process'
 import { request as httpRequest } from 'node:http'
@@ -185,6 +191,8 @@ import { CHAT_ALLOWED_TOOLS, CHAT_DISALLOWED_TOOLS } from './claude-cli/chat'
 import { MEETINGS_FILE } from './meetings/store'
 import { originOf } from './security'
 import type { WhatsAppService } from './whatsapp/service'
+import type { AtendimentoStore } from './whatsapp/atendimento/store'
+import type { AtendimentoBinding } from '../shared/atendimento'
 import type { AutomationsService } from './schedules/service'
 import { SCHEDULE_RUNS_DIR, SCHEDULES_FILE } from './schedules/store'
 import { AGENTS_FILE } from './agents/store'
@@ -308,6 +316,8 @@ export interface SmokeContext {
   /** Contrato 69: as redes (o smoke adianta o relógio do Instagram falso e roda a renovação diária na hora). Contrato 71: e
    * o agendador das publicações (`tick`) e a fila lida direto do serviço (com o app bloqueado, o canal recusa). */
   redes: Pick<RedesService, 'refreshDue' | 'state' | 'tick' | 'publications'>
+  /** Contrato 144: o atendimento no WhatsApp (o estado gravado e a pausa da conversa tirada pelo store, com o aviso às janelas). */
+  atendimento: Pick<AtendimentoStore, 'state'> & { clearPause: (chatId: string) => Promise<boolean> }
 }
 
 interface Check {
@@ -7200,6 +7210,417 @@ interface SmokeActionFile {
   tarefaId?: string | null
 }
 
+// Contrato 144: o atendimento no WhatsApp. O `claude` falso responde confirmando o recebimento com o primeiro nome do
+// contato; as mensagens abaixo nunca podem aparecer no histórico do atendimento.
+const ATENDIMENTO_RULES = 'Responda só confirmando o recebimento.'
+const ATENDIMENTO_REPLY = 'Recebido, Ana! Já anotei aqui.'
+const ATENDIMENTO_TEXTS = {
+  test: 'Oi! Chegou a encomenda?',
+  auto: 'Deixei o pacote na portaria.',
+  bruno: 'Recebeu o contrato revisado?',
+  draft: 'Consegue confirmar o horário de amanhã?',
+  mine: 'Deixa que eu respondo daqui.',
+  pausedAll: 'Mais uma coisa: chega amanhã?',
+  last: 'Combinado, até amanhã.',
+} as const
+/** Os checks do atendimento, na ordem do roteiro. */
+const ATENDIMENTO_CHECKS = ['agente', 'teste', 'ligar', 'respondeSozinho', 'semAtendimento', 'grupo', 'rascunho', 'pausaMinha', 'pausarTodos', 'historico', 'escuro', 'excluir', 'estadoFinal'] as const
+const WA_BADGE = `(document.querySelector('[data-atendimento-badge]')?.getAttribute('title') ?? '')`
+const WA_PANEL_FORM = `document.querySelector('[data-wa-atendimento] [data-atendimento-form]')`
+
+/** "HH:MM" da pausa no mesmo dia; em outro, "DD/MM HH:MM" (como o selo). */
+function atendimentoUntil(iso: string, now = new Date()): string {
+  const date = new Date(iso)
+  const pad = (value: number): string => String(value).padStart(2, '0')
+  const time = `${pad(date.getHours())}:${pad(date.getMinutes())}`
+  return date.toDateString() === now.toDateString() ? time : `${pad(date.getDate())}/${pad(date.getMonth() + 1)} ${time}`
+}
+
+/** Os textos enviados pelo serviço falso para a conversa (sem reações), esperando chegar a `count` ou o prazo. */
+async function waSentTo(ctx: SmokeContext, chatId: string, count = 0, ms = 0): Promise<{ id: string; chatId: string; text: string }[]> {
+  const deadline = Date.now() + ms
+  for (;;) {
+    const sent = (await waSent(ctx)).filter((item) => item.chatId === chatId && typeof item.text === 'string')
+    if (sent.length >= count || Date.now() >= deadline) return sent
+    await wait(100)
+  }
+}
+
+/** Um check que, se o roteiro quebrar no meio (elemento que não apareceu), falha com o erro em vez de parar o smoke. */
+async function atendimentoStep(checks: Record<string, Check>, name: (typeof ATENDIMENTO_CHECKS)[number], run: () => Promise<Check>): Promise<void> {
+  try {
+    checks[name] = await run()
+  } catch (error) {
+    checks[name] = { ok: false, detail: `parou com erro: ${String((error as Error)?.message ?? error).slice(0, 200)}` }
+  }
+}
+
+/**
+ * Contrato 144, numa janela clara (e uma escura para os prints), com o WhatsApp falso conectado e o `claude` falso pela
+ * linha de comando: o agente "Recados" criado e testado em Automações › Atendimento (o teste não envia); a conversa da Ana
+ * marcada pelo painel "Atendimento" em "Responder sozinho" com o aviso de risco ("Cancelar" não salva); a resposta
+ * sozinha com o nome do agente na mensagem; o Bruno sem atendimento e o grupo sem o botão; o modo rascunho com a proposta
+ * enviada pelo clique; a pausa pela resposta minha vinda do celular falso (tirada depois pelo store: não há "Retomar
+ * agora"); "Pausar todos os atendimentos"; o histórico sem texto de mensagem; e a exclusão do agente. Termina sem agente,
+ * sem atendimento, sem a pausa geral e com a última mensagem da Ana sendo minha (o Assistente, depois, a conta como
+ * respondida).
+ */
+async function atendimentoChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => void, checks: Record<string, Check>, shots: Screenshot[]): Promise<void> {
+  const win = ctx.openWindow({ theme: 'light' })
+  watch(win)
+  await loadAndWait(win)
+  const contents = win.webContents
+  const invoke = <T>(script: string): Promise<T> => evaluate<T>(contents, script)
+  const shot = async (name: string, target: BrowserWindow = win): Promise<void> => {
+    await settle(target.webContents)
+    shots.push(await capture(target, ctx.outDir, name))
+  }
+  const transportBefore = readSettings(ctx.userDataDir).claudeTransport
+  await invoke("window.__scribeApi.invoke('scribe:settings-update', { claudeTransport: 'cli' }).then(() => true)")
+  const anaBinding = async (): Promise<AtendimentoBinding | undefined> => (await ctx.atendimento.state()).bindings.find((binding) => binding.chatId === WA_ANA)
+  const openAtendimentoTab = async (target: WebContents = contents): Promise<boolean> => {
+    await clickNav(target, 'automacoes')
+    await waitFor(target, `${routeIs('automacoes')} && document.querySelector('#automations-tab-atendimento')`, 8000)
+    await clickSelector(target, '#automations-tab-atendimento')
+    return waitFor(target, `document.querySelector('[data-automations-tab="atendimento"] [data-atendimento-tab]')`, 8000)
+  }
+  const openChat = async (chatId: string, target: WebContents = contents): Promise<boolean> => {
+    await clickNav(target, 'whatsapp')
+    await waitFor(target, `${routeIs('whatsapp')} && document.querySelectorAll('[data-whatsapp-chat]').length === 3`, 8000)
+    await clickSelector(target, `[data-whatsapp-chat="${chatId}"]`)
+    return waitFor(target, `document.querySelector('[data-whatsapp-conversation="${chatId}"] [data-whatsapp-message]')`, 8000)
+  }
+  const openPanel = async (target: WebContents = contents): Promise<boolean> => {
+    if (!(await evaluate<boolean>(target, `Boolean(document.querySelector('[data-wa-atendimento]'))`))) await clickSelector(target, '[data-action="toggle-whatsapp-atendimento"]')
+    return waitFor(target, WA_PANEL_FORM)
+  }
+  const closePanel = async (): Promise<boolean> => {
+    if (await invoke<boolean>(`Boolean(document.querySelector('[data-wa-atendimento]'))`)) await clickSelector(contents, '[data-action="whatsapp-atendimento-close"]')
+    return waitFor(contents, `!document.querySelector('[data-wa-atendimento]')`)
+  }
+  let agentId = ''
+
+  try {
+    // CA1 e CA2: o agente pelo formulário da aba, e o "Testar" antes de salvar (não envia nem entra no histórico).
+    let tabOpen = false
+    let emptyBefore = ''
+    try {
+      tabOpen = await openAtendimentoTab()
+      emptyBefore = await text(contents, '[data-atendimento-empty]')
+    } catch {
+      // O check "agente" falha com a aba fechada.
+    }
+    await atendimentoStep(checks, 'teste', async () => {
+      await clickSelector(contents, '[data-action="atendimento-agent-new"]')
+      await waitFor(contents, `document.querySelector('[data-atendimento-agent-form]')`)
+      await setValue(contents, '#atendimento-agent-name', 'Recados')
+      await setValue(contents, '#atendimento-agent-instructions', ATENDIMENTO_RULES)
+      const sentBefore = (await waSent(ctx)).length
+      await setValue(contents, '#atendimento-agent-test-message', ATENDIMENTO_TEXTS.test)
+      await clickSelector(contents, '[data-action="atendimento-agent-test"]')
+      const answered = await waitFor(contents, `document.querySelector('[data-atendimento-test-result="responder"]')`, 20_000)
+      const view = await invoke<{ label: string; reply: string; meta: string }>(
+        `(() => { const box = document.querySelector('[data-atendimento-test-result]'); const spans = box?.querySelectorAll(':scope > div > span') ?? []; return { label: spans[0]?.textContent ?? '', meta: spans[1]?.textContent ?? '', reply: box?.querySelector(':scope > p')?.textContent ?? '' } })()`,
+      )
+      // O print mostra o resultado do teste (com o fim do formulário acima dele).
+      await evaluate(contents, `document.querySelector('[data-atendimento-test]')?.scrollIntoView({ block: 'end' }), true`)
+      await shot('automacoes-atendimento-form-light')
+      const sentAfter = (await waSent(ctx)).length
+      const logged = await invoke<number>(`window.__scribeApi.invoke('scribe:atendimento-log-list', {}).then((r) => (r.ok ? r.entries.length : -1))`)
+      return {
+        ok: answered && view.label === 'Responderia' && view.reply === 'Recebido, Contato! Já anotei aqui.' && /^Haiku · \d+,\d s$/.test(view.meta) && sentAfter === sentBefore && logged === 0,
+        detail: `resposta=${answered} "${view.label}" "${view.reply}" (${view.meta}); envios antes ${sentBefore}, depois ${sentAfter}; linhas no histórico ${logged}`,
+      }
+    })
+    await atendimentoStep(checks, 'agente', async () => {
+      const formTitle = await text(contents, '[data-atendimento-agent-form] h2')
+      await clickSelector(contents, '[data-action="atendimento-agent-save"]')
+      const card = await waitFor(contents, `document.querySelector('[data-atendimento-agent-name="Recados"]')`, 8000)
+      const view = await invoke<{ id: string; model: string; usage: string; rules: string }>(
+        `(() => { const card = document.querySelector('[data-atendimento-agent-name="Recados"]'); return { id: card?.dataset.atendimentoAgent ?? '', model: card?.querySelector('[data-atendimento-agent-usage]')?.parentElement?.firstElementChild?.textContent ?? '', usage: card?.querySelector('[data-atendimento-agent-usage]')?.textContent ?? '', rules: card?.querySelector('h3 + p')?.textContent ?? '' } })()`,
+      )
+      agentId = view.id
+      const saved = (await ctx.atendimento.state()).agents
+      await shot('automacoes-atendimento-light')
+      return {
+        ok:
+          tabOpen &&
+          emptyBefore === 'Nenhum agente de atendimento ainda. Crie um e depois marque a conversa na tela do WhatsApp.' &&
+          formTitle === 'Novo agente de atendimento' &&
+          card &&
+          `${view.model} · ${view.usage}` === 'Haiku · Nenhuma conversa' &&
+          view.rules === ATENDIMENTO_RULES &&
+          saved.length === 1 &&
+          saved[0]?.id === agentId &&
+          saved[0]?.name === 'Recados' &&
+          saved[0]?.instructions === ATENDIMENTO_RULES &&
+          saved[0]?.model === 'haiku',
+        detail: `aba=${tabOpen}, vazia "${emptyBefore}"; formulário "${formTitle}"; cartão=${card} "${view.model} · ${view.usage}" (regras "${view.rules}"); gravados ${JSON.stringify(saved.map((agent) => ({ name: agent.name, model: agent.model, regras: agent.instructions === ATENDIMENTO_RULES })))}`,
+      }
+    })
+
+    // CA3: a Ana marcada pelo painel; "Salvar" em "Responder sozinho" abre o aviso, "Cancelar" não salva.
+    await atendimentoStep(checks, 'ligar', async () => {
+      const opened = await openChat(WA_ANA)
+      const noBadge = await invoke<boolean>(`!document.querySelector('[data-atendimento-badge]')`)
+      const panel = await openPanel()
+      const pressed = await invoke<string>(`document.querySelector('[data-action="toggle-whatsapp-atendimento"]')?.getAttribute('aria-pressed') ?? ''`)
+      await setValue(contents, '[data-wa-atendimento] [data-atendimento-form] select', agentId, 'change')
+      await clickSelector(contents, '[data-atendimento-mode="auto"]')
+      await setValue(contents, '[data-atendimento-delay-min]', '0')
+      await setValue(contents, '[data-atendimento-delay-max]', '0')
+      await clickSelector(contents, '[data-action="atendimento-binding-save"]')
+      const risk = await waitFor(contents, `document.querySelector('[data-atendimento-risk]') && document.querySelector('[data-action="atendimento-risk-accept"]')?.disabled === true`)
+      const riskView = await invoke<{ title: string; lines: string[] }>(
+        `({ title: document.querySelector('[data-atendimento-risk] h3')?.textContent ?? '', lines: [...document.querySelectorAll('[data-atendimento-risk-list] li')].map((li) => li.textContent) })`,
+      )
+      await clickSelector(contents, '[data-action="atendimento-risk-cancel"]')
+      const backToForm = await waitFor(contents, `${WA_PANEL_FORM} && document.querySelector('[data-atendimento-mode="auto"]')?.checked && document.querySelector('[data-atendimento-delay-max]')?.value === '0'`)
+      const afterCancel = await ctx.atendimento.state()
+      const nothingSaved = !afterCancel.bindings.some((binding) => binding.chatId === WA_ANA) && afterCancel.riskAcceptedAt === null
+      await clickSelector(contents, '[data-action="atendimento-binding-save"]')
+      await waitFor(contents, `document.querySelector('[data-atendimento-risk]')`)
+      await shot('whatsapp-atendimento-risco-light')
+      await clickSelector(contents, '[data-atendimento-risk-check]')
+      const enabled = await waitFor(contents, `document.querySelector('[data-action="atendimento-risk-accept"]')?.disabled === false`)
+      await clickSelector(contents, '[data-action="atendimento-risk-accept"]')
+      const savedUi = await waitFor(contents, `${WA_PANEL_FORM} && document.querySelector('[data-atendimento-saved]')`, 8000)
+      const badge = await waitFor(contents, `${WA_BADGE} === 'Recados · atendendo'`, 8000)
+      const badgeTitle = await invoke<string>(WA_BADGE)
+      const state = await ctx.atendimento.state()
+      const binding = state.bindings.find((item) => item.chatId === WA_ANA)
+      await shot('whatsapp-atendimento-painel-light')
+      return {
+        ok:
+          opened &&
+          noBadge &&
+          panel &&
+          pressed === 'true' &&
+          risk &&
+          riskView.title === 'Antes de deixar um agente responder sozinho' &&
+          JSON.stringify(riskView.lines) === JSON.stringify(['responde sem espera;', 'mostra “digitando…” antes de enviar;', 'responde no máximo 6 vezes por hora.']) &&
+          backToForm &&
+          nothingSaved &&
+          enabled &&
+          savedUi &&
+          badge &&
+          binding?.enabled === true &&
+          binding.agentId === agentId &&
+          binding.mode === 'auto' &&
+          binding.delayMinMinutes === 0 &&
+          binding.delayMaxMinutes === 0 &&
+          state.riskAcceptedAt !== null,
+        detail: `conversa=${opened}, sem selo antes=${noBadge}; painel=${panel} (aria-pressed ${pressed}); aviso=${risk} "${riskView.title}" ${JSON.stringify(riskView.lines)}; "Cancelar" volta ao formulário=${backToForm} sem salvar=${nothingSaved}; caixa habilita=${enabled}; "Salvo."=${savedUi}; selo "${badgeTitle}"; gravado ${JSON.stringify(binding ? { enabled: binding.enabled, mode: binding.mode, delay: [binding.delayMinMinutes, binding.delayMaxMinutes], agente: binding.agentId === agentId } : null)}, risco aceito=${state.riskAcceptedAt !== null}`,
+      }
+    })
+
+    // CA4: mensagem da Ana, resposta sozinha: um envio só, com o nome do agente junto da hora na conversa.
+    await atendimentoStep(checks, 'respondeSozinho', async () => {
+      const closed = await closePanel()
+      const before = (await waSentTo(ctx, WA_ANA)).length
+      await ctx.whatsapp.fake('incoming', { chatId: WA_ANA, text: ATENDIMENTO_TEXTS.auto })
+      await waSentTo(ctx, WA_ANA, before + 1, 20_000)
+      // Um segundo a mais: "exatamente um" quer dizer que nada sai depois.
+      await wait(1000)
+      const sent = (await waSentTo(ctx, WA_ANA)).slice(before)
+      const marked = await waitFor(
+        contents,
+        `[...document.querySelectorAll('[data-whatsapp-conversation="${WA_ANA}"] [data-whatsapp-message][data-from-me="true"]')].some((m) => m.querySelector('[data-whatsapp-text]')?.textContent === ${JSON.stringify(ATENDIMENTO_REPLY)} && /^Recados · \\d\\d:\\d\\d$/.test(m.querySelector('[data-atendimento-agent-mark]')?.textContent ?? ''))`,
+        8000,
+      )
+      const mark = await invoke<string>(`document.querySelector('[data-whatsapp-conversation="${WA_ANA}"] [data-atendimento-agent-mark]')?.textContent ?? ''`)
+      const badge = await waitFor(contents, `${WA_BADGE} === 'Recados · atendendo'`, 8000)
+      const chip = await invoke<{ kind: string; text: string; title: string }>(
+        `(() => { const chip = document.querySelector('[data-whatsapp-chat="${WA_ANA}"] [data-atendimento-chip]'); return { kind: chip?.dataset.atendimentoChip ?? '', text: chip?.querySelector('span')?.textContent ?? '', title: chip?.getAttribute('title') ?? '' } })()`,
+      )
+      const otherChips = await invoke<number>(`document.querySelectorAll('[data-atendimento-chip]').length`)
+      const bar = await invoke<string>(`document.querySelector('[data-atendimento-pause-bar="on"]')?.textContent ?? ''`)
+      await shot('whatsapp-atendimento-selo-light')
+      return {
+        ok: closed && sent.length === 1 && sent[0]?.text === ATENDIMENTO_REPLY && marked && badge && chip.kind === 'attending' && chip.text === 'Recados' && otherChips === 1 && bar.includes('1 atendida') && bar.includes('Pausar todos os atendimentos'),
+        detail: `envios novos para a Ana ${JSON.stringify(sent.map((item) => item.text))}; na conversa com a marca=${marked} "${mark}"; selo=${badge} "${await invoke<string>(WA_BADGE)}"; etiqueta ${JSON.stringify(chip)} (${otherChips} na lista); barra "${bar}"`,
+      }
+    })
+
+    // CA5: o Bruno, sem atendimento, não recebe nada.
+    await atendimentoStep(checks, 'semAtendimento', async () => {
+      const before = (await waSent(ctx)).length
+      await ctx.whatsapp.fake('incoming', { chatId: WA_BRUNO, author: 'Bruno Lima', text: ATENDIMENTO_TEXTS.bruno })
+      await wait(5000)
+      const after = (await waSent(ctx)).length
+      const bound = (await ctx.atendimento.state()).bindings.some((binding) => binding.chatId === WA_BRUNO)
+      return { ok: after === before && !bound, detail: `envios antes ${before}, 5 s depois ${after}; Bruno com atendimento=${bound}` }
+    })
+
+    // CA6: no grupo não há botão "Atendimento".
+    await atendimentoStep(checks, 'grupo', async () => {
+      const opened = await openChat(WA_ATLAS)
+      const header = await waitFor(contents, `document.querySelector('[data-whatsapp-conversation="${WA_ATLAS}"] [data-action="toggle-whatsapp-details"]')`)
+      const button = await invoke<boolean>(`Boolean(document.querySelector('[data-action="toggle-whatsapp-atendimento"]'))`)
+      return { ok: opened && header && !button, detail: `grupo aberto=${opened}, cabeçalho=${header}; botão "Atendimento"=${button}` }
+    })
+
+    // CA7: em "Rascunho para eu aprovar", a mensagem vira proposta; "Enviar" manda e a caixa some.
+    await atendimentoStep(checks, 'rascunho', async () => {
+      const opened = await openChat(WA_ANA)
+      await openPanel()
+      await clickSelector(contents, '[data-atendimento-mode="draft"]')
+      await clickSelector(contents, '[data-action="atendimento-binding-save"]')
+      const savedUi = await waitFor(contents, `document.querySelector('[data-atendimento-saved]')`, 8000)
+      const mode = (await anaBinding())?.mode
+      await closePanel()
+      const before = (await waSentTo(ctx, WA_ANA)).length
+      await ctx.whatsapp.fake('incoming', { chatId: WA_ANA, text: ATENDIMENTO_TEXTS.draft })
+      const proposal = await waitFor(contents, `document.querySelector('[data-atendimento-proposal] [data-atendimento-proposal-text]')?.value === ${JSON.stringify(ATENDIMENTO_REPLY)}`, 20_000)
+      const badge = await waitFor(contents, `${WA_BADGE} === 'Recados · propôs uma resposta'`, 8000)
+      const heading = await text(contents, '[data-atendimento-proposal] > div')
+      const notSent = (await waSentTo(ctx, WA_ANA)).length === before
+      await shot('whatsapp-atendimento-rascunho-light')
+      await clickSelector(contents, '[data-action="atendimento-draft-send"]')
+      const sent = (await waSentTo(ctx, WA_ANA, before + 1, 10_000)).slice(before)
+      const gone = await waitFor(contents, `!document.querySelector('[data-atendimento-proposal]') && !document.querySelector('[data-atendimento-proposal-error]')`, 8000)
+      const badgeAfter = await waitFor(contents, `${WA_BADGE} === 'Recados · atendendo'`, 8000)
+      return {
+        ok: opened && savedUi && mode === 'draft' && proposal && badge && heading.startsWith('Recados propôs uma resposta') && notSent && sent.length === 1 && sent[0]?.text === ATENDIMENTO_REPLY && gone && badgeAfter,
+        detail: `modo gravado "${mode}" ("Salvo."=${savedUi}); proposta=${proposal} "${heading}"; selo=${badge}; nada enviado antes do clique=${notSent}; "Enviar" -> ${JSON.stringify(sent.map((item) => item.text))}; caixa sumiu=${gone}; selo depois "${await invoke<string>(WA_BADGE)}"`,
+      }
+    })
+
+    // CA8: uma resposta minha que não saiu do app (o celular falso) pausa a conversa; o painel diz até quando.
+    await atendimentoStep(checks, 'pausaMinha', async () => {
+      await ctx.whatsapp.fake('incoming', { chatId: WA_ANA, fromMe: true, text: ATENDIMENTO_TEXTS.mine })
+      const paused = await waitFor(contents, `${WA_BADGE}.startsWith('Recados · pausado até ')`, 8000)
+      const until = (await anaBinding())?.pausedUntil ?? null
+      const label = until ? atendimentoUntil(until) : '?'
+      const badgeTitle = await invoke<string>(WA_BADGE)
+      const minutes = until ? Math.round((Date.parse(until) - Date.now()) / 60_000) : -1
+      await openPanel()
+      const note = await waitFor(contents, `(document.querySelector('[data-wa-atendimento]')?.textContent ?? '').includes(${JSON.stringify(`Pausado até ${label} porque você respondeu.`)})`)
+      await closePanel()
+      // Não há "Retomar agora" (fora do contrato 143): a pausa sai pelo store, para os checks seguintes.
+      const cleared = await ctx.atendimento.clearPause(WA_ANA)
+      const resumed = await waitFor(contents, `${WA_BADGE} === 'Recados · atendendo'`, 8000)
+      return {
+        ok: paused && badgeTitle === `Recados · pausado até ${label}` && minutes >= 58 && minutes <= 60 && note && cleared && resumed && (await anaBinding())?.pausedUntil === null,
+        detail: `selo "${badgeTitle}" (pausa gravada ${until}, ${minutes} min); nota no painel "Pausado até ${label} porque você respondeu."=${note}; pausa tirada pelo store=${cleared}, selo de volta=${resumed}`,
+      }
+    })
+
+    // CA9: "Pausar todos os atendimentos": nada sai nem é proposto; "Retomar atendimentos" volta como estava.
+    await atendimentoStep(checks, 'pausarTodos', async () => {
+      await clickSelector(contents, '[data-action="atendimento-pause-all"]')
+      const pausedUi = await waitFor(contents, `document.querySelector('[data-atendimento-pause-bar="paused"]') && (document.querySelector('[data-action="atendimento-pause-all"]')?.textContent ?? '') === 'Retomar atendimentos'`)
+      const badge = await waitFor(contents, `${WA_BADGE} === 'Recados · todos pausados'`)
+      const barText = await text(contents, '[data-atendimento-pause-bar]')
+      const pausedAll = (await ctx.atendimento.state()).pausedAll
+      const before = (await waSent(ctx)).length
+      await ctx.whatsapp.fake('incoming', { chatId: WA_ANA, text: ATENDIMENTO_TEXTS.pausedAll })
+      const shown = await waitFor(contents, `[...document.querySelectorAll('[data-whatsapp-conversation="${WA_ANA}"] [data-whatsapp-text]')].some((el) => el.textContent === ${JSON.stringify(ATENDIMENTO_TEXTS.pausedAll)})`)
+      // Com o atraso 0, a resposta sairia em 1 a 2 s: 4 s sem envio nem proposta bastam.
+      await wait(4000)
+      const after = (await waSent(ctx)).length
+      const runtime = await invoke<Record<string, { draft: unknown; dueAt: unknown }>>(`window.__scribeApi.invoke('scribe:atendimento-runtime')`)
+      const noProposal = !(await invoke<boolean>(`Boolean(document.querySelector('[data-atendimento-proposal]'))`)) && !runtime[WA_ANA]?.draft && !runtime[WA_ANA]?.dueAt
+      await clickSelector(contents, '[data-action="atendimento-pause-all"]')
+      const resumedUi = await waitFor(contents, `document.querySelector('[data-atendimento-pause-bar="on"]') && (document.querySelector('[data-action="atendimento-pause-all"]')?.textContent ?? '') === 'Pausar todos os atendimentos'`)
+      const badgeAfter = await waitFor(contents, `${WA_BADGE} === 'Recados · atendendo'`)
+      const state = await ctx.atendimento.state()
+      const binding = state.bindings.find((item) => item.chatId === WA_ANA)
+      return {
+        ok: pausedUi && badge && barText.includes('Todos os atendimentos pausados') && pausedAll && shown && after === before && noProposal && resumedUi && badgeAfter && !state.pausedAll && binding?.enabled === true && binding.mode === 'draft',
+        detail: `pausado na tela=${pausedUi} "${barText}"; selo=${badge}; gravado=${pausedAll}; mensagem na conversa=${shown}; envios ${before} -> ${after}; sem proposta nem pendência=${noProposal}; retomado=${resumedUi}, selo "${await invoke<string>(WA_BADGE)}", pausedAll=${state.pausedAll}, atendimento ${binding?.enabled ? binding.mode : 'desligado'}`,
+      }
+    })
+
+    // CA10: o histórico da aba, com o que aconteceu na conversa da Ana e sem o texto de nenhuma mensagem.
+    await atendimentoStep(checks, 'historico', async () => {
+      const tab = await openAtendimentoTab()
+      const rowsShown = await waitFor(contents, `document.querySelectorAll('[data-atendimento-log-row][data-atendimento-log-chat="${WA_ANA}"]').length >= 4`, 8000)
+      const rows = await invoke<{ chat: string; cells: string[] }[]>(
+        `[...document.querySelectorAll('[data-atendimento-log-row]')].map((row) => ({ chat: row.dataset.atendimentoLogChat, cells: [...row.cells].map((cell) => cell.textContent) }))`,
+      )
+      const ana = rows.filter((row) => row.chat === WA_ANA)
+      const actions = new Set(ana.map((row) => row.cells[3]))
+      const forbidden = [...Object.values(ATENDIMENTO_TEXTS), ATENDIMENTO_REPLY, ATENDIMENTO_RULES]
+      const leaked = rows.flatMap((row) => row.cells).filter((cell) => forbidden.some((value) => cell.includes(value)))
+      const usage = await text(contents, '[data-atendimento-agent-name="Recados"] [data-atendimento-agent-usage]')
+      await evaluate(contents, `document.querySelector('[data-atendimento-log]')?.scrollIntoView({ block: 'start' }), true`)
+      await shot('automacoes-atendimento-historico-light')
+      return {
+        ok: tab && rowsShown && ['Respondeu', 'Propôs', 'Você enviou a proposta', 'Pausou'].every((label) => actions.has(label)) && ana.every((row) => row.cells[1] === 'Ana Souza' && row.cells[2] === 'Recados') && leaked.length === 0 && usage === '1 conversa · Rascunho',
+        detail: `aba=${tab}; linhas da Ana ${ana.length} (${[...actions].join(', ')}); conversa/agente ${JSON.stringify([...new Set(ana.map((row) => `${row.cells[1]}/${row.cells[2]}`))])}; células com texto de mensagem ${JSON.stringify(leaked)}; cartão "${usage}"`,
+      }
+    })
+
+    // Os prints no escuro, antes de excluir o agente: a aba e o painel da conversa.
+    await atendimentoStep(checks, 'escuro', async () => {
+      const dark = ctx.openWindow({ theme: 'dark' })
+      watch(dark)
+      try {
+        await loadAndWait(dark)
+        await showRoot(dark.webContents)
+        const tab = await openAtendimentoTab(dark.webContents)
+        const filled = await waitFor(dark.webContents, `document.querySelector('[data-atendimento-agent-name="Recados"]') && document.querySelector('[data-atendimento-log-row]')`, 8000)
+        await shot('automacoes-atendimento-dark', dark)
+        await waitFor(dark.webContents, `document.querySelector('${SIDEBAR_ROOT} [data-nav="whatsapp"]')`)
+        const chat = await openChat(WA_ANA, dark.webContents)
+        const panel = await openPanel(dark.webContents)
+        await shot('whatsapp-atendimento-painel-dark', dark)
+        const theme = await evaluate<string>(dark.webContents, `document.documentElement.dataset.theme ?? ''`)
+        return { ok: tab && filled && chat && panel && theme === 'dark', detail: `aba=${tab} com cartão e histórico=${filled}; conversa=${chat}, painel=${panel}; tema ${theme}` }
+      } finally {
+        dark.destroy()
+      }
+    })
+
+    // CA11: excluir o agente desliga o atendimento da Ana.
+    await atendimentoStep(checks, 'excluir', async () => {
+      const tab = await openAtendimentoTab()
+      await clickSelector(contents, '[data-atendimento-agent-name="Recados"] [data-action="atendimento-agent-delete"]')
+      const confirm = await text(contents, '[data-atendimento-agent-name="Recados"] [data-action="atendimento-agent-delete-confirm"] ~ *')
+      const question = await invoke<string>(`document.querySelector('[data-atendimento-agent-name="Recados"] [data-action="atendimento-agent-delete-confirm"]')?.previousElementSibling?.textContent ?? ''`)
+      await clickSelector(contents, '[data-atendimento-agent-name="Recados"] [data-action="atendimento-agent-delete-confirm"]')
+      const removed = await waitFor(contents, `!document.querySelector('[data-atendimento-agent-name="Recados"]') && document.querySelector('[data-atendimento-empty]')`, 8000)
+      const state = await ctx.atendimento.state()
+      const binding = state.bindings.find((item) => item.chatId === WA_ANA)
+      const opened = await openChat(WA_ANA)
+      const badge = await waitFor(contents, `${WA_BADGE} === 'Agente excluído · desligado' || !document.querySelector('[data-atendimento-badge]')`)
+      const view = await invoke<{ badge: string; chip: boolean; bar: boolean }>(
+        `({ badge: ${WA_BADGE}, chip: Boolean(document.querySelector('[data-atendimento-chip]')), bar: Boolean(document.querySelector('[data-atendimento-pause-bar]')) })`,
+      )
+      return {
+        ok: tab && question === 'Excluir este agente? As conversas que ele atende ficam desligadas.' && confirm === 'Cancelar' && removed && state.agents.length === 0 && (!binding || binding.enabled === false) && opened && badge && !view.chip && !view.bar,
+        detail: `confirmação "${question}" (${confirm}); cartão saiu=${removed}; agentes ${state.agents.length}; atendimento da Ana ${binding ? (binding.enabled ? 'ligado' : 'desligado') : 'apagado'}; selo "${view.badge}", etiqueta=${view.chip}, barra=${view.bar}`,
+      }
+    })
+  } finally {
+    // CA12: como estava. Sem agente, sem atendimento (o desligado também sai: o selo "desligado" mudaria os prints do
+    // WhatsApp dos checks seguintes), sem a pausa geral, o transporte de antes e a última mensagem da Ana minha.
+    await atendimentoStep(checks, 'estadoFinal', async () => {
+      let state = await ctx.atendimento.state()
+      if (state.pausedAll) await invoke(`window.__scribeApi.invoke('scribe:atendimento-pause-all', { paused: false }).then(() => true)`)
+      for (const binding of state.bindings) await invoke(`window.__scribeApi.invoke('scribe:atendimento-binding-delete', { chatId: ${JSON.stringify(binding.chatId)} }).then(() => true)`)
+      for (const agent of state.agents) await invoke(`window.__scribeApi.invoke('scribe:atendimento-agent-delete', { id: ${JSON.stringify(agent.id)} }).then(() => true)`)
+      await invoke(`window.__scribeApi.invoke('scribe:settings-update', { claudeTransport: '${transportBefore === 'acp' ? 'acp' : 'cli'}' }).then(() => true)`)
+      const before = (await waSent(ctx)).length
+      await ctx.whatsapp.fake('incoming', { chatId: WA_ANA, fromMe: true, text: ATENDIMENTO_TEXTS.last })
+      let lastMine = false
+      for (let attempt = 0; attempt < 50 && !lastMine; attempt++) {
+        lastMine = await invoke<boolean>(`window.__scribeApi.invoke('scribe:whatsapp-messages', { chatId: '${WA_ANA}' }).then((list) => list.some((m) => m.fromMe && m.text === ${JSON.stringify(ATENDIMENTO_TEXTS.last)}))`)
+        if (!lastMine) await wait(100)
+      }
+      await wait(500)
+      state = await ctx.atendimento.state()
+      const after = (await waSent(ctx)).length
+      return {
+        ok: state.agents.length === 0 && state.bindings.length === 0 && !state.pausedAll && lastMine && after === before && readSettings(ctx.userDataDir).claudeTransport === (transportBefore === 'acp' ? 'acp' : 'cli'),
+        detail: `agentes ${state.agents.length}, atendimentos ${state.bindings.length}, pausa geral ${state.pausedAll}; última da Ana minha=${lastMine}; envios ${before} -> ${after}; transporte ${readSettings(ctx.userDataDir).claudeTransport}`,
+      }
+    })
+    win.destroy()
+  }
+}
+
 /**
  * Contrato 25 (CA1 a CA6), numa janela clara: "Assistente" na barra lateral (contrato 78: a tela sem título) e o campo
  * novo; "tenho algo pendente no WhatsApp?" responde citando as conversas pendentes; o painel "Contexto" com as
@@ -7587,6 +8008,10 @@ async function assistantAgendaChecks(ctx: SmokeContext, watch: (win: BrowserWind
     )
     const savedNoAccess = (await lastActions())[0] as (SmokeActionFile & { access?: string; calendarId?: string | null }) | undefined
     writeHelper({ access: 'full' })
+    // Contrato 144: o acesso do `ESTADO.md` fica guardado 30 s; o "sem acesso" lido acima só saía dele por tempo, e o
+    // `reminderEdit` abaixo dependia de quanto as perguntas demoravam. A volta do foco à janela (que o app trata como
+    // "leia de novo") esquece o guardado, como faria a pessoa que acabou de dar o acesso no macOS.
+    app.emit('browser-window-focus', {}, win)
     checks['eventNoAccess'] = {
       ok: noAccessShown && view.note.includes('O app ainda não tem acesso ao Calendário.') && view.ask === 'Pedir acesso' && view.disabled && !view.picker && savedNoAccess?.access === 'not-determined' && savedNoAccess.calendarId === null,
       detail: `cartão=${noAccessShown}; aviso "${view.note}"; botão "${view.ask}"; "Pôr na agenda" desabilitado=${view.disabled}; seletor=${view.picker}; gravado access=${String(savedNoAccess?.access)} agenda=${String(savedNoAccess?.calendarId)}`,
@@ -16756,6 +17181,8 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
   const calendar: Record<string, Check> = {}
   /** Contrato 24: WhatsApp pelo serviço falso. */
   const whatsapp: Record<string, Check> = {}
+  /** Contrato 144: o atendimento no WhatsApp. */
+  const atendimento: Record<string, Check> = {}
   const assistant: Record<string, Check> = {}
   const automations: Record<string, Check> = {}
   const internet: Record<string, Check> = {}
@@ -17208,6 +17635,10 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
     // Contrato 24: WhatsApp com o serviço falso, antes do bloqueio (que também recusa os canais dele).
     await whatsappChecks(ctx, watch, whatsapp, screenshots)
 
+    // Contrato 144: o atendimento no WhatsApp, com o WhatsApp falso ainda conectado e o `claude` falso; termina sem agente,
+    // sem atendimento e sem a pausa geral.
+    await atendimentoChecks(ctx, watch, atendimento, screenshots)
+
     // Contrato 23: Automações, com o agente ACP falso e o relógio do agendador adiantado; antes do bloqueio.
     await automationsChecks(ctx, watch, automations, screenshots)
 
@@ -17377,6 +17808,8 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
   for (const name of ['microsoft', 'googleCalendar', 'notices', 'settings', 'banner', 'recordFromBanner', 'recordFromNotice', 'upcoming', 'signOut']) if (!calendar[name]) failures.push(`agenda ${name}: não executado`)
   for (const [name, check] of Object.entries(whatsapp)) if (!check.ok) failures.push(`whatsapp ${name}: ${check.detail}`)
   for (const name of ['detect', 'install', 'risk', 'paired', 'screen', 'draft', 'send', 'correct', 'ask', 'dark', 'locked', 'notify']) if (!whatsapp[name]) failures.push(`whatsapp ${name}: não executado`)
+  for (const [name, check] of Object.entries(atendimento)) if (!check.ok) failures.push(`atendimento ${name}: ${check.detail}`)
+  for (const name of ATENDIMENTO_CHECKS) if (!atendimento[name]) failures.push(`atendimento ${name}: não executado`)
   for (const [name, check] of Object.entries(automations)) if (!check.ok) failures.push(`automações ${name}: ${check.detail}`)
   for (const [name, check] of Object.entries(assistant)) if (!check.ok) failures.push(`assistente ${name}: ${check.detail}`)
   for (const name of ['name', 'pending', 'sources', 'reminder', 'whatsapp', 'invalid', 'noHeader', 'eventCard', 'eventEdit', 'eventNoAccess', 'reminderEdit', 'reminderDelete'])
@@ -17496,7 +17929,9 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
   // Contrato 135: +2 (o Início com a gravação em andamento, nos dois temas; o `inicio-dia` entrou em `SCREENS`).
   // Contrato 136: +4 (o Início vazio na abertura, nos dois temas; o Calendário do Mac sem acesso e a Section "Início" das
   // Configurações, no claro).
-  const expectedShots = SCREENS.length * THEMES.length + 228
+  // Contrato 144: +9 (o painel Atendimento da conversa e a aba Atendimento das Automações, nos dois temas; o selo no
+  // cabeçalho e na lista, a proposta do agente, o aviso de risco, o formulário do agente com o teste e o histórico, no claro).
+  const expectedShots = SCREENS.length * THEMES.length + 237
   if (screenshots.length !== expectedShots) failures.push(`${screenshots.length} PNGs em vez de ${expectedShots}`)
   for (const shot of screenshots) {
     if (shot.name === MEETING_PROMPT_SHOT) {
@@ -17547,6 +17982,7 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
     calendarNotifications: ctx.fixtures.calendar.notifications.map((notice) => ({ kind: notice.kind, actions: notice.actions })),
     // Contrato 24: só os resultados; nenhum texto de mensagem além dos fixos do serviço falso.
     whatsapp,
+    atendimento,
     assistant,
     // Contrato 26: só os resultados (os endereços são os inventados do agente falso).
     internet,

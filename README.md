@@ -51,7 +51,7 @@ Você usa a **sua** conta e o **seu** `claude` instalado. O app não tem servido
 A tela que antes se chamava "Perguntar".
 - Pergunte "O que ficou decidido esta semana?", "Quais tarefas são minhas?", "Tenho algo pendente para responder no WhatsApp?", "Como ligo o resumo automático?".
 - Além das reuniões, ele lê as suas **Tarefas** (as vencidas, as de hoje, as próximas e as sem prazo), o **WhatsApp** (as conversas dos últimos 14 dias, com o que está pendente de resposta, ou só as que você escolher), as **Automações** (agentes, agendamentos e as últimas execuções), o **guia do próprio app**, a **internet** (busca na web quando a pergunta pedir, com os links na resposta) e o estado atual (data, hora, contas). Cada fonte tem um interruptor no painel **Contexto**.
-- Peça ações na mesma tela: "me lembre amanhã de responder a Ana", "responda a Bia dizendo sim", "toda segunda, me mande o resumo da semana". O Assistente **propõe** um cartão (lembrete, tarefa, resposta no WhatsApp com o texto editável, agendamento ou um botão para abrir uma tela) e **nada acontece sem o seu clique**. Todo envio pelo WhatsApp ainda pede a confirmação do macOS. Os lembretes viram tarefas com aviso, na tela Tarefas, e chegam como notificação do macOS.
+- Peça ações na mesma tela: "me lembre amanhã de responder a Ana", "responda a Bia dizendo sim", "toda segunda, me mande o resumo da semana". O Assistente **propõe** um cartão (lembrete, tarefa, resposta no WhatsApp com o texto editável, agendamento ou um botão para abrir uma tela) e **nada acontece sem o seu clique**. Os lembretes viram tarefas com aviso, na tela Tarefas, e chegam como notificação do macOS.
 - Você **vê o Claude pensar**: os passos ("Lendo o índice das reuniões", "Abrindo «Planejamento»", "Lendo as conversas do WhatsApp") e o raciocínio aparecem enquanto ele trabalha.
 - Cada resposta cita de onde veio cada coisa (a reunião com link, "[Tarefa · Mandar a proposta]", "[WhatsApp · Ana · 16/11 14:46]", "[Automações · Resumo da semana]", "[Guia]", "[Web · site · título]" com o link, que abre no navegador) e mostra **modelo, tempo, tokens e custo** e, quando buscou na web, "Usou a internet · N buscas · M páginas".
 - **Agentes e agendamentos com internet**: em Automações, cada agente tem o interruptor "Pode pesquisar na internet" (desligado por padrão). "Pedir agora" e os agendamentos usam o que está no agente.
@@ -61,7 +61,7 @@ A tela que antes se chamava "Perguntar".
 
 ![Assistente propondo um lembrete: só cria com o seu clique](docs/images/assistente-lembrete-light.png)
 
-![Assistente propondo uma resposta no WhatsApp: o macOS pergunta antes de enviar](docs/images/assistente-whatsapp-light.png)
+![Assistente propondo uma resposta no WhatsApp: só sai com o seu clique em "Enviar"](docs/images/assistente-whatsapp-light.png)
 
 ### Email: IMAP, POP3 e SMTP
 
@@ -218,7 +218,17 @@ Depois disso, as versões novas chegam pelo próprio app.
 
 > Este recurso usa um cliente não oficial do WhatsApp (neonize/whatsmeow). O WhatsApp pode suspender ou bloquear o seu número, de forma temporária ou definitiva, sem aviso. A LAP não tem como desfazer um bloqueio. Use por sua conta e risco.
 
-Desligado por padrão. Em Configurações › Contas › WhatsApp, depois de aceitar o aviso, o app instala um serviço pequeno em Python neste Mac (precisa do Python 3.10 ou mais novo e da `libmagic`: `brew install python libmagic`), liga, mostra o aviso de novo e o QR code para conectar como um aparelho. A tela **WhatsApp** lista as conversas e mensagens (áudio, imagem e vídeo só baixam no clique em "Baixar": o áudio toca no próprio balão e pode ser transcrito pela AssemblyAI no clique em "Transcrever"); o **Assistente** lê as conversas recentes (ou só as que você escolher) junto com as reuniões e pode propor uma resposta num cartão; e o **Rascunho com o Claude** escreve uma resposta no campo. **Nenhuma mensagem sai sem o seu clique em "Enviar"** e a confirmação do macOS: o Claude e os agentes só leem, escrevem rascunhos e propõem. A sessão e as mensagens ficam só no Mac. Detalhes em [`services/whatsapp-bridge/`](services/whatsapp-bridge/README.md).
+Desligado por padrão. Em Configurações › Contas › WhatsApp, depois de aceitar o aviso, o app instala um serviço pequeno em Python neste Mac (precisa do Python 3.10 ou mais novo e da `libmagic`: `brew install python libmagic`), liga, mostra o aviso de novo e o QR code para conectar como um aparelho. A tela **WhatsApp** lista as conversas e mensagens (áudio, imagem e vídeo só baixam no clique em "Baixar": o áudio toca no próprio balão e pode ser transcrito pela AssemblyAI no clique em "Transcrever"); o **Assistente** lê as conversas recentes (ou só as que você escolher) junto com as reuniões e pode propor uma resposta num cartão; e o **Rascunho com o Claude** escreve uma resposta no campo. **Nenhuma mensagem sai sem o seu clique em "Enviar"**, com uma exceção: as conversas que você marcar para um agente de atendimento responder sozinho (abaixo). Fora delas, o Claude e os agentes só leem, escrevem rascunhos e propõem. A sessão e as mensagens ficam só no Mac. Detalhes em [`services/whatsapp-bridge/`](services/whatsapp-bridge/README.md).
+
+### Atendimento no WhatsApp (por sua conta e risco)
+
+Agentes com as regras que você escreve respondem as conversas do WhatsApp que você marcar, uma a uma. Crie o agente em Automações › Atendimento (o "Testar" mostra a resposta que ele daria, sem enviar nada) e marque a conversa pelo botão **Atendimento**, no topo dela. Cada conversa tem as próprias opções: o agente; o modo, **Rascunho para eu aprovar** (o padrão: o agente propõe e quem envia é você) ou **Responder sozinho**; o atraso de X a Y minutos antes de responder; o "digitando…"; o horário de atendimento; o limite de respostas por hora; e a pausa quando você responde. "Pausar todos os atendimentos", na lista de conversas, para tudo com um clique, e o histórico em Automações › Atendimento mostra o que cada agente fez, sem o texto das mensagens.
+
+- Só funciona com o app aberto e o Mac acordado.
+- Continua respondendo com o app bloqueado. Para interromper, use "Pausar todos os atendimentos".
+- Não vale para grupos, e o agente não lê áudio, imagem nem arquivo: quando chega um, ele passa a conversa para você.
+- Responder sozinho aumenta a chance de o WhatsApp suspender ou bloquear o seu número. O app mostra o aviso antes do primeiro atendimento automático.
+- O agente não tem ferramentas e não lê nada além daquela conversa. Fora das regras, ou quando perguntam se é um robô, ele passa a conversa para você, com uma notificação.
 
 ---
 

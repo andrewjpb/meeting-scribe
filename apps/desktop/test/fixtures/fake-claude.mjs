@@ -10,6 +10,7 @@
 // 0,6 s e devolve o lote falso (`fake-ai-notes.mjs`) entre cercas. Com a dos Detalhes do WhatsApp ("Você lê uma
 // conversa do WhatsApp…", contrato 32), espera 0,6 s e devolve os Detalhes falsos (`fake-whatsapp-insights.mjs`). Com a
 // da correção ao enviar ("Você corrige mensagens de WhatsApp…", contrato 35), devolve a correção falsa (`fake-correct.mjs`).
+// Com a do atendimento ("Você responde mensagens de WhatsApp…", contrato 144), responde confirmando o recebimento.
 //
 // Com `--include-partial-messages` (chat "Perguntar", contrato 15): para cada pergunta, lê a pasta atual (o
 // `INDICE.md` do acervo ou o único `.md` de uma reunião), escreve a resposta em pedaços (`stream_event`),
@@ -301,6 +302,16 @@ if (args[0] === 'mcp') {
       if (isSlowCorrection(input)) await sleep(FAKE_CORRECT_SLOW_MS)
       process.stdout.write(
         `${JSON.stringify({ type: 'result', subtype: 'success', is_error: false, duration_ms: Date.now() - started, result: fakeCorrection(input), usage: { input_tokens: Math.ceil(input.length / 4), output_tokens: 20 }, total_cost_usd: 0.0004 })}\n`,
+        () => process.exit(0),
+      )
+      return
+    }
+    // Contrato 144: a resposta do atendimento no WhatsApp, só o JSON da decisão; confirma o recebimento com o primeiro
+    // nome do contato (o smoke confere o texto em `/_fake/sent`).
+    if (systemPrompt.startsWith('Você responde mensagens de WhatsApp')) {
+      const contact = /<contato>([^<]*)<\/contato>/.exec(input)?.[1]?.trim().split(' ')[0] || 'tudo bem'
+      process.stdout.write(
+        `${JSON.stringify({ type: 'result', subtype: 'success', is_error: false, duration_ms: Date.now() - started, result: JSON.stringify({ acao: 'responder', texto: `Recebido, ${contact}! Já anotei aqui.` }), usage: { input_tokens: Math.ceil(input.length / 4), output_tokens: 20 }, total_cost_usd: 0.0003 })}\n`,
         () => process.exit(0),
       )
       return
