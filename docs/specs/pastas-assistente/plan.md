@@ -51,4 +51,5 @@ Waves: 1 = {165}; 2 = {166, 167} (sem arquivo em comum: 166 é main + `shared/ch
 ## Pendências
 
 - Contagem "N arquivos legíveis · M só para anexo" na lista de pastas das Configurações (mockup 01): fica para uma versão seguinte; precisaria de varredura ao abrir a aba.
+- O caminho encurtado com `~` na lista de pastas é calculado no renderer por `/Users/<nome>`; alternativa barata depois: o preload expõe `os.homedir()` e a tela usa `shortenHome(path, home)` (revisão do 167).
 (demais preenchidas no fechamento)

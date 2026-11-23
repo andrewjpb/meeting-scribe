@@ -1,5 +1,7 @@
-import { useEffect } from 'react'
+import { useEffect, type ReactNode } from 'react'
+import { useNavigate } from 'react-router'
 import { chatSourcesOf, chatSourcesToKeep, chatWhatsAppModeOf, type ChatScope, type ChatSourceKind } from '@shared/chat'
+import { settingsPath } from '@shared/routes'
 import { WHATSAPP_RECENT_CHATS_MAX, WHATSAPP_RECENT_DAYS } from '@shared/whatsapp'
 import { useSettings } from '../../app/settingsStore'
 import { Switch } from '../../design/Switch'
@@ -15,14 +17,14 @@ const SOURCE_TEXT: Readonly<Record<ChatSourceKind, { name: string; description: 
   whatsapp: { name: 'WhatsApp', description: `As conversas com mensagem nos últimos ${WHATSAPP_RECENT_DAYS} dias (até ${WHATSAPP_RECENT_CHATS_MAX}), com o que está pendente de resposta.` },
   email: { name: 'Email', description: 'Os emails recebidos nos últimos 30 dias, com o que está pendente de resposta, e a busca em todas as pastas do servidor.' },
   redes: { name: 'Redes', description: 'Contas, as 10 últimas publicações com métricas e os comentários e mensagens não lidos.' },
-  // Contrato 165: só o texto (o mapa é por fonte); a linha entra no 167.
+  // Contrato 165: o texto; contrato 167: a linha, logo depois do Email.
   pastas: { name: 'Pastas', description: 'Arquivos das pastas que você escolheu em Configurações; só leitura' },
   automations: { name: 'Automações', description: 'Agentes, agendamentos e as últimas 20 execuções.' },
   guide: { name: 'Guia do app', description: 'Cada tela, cada aba de Configurações, os atalhos e o que cada recurso faz.' },
   internet: { name: 'Internet', description: 'Busca na web quando a pergunta pedir. Os links aparecem na resposta.' },
 }
 
-function SourceRow({ kind, checked, onChange, unavailable }: { kind: ChatSourceKind; checked: boolean; onChange: (checked: boolean) => void; unavailable?: string | undefined }) {
+function SourceRow({ kind, checked, onChange, unavailable }: { kind: ChatSourceKind; checked: boolean; onChange: (checked: boolean) => void; unavailable?: ReactNode }) {
   const id = `chat-source-${kind}`
   return (
     <div data-chat-source={kind} data-chat-source-unavailable={unavailable ? '' : undefined} className="flex items-start justify-between gap-3">
@@ -42,7 +44,7 @@ function SourceRow({ kind, checked, onChange, unavailable }: { kind: ChatSourceK
  * ou com conversas já escolhidas), o Email (contrato 45, só com conta de email), as Redes (contrato 76, só com conta do
  * Instagram), as Automações, o Guia do app e (contrato 26) a Internet, cada um com interruptor, todos ligados por padrão
  * menos as Redes. Contrato 117: o Funil, desligado por padrão (leva nomes, e-mails e telefones ao modelo). Contrato 127: as
- * Tarefas, a primeira e ligada por padrão.
+ * Tarefas, a primeira e ligada por padrão. Contrato 167: as Pastas, desligadas por padrão e desabilitadas sem pasta escolhida.
  * No WhatsApp, "Conversas recentes" (o padrão) ou "Só estas conversas" (a escolha manual do contrato 24). O estado
  * atual (data, hora, fuso e conexões) vai sempre. A troca vale a partir da próxima pergunta.
  */
@@ -57,6 +59,9 @@ export function SourcesSection({ scope, onScope }: { scope: ChatScope; onScope: 
   const hasEmail = useEmail((state) => (state.accounts?.length ?? 0) > 0)
   // Contrato 76: as redes só aparecem com conta do Instagram.
   const hasRedes = useRedes((state) => (state.state?.accounts.length ?? 0) > 0)
+  // Contrato 167: sem pasta escolhida, a linha das Pastas fica desabilitada e leva às Configurações › Claude.
+  const hasFolders = useSettings((state) => state.settings.assistant.folders.length > 0)
+  const navigate = useNavigate()
 
   useEffect(() => {
     if (connected) void useWhatsApp.getState().loadChats()
@@ -108,6 +113,26 @@ export function SourcesSection({ scope, onScope }: { scope: ChatScope; onScope: 
         </>
       )}
       {hasEmail && <SourceRow kind="email" checked={sources.email} onChange={(on) => toggle('email', on)} />}
+      <SourceRow
+        kind="pastas"
+        checked={sources.pastas}
+        onChange={(on) => toggle('pastas', on)}
+        unavailable={
+          hasFolders ? undefined : (
+            <>
+              Nenhuma pasta escolhida ·{' '}
+              <button
+                type="button"
+                data-action="chat-source-pastas-settings"
+                onClick={() => void navigate(settingsPath('claude'))}
+                className="no-drag text-accent underline decoration-1 underline-offset-3 hover:text-title"
+              >
+                Configurações
+              </button>
+            </>
+          )
+        }
+      />
       {hasRedes && <SourceRow kind="redes" checked={sources.redes} onChange={(on) => toggle('redes', on)} />}
       <SourceRow kind="automations" checked={sources.automations} onChange={(on) => toggle('automations', on)} />
       <SourceRow kind="guide" checked={sources.guide} onChange={(on) => toggle('guide', on)} />
