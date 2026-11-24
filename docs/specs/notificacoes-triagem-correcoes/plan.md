@@ -1,4 +1,4 @@
-# Plan — notificacoes-triagem-correcoes (0.25.1)
+# Plan — notificacoes-triagem-correcoes (0.26.1)
 
 Base: `8b55751` · Spec: `spec.md` · Contrato único: 171 · Branch: main (árvore principal; a frente `pastas-assistente` está em worktree próprio e toca `main/chat/*`, `features/chat/ActionCards.tsx`, `ChatMessages.tsx` — ver decisão 4).
 
@@ -18,4 +18,4 @@ Base: `8b55751` · Spec: `spec.md` · Contrato único: 171 · Branch: main (árv
 
 ## Gates
 - Por contrato: `pnpm --filter desktop typecheck && pnpm --filter desktop lint && pnpm --filter desktop test`.
-- Gate completo `pnpm gates` (coordenador, ~25 min, tela desbloqueada) antes da versão 0.25.1; auditoria dos prints afetados; `pack.sh`; teste navegado curto em sessão nova; arquivamento em `docs/specs/_archive/notificacoes-triagem-correcoes/`.
+- Gate completo `pnpm gates` (coordenador, ~25 min, tela desbloqueada) antes da versão 0.26.1; auditoria dos prints afetados; `pack.sh`; teste navegado curto em sessão nova; arquivamento em `docs/specs/_archive/notificacoes-triagem-correcoes/`.
