@@ -1,7 +1,7 @@
 ---
 feature: email-painel-correcoes
-status: aprovada-2026-11-23 (Andrew: "Sim, corrija", sobre o resumo dos achados do teste navegado)
-versao: 0.26.1 ou 0.26.2 (fila da coordenadora: 0.26.0 = pastas-assistente; a primeira correção com gate verde leva 0.26.1)
+status: implementada-2026-11-24 (0.26.2, arquivada)
+versao: 0.26.2
 origem: teste navegado da 0.25.0 (relatorio-teste-email-painel-0.25.0.pdf, 23/11/2026)
 ---
 
