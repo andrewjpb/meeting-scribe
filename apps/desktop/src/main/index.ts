@@ -2391,6 +2391,10 @@ function createAppServices(userData: string): AppServices {
     batches: {
       record: async (batch) => {
         await emailBatchStore.mutate((batches) => ({ batches: [batch, ...batches], value: null }))
+        // Contrato 173 (D2): o lote do Painel chega às janelas como o do agente (`scribe:email-organize`), e a Caixa de
+        // Entrada mostra a faixa "O Painel moveu N mensagens" pelo mesmo caminho. Bloqueado, nada vai às janelas.
+        const saved = await emailTools.organizer?.get(batch.id).catch(() => null)
+        if (saved?.ok && !lockService?.isLocked()) broadcast(appWindows(), 'scribe:email-organize', saved.view)
         return batch.id
       },
     },

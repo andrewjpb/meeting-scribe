@@ -134,6 +134,15 @@ export function isInbox(message: Pick<EmailMessage, 'mailbox'>): boolean {
   return message.mailbox.toUpperCase() === EMAIL_INBOX_MAILBOX
 }
 
+/**
+ * Contrato 173: o caminho da Caixa de Entrada na listagem da conta: a pasta de uso `\Inbox`, senão a de caminho `INBOX`
+ * (sem diferenciar maiúscula); `null` sem nenhuma. No Zoho ela vem como "Caixa de entrada", e não há pasta `INBOX`.
+ */
+export function inboxFolderPath(folders: readonly { path: string; specialUse?: string | null; noselect?: boolean }[]): string | null {
+  const usable = folders.filter((folder) => !folder.noselect)
+  return (usable.find((folder) => folder.specialUse === '\\Inbox') ?? usable.find((folder) => folder.path.toUpperCase() === EMAIL_INBOX_MAILBOX))?.path ?? null
+}
+
 /** Contrato 52: a mensagem é da pasta de enviados da conta (`EmailAccountStatus.sentMailbox`). */
 export function isSent(message: Pick<EmailMessage, 'mailbox'>, account: Pick<EmailAccountStatus, 'sentMailbox'>): boolean {
   return message.mailbox === account.sentMailbox

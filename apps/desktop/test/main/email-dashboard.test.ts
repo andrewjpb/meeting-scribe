@@ -106,6 +106,8 @@ function harness(input: {
   store?: EmailDashboardStoreApi
   loadBody?: (message: EmailMessage) => EmailBody | null
   callTimeoutMs?: number
+  /** A listagem da conta IMAP (o `LIST` guardado e o pedido agora); sem ela, `FOLDERS`. */
+  folders?: typeof FOLDERS
 }): Harness {
   const store = input.store ?? createEmailDashboardStore(join(dir, 'email'))
   const batches = createEmailBatchStore(join(dir, 'email'), () => h.state.now)
@@ -126,8 +128,8 @@ function harness(input: {
     store,
     email: {
       cached: async () => structuredClone(h.caches),
-      cachedFolders: (accountId) => (accountId === IMAP ? FOLDERS : null),
-      listFolders: async (accountId) => (accountId === IMAP ? FOLDERS : null),
+      cachedFolders: (accountId) => (accountId === IMAP ? (input.folders ?? FOLDERS) : null),
+      listFolders: async (accountId) => (accountId === IMAP ? (input.folders ?? FOLDERS) : null),
       cachedBody: async () => null,
       loadBody: async (_accountId, msg) => {
         h.loads.push(msg.id)
@@ -403,6 +405,23 @@ describe('mover (contrato 156, CA7)', () => {
     const store = await h.store.load()
     for (const key of keys) expect(store.items[`${IMAP}:${key}`]).toBeUndefined()
     expect(h.changes).toHaveLength(1)
+  })
+
+  // Contrato 173 (CA1): a origem é sempre `INBOX` (o nome canônico do IMAP e o único que o serviço reconhece como a
+  // entrada), mesmo quando a listagem a traz como "Caixa de entrada" (Zoho, de uso `\Inbox`, sem `INBOX`).
+  it.each([
+    ['com a Caixa de Entrada em "Caixa de entrada"', [{ path: 'Caixa de entrada', name: 'Caixa de entrada', specialUse: '\\Inbox', delimiter: '/' }, ...FOLDERS.slice(1)], 'INBOX'],
+    ['com a INBOX (Gmail, servidor falso)', FOLDERS, 'INBOX'],
+    ['sem a Caixa de Entrada na listagem', FOLDERS.slice(1), 'INBOX'],
+  ])('%s: move e grava o lote com a origem INBOX', async (_name, folders, fromPath) => {
+    const h = harness({ caches: twoAccounts(), folders })
+    await runToEnd(h)
+    const keys = (await h.service.view()).moves[0]?.rows.map((row) => row.messageKey) ?? []
+    expect(keys).toHaveLength(3)
+    const result = await h.service.applyMove(IMAP, 'Newsletters', keys)
+    expect(h.moves).toEqual([{ accountId: IMAP, fromPath, uids: keys.map(Number), toPath: 'Newsletters' }])
+    const batch = await h.batches.get(result.batchId)
+    expect(batch?.items.map((item) => item.fromPath)).toEqual([fromPath, fromPath, fromPath])
   })
 
   it.each([

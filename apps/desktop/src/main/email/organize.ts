@@ -18,7 +18,7 @@ import { randomUUID } from 'node:crypto'
 import { chmod, rename, writeFile } from 'node:fs/promises'
 import { z } from 'zod'
 import type { EmailBatchAction } from '../../shared/assistant'
-import { EMAIL_FOLDER_PATH_MAX, EMAIL_INBOX_MAILBOX, EMAIL_MOVE_MAX, EMAIL_REF_PATTERN, isInbox, isSent, type EmailAccountStatus, type EmailFolderNode, type EmailFolderPathResult, type EmailFoldersResult, type EmailMessage, type EmailMoveResult, type EmailOpenFolderResult } from '../../shared/email'
+import { EMAIL_FOLDER_PATH_MAX, EMAIL_INBOX_MAILBOX, EMAIL_MOVE_MAX, EMAIL_REF_PATTERN, inboxFolderPath, isInbox, isSent, type EmailAccountStatus, type EmailFolderNode, type EmailFolderPathResult, type EmailFoldersResult, type EmailMessage, type EmailMoveResult, type EmailOpenFolderResult } from '../../shared/email'
 import {
   EMAIL_BATCH_REASON_MAX,
   EMAIL_BATCH_REQUEST_MAX,
@@ -842,6 +842,9 @@ export function createEmailOrganizer(deps: EmailOrganizeDeps, links: EmailOrgani
       if (!listed.ok) return { ok: false, error: listed.error === 'unavailable' ? 'unavailable' : 'server' }
       const entries = flatten(listed.folders)
       const exists = (path: string): boolean => entries.some((entry) => entry.path === path && !entry.noselect)
+      // Contrato 173: `INBOX` existe se a listagem tem uma pasta de entrada (no Zoho, "Caixa de entrada", de uso `\Inbox`,
+      // sem pasta `INBOX`). A volta continua por `INBOX`, o nome que o servidor e o serviço reconhecem como a entrada.
+      const hasOrigin = (path: string): boolean => exists(path) || (isInbox({ mailbox: path }) && inboxFolderPath(entries) !== null)
       // Os que podem estar no destino: movidos, `pending` (o app pode ter caído depois do `MOVE`) e os que falharam antes.
       const todo = batch.items.map((item, index) => ({ item, index })).filter(({ item }) => item.status === 'moved' || item.status === 'pending' || item.status === 'undo-failed')
       const outcome = new Map<number, { status: 'undone'; backUid: number | null; backUidValidity: string | null } | { status: 'undo-failed'; code: EmailUndoError } | { status: 'failed' }>()
@@ -854,7 +857,7 @@ export function createEmailOrganizer(deps: EmailOrganizeDeps, links: EmailOrgani
           for (const { index } of group) fail(index, 'folder-missing')
           continue
         }
-        const ready = group.filter(({ item, index }) => (exists(item.fromPath) ? true : (fail(index, 'origin-missing'), false)))
+        const ready = group.filter(({ item, index }) => (hasOrigin(item.fromPath) ? true : (fail(index, 'origin-missing'), false)))
         if (!ready.length) continue
         const uids = ready.flatMap(({ item }) => (item.toUid !== null ? [item.toUid] : []))
         const ids = [...new Set(ready.flatMap(({ item }) => (item.messageId ? [item.messageId] : [])))]

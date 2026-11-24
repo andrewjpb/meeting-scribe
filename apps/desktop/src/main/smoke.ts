@@ -17539,13 +17539,28 @@ async function emailDashboardChecks(ctx: SmokeContext, watch: (win: BrowserWindo
     const batchId = await evaluate<string>(contents, `document.querySelector('[data-email-painel] [data-email-organize-banner]')?.dataset.emailOrganizeBanner ?? ''`)
     const batch = batchId ? await api<{ ok: boolean; batch?: { origem?: string } }>('scribe:email-batch-get', { batchId }) : null
     const origemPainel = batch?.ok === true && batch.batch?.origem === 'painel'
+    // Contrato 173 (CA3): antes do Desfazer, a Caixa de Entrada mostra a faixa deste lote ("O Painel moveu N mensagens");
+    // de volta ao Painel, só a faixa dele (nenhuma faixa em dobro).
+    let inboxBanner = false
+    let painelBanners = 0
+    if (batchId) {
+      await clickSelector(contents, `${SIDEBAR_EMAIL} ${EMAIL_INBOX_LINK}`)
+      inboxBanner = await waitFor(
+        contents,
+        `/^O Painel moveu \\d+ mensage(m|ns)$/.test(document.querySelector('[data-email-folder-view="inbox"] [data-email-organize-banner="${batchId}"] p')?.textContent ?? '')`,
+        8000,
+      )
+      await showPainel()
+      await waitFor(contents, `document.querySelector('[data-email-painel] [data-email-organize-banner="${batchId}"]')`, 8000)
+      painelBanners = await evaluate<number>(contents, `document.querySelectorAll('[data-email-organize-banner]').length`)
+    }
     if (bannerShown) await clickSelector(contents, '[data-email-painel] [data-action="email-organize-banner-undo"]')
     for (const stop = Date.now() + 8000; count('INBOX') !== inboxBeforeMove && Date.now() < stop; ) await wait(50)
     const undone = count('INBOX') === inboxBeforeMove && count('Newsletters') === newslettersBefore
     await waitInbox(DASHBOARD_SEEDS.length)
     record('dashboardMove', {
-      ok: bannerShown && moved >= 3 && inboxAfter === inboxBeforeMove - moved && origemPainel && undone,
-      detail: `moved=${moved} inboxAfter=${inboxAfter} newsletters=${newslettersAfter} origemPainel=${origemPainel} undone=${undone}`,
+      ok: bannerShown && moved >= 3 && inboxAfter === inboxBeforeMove - moved && origemPainel && inboxBanner && painelBanners === 1 && undone,
+      detail: `moved=${moved} inboxAfter=${inboxAfter} newsletters=${newslettersAfter} origemPainel=${origemPainel} inboxBanner=${inboxBanner} painelBanners=${painelBanners} undone=${undone}`,
     })
 
     // dashboardIgnore: as que voltaram (UIDs novos) são analisadas de novo; Ignorar uma resposta e um mover os tira, e a

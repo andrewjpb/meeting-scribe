@@ -3,7 +3,9 @@
 // tempo); e a conta removida levando as listas e o rascunho junto.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { EmailAccountStatus, EmailMessage } from '../../src/shared/email'
+import type { EmailBatch, EmailOrganizeEvent } from '../../src/shared/email-organize'
 import { bodyKey, folderKey, useEmail, watchEmail } from '../../src/renderer/src/features/email/emailStore'
+import { organizeBanner, panelBatch } from '../../src/renderer/src/features/email/organizeState'
 import { emptyDraft } from '../../src/renderer/src/features/email/format'
 
 const A = '0b6f2c1e-3a4d-4c5b-8e9f-0a1b2c3d4e5f'
@@ -117,6 +119,47 @@ describe('emailStore', () => {
     expect(invoke).toHaveBeenCalledTimes(4)
     useEmail.getState().requestBody(A, '2', true)
     await vi.waitFor(() => expect(invoke).toHaveBeenCalledTimes(5))
+  })
+
+  it('contrato 173 (CA3): o lote do Painel que o main anuncia vira a faixa "O Painel moveu" da Caixa de Entrada, sem o painel "Organizando"', async () => {
+    const now = Date.now()
+    const batch: EmailBatch = {
+      id: 'p1',
+      accountId: A,
+      chatId: 'painel',
+      startedAt: now,
+      endedAt: now,
+      state: 'done',
+      request: '',
+      totals: { read: 3, total: 3, outOfLimit: 0 },
+      topics: [{ assunto: 'Painel de e-mail', veredito: 'outra', destino: 'Newsletters', motivo: '', evidencia: '', from: '', count: 3 }],
+      items: [1, 2, 3].map((uid) => ({ messageId: null, fromPath: 'INBOX', fromUid: uid, fromUidValidity: '7', toPath: 'Newsletters', toUid: uid + 100, toUidValidity: '9', status: 'moved' as const, topic: 0 })),
+      origem: 'painel',
+    }
+    const event: EmailOrganizeEvent = { batchId: 'p1', chatId: 'painel', accountId: A, state: 'done', etapa: 'movendo', read: 3, total: 3, outOfLimit: 0, moved: 3, byFolder: [{ path: 'Newsletters', count: 3 }], topics: [] }
+    invoke.mockImplementation(async (channel: string) => {
+      if (channel === 'scribe:email-batch-get') return { ok: true, batch, view: event }
+      return []
+    })
+    useEmail.setState({ organize: { running: null, today: [] }, organizeLive: [], organizeClosed: [], bannerDismissed: [], bannerResults: {}, batches: {} })
+    const off = watchEmail()
+    listeners.get('scribe:email-organize')?.(event)
+    await vi.waitFor(() => expect(useEmail.getState().batches['p1']).toBeDefined())
+    const state = useEmail.getState()
+    expect(state.organize.today.map((item) => item.batchId)).toEqual(['p1'])
+    expect(organizeBanner(event, state.batches['p1'] ?? null, now, new Set())).toMatchObject({ path: 'INBOX', title: 'O Painel moveu 3 mensagens' })
+    // Não rodou nesta tela: nada do painel "Organizando".
+    expect(panelBatch(state.organize, A, new Set(state.organizeLive), new Set())).toBeNull()
+    // CA4: o Desfazer da faixa da Caixa de Entrada é o de sempre, e a faixa diz "Desfeito".
+    invoke.mockImplementation(async (channel: string, request?: { batchId: string }) => {
+      if (channel === 'scribe:email-batch-undo') return request?.batchId === 'p1' ? { ok: true, undone: 3, failed: [] } : { ok: false, error: 'missing' }
+      if (channel === 'scribe:email-organize-state') return { ok: true, running: null, today: [{ ...event, state: 'undone', moved: 0 }] }
+      return []
+    })
+    await useEmail.getState().undoFromBanner('p1', 'a Caixa de Entrada')
+    expect(invoke).toHaveBeenCalledWith('scribe:email-batch-undo', { batchId: 'p1' })
+    expect(useEmail.getState().bannerResults['p1']).toEqual({ text: 'Desfeito: 3 mensagens voltaram para a Caixa de Entrada.', failed: false })
+    off()
   })
 
   it('conta removida: as listas, os corpos e o rascunho dela saem', async () => {

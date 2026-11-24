@@ -502,6 +502,49 @@ describe('Desfazer (CA7, CA9, CA15)', () => {
     expect(h.batches().find((batch) => batch.id === pair)).toMatchObject({ state: 'undone' })
   })
 
+  it('contrato 173 (CA2): origem INBOX com a entrada listada como "Caixa de entrada" (Zoho) volta por INBOX; origem que sumiu de verdade continua origin-missing', async () => {
+    // O servidor passa a listar a INBOX como "Caixa de entrada" (de uso `\\Inbox`), sem pasta `INBOX`, como o Zoho.
+    let zoho = false
+    const moves: { from: string; to: string }[] = []
+    const h = await setup({
+      fake: { folders: [{ path: 'Resolvidos' }, { path: 'Projetos' }] },
+      prepare: (fake) => void fake.put('Projetos', { from: BRUNO, subject: 'Do projeto', date: NOW - HOUR }),
+      imapFolders: (fake) => async (config) => {
+        const session = await fake.imapFolders(config)
+        return {
+          ...session,
+          list: async () => (await session.list()).map((entry) => (zoho && entry.path === 'INBOX' ? { ...entry, path: 'Caixa de entrada', name: 'Caixa de entrada', specialUse: '\\Inbox' } : entry)),
+          move: (from, uids, to, uidValidity) => {
+            moves.push({ from, to })
+            return session.move(from, uids, to, uidValidity)
+          },
+        }
+      },
+    })
+    const id = await moveTwo(h)
+    await h.run('listar_conversas', { pasta: 'Projetos' }, null)
+    const context = newTurn()
+    await h.run('mover_emails', { destino: 'Resolvidos', assuntos: [{ emails: refsOf(h, 'Do projeto'), assunto: 'Do projeto', veredito: 'resolvido', motivo: 'x', evidencia: 'y' }] }, context)
+    await h.tools.organizer?.endTurn(context, 'done')
+    const gone = h.batches()[0]?.id as string
+    expect(h.batches().find((batch) => batch.id === id)?.items.map((item) => item.fromPath)).toEqual(['INBOX', 'INBOX'])
+    zoho = true
+    h.fake.dropFolder('Projetos')
+    moves.length = 0
+    expect(await h.tools.organizer?.undoBatch(id)).toEqual({ ok: true, undone: 2, failed: [] })
+    // A volta chega ao serviço e ao servidor por `INBOX`, nunca pelo caminho da listagem.
+    expect(moves).toEqual([{ from: 'Resolvidos', to: 'INBOX' }])
+    // As que voltaram são "movidas de volta", não email novo.
+    await vi.waitFor(async () => expect((await h.service.messages({ accountId: h.accountId })).length).toBe(4))
+    expect(h.received).toEqual([])
+    expect(h.fake.mailboxes()['INBOX']?.uids).toHaveLength(4)
+    expect(h.batches().find((batch) => batch.id === id)).toMatchObject({ state: 'undone' })
+    // O lote não muda de formato: a origem gravada continua `INBOX`.
+    expect(h.batches().find((batch) => batch.id === id)?.items.map((item) => item.fromPath)).toEqual(['INBOX', 'INBOX'])
+    expect(await h.tools.organizer?.undoBatch(gone)).toEqual({ ok: true, undone: 0, failed: [{ code: 'origin-missing', count: 1 }] })
+    expect(h.fake.mailboxes()['Projetos']).toBeUndefined()
+  })
+
   it('UIDVALIDITY do destino trocado: acha pelo Message-ID', async () => {
     const h = await setup({ fake: { folders: [{ path: 'Resolvidos' }] } })
     const id = await moveTwo(h)
