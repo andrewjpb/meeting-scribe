@@ -24,6 +24,7 @@ import {
 } from '../../../shared/atendimento'
 import { atendimentoAgentTestRequestSchema, atendimentoChatRequestSchema, atendimentoDraftSendRequestSchema } from '../../../shared/atendimento-schema'
 import type { WhatsAppMessage, WhatsAppSendRequest, WhatsAppSendResult } from '../../../shared/whatsapp'
+import { savedTranscripts } from '../export'
 import type { AgentSendAuthority, AgentSendProof } from '../send-guard'
 import type { AtendimentoLog } from './log'
 import type { ReplyInput, ReplyMessage, ReplyOutcome } from './reply'
@@ -61,6 +62,8 @@ export interface AtendimentoWhatsApp {
   clickSend(senderId: number, request: WhatsAppSendRequest, onText?: (text: string) => void): Promise<WhatsAppSendResult>
   /** O nome da conta conectada, quando o app sabe. */
   ownerName(): string | null
+  /** Contrato 147: a transcrição já guardada de um áudio (sem rede). Não muda a regra: áudio pendente passa para o dono. */
+  transcript?(chatId: string, messageId: string): Promise<string | null>
 }
 
 /** A notificação de passagem, pelo mesmo mecanismo das do WhatsApp; o clique abre a conversa. */
@@ -125,14 +128,18 @@ interface Run {
 const OWNER_FALLBACK = 'o dono deste WhatsApp'
 const TEST_CHAT = 'teste@s.whatsapp.net'
 
-const toReplyMessage = (message: WhatsAppMessage): ReplyMessage => ({
-  id: message.id,
-  fromMe: message.fromMe,
-  author: message.author,
-  at: new Date(message.at).toISOString(),
-  type: message.type,
-  text: message.text,
-})
+const toReplyMessage = (message: WhatsAppMessage, transcripts: ReadonlyMap<string, string> = new Map()): ReplyMessage => {
+  const transcript = transcripts.get(message.id)
+  return {
+    id: message.id,
+    fromMe: message.fromMe,
+    author: message.author,
+    at: new Date(message.at).toISOString(),
+    type: message.type,
+    text: message.text,
+    ...(transcript ? { transcript } : {}),
+  }
+}
 
 export function createAtendimentoService(deps: AtendimentoServiceDeps): AtendimentoService {
   const now = deps.now ?? Date.now
@@ -298,7 +305,10 @@ export function createAtendimentoService(deps: AtendimentoServiceDeps): Atendime
       run.agentId = agent.id
       let history: ReplyMessage[]
       try {
-        history = (await deps.whatsapp.lastMessages(chatId, HISTORY_MAX)).slice(-HISTORY_MAX).map(toReplyMessage)
+        const messages = (await deps.whatsapp.lastMessages(chatId, HISTORY_MAX)).slice(-HISTORY_MAX)
+        const transcript = deps.whatsapp.transcript?.bind(deps.whatsapp)
+        const transcripts = await savedTranscripts(messages, transcript ? { get: transcript } : undefined)
+        history = messages.map((message) => toReplyMessage(message, transcripts))
       } catch {
         if (!stopped()) handOff(chatId, agent, 'failed', 'não deu para ler a conversa')
         return

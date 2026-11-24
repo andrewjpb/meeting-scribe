@@ -140,12 +140,13 @@ afterEach(async () => {
 describe('agentes (contrato 23, CA1 e CA2)', () => {
   it('os três de exemplo entram na primeira vez, em agents.json, e podem ser apagados para sempre', async () => {
     const { agents, models, mcp } = await service.listAgents()
-    expect(agents.map((agent) => agent.name)).toEqual(['Resumo da semana', 'Minhas tarefas', 'Pendências da reunião'])
+    // Contrato 159: o modelo pronto "Triagem do WhatsApp" entra por último.
+    expect(agents.map((agent) => agent.name)).toEqual(['Resumo da semana', 'Minhas tarefas', 'Pendências da reunião', 'Triagem do WhatsApp'])
     expect(agents[0]?.scope).toEqual({ kind: '7d' })
     expect(models).toEqual(['haiku', 'sonnet', 'opus'])
     expect(mcp).toBe(false)
     const file = JSON.parse(readFileSync(join(dir, AGENTS_FILE), 'utf8')) as { version: number; agents: unknown[] }
-    expect(file.agents).toHaveLength(3)
+    expect(file.agents).toHaveLength(4)
     for (const agent of agents) expect(await service.deleteAgent({ id: agent.id })).toEqual({ ok: true })
     // Reaberto do disco: continua vazio (os exemplos não voltam).
     setup()
@@ -302,6 +303,21 @@ describe('agendador (contrato 23, CA5)', () => {
     const resumed = await service.setPaused({ paused: false })
     expect(resumed).toMatchObject({ paused: false, pauseReason: null })
     expect(Date.parse((await service.listTasks())[0]?.nextRunAt ?? '')).toBe(clock + 5 * 60_000)
+  })
+
+  it('Triagem do WhatsApp (contrato 159, CA6): a tarefa "Quando chega mensagem do WhatsApp" não tem próximo horário e o relógio nunca a roda', async () => {
+    const agentId = await firstAgentId('Triagem do WhatsApp')
+    const saved = await service.saveTask(taskInput(agentId, { name: 'Triagem', schedule: { kind: 'whatsapp-message', esperaSeg: 30, grupos: false } }))
+    expect(saved.ok && saved.task.nextRunAt).toBeNull()
+    await service.tick()
+    service.meetingEnded('reuniao-1')
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    clock += 2 * 24 * 60 * 60_000
+    await service.tick()
+    await service.settled()
+    expect(pending).toHaveLength(0)
+    expect(runsOnDisk()).toEqual([])
+    expect((await service.listTasks())[0]?.nextRunAt).toBeNull()
   })
 
   it('depois de cada reunião: roda com a reunião que acabou, depois do atraso', async () => {
@@ -519,5 +535,76 @@ describe('"Pode ler as tarefas" no agents.json (contrato 128, R31)', () => {
     expect(porNome['Minhas tarefas']?.tarefas).toBe(true)
     expect(porNome['Minhas tarefas']?.instructions).toContain('TAREFAS.md')
     expect(EXAMPLE_AGENTS.filter((agent) => agent.name !== 'Minhas tarefas').every((agent) => agent.tarefas === false)).toBe(true)
+  })
+})
+
+describe('triagem do WhatsApp nas Automações (contrato 161, CA7, CA8 e CA10)', () => {
+  const triagemInput = (agentId: string, patch: Partial<TaskInput> = {}): TaskInput => taskInput(agentId, { name: 'Triagem A', schedule: { kind: 'whatsapp-message', esperaSeg: 30, grupos: false }, ...patch })
+
+  it('CA7: uma triagem ligada por vez; editar a própria e salvar outra desligada passam; ligar a segunda é recusado', async () => {
+    const agentId = await firstAgentId('Triagem do WhatsApp')
+    const primeira = await service.saveTask(triagemInput(agentId))
+    if (!primeira.ok) throw new Error('primeira recusada')
+    expect(await service.saveTask(triagemInput(agentId, { name: 'Triagem B' }))).toEqual({ ok: false, error: 'Já existe um agente de triagem ativo: Triagem A' })
+    const editada = await service.saveTask(triagemInput(agentId, { id: primeira.task.id, schedule: { kind: 'whatsapp-message', esperaSeg: 60, grupos: true } }))
+    expect(editada.ok).toBe(true)
+    const desligada = await service.saveTask(triagemInput(agentId, { name: 'Triagem B', enabled: false }))
+    expect(desligada.ok).toBe(true)
+    if (!desligada.ok) return
+    expect(await service.saveTask(triagemInput(agentId, { id: desligada.task.id, name: 'Triagem B', enabled: true }))).toEqual({ ok: false, error: 'Já existe um agente de triagem ativo: Triagem A' })
+    expect(await service.toggleTask({ id: desligada.task.id, enabled: true })).toEqual({ ok: false, error: 'Já existe um agente de triagem ativo: Triagem A' })
+    expect((await service.listTasks()).filter((task) => task.enabled).map((task) => task.name)).toEqual(['Triagem A'])
+    // Desligar a primeira libera ligar a segunda pelo interruptor.
+    await service.toggleTask({ id: primeira.task.id, enabled: false })
+    expect(await service.toggleTask({ id: desligada.task.id, enabled: true })).toMatchObject({ id: desligada.task.id, enabled: true })
+    // Tarefa comum ligada junto não conta.
+    await createTask()
+  })
+
+  it('CA8: o modelo pronto duas vezes dá o mesmo agente e a mesma tarefa, ligada com o gatilho padrão', async () => {
+    const um = await service.criarTriagemDoModelo()
+    const dois = await service.criarTriagemDoModelo()
+    expect(um.ok && dois.ok).toBe(true)
+    if (!um.ok || !dois.ok) return
+    expect(dois).toEqual(um)
+    const agent = (await service.listAgents()).agents.find((known) => known.id === um.agentId)
+    expect(agent).toMatchObject({ name: 'Triagem do WhatsApp', funil: true, model: 'haiku' })
+    const tasks = (await service.listTasks()).filter((task) => task.schedule.kind === 'whatsapp-message')
+    expect(tasks).toHaveLength(1)
+    expect(tasks[0]).toMatchObject({ id: um.taskId, enabled: true, schedule: { kind: 'whatsapp-message', esperaSeg: 30, grupos: false } })
+    expect(await service.triagemAtiva()).toMatchObject({ task: { id: um.taskId }, agent: { id: um.agentId } })
+  })
+
+  it('CA8: desligada, em pausa automática ou com tudo pausado, triagemAtiva é null e o motivo é "pausado"; sem tarefa, "sem-agente"', async () => {
+    expect(await service.triagemSituacao()).toMatchObject({ task: null, motivo: 'sem-agente' })
+    const criado = await service.criarTriagemDoModelo()
+    if (!criado.ok) throw new Error('modelo recusado')
+    expect((await service.triagemSituacao()).motivo).toBeNull()
+    await service.toggleTask({ id: criado.taskId, enabled: false })
+    expect(await service.triagemAtiva()).toBeNull()
+    expect((await service.triagemSituacao()).motivo).toBe('pausado')
+    // O modelo pronto religa a existente.
+    expect(await service.criarTriagemDoModelo()).toEqual(criado)
+    expect(await service.triagemAtiva()).not.toBeNull()
+    await service.setPaused({ paused: true })
+    expect(await service.triagemAtiva()).toBeNull()
+    expect((await service.triagemSituacao()).motivo).toBe('pausado')
+    await service.setPaused({ paused: false })
+    expect(await service.triagemAtiva()).not.toBeNull()
+  })
+
+  it('CA10: a execução externa entra no histórico e no evento da aba Execuções, sem contar no limite diário', async () => {
+    const criado = await service.criarTriagemDoModelo()
+    if (!criado.ok) throw new Error('modelo recusado')
+    const at = new Date(clock).toISOString()
+    const base = { taskId: criado.taskId, taskName: 'Triagem do WhatsApp', agentId: criado.agentId, agentName: 'Triagem do WhatsApp', trigger: 'whatsapp' as const, startedAt: at, endedAt: at, durationMs: 10, model: 'haiku' as const, costUsd: 0, prompt: 'Triagem da conversa Ana · 1 mensagem nova', meetingId: null, outputResult: null }
+    await service.salvarExecucaoExterna({ ...base, id: 'tri-1', status: 'ok', answer: { role: 'assistant', text: 'Etiqueta: Urgente. Motivo: x', at }, error: null })
+    await service.salvarExecucaoExterna({ ...base, id: 'tri-2', status: 'error', answer: null, error: 'Teto diário de triagens atingido' })
+    expect((await service.listRuns(undefined)).map((run) => run.id).sort()).toEqual(['tri-1', 'tri-2'])
+    expect(events.filter((event) => event.type === 'done').map((event) => event.runId)).toEqual(['tri-1', 'tri-2'])
+    expect((await service.status()).runsToday).toBe(0)
+    expect(await service.hojeTrigger('whatsapp')).toBe(2)
+    expect(await service.hojeTrigger('whatsapp', 'Teto diário de triagens atingido')).toBe(1)
+    expect(await service.hojeTrigger('schedule')).toBe(0)
   })
 })

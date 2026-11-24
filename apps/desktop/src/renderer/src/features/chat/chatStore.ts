@@ -116,6 +116,8 @@ interface ChatState {
   funilAction: (ref: ChatActionRef, campos?: ChatActionOportunidadeCampos) => Promise<ChatActionResult>
   /** Contrato 127: "Criar", "Concluir" e "Adiar" num cartão das tarefas (`campos`: o que o cartão de criar tarefa mudou). */
   tarefaAction: (ref: ChatActionRef, campos?: ChatActionTarefaCampos) => Promise<ChatActionResult>
+  /** Contrato 163: "Criar agente", "Salvar", "Pausar", "Retomar" e "Aplicar" num cartão da triagem do WhatsApp. */
+  triagemAction: (ref: ChatActionRef) => Promise<ChatActionResult>
   /** Contrato 21: "Permitir uma vez", "Sempre permitir esta ferramenta" ou "Negar" num cartão de aprovação. */
   answerApproval: (chatId: string, id: string, decision: McpApprovalDecision) => Promise<boolean>
 }
@@ -427,6 +429,16 @@ export const useChat = create<ChatState>()((set, get) => {
     tarefaAction: async (ref, campos) => {
       try {
         const result = await window.__scribeApi.invoke('scribe:chat-action-tarefa', { ...ref, ...(campos ? { campos } : {}) })
+        if (result.ok) keepChat(result.chat)
+        return result
+      } catch {
+        return { ok: false, error: 'invalid' }
+      }
+    },
+
+    triagemAction: async (ref) => {
+      try {
+        const result = await window.__scribeApi.invoke('scribe:chat-action-triagem', { chatId: ref.chatId, index: ref.index, actionId: ref.actionId })
         if (result.ok) keepChat(result.chat)
         return result
       } catch {

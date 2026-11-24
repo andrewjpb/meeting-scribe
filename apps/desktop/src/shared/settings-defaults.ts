@@ -89,6 +89,14 @@ export interface EmailDashboardSettings {
   enabled: boolean
   model: (typeof EMAIL_DASHBOARD_MODELS)[number]
 }
+/** Contrato 149 (ia-midia, R8): o que o Assistente pode fazer além de ler os arquivos da pasta. */
+export interface AssistantSettings {
+  /**
+   * "A IA pode abrir imagens e transcrever áudios" (padrão ligado): o Assistente ganha as ferramentas de mídia do WhatsApp
+   * e do email. Desligado, elas não existem e nada é baixado nem transcrito pela IA.
+   */
+  media: boolean
+}
 /** Agendas lidas de cada conta (contrato 12); `null` é só a principal. */
 export interface CalendarSelection {
   google: string[] | null
@@ -151,6 +159,11 @@ export interface AppSettings {
    * "digitando…" enquanto você escreve. Desligado, o app não manda nada disso ao WhatsApp.
    */
   whatsappTypingSignal: boolean
+  /**
+   * "Triagem do WhatsApp por agente" (contrato 159, padrão ligado): o agente de triagem das Automações etiqueta cada
+   * conversa que recebe mensagem (urgente, pessoal, profissional). Desligado, o motor não chama a IA.
+   */
+  whatsappTriagem: boolean
   /**
    * Separa os participantes por voz ("Participante A", "B"…). Desligado (padrão desde 15/11/2026), o
    * áudio dos participantes vira "Participantes" e os trechos se dividem só pelas pausas.
@@ -260,6 +273,8 @@ export interface AppSettings {
   inicio: InicioSettings
   /** Contrato 155: a análise por IA do Painel de e-mail. */
   emailDashboard: EmailDashboardSettings
+  /** Contrato 149: as ferramentas de mídia do Assistente. */
+  assistant: AssistantSettings
 }
 
 /**
@@ -294,6 +309,7 @@ export const DEFAULT_SETTINGS: Readonly<AppSettings> = Object.freeze({
   whatsappNotifications: true,
   whatsappNotifyGroups: true,
   whatsappTypingSignal: false,
+  whatsappTriagem: true,
   identifySpeakers: false,
   meetSpeakers: true,
   meetingPrompt: true,
@@ -333,6 +349,7 @@ export const DEFAULT_SETTINGS: Readonly<AppSettings> = Object.freeze({
     blocos: Object.freeze({ agenda: true, tarefas: true, pendencias: true, ultimaReuniao: true, automacoes: true }),
   }) as InicioSettings,
   emailDashboard: Object.freeze({ enabled: true, model: 'haiku' }) as EmailDashboardSettings,
+  assistant: Object.freeze({ media: true }) as AssistantSettings,
 })
 
 /** Prefixo do modelo gravado na reunião quando a tradução veio do Claude CLI (`claude-cli:haiku`). */

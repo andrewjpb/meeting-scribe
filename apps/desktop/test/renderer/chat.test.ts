@@ -16,6 +16,7 @@ import {
   filterChats,
   frequentWord,
   groupChatsByDay,
+  mediaStepKind,
   modelLabel,
   railScrollTarget,
   scopeLabel,
@@ -74,6 +75,24 @@ describe('Markdown das respostas (CA4)', () => {
     expect(isExternalLink('https://')).toBe(false)
   })
 
+})
+
+describe('passos de mídia (contrato 151)', () => {
+  it('o tipo do ícone pelo rótulo que o main manda; nenhum passo de antes muda', () => {
+    const kind = (label: string, tool = 'Read') => mediaStepKind({ tool, label })
+    expect(kind('Abrindo uma imagem «WhatsApp · Bruno Lima · 23/11 14:20»')).toBe('image')
+    expect(kind('Abrindo uma mídia')).toBe('image')
+    expect(kind('Vendo a imagem aberta')).toBe('image')
+    expect(kind('Abrindo um PDF «WhatsApp · Bruno Lima · 23/11 14:20»')).toBe('pdf')
+    expect(kind('Lendo o PDF aberto')).toBe('pdf')
+    expect(kind('Lendo o texto da mídia')).toBe('text')
+    expect(kind('Transcrevendo um áudio «WhatsApp · Bruno Lima · 23/11 14:20»')).toBe('audio')
+    expect(kind('Lendo um anexo «Email · contrato.pdf»')).toBe('attachment')
+    expect(kind('Lendo um anexo: falhou')).toBe('attachment')
+    // Os passos de antes ficam com o ícone deles.
+    for (const label of ['Lendo as conversas do WhatsApp', 'Abrindo o email «Proposta»', 'Abrindo «Planejamento»', 'Abrindo o guia do app', 'Lendo os emails', 'Abrindo uma imagemX']) expect(kind(label)).toBeNull()
+    expect(kind('Abrindo uma imagem', 'Grep')).toBeNull()
+  })
 })
 
 describe('textos da tela "Perguntar" v2 (contrato 16)', () => {

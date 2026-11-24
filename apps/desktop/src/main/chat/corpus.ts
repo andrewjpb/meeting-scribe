@@ -13,6 +13,10 @@
 // do acervo, não cópias: nada é copiado por conversa. O acervo grava por `rename`, então a reunião que muda ganha um
 // arquivo novo e o link é refeito (`refreshScopes` e `refreshScope`, que compara o inode). Link simbólico não serve:
 // o alvo fica fora da pasta da conversa, que é tudo o que o agente pode ler. Sem link físico (outro volume), copia.
+//
+// Contrato 149: os arquivos de mídia que as ferramentas do Assistente gravam na pasta da conversa (`media-files.ts`)
+// ficam entre as perguntas (a mesma mídia não baixa de novo) e saem com a pasta (`dropScope`, `clearScopes`, a pasta
+// refeita ao abrir a conversa) e no "Sair"/"Remover" da conta (`dropMedia`, em todas as pastas abertas).
 import { randomUUID } from 'node:crypto'
 import { chmod, copyFile, link, mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -31,6 +35,7 @@ import type { NotesStore } from '../meetings/notes'
 import type { MeetingsStore } from '../meetings/store'
 import type { SummaryStore } from '../meetings/summaries'
 import type { TranscriptStore } from '../meetings/transcripts'
+import { clearMediaFiles, isMediaFile, type MediaSource } from './media-files'
 import { AUTOMATIONS_FILE, EMAIL_SEARCH_FILE, FUNIL_FILE, GUIDE_FILE, isSourceFile, REDES_FILE, STATE_FILE, TAREFAS_FILE } from './sources'
 
 export const CHAT_CORPUS_DIR = 'chat-corpus'
@@ -227,6 +232,8 @@ export interface ChatCorpus {
   dropScope(key: string): Promise<void>
   /** Ao abrir o app: apaga as pastas temporárias que sobraram. */
   clearScopes(): Promise<void>
+  /** Contrato 149 (CA10): "Sair"/"Remover" da conta: os arquivos de mídia daquela fonte saem de todas as pastas de conversa. */
+  dropMedia(source: MediaSource): Promise<void>
 }
 
 /**
@@ -326,7 +333,7 @@ export function createChatCorpus(deps: ChatCorpusDeps): ChatCorpus {
   /** Ids das reuniões cujos `.md` estão numa pasta. */
   const idsIn = (names: readonly string[]): string[] =>
     names.flatMap((file) => {
-      const id = file !== CHAT_INDEX_FILE ? /^.* - ([\w-]{1,200})\.md$/.exec(file)?.[1] : undefined
+      const id = file !== CHAT_INDEX_FILE && !isMediaFile(file) ? /^.* - ([\w-]{1,200})\.md$/.exec(file)?.[1] : undefined
       return id ? [id] : []
     })
 
@@ -470,7 +477,8 @@ export function createChatCorpus(deps: ChatCorpusDeps): ChatCorpus {
         const meetings = (await deps.meetings.list()).filter((meeting) => wanted.has(meeting.id))
         const names = await readdir(target)
         const keep = new Set(meetings.map(corpusFileName))
-        for (const name of names) if (name !== CHAT_INDEX_FILE && !isSourceFile(name) && name.endsWith('.md') && !keep.has(name)) await rm(join(target, name), { force: true })
+        // Contrato 149: as transcrições e os textos de anexo (`Midia - … .md`) ficam: não são reuniões.
+        for (const name of names) if (name !== CHAT_INDEX_FILE && !isSourceFile(name) && !isMediaFile(name) && name.endsWith('.md') && !keep.has(name)) await rm(join(target, name), { force: true })
         await ensureDir(dir)
         for (const meeting of meetings) {
           const name = corpusFileName(meeting)
@@ -498,5 +506,10 @@ export function createChatCorpus(deps: ChatCorpusDeps): ChatCorpus {
       }),
 
     clearScopes: () => rm(scopes, { recursive: true, force: true }),
+
+    dropMedia: (source) =>
+      serial(async () => {
+        for (const folder of await readdir(scopes).catch(() => [] as string[])) if (safeKey(folder)) await clearMediaFiles(join(scopes, folder), source)
+      }),
   }
 }

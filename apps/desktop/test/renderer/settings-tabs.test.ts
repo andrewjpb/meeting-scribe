@@ -130,6 +130,15 @@ describe('índice da busca (contrato 18, devolução)', () => {
     expect(settingsResultLabel(index, index.find((entry) => entry.name === 'Modelo do chat') as SettingsEntry)).toBe('Claude › Modelo do chat')
   })
 
+  it('"A IA pode abrir imagens e transcrever áudios" fica logo abaixo de "Modelo do chat" e a busca acha pelas palavras de mídia (contrato 151)', () => {
+    const chat = index.filter((entry) => entry.tab === 'claude' && entry.section === 'Chat e resumo').map((entry) => entry.name)
+    expect(chat.indexOf('A IA pode abrir imagens e transcrever áudios')).toBe(chat.indexOf('Modelo do chat') + 1)
+    for (const term of ['mídia', 'midia', 'imagem', 'foto', 'print', 'áudio', 'PDF', 'anexo', 'transcrição', 'AssemblyAI', 'privacidade']) {
+      const found = searchSettings(index, term).flatMap((group) => group.indexes.map((i) => index[i] as SettingsEntry))
+      expect(found.map((entry) => entry.name), term).toContain('A IA pode abrir imagens e transcrever áudios')
+    }
+  })
+
   it('casa a linha da tela pelo nome ou pelo nome com a versão', () => {
     expect(matchesRow({ name: 'Versão' }, 'Versão 0.3.0')).toBe(true)
     expect(matchesRow({ name: 'Modelo' }, 'Modelo')).toBe(true)

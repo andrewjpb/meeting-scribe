@@ -33,7 +33,7 @@ export interface OneShotEngine {
 
 export interface OneShotRequest<T> {
   claudePath: string
-  purpose: 'summary' | 'analysis' | 'draft' | 'ai-notes' | 'whatsapp-insights' | 'whatsapp-correct' | 'invite-suggest' | 'funnel-extract' | 'whatsapp-atendimento' | 'email-dashboard'
+  purpose: 'summary' | 'analysis' | 'draft' | 'ai-notes' | 'whatsapp-insights' | 'whatsapp-correct' | 'invite-suggest' | 'funnel-extract' | 'whatsapp-atendimento' | 'email-dashboard' | 'whatsapp-triagem'
   /** Modelo fixo, no lugar do das Configurações (a correção do WhatsApp, contrato 35, e a sugestão do contrato 64 são sempre o Haiku). */
   model?: ClaudeModel | undefined
   /** Pasta vazia do ACP dentro de `claude-cwd`. */

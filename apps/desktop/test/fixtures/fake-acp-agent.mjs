@@ -54,6 +54,13 @@
 //   "[Tarefa · <título>]"; "crie a tarefa <x> para sexta ligada à <oportunidade>" propõe `tarefa-criar` com o título, o
 //   prazo da próxima sexta (AAAA-MM-DD) e a oportunidade pelo nome; "conclua a tarefa <id>", `tarefa-concluir`; "adie a
 //   tarefa <id> para <AAAA-MM-DD>", `tarefa-adiar`. Os lembretes ("adie o lembrete", "apague o lembrete") leem o `ESTADO.md`.
+//   Contrato 151: a mídia do WhatsApp (`mediaAnswer`). "o que tem na imagem d<nome>" lê a conversa dele e pede
+//   `ver_midia_whatsapp` da imagem mais recente com "mídia <id>"; "transcreva o áudio d<nome>" pede
+//   `transcrever_audio_whatsapp` do áudio mais recente com id (sem nenhum, responde com o "[áudio transcrito: …]" da
+//   conversa, sem ferramenta); "abra a imagem d<nome> e crie a pasta …" abre a imagem e, no resultado, pede `criar_pasta`
+//   (o app tem de recusar). Cada resultado com arquivo é lido (Read) e vira a resposta final.
+//   Contrato 164: a triagem do WhatsApp. "marque a conversa <nome> como urgente" lê o `CONVERSAS-WHATSAPP.md` e propõe
+//   `triagem-etiqueta` com o id da conversa e `urgente: true`; "crie o agente de triagem", `triagem-agente` com `criar`.
 // - "quais arquivos estão na pasta" (contrato 117), em qualquer chat (o agente das Automações também): responde com os nomes
 //   dos arquivos da pasta da sessão (`readdirSync(cwd)`), em ordem.
 // - internet (contrato 26), em qualquer chat (agente ou Assistente), com "pesquise" no pedido: `WebSearch` (pedindo
@@ -285,6 +292,65 @@ async function emailAnswer(question, cwd, read, fence) {
   return null
 }
 
+/** Contrato 151: o pedido de mídia em curso: depois de abrir a imagem, pedir `criar_pasta` (a ação que o app recusa). */
+let mediaThenFolder = false
+
+/**
+ * Contrato 151: a mídia do WhatsApp no Assistente falso, como um modelo faria: o id da conversa e o da mídia saem dos
+ * arquivos da pasta (`CONVERSAS-WHATSAPP.md` e o `.md` da conversa); o resultado da ferramenta é o nome de um arquivo da
+ * pasta, lido com Read. `null`: não é pedido de mídia.
+ */
+async function mediaAnswer(question, cwd, read) {
+  const tool = (json) => `\n\n\`\`\`lap-ferramenta\n${JSON.stringify(json)}\n\`\`\``
+  const resultFile = /^\[Resultado da ferramenta (ver_midia_whatsapp|transcrever_audio_whatsapp)\] O resultado está no arquivo (Midia - .+?\.(?:png|jpg|gif|webp|pdf|md)), na pasta atual/.exec(question)
+  if (resultFile) {
+    await read(resultFile[2])
+    if (resultFile[1] === 'ver_midia_whatsapp' && mediaThenFolder) {
+      mediaThenFolder = false
+      return `Vi a imagem. Vou criar a pasta que ela pede.${tool({ ferramenta: 'criar_pasta', nome: 'Pedido da imagem' })}`
+    }
+    if (resultFile[1] === 'transcrever_audio_whatsapp') {
+      const text = readFileSync(join(cwd, resultFile[2]), 'utf8')
+      const said = text.split('\n').filter((line) => line.startsWith('> ')).map((line) => line.slice(2)).join(' ')
+      return `Pelo áudio transcrito do Bruno: "${said}"`
+    }
+    return 'Pela imagem que o Bruno mandou: é uma foto do quadro, toda em laranja.'
+  }
+  const refused = /^\[Resultado da ferramenta (\S+)\] (Recusado: nesta pergunta uma mídia foi aberta\.)/.exec(question)
+  if (refused) return `Não fiz isso: ${refused[2]} Se quiser, confirme numa nova pergunta.`
+  const failed = /^\[Resultado da ferramenta (ver_midia_whatsapp|transcrever_audio_whatsapp)\] (.+?) Continue respondendo/.exec(question)
+  if (failed) {
+    mediaThenFolder = false
+    return `Não consegui abrir a mídia: ${failed[2]}`
+  }
+  const asked = /(o que tem na imagem|transcreva o áudio|abra a imagem) d[aoe] (\S+?)(?: e crie a pasta.*)?[.!?]?$/i.exec(question)
+  if (!asked) return null
+  const overview = 'CONVERSAS-WHATSAPP.md'
+  if (!readdirSync(cwd).includes(overview)) return 'O WhatsApp não está na pasta desta conversa.'
+  await read(overview)
+  const line = readFileSync(join(cwd, overview), 'utf8')
+    .split('\n')
+    .find((item) => (/^- (.+?) · /.exec(item)?.[1] ?? '').toLowerCase().includes(asked[2].toLowerCase()))
+  const file = line ? / · arquivo: (.+)$/.exec(line)?.[1] : undefined
+  if (!file || !readdirSync(cwd).includes(file)) return `Não achei a conversa de ${asked[2]}.`
+  await read(file)
+  const text = readFileSync(join(cwd, file), 'utf8')
+  const chatId = /^- Id da conversa: (\S+)$/m.exec(text)?.[1]
+  const audio = /transcreva/i.test(asked[1])
+  const lines = text.split('\n')
+  const media = lines
+    .map((item) => new RegExp(`\\[anexo: ${audio ? 'áudio' : 'imagem'} [^\\]]*· mídia (\\S+?)\\]`).exec(item)?.[1])
+    .filter(Boolean)
+    .at(-1)
+  if (!media || !chatId) {
+    // Já transcrito: a conversa traz o texto, sem precisar de ferramenta.
+    const said = audio ? lines.map((item) => /\[áudio transcrito: "(.*)"\]/.exec(item)?.[1]).filter(Boolean).at(-1) : undefined
+    return said ? `Pelo áudio transcrito do Bruno: "${said}"` : 'Não achei essa mídia na conversa.'
+  }
+  mediaThenFolder = /crie a pasta/i.test(question)
+  return `Vou ${audio ? 'transcrever o áudio' : 'abrir a imagem'}.${tool({ ferramenta: audio ? 'transcrever_audio_whatsapp' : 'ver_midia_whatsapp', conversa: chatId, midia: media })}`
+}
+
 /**
  * Contrato 51: a tarefa falsa que envia email. "envie <assunto> para a@x e b@y" guarda os endereços e pede o primeiro;
  * cada "[Resultado da ferramenta enviar_email]" conta o resultado e pede o próximo; no fim, a contagem. `null`: não é
@@ -322,12 +388,16 @@ async function assistantAnswer(question, cwd, read) {
     has(overviewFile)
       ? readFileSync(join(cwd, overviewFile), 'utf8')
           .split('\n')
-          .map((line) => /^- (.+?) · (pessoa|grupo) · id: (\S+) · .*?última de: (.+?) em (\d{2}\/\d{2} \d{2}:\d{2}) · pendente de resposta: (sim|não) · última mensagem: "(.*)" · arquivo: (.+)$/.exec(line))
+          // Contrato 163: a etiqueta da triagem entre a última mensagem e o arquivo.
+          .map((line) => /^- (.+?) · (pessoa|grupo) · id: (\S+) · .*?última de: (.+?) em (\d{2}\/\d{2} \d{2}:\d{2}) · pendente de resposta: (sim|não) · última mensagem: "(.*)"(?: · etiqueta: .+?)? · arquivo: (.+)$/.exec(line))
           .filter(Boolean)
           .map((match) => ({ name: match[1], id: match[3], lastFrom: match[4], at: match[5], pending: match[6] === 'sim', last: match[7] }))
       : []
   const byName = (text) => conversations().find((chat) => text.toLowerCase().includes(chat.name.split(' ')[0].toLowerCase()))
   const fence = (json) => `\n\n\`\`\`lap-acao\n${typeof json === 'string' ? json : JSON.stringify(json)}\n\`\`\``
+  // Contrato 151: a mídia antes do email (o `criar_pasta` recusado depois da imagem não segue para o `mover_emails`).
+  const media = await mediaAnswer(question, cwd, read)
+  if (media !== null) return media
   const email = await emailAnswer(question, cwd, read, fence)
   if (email !== null) return email
   if (/bloco inv[aá]lido/i.test(question)) return `Aqui vai um bloco quebrado.${fence('{"tipo": "lembrete", "quando": ')}`
@@ -411,6 +481,15 @@ async function assistantAnswer(question, cwd, read) {
   if (drop) {
     await read('ESTADO.md')
     return `Confirme no cartão para eu apagar o lembrete.${fence({ tipo: 'lembrete-apagar', id: drop[1] })}`
+  }
+  // Contrato 164: a triagem do WhatsApp (o app confere a conversa e cria o agente pelo modelo pronto).
+  if (/crie o agente de triagem/i.test(question)) return `Monto o agente de triagem pelo modelo pronto. Confira no cartão.${fence({ tipo: 'triagem-agente', acao: 'criar' })}`
+  if (/marque a conversa .+ como urgente/i.test(question)) {
+    if (!has(overviewFile)) return 'O WhatsApp não está na pasta desta conversa.'
+    await read(overviewFile)
+    const chat = byName(question.replace(/marque a conversa|como urgente/gi, ''))
+    if (!chat) return 'Não achei essa conversa.'
+    return `Proponho marcar a conversa de ${chat.name} como urgente.${fence({ tipo: 'triagem-etiqueta', chatId: chat.id, urgente: true })}`
   }
   if (/pendente/i.test(question)) {
     if (!has(overviewFile)) return 'O WhatsApp não está na pasta desta conversa.'

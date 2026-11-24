@@ -1,8 +1,9 @@
 # Banco local do serviço (contrato 24, CA1): conversas e mensagens em SQLite, em `<data-dir>/messages.db`,
 # nunca no repositório. Mídia fica como metadado (tipo, mime, tamanho, nome); nada é baixado sozinho. Contrato 37:
 # imagem, vídeo e áudio guardam também a mensagem do WhatsApp serializada (`media_proto`, as chaves do download) e,
-# o áudio, a duração; o download só acontece no clique, pela rota da mídia. Banco antigo ganha as colunas ao abrir
-# (as mensagens de antes ficam sem as chaves e não baixam). As não lidas
+# o áudio, a duração; o download só acontece no clique, pela rota da mídia. Contrato 148: documento e figurinha também
+# guardam as chaves. Banco antigo ganha as colunas ao abrir (as mensagens de antes ficam sem as chaves e não baixam,
+# inclusive documento e figurinha recebidos antes do contrato 148). As não lidas
 # contam as mensagens recebidas desde a última vez que o app abriu a conversa; abrir não manda recibo de
 # leitura ao WhatsApp (o serviço não envia nada sozinho).
 #
@@ -18,8 +19,8 @@ import time
 TEXT_MAX = 20_000
 NAME_MAX = 200
 MESSAGE_KINDS = ('text', 'image', 'video', 'audio', 'document', 'sticker', 'other')
-# Contrato 37: os tipos que baixam no clique (documento e figurinha ficam de fora).
-DOWNLOADABLE_KINDS = ('image', 'video', 'audio')
+# Contrato 37: os tipos que baixam no clique; contrato 148: documento e figurinha também.
+DOWNLOADABLE_KINDS = ('image', 'video', 'audio', 'document', 'sticker')
 # A mensagem serializada que passa disso não fica guardada (a mensagem continua, sem o download).
 MEDIA_PROTO_MAX = 256 * 1024
 COLUMNS = 'id, chat_id, author, from_me, at, kind, text, media_mime, media_size, media_name, media_proto IS NOT NULL, media_seconds, reply_to_id, reply_preview'
@@ -58,7 +59,7 @@ def clean_emoji(value):
 
 
 def media_proto_of(message):
-    """A mensagem serializada que fica guardada (imagem, vídeo ou áudio, até 256 KB), ou `None`."""
+    """A mensagem serializada que fica guardada (imagem, vídeo, áudio, documento ou figurinha, até 256 KB), ou `None`."""
     proto = message.get('mediaProto')
     if message.get('type') not in DOWNLOADABLE_KINDS or not isinstance(proto, (bytes, bytearray)) or not proto or len(proto) > MEDIA_PROTO_MAX:
         return None

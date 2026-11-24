@@ -1,9 +1,13 @@
 // Rotas do renderer. O main só conhece o id; o caminho é detalhe do roteador em memória.
-export type RouteId = 'inicio' | 'reunioes' | 'tarefas' | 'assistente' | 'automacoes' | 'whatsapp' | 'email' | 'funil' | 'redes' | 'gravacao' | 'detalhe' | 'configuracoes'
+import type { TriagemAba } from './triagem'
+
+export type RouteId = 'inicio' | 'notificacoes' | 'reunioes' | 'tarefas' | 'assistente' | 'automacoes' | 'whatsapp' | 'email' | 'funil' | 'redes' | 'gravacao' | 'detalhe' | 'configuracoes'
 
 export const ROUTE_PATHS: Record<RouteId, string> = {
   /** Início (contrato 135): o dashboard do dia, primeiro item da barra lateral. `/` continua sendo Reuniões. */
   inicio: '/inicio',
+  /** Notificações (contrato 160): as conversas do WhatsApp e os e-mails da Entrada por ler, logo abaixo do Início. */
+  notificacoes: '/notificacoes',
   reunioes: '/',
   /**
    * Tarefas (contrato 123, R1): a lista única, com o detalhe ao lado quando há id. Padrão do roteador; o caminho concreto
@@ -47,6 +51,8 @@ export const ROUTE_REDIRECTS: readonly { from: string; to: string }[] = [{ from:
 export interface WhatsAppNavigationState {
   chatId?: string
   text?: string
+  /** Contrato 162: a aba de triagem que a lista abre (sem ela, "Todas"). */
+  aba?: TriagemAba
 }
 
 /** Pastas do email na URL (contrato 43): "Caixa de Entrada" e "Enviados". */
@@ -127,6 +133,9 @@ export interface EmailNavigationState {
    */
   compose?: { to?: string[]; subject?: string; replyTo?: { messageKey: string; mailbox: string }; text?: string }
 }
+
+/** Destino do item "Notificações" da barra lateral (contrato 160): a lista, com o filtro Todas. */
+export const NOTIFICACOES_ROOT_PATH = ROUTE_PATHS.notificacoes
 
 /** Destino do item "Funil" da barra lateral (contrato 112): a tela vai a Oportunidades. */
 export const FUNIL_ROOT_PATH = '/funil'

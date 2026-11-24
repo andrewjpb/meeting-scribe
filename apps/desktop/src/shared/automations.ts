@@ -12,6 +12,7 @@ import type { ChatDetail, ChatMessage } from './chat'
 import { NOTE_COLORS, type NoteColor } from './meeting-notes'
 import type { AgentProfileId } from './settings-defaults'
 import type { RunEmail, TaskEmailInput, TaskEmailPermission } from './task-email'
+import { TRIAGEM_AGENT_NAME, TRIAGEM_ESPERA_SEG } from './triagem'
 
 export const AGENT_NAME_MAX = 40
 export const AGENT_DESCRIPTION_MAX = 200
@@ -125,8 +126,13 @@ export type Schedule =
   | { kind: 'once'; at: string }
   | { kind: 'cron'; expr: string }
   | { kind: 'after-meeting'; delayMin: number }
+  /**
+   * Contrato 159: "Quando chega mensagem do WhatsApp" (a triagem). Não roda pelo relógio: o motor da triagem dispara
+   * `esperaSeg` segundos depois da última mensagem da conversa; `grupos` desligado ignora as conversas de grupo.
+   */
+  | { kind: 'whatsapp-message'; esperaSeg: number; grupos: boolean }
 export type ScheduleKind = Schedule['kind']
-export const SCHEDULE_KINDS = ['every', 'daily', 'weekly', 'monthly', 'once', 'cron', 'after-meeting'] as const satisfies readonly ScheduleKind[]
+export const SCHEDULE_KINDS = ['every', 'daily', 'weekly', 'monthly', 'once', 'cron', 'after-meeting', 'whatsapp-message'] as const satisfies readonly ScheduleKind[]
 
 export const RUN_STATUSES = ['ok', 'error', 'timeout', 'skipped', 'running'] as const
 export type RunStatus = (typeof RUN_STATUSES)[number]
@@ -192,9 +198,10 @@ export type TaskInput = Pick<ScheduledTask, 'name' | 'agentId' | 'message' | 'sc
 /**
  * De onde veio a execução: o horário (`schedule`), um horário perdido rodando atrasado (`missed`), o fim de
  * uma reunião (`meeting`), "Rodar agora" (`manual`), "Pedir agora" (`ask`), "Rodar de novo" (`rerun`) e
- * "Testar agora" (`test`, que não entra no histórico).
+ * "Testar agora" (`test`, que não entra no histórico). Contrato 159: a triagem de uma conversa do WhatsApp (`whatsapp`),
+ * que tem teto diário próprio e fica fora do limite diário.
  */
-export const RUN_TRIGGERS = ['schedule', 'missed', 'meeting', 'manual', 'ask', 'rerun', 'test'] as const
+export const RUN_TRIGGERS = ['schedule', 'missed', 'meeting', 'manual', 'ask', 'rerun', 'test', 'whatsapp'] as const
 export type RunTrigger = (typeof RUN_TRIGGERS)[number]
 /** As que contam no limite diário: as que rodaram sem clique. */
 export const AUTOMATIC_TRIGGERS: readonly RunTrigger[] = ['schedule', 'missed', 'meeting']
@@ -273,7 +280,13 @@ export type AgentSaveResult = { ok: true; agent: Agent } | { ok: false; error: '
 export type AgentDeleteResult = { ok: true } | { ok: false; error: 'in-use'; tasks: string[] } | { ok: false; error: 'missing' }
 /** `past`: "Uma vez em" com a data que já passou. */
 /** `email`: a conta escolhida em "Pode enviar email" não existe (contrato 51). */
-export type TaskSaveResult = { ok: true; task: ScheduledTask } | { ok: false; error: 'invalid' | 'agent' | 'cron' | 'timezone' | 'missing' | 'full' | 'past' | 'email' }
+/** Contrato 161: uma segunda tarefa "Quando chega mensagem do WhatsApp" ligada é recusada com a frase pronta. */
+export type TaskSaveResult = { ok: true; task: ScheduledTask } | { ok: false; error: 'invalid' | 'agent' | 'cron' | 'timezone' | 'missing' | 'full' | 'past' | 'email' | TriagemUnicaError }
+export type TriagemUnicaError = `Já existe um agente de triagem ativo: ${string}`
+/** Contrato 161: ligar (pelo interruptor da lista) uma segunda triagem é recusado com a mesma frase do `saveTask`. */
+export type TaskToggleResult = ScheduledTask | null | { ok: false; error: TriagemUnicaError }
+/** Contrato 161: a frase da recusa, com o nome da tarefa que já está ligada. */
+export const triagemUnicaError = (taskName: string): TriagemUnicaError => `Já existe um agente de triagem ativo: ${taskName}`
 /** `busy`: a tarefa já roda (a vez vira `skipped`); `not-found`: sem o `claude`; `paused`: tudo pausado. */
 export type RunStartResult = { ok: true; runId: string } | { ok: false; error: 'missing' | 'busy' | 'invalid' }
 
@@ -292,6 +305,7 @@ export const RUN_TRIGGER_LABELS: Readonly<Record<RunTrigger, string>> = {
   ask: 'Pedir agora',
   rerun: 'Rodar de novo',
   test: 'Testar agora',
+  whatsapp: 'WhatsApp',
 }
 export const OUTPUT_LABELS: Readonly<Record<AgentOutputKind, string>> = { chat: 'Conversa no Assistente', note: 'Post-it na reunião', file: 'Arquivo .md na pasta', notification: 'Notificação do macOS' }
 export const SCOPE_LABELS: Readonly<Record<AgentScopeKind, string>> = { all: 'Todas as reuniões', '7d': 'Últimos 7 dias', '30d': 'Últimos 30 dias', meetings: 'Reuniões escolhidas', none: 'Nenhuma reunião' }
@@ -336,6 +350,12 @@ export function isValidTimeZone(value: unknown): value is string {
   } catch {
     return false
   }
+}
+
+/** "AAAA-MM-DD" de um instante no fuso (o dia do limite diário; contrato 161: também o do teto da triagem). */
+export function dayKey(ms: number, timeZone: string): string {
+  const wall = wallTime(ms, timeZone)
+  return `${wall.year}-${String(wall.month).padStart(2, '0')}-${String(wall.day).padStart(2, '0')}`
 }
 
 /** Hora de parede de um instante num fuso. */
@@ -456,7 +476,7 @@ const CRON_SEARCH_DAYS = 366 * 8
 
 /**
  * Próximo horário depois de `after` (ms), no fuso; `null` quando não há (uma vez só que já passou, depois de
- * cada reunião, cron impossível). `every` conta a partir de `after`: quem chama passa a última execução.
+ * cada reunião, mensagem do WhatsApp, cron impossível). `every` conta a partir de `after`: quem chama passa a última execução.
  */
 export function nextRunAfter(schedule: Schedule, timeZone: string, after: number): number | null {
   if (schedule.kind === 'every') return after + schedule.minutes * 60_000
@@ -464,7 +484,7 @@ export function nextRunAfter(schedule: Schedule, timeZone: string, after: number
     const at = Date.parse(schedule.at)
     return Number.isNaN(at) || at <= after ? null : at
   }
-  if (schedule.kind === 'after-meeting') return null
+  if (schedule.kind === 'after-meeting' || schedule.kind === 'whatsapp-message') return null
   const start = wallTime(after, timeZone)
   if (schedule.kind === 'daily' || schedule.kind === 'weekly') {
     const time = parseTime(schedule.time)
@@ -627,6 +647,8 @@ export function describeSchedule(schedule: Schedule, timeZone: string): string {
       return describeCron(schedule.expr) ?? 'Expressão cron inválida'
     case 'after-meeting':
       return schedule.delayMin === 0 ? 'Depois de cada reunião' : `${schedule.delayMin} min depois de cada reunião`
+    case 'whatsapp-message':
+      return 'Quando chega mensagem do WhatsApp'
   }
 }
 
@@ -679,6 +701,32 @@ export function runFileStamp(date: Date): string {
 }
 
 export const AGENTS_FOLDER_NAME = 'Agentes'
+
+/**
+ * Contrato 159: o modelo pronto "Triagem do WhatsApp". Lê o funil (decide pessoal × profissional pelo contato e pela
+ * empresa); a leitura das mensagens vem do gatilho "Quando chega mensagem do WhatsApp", não de uma permissão do agente.
+ * As instruções são o texto da PRD (notificacoes-triagem).
+ */
+export const TRIAGEM_TEMPLATE: Omit<AgentInput, 'id'> = {
+  name: TRIAGEM_AGENT_NAME,
+  description: 'Classifica cada conversa que recebe mensagem: urgente ou não; pessoal ou profissional.',
+  icon: 'bell',
+  color: 'orange',
+  instructions:
+    'Você faz a triagem de conversas do WhatsApp do dono do app. Para a conversa recebida, decida duas coisas. Urgente: sim quando a pessoa pede resposta hoje, cita prazo, pagamento, cobrança, falha em produção, saúde, segurança ou emergência, ou mandou várias mensagens seguidas sem resposta; não para conversa casual, confirmação simples ou assunto que pode esperar. Âmbito: profissional quando trata de trabalho, cliente, projeto, proposta, orçamento, reunião, nota fiscal ou cobrança; pessoal quando família, amigos, lazer, saúde própria ou assunto particular. Se o contato está no funil de vendas, pende para profissional, salvo contexto claro em contrário. Em dúvida, âmbito indefinido. Nunca invente fatos: use só o que está nas mensagens.',
+  profile: 'claude',
+  model: 'haiku',
+  thinkMore: false,
+  scope: { kind: 'none' },
+  web: false,
+  funil: true,
+  tarefas: false,
+  mcpServers: [],
+  output: { kind: 'notification' },
+}
+
+/** Contrato 159: o gatilho padrão da tarefa da triagem (espera 30 s depois da última mensagem; grupos desligado). */
+export const TRIAGEM_SCHEDULE_DEFAULTS: Schedule = { kind: 'whatsapp-message', esperaSeg: TRIAGEM_ESPERA_SEG.padrao, grupos: false }
 
 /** Agentes de exemplo da primeira vez (editáveis e removíveis). */
 export const EXAMPLE_AGENTS: readonly Omit<AgentInput, 'id'>[] = [
@@ -742,4 +790,5 @@ export const EXAMPLE_AGENTS: readonly Omit<AgentInput, 'id'>[] = [
     mcpServers: [],
     output: { kind: 'note' },
   },
+  TRIAGEM_TEMPLATE,
 ]

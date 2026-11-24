@@ -105,12 +105,24 @@ export function textoFalha(nome: string, quando: string | null, agora: number): 
   return dia.startsWith('hoje, ') ? `“${nome}” falhou às ${horaMinuto(data)}` : `“${nome}” falhou ${dia}`
 }
 
-/** "3 conversas do WhatsApp sem resposta", "1 convite de agenda sem resposta", "5 e-mails pendentes". */
+/**
+ * O texto depois do número em cada linha de Pendências: "3 conversas do WhatsApp sem resposta", "1 convite de agenda sem
+ * resposta", "5 emails na pasta Pendentes" e (contrato 146) "5 emails não lidos".
+ */
 export const textoPendencia = {
   whatsapp: (n: number): string => `${n === 1 ? 'conversa' : 'conversas'} do WhatsApp sem resposta`,
   convites: (n: number): string => `${n === 1 ? 'convite' : 'convites'} de agenda sem resposta`,
-  emails: (n: number): string => (n === 1 ? 'e-mail pendente' : 'e-mails pendentes'),
+  emails: (n: number): string => `${n === 1 ? 'email' : 'emails'} na pasta Pendentes`,
+  emailsNaoLidos: (n: number): string => (n === 1 ? 'email não lido' : 'emails não lidos'),
 } as const
+
+/** Contrato 146 (CA3): "Atualizado às 14:32", a hora local da última leitura (o `atualizadoEm` da view). */
+export function textoAtualizado(quando: string): string {
+  return `Atualizado às ${horaMinuto(quando)}`
+}
+
+/** Contrato 146 (CA6): ao lado do "Atualizar" quando alguma fonte não foi relida. */
+export const TEXTO_ATUALIZAR_FALHOU = 'Não foi possível atualizar tudo.'
 
 export type EstadoEvento = 'passado' | 'atual' | 'futuro'
 

@@ -71,7 +71,7 @@ import { createFunilService, type FunilService } from './funil/service'
 import { createFunilStore } from './funil/store'
 import { registerTarefasIpc } from './tarefas/ipc'
 import { registerInicioIpc } from './inicio/ipc'
-import { createInicioService, createMacDay, type InicioService } from './inicio/service'
+import { createInicioService, createMacDay, inicioNoDesbloqueio, type InicioService } from './inicio/service'
 import { createAvisoHoje } from './tarefas/hoje'
 import { avisoMostrado, createDestinoPendente } from './tarefas/lembretes'
 import { tarefasMarkdown } from './tarefas/markdown'
@@ -121,6 +121,10 @@ import { createAtendimentoLog, type AtendimentoLog } from './whatsapp/atendiment
 import { generateReply } from './whatsapp/atendimento/reply'
 import { createAtendimentoService, type AtendimentoService } from './whatsapp/atendimento/service'
 import { createAtendimentoStore, type AtendimentoStore } from './whatsapp/atendimento/store'
+import { createTriagemClassifier } from './whatsapp/triagem/classify'
+import { createTriagemIpc } from './whatsapp/triagem/ipc'
+import { createTriagemService, type TriagemService } from './whatsapp/triagem/service'
+import { createTriagemStore } from './whatsapp/triagem/store'
 import { createInsightsCache, INSIGHTS_FILE } from './whatsapp/insights'
 import { createInsightsService, type InsightsService } from './whatsapp/insights-service'
 import { createWhatsAppNotifier, isGroupChat, shouldNotify, type NoticeHandle, type WhatsAppNotice } from './whatsapp/notify'
@@ -150,6 +154,8 @@ import { createInviteService, type InviteService } from './invites/service'
 import { createInviteSuggester, createInviteSuggestChannels, type InviteSuggestChannels } from './invites/suggest'
 import { INVITE_ERROR_MESSAGES } from '../shared/invite-state'
 import { createEmailTools } from './email/assistant-tools'
+import { createWhatsAppMediaTools } from './whatsapp/assistant-tools'
+import { createMediaBudget, mediaToolsFor } from './chat/media-files'
 import { emailStateLabel, exportEmail } from './email/export'
 import { readEmailAttachments } from './email/attach'
 import { createEmailNotifier, type EmailNotice } from './email/notify'
@@ -262,6 +268,8 @@ let loginItemApplied: boolean | null = null
 const destinoTarefa = createDestinoPendente()
 /** Contrato 122: o serviço das tarefas, para reemitir a view ao desbloquear (o tick do dia pode ter rodado bloqueado). */
 let tarefasService: TarefasService | null = null
+/** Contrato 145 (D5): o `inicioChanged` do `createServices`, para o desbloqueio reler o Início. */
+let inicioChangedRef: ((opcoes?: { forcar?: boolean }) => void) | null = null
 
 /**
  * ⌘W ou ⌘Q com gravação em andamento: diálogo nativo. Bloqueado, só "Cancelar"; desbloqueado, também
@@ -341,6 +349,8 @@ function applyLockStatus(status: LockStatus): void {
       (error: unknown) => console.error('[tarefas] view ao desbloquear:', error instanceof Error ? error.message : String(error)),
     )
   }
+  // Contrato 145 (D5): o que chegou durante o bloqueio aparece no Início (uma releitura, só na passagem para desbloqueado).
+  inicioNoDesbloqueio(wasLocked, status.locked, () => inicioChangedRef?.({ forcar: true }))
 }
 
 /** "Bloquear" pelo menu ou ⌘⇧L, pelo `powerMonitor` ou por falta de uso; só bloqueia com senha ou Touch ID. */
@@ -1033,6 +1043,8 @@ interface AppServices {
   atendimentoLog: AtendimentoLog
   /** Contrato 141: o serviço que responde as conversas marcadas (agenda, motor, envio do agente, propostas). */
   atendimentoService: AtendimentoService
+  /** Contrato 161: o motor da triagem do WhatsApp (etiquetas por conversa; só etiqueta, nunca envia). */
+  triagem: TriagemService
   /**
    * Contrato 124 (R35, D11): a migração única do próximo passo e dos lembretes para tarefas, no boot, antes do
    * bloqueio, do IPC e das Automações. Nunca lança; a falha vai ao log (só o passo) e o app segue.
@@ -1075,8 +1087,25 @@ function createAppServices(userData: string): AppServices {
   const gateway = createGatewayClient({ fetch: fetchImpl, getApiKey: () => secrets.getApiKey() })
   const fileTranscriber = createFileTranscriber({ fetch: fetchImpl, getApiKey: () => secrets.getApiKey() })
   const mic = createMicPermissions(smokeFixtures ? smokeFixtures.media : process.platform === 'darwin' ? systemPreferences : null)
-  const settings = createFileSettingsStore({ dir: userData, onChange: broadcastSettings })
+  // Contrato 149: a função de mídia do Assistente, guardada aqui para a lista de ferramentas (lida sem esperar a cada
+  // pergunta); as ferramentas conferem de novo no arquivo a cada chamada.
+  // Desligada até a primeira leitura do arquivo (nada de mídia antes de saber o que a pessoa escolheu).
+  let assistantMediaOn = false
+  const settings = createFileSettingsStore({
+    dir: userData,
+    onChange: (next) => {
+      assistantMediaOn = next.assistant.media
+      broadcastSettings(next)
+    },
+  })
   readSettings = () => settings.get()
+  void settings.get().then(
+    (current) => {
+      assistantMediaOn = current.assistant.media
+    },
+    () => undefined,
+  )
+  const assistantMediaEnabled = async (): Promise<boolean> => (await settings.get()).assistant.media
   const meetings = createFileMeetingsStore({ dir: userData })
   const transcripts = createFileTranscriptStore({ dir: userData })
   const summaries = createFileSummaryStore({ dir: userData })
@@ -1236,14 +1265,19 @@ function createAppServices(userData: string): AppServices {
   mcpRef.current = mcp
   // Contrato 134: a tela Início nasce depois da agenda; o WhatsApp, o email e a agenda avisam por aqui (bloqueado, nada).
   const inicioRef: { current: InicioService | null } = { current: null }
-  const inicioChanged = (): void => {
-    if (!lockService?.isLocked()) inicioRef.current?.changed()
+  const inicioChanged = (opcoes?: { forcar?: boolean }): void => {
+    if (!lockService?.isLocked()) inicioRef.current?.changed(opcoes?.forcar === true ? { forcar: true } : undefined)
   }
+  inicioChangedRef = inicioChanged
   const inicioMacRead = (): void => {
     if (!lockService?.isLocked()) inicioRef.current?.macRead()
   }
   // Contrato 141: o atendimento nasce depois do WhatsApp; as mensagens chegam a ele por aqui.
   const atendimentoRef: { current: AtendimentoService | null } = { current: null }
+  // Contrato 161: a triagem nasce depois das Automações e do funil; as mensagens chegam a ela por aqui. As etiquetas
+  // (`whatsapp/triagem.json`) saem no "Sair da conta" e no "Remover" do WhatsApp.
+  const triagemRef: { current: TriagemService | null } = { current: null }
+  const triagemStore = createTriagemStore({ dir: join(userData, WHATSAPP_DIR), ...(app.isPackaged ? {} : { devLog: (message: string) => console.log(message) }) })
   // WhatsApp pessoal (contrato 24): desligado por padrão; o serviço é processo filho, só depois de "Instalar" e
   // "Ligar". No smoke, o cliente falso (`backend_fake.py`) e um índice de pacotes falso numa pasta local: nenhum
   // neonize, nenhuma rede, nenhum número de verdade.
@@ -1308,6 +1342,8 @@ function createAppServices(userData: string): AppServices {
       inicioChanged()
       // Contrato 141: o atendimento recebe também com o app bloqueado (e continua respondendo).
       void atendimentoRef.current?.onMessage(message, chatName)
+      // Contrato 161: a triagem também etiqueta com o app bloqueado (os avisos às janelas esperam o desbloqueio).
+      void triagemRef.current?.onMessage(message, chatName)
       notifyWhatsApp(message, chatName).catch((error: unknown) => console.error('[whatsapp] notificação:', error))
       refreshWhatsAppBadge()
     },
@@ -1324,6 +1360,8 @@ function createAppServices(userData: string): AppServices {
       if (!lockService?.isLocked()) broadcast(appWindows(), 'scribe:whatsapp-presence', presence)
     },
     typingEnabled: async () => (await settings.get()).whatsappTypingSignal,
+    // Contrato 161: "Sair da conta" e "Remover" esquecem as etiquetas da triagem antes de apagar o arquivo.
+    onForget: () => triagemStore.clear(),
     // Só estados, nunca texto de mensagem.
     ...(app.isPackaged ? {} : { log: (message: string) => console.log(message) }),
   })
@@ -1390,6 +1428,8 @@ function createAppServices(userData: string): AppServices {
       // Contrato 156 (R26): a análise da conta sai com ela; sem conta nenhuma, o arquivo inteiro.
       void (email.accounts().length ? emailDashboardStore.removeAccount(accountId) : emailDashboardStore.clear()).catch(() => undefined)
       void invites?.forgetAccount(accountId)
+      // Contrato 149 (CA10): os anexos que o Assistente abriu saem das pastas das conversas.
+      void corpus.dropMedia('Email').catch(() => undefined)
     },
     // Contrato 62 (CA16): o REPLY saiu; a resposta vai para o registro (um caminho só: o `reply` do resultado não é usado).
     onInviteReplied: (event) => void invites?.recordReply(event).catch(() => undefined),
@@ -1535,6 +1575,7 @@ function createAppServices(userData: string): AppServices {
       agentPresence: (chatId, state) => whatsapp.agentPresence(chatId, state),
       clickSend: (senderId, request, onText) => whatsapp.send(senderId, request, onText),
       ownerName: () => whatsapp.status().me?.name ?? null,
+      transcript: (chatId, messageId) => whatsapp.savedTranscript(chatId, messageId),
     },
     authority: createAgentSendAuthority(),
     reply: async (input, signal) => {
@@ -1569,6 +1610,7 @@ function createAppServices(userData: string): AppServices {
     locate: () => claude.locate(),
     chat: (chatId) => whatsapp.findChat(chatId),
     messages: (chatId, max) => whatsapp.lastMessages(chatId, max),
+    transcript: (chatId, messageId) => whatsapp.savedTranscript(chatId, messageId),
     enabled: async () => (await settings.get()).whatsappInsights,
     spawn: smokeClaude?.spawnSummary ?? nodeSpawnSummary,
     openAcp,
@@ -1621,9 +1663,20 @@ function createAppServices(userData: string): AppServices {
     automations: async () => {
       const [agents, tasks, items] = await Promise.all([automations.listAgents(), automations.listTasks(), automations.listRuns({})])
       const runs = await Promise.all(items.slice(0, AUTOMATION_RUNS_IN_SOURCE).map((item) => automations.getRun({ id: item.id })))
-      return { agents: agents.agents, tasks, runs: runs.filter((run): run is AutomationRun => run !== null) }
+      // Contrato 163: a seção da triagem (o estado do motor, o gatilho da tarefa dela e as urgentes de agora).
+      const triagemAgora = triagemRef.current
+      const triagem = triagemAgora
+        ? await Promise.all([triagemAgora.status(), automations.triagemSituacao(), triagemStore.list()])
+            .then(([status, situacao, etiquetas]) => {
+              const schedule = situacao.task?.schedule.kind === 'whatsapp-message' ? situacao.task.schedule : null
+              return { status, urgentes: Object.values(etiquetas).filter((etiqueta) => etiqueta.urgente).length, esperaSeg: schedule?.esperaSeg ?? null, grupos: schedule?.grupos ?? null }
+            })
+            .catch(() => undefined)
+        : undefined
+      return { agents: agents.agents, tasks, runs: runs.filter((run): run is AutomationRun => run !== null), triagem }
     },
-    whatsapp: { exportRecent: (folder: string) => whatsapp.exportRecent(folder), exportChats: (folder: string, chatIds: readonly string[], days: number) => whatsapp.exportChats(folder, chatIds, days) },
+    // Contrato 163: o resumo das conversas leva as etiquetas da triagem.
+    whatsapp: { exportRecent: async (folder: string) => whatsapp.exportRecent(folder, await triagemStore.list().catch(() => ({}))), exportChats: (folder: string, chatIds: readonly string[], days: number) => whatsapp.exportChats(folder, chatIds, days) },
     // Contrato 45: o cache do email (só leitura do store; bloqueado, nada).
     email: { export: (folder: string) => exportEmail(emailExport, folder) },
     // Contrato 76: o guardado das redes (sem ler a Meta); bloqueado, nada.
@@ -1632,6 +1685,8 @@ function createAppServices(userData: string): AppServices {
     funil: async () => (lockService?.isLocked() ? null : funilMarkdownText()),
     // Contrato 127 (R27): o `TAREFAS.md` do gerador do contrato 121; bloqueado, nada.
     tarefas: async () => (lockService?.isLocked() ? null : tarefasMarkdownText()),
+    // Contrato 149 (CA10): a função de mídia desligada leva os arquivos de mídia da pasta.
+    media: assistantMediaEnabled,
     // Contrato 127 (R13): os lembretes do `ESTADO.md`, das tarefas abertas com aviso; bloqueado, nenhum.
     lembretes: async () =>
       lockService?.isLocked()
@@ -1644,6 +1699,22 @@ function createAppServices(userData: string): AppServices {
   // Contrato 45: o email do Assistente. O `EMAILS.md` e as mensagens já baixadas saem do cache (sem servidor); as
   // ferramentas `buscar_emails` e `ler_email` (CA7) vão ao servidor IMAP só para leitura. Bloqueado (CA5), nada disso.
   const emailLocked = (): boolean => lockService?.isLocked() ?? false
+  // Contrato 149: o limite de mídias por pergunta, um só para as ferramentas do WhatsApp e do email.
+  const assistantMediaBudget = createMediaBudget()
+  // Contrato 149: as ferramentas de mídia do WhatsApp (ver e transcrever), só do recorte exportado para a pergunta.
+  const whatsappMediaTools = createWhatsAppMediaTools({
+    exported: (folder, chatId, messageId) => whatsapp.exportedMedia(folder, chatId, messageId),
+    media: (chatId, messageId) => whatsapp.media({ chatId, messageId }),
+    savedTranscript: (chatId, messageId) => whatsapp.savedTranscript(chatId, messageId),
+    transcribe: (chatId, messageId) => whatsapp.assistantTranscribe(chatId, messageId),
+    locked: emailLocked,
+    account: () => {
+      const current = whatsapp.status()
+      return current.state === 'connected' ? (current.me?.phone ?? null) : null
+    },
+    enabled: assistantMediaEnabled,
+    budget: assistantMediaBudget,
+  })
   const emailExport = {
     cached: () => email.cached(),
     body: (accountId: string, message: EmailMessage) => email.cachedBody(accountId, message),
@@ -1682,6 +1753,16 @@ function createAppServices(userData: string): AppServices {
       },
       ...devLog,
     },
+    // Contrato 149: `ler_anexo_email` (o anexo pela posição, a transcrição pela AssemblyAI e o limite da pergunta).
+    media: {
+      attachment: async (found, index) => {
+        const result = await email.attachment({ accountId: found.status.account.id, id: found.message.id, index })
+        return result.ok ? { ok: true, bytes: result.bytes } : result
+      },
+      transcribe: (bytes) => fileTranscriber.transcribe(bytes),
+      enabled: assistantMediaEnabled,
+      budget: assistantMediaBudget,
+    },
   })
   // Contrato 56 (CA11): o lote que ficou `running` (o app caiu no meio) vira `stopped`.
   void emailTools.organizer?.init().catch(() => undefined)
@@ -1711,6 +1792,14 @@ function createAppServices(userData: string): AppServices {
     instagramAccounts: async () => redes.state().accounts.map((account) => ({ id: account.id, username: account.username })),
     // Contrato 117: o funil, só para ler os ids, as etapas e os contatos do cartão; bloqueado, o bloco fica como texto.
     funil: async () => (lockService?.isLocked() ? null : funil.view()),
+    // Contrato 163: a triagem, só para ler (o estado, o agente e a tarefa; as etiquetas); bloqueado, o bloco fica como texto.
+    triagem: async () => {
+      const motor = triagemRef.current
+      if (lockService?.isLocked() || !motor) return null
+      const [status, situacao] = await Promise.all([motor.status(), automations.triagemSituacao()])
+      return { status, agent: situacao.agent, task: situacao.task }
+    },
+    triagemEtiquetas: async () => (lockService?.isLocked() ? null : triagemStore.list()),
     now: Date.now,
     timeZone,
   }
@@ -1725,9 +1814,17 @@ function createAppServices(userData: string): AppServices {
       // Contrato 45 (CA7): com conta de email e a fonte ligada, as ferramentas de busca e leitura. Contrato 56: e as de
       // organizar (só aqui, no Assistente interativo; as automações recebem só as de leitura).
       // Contrato 76: com a fonte Redes ligada e uma conta do Instagram, as ferramentas do Instagram.
+      // Contrato 149: com a função de mídia ligada, as de mídia (as do WhatsApp com a fonte WhatsApp, a do anexo com a do
+      // email); desligada, elas não existem e um pedido forjado com esses nomes não acha ferramenta.
       tools: (scope) => [
         ...(chatSourcesOf(scope).email && email.accounts().length > 0 && !emailLocked() ? [...emailTools.tools, ...emailTools.organizeTools] : []),
         ...(chatSourcesOf(scope).redes && redes.state().accounts.length > 0 && !emailLocked() ? redesAssistant.tools : []),
+        ...mediaToolsFor({
+          enabled: assistantMediaOn,
+          locked: emailLocked(),
+          whatsapp: { on: chatSourcesOf(scope).whatsapp && whatsapp.status().state === 'connected', tools: whatsappMediaTools },
+          email: { on: chatSourcesOf(scope).email && email.accounts().length > 0, tools: emailTools.mediaTools },
+        }),
       ],
       endTurn: (turn, outcome) => emailTools.organizer?.endTurn(turn, outcome) ?? Promise.resolve(),
     },
@@ -1945,6 +2042,8 @@ function createAppServices(userData: string): AppServices {
     onChange: (status) => {
       trayController?.refresh()
       if (!lockService?.isLocked()) broadcast(appWindows(), 'scribe:automations-changed', status)
+      // Contrato 161: tarefas, pausa ou agentes mudaram: a triagem relê o estado dela (avisa só se mudou).
+      void triagemRef.current?.status().catch(() => undefined)
     },
     // Bloqueado, nada da resposta vai às janelas; a execução continua e fica no histórico.
     onEvent: (event) => {
@@ -2000,6 +2099,7 @@ function createAppServices(userData: string): AppServices {
     meetings,
     whatsapp,
     email,
+    pendencias: async () => (await settings.get()).inicio.blocos.pendencias,
     profiles: () => [google.status().profile, microsoft.status().profile],
     timeZone,
     onChange: (view) => {
@@ -2109,6 +2209,19 @@ function createAppServices(userData: string): AppServices {
     },
     // Contrato 117: os cartões do funil gravam só pelo serviço do funil (110), no clique.
     funil: { view: () => funil.view(), contatoSave: (request) => funil.contatoSave(request), oportunidadeSave: (request) => funil.oportunidadeSave(request), oportunidadeMove: (request) => funil.oportunidadeMove(request), eventoAdd: (request) => funil.eventoAdd(request) },
+    // Contrato 163: os cartões da triagem gravam pelas Automações (o agente e a tarefa, com as regras delas) e pelo `set` da
+    // triagem (a etiqueta); por closures, resolvidas na hora do clique (o motor nasce depois). Nada aqui envia mensagem.
+    triagem: {
+      situacao: async () => {
+        const { agent, task, motivo } = await automations.triagemSituacao()
+        return { agent, task, motivo }
+      },
+      createFromTemplate: () => triagem.createFromTemplate(),
+      saveAgent: (input) => automations.saveAgent(input),
+      saveTask: (input) => automations.saveTask(input),
+      toggleTask: (input) => automations.toggleTask(input),
+      set: (chatId, patch) => triagem.set(chatId, patch),
+    },
     ...devLog,
   })
   // Contrato 110: o funil lê reuniões, email e WhatsApp só pelos caches deles; bloqueado, a view não vai às janelas.
@@ -2127,6 +2240,55 @@ function createAppServices(userData: string): AppServices {
     tarefas: { todas: () => tarefas.todas(), criar: (input) => tarefas.criar(input), salvar: (request) => tarefas.salvar(request) },
     ...devLog,
   })
+  // Contrato 161: o motor da triagem. O modelo é o do contrato 17 (como o atendimento), com o `claude` encontrado a cada
+  // chamada; a tarefa ativa e o histórico vêm das Automações por funções (elas não importam a triagem). Bloqueado, os
+  // avisos às janelas não saem; o motor continua.
+  const triagem = createTriagemService({
+    store: triagemStore,
+    enabled: async () => (await settings.get()).whatsappTriagem,
+    automations: {
+      triagemAtiva: () => automations.triagemAtiva(),
+      triagemSituacao: () => automations.triagemSituacao(),
+      salvarExecucaoExterna: (run) => automations.salvarExecucaoExterna(run),
+      criarTriagemDoModelo: () => automations.criarTriagemDoModelo(),
+    },
+    whatsapp: {
+      lastMessages: (chatId, n) => whatsapp.lastMessages(chatId, n),
+      chat: (chatId) => whatsapp.findChat(chatId),
+      ownerName: () => whatsapp.status().me?.name ?? null,
+    },
+    funil: {
+      contatos: async () => (await funilStore.read()).contatos,
+      empresaNome: async (id) => (await funilStore.read()).empresas.find((empresa) => empresa.id === id)?.nome ?? null,
+    },
+    classify: async (input, signal) => {
+      const found = await claude.locate()
+      if (!found.ok) return { ok: false, error: 'failed' }
+      return createTriagemClassifier(
+        {
+          settings,
+          spawn: smokeClaude?.spawnSummary ?? nodeSpawnSummary,
+          openAcp,
+          acpAvailable: async () => (await acpAgent.current()).available(),
+          userData,
+          baseEnv: process.env,
+          ...devLog,
+        },
+        { claudePath: found.path },
+      )(input, signal)
+    },
+    changed: (chatId, etiqueta) => {
+      if (!lockService?.isLocked()) broadcast(appWindows(), 'scribe:triagem-changed', { chatId, etiqueta })
+    },
+    statusChanged: (status) => {
+      if (!lockService?.isLocked()) broadcast(appWindows(), 'scribe:triagem-status-changed', status)
+    },
+    locked: () => lockService?.isLocked() ?? false,
+    runs: { hojeTrigger: (trigger, exceptError) => automations.hojeTrigger(trigger, exceptError) },
+    timeZone,
+    ...devLog,
+  })
+  triagemRef.current = triagem
   // Contrato 122: as tarefas leem funil, reuniões, análises e WhatsApp só pelos caches; bloqueado, a view não vai às janelas.
   const tarefasStore = createTarefasStore({ dir: userData, ...devLog })
   const tarefas = createTarefasService({
@@ -2313,6 +2475,7 @@ function createAppServices(userData: string): AppServices {
     atendimento,
     atendimentoLog,
     atendimentoService,
+    triagem,
     async migrarTarefas() {
       try {
         const result = await migrarTarefas({
@@ -2515,6 +2678,7 @@ function registerIpc(services: AppServices): void {
   registerTarefasIpc({ appOrigin, tarefas: services.tarefas, log: (message) => console.error(message) })
   registerInicioIpc({ appOrigin, inicio: services.inicio })
   registerEmailDashboardIpc({ appOrigin, dashboard: services.emailDashboard })
+  createTriagemIpc({ appOrigin, triagem: services.triagem })
   handle('scribe:meetings-list', appOrigin, () => meetings.list())
   handle('scribe:meetings-get', appOrigin, (_event, { id }) => meetings.get(id))
   handle('scribe:meetings-create', appOrigin, async (_event, input) => {
@@ -2679,6 +2843,8 @@ function registerIpc(services: AppServices): void {
   handle('scribe:chat-action-funil', appOrigin, (_event, request) => chatActions.funil(request).catch((): ChatActionResult => ({ ok: false, error: 'invalid' })))
   // Contrato 127 (D14): "Criar", "Concluir" e "Adiar" nos cartões das tarefas, pelo serviço das tarefas.
   handle('scribe:chat-action-tarefa', appOrigin, (_event, request) => chatActions.tarefa(request).catch((): ChatActionResult => ({ ok: false, error: 'invalid' })))
+  // Contrato 163: os cartões da triagem do WhatsApp (o agente e a etiqueta), recusados com o app bloqueado.
+  handle('scribe:chat-action-triagem', appOrigin, (_event, request) => chatActions.triagem(request).catch((): ChatActionResult => ({ ok: false, error: 'invalid' })))
   // Contrato 21: o cartão de aprovação de uma ferramenta MCP e a aba "Conexões". Nenhum segredo volta por aqui.
   handle('scribe:chat-approval', appOrigin, (_event, request) => chat.answerApproval(request))
   handle('scribe:mcp-chat-servers', appOrigin, () => mcp.chatServers())
@@ -2765,8 +2931,9 @@ function registerIpc(services: AppServices): void {
   handle('scribe:whatsapp-start', appOrigin, () => whatsapp.start())
   handle('scribe:whatsapp-stop', appOrigin, () => whatsapp.stop())
   handle('scribe:whatsapp-pair', appOrigin, (_event, request) => whatsapp.pair(request))
-  handle('scribe:whatsapp-logout', appOrigin, () => whatsapp.logout())
-  handle('scribe:whatsapp-remove', appOrigin, () => whatsapp.remove())
+  // Contrato 149 (CA10): "Sair" e "Remover" levam também as mídias que o Assistente abriu nas pastas das conversas.
+  handle('scribe:whatsapp-logout', appOrigin, () => whatsapp.logout().finally(() => corpus.dropMedia('WhatsApp').catch(() => undefined)))
+  handle('scribe:whatsapp-remove', appOrigin, () => whatsapp.remove().finally(() => corpus.dropMedia('WhatsApp').catch(() => undefined)))
   handle('scribe:whatsapp-chats', appOrigin, () => whatsapp.chats().catch(() => []))
   // Contrato 40: abrir a conversa zera as não lidas dela; o número do Dock é relido.
   handle('scribe:whatsapp-messages', appOrigin, (_event, request) =>
@@ -3114,6 +3281,7 @@ void app.whenReady().then(async () => {
     services.drive.dispose()
     // Contrato 141: antes do WhatsApp, para nenhum envio do agente sair no meio da saída.
     services.atendimentoService.dispose()
+    services.triagem.dispose()
     void services.whatsapp.dispose()
     // Contrato 156: o relógio do painel para e a chamada em curso é cancelada (nada dela é gravado).
     stopEmailDashboard()
@@ -3222,6 +3390,7 @@ void app.whenReady().then(async () => {
     services.updates.dispose()
     services.drive.dispose()
     services.atendimentoService.dispose()
+    services.triagem.dispose()
     await services.whatsapp.dispose()
     await services.email.dispose()
     services.redes.dispose()

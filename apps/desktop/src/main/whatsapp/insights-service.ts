@@ -9,6 +9,7 @@ import { CLAUDE_MODEL_PREFIX } from '../../shared/settings-defaults'
 import { WHATSAPP_CHAT_ID_PATTERN, type WhatsAppChat, type WhatsAppMessage } from '../../shared/whatsapp'
 import { INSIGHTS_MESSAGES_MAX, type WhatsAppInsights, type WhatsAppInsightsResult, type WhatsAppInsightsState } from '../../shared/whatsapp-insights'
 import { runClaudeOneShot, type OneShotEngine } from '../meetings/claude-one-shot'
+import { savedTranscripts } from './export'
 import { ACP_INSIGHTS_DIR, insightsInput, insightsParser, insightsSystemPrompt, INSIGHTS_TIMEOUT_MS, type InsightsCacheStore } from './insights'
 
 export interface InsightsServiceDeps extends OneShotEngine {
@@ -18,6 +19,8 @@ export interface InsightsServiceDeps extends OneShotEngine {
   chat: (chatId: string) => Promise<WhatsAppChat | null>
   /** As últimas `max` mensagens, da mais antiga para a mais nova. */
   messages: (chatId: string, max: number) => Promise<WhatsAppMessage[]>
+  /** Contrato 147: a transcrição já guardada de um áudio (sem rede); sem ela, os áudios vão como anexo. */
+  transcript?: (chatId: string, messageId: string) => Promise<string | null>
   /** "Detalhes com IA no WhatsApp" (Configurações › Claude). */
   enabled: () => Promise<boolean>
   now?: () => number
@@ -54,6 +57,7 @@ export function createInsightsService(deps: InsightsServiceDeps): InsightsServic
     const found = await deps.locate().catch((): ClaudeLocateResult => ({ ok: false, error: 'not-found' }))
     if (!found.ok) return { ok: false, error: 'not-found' }
     if (signal.aborted) return { ok: false, error: 'failed' }
+    const transcripts = await savedTranscripts(messages.slice(-INSIGHTS_MESSAGES_MAX), deps.transcript ? { get: deps.transcript } : undefined)
     const startedAt = now()
     const { result, model } = await runClaudeOneShot(deps, {
       claudePath: found.path,
@@ -61,7 +65,7 @@ export function createInsightsService(deps: InsightsServiceDeps): InsightsServic
       acpDir: ACP_INSIGHTS_DIR,
       systemPrompt: insightsSystemPrompt(),
       parse: insightsParser,
-      input: insightsInput(chat.name, chat.kind, messages, now()),
+      input: insightsInput(chat.name, chat.kind, messages, now(), transcripts),
       label: 'detalhes do WhatsApp',
       timeoutMs: deps.timeoutMs ?? INSIGHTS_TIMEOUT_MS,
       signal,

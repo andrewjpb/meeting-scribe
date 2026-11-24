@@ -22,6 +22,15 @@ export const WHATSAPP_INSIGHTS_DESCRIPTION = 'Ao abrir uma conversa, o Claude lo
 /** Descrição de "Corrigir ao enviar no WhatsApp" (contrato 35), a mesma na tela e na busca. */
 export const WHATSAPP_AUTO_CORRECT_DESCRIPTION = 'Ao clicar em Enviar, o Claude (Haiku) corrige ortografia e pontuação e melhora a clareza da mensagem, e o texto corrigido é enviado sem nova confirmação. Se a correção falhar, a mensagem original é enviada.'
 
+/** Contrato 151: "A IA pode abrir imagens e transcrever áudios" (`assistant.media`), o nome e a descrição da tela e da busca. */
+export const ASSISTANT_MEDIA_NAME = 'A IA pode abrir imagens e transcrever áudios'
+export const ASSISTANT_MEDIA_DESCRIPTION =
+  'Ao responder, o Assistente abre imagens e PDFs e transcreve áudios das conversas e emails que já pode ler. Imagens e PDFs vão para o Claude; áudios vão para a AssemblyAI e só o texto vai para o Claude.'
+
+/** Contrato 159: "Triagem do WhatsApp por agente" (`whatsappTriagem`), o nome e a descrição da tela e da busca. */
+export const WHATSAPP_TRIAGEM_NAME = 'Triagem do WhatsApp por agente'
+export const WHATSAPP_TRIAGEM_DESCRIPTION = 'O agente de triagem das Automações etiqueta cada conversa que recebe mensagem (urgente, pessoal, profissional). Só grava etiquetas no seu Mac; nunca envia nem apaga.'
+
 /** Descrições das notificações do WhatsApp (contrato 40), as mesmas na tela e na busca. */
 export const WHATSAPP_NOTIFICATIONS_DESCRIPTION = 'Uma notificação do macOS a cada mensagem recebida, menos da conversa que está aberta na frente. Com o app bloqueado, sem o texto.'
 export const WHATSAPP_ONLY_PEOPLE_DESCRIPTION = 'Mensagens de grupo não geram notificação.'
@@ -185,10 +194,12 @@ export function settingsIndex(agent: string): SettingsEntry[] {
     row('claude', 'Modelo de tradução', 'Modelo', 'Modelo do Claude na tradução: Haiku (mais rápido) ou Sonnet.', '"Traduzir com" está em Claude CLI'),
     row('claude', 'Modelo de tradução', 'Modelo da AssemblyAI', 'Lista de modelos de tradução com preço e contexto.', '"Traduzir com" está em AssemblyAI'),
     row('claude', 'Chat e resumo', 'Modelo do chat', 'Usado no Assistente. O Opus responde melhor e demora mais.'),
+    row('claude', 'Chat e resumo', ASSISTANT_MEDIA_NAME, ASSISTANT_MEDIA_DESCRIPTION, undefined, 'mídia imagem foto print áudio PDF anexo transcrição AssemblyAI privacidade'),
     row('claude', 'Chat e resumo', 'Resumir ao encerrar', 'Ao encerrar, o Claude lê a transcrição e escreve o resumo, as decisões e as tarefas.'),
     row('claude', 'Chat e resumo', 'IA anotando ao vivo', LIVE_CARDS_DESCRIPTION),
     row('claude', 'Chat e resumo', 'Detalhes com IA no WhatsApp', WHATSAPP_INSIGHTS_DESCRIPTION),
     row('claude', 'Chat e resumo', 'Corrigir ao enviar no WhatsApp', WHATSAPP_AUTO_CORRECT_DESCRIPTION),
+    row('claude', 'Chat e resumo', WHATSAPP_TRIAGEM_NAME, WHATSAPP_TRIAGEM_DESCRIPTION),
     row('claude', 'Automações', 'Limite diário de execuções agendadas', 'Ao passar, todas as tarefas pausam e o app avisa.'),
     row('arquivos', 'Arquivos da reunião', 'Salvar áudio e transcrição numa pasta', 'Para cada reunião: um arquivo de áudio (você e os participantes) e a transcrição em texto. Avise as pessoas antes de gravar.'),
     row('arquivos', 'Arquivos da reunião', 'Pasta', 'Onde ficam o áudio e a transcrição de cada reunião.', '"Salvar áudio e transcrição numa pasta" está ligado'),

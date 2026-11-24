@@ -12,9 +12,10 @@ import type { AcpPackage } from '../install'
 /**
  * Contrato 64: `invite-suggest`, o "Sugerir evento" do email (sem ferramenta, sem MCP, sem web). Contrato 111:
  * `funnel-extract`, a detecção de oportunidade no resumo da reunião (idem). Contrato 139: `whatsapp-atendimento`, a
- * resposta do agente de atendimento no WhatsApp (idem). Contrato 156: `email-dashboard`, a passada do Painel de e-mail (idem).
- */
-export type AcpPurpose = 'chat' | 'translate' | 'summary' | 'analysis' | 'draft' | 'ai-notes' | 'whatsapp-insights' | 'whatsapp-correct' | 'invite-suggest' | 'funnel-extract' | 'whatsapp-atendimento' | 'email-dashboard'
+  * resposta do agente de atendimento no WhatsApp (idem). Contrato 156: `email-dashboard`, a passada do Painel de e-mail (idem).
+  * Contrato 159: `whatsapp-triagem`, a etiqueta da triagem do WhatsApp (idem).
+  */
+export type AcpPurpose = 'chat' | 'translate' | 'summary' | 'analysis' | 'draft' | 'ai-notes' | 'whatsapp-insights' | 'whatsapp-correct' | 'invite-suggest' | 'funnel-extract' | 'whatsapp-atendimento' | 'email-dashboard' | 'whatsapp-triagem'
 
 /** O que a fábrica de sessões recebe (CA4d), sem nada do agente. */
 export interface AcpSessionRequest {

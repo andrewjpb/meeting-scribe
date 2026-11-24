@@ -1,8 +1,9 @@
 // Contrato 107 (funil-vendas, CA10 a CA12): lógica pura do funil. Última interação e "esfriou" (R7), telefone (R3),
 // e-mail, domínio e empresa (R5), `formatarBRL` e os totais do cabeçalho.
 import { describe, expect, it } from 'vitest'
-import type { Etapa, FunilState, Oportunidade } from '../src/shared/funil'
+import type { Contato, Etapa, FunilState, Oportunidade } from '../src/shared/funil'
 import {
+  contatoLigado,
   diasNaEtapa,
   dominioDe,
   ehProvedorPessoal,
@@ -154,5 +155,36 @@ describe('lógica do funil', () => {
       ],
     }
     expect(totaisDoFunil(state, NOW, 'America/Sao_Paulo')).toEqual({ abertas: 2, emAberto: 100_000, ganhoNoMes: 1_200_000 })
+  })
+})
+
+describe('contatoLigado em shared (contrato 159, CA9)', () => {
+  const contato = (id: string, patch: Partial<Contato>): Contato => ({
+    id,
+    nome: id,
+    emails: [],
+    telefones: [],
+    empresaId: null,
+    cargo: null,
+    notas: '',
+    whatsappChatId: null,
+    origem: 'manual',
+    criadoEm: NOW,
+    atualizadoEm: NOW,
+    arquivado: false,
+    ...patch,
+  })
+  const contatos = [
+    contato('ct-ana', { emails: ['ana@acme.example'], telefones: ['+5511911110000'] }),
+    contato('ct-bia', { telefones: ['+5521998765432'], whatsappChatId: '5521998765432@s.whatsapp.net' }),
+    contato('ct-arq', { emails: ['velho@acme.example'], whatsappChatId: '5511000000000@s.whatsapp.net', arquivado: true }),
+  ]
+
+  it('acha pela conversa, pelo e-mail e pelo telefone; nunca o arquivado', () => {
+    expect(contatoLigado(contatos, { whatsappChatId: '5521998765432@s.whatsapp.net', email: 'ana@acme.example' })?.id).toBe('ct-bia')
+    expect(contatoLigado(contatos, { email: ' Ana@ACME.example ' })?.id).toBe('ct-ana')
+    expect(contatoLigado(contatos, { telefone: '+55 11 1111-0000' })?.id).toBe('ct-ana')
+    expect(contatoLigado(contatos, { whatsappChatId: '5511000000000@s.whatsapp.net' })).toBeNull()
+    expect(contatoLigado(contatos, {})).toBeNull()
   })
 })

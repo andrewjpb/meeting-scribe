@@ -4,7 +4,8 @@
 // daqui vai para log com texto de mensagem.
 //
 // Contrato 37: a mídia de uma mensagem (`media`) volta em bytes, não em JSON: leitor próprio, até 64 MB, com o
-// `Content-Type` conferido (só `audio/`, `image/` e `video/`).
+// `Content-Type` conferido (só `audio/`, `image/` e `video/`; contrato 149: também `application/` e `text/`, de documento e
+// figurinha).
 //
 // Contrato 39: o envio de imagem ou vídeo é um POST com os bytes no corpo e o tipo, o nome e a legenda nos cabeçalhos
 // (`X-Media-Mime`, `X-Media-Name`, `X-Caption`, os dois últimos com `encodeURIComponent`), só com a prova de clique.
@@ -42,7 +43,12 @@ const RESPONSE_MAX = 8 * 1024 * 1024
 const MEDIA_TIMEOUT_MS = 120_000
 /** Contrato 39: o envio do anexo (o upload ao WhatsApp e, no vídeo, o ffmpeg) tem até 300 s. */
 export const SEND_MEDIA_TIMEOUT_MS = 300_000
-const MEDIA_MIME = /^(?:audio|image|video)\/[\w.+-]{1,60}(?:; ?[\w.+-]{1,40}=[\w.+"-]{1,40}){0,3}$/
+/**
+ * Contrato 149: também o que o serviço devolve para documento e figurinha (`application/*`, `text/*`, `image/webp`), com o
+ * subtipo até 100. O tipo aqui só confere o formato do cabeçalho: quem decide o que a mídia é (imagem, PDF) são os bytes,
+ * em `chat/media-files.ts`; e a tela continua oferecendo "Baixar" só para imagem, vídeo e áudio.
+ */
+const MEDIA_MIME = /^(?:audio|image|video|application|text)\/[\w.+-]{1,100}(?:; ?[\w.+-]{1,40}=[\w.+"-]{1,40}){0,3}$/
 
 const meSchema: z.ZodType<WhatsAppMe> = z.object({ name: z.string().max(200), phone: z.string().max(40) })
 export const healthSchema = z.object({

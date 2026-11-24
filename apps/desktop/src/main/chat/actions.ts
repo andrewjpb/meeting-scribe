@@ -23,6 +23,9 @@
 // Automações) e `lembrete-editar`/`-apagar` mexem na tarefa aberta com lembrete; os cartões `tarefa-criar`, `-concluir` e
 // `-adiar` resolvem o id (inteiro ou curto) nas tarefas do app e a oportunidade e o contato pelo nome no funil. O clique
 // grava só pelo serviço das tarefas (122).
+// Contrato 163: a triagem do WhatsApp. `triagem-agente` lê o agente e a tarefa da triagem nas Automações e, no clique, cria
+// pelo modelo pronto, edita, pausa ou retoma pelas funções injetadas das Automações; `triagem-etiqueta` lê a conversa e a
+// etiqueta de agora e, no clique, grava pelo `set` da triagem (a escolha do dono). Nenhum dos dois envia mensagem.
 import { randomUUID } from 'node:crypto'
 import { z } from 'zod'
 import {
@@ -72,6 +75,17 @@ import {
   tarefaJaExistiaText,
   tarefaPrazoAtualizadoText,
   TASK_CREATED_TEXT,
+  isTriagemOpenTab,
+  TRIAGEM_ACTION_KINDS,
+  TRIAGEM_AGENTE_ACOES,
+  TRIAGEM_AGENTE_RESULT,
+  TRIAGEM_CONVERSA_NAO_ENCONTRADA_TEXT,
+  TRIAGEM_INSTRUCOES_PREVIEW,
+  TRIAGEM_JA_EXISTIA_TEXT,
+  TRIAGEM_RETOMADO_PAUSADOS_TEXT,
+  TRIAGEM_SEM_AGENTE_TEXT,
+  triagemEtiquetaText,
+  triagemTabOpenLabel,
   WHATSAPP_CHOICES_MAX,
   type ChatAction,
   type ChatActionCalendar,
@@ -81,19 +95,38 @@ import {
   type ChatActionOportunidadeCriar,
   type ChatActionResult,
   type ChatActionTarefa,
+  type ChatActionTriagem,
+  type ChatActionTriagemAgente,
   type ChatCalendarAccess,
+  type TriagemAgenteAviso,
   type EmailCardItem,
   type OpenScreen,
   type ReminderEmail,
 } from '../../shared/assistant'
 import { EMAIL_REF_PATTERN, EMAIL_TEXT_MAX, isSent, prefixedSubject, type EmailAccountStatus, type EmailMessage } from '../../shared/email'
-import { describeSchedule, TASK_MESSAGE_MAX, TASK_NAME_MAX, wallTime, zonedInstant } from '../../shared/automations'
+import {
+  AGENT_INSTRUCTIONS_MAX,
+  describeSchedule,
+  TASK_MESSAGE_MAX,
+  TASK_NAME_MAX,
+  TRIAGEM_TEMPLATE,
+  wallTime,
+  zonedInstant,
+  type Agent,
+  type AgentInput,
+  type AgentSaveResult,
+  type ScheduledTask,
+  type TaskInput,
+  type TaskSaveResult,
+  type TaskToggleResult,
+} from '../../shared/automations'
 import { automationIdSchema, scheduleSchema } from '../../shared/automations-schema'
 import type { Chat, ChatMessage } from '../../shared/chat'
 import { FUNIL_ETAPA_NOME_MAX, FUNIL_NOME_MAX, type Etapa, type FunilActionResult, type FunilState, type FunilView, type Oportunidade } from '../../shared/funil'
 import { mesmoTelefone, normalizarEmail, normalizarTelefone, semAcento } from '../../shared/funil-logic'
 import { SETTINGS_TABS } from '../../shared/routes'
 import { TAREFA_DETALHE_MAX, TAREFA_ID_CURTO, TAREFA_TITULO_MAX, type Tarefa } from '../../shared/tarefas'
+import { chipsDe, etiquetaVazia, TRIAGEM_ESPERA_SEG, type Etiqueta, type EtiquetaPatch, type TriagemStatus } from '../../shared/triagem'
 import { diaNoFuso, diaValido } from '../../shared/tarefas-logic'
 import { WHATSAPP_CHAT_ID_PATTERN, WHATSAPP_SEND_TEXT_MAX, type WhatsAppChatKind } from '../../shared/whatsapp'
 import { normalizeWhen } from '../invites/map'
@@ -216,6 +249,17 @@ const proposedSchema = z.discriminatedUnion('tipo', [
   }),
   z.object({ tipo: z.literal('tarefa-concluir'), id: tarefaIdSchema }),
   z.object({ tipo: z.literal('tarefa-adiar'), id: tarefaIdSchema, prazo: funilDia }),
+  // Contrato 163: a triagem do WhatsApp. A etiqueta pede ao menos um dos dois eixos; "nenhum" limpa o âmbito.
+  z.object({
+    tipo: z.literal('triagem-agente'),
+    acao: z.enum(TRIAGEM_AGENTE_ACOES),
+    instrucoes: z.string().trim().min(1).max(AGENT_INSTRUCTIONS_MAX).optional(),
+    esperaSeg: z.number().int().min(TRIAGEM_ESPERA_SEG.min).max(TRIAGEM_ESPERA_SEG.max).optional(),
+    grupos: z.boolean().optional(),
+  }),
+  z
+    .object({ tipo: z.literal('triagem-etiqueta'), chatId: whatsappChatId, urgente: z.boolean().optional(), ambito: z.enum(['pessoal', 'profissional', 'nenhum']).optional() })
+    .refine((value) => value.urgente !== undefined || value.ambito !== undefined, 'urgente ou ambito'),
 ])
 type Proposed = z.infer<typeof proposedSchema>
 type FunilProposed = Extract<Proposed, { tipo: ChatActionFunil['kind'] }>
@@ -241,6 +285,13 @@ export interface ActionResolver {
   instagramAccounts?: () => Promise<readonly InstagramDraftAccount[]>
   /** Contrato 117: o funil de vendas, só para ler (montar o cartão não grava nada); `null` com o app bloqueado. */
   funil?: () => Promise<FunilView | null>
+  /**
+   * Contrato 163: a triagem, só para ler: o estado do motor e o agente e a tarefa dela (das Automações); `null` com o app
+   * bloqueado (o bloco fica como texto).
+   */
+  triagem?: () => Promise<{ status: TriagemStatus; agent: Agent | null; task: ScheduledTask | null } | null>
+  /** Contrato 163: as etiquetas de agora, por conversa; `null` com o app bloqueado. */
+  triagemEtiquetas?: () => Promise<Readonly<Record<string, Etiqueta>> | null>
   now: () => number
   timeZone: () => string
   newId?: () => string
@@ -259,6 +310,8 @@ async function openTarget(screen: OpenScreen, target: string | null, resolver: A
   }
   if (screen === 'whatsapp') {
     if (!target) return { target: null, name: null }
+    // Contrato 163: uma aba da triagem (sem conversa).
+    if (isTriagemOpenTab(target)) return { target, name: null }
     if (!WHATSAPP_CHAT_ID_PATTERN.test(target)) return null
     const chat = await resolver.whatsappChat?.(target).catch(() => null)
     return chat ? { target, name: chat.name } : null
@@ -725,6 +778,49 @@ function resolveFunil(proposed: FunilProposed, base: { id: string; status: 'prop
   }
 }
 
+// --- Contrato 163: a triagem do WhatsApp -------------------------------------------------------------------------
+
+type TriagemAgenteProposed = Extract<Proposed, { tipo: 'triagem-agente' }>
+/** O gatilho já é a permissão de leitura: só a conversa que recebeu a mensagem vai ao agente. */
+export const TRIAGEM_PERMISSAO_CONVERSA = 'lê só a conversa que recebeu a mensagem'
+export const TRIAGEM_PERMISSAO_FUNIL = 'Pode ler o funil'
+
+/** Os primeiros 140 caracteres das instruções, numa linha, com "…" quando cortadas. */
+export function triagemInstrucoesPreview(text: string): string {
+  const line = text.replace(/\s+/g, ' ').trim()
+  return line.length > TRIAGEM_INSTRUCOES_PREVIEW ? `${line.slice(0, TRIAGEM_INSTRUCOES_PREVIEW)}…` : line
+}
+
+/**
+ * O cartão do agente: "criar" com o agente e a tarefa já existentes vira "editar" (`ja-existe`); editar, pausar ou
+ * retomar sem eles fica com `sem-agente` (o botão desabilitado). O interruptor desligado só avisa: dá para criar.
+ */
+function resolveTriagemAgente(proposed: TriagemAgenteProposed, base: { id: string; status: 'proposed'; result: null }, leitura: { status: TriagemStatus; agent: Agent | null; task: ScheduledTask | null }): ChatActionTriagemAgente {
+  const { agent, task, status } = leitura
+  const existe = agent !== null && task !== null
+  const avisos: TriagemAgenteAviso[] = []
+  if (proposed.acao === 'criar' && existe) avisos.push('ja-existe')
+  if (proposed.acao !== 'criar' && !existe) avisos.push('sem-agente')
+  if (status.motivo === 'desligado') avisos.push('desligado')
+  // A pausa geral das Automações: a tarefa ligada e sem a pausa automática, e mesmo assim "pausado" (o interruptor e o
+  // agente em ordem). Retomar só o agente não faz a triagem voltar.
+  if (proposed.acao === 'retomar' && existe && task?.enabled === true && !task.autoPaused && status.motivo === 'pausado') avisos.push('agendamentos-pausados')
+  const schedule = task?.schedule.kind === 'whatsapp-message' ? task.schedule : null
+  const funil = agent ? agent.funil : TRIAGEM_TEMPLATE.funil
+  return {
+    ...base,
+    kind: 'triagem-agente',
+    acao: proposed.acao === 'criar' && existe ? 'editar' : proposed.acao,
+    agente: agent ? { id: agent.id, nome: agent.name.slice(0, 200), modelo: agent.model } : null,
+    tarefa: task && schedule ? { id: task.id, esperaSeg: schedule.esperaSeg, grupos: schedule.grupos, enabled: task.enabled } : null,
+    pedido: { instrucoes: proposed.instrucoes ?? null, esperaSeg: proposed.esperaSeg ?? null, grupos: proposed.grupos ?? null },
+    permissoes: [...(funil ? [TRIAGEM_PERMISSAO_FUNIL] : []), TRIAGEM_PERMISSAO_CONVERSA],
+    instrucoesPreview: triagemInstrucoesPreview(proposed.instrucoes ?? agent?.instructions ?? TRIAGEM_TEMPLATE.instructions),
+    avisos,
+    error: null,
+  }
+}
+
 /** A ação validada, com o que o app leu; `null` se ela não vale (o bloco fica como texto). */
 async function resolve(proposed: Proposed, id: string, resolver: ActionResolver): Promise<ChatAction | null> {
   const base = { id, status: 'proposed' as const, result: null }
@@ -771,7 +867,8 @@ async function resolve(proposed: Proposed, id: string, resolver: ActionResolver)
     case 'abrir': {
       const found = await openTarget(proposed.tela, proposed.alvo ?? null, resolver)
       if (!found) return null
-      return { ...base, kind: 'abrir', screen: proposed.tela, target: found.target, label: openLabel(proposed.tela, found.name) }
+      const label = proposed.tela === 'whatsapp' && isTriagemOpenTab(found.target) ? triagemTabOpenLabel(found.target) : openLabel(proposed.tela, found.name)
+      return { ...base, kind: 'abrir', screen: proposed.tela, target: found.target, label }
     }
     case 'emails': {
       // As referências que não existem ficam de fora; nenhuma que vale, o bloco fica como texto.
@@ -852,6 +949,32 @@ async function resolve(proposed: Proposed, id: string, resolver: ActionResolver)
     case 'tarefa-adiar': {
       const tarefas = await resolver.tarefas?.().catch(() => null)
       return tarefas ? resolveTarefa(proposed, base, tarefas, resolver) : null
+    }
+    // Contrato 163: sem a triagem (o app bloqueado), o bloco fica como texto.
+    case 'triagem-agente': {
+      const semMudanca = proposed.instrucoes === undefined && proposed.esperaSeg === undefined && proposed.grupos === undefined
+      if (proposed.acao === 'editar' && semMudanca) return null
+      const leitura = await resolver.triagem?.().catch(() => null)
+      return leitura ? resolveTriagemAgente(proposed, base, leitura) : null
+    }
+    case 'triagem-etiqueta': {
+      const etiquetas = await resolver.triagemEtiquetas?.().catch(() => null)
+      if (!etiquetas) return null
+      const chat = (await resolver.whatsappChat?.(proposed.chatId).catch(() => null)) ?? null
+      const antes = etiquetas[proposed.chatId] ?? null
+      const pedido = { urgente: proposed.urgente ?? null, ambito: proposed.ambito ?? null }
+      const depois = { urgente: pedido.urgente ?? antes?.urgente ?? false, ambito: pedido.ambito === 'nenhum' ? null : (pedido.ambito ?? antes?.ambito ?? null) }
+      return {
+        ...base,
+        kind: 'triagem-etiqueta',
+        chatId: proposed.chatId,
+        chat: chat ? { id: proposed.chatId, name: chat.name.slice(0, 200), kind: chat.kind } : null,
+        antes,
+        depois,
+        pedido,
+        avisos: chat ? [] : ['conversa-nao-encontrada'],
+        error: null,
+      }
     }
   }
 }
@@ -936,6 +1059,13 @@ export function actionsHistory(actions: readonly ChatAction[] | undefined): stri
         return `- concluir a tarefa "${action.titulo || action.tarefaId}" (${state})`
       case 'tarefa-adiar':
         return `- adiar a tarefa "${action.titulo || action.tarefaId}" para ${action.prazo} (${state})`
+      // Contrato 163.
+      case 'triagem-agente':
+        return `- ${action.acao} o agente de triagem do WhatsApp${action.pedido.esperaSeg !== null ? ` com espera de ${action.pedido.esperaSeg} s` : ''}${action.pedido.grupos !== null ? (action.pedido.grupos ? ', com grupos' : ', sem grupos') : ''}${action.pedido.instrucoes !== null ? ', com instruções novas' : ''} (${state})`
+      case 'triagem-etiqueta': {
+        const chips = chipsDe({ ...etiquetaVazia(0), ...action.depois })
+        return `- etiquetar a conversa ${action.chat?.name ?? action.chatId} como ${chips.length ? chips.join(' · ') : 'sem etiqueta'} (${state})`
+      }
     }
   })
   return ['[Cartões propostos nesta resposta:', ...lines, ']'].join('\n')
@@ -984,6 +1114,19 @@ export interface ChatActionsDeps {
    * uma tarefa e os cartões das tarefas.
    */
   tarefas?: Pick<TarefasService, 'todas' | 'criar' | 'salvar' | 'status' | 'apagar'>
+  /**
+   * Contrato 163: a triagem do WhatsApp, só no clique: o agente e a tarefa de agora e o modelo pronto, o salvar e o
+   * ligar/desligar das Automações (com as regras delas) e a etiqueta pelo `set` da triagem. Nada aqui envia mensagem.
+   */
+  triagem?: {
+    /** `motivo`: o das Automações (`pausado` com a tarefa ligada e sem a pausa automática é a pausa geral). */
+    situacao: () => Promise<{ agent: Agent | null; task: ScheduledTask | null; motivo?: 'sem-agente' | 'pausado' | null | undefined }>
+    createFromTemplate: () => Promise<{ ok: true; agentId: string; taskId: string } | { ok: false; error: string }>
+    saveAgent: (input: AgentInput) => Promise<AgentSaveResult>
+    saveTask: (input: TaskInput) => Promise<TaskSaveResult>
+    toggleTask: (input: { id: string; enabled: boolean }) => Promise<TaskToggleResult>
+    set: (chatId: string, patch: EtiquetaPatch) => Promise<{ ok: true; etiqueta: Etiqueta } | { ok: false; error: string }>
+  }
   log?: (message: string) => void
 }
 
@@ -1005,6 +1148,8 @@ export interface ChatActions {
   funil(request: unknown): Promise<ChatActionResult>
   /** Contrato 127 (D14): "Criar", "Concluir" e "Adiar" nos cartões das tarefas, pelo tipo gravado (`campos`: o de criar). */
   tarefa(request: unknown): Promise<ChatActionResult>
+  /** Contrato 163: "Criar agente", "Salvar", "Pausar", "Retomar" e "Aplicar" nos cartões da triagem, pelo tipo gravado. */
+  triagem(request: unknown): Promise<ChatActionResult>
 }
 
 /** Contrato 78: a frase do erro do helper no cartão do evento, sem termo técnico. */
@@ -1111,6 +1256,36 @@ const tarefaRequestSchema = z.object({ ...refFields, campos: tarefaCamposSchema.
 const isTarefaAction = (action: ChatAction): action is ChatActionTarefa => (TAREFA_ACTION_KINDS as readonly string[]).includes(action.kind)
 /** Contrato 127: o erro do serviço das tarefas como o canal devolve (o limite é o `full` do lembrete). */
 const tarefaErro = (erro: string): 'full' | 'invalid' => (erro === 'limite' ? 'full' : 'invalid')
+const triagemRequestSchema = z.object(refFields).strict()
+const isTriagemAction = (action: ChatAction): action is ChatActionTriagem => (TRIAGEM_ACTION_KINDS as readonly string[]).includes(action.kind)
+const TRIAGEM_FALHOU_TEXT = 'Não foi possível salvar o agente de triagem.'
+const TRIAGEM_ETIQUETA_FALHOU_TEXT = 'Não foi possível aplicar a etiqueta.'
+
+/** O agente como o formulário das Automações manda, com as instruções novas. */
+const agentInputOf = (agent: Agent, instructions: string): AgentInput => {
+  const { createdAt: _createdAt, updatedAt: _updatedAt, ...fields } = agent
+  return { ...fields, instructions }
+}
+
+/** A tarefa como o formulário das Automações manda (sem o estado das execuções), com o gatilho novo. */
+function taskInputOf(task: ScheduledTask, schedule: ScheduledTask['schedule']): TaskInput {
+  return {
+    id: task.id,
+    name: task.name,
+    agentId: task.agentId,
+    message: task.message,
+    schedule,
+    timezone: task.timezone,
+    enabled: task.enabled,
+    runOnce: task.runOnce,
+    runOnceAction: task.runOnceAction,
+    timeoutS: task.timeoutS,
+    notify: task.notify,
+    output: task.output,
+    email: task.email ? { accountId: task.email.accountId, allow: [...task.email.allow], maxPerRun: task.email.maxPerRun } : null,
+  }
+}
+
 /** Contrato 117 (R39): os contatos sem e-mail do cartão de criar ficam numa nota da oportunidade. */
 export const funilNotaCitados = (nomes: readonly string[]): string => `Citados na conversa com o Assistente: ${nomes.join(', ')}`
 
@@ -1615,6 +1790,86 @@ export function createChatActions(deps: ChatActionsDeps): ChatActions {
         )
       } catch (error) {
         deps.log?.(`[assistente] tarefas: ${error instanceof Error ? error.message : String(error)}`)
+        return { ok: false, error: 'invalid' }
+      } finally {
+        busy.delete(key)
+      }
+    },
+
+    async triagem(request) {
+      const parsed = triagemRequestSchema.safeParse(request)
+      if (!parsed.success) return { ok: false, error: 'invalid' }
+      const ref = parsed.data
+      const key = keyOf(ref)
+      // O segundo clique, enquanto o primeiro roda, não cria outro agente.
+      if (busy.has(key)) return { ok: false, error: 'done' }
+      busy.add(key)
+      try {
+        const current = actionIn(await deps.store.get(ref.chatId), ref)
+        if (!current || !isTriagemAction(current)) return { ok: false, error: 'missing' }
+        if (current.status !== 'proposed') return { ok: false, error: 'done' }
+        if (!deps.triagem) return { ok: false, error: 'invalid' }
+        const triagem = deps.triagem
+        const kind = current.kind
+        const failed = (error: string): Promise<ChatActionResult> =>
+          write(ref, (action) => (action.kind === kind ? { ...action, status: 'failed', result: null, error: error.slice(0, CHAT_ACTION_ERROR_MAX) } : null))
+
+        if (current.kind === 'triagem-etiqueta') {
+          // A conversa que não existia quando o cartão nasceu: nada é gravado.
+          if (!current.chat) return await failed(TRIAGEM_CONVERSA_NAO_ENCONTRADA_TEXT)
+          const patch: EtiquetaPatch = {}
+          if (current.pedido.urgente !== null) patch.urgente = current.pedido.urgente
+          if (current.pedido.ambito !== null) patch.ambito = current.pedido.ambito === 'nenhum' ? null : current.pedido.ambito
+          const saved = await triagem.set(current.chatId, patch)
+          if (!saved.ok) return await failed(TRIAGEM_ETIQUETA_FALHOU_TEXT)
+          const { etiqueta } = saved
+          return await write(ref, (action) =>
+            action.kind === 'triagem-etiqueta' ? { ...action, depois: { urgente: etiqueta.urgente, ambito: etiqueta.ambito }, status: 'done', result: triagemEtiquetaText(chipsDe(etiqueta)), error: null } : null,
+          )
+        }
+
+        // `triagem-agente`: o estado de agora (o agente pode ter sido criado ou apagado depois da proposta).
+        let { agent, task } = await triagem.situacao()
+        const done = (acao: ChatActionTriagemAgente['acao'], result: string = TRIAGEM_AGENTE_RESULT[acao]): Promise<ChatActionResult> =>
+          write(ref, (action) => (action.kind === 'triagem-agente' ? { ...action, acao, status: 'done', result, error: null } : null))
+        const { pedido } = current
+        if (current.acao === 'pausar' || current.acao === 'retomar') {
+          if (!agent || !task) return await failed(TRIAGEM_SEM_AGENTE_TEXT)
+          const toggled = await triagem.toggleTask({ id: task.id, enabled: current.acao === 'retomar' })
+          if (!toggled) return await failed(TRIAGEM_FALHOU_TEXT)
+          if ('ok' in toggled) return await failed(toggled.error)
+          // Retomada com a pausa geral dos agendamentos: a tarefa liga, mas o motor segue parado; o cartão diz isso.
+          if (current.acao === 'retomar' && (await triagem.situacao()).motivo === 'pausado') return await done('retomar', TRIAGEM_RETOMADO_PAUSADOS_TEXT)
+          return await done(current.acao)
+        }
+        let acao: ChatActionTriagemAgente['acao'] = 'editar'
+        if (current.acao === 'criar' && (!agent || !task)) {
+          const created = await triagem.createFromTemplate()
+          if (!created.ok) return await failed(created.error)
+          acao = 'criar'
+          ;({ agent, task } = await triagem.situacao())
+          if (pedido.instrucoes === null && pedido.esperaSeg === null && pedido.grupos === null) return await done(acao)
+        }
+        if (!agent || !task) return await failed(TRIAGEM_SEM_AGENTE_TEXT)
+        // Só os campos pedidos mudam; o resto fica como está agora. Sem mudança nenhuma, o cartão diz isso (nunca "atualizado").
+        let mudou = false
+        if (pedido.instrucoes !== null && pedido.instrucoes !== agent.instructions) {
+          const saved = await triagem.saveAgent(agentInputOf(agent, pedido.instrucoes))
+          if (!saved.ok) return await failed(TRIAGEM_FALHOU_TEXT)
+          mudou = true
+        }
+        const atual = task.schedule.kind === 'whatsapp-message' ? task.schedule : null
+        if (atual && (pedido.esperaSeg !== null || pedido.grupos !== null)) {
+          const schedule = { kind: 'whatsapp-message' as const, esperaSeg: pedido.esperaSeg ?? atual.esperaSeg, grupos: pedido.grupos ?? atual.grupos }
+          if (schedule.esperaSeg !== atual.esperaSeg || schedule.grupos !== atual.grupos) {
+            const saved = await triagem.saveTask(taskInputOf(task, schedule))
+            if (!saved.ok) return await failed(TRIAGEM_FALHOU_TEXT)
+            mudou = true
+          }
+        }
+        return await done(acao, acao === 'editar' && !mudou ? TRIAGEM_JA_EXISTIA_TEXT : TRIAGEM_AGENTE_RESULT[acao])
+      } catch (error) {
+        deps.log?.(`[assistente] triagem: ${error instanceof Error ? error.message : String(error)}`)
         return { ok: false, error: 'invalid' }
       } finally {
         busy.delete(key)

@@ -1,8 +1,8 @@
 // Contrato das mensagens entre main e renderer. Canal novo entra aqui primeiro: no mapa do
 // sentido certo e na lista de canais permitidos logo abaixo (o preload recusa o que não estiver nela).
 import type { AcpAgentStatus } from './acp'
-import type { ChatActionEventRequest, ChatActionFunilRequest, ChatActionInstagramDraftRequest, ChatActionReminderChangeRequest, ChatActionReminderRequest, ChatActionResult, ChatActionStateRequest, ChatActionTarefaRequest } from './assistant'
-import type { AgentDeleteResult, AgentInput, AgentSaveResult, AgentsList, AutomationEvent, AutomationRun, AutomationRunListItem, AutomationsStatus, RunStartResult, RunStatus, ScheduledTask, TaskInput, TaskSaveResult } from './automations'
+import type { ChatActionEventRequest, ChatActionFunilRequest, ChatActionInstagramDraftRequest, ChatActionReminderChangeRequest, ChatActionReminderRequest, ChatActionResult, ChatActionStateRequest, ChatActionTarefaRequest, ChatActionTriagemRequest } from './assistant'
+import type { AgentDeleteResult, AgentInput, AgentSaveResult, AgentsList, AutomationEvent, AutomationRun, AutomationRunListItem, AutomationsStatus, RunStartResult, RunStatus, ScheduledTask, TaskInput, TaskSaveResult, TaskToggleResult } from './automations'
 import type { DriveMeetingStatus, GoogleAccountStatus, GoogleClientSaveResult, MicrosoftAccountStatus, MicrosoftClientSaveResult } from './accounts'
 import type { CalendarListResult, CalendarView } from './calendar'
 import type { BrandingInfo, BrandLogoChoice } from './branding'
@@ -34,7 +34,7 @@ import type { FunilPropostaAplicarRequest, FunilPropostaAplicarResult, FunilProp
 import type { SugestaoTarefa, TarefaInput, TarefaSalvar, TarefasActionResult, TarefasFalha, TarefasResumoResult, TarefaStatus, TarefasView } from './tarefas'
 // fim 122
 // 134: inicio
-import type { InicioView } from './inicio'
+import type { InicioAtualizarResult, InicioView } from './inicio'
 // fim 134
 // 156: painel de e-mail
 import type { EmailDashboardSuggestionKind, EmailDashboardView } from './email-dashboard'
@@ -58,6 +58,9 @@ import type {
   AtendimentoState,
 } from './atendimento'
 // fim 138
+// 161: triagem
+import type { Etiqueta, EtiquetaPatch, TriagemStatus } from './triagem'
+// fim 161
 import type { AnalysisRunRequest, AnalysisRunResult, MeetingAnalysis } from './meeting-analysis'
 import type { MeetingNote } from './meeting-notes'
 import type { SummaryStatus } from './meeting-summary'
@@ -315,6 +318,8 @@ export interface InvokeChannels {
    * tarefa que fechou ou sumiu vira o cartão `failed`, com a frase.
    */
   'scribe:chat-action-tarefa': { request: ChatActionTarefaRequest; response: ChatActionResult }
+  /** Contrato 163: os cartões da triagem do WhatsApp (criar, editar, pausar e retomar o agente; aplicar a etiqueta). */
+  'scribe:chat-action-triagem': { request: ChatActionTriagemRequest; response: ChatActionResult }
   /** Contrato 21: "Permitir uma vez", "Sempre permitir esta ferramenta" ou "Negar" no cartão de uma ferramenta MCP. */
   'scribe:chat-approval': { request: ChatApprovalAnswer; response: boolean }
   /** Contrato 21: a linha "Conexões" do painel Contexto (os servidores MCP ligados para o chat). */
@@ -576,7 +581,8 @@ export interface InvokeChannels {
   'scribe:tasks-save': { request: TaskInput; response: TaskSaveResult }
   'scribe:tasks-delete': { request: { id: string }; response: boolean }
   /** Interruptor ligado/desligado; ligar tira a pausa automática. */
-  'scribe:tasks-toggle': { request: { id: string; enabled: boolean }; response: ScheduledTask | null }
+  /** Contrato 161: ligar uma segunda triagem devolve `{ ok: false, error }` com a frase da recusa. */
+  'scribe:tasks-toggle': { request: { id: string; enabled: boolean }; response: TaskToggleResult }
   /** "Rodar agora"; se a tarefa já roda, a vez vira `skipped`. */
   'scribe:tasks-run-now': { request: { id: string }; response: RunStartResult }
   /** "Pedir agora": um agente e um pedido, na hora; entra em "Execuções". */
@@ -719,6 +725,8 @@ export interface InvokeChannels {
   'scribe:inicio-get': { request: undefined; response: InicioView }
   /** "Conceder" da linha do Calendário do Mac: pede o acesso, esquece o que leu e devolve a view de novo. */
   'scribe:inicio-mac-acesso': { request: undefined; response: InicioView }
+  /** Contrato 145 (D3): relê na origem a agenda, o Calendário do Mac e as pastas do email; devolve a view de novo. */
+  'scribe:inicio-atualizar': { request: undefined; response: InicioAtualizarResult }
   // fim 134
   // 138: atendimento
   /** Contrato 138: os agentes de atendimento, os atendimentos das conversas, a pausa geral e o aceite do risco. */
@@ -747,6 +755,16 @@ export interface InvokeChannels {
   /** Descartar a proposta da conversa. */
   'scribe:atendimento-draft-discard': { request: { chatId: string }; response: AtendimentoDraftDiscardResult }
   // fim 141
+  // 161: triagem
+  /** Contrato 161: as etiquetas da triagem por conversa e o estado do motor. */
+  'scribe:triagem-list': { request: undefined; response: { etiquetas: Record<string, Etiqueta>; status: TriagemStatus } }
+  /** A escolha do dono numa conversa (urgente e/ou âmbito); o eixo escolhido fica fixo. */
+  'scribe:triagem-set': { request: { chatId: string; patch: EtiquetaPatch }; response: { ok: true; etiqueta: Etiqueta } | { ok: false; error: string } }
+  /** "Triar agora": sem a espera; respeita o interruptor, o agente, o teto do dia e a fila. */
+  'scribe:triagem-run': { request: { chatId: string }; response: { ok: true } | { ok: false; error: 'sem-agente' | 'desligado' | 'pausado' | 'sem-mensagens' | 'teto' | 'ocupado' } }
+  /** Cria (ou religa) o agente e a tarefa do modelo pronto "Triagem do WhatsApp". */
+  'scribe:triagem-create-from-template': { request: undefined; response: { ok: true; agentId: string; taskId: string } | { ok: false; error: string } }
+  // fim 161
 }
 
 /** renderer -> main, sem resposta (`__scribeApi.send` / `ipcMain.on`). */
@@ -916,6 +934,12 @@ export interface MainEvents {
   /** Contrato 141: a resposta agendada, a proposta ou a passagem de uma conversa mudou; relê o runtime. Não chega bloqueado. */
   'scribe:atendimento-changed': { chatId: string }
   // fim 141
+  // 161: triagem
+  /** Contrato 161: a etiqueta de uma conversa mudou (`null`: sem etiqueta). Não chega bloqueado. */
+  'scribe:triagem-changed': { chatId: string; etiqueta: Etiqueta | null }
+  /** Contrato 161: o estado do motor mudou (ligado, agente, pausa, contagem do dia). Não chega bloqueado. */
+  'scribe:triagem-status-changed': TriagemStatus
+  // fim 161
 }
 
 export type InvokeChannel = keyof InvokeChannels
@@ -1009,6 +1033,7 @@ const INVOKE: Record<InvokeChannel, true> = {
   'scribe:chat-action-instagram-draft': true,
   'scribe:chat-action-funil': true,
   'scribe:chat-action-tarefa': true,
+  'scribe:chat-action-triagem': true,
   'scribe:chat-approval': true,
   'scribe:mcp-chat-servers': true,
   'scribe:mcp-overview': true,
@@ -1210,6 +1235,7 @@ const INVOKE: Record<InvokeChannel, true> = {
   // 134: inicio
   'scribe:inicio-get': true,
   'scribe:inicio-mac-acesso': true,
+  'scribe:inicio-atualizar': true,
   // fim 134
   // 138: atendimento
   'scribe:atendimento-state': true,
@@ -1227,6 +1253,12 @@ const INVOKE: Record<InvokeChannel, true> = {
   'scribe:atendimento-draft-send': true,
   'scribe:atendimento-draft-discard': true,
   // fim 141
+  // 161: triagem
+  'scribe:triagem-list': true,
+  'scribe:triagem-set': true,
+  'scribe:triagem-run': true,
+  'scribe:triagem-create-from-template': true,
+  // fim 161
 }
 const RENDERER_EVENTS: Record<RendererEvent, true> = {
   'scribe:csp-violation': true,
@@ -1313,6 +1345,10 @@ const MAIN_EVENTS: Record<MainEvent, true> = {
   // 141: atendimento
   'scribe:atendimento-changed': true,
   // fim 141
+  // 161: triagem
+  'scribe:triagem-changed': true,
+  'scribe:triagem-status-changed': true,
+  // fim 161
 }
 
 /**
@@ -1450,6 +1486,8 @@ export const WHEN_LOCKED: Readonly<Record<InvokeChannel, LockedPolicy>> = Object
   // Contrato 117: os cartões do funil, recusados com o app bloqueado como os outros cartões.
   'scribe:chat-action-funil': 'refused',
   'scribe:chat-action-tarefa': 'refused',
+  // Contrato 163: os cartões da triagem, recusados com o app bloqueado como os outros cartões.
+  'scribe:chat-action-triagem': 'refused',
   // Contrato 21: as conexões MCP não aparecem nem mudam com o app bloqueado; o cartão sem resposta nega em 2 min.
   'scribe:chat-approval': 'refused',
   'scribe:mcp-chat-servers': 'refused',
@@ -1667,6 +1705,7 @@ export const WHEN_LOCKED: Readonly<Record<InvokeChannel, LockedPolicy>> = Object
   // 134: inicio (D10: recusados; o `scribe:inicio-changed` só sai desbloqueado)
   'scribe:inicio-get': 'refused',
   'scribe:inicio-mac-acesso': 'refused',
+  'scribe:inicio-atualizar': 'refused',
   // fim 134
   // 138: atendimento (recusados, como o resto do WhatsApp)
   'scribe:atendimento-state': 'refused',
@@ -1684,6 +1723,12 @@ export const WHEN_LOCKED: Readonly<Record<InvokeChannel, LockedPolicy>> = Object
   'scribe:atendimento-draft-send': 'refused',
   'scribe:atendimento-draft-discard': 'refused',
   // fim 141
+  // 161: triagem (recusados; o motor continua etiquetando com o app bloqueado)
+  'scribe:triagem-list': 'refused',
+  'scribe:triagem-set': 'refused',
+  'scribe:triagem-run': 'refused',
+  'scribe:triagem-create-from-template': 'refused',
+  // fim 161
 })
 
 /**

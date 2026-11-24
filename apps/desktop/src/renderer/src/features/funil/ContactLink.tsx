@@ -1,37 +1,17 @@
 import { Plus } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router'
-import { FUNIL_TRANSPORTE_TEXTO, type Contato, type ContatoOrigem, type FunilView } from '@shared/funil'
-import { mesmoTelefone, normalizarEmail, semAcento } from '@shared/funil-logic'
+import { FUNIL_TRANSPORTE_TEXTO, type ContatoOrigem, type FunilView } from '@shared/funil'
+import { contatoLigado, semAcento, type ContatoAlvo } from '@shared/funil-logic'
 import { funilPath } from '@shared/routes'
 import { rereadWhenUnlocked } from '../../app/lockStore'
 import { ActionButton } from '../../design/ActionButton'
 import { useFunil } from './funilStore'
 import { FUNIL_LINK_CLASS } from './Timeline'
 
-/** Quem acha o contato: o e-mail (normalizado), o telefone (E.164) ou a conversa do WhatsApp. */
-export interface ContatoAlvo {
-  email?: string | null | undefined
-  telefone?: string | null | undefined
-  whatsappChatId?: string | null | undefined
-}
-
-/**
- * O contato não arquivado ligado ao alvo (contrato 116, R35 a R37): primeiro pela conversa do WhatsApp, depois pelo e-mail
- * e por último pelo telefone (com e sem o nono dígito, R3). Sem nenhum, `null`.
- */
-export function contatoLigado(contatos: readonly Contato[], alvo: ContatoAlvo): Contato | null {
-  const ativos = contatos.filter((contato) => !contato.arquivado)
-  const chatId = alvo.whatsappChatId ?? null
-  const email = alvo.email ? normalizarEmail(alvo.email) : null
-  const telefone = alvo.telefone ?? null
-  return (
-    (chatId !== null ? ativos.find((contato) => contato.whatsappChatId === chatId) : undefined) ??
-    (email !== null ? ativos.find((contato) => contato.emails.some((item) => normalizarEmail(item) === email)) : undefined) ??
-    (telefone !== null ? ativos.find((contato) => contato.telefones.some((item) => mesmoTelefone(item, telefone))) : undefined) ??
-    null
-  )
-}
+// Contrato 159: `contatoLigado` e `ContatoAlvo` moram em `shared/funil-logic.ts`; ficam exportados daqui para quem já os
+// importava deste arquivo.
+export { contatoLigado, type ContatoAlvo }
 
 /** Os dois nomes são o mesmo (contrato 131, R5): sem acento, sem caixa, sem espaço nas pontas e com espaços simples. */
 export function mesmoNome(a: string, b: string): boolean {

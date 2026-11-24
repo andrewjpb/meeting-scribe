@@ -21,6 +21,8 @@ export interface TranscriptsCache {
   set(chatId: string, messageId: string, text: string): Promise<string>
   /** O arquivo foi apagado ("Sair da conta", "Remover"): esquece o que estava lido. */
   forget(): void
+  /** Contrato 147: sobe a cada `set` e `forget`; o export do Assistente reescreve a conversa quando muda. */
+  version(): number
 }
 
 const keyOf = (chatId: string, messageId: string): string => `${chatId}\n${messageId}`
@@ -31,6 +33,7 @@ export const clipTranscript = (text: string): string => text.trim().slice(0, WHA
 export function createTranscriptsCache(file: string, now: () => number = Date.now): TranscriptsCache {
   /** O arquivo lido uma vez; cada "Transcrever" atualiza a cópia junto com o disco. */
   let loaded: TranscriptsFile | null = null
+  let version = 0
   async function read(): Promise<TranscriptsFile> {
     if (loaded) return loaded
     try {
@@ -65,6 +68,7 @@ export function createTranscriptsCache(file: string, now: () => number = Date.no
         await rename(temp, file)
         await chmod(file, 0o600)
         loaded = kept
+        version++
         return clipped
       })
       queue = task.catch(() => undefined)
@@ -73,6 +77,11 @@ export function createTranscriptsCache(file: string, now: () => number = Date.no
 
     forget() {
       loaded = null
+      version++
+    },
+
+    version() {
+      return version
     },
   }
 }

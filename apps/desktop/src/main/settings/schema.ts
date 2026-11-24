@@ -171,6 +171,10 @@ const lenientEmailDashboardSchema = z
     model: z.enum(EMAIL_DASHBOARD_MODELS).catch(D.emailDashboard.model),
   })
   .catch(() => ({ ...D.emailDashboard }))
+/** Contrato 149 (ia-midia, R8): pelo renderer, o objeto inteiro; outro campo recusa o pedido. */
+const assistantPatchSchema = z.object({ media: z.boolean() }).strict()
+/** No arquivo: o arquivo de antes do 149 (sem o campo) ganha o padrão, ligado. */
+const lenientAssistantSchema = z.object({ media: z.boolean().catch(D.assistant.media) }).catch(() => ({ ...D.assistant }))
 
 const lenientSchema = z.object({
   translationEnabled: z.boolean().catch(D.translationEnabled),
@@ -196,6 +200,7 @@ const lenientSchema = z.object({
   whatsappNotifications: z.boolean().catch(D.whatsappNotifications),
   whatsappNotifyGroups: z.boolean().catch(D.whatsappNotifyGroups),
   whatsappTypingSignal: z.boolean().catch(D.whatsappTypingSignal),
+  whatsappTriagem: z.boolean().catch(D.whatsappTriagem),
   identifySpeakers: z.boolean().catch(D.identifySpeakers),
   meetSpeakers: z.boolean().catch(D.meetSpeakers),
   meetingPrompt: z.boolean().catch(D.meetingPrompt),
@@ -235,6 +240,7 @@ const lenientSchema = z.object({
   tarefas: lenientTarefasSchema,
   inicio: lenientInicioSchema,
   emailDashboard: lenientEmailDashboardSchema,
+  assistant: lenientAssistantSchema,
 })
 
 const patchSchema = z
@@ -259,6 +265,7 @@ const patchSchema = z
     whatsappNotifications: z.boolean(),
     whatsappNotifyGroups: z.boolean(),
     whatsappTypingSignal: z.boolean(),
+    whatsappTriagem: z.boolean(),
     identifySpeakers: z.boolean(),
     meetSpeakers: z.boolean(),
     meetingPrompt: z.boolean(),
@@ -294,6 +301,7 @@ const patchSchema = z
     tarefas: tarefasPatchSchema,
     inicio: inicioPatchSchema,
     emailDashboard: emailDashboardPatchSchema,
+    assistant: assistantPatchSchema,
   })
   .partial()
   .strict()

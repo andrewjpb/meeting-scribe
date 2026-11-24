@@ -216,3 +216,32 @@ export function railScrollTarget(rail: RailBox & { scrollTop: number }, section:
   if (section.height >= rail.height || start < rail.scrollTop) return Math.max(0, start)
   return end - rail.height
 }
+
+/** Contrato 151: o tipo de mídia de um passo, para o ícone dele. */
+export type MediaStepKind = 'image' | 'pdf' | 'text' | 'audio' | 'attachment'
+
+/**
+ * Contrato 151: os rótulos que o main manda nos passos de mídia (contrato 149): o pedido à ferramenta ("Abrindo uma imagem
+ * «…»", "Transcrevendo um áudio «…»", "Lendo um anexo «…»", e "Abrindo uma mídia" enquanto roda) e a leitura do arquivo
+ * aberto ("Vendo a imagem aberta", "Lendo o PDF aberto", "Lendo o texto da mídia", que pode ser transcrição ou texto de
+ * anexo: fica com o ícone de texto).
+ */
+const MEDIA_STEP_LABELS: readonly (readonly [string, MediaStepKind])[] = [
+  ['Abrindo uma imagem', 'image'],
+  ['Abrindo uma mídia', 'image'],
+  ['Vendo a imagem aberta', 'image'],
+  ['Abrindo um PDF', 'pdf'],
+  ['Lendo o PDF aberto', 'pdf'],
+  ['Lendo o texto da mídia', 'text'],
+  ['Transcrevendo um áudio', 'audio'],
+  ['Lendo um anexo', 'attachment'],
+]
+
+/** Contrato 151: o passo é de mídia? O rótulo inteiro, ou seguido de " «lugar»" ou de ": falhou"; fora disso, `null`. */
+export function mediaStepKind(step: { tool: string; label: string }): MediaStepKind | null {
+  if (step.tool !== 'Read') return null
+  for (const [prefix, kind] of MEDIA_STEP_LABELS) {
+    if (step.label === prefix || step.label.startsWith(`${prefix} «`) || step.label.startsWith(`${prefix}:`)) return kind
+  }
+  return null
+}

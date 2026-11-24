@@ -27,6 +27,10 @@
 // Contrato 141: o agente de atendimento envia por `agentSend`, só com a `AgentSendProof` que a autoridade da montagem
 // do app entrega ao serviço de atendimento; o cliente confere e gasta a prova. Esse envio não passa pela correção do
 // contrato 35. O "digitando…" do agente (`agentPresence`) segue o interruptor do atendimento, não o da tela.
+//
+// Contrato 149: as ferramentas de mídia do Assistente leem daqui o recorte da pergunta (`exportedMedia`: a mídia de uma
+// conversa exportada para aquela pasta) e transcrevem por `assistantTranscribe`, que aceita também a fala de um vídeo e
+// guarda o texto como o "Transcrever" da tela; `media()` e `transcribe()` da tela não mudam.
 import { randomBytes, randomUUID } from 'node:crypto'
 import { existsSync } from 'node:fs'
 import { chmod, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
@@ -38,6 +42,7 @@ import { createVault, type Vault } from '../accounts/vault'
 import { FileTranscriptError } from '../assemblyai/transcript'
 import type { MeetingSummary } from '../../shared/meeting-summary'
 import type { Meeting } from '../../shared/meetings'
+import type { Etiqueta } from '../../shared/triagem'
 import {
   WHATSAPP_CHAT_ID_PATTERN,
   WHATSAPP_DRAFT_INSTRUCTION_MAX,
@@ -61,7 +66,8 @@ import {
   type WhatsAppTranscribeResult,
 } from '../../shared/whatsapp'
 import { createBridgeClient, probeInstance, WhatsAppServiceError, type BridgeClient, type WhatsAppHealth } from './client'
-import { dayLines, exportChats, exportRecentWith, recentMessages, type ExportCache } from './export'
+import { ASSISTANT_MEDIA_AUDIO_DOWNLOADED_BYTES_MAX } from '../../shared/assistant'
+import { dayLines, exportChats, exportedMedia, exportRecentWith, recentMessages, savedTranscripts, type ExportCache, type ExportedChatMedia } from './export'
 import { draftInput } from './draft'
 import { copyBridge, installBridge, isInstalled, removeBridge, WHATSAPP_PATHS, type Exec, type PackageIndex } from './install'
 import { killBridgePid, startBridge, type BridgeBackend, type BridgeProcess, type SpawnBridge } from './process'
@@ -152,6 +158,11 @@ export interface WhatsAppServiceDeps {
   onPresence?: (presence: WhatsAppPresence) => void
   /** Contrato 34: "Mostrar quando estou digitando" (padrão desligado); sem ela, o "digitando…" da sua conta nunca sai. */
   typingEnabled?: () => Promise<boolean>
+  /**
+   * Contrato 161: "Sair da conta" e "Remover" apagam as etiquetas da triagem (`triagem.json`); antes, quem guarda o cache
+   * delas o esquece (no app, o `clear()` do store da triagem).
+   */
+  onForget?: () => Promise<void> | void
   log?: (message: string) => void
   now?: () => number
 }
@@ -192,6 +203,8 @@ export interface WhatsAppService {
   findChat(chatId: string): Promise<WhatsAppChat | null>
   /** Contrato 32 (Detalhes): as últimas `max` mensagens da conversa. Só leitura; nunca zera as não lidas. */
   lastMessages(chatId: string, max: number): Promise<WhatsAppMessage[]>
+  /** Contrato 147: a transcrição já guardada de um áudio (`transcripts.json`), ou `null`. Nunca baixa nem transcreve. */
+  savedTranscript(chatId: string, messageId: string): Promise<string | null>
   /** O preload registrou um clique de "Enviar" desta janela. */
   registerClick(senderId: number, token: unknown): void
   /**
@@ -217,11 +230,18 @@ export interface WhatsAppService {
   exportChats(folder: string, chatIds: readonly string[], days: number): Promise<string[]>
   /**
    * Assistente (contrato 25, CA2): as conversas dos últimos 14 dias e o resumo delas, relendo só as que têm mensagem
-   * nova desde o último export daquela pasta. Só leitura; conectado.
+   * nova desde o último export daquela pasta. Só leitura; conectado. Contrato 163: com as etiquetas da triagem no resumo.
    */
-  exportRecent(folder: string): Promise<string[]>
+  exportRecent(folder: string, etiquetas?: Readonly<Record<string, Etiqueta>>): Promise<string[]>
   /** A lista de conversas lida pela última exportação (até 2 min), ou lida agora: o nome nos cartões do Assistente. */
   knownChats(): Promise<WhatsAppChat[]>
+  /** Contrato 149 (CA5): a mídia, se a conversa está num arquivo exportado para esta pasta e a mensagem está nele. */
+  exportedMedia(folder: string, chatId: string, messageId: string): Promise<ExportedChatMedia | null>
+  /**
+   * Contrato 149: a transcrição para o Assistente: a guardada, ou o áudio (ou a fala do vídeo) baixado e transcrito na
+   * AssemblyAI, e guardado. Só com a função de mídia ligada (quem chama confere).
+   */
+  assistantTranscribe(chatId: string, messageId: string): Promise<WhatsAppTranscribeResult>
   /** Resumo e análise: as mensagens do dia da conversa ligada, se a opção estiver ligada. */
   meetingMaterial(meetingId: string): Promise<string[]>
   /** Excluir a reunião: a ligação sai. */
@@ -294,6 +314,11 @@ export function createWhatsAppService(deps: WhatsAppServiceDeps): WhatsAppServic
   const mediaRequests = new Map<string, Promise<WhatsAppMediaResult>>()
   const transcribeRequests = new Map<string, Promise<WhatsAppTranscribeResult>>()
   const transcripts = createTranscriptsCache(join(deps.root, WHATSAPP_PATHS.transcripts), now)
+  /** Contrato 161: as etiquetas da triagem saem junto com as mensagens (o cache primeiro, depois o arquivo). */
+  const forgetTriagem = async (): Promise<void> => {
+    await Promise.resolve(deps.onForget?.()).catch(() => deps.log?.('[whatsapp] não deu para esquecer as etiquetas da triagem'))
+    await rm(join(deps.root, WHATSAPP_PATHS.triagem), { force: true })
+  }
   /** Sobe a cada "Sair da conta" e "Remover": a transcrição que terminar depois não grava nada. */
   let generation = 0
 
@@ -507,12 +532,17 @@ export function createWhatsAppService(deps: WhatsAppServiceDeps): WhatsAppServic
     return done
   }
 
-  async function transcribeNow(chatId: string, messageId: string): Promise<WhatsAppTranscribeResult> {
+  /**
+   * Contrato 149: `assistant` também aceita a fala de um vídeo (só o Assistente pede) e confere os bytes do áudio baixado
+   * contra o teto dos 30 minutos (a duração e o tamanho declarados vêm de quem mandou): acima, `too-big` sem ir à AssemblyAI.
+   */
+  async function transcribeNow(chatId: string, messageId: string, assistant = false): Promise<WhatsAppTranscribeResult> {
     if (!deps.transcribe) return { ok: false, error: 'failed' }
     const started = generation
     const media = await download(chatId, messageId)
     if (!media.ok) return media
-    if (!media.mime.startsWith('audio/')) return { ok: false, error: 'unavailable' }
+    if (!media.mime.startsWith('audio/') && !(assistant && media.mime.startsWith('video/'))) return { ok: false, error: 'unavailable' }
+    if (assistant && media.mime.startsWith('audio/') && media.bytes.byteLength > ASSISTANT_MEDIA_AUDIO_DOWNLOADED_BYTES_MAX) return { ok: false, error: 'too-big' }
     let text: string
     try {
       text = await deps.transcribe(media.bytes)
@@ -635,6 +665,7 @@ export function createWhatsAppService(deps: WhatsAppServiceDeps): WhatsAppServic
         await rm(root(WHATSAPP_PATHS.insights), { force: true })
         await rm(root(WHATSAPP_PATHS.transcripts), { force: true })
         transcripts.forget()
+        await forgetTriagem()
         photos.clear()
         // Sessão apagada: o serviço sobe de novo, pronto para um pareamento novo.
         await stopNow(false)
@@ -649,6 +680,7 @@ export function createWhatsAppService(deps: WhatsAppServiceDeps): WhatsAppServic
         vault.remove()
         await removeBridge(deps.root)
         transcripts.forget()
+        await forgetTriagem()
         pendingRisk.install = null
         pendingRisk.pair = null
         chatNames = new Map()
@@ -731,6 +763,10 @@ export function createWhatsAppService(deps: WhatsAppServiceDeps): WhatsAppServic
     async lastMessages(chatId, max) {
       if (!client || !chatIdSchema.safeParse(chatId).success) return []
       return recentMessages(client, chatId, 0, max, now() + 1)
+    },
+
+    savedTranscript(chatId, messageId) {
+      return transcripts.get(chatId, messageId).catch(() => null)
     },
 
     registerClick(senderId, token) {
@@ -878,7 +914,7 @@ export function createWhatsAppService(deps: WhatsAppServiceDeps): WhatsAppServic
       if (!chat) return { ok: false, error: 'chat' }
       const messages = await current.messages(chat.id, { before: now() + 1, limit: 40 }).catch((): WhatsAppMessage[] => [])
       const meeting = parsed.data.meetingId ? await deps.meeting(parsed.data.meetingId).catch(() => null) : null
-      const result = await deps.draft(draftInput(chat.name, parsed.data.instruction, messages, meeting))
+      const result = await deps.draft(draftInput(chat.name, parsed.data.instruction, messages, meeting, await savedTranscripts(messages, transcripts)))
       if (result.ok) return { ok: true, text: result.content }
       return { ok: false, error: result.error === 'format' ? 'failed' : result.error }
     },
@@ -905,12 +941,12 @@ export function createWhatsAppService(deps: WhatsAppServiceDeps): WhatsAppServic
       const ids = chatIds.filter((id) => chatIdSchema.safeParse(id).success).slice(0, WHATSAPP_SCOPE_CHATS_MAX)
       const list = await client.chats()
       listRead = { at: now(), chats: list }
-      return exportChats(client, folder, ids, days, now(), exportCache, list)
+      return exportChats(client, folder, ids, days, now(), exportCache, list, transcripts)
     },
 
-    async exportRecent(folder) {
+    async exportRecent(folder, etiquetas) {
       if (!client || health?.state !== 'connected') return []
-      const result = await exportRecentWith(client, folder, now(), exportCache)
+      const result = await exportRecentWith(client, folder, now(), exportCache, transcripts, etiquetas)
       listRead = { at: now(), chats: result.chats }
       return result.files
     },
@@ -920,13 +956,31 @@ export function createWhatsAppService(deps: WhatsAppServiceDeps): WhatsAppServic
       return this.chats()
     },
 
+    exportedMedia(folder, chatId, messageId) {
+      if (!chatIdSchema.safeParse(chatId).success || !messageIdSchema.safeParse(messageId).success) return Promise.resolve(null)
+      return exportedMedia(exportCache, folder, chatId, messageId)
+    },
+
+    async assistantTranscribe(chatId, messageId) {
+      if (!chatIdSchema.safeParse(chatId).success || !messageIdSchema.safeParse(messageId).success) return { ok: false, error: 'unavailable' }
+      const saved = await transcripts.get(chatId, messageId)
+      if (saved !== null) return { ok: true, text: saved }
+      // Chave própria: o teto e o vídeo do Assistente nunca respondem por um "Transcrever" da tela em curso, e vice-versa.
+      const key = `${chatId}\n${messageId}\nassistente`
+      const running = transcribeRequests.get(key)
+      if (running) return running
+      const done = transcribeNow(chatId, messageId, true).finally(() => transcribeRequests.delete(key))
+      transcribeRequests.set(key, done)
+      return done
+    },
+
     async meetingMaterial(meetingId) {
       if (!client) return []
       const link = (await readLinks())[meetingId]
       if (!link?.useInSummary) return []
       const found = await deps.meeting(meetingId).catch(() => null)
       if (!found) return []
-      return dayLines(client, link.chatId, found.meeting.startedAt).catch(() => [])
+      return dayLines(client, link.chatId, found.meeting.startedAt, transcripts).catch(() => [])
     },
 
     async removeMeeting(meetingId) {

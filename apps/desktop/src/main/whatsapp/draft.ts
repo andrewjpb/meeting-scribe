@@ -27,7 +27,14 @@ export function draftSystemPrompt(): string {
   ].join('\n')
 }
 
-export function draftInput(chatName: string, instruction: string, messages: readonly WhatsAppMessage[], meeting: { meeting: Meeting; summary: MeetingSummary | null } | null): string {
+/** Contrato 147: `transcripts` são as transcrições guardadas dos áudios, por id da mensagem (sem o id da mídia). */
+export function draftInput(
+  chatName: string,
+  instruction: string,
+  messages: readonly WhatsAppMessage[],
+  meeting: { meeting: Meeting; summary: MeetingSummary | null } | null,
+  transcripts: ReadonlyMap<string, string> = new Map(),
+): string {
   const meetingLines = meeting
     ? [
         `Título: ${meeting.meeting.title}`,
@@ -45,7 +52,7 @@ export function draftInput(chatName: string, instruction: string, messages: read
     '</instrucao>',
     '',
     `<conversa nome="${escapeTurnText(chatName.replace(/"/g, "'"))}">`,
-    ...messages.slice(-DRAFT_CONTEXT_MESSAGES).map((message) => escapeTurnText(messageLine(message))),
+    ...messages.slice(-DRAFT_CONTEXT_MESSAGES).map((message) => escapeTurnText(messageLine(message, { transcript: transcripts.get(message.id) }))),
     '</conversa>',
     ...taggedBlock('reuniao', meetingLines),
     '',

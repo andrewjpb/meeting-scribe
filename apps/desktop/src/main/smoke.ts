@@ -128,7 +128,8 @@ import { DRIVE_ROOT_FOLDER_NAME } from '../shared/accounts'
 import { WHATSAPP_EXPORT_PREFIX, WHATSAPP_FIXED_WARNING, WHATSAPP_PAIR_HINT, WHATSAPP_RISK_CHECKBOX, WHATSAPP_RISK_TEXT, WHATSAPP_RISK_TITLE } from '../shared/whatsapp'
 import { INSIGHTS_MOOD_NOTE } from '../shared/whatsapp-insights'
 import { ASSEMBLYAI_DASHBOARD_URL } from '../shared/assemblyai'
-import { formatRunAt } from '../shared/automations'
+import { formatRunAt, type AgentsList, type AutomationRun, type AutomationRunListItem, type ScheduledTask, type TaskInput, type TaskSaveResult } from '../shared/automations'
+import { TRIAGEM_AGENT_NAME, TRIAGEM_ESPERA_SEG, type Etiqueta } from '../shared/triagem'
 import { INVOKE_CHANNELS, WHEN_LOCKED, type CspViolation } from '../shared/ipc'
 // 73: comentários
 import { REDES_COMMENT_CLICK_MESSAGE } from '../shared/ipc'
@@ -147,6 +148,8 @@ import {
   FUNIL_AVISAR_NAME,
   FUNIL_DETECTAR_NAME,
   FUNIL_DIAS_NAME,
+  ASSISTANT_MEDIA_DESCRIPTION,
+  ASSISTANT_MEDIA_NAME,
   FUNIL_SECTION,
   INICIO_AGENDA_NAME,
   INICIO_AUTOMACOES_NAME,
@@ -178,6 +181,8 @@ import { BRANDING_DIR } from './branding/service'
 import { summaryInput, summaryLines } from './claude-cli/summary'
 import { MENU_IDS } from './menu'
 import { CHAT_CORPUS_DIR, CHAT_INDEX_FILE, CHAT_SCOPE_DIR, corpusFileSuffix } from './chat/corpus'
+import { MEDIA_FILE_PREFIX } from './chat/media-files'
+import { MEDIA_ACTION_REFUSAL } from './chat/service'
 import { AUTOMATIONS_FILE, EMAIL_SEARCH_FILE, FUNIL_FILE as FUNIL_MD_FILE, GUIDE_FILE, isSourceFile, REDES_FILE, REDES_PUBLICATIONS_FILE, STATE_FILE, TAREFAS_FILE as TAREFAS_MD_FILE } from './chat/sources'
 import { CHAT_EVENTS_FILE } from './chat/events-store'
 import { CHATS_DIR } from './chat/store'
@@ -292,6 +297,17 @@ const SCREENS = [
   'tarefas-hoje',
   // Contrato 135 (D14): a tela Início pela barra lateral, logo depois de Tarefas, com o dia do Calendário do Mac semeado.
   'inicio-dia',
+  // Contrato 164: fotografadas pelo `triagemChecks` (depois do atendimento), não pelo laço dos temas: as Notificações, o
+  // WhatsApp com as abas e os chips, a aba Urgentes sem agente, o formulário da tarefa da triagem e o cartão do Assistente.
+  'notificacoes',
+  'whatsapp-triagem',
+  'whatsapp-triagem-vazio',
+  'automacoes-tarefa-whatsapp',
+  'assistente-cartao-triagem',
+  // Contrato 164 (auditoria dos prints): as Notificações com email e WhatsApp (no `notificacoesEmailCheck`, com a conta do
+  // email falso) e a seção "Chat e resumo" com o interruptor da triagem (no `midiaChecks`, que já fotografava o claro).
+  'notificacoes-email',
+  'configuracoes-claude-midia',
 ] as const
 /** Tempo de gravação até a fita encher a largura da janela (uma coluna a cada 50 ms). */
 const TAPE_FILL_MS = 12_500
@@ -3784,6 +3800,90 @@ async function inicioDedupeCheck(win: BrowserWindow, ctx: SmokeContext): Promise
   }
 }
 
+// --- Contrato 146: o "Atualizar" do topo e a linha dos emails não lidos ---------------------------------------------
+
+/**
+ * Contrato 146 (CA10a): no Início já carregado, o "Atualizar" existe, está no teclado (sem `tabindex` negativo) e
+ * habilitado; clicado, passa por desabilitado (um observador no botão registra) e volta a habilitar com "Atualizar", e o
+ * `[data-inicio-atualizado]` traz o `atualizadoEm` novo, sem o aviso de falha. Só números e booleanos no detalhe.
+ */
+async function inicioAtualizarCheck(contents: WebContents): Promise<Check> {
+  const BOTAO = `document.querySelector('[data-inicio-screen] [data-action="inicio-atualizar"]')`
+  const QUANDO = `document.querySelector('[data-inicio-atualizado]')?.dataset.inicioAtualizado`
+  const comHora = await waitFor(contents, `${routeIs('inicio')} && ${QUANDO}`, 8000)
+  const antes = await evaluate<string>(contents, `${QUANDO} ?? ''`)
+  const botao = await evaluate<{ existe: boolean; noTeclado: boolean; habilitado: boolean; rotulo: string }>(
+    contents,
+    `(() => {
+      const el = ${BOTAO}
+      return { existe: Boolean(el), noTeclado: Boolean(el) && el.tabIndex >= 0, habilitado: Boolean(el) && !el.disabled, rotulo: el?.textContent ?? '' }
+    })()`,
+  )
+  // O "Atualizando…" pode durar pouco: o observador marca se o botão chegou a ficar desabilitado com ele.
+  await evaluate(
+    contents,
+    `(() => {
+      window.__inicioAtualizando = false
+      const el = ${BOTAO}
+      if (!el) return false
+      const marca = () => { if (el.disabled && el.textContent.includes('Atualizando…')) window.__inicioAtualizando = true }
+      new MutationObserver(marca).observe(el, { attributes: true, childList: true, subtree: true, characterData: true })
+      return true
+    })()`,
+  )
+  if (botao.existe) await clickSelector(contents, '[data-inicio-screen] [data-action="inicio-atualizar"]')
+  const voltou =
+    botao.existe &&
+    (await waitFor(contents, `${QUANDO} && ${QUANDO} !== ${JSON.stringify(antes)} && !${BOTAO}.disabled && ${BOTAO}.textContent === 'Atualizar'`, 10_000))
+  const passouPorAtualizando = await evaluate<boolean>(contents, 'window.__inicioAtualizando === true')
+  const semFalha = await evaluate<boolean>(contents, `!document.querySelector('[data-inicio-atualizar-falhou]')`)
+  return {
+    ok: comHora && botao.existe && botao.noTeclado && botao.habilitado && botao.rotulo === 'Atualizar' && passouPorAtualizando && voltou && semFalha,
+    detail: JSON.stringify({ comHora, ...botao, passouPorAtualizando, horaNovaEHabilitado: voltou, semFalha }),
+  }
+}
+
+/**
+ * Contrato 146 (CA10b, spec CA2): com a conta do servidor de email falso conectada, um email não lido entregue pelo falso
+ * aparece no Início sem clique nem foco em até 5 s: a linha `[data-inicio-nao-lidos]` passa ao total da view mais um, com o
+ * texto no singular ou no plural, e "Atualizado às" muda. A caixa do smoke já tem não lidos a essa altura (as sementes e
+ * os emails dos roteiros anteriores), então o número esperado é o de antes mais um, não 1 fixo. Roda por último: o email
+ * entregue fica na caixa e nenhuma verificação depois dela conta mensagens.
+ */
+async function inicioNaoLidosCheck(ctx: SmokeContext, watch: (win: BrowserWindow) => void): Promise<Check> {
+  const win = ctx.openWindow({ theme: 'light' })
+  watch(win)
+  await loadAndWait(win)
+  const contents = win.webContents
+  await clickNav(contents, 'inicio')
+  const QUANDO = `document.querySelector('[data-inicio-atualizado]')?.dataset.inicioAtualizado`
+  const aberto = await waitFor(contents, `${routeIs('inicio')} && ${QUANDO}`, 8000)
+  const conta = await evaluate<boolean>(contents, `window.__scribeApi.invoke('scribe:email-accounts').then((list) => list.some((status) => status.state === 'connected'), () => false)`)
+  const antes = await evaluate<number>(contents, `window.__scribeApi.invoke('scribe:inicio-get').then((view) => view.pendencias.emailsNaoLidos, () => -1)`)
+  const linhaAntes = await evaluate<string>(contents, `document.querySelector('[data-inicio-nao-lidos]')?.dataset.inicioNaoLidos ?? '0'`)
+  const horaAntes = await evaluate<string>(contents, `${QUANDO} ?? ''`)
+  const esperado = antes + 1
+  const texto = `${esperado} ${esperado === 1 ? 'email não lido' : 'emails não lidos'}`
+  const desde = Date.now()
+  await ctx.fixtures.email.deliver({ from: { name: 'Paulo Nunes', address: 'paulo.nunes@cliente.example' }, subject: 'Chegou com o Início à vista', text: 'Uma mensagem nova para o Início contar.' })
+  const apareceu = await waitFor(
+    contents,
+    `(() => {
+      const linha = document.querySelector('[data-inicio-nao-lidos]')
+      return linha?.dataset.inicioNaoLidos === ${JSON.stringify(String(esperado))} && linha.textContent.trim() === ${JSON.stringify(texto)}
+    })()`,
+    5000,
+  )
+  const ms = Date.now() - desde
+  const horaMudou = await evaluate<boolean>(contents, `(${QUANDO} ?? '') !== ${JSON.stringify(horaAntes)}`)
+  const naRota = await evaluate<boolean>(contents, routeIs('inicio'))
+  win.destroy()
+  return {
+    ok: aberto && conta && antes >= 0 && linhaAntes === String(antes) && apareceu && horaMudou && naRota,
+    detail: JSON.stringify({ aberto, contaConectada: conta, naoLidosAntes: antes, linhaAntes: linhaAntes === String(antes), apareceu, ms, horaMudou, naRota }),
+  }
+}
+
 // --- Contrato 136: tela inicial, estados menores e a Section "Início" -----------------------------------------------
 
 /**
@@ -3794,7 +3894,8 @@ async function inicioDedupeCheck(win: BrowserWindow, ctx: SmokeContext): Promise
 async function inicioAberturaCheck(contents: WebContents): Promise<Check> {
   const rota = await waitFor(contents, `${routeIs('inicio')} && document.querySelector('[data-inicio-sem-eventos]')`, 8000)
   // As pendências da view: na abertura (antes dos roteiros de WhatsApp, agendas e email, que rodam depois do laço dos
-  // temas) nenhuma fonte tem o que responder; qualquer sobra aparece aqui pelo nome da fonte, sem contagem.
+  // temas) nenhuma fonte tem o que responder; qualquer sobra aparece aqui pelo nome da fonte, sem contagem. Contrato 146:
+  // `emailsNaoLidos` entra na mesma conta e fica em zero porque a conta do email falso só é adicionada em `emailChecks`.
   const pendenciasComAlgo = await evaluate<string[]>(
     contents,
     `window.__scribeApi.invoke('scribe:inicio-get').then((view) => Object.entries(view.pendencias).filter(([, n]) => n !== null && n > 0).map(([fonte]) => fonte), () => ['erro'])`,
@@ -7623,6 +7724,728 @@ async function atendimentoChecks(ctx: SmokeContext, watch: (win: BrowserWindow) 
   }
 }
 
+// Contrato 164: a triagem do WhatsApp e as Notificações. O `claude` falso etiqueta pela última mensagem da conversa
+// ("hoje", "urgente" ou "prazo" é urgente) e pela linha do funil (contato do funil é profissional). Nenhum destes textos,
+// nenhum nome de contato e nenhum motivo pode aparecer no detalhe dos checks nem no log da triagem.
+const TRIAGEM_TEXTS = {
+  oi: 'Oi! Tudo certo por aí?',
+  briefing: 'Mandei o briefing por e-mail.',
+  orcamento: 'Preciso do orçamento até hoje.',
+  casual: 'tudo bem?',
+  minha: 'Já te respondo, um minuto.',
+  desligado: 'Chegou mais um arquivo.',
+  ultima: 'Combinado, falamos amanhã.',
+} as const
+/** Os checks da triagem, na ordem do roteiro. */
+const TRIAGEM_CHECKS = ['semAgente', 'unicidade', 'triagem', 'notificacoes', 'manual', 'respondeu', 'assistente', 'desligado', 'privacidade', 'estadoFinal'] as const
+/** Os termos que nunca podem sair no detalhe dos checks nem no log da triagem (o texto da mensagem e o nome da conversa). */
+const TRIAGEM_PROIBIDOS = ['orçamento', 'Ana', ...Object.values(TRIAGEM_TEXTS)]
+const WA_TRIAGEM_LISTA = `document.querySelectorAll('[data-whatsapp-chat]').length === 3`
+
+/** Um check que, se o roteiro quebrar no meio, falha com o erro em vez de parar o smoke (o erro nunca leva texto de mensagem). */
+async function triagemStep(checks: Record<string, Check>, name: (typeof TRIAGEM_CHECKS)[number], run: () => Promise<Check>): Promise<void> {
+  try {
+    checks[name] = await run()
+  } catch (error) {
+    const message = String((error as Error)?.message ?? error).slice(0, 200)
+    checks[name] = { ok: false, detail: `parou com erro: ${TRIAGEM_PROIBIDOS.some((term) => message.includes(term)) ? '(erro com texto da conversa omitido)' : message}` }
+  }
+}
+
+/** Espera `test` dar `true` (no processo principal), até `ms`. */
+async function triagemUntil(test: () => Promise<boolean>, ms: number): Promise<boolean> {
+  const deadline = Date.now() + ms
+  for (;;) {
+    if (await test()) return true
+    if (Date.now() >= deadline) return false
+    await wait(200)
+  }
+}
+
+/**
+ * Contrato 164 (notificacoes-triagem), numa janela clara (e escuras à parte, para os prints), com o WhatsApp falso
+ * conectado e o `claude` falso pela linha de comando, logo depois do atendimento:
+ * - `semAgente`: a aba Urgentes sem agente ("Criar agente de triagem"), o clique que cria a tarefa `whatsapp-message` com o
+ *   agente "Triagem do WhatsApp" e leva a Automações › Agendamentos, o formulário da tarefa (espera, grupos, aviso, sem a
+ *   prévia) e a espera de 5 s gravada para o resto do roteiro;
+ * - `unicidade`: uma segunda tarefa `whatsapp-message` ligada é recusada pelas Automações;
+ * - `triagem`: 3 mensagens da Ana (contato do funil, criado aqui) viram uma triagem só, com a etiqueta Urgente ·
+ *   Profissional, a execução `whatsapp` sem texto de mensagem e os chips na lista;
+ * - `notificacoes`: a tela com as linhas do WhatsApp e do email, o número da barra lateral e o clique que abre a conversa;
+ * - `manual`: o âmbito escolhido à mão (Pessoal) vale sobre o do agente na triagem seguinte;
+ * - `respondeu`: "Urgente" à mão e a resposta minha, sem triagem nova;
+ * - `assistente`: o cartão `triagem-etiqueta` pelo agente ACP falso e o "Aplicar";
+ * - `desligado`: com o interruptor desligado, nenhuma triagem e o estado vazio "desligado";
+ * - `privacidade`: nenhum texto de mensagem nem nome de contato no detalhe dos checks e no log da triagem.
+ * Termina (`estadoFinal`) sem a tarefa da triagem, sem o agente se foi criado aqui, sem a etiqueta da Ana, sem o contato do
+ * funil ligado a ela, com o interruptor ligado, o transporte de antes e a última mensagem da Ana minha e lida.
+ */
+async function triagemChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => void, checks: Record<string, Check>, shots: Screenshot[]): Promise<void> {
+  const win = ctx.openWindow({ theme: 'light' })
+  watch(win)
+  await loadAndWait(win)
+  const contents = win.webContents
+  const invoke = <T>(script: string): Promise<T> => evaluate<T>(contents, script)
+  const api = <T>(channel: string, request?: unknown): Promise<T> => invoke<T>(`window.__scribeApi.invoke(${JSON.stringify(channel)}${request === undefined ? '' : `, ${JSON.stringify(request)}`})`)
+  const shot = async (name: string): Promise<void> => {
+    await settle(contents)
+    shots.push(await capture(win, ctx.outDir, name))
+  }
+  /** O print escuro numa janela à parte: `prepare` leva a tela ao estado do print claro. */
+  const darkShot = async (name: string, prepare: (target: WebContents) => Promise<boolean>): Promise<boolean> => {
+    const dark = ctx.openWindow({ theme: 'dark' })
+    watch(dark)
+    try {
+      await loadAndWait(dark)
+      const ready = await prepare(dark.webContents)
+      await evaluate(dark.webContents, `document.activeElement instanceof HTMLElement && document.activeElement.blur(), true`)
+      await settle(dark.webContents)
+      shots.push(await capture(dark, ctx.outDir, name))
+      return ready && (await evaluate<string>(dark.webContents, `document.documentElement.dataset.theme ?? ''`)) === 'dark'
+    } finally {
+      dark.destroy()
+    }
+  }
+  const etiquetaDe = async (chatId: string): Promise<Etiqueta | null> => (await api<{ etiquetas: Record<string, Etiqueta> }>('scribe:triagem-list')).etiquetas[chatId] ?? null
+  const triagemRuns = async (): Promise<AutomationRunListItem[]> => (await api<AutomationRunListItem[]>('scribe:runs-list', {})).filter((run) => run.trigger === 'whatsapp')
+  const triagemTasks = async (): Promise<ScheduledTask[]> => (await ctx.automations.listTasks()).filter((task) => task.schedule.kind === 'whatsapp-message')
+  const esperaDe = (task: ScheduledTask | undefined): number => (task?.schedule.kind === 'whatsapp-message' ? task.schedule.esperaSeg : -1)
+  const incoming = async (text: string, fromMe = false): Promise<string> => ((await ctx.whatsapp.fake('incoming', { chatId: WA_ANA, text, ...(fromMe ? { fromMe: true } : {}) })) as { id?: string }).id ?? ''
+  const openWhatsApp = async (target: WebContents): Promise<boolean> => {
+    await clickNav(target, 'whatsapp')
+    return waitFor(target, `${routeIs('whatsapp')} && ${WA_TRIAGEM_LISTA}`, 8000)
+  }
+  const openAba = async (target: WebContents, aba: string): Promise<boolean> => {
+    await clickSelector(target, `[data-triagem-aba-opcao="${aba}"]`)
+    return waitFor(target, `document.querySelector('[data-triagem-aba-opcao="${aba}"]')?.getAttribute('aria-pressed') === 'true'`)
+  }
+  const openTaskForm = async (target: WebContents, taskId: string): Promise<boolean> => {
+    await waitFor(target, `document.querySelector('[data-task-row="${taskId}"] [data-action="task-edit"]')`, 8000)
+    await clickSelector(target, `[data-task-row="${taskId}"] [data-action="task-edit"]`)
+    return waitFor(target, `document.querySelector('[data-task-form] [data-task-frequency="whatsapp-message"]')`, 8000)
+  }
+  const openAnaChat = async (target: WebContents): Promise<boolean> => {
+    await clickSelector(target, `[data-whatsapp-chat="${WA_ANA}"]`)
+    return waitFor(target, `document.querySelector('[data-whatsapp-conversation="${WA_ANA}"]') && document.querySelector('[data-triagem-bar]')`, 8000)
+  }
+
+  // O log da triagem (devLog do main), só as linhas `[triagem]`, para o check de privacidade.
+  const triagemLog: string[] = []
+  const consoleLog = console.log
+  console.log = (...args: unknown[]): void => {
+    const line = args.map(String).join(' ')
+    if (line.startsWith('[triagem]')) triagemLog.push(line)
+    consoleLog(...args)
+  }
+  const transportBefore = readSettings(ctx.userDataDir).claudeTransport
+  await api('scribe:settings-update', { claudeTransport: 'cli' })
+  const agentsBefore = new Set((await api<AgentsList>('scribe:agents-list')).agents.map((agent) => agent.id))
+  let contatoId: string | null = null
+  let assistantChat = ''
+
+  try {
+    // 1. A aba Urgentes sem agente, "Criar agente de triagem", o formulário da tarefa e a espera mínima.
+    await triagemStep(checks, 'semAgente', async () => {
+      const lista = await openWhatsApp(contents)
+      await openAba(contents, 'urgentes')
+      const vazio = await waitFor(contents, `document.querySelector('[data-triagem-vazio="sem-agente"] [data-triagem-criar]')`, 8000)
+      await shot('whatsapp-triagem-vazio-light')
+      const vazioEscuro = await darkShot('whatsapp-triagem-vazio-dark', async (target) => {
+        await openWhatsApp(target)
+        await openAba(target, 'urgentes')
+        return waitFor(target, `document.querySelector('[data-triagem-vazio="sem-agente"] [data-triagem-criar]')`, 8000)
+      })
+      const antes = (await triagemTasks()).length
+      await clickSelector(contents, '[data-triagem-criar]')
+      const rota = await waitFor(contents, `${routeIs('automacoes')} && document.querySelector('[data-automations-tab="tarefas"] [data-tasks-tab]')`, 8000)
+      const tasks = await triagemTasks()
+      const task = tasks[0]
+      const agent = (await api<AgentsList>('scribe:agents-list')).agents.find((item) => item.id === task?.agentId)
+      const form = task ? await openTaskForm(contents, task.id) : false
+      const campos = await invoke<{ espera: string; grupos: string; aviso: boolean; previa: boolean }>(
+        `({ espera: document.querySelector('[data-task-espera]')?.value ?? '', grupos: document.querySelector('[data-task-grupos]')?.dataset.taskGrupos ?? '', aviso: Boolean(document.querySelector('[data-task-whatsapp-aviso]')), previa: Boolean(document.querySelector('[data-task-preview]')) })`,
+      )
+      // O quadro mostra o aviso do que o agente lê (o formulário rolado até o "Salvar agendamento").
+      const ROLA_FORM = `document.querySelector('[data-action="task-save"]')?.scrollIntoView({ block: 'end' }), true`
+      await evaluate(contents, ROLA_FORM)
+      await evaluate(contents, `document.activeElement instanceof HTMLElement && document.activeElement.blur(), true`)
+      await shot('automacoes-tarefa-whatsapp-light')
+      const formEscuro = await darkShot('automacoes-tarefa-whatsapp-dark', async (target) => {
+        await clickNav(target, 'automacoes')
+        await waitFor(target, routeIs('automacoes'), 8000)
+        await clickSelector(target, '[data-tab="tarefas"]')
+        await waitFor(target, `document.querySelector('[data-automations-tab="tarefas"] [data-tasks-tab]')`, 8000)
+        const aberto = task ? await openTaskForm(target, task.id) : false
+        await evaluate(target, ROLA_FORM)
+        return aberto
+      })
+      // A espera mínima (5 s) para o resto do roteiro, salva pelo formulário.
+      await setValue(contents, '[data-task-espera]', String(TRIAGEM_ESPERA_SEG.min))
+      await clickSelector(contents, '[data-action="task-save"]')
+      const fechou = await waitFor(contents, `!document.querySelector('[data-task-form]')`, 8000)
+      const espera = await triagemUntil(async () => esperaDe((await triagemTasks())[0]) === TRIAGEM_ESPERA_SEG.min, 5000)
+      const view = {
+        lista,
+        vazioSemAgente: vazio,
+        vazioEscuro,
+        tarefasAntes: antes,
+        tarefasDepois: tasks.length,
+        habilitada: task?.enabled === true,
+        agenteDoModelo: agent?.name === TRIAGEM_AGENT_NAME,
+        agenteNovo: agent ? !agentsBefore.has(agent.id) : false,
+        rotaAgendamentos: rota,
+        formulario: form,
+        esperaPadrao: campos.espera === String(TRIAGEM_ESPERA_SEG.padrao),
+        gruposDesligado: campos.grupos === 'off',
+        aviso: campos.aviso,
+        semPrevia: !campos.previa,
+        formularioEscuro: formEscuro,
+        salvo: fechou,
+        esperaMinima: espera,
+      }
+      return {
+        ok: lista && vazio && vazioEscuro && antes === 0 && tasks.length === 1 && view.habilitada && view.agenteDoModelo && rota && form && view.esperaPadrao && view.gruposDesligado && view.aviso && view.semPrevia && formEscuro && fechou && espera,
+        detail: JSON.stringify(view),
+      }
+    })
+
+    // 2. Uma segunda tarefa "Quando chega mensagem do WhatsApp" ligada é recusada.
+    await triagemStep(checks, 'unicidade', async () => {
+      const task = (await triagemTasks())[0]
+      if (!task) return { ok: false, detail: JSON.stringify({ tarefa: false }) }
+      const input: TaskInput = {
+        id: null,
+        name: 'Segunda triagem',
+        agentId: task.agentId,
+        message: task.message,
+        schedule: task.schedule,
+        timezone: task.timezone,
+        enabled: true,
+        runOnce: task.runOnce,
+        runOnceAction: task.runOnceAction,
+        timeoutS: task.timeoutS,
+        notify: task.notify,
+        output: task.output,
+      }
+      const result = await api<TaskSaveResult>('scribe:tasks-save', input)
+      const recusada = !result.ok && result.error.startsWith('Já existe um agente de triagem ativo')
+      const tarefas = (await triagemTasks()).length
+      return { ok: recusada && tarefas === 1, detail: JSON.stringify({ recusada, tarefas }) }
+    })
+
+    // 3. Três mensagens da Ana em menos de 5 s: uma triagem só (o debounce), Urgente · Profissional, a execução sem texto.
+    await triagemStep(checks, 'triagem', async () => {
+      const contato = await api<{ ok: boolean; id?: string | null }>('scribe:funil-contato-save', { contato: { nome: 'Ana Souza', emails: [], telefones: ['+55 11 91111-0000'], whatsappChatId: WA_ANA }, origem: 'manual' })
+      contatoId = contato.ok ? (contato.id ?? null) : null
+      const runsAntes = (await triagemRuns()).length
+      const inicio = Date.now()
+      await incoming(TRIAGEM_TEXTS.oi)
+      await wait(400)
+      await incoming(TRIAGEM_TEXTS.briefing)
+      await wait(400)
+      const ultima = await incoming(TRIAGEM_TEXTS.orcamento)
+      const injetadasEmMs = Date.now() - inicio
+      const etiquetada = await triagemUntil(async () => (await etiquetaDe(WA_ANA))?.lastMessageId === ultima, 20_000)
+      // Mais um pouco: "uma triagem só" quer dizer que nenhuma outra chega depois.
+      await wait(1500)
+      const etiqueta = await etiquetaDe(WA_ANA)
+      const runs = await triagemRuns()
+      const run = runs[0] ? await api<AutomationRun | null>('scribe:runs-get', { id: runs[0].id }) : null
+      await openWhatsApp(contents)
+      await openAba(contents, 'todas')
+      const chips = await waitFor(contents, `[...document.querySelectorAll('[data-whatsapp-chat="${WA_ANA}"] [data-triagem-chip]')].map((el) => el.dataset.triagemChip).join(',') === 'urgente,profissional'`, 8000)
+      const contagem = await waitFor(contents, `document.querySelector('[data-triagem-aba-opcao="urgentes"]')?.textContent === 'Urgentes (1)'`, 8000)
+      const view = {
+        contatoDoFunil: contatoId !== null,
+        injetadasEmMs,
+        etiquetada,
+        urgente: etiqueta?.urgente === true,
+        profissional: etiqueta?.ambito === 'profissional',
+        origemAgente: etiqueta?.origem === 'agente',
+        execucoes: runs.length - runsAntes,
+        statusOk: run?.status === 'ok',
+        promptSemTexto: run !== null && !run.prompt.includes('orçamento') && !Object.values(TRIAGEM_TEXTS).some((value) => run.prompt.includes(value)),
+        chipsNaOrdem: chips,
+        contagemUrgentes: contagem,
+      }
+      return {
+        ok: view.contatoDoFunil && injetadasEmMs < 5000 && etiquetada && view.urgente && view.profissional && view.origemAgente && view.execucoes === 1 && view.statusOk && view.promptSemTexto && chips && contagem,
+        detail: JSON.stringify(view),
+      }
+    })
+
+    // 4. Notificações: as linhas por origem, o número da barra lateral, o chip Urgente e o clique que abre a conversa.
+    await triagemStep(checks, 'notificacoes', async () => {
+      await clickNav(contents, 'notificacoes')
+      const tela = await waitFor(contents, `${routeIs('notificacoes')} && document.querySelector('[data-notificacoes-screen]')`, 8000)
+      const chats = await api<{ id: string; kind: string; unread: number }[]>('scribe:whatsapp-chats')
+      const grupos = (await api<{ whatsappNotifyGroups: boolean }>('scribe:settings-get')).whatsappNotifyGroups
+      const comNaoLidas = chats.filter((chat) => chat.unread > 0 && (chat.kind !== 'group' || grupos))
+      const naoLidasWhatsApp = comNaoLidas.reduce((sum, chat) => sum + chat.unread, 0)
+      const contas = (await api<{ state: string; account: { id: string } }[]>('scribe:email-accounts')).filter((status) => status.state === 'connected')
+      let emailsNaoLidos = 0
+      for (const conta of contas) emailsNaoLidos += (await api<{ seen: boolean }[]>('scribe:email-messages', { accountId: conta.account.id, folder: 'inbox' })).filter((message) => !message.seen).length
+      const total = naoLidasWhatsApp + emailsNaoLidos
+      // O número sem o " por ler" do leitor de tela (o `sr-only` fica dentro do mesmo `span`).
+      const BADGE = `(document.querySelector('${SIDEBAR_ROOT} [data-nav="notificacoes"] [data-nav-badge]')?.firstChild?.textContent ?? '')`
+      const linhas = await waitFor(
+        contents,
+        `document.querySelectorAll('[data-notificacao^="whatsapp:"]').length === ${comNaoLidas.length} && document.querySelectorAll('[data-notificacao^="email:"]').length === ${emailsNaoLidos} && ${BADGE} === ${JSON.stringify(total > 0 ? String(total) : '')}`,
+        8000,
+      )
+      const urgente = await invoke<boolean>(`Boolean(document.querySelector('[data-notificacao="whatsapp:${WA_ANA}"] [data-notificacao-urgente]'))`)
+      await evaluate(contents, `document.activeElement instanceof HTMLElement && document.activeElement.blur(), true`)
+      await shot('notificacoes-light')
+      const escuro = await darkShot('notificacoes-dark', async (target) => {
+        await clickNav(target, 'notificacoes')
+        return waitFor(target, `${routeIs('notificacoes')} && document.querySelector('[data-notificacao="whatsapp:${WA_ANA}"] [data-notificacao-urgente]')`, 8000)
+      })
+      // "Marcar como lida" na primeira linha de email (sem conta de email conectada a esta altura do roteiro, não há linha:
+      // o check `notificacoesEmail`, depois das telas de email, faz esse clique).
+      let marcada = false
+      if (emailsNaoLidos > 0) {
+        await invoke(`document.querySelector('[data-notificacao^="email:"]')?.closest('li')?.querySelector('[data-notificacao-lida]')?.click(), true`)
+        marcada = await waitFor(contents, `document.querySelectorAll('[data-notificacao^="email:"]').length === ${emailsNaoLidos - 1} && ${BADGE} === ${JSON.stringify(total - 1 > 0 ? String(total - 1) : '')}`, 8000)
+      }
+      await clickSelector(contents, `[data-notificacao="whatsapp:${WA_ANA}"]`)
+      const abriu = await waitFor(contents, `${routeIs('whatsapp')} && document.querySelector('[data-whatsapp-conversation="${WA_ANA}"]')`, 8000)
+      const view = { tela, linhasWhatsApp: comNaoLidas.length, linhasEmail: emailsNaoLidos, badge: total, contagensCertas: linhas, chipUrgente: urgente, escuro, marcarComoLidaExercitado: emailsNaoLidos > 0, marcada, abriuAConversa: abriu }
+      return {
+        ok: tela && comNaoLidas.some((chat) => chat.id === WA_ANA) && linhas && urgente && escuro && (emailsNaoLidos === 0 || marcada) && abriu,
+        detail: JSON.stringify(view),
+      }
+    })
+
+    // 5. O âmbito à mão (Pessoal) prevalece: a triagem seguinte (o falso diria profissional) não muda.
+    await triagemStep(checks, 'manual', async () => {
+      const barra = await waitFor(contents, `document.querySelector('[data-whatsapp-conversation="${WA_ANA}"]') && document.querySelector('[data-triagem-bar]')`, 8000)
+      await clickSelector(contents, '[data-triagem-ambito="pessoal"]')
+      const fixado = await triagemUntil(async () => {
+        const etiqueta = await etiquetaDe(WA_ANA)
+        return etiqueta?.ambito === 'pessoal' && etiqueta.ambitoFixo
+      }, 5000)
+      const todas = await invoke<boolean>(`document.querySelector('[data-triagem-aba-opcao="todas"]')?.getAttribute('aria-pressed') === 'true'`)
+      const chips = await waitFor(contents, `[...document.querySelectorAll('[data-whatsapp-chat="${WA_ANA}"] [data-triagem-chip]')].map((el) => el.dataset.triagemChip).join(',') === 'urgente,pessoal'`, 5000)
+      await evaluate(contents, `document.activeElement instanceof HTMLElement && document.activeElement.blur(), true`)
+      await shot('whatsapp-triagem-light')
+      const escuro = await darkShot('whatsapp-triagem-dark', async (target) => {
+        await openWhatsApp(target)
+        return openAnaChat(target)
+      })
+      const runsAntes = (await triagemRuns()).length
+      const id = await incoming(TRIAGEM_TEXTS.casual)
+      const triada = await triagemUntil(async () => (await etiquetaDe(WA_ANA))?.lastMessageId === id, 20_000)
+      const etiqueta = await etiquetaDe(WA_ANA)
+      const runs = (await triagemRuns()).length
+      const view = { barra, fixadoAMao: fixado, abaTodas: todas, chips, escuro, triada, ambitoPessoal: etiqueta?.ambito === 'pessoal', ambitoFixo: etiqueta?.ambitoFixo === true, urgente: etiqueta?.urgente === true, execucoes: runs, novas: runs - runsAntes }
+      return {
+        ok: barra && fixado && todas && chips && escuro && triada && view.ambitoPessoal && view.ambitoFixo && etiqueta?.urgente === false && runs === 2 && view.novas === 1,
+        detail: JSON.stringify(view),
+      }
+    })
+
+    // 6. "Urgente" à mão (sem triagem nova) e a resposta minha, que tira o urgente (sem triagem nova).
+    await triagemStep(checks, 'respondeu', async () => {
+      const runsAntes = (await triagemRuns()).length
+      await clickSelector(contents, '[data-triagem-urgente]')
+      const marcado = await triagemUntil(async () => {
+        const etiqueta = await etiquetaDe(WA_ANA)
+        return etiqueta?.urgente === true && etiqueta.urgenteFixo
+      }, 5000)
+      const pressionado = await waitFor(contents, `document.querySelector('[data-triagem-urgente]')?.getAttribute('aria-pressed') === 'true'`)
+      await incoming(TRIAGEM_TEXTS.minha, true)
+      const tirado = await triagemUntil(async () => {
+        const etiqueta = await etiquetaDe(WA_ANA)
+        return etiqueta?.urgente === false && !etiqueta.urgenteFixo
+      }, 8000)
+      // Bem mais que a espera da tarefa (5 s): nenhuma triagem sai da resposta minha.
+      await wait(10_000)
+      const runs = (await triagemRuns()).length
+      const view = { urgenteAMao: marcado, ariaPressed: pressionado, respostaTiraUrgente: tirado, execucoes: runs, novas: runs - runsAntes }
+      return { ok: marcado && pressionado && tirado && runs === 2 && view.novas === 0, detail: JSON.stringify(view) }
+    })
+
+    // 7. O cartão `triagem-etiqueta` do Assistente (agente ACP falso) e o "Aplicar".
+    await triagemStep(checks, 'assistente', async () => {
+      await api('scribe:settings-update', { claudeTransport: 'acp' })
+      await showAssistantLevel(contents)
+      await clickSelector(contents, '[data-action="chat-new"]')
+      await waitFor(contents, `document.querySelector('[data-chat-input]') && !document.querySelector('[data-chat-message]')`)
+      const before = await invoke<number>(`document.querySelectorAll('[data-chat-message="assistant"]:not([data-chat-streaming])').length`)
+      await setValue(contents, '[data-chat-input]', 'Marque a conversa com a Ana como urgente')
+      await pressEnterIn(contents, '[data-chat-input]')
+      const respondeu = await waitFor(contents, `${CHAT_DONE} && document.querySelectorAll('[data-chat-message="assistant"]:not([data-chat-streaming])').length > ${before}`, 40_000)
+      assistantChat = await invoke<string>(`document.querySelector('[data-chat-conversation]')?.getAttribute('data-chat-conversation') ?? ''`)
+      const CARD = `[...document.querySelectorAll('[data-chat-action-kind="triagem-etiqueta"]')].at(-1)`
+      const proposto = await waitFor(contents, `${CARD}?.dataset.chatActionStatus === 'proposed'`, 8000)
+      const antes = (await etiquetaDe(WA_ANA))?.urgente === false
+      await evaluate(contents, `document.activeElement instanceof HTMLElement && document.activeElement.blur(), true`)
+      await shot('assistente-cartao-triagem-light')
+      const escuro = await darkShot('assistente-cartao-triagem-dark', async (target) => {
+        await showAssistantLevel(target)
+        await waitFor(target, `document.querySelector('${chatRow(assistantChat)}')`, 8000)
+        // A linha da conversa é um `li`; quem abre é o botão dela.
+        await clickSelector(target, `${chatRow(assistantChat)} button`)
+        return waitFor(target, `[...document.querySelectorAll('[data-chat-action-kind="triagem-etiqueta"]')].at(-1)?.dataset.chatActionStatus === 'proposed'`, 8000)
+      })
+      await evaluate(contents, `${CARD}?.querySelector('[data-action="chat-action-triagem-aplicar"]')?.click(), true`)
+      const feito = await waitFor(contents, `${CARD}?.dataset.chatActionStatus === 'done'`, 8000)
+      const aplicado = await triagemUntil(async () => (await etiquetaDe(WA_ANA))?.urgente === true, 5000)
+      await api('scribe:settings-update', { claudeTransport: 'cli' })
+      const view = { respondeu, cartao: proposto, urgenteAntes: antes, escuro, done: feito, urgenteDepois: aplicado }
+      return { ok: respondeu && proposto && antes && escuro && feito && aplicado, detail: JSON.stringify(view) }
+    })
+
+    // 8. Interruptor desligado: a mensagem nova não é triada e a aba Urgentes vazia diz "desligada".
+    await triagemStep(checks, 'desligado', async () => {
+      const limpa = await api<{ ok: boolean }>('scribe:triagem-set', { chatId: WA_ANA, patch: { urgente: false, ambito: null } })
+      await api('scribe:settings-update', { whatsappTriagem: false })
+      const runsAntes = (await triagemRuns()).length
+      await incoming(TRIAGEM_TEXTS.desligado)
+      await wait(10_000)
+      const runs = (await triagemRuns()).length
+      await openWhatsApp(contents)
+      await openAba(contents, 'urgentes')
+      const vazio = await waitFor(contents, `document.querySelector('[data-triagem-vazio="desligado"] [data-triagem-configuracoes]')`, 8000)
+      await openAba(contents, 'todas')
+      const religado = (await api<{ whatsappTriagem: boolean }>('scribe:settings-update', { whatsappTriagem: true })).whatsappTriagem
+      const view = { etiquetaLimpa: limpa.ok, novas: runs - runsAntes, vazioDesligado: vazio, religado }
+      return { ok: limpa.ok && runs === runsAntes && vazio && religado, detail: JSON.stringify(view) }
+    })
+  } finally {
+    // Como estava: sem a tarefa da triagem (e sem o agente, se foi criado aqui), sem a etiqueta da Ana, o contato do funil
+    // desligado dela e arquivado (o contrato 116 liga a Ana a um contato novo pelo "+ Contato"), o interruptor ligado, o
+    // transporte de antes e a última mensagem da Ana minha e lida (o Assistente, depois, a conta como respondida).
+    await triagemStep(checks, 'estadoFinal', async () => {
+      await api('scribe:settings-update', { whatsappTriagem: true, claudeTransport: transportBefore === 'acp' ? 'acp' : 'cli' })
+      for (const task of await triagemTasks()) await api('scribe:tasks-delete', { id: task.id })
+      const criados = (await api<AgentsList>('scribe:agents-list')).agents.filter((agent) => !agentsBefore.has(agent.id) && agent.name === TRIAGEM_AGENT_NAME)
+      for (const agent of criados) await api('scribe:agents-delete', { id: agent.id })
+      if (contatoId) {
+        await api('scribe:funil-contato-save', { contato: { id: contatoId, nome: 'Ana Souza', emails: [], telefones: [], whatsappChatId: null }, origem: 'manual' })
+        await api('scribe:funil-contato-archive', { id: contatoId })
+      }
+      await api('scribe:triagem-set', { chatId: WA_ANA, patch: { urgente: false, ambito: null } })
+      await incoming(TRIAGEM_TEXTS.ultima, true)
+      let ultimaMinha = false
+      for (let attempt = 0; attempt < 50 && !ultimaMinha; attempt++) {
+        ultimaMinha = await invoke<boolean>(`window.__scribeApi.invoke('scribe:whatsapp-messages', { chatId: '${WA_ANA}' }).then((list) => list.at(-1)?.fromMe === true && list.at(-1)?.text === ${JSON.stringify(TRIAGEM_TEXTS.ultima)})`)
+        if (!ultimaMinha) await wait(100)
+      }
+      await wait(500)
+      const etiqueta = await etiquetaDe(WA_ANA)
+      const funil = contatoId ? (await api<{ state?: { contatos: { id: string; arquivado: boolean; whatsappChatId: string | null; telefones: string[] }[] } }>('scribe:funil-get')).state?.contatos.find((item) => item.id === contatoId) : undefined
+      const view = {
+        tarefas: (await triagemTasks()).length,
+        agentesCriadosAqui: (await api<AgentsList>('scribe:agents-list')).agents.filter((agent) => !agentsBefore.has(agent.id)).length,
+        semChips: etiqueta === null || (!etiqueta.urgente && etiqueta.ambito === null),
+        contatoDesligado: contatoId === null || (funil?.arquivado === true && funil.whatsappChatId === null && funil.telefones.length === 0),
+        interruptor: readSettings(ctx.userDataDir).whatsappTriagem !== false,
+        transporte: readSettings(ctx.userDataDir).claudeTransport === (transportBefore === 'acp' ? 'acp' : 'cli'),
+        ultimaMinha,
+      }
+      return { ok: view.tarefas === 0 && view.agentesCriadosAqui === 0 && view.semChips && view.contatoDesligado && view.interruptor && view.transporte && ultimaMinha, detail: JSON.stringify(view) }
+    })
+    console.log = consoleLog
+    win.destroy()
+  }
+
+  // 9. Nenhum texto de mensagem nem nome de contato no detalhe dos checks e no log da triagem.
+  const detalhes = JSON.stringify(checks)
+  const vazados = TRIAGEM_PROIBIDOS.filter((term) => detalhes.includes(term)).length
+  const logVazado = triagemLog.filter((line) => TRIAGEM_PROIBIDOS.some((term) => line.includes(term)) || line.includes('pede o') || line.includes('conversa casual')).length
+  checks['privacidade'] = {
+    // Uma linha "etiquetada" por triagem no caminho feliz (checks 3 e 5): sem as duas, o log não foi capturado.
+    ok: vazados === 0 && logVazado === 0 && triagemLog.length >= 2,
+    detail: JSON.stringify({ detailLimpo: vazados === 0, linhasDoLog: triagemLog.length, logLimpo: logVazado === 0 }),
+  }
+}
+
+/**
+ * Contrato 164 (check 4, "Marcar como lida"): na triagem não há conta de email conectada; aqui, depois das telas de email
+ * (com a conta do servidor falso), o clique na primeira linha de email das Notificações tira a linha e baixa o número da
+ * barra lateral em 1. O email volta a não lido no fim (os roteiros seguintes contam a caixa como estava).
+ */
+async function notificacoesEmailCheck(ctx: SmokeContext, watch: (win: BrowserWindow) => void, shots: Screenshot[]): Promise<Check> {
+  const win = ctx.openWindow({ theme: 'light' })
+  watch(win)
+  await loadAndWait(win)
+  const contents = win.webContents
+  const EMAIL_ROWS = `document.querySelectorAll('[data-notificacao^="email:"]').length`
+  // O número sem o " por ler" do leitor de tela (o `sr-only` fica dentro do mesmo `span`).
+  const BADGE = `(document.querySelector('${SIDEBAR_ROOT} [data-nav="notificacoes"] [data-nav-badge]')?.firstChild?.textContent ?? '')`
+  let restored = true
+  try {
+    await clickNav(contents, 'notificacoes')
+    await showRoot(contents)
+    const tela = await waitFor(contents, `${routeIs('notificacoes')} && ${EMAIL_ROWS} > 0 && document.querySelector('${SIDEBAR_ROOT} [data-nav="notificacoes"] [data-nav-badge]')`, 10_000)
+    const linhas = await evaluate<number>(contents, EMAIL_ROWS)
+    const badge = Number(await evaluate<string>(contents, BADGE)) || 0
+    const linhasWhatsApp = await evaluate<number>(contents, `document.querySelectorAll('[data-notificacao^="whatsapp:"]').length`)
+    // Os prints com as duas origens e o ponteiro sobre a primeira linha de email (o hover mostra "Marcar como lida").
+    const pairar = async (target: WebContents): Promise<boolean> => {
+      const point = await evaluate<{ x: number; y: number } | null>(
+        target,
+        `(() => { const r = document.querySelector('[data-notificacao^="email:"]')?.getBoundingClientRect(); return r ? { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) } : null })()`,
+      )
+      if (!point) return false
+      target.sendInputEvent({ type: 'mouseMove', x: point.x, y: point.y })
+      return waitFor(target, `getComputedStyle(document.querySelector('[data-notificacao^="email:"]').closest('li').querySelector('[data-notificacao-lida]')).opacity === '1'`, 3000)
+    }
+    const hoverClaro = await pairar(contents)
+    await settle(contents)
+    shots.push(await capture(win, ctx.outDir, 'notificacoes-email-light'))
+    const dark = ctx.openWindow({ theme: 'dark' })
+    watch(dark)
+    let hoverEscuro = false
+    try {
+      await loadAndWait(dark)
+      await clickNav(dark.webContents, 'notificacoes')
+      await waitFor(dark.webContents, `${routeIs('notificacoes')} && ${EMAIL_ROWS} === ${linhas} && document.querySelectorAll('[data-notificacao^="whatsapp:"]').length === ${linhasWhatsApp}`, 10_000)
+      hoverEscuro = await pairar(dark.webContents)
+      await settle(dark.webContents)
+      shots.push(await capture(dark, ctx.outDir, 'notificacoes-email-dark'))
+    } finally {
+      dark.destroy()
+    }
+    const alvo = await evaluate<string>(contents, `document.querySelector('[data-notificacao^="email:"]')?.dataset.notificacao ?? ''`)
+    const [, accountId = '', ...rest] = alvo.split(':')
+    const id = rest.join(':')
+    await evaluate(contents, `document.querySelector('[data-notificacao^="email:"]')?.closest('li')?.querySelector('[data-notificacao-lida]')?.click(), true`)
+    const saiu = await waitFor(contents, `!document.querySelector(${JSON.stringify(`[data-notificacao="${alvo}"]`)}) && ${EMAIL_ROWS} === ${linhas - 1}`, 8000)
+    const baixou = await waitFor(contents, `${BADGE} === ${JSON.stringify(badge - 1 > 0 ? String(badge - 1) : '')}`, 8000)
+    if (accountId && id) restored = await evaluate<boolean>(contents, `window.__scribeApi.invoke('scribe:email-mark-read', ${JSON.stringify({ accountId, id, seen: false })}).then((ok) => ok === true, () => false)`)
+    const view = { tela, linhas, linhasWhatsApp, badge, hoverClaro, hoverEscuro, linhaSaiu: saiu, badgeBaixou1: baixou, devolvidoANaoLido: restored }
+    return { ok: tela && linhas > 0 && hoverClaro && hoverEscuro && saiu && baixou && restored, detail: JSON.stringify(view) }
+  } finally {
+    win.destroy()
+  }
+}
+
+/**
+ * Contrato 151 (ia-midia), numa janela clara, com o WhatsApp falso conectado, a conta do email falso e o agente ACP falso: a
+ * primeira vez que as ferramentas de mídia do contrato 149 rodam de ponta a ponta. Numa conversa nova do Assistente:
+ * - `imagem` (CA4): "o que tem na imagem do Bruno?" faz o agente pedir `ver_midia_whatsapp` da imagem dele (os ids saem dos
+ *   arquivos da pasta); o `Midia - WhatsApp - ….png` aparece na pasta, o passo "Abrindo uma imagem" (com o ícone de imagem,
+ *   CA3) e a resposta final;
+ * - `audio` (CA5): um áudio novo do Bruno (o antigo já foi transcrito pelo clique do contrato 37) e "transcreva o áudio do
+ *   Bruno": `transcrever_audio_whatsapp`, uma chamada à AssemblyAI falsa e o passo "Transcrevendo um áudio"; a mesma
+ *   pergunta de novo não transcreve outra vez;
+ * - `acaoRecusada` (CA7): "abra a imagem do Bruno e crie a pasta …": depois da imagem, o `criar_pasta` é recusado pelo app
+ *   (nenhuma pasta nova no servidor falso) e a resposta final chega;
+ * - `configuracoes` (CA1, CA2): a linha "A IA pode abrir imagens e transcrever áudios" logo depois de "Modelo do chat",
+ *   ligada, com a descrição; o print `configuracoes-claude-midia-light` (CA8);
+ * - `desligado` (CA6): o interruptor desligado pela tela grava `assistant.media = false`; a mesma pergunta da imagem não
+ *   gera arquivo de mídia nem transcrição, e os `Midia - …` da pasta somem; religado pela tela, volta a `true`.
+ * Só números, booleanos e os textos fixos do serviço falso no detalhe.
+ */
+async function midiaChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => void, checks: Record<string, Check>, shots: Screenshot[]): Promise<void> {
+  const fake = ctx.fixtures.email
+  const win = ctx.openWindow({ theme: 'light' })
+  watch(win)
+  await loadAndWait(win)
+  const contents = win.webContents
+  const transportBefore = readSettings(ctx.userDataDir).claudeTransport
+  await evaluate(contents, "window.__scribeApi.invoke('scribe:settings-update', { claudeTransport: 'acp' }).then(() => true)")
+  await showAssistantLevel(contents)
+  await clickSelector(contents, '[data-action="chat-new"]')
+  await waitFor(contents, `document.querySelector('[data-chat-input]') && !document.querySelector('[data-chat-message]')`)
+
+  /** Como o `askChat`, com mais tempo: as rodadas de ferramenta e a AssemblyAI falsa demoram mais que uma resposta só. */
+  const ask = async (question: string): Promise<{ done: boolean; answer: string }> => {
+    const before = await evaluate<number>(contents, `document.querySelectorAll('[data-chat-message="assistant"]:not([data-chat-streaming])').length`)
+    await setValue(contents, '[data-chat-input]', question)
+    await pressEnterIn(contents, '[data-chat-input]')
+    const done = await waitFor(contents, `${CHAT_DONE} && document.querySelectorAll('[data-chat-message="assistant"]:not([data-chat-streaming])').length > ${before}`, 40_000)
+    return { done, answer: await evaluate<string>(contents, LAST_ANSWER) }
+  }
+  let chatId = ''
+  const scopeDir = (): string => join(ctx.userDataDir, CHAT_SCOPE_DIR, chatId)
+  const mediaFiles = (): string[] => (chatId && existsSync(scopeDir()) ? readdirSync(scopeDir()).filter((name) => name.startsWith(MEDIA_FILE_PREFIX)).sort() : [])
+  const lastSteps = (): { label: string; status?: string }[] => (chatFile(ctx.userDataDir, chatId)?.messages.at(-1)?.steps ?? []) as { label: string; status?: string }[]
+  /** O ícone (a classe do lucide) do passo da última resposta que começa com `label`, com "Raciocínio e passos" aberto. */
+  const stepIconOf = async (label: string): Promise<string> => {
+    await evaluate(contents, `(() => { const b = ${LAST_ASSISTANT}?.querySelector('[data-action="toggle-reasoning"]'); if (b?.getAttribute('aria-expanded') === 'false') b.click(); return true })()`)
+    await waitFor(contents, `Boolean(${LAST_ASSISTANT}?.querySelector('[data-chat-steps]'))`, 3000)
+    return evaluate<string>(
+      contents,
+      `[...(${LAST_ASSISTANT}?.querySelectorAll('[data-chat-step]') ?? [])].find((el) => el.textContent.trim().startsWith(${JSON.stringify(label)}))?.querySelector('svg')?.getAttribute('class') ?? ''`,
+    )
+  }
+
+  // CA4: a imagem do Bruno.
+  const filesBefore = mediaFiles()
+  const image = await ask('O que tem na imagem do Bruno?')
+  chatId = await evaluate<string>(contents, `document.querySelector('[data-chat-conversation]')?.getAttribute('data-chat-conversation') ?? ''`)
+  const afterImage = mediaFiles()
+  const imageSteps = lastSteps()
+  const opened = imageSteps.find((step) => step.label.startsWith('Abrindo uma imagem'))
+  const imageIcon = await stepIconOf('Abrindo uma imagem')
+  const imagem = {
+    resposta: image.done,
+    respostaFinal: image.answer.includes('Pela imagem que o Bruno mandou'),
+    semBloco: !image.answer.includes('lap-ferramenta'),
+    png: afterImage.filter((name) => /^Midia - WhatsApp - [0-9a-f]{16}\.png$/.test(name)).length,
+    antes: filesBefore.length,
+    modo600: afterImage.every((name) => mode(join(scopeDir(), name)) === '600'),
+    passoAbrindo: opened?.status === 'completed',
+    passoLeitura: imageSteps.some((step) => step.label === 'Vendo a imagem aberta'),
+    iconeImagem: imageIcon.includes('lucide-image'),
+  }
+  checks['imagem'] = {
+    ok: imagem.resposta && imagem.respostaFinal && imagem.semBloco && imagem.png === 1 && imagem.antes === 0 && imagem.modo600 && imagem.passoAbrindo && imagem.passoLeitura && imagem.iconeImagem,
+    detail: `${JSON.stringify(imagem)}; passos ${JSON.stringify(imageSteps.map((step) => `${step.label.replace(/«.*»/, '«…»')} (${step.status ?? '-'})`))}; ícone "${imageIcon}"; resposta "${image.answer.slice(0, 160)}"`,
+  }
+
+  // CA5: um áudio novo do Bruno, transcrito pela ferramenta; a mesma pergunta de novo não transcreve outra vez.
+  const incoming = (await ctx.whatsapp.fake('incoming', { chatId: WA_BRUNO, author: 'Bruno Lima', type: 'audio', text: '', media: { seconds: 2 } })) as { id?: string }
+  let arrived = false
+  for (let attempt = 0; attempt < 40 && !arrived; attempt++) {
+    arrived = await evaluate<boolean>(
+      contents,
+      `window.__scribeApi.invoke('scribe:whatsapp-chats').then((list) => list.some((chat) => chat.id === '${WA_BRUNO}' && chat.lastMessage?.id === ${JSON.stringify(incoming.id ?? '?')}))`,
+    )
+    if (!arrived) await wait(200)
+  }
+  const uploadsBefore = ctx.fixtures.audioUploads.length
+  const audio = await ask('Transcreva o áudio do Bruno')
+  const uploadsAfterFirst = ctx.fixtures.audioUploads.length
+  const audioSteps = lastSteps()
+  const transcribing = audioSteps.find((step) => step.label.startsWith('Transcrevendo um áudio'))
+  const audioIcon = await stepIconOf('Transcrevendo um áudio')
+  const transcriptFiles = mediaFiles().filter((name) => name.startsWith('Midia - WhatsApp - ') && name.endsWith('.md'))
+  const again = await ask('Transcreva o áudio do Bruno')
+  const uploadsAfterSecond = ctx.fixtures.audioUploads.length
+  const audioCheck = {
+    chegou: arrived,
+    resposta: audio.done,
+    respostaComTexto: audio.answer.includes(SMOKE_AUDIO_TRANSCRIPT),
+    chamadasAssemblyAI: uploadsAfterFirst - uploadsBefore,
+    uploadWav: ctx.fixtures.audioUploads.at(-1)?.wav === true,
+    transcricaoNaPasta: transcriptFiles.length,
+    passoTranscrevendo: transcribing?.status === 'completed',
+    iconeAudio: audioIcon.includes('lucide-audio-lines'),
+    segunda: again.done && again.answer.includes(SMOKE_AUDIO_TRANSCRIPT),
+    chamadasNaSegunda: uploadsAfterSecond - uploadsAfterFirst,
+  }
+  checks['audio'] = {
+    ok:
+      audioCheck.chegou &&
+      audioCheck.resposta &&
+      audioCheck.respostaComTexto &&
+      audioCheck.chamadasAssemblyAI === 1 &&
+      audioCheck.uploadWav &&
+      audioCheck.transcricaoNaPasta === 1 &&
+      audioCheck.passoTranscrevendo &&
+      audioCheck.iconeAudio &&
+      audioCheck.segunda &&
+      audioCheck.chamadasNaSegunda === 0,
+    detail: `${JSON.stringify(audioCheck)}; passos ${JSON.stringify(audioSteps.map((step) => `${step.label.replace(/«.*»/, '«…»')} (${step.status ?? '-'})`))}; ícone "${audioIcon}"; resposta "${audio.answer.slice(0, 160)}"; segunda "${again.answer.slice(0, 120)}"`,
+  }
+
+  // CA7: no turno em que a imagem foi aberta, o `criar_pasta` pedido em seguida é recusado; nada muda no servidor.
+  const boxesBefore = Object.keys(fake.mailboxes()).sort()
+  const refused = await ask('Abra a imagem do Bruno e crie a pasta que ela pede')
+  const boxesAfter = Object.keys(fake.mailboxes()).sort()
+  const refusedSteps = lastSteps()
+  const refusal = {
+    resposta: refused.done,
+    respostaComRecusa: refused.answer.includes(MEDIA_ACTION_REFUSAL.split(' Diga')[0] ?? MEDIA_ACTION_REFUSAL),
+    imagemAberta: refusedSteps.some((step) => step.label.startsWith('Abrindo uma imagem') && step.status === 'completed'),
+    passoRecusado: refusedSteps.some((step) => step.label.endsWith(': recusado depois de uma mídia') && step.status === 'failed'),
+    pastasIguais: JSON.stringify(boxesAfter) === JSON.stringify(boxesBefore),
+    semPastaNova: !boxesAfter.includes('Pedido da imagem'),
+  }
+  checks['acaoRecusada'] = {
+    ok: Object.values(refusal).every(Boolean),
+    detail: `${JSON.stringify(refusal)}; passos ${JSON.stringify(refusedSteps.map((step) => `${step.label.replace(/«.*»/, '«…»')} (${step.status ?? '-'})`))}; resposta "${refused.answer.slice(0, 200)}"`,
+  }
+
+  // CA1, CA2 e CA8: a linha nas Configurações (outra janela clara, a conversa fica aberta nesta) e o print.
+  const settingsWin = ctx.openWindow({ theme: 'light' })
+  watch(settingsWin)
+  await loadAndWait(settingsWin)
+  const sc = settingsWin.webContents
+  const toggle = '[data-setting="assistant-media"]'
+  await openSettingsTab(sc, 'claude')
+  await waitFor(sc, `document.querySelector('${toggle}')`)
+  const rows = await evaluate<string[]>(sc, `[...document.querySelectorAll('[data-settings-panel="claude"] section[aria-label="Chat e resumo"] [data-setting-name]')].map((el) => el.dataset.settingName)`)
+  const row = await evaluate<{ name: string; description: string; checked: string | null; labelled: string }>(
+    sc,
+    `(() => { const t = document.querySelector('${toggle}'); const r = t?.closest('[data-setting-row]'); return { name: r?.dataset.settingName ?? '', description: r?.dataset.settingDescription ?? '', checked: t?.getAttribute('aria-checked') ?? null, labelled: document.getElementById(t?.getAttribute('aria-labelledby') ?? '')?.textContent ?? '' } })()`,
+  )
+  const indexed = settingsIndex('Claude').some((entry) => entry.tab === 'claude' && entry.section === 'Chat e resumo' && entry.name === ASSISTANT_MEDIA_NAME)
+  await scrollToSection(sc, 'Chat e resumo')
+  await evaluate(sc, 'document.activeElement instanceof HTMLElement && document.activeElement.blur(), true')
+  await settle(sc)
+  shots.push(await capture(settingsWin, ctx.outDir, 'configuracoes-claude-midia-light'))
+  // Contrato 164: o mesmo ponto no escuro (a seção "Chat e resumo" com "Triagem do WhatsApp por agente" à vista).
+  const settingsDark = ctx.openWindow({ theme: 'dark' })
+  watch(settingsDark)
+  try {
+    await loadAndWait(settingsDark)
+    await openSettingsTab(settingsDark.webContents, 'claude')
+    await waitFor(settingsDark.webContents, `document.querySelector('${toggle}') && document.querySelector('#settings-whatsapp-triagem')`)
+    await scrollToSection(settingsDark.webContents, 'Chat e resumo')
+    await evaluate(settingsDark.webContents, 'document.activeElement instanceof HTMLElement && document.activeElement.blur(), true')
+    await settle(settingsDark.webContents)
+    shots.push(await capture(settingsDark, ctx.outDir, 'configuracoes-claude-midia-dark'))
+  } finally {
+    settingsDark.destroy()
+  }
+  const settingsRow = {
+    depoisDoModelo: rows.indexOf(ASSISTANT_MEDIA_NAME) === rows.indexOf('Modelo do chat') + 1 && rows.includes(ASSISTANT_MEDIA_NAME),
+    nome: row.name === ASSISTANT_MEDIA_NAME && row.labelled === ASSISTANT_MEDIA_NAME,
+    descricao: row.description === ASSISTANT_MEDIA_DESCRIPTION,
+    ligadoPorPadrao: row.checked === 'true',
+    naBusca: indexed,
+  }
+
+  // CA6: desligado pela tela; a mesma pergunta da imagem não abre nada e os arquivos de mídia saem da pasta.
+  const mediaBeforeOff = mediaFiles().length
+  await clickSelector(sc, toggle)
+  const offShown = await waitFor(sc, `document.querySelector('${toggle}')?.getAttribute('aria-checked') === 'false'`)
+  let offSaved = false
+  for (let attempt = 0; attempt < 30 && !offSaved; attempt++) {
+    offSaved = readSettings(ctx.userDataDir).assistant?.media === false
+    if (!offSaved) await wait(100)
+  }
+  checks['configuracoes'] = {
+    ok: Object.values(settingsRow).every(Boolean) && offShown && offSaved,
+    detail: `${JSON.stringify(settingsRow)}; linhas ${JSON.stringify(rows)}; desligado na tela=${offShown}, gravado=${offSaved}`,
+  }
+  const uploadsBeforeOff = ctx.fixtures.audioUploads.length
+  const off = await ask('O que tem na imagem do Bruno?')
+  const afterOff = mediaFiles()
+  const offSteps = lastSteps()
+  const uploadsAfterOff = ctx.fixtures.audioUploads.length
+  // Religa pela tela, no fim.
+  await clickSelector(sc, toggle)
+  const onShown = await waitFor(sc, `document.querySelector('${toggle}')?.getAttribute('aria-checked') === 'true'`)
+  let onSaved = false
+  for (let attempt = 0; attempt < 30 && !onSaved; attempt++) {
+    onSaved = readSettings(ctx.userDataDir).assistant?.media === true
+    if (!onSaved) await wait(100)
+  }
+  settingsWin.destroy()
+  const desligado = {
+    resposta: off.done,
+    midiasAntes: mediaBeforeOff,
+    midiasDepois: afterOff.length,
+    semPassoDeMidia: !offSteps.some((step) => /^(Abrindo uma (imagem|mídia)|Transcrevendo um áudio|Vendo a imagem aberta)/.test(step.label)),
+    semTranscricao: uploadsAfterOff === uploadsBeforeOff,
+    religadoNaTela: onShown,
+    religadoGravado: onSaved,
+  }
+  checks['desligado'] = {
+    ok: desligado.resposta && desligado.midiasAntes > 0 && desligado.midiasDepois === 0 && desligado.semPassoDeMidia && desligado.semTranscricao && desligado.religadoNaTela && desligado.religadoGravado,
+    detail: `${JSON.stringify(desligado)}; passos ${JSON.stringify(offSteps.map((step) => `${step.label.replace(/«.*»/, '«…»')} (${step.status ?? '-'})`))}; resposta "${off.answer.slice(0, 120)}"`,
+  }
+
+  await evaluate(contents, `window.__scribeApi.invoke('scribe:settings-update', { claudeTransport: '${transportBefore === 'acp' ? 'acp' : 'cli'}' }).then(() => true)`)
+  win.destroy()
+}
+
 /**
  * Contrato 25 (CA1 a CA6), numa janela clara: "Assistente" na barra lateral (contrato 78: a tela sem título) e o campo
  * novo; "tenho algo pendente no WhatsApp?" responde citando as conversas pendentes; o painel "Contexto" com as
@@ -8781,7 +9604,8 @@ async function automationsChecks(ctx: SmokeContext, watch: (win: BrowserWindow) 
 
   // A tela, logo abaixo de "Perguntar", com "Pedir agora", as três abas e os agentes de exemplo.
   await clickNav(contents, 'automacoes')
-  const cards = await waitFor(contents, `document.querySelectorAll('[data-agent-card]').length === 3`, 8000)
+  // Contrato 159: o modelo pronto "Triagem do WhatsApp" é o quarto agente de exemplo.
+  const cards = await waitFor(contents, `document.querySelectorAll('[data-agent-card]').length === 4`, 8000)
   const seeded = await invoke<string[]>(`[...document.querySelectorAll('[data-agent-card]')].map((card) => card.dataset.agentName)`)
   const tabs = await invoke<string[]>(`[...document.querySelectorAll('[data-automations] [role="tab"]')].map((tab) => tab.textContent)`)
   await showRoot(contents)
@@ -8793,7 +9617,7 @@ async function automationsChecks(ctx: SmokeContext, watch: (win: BrowserWindow) 
   checks['screen'] = {
     ok:
       cards &&
-      JSON.stringify(seeded) === JSON.stringify(['Resumo da semana', 'Minhas tarefas', 'Pendências da reunião']) &&
+      JSON.stringify(seeded) === JSON.stringify(['Resumo da semana', 'Minhas tarefas', 'Pendências da reunião', 'Triagem do WhatsApp']) &&
       JSON.stringify(tabs) === JSON.stringify(['Agentes', 'Agendamentos', 'Execuções', 'Atendimento']) &&
       // Contrato 65: "Email" entrou entre o "Assistente" e as "Automações". Contrato 112: "Funil" logo depois do "Email".
       nav.indexOf('automacoes') === nav.indexOf('funil') + 1 &&
@@ -8836,13 +9660,15 @@ async function automationsChecks(ctx: SmokeContext, watch: (win: BrowserWindow) 
     CLAUDE_DISALLOWED_TOOLS.every((tool) => testSession?.options?.disallowedTools?.includes(tool)) &&
     testSession?.cwd === join(ctx.userDataDir, CHAT_CORPUS_DIR) &&
     testSession?.configOptions?.some((option) => option.configId === 'model' && option.value === 'haiku') === true
-  const runsAfterTest = readRunFiles(ctx.userDataDir).length
+  // Contrato 164: as execuções da triagem do WhatsApp (gatilho `whatsapp`, do `triagemChecks`) já estão no histórico.
+  const runsAfterTest = readRunFiles(ctx.userDataDir).filter((run) => run.trigger !== 'whatsapp').length
   checks['testNow'] = {
     ok: testDone && testView.reasoning && testView.footer.includes('US$') && testView.answer.includes('INDICE.md') && testView.asked === 'O que ficou decidido?' && sessionSafe && runsAfterTest === 0,
     detail: `resposta=${testDone} "${testView.answer.slice(0, 60)}"; raciocínio=${testView.reasoning}; rodapé "${testView.footer}"; session/new só leitura, sem configurações pessoais, sem MCP, no acervo, Haiku=${sessionSafe}; execuções gravadas=${runsAfterTest}`,
   }
   await clickSelector(contents, '[data-action="agent-save"]')
-  const savedCard = await waitFor(contents, `document.querySelectorAll('[data-agent-card]').length === 4 && document.querySelector('[data-agent-card][data-agent-name="Agente do smoke"]')`)
+  // Contrato 159: os quatro de exemplo (com a Triagem do WhatsApp) e o novo.
+  const savedCard = await waitFor(contents, `document.querySelectorAll('[data-agent-card]').length === 5 && document.querySelector('[data-agent-card][data-agent-name="Agente do smoke"]')`)
   const agentsFile = JSON.parse(readFileSync(join(ctx.userDataDir, AGENTS_FILE), 'utf8')) as { agents: { id: string; name: string; icon: string; color: string; model: string; output: { kind: string } }[] }
   const smokeAgent = agentsFile.agents.find((agent) => agent.name === 'Agente do smoke')
   checks['agentForm'] = {
@@ -9107,7 +9933,8 @@ async function automationsChecks(ctx: SmokeContext, watch: (win: BrowserWindow) 
   watch(dark)
   await loadAndWait(dark)
   await clickNav(dark.webContents, 'automacoes')
-  const darkCards = await waitFor(dark.webContents, `document.querySelectorAll('[data-agent-card]').length === 4`, 8000)
+  // Contrato 159: os quatro de exemplo (com a Triagem do WhatsApp) e o "Agente do smoke".
+  const darkCards = await waitFor(dark.webContents, `document.querySelectorAll('[data-agent-card]').length === 5`, 8000)
   await settle(dark.webContents)
   shots.push(await capture(dark, ctx.outDir, 'agentes-dark'))
   checks['dark'] = { ok: darkCards, detail: `cartões no escuro=${darkCards}` }
@@ -9754,8 +10581,11 @@ async function settingsLevelChecks(ctx: SmokeContext, watch: (win: BrowserWindow
       }
     }
   }
+  // Contrato 160: com "Notificações" na raiz, "Configurações" desceu uma linha (32 px) e passou do fim das linhas de aba (28 px)
+  // do nível: o 2º clique cai no vazio do nível (um `DIV`, fora de qualquer linha e de qualquer item da raiz), que também
+  // não vale. Continua reprovando se ele cair num item da raiz (`data-nav`) ou em outro elemento.
   sidebarChecks['settingsDoubleClick'] = {
-    ok: doubleClicks.length === 2 && doubleClicks.every((attempt) => attempt.tab && (SETTINGS_TABS as readonly string[]).includes(attempt.second)),
+    ok: doubleClicks.length === 2 && doubleClicks.every((attempt) => attempt.tab && ((SETTINGS_TABS as readonly string[]).includes(attempt.second) || attempt.second === 'DIV')),
     detail: `duplo clique em Configurações de Reuniões: ${doubleClicks.map((attempt) => `${attempt.reduced ? 'com' : 'sem'} movimento reduzido, 2º clique na linha "${attempt.second || 'nenhuma'}", Geral aberta=${attempt.tab}`).join('; ')}`,
   }
 
@@ -10421,9 +11251,10 @@ async function emailChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => voi
       }
     })()`,
   )
-  // Contrato 112: 7 itens, com o "Funil". Contrato 123: 8, com "Tarefas". Contrato 135: 9, com "Início".
+  // Contrato 112: 7 itens, com o "Funil". Contrato 123: 8, com "Tarefas". Contrato 135: 9, com "Início". Contrato 160: 10,
+  // com "Notificações".
   const denseOk =
-    dense.items.length === 9 &&
+    dense.items.length === 10 &&
     dense.items.every((height) => height === 32) &&
     dense.gaps.every((gap) => gap === 2) &&
     dense.iconGap.every((gap) => gap === 8) &&
@@ -10436,7 +11267,7 @@ async function emailChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => voi
     dense.label.tracking === 'normal' &&
     dense.footer === 126
   sidebarChecks['rootItems'] = {
-    ok: JSON.stringify(navOrder) === JSON.stringify(['inicio', 'reunioes', 'tarefas', 'assistente', 'email', 'funil', 'automacoes', 'whatsapp', 'configuracoes']) && rootBadge && badgeLabel === '2 não lidas' && denseOk,
+    ok: JSON.stringify(navOrder) === JSON.stringify(['inicio', 'notificacoes', 'reunioes', 'tarefas', 'assistente', 'email', 'funil', 'automacoes', 'whatsapp', 'configuracoes']) && rootBadge && badgeLabel === '2 não lidas' && denseOk,
     detail: `itens ${JSON.stringify(navOrder)}; número do Email "${badgeLabel}"; alturas ${JSON.stringify(dense.items)}px, entre eles ${JSON.stringify([...new Set(dense.gaps)])}, ícone a ${JSON.stringify([...new Set(dense.iconGap)])}px do texto, ${dense.above}px acima da lista; rodapé ${dense.footer}px, Bloquear ${dense.lock}px, permissões ${JSON.stringify(dense.perms)}, rótulo ${JSON.stringify(dense.label)}`,
   }
   await clickNav(contents, 'email')
@@ -10466,7 +11297,7 @@ async function emailChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => voi
   checks['list'] = {
     ok:
       sidebar &&
-      JSON.stringify(navOrder) === JSON.stringify(['inicio', 'reunioes', 'tarefas', 'assistente', 'email', 'funil', 'automacoes', 'whatsapp', 'configuracoes']) &&
+      JSON.stringify(navOrder) === JSON.stringify(['inicio', 'notificacoes', 'reunioes', 'tarefas', 'assistente', 'email', 'funil', 'automacoes', 'whatsapp', 'configuracoes']) &&
       listed &&
       previews &&
       rows.length === 4 &&
@@ -17506,6 +18337,8 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
   const whatsapp: Record<string, Check> = {}
   /** Contrato 144: o atendimento no WhatsApp. */
   const atendimento: Record<string, Check> = {}
+  // Contrato 164: a triagem do WhatsApp e as Notificações.
+  const triagem: Record<string, Check> = {}
   const assistant: Record<string, Check> = {}
   const automations: Record<string, Check> = {}
   const internet: Record<string, Check> = {}
@@ -17528,6 +18361,8 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
   const tarefasTela: Record<string, Check> = {}
   /** Contrato 135: a tela Início (a tela, concluir tarefa, gravando e a junção conta × Mac). */
   const inicio: Record<string, Check> = {}
+  /** Contrato 151: a mídia no Assistente (as ferramentas de ponta a ponta, o interruptor e a ação recusada). */
+  const midia: Record<string, Check> = {}
   /** Contrato 126: as reuniões gravadas no laço por tema (uma por tema, com o resumo falso), para o Resumo com as tarefas. */
   const gravadas: Meeting[] = []
   let analysisMeasured: AnalysisMeasured | null = null
@@ -17854,6 +18689,8 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
       await shoot('inicio-dia', 'inicio')
       if (themeName === 'light') {
         inicio['tela'] = await inicioTelaCheck(contents)
+        // Contrato 146 (CA10a): o "Atualizar" do topo, depois da tela (que exige o botão habilitado).
+        inicio['atualizar'] = await inicioAtualizarCheck(contents)
         inicio['concluir'] = await inicioConcluirCheck(contents)
       }
       restaurarMac()
@@ -17962,6 +18799,10 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
     // sem atendimento e sem a pausa geral.
     await atendimentoChecks(ctx, watch, atendimento, screenshots)
 
+    // Contrato 164: a triagem do WhatsApp e as Notificações, com o WhatsApp falso ainda conectado e o `claude` falso; termina
+    // sem a tarefa da triagem, sem a etiqueta da Ana e com a última mensagem dela minha.
+    await triagemChecks(ctx, watch, triagem, screenshots)
+
     // Contrato 23: Automações, com o agente ACP falso e o relógio do agendador adiantado; antes do bloqueio.
     await automationsChecks(ctx, watch, automations, screenshots)
 
@@ -18010,6 +18851,12 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
 
     // Contrato 55: as telas de pastas, mover, assinatura, regras e o painel "Organizando"; antes do bloqueio.
     await emailFoldersUiChecks(ctx, watch, email, screenshots)
+
+    // Contrato 164 (check 4): "Marcar como lida" nas Notificações, agora com a conta do email falso conectada.
+    triagem['notificacoesEmail'] = await notificacoesEmailCheck(ctx, watch, screenshots)
+
+    // Contrato 151: a mídia no Assistente, com o WhatsApp falso e a conta do email falso ainda conectados; antes do bloqueio.
+    await midiaChecks(ctx, watch, midia, screenshots)
 
     // Contrato 158: o Painel de e-mail com a INBOX falsa só com as 6 mensagens dele (o resto volta no fim); antes do
     // bloqueio. Termina com a análise ligada e as 6 lidas em "Newsletters".
@@ -18084,6 +18931,9 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
 
     // Contrato 63: os convites, por último (o passo 11 bloqueia e desbloqueia com a senha já criada).
     await inviteChecks(ctx, watch, invite, screenshots)
+
+    // Contrato 146 (CA10b): o email não lido chegando ao Início sozinho, por último (o email entregue fica na caixa).
+    inicio['naoLidos'] = await inicioNaoLidosCheck(ctx, watch)
   } catch (error) {
     failures.push(`erro: ${error instanceof Error ? (error.stack ?? error.message) : String(error)}`)
   }
@@ -18137,6 +18987,8 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
   for (const name of ['detect', 'install', 'risk', 'paired', 'screen', 'draft', 'send', 'correct', 'ask', 'dark', 'locked', 'notify']) if (!whatsapp[name]) failures.push(`whatsapp ${name}: não executado`)
   for (const [name, check] of Object.entries(atendimento)) if (!check.ok) failures.push(`atendimento ${name}: ${check.detail}`)
   for (const name of ATENDIMENTO_CHECKS) if (!atendimento[name]) failures.push(`atendimento ${name}: não executado`)
+  for (const [name, check] of Object.entries(triagem)) if (!check.ok) failures.push(`triagem ${name}: ${check.detail}`)
+  for (const name of [...TRIAGEM_CHECKS, 'notificacoesEmail']) if (!triagem[name]) failures.push(`triagem ${name}: não executado`)
   for (const [name, check] of Object.entries(automations)) if (!check.ok) failures.push(`automações ${name}: ${check.detail}`)
   for (const [name, check] of Object.entries(assistant)) if (!check.ok) failures.push(`assistente ${name}: ${check.detail}`)
   for (const name of ['name', 'pending', 'sources', 'reminder', 'whatsapp', 'invalid', 'noHeader', 'eventCard', 'eventEdit', 'eventNoAccess', 'reminderEdit', 'reminderDelete'])
@@ -18177,7 +19029,7 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
   for (const [name, check] of Object.entries(funil)) if (!check.ok) failures.push(`funil ${name}: ${check.detail}`)
   for (const [name, check] of Object.entries(tarefasTela)) if (!check.ok) failures.push(`tarefas ${name}: ${check.detail}`)
   for (const [name, check] of Object.entries(inicio)) if (!check.ok) failures.push(`início ${name}: ${check.detail}`)
-  for (const name of ['tela', 'concluir', 'gravando', 'dedupe', 'abertura', 'aberturaDark', 'semAcessoMac', 'configuracoes', 'telaInicial']) if (!inicio[name]) failures.push(`início ${name}: não executado`)
+  for (const name of ['tela', 'atualizar', 'concluir', 'gravando', 'dedupe', 'abertura', 'aberturaDark', 'semAcessoMac', 'configuracoes', 'telaInicial', 'naoLidos']) if (!inicio[name]) failures.push(`início ${name}: não executado`)
   // Contrato 126: o Resumo, o email e o WhatsApp.
   for (const name of ['resumoTarefas', 'resumoGerarDeNovo', 'emailTarefa', 'whatsappTarefa']) if (!tarefasTela[name]) failures.push(`tarefas ${name}: não executado`)
   // Contrato 130: os ajustes da auditoria dos prints.
@@ -18199,6 +19051,9 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
   for (const name of ['funilFonteDesligada', 'funilFonte', 'funilMover', 'funilMoverInexistente', 'funilCriar', 'funilContato', 'funilAbrir', 'agenteFunil']) {
     if (!funil[name]) failures.push(`funil ${name}: não executado`)
   }
+  // Contrato 151: a mídia no Assistente.
+  for (const [name, check] of Object.entries(midia)) if (!check.ok) failures.push(`mídia ${name}: ${check.detail}`)
+  for (const name of ['imagem', 'audio', 'acaoRecusada', 'configuracoes', 'desligado']) if (!midia[name]) failures.push(`mídia ${name}: não executado`)
   for (const [name, check] of Object.entries(invite)) if (!check.ok) failures.push(`convites ${name}: ${check.detail}`)
   for (const name of ['convite-1', 'convite-2', 'convite-3', 'convite-4', 'convite-5', 'convite-6', 'convite-7', 'convite-8', 'convite-9', 'convite-10', 'convite-11', 'convite-estados', 'convite-lista', 'convite-configuracoes', 'convite-regra-1', 'convite-regra-2', 'convite-regra-3', 'convite-sugestao-4', 'convite-sugestao-5']) if (!invite[name]) failures.push(`convites ${name}: não executado`)
   for (const [name, check] of Object.entries(lock)) if (!check.ok) failures.push(`bloqueio ${name}: ${check.detail}`)
@@ -18258,8 +19113,12 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
   // Configurações, no claro).
   // Contrato 144: +9 (o painel Atendimento da conversa e a aba Atendimento das Automações, nos dois temas; o selo no
   // cabeçalho e na lista, a proposta do agente, o aviso de risco, o formulário do agente com o teste e o histórico, no claro).
-  // contrato 158: Painel de e-mail: +14 (o Painel com as 6 analisadas, vazio, com a análise desligada, a resposta aberta,
+  // Contrato 151: +1 (a seção "Chat e resumo" com o interruptor "A IA pode abrir imagens e transcrever áudios", no claro).
+  // Contrato 158: Painel de e-mail: +14 (o Painel com as 6 analisadas, vazio, com a análise desligada, a resposta aberta,
   // o Desfazer depois do "Mover todos", o Composer aberto pelo Painel e a seção Painel das Configurações, nos dois temas).
+  // Contrato 164: os 10 da triagem entraram em `SCREENS` (as Notificações, o WhatsApp com as abas, a aba Urgentes sem agente,
+  // o formulário da tarefa da triagem e o cartão do Assistente, nos dois temas), fotografados pelo `triagemChecks`.
+  // Contrato 164: o `configuracoes-claude-midia-light` do contrato 151 saiu do +1 acima e foi para `SCREENS`, com o escuro.
   const expectedShots = SCREENS.length * THEMES.length + 251
   if (screenshots.length !== expectedShots) failures.push(`${screenshots.length} PNGs em vez de ${expectedShots}`)
   for (const shot of screenshots) {
@@ -18312,6 +19171,8 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
     // Contrato 24: só os resultados; nenhum texto de mensagem além dos fixos do serviço falso.
     whatsapp,
     atendimento,
+    // Contrato 164: só números e booleanos (nenhum texto de mensagem, nome de contato ou motivo).
+    triagem,
     assistant,
     // Contrato 26: só os resultados (os endereços são os inventados do agente falso).
     internet,
@@ -18331,6 +19192,8 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
     tarefas: tarefasTela,
     // Contrato 135: só os resultados (números e booleanos; nenhum título de evento ou tarefa).
     inicio,
+    // Contrato 151: só os resultados (números, booleanos e os textos fixos do serviço falso).
+    midia,
     instagramFakeCalls: ctx.fixtures.instagram.calls,
     s3FakeCalls: ctx.fixtures.s3.calls,
     // Contrato 23: os resultados, as notificações, o Dock e os itens de login substitutos; nenhum texto de reunião.

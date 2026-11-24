@@ -32,6 +32,10 @@
 // organizar o email tem até 40 rodadas; "Parar" também aborta a ferramenta em curso (e conta como parada mesmo sem o
 // motor responder); os cartões que a ferramenta monta (o lote) entram no fim da resposta; e o fim do turno (parado ou
 // não) é avisado a `assistant.endTurn`, antes de a resposta ser gravada.
+//
+// Contrato 149 (CA13): no turno em que uma ferramenta de mídia devolveu resultado, ou em que a IA leu um arquivo de mídia
+// da pasta, as ferramentas que mudam (`changes`) ou criam (`creates`) algo não rodam: o modelo recebe a recusa e pede à
+// pessoa que confirme numa nova pergunta. As de leitura continuam.
 import { randomUUID } from 'node:crypto'
 import { z } from 'zod'
 import { ACTIONS_PER_MESSAGE_MAX, withoutActionBlocks, type ChatAction } from '../../shared/assistant'
@@ -60,7 +64,7 @@ import { MCP_APPROVAL_DECISIONS } from '../../shared/mcp'
 import { WHATSAPP_DEFAULT_SCOPE_DAYS } from '../../shared/whatsapp'
 import type { AcpOpenResult, AcpSessionRequest } from '../acp/agent'
 import { AcpChat, type ChatEngine } from '../acp/chat'
-import { assistantSystemPrompt, ClaudeChat, type ChatAnswer } from '../claude-cli/chat'
+import { assistantSystemPrompt, ClaudeChat, isMediaReadStep, type ChatAnswer } from '../claude-cli/chat'
 import { claudeEnv } from '../claude-cli/locate'
 import type { SpawnClaude, Timers } from '../claude-cli/translator'
 import type { MeetingsStore } from '../meetings/store'
@@ -86,6 +90,9 @@ export function sumMeta(a: ChatMeta, b: ChatMeta): ChatMeta {
     consulted: [...new Set([...a.consulted, ...b.consulted])],
   }
 }
+
+/** Contrato 149 (CA13): a nota da ferramenta que muda ou cria algo, pedida numa pergunta que já viu mídia. */
+export const MEDIA_ACTION_REFUSAL = 'Recusado: nesta pergunta uma mídia foi aberta. Diga à pessoa o que você faria e peça que ela confirme numa nova pergunta.'
 
 /** Fora da tela do chat por 5 min: o processo da conversa morre. */
 export const CHAT_LEAVE_MS = 5 * 60_000
@@ -467,7 +474,11 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
     let spent: ChatMeta | null = null
     let deniedBefore = 0
     let earlier = ''
+    // Contrato 149 (CA13): a pergunta viu mídia (a ferramenta de mídia devolveu algo, ou a IA leu um arquivo de mídia da
+    // pasta): daí em diante, nenhuma ferramenta que muda ou cria algo roda neste turno.
+    let mediaSeen = false
     const onDetail = (detail: ChatDetail): void => {
+      if (detail.type === 'step' && isMediaReadStep(detail.step)) mediaSeen = true
       if (detail.type === 'step') {
         // Pelo ACP o mesmo passo volta com estado novo: troca no lugar.
         const at = detail.step.id ? steps.findIndex((step) => step.id === detail.step.id) : -1
@@ -521,10 +532,15 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
         const shown = steps.find((step) => step.id === stepId)
         onDetail({ type: 'step', step: { tool: call.tool.step, label: shown?.label ?? call.tool.pending, meetingId: null, id: stepId, status: 'in_progress' } })
         turn.toolRunning = true
-        const done: ToolResult = await call.tool.run(call.args, session.scope, { chatId: chat.id, turnId, request: question, signal: turn.abort.signal }).catch((error: unknown) => {
-          deps.log?.(`[assistente] ferramenta ${call.tool.name} falhou: ${error instanceof Error ? error.message : String(error)}`)
-          return { file: null, label: `${call.tool.pending}: falhou`, note: 'A ferramenta falhou: responda com o que já tem.' }
-        })
+        // Contrato 149 (CA13): depois de uma mídia, o que muda ou cria algo não roda (a mídia pode ter induzido o pedido).
+        const blocked = mediaSeen && (call.tool.changes === true || call.tool.creates !== undefined)
+        const done: ToolResult = blocked
+          ? { file: null, label: `${call.tool.pending}: recusado depois de uma mídia`, note: MEDIA_ACTION_REFUSAL }
+          : await call.tool.run(call.args, session.scope, { chatId: chat.id, turnId, request: question, signal: turn.abort.signal }).catch((error: unknown) => {
+              deps.log?.(`[assistente] ferramenta ${call.tool.name} falhou: ${error instanceof Error ? error.message : String(error)}`)
+              return { file: null, label: `${call.tool.pending}: falhou`, note: 'A ferramenta falhou: responda com o que já tem.' }
+            })
+        if (call.tool.media && !blocked) mediaSeen = true
         turn.toolRunning = false
         onDetail({ type: 'step', step: { tool: call.tool.step, label: done.label, meetingId: null, id: stepId, status: done.file || done.ok ? 'completed' : 'failed' } })
         for (const action of done.actions ?? []) if (!toolActions.some((known) => known.id === action.id)) toolActions.push(action)

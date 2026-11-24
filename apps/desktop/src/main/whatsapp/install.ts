@@ -24,6 +24,8 @@ export const WHATSAPP_PATHS = {
   insights: 'insights.json',
   /** Contrato 37: as transcrições dos áudios: saem junto com as mensagens. */
   transcripts: 'transcripts.json',
+  /** Contrato 159: as etiquetas da triagem: saem junto com as mensagens. */
+  triagem: 'triagem.json',
 } as const
 
 /** Arquivos do serviço copiados para `userData/whatsapp/bridge` a cada "Ligar". */

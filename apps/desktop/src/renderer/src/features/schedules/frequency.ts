@@ -1,6 +1,7 @@
 // Frequência no formulário de tarefa (contrato 23, CA4): seletores simples que viram o `schedule` da tarefa, e
 // o caminho de volta para editar. Funções puras (test/renderer/schedules-format.test.ts).
 import { parseCron, wallTime, zonedInstant, type Schedule, type ScheduleKind } from '@shared/automations'
+import { TRIAGEM_ESPERA_SEG } from '@shared/triagem'
 
 export interface FrequencyDraft {
   kind: ScheduleKind
@@ -13,6 +14,9 @@ export interface FrequencyDraft {
   onceAt: string
   delayMin: number
   cron: string
+  /** Contrato 159: "Quando chega mensagem do WhatsApp" (os controles do formulário chegam no contrato 162). */
+  esperaSeg: number
+  grupos: boolean
 }
 
 /** Na ordem do seletor; o cron fica por último, como "Avançado". */
@@ -23,6 +27,8 @@ export const FREQUENCY_OPTIONS: readonly { value: ScheduleKind; label: string }[
   { value: 'monthly', label: 'Todo mês no dia' },
   { value: 'once', label: 'Uma vez em' },
   { value: 'after-meeting', label: 'Depois de cada reunião' },
+  // Contrato 162: a triagem do WhatsApp (sem próxima execução pelo relógio).
+  { value: 'whatsapp-message', label: 'Quando chega mensagem do WhatsApp' },
   { value: 'cron', label: 'Avançado: expressão cron' },
 ]
 
@@ -35,7 +41,7 @@ export function localInput(ms: number, timeZone: string): string {
 }
 
 export function defaultDraft(now: number, timeZone: string): FrequencyDraft {
-  return { kind: 'weekly', everyValue: 30, everyUnit: 'min', time: '08:00', days: [1, 2, 3, 4, 5], monthDay: 1, onceAt: localInput(now + 60 * 60_000, timeZone), delayMin: 0, cron: '0 8 * * 1-5' }
+  return { kind: 'weekly', everyValue: 30, everyUnit: 'min', time: '08:00', days: [1, 2, 3, 4, 5], monthDay: 1, onceAt: localInput(now + 60 * 60_000, timeZone), delayMin: 0, cron: '0 8 * * 1-5', esperaSeg: TRIAGEM_ESPERA_SEG.padrao, grupos: false }
 }
 
 export function draftOf(schedule: Schedule, now: number, timeZone: string): FrequencyDraft {
@@ -57,6 +63,8 @@ export function draftOf(schedule: Schedule, now: number, timeZone: string): Freq
       return { ...base, kind: 'cron', cron: schedule.expr }
     case 'after-meeting':
       return { ...base, kind: 'after-meeting', delayMin: schedule.delayMin }
+    case 'whatsapp-message':
+      return { ...base, kind: 'whatsapp-message', esperaSeg: schedule.esperaSeg, grupos: schedule.grupos }
   }
 }
 
@@ -89,6 +97,11 @@ export function scheduleOf(draft: FrequencyDraft, timeZone: string, now: number)
       const delayMin = Math.round(draft.delayMin)
       if (!Number.isFinite(delayMin) || delayMin < 0 || delayMin > 60) return { error: 'Escolha de 0 a 60 min.' }
       return { schedule: { kind: 'after-meeting', delayMin } }
+    }
+    case 'whatsapp-message': {
+      const esperaSeg = Math.round(draft.esperaSeg)
+      if (!Number.isFinite(esperaSeg) || esperaSeg < TRIAGEM_ESPERA_SEG.min || esperaSeg > TRIAGEM_ESPERA_SEG.max) return { error: `Escolha de ${TRIAGEM_ESPERA_SEG.min} a ${TRIAGEM_ESPERA_SEG.max} s.` }
+      return { schedule: { kind: 'whatsapp-message', esperaSeg, grupos: draft.grupos } }
     }
   }
 }

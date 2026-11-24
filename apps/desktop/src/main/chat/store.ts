@@ -54,10 +54,15 @@ import {
   INSTAGRAM_DRAFT_CAPTION_MAX,
   OPEN_SCREENS,
   REMINDER_TEXT_MAX,
+  TRIAGEM_AGENTE_ACOES,
+  TRIAGEM_AGENTE_AVISOS,
 } from '../../shared/assistant'
 import { FUNIL_ETAPA_NOME_MAX, FUNIL_NOME_MAX, FUNIL_NOTAS_MAX } from '../../shared/funil'
+import { TRIAGEM_AMBITOS, TRIAGEM_ESPERA_SEG } from '../../shared/triagem'
+import { etiquetaSchema } from '../../shared/triagem-schema'
 import { TAREFA_TITULO_MAX } from '../../shared/tarefas'
 import { EMAIL_ACCOUNT_ID_PATTERN, EMAIL_RECIPIENTS_MAX, EMAIL_SUBJECT_MAX, EMAIL_TEXT_MAX } from '../../shared/email'
+import { AGENT_INSTRUCTIONS_MAX, AGENT_MODELS } from '../../shared/automations'
 import { automationIdSchema, scheduleSchema } from '../../shared/automations-schema'
 import { MCP_SERVERS_MAX } from '../../shared/mcp'
 import { PUBLICATION_ID_PATTERN, REDES_ACCOUNT_ID_PATTERN } from '../../shared/redes'
@@ -414,6 +419,46 @@ export const chatActionSchema = z.discriminatedUnion('kind', [
       titulo: z.string().max(TAREFA_TITULO_MAX),
       prazoAntes: funilCardDia.nullable(),
       prazo: funilCardDia,
+      error: z.string().max(CHAT_ACTION_ERROR_MAX).nullable(),
+    })
+    .strict(),
+  // Contrato 163: a triagem do WhatsApp (o agente e a tarefa lidos das Automações; a conversa e a etiqueta, do app).
+  z
+    .object({
+      kind: z.literal('triagem-agente'),
+      ...actionBase,
+      acao: z.enum(TRIAGEM_AGENTE_ACOES),
+      agente: z.object({ id: automationIdSchema, nome: z.string().max(200), modelo: z.enum(AGENT_MODELS) }).strict().nullable(),
+      tarefa: z
+        .object({ id: automationIdSchema, esperaSeg: z.number().int().min(TRIAGEM_ESPERA_SEG.min).max(TRIAGEM_ESPERA_SEG.max), grupos: z.boolean(), enabled: z.boolean() })
+        .strict()
+        .nullable(),
+      pedido: z
+        .object({
+          instrucoes: z.string().max(AGENT_INSTRUCTIONS_MAX).nullable(),
+          esperaSeg: z.number().int().min(TRIAGEM_ESPERA_SEG.min).max(TRIAGEM_ESPERA_SEG.max).nullable(),
+          grupos: z.boolean().nullable(),
+        })
+        .strict(),
+      permissoes: z.array(z.string().max(100)).max(5),
+      instrucoesPreview: z.string().max(200),
+      avisos: z.array(z.enum(TRIAGEM_AGENTE_AVISOS)).max(TRIAGEM_AGENTE_AVISOS.length),
+      error: z.string().max(CHAT_ACTION_ERROR_MAX).nullable(),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal('triagem-etiqueta'),
+      ...actionBase,
+      chatId: chatIdOfWhatsApp,
+      chat: z
+        .object({ id: chatIdOfWhatsApp, name: z.string().max(200), kind: z.enum(['person', 'group']) })
+        .strict()
+        .nullable(),
+      antes: etiquetaSchema.nullable(),
+      depois: z.object({ urgente: z.boolean(), ambito: z.enum(TRIAGEM_AMBITOS).nullable() }).strict(),
+      pedido: z.object({ urgente: z.boolean().nullable(), ambito: z.enum([...TRIAGEM_AMBITOS, 'nenhum']).nullable() }).strict(),
+      avisos: z.array(z.literal('conversa-nao-encontrada')).max(1),
       error: z.string().max(CHAT_ACTION_ERROR_MAX).nullable(),
     })
     .strict(),

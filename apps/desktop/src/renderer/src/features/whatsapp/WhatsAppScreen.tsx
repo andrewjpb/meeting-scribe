@@ -1,9 +1,10 @@
-import { Bot, Paperclip, PanelRight, Pause, Play, Reply, Search, SmilePlus, Sparkles, TriangleAlert, X } from 'lucide-react'
+import { Bot, Paperclip, PanelRight, Pause, Play, Plus, Reply, Search, Settings, SmilePlus, Sparkles, TriangleAlert, X } from 'lucide-react'
 import { useEffect, useLayoutEffect, useRef, useState, type DragEvent, type KeyboardEvent, type RefObject, type UIEvent } from 'react'
-import { Link, useLocation } from 'react-router'
-import { settingsPath, type WhatsAppNavigationState } from '@shared/routes'
+import { Link, useLocation, useNavigate } from 'react-router'
+import { ROUTE_PATHS, settingsPath, type WhatsAppNavigationState } from '@shared/routes'
 import { isGroupChat } from '@shared/atendimento'
 import type { Meeting } from '@shared/meetings'
+import { contagensAbas, naAba, type Etiqueta, type TriagemAba, type TriagemStatus } from '@shared/triagem'
 import {
   WHATSAPP_DRAFT_INSTRUCTION_MAX,
   WHATSAPP_REACTION_EMOJIS,
@@ -24,15 +25,20 @@ import { AtendimentoPanel, useAtendimentoChatLog } from '../atendimento/Atendime
 import { AtendimentoProposal } from '../atendimento/AtendimentoProposal'
 import { useAtendimento } from '../atendimento/atendimentoStore'
 import { agentMessageIds } from '../atendimento/status'
+import { useAutomations } from '../agents/automationsStore'
 import { AttachCard } from './AttachCard'
 import { carriesFiles, chooseDropped, DROP_FILES_MAX, previewFor, type AttachPreview } from './attach'
 import { Avatar } from './Avatar'
 import { DetailsPanel } from './DetailsPanel'
+import { EtiquetaBar } from './EtiquetaBar'
+import { EtiquetaChips } from './EtiquetaChips'
 import { toBlob } from './media'
 import { MessageMedia } from './MessageMedia'
 import { chatPhone, clockLabel, detailsStartOpen, messageTimeLabel, previewText, startsRun } from './format'
 import { createTypingSignal, quotedBlock, quoteFor, reactionToSend, typingLabel, type ReplyQuote, type TypingSignal } from './interactions'
 import { visibleMessages, visiblePending, type PendingSend } from './pending'
+import { TriagemTabs } from './TriagemTabs'
+import { useTriagem } from './triagemStore'
 import { useWhatsApp } from './whatsappStore'
 
 const SEND_ERRORS: Record<'click' | 'state' | 'invalid' | 'failed', string> = {
@@ -94,8 +100,8 @@ function usePhoto(chatId: string, target: RefObject<Element | null>, again = fal
   return photo
 }
 
-/** Uma linha da lista de conversas: foto (ou iniciais), nome, hora, prévia e não lidas. */
-function ChatRow({ chat, active, onOpen }: { chat: WhatsAppChat; active: boolean; onOpen: () => void }) {
+/** Uma linha da lista de conversas: foto (ou iniciais), nome, hora, prévia, etiquetas da triagem e não lidas. */
+function ChatRow({ chat, etiqueta, active, onOpen }: { chat: WhatsAppChat; etiqueta: Etiqueta | null; active: boolean; onOpen: () => void }) {
   const ref = useRef<HTMLButtonElement | null>(null)
   const photo = usePhoto(chat.id, ref)
   const group = chat.kind === 'group'
@@ -127,6 +133,8 @@ function ChatRow({ chat, active, onOpen }: { chat: WhatsAppChat; active: boolean
           ) : (
             <span className="min-w-0 flex-1 truncate text-12 text-text-muted">{previewText(chat.lastMessage)}</span>
           )}
+          {/* Contrato 162: as etiquetas da triagem, na linha da prévia (o nome não perde espaço). */}
+          <EtiquetaChips etiqueta={etiqueta} />
           {/* Contrato 143: a etiqueta do atendimento ligado, sem empurrar a hora nem as não lidas. */}
           <AtendimentoChip chatId={chat.id} />
           {chat.unread > 0 && (
@@ -745,6 +753,8 @@ function Conversation({ chat, initialText, detailsOpen, onDetails, atendimentoOp
           Detalhes
         </button>
       </header>
+      {/* Contrato 162: a etiqueta da triagem (pessoa ou grupo), à mão, e o "Triar agora". */}
+      <EtiquetaBar chatId={chat.id} />
       <div ref={list} onScroll={onScroll} data-whatsapp-messages className="min-h-0 flex-1 overflow-y-auto px-5 py-3">
         {messages === undefined ? (
           <div className="flex flex-col gap-3" aria-hidden="true">
@@ -992,6 +1002,70 @@ function AtendimentoPauseBar() {
   )
 }
 
+/**
+ * Contrato 162 (R12): a aba Urgentes, Pessoal ou Profissional sem conversa. Desligada em Configurações > sem agente de
+ * triagem ativo > vazia (a ordem do `status.motivo`); ainda sem o status, só a frase.
+ */
+function TriagemVazia({ status }: { status: TriagemStatus | null }) {
+  const navigate = useNavigate()
+  const [creating, setCreating] = useState(false)
+  const [failure, setFailure] = useState<string | null>(null)
+  const motivo = status?.motivo === 'desligado' ? 'desligado' : status?.motivo === 'sem-agente' ? 'sem-agente' : 'vazio'
+  const criar = (): void => {
+    if (creating) return
+    setCreating(true)
+    setFailure(null)
+    void useTriagem
+      .getState()
+      .createFromTemplate()
+      .then(
+        (result) => {
+          setCreating(false)
+          if (!result.ok) {
+            setFailure('Não foi possível criar o agente de triagem.')
+            return
+          }
+          useAutomations.getState().setTab('tarefas')
+          void navigate(ROUTE_PATHS.automacoes)
+        },
+        () => {
+          setCreating(false)
+          setFailure('Não foi possível criar o agente de triagem.')
+        },
+      )
+  }
+  if (status === null || motivo === 'vazio') {
+    return (
+      <p data-triagem-vazio="vazio" className="px-2 text-12 text-text-muted">
+        Nenhuma conversa aqui.
+      </p>
+    )
+  }
+  if (motivo === 'desligado') {
+    return (
+      <div data-triagem-vazio="desligado" className="flex flex-col items-start gap-3 px-2 pt-1">
+        <p className="text-12 text-text-muted">A triagem está desligada em Configurações.</p>
+        <Button action="triagem-configuracoes" variant="secondary" icon={Settings} data={{ 'data-triagem-configuracoes': '' }} onClick={() => void navigate(settingsPath('claude'))}>
+          Abrir Configurações
+        </Button>
+      </div>
+    )
+  }
+  return (
+    <div data-triagem-vazio="sem-agente" className="flex flex-col items-start gap-3 px-2 pt-1">
+      <p className="text-12 text-text-muted">Nenhum agente de triagem ativo. Um agente das Automações etiqueta cada conversa que recebe mensagem.</p>
+      <Button action="triagem-criar" icon={Plus} data={{ 'data-triagem-criar': '' }} disabled={creating} onClick={criar}>
+        Criar agente de triagem
+      </Button>
+      {failure && (
+        <p role="alert" className="text-12 text-rec">
+          {failure}
+        </p>
+      )}
+    </div>
+  )
+}
+
 /** O painel Detalhes da conversa aberta, com as mensagens carregadas dela. */
 function OpenDetails({ chat, onClose }: { chat: WhatsAppChat; onClose: () => void }) {
   const messages = useWhatsApp((state) => state.messages[chat.id])
@@ -1011,10 +1085,15 @@ export function WhatsAppScreen() {
   const [selected, setSelected] = useState<string | null>(asked?.chatId ?? null)
   // Já na tela, um pedido novo (outra navegação) troca a conversa aberta.
   const [seenKey, setSeenKey] = useState(location.key)
+  // Contrato 162: a aba de triagem pedida na navegação (sem ela, "Todas"); trocar de aba não persiste.
+  const [aba, setAba] = useState<TriagemAba>(asked?.aba ?? 'todas')
   if (seenKey !== location.key) {
     setSeenKey(location.key)
     if (asked?.chatId) setSelected(asked.chatId)
+    if (asked?.aba) setAba(asked.aba)
   }
+  const etiquetas = useTriagem((state) => state.etiquetas)
+  const triagemStatus = useTriagem((state) => state.status)
   const [query, setQuery] = useState('')
   // Contrato 33: o painel Detalhes começa aberto com a janela larga (fechado abaixo) e, depois, fica como a pessoa
   // deixou, ao trocar de conversa e ao redimensionar, enquanto a tela está montada.
@@ -1073,7 +1152,11 @@ export function WhatsAppScreen() {
   useEffect(() => () => window.__scribeApi.send('scribe:whatsapp-viewing', { chatId: null }), [])
 
   const term = query.trim().toLocaleLowerCase('pt-BR')
-  const shown = (chats ?? []).filter((chat) => !term || chat.name.toLocaleLowerCase('pt-BR').includes(term))
+  // Contrato 162: a aba filtra antes da busca; as contagens são sobre todas as conversas.
+  const naAbaAtual = (chats ?? []).filter((chat) => naAba(chat, etiquetas[chat.id] ?? null, aba))
+  const shown = naAbaAtual.filter((chat) => !term || chat.name.toLocaleLowerCase('pt-BR').includes(term))
+  const contagens = contagensAbas(chats ?? [], etiquetas)
+  const vazioTriagem = (aba === 'urgentes' || aba === 'pessoal' || aba === 'profissional') && chats !== null && !naAbaAtual.length
   const open = chats?.find((chat) => chat.id === selected) ?? null
   const openIndividual = open !== null && open.kind !== 'group' && !isGroupChat(open.id)
   // Em grupo, o painel Atendimento fecha.
@@ -1121,19 +1204,24 @@ export function WhatsAppScreen() {
                   className="min-w-0 flex-1 bg-transparent text-12 text-text select-text placeholder:text-text-faint focus-visible:outline-none"
                 />
               </div>
+              <div className="mt-2">
+                <TriagemTabs value={aba} naoLidas={contagens.naoLidas} urgentes={contagens.urgentes} onChange={setAba} />
+              </div>
             </div>
             <AtendimentoPauseBar />
             <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-3">
               {chats === null ? (
                 <p className="px-2 text-12 text-text-muted">Carregando…</p>
+              ) : vazioTriagem ? (
+                <TriagemVazia status={triagemStatus} />
               ) : (
                 <ul data-whatsapp-chats className="flex flex-col gap-0.5">
                   {shown.map((chat) => (
                     <li key={chat.id}>
-                      <ChatRow chat={chat} active={chat.id === selected} onOpen={() => setSelected(chat.id)} />
+                      <ChatRow chat={chat} etiqueta={etiquetas[chat.id] ?? null} active={chat.id === selected} onOpen={() => setSelected(chat.id)} />
                     </li>
                   ))}
-                  {!shown.length && <li className="px-2 text-12 text-text-muted">{chats.length ? 'Nenhuma conversa com esse nome.' : 'Nenhuma conversa ainda.'}</li>}
+                  {!shown.length && <li className="px-2 text-12 text-text-muted">{naAbaAtual.length ? 'Nenhuma conversa com esse nome.' : chats.length ? 'Nenhuma conversa aqui.' : 'Nenhuma conversa ainda.'}</li>}
                 </ul>
               )}
               {shownHits && (

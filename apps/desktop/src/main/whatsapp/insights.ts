@@ -58,10 +58,13 @@ export function insightsSystemPrompt(): string {
   ].join('\n')
 }
 
-/** O pedido: a data de hoje e as últimas 200 mensagens, uma por linha, escapadas. */
-export function insightsInput(chatName: string, kind: 'person' | 'group', messages: readonly WhatsAppMessage[], now: number): string {
+/**
+ * O pedido: a data de hoje e as últimas 200 mensagens, uma por linha, escapadas. Contrato 147: os áudios com a
+ * transcrição guardada (`transcripts`, por id da mensagem), sem o id da mídia.
+ */
+export function insightsInput(chatName: string, kind: 'person' | 'group', messages: readonly WhatsAppMessage[], now: number, transcripts: ReadonlyMap<string, string> = new Map()): string {
   const lines = messages.slice(-INSIGHTS_MESSAGES_MAX).map((message) => {
-    const line = messageLine(message)
+    const line = messageLine(message, { transcript: transcripts.get(message.id) })
     return escapeTurnText(line.length > LINE_MAX ? `${line.slice(0, LINE_MAX - 1)}…` : line)
   })
   return [

@@ -12,6 +12,9 @@
 # falso). `fake:gone` faz o papel do arquivo que o WhatsApp não tem mais. A imagem do Atlas (m4) continua sem as
 # chaves, como uma mensagem de antes desta versão.
 #
+# Contrato 148: o Bruno ganha também um documento PDF (uma página, gerado aqui) e uma figurinha WebP de 1×1 que baixam no
+# clique, como histórico mais antigo que o áudio: a última mensagem e as não lidas do Bruno não mudam.
+#
 # Contrato 39: o envio de imagem e vídeo fica em `sent` (tipo, nome, tamanho e legenda, nunca os bytes) e o eco volta
 # com as chaves falsas do tipo: baixar o eco devolve o PNG (ou o começo de MP4) acima, não o arquivo enviado.
 # Contrato 34: o envio com `quote` guarda o `replyToId`; a reação (`send_reaction`) entra em `sent` como `{'type':
@@ -61,15 +64,44 @@ def tone_wav(seconds=2, rate=8000):
     return header + b'data' + struct.pack('<I', len(frames)) + frames
 
 
+def tiny_pdf(text):
+    """PDF de uma página com uma linha de texto (ASCII), com a tabela `xref` certa: sempre os mesmos bytes."""
+    stream = f'BT /F1 18 Tf 72 720 Td ({text}) Tj ET'.encode('ascii')
+    objects = [
+        b'<< /Type /Catalog /Pages 2 0 R >>',
+        b'<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+        b'<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>',
+        b'<< /Length ' + str(len(stream)).encode() + b' >>\nstream\n' + stream + b'\nendstream',
+        b'<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
+    ]
+    data = b'%PDF-1.4\n'
+    offsets = []
+    for number, body in enumerate(objects, start=1):
+        offsets.append(len(data))
+        data += f'{number} 0 obj\n'.encode() + body + b'\nendobj\n'
+    table = len(data)
+    data += f'xref\n0 {len(objects) + 1}\n0000000000 65535 f \n'.encode()
+    data += b''.join(f'{offset:010d} 00000 n \n'.encode() for offset in offsets)
+    data += f'trailer\n<< /Size {len(objects) + 1} /Root 1 0 R >>\nstartxref\n{table}\n%%EOF\n'.encode()
+    return data
+
+
+# WebP sem perdas de 1×1 pixel transparente (o menor WebP válido).
+TINY_WEBP = b'RIFF\x1a\x00\x00\x00WEBPVP8L\x0d\x00\x00\x00\x2f\x00\x00\x00\x10\x07\x10\x11\x11\x88\x88\xfe\x07\x00'
+
 FAKE_AUDIO_SECONDS = 2
 FAKE_MEDIA = {
     'image': solid_png((214, 120, 40), size=48),
     'audio': tone_wav(FAKE_AUDIO_SECONDS),
     # Só o começo de um MP4 (a caixa `ftyp`): ninguém dá play no vídeo falso.
     'video': b'\x00\x00\x00\x18ftypmp42\x00\x00\x00\x00mp42isom' + b'\x00' * 64,
+    # Contrato 148.
+    'document': tiny_pdf('Contrato revisado - versao 2'),
+    'sticker': TINY_WEBP,
 }
 
-FAKE_MIME = {'image': 'image/png', 'audio': 'audio/wav', 'video': 'video/mp4'}
+FAKE_MIME = {'image': 'image/png', 'audio': 'audio/wav', 'video': 'video/mp4', 'document': 'application/pdf', 'sticker': 'image/webp'}
+FAKE_DOCUMENT_NAME = 'contrato-revisado.pdf'
 
 
 def png_data_url(rgb):
@@ -129,7 +161,8 @@ def seed_messages(base):
 
 
 def media_messages(base):
-    """Contrato 37: o áudio e a imagem do Bruno, com as chaves falsas do download (histórico: não contam como não lidas)."""
+    """Contrato 37: o áudio e a imagem do Bruno, com as chaves falsas do download (histórico: não contam como não lidas).
+    Contrato 148: o documento PDF e a figurinha do Bruno, do mesmo jeito."""
     bruno = SEED_CHATS[2][0]
     minute = 60_000
     return [
@@ -154,6 +187,29 @@ def media_messages(base):
             'text': 'Foto do quadro',
             'media': {'kind': 'image', 'mime': 'image/png', 'size': len(FAKE_MEDIA['image']), 'name': None},
             'mediaProto': b'fake:image',
+        },
+        # Contrato 148: o PDF e a figurinha, mais antigos que o áudio (a última do Bruno continua o texto m6).
+        {
+            'id': 'm9',
+            'chatId': bruno,
+            'author': 'Bruno Lima',
+            'fromMe': False,
+            'at': base - 100 * minute,
+            'type': 'document',
+            'text': '',
+            'media': {'kind': 'document', 'mime': 'application/pdf', 'size': len(FAKE_MEDIA['document']), 'name': FAKE_DOCUMENT_NAME},
+            'mediaProto': b'fake:document',
+        },
+        {
+            'id': 'm10',
+            'chatId': bruno,
+            'author': 'Bruno Lima',
+            'fromMe': False,
+            'at': base - 99 * minute,
+            'type': 'sticker',
+            'text': '',
+            'media': {'kind': 'sticker', 'mime': 'image/webp', 'size': len(FAKE_MEDIA['sticker']), 'name': None},
+            'mediaProto': b'fake:sticker',
         },
     ]
 
@@ -258,8 +314,8 @@ class FakeBackend:
             with self.lock:
                 self.counter += 1
                 message_id = f'recebida-{self.counter}'
-            # Contrato 37: `type` e `media` entregam uma mídia; imagem, vídeo e áudio baixam (com `gone: true`, o
-            # arquivo já não existe no WhatsApp), a não ser com `downloadable: false`.
+            # Contrato 37: `type` e `media` entregam uma mídia; imagem, vídeo e áudio (contrato 148: documento e figurinha
+            # também) baixam (com `gone: true`, o arquivo já não existe no WhatsApp), a não ser com `downloadable: false`.
             kind = body.get('type') if body.get('type') in ('image', 'video', 'audio', 'document', 'sticker') else 'text'
             given = body.get('media') if isinstance(body.get('media'), dict) else {}
             media = None

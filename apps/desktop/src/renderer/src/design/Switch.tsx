@@ -6,15 +6,18 @@ interface SwitchProps {
   disabled?: boolean
   /** `data-action` do botão (o smoke e os atalhos acham por ele). */
   action?: string
+  /** `data-setting` do botão (contrato 151: o smoke acha a configuração por ele). */
+  setting?: string
 }
 
 /** Alternador quadrado (36 × 20, raio 4; botão de 14 entre o fio de 1 px e 2 px de folga): desligado em --bg-sunken, ligado em --accent. */
-export function Switch({ checked, onChange, labelledBy, disabled = false, action }: SwitchProps) {
+export function Switch({ checked, onChange, labelledBy, disabled = false, action, setting }: SwitchProps) {
   return (
     <button
       type="button"
       role="switch"
       {...(action ? { 'data-action': action } : {})}
+      {...(setting ? { 'data-setting': setting } : {})}
       aria-checked={checked}
       aria-labelledby={labelledBy}
       disabled={disabled}

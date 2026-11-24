@@ -268,6 +268,10 @@ def test_media_is_listed_as_downloadable_only_with_the_keys(running):
     assert bruno['m7']['media'] == {'kind': 'audio', 'mime': 'audio/wav', 'size': len(backend_fake.FAKE_MEDIA['audio']), 'name': None, 'downloadable': True, 'seconds': 2}
     assert bruno['m8']['media']['downloadable'] is True and bruno['m6']['media'] is None
     assert 'mediaProto' not in bruno['m7']
+    # Contrato 148: o PDF e a figurinha do Bruno também baixam.
+    assert bruno['m9']['media'] == {'kind': 'document', 'mime': 'application/pdf', 'size': len(backend_fake.FAKE_MEDIA['document']), 'name': 'contrato-revisado.pdf', 'downloadable': True}
+    assert bruno['m10']['media'] == {'kind': 'sticker', 'mime': 'image/webp', 'size': len(backend_fake.FAKE_MEDIA['sticker']), 'name': None, 'downloadable': True}
+    assert [m['id'] for m in call(port, 'GET', f'/chats/{BRUNO}/messages')[1]['messages']] == ['m9', 'm10', 'm7', 'm8', 'm6']
     # As do Bruno são histórico: não contam como não lidas, e a última da conversa continua o texto.
     chat = next(c for c in call(port, 'GET', '/chats')[1]['chats'] if c['id'] == BRUNO)
     assert chat['unread'] == 0 and chat['lastMessage']['id'] == 'm6'
@@ -315,9 +319,10 @@ def test_media_route_without_keys_too_big_and_gone(running, monkeypatch):
     gone = call(port, 'POST', '/_fake/incoming', {'chatId': ANA, 'type': 'audio', 'gone': True})[1]['id']
     status, _, _, body = raw(port, f'/chats/{ANA}/messages/{gone}/media')
     assert status == 410 and json.loads(body) == {'error': 'gone'}
-    # Documento e figurinha nunca baixam; `downloadable: false` também não.
-    document = call(port, 'POST', '/_fake/incoming', {'chatId': ANA, 'type': 'document', 'media': {'name': 'a.pdf'}})[1]['id']
-    assert raw(port, f'/chats/{ANA}/messages/{document}/media')[0] == 404
+    # Sem as chaves (`downloadable: false`): 404, também para documento e figurinha (contrato 148).
+    for kind in ('image', 'document', 'sticker'):
+        keyless = call(port, 'POST', '/_fake/incoming', {'chatId': ANA, 'type': kind, 'downloadable': False})[1]['id']
+        assert raw(port, f'/chats/{ANA}/messages/{keyless}/media')[0] == 404
     # Acima do limite: pelo tamanho que a mensagem diz (sem baixar) e pelo que veio.
     monkeypatch.setattr(server, 'MEDIA_MAX', 200)
     assert raw(port, f'/chats/{BRUNO}/messages/m8/media')[0] == 200
@@ -326,6 +331,117 @@ def test_media_route_without_keys_too_big_and_gone(running, monkeypatch):
     monkeypatch.setattr(server, 'MEDIA_MAX', 50)
     unsized = call(port, 'POST', '/_fake/incoming', {'chatId': ANA, 'type': 'video'})[1]['id']
     assert raw(port, f'/chats/{ANA}/messages/{unsized}/media')[0] == 413
+
+
+def counting_downloads(bridge):
+    """Troca o download do backend falso por um que conta os pedidos (e devolve os mesmos bytes)."""
+    asked = []
+    original = bridge.backend.download_media
+
+    def counted(kind, proto):
+        asked.append((kind, proto))
+        return original(kind, proto)
+
+    bridge.backend.download_media = counted
+    return asked
+
+
+def test_document_and_sticker_route_serves_bytes_with_their_mime(running):
+    """Contrato 148 (CA1): o PDF sai com o mime declarado; a figurinha, sempre como `image/webp`."""
+    _, port, _ = running
+    call(port, 'POST', '/_fake/scan', {})
+    status, mime, length, body = raw(port, f'/chats/{BRUNO}/messages/m9/media')
+    assert status == 200 and mime == 'application/pdf' and int(length) == len(body) and body == backend_fake.FAKE_MEDIA['document']
+    assert body.startswith(b'%PDF-') and body.rstrip().endswith(b'%%EOF')
+    status, mime, _, body = raw(port, f'/chats/{BRUNO}/messages/m10/media')
+    assert status == 200 and mime == 'image/webp' and body[:4] == b'RIFF' and body[8:12] == b'WEBP'
+    # Figurinha que declara outro mime continua `image/webp`.
+    sticker = call(port, 'POST', '/_fake/incoming', {'chatId': ANA, 'type': 'sticker', 'media': {'mime': 'application/x-lottie'}})[1]['id']
+    assert raw(port, f'/chats/{ANA}/messages/{sticker}/media')[1] == 'image/webp'
+    # Documento de outro tipo: o mime declarado (o do Office passa de 60 caracteres); com quebra de linha, o genérico.
+    office = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+    sheet = call(port, 'POST', '/_fake/incoming', {'chatId': ANA, 'type': 'document', 'media': {'mime': office, 'name': 'a.docx'}})[1]['id']
+    assert raw(port, f'/chats/{ANA}/messages/{sheet}/media')[1] == office
+    injected = call(port, 'POST', '/_fake/incoming', {'chatId': ANA, 'type': 'document', 'media': {'mime': 'application/pdf\nX-Injetado: 1'}})[1]['id']
+    assert raw(port, f'/chats/{ANA}/messages/{injected}/media')[1] == 'application/octet-stream'
+    assert server.DOCUMENT_MIME.fullmatch('text/html\n') is None and server.DOCUMENT_MIME.fullmatch('multipart/mixed') is None
+
+
+def test_document_too_big_is_413(running, monkeypatch):
+    """Contrato 148 (CA2): o limite de 64 MB vale para o documento, pelo tamanho declarado e pelo que veio."""
+    bridge, port, _ = running
+    call(port, 'POST', '/_fake/scan', {})
+    asked = counting_downloads(bridge)
+    declared = call(port, 'POST', '/_fake/incoming', {'chatId': ANA, 'type': 'document', 'media': {'size': server.MEDIA_MAX + 1, 'name': 'grande.pdf'}})[1]['id']
+    status, _, _, body = raw(port, f'/chats/{ANA}/messages/{declared}/media')
+    assert status == 413 and json.loads(body) == {'error': 'too-big'} and asked == []
+    monkeypatch.setattr(server, 'MEDIA_MAX', 100)
+    unsized = call(port, 'POST', '/_fake/incoming', {'chatId': ANA, 'type': 'document'})[1]['id']
+    assert raw(port, f'/chats/{ANA}/messages/{unsized}/media')[0] == 413
+
+
+def test_document_without_keys_is_404(running):
+    """Contrato 148 (CA2, CA3): documento sem as chaves (como os recebidos antes desta versão) é 404, sem erro."""
+    bridge, port, _ = running
+    call(port, 'POST', '/_fake/scan', {})
+    asked = counting_downloads(bridge)
+    old = {'id': 'D0', 'chatId': ANA, 'author': 'Ana Souza', 'fromMe': False, 'at': 1, 'type': 'document', 'text': '', 'media': {'kind': 'document', 'mime': 'application/pdf', 'size': 10, 'name': 'a.pdf'}}
+    bridge.on_message(old, count_unread=False)
+    listed = {m['id']: m for m in call(port, 'GET', f'/chats/{ANA}/messages?limit=200')[1]['messages']}
+    assert listed['D0']['media']['downloadable'] is False
+    status, _, _, body = raw(port, f'/chats/{ANA}/messages/D0/media')
+    assert status == 404 and json.loads(body) == {'error': 'missing'} and asked == []
+
+
+def test_document_gone_is_410(running):
+    """Contrato 148 (CA2): o WhatsApp não tem mais o documento: 410."""
+    _, port, _ = running
+    call(port, 'POST', '/_fake/scan', {})
+    gone = call(port, 'POST', '/_fake/incoming', {'chatId': ANA, 'type': 'document', 'gone': True})[1]['id']
+    status, _, _, body = raw(port, f'/chats/{ANA}/messages/{gone}/media')
+    assert status == 410 and json.loads(body) == {'error': 'gone'}
+
+
+def test_document_is_kept_7_days_then_cleaned(running):
+    """Contrato 148 (CA2): o documento baixado fica 7 dias em `media/` (0600) e sai na limpeza da gravação seguinte."""
+    bridge, port, data = running
+    call(port, 'POST', '/_fake/scan', {})
+    asked = counting_downloads(bridge)
+    assert raw(port, f'/chats/{BRUNO}/messages/m9/media')[0] == 200
+    [saved] = list((data / 'media').iterdir())
+    assert oct(saved.stat().st_mode & 0o777) == '0o600'
+    # Dentro dos 7 dias vem do disco.
+    assert raw(port, f'/chats/{BRUNO}/messages/m9/media')[3] == backend_fake.FAKE_MEDIA['document'] and len(asked) == 1
+    # Vencido: a próxima gravação (a figurinha) apaga o arquivo, e o documento é pedido de novo.
+    os.utime(saved, (time.time() - 8 * 24 * 3600, time.time() - 8 * 24 * 3600))
+    assert raw(port, f'/chats/{BRUNO}/messages/m10/media')[0] == 200
+    assert not saved.exists()
+    assert raw(port, f'/chats/{BRUNO}/messages/m9/media')[0] == 200
+    assert [kind for kind, _ in asked] == ['document', 'sticker', 'document']
+
+
+def test_document_is_deleted_on_logout(running):
+    """Contrato 148 (CA2): sair da conta apaga o documento e a figurinha baixados."""
+    _, port, data = running
+    call(port, 'POST', '/_fake/scan', {})
+    assert raw(port, f'/chats/{BRUNO}/messages/m9/media')[0] == 200
+    assert raw(port, f'/chats/{BRUNO}/messages/m10/media')[0] == 200
+    assert len(list((data / 'media').iterdir())) == 2
+    call(port, 'POST', '/logout', {})
+    assert not (data / 'media').exists()
+
+
+def test_nothing_downloads_when_messages_arrive(running):
+    """Contrato 148 (CA5): receber documento e figurinha (no histórico ou ao vivo) e listar não baixa nada."""
+    bridge, port, data = running
+    asked = counting_downloads(bridge)
+    call(port, 'POST', '/_fake/scan', {})
+    for kind in ('document', 'sticker', 'image', 'audio', 'video'):
+        call(port, 'POST', '/_fake/incoming', {'chatId': ANA, 'type': kind})
+    for chat_id, _, _ in SEED_CHATS:
+        call(port, 'GET', f'/chats/{chat_id}/messages')
+    call(port, 'GET', '/chats')
+    assert asked == [] and not (data / 'media').exists()
 
 
 def test_new_media_message_event_says_downloadable_without_the_keys(running):
@@ -357,19 +473,25 @@ def test_old_database_loads_and_keeps_its_messages_without_download(tmp_path):
         CREATE TABLE messages (id TEXT NOT NULL, chat_id TEXT NOT NULL, author TEXT NOT NULL DEFAULT '', from_me INTEGER NOT NULL DEFAULT 0, at INTEGER NOT NULL, kind TEXT NOT NULL DEFAULT 'text', text TEXT NOT NULL DEFAULT '', media_mime TEXT, media_size INTEGER, media_name TEXT, PRIMARY KEY (chat_id, id));
         INSERT INTO chats (id, name, last_at) VALUES ('5511944440000@s.whatsapp.net', 'Bia', 10);
         INSERT INTO messages (id, chat_id, author, at, kind, text, media_mime, media_size) VALUES ('A1', '5511944440000@s.whatsapp.net', 'Bia', 10, 'audio', '', 'audio/ogg', 2048);
+        INSERT INTO messages (id, chat_id, author, at, kind, text, media_mime, media_size, media_name) VALUES ('D1', '5511944440000@s.whatsapp.net', 'Bia', 11, 'document', '', 'application/pdf', 4096, 'a.pdf');
+        INSERT INTO messages (id, chat_id, author, at, kind, text, media_mime, media_size) VALUES ('S1', '5511944440000@s.whatsapp.net', 'Bia', 12, 'sticker', '', 'image/webp', 26);
         '''
     )
     old.commit()
     old.close()
     store = Store(str(path))
-    [message] = store.messages('5511944440000@s.whatsapp.net')
+    message, document, sticker = store.messages('5511944440000@s.whatsapp.net')
     assert message['media'] == {'kind': 'audio', 'mime': 'audio/ogg', 'size': 2048, 'name': None, 'downloadable': False}
     assert store.media_source('5511944440000@s.whatsapp.net', 'A1') is None
+    # Contrato 148 (CA3): documento e figurinha de antes também ficam sem download, sem erro.
+    assert document['media'] == {'kind': 'document', 'mime': 'application/pdf', 'size': 4096, 'name': 'a.pdf', 'downloadable': False}
+    assert sticker['media']['downloadable'] is False
+    assert store.media_source('5511944440000@s.whatsapp.net', 'D1') is None and store.media_source('5511944440000@s.whatsapp.net', 'S1') is None
     audio = {'id': 'A2', 'chatId': '5511944440000@s.whatsapp.net', 'author': 'Bia', 'fromMe': False, 'at': 20, 'type': 'audio', 'text': '', 'media': {'kind': 'audio', 'mime': 'audio/ogg', 'size': 10, 'name': None, 'seconds': 7}, 'mediaProto': b'chaves'}
-    # A mensagem serializada só fica para imagem, vídeo e áudio, e até 256 KB.
-    sticker = dict(audio, id='A3', type='sticker', media={'kind': 'sticker', 'mime': 'image/webp', 'size': 10, 'name': None})
+    # A mensagem serializada só fica para imagem, vídeo, áudio, documento e figurinha (contrato 148), e até 256 KB.
+    other = dict(audio, id='A3', type='other', media={'kind': 'other', 'mime': None, 'size': None, 'name': None})
     huge = dict(audio, id='A4', mediaProto=b'x' * (256 * 1024 + 1))
-    assert store.add_messages([audio, sticker, huge]) == 3
+    assert store.add_messages([audio, other, huge]) == 3
     assert store.media_source('5511944440000@s.whatsapp.net', 'A2') == ('audio', 'audio/ogg', 10, b'chaves')
     assert store.media_source('5511944440000@s.whatsapp.net', 'A3') is None and store.media_source('5511944440000@s.whatsapp.net', 'A4') is None
     listed = {m['id']: m['media'] for m in store.messages('5511944440000@s.whatsapp.net')}
@@ -377,7 +499,7 @@ def test_old_database_loads_and_keeps_its_messages_without_download(tmp_path):
     store.close()
     # Abrir de novo (já com as colunas) não muda nada.
     again = Store(str(path))
-    assert len(again.messages('5511944440000@s.whatsapp.net')) == 4
+    assert len(again.messages('5511944440000@s.whatsapp.net')) == 6
     again.close()
 
 
