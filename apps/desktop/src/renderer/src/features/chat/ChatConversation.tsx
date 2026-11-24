@@ -43,7 +43,45 @@ interface ChatConversationProps {
 const INPUT_MAX_HEIGHT = 8 * 22 + 14
 const COUNT = new Intl.NumberFormat('pt-BR')
 /** Cliques seguidos no escopo viram uma gravação só. */
-const SCOPE_DELAY_MS = 300
+export const SCOPE_DELAY_MS = 300
+
+/** O timer da gravação do escopo (o `useRef` da conversa). */
+interface ScopeTimer {
+  current: ReturnType<typeof setTimeout> | null
+}
+/** Se a gravação de antes da pergunta ainda está indo (o `useRef` da conversa). */
+interface ScopeSaving {
+  current: boolean
+}
+
+/** Grava o escopo 300 ms depois do último clique; um clique novo recomeça a espera. */
+export function scheduleScope(timer: ScopeTimer, next: ChatScope, save: (scope: ChatScope) => void): void {
+  if (timer.current) clearTimeout(timer.current)
+  timer.current = setTimeout(() => {
+    timer.current = null
+    save(next)
+  }, SCOPE_DELAY_MS)
+}
+
+/**
+ * Contrato 172: antes de uma pergunta, a troca que ainda esperava os 300 ms é gravada já (e aguardada), senão o main
+ * responderia com o escopo antigo. Sem troca esperando, não grava nada: o timer que já disparou fez a dele.
+ * Enquanto essa gravação vai, outra pergunta não sai (iria com o escopo antigo). `false` = a gravação falhou ou ainda
+ * está indo, e a pergunta não vai.
+ */
+export async function flushPendingScope(timer: ScopeTimer, pending: ChatScope | null, save: (scope: ChatScope) => Promise<boolean>, saving: ScopeSaving): Promise<boolean> {
+  if (saving.current) return false
+  if (!timer.current) return true
+  clearTimeout(timer.current)
+  timer.current = null
+  if (!pending) return true
+  saving.current = true
+  try {
+    return await save(pending)
+  } finally {
+    saving.current = false
+  }
+}
 
 const LABEL_BUTTON =
   'no-drag inline-flex h-7 max-w-[220px] items-center gap-1.5 rounded-[var(--radius-control)] border border-line-strong px-2 text-12 font-medium text-title transition-colors duration-[var(--duration-fast)] ease-[var(--ease-out)] hover:bg-bg-sunken'
@@ -99,7 +137,10 @@ export function ChatConversation({ chatId, meetingId, meetings, contextOpen, onC
 
   const messages: ChatMessage[] = chat?.messages ?? []
   const answering = answer !== undefined
-  const busy = answering || pending !== undefined
+  // Contrato 172: a troca de escopo sendo gravada antes de uma pergunta também segura as outras.
+  const [savingScope, setSavingScope] = useState(false)
+  const scopeSaving = useRef(false)
+  const busy = answering || pending !== undefined || savingScope
   // Escopo trocado na tela e ainda não gravado (cliques seguidos viram um `update` só): ele vale na tela.
   const [pendingScope, setPendingScope] = useState<ChatScope | null>(null)
   const [scopeNotice, setScopeNotice] = useState<string | null>(null)
@@ -173,30 +214,36 @@ export function ChatConversation({ chatId, meetingId, meetings, contextOpen, onC
     if (!question || busy || claude === 'not-found' || noneChosen) return
     setText('')
     atBottom.current = true
-    if (editing && chatId) {
-      setEditing(false)
+    const redoId = editing ? chatId : null
+    setEditing(false)
+    // Nada foi enviado: o texto volta para o campo.
+    const giveBack = (): void => setText((current) => current || question)
+    void flushPendingScope(scopeTimer, pendingScope, saveScopeBeforeAsking, scopeSaving).then((saved) => {
+      if (!saved) return giveBack()
+      if (redoId) {
+        void useChat
+          .getState()
+          .redo(redoId, question)
+          .then((ok) => {
+            if (!ok) giveBack()
+          })
+        return
+      }
       void useChat
         .getState()
-        .redo(chatId, question)
-        .then((ok) => {
-          if (!ok) setText((current) => current || question)
+        .send(chatId, meetingId, question)
+        .then((id) => {
+          if (!id) giveBack()
         })
-      return
-    }
-    setEditing(false)
-    void useChat
-      .getState()
-      .send(chatId, meetingId, question)
-      .then((id) => {
-        // Nada foi enviado: o texto volta para o campo.
-        if (!id) setText((current) => current || question)
-      })
+    })
   }
 
   const redo = (): void => {
     if (!chatId || busy) return
     atBottom.current = true
-    void useChat.getState().redo(chatId)
+    void flushPendingScope(scopeTimer, pendingScope, saveScopeBeforeAsking, scopeSaving).then((saved) => {
+      if (saved) void useChat.getState().redo(chatId)
+    })
   }
 
   const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>): void => {
@@ -233,6 +280,27 @@ export function ChatConversation({ chatId, meetingId, meetings, contextOpen, onC
         } else setScopeNotice('Espere a pergunta começar para mudar o escopo.')
       })
   }
+  /**
+   * Contrato 172: a troca que esperava os 300 ms, gravada antes da pergunta. Falhou: o erro aparece como nas outras
+   * gravações e a troca volta a esperar o timer (continua valendo na tela e na próxima pergunta).
+   */
+  const saveScopeBeforeAsking = async (next: ChatScope): Promise<boolean> => {
+    if (!chatId) return true
+    setSavingScope(true)
+    const ok = await useChat
+      .getState()
+      .update(chatId, { scope: next })
+      .finally(() => setSavingScope(false))
+    if (ok) {
+      setPendingScope((current) => (current === next ? null : current))
+      setScopeNotice(null)
+      return true
+    }
+    // Recusada pelo main (sem exceção, o `update` não deixa a mensagem).
+    if (!useChat.getState().failures[chatId]) useChat.setState((state) => ({ failures: { ...state.failures, [chatId]: 'Não foi possível gravar a mudança.' } }))
+    if (!scopeTimer.current) scheduleScope(scopeTimer, next, flushScope)
+    return false
+  }
   const changeScope = (next: ChatScope): void => {
     if (!chatId) {
       useChat.getState().setDraft(meetingId, { scope: next })
@@ -240,11 +308,7 @@ export function ChatConversation({ chatId, meetingId, meetings, contextOpen, onC
     }
     // Otimista na tela; o main recebe a lista final 300 ms depois do último clique.
     setPendingScope(next)
-    if (scopeTimer.current) clearTimeout(scopeTimer.current)
-    scopeTimer.current = setTimeout(() => {
-      scopeTimer.current = null
-      flushScope(next)
-    }, SCOPE_DELAY_MS)
+    scheduleScope(scopeTimer, next, flushScope)
   }
   // Escopo recusado enquanto a pergunta saía: tenta de novo quando ela já foi (a resposta começou ou acabou).
   useEffect(() => {
