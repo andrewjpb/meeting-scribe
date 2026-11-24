@@ -1,7 +1,8 @@
 // Contrato das mensagens entre main e renderer. Canal novo entra aqui primeiro: no mapa do
 // sentido certo e na lista de canais permitidos logo abaixo (o preload recusa o que não estiver nela).
 import type { AcpAgentStatus } from './acp'
-import type { ChatActionEventRequest, ChatActionFunilRequest, ChatActionInstagramDraftRequest, ChatActionReminderChangeRequest, ChatActionReminderRequest, ChatActionResult, ChatActionStateRequest, ChatActionTarefaRequest, ChatActionTriagemRequest } from './assistant'
+import type { FolderAddResult } from './assistant-folders'
+import type { ChatActionEventRequest, ChatActionFunilRequest, ChatActionComposeRequest, ChatActionInstagramDraftRequest, ChatActionReminderChangeRequest, ChatActionReminderRequest, ChatActionResult, ChatActionStateRequest, ChatActionTarefaRequest, ChatActionTriagemRequest, EmailComposeFromAction } from './assistant'
 import type { AgentDeleteResult, AgentInput, AgentSaveResult, AgentsList, AutomationEvent, AutomationRun, AutomationRunListItem, AutomationsStatus, RunStartResult, RunStatus, ScheduledTask, TaskInput, TaskSaveResult, TaskToggleResult } from './automations'
 import type { DriveMeetingStatus, GoogleAccountStatus, GoogleClientSaveResult, MicrosoftAccountStatus, MicrosoftClientSaveResult } from './accounts'
 import type { CalendarListResult, CalendarView } from './calendar'
@@ -209,6 +210,12 @@ export interface InvokeChannels {
   'scribe:audio-folder': { request: undefined; response: AudioFolderInfo }
   /** "Escolher pasta…": diálogo nativo no main; só ele grava `audioFolder`. */
   'scribe:audio-folder-choose': { request: undefined; response: { chosen: boolean; folder: AudioFolderInfo; settings: AppSettings } }
+  /** Contrato 165: "Adicionar pasta…" do Assistente: diálogo nativo no main; só ele grava `assistant.folders`. */
+  'scribe:assistant-folder-add': { request: undefined; response: FolderAddResult }
+  /** Contrato 165: tira a pasta da lista e apaga as cópias lidas dela nas conversas; id desconhecido, `ok: false`. */
+  'scribe:assistant-folder-remove': { request: { id: string }; response: { ok: boolean } }
+  /** Contrato 166: o "Abrir" da citação `[Pasta · …](pasta:<id>)`: o main resolve o id pelo índice da conversa e revela o arquivo no Finder. */
+  'scribe:assistant-folder-reveal': { request: { chatId: string; id: string }; response: { ok: boolean; error?: 'nao-encontrado' } }
   /** Início da gravação com "Salvar áudio e transcrição numa pasta": cria o `.part`. */
   'scribe:audio-begin': { request: { startedAt: string; title: string; extension: AudioExtension | null }; response: AudioBeginResult }
   /** Um pedaço de 5 s do gravador. */
@@ -318,6 +325,12 @@ export interface InvokeChannels {
    * tarefa que fechou ou sumiu vira o cartão `failed`, com a frase.
    */
   'scribe:chat-action-tarefa': { request: ChatActionTarefaRequest; response: ChatActionResult }
+  /**
+   * Contrato 168 (pastas-assistente E4): "Abrir no Composer" na resposta de email com anexos das pastas. O main relê cada
+   * anexo pelo índice da conversa (caminho real dentro da pasta permitida, sem link, com o tamanho gravado), lê os bytes
+   * sem seguir link e marca o cartão `opened`, com o texto do cartão. Nada é enviado: o envio é o "Enviar" do Composer.
+   */
+  'scribe:chat-action-email-compose': { request: ChatActionComposeRequest; response: EmailComposeFromAction }
   /** Contrato 163: os cartões da triagem do WhatsApp (criar, editar, pausar e retomar o agente; aplicar a etiqueta). */
   'scribe:chat-action-triagem': { request: ChatActionTriagemRequest; response: ChatActionResult }
   /** Contrato 21: "Permitir uma vez", "Sempre permitir esta ferramenta" ou "Negar" no cartão de uma ferramenta MCP. */
@@ -996,6 +1009,9 @@ const INVOKE: Record<InvokeChannel, true> = {
   'scribe:claude-stop': true,
   'scribe:audio-folder': true,
   'scribe:audio-folder-choose': true,
+  'scribe:assistant-folder-add': true,
+  'scribe:assistant-folder-remove': true,
+  'scribe:assistant-folder-reveal': true,
   'scribe:audio-begin': true,
   'scribe:audio-append': true,
   'scribe:audio-finish': true,
@@ -1035,6 +1051,7 @@ const INVOKE: Record<InvokeChannel, true> = {
   'scribe:chat-action-instagram-draft': true,
   'scribe:chat-action-funil': true,
   'scribe:chat-action-tarefa': true,
+  'scribe:chat-action-email-compose': true,
   'scribe:chat-action-triagem': true,
   'scribe:chat-approval': true,
   'scribe:mcp-chat-servers': true,
@@ -1447,6 +1464,9 @@ export const WHEN_LOCKED: Readonly<Record<InvokeChannel, LockedPolicy>> = Object
   'scribe:claude-path-set': 'refused',
   'scribe:audio-folder': 'refused',
   'scribe:audio-folder-choose': 'refused',
+  'scribe:assistant-folder-add': 'refused',
+  'scribe:assistant-folder-remove': 'refused',
+  'scribe:assistant-folder-reveal': 'refused',
   'scribe:audio-begin': 'refused',
   'scribe:audio-finish': 'session',
   'scribe:meeting-files': 'refused',
@@ -1489,6 +1509,7 @@ export const WHEN_LOCKED: Readonly<Record<InvokeChannel, LockedPolicy>> = Object
   // Contrato 117: os cartões do funil, recusados com o app bloqueado como os outros cartões.
   'scribe:chat-action-funil': 'refused',
   'scribe:chat-action-tarefa': 'refused',
+  'scribe:chat-action-email-compose': 'refused',
   // Contrato 163: os cartões da triagem, recusados com o app bloqueado como os outros cartões.
   'scribe:chat-action-triagem': 'refused',
   // Contrato 21: as conexões MCP não aparecem nem mudam com o app bloqueado; o cartão sem resposta nega em 2 min.

@@ -35,6 +35,7 @@ import { InicioSection } from './InicioSection'
 import { TarefasSection } from './TarefasSection'
 import { AcpAgentField } from './AcpAgentField'
 import { ApiKeyField } from './ApiKeyField'
+import { AssistantFoldersSection } from './AssistantFoldersSection'
 import { BrandSection } from './BrandSection'
 import { useAudioInputs } from './audioInputs'
 import { ClaudeCliField } from './ClaudeCliField'
@@ -453,6 +454,9 @@ function SettingsPanels({ tab }: { tab: SettingsTab }) {
                   <Switch checked={settings.whatsappTriagem} labelledBy="settings-whatsapp-triagem" onChange={(whatsappTriagem) => void update({ whatsappTriagem })} />
                 </SettingRow>
               </Section>
+
+              {/* Contrato 167: as pastas que o Assistente pode ler; a lista só muda pelos canais do main. */}
+              <AssistantFoldersSection active={!searching && tab === 'claude'} />
 
               {/* Contrato 23 (CA10): ao passar do limite, todas as tarefas pausam e o app avisa. */}
               <Section title="Automações">

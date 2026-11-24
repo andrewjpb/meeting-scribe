@@ -95,7 +95,12 @@
     "AssistenteTarefas.dc.html": { "x": 3600, "y": 14620, "w": 1120, "h": 740, "title": "Assistente · fonte Tarefas e cartão tarefa-criar" },
     "ConfigGeralTarefas.dc.html": { "x": 4800, "y": 14620, "w": 1120, "h": 740, "title": "Configurações · Geral, Tarefas" },
     "Notificacoes.dc.html": { "x": 0, "y": 15820, "w": 1120, "h": 740, "title": "Notificações · WhatsApp e Email por ler" },
-    "WhatsAppTriagem.dc.html": { "x": 1200, "y": 15820, "w": 1120, "h": 740, "title": "WhatsApp · abas de triagem e etiqueta" }
+    "WhatsAppTriagem.dc.html": { "x": 1200, "y": 15820, "w": 1120, "h": 740, "title": "WhatsApp · abas de triagem e etiqueta" },
+    "PastasConfiguracoes.dc.html": { "x": 0, "y": 17020, "w": 1120, "h": 740, "title": "Configurações · Claude, Pastas que o Assistente pode ler" },
+    "PastasContexto.dc.html": { "x": 1200, "y": 17020, "w": 1120, "h": 740, "title": "Assistente · Contexto com a fonte Pastas" },
+    "PastasResposta.dc.html": { "x": 2400, "y": 17020, "w": 1120, "h": 740, "title": "Assistente · resposta com a citação de pasta" },
+    "PastasEmailAnexos.dc.html": { "x": 3600, "y": 17020, "w": 1120, "h": 740, "title": "Assistente · Responder por email com anexos" },
+    "PastasComposer.dc.html": { "x": 4800, "y": 17020, "w": 1120, "h": 740, "title": "Email · Composer com os anexos das pastas" }
   },
   "order": [
     "Main.dc.html",
@@ -134,6 +139,11 @@
     "WhatsAppContato.dc.html",
     "WhatsAppTarefa.dc.html",
     "WhatsAppTriagem.dc.html",
+    "PastasConfiguracoes.dc.html",
+    "PastasContexto.dc.html",
+    "PastasResposta.dc.html",
+    "PastasEmailAnexos.dc.html",
+    "PastasComposer.dc.html",
     "Email.dc.html",
     "EmailLeitura.dc.html",
     "EmailLeituraContato.dc.html",
@@ -193,6 +203,7 @@
     "t-tarefas": { "x": 0, "y": 13190, "text": "Tarefas (Hoje, Todas, detalhe, Nova, Sugestões, vazia)", "kind": "title1", "maxW": 4800 },
     "t-tarefas-telas": { "x": 0, "y": 14390, "text": "Tarefas nas telas existentes (Funil, Email, WhatsApp, Assistente, Configurações)", "kind": "title1", "maxW": 4800 },
     "t-notificacoes": { "x": 0, "y": 15590, "text": "Notificações e triagem do WhatsApp", "kind": "title1", "maxW": 4800 },
+    "t-pastas": { "x": 0, "y": 16790, "text": "Pastas do Assistente", "kind": "title1", "maxW": 5920 },
     "s-sobre": { "x": 1216, "y": 0, "w": 420, "fill": "blue", "text": "Telas recriadas do código em 19/11/2026 e adensadas em 20/11/2026 (feature densidade: controles de 32, linhas de 44, títulos de página de 20, rótulos de seção de 11 em caixa normal), conferidas contra os prints do smoke. Sidebar em pilha com os níveis Email, Configurações e Assistente (o nível Redes fica na última linha). Penúltima linha: prints reais do README. Depois: Redes (Instagram), contrato 77, e as duas linhas do Funil de vendas (feature funil-vendas, contrato 118)." }
   },
   "designSystems": [

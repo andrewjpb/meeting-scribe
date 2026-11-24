@@ -108,11 +108,11 @@ export interface ChatServiceDeps {
   /**
    * Contrato 25: o Assistente. `prepare` escreve as fontes do app na pasta da conversa antes de cada pergunta;
    * `extract` tira os blocos de ação do fim da resposta e devolve as ações validadas. Sem ele, a tela segue o chat
-   * dos contratos 15 a 24.
+   * dos contratos 15 a 24. Contrato 168: `extract` recebe a conversa (os anexos das pastas resolvem pelo índice dela).
    */
   assistant?: {
     prepare(folder: string, scope: ChatScope): Promise<unknown>
-    extract(text: string): Promise<{ text: string; actions: ChatAction[] }>
+    extract(text: string, chatId: string): Promise<{ text: string; actions: ChatAction[] }>
     /**
      * Contrato 45 (CA7): as ferramentas do app (só leitura) que a conversa do Assistente pode pedir no fim da
      * resposta (`tools.ts`), pelo escopo (a fonte desligada não dá ferramenta). Relidas a cada pergunta; sem elas,
@@ -563,7 +563,7 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
       let text = result.text
       let actions: ChatAction[] = []
       if (session.assistant && result.ok && deps.assistant) {
-        const extracted = await deps.assistant.extract(result.text).catch(() => ({ text: result.text, actions: [] as ChatAction[] }))
+        const extracted = await deps.assistant.extract(result.text, chat.id).catch(() => ({ text: result.text, actions: [] as ChatAction[] }))
         text = extracted.text
         actions = extracted.actions
       } else if (session.assistant) text = withoutActionBlocks(result.text)

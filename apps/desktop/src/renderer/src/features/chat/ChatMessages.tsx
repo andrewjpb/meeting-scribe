@@ -295,7 +295,7 @@ export function AssistantMessage({ message, meetings, onCopy, onRedo, chatId = n
       <Reasoning steps={message.steps ?? []} thinking={message.thinking ?? ''} denied={message.denied ?? 0} plan={message.plan ?? []} live={false} />
       {message.text && (
         <div className="max-w-[72ch] text-14 text-text select-text">
-          <ChatMarkdown text={message.text} />
+          <ChatMarkdown text={message.text} chatId={chatId} />
         </div>
       )}
       {message.actions && message.actions.length > 0 && chatId && index !== undefined && <ActionCards chatId={chatId} index={index} actions={message.actions} web={chatWebUsage(message.steps).used} />}
@@ -339,7 +339,7 @@ export function LiveAssistantMessage({ answer, card = false, chatId = null }: { 
       {chatId && answer.approvals.map((approval) => <McpApprovalCard key={approval.id} chatId={chatId} approval={approval} />)}
       {text ? (
         <div className="max-w-[72ch] text-14 text-text">
-          <ChatMarkdown text={text} />
+          <ChatMarkdown text={text} chatId={chatId} />
         </div>
       ) : (
         <p role="status" data-chat-status className="flex items-center gap-2 text-13 text-text-muted">

@@ -61,6 +61,11 @@
 //   (o app tem de recusar). Cada resultado com arquivo é lido (Read) e vira a resposta final.
 //   Contrato 164: a triagem do WhatsApp. "marque a conversa <nome> como urgente" lê o `CONVERSAS-WHATSAPP.md` e propõe
 //   `triagem-etiqueta` com o id da conversa e `urgente: true`; "crie o agente de triagem", `triagem-agente` com `criar`.
+//   Contrato 169: as pastas do Assistente (`pastasAnswer`). "o que tem nas pastas" lê o `PASTAS.md` e conta as linhas;
+//   "resuma a proposta" pede `ler_arquivo_pasta` com o id da linha `Propostas/proposta-exemplo.docx` do `PASTAS.md`, lê o
+//   resultado e responde com a citação `[Pasta · <pasta>/<caminho>](pasta:<id>)` (com "crie uma pasta" no pedido, pede
+//   `criar_pasta` depois da leitura: o app tem de recusar); "responda ao michel com os documentos" lê o `EMAILS.md` e o
+//   `PASTAS.md` e propõe `email-resposta` com o PDF e o Word como `anexos` e o comprovante em `faltando`.
 // - "quais arquivos estão na pasta" (contrato 117), em qualquer chat (o agente das Automações também): responde com os nomes
 //   dos arquivos da pasta da sessão (`readdirSync(cwd)`), em ordem.
 // - internet (contrato 26), em qualquer chat (agente ou Assistente), com "pesquise" no pedido: `WebSearch` (pedindo
@@ -292,6 +297,76 @@ async function emailAnswer(question, cwd, read, fence) {
   return null
 }
 
+/** Contrato 169: o pedido "resuma a proposta … e crie uma pasta" em curso (depois da leitura, pedir `criar_pasta`). */
+let folderThenCreate = false
+
+/**
+ * Contrato 169: as pastas do Assistente no agente falso, como um modelo faria: o id e o nome da pasta saem do `PASTAS.md`
+ * (a tabela de cada pasta), o email do Michel do `EMAILS.md`; o resultado da ferramenta é um arquivo da pasta, lido com Read.
+ * `null`: não é pedido das pastas.
+ */
+async function pastasAnswer(question, cwd, read, fence) {
+  const tool = (json) => `\n\n\`\`\`lap-ferramenta\n${JSON.stringify(json)}\n\`\`\``
+  const index = 'PASTAS.md'
+  /** As linhas do índice: o id, o caminho na pasta e o nome da pasta (o título `## <nome>  (…)` acima da tabela). */
+  const rows = () => {
+    let label = ''
+    const found = []
+    for (const line of readFileSync(join(cwd, index), 'utf8').split('\n')) {
+      const title = /^## (.+?) {2}\(/.exec(line)
+      if (title) label = title[1]
+      const row = /^\| ([0-9a-f]{16}) \| (.+?) \| /.exec(line)
+      if (row) found.push({ id: row[1], relPath: row[2], label })
+    }
+    return found
+  }
+  const result = /^\[Resultado da ferramenta ler_arquivo_pasta\] O resultado está no arquivo (Midia - Pasta - [0-9a-f]{16}\.(?:pdf|png|jpg|gif|webp|md)), na pasta atual/.exec(question)
+  if (result) {
+    await read(result[1])
+    if (folderThenCreate) {
+      folderThenCreate = false
+      return `Li a proposta. Vou criar a pasta pedida.${tool({ ferramenta: 'criar_pasta', nome: 'Pasta da proposta' })}`
+    }
+    const text = readFileSync(join(cwd, result[1]), 'utf8')
+    const cite = /^- Citar como: (\[Pasta · .+\]\(pasta:[0-9a-f]{16}\))$/m.exec(text)?.[1] ?? ''
+    return `A proposta descreve a implantação em três etapas. ${cite}`
+  }
+  const failed = /^\[Resultado da ferramenta ler_arquivo_pasta\] (.+?) Continue respondendo/.exec(question)
+  if (failed) {
+    folderThenCreate = false
+    return `Não consegui ler o arquivo: ${failed[1]}`
+  }
+  const asked = /o que tem nas pastas|resuma a proposta|responda ao michel com os documentos/i.exec(question)
+  if (!asked) return null
+  if (!readdirSync(cwd).includes(index)) return 'As pastas não estão nesta conversa: ligue a fonte Pastas no Contexto.'
+  await read(index)
+  const listed = rows()
+  if (/o que tem nas pastas/i.test(asked[0])) return `Nas pastas há ${listed.length} arquivo(s) listado(s).`
+  const byPath = (relPath) => listed.find((row) => row.relPath === relPath)
+  const proposal = byPath('Propostas/proposta-exemplo.docx')
+  if (/resuma a proposta/i.test(asked[0])) {
+    if (!proposal) return 'Não achei a proposta nas pastas.'
+    folderThenCreate = /crie uma pasta/i.test(question)
+    return `Vou ler a proposta.${tool({ ferramenta: 'ler_arquivo_pasta', id: proposal.id })}`
+  }
+  const overview = 'EMAILS.md'
+  if (!readdirSync(cwd).includes(overview)) return 'O email não está na pasta desta conversa.'
+  await read(overview)
+  const email = emailLines(cwd, overview).find((line) => line.from.toLowerCase().startsWith('michel'))
+  const contract = byPath('Contratos/contrato-exemplo.pdf')
+  if (!email || !contract || !proposal) return 'Não achei o email do Michel ou os documentos.'
+  return `Achei dois dos três documentos. Confira no cartão.${fence({
+    tipo: 'email-resposta',
+    email: email.ref,
+    texto: 'Oi, Michel.\n\nSegue o contrato assinado e a proposta comercial. O comprovante de inscrição estadual ainda não está comigo; mando assim que receber.\n\nAbraço,\nAndrew',
+    anexos: [
+      { id: contract.id, pedido: 'contrato assinado' },
+      { id: proposal.id, pedido: 'proposta comercial' },
+    ],
+    faltando: ['comprovante de inscrição estadual'],
+  })}`
+}
+
 /** Contrato 151: o pedido de mídia em curso: depois de abrir a imagem, pedir `criar_pasta` (a ação que o app recusa). */
 let mediaThenFolder = false
 
@@ -395,6 +470,9 @@ async function assistantAnswer(question, cwd, read) {
       : []
   const byName = (text) => conversations().find((chat) => text.toLowerCase().includes(chat.name.split(' ')[0].toLowerCase()))
   const fence = (json) => `\n\n\`\`\`lap-acao\n${typeof json === 'string' ? json : JSON.stringify(json)}\n\`\`\``
+  // Contrato 169: as pastas primeiro (o `criar_pasta` recusado depois da leitura cai na resposta de recusa da mídia).
+  const pastas = await pastasAnswer(question, cwd, read, fence)
+  if (pastas !== null) return pastas
   // Contrato 151: a mídia antes do email (o `criar_pasta` recusado depois da imagem não segue para o `mover_emails`).
   const media = await mediaAnswer(question, cwd, read)
   if (media !== null) return media

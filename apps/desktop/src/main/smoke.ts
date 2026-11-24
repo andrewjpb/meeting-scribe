@@ -118,7 +118,8 @@
 // marcada pelo painel com o aviso de risco, a resposta sozinha, o Bruno sem atendimento e o grupo sem o botão, a proposta
 // do modo rascunho enviada pelo clique, a pausa pela resposta minha vinda do celular falso, "Pausar todos os
 // atendimentos", o histórico sem texto de mensagem e a exclusão do agente. Termina sem agente nem atendimento.
-import { appendFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { createHash } from 'node:crypto'
+import { appendFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { spawn as spawnChild } from 'node:child_process'
 import { request as httpRequest } from 'node:http'
 import { tmpdir } from 'node:os'
@@ -259,7 +260,9 @@ import {
   SMOKE_S3_PUBLIC_BASE_URL,
   SMOKE_S3_REGION,
   SMOKE_S3_SECRET_ACCESS_KEY,
+  SMOKE_FOLDER_DOCX_TEXT,
   SMOKE_TAREFAS,
+  createSyntheticFolder,
   type SmokeFixtures,
 } from './smoke-fixtures'
 import { TAREFAS_FILE, type SugestaoTarefa, type Tarefa, type TarefasActionResult, type TarefasArquivo, type TarefasFalha, type TarefasView } from '../shared/tarefas'
@@ -308,6 +311,15 @@ const SCREENS = [
   // email falso) e a seção "Chat e resumo" com o interruptor da triagem (no `midiaChecks`, que já fotografava o claro).
   'notificacoes-email',
   'configuracoes-claude-midia',
+  // Contrato 169: fotografadas pelo `pastasChecks` (depois da mídia), na janela que troca de tema no lugar.
+  'configuracoes-claude-pastas',
+  'configuracoes-claude-pastas-recusa',
+  'assistente-contexto-pastas',
+  'assistente-contexto-pastas-vazia',
+  'assistente-resposta-pasta',
+  'assistente-cartao-anexos',
+  'assistente-cartao-aberto',
+  'email-composer-anexos',
 ] as const
 /** Tempo de gravação até a fita encher a largura da janela (uma coluna a cada 50 ms). */
 const TAPE_FILL_MS = 12_500
@@ -8522,6 +8534,427 @@ async function midiaChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => voi
 
   await evaluate(contents, `window.__scribeApi.invoke('scribe:settings-update', { claudeTransport: '${transportBefore === 'acp' ? 'acp' : 'cli'}' }).then(() => true)`)
   win.destroy()
+}
+
+/**
+ * Contrato 169: rola só o `scroller` até `target` (uma expressão) ficar no meio dele. O `scrollIntoView` rolava também a
+ * raiz da janela e o print saía com a tela deslocada para cima.
+ */
+async function centerIn(contents: WebContents, scroller: string, target: string): Promise<void> {
+  await evaluate(
+    contents,
+    `(() => { const box = document.querySelector(${JSON.stringify(scroller)}); const el = ${target}; if (!box || !el) return false; const b = box.getBoundingClientRect(); const r = el.getBoundingClientRect(); box.scrollTop += r.top + r.height / 2 - (b.top + b.height / 2); return true })()`,
+  )
+}
+
+/** Contrato 169: os checks das pastas do Assistente, na ordem do roteiro. */
+const PASTAS_CHECKS = ['configuracoes', 'indice', 'leitura', 'abrir', 'acaoRecusada', 'cartaoAnexos', 'desligado', 'estadoFinal'] as const
+/** Contrato 169: o que nunca pode sair no detalhe dos checks nem no `report.json` (nomes da pasta sintética e do email). */
+const PASTAS_PROIBIDOS = ['pasta-exemplo', 'proposta-exemplo', 'contrato-exemplo', 'planilha-exemplo', 'institucional.pptx', 'segredo.txt', 'Michel', SMOKE_FOLDER_DOCX_TEXT]
+/** Contrato 169: o email do Michel (inventado) que pede os três documentos, na conta do servidor falso. */
+const PASTAS_EMAIL = {
+  from: { name: 'Michel Exemplo', address: 'michel@cliente.example' },
+  subject: 'Documentos para o contrato',
+  text: 'Olá, Andrew.\n\nPara fecharmos o contrato, preciso de três documentos: o contrato assinado, a proposta comercial e o comprovante de inscrição estadual.\n\nObrigado,\nMichel',
+}
+
+/** Um check que, se o roteiro quebrar no meio, falha com o erro em vez de parar o smoke (o erro sem nome da pasta nem do email). */
+async function pastasStep(checks: Record<string, Check>, name: (typeof PASTAS_CHECKS)[number], run: () => Promise<Check>): Promise<void> {
+  try {
+    checks[name] = await run()
+  } catch (error) {
+    const message = String((error as Error)?.message ?? error).slice(0, 200)
+    checks[name] = { ok: false, detail: `parou com erro: ${PASTAS_PROIBIDOS.some((term) => message.includes(term)) || message.includes('/') ? '(erro com caminho omitido)' : message}` }
+  }
+}
+
+/** Contrato 169 (CA3): o retrato da pasta sintética (nomes, tipos, tamanhos, datas de modificação e o hash de cada arquivo). */
+function folderFingerprint(root: string): string {
+  const hash = createHash('sha256')
+  const walk = (dir: string, rel: string): void => {
+    for (const name of readdirSync(dir).sort()) {
+      const path = join(dir, name)
+      const info = lstatSync(path)
+      if (info.isSymbolicLink()) hash.update(`L ${rel}${name} ${readlinkSync(path)}\n`)
+      else if (info.isDirectory()) {
+        hash.update(`D ${rel}${name}\n`)
+        walk(path, `${rel}${name}/`)
+      } else hash.update(`F ${rel}${name} ${info.size} ${info.mtimeMs} ${createHash('sha256').update(readFileSync(path)).digest('hex')}\n`)
+    }
+  }
+  walk(root, '')
+  return hash.digest('hex')
+}
+
+/**
+ * Contrato 169 (pastas-assistente G1), com o agente ACP falso, a conta do email falso conectada e a pasta sintética em
+ * `<userData>/smoke-pastas/pasta-exemplo` (`createSyntheticFolder`), numa janela que troca de tema no lugar (os prints nos
+ * dois temas):
+ * - `configuracoes`: "Adicionar pasta…" com a pasta pessoal (`sensivel`), a pasta sintética e uma de dentro dela
+ *   (`repetida`): 1 linha e 2 avisos; depois Remover e Adicionar de novo só a sintética;
+ * - `indice`: a fonte Pastas ligada numa conversa nova grava o `PASTAS.md` (0600) com as 5 linhas, sem o oculto, o grande e
+ *   o link, e o PowerPoint como só anexo;
+ * - `leitura`: "resuma a proposta" lê o Word pela `ler_arquivo_pasta` (uma `Midia - Pasta - *.md` 0600, o passo "Lendo um
+ *   arquivo da pasta" sem o conteúdo) e responde com a citação, que vira botão;
+ * - `abrir`: o botão da citação revela no Finder (falso) o arquivo de dentro da pasta;
+ * - `acaoRecusada`: depois da leitura, o `criar_pasta` do mesmo turno é recusado e nada muda no servidor;
+ * - `cartaoAnexos`: o email do Michel pede três documentos; "responda ao michel com os documentos" vira o cartão com 2
+ *   anexos, 1 não encontrado e o total, sem Enviar; "Abrir no Composer" abre o Composer com os 2 anexos, sem envio;
+ * - `desligado`: a fonte desligada leva o `PASTAS.md` e as cópias; religada, o índice volta;
+ * - `estadoFinal`: 1 pasta nas Configurações, a pasta sintética intacta, nenhum envio e nenhum nome dela nos PNGs.
+ * Os detalhes levam só números e booleanos.
+ */
+async function pastasChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => void, checks: Record<string, Check>, shots: Screenshot[]): Promise<void> {
+  const fake = ctx.fixtures.email
+  const base = await createSyntheticFolder(join(ctx.userDataDir, 'smoke-pastas', 'pasta-exemplo'))
+  const realBase = realpathSync(base)
+  const fingerprintBefore = folderFingerprint(base)
+  const sentBefore = fake.sent.length
+  const appendedBefore = fake.appended
+  const themeBefore = readSettings(ctx.userDataDir).theme ?? 'system'
+  const transportBefore = readSettings(ctx.userDataDir).claudeTransport
+  nativeTheme.themeSource = 'light'
+  const win = ctx.openWindow({})
+  watch(win)
+  await loadAndWait(win)
+  const contents = win.webContents
+  if (themeBefore !== 'system') await evaluate(contents, "window.__scribeApi.invoke('scribe:settings-update', { theme: 'system' }).then(() => true)")
+  await evaluate(contents, "window.__scribeApi.invoke('scribe:settings-update', { claudeTransport: 'acp' }).then(() => true)")
+  /** O mesmo estado nos dois temas: claro, escuro (no lugar, sem recarregar) e de volta ao claro. */
+  const both = async (target: BrowserWindow, name: string): Promise<boolean> => {
+    const tc = target.webContents
+    await evaluate(tc, `document.activeElement instanceof HTMLElement && document.activeElement.blur(), true`)
+    await settle(tc)
+    shots.push(await capture(target, ctx.outDir, `${name}-light`))
+    nativeTheme.themeSource = 'dark'
+    const dark = await waitFor(tc, "document.documentElement.dataset.theme === 'dark'")
+    await settle(tc)
+    shots.push(await capture(target, ctx.outDir, `${name}-dark`))
+    nativeTheme.themeSource = 'light'
+    const light = await waitFor(tc, "document.documentElement.dataset.theme === 'light'")
+    return dark && light
+  }
+  const ask = async (question: string): Promise<{ done: boolean; answer: string }> => {
+    const before = await evaluate<number>(contents, `document.querySelectorAll('[data-chat-message="assistant"]:not([data-chat-streaming])').length`)
+    await setValue(contents, '[data-chat-input]', question)
+    await pressEnterIn(contents, '[data-chat-input]')
+    const done = await waitFor(contents, `${CHAT_DONE} && document.querySelectorAll('[data-chat-message="assistant"]:not([data-chat-streaming])').length > ${before}`, 40_000)
+    return { done, answer: await evaluate<string>(contents, LAST_ANSWER) }
+  }
+  let chatId = ''
+  const scopeDir = (): string => join(ctx.userDataDir, CHAT_SCOPE_DIR, chatId)
+  const pastasFile = (): string => join(scopeDir(), 'PASTAS.md')
+  const pastaCopies = (): string[] => (chatId && existsSync(scopeDir()) ? readdirSync(scopeDir()).filter((name) => name.startsWith(`${MEDIA_FILE_PREFIX}Pasta - `)).sort() : [])
+  const lastSteps = (): { label: string; status?: string }[] => (chatFile(ctx.userDataDir, chatId)?.messages.at(-1)?.steps ?? []) as { label: string; status?: string }[]
+  const PASTAS_ROW = '[data-chat-source="pastas"]'
+  const PASTAS_SWITCH = `${PASTAS_ROW} [role="switch"]`
+  /** O painel Contexto à mostra com a linha Pastas no meio do trilho. */
+  const showPastasRow = async (): Promise<boolean> => {
+    if (!(await evaluate<boolean>(contents, `Boolean(document.querySelector('${PASTAS_ROW}'))`))) await clickSelector(contents, '[data-action="toggle-context"]')
+    const shown = await waitFor(contents, `document.querySelector('${PASTAS_ROW}')`, 8000)
+    await centerIn(contents, '[data-chat-rail]', `document.querySelector('${PASTAS_ROW}')`)
+    return shown
+  }
+  const setPastas = async (on: boolean): Promise<boolean> => {
+    await showPastasRow()
+    if ((await evaluate<string | null>(contents, `document.querySelector('${PASTAS_SWITCH}')?.getAttribute('aria-checked') ?? null`)) !== String(on)) await clickSelector(contents, PASTAS_SWITCH)
+    const shown = await waitFor(contents, `document.querySelector('${PASTAS_SWITCH}')?.getAttribute('aria-checked') === '${on}'`)
+    // Numa conversa salva, a troca só vale depois de gravada no escopo dela (a pergunta logo depois ainda ia com a de antes).
+    if (!chatId) return shown
+    for (let attempt = 0; attempt < 50; attempt++) {
+      const sources = (chatFile(ctx.userDataDir, chatId)?.scope as { sources?: Record<string, boolean> } | undefined)?.sources
+      if ((sources?.['pastas'] === true) === on) return shown
+      await wait(100)
+    }
+    return false
+  }
+  const folders = (): number => readSettings(ctx.userDataDir).assistant?.folders?.length ?? -1
+  const untilFolders = async (count: number): Promise<boolean> => {
+    for (let attempt = 0; attempt < 50; attempt++) {
+      if (folders() === count) return true
+      await wait(100)
+    }
+    return false
+  }
+
+  try {
+    // O email do Michel (inventado), na Caixa de Entrada do servidor falso e na lista do app.
+    await fake.deliver(PASTAS_EMAIL)
+    const accountId = await evaluate<string>(contents, `window.__scribeApi.invoke('scribe:email-accounts').then((list) => list[0]?.account.id ?? '')`)
+    let emailArrived = false
+    for (let attempt = 0; attempt < 50 && !emailArrived; attempt++) {
+      emailArrived = await evaluate<boolean>(contents, `window.__scribeApi.invoke('scribe:email-messages', { accountId: '${accountId}' }).then((list) => list.some((item) => item.subject === ${JSON.stringify(PASTAS_EMAIL.subject)}))`)
+      if (!emailArrived) await wait(200)
+    }
+
+    // A linha Pastas sem pasta escolhida (desabilitada, com o link para as Configurações), numa conversa nova.
+    let vaziaShown = false
+    let vaziaBoth = false
+    if (folders() === 0) {
+      await showAssistantLevel(contents)
+      await clickSelector(contents, '[data-action="chat-new"]')
+      await waitFor(contents, `document.querySelector('[data-chat-input]') && !document.querySelector('[data-chat-message]')`)
+      await showPastasRow()
+      vaziaShown = await waitFor(contents, `document.querySelector('${PASTAS_ROW}')?.hasAttribute('data-chat-source-unavailable') && document.querySelector('${PASTAS_SWITCH}')?.disabled === true`)
+      vaziaBoth = await both(win, 'assistente-contexto-pastas-vazia')
+    }
+
+    await pastasStep(checks, 'configuracoes', async () => {
+      const settingsWin = ctx.openWindow({})
+      watch(settingsWin)
+      try {
+        await loadAndWait(settingsWin)
+        const sc = settingsWin.webContents
+        await openSettingsTab(sc, 'claude')
+        await waitFor(sc, `document.querySelector('#settings-assistant-folders [data-assistant-folder-add]')`, 8000)
+        // A seção logo depois de "Chat e resumo" (mockup 01).
+        const depoisDeChatEResumo = await evaluate<boolean>(
+          sc,
+          `(() => { const chat = document.querySelector('[data-settings-panel="claude"] section[aria-label="Chat e resumo"]'); const pastas = document.querySelector('#settings-assistant-folders'); if (!chat || !pastas) return false; const sections = [...document.querySelectorAll('[data-settings-panel="claude"] section[aria-label], #settings-assistant-folders')].filter((el) => !pastas.contains(el) || el === pastas); return sections.indexOf(pastas) === sections.indexOf(chat) + 1 })()`,
+        )
+        const scrollTo = async (): Promise<void> => {
+          await evaluate(
+            sc,
+            `(() => { const scroller = document.querySelector('[data-settings-scroll]'); const block = document.querySelector('#settings-assistant-folders'); scroller.scrollTop += block.getBoundingClientRect().top - scroller.getBoundingClientRect().top - 240; return true })()`,
+          )
+        }
+        const rows = (): Promise<number> => evaluate<number>(sc, `document.querySelectorAll('[data-assistant-folder-id]').length`)
+        const notices = (): Promise<string[]> => evaluate<string[]>(sc, `[...document.querySelectorAll('[data-assistant-folder-refused] [role="alert"]')].map((el) => el.textContent ?? '')`)
+        // 1. A pasta pessoal, a sintética e uma de dentro dela.
+        ctx.fixtures.chosenAssistantFolders = [app.getPath('home'), base, join(base, 'Contratos')]
+        await clickSelector(sc, '#settings-assistant-folders [data-assistant-folder-add]')
+        const refusedShown = await waitFor(sc, `document.querySelectorAll('[data-assistant-folder-id]').length === 1 && document.querySelectorAll('[data-assistant-folder-refused] [role="alert"]').length === 2`, 8000)
+        const added = await rows()
+        const avisos = await notices()
+        const savedFirst = await untilFolders(1)
+        await scrollTo()
+        const recusaBoth = await both(settingsWin, 'configuracoes-claude-pastas-recusa')
+        // 2. Remover e adicionar de novo só a sintética: a linha volta, sem aviso.
+        await clickSelector(sc, '[data-assistant-folder-id] [data-action="assistant-folder-remove"]')
+        const removed = (await waitFor(sc, `document.querySelectorAll('[data-assistant-folder-id]').length === 0`, 8000)) && (await untilFolders(0))
+        ctx.fixtures.chosenAssistantFolders = [base]
+        await clickSelector(sc, '#settings-assistant-folders [data-assistant-folder-add]')
+        const again = await waitFor(sc, `document.querySelectorAll('[data-assistant-folder-id]').length === 1 && !document.querySelector('[data-assistant-folder-refused]')`, 8000)
+        const savedAgain = await untilFolders(1)
+        await scrollTo()
+        const umaBoth = await both(settingsWin, 'configuracoes-claude-pastas')
+        const configuracoes = {
+          added,
+          refused: avisos.length,
+          avisoSensivel: avisos.some((text) => text.startsWith('Pasta pessoal, Library ou do sistema')),
+          avisoRepetida: avisos.some((text) => text.startsWith('Essa pasta já está na lista')),
+          linhaVisivel: refusedShown,
+          gravada: savedFirst,
+          depoisDeChatEResumo,
+          removida: removed,
+          adicionadaDeNovo: again && savedAgain,
+          doisTemas: recusaBoth && umaBoth,
+        }
+        return {
+          ok: configuracoes.added === 1 && configuracoes.refused === 2 && configuracoes.avisoSensivel && configuracoes.avisoRepetida && configuracoes.linhaVisivel && configuracoes.gravada && configuracoes.depoisDeChatEResumo && configuracoes.removida && configuracoes.adicionadaDeNovo && configuracoes.doisTemas,
+          detail: JSON.stringify(configuracoes),
+        }
+      } finally {
+        ctx.fixtures.chosenAssistantFolders = []
+        settingsWin.destroy()
+      }
+    })
+
+    await pastasStep(checks, 'indice', async () => {
+      await showAssistantLevel(contents)
+      await clickSelector(contents, '[data-action="chat-new"]')
+      await waitFor(contents, `document.querySelector('[data-chat-input]') && !document.querySelector('[data-chat-message]')`)
+      const ligada = await setPastas(true)
+      const neutral = await ask('O que tem nas pastas?')
+      chatId = await evaluate<string>(contents, `document.querySelector('[data-chat-conversation]')?.getAttribute('data-chat-conversation') ?? ''`)
+      const text = existsSync(pastasFile()) ? readFileSync(pastasFile(), 'utf8') : ''
+      const lines = text.split('\n').filter((line) => /^\| [0-9a-f]{16} \| /.test(line))
+      const pptx = lines.find((line) => line.includes('.pptx |'))
+      await showPastasRow()
+      const ligadaNaTela = await waitFor(contents, `document.querySelector('${PASTAS_SWITCH}')?.getAttribute('aria-checked') === 'true'`)
+      const contextoBoth = await both(win, 'assistente-contexto-pastas')
+      const indice = {
+        vaziaDesabilitada: vaziaShown,
+        vaziaDoisTemas: vaziaBoth,
+        ligada,
+        resposta: neutral.done && neutral.answer.includes('5 arquivo(s)'),
+        existe: text.length > 0,
+        modo600: mode(pastasFile()) === '600',
+        linhas: lines.length,
+        tipos: lines.map((line) => line.split(' | ')[2]).sort().join(','),
+        ocultoListado: text.includes('segredo.txt') || text.includes('.oculto'),
+        grandeListado: text.includes('grande.bin'),
+        linkListado: text.includes('link-fora'),
+        pptxLegivel: pptx === undefined || !pptx.endsWith('| não (só anexo) |'),
+        ligadaNaTela,
+        doisTemas: contextoBoth,
+      }
+      return {
+        ok:
+          indice.vaziaDesabilitada && indice.vaziaDoisTemas && indice.ligada && indice.resposta && indice.existe && indice.modo600 && indice.linhas === 5 && indice.tipos === 'docx,pdf,pptx,txt,xlsx' && !indice.ocultoListado && !indice.grandeListado && !indice.linkListado && !indice.pptxLegivel && indice.ligadaNaTela && indice.doisTemas,
+        detail: JSON.stringify(indice),
+      }
+    })
+
+    let citationShown = false
+    await pastasStep(checks, 'leitura', async () => {
+      const before = pastaCopies().length
+      const read = await ask('Resuma a proposta')
+      const copies = pastaCopies()
+      const steps = lastSteps()
+      const step = steps.find((item) => item.label.startsWith('Lendo um arquivo da pasta'))
+      // O passo à vista em "Raciocínio e passos" (aberto para o print).
+      await evaluate(contents, `(() => { const b = ${LAST_ASSISTANT}?.querySelector('[data-action="toggle-reasoning"]'); if (b?.getAttribute('aria-expanded') === 'false') b.click(); return true })()`)
+      const passoVisivel = await waitFor(contents, `[...(${LAST_ASSISTANT}?.querySelectorAll('[data-chat-step]') ?? [])].some((el) => el.textContent.trim().startsWith('Lendo um arquivo da pasta'))`, 3000)
+      citationShown = await waitFor(contents, `${LAST_ASSISTANT}?.querySelectorAll('[data-chat-link-kind="pasta"]').length === 1`)
+      // O print com o passo e a citação à vista (o fim da resposta, com os passos abertos acima).
+      await centerIn(contents, '[data-chat-scroll]', `${LAST_ASSISTANT}?.querySelector('[data-chat-link-kind="pasta"]')`)
+      const respostaBoth = await both(win, 'assistente-resposta-pasta')
+      const leitura = {
+        resposta: read.done,
+        semBloco: !read.answer.includes('lap-ferramenta'),
+        antes: before,
+        copias: copies.filter((name) => /^Midia - Pasta - [0-9a-f]{16}\.md$/.test(name)).length,
+        modo600: copies.length > 0 && copies.every((name) => mode(join(scopeDir(), name)) === '600'),
+        passoConcluido: step?.status === 'completed',
+        passoVisivel,
+        conteudoNoLabel: steps.some((item) => item.label.includes(SMOKE_FOLDER_DOCX_TEXT) || item.label.includes('três etapas')),
+        citacaoBotao: citationShown,
+        doisTemas: respostaBoth,
+      }
+      return {
+        ok: leitura.resposta && leitura.semBloco && leitura.antes === 0 && leitura.copias === 1 && leitura.modo600 && leitura.passoConcluido && leitura.passoVisivel && !leitura.conteudoNoLabel && leitura.citacaoBotao && leitura.doisTemas,
+        detail: JSON.stringify(leitura),
+      }
+    })
+
+    await pastasStep(checks, 'abrir', async () => {
+      const before = ctx.fixtures.openedFiles.length
+      await evaluate(contents, `${LAST_ASSISTANT}?.querySelector('[data-chat-link-kind="pasta"]')?.click(), true`)
+      for (let attempt = 0; attempt < 30 && ctx.fixtures.openedFiles.length === before; attempt++) await wait(100)
+      const opened = ctx.fixtures.openedFiles.slice(before)
+      const abrir = {
+        botao: citationShown,
+        aberturas: opened.length,
+        reveal: opened.every((item) => item.action === 'reveal'),
+        dentroDaPasta: opened.length > 0 && opened.every((item) => item.path.startsWith(`${realBase}/`)),
+        semErroNaTela: !(await evaluate<boolean>(contents, `(${LAST_ASSISTANT}?.textContent ?? '').includes('Arquivo não encontrado')`)),
+      }
+      return { ok: abrir.botao && abrir.aberturas === 1 && abrir.reveal && abrir.dentroDaPasta && abrir.semErroNaTela, detail: JSON.stringify(abrir) }
+    })
+
+    await pastasStep(checks, 'acaoRecusada', async () => {
+      const boxesBefore = Object.keys(fake.mailboxes()).sort()
+      const refused = await ask('Resuma a proposta e crie uma pasta para ela')
+      const boxesAfter = Object.keys(fake.mailboxes()).sort()
+      const steps = lastSteps()
+      const recusa = {
+        resposta: refused.done,
+        respostaComRecusa: refused.answer.includes(MEDIA_ACTION_REFUSAL.split(' Diga')[0] ?? MEDIA_ACTION_REFUSAL),
+        arquivoLido: steps.some((step) => step.label.startsWith('Lendo um arquivo da pasta') && step.status === 'completed'),
+        passoRecusado: steps.some((step) => step.label.endsWith(': recusado depois de uma mídia') && step.status === 'failed'),
+        pastasIguais: JSON.stringify(boxesAfter) === JSON.stringify(boxesBefore),
+      }
+      return { ok: Object.values(recusa).every(Boolean), detail: JSON.stringify(recusa) }
+    })
+
+    await pastasStep(checks, 'cartaoAnexos', async () => {
+      const sentAt = fake.sent.length
+      const reply = await ask('Responda ao Michel com os documentos que ele pediu')
+      const card = `[...document.querySelectorAll('[data-chat-action="email-resposta"]')].at(-1)`
+      const shown = await waitFor(contents, `${card}?.dataset.chatActionStatus === 'proposed'`)
+      const view = await evaluate<{ attachments: string; missing: string; items: number; missingItems: number; total: string; send: boolean; composer: boolean }>(
+        contents,
+        `(() => { const c = ${card}; return { attachments: c?.getAttribute('data-email-reply-attachments') ?? '', missing: c?.getAttribute('data-email-reply-missing') ?? '', items: c?.querySelectorAll('[data-email-reply-attachment]').length ?? 0, missingItems: c?.querySelectorAll('[data-email-reply-missing-item]').length ?? 0, total: c?.querySelector('[data-email-reply-total]')?.textContent ?? '', send: Boolean(c?.querySelector('[data-action="chat-action-email-send"]')), composer: Boolean(c?.querySelector('[data-email-reply-open-composer]')) } })()`,
+      )
+      await centerIn(contents, '[data-chat-scroll]', card)
+      const cartaoBoth = await both(win, 'assistente-cartao-anexos')
+      await evaluate(contents, `${card}?.querySelector('[data-email-reply-open-composer]')?.click(), true`)
+      const composer = await waitFor(contents, `${routeIs('email')} && document.querySelector('[data-email-composer="reply"]')`, 8000)
+      const chips = composer ? ((await waitFor(contents, `document.querySelectorAll('[data-email-compose-attachments] li').length === 2`, 8000)) ? 2 : await evaluate<number>(contents, `document.querySelectorAll('[data-email-compose-attachments] li').length`)) : 0
+      const subjectOk = await evaluate<boolean>(contents, `(document.querySelector('#email-compose-subject')?.value ?? '') === ${JSON.stringify(`Re: ${PASTAS_EMAIL.subject}`)}`)
+      const composerBoth = await both(win, 'email-composer-anexos')
+      await wait(300)
+      const emailSendCalls = fake.sent.length - sentAt
+      // De volta à conversa: o cartão "Aberto no Composer".
+      await clickNav(contents, 'assistente')
+      const back = await waitFor(contents, `${routeIs('assistente')} && document.querySelector('[data-chat-conversation="${chatId}"]')`, 8000)
+      const opened = await waitFor(contents, `${card}?.dataset.chatActionStatus === 'opened'`, 8000)
+      await centerIn(contents, '[data-chat-scroll]', card)
+      const abertoBoth = await both(win, 'assistente-cartao-aberto')
+      const saved = chatFile(ctx.userDataDir, chatId)?.messages.at(-1)?.actions?.find((action) => action.kind === 'email-resposta')
+      const cartao = {
+        resposta: reply.done,
+        cartao: shown,
+        anexos: Number(view.attachments),
+        faltando: Number(view.missing),
+        linhasAnexo: view.items,
+        linhasFaltando: view.missingItems,
+        total: view.total.startsWith('Total: ') && view.total.endsWith(' de 20 MB'),
+        semEnviar: !view.send,
+        abrirNoComposer: view.composer,
+        composerAberto: composer,
+        chips,
+        assunto: subjectOk,
+        emailSendCalls,
+        voltou: back,
+        estadoOpened: opened && saved?.status === 'opened',
+        doisTemas: cartaoBoth && composerBoth && abertoBoth,
+      }
+      return {
+        ok:
+          cartao.resposta && cartao.cartao && cartao.anexos === 2 && cartao.faltando === 1 && cartao.linhasAnexo === 2 && cartao.linhasFaltando === 1 && cartao.total && cartao.semEnviar && cartao.abrirNoComposer && cartao.composerAberto && cartao.chips === 2 && cartao.assunto && cartao.emailSendCalls === 0 && cartao.voltou && cartao.estadoOpened && cartao.doisTemas,
+        detail: JSON.stringify(cartao),
+      }
+    })
+
+    await pastasStep(checks, 'desligado', async () => {
+      const antes = { indice: existsSync(pastasFile()), copias: pastaCopies().length }
+      const desligada = await setPastas(false)
+      const off = await ask('O que tem nas pastas?')
+      const semIndice = !existsSync(pastasFile())
+      const copiasDepois = pastaCopies().length
+      const semResposta = off.answer.includes('ligue a fonte Pastas')
+      const religada = await setPastas(true)
+      const on = await ask('O que tem nas pastas?')
+      const desligado = {
+        indiceAntes: antes.indice,
+        copiasAntes: antes.copias,
+        desligada,
+        resposta: off.done,
+        semIndice,
+        copiasDepois,
+        respostaSemPastas: semResposta,
+        religada,
+        indiceDeVolta: on.done && existsSync(pastasFile()) && on.answer.includes('5 arquivo(s)'),
+      }
+      return {
+        ok: desligado.indiceAntes && desligado.copiasAntes > 0 && desligado.desligada && desligado.resposta && desligado.semIndice && desligado.copiasDepois === 0 && desligado.respostaSemPastas && desligado.religada && desligado.indiceDeVolta,
+        detail: JSON.stringify(desligado),
+      }
+    })
+  } finally {
+    await evaluate(contents, `window.__scribeApi.invoke('scribe:settings-update', { claudeTransport: '${transportBefore === 'acp' ? 'acp' : 'cli'}' }).then(() => true)`).catch(() => undefined)
+    if (themeBefore !== 'system') await evaluate(contents, `window.__scribeApi.invoke('scribe:settings-update', { theme: '${themeBefore}' }).then(() => true)`).catch(() => undefined)
+    nativeTheme.themeSource = 'system'
+    win.destroy()
+  }
+
+  await pastasStep(checks, 'estadoFinal', async () => {
+    const pngs = readdirSync(ctx.outDir)
+    const estado = {
+      pastasNasConfiguracoes: folders(),
+      pastaIntacta: folderFingerprint(base) === fingerprintBefore,
+      emailSendCalls: fake.sent.length - sentBefore,
+      enviadosGravados: fake.appended - appendedBefore,
+      nomesNosArquivos: pngs.filter((name) => PASTAS_PROIBIDOS.some((term) => name.includes(term))).length,
+      detalhesLimpos: Object.values(checks).every((check) => !PASTAS_PROIBIDOS.some((term) => check.detail.includes(term))),
+    }
+    return {
+      ok: estado.pastasNasConfiguracoes === 1 && estado.pastaIntacta && estado.emailSendCalls === 0 && estado.enviadosGravados === 0 && estado.nomesNosArquivos === 0 && estado.detalhesLimpos,
+      detail: JSON.stringify(estado),
+    }
+  })
 }
 
 /**
@@ -18441,6 +18874,8 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
   const inicio: Record<string, Check> = {}
   /** Contrato 151: a mídia no Assistente (as ferramentas de ponta a ponta, o interruptor e a ação recusada). */
   const midia: Record<string, Check> = {}
+  // Contrato 169: as pastas do Assistente.
+  const pastas: Record<string, Check> = {}
   /** Contrato 126: as reuniões gravadas no laço por tema (uma por tema, com o resumo falso), para o Resumo com as tarefas. */
   const gravadas: Meeting[] = []
   let analysisMeasured: AnalysisMeasured | null = null
@@ -18936,6 +19371,10 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
     // Contrato 151: a mídia no Assistente, com o WhatsApp falso e a conta do email falso ainda conectados; antes do bloqueio.
     await midiaChecks(ctx, watch, midia, screenshots)
 
+    // Contrato 169: as pastas do Assistente, com a conta do email falso ainda conectada e o agente ACP falso; antes do
+    // bloqueio (que recusa os canais das pastas). Termina com a pasta sintética na lista e a fonte só na conversa dela.
+    await pastasChecks(ctx, watch, pastas, screenshots)
+
     // Contrato 158: o Painel de e-mail com a INBOX falsa só com as 6 mensagens dele (o resto volta no fim); antes do
     // bloqueio. Termina com a análise ligada e as 6 lidas em "Newsletters".
     await emailDashboardChecks(ctx, watch, email, screenshots, failures)
@@ -19132,6 +19571,9 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
   // Contrato 151: a mídia no Assistente.
   for (const [name, check] of Object.entries(midia)) if (!check.ok) failures.push(`mídia ${name}: ${check.detail}`)
   for (const name of ['imagem', 'audio', 'acaoRecusada', 'configuracoes', 'desligado']) if (!midia[name]) failures.push(`mídia ${name}: não executado`)
+  // Contrato 169: as pastas do Assistente.
+  for (const [name, check] of Object.entries(pastas)) if (!check.ok) failures.push(`pastas ${name}: ${check.detail}`)
+  for (const name of PASTAS_CHECKS) if (!pastas[name]) failures.push(`pastas ${name}: não executado`)
   for (const [name, check] of Object.entries(invite)) if (!check.ok) failures.push(`convites ${name}: ${check.detail}`)
   for (const name of ['convite-1', 'convite-2', 'convite-3', 'convite-4', 'convite-5', 'convite-6', 'convite-7', 'convite-8', 'convite-9', 'convite-10', 'convite-11', 'convite-estados', 'convite-lista', 'convite-configuracoes', 'convite-regra-1', 'convite-regra-2', 'convite-regra-3', 'convite-sugestao-4', 'convite-sugestao-5']) if (!invite[name]) failures.push(`convites ${name}: não executado`)
   for (const [name, check] of Object.entries(lock)) if (!check.ok) failures.push(`bloqueio ${name}: ${check.detail}`)
@@ -19197,6 +19639,8 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
   // Contrato 164: os 10 da triagem entraram em `SCREENS` (as Notificações, o WhatsApp com as abas, a aba Urgentes sem agente,
   // o formulário da tarefa da triagem e o cartão do Assistente, nos dois temas), fotografados pelo `triagemChecks`.
   // Contrato 164: o `configuracoes-claude-midia-light` do contrato 151 saiu do +1 acima e foi para `SCREENS`, com o escuro.
+  // Contrato 169: +8 telas (as Configurações com a pasta e com a recusa, o Contexto com a linha Pastas ligada e vazia, a
+  // resposta com a citação, o cartão com anexos, o cartão aberto e o Composer com os anexos, nos dois temas), em `SCREENS`.
   const expectedShots = SCREENS.length * THEMES.length + 251
   if (screenshots.length !== expectedShots) failures.push(`${screenshots.length} PNGs em vez de ${expectedShots}`)
   for (const shot of screenshots) {
@@ -19272,13 +19716,16 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
     inicio,
     // Contrato 151: só os resultados (números, booleanos e os textos fixos do serviço falso).
     midia,
+    // Contrato 169: só números e booleanos (nenhum nome de arquivo, de pasta ou conteúdo).
+    pastas,
     instagramFakeCalls: ctx.fixtures.instagram.calls,
     s3FakeCalls: ctx.fixtures.s3.calls,
     // Contrato 23: os resultados, as notificações, o Dock e os itens de login substitutos; nenhum texto de reunião.
     automations,
     automationsFixtures: { notifications: ctx.fixtures.automations.notifications.map((notice) => notice.title), trayImages: ctx.fixtures.automations.trayImages, dock: ctx.fixtures.automations.dock, loginItems: ctx.fixtures.automations.loginItems, quitRequests: ctx.fixtures.automations.quitRequests },
     meetingFolder: folderFiles(defaultMeetingFolder(ctx)).map((file) => ({ ...file, name: redactCalendar(file.name) })),
-    openedFiles: ctx.fixtures.openedFiles.map((item) => ({ action: item.action, file: redactCalendar(basename(item.path)) })),
+    // Contrato 169: o arquivo revelado das pastas do Assistente sai sem o nome.
+    openedFiles: ctx.fixtures.openedFiles.map((item) => ({ action: item.action, file: item.path.includes('/smoke-pastas/') ? '(arquivo das pastas do Assistente)' : redactCalendar(basename(item.path)) })),
     claudeFakeSpawns: ctx.fixtures.claudeSpawns.map((spawn) => ({ ...spawn, args: spawn.args.filter((arg) => arg.startsWith('--')) })),
     openedExternally: ctx.fixtures.openedUrls.map(redactCalendar),
     updateFixtureCalls: ctx.fixtures.updates.calls,
@@ -19305,6 +19752,9 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
   // Contrato 69 (CA2): nenhum token do Instagram falso nem a chave secreta do armazenamento no relatório.
   const redesLeaked = [...ctx.fixtures.instagram.tokens(), SMOKE_S3_SECRET_ACCESS_KEY].filter((secret) => JSON.stringify(report).includes(secret))
   if (redesLeaked.length) failures.push(`${redesLeaked.length} token(s) do Instagram ou chave do armazenamento no relatório`)
+  // Contrato 169 (CA2): nenhum nome da pasta sintética nem do email do Michel no relatório.
+  const pastasLeaked = PASTAS_PROIBIDOS.filter((term) => JSON.stringify(report).includes(term))
+  if (pastasLeaked.length) failures.push(`${pastasLeaked.length} nome(s) da pasta sintética ou do email do Michel no relatório`)
   writeFileSync(join(ctx.outDir, 'report.json'), `${JSON.stringify(report, null, 2)}\n`)
 
   clearTimeout(timer)
