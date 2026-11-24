@@ -17,16 +17,17 @@ import { ASSISTANT_MEDIA_PER_QUESTION_MAX } from '../../shared/assistant'
 import type { AssistantTool } from './tools'
 
 export const MEDIA_FILE_PREFIX = 'Midia - '
-export const MEDIA_SOURCES = ['WhatsApp', 'Email'] as const
+/** Contrato 165: `Pasta`, as cópias dos arquivos das pastas permitidas que o Assistente lê. */
+export const MEDIA_SOURCES = ['WhatsApp', 'Email', 'Pasta'] as const
 export type MediaSource = (typeof MEDIA_SOURCES)[number]
 /** O que os bytes podem ser para virar arquivo de mídia. */
 export type MediaFileKind = 'png' | 'jpg' | 'gif' | 'webp' | 'pdf'
 /** Os textos que as ferramentas escrevem (transcrição, anexo de texto) também ficam como mídia. */
 export type MediaFileExtension = MediaFileKind | 'md'
 
-const MEDIA_FILE_PATTERN = /^Midia - (WhatsApp|Email) - [0-9a-f]{16}\.(png|jpg|gif|webp|pdf|md)$/
+const MEDIA_FILE_PATTERN = /^Midia - (WhatsApp|Email|Pasta) - [0-9a-f]{16}\.(png|jpg|gif|webp|pdf|md)$/
 /** O temporário de uma gravação interrompida (`<nome>.tmp-<pid>-<uuid>`): sai na limpeza junto com os arquivos. */
-const MEDIA_TEMP_PATTERN = /^Midia - (WhatsApp|Email) - [0-9a-f]{16}\.(png|jpg|gif|webp|pdf|md)\.tmp-[\w-]{1,100}$/
+const MEDIA_TEMP_PATTERN = /^Midia - (WhatsApp|Email|Pasta) - [0-9a-f]{16}\.(png|jpg|gif|webp|pdf|md)\.tmp-[\w-]{1,100}$/
 
 const startsWith = (bytes: Uint8Array, signature: readonly number[], at = 0): boolean => bytes.length >= at + signature.length && signature.every((value, index) => bytes[at + index] === value)
 const ascii = (text: string): number[] => [...text].map((char) => char.charCodeAt(0))

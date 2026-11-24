@@ -3,7 +3,7 @@
 // conferidas no main, mover de pasta nunca aberta, o Desfazer (com e sem `COPYUID`, depois de reiniciar, item `pending`,
 // pasta sumida, mensagem tirada, segunda tentativa, sem aviso de email novo), o Parar, as rodadas, a tarefa agendada, os
 // lotes guardados e o cartão no chat. Nenhuma rede.
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, relative, resolve } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -14,6 +14,8 @@ import { EMAIL_BATCHES_MAX, type EmailBatch, type EmailOrganizeEvent } from '../
 import { DEFAULT_SETTINGS } from '../src/shared/settings-defaults'
 import { markEmailBatchCard } from '../src/main/chat/actions'
 import { createChatCorpus } from '../src/main/chat/corpus'
+import { createFolderTools } from '../src/main/chat/folder-tools'
+import { folderFileId } from '../src/main/chat/folders'
 import { createMediaBudget, mediaFileName } from '../src/main/chat/media-files'
 import { createChatService, MEDIA_ACTION_REFUSAL } from '../src/main/chat/service'
 import { EMAIL_CONVERSATIONS_FILE, EMAIL_FOLDERS_FILE, EMAIL_MOVE_FILE } from '../src/main/chat/sources'
@@ -943,6 +945,41 @@ describe('mídia no turno (contrato 149, CA13)', () => {
     proc.answer('Movi.')
     await chat.service.settled(sent.chat.id)
     expect(h.fake.mailboxes()['Resolvidos']?.uids).toHaveLength(1)
+  })
+
+  it('contrato 166 (CA7): depois de ler_arquivo_pasta, mover_emails é recusado com a nota e nada se move', async () => {
+    const { h, move, dir } = await harness()
+    const pasta = join(realpathSync(dir), 'Documentos')
+    mkdirSync(pasta)
+    writeFileSync(join(pasta, 'contrato.txt'), 'Cláusula 1: vigência 12 meses')
+    const entry = { id: folderFileId('f1', 'contrato.txt'), folderId: 'f1', relPath: 'contrato.txt', name: 'contrato.txt', ext: 'txt', kind: 'texto' as const, readable: true, size: 29, mtime: 0 }
+    const folderTools = createFolderTools({
+      index: {
+        scans: async () => [],
+        markdown: async () => null,
+        resolve: (_chatId, id) => (id === entry.id ? entry : null),
+        folderOf: () => ({ id: 'f1', path: pasta, addedAt: '2026-11-23T10:00:00.000Z' }),
+        invalidate: () => undefined,
+        forget: () => undefined,
+        forgetAll: () => undefined,
+      },
+      budget: createMediaBudget(),
+      home: dir,
+    })
+    const withFolder = chatHarness(dir, () => [...h.tools.tools, ...h.tools.organizeTools, ...folderTools])
+    const sent = (await withFolder.service.send({ chatId: null, meetingId: null, text: 'leia o contrato da pasta e organize meus emails' })) as { chat: Chat }
+    const proc = await withFolder.child()
+    await withFolder.written(1)
+    proc.answer(block({ ferramenta: 'ler_arquivo_pasta', id: entry.id }))
+    await withFolder.written(2)
+    expect(proc.written[1]).toContain(mediaFileName('Pasta', entry.id, 'md'))
+    proc.answer(move)
+    await withFolder.written(3)
+    expect(proc.written[2]).toContain(MEDIA_ACTION_REFUSAL)
+    proc.answer('Pelo contrato, eu moveria o email para Resolvidos; confirme numa nova pergunta.')
+    await withFolder.service.settled(sent.chat.id)
+    expect(h.fake.mailboxes()['Resolvidos']?.uids ?? []).toEqual([])
+    expect(h.batches()).toEqual([])
   })
 
   it('ler um arquivo "Midia - …" que ficou na pasta (sem chamar a ferramenta) também bloqueia o que muda', async () => {

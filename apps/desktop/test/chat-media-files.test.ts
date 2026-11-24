@@ -2,7 +2,7 @@
 // nome gerado pelo app (hash, sem caminho de fora), o limite de mídias da pergunta (CA6), quais ferramentas a conversa
 // recebe (CA7, CA9), a limpeza (CA10: a pasta, a fonte desligada, a função desligada e o "Sair"/"Remover" da conta) e a
 // instrução do Assistente só com a função ligada (CA11).
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
@@ -14,6 +14,7 @@ import {
   existingMediaFile,
   isMediaFile,
   mediaFileName,
+  mediaHash,
   mediaToolsFor,
   quotedMaterial,
   senderGivenName,
@@ -246,5 +247,43 @@ describe('limpeza dos arquivos de mídia (CA10)', () => {
     rmSync(join(dir, 'chat-scope'), { recursive: true, force: true })
     await expect(corpus.dropMedia('WhatsApp')).resolves.toBeUndefined()
     expect(await clearMediaFiles(join(dir, 'nada'))).toBe(0)
+  })
+})
+
+describe('cópias dos arquivos das pastas (contrato 165, CA8)', () => {
+  const corpusOf = () => {
+    const meetings = createFileMeetingsStore({ dir, newId: () => 'm-1' })
+    return createChatCorpus({ dir, meetings, transcripts: createFileTranscriptStore({ dir }), summaries: createFileSummaryStore({ dir }) })
+  }
+
+  it('Midia - Pasta - <hash>.<ext>: reconhecido, limpo só pela origem Pasta, com o passo próprio', async () => {
+    const pdf = mediaFileName('Pasta', '3f9a0c1e8b2d4a6f', 'pdf')
+    expect(pdf).toBe(`Midia - Pasta - ${mediaHash('Pasta', '3f9a0c1e8b2d4a6f')}.pdf`)
+    expect(pdf).toMatch(/^Midia - Pasta - [0-9a-f]{16}\.pdf$/)
+    expect(isMediaFile(pdf)).toBe(true)
+    expect(isMediaFile(pdf, 'Pasta')).toBe(true)
+    expect(isMediaFile(pdf, 'Email')).toBe(false)
+    const text = mediaFileName('Pasta', 'planilha', 'md')
+    const email = mediaFileName('Email', 'em-1\n0', 'md')
+    for (const name of [pdf, text, email]) writeFileSync(join(dir, name), 'x')
+    writeFileSync(join(dir, `${text}.tmp-1-ab`), 'x')
+    expect(await clearMediaFiles(dir, 'Pasta')).toBe(3)
+    expect(readdirSync(dir)).toEqual([email])
+    expect(chatStepOf('Read', { file_path: `/pasta/${pdf}` })).toEqual({ tool: 'Read', label: 'Lendo um arquivo da pasta', meetingId: null })
+  })
+
+  it('o .md da cópia nunca é tomado por reunião: sobrevive à limpeza da pasta da conversa', async () => {
+    const corpus = corpusOf()
+    const folder = (await corpus.scopeMany([], 'c1')) as string
+    const copy = mediaFileName('Pasta', 'f1\nContratos/c1.docx', 'md')
+    writeFileSync(join(folder, copy), 'texto extraído')
+    writeFileSync(join(folder, 'Reunião velha - m-9.md'), 'x')
+    await corpus.refreshScope([], 'c1')
+    const names = readdirSync(folder)
+    expect(names).toContain(copy)
+    expect(names).not.toContain('Reunião velha - m-9.md')
+    expect(readFileSync(join(folder, 'INDICE.md'), 'utf8')).not.toContain(copy.slice(-20, -3))
+    await corpus.dropMedia('Pasta')
+    expect(readdirSync(folder)).not.toContain(copy)
   })
 })

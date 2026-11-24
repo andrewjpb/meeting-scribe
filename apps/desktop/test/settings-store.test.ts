@@ -70,7 +70,7 @@ describe('esquema de configurações (CA1)', () => {
       tarefas: { horaLembrete: '09:00', lembrarNoPrazo: true, avisoDiario: true, sugerirDasReunioes: true },
       inicio: { telaInicial: 'inicio', blocos: { agenda: true, tarefas: true, pendencias: true, ultimaReuniao: true, automacoes: true } },
       emailDashboard: { enabled: true, model: 'haiku' },
-      assistant: { media: true },
+      assistant: { media: true, folders: [] },
     })
     expect(parseSettings(undefined)).toEqual(DEFAULT_SETTINGS)
     expect(parseSettings({})).toEqual(DEFAULT_SETTINGS)
@@ -150,7 +150,7 @@ describe('esquema de configurações (CA1)', () => {
       tarefas: { horaLembrete: '07:45', lembrarNoPrazo: false, avisoDiario: true, sugerirDasReunioes: false },
       inicio: { telaInicial: 'reunioes', blocos: { agenda: true, tarefas: false, pendencias: true, ultimaReuniao: false, automacoes: true } },
       emailDashboard: { enabled: false, model: 'sonnet' },
-      assistant: { media: false },
+      assistant: { media: false, folders: [{ id: '5d1c2b3a-4e5f-4a6b-8c7d-9e0f1a2b3c4d', path: '/Users/x/Documentos', addedAt: '2026-11-23T10:00:00.000Z' }] },
     }
     expect(parseSettings(saved)).toEqual(saved)
     // 73: comentários
@@ -197,7 +197,7 @@ describe('esquema de configurações (CA1)', () => {
   it('Claude CLI (contrato 05, CA1): motor, modelo e caminho com padrão próprio cada um', () => {
     // `settings.json` do contrato 04, sem os campos novos: carrega com os padrões deles e mantém o resto.
     const old = { translationEnabled: false, translationModel: 'gpt-oss-120b', sourceLanguage: 'es', targetLanguage: 'ja', echoCancellation: true, theme: 'dark', micDeviceId: null }
-    expect(parseSettings(old)).toEqual({ ...old, removeEcho: true, translationEngine: 'assemblyai', claudeModel: 'haiku', chatModel: 'sonnet', claudePath: null, claudeTransport: 'acp', agentProfile: 'claude', saveToFolder: true, audioFolder: null, summarizeOnStop: true, liveCards: false, whatsappInsights: true, whatsappAutoCorrect: false, whatsappNotifications: true, whatsappNotifyGroups: true, whatsappTypingSignal: false, whatsappTriagem: true, identifySpeakers: false, meetSpeakers: true, meetingPrompt: true, navegadorPlugin: false, brandName: null, brandSubtitle: null, brandLogo: null, autoCheckUpdates: true, lockUseTouchId: false, lockAfterMinutes: 0, lockOnSystemLock: true, lockOnLaunch: false, saveToDrive: true, closeBehavior: 'tray', openAtLogin: false, scheduledRunsDailyLimit: 50, calendarAlerts: true, calendarLeadMinutes: 5, calendarNotRecordingAlert: true, calendarIds: { google: null, microsoft: null }, emailPollMinutes: 5, emailNotifications: true, emailCollapsed: [], emailFoldersCollapsed: [], emailRecentFolders: {}, inviteCalendarId: null, inviteAddOnAccept: true, inviteSuggest: false, claudeConnectors: {}, redesPollMinutes: 5, funil: { detectarNasReunioes: true, diasEsfriar: 7, avisarEsfriadas: true }, tarefas: { horaLembrete: '09:00', lembrarNoPrazo: true, avisoDiario: true, sugerirDasReunioes: true }, inicio: { telaInicial: 'inicio', blocos: { agenda: true, tarefas: true, pendencias: true, ultimaReuniao: true, automacoes: true } }, emailDashboard: { enabled: true, model: 'haiku' }, assistant: { media: true } })
+    expect(parseSettings(old)).toEqual({ ...old, removeEcho: true, translationEngine: 'assemblyai', claudeModel: 'haiku', chatModel: 'sonnet', claudePath: null, claudeTransport: 'acp', agentProfile: 'claude', saveToFolder: true, audioFolder: null, summarizeOnStop: true, liveCards: false, whatsappInsights: true, whatsappAutoCorrect: false, whatsappNotifications: true, whatsappNotifyGroups: true, whatsappTypingSignal: false, whatsappTriagem: true, identifySpeakers: false, meetSpeakers: true, meetingPrompt: true, navegadorPlugin: false, brandName: null, brandSubtitle: null, brandLogo: null, autoCheckUpdates: true, lockUseTouchId: false, lockAfterMinutes: 0, lockOnSystemLock: true, lockOnLaunch: false, saveToDrive: true, closeBehavior: 'tray', openAtLogin: false, scheduledRunsDailyLimit: 50, calendarAlerts: true, calendarLeadMinutes: 5, calendarNotRecordingAlert: true, calendarIds: { google: null, microsoft: null }, emailPollMinutes: 5, emailNotifications: true, emailCollapsed: [], emailFoldersCollapsed: [], emailRecentFolders: {}, inviteCalendarId: null, inviteAddOnAccept: true, inviteSuggest: false, claudeConnectors: {}, redesPollMinutes: 5, funil: { detectarNasReunioes: true, diasEsfriar: 7, avisarEsfriadas: true }, tarefas: { horaLembrete: '09:00', lembrarNoPrazo: true, avisoDiario: true, sugerirDasReunioes: true }, inicio: { telaInicial: 'inicio', blocos: { agenda: true, tarefas: true, pendencias: true, ultimaReuniao: true, automacoes: true } }, emailDashboard: { enabled: true, model: 'haiku' }, assistant: { media: true, folders: [] } })
     expect(parseSettings({ translationEngine: 'claude-cli', claudeModel: 'sonnet' })).toMatchObject({ translationEngine: 'claude-cli', claudeModel: 'sonnet' })
     // Fora da lista cai no padrão: só `haiku` e `sonnet`, só os dois motores.
     expect(parseSettings({ translationEngine: 'openai' }).translationEngine).toBe('assemblyai')
@@ -515,21 +515,39 @@ describe('esquema de configurações (CA1)', () => {
   })
 
   it('mídia do Assistente (contrato 149, R8): padrão ligado; arquivo de antes ganha o padrão; lixo volta ao padrão; pelo renderer, o objeto inteiro', () => {
-    expect(DEFAULT_SETTINGS.assistant).toEqual({ media: true })
+    expect(DEFAULT_SETTINGS.assistant).toEqual({ media: true, folders: [] })
     expect(Object.isFrozen(DEFAULT_SETTINGS.assistant)).toBe(true)
     // Migração: quem já tem configurações salvas (sem o campo) fica com a função ligada.
     const old = { ...DEFAULT_SETTINGS, theme: 'dark' } as Record<string, unknown>
     delete old['assistant']
     expect(parseSettings(old)).toEqual({ ...DEFAULT_SETTINGS, theme: 'dark' })
-    expect(parseSettings({ assistant: { media: false } }).assistant).toEqual({ media: false })
-    expect(parseSettings({ assistant: { media: 'não' } }).assistant).toEqual({ media: true })
-    expect(parseSettings({ assistant: null }).assistant).toEqual({ media: true })
-    expect(parseSettings({ assistant: { media: false, extra: 1 } }).assistant).toEqual({ media: false })
+    expect(parseSettings({ assistant: { media: false } }).assistant).toEqual({ media: false, folders: [] })
+    expect(parseSettings({ assistant: { media: 'não' } }).assistant).toEqual({ media: true, folders: [] })
+    expect(parseSettings({ assistant: null }).assistant).toEqual({ media: true, folders: [] })
+    expect(parseSettings({ assistant: { media: false, extra: 1 } }).assistant).toEqual({ media: false, folders: [] })
     expect(parseSettingsPatch({ assistant: { media: false } })).toEqual({ assistant: { media: false } })
-    expect(applySettingsPatch(DEFAULT_SETTINGS, parseSettingsPatch({ assistant: { media: false } })).assistant).toEqual({ media: false })
+    expect(applySettingsPatch(DEFAULT_SETTINGS, parseSettingsPatch({ assistant: { media: false } })).assistant).toEqual({ media: false, folders: [] })
     expect(() => parseSettingsPatch({ assistant: { media: 'sim' } })).toThrow()
     expect(() => parseSettingsPatch({ assistant: {} })).toThrow()
     expect(() => parseSettingsPatch({ assistant: { media: true, extra: 1 } })).toThrow()
+  })
+
+  it('pastas do Assistente (contrato 165, CA9): padrão vazio; arquivo de antes ganha a lista vazia; lixo volta à vazia; o patch aceita a lista e a ignora; entrada no índice', () => {
+    const folder = { id: '5d1c2b3a-4e5f-4a6b-8c7d-9e0f1a2b3c4d', path: '/Users/x/Documentos', addedAt: '2026-11-23T10:00:00.000Z' }
+    expect(DEFAULT_SETTINGS.assistant.folders).toEqual([])
+    expect(parseSettings({ assistant: { media: true } }).assistant).toEqual({ media: true, folders: [] })
+    expect(parseSettings({ assistant: { media: false, folders: [folder] } }).assistant).toEqual({ media: false, folders: [folder] })
+    expect(parseSettings({ assistant: { media: false, folders: 'todas' } }).assistant).toEqual({ media: false, folders: [] })
+    expect(parseSettings({ assistant: { media: false, folders: [{ ...folder, path: 'relativo' }] } }).assistant).toEqual({ media: false, folders: [] })
+    expect(parseSettings({ assistant: { media: false, folders: [{ ...folder, extra: 1 }] } }).assistant).toEqual({ media: false, folders: [] })
+    // Pelo renderer: a lista vem junto (o objeto inteiro) e sai do patch; o que vale é a gravada.
+    expect(parseSettingsPatch({ assistant: { media: false, folders: [folder] } })).toEqual({ assistant: { media: false } })
+    const current = { ...DEFAULT_SETTINGS, assistant: { media: true, folders: [folder] } }
+    expect(applySettingsPatch(current, parseSettingsPatch({ assistant: { media: false, folders: [] } })).assistant).toEqual({ media: false, folders: [folder] })
+    expect(applySettingsPatch(current, { assistant: { media: false, folders: [] } }).assistant).toEqual({ media: false, folders: [folder] })
+    expect(() => parseSettingsPatch({ assistant: { media: false, folders: 'x' } })).toThrow()
+    const entry = settingsIndex('Claude').find((row) => row.name === 'Pastas que o Assistente pode ler')
+    expect(entry).toMatchObject({ tab: 'claude', description: 'Pastas do Mac que o Assistente lê, só leitura. Pastas ocultas, a pasta pessoal inteira e as do sistema não podem ser escolhidas.' })
   })
 
   it('Triagem do WhatsApp (contrato 159, CA8): padrão ligado; arquivo de antes ganha o padrão; lixo volta ao padrão; pelo renderer, booleano estrito', () => {
@@ -717,6 +735,26 @@ describe('store de configurações (CA2)', () => {
     await expect(store.update({ inicio: { ...inicio, telaInicial: 'tarefas' } } as never)).rejects.toThrow()
     await expect(store.update({ inicio: { telaInicial: 'inicio' } } as never)).rejects.toThrow()
     expect(readFileSync(join(dir, SETTINGS_FILE), 'utf8')).toBe(before)
+  })
+
+  it('pastas do Assistente (contrato 165, CA9): só o main grava a lista; o patch do renderer muda a mídia e mantém a lista', async () => {
+    const store = createFileSettingsStore({ dir })
+    expect((await store.get()).assistant.folders).toEqual([])
+    const updated = await store.update({ assistant: { media: false, folders: [{ id: 'x', path: '/tmp', addedAt: '2026-11-23T10:00:00.000Z' }] } })
+    expect(updated.assistant).toEqual({ media: false, folders: [] })
+    expect(onDisk().settings.assistant).toEqual({ media: false, folders: [] })
+    const folder = { id: '5d1c2b3a-4e5f-4a6b-8c7d-9e0f1a2b3c4d', path: '/Users/x/Documentos', addedAt: '2026-11-23T10:00:00.000Z' }
+    expect((await store.updateAssistantFolders(() => [folder])).assistant).toEqual({ media: false, folders: [folder] })
+    expect((await store.update({ assistant: { media: true, folders: [] } })).assistant).toEqual({ media: true, folders: [folder] })
+    expect((await createFileSettingsStore({ dir }).get()).assistant.folders).toEqual([folder])
+    // A mesma lista não grava; fora do formato lança e o arquivo não muda.
+    const before = readFileSync(join(dir, SETTINGS_FILE), 'utf8')
+    await store.updateAssistantFolders((current) => current as typeof folder[])
+    await expect(store.updateAssistantFolders(() => [{ ...folder, path: 'relativo' }])).rejects.toThrow()
+    expect(readFileSync(join(dir, SETTINGS_FILE), 'utf8')).toBe(before)
+    // Arquivo sem a lista (de antes do 165): vazia.
+    writeFileSync(join(dir, SETTINGS_FILE), JSON.stringify({ version: 1, settings: { assistant: { media: true } } }))
+    expect((await createFileSettingsStore({ dir }).get()).assistant).toEqual({ media: true, folders: [] })
   })
 
   it('sem arquivo valem os padrões e nada é criado', async () => {

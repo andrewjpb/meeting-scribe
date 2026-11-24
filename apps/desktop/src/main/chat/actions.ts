@@ -23,6 +23,10 @@
 // Automações) e `lembrete-editar`/`-apagar` mexem na tarefa aberta com lembrete; os cartões `tarefa-criar`, `-concluir` e
 // `-adiar` resolvem o id (inteiro ou curto) nas tarefas do app e a oportunidade e o contato pelo nome no funil. O clique
 // grava só pelo serviço das tarefas (122).
+// Contrato 168 (pastas-assistente E): a resposta de email com anexos das pastas permitidas. O modelo só escreve os ids de
+// `PASTAS.md`; o main os resolve pelo índice da conversa (nunca um caminho do texto), aplica os limites do Composer e, no
+// "Abrir no Composer", relê cada arquivo (caminho real dentro da pasta, sem link, com o tamanho gravado) e devolve os
+// bytes ao Composer. Daqui nada é enviado: o envio continua o "Enviar" do Composer, com o token de clique.
 // Contrato 163: a triagem do WhatsApp. `triagem-agente` lê o agente e a tarefa da triagem nas Automações e, no clique, cria
 // pelo modelo pronto, edita, pausa ou retoma pelas funções injetadas das Automações; `triagem-etiqueta` lê a conversa e a
 // etiqueta de agora e, no clique, grava pelo `set` da triagem (a escolha do dono). Nenhum dos dois envia mensagem.
@@ -36,6 +40,11 @@ import {
   AUTOMATIONS_TABS,
   CHAT_ACTION_ERROR_MAX,
   DISMISSED_TEXT,
+  EMAIL_REPLY_ATTACHMENTS_MAX,
+  EMAIL_REPLY_MISSING_MAX,
+  EMAIL_REPLY_MISSING_TEXT_MAX,
+  EMAIL_REPLY_OPENED_TEXT,
+  EMAIL_REPLY_REQUESTED_MAX,
   EVENT_DEFAULT_DURATION_MS,
   EVENT_LOCATION_MAX,
   EVENT_NOTES_MAX,
@@ -100,10 +109,14 @@ import {
   type ChatCalendarAccess,
   type TriagemAgenteAviso,
   type EmailCardItem,
+  type EmailComposeFromAction,
+  type EmailReplyAction,
+  type EmailReplyAttachment,
   type OpenScreen,
   type ReminderEmail,
 } from '../../shared/assistant'
-import { EMAIL_REF_PATTERN, EMAIL_TEXT_MAX, isSent, prefixedSubject, type EmailAccountStatus, type EmailMessage } from '../../shared/email'
+import { EMAIL_ATTACH_MAX_BYTES, EMAIL_ATTACH_MAX_FILES, EMAIL_REF_PATTERN, EMAIL_TEXT_MAX, isSent, prefixedSubject, type EmailAccountStatus, type EmailMessage, type EmailOutgoingAttachment } from '../../shared/email'
+import type { FolderFileEntry } from '../../shared/assistant-folders'
 import {
   AGENT_INSTRUCTIONS_MAX,
   describeSchedule,
@@ -135,6 +148,9 @@ import type { MacCalendarCreateArgs, MacCalendarError } from '../mac-calendar/pr
 import type { FunilService } from '../funil/service'
 import type { TarefasService } from '../tarefas/service'
 import type { ChatEventsStore } from './events-store'
+import { attachmentName } from '../email/attach'
+import { locateFolderFile, readNoFollow } from './folder-tools'
+import type { FolderIndex } from './folders'
 import { calendarIdSchema, CHAT_CALENDARS_MAX, chatIdSchema, type ChatStore } from './store'
 import { captionStats } from '../../shared/redes-rules'
 
@@ -193,7 +209,21 @@ const proposedSchema = z.discriminatedUnion('tipo', [
   z.object({ tipo: z.literal('abrir'), tela: z.enum(OPEN_SCREENS), alvo: z.string().trim().max(200).nullable().optional() }),
   // Contrato 45.
   z.object({ tipo: z.literal('emails'), mensagens: z.array(emailRef).min(1).max(EMAIL_CARD_ITEMS_MAX * 2) }),
-  z.object({ tipo: z.literal('email-resposta'), email: emailRef, texto: z.string().trim().min(1).max(EMAIL_TEXT_MAX) }),
+  // Contrato 168: `anexos` com os ids de PASTAS.md e `faltando` com o que não foi achado. O que passa dos limites do cartão
+  // (o 11º anexo, o item longo, o 11º faltante) não recusa o bloco: é cortado ou vira faltante na resolução.
+  z.object({
+    tipo: z.literal('email-resposta'),
+    email: emailRef,
+    texto: z.string().trim().min(1).max(EMAIL_TEXT_MAX),
+    anexos: z
+      .array(z.object({ id: z.string().regex(/^[0-9a-f]{16}$/), pedido: z.string().max(EMAIL_REPLY_REQUESTED_MAX * 4).optional() }))
+      .max(EMAIL_REPLY_ATTACHMENTS_MAX * 2)
+      .optional(),
+    faltando: z
+      .array(z.string().max(EMAIL_REPLY_MISSING_TEXT_MAX * 4))
+      .max(EMAIL_REPLY_MISSING_MAX * 2)
+      .optional(),
+  }),
   // Contrato 78: o título e as notas a mais são cortados (não recusados).
   z.object({
     tipo: z.literal('evento'),
@@ -285,6 +315,11 @@ export interface ActionResolver {
   instagramAccounts?: () => Promise<readonly InstagramDraftAccount[]>
   /** Contrato 117: o funil de vendas, só para ler (montar o cartão não grava nada); `null` com o app bloqueado. */
   funil?: () => Promise<FunilView | null>
+  /**
+   * Contrato 168: um arquivo do último índice das pastas desta conversa, pelo id, e o nome da pasta permitida dele; `null`
+   * se o id não está no índice ou a pasta saiu da lista.
+   */
+  folderFile?: (id: string) => { entry: FolderFileEntry; folderLabel: string } | null
   /**
    * Contrato 163: a triagem, só para ler: o estado do motor e o agente e a tarefa dela (das Automações); `null` com o app
    * bloqueado (o bloco fica como texto).
@@ -778,6 +813,54 @@ function resolveFunil(proposed: FunilProposed, base: { id: string; status: 'prop
   }
 }
 
+/** Contrato 168: o item pedido numa linha, sem controle, cortado. */
+const requestedText = (value: string, max: number): string =>
+  [...value]
+    .map((char) => (char.charCodeAt(0) < 0x20 || char.charCodeAt(0) === 0x7f ? ' ' : char))
+    .join('')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, max)
+    .trim()
+
+/**
+ * Contrato 168 (E2): os anexos e os faltantes de uma resposta. Cada id só vale pelo índice da conversa; o que não está nele
+ * (ou cuja pasta saiu) vira faltante. Em ordem, entram os que cabem em 20 MB e 10 arquivos; o resto vira faltante. Os
+ * `faltando` do modelo vêm depois, até 10 itens no total.
+ */
+export function emailReplyAttachments(
+  anexos: readonly { id: string; pedido?: string | undefined }[] | undefined,
+  faltando: readonly string[] | undefined,
+  folderFile: ActionResolver['folderFile'],
+): { attachments: EmailReplyAttachment[]; missing: string[] } {
+  const attachments: EmailReplyAttachment[] = []
+  const missing: string[] = []
+  const seen = new Set<string>()
+  let total = 0
+  for (const { id, pedido } of anexos ?? []) {
+    if (seen.has(id)) continue
+    seen.add(id)
+    const requested = pedido ? requestedText(pedido, EMAIL_REPLY_REQUESTED_MAX) || null : null
+    const found = folderFile?.(id) ?? null
+    if (!found) {
+      missing.push(`${requested ?? id} (arquivo não está no índice)`)
+      continue
+    }
+    const { entry } = found
+    if (total + entry.size > EMAIL_ATTACH_MAX_BYTES || attachments.length === EMAIL_ATTACH_MAX_FILES) {
+      missing.push(`${requested ?? entry.name} (não coube no limite de 20 MB)`)
+      continue
+    }
+    total += entry.size
+    attachments.push({ id, name: entry.name, relPath: entry.relPath, folderLabel: found.folderLabel, bytes: entry.size, requested })
+  }
+  for (const item of faltando ?? []) {
+    const text = requestedText(item, EMAIL_REPLY_MISSING_TEXT_MAX)
+    if (text) missing.push(text)
+  }
+  return { attachments, missing: missing.map((item) => item.slice(0, EMAIL_REPLY_MISSING_TEXT_MAX)).slice(0, EMAIL_REPLY_MISSING_MAX) }
+}
+
 // --- Contrato 163: a triagem do WhatsApp -------------------------------------------------------------------------
 
 type TriagemAgenteProposed = Extract<Proposed, { tipo: 'triagem-agente' }>
@@ -902,6 +985,7 @@ async function resolve(proposed: Proposed, id: string, resolver: ActionResolver)
         toLabel: targets.map((item) => (item.name ? `${nameOf(item)} <${item.address}>` : item.address)).join(', ').slice(0, 500),
         subject: prefixedSubject('Re:', message.subject).slice(0, 998),
         text: proposed.texto,
+        ...emailReplyAttachments(proposed.anexos, proposed.faltando, resolver.folderFile),
       }
     }
     case 'evento': {
@@ -1014,6 +1098,12 @@ export async function extractActions(text: string, resolver: ActionResolver): Pr
   return { text: rest, actions }
 }
 
+/** Contrato 168: os anexos e os faltantes de uma resposta no histórico (só o nome e o caminho dentro da pasta). */
+function emailReplyHistory(action: EmailReplyAction): string {
+  const attached = action.attachments.map((item) => `${item.folderLabel}/${item.relPath}`)
+  return `${attached.length ? `, com os anexos ${attached.join('; ')}` : ''}${action.missing.length ? `, sem ${action.missing.join('; ')}` : ''}`
+}
+
 /** Para o histórico de um processo novo: o que foi proposto e o que a pessoa fez com cada cartão. */
 export function actionsHistory(actions: readonly ChatAction[] | undefined): string {
   if (!actions?.length) return ''
@@ -1032,7 +1122,7 @@ export function actionsHistory(actions: readonly ChatAction[] | undefined): stri
       case 'emails':
         return `- cartão com ${action.items.length} email(s): ${action.items.map((item) => `${item.from} · "${item.subject.replace(/\s+/g, ' ').slice(0, 80)}"`).join('; ')}`
       case 'email-resposta':
-        return `- resposta por email para ${action.toLabel} ("${action.subject}"): "${action.text.replace(/\s+/g, ' ').slice(0, 200)}" (${state})`
+        return `- resposta por email para ${action.toLabel} ("${action.subject}"): "${action.text.replace(/\s+/g, ' ').slice(0, 200)}"${emailReplyHistory(action)} (${state})`
       case 'email-lote':
         return `- lote de emails movidos na conta ${action.account} (${action.status === 'proposed' ? 'com Desfazer' : state})`
       case 'evento':
@@ -1114,6 +1204,8 @@ export interface ChatActionsDeps {
    * uma tarefa e os cartões das tarefas.
    */
   tarefas?: Pick<TarefasService, 'todas' | 'criar' | 'salvar' | 'status' | 'apagar'>
+  /** Contrato 168: o índice das pastas (o mapa da conversa e a lista vigente), para o "Abrir no Composer". */
+  folderIndex?: FolderIndex
   /**
    * Contrato 163: a triagem do WhatsApp, só no clique: o agente e a tarefa de agora e o modelo pronto, o salvar e o
    * ligar/desligar das Automações (com as regras delas) e a etiqueta pelo `set` da triagem. Nada aqui envia mensagem.
@@ -1148,6 +1240,12 @@ export interface ChatActions {
   funil(request: unknown): Promise<ChatActionResult>
   /** Contrato 127 (D14): "Criar", "Concluir" e "Adiar" nos cartões das tarefas, pelo tipo gravado (`campos`: o de criar). */
   tarefa(request: unknown): Promise<ChatActionResult>
+  /**
+   * Contrato 168 (E4): "Abrir no Composer" na resposta de email com anexos. Relê cada anexo pelo índice da conversa (o
+   * caminho real dentro da pasta, sem link, com o tamanho gravado), lê os bytes e marca o cartão `opened`; a segunda vez
+   * devolve o mesmo rascunho. Nada é enviado.
+   */
+  emailCompose(request: unknown): Promise<EmailComposeFromAction>
   /** Contrato 163: "Criar agente", "Salvar", "Pausar", "Retomar" e "Aplicar" nos cartões da triagem, pelo tipo gravado. */
   triagem(request: unknown): Promise<ChatActionResult>
 }
@@ -1192,6 +1290,8 @@ function createArgs(draft: EventDraft, calendarId: string, timeZone: string): Ma
 
 const refFields = { chatId: chatIdSchema, index: z.number().int().min(0).max(10_000), actionId: z.string().regex(/^[\w-]{1,40}$/) }
 const reminderRequestSchema = z.object({ ...refFields, at: zonedIso.optional(), text: z.string().max(REMINDER_TEXT_MAX * 2).optional() }).strict()
+/** Contrato 168: o "Abrir no Composer", com o texto do cartão (a edição da pessoa). */
+const composeRequestSchema = z.object({ ...refFields, text: z.string().max(EMAIL_TEXT_MAX).optional() }).strict()
 const stateRequestSchema = z.object({ ...refFields, state: z.enum(['dismissed', 'sent', 'task-created']), text: z.string().max(Math.max(WHATSAPP_SEND_TEXT_MAX, EMAIL_TEXT_MAX)).optional() }).strict()
 const isoText = z.string().max(40)
 const eventRequestSchema = z
@@ -1338,7 +1438,55 @@ export function createChatActions(deps: ChatActionsDeps): ChatActions {
     return saved ? { ok: true, chat: saved } : { ok: false, error: 'missing' }
   }
 
+  /**
+   * Contrato 168: os anexos que ainda batem com o cartão (o id no índice da conversa, a pasta na lista, o caminho real sem
+   * link) lidos sem seguir link, cada um só se o tamanho lido for o gravado e dentro dos limites; os outros, pelo nome, em
+   * `skipped`. O caminho que vira link entre a conferência e a leitura falha na abertura (`O_NOFOLLOW`).
+   */
+  async function composeAttachments(chatId: string, action: EmailReplyAction): Promise<{ attachments: EmailOutgoingAttachment[]; skipped: string[] }> {
+    const attachments: EmailOutgoingAttachment[] = []
+    const skipped: string[] = []
+    let total = 0
+    for (const item of action.attachments) {
+      const found = deps.folderIndex ? await locateFolderFile(deps.folderIndex, chatId, item.id).catch(() => 'sumiu' as const) : 'sumiu'
+      const fits = attachments.length < EMAIL_ATTACH_MAX_FILES && total + item.bytes <= EMAIL_ATTACH_MAX_BYTES
+      const read = typeof found === 'string' || !fits ? null : await readNoFollow(found.real, EMAIL_ATTACH_MAX_BYTES - total).catch(() => null)
+      if (!read || read === 'grande' || read.size !== item.bytes) {
+        skipped.push(item.name)
+        continue
+      }
+      total += read.size
+      attachments.push({ name: attachmentName(item.name), bytes: read.bytes })
+    }
+    return { attachments, skipped }
+  }
+
   return {
+    async emailCompose(request) {
+      const parsed = composeRequestSchema.safeParse(request)
+      if (!parsed.success) return { ok: false, error: 'nao-encontrado' }
+      const ref = parsed.data
+      const current = actionIn(await deps.store.get(ref.chatId), ref)
+      if (!current || current.kind !== 'email-resposta') return { ok: false, error: 'nao-encontrado' }
+      if (current.status !== 'proposed' && current.status !== 'opened') return { ok: false, error: 'estado' }
+      // Nenhum anexo lido: o Composer abre sem eles e diz quais ficaram de fora; quem decide é a pessoa.
+      const { attachments, skipped } = await composeAttachments(ref.chatId, current)
+      const edited = parsed.data.text
+      let text = current.text
+      if (current.status === 'proposed') {
+        // Como o "Enviado": o cartão guarda o texto que foi para o Composer (a edição da pessoa).
+        text = edited?.trim() ? edited : current.text
+        const marked = await write(ref, (action) => (action.kind === 'email-resposta' ? { ...action, text, status: 'opened', result: EMAIL_REPLY_OPENED_TEXT } : null))
+        if (!marked.ok) {
+          // Outro clique pode ter aberto antes; enviado ou descartado no meio, não abre.
+          const after = actionIn(await deps.store.get(ref.chatId), ref)
+          if (!after) return { ok: false, error: 'nao-encontrado' }
+          if (after.status !== 'opened') return { ok: false, error: 'estado' }
+        }
+      }
+      return { ok: true, accountId: current.accountId, mailbox: current.mailbox, to: current.to, subject: current.subject, text, inReplyTo: current.inReplyTo, attachments, skipped }
+    },
+
     async reminder(request) {
       const parsed = reminderRequestSchema.safeParse(request)
       if (!parsed.success) return { ok: false, error: 'invalid' }
