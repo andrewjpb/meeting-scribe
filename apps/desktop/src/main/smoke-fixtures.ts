@@ -458,7 +458,8 @@ export function createSmokeFixtures(currentVersion: string, userDataDir: string)
       log: () => readFakeCalendarLog(join(userDataDir, 'lap-calendar-falso.jsonl')),
     },
     whatsappNotify: { notifications: [], focusedContentsId: null, badges: [] },
-    email: createFakeEmail(),
+    // Contrato 156 (D9): a pasta "Newsletters" para onde a resposta falsa do Painel de e-mail sugere mover.
+    email: createFakeEmail(Date.now, { folders: [{ path: 'Newsletters' }] }),
     emailNotify: { notifications: [], focusedContentsId: null },
     chosenEmailAttachments: [],
     chosenRedesMedia: [],

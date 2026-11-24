@@ -69,6 +69,7 @@ describe('esquema de configurações (CA1)', () => {
       funil: { detectarNasReunioes: true, diasEsfriar: 7, avisarEsfriadas: true },
       tarefas: { horaLembrete: '09:00', lembrarNoPrazo: true, avisoDiario: true, sugerirDasReunioes: true },
       inicio: { telaInicial: 'inicio', blocos: { agenda: true, tarefas: true, pendencias: true, ultimaReuniao: true, automacoes: true } },
+      emailDashboard: { enabled: true, model: 'haiku' },
       assistant: { media: true, folders: [] },
     })
     expect(parseSettings(undefined)).toEqual(DEFAULT_SETTINGS)
@@ -148,6 +149,7 @@ describe('esquema de configurações (CA1)', () => {
       funil: { detectarNasReunioes: true, diasEsfriar: 7, avisarEsfriadas: true },
       tarefas: { horaLembrete: '07:45', lembrarNoPrazo: false, avisoDiario: true, sugerirDasReunioes: false },
       inicio: { telaInicial: 'reunioes', blocos: { agenda: true, tarefas: false, pendencias: true, ultimaReuniao: false, automacoes: true } },
+      emailDashboard: { enabled: false, model: 'sonnet' },
       assistant: { media: false, folders: [{ id: '5d1c2b3a-4e5f-4a6b-8c7d-9e0f1a2b3c4d', path: '/Users/x/Documentos', addedAt: '2026-11-23T10:00:00.000Z' }] },
     }
     expect(parseSettings(saved)).toEqual(saved)
@@ -195,7 +197,7 @@ describe('esquema de configurações (CA1)', () => {
   it('Claude CLI (contrato 05, CA1): motor, modelo e caminho com padrão próprio cada um', () => {
     // `settings.json` do contrato 04, sem os campos novos: carrega com os padrões deles e mantém o resto.
     const old = { translationEnabled: false, translationModel: 'gpt-oss-120b', sourceLanguage: 'es', targetLanguage: 'ja', echoCancellation: true, theme: 'dark', micDeviceId: null }
-    expect(parseSettings(old)).toEqual({ ...old, removeEcho: true, translationEngine: 'assemblyai', claudeModel: 'haiku', chatModel: 'sonnet', claudePath: null, claudeTransport: 'acp', agentProfile: 'claude', saveToFolder: true, audioFolder: null, summarizeOnStop: true, liveCards: false, whatsappInsights: true, whatsappAutoCorrect: false, whatsappNotifications: true, whatsappNotifyGroups: true, whatsappTypingSignal: false, whatsappTriagem: true, identifySpeakers: false, meetSpeakers: true, meetingPrompt: true, navegadorPlugin: false, brandName: null, brandSubtitle: null, brandLogo: null, autoCheckUpdates: true, lockUseTouchId: false, lockAfterMinutes: 0, lockOnSystemLock: true, lockOnLaunch: false, saveToDrive: true, closeBehavior: 'tray', openAtLogin: false, scheduledRunsDailyLimit: 50, calendarAlerts: true, calendarLeadMinutes: 5, calendarNotRecordingAlert: true, calendarIds: { google: null, microsoft: null }, emailPollMinutes: 5, emailNotifications: true, emailCollapsed: [], emailFoldersCollapsed: [], emailRecentFolders: {}, inviteCalendarId: null, inviteAddOnAccept: true, inviteSuggest: false, claudeConnectors: {}, redesPollMinutes: 5, funil: { detectarNasReunioes: true, diasEsfriar: 7, avisarEsfriadas: true }, tarefas: { horaLembrete: '09:00', lembrarNoPrazo: true, avisoDiario: true, sugerirDasReunioes: true }, inicio: { telaInicial: 'inicio', blocos: { agenda: true, tarefas: true, pendencias: true, ultimaReuniao: true, automacoes: true } }, assistant: { media: true, folders: [] } })
+    expect(parseSettings(old)).toEqual({ ...old, removeEcho: true, translationEngine: 'assemblyai', claudeModel: 'haiku', chatModel: 'sonnet', claudePath: null, claudeTransport: 'acp', agentProfile: 'claude', saveToFolder: true, audioFolder: null, summarizeOnStop: true, liveCards: false, whatsappInsights: true, whatsappAutoCorrect: false, whatsappNotifications: true, whatsappNotifyGroups: true, whatsappTypingSignal: false, whatsappTriagem: true, identifySpeakers: false, meetSpeakers: true, meetingPrompt: true, navegadorPlugin: false, brandName: null, brandSubtitle: null, brandLogo: null, autoCheckUpdates: true, lockUseTouchId: false, lockAfterMinutes: 0, lockOnSystemLock: true, lockOnLaunch: false, saveToDrive: true, closeBehavior: 'tray', openAtLogin: false, scheduledRunsDailyLimit: 50, calendarAlerts: true, calendarLeadMinutes: 5, calendarNotRecordingAlert: true, calendarIds: { google: null, microsoft: null }, emailPollMinutes: 5, emailNotifications: true, emailCollapsed: [], emailFoldersCollapsed: [], emailRecentFolders: {}, inviteCalendarId: null, inviteAddOnAccept: true, inviteSuggest: false, claudeConnectors: {}, redesPollMinutes: 5, funil: { detectarNasReunioes: true, diasEsfriar: 7, avisarEsfriadas: true }, tarefas: { horaLembrete: '09:00', lembrarNoPrazo: true, avisoDiario: true, sugerirDasReunioes: true }, inicio: { telaInicial: 'inicio', blocos: { agenda: true, tarefas: true, pendencias: true, ultimaReuniao: true, automacoes: true } }, emailDashboard: { enabled: true, model: 'haiku' }, assistant: { media: true, folders: [] } })
     expect(parseSettings({ translationEngine: 'claude-cli', claudeModel: 'sonnet' })).toMatchObject({ translationEngine: 'claude-cli', claudeModel: 'sonnet' })
     // Fora da lista cai no padrão: só `haiku` e `sonnet`, só os dois motores.
     expect(parseSettings({ translationEngine: 'openai' }).translationEngine).toBe('assemblyai')
@@ -493,6 +495,23 @@ describe('esquema de configurações (CA1)', () => {
     expect(() => parseSettingsPatch({ inicio: null })).toThrow()
     // Recusa o pedido inteiro, não só o campo.
     expect(() => parseSettingsPatch({ theme: 'dark', inicio: { ...inicio, telaInicial: 'x' } })).toThrow()
+  })
+
+  it('Painel de e-mail (contrato 155, CA8): arquivo antigo vem com a análise ligada no haiku; opus é recusado', () => {
+    expect(DEFAULT_SETTINGS.emailDashboard).toEqual({ enabled: true, model: 'haiku' })
+    const old = { ...DEFAULT_SETTINGS, theme: 'dark' } as Record<string, unknown>
+    delete old['emailDashboard']
+    expect(parseSettings(old)).toEqual({ ...DEFAULT_SETTINGS, theme: 'dark' })
+    expect(parseSettings(old).emailDashboard).toEqual({ enabled: true, model: 'haiku' })
+    // No arquivo, cada campo à parte volta ao padrão dele.
+    expect(parseSettings({ emailDashboard: { enabled: false, model: 'opus' } }).emailDashboard).toEqual({ enabled: false, model: 'haiku' })
+    expect(parseSettings({ emailDashboard: 'sim' }).emailDashboard).toEqual({ enabled: true, model: 'haiku' })
+    // Pelo renderer, os dois campos juntos; opus (ou chave a mais) recusa o pedido inteiro.
+    const emailDashboard = { enabled: false, model: 'sonnet' as const }
+    expect(parseSettingsPatch({ emailDashboard })).toEqual({ emailDashboard })
+    expect(() => parseSettingsPatch({ emailDashboard: { enabled: true, model: 'opus' } })).toThrow()
+    expect(() => parseSettingsPatch({ emailDashboard: { enabled: true } })).toThrow()
+    expect(() => parseSettingsPatch({ emailDashboard: { ...emailDashboard, extra: 1 } })).toThrow()
   })
 
   it('mídia do Assistente (contrato 149, R8): padrão ligado; arquivo de antes ganha o padrão; lixo volta ao padrão; pelo renderer, o objeto inteiro', () => {

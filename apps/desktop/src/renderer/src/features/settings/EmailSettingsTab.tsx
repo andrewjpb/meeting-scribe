@@ -11,6 +11,7 @@ import { breadcrumb } from '../email/folderTree'
 import { accountLabel } from '../email/format'
 import { MoveToPicker } from '../email/MoveToPicker'
 import { EmailFoldersSection } from './EmailFoldersSection'
+import { EmailPainelSection } from './EmailPainelSection'
 import { EmailRulesSection } from './EmailRulesSection'
 import { EmailSection } from './EmailSection'
 import { EmailSignatureSection } from './EmailSignatureSection'
@@ -21,7 +22,7 @@ let rememberedAccount: string | null = null
 
 /**
  * Configurações › Email (contrato 55, CA14 a CA22, telas 09 a 12): Contas, o seletor de conta, Assinatura, Regras,
- * Pastas e Avisos, nesta ordem; depois, Convites (contrato 63). Sem conta, só Contas, a nota e Avisos.
+ * Pastas e Avisos, nesta ordem; depois, o Painel (contrato 157) e Convites (contrato 63). Sem conta, só Contas, a nota e Avisos.
  */
 export function EmailSettingsTab() {
   const accounts = useEmail((state) => state.accounts)
@@ -92,6 +93,8 @@ export function EmailSettingsTab() {
           <Switch checked={notifications} labelledBy="settings-email-notifications" onChange={(emailNotifications) => void update({ emailNotifications })} />
         </SettingRow>
       </Section>
+      {/* Contrato 157 (D13): o Painel, entre Avisos e Convites (vale para todas as contas). */}
+      <EmailPainelSection />
       {/* Contrato 63: os convites, no fim (vale para todas as contas). */}
       <InvitesSection />
       <MoveToPicker />

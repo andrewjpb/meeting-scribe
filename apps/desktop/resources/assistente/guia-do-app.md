@@ -135,7 +135,17 @@ Na leitura, no cabeçalho à direita (ao lado da data), "+ Tarefa" abre, entre o
 
 A assinatura da conta entra sozinha ao escrever (depois de "-- ", acima do texto citado, nas respostas e nos encaminhamentos). Ela é texto comum do campo: dá para editar ou apagar antes de enviar; a padrão fica em Configurações › Email › Assinatura.
 
-Quando você pede ao Assistente para organizar o email ("organiza meus emails em resolvidos e pendentes"), a área da leitura da conta vira o painel "Organizando": o pedido, Parar, as etapas (Lendo, Decidindo, Movendo), quantas mensagens ele leu e moveu, quantas foram para Resolvidos, Pendentes e outras pastas e uma linha por assunto com o veredito, o motivo e a evidência. Clicar numa linha abre o email, e "Voltar ao andamento" traz o painel de volta. As mensagens movidas somem da lista na hora. Ele lê as 200 mensagens mais recentes da pasta; na dúvida, manda para Pendentes. Ao parar ou terminar, o painel mostra o resumo, "Desfazer as N" (devolve tudo à pasta de origem) e "Abrir no Assistente", e o topo da lista ganha a faixa "O Assistente moveu N mensagens" com Desfazer, que fica até o fim do dia ou até você fechar.
+Quando você pede ao Assistente para organizar o email ("organiza meus emails em resolvidos e pendentes"), a área da leitura da conta vira o painel "Organizando": o pedido, Parar, as etapas (Lendo, Decidindo, Movendo), quantas mensagens ele leu e moveu, quantas foram para Resolvidos, Pendentes e outras pastas e uma linha por assunto com o veredito, o motivo e a evidência. Clicar numa linha abre o email, e "Voltar ao andamento" traz o painel de volta. As mensagens movidas somem da lista na hora. Ele lê as 200 mensagens mais recentes da pasta; na dúvida, manda para Pendentes. Ao parar ou terminar, o painel mostra o resumo, "Desfazer as N" (devolve tudo à pasta de origem) e "Abrir no Assistente", e o topo da lista ganha a faixa "O Assistente moveu N mensagens" com Desfazer, que fica até o fim do dia ou até você fechar. Quando o lote foi movido pelo Painel de e-mail ("Mover" ou "Mover todos"), a mesma faixa diz "O Painel moveu N mensagens", com o mesmo Desfazer.
+
+### Painel
+
+O Painel é o topo do Email. O clique em Email, na barra lateral, leva a ele, e a linha "Painel" fica logo abaixo da seta "Email" do nível. No cabeçalho, quando foi a última análise, quantos e-mails e o modelo, e o botão "Analisar agora". Abaixo, as contas com os não lidos e os pendentes e três cartões:
+
+- Precisam de atenção: os e-mails mais importantes, com o motivo ao lado do assunto. Um quadrado pequeno marca os mais importantes. O clique abre o e-mail na Caixa de Entrada.
+- Respostas sugeridas: um rascunho por e-mail que pede resposta. "Ver resposta" mostra o texto inteiro. "Abrir no Composer" abre a resposta com o rascunho e o texto citado; nada sai sem o seu clique em "Enviar". Depois de aberta, a linha mostra "Aberta". Aparecem 3; "Mostrar mais N" mostra o resto.
+- Sugestões de organização: grupos "Mover para <pasta>" (ou "Arquivar"), com "Mover" em cada e-mail e "Mover todos (N)" no grupo. Só move no seu clique. Depois de mover, a faixa "N e-mails movidos para <pasta>" tem "Desfazer", que devolve os e-mails à Caixa de Entrada.
+
+"Ignorar" tira a sugestão de vez: ela não volta nas próximas análises. A análise roda uma vez por dia, com o app aberto, e quando você clica em "Analisar agora"; lê as Caixas de Entrada dos últimos 7 dias de todas as contas e só olha os e-mails novos desde a anterior. Com a análise desligada (Configurações › Email › Painel), o Painel mostra só os não lidos pendentes, sem respostas nem sugestões, e nada vai ao Claude.
 
 <!-- tela: funil -->
 ## Funil
@@ -222,7 +232,7 @@ No bloco "Agenda": "Avisar reuniões da agenda" (ligado), "Avisar antes" (1, 5 o
 <!-- aba: email -->
 ### Email
 
-Nesta ordem: Contas (as contas de email IMAP ou POP3, com o servidor e o estado de cada uma, "Adicionar conta", "Remover" e "Buscar emails novos a cada", que vale só para as POP3), a escolha da conta ("Assinatura, regras e pastas de …", que vale para as três seções abaixo), Assinatura, Regras, Pastas, Avisos e Convites.
+Nesta ordem: Contas (as contas de email IMAP ou POP3, com o servidor e o estado de cada uma, "Adicionar conta", "Remover" e "Buscar emails novos a cada", que vale só para as POP3), a escolha da conta ("Assinatura, regras e pastas de …", que vale para as três seções abaixo), Assinatura, Regras, Pastas, Avisos, Painel e Convites.
 
 Assinatura: o texto (até 2000 caracteres; links e emails viram link) e dois interruptores, "Em mensagens novas" e "Em respostas e encaminhamentos". Grava sozinho.
 
@@ -231,6 +241,8 @@ Regras: até 50 por conta, na ordem da lista. Cada regra tem condições (remete
 Pastas: "Nova pasta" e a lista das pastas da conta, com o total e as não lidas, "Renomear" e "Apagar" (as do sistema não mudam). É a mesma árvore da barra lateral.
 
 Avisos: "Avisar quando chega email" (a notificação do macOS; uma regra com "não avisar" vale mais).
+
+Painel (vale para todas as contas): "Analisar e-mails com IA" (ligado; uma vez por dia e quando você pede, o Claude lê as Caixas de Entrada dos últimos 7 dias; desligado, o Painel mostra só não lidos e pendentes), "Modelo" (Haiku, o padrão, rápido e barato, ou Sonnet, que escreve respostas melhores e custa mais) e "Última análise" (a hora, quantos e-mails e o custo), com "Analisar agora". O Painel só sugere: nada é enviado nem movido sem o seu clique.
 
 Convites (vale para todas as contas): "Agenda padrão" (onde entra o convite aceito, entre as agendas do Calendário do Mac em que dá para gravar; dá para trocar em cada convite), "Pôr na agenda ao aceitar" (ligado, Aceitar e Talvez também gravam o evento), "Acesso ao Calendário do Mac" (permitido, não pedido, com "Pedir acesso", ou negado, com "Abrir Ajustes"; o app nunca apaga evento que não criou) e "Sugerir evento quando o email não tem convite".
 

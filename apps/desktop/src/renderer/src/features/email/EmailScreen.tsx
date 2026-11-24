@@ -1,7 +1,7 @@
 import { Calendar, CalendarX, Check, FolderInput, Forward, Mail, MailOpen, PenLine, Reply, SquarePen, Trash2, TriangleAlert, X } from 'lucide-react'
 import { useEffect, useRef, useState, type DragEvent, type KeyboardEvent, type MouseEvent, type RefObject } from 'react'
 import { Link, Navigate, useLocation, useNavigate, useParams } from 'react-router'
-import { emailFolderFromSlug, emailFolderSegment, emailPath, settingsPath, type EmailNavigationState, type EmailRouteFolder } from '@shared/routes'
+import { emailFolderFromSlug, emailFolderSegment, emailPath, isEmailPainelPath, settingsPath, type EmailNavigationState, type EmailRouteFolder } from '@shared/routes'
 import { EMAIL_INBOX_MAILBOX, isInbox, isSent, type EmailAccount, type EmailBody, type EmailFolderNode, type EmailMessage } from '@shared/email'
 import type { EmailSignature } from '@shared/email-signature'
 import { useSettings } from '../../app/settingsStore'
@@ -12,13 +12,14 @@ import { Avatar } from '../whatsapp/Avatar'
 import { Composer } from './Composer'
 import { ContextMenu, type MenuEntry } from './ContextMenu'
 import { accountTree } from './EmailNav'
-import { bodyKey, folderKey, useEmail } from './emailStore'
+import { bodyKey, findReplyTarget, folderKey, useEmail } from './emailStore'
 import { moveMessages, useEmailUi } from './emailUi'
 import { breadcrumb, findFolder } from './folderTree'
-import { accountLabel, addressLabel, composeFrom, createDraftRequests, emailTimeLabel, emptyDraft, groupByDay, previewLine, parseRecipients, rowTitle, signatureEntered, signedDraft, unreadCount, type ComposeMode, type Recipient } from './format'
+import { accountLabel, addressLabel, composedDraft, createDraftRequests, emailTimeLabel, emptyDraft, groupByDay, previewLine, parseRecipients, rowTitle, signatureEntered, signedDraft, unreadCount, type ComposeMode, type Recipient } from './format'
 import { recentTargets, submenuTargets } from './moveTargets'
 import { MoveToPicker } from './MoveToPicker'
 import { OrganizeBanner, OrganizePanel } from './OrganizePanel'
+import { PainelEmail } from './PainelEmail'
 import { folderPhrase, organizeBanner, organizeView, panelBatch, type OrganizeTopicRow } from './organizeState'
 import { ReadingPane } from './ReadingPane'
 import { EMPTY_SELECTION, isMultiSelection, selectedLabel, selectionReducer, type EmailSelection, type SelectionAction } from './selection'
@@ -157,6 +158,8 @@ export function EmailScreen() {
       </div>
     ) : null
   }
+  // Contrato 157 (D6): `/email/painel` é o Painel; sem conta, a nota de nenhuma conta abaixo continua valendo.
+  if (isEmailPainelPath(location.pathname) && accounts.length > 0) return <PainelEmail />
   const first = accounts[0]
   const status = accounts.find((item) => item.account.id === conta)
   const folder = emailFolderFromSlug(emailFolderSegment(location.pathname))
@@ -240,6 +243,8 @@ function FolderView({ account, sentMailbox, folder, pop3, nodes }: FolderViewPro
   const [menu, setMenu] = useState<{ x: number; y: number; ids: string[] } | null>(null)
   const [pendingDelete, setPendingDelete] = useState<string[] | null>(null)
   const [actionError, setActionError] = useState<string | null>(null)
+  // Contrato 157: a resposta pedida pelo Painel a uma mensagem que saiu da pasta.
+  const [replyMissing, setReplyMissing] = useState(false)
   // Janela estreita: "Voltar" do painel "Organizando" mostra a lista (o painel volta ao abrir e fechar uma mensagem).
   const [listOverPanel, setListOverPanel] = useState(false)
   const now = useToday()
@@ -363,6 +368,7 @@ function FolderView({ account, sentMailbox, folder, pop3, nodes }: FolderViewPro
     setPreparing(false)
     useEmail.getState().closeDraft(false)
     setPendingDelete(null)
+    setReplyMissing(false)
     const next = dispatch({ type: 'click', id, meta: event.metaKey, shift: event.shiftKey })
     if (!event.metaKey && !event.shiftKey) setSelected(id)
     else setSelected(next.ids.length === 1 ? (next.ids[0] ?? null) : next.ids.length === 0 ? null : selected)
@@ -376,13 +382,14 @@ function FolderView({ account, sentMailbox, folder, pop3, nodes }: FolderViewPro
     )
   // Responder e Encaminhar esperam o corpo (a citação é da mensagem inteira) e, no Encaminhar, os anexos da original
   // (CA9), já nos limites do envio; os que passam ficam de fora e o composer diz quais.
-  const compose = (mode: Exclude<ComposeMode, 'new'>, message: EmailMessage): void => {
+  // Contrato 157 (D12): `lead` é a resposta sugerida do Painel, no topo do texto, antes da assinatura e da citação.
+  const compose = (mode: Exclude<ComposeMode, 'new'>, message: EmailMessage, lead?: string): void => {
     const token = draftRequests.start()
     setPreparing(true)
     void (async () => {
       const body = await useEmail.getState().loadBody(account.id, message.id)
       const found = await signature()
-      const draft = { ...signedDraft(composeFrom(mode, message, body, { ...account, sentMailbox }), found), signed: signatureEntered(found, mode) }
+      const draft = composedDraft(mode, message, body, { ...account, sentMailbox }, found, lead)
       if (mode === 'forward' && body && body.attachments.length > 0) {
         const attached = await window.__scribeApi.invoke('scribe:email-attachments', { accountId: account.id, id: message.id }).catch(() => null)
         if (attached?.ok) {
@@ -412,12 +419,25 @@ function FolderView({ account, sentMailbox, folder, pop3, nodes }: FolderViewPro
 
   // Contrato 119 (D12, R28): `compose` no `state` (o "Escrever e-mail" do funil) abre a mensagem nova já endereçada, pelo
   // mesmo `newMessage` (com a assinatura), uma vez por navegação; o pedido sai do histórico para não abrir de novo.
+  // Contrato 157 (D5, R16): com `replyTo` (o "Abrir no Composer" do Painel), a resposta à mensagem do cache, com o texto
+  // sugerido no topo; a mensagem que saiu da pasta só deixa a nota. Nada é enviado: o Enviar continua com a pessoa.
   const composeSeen = useRef<string | null>(null)
+  const composeRequested = (pedido: NonNullable<EmailNavigationState['compose']>): void => {
+    const replyTo = pedido.replyTo
+    if (!replyTo) {
+      newMessage(parseRecipients((pedido.to ?? []).join('\n')), pedido.subject ?? '')
+      return
+    }
+    void findReplyTarget(account.id, replyTo).then((message) => {
+      if (message) compose('reply', message, pedido.text ?? '')
+      else setReplyMissing(true)
+    })
+  }
   useEffect(() => {
     const pedido = (location.state as EmailNavigationState | null)?.compose
     if (!pedido || composeSeen.current === location.key) return
     composeSeen.current = location.key
-    newMessage(parseRecipients(pedido.to.join('\n')), pedido.subject ?? '')
+    composeRequested(pedido)
     void navigate(location.pathname, { replace: true, state: null })
   })
 
@@ -558,6 +578,21 @@ function FolderView({ account, sentMailbox, folder, pop3, nodes }: FolderViewPro
           )}
         </div>
         {banner && <OrganizeBanner key={banner.batchId} banner={banner} where={where} />}
+        {replyMissing && (
+          <Note
+            id="email-reply-missing"
+            icon={TriangleAlert}
+            role="status"
+            className="mx-2 mb-1"
+            action={
+              <button type="button" aria-label="Fechar o aviso" onClick={() => setReplyMissing(false)} className="no-drag inline-flex size-5 items-center justify-center text-text-muted hover:text-title">
+                <Icon icon={X} size={14} />
+              </button>
+            }
+          >
+            Este e-mail saiu da Caixa de Entrada
+          </Note>
+        )}
         {asked?.missingFolder && (
           <Note id="email-folder-missing" icon={TriangleAlert} role="status" className="mx-2 mb-1">
             {`A pasta “${breadcrumb(asked.missingFolder, nodes)}” não existe mais nesta conta.`}

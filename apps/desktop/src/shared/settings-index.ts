@@ -50,6 +50,11 @@ export const EMAIL_POLL_DESCRIPTION = 'Só nas contas POP3: de quantos em quanto
  */
 export const EMAIL_ACCOUNTS_DESCRIPTION = 'Contas de email IMAP ou POP3, com envio por SMTP. A senha fica cifrada neste Mac.'
 export const EMAIL_NOTIFICATIONS_DESCRIPTION = 'Notificação do macOS para email novo na Caixa de Entrada. Uma regra com “não avisar” vale mais.'
+/** Contrato 157 (D13): a seção "Painel" de Configurações › Email, os mesmos textos na tela e na busca. */
+export const EMAIL_DASHBOARD_SECTION_DESCRIPTION = 'O Painel fica no topo do Email. Ele sugere; nada é enviado nem movido sem o seu clique.'
+export const EMAIL_DASHBOARD_ENABLED_DESCRIPTION = 'Uma vez por dia e quando você pede, o Claude lê as Caixas de Entrada dos últimos 7 dias de todas as contas. Desligado, o Painel mostra só não lidos e pendentes.'
+export const EMAIL_DASHBOARD_MODEL_DESCRIPTION = 'Haiku é rápido e barato. Sonnet escreve respostas melhores e custa mais.'
+export const EMAIL_DASHBOARD_LAST_RUN_DESCRIPTION = 'Quando o Claude analisou os e-mails pela última vez, quantos e quanto custou.'
 export const EMAIL_SIGNATURE_DESCRIPTION = 'Texto que entra no fim das mensagens da conta. Um por conta.'
 export const EMAIL_SIGNATURE_NEW_DESCRIPTION = 'Põe a assinatura ao abrir “Nova mensagem”.'
 export const EMAIL_SIGNATURE_REPLY_DESCRIPTION = 'Põe a assinatura acima do texto citado.'
@@ -232,6 +237,10 @@ export function settingsIndex(agent: string): SettingsEntry[] {
     row('email', 'Regras', 'Regras', EMAIL_RULES_DESCRIPTION, 'há uma conta de email', 'regra executar agora mover marcar apagar não avisar'),
     row('email', 'Pastas', 'Pastas', EMAIL_FOLDERS_DESCRIPTION, 'há uma conta de email', 'pasta criar renomear apagar mover'),
     row('email', 'Avisos', 'Avisar quando chega email', EMAIL_NOTIFICATIONS_DESCRIPTION, undefined, 'avisos notificação'),
+    // Contrato 157: o Painel de e-mail, entre Avisos e Convites.
+    row('email', 'Painel', 'Analisar e-mails com IA', EMAIL_DASHBOARD_ENABLED_DESCRIPTION, undefined, 'painel ia claude analisar respostas sugeridas organização'),
+    row('email', 'Painel', 'Modelo', EMAIL_DASHBOARD_MODEL_DESCRIPTION, undefined, 'painel haiku sonnet modelo'),
+    row('email', 'Painel', 'Última análise', EMAIL_DASHBOARD_LAST_RUN_DESCRIPTION, undefined, 'painel analisar agora custo'),
     // Contrato 63: o bloco "Convites", no fim da aba (vale para todas as contas).
     row('email', 'Convites', 'Agenda padrão', INVITE_CALENDAR_DESCRIPTION, undefined, 'convite agenda calendário'),
     row('email', 'Convites', 'Pôr na agenda ao aceitar', INVITE_ADD_ON_ACCEPT_DESCRIPTION, undefined, 'convite agenda calendário aceitar'),

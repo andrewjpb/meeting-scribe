@@ -3,7 +3,7 @@
 // é `sidebarStack.ts` porque, no disco do Mac (sem distinção de maiúsculas), `./SidebarStack` resolveria para ele e não
 // para o componente.
 import { matchPath } from 'react-router'
-import { DEFAULT_REDES_SECTION, EMAIL_ROOT_PATH, FUNIL_ROOT_PATH, isRedesSection, REDES_ROOT_PATH, redesPath, ROUTE_PATHS } from '@shared/routes'
+import { DEFAULT_REDES_SECTION, EMAIL_ROOT_PATH, emailPainelPath, FUNIL_ROOT_PATH, isEmailPainelPath, isRedesSection, REDES_ROOT_PATH, redesPath, ROUTE_PATHS } from '@shared/routes'
 
 /**
  * Seções com nível próprio na barra lateral (contrato 66: Configurações, com as abas; contrato 67: Assistente, com as
@@ -83,6 +83,19 @@ export function lastEmailPath(accountIds: readonly string[]): string {
   if (!rememberedEmailPath) return EMAIL_ROOT_PATH
   const conta = matchPath(EMAIL_FOLDER_PATTERN, rememberedEmailPath)?.params.conta
   return conta !== undefined && accountIds.includes(conta) ? rememberedEmailPath : EMAIL_ROOT_PATH
+}
+
+/**
+ * Contrato 157 (R11): para onde vai o clique no item "Email"; `null` só mostra o nível, sem navegar. Com conta: de fora
+ * do Email ou de uma pasta, o Painel; no Painel, a última pasta aberta (sem ela, só o nível). Antes de as contas chegarem
+ * (`null`), também o Painel: a tela decide quando elas chegam (sem conta, a nota de sempre). Sem conta nenhuma, o de antes:
+ * no Email, só o nível; de fora, `lastEmailPath`.
+ */
+export function emailNavTarget(pathname: string, accountIds: readonly string[] | null): string | null {
+  if (accountIds?.length === 0) return sectionOf(pathname) === 'email' ? null : lastEmailPath([])
+  if (!isEmailPainelPath(pathname)) return emailPainelPath()
+  const last = lastEmailPath(accountIds ?? [])
+  return last === EMAIL_ROOT_PATH ? null : last
 }
 
 /** Contrato 72: guarda a seção aberta das redes (`/redes/<conta>/<secao>`); outras rotas, e `/redes` sozinho, não trocam o lembrado. */

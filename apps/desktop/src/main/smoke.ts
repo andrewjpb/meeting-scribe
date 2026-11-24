@@ -236,7 +236,9 @@ import { CLAUDE_CONNECTOR_AUTHORIZE_HINT, CLAUDE_CONNECTOR_NEXT_QUESTION, CLAUDE
 import { NAVEGADOR_COMANDOS_PATH, NAVEGADOR_HEADER, NAVEGADOR_PORTS, type NavegadorServer } from './navegador/server'
 import { MEETINGS_DIR } from './meetings/transcripts'
 import { SETTINGS_VERSION } from './settings/schema'
-import { SMOKE_EMAIL_ADDRESS, SMOKE_EMAIL_ARCHIVED, SMOKE_EMAIL_ATTACHMENT, SMOKE_EMAIL_PASSWORD, SMOKE_EMAIL_WRONG_PASSWORD } from './email/fake-email'
+import { SMOKE_EMAIL_ADDRESS, SMOKE_EMAIL_ARCHIVE_FOLDER, SMOKE_EMAIL_ARCHIVED, SMOKE_EMAIL_ATTACHMENT, SMOKE_EMAIL_PASSWORD, SMOKE_EMAIL_WRONG_PASSWORD } from './email/fake-email'
+import type { EmailDashboardView } from '../shared/email-dashboard'
+import { leakedLines, numericDetail } from './smoke-privacy'
 import { CLAUDE_DISALLOWED_TOOLS, CLAUDE_READ_TOOLS, CLAUDE_WEB_TOOLS } from './acp/profiles/claude'
 import { LATEST_RELEASE_URL, RELEASE_DOWNLOAD_PREFIX, RELEASE_REDIRECT_HOSTS } from './updates/release'
 import {
@@ -11702,9 +11704,10 @@ async function emailChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => voi
     detail: `itens ${JSON.stringify(navOrder)}; número do Email "${badgeLabel}"; alturas ${JSON.stringify(dense.items)}px, entre eles ${JSON.stringify([...new Set(dense.gaps)])}, ícone a ${JSON.stringify([...new Set(dense.iconGap)])}px do texto, ${dense.above}px acima da lista; rodapé ${dense.footer}px, Bloquear ${dense.lock}px, permissões ${JSON.stringify(dense.perms)}, rótulo ${JSON.stringify(dense.label)}`,
   }
   await clickNav(contents, 'email')
-  const firstTime = await waitFor(contents, `${routeIs('email')} && document.querySelector('[data-email-folder-view="inbox"]') && document.querySelector('${SIDEBAR_EMAIL} [data-email-folder="inbox"][data-email-folder-account="${accountId}"]')?.getAttribute('aria-current') === 'page'`, 8000)
+  // Contrato 157 (R11): de fora do Email, o Painel (era a Caixa de Entrada da primeira conta), com a linha Painel marcada.
+  const firstTime = await waitFor(contents, `${routeIs('email')} && document.querySelector('main [data-email-painel]') && document.querySelector('${SIDEBAR_EMAIL} [data-email-painel-link]')?.getAttribute('aria-current') === 'page'`, 8000)
   const focusBack = await evaluate<boolean>(contents, `document.activeElement?.matches('${SIDEBAR_EMAIL} [data-sidebar-back]') === true`)
-  sidebarChecks['enterFirstTime'] = { ok: firstTime && focusBack, detail: `de Configurações, a Caixa de Entrada da primeira conta=${firstTime}; foco no cabeçalho-voltar=${focusBack}` }
+  sidebarChecks['enterFirstTime'] = { ok: firstTime && focusBack, detail: `de Configurações, o Painel=${firstTime}; foco no cabeçalho-voltar=${focusBack}` }
 
   // Barra lateral: com uma conta (D1 do contrato 65), a linha dela sem seta, as pastas sempre e as não lidas; a lista em
   // duas colunas.
@@ -11810,15 +11813,20 @@ async function emailChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => voi
   const rootShown = await waitFor(contents, `document.querySelector('${SIDEBAR_ROOT}') && ${SIDEBAR_LEVELS}.length === 1`)
   const afterBack = await sidebarView()
   await clickNav(contents, 'email')
-  const levelAgain = await waitFor(contents, `document.querySelector('${SIDEBAR_EMAIL}') && ${SIDEBAR_LEVELS}.length === 1`)
+  // Contrato 157 (R11): numa pasta do Email, "Email" leva ao Painel (era só mostrar o nível, sem navegar).
+  const levelAgain = await waitFor(contents, `document.querySelector('${SIDEBAR_EMAIL}') && ${SIDEBAR_LEVELS}.length === 1 && document.querySelector('main [data-email-painel]')`, 8000)
   const afterEnter = await sidebarView()
+  // E, no Painel, "Email" de novo volta à última pasta (a Caixa de Entrada); a mensagem é aberta de novo para o Responder.
+  await clickNav(contents, 'email')
+  const backToFolder = await waitFor(contents, `${routeIs('email')} && document.querySelector('[data-email-folder-view="inbox"]') && document.querySelector('${SIDEBAR_EMAIL}') && ${SIDEBAR_LEVELS}.length === 1`, 8000)
+  const reopened = await clickEmailRow(contents, EMAIL_HTML_SUBJECT)
   sidebarChecks['back'] = {
     ok: rootShown && beforeBack.subject === EMAIL_HTML_SUBJECT && afterBack.route === 'email' && afterBack.subject === beforeBack.subject && afterBack.current === 'page' && afterBack.focus === 'email',
     detail: `raiz=${rootShown}; rota ${beforeBack.route} -> ${afterBack.route}; mensagem "${beforeBack.subject}" -> "${afterBack.subject}"; "Email" com aria-current="${afterBack.current}"; foco em ${afterBack.focus}`,
   }
   sidebarChecks['enterInSection'] = {
-    ok: levelAgain && afterEnter.route === 'email' && afterEnter.subject === beforeBack.subject && afterEnter.focus === 'back',
-    detail: `nível Email sem navegar=${levelAgain}; rota ${afterEnter.route}; mensagem "${afterEnter.subject}"; foco em ${afterEnter.focus}`,
+    ok: levelAgain && afterEnter.route === 'email' && afterEnter.subject === '' && afterEnter.focus === 'back' && backToFolder && reopened,
+    detail: `de uma pasta, o Painel no nível Email=${levelAgain}; rota ${afterEnter.route}; foco em ${afterEnter.focus}; do Painel, de volta à Caixa de Entrada=${backToFolder}, mensagem aberta de novo=${reopened}`,
   }
 
   // Responder: "Re:", a citação e um anexo local; Enviar sem diálogo, e a mensagem em Enviados.
@@ -11880,9 +11888,13 @@ async function emailChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => voi
   await settle(contents)
   shots.push(await capture(win, ctx.outDir, 'sidebar-raiz-light'))
   const push = await evaluate<SlideView>(contents, slideScript(`${SIDEBAR_ROOT} [data-nav="email"]`, 'push'))
-  const lastFolder = await waitFor(contents, `${routeIs('email')} && document.querySelector('[data-email-folder-view="sent"]') && document.querySelector('${SIDEBAR_EMAIL} ${EMAIL_SENT_LINK}')?.getAttribute('aria-current') === 'page'`, 8000)
-  sidebarChecks['enterLast'] = { ok: push.after.level === 'email' && lastFolder, detail: `de Reuniões, a última pasta aberta (Enviados)=${lastFolder}` }
+  // Contrato 157 (R11): de Reuniões, o Painel; com a raiz à mostra, "Email" no Painel leva à última pasta (Enviados).
+  const painelFirst = await waitFor(contents, `${routeIs('email')} && document.querySelector('main [data-email-painel]') && document.querySelector('${SIDEBAR_EMAIL} [data-email-painel-link]')?.getAttribute('aria-current') === 'page'`, 8000)
   const pop = await evaluate<SlideView>(contents, slideScript(SIDEBAR_BACK, 'pop'))
+  await clickNav(contents, 'email')
+  const lastFolder = await waitFor(contents, `${routeIs('email')} && document.querySelector('[data-email-folder-view="sent"]') && document.querySelector('${SIDEBAR_EMAIL} ${EMAIL_SENT_LINK}')?.getAttribute('aria-current') === 'page'`, 8000)
+  sidebarChecks['enterLast'] = { ok: push.after.level === 'email' && painelFirst && lastFolder, detail: `de Reuniões, o Painel=${painelFirst}; do Painel, a última pasta aberta (Enviados)=${lastFolder}` }
+  await showRoot(contents)
   // Dois cliques seguidos (entrar e voltar): termina com um nível só, a raiz.
   const twice = await evaluate<{ count: number; level: string; sliding: boolean }>(
     contents,
@@ -12103,23 +12115,25 @@ async function emailChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => voi
   for (const id of fitToggles) await setOpen(id, true)
   await waitFor(contents, `document.querySelector('${ownInbox}')`)
   // Contrato 79 (barra densa): cabeçalho-voltar de 32 com 4 abaixo dele; contas e pastas em linhas de 28 (a seta da
-  // subpasta centrada na linha, a 6 px do topo).
-  const rowSizes = await evaluate<{ header: number; below: number; accounts: number[]; folders: number[]; toggles: number[] }>(
+  // subpasta centrada na linha, a 6 px do topo). Contrato 157 (D1): a linha Painel de 28 vem logo abaixo do cabeçalho (os
+  // 4 px passam a ser até ela), com o fio de 1 px antes das contas.
+  const rowSizes = await evaluate<{ header: number; below: number; painel: number; accounts: number[]; folders: number[]; toggles: number[] }>(
     contents,
     `(() => {
       const level = document.querySelector('${SIDEBAR_EMAIL}')
       const round = (n) => Math.round(n * 10) / 10
-      const back = level.querySelector('[data-sidebar-back]').getBoundingClientRect(), nav = level.querySelector('[data-email-nav]').getBoundingClientRect()
+      const back = level.querySelector('[data-sidebar-back]').getBoundingClientRect(), painel = level.querySelector('[data-email-painel-link]').getBoundingClientRect()
       return {
         header: round(back.height),
-        below: round(nav.top - back.bottom),
+        below: round(painel.top - back.bottom),
+        painel: round(painel.height),
         accounts: [...level.querySelectorAll('[data-email-account-toggle], [data-email-account-header]')].map((el) => round(el.getBoundingClientRect().height)),
         folders: [...level.querySelectorAll('[data-email-folder]')].map((el) => round(el.getBoundingClientRect().height)),
         toggles: [...level.querySelectorAll('[data-email-folder-toggle]')].map((el) => round(el.getBoundingClientRect().top - el.parentElement.getBoundingClientRect().top)),
       }
     })()`,
   )
-  const rowSizesOk = rowSizes.header === 32 && rowSizes.below === 4 && rowSizes.accounts.length === 2 && rowSizes.accounts.every((height) => height === 28) && rowSizes.folders.length > 0 && rowSizes.folders.every((height) => height === 28) && rowSizes.toggles.every((top) => top === 6)
+  const rowSizesOk = rowSizes.header === 32 && rowSizes.below === 4 && rowSizes.painel === 28 && rowSizes.accounts.length === 2 && rowSizes.accounts.every((height) => height === 28) && rowSizes.folders.length > 0 && rowSizes.folders.every((height) => height === 28) && rowSizes.toggles.every((top) => top === 6)
   await clickSelector(contents, '[data-action="email-toggle-seen"]')
   const fitRead = await waitFor(contents, `!document.querySelector('[data-email-unread-count]')`, 8000)
   sidebarChecks['emailFits'] = {
@@ -12138,7 +12152,7 @@ async function emailChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => voi
       fit.restored &&
       rowSizesOk &&
       fitRead,
-    detail: `contas recolhidas=${fitCollapsed} (${fitToggles.length}), uma não lida na linha da conta=${fitUnread}; com nomes compridos: borda direita da barra ${fit.asideRight}, linhas ${JSON.stringify(fit.rows)}, número ${fit.badge ?? 'nenhum na linha da conta recolhida'}; fora da borda ${JSON.stringify(fit.over)}; rótulos truncados ${JSON.stringify(fit.truncated)}, transbordando sem truncate ${JSON.stringify(fit.overflowing)}; nomes restaurados=${fit.restored}; cabeçalho ${rowSizes.header}px com ${rowSizes.below}px abaixo, contas ${JSON.stringify(rowSizes.accounts)}px, pastas ${JSON.stringify([...new Set(rowSizes.folders)])}px (${rowSizes.folders.length}), seta da subpasta a ${JSON.stringify([...new Set(rowSizes.toggles)])}px do topo; lida de novo=${fitRead}`,
+    detail: `contas recolhidas=${fitCollapsed} (${fitToggles.length}), uma não lida na linha da conta=${fitUnread}; com nomes compridos: borda direita da barra ${fit.asideRight}, linhas ${JSON.stringify(fit.rows)}, número ${fit.badge ?? 'nenhum na linha da conta recolhida'}; fora da borda ${JSON.stringify(fit.over)}; rótulos truncados ${JSON.stringify(fit.truncated)}, transbordando sem truncate ${JSON.stringify(fit.overflowing)}; nomes restaurados=${fit.restored}; cabeçalho ${rowSizes.header}px com ${rowSizes.below}px abaixo, Painel ${rowSizes.painel}px, contas ${JSON.stringify(rowSizes.accounts)}px, pastas ${JSON.stringify([...new Set(rowSizes.folders)])}px (${rowSizes.folders.length}), seta da subpasta a ${JSON.stringify([...new Set(rowSizes.toggles)])}px do topo; lida de novo=${fitRead}`,
   }
 
   // Contrato 68 (C): com a janela baixa, a lista do nível Email não cabe e o pé dela esmaece (24 px, sem receber
@@ -17770,6 +17784,315 @@ async function emailFoldersUiChecks(ctx: SmokeContext, watch: (win: BrowserWindo
   win.destroy()
 }
 
+/**
+ * Contrato 158: as 6 mensagens falsas do Painel de e-mail, na ordem de entrega. A passada as manda da mais nova para a
+ * mais velha, então a resposta falsa (`fake-email-dashboard.mjs`) sugere resposta às 2ª, 4ª e 6ª entregues e mover para
+ * "Newsletters" as 1ª, 3ª e 5ª. Dados fictícios; nenhum deles vai a `detail`, nome de PNG ou log do smoke.
+ */
+const DASHBOARD_SEEDS = [
+  { from: { name: 'Boletim Tech Semanal', address: 'boletim@technews.example' }, subject: 'Edição 212: o que mudou no Node 24', text: 'As novidades da semana em um só lugar.' },
+  { from: { name: 'Rafael Lima', address: 'rafael.lima@portal.example' }, subject: 'Aceite da proposta do portal', text: 'Aceitamos a proposta. Pode mandar a minuta do contrato até sexta?' },
+  { from: { name: 'Agência Pixel', address: 'news@pixel.example' }, subject: 'Novidades de novembro', text: 'Confira os destaques do mês.' },
+  { from: { name: 'Marina Costa', address: 'marina.costa@cliente.example' }, subject: 'Cronograma da fase 2', text: 'Qual é o prazo da entrega da fase 2?' },
+  { from: { name: 'Clube de Ofertas', address: 'ofertas@clube.example' }, subject: 'Ofertas da semana', text: 'Descontos de até 30% nesta semana.' },
+  { from: { name: 'Bruno Alves', address: 'bruno.alves@obra.example' }, subject: 'Pauta da reunião técnica', text: 'Confirma o horário de quarta às 10h?' },
+] as const
+
+/**
+ * Contrato 158, numa janela que troca de tema no lugar e com o `claude` falso pela linha de comando: o Painel de e-mail
+ * com a INBOX falsa só com as 6 mensagens de `DASHBOARD_SEEDS` (o que já estava nela vai para "Arquivo" e volta no fim,
+ * com UIDs novos). A passada, a repetida sem mensagem nova, o log sem dado das mensagens, a resposta aberta no Composer
+ * sem envio, o "Mover todos" com o lote `painel` e o Desfazer, o Ignorar, a análise desligada e os canais recusados com o
+ * app bloqueado; 14 prints. Termina com as 6 lidas em "Newsletters", a análise ligada e o transporte de antes. Os `detail`
+ * só com `chave=valor` numéricos ou booleanos (R36), conferidos por `numericDetail`.
+ */
+async function emailDashboardChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => void, checks: Record<string, Check>, shots: Screenshot[], failures: string[]): Promise<void> {
+  const fake = ctx.fixtures.email
+  const before = readSettings(ctx.userDataDir)
+  const themeBefore = before.theme ?? 'system'
+  const transportBefore = before.claudeTransport === 'cli' ? 'cli' : 'acp'
+  const modelBefore = before.emailDashboard?.model === 'sonnet' ? 'sonnet' : 'haiku'
+  nativeTheme.themeSource = 'light'
+  const win = ctx.openWindow({})
+  watch(win)
+  await loadAndWait(win)
+  const contents = win.webContents
+  const api = <T>(channel: string, request?: unknown): Promise<T> => evaluate<T>(contents, `window.__scribeApi.invoke(${JSON.stringify(channel)}${request === undefined ? '' : `, ${JSON.stringify(request)}`})`)
+  const both = async (name: string): Promise<void> => {
+    await settle(contents)
+    shots.push(await capture(win, ctx.outDir, `${name}-light`))
+    nativeTheme.themeSource = 'dark'
+    await waitFor(contents, "document.documentElement.dataset.theme === 'dark'")
+    await settle(contents)
+    shots.push(await capture(win, ctx.outDir, `${name}-dark`))
+    nativeTheme.themeSource = 'light'
+    await waitFor(contents, "document.documentElement.dataset.theme === 'light'")
+  }
+  const accountId = await evaluate<string>(contents, `window.__scribeApi.invoke('scribe:email-accounts').then((list) => list[0]?.account.id ?? '')`)
+  const getView = (): Promise<EmailDashboardView> => api<EmailDashboardView>('scribe:email-dashboard-get')
+  const moveRows = (view: EmailDashboardView): number => view.moves.reduce((sum, group) => sum + group.rows.length, 0)
+  const calls = (): number => ctx.fixtures.claudeSpawns.length
+  const count = (path: string): number => fake.mailboxes()[path]?.uids.length ?? 0
+  const cachedInbox = async (): Promise<number> => (await api<unknown[]>('scribe:email-messages', { accountId })).length
+  const waitInbox = async (size: number): Promise<boolean> => {
+    for (const stop = Date.now() + 8000; Date.now() < stop; await wait(100)) if ((await cachedInbox()) === size) return true
+    return false
+  }
+  /** "Analisar agora" pelo canal; espera a passada que começou depois de `since` terminar (`null`: não terminou). */
+  const runAndWait = async (): Promise<{ started: boolean; view: EmailDashboardView | null }> => {
+    const since = Date.now()
+    const result = await api<{ started: boolean; running: boolean }>('scribe:email-dashboard-run')
+    for (const stop = Date.now() + 30_000; result.started && Date.now() < stop; await wait(100)) {
+      const view = await getView()
+      if (!view.running && view.lastRun && view.lastRun.at >= since) return { started: true, view }
+    }
+    return { started: result.started, view: null }
+  }
+  const showPainel = async (): Promise<boolean> => {
+    await showEmailLevel(contents)
+    await clickSelector(contents, `${SIDEBAR_EMAIL} [data-email-painel-link]`)
+    return waitFor(contents, `${routeIs('email')} && document.querySelector('main [data-email-painel][data-email-painel-ia]')`, 8000)
+  }
+  const painelCount = (card: string, row: string): string => `document.querySelectorAll('[data-email-painel-cartao="${card}"] ${row}').length`
+  const record = (name: string, check: Check): void => {
+    checks[name] = check
+    if (!numericDetail(check.detail)) failures.push(`email.${name}: detail fora do formato chave=valor`)
+  }
+
+  // A INBOX falsa só com as mensagens do Painel: o que já estava nela vai para "Arquivo" (volta no fim).
+  const archivedBefore = new Set(fake.mailboxes()[SMOKE_EMAIL_ARCHIVE_FOLDER]?.uids ?? [])
+  const inboxUids = fake.mailboxes()['INBOX']?.uids ?? []
+  if (inboxUids.length) await api('scribe:email-move', { accountId, fromPath: 'INBOX', uids: inboxUids, toPath: SMOKE_EMAIL_ARCHIVE_FOLDER })
+  const held = (fake.mailboxes()[SMOKE_EMAIL_ARCHIVE_FOLDER]?.uids ?? []).filter((uid) => !archivedBefore.has(uid))
+  const ownUids: number[] = []
+  try {
+    // Contrato 170: o tema e o transporte mudam dentro do `try`, e o `finally` os devolve mesmo quando um passo falha.
+    if (themeBefore !== 'system') await evaluate(contents, "window.__scribeApi.invoke('scribe:settings-update', { theme: 'system' }).then(() => true)")
+    // O `claude` falso responde à passada pela linha de comando (o agente ACP falso não tem a resposta do Painel), e cada
+    // chamada fica em `claudeSpawns`: é o contador de chamadas dos checks.
+    await evaluate(contents, "window.__scribeApi.invoke('scribe:settings-update', { claudeTransport: 'cli' }).then(() => true)")
+    await waitInbox(0)
+
+    // Print B: a INBOX falsa vazia, antes de entregar (nada analisado: os três cartões vazios).
+    const empty = (await showPainel()) && (await waitFor(contents, `document.querySelectorAll('[data-email-painel-vazio]').length === 3`, 8000))
+    await both('email-painel-vazio')
+
+    // dashboardRun e dashboardLogPrivacy: 6 mensagens novas, a passada e o log dela.
+    for (const seed of DASHBOARD_SEEDS) {
+      await fake.deliver(seed)
+      await wait(20)
+    }
+    const delivered = await waitInbox(DASHBOARD_SEEDS.length)
+    const callsBeforeRun = calls()
+    const logged: string[] = []
+    const original = { log: console.log, warn: console.warn, error: console.error }
+    const keep =
+      (write: (...args: unknown[]) => void) =>
+      (...args: unknown[]): void => {
+        logged.push(args.map((arg) => (typeof arg === 'string' ? arg : JSON.stringify(arg) ?? String(arg))).join(' '))
+        write(...args)
+      }
+    console.log = keep(original.log)
+    console.warn = keep(original.warn)
+    console.error = keep(original.error)
+    let first: Awaited<ReturnType<typeof runAndWait>>
+    try {
+      first = await runAndWait()
+    } finally {
+      Object.assign(console, original)
+    }
+    const view = first.view
+    const runCalls = calls() - callsBeforeRun
+    const newsletters = view?.moves.filter((group) => group.folder === 'Newsletters') ?? []
+    record('dashboardRun', {
+      ok: delivered && first.started && view !== null && view.lastRun !== null && view.lastRun.analyzed >= 6 && view.attention.length >= 6 && view.replies.length >= 3 && view.moves.length === 1 && newsletters.length === 1 && (newsletters[0]?.rows.length ?? 0) >= 3 && view.lastRun.error === null && runCalls >= 1,
+      detail: `analyzed=${view?.lastRun?.analyzed ?? 0} attention=${view?.attention.length ?? 0} replies=${view?.replies.length ?? 0} moveGroups=${view?.moves.length ?? 0} moveRows=${newsletters[0]?.rows.length ?? 0} calls=${runCalls} error=${view?.lastRun?.error != null}`,
+    })
+    // CA3: `leakedLines` tem teste próprio (test/smoke-privacy.test.ts) que acusa um assunto injetado no log.
+    const leaked = leakedLines(
+      logged,
+      DASHBOARD_SEEDS.flatMap((seed) => [seed.subject, seed.from.name, seed.from.address, seed.text]),
+    )
+    const passLine = logged.some((line) => line.startsWith('email-dashboard: '))
+    record('dashboardLogPrivacy', { ok: logged.length > 0 && passLine && leaked === 0, detail: `lines=${logged.length} passLine=${passLine} leaked=${leaked > 0}` })
+
+    // Print A: os três cartões com conteúdo e o Painel marcado na barra lateral.
+    const filled = await waitFor(
+      contents,
+      `${painelCount('atencao', '[data-email-painel-linha]')} >= 6 && ${painelCount('respostas', '[data-email-painel-resposta]')} >= 3 && ${painelCount('organizacao', '[data-email-painel-grupo]')} === 1 && document.querySelector('${SIDEBAR_EMAIL} [data-email-painel-link]')?.getAttribute('aria-current') === 'page'`,
+      8000,
+    )
+    await both('email-painel')
+
+    // dashboardIdempotent: sem mensagem nova, a passada não chama o modelo.
+    const callsBeforeAgain = calls()
+    const again = await runAndWait()
+    const againCalls = calls() - callsBeforeAgain
+    record('dashboardIdempotent', {
+      ok: again.started && again.view?.lastRun?.analyzed === 0 && againCalls === 0 && again.view.lastRun.error === null,
+      // Contrato 170: sem a passada terminada, `finished=false` e `analyzed=0` (o `numericDetail` não aceita sinal).
+      detail: `analyzed=${again.view?.lastRun?.analyzed ?? 0} calls=${againCalls} finished=${again.view !== null}`,
+    })
+
+    // Print D: o 1º bloco de resposta aberto por inteiro ("Ver resposta").
+    await clickSelector(contents, '[data-email-painel-cartao="respostas"] [data-action="email-painel-ver-resposta"]')
+    const expanded = await waitFor(contents, `document.querySelector('[data-email-painel-cartao="respostas"] [data-action="email-painel-ver-resposta"]')?.getAttribute('aria-expanded') === 'true'`)
+    await both('email-painel-resposta')
+
+    // dashboardReply: "Abrir no Composer" do 1º bloco; o rascunho começa pela resposta e traz a citação; nada é enviado.
+    const firstReply = await evaluate<string>(contents, `document.querySelector('[data-email-painel-cartao="respostas"] [data-action="email-painel-resposta-texto"]')?.textContent ?? ''`)
+    const sentBefore = fake.sent.length
+    await clickSelector(contents, '[data-email-painel-cartao="respostas"] [data-action="email-painel-composer"]')
+    const composerOpen = await waitFor(contents, `${routeIs('email')} && document.querySelector('[data-email-composer="reply"] #email-compose-text')`, 8000)
+    const draft = await evaluate<string>(contents, `document.querySelector('#email-compose-text')?.value ?? ''`)
+    const startsWithReply = firstReply.length > 0 && draft.startsWith(firstReply)
+    const quoted = draft.includes('escreveu:\n> ')
+    await both('email-compor-sugerida')
+    await wait(400)
+    const sent = fake.sent.length - sentBefore
+    record('dashboardReply', { ok: composerOpen && startsWithReply && quoted && sent === 0, detail: `composerOpen=${composerOpen} startsWithReply=${startsWithReply} quoted=${quoted} sent=${sent}` })
+    if (composerOpen) {
+      await clickSelector(contents, '[data-action="email-discard"]')
+      if (await waitFor(contents, `document.querySelector('[data-action="email-discard-confirm"]')`, 2000)) await clickSelector(contents, '[data-action="email-discard-confirm"]')
+      await waitFor(contents, `!document.querySelector('[data-email-composer]')`)
+    }
+
+    // dashboardMove e print G: "Mover todos" leva o grupo a "Newsletters" num lote `painel`; o Desfazer da faixa o devolve.
+    await showPainel()
+    await waitFor(contents, `document.querySelector('[data-email-painel-grupo="Newsletters"] [data-action="email-painel-mover-todos"]')`, 8000)
+    const inboxBeforeMove = count('INBOX')
+    const newslettersBefore = count('Newsletters')
+    await clickSelector(contents, '[data-email-painel-grupo="Newsletters"] [data-action="email-painel-mover-todos"]')
+    const bannerShown = await waitFor(contents, `document.querySelector('[data-email-painel] [data-email-organize-banner]')`, 8000)
+    for (const stop = Date.now() + 5000; count('Newsletters') === newslettersBefore && Date.now() < stop; ) await wait(50)
+    const moved = count('Newsletters') - newslettersBefore
+    const inboxAfter = count('INBOX')
+    const newslettersAfter = count('Newsletters')
+    await both('email-painel-desfazer')
+    const batchId = await evaluate<string>(contents, `document.querySelector('[data-email-painel] [data-email-organize-banner]')?.dataset.emailOrganizeBanner ?? ''`)
+    const batch = batchId ? await api<{ ok: boolean; batch?: { origem?: string } }>('scribe:email-batch-get', { batchId }) : null
+    const origemPainel = batch?.ok === true && batch.batch?.origem === 'painel'
+    if (bannerShown) await clickSelector(contents, '[data-email-painel] [data-action="email-organize-banner-undo"]')
+    for (const stop = Date.now() + 8000; count('INBOX') !== inboxBeforeMove && Date.now() < stop; ) await wait(50)
+    const undone = count('INBOX') === inboxBeforeMove && count('Newsletters') === newslettersBefore
+    await waitInbox(DASHBOARD_SEEDS.length)
+    record('dashboardMove', {
+      ok: bannerShown && moved >= 3 && inboxAfter === inboxBeforeMove - moved && origemPainel && undone,
+      detail: `moved=${moved} inboxAfter=${inboxAfter} newsletters=${newslettersAfter} origemPainel=${origemPainel} undone=${undone}`,
+    })
+
+    // dashboardIgnore: as que voltaram (UIDs novos) são analisadas de novo; Ignorar uma resposta e um mover os tira, e a
+    // passada seguinte não os devolve.
+    const reanalyzed = await runAndWait()
+    const beforeIgnore = reanalyzed.view ?? (await getView())
+    const reply = beforeIgnore.replies[0]
+    const move = beforeIgnore.moves[0]?.rows[0]
+    if (reply) await api('scribe:email-dashboard-ignore', { accountId: reply.accountId, messageKey: reply.messageKey, kind: 'reply' })
+    if (move) await api('scribe:email-dashboard-ignore', { accountId: move.accountId, messageKey: move.messageKey, kind: 'move' })
+    const afterIgnore = await getView()
+    const rerun = await runAndWait()
+    const afterRerun = rerun.view ?? (await getView())
+    const back = afterRerun.replies.some((row) => row.messageKey === reply?.messageKey) || afterRerun.moves.some((group) => group.rows.some((row) => row.messageKey === move?.messageKey))
+    record('dashboardIgnore', {
+      ok: reply !== undefined && move !== undefined && afterIgnore.replies.length === beforeIgnore.replies.length - 1 && moveRows(afterIgnore) === moveRows(beforeIgnore) - 1 && rerun.view?.lastRun?.analyzed === 0 && !back && afterRerun.replies.length === afterIgnore.replies.length && moveRows(afterRerun) === moveRows(afterIgnore),
+      detail: `repliesBefore=${beforeIgnore.replies.length} repliesAfter=${afterIgnore.replies.length} moveRowsBefore=${moveRows(beforeIgnore)} moveRowsAfter=${moveRows(afterIgnore)} returned=${back}`,
+    })
+
+    // dashboardDisabled e print C: desligada, "Analisar agora" não começa, o modelo não é chamado e a tela mostra a nota.
+    // Contrato 170: a análise volta ligada no `finally`, mesmo quando um passo falha; a faixa "Desfeito" do check
+    // anterior sai pelo × antes do print (ou some sozinha em até 6 s).
+    let off = { started: true, running: true }
+    let offCalls = 0
+    let noteShown = false
+    let buttonDisabled = false
+    let bannerGone = false
+    try {
+      await evaluate(contents, `window.__scribeApi.invoke('scribe:settings-update', { emailDashboard: { enabled: false, model: '${modelBefore}' } }).then(() => true)`)
+      const callsBeforeOff = calls()
+      off = await api<{ started: boolean; running: boolean }>('scribe:email-dashboard-run')
+      await wait(300)
+      offCalls = calls() - callsBeforeOff
+      await clickSelector(contents, `${SIDEBAR_EMAIL} ${EMAIL_INBOX_LINK}`)
+      await waitFor(contents, `document.querySelector('[data-email-folder-view="inbox"]')`, 8000)
+      await showPainel()
+      noteShown = await waitFor(contents, `document.querySelector('[data-email-painel][data-email-painel-ia="desligada"] [data-notice="email-painel-ia-desligada"]')`, 8000)
+      buttonDisabled = await evaluate<boolean>(contents, `document.querySelector('[data-action="email-painel-analisar"]')?.disabled === true`)
+      await evaluate(contents, `document.querySelector('[data-email-painel] [data-email-organize-banner] [data-action="email-organize-banner-close"]')?.click() ?? null`)
+      bannerGone = await waitFor(contents, `!document.querySelector('[data-email-painel] [data-email-organize-banner]')`, 6000)
+      await both('email-painel-ia-desligada')
+    } finally {
+      await evaluate(contents, `window.__scribeApi.invoke('scribe:settings-update', { emailDashboard: { enabled: true, model: '${modelBefore}' } }).then(() => true)`).catch(() => undefined)
+    }
+    record('dashboardDisabled', {
+      ok: !off.started && !off.running && offCalls === 0 && noteShown && buttonDisabled && bannerGone,
+      detail: `started=${off.started} calls=${offCalls} noteShown=${noteShown} buttonDisabled=${buttonDisabled} bannerGone=${bannerGone}`,
+    })
+
+    // Print F: Configurações › Email rolada até a seção Painel (a análise ligada de novo).
+    await openSettingsTab(contents, 'email')
+    await waitFor(contents, `document.querySelector('section[aria-label="Painel"]')`, 8000)
+    await scrollToSection(contents, 'Painel')
+    await both('config-email-painel')
+
+    // dashboardLocked: bloqueado, os cinco canais do Painel recusam (pedidos no formato certo). Com uma senha própria,
+    // tirada no fim (o `lockChecks` começa sem senha), como o `pubLocked` das redes.
+    const lockPassword = 'smoke-painel-0000'
+    let passwordSet = false
+    let refused = 0
+    let locked = false
+    let unlocked = false
+    const requests: [string, unknown][] = [
+      ['scribe:email-dashboard-get', undefined],
+      ['scribe:email-dashboard-run', undefined],
+      ['scribe:email-dashboard-ignore', { accountId, messageKey: '1', kind: 'reply' }],
+      ['scribe:email-dashboard-opened', { accountId, messageKey: '1' }],
+      ['scribe:email-dashboard-apply-move', { accountId, folder: 'Newsletters', messageKeys: ['1'] }],
+    ]
+    try {
+      passwordSet = (await api<{ result: string }>('scribe:lock-password-set', { current: null, next: lockPassword })).result === 'ok'
+      locked = passwordSet && (await api<{ locked: boolean }>('scribe:lock-now')).locked && (await waitFor(contents, LOCK_LAYER))
+      for (const [channel, request] of requests) {
+        const call = `window.__scribeApi.invoke(${JSON.stringify(channel)}${request === undefined ? '' : `, ${JSON.stringify(request)}`})`
+        if (await evaluate<boolean>(contents, `${call}.then(() => false, (error) => String(error?.message ?? error).endsWith('Error: ${LOCKED_ERROR}'))`)) refused++
+      }
+      unlocked = (await api<{ result: string }>('scribe:lock-unlock', { password: lockPassword })).result === 'ok' && (await waitFor(contents, `!${LOCK_LAYER}`))
+    } finally {
+      if (passwordSet) {
+        await api('scribe:lock-unlock', { password: lockPassword }).catch(() => undefined)
+        const removed = (await api<{ result: string }>('scribe:lock-password-remove', { current: lockPassword }).catch(() => ({ result: 'erro' }))).result === 'ok'
+        if (!removed) failures.push('email.dashboardLocked: a senha própria não saiu')
+      }
+    }
+    record('dashboardLocked', { ok: locked && refused === requests.length && unlocked, detail: `refused=${refused} locked=${locked} unlocked=${unlocked}` })
+
+    if (!empty) failures.push('email.dashboard: o Painel vazio não apareceu antes do print')
+    if (!filled) failures.push('email.dashboard: o Painel com os três cartões não apareceu antes do print')
+    if (!expanded) failures.push('email.dashboard: o bloco de resposta não abriu antes do print')
+  } finally {
+    // As 6 do Painel saem lidas para "Newsletters"; o que estava na INBOX volta do "Arquivo".
+    const own = new Set<string>(DASHBOARD_SEEDS.map((seed) => seed.from.address))
+    const inbox = await api<{ id: string; uid: number | null; from: { address: string }[] }[]>('scribe:email-messages', { accountId }).catch(() => [])
+    for (const message of inbox) {
+      if (message.uid === null || !message.from.some((address) => own.has(address.address))) continue
+      ownUids.push(message.uid)
+      await api('scribe:email-mark-read', { accountId, id: message.id, seen: true }).catch(() => undefined)
+    }
+    if (ownUids.length) await api('scribe:email-move', { accountId, fromPath: 'INBOX', uids: ownUids, toPath: 'Newsletters' }).catch(() => undefined)
+    // O mover de uma pasta confere o `UIDVALIDITY` guardado dela: abrir "Arquivo" o grava antes.
+    if (held.length) {
+      await api('scribe:email-open-folder', { accountId, path: SMOKE_EMAIL_ARCHIVE_FOLDER }).catch(() => undefined)
+      await api('scribe:email-move', { accountId, fromPath: SMOKE_EMAIL_ARCHIVE_FOLDER, uids: held, toPath: 'INBOX' }).catch(() => undefined)
+    }
+    let restored = false
+    for (const stop = Date.now() + 15_000; !restored && Date.now() < stop; await wait(200)) restored = count('INBOX') === inboxUids.length && (await cachedInbox().catch(() => -1)) === count('INBOX')
+    if (!restored) failures.push(`email.dashboard: a INBOX falsa não voltou ao tamanho de antes (antes=${inboxUids.length} servidor=${count('INBOX')} cache=${await cachedInbox().catch(() => -1)} guardadas=${held.length} minhas=${ownUids.length})`)
+    await evaluate(contents, `window.__scribeApi.invoke('scribe:settings-update', { claudeTransport: '${transportBefore}' }).then(() => true)`).catch(() => undefined)
+    if (themeBefore !== 'system') await evaluate(contents, `window.__scribeApi.invoke('scribe:settings-update', { theme: '${themeBefore}' }).then(() => true)`).catch(() => undefined)
+    nativeTheme.themeSource = 'system'
+    win.destroy()
+  }
+}
+
 // ---------------------------------------------------------------------------------------------------------
 // Contrato 63: as telas dos convites com o IMAP/SMTP falso do email e o `lap-calendar` falso (62, CA24). Contrato 64:
 // a regra "É convite → Pôr na agenda" e o "Sugerir evento" (CA17), antes do passo 11.
@@ -18974,6 +19297,10 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
     // bloqueio (que recusa os canais das pastas). Termina com a pasta sintética na lista e a fonte só na conversa dela.
     await pastasChecks(ctx, watch, pastas, screenshots)
 
+    // Contrato 158: o Painel de e-mail com a INBOX falsa só com as 6 mensagens dele (o resto volta no fim); antes do
+    // bloqueio. Termina com a análise ligada e as 6 lidas em "Newsletters".
+    await emailDashboardChecks(ctx, watch, email, screenshots, failures)
+
     // Contrato 69: o Instagram por token e o armazenamento de mídia, com o Instagram falso; antes do bloqueio (que recusa
     // os canais novos junto com os outros). Termina sem conta e sem armazenamento.
     await redesChecks(ctx, watch, redes, screenshots)
@@ -19229,12 +19556,14 @@ export async function runSmoke(ctx: SmokeContext): Promise<number> {
   // Contrato 144: +9 (o painel Atendimento da conversa e a aba Atendimento das Automações, nos dois temas; o selo no
   // cabeçalho e na lista, a proposta do agente, o aviso de risco, o formulário do agente com o teste e o histórico, no claro).
   // Contrato 151: +1 (a seção "Chat e resumo" com o interruptor "A IA pode abrir imagens e transcrever áudios", no claro).
+  // Contrato 158: Painel de e-mail: +14 (o Painel com as 6 analisadas, vazio, com a análise desligada, a resposta aberta,
+  // o Desfazer depois do "Mover todos", o Composer aberto pelo Painel e a seção Painel das Configurações, nos dois temas).
   // Contrato 164: os 10 da triagem entraram em `SCREENS` (as Notificações, o WhatsApp com as abas, a aba Urgentes sem agente,
   // o formulário da tarefa da triagem e o cartão do Assistente, nos dois temas), fotografados pelo `triagemChecks`.
   // Contrato 164: o `configuracoes-claude-midia-light` do contrato 151 saiu do +1 acima e foi para `SCREENS`, com o escuro.
   // Contrato 169: +8 telas (as Configurações com a pasta e com a recusa, o Contexto com a linha Pastas ligada e vazia, a
   // resposta com a citação, o cartão com anexos, o cartão aberto e o Composer com os anexos, nos dois temas), em `SCREENS`.
-  const expectedShots = SCREENS.length * THEMES.length + 237
+  const expectedShots = SCREENS.length * THEMES.length + 251
   if (screenshots.length !== expectedShots) failures.push(`${screenshots.length} PNGs em vez de ${expectedShots}`)
   for (const shot of screenshots) {
     if (shot.name === MEETING_PROMPT_SHOT) {

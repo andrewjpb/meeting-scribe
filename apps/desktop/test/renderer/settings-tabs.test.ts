@@ -163,6 +163,10 @@ describe('aba Email no índice (contrato 55, CA23)', () => {
       'Regras › Regras',
       'Pastas › Pastas',
       'Avisos › Avisar quando chega email',
+      // Contrato 157 (D13): o Painel de e-mail, entre Avisos e Convites.
+      'Painel › Analisar e-mails com IA',
+      'Painel › Modelo',
+      'Painel › Última análise',
       // Contrato 63 (CA23): o bloco "Convites", no fim da aba.
       'Convites › Agenda padrão',
       'Convites › Pôr na agenda ao aceitar',

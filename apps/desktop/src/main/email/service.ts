@@ -699,6 +699,11 @@ export interface EmailService {
    */
   pendentesEmCache(): number | null
   /**
+   * Contrato 156: as pastas da conta IMAP pelo `LIST` já guardado, em árvore, sem abrir sessão. `null`: conta POP3,
+   * desconhecida ou sem `LIST` guardado.
+   */
+  foldersInCache(accountId: string): EmailFolderNode[] | null
+  /**
    * Contrato 145 (D1): os não lidos da INBOX guardada no store (o mesmo que a tela Email lê), somados das contas
    * conectadas. Só lê o disco: nunca abre sessão IMAP nem POP3. Conta desconectada ou sem nada guardado conta 0.
    */
@@ -2447,6 +2452,11 @@ export function createEmailService(deps: EmailServiceDeps): EmailService {
     },
 
     listFolders,
+
+    foldersInCache(accountId) {
+      const entries = folderCache.get(accountId)
+      return entries && runtimes.has(accountId) ? folderTree(entries) : null
+    },
 
     pendentesEmCache() {
       let total: number | null = null

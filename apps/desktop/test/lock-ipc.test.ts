@@ -240,6 +240,12 @@ describe('canais com o app bloqueado (contrato 22, CA4)', () => {
       // Contrato 56: o lote do Assistente (o cartão e o Desfazer).
       'scribe:email-batch-get',
       'scribe:email-batch-undo',
+      // Contrato 156: o Painel de e-mail.
+      'scribe:email-dashboard-apply-move',
+      'scribe:email-dashboard-get',
+      'scribe:email-dashboard-ignore',
+      'scribe:email-dashboard-opened',
+      'scribe:email-dashboard-run',
       'scribe:email-delete',
       // Contrato 52: as pastas.
       'scribe:email-folder-create',
@@ -282,6 +288,19 @@ describe('canais com o app bloqueado (contrato 22, CA4)', () => {
     expect(EMAIL_PRELOAD_ONLY_EVENTS).toContain('scribe:invite-suggest-click')
     locked = false
     await expect(invoke('scribe:invite-suggest')).resolves.toBe('resposta')
+  })
+
+  it('contrato 156 (CA11): os cinco canais do Painel de e-mail são recusados bloqueados, antes do handler', async () => {
+    const channels = INVOKE_CHANNELS.filter((channel) => channel.startsWith('scribe:email-dashboard-'))
+    expect(channels.sort()).toEqual(['scribe:email-dashboard-apply-move', 'scribe:email-dashboard-get', 'scribe:email-dashboard-ignore', 'scribe:email-dashboard-opened', 'scribe:email-dashboard-run'])
+    locked = true
+    for (const channel of channels) {
+      expect(WHEN_LOCKED[channel], channel).toBe('refused')
+      await expect(Promise.resolve().then(() => invokeHandlers.get(channel)?.(trusted, { accountId: 'x', folder: 'Newsletters', messageKeys: ['1'] })), channel).rejects.toThrow(/^locked$/)
+    }
+    expect(calls).toEqual([])
+    locked = false
+    await expect(invoke('scribe:email-dashboard-get')).resolves.toBe('resposta')
   })
 
   it('contrato 61: a resposta de convite é recusada bloqueada, antes do handler', async () => {

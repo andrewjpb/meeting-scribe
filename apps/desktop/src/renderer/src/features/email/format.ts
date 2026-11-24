@@ -276,6 +276,23 @@ export function createDraftRequests(): { start: () => number; cancel: () => void
   }
 }
 
+/**
+ * Contrato 157 (D12): o texto do rascunho de resposta com a sugestão do Painel: a resposta, uma linha em branco e o
+ * rascunho de sempre (assinatura e citação), sem as linhas em branco do começo dele.
+ */
+export function replyDraftText(lead: string, draftText: string): string {
+  return `${lead.replace(/\s+$/, '')}\n\n${draftText.replace(/^\n+/, '')}`
+}
+
+/**
+ * O rascunho de Responder, Responder a todos e Encaminhar como a tela abre: o de `composeFrom` com a assinatura e, com
+ * `lead` (contrato 157, a resposta sugerida do Painel), o texto dela no topo.
+ */
+export function composedDraft(mode: Exclude<ComposeMode, 'new'>, message: EmailMessage, body: Pick<EmailBody, 'text' | 'html'> | null, account: Pick<EmailAccount, 'id' | 'address'> & Pick<EmailAccountStatus, 'sentMailbox'>, signature: EmailSignature | null, lead?: string): ComposeDraft {
+  const signed = signedDraft(composeFrom(mode, message, body, account), signature)
+  return { ...signed, text: lead === undefined ? signed.text : replyDraftText(lead, signed.text), signed: signatureEntered(signature, mode) }
+}
+
 /** O rascunho tem algo escrito (fechar pede para descartar). */
 export function draftHasContent(draft: ComposeDraft): boolean {
   return draft.to.length > 0 || draft.cc.length > 0 || draft.subject.trim() !== '' || draft.text.trim() !== '' || draft.attachments.length > 0

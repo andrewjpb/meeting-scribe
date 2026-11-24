@@ -82,6 +82,14 @@ export interface InicioSettings {
   /** Cada bloco da tela Início; desligado, não aparece. */
   blocos: { agenda: boolean; tarefas: boolean; pendencias: boolean; ultimaReuniao: boolean; automacoes: boolean }
 }
+/** Contrato 155 (email-dashboard): os modelos da passada do Painel de e-mail. */
+export const EMAIL_DASHBOARD_MODELS = ['haiku', 'sonnet'] as const
+/** Contrato 155 (email-dashboard): a análise por IA do Painel de e-mail (Configurações › Email). */
+export interface EmailDashboardSettings {
+  /** Ligada, a passada diária e o Analisar agora chamam o modelo; desligada, o painel mostra só a heurística. */
+  enabled: boolean
+  model: (typeof EMAIL_DASHBOARD_MODELS)[number]
+}
 /** Contrato 149 (ia-midia, R8): o que o Assistente pode fazer além de ler os arquivos da pasta. */
 export interface AssistantSettings {
   /**
@@ -269,6 +277,8 @@ export interface AppSettings {
   tarefas: TarefasSettings
   /** Contrato 133: a tela inicial e os blocos da tela Início (Configurações › Geral). */
   inicio: InicioSettings
+  /** Contrato 155: a análise por IA do Painel de e-mail. */
+  emailDashboard: EmailDashboardSettings
   /** Contrato 149: as ferramentas de mídia do Assistente. */
   assistant: AssistantSettings
 }
@@ -344,6 +354,7 @@ export const DEFAULT_SETTINGS: Readonly<AppSettings> = Object.freeze({
     telaInicial: 'inicio',
     blocos: Object.freeze({ agenda: true, tarefas: true, pendencias: true, ultimaReuniao: true, automacoes: true }),
   }) as InicioSettings,
+  emailDashboard: Object.freeze({ enabled: true, model: 'haiku' }) as EmailDashboardSettings,
   assistant: Object.freeze({ media: true, folders: Object.freeze([]) as unknown as AssistantFolder[] }) as AssistantSettings,
 })
 

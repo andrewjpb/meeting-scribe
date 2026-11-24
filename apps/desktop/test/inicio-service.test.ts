@@ -309,7 +309,8 @@ describe('tela Início: o Calendário do Mac', () => {
     expect(index).toContain("app.on('browser-window-focus', () => macDay.invalidate())")
     expect(index).toContain('onRead: inicioChanged,')
     expect(index).toContain('onRead: inicioMacRead })')
-    expect(index).toContain('onFoldersCached: () => inicioChanged(),')
+    // Contrato 156: o mesmo aviso também leva a visão do Painel de e-mail; o do Início continua.
+    expect(index).toMatch(/onFoldersCached: \(\) => \{\n\s*inicioChanged\(\)/)
     expect(index).toMatch(/if \(!lockService\?\.isLocked\(\)\) broadcast\(appWindows\(\), 'scribe:inicio-changed', view\)/)
   })
 })
@@ -632,11 +633,12 @@ describe('tela Início: não lidos, agrupamento, Atualizar e desbloqueio (contra
     service.changed()
     await expect.poll(() => views.length).toBe(1)
     expect(contagem).toEqual({ pendentes: 1, naoLidos: 1, accounts: 0, listFolders: [], refresh: 0, invalidate: 0 })
-    // O caminho do `onMessagesChanged` no index: o evento às janelas e o `inicioChanged`, mais nada.
+    // O caminho do `onMessagesChanged` no index: o evento às janelas, o `inicioChanged` e o `emailDashboardChanged` (contrato
+    // 156: a visão do Painel de e-mail relê o guardado, sem modelo), mais nada.
     const index = readFileSync(join(import.meta.dirname, '..', 'src', 'main', 'index.ts'), 'utf8')
     const inicio = index.indexOf('    onMessagesChanged: (accountId) => {')
     const bloco = index.slice(inicio, index.indexOf('\n    },', inicio))
     const linhas = bloco.split('\n').slice(1).map((linha) => linha.trim()).filter((linha) => linha !== '' && !linha.startsWith('//'))
-    expect(linhas).toEqual(["if (!lockService?.isLocked()) broadcast(appWindows(), 'scribe:email-changed', { accountId })", 'inicioChanged()'])
+    expect(linhas).toEqual(["if (!lockService?.isLocked()) broadcast(appWindows(), 'scribe:email-changed', { accountId })", 'inicioChanged()', 'emailDashboardChanged()'])
   })
 })

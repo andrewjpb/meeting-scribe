@@ -2,7 +2,7 @@
 // do estado inteiro do lote que o main manda (`scribe:email-organize`, contrato 56) e do pedido e das horas do lote
 // (`scribe:email-batch-get`). Sem DOM: testado em test/renderer/email-organize-state.test.ts.
 import { EMAIL_INBOX_MAILBOX } from '@shared/email'
-import { EMAIL_ORGANIZE_READ_MAX, EMAIL_ORGANIZE_STAGES, type EmailBatch, type EmailBatchUndoResult, type EmailOrganizeEvent, type EmailOrganizeStage, type EmailUndoError, type EmailVerdict } from '@shared/email-organize'
+import { EMAIL_ORGANIZE_READ_MAX, EMAIL_ORGANIZE_STAGES, type EmailBatch, type EmailBatchOrigem, type EmailBatchUndoResult, type EmailOrganizeEvent, type EmailOrganizeStage, type EmailUndoError, type EmailVerdict } from '@shared/email-organize'
 
 /** O que vem do lote gravado (uma vez por `batchId`): o pedido, as horas e a pasta organizada. */
 export interface BatchMeta {
@@ -11,10 +11,12 @@ export interface BatchMeta {
   endedAt: number | null
   /** A pasta de onde os itens saíram; `null` sem item ainda (o título diz "a Caixa de Entrada"). */
   fromPath: string | null
+  /** Contrato 170: quem moveu (o título da faixa); o lote sem `origem` é do agente. */
+  origem: EmailBatchOrigem
 }
 
-export function batchMeta(batch: Pick<EmailBatch, 'request' | 'startedAt' | 'endedAt' | 'items'>): BatchMeta {
-  return { request: batch.request, startedAt: batch.startedAt, endedAt: batch.endedAt, fromPath: batch.items[0]?.fromPath ?? null }
+export function batchMeta(batch: Pick<EmailBatch, 'request' | 'startedAt' | 'endedAt' | 'items' | 'origem'>): BatchMeta {
+  return { request: batch.request, startedAt: batch.startedAt, endedAt: batch.endedAt, fromPath: batch.items[0]?.fromPath ?? null, origem: batch.origem ?? 'agente' }
 }
 
 /** O nome de uma pasta na tela ("Clientes › ABF"); quem chama sabe a árvore. */
@@ -214,7 +216,8 @@ export const BANNER_RESULT_MS = 5000
 
 /**
  * A faixa no topo da lista (CA13, D7): lote parado ou terminado, com algo movido, de hoje (até a meia-noite local) e não
- * fechado no ×. Lote rodando não tem Desfazer; desfeito, nada.
+ * fechado no ×. Lote rodando não tem Desfazer; desfeito, nada. O título diz quem moveu: "O Painel moveu N mensagens"
+ * no lote `origem: 'painel'` (contrato 170), "O Assistente moveu N mensagens" nos outros.
  */
 export function organizeBanner(event: EmailOrganizeEvent, meta: BatchMeta | null, now: number, dismissed: ReadonlySet<string>, results: Readonly<Record<string, BannerResult>> = {}): OrganizeBanner | null {
   if (dismissed.has(event.batchId)) return null
@@ -227,7 +230,7 @@ export function organizeBanner(event: EmailOrganizeEvent, meta: BatchMeta | null
   return {
     batchId: event.batchId,
     path: meta?.fromPath ?? EMAIL_INBOX_MAILBOX,
-    title: `O Assistente moveu ${messages(event.moved)}`,
+    title: `${meta?.origem === 'painel' ? 'O Painel' : 'O Assistente'} moveu ${messages(event.moved)}`,
     detail: at === null ? how : `hoje, ${clock(at)} · ${how}`,
     retry: event.state === 'partial-undo',
     result,

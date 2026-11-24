@@ -111,6 +111,10 @@ export interface EmailBatchItem {
   backUidValidity?: string | undefined
 }
 
+/** Contrato 156: o lote do agente do Assistente ou o do "Mover" do Painel de e-mail. */
+export const EMAIL_BATCH_ORIGENS = ['agente', 'painel'] as const
+export type EmailBatchOrigem = (typeof EMAIL_BATCH_ORIGENS)[number]
+
 export interface EmailBatch {
   id: string
   accountId: string
@@ -122,6 +126,8 @@ export interface EmailBatch {
   totals: { read: number; total: number; outOfLimit: number }
   topics: EmailBatchTopic[]
   items: EmailBatchItem[]
+  /** Contrato 156 (D4): quem moveu; ausente vale `agente` (os lotes de antes). O Desfazer é o mesmo para os dois. */
+  origem?: EmailBatchOrigem | undefined
 }
 
 /** Um assunto como a tela mostra: o estado e onde a mensagem mais recente está agora (o clique abre o email). */
