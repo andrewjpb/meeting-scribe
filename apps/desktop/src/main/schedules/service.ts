@@ -695,6 +695,8 @@ export function createAutomationsService(deps: AutomationsDeps): AutomationsServ
   async function startTask(id: string, trigger: RunTrigger): Promise<RunStartResult> {
     const task = (await deps.schedules.read()).tasks.find((candidate) => candidate.id === id)
     if (!task) return { ok: false, error: 'missing' }
+    // Contrato 171 (C4): a triagem roda por conversa, pelo motor dela; "Rodar agora" e "Rodar de novo" não se aplicam.
+    if (task.schedule.kind === 'whatsapp-message') return { ok: false, error: 'invalid' }
     // Contrato 25: "Rodar agora" num lembrete mostra a notificação agora.
     if (task.reminder) {
       await fireReminder(task)
@@ -936,6 +938,8 @@ export function createAutomationsService(deps: AutomationsDeps): AutomationsServ
       const id = parseId(input)
       const run = id ? await deps.runs.get(id) : null
       if (!run) return { ok: false, error: 'missing' }
+      // Contrato 171 (C4): a da triagem também com a tarefa já excluída (não vira um pedido ao agente).
+      if (run.trigger === 'whatsapp') return { ok: false, error: 'invalid' }
       if (run.taskId && (await deps.schedules.read()).tasks.some((task) => task.id === run.taskId)) return startTask(run.taskId, 'rerun')
       const agent = run.agentId ? await deps.agents.get(run.agentId) : null
       if (!agent) return { ok: false, error: 'missing' }

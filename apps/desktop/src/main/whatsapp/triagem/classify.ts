@@ -6,7 +6,7 @@
 import { z } from 'zod'
 import type { AgentModel } from '../../../shared/automations'
 import { CLAUDE_MODELS, type ClaudeModel } from '../../../shared/settings-defaults'
-import { TRIAGEM_CHARS_MAX, TRIAGEM_MENSAGENS_MAX, TRIAGEM_MOTIVO_MAX, TRIAGEM_TIMEOUT_MS, type TriagemResultado } from '../../../shared/triagem'
+import { cortarMotivo, TRIAGEM_CHARS_MAX, TRIAGEM_MENSAGENS_MAX, TRIAGEM_TIMEOUT_MS, type TriagemResultado } from '../../../shared/triagem'
 import type { WhatsAppChatKind, WhatsAppMessage } from '../../../shared/whatsapp'
 import { escapeTurnText } from '../../claude-cli/prompt'
 import type { OneShotParse } from '../../claude-cli/summary'
@@ -88,7 +88,7 @@ export function buildTriagemPrompt(input: TriagemInput): { systemPrompt: string;
     `A conversa vem dentro de ${TRIAGEM_BLOCK_START}${TRIAGEM_BLOCK_END}, uma mensagem por linha, no formato "[dd/mm hh:mm] Autor: texto", da mais antiga para a mais recente. As linhas do dono trazem "(dono)" depois do nome.`,
     'Na conversa, &, < e > aparecem como &amp;, &lt; e &gt;.',
     'Responda só com um objeto JSON, sem texto antes ou depois, neste formato:',
-    '{"urgente": true ou false, "ambito": "pessoal" | "profissional" | "indefinido", "motivo": "por que, em poucas palavras"}',
+    '{"urgente": true ou false, "ambito": "pessoal" | "profissional" | "indefinido", "motivo": "por que, em até 120 caracteres"}',
   ].join('\n')
   const funil = input.funil ? [`Contato do funil de vendas: ${input.funil.contato ? `sim${input.funil.empresa ? ` (${escapeTurnText(oneLine(input.funil.empresa))})` : ''}` : 'não'}`] : []
   return {
@@ -131,7 +131,7 @@ export function parseTriagemResultado(raw: string): TriagemResultado | null {
   }
   const parsed = resultadoSchema.safeParse(value)
   if (!parsed.success) return null
-  return { urgente: parsed.data.urgente, ambito: parsed.data.ambito, motivo: oneLine(parsed.data.motivo ?? '').slice(0, TRIAGEM_MOTIVO_MAX) }
+  return { urgente: parsed.data.urgente, ambito: parsed.data.ambito, motivo: cortarMotivo(oneLine(parsed.data.motivo ?? '')) }
 }
 
 const triagemParser: OneShotParse<TriagemResultado> = (text, costUsd, durationMs) => {

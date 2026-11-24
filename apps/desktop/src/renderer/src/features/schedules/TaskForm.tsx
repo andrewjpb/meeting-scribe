@@ -172,14 +172,16 @@ export function TaskForm({ initial, meetings, onClose, onSaved }: { initial: Tas
   const email = emailOf(emailDraft, emailAccounts ?? [])
   // Contrato 162: no gatilho do WhatsApp a mensagem é opcional (o agente recebe a conversa que chegou).
   const whatsappTrigger = frequency.kind === 'whatsapp-message'
-  const valid = schedule !== null && task.name.trim() !== '' && (whatsappTrigger || task.message.trim() !== '') && agent !== undefined && task.timeoutS >= TASK_TIMEOUT_MIN_S && task.timeoutS <= TASK_TIMEOUT_MAX_S && 'email' in email
+  const valid = schedule !== null && task.name.trim() !== '' && (whatsappTrigger || task.message.trim() !== '') && agent !== undefined && task.timeoutS >= TASK_TIMEOUT_MIN_S && task.timeoutS <= TASK_TIMEOUT_MAX_S && (whatsappTrigger || 'email' in email)
 
   const save = async (): Promise<void> => {
-    if (!schedule || !('email' in email)) return
+    if (!schedule || (!whatsappTrigger && !('email' in email))) return
     setSaving(true)
     setFailure(null)
     const message = whatsappTrigger && !task.message.trim() ? WHATSAPP_TRIGGER_MESSAGE : task.message
-    const result = await window.__scribeApi.invoke('scribe:tasks-save', { ...task, name: task.name.trim(), message, schedule, email: email.email })
+    // Contrato 171 (C8): no gatilho do WhatsApp não há Saída nem "Pode enviar email"; nada antigo vai junto.
+    const output = whatsappTrigger ? null : task.output
+    const result = await window.__scribeApi.invoke('scribe:tasks-save', { ...task, name: task.name.trim(), message, schedule, output, email: whatsappTrigger || !('email' in email) ? null : email.email })
     setSaving(false)
     if (!result.ok) {
       setFailure(taskErrorText(result.error))
@@ -201,6 +203,20 @@ export function TaskForm({ initial, meetings, onClose, onSaved }: { initial: Tas
   const agentOptions = [{ value: '', label: 'Escolha o agente' }, ...agents.map((candidate) => ({ value: candidate.id, label: candidate.name }))]
   const outputValue: AgentOutputKind | 'inherit' = task.output?.kind ?? 'inherit'
   const outputOptions = [{ value: 'inherit' as const, label: agent ? `A do agente (${OUTPUT_LABELS[agent.output.kind]})` : 'A do agente' }, ...AGENT_OUTPUT_KINDS.map((kind) => ({ value: kind, label: OUTPUT_LABELS[kind] }))]
+  // Contrato 171 (C8): no gatilho do WhatsApp, a espera e os grupos no lugar da frase do agendamento.
+  const frequencyHint = schedule
+    ? schedule.kind === 'whatsapp-message'
+      ? `Roda em cada conversa que recebe mensagem, ${schedule.esperaSeg} s depois da última. ${schedule.grupos ? 'Inclui grupos.' : 'Grupos ficam de fora.'}`
+      : describeSchedule(schedule, task.timezone)
+    : 'error' in built
+      ? built.error
+      : ''
+  const chooseKind = (kind: ScheduleKind): void => {
+    patchFrequency({ kind })
+    if (kind !== 'whatsapp-message') return
+    patch({ output: null })
+    setEmailDraft((current) => ({ ...current, on: false }))
+  }
   const meetingOptions = [{ value: '', label: 'Escolha a reunião' }, ...(meetings.list ?? []).map((entry) => ({ value: entry.meeting.id, label: entry.meeting.title }))]
 
   return (
@@ -246,9 +262,9 @@ export function TaskForm({ initial, meetings, onClose, onSaved }: { initial: Tas
         )}
       </FormField>
 
-      <FormField label="Frequência" htmlFor="task-frequency" hint={schedule ? describeSchedule(schedule, task.timezone) : 'error' in built ? built.error : ''}>
+      <FormField label="Frequência" htmlFor="task-frequency" hint={frequencyHint}>
         <div className="flex flex-wrap items-center gap-2" data-task-frequency={frequency.kind}>
-          <Select id="task-frequency" value={frequency.kind} options={FREQUENCY_OPTIONS} onChange={(kind: ScheduleKind) => patchFrequency({ kind })} />
+          <Select id="task-frequency" value={frequency.kind} options={FREQUENCY_OPTIONS} onChange={chooseKind} />
           <FrequencyControls draft={frequency} onChange={patchFrequency} />
         </div>
         {/* Contrato 162: "Incluir grupos" e o aviso do que o agente lê, abaixo do seletor. */}
@@ -288,25 +304,29 @@ export function TaskForm({ initial, meetings, onClose, onSaved }: { initial: Tas
       </div>
 
       <div className="grid grid-cols-[repeat(auto-fit,minmax(280px,1fr))] gap-4">
-        <FormField label="Saída" htmlFor="task-output">
-          <Select
-            id="task-output"
-            value={outputValue}
-            options={outputOptions}
-            onChange={(value) => patch({ output: value === 'inherit' ? null : value === 'note' ? { kind: 'note', meetingId: task.output?.meetingId ?? null } : { kind: value } })}
-          />
-        </FormField>
+        {!whatsappTrigger && (
+          <FormField label="Saída" htmlFor="task-output">
+            <Select
+              id="task-output"
+              value={outputValue}
+              options={outputOptions}
+              onChange={(value) => patch({ output: value === 'inherit' ? null : value === 'note' ? { kind: 'note', meetingId: task.output?.meetingId ?? null } : { kind: value } })}
+            />
+          </FormField>
+        )}
         <FormField label="Avisos" htmlFor="task-notify" hint="Notificação do macOS ao terminar.">
           <Select id="task-notify" value={task.notify} options={NOTIFY_POLICIES.map((value) => ({ value, label: NOTIFY_LABELS[value] }))} onChange={(notify: NotifyPolicy) => patch({ notify })} />
         </FormField>
       </div>
-      {task.output?.kind === 'note' && frequency.kind !== 'after-meeting' && (
+      {!whatsappTrigger && task.output?.kind === 'note' && frequency.kind !== 'after-meeting' && (
         <FormField label="Reunião do post-it" htmlFor="task-output-meeting">
           <Select id="task-output-meeting" value={task.output.meetingId ?? ''} options={meetingOptions} onChange={(meetingId) => patch({ output: { kind: 'note', meetingId: meetingId || null } })} />
         </FormField>
       )}
 
-      <EmailSection draft={emailDraft} accounts={emailAccounts} grantedAt={grantedAt} timeZone={task.timezone} error={'error' in email ? email.error : null} onChange={(next) => setEmailDraft((current) => ({ ...current, ...next }))} />
+      {!whatsappTrigger && (
+        <EmailSection draft={emailDraft} accounts={emailAccounts} grantedAt={grantedAt} timeZone={task.timezone} error={'error' in email ? email.error : null} onChange={(next) => setEmailDraft((current) => ({ ...current, ...next }))} />
+      )}
 
       <div className="flex flex-wrap items-center gap-5">
         <div className="flex items-center gap-2.5">

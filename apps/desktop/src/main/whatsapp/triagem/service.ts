@@ -38,7 +38,7 @@ import type { WhatsAppChat, WhatsAppMessage } from '../../../shared/whatsapp'
 import type { TriagemInput, TriagemOutcome } from './classify'
 import type { TriagemStore } from './store'
 
-export type TriagemRunError = 'sem-agente' | 'desligado' | 'pausado' | 'sem-mensagens' | 'teto' | 'ocupado'
+export type TriagemRunError = 'sem-agente' | 'desligado' | 'pausado' | 'sem-mensagens' | 'teto' | 'ocupado' | 'grupos'
 export type TriagemRunResult = { ok: true } | { ok: false; error: TriagemRunError }
 export type TriagemSetResult = { ok: true; etiqueta: Etiqueta } | { ok: false; error: string }
 export type TriagemCreateResult = { ok: true; agentId: string; taskId: string } | { ok: false; error: string }
@@ -70,6 +70,8 @@ export interface TriagemServiceDeps {
   changed: (chatId: string, etiqueta: Etiqueta | null) => void
   /** Aviso às janelas (`scribe:triagem-status-changed`) quando o estado muda; só com o app desbloqueado. */
   statusChanged: (status: TriagemStatus) => void
+  /** Contrato 171 (C10): aviso às janelas (`scribe:triagem-done`) no fim de cada triagem, com ou sem etiqueta; só desbloqueado. */
+  done: (chatId: string, ok: boolean) => void
   locked: () => boolean
   /** Execuções de hoje com o gatilho, sem as que têm o erro `exceptError` (o registro do teto). */
   runs: { hojeTrigger(trigger: RunTrigger, exceptError?: string): Promise<number> }
@@ -85,7 +87,7 @@ export interface TriagemServiceDeps {
 export interface TriagemService {
   /** Toda mensagem nova do WhatsApp (minha ou não). Nunca rejeita. */
   onMessage(message: WhatsAppMessage, chatName: string): Promise<void>
-  /** "Triar agora": sem a espera e sem o limite de idade; respeita o interruptor, o agente, o teto e a fila. */
+  /** "Triar agora": sem a espera e sem o limite de idade; respeita o interruptor, o agente, os grupos, o teto e a fila. */
   runNow(chatId: unknown): Promise<TriagemRunResult>
   list(): Promise<{ etiquetas: Record<string, Etiqueta>; status: TriagemStatus }>
   /** A escolha do dono (`aplicarManual`). */
@@ -227,7 +229,8 @@ export function createTriagemService(deps: TriagemServiceDeps): TriagemService {
     }
   }
 
-  function runBase(task: ScheduledTask, agent: Agent, chatName: string, novas: number, started: number): AutomationRun {
+  /** Contrato 171 (C3): a manual ("Triar agora") termina o pedido em "· Triar agora"; o `trigger` é o mesmo. */
+  function runBase(task: ScheduledTask, agent: Agent, chatName: string, novas: number, started: number, manual = false): AutomationRun {
     return {
       id: newId(),
       taskId: task.id,
@@ -241,7 +244,7 @@ export function createTriagemService(deps: TriagemServiceDeps): TriagemService {
       durationMs: 0,
       model: agent.model,
       costUsd: 0,
-      prompt: `Triagem da conversa ${chatName} · ${novas === 1 ? '1 mensagem nova' : `${novas} mensagens novas`}`,
+      prompt: `Triagem da conversa ${chatName} · ${novas === 1 ? '1 mensagem nova' : `${novas} mensagens novas`}${manual ? ' · Triar agora' : ''}`,
       answer: null,
       error: null,
       meetingId: null,
@@ -289,6 +292,7 @@ export function createTriagemService(deps: TriagemServiceDeps): TriagemService {
 
   async function triar({ chatId, manual }: Entrada, signal: AbortSignal): Promise<void> {
     const parado = (): boolean => disposed || signal.aborted
+    let etiquetou = false
     try {
       if (!(await deps.enabled())) return
       const ativa = await deps.automations.triagemAtiva()
@@ -307,7 +311,7 @@ export function createTriagemService(deps: TriagemServiceDeps): TriagemService {
       const outcome = await deps.classify(input, signal).catch((): TriagemOutcome => ({ ok: false, error: 'failed' }))
       if (parado()) return
       const ended = now()
-      const base = { ...runBase(task, agent, chatName, novas, started), endedAt: iso(ended), durationMs: Math.max(0, ended - started) }
+      const base = { ...runBase(task, agent, chatName, novas, started, manual), endedAt: iso(ended), durationMs: Math.max(0, ended - started) }
       const chatModel = (CHAT_MODELS as readonly string[]).includes(agent.model) ? { model: agent.model as ChatModel } : {}
       if (!outcome.ok) {
         const answer: ChatMessage = { role: 'assistant', text: '', at: iso(ended), error: outcome.error === 'timeout' ? 'timeout' : 'failed', ...chatModel }
@@ -322,9 +326,13 @@ export function createTriagemService(deps: TriagemServiceDeps): TriagemService {
       const chips = chipsDe(etiqueta)
       const answer: ChatMessage = { role: 'assistant', text: `Etiqueta: ${chips.length ? chips.join(' · ') : 'Nenhuma'}. Motivo: ${etiqueta.motivo ?? ''}`, at: iso(ended), ...chatModel }
       await salvar({ ...base, status: 'ok', costUsd: outcome.costUsd, answer })
+      etiquetou = true
       log(`[triagem] conversa ${curto(chatId)} etiquetada (${messages.length} mensagens, ${ended - started} ms)`)
     } catch {
       log(`[triagem] conversa ${curto(chatId)} não triada por erro`)
+    } finally {
+      // Contrato 171 (C10): o "Triando…" da barra cai aqui, com etiqueta, falha, tempo esgotado ou nada a triar.
+      if (!disposed && !deps.locked()) deps.done(chatId, etiquetou)
     }
   }
 
@@ -372,6 +380,11 @@ export function createTriagemService(deps: TriagemServiceDeps): TriagemService {
       const chatId = parsed.data
       const status = await refreshStatus()
       if (status.motivo !== null || disposed) return { ok: false, error: status.motivo ?? 'desligado' }
+      // Contrato 171 (C2): grupo só com "Incluir grupos" na tarefa, como na mensagem recebida.
+      if (isGroupChat(chatId)) {
+        const { task } = await deps.automations.triagemSituacao()
+        if (task?.schedule.kind === 'whatsapp-message' && !task.schedule.grupos) return { ok: false, error: 'grupos' }
+      }
       if (naFila(chatId)) return { ok: false, error: 'ocupado' }
       const messages = await deps.whatsapp.lastMessages(chatId, TRIAGEM_MENSAGENS_MAX).catch(() => [])
       if (!messages.some((message) => !message.fromMe)) return { ok: false, error: 'sem-mensagens' }

@@ -6,7 +6,7 @@ import { useEffect, useRef, useState } from 'react'
 import type { TriagemAmbito } from '@shared/triagem'
 import { Icon } from '../../design/Icon'
 import { Segmented } from '../../design/Segmented'
-import { TRIAGEM_RUN_ERRORS, useTriagem } from './triagemStore'
+import { TRIAGEM_RUN_ERRORS, TRIAGEM_TRIANDO_MAX_MS, useTriagem } from './triagemStore'
 
 type AmbitoOpcao = TriagemAmbito | 'nenhum'
 
@@ -24,7 +24,10 @@ const BUTTON_CLASS =
 
 export function EtiquetaBar({ chatId }: { chatId: string }) {
   const etiqueta = useTriagem((state) => state.etiquetas[chatId] ?? null)
-  const [running, setRunning] = useState(false)
+  // Contrato 171 (C10): "Triando…" do clique até o fim da triagem no main (`triando`), não só até o pedido aceito.
+  const [pedindo, setPedindo] = useState(false)
+  const triando = useTriagem((state) => state.triando[chatId] === true)
+  const running = pedindo || triando
   const [error, setError] = useState<string | null>(null)
   const mounted = useRef(true)
   useEffect(() => {
@@ -33,6 +36,13 @@ export function EtiquetaBar({ chatId }: { chatId: string }) {
       mounted.current = false
     }
   }, [])
+
+  // Sem o aviso do fim (janela recarregada, app bloqueado no meio), o "Triando…" cai sozinho.
+  useEffect(() => {
+    if (!triando) return
+    const timer = setTimeout(() => useTriagem.getState().done(chatId), TRIAGEM_TRIANDO_MAX_MS)
+    return () => clearTimeout(timer)
+  }, [chatId, triando])
 
   const urgente = etiqueta?.urgente === true
   const ambito: AmbitoOpcao = etiqueta?.ambito ?? 'nenhum'
@@ -49,7 +59,7 @@ export function EtiquetaBar({ chatId }: { chatId: string }) {
 
   const triar = (): void => {
     if (running) return
-    setRunning(true)
+    setPedindo(true)
     setError(null)
     void useTriagem
       .getState()
@@ -57,19 +67,19 @@ export function EtiquetaBar({ chatId }: { chatId: string }) {
       .then(
         (result) => {
           if (!mounted.current) return
-          setRunning(false)
+          setPedindo(false)
           if (!result.ok) setError(TRIAGEM_RUN_ERRORS[result.error])
         },
         () => {
           if (!mounted.current) return
-          setRunning(false)
+          setPedindo(false)
           setError(RUN_FAILURE)
         },
       )
   }
 
   return (
-    <div data-triagem-bar className="flex h-11 shrink-0 items-center gap-2.5 border-b border-line px-5">
+    <div data-triagem-bar className="flex min-h-11 shrink-0 items-center gap-2.5 border-b border-line px-5 py-1">
       <span id={`triagem-etiqueta-${chatId}`} className="text-12 text-text-muted">
         Etiqueta
       </span>
@@ -86,7 +96,7 @@ export function EtiquetaBar({ chatId }: { chatId: string }) {
       </button>
       <span className="min-w-0 flex-1">
         {error && (
-          <span data-triagem-run-erro role="status" className="block truncate text-right text-12 text-rec" title={error}>
+          <span data-triagem-run-erro role="status" className="line-clamp-2 text-right text-12 leading-4 text-rec" title={error}>
             {error}
           </span>
         )}

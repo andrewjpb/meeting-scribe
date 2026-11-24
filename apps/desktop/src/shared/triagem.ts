@@ -19,6 +19,17 @@ export const TRIAGEM_MAX_AGE_MS = 5 * 60_000
 /** Triagens rodando ao mesmo tempo. */
 export const TRIAGEM_SIMULTANEAS = 2
 export const TRIAGEM_MOTIVO_MAX = 160
+
+/**
+ * Contrato 171 (C6): o motivo longo cortado na última palavra inteira, com "…" (resultado ≤ `max`). Sem espaço além de
+ * 60% do limite, corta no meio da palavra.
+ */
+export function cortarMotivo(s: string, max = TRIAGEM_MOTIVO_MAX): string {
+  if (s.length <= max) return s
+  const espaco = s.lastIndexOf(' ', max - 1)
+  const fim = espaco > max * 0.6 ? espaco : max - 1
+  return `${s.slice(0, fim).trimEnd()}…`
+}
 /** "Espera depois da última mensagem", em segundos. */
 export const TRIAGEM_ESPERA_SEG = { min: 5, max: 600, padrao: 30 } as const
 /** Etiquetas guardadas no arquivo; as mais antigas (por `at`) saem. */
@@ -105,7 +116,7 @@ export function aplicarAgente(atual: Etiqueta | null, r: TriagemResultado, lastM
     urgenteFixo: atual?.urgenteFixo ?? false,
     origem: 'agente',
     lastMessageId,
-    motivo: r.motivo.slice(0, TRIAGEM_MOTIVO_MAX),
+    motivo: cortarMotivo(r.motivo),
     at: now,
   }
 }

@@ -761,7 +761,7 @@ export interface InvokeChannels {
   /** A escolha do dono numa conversa (urgente e/ou âmbito); o eixo escolhido fica fixo. */
   'scribe:triagem-set': { request: { chatId: string; patch: EtiquetaPatch }; response: { ok: true; etiqueta: Etiqueta } | { ok: false; error: string } }
   /** "Triar agora": sem a espera; respeita o interruptor, o agente, o teto do dia e a fila. */
-  'scribe:triagem-run': { request: { chatId: string }; response: { ok: true } | { ok: false; error: 'sem-agente' | 'desligado' | 'pausado' | 'sem-mensagens' | 'teto' | 'ocupado' } }
+  'scribe:triagem-run': { request: { chatId: string }; response: { ok: true } | { ok: false; error: 'sem-agente' | 'desligado' | 'pausado' | 'sem-mensagens' | 'teto' | 'ocupado' | 'grupos' } }
   /** Cria (ou religa) o agente e a tarefa do modelo pronto "Triagem do WhatsApp". */
   'scribe:triagem-create-from-template': { request: undefined; response: { ok: true; agentId: string; taskId: string } | { ok: false; error: string } }
   // fim 161
@@ -939,6 +939,8 @@ export interface MainEvents {
   'scribe:triagem-changed': { chatId: string; etiqueta: Etiqueta | null }
   /** Contrato 161: o estado do motor mudou (ligado, agente, pausa, contagem do dia). Não chega bloqueado. */
   'scribe:triagem-status-changed': TriagemStatus
+  /** Contrato 171 (C10): uma triagem terminou (`ok`: gravou a etiqueta); solta o "Triando…". Não chega bloqueado. */
+  'scribe:triagem-done': { chatId: string; ok: boolean }
   // fim 161
 }
 
@@ -1348,6 +1350,7 @@ const MAIN_EVENTS: Record<MainEvent, true> = {
   // 161: triagem
   'scribe:triagem-changed': true,
   'scribe:triagem-status-changed': true,
+  'scribe:triagem-done': true,
   // fim 161
 }
 

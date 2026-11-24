@@ -76,6 +76,7 @@ function harness(options: Options = {}) {
   const sets: { chatId: string; etiqueta: Etiqueta }[] = []
   const changed: { chatId: string; etiqueta: Etiqueta | null }[] = []
   const statuses: TriagemStatus[] = []
+  const dones: { chatId: string; ok: boolean }[] = []
   const runs: AutomationRun[] = []
   const calls: TriagemInput[] = []
   const logs: string[] = []
@@ -116,6 +117,7 @@ function harness(options: Options = {}) {
     },
     changed: (chatId, etiqueta) => void changed.push({ chatId, etiqueta }),
     statusChanged: (status) => void statuses.push(status),
+    done: (chatId, ok) => void dones.push({ chatId, ok }),
     locked: () => state.locked,
     runs: {
       hojeTrigger: async () => {
@@ -143,6 +145,7 @@ function harness(options: Options = {}) {
     sets,
     changed,
     statuses,
+    dones,
     runs,
     calls,
     logs,
@@ -341,6 +344,53 @@ describe('motor da triagem (contrato 161)', () => {
     expect(await h.service.runNow(BETO)).toEqual({ ok: false, error: 'desligado' })
   })
 
+  it('contrato 171 (C2): "Triar agora" num grupo sem "Incluir grupos" é recusado sem execução; com grupos, tria', async () => {
+    const h = harness()
+    await h.receive(h.mensagem(GRUPO, 'g1', { at: START - 60 * MINUTE }))
+    expect(await h.service.runNow(GRUPO)).toEqual({ ok: false, error: 'grupos' })
+    await h.advance(0)
+    expect(h.calls).toEqual([])
+    expect(h.runs).toEqual([])
+    h.state.grupos = true
+    expect(await h.service.runNow(GRUPO)).toEqual({ ok: true })
+    await h.advance(0)
+    expect(h.calls).toHaveLength(1)
+    expect(h.runs).toHaveLength(1)
+  })
+
+  it('contrato 171 (C3): a execução do "Triar agora" termina em "· Triar agora"; a automática não; o teto conta as duas pelo gatilho', async () => {
+    const h = harness()
+    await h.receive(h.mensagem(ANA, 'm1'))
+    await h.advance(30 * SEC)
+    await h.receive(h.mensagem(BETO, 'b1', { at: START - 60 * MINUTE }))
+    expect(await h.service.runNow(BETO)).toEqual({ ok: true })
+    await h.advance(0)
+    expect(h.runs.map((run) => run.prompt)).toEqual(['Triagem da conversa Ana · 1 mensagem nova', 'Triagem da conversa Beto · 1 mensagem nova · Triar agora'])
+    expect(h.runs.every((run) => run.trigger === 'whatsapp')).toBe(true)
+  })
+
+  it('contrato 171 (C10): o fim de cada triagem avisa as janelas, com etiqueta, com falha e com tempo esgotado', async () => {
+    let outcome: TriagemOutcome = { ok: true, resultado: { urgente: false, ambito: 'pessoal', motivo: 'conversa' }, costUsd: 0, durationMs: 10 }
+    const h = harness({ outcome: () => outcome })
+    await h.receive(h.mensagem(ANA, 'a1', { at: START - 60 * MINUTE }))
+    expect(await h.service.runNow(ANA)).toEqual({ ok: true })
+    await h.advance(0)
+    outcome = { ok: false, error: 'format' }
+    await h.receive(h.mensagem(BETO, 'b1', { at: START - 60 * MINUTE }))
+    expect(await h.service.runNow(BETO)).toEqual({ ok: true })
+    await h.advance(0)
+    outcome = { ok: false, error: 'timeout' }
+    await h.receive(h.mensagem(CAIO, 'c1', { at: START - 60 * MINUTE }))
+    expect(await h.service.runNow(CAIO)).toEqual({ ok: true })
+    await h.advance(0)
+    expect(h.dones).toEqual([
+      { chatId: ANA, ok: true },
+      { chatId: BETO, ok: false },
+      { chatId: CAIO, ok: false },
+    ])
+    expect(h.runs.map((run) => run.status)).toEqual(['ok', 'error', 'timeout'])
+  })
+
   it('o estado: prioridade desligado > sem agente > pausado; avisa só quando muda', async () => {
     const h = harness({ enabled: false, motivo: 'sem-agente' })
     expect((await h.service.status()).motivo).toBe('desligado')
@@ -381,9 +431,13 @@ describe('motor da triagem (contrato 161)', () => {
     }
     expect(MAIN_EVENT_CHANNELS).toContain('scribe:triagem-changed')
     expect(MAIN_EVENT_CHANNELS).toContain('scribe:triagem-status-changed')
+    expect(MAIN_EVENT_CHANNELS).toContain('scribe:triagem-done')
+    // Contrato 171 (C10): bloqueado, o fim da triagem também não chega às janelas.
+    expect(h.dones).toEqual([])
     const index = readFileSync(resolve(import.meta.dirname, '../src/main/index.ts'), 'utf8')
     expect(index).toContain("if (!lockService?.isLocked()) broadcast(appWindows(), 'scribe:triagem-changed', { chatId, etiqueta })")
     expect(index).toContain("if (!lockService?.isLocked()) broadcast(appWindows(), 'scribe:triagem-status-changed', status)")
+    expect(index).toContain("if (!lockService?.isLocked()) broadcast(appWindows(), 'scribe:triagem-done', { chatId, ok })")
   })
 
   it('CA11: no index.ts a triagem recebe a mensagem depois do atendimento e antes da notificação', () => {

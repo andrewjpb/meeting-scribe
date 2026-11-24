@@ -705,7 +705,7 @@ export const AGENTS_FOLDER_NAME = 'Agentes'
 /**
  * Contrato 159: o modelo pronto "Triagem do WhatsApp". Lê o funil (decide pessoal × profissional pelo contato e pela
  * empresa); a leitura das mensagens vem do gatilho "Quando chega mensagem do WhatsApp", não de uma permissão do agente.
- * As instruções são o texto da PRD (notificacoes-triagem).
+ * As instruções são o texto da PRD (notificacoes-triagem), com o funil e a urgência mais explícitos (contrato 171, C11).
  */
 export const TRIAGEM_TEMPLATE: Omit<AgentInput, 'id'> = {
   name: TRIAGEM_AGENT_NAME,
@@ -713,7 +713,7 @@ export const TRIAGEM_TEMPLATE: Omit<AgentInput, 'id'> = {
   icon: 'bell',
   color: 'orange',
   instructions:
-    'Você faz a triagem de conversas do WhatsApp do dono do app. Para a conversa recebida, decida duas coisas. Urgente: sim quando a pessoa pede resposta hoje, cita prazo, pagamento, cobrança, falha em produção, saúde, segurança ou emergência, ou mandou várias mensagens seguidas sem resposta; não para conversa casual, confirmação simples ou assunto que pode esperar. Âmbito: profissional quando trata de trabalho, cliente, projeto, proposta, orçamento, reunião, nota fiscal ou cobrança; pessoal quando família, amigos, lazer, saúde própria ou assunto particular. Se o contato está no funil de vendas, pende para profissional, salvo contexto claro em contrário. Em dúvida, âmbito indefinido. Nunca invente fatos: use só o que está nas mensagens.',
+    'Você faz a triagem de conversas do WhatsApp do dono do app. Para a conversa recebida, decida duas coisas. Urgente: sim quando a pessoa pede resposta hoje, cita prazo, pagamento, cobrança, falha em produção, saúde, segurança ou emergência, ou mandou várias mensagens seguidas sem resposta; não para conversa casual, confirmação simples ou assunto que pode esperar. Âmbito: profissional quando trata de trabalho, cliente, projeto, proposta, orçamento, reunião, nota fiscal ou cobrança; pessoal quando família, amigos, lazer, saúde própria ou assunto particular. Se o contato está no funil de vendas, pende para profissional, salvo contexto claro em contrário. Contato do funil pende para profissional mesmo em conversa informal. Urgente só com pedido explícito e prazo, cobrança de resposta ou problema em andamento; conversa só com anexos, mensagens automáticas (saldo, notificação, robô) ou sem pedido não é urgente. Em dúvida, âmbito indefinido. Nunca invente fatos: use só o que está nas mensagens.',
   profile: 'claude',
   model: 'haiku',
   thinkMore: false,

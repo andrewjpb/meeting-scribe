@@ -7737,7 +7737,7 @@ const TRIAGEM_TEXTS = {
   ultima: 'Combinado, falamos amanhã.',
 } as const
 /** Os checks da triagem, na ordem do roteiro. */
-const TRIAGEM_CHECKS = ['semAgente', 'unicidade', 'triagem', 'notificacoes', 'manual', 'respondeu', 'assistente', 'desligado', 'privacidade', 'estadoFinal'] as const
+const TRIAGEM_CHECKS = ['semAgente', 'pausado', 'unicidade', 'triagem', 'notificacoes', 'manual', 'respondeu', 'assistente', 'desligado', 'manualGrupo', 'privacidade', 'estadoFinal'] as const
 /** Os termos que nunca podem sair no detalhe dos checks nem no log da triagem (o texto da mensagem e o nome da conversa). */
 const TRIAGEM_PROIBIDOS = ['orçamento', 'Ana', ...Object.values(TRIAGEM_TEXTS)]
 const WA_TRIAGEM_LISTA = `document.querySelectorAll('[data-whatsapp-chat]').length === 3`
@@ -7767,7 +7767,10 @@ async function triagemUntil(test: () => Promise<boolean>, ms: number): Promise<b
  * conectado e o `claude` falso pela linha de comando, logo depois do atendimento:
  * - `semAgente`: a aba Urgentes sem agente ("Criar agente de triagem"), o clique que cria a tarefa `whatsapp-message` com o
  *   agente "Triagem do WhatsApp" e leva a Automações › Agendamentos, o formulário da tarefa (espera, grupos, aviso, sem a
- *   prévia) e a espera de 5 s gravada para o resto do roteiro;
+ *   prévia) e a espera de 5 s gravada para o resto do roteiro; contrato 171: o formulário sem Saída e sem "Pode enviar
+ *   email" nesse gatilho;
+ * - `pausado` (contrato 171, C1): com a tarefa desligada, a aba Urgentes vazia diz "sem agente" e o botão "Abrir
+ *   Automações" leva a Agendamentos (sem "Rodar agora" na linha da triagem, C4); a tarefa volta ligada;
  * - `unicidade`: uma segunda tarefa `whatsapp-message` ligada é recusada pelas Automações;
  * - `triagem`: 3 mensagens da Ana (contato do funil, criado aqui) viram uma triagem só, com a etiqueta Urgente ·
  *   Profissional, a execução `whatsapp` sem texto de mensagem e os chips na lista;
@@ -7776,6 +7779,8 @@ async function triagemUntil(test: () => Promise<boolean>, ms: number): Promise<b
  * - `respondeu`: "Urgente" à mão e a resposta minha, sem triagem nova;
  * - `assistente`: o cartão `triagem-etiqueta` pelo agente ACP falso e o "Aplicar";
  * - `desligado`: com o interruptor desligado, nenhuma triagem e o estado vazio "desligado";
+ * - `manualGrupo` (contrato 171, C2 e C3): "Triar agora" num grupo sem "Incluir grupos" é recusado sem execução; na Ana,
+ *   a execução termina em "· Triar agora";
  * - `privacidade`: nenhum texto de mensagem nem nome de contato no detalhe dos checks e no log da triagem.
  * Termina (`estadoFinal`) sem a tarefa da triagem, sem o agente se foi criado aqui, sem a etiqueta da Ana, sem o contato do
  * funil ligado a ela, com o interruptor ligado, o transporte de antes e a última mensagem da Ana minha e lida.
@@ -7848,7 +7853,7 @@ async function triagemChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => v
     await triagemStep(checks, 'semAgente', async () => {
       const lista = await openWhatsApp(contents)
       await openAba(contents, 'urgentes')
-      const vazio = await waitFor(contents, `document.querySelector('[data-triagem-vazio="sem-agente"] [data-triagem-criar]')`, 8000)
+      const vazio = await waitFor(contents, `document.querySelector('[data-triagem-vazio="sem-agente"][data-triagem-vazio-acao="criar"] [data-triagem-criar]')`, 8000)
       await shot('whatsapp-triagem-vazio-light')
       const vazioEscuro = await darkShot('whatsapp-triagem-vazio-dark', async (target) => {
         await openWhatsApp(target)
@@ -7862,8 +7867,8 @@ async function triagemChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => v
       const task = tasks[0]
       const agent = (await api<AgentsList>('scribe:agents-list')).agents.find((item) => item.id === task?.agentId)
       const form = task ? await openTaskForm(contents, task.id) : false
-      const campos = await invoke<{ espera: string; grupos: string; aviso: boolean; previa: boolean }>(
-        `({ espera: document.querySelector('[data-task-espera]')?.value ?? '', grupos: document.querySelector('[data-task-grupos]')?.dataset.taskGrupos ?? '', aviso: Boolean(document.querySelector('[data-task-whatsapp-aviso]')), previa: Boolean(document.querySelector('[data-task-preview]')) })`,
+      const campos = await invoke<{ espera: string; grupos: string; aviso: boolean; previa: boolean; saida: boolean; email: boolean }>(
+        `({ espera: document.querySelector('[data-task-espera]')?.value ?? '', grupos: document.querySelector('[data-task-grupos]')?.dataset.taskGrupos ?? '', aviso: Boolean(document.querySelector('[data-task-whatsapp-aviso]')), previa: Boolean(document.querySelector('[data-task-preview]')), saida: Boolean(document.querySelector('#task-output')), email: Boolean(document.querySelector('[data-task-form] section[aria-label="Pode enviar email"]')) })`,
       )
       // O quadro mostra o aviso do que o agente lê (o formulário rolado até o "Salvar agendamento").
       const ROLA_FORM = `document.querySelector('[data-action="task-save"]')?.scrollIntoView({ block: 'end' }), true`
@@ -7899,14 +7904,40 @@ async function triagemChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => v
         gruposDesligado: campos.grupos === 'off',
         aviso: campos.aviso,
         semPrevia: !campos.previa,
+        semSaida: !campos.saida,
+        semEmail: !campos.email,
         formularioEscuro: formEscuro,
         salvo: fechou,
         esperaMinima: espera,
       }
       return {
-        ok: lista && vazio && vazioEscuro && antes === 0 && tasks.length === 1 && view.habilitada && view.agenteDoModelo && rota && form && view.esperaPadrao && view.gruposDesligado && view.aviso && view.semPrevia && formEscuro && fechou && espera,
+        ok: lista && vazio && vazioEscuro && antes === 0 && tasks.length === 1 && view.habilitada && view.agenteDoModelo && rota && form && view.esperaPadrao && view.gruposDesligado && view.aviso && view.semPrevia && view.semSaida && view.semEmail && formEscuro && fechou && espera,
         detail: JSON.stringify(view),
       }
+    })
+
+    // 1b. Contrato 171 (C1, C4): a tarefa desligada conta como sem agente ativo, e o botão abre Automações em vez de criar.
+    await triagemStep(checks, 'pausado', async () => {
+      const task = (await triagemTasks())[0]
+      if (!task) return { ok: false, detail: JSON.stringify({ tarefa: false }) }
+      await api('scribe:tasks-toggle', { id: task.id, enabled: false })
+      const desligada = await triagemUntil(async () => (await triagemTasks())[0]?.enabled === false, 5000)
+      await openWhatsApp(contents)
+      await openAba(contents, 'urgentes')
+      const vazio = await waitFor(contents, `document.querySelector('[data-triagem-vazio="sem-agente"][data-triagem-vazio-acao="abrir"] [data-triagem-abrir-automacoes]')`, 8000)
+      const semCriar = await invoke<boolean>(`!document.querySelector('[data-triagem-criar]')`)
+      await clickSelector(contents, '[data-triagem-abrir-automacoes]')
+      const rota = await waitFor(contents, `${routeIs('automacoes')} && document.querySelector('[data-automations-tab="tarefas"] [data-task-row="${task.id}"]')`, 8000)
+      const semRodarAgora = await invoke<boolean>(`!document.querySelector('[data-task-row="${task.id}"] [data-action="task-run-now"]')`)
+      const tarefas = (await triagemTasks()).length
+      await api('scribe:tasks-toggle', { id: task.id, enabled: true })
+      const religada = await triagemUntil(async () => (await triagemTasks())[0]?.enabled === true, 5000)
+      await openWhatsApp(contents)
+      await openAba(contents, 'urgentes')
+      const vazioLigada = await waitFor(contents, `document.querySelector('[data-triagem-vazio="vazio"]')`, 8000)
+      await openAba(contents, 'todas')
+      const view = { desligada, vazioSemAgente: vazio, semCriar, rotaAgendamentos: rota, semRodarAgora, tarefas, religada, vazioLigada }
+      return { ok: desligada && vazio && semCriar && rota && semRodarAgora && tarefas === 1 && religada && vazioLigada, detail: JSON.stringify(view) }
     })
 
     // 2. Uma segunda tarefa "Quando chega mensagem do WhatsApp" ligada é recusada.
@@ -8036,10 +8067,14 @@ async function triagemChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => v
       const id = await incoming(TRIAGEM_TEXTS.casual)
       const triada = await triagemUntil(async () => (await etiquetaDe(WA_ANA))?.lastMessageId === id, 20_000)
       const etiqueta = await etiquetaDe(WA_ANA)
-      const runs = (await triagemRuns()).length
-      const view = { barra, fixadoAMao: fixado, abaTodas: todas, chips, escuro, triada, ambitoPessoal: etiqueta?.ambito === 'pessoal', ambitoFixo: etiqueta?.ambitoFixo === true, urgente: etiqueta?.urgente === true, execucoes: runs, novas: runs - runsAntes }
+      const lista = await triagemRuns()
+      const runs = lista.length
+      // Contrato 171 (C3): as automáticas não terminam em "· Triar agora" (a manual é conferida no `manualGrupo`).
+      const automaticas = await Promise.all(lista.map((item) => api<AutomationRun | null>('scribe:runs-get', { id: item.id })))
+      const semSufixo = automaticas.every((run) => run !== null && !run.prompt.endsWith('· Triar agora'))
+      const view = { barra, fixadoAMao: fixado, abaTodas: todas, chips, escuro, triada, ambitoPessoal: etiqueta?.ambito === 'pessoal', ambitoFixo: etiqueta?.ambitoFixo === true, urgente: etiqueta?.urgente === true, execucoes: runs, novas: runs - runsAntes, automaticasSemSufixo: semSufixo }
       return {
-        ok: barra && fixado && todas && chips && escuro && triada && view.ambitoPessoal && view.ambitoFixo && etiqueta?.urgente === false && runs === 2 && view.novas === 1,
+        ok: barra && fixado && todas && chips && escuro && triada && view.ambitoPessoal && view.ambitoFixo && etiqueta?.urgente === false && runs === 2 && view.novas === 1 && semSufixo,
         detail: JSON.stringify(view),
       }
     })
@@ -8112,6 +8147,42 @@ async function triagemChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => v
       const view = { etiquetaLimpa: limpa.ok, novas: runs - runsAntes, vazioDesligado: vazio, religado }
       return { ok: limpa.ok && runs === runsAntes && vazio && religado, detail: JSON.stringify(view) }
     })
+
+    // 9. Contrato 171 (C2, C3): "Triar agora" num grupo com "Incluir grupos" desligado é recusado e não cria execução; na
+    // Ana (a mensagem do passo 8 ainda não triada), a execução do "Triar agora" termina em "· Triar agora".
+    await triagemStep(checks, 'manualGrupo', async () => {
+      const task = (await triagemTasks())[0]
+      const semGrupos = task?.schedule.kind === 'whatsapp-message' && !task.schedule.grupos
+      const runsAntes = (await triagemRuns()).length
+      const grupo = await api<{ ok: boolean; error?: string }>('scribe:triagem-run', { chatId: WA_ATLAS })
+      // O mesmo pela barra (C7): o aviso aparece inteiro, em até 2 linhas, sem corte.
+      await openWhatsApp(contents)
+      await clickSelector(contents, `[data-whatsapp-chat="${WA_ATLAS}"]`)
+      await waitFor(contents, `document.querySelector('[data-whatsapp-conversation="${WA_ATLAS}"]') && document.querySelector('[data-triagem-bar]')`, 8000)
+      await clickSelector(contents, '[data-triagem-run]')
+      const aviso = await waitFor(contents, `document.querySelector('[data-triagem-run-erro]')?.textContent === ${JSON.stringify('Grupos estão fora da triagem. Ligue “Incluir grupos” na tarefa.')}`, 5000)
+      const avisoInteiro = await invoke<boolean>(`(() => { const el = document.querySelector('[data-triagem-run-erro]'); return Boolean(el) && el.scrollHeight <= el.clientHeight + 1 && el.scrollWidth <= el.clientWidth + 1 })()`)
+      await wait(1500)
+      const idsAntes = new Set((await triagemRuns()).map((item) => item.id))
+      const runsGrupo = idsAntes.size
+      const ana = await api<{ ok: boolean; error?: string }>('scribe:triagem-run', { chatId: WA_ANA })
+      const nova = async (): Promise<AutomationRunListItem | undefined> => (await triagemRuns()).find((item) => !idsAntes.has(item.id) && item.status !== 'running')
+      const triada = await triagemUntil(async () => (await nova()) !== undefined, 20_000)
+      const ultima = await nova()
+      const run = ultima ? await api<AutomationRun | null>('scribe:runs-get', { id: ultima.id }) : null
+      const view = {
+        semGrupos,
+        grupoRecusado: !grupo.ok && grupo.error === 'grupos',
+        avisoNaBarra: aviso,
+        avisoInteiro,
+        semExecucaoDoGrupo: runsGrupo === runsAntes,
+        conversaAceita: ana.ok,
+        triada,
+        sufixoTriarAgora: run?.prompt.endsWith('· Triar agora') === true,
+        gatilhoWhatsapp: run?.trigger === 'whatsapp',
+      }
+      return { ok: semGrupos && view.grupoRecusado && aviso && avisoInteiro && view.semExecucaoDoGrupo && ana.ok && triada && view.sufixoTriarAgora && view.gatilhoWhatsapp, detail: JSON.stringify(view) }
+    })
   } finally {
     // Como estava: sem a tarefa da triagem (e sem o agente, se foi criado aqui), sem a etiqueta da Ana, o contato do funil
     // desligado dela e arquivado (o contrato 116 liga a Ana a um contato novo pelo "+ Contato"), o interruptor ligado, o
@@ -8150,7 +8221,7 @@ async function triagemChecks(ctx: SmokeContext, watch: (win: BrowserWindow) => v
     win.destroy()
   }
 
-  // 9. Nenhum texto de mensagem nem nome de contato no detalhe dos checks e no log da triagem.
+  // 10. Nenhum texto de mensagem nem nome de contato no detalhe dos checks e no log da triagem.
   const detalhes = JSON.stringify(checks)
   const vazados = TRIAGEM_PROIBIDOS.filter((term) => detalhes.includes(term)).length
   const logVazado = triagemLog.filter((line) => TRIAGEM_PROIBIDOS.some((term) => line.includes(term)) || line.includes('pede o') || line.includes('conversa casual')).length
@@ -8208,6 +8279,13 @@ async function notificacoesEmailCheck(ctx: SmokeContext, watch: (win: BrowserWin
     } finally {
       dark.destroy()
     }
+    // Contrato 171 (C5): sem o ponteiro, o foco por teclado na linha também mostra "Marcar como lida".
+    const LIDA_OPACIDADE = `getComputedStyle(document.querySelector('[data-notificacao^="email:"]').closest('li').querySelector('[data-notificacao-lida]')).opacity`
+    contents.sendInputEvent({ type: 'mouseMove', x: 1, y: 1 })
+    const semPonteiro = await waitFor(contents, `${LIDA_OPACIDADE} === '0'`, 3000)
+    await evaluate(contents, `document.querySelector('[data-notificacao^="email:"]')?.focus(), true`)
+    const focoTeclado = await waitFor(contents, `${LIDA_OPACIDADE} === '1'`, 3000)
+    await evaluate(contents, `document.activeElement instanceof HTMLElement && document.activeElement.blur(), true`)
     const alvo = await evaluate<string>(contents, `document.querySelector('[data-notificacao^="email:"]')?.dataset.notificacao ?? ''`)
     const [, accountId = '', ...rest] = alvo.split(':')
     const id = rest.join(':')
@@ -8215,8 +8293,8 @@ async function notificacoesEmailCheck(ctx: SmokeContext, watch: (win: BrowserWin
     const saiu = await waitFor(contents, `!document.querySelector(${JSON.stringify(`[data-notificacao="${alvo}"]`)}) && ${EMAIL_ROWS} === ${linhas - 1}`, 8000)
     const baixou = await waitFor(contents, `${BADGE} === ${JSON.stringify(badge - 1 > 0 ? String(badge - 1) : '')}`, 8000)
     if (accountId && id) restored = await evaluate<boolean>(contents, `window.__scribeApi.invoke('scribe:email-mark-read', ${JSON.stringify({ accountId, id, seen: false })}).then((ok) => ok === true, () => false)`)
-    const view = { tela, linhas, linhasWhatsApp, badge, hoverClaro, hoverEscuro, linhaSaiu: saiu, badgeBaixou1: baixou, devolvidoANaoLido: restored }
-    return { ok: tela && linhas > 0 && hoverClaro && hoverEscuro && saiu && baixou && restored, detail: JSON.stringify(view) }
+    const view = { tela, linhas, linhasWhatsApp, badge, hoverClaro, hoverEscuro, semPonteiro, focoTeclado, linhaSaiu: saiu, badgeBaixou1: baixou, devolvidoANaoLido: restored }
+    return { ok: tela && linhas > 0 && hoverClaro && hoverEscuro && semPonteiro && focoTeclado && saiu && baixou && restored, detail: JSON.stringify(view) }
   } finally {
     win.destroy()
   }

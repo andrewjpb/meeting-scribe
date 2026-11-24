@@ -607,4 +607,18 @@ describe('triagem do WhatsApp nas Automações (contrato 161, CA7, CA8 e CA10)',
     expect(await service.hojeTrigger('whatsapp', 'Teto diário de triagens atingido')).toBe(1)
     expect(await service.hojeTrigger('schedule')).toBe(0)
   })
+
+  it('contrato 171 (C4): "Rodar agora" e "Rodar de novo" recusam a triagem, com a tarefa ou sem ela', async () => {
+    const criado = await service.criarTriagemDoModelo()
+    if (!criado.ok) throw new Error('modelo recusado')
+    expect(await service.runNow({ id: criado.taskId })).toEqual({ ok: false, error: 'invalid' })
+    const at = new Date(clock).toISOString()
+    await service.salvarExecucaoExterna({ id: 'tri-1', taskId: criado.taskId, taskName: 'Triagem do WhatsApp', agentId: criado.agentId, agentName: 'Triagem do WhatsApp', trigger: 'whatsapp', startedAt: at, endedAt: at, durationMs: 10, model: 'haiku', costUsd: 0, prompt: 'Triagem da conversa Ana · 1 mensagem nova', meetingId: null, outputResult: null, status: 'ok', answer: null, error: null })
+    expect(await service.rerun({ id: 'tri-1' })).toEqual({ ok: false, error: 'invalid' })
+    await service.deleteTask({ id: criado.taskId })
+    expect(await service.rerun({ id: 'tri-1' })).toEqual({ ok: false, error: 'invalid' })
+    await service.settled()
+    expect(pending).toHaveLength(0)
+    expect((await service.listRuns(undefined)).map((run) => run.id)).toEqual(['tri-1'])
+  })
 })

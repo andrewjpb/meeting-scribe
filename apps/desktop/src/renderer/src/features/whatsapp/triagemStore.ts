@@ -19,16 +19,25 @@ export const TRIAGEM_RUN_ERRORS: Readonly<Record<TriagemRunError, string>> = {
   'sem-mensagens': 'Nada para triar nesta conversa.',
   teto: 'Teto diário de triagens atingido.',
   ocupado: 'Já há uma triagem desta conversa em andamento.',
+  grupos: 'Grupos estão fora da triagem. Ligue “Incluir grupos” na tarefa.',
 }
+
+/** Contrato 171 (C10): sem o `scribe:triagem-done`, o "Triando…" cai sozinho depois disto (o modelo tem 30 s). */
+export const TRIAGEM_TRIANDO_MAX_MS = 35_000
 
 interface TriagemStoreState {
   etiquetas: Record<string, Etiqueta>
   /** `null` enquanto não leu. */
   status: TriagemStatus | null
+  /** Contrato 171 (C10): conversas com "Triar agora" aceito, até o main avisar o fim (`scribe:triagem-done`). */
+  triando: Record<string, true>
   load: () => Promise<void>
   /** Grava a escolha do dono; a etiqueta devolvida substitui a daqui. */
   set: (chatId: string, patch: EtiquetaPatch) => Promise<{ ok: true } | { ok: false; error: string }>
+  /** "Triar agora": a conversa fica em `triando` até o aviso do fim; a recusa (ou a falha) tira na hora. */
   runNow: (chatId: string) => Promise<TriagemRunResult>
+  /** Fim da triagem da conversa (o aviso do main ou o limite de `TRIAGEM_TRIANDO_MAX_MS`). */
+  done: (chatId: string) => void
   createFromTemplate: () => Promise<TriagemCreateResult>
   /** O aviso do main: a etiqueta nova da conversa (`null` tira). */
   receive: (event: MainEvents['scribe:triagem-changed']) => void
@@ -39,6 +48,7 @@ let reread: (() => void) | null = null
 export const useTriagem = create<TriagemStoreState>()((set) => ({
   etiquetas: {},
   status: null,
+  triando: {},
 
   load: async () => {
     try {
@@ -64,7 +74,21 @@ export const useTriagem = create<TriagemStoreState>()((set) => ({
     }
   },
 
-  runNow: async (chatId) => window.__scribeApi.invoke('scribe:triagem-run', { chatId }),
+  runNow: async (chatId) => {
+    // Marca antes de pedir: o aviso do fim pode chegar logo depois da resposta.
+    set((state) => ({ triando: { ...state.triando, [chatId]: true } }))
+    try {
+      const result = await window.__scribeApi.invoke('scribe:triagem-run', { chatId })
+      if (!result.ok) useTriagem.getState().done(chatId)
+      return result
+    } catch (error) {
+      useTriagem.getState().done(chatId)
+      throw error
+    }
+  },
+
+  done: (chatId) =>
+    set((state) => (state.triando[chatId] ? { triando: Object.fromEntries(Object.entries(state.triando).filter(([id]) => id !== chatId)) as Record<string, true> } : state)),
 
   createFromTemplate: async () => {
     const result = await window.__scribeApi.invoke('scribe:triagem-create-from-template')
@@ -77,13 +101,15 @@ export const useTriagem = create<TriagemStoreState>()((set) => ({
     set((state) => ({ etiquetas: etiqueta ? { ...state.etiquetas, [chatId]: etiqueta } : Object.fromEntries(Object.entries(state.etiquetas).filter(([id]) => id !== chatId)) })),
 }))
 
-/** Os avisos do main: a etiqueta de uma conversa e o estado do motor. */
+/** Os avisos do main: a etiqueta de uma conversa, o estado do motor e o fim de uma triagem. */
 export function watchTriagem(): () => void {
   const offChanged = window.__scribeApi.on('scribe:triagem-changed', (event) => useTriagem.getState().receive(event))
   const offStatus = window.__scribeApi.on('scribe:triagem-status-changed', (status) => useTriagem.setState({ status }))
+  const offDone = window.__scribeApi.on('scribe:triagem-done', ({ chatId }) => useTriagem.getState().done(chatId))
   return () => {
     offChanged()
     offStatus()
+    offDone()
   }
 }
 

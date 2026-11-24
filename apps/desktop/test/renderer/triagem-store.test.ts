@@ -97,6 +97,23 @@ describe('triagemStore', () => {
     expect(mod.TRIAGEM_RUN_ERRORS.ocupado).toBe('Já há uma triagem desta conversa em andamento.')
   })
 
+  it('contrato 171 (C2, C10): "Triando…" fica até o aviso do fim daquela conversa; a recusa solta na hora', async () => {
+    const off = mod.watchTriagem()
+    invoke.mockResolvedValueOnce({ ok: true })
+    expect(await store().runNow(ANA)).toEqual({ ok: true })
+    expect(store().triando[ANA]).toBe(true)
+    emit('scribe:triagem-done', { chatId: 'outra@s.whatsapp.net', ok: true })
+    expect(store().triando[ANA]).toBe(true)
+    emit('scribe:triagem-done', { chatId: ANA, ok: false })
+    expect(store().triando[ANA]).toBeUndefined()
+    invoke.mockResolvedValueOnce({ ok: false, error: 'grupos' })
+    expect(await store().runNow(ANA)).toEqual({ ok: false, error: 'grupos' })
+    expect(store().triando[ANA]).toBeUndefined()
+    expect(mod.TRIAGEM_RUN_ERRORS.grupos).toBe('Grupos estão fora da triagem. Ligue “Incluir grupos” na tarefa.')
+    expect(mod.TRIAGEM_TRIANDO_MAX_MS).toBe(35_000)
+    off()
+  })
+
   it('createFromTemplate relê o estado quando cria', async () => {
     invoke.mockImplementation(async (channel: string) => (channel === 'scribe:triagem-create-from-template' ? { ok: true, agentId: 'a', taskId: 't' } : { etiquetas: {}, status: STATUS }))
     expect(await store().createFromTemplate()).toEqual({ ok: true, agentId: 'a', taskId: 't' })

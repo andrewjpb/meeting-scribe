@@ -82,7 +82,7 @@ export function RunAnswer({ runId, prompt, meetings }: { runId: string; prompt: 
     <ol aria-label="Execução" aria-live="polite" data-run-answer={runId} data-run-state={finished ? finished.status : 'running'} className="flex flex-col gap-6">
       {prompt && <UserMessage text={prompt} />}
       {!finished && live && <LiveAssistantMessage answer={live} />}
-      {answer && <AssistantMessage message={answer} meetings={meetings} onCopy={() => window.__scribeApi.invoke('scribe:analysis-copy', { text: answer.text })} onRedo={null} />}
+      {answer && <AssistantMessage message={answer} meetings={meetings} onCopy={() => window.__scribeApi.invoke('scribe:analysis-copy', { text: answer.text })} onRedo={null} author={finished?.agentName || 'Claude'} />}
       {finished?.error && (
         <li data-run-error className="text-13 text-text-muted">
           {finished.error}
