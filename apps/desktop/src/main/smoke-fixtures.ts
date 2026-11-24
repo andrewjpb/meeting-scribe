@@ -7,7 +7,7 @@ import type { EmailNotice } from './email/notify'
 import { execFile, spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { EventEmitter } from 'node:events'
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, symlinkSync, truncateSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:http'
 import { join } from 'node:path'
 import { gzipSync } from 'node:zlib'
@@ -30,7 +30,7 @@ import { createFakeS3, type FakeS3 } from './redes/fake-s3'
 import type { HttpFetch, HttpResponse } from './accounts/http'
 import type { CalendarNoticeKind } from '../shared/calendar'
 import { fakeMediaAccess } from './permissions'
-import { writeFakeIndex } from './whatsapp/fake-index'
+import { storedZip, writeFakeIndex } from './whatsapp/fake-index'
 import { SCHEDULES_FILE, SCHEDULES_VERSION, type SchedulesState } from './schedules/store'
 import type { DownloadRequest } from './updates/download'
 import { LATEST_RELEASE_URL, RELEASE_DOWNLOAD_PREFIX } from './updates/release'
@@ -876,4 +876,72 @@ export function writeSmokeMcpFixtures(userData: string, serverScript: string): {
     `${JSON.stringify({ mcpServers: { 'arquivos-desktop': { command: process.execPath, args: [serverScript], env: { ELECTRON_RUN_AS_NODE: '1', API_KEY: SMOKE_MCP_SECRETS.desktop } } } }, null, 2)}\n`,
   )
   return { cliFile, desktopFile, env: { FAKE_CLAUDE_MCP_FILE: cliFile } }
+}
+
+/** Contrato 169: o texto do `.docx` da pasta sintética (o smoke confere que ele não aparece no passo nem no detalhe). */
+export const SMOKE_FOLDER_DOCX_TEXT = 'Proposta comercial de exemplo: implantação em três etapas.'
+
+/** Contrato 169: um PDF mínimo válido (uma página com "CONTRATO EXEMPLO"), com a tabela `xref` calculada aqui. */
+function minimalPdf(text: string): Buffer {
+  const stream = `BT /F1 18 Tf 72 720 Td (${text}) Tj ET`
+  const objects = [
+    '<< /Type /Catalog /Pages 2 0 R >>',
+    '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+    '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>',
+    `<< /Length ${stream.length} >>\nstream\n${stream}\nendstream`,
+    '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
+  ]
+  let body = '%PDF-1.4\n'
+  const offsets: number[] = []
+  objects.forEach((object, index) => {
+    offsets.push(body.length)
+    body += `${index + 1} 0 obj\n${object}\nendobj\n`
+  })
+  const xref = body.length
+  body += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n${offsets.map((offset) => `${String(offset).padStart(10, '0')} 00000 n \n`).join('')}`
+  body += `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`
+  return Buffer.from(body, 'latin1')
+}
+
+const CONTENT_TYPES_NS = 'http://schemas.openxmlformats.org/package/2006/content-types'
+const RELS_NS = 'http://schemas.openxmlformats.org/package/2006/relationships'
+
+/**
+ * Contrato 169 (pastas-assistente D9): a pasta sintética do smoke em `dir` (dentro de `<userData>/smoke-pastas`, a única
+ * raiz que a costura `smokeRoot` livra da recusa `sensivel`). Cinco arquivos que entram no índice (PDF, Word, planilha,
+ * texto e PowerPoint, este só para anexo) e três que não podem entrar: um oculto, um de 21 MB (esparso) e um link
+ * simbólico para fora. Nenhum dado real. Devolve `dir`.
+ */
+export async function createSyntheticFolder(dir: string): Promise<string> {
+  const put = (rel: string, content: string | Buffer): void => {
+    const path = join(dir, rel)
+    mkdirSync(join(path, '..'), { recursive: true })
+    writeFileSync(path, content)
+  }
+  put('Contratos/contrato-exemplo.pdf', minimalPdf('CONTRATO EXEMPLO'))
+  put(
+    'Propostas/proposta-exemplo.docx',
+    storedZip([
+      { name: '[Content_Types].xml', content: `<?xml version="1.0" encoding="UTF-8"?><Types xmlns="${CONTENT_TYPES_NS}"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>` },
+      { name: '_rels/.rels', content: `<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="${RELS_NS}"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>` },
+      { name: 'word/document.xml', content: `<?xml version="1.0" encoding="UTF-8"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>${SMOKE_FOLDER_DOCX_TEXT}</w:t></w:r></w:p></w:body></w:document>` },
+    ]),
+  )
+  put(
+    'Planilhas/planilha-exemplo.xlsx',
+    storedZip([
+      { name: '[Content_Types].xml', content: `<?xml version="1.0" encoding="UTF-8"?><Types xmlns="${CONTENT_TYPES_NS}"/>` },
+      { name: 'xl/workbook.xml', content: '<?xml version="1.0" encoding="UTF-8"?><workbook xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Precos" sheetId="1" r:id="rId1"/></sheets></workbook>' },
+      { name: 'xl/_rels/workbook.xml.rels', content: '<?xml version="1.0"?><Relationships><Relationship Id="rId1" Type="worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="sharedStrings" Target="sharedStrings.xml"/></Relationships>' },
+      { name: 'xl/sharedStrings.xml', content: '<?xml version="1.0"?><sst count="2"><si><t>item</t></si><si><t>valor</t></si></sst>' },
+      { name: 'xl/worksheets/sheet1.xml', content: '<?xml version="1.0"?><worksheet><sheetData><row r="1"><c r="A1" t="s"><v>0</v></c><c r="B1" t="s"><v>1</v></c></row><row r="2"><c r="A2"><v>1</v></c><c r="B2"><v>100</v></c></row></sheetData></worksheet>' },
+    ]),
+  )
+  put('Notas/nota.txt', 'Nota de exemplo do smoke.\n')
+  put('Apresentacoes/institucional.pptx', storedZip([{ name: '[Content_Types].xml', content: `<?xml version="1.0" encoding="UTF-8"?><Types xmlns="${CONTENT_TYPES_NS}"/>` }]))
+  put('.oculto/segredo.txt', 'Arquivo oculto de exemplo.\n')
+  put('grande.bin', '')
+  truncateSync(join(dir, 'grande.bin'), 21 * 1024 * 1024)
+  symlinkSync('/etc', join(dir, 'link-fora'))
+  return dir
 }
