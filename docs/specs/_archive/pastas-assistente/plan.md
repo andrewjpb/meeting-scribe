@@ -1,5 +1,5 @@
 ---
-status: aprovado
+status: arquivado
 feature: pastas-assistente
 tipo: plan
 data: 2026-11-23
@@ -31,7 +31,7 @@ Base: main `6079fec` (0.23.1 + contratos 159 e 160) · Spec: `spec.md` (aprovada
 | 167 | Telas: seção "Pastas que o Assistente pode ler" em Configurações › Claude (lista, Adicionar pasta…, Remover, aviso de recusa; sem contagem de arquivos nesta versão); linha Pastas no painel Contexto (ligada/vazia); conforme mockups 01–03 | `renderer/.../settings/SettingsScreen.tsx`, `renderer/.../chat/SourcesSection.tsx`, hooks/stores do renderer que esses dois usam, `shared/settings-index.ts` (texto), `test/*` | 165; mockups aprovados | 2 |
 | 168 | Cartão `email-resposta` com anexos e faltantes, resolver por índice e limites, `scribe:chat-action-email-compose`, estado `opened`, `openDraft` + navegação, regra de e-mail com documentos na instrução; conforme mockups 05–07; testes | `shared/assistant.ts`, `main/chat/actions.ts`, `main/chat/store.ts`, `shared/ipc.ts`, `main/index.ts`, `main/claude-cli/chat.ts`, `renderer/.../chat/ActionCards.tsx`, `renderer/.../email/emailStore.ts` (só se `openDraft` precisar de `skippedAttachments`), `test/*` | 166 | 3 |
 | 172 | Correção de produto achada no smoke: a troca de fonte no Contexto é gravada antes da pergunta seguinte (`send`/`redo` esvaziam o `pendingScope`) | `renderer/.../chat/ChatConversation.tsx`, `test/renderer/*` | 169 | 5 |
-| 169 | Smoke `pastasChecks` + pasta sintética + scripts do agente falso + telas em `SCREENS`; README, guia do app, design.md, docs/telas (artboards + canvas.json), `auditoria-prints.md`, `notas-release.md`, "Pendências" aqui | `main/smoke.ts`, `main/smoke-fixtures.ts`, `test/fixtures/fake-acp-agent.mjs`, `README.md`, `apps/desktop/resources/assistente/guia-do-app.md`, `docs/specs/desktop-shell/design.md`, `docs/telas/*`, `docs/specs/pastas-assistente/*` | 167, 168 | 4 |
+| 169 | Smoke `pastasChecks` + pasta sintética + scripts do agente falso + telas em `SCREENS`; README, guia do app, design.md, docs/telas (artboards + canvas.json), `auditoria-prints.md`, `notas-release.md`, "Pendências" aqui | `main/smoke.ts`, `main/smoke-fixtures.ts`, `test/fixtures/fake-acp-agent.mjs`, `README.md`, `apps/desktop/resources/assistente/guia-do-app.md`, `docs/specs/desktop-shell/design.md`, `docs/telas/*`, `docs/specs/_archive/pastas-assistente/*` | 167, 168 | 4 |
 
 Waves: 1 = {165}; 2 = {166, 167} (sem arquivo em comum: 166 é main + `shared/chat.ts` + `ChatMarkdown.tsx`; 167 é `SettingsScreen.tsx` + `SourcesSection.tsx`); 3 = {168}; 4 = {169}; 5 = {172} (correção de produto, fora da spec original, antes da versão). Teto de 2 agentes por wave; wave 2 em paralelo na mesma árvore (worktree desta frente) com a lista de arquivos de cada um no contrato.
 
@@ -59,3 +59,5 @@ Waves: 1 = {165}; 2 = {166, 167} (sem arquivo em comum: 166 é main + `shared/ch
 - Citações `[Email · …]` e `[WhatsApp · …]` continuam texto; só `[Pasta · …]` (e as reuniões e os links da web) viram botão.
 - Tema escuro: os mockups são só claros; o escuro das 8 telas novas só existe nos prints do smoke (`*-dark`), conferidos na `auditoria-prints.md`.
 - Smoke: o agente falso não é o Claude; a prova de que o Read do CLI abre a cópia PDF e o texto extraído do Word continua no teste manual do Andrew (como no contrato 151).
+
+Versão: 0.26.0 (commit 8181f45)

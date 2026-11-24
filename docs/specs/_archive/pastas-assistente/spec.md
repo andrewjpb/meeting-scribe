@@ -1,5 +1,5 @@
 ---
-status: aprovada
+status: arquivada
 feature: pastas-assistente
 tipo: spec
 data: 2026-11-23

@@ -23,9 +23,9 @@ Fechamento da feature: provar de ponta a ponta no smoke (agente falso) que a fon
   - `apps/desktop/resources/assistente/guia-do-app.md`: bloco da fonte Pastas na seção do Assistente, a ferramenta `ler_arquivo_pasta`, a citação com Abrir, o cartão com anexos, a seção nas Configurações (`<!-- tela: configuracoes -->` ou o bloco correspondente); o teste `assistant.test.ts:817` continua verde.
   - `docs/specs/desktop-shell/design.md`: cartão `email-resposta` com anexos (seção Anexos, "Não encontrado", total, botões), botão de citação de pasta, linha de pasta nas Configurações.
   - `docs/telas/`: artboards novos a partir de `mockups/PastasAssistente.html` (um `.dc.html` por tela, nomeados como os vizinhos) e `artboards/canvas.json` (`boards` + `order`); `docs/telas/README.md` com as telas.
-  - `docs/specs/pastas-assistente/auditoria-prints.md`: tabela tela × tema × ok/ajuste, comparando o PNG real do smoke com o mockup (os PNGs do smoke ficam em `out/smoke/`; copiar os 16 para o scratchpad para comparar; nada para dentro do repo além do que já é padrão).
-  - `docs/specs/pastas-assistente/notas-release.md`: texto curto para a release (o que o usuário ganha, limites, privacidade).
-  - `docs/specs/pastas-assistente/plan.md`: seção "Pendências" preenchida (o que ficou fora: contagem por pasta, PowerPoint, limite por conta, linhas do Composer do desenho, citações de Email/WhatsApp ainda não clicáveis, tema escuro só no smoke).
+  - `docs/specs/_archive/pastas-assistente/auditoria-prints.md`: tabela tela × tema × ok/ajuste, comparando o PNG real do smoke com o mockup (os PNGs do smoke ficam em `out/smoke/`; copiar os 16 para o scratchpad para comparar; nada para dentro do repo além do que já é padrão).
+  - `docs/specs/_archive/pastas-assistente/notas-release.md`: texto curto para a release (o que o usuário ganha, limites, privacidade).
+  - `docs/specs/_archive/pastas-assistente/plan.md`: seção "Pendências" preenchida (o que ficou fora: contagem por pasta, PowerPoint, limite por conta, linhas do Composer do desenho, citações de Email/WhatsApp ainda não clicáveis, tema escuro só no smoke).
 
 ## Critérios de aceite
 - CA1: `pnpm gates` da raiz do worktree **verde** (typecheck, lint, testes, build, smoke, pytest se houver), com `pastasChecks` todos `ok` e `expectedShots` batendo.

@@ -7,7 +7,7 @@ Constituição: `~/CLAUDE.md` e `docs/specs/desktop-shell/design.md`. Prevalecem
 ## Pré-condições
 - Worktree `~/Documents/GitHub/meeting-scribe-pastas-assistente`, branch `pastas-assistente`, 165 commitado (canais `scribe:assistant-folder-add`/`-remove`, `settings.assistant.folders`, fonte `pastas`). Gates rápidos verdes.
 - O contrato 166 roda **em paralelo** na mesma árvore (main, `shared/chat.ts`, `shared/ipc.ts`, `main/index.ts`, `ChatMarkdown.tsx`): **não tocar** nenhum desses. Este contrato é só renderer: `SettingsScreen.tsx`, `SourcesSection.tsx`, hooks/stores do renderer que eles já usam, `shared/settings-index.ts` (só texto, se faltar).
-- Desenho de referência: `docs/specs/pastas-assistente/mockups/png/01-configuracoes-pastas.png`, `02-configuracoes-recusa.png`, `03-contexto-pastas.png` (e `03b` se existir), com o HTML em `mockups/PastasAssistente.html`. Seguir o desenho; dúvida de pixel resolve-se pelo `design.md` e pelos componentes existentes (`SettingRow`, `Switch`, `Section`, botões secundários).
+- Desenho de referência: `docs/specs/_archive/pastas-assistente/mockups/png/01-configuracoes-pastas.png`, `02-configuracoes-recusa.png`, `03-contexto-pastas.png` (e `03b` se existir), com o HTML em `mockups/PastasAssistente.html`. Seguir o desenho; dúvida de pixel resolve-se pelo `design.md` e pelos componentes existentes (`SettingRow`, `Switch`, `Section`, botões secundários).
 
 ## Contexto mínimo
 A lista de pastas é gravada só pelo main (165). A tela só mostra `settings.assistant.folders`, chama os dois canais e exibe o resultado. No painel Contexto, a fonte `pastas` ganha a linha com interruptor por conversa; com a lista vazia, a linha fica desabilitada e aponta para Configurações.
