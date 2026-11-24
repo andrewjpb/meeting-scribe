@@ -1,7 +1,7 @@
 ---
 feature: email-dashboard
 tipo: spec
-status: aprovada-2026-11-23
+status: implementada-2026-11-23 (0.25.0, arquivada)
 criado: 2026-11-23
 base: main 47ad5c1 (0.23.0)
 contratos: 155–158

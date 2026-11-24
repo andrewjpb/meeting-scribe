@@ -2,10 +2,10 @@
 feature: email-dashboard
 contrato: 158
 correcoes: 170
-status: em-correcao
+status: concluido
 data: 2026-11-23
 semana: 2026-W48
-base: email-dashboard 4af7500 (+158 não commitado)
+base: email-dashboard baf8f90 + merge da main 9c7dcd0
 ---
 
 # Auditoria dos prints do smoke (email-dashboard)
@@ -16,7 +16,7 @@ Prints de `apps/desktop/out/smoke/` gravados pelo `pnpm gates` do contrato 158 e
 
 - **14 prints:** 6 `ok`, 8 `ajustar` (os 8 pelos achados A1 e A2, que atravessam as telas com conteúdo).
 - Nenhuma cor fora da paleta nos dois temas, nenhuma sombra, nenhuma pílula, nenhum id, JSON ou "undefined". Estrutura igual ao mockup: contas no topo da coluna esquerda, "Precisam de atenção" em 380 px, respostas e organização à direita, linhas de 44, quadrado de 6 px, grupo com "Mover todos (N)", item Painel de 28 px marcado na barra.
-- Os achados viraram o **contrato 170**; a tabela abaixo é da rodada do 158 e será refeita com os prints regravados.
+- Os achados viraram o **contrato 170** (commit `baf8f90`). Re-auditoria com os prints regravados pelo gate da ponta (23/11/2026 20:54, 301 PNGs, `failures` vazio): A1–A4 resolvidos. Conta aparece como "Andrew Teste" na linha da conta, nos sufixos, no grupo e no banner; subtítulo "6 e-mails" com 6 na tela e "3 e-mails" depois do mover; "Última análise · Às 20:54 · 6 e-mails"; o print da IA desligada saiu sem a faixa "Desfeito". **Resultado final: 14 prints `ok`.**
 
 ### Ajustar (vão ao contrato 170)
 
