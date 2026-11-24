@@ -79,7 +79,7 @@ export function EtiquetaBar({ chatId }: { chatId: string }) {
   }
 
   return (
-    <div data-triagem-bar className="flex min-h-11 shrink-0 items-center gap-2.5 border-b border-line px-5 py-1">
+    <div data-triagem-bar className="flex min-h-11 shrink-0 flex-wrap items-center gap-x-2.5 gap-y-1 border-b border-line px-5 py-1">
       <span id={`triagem-etiqueta-${chatId}`} className="text-12 text-text-muted">
         Etiqueta
       </span>
@@ -94,17 +94,18 @@ export function EtiquetaBar({ chatId }: { chatId: string }) {
         <Icon icon={CircleAlert} size={14} />
         Urgente
       </button>
-      <span className="min-w-0 flex-1">
-        {error && (
-          <span data-triagem-run-erro role="status" className="line-clamp-2 text-right text-12 leading-4 text-rec" title={error}>
-            {error}
-          </span>
-        )}
-      </span>
+      <span className="min-w-0 flex-1" />
       <button type="button" data-triagem-run disabled={running} onClick={triar} className={`${BUTTON_CLASS} text-title hover:bg-bg-sunken`}>
         <Icon icon={Sparkles} size={14} />
         {running ? 'Triando…' : 'Triar agora'}
       </button>
+      {/* Contrato 171 (C7): em 1120 px os controles ocupam a linha inteira; o aviso desce para uma segunda linha, com a
+          largura toda, em até 2 linhas e sem corte. */}
+      {error && (
+        <span data-triagem-run-erro role="status" className="line-clamp-2 basis-full text-12 leading-4 text-rec" title={error}>
+          {error}
+        </span>
+      )}
     </div>
   )
 }
