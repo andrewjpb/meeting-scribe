@@ -41,7 +41,8 @@ function Origem({ item }: { item: NotificacaoItem }) {
 /**
  * Uma linha de Notificações (mockup 01, escolhas D5 e D6): 44 px em duas linhas de texto, a origem à esquerda e a hora à
  * direita (no WhatsApp, "N não lidas" abaixo dela em --accent). A linha inteira é um botão; no e-mail, "Marcar como lida"
- * (ghost de 32) entra antes da hora no hover e no foco por teclado, fora do botão da linha (botão não vai dentro de botão).
+ * (ghost de 32) entra antes da hora no hover e no foco por teclado (da linha ou dele; contrato 171), fora do botão da linha
+ * (botão não vai dentro de botão).
  */
 export function NotificacaoRow({ item, onOpen, onMarkRead, marking = false }: NotificacaoRowProps) {
   const whatsapp = item.kind === 'whatsapp'
@@ -100,7 +101,7 @@ export function NotificacaoRow({ item, onOpen, onMarkRead, marking = false }: No
           data-notificacao-lida
           onClick={marcar}
           disabled={marking}
-          className={`no-drag absolute top-1/2 right-[114px] inline-flex h-8 -translate-y-1/2 items-center gap-1.5 rounded-[var(--radius-control)] bg-bg-sunken px-2.5 text-13 font-medium whitespace-nowrap text-title transition-opacity duration-[var(--duration-fast)] ease-[var(--ease-out)] group-hover:opacity-100 hover:bg-line focus-visible:opacity-100 disabled:pointer-events-none disabled:opacity-50 ${marking ? '' : 'opacity-0'}`}
+          className={`no-drag absolute top-1/2 right-[114px] inline-flex h-8 -translate-y-1/2 items-center gap-1.5 rounded-[var(--radius-control)] bg-bg-sunken px-2.5 text-13 font-medium whitespace-nowrap text-title transition-opacity duration-[var(--duration-fast)] ease-[var(--ease-out)] group-focus-within:opacity-100 group-hover:opacity-100 hover:bg-line focus-visible:opacity-100 disabled:pointer-events-none disabled:opacity-50 ${marking ? '' : 'opacity-0'}`}
         >
           <Icon icon={MailOpen} className="text-text-muted" />
           Marcar como lida

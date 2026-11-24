@@ -224,5 +224,8 @@ describe('Triagem do WhatsApp (contrato 159, CA6 e CA10)', () => {
     expect(EXAMPLE_AGENTS.at(-1)).toBe(TRIAGEM_TEMPLATE)
     expect(TRIAGEM_TEMPLATE.instructions.startsWith('Você faz a triagem de conversas do WhatsApp do dono do app.')).toBe(true)
     expect(agentInputSchema.safeParse({ id: null, ...TRIAGEM_TEMPLATE }).success).toBe(true)
+    // Contrato 171 (C11): o funil e a urgência explícitos no modelo pronto.
+    expect(TRIAGEM_TEMPLATE.instructions).toContain('Contato do funil pende para profissional mesmo em conversa informal.')
+    expect(TRIAGEM_TEMPLATE.instructions).toContain('conversa só com anexos, mensagens automáticas (saldo, notificação, robô) ou sem pedido não é urgente.')
   })
 })

@@ -7,6 +7,7 @@ import {
   aplicarManual,
   chipsDe,
   contagensAbas,
+  cortarMotivo,
   etiquetaVazia,
   mensagemRecebida,
   naAba,
@@ -18,6 +19,7 @@ import {
   type Etiqueta,
   type TriagemAba,
 } from '../src/shared/triagem'
+import { etiquetaSchema } from '../src/shared/triagem-schema'
 
 describe('etiqueta da triagem (contrato 159)', () => {
   it('CA1: o âmbito escolhido à mão fica fixo; "nenhum" à mão limpa o âmbito e solta', () => {
@@ -83,9 +85,29 @@ describe('etiqueta da triagem (contrato 159)', () => {
     expect(chipsDe(pessoal)).toEqual(['Pessoal'])
     expect(chipsDe(null)).toEqual([])
     expect(aplicarAgente(null, { urgente: false, ambito: 'indefinido', motivo: 'x' }, 'm3', 3).ambito).toBeNull()
-    const motivo = aplicarAgente(null, { urgente: false, ambito: 'pessoal', motivo: 'y'.repeat(300) }, 'm4', 4).motivo
-    expect(motivo).toHaveLength(TRIAGEM_MOTIVO_MAX)
+    // Contrato 171 (C6): o motivo longo sai cortado com "…", dentro do limite.
+    const etiqueta = aplicarAgente(null, { urgente: false, ambito: 'pessoal', motivo: 'y'.repeat(300) }, 'm4', 4)
+    expect(etiqueta.motivo?.length).toBeLessThanOrEqual(TRIAGEM_MOTIVO_MAX)
+    expect(etiqueta.motivo?.endsWith('…')).toBe(true)
+    expect(etiquetaSchema.safeParse(etiqueta).success).toBe(true)
     expect(TRIAGEM_MOTIVO_MAX).toBe(160)
+  })
+
+  it('contrato 171 (C6): o motivo longo é cortado na última palavra inteira, com "…"; o curto não muda', () => {
+    const curto = 'Pedido de orçamento com prazo.'
+    expect(cortarMotivo(curto)).toBe(curto)
+    expect(cortarMotivo('a'.repeat(160))).toBe('a'.repeat(160))
+    const longo = Array.from({ length: 40 }, (_, i) => `palavra${i}`).join(' ')
+    const cortado = cortarMotivo(longo)
+    expect(cortado.length).toBeLessThanOrEqual(TRIAGEM_MOTIVO_MAX)
+    expect(cortado.endsWith('…')).toBe(true)
+    // Só palavras inteiras antes do "…".
+    const palavras = cortado.slice(0, -1).split(' ')
+    expect(palavras.every((palavra, i) => palavra === `palavra${i}`)).toBe(true)
+    expect(longo.startsWith(cortado.slice(0, -1))).toBe(true)
+    // Uma palavra só, maior que o limite: corta no meio dela.
+    expect(cortarMotivo('z'.repeat(300))).toBe(`${'z'.repeat(159)}…`)
+    expect(cortarMotivo('um dois três quatro', 10)).toBe('um dois…')
   })
 
   it('a poda fica com as mais recentes por `at`', () => {

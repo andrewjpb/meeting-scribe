@@ -1,10 +1,10 @@
-# Spec — notificacoes-triagem-correcoes (0.25.1)
+# Spec — notificacoes-triagem-correcoes (0.26.1)
 
 Feature: correções dos achados do teste navegado da 0.24.0 (centro de Notificações e triagem do WhatsApp por agente).
 Data: 2026-11-23 · Base: `8b55751` (main, versão 0.25.0: 0.24.0 + Painel de e-mail) · Contrato: 171 · Origem: relatório interno em `~/Documents/LAP/Entregas/meeting-scribe/2026-W48-notificacoes-triagem/relatorio-teste.pdf` · Spec de origem: `docs/specs/_archive/notificacoes-triagem/spec.md` (R1–R28, vale como referência de comportamento).
 
 ## Problema e objetivo
-O teste navegado de 23/11/2026 (20:40–21:10, app instalado, contas reais) encontrou 1 defeito contra a spec (R12), 5 desvios de padrão e 4 melhorias pequenas, todos com causa localizada no código. O objetivo desta spec é fechar esses pontos numa versão 0.25.1 sem mudar o desenho das telas nem as regras de negócio N1–N8 da spec de origem.
+O teste navegado de 23/11/2026 (20:40–21:10, app instalado, contas reais) encontrou 1 defeito contra a spec (R12), 5 desvios de padrão e 4 melhorias pequenas, todos com causa localizada no código. O objetivo desta spec é fechar esses pontos numa versão 0.26.1 sem mudar o desenho das telas nem as regras de negócio N1–N8 da spec de origem.
 
 ## Requisitos
 
@@ -42,4 +42,4 @@ O teste navegado de 23/11/2026 (20:40–21:10, app instalado, contas reais) enco
 1. Smoke: novo check `triagem.pausado` (tarefa `enabled=false` → `[data-triagem-vazio="sem-agente"]` com `data-triagem-vazio-acao="abrir"`; clique leva a Automações); check `triagem.manualGrupo` (`runNow` num grupo com `grupos=false` → `{ok:false,error:'grupos'}`, nenhuma run); `triagem.manual` passa a conferir `prompt` terminando em "· Triar agora"; `notificacoes`: foco por teclado na linha de e-mail deixa `[data-notificacao-lida]` com opacidade 1.
 2. Testes unitários: `cortarMotivo` (corte em palavra, "…", ≤160), `startTask` recusa `whatsapp-message`, `runNow` recusa grupo, prompt manual.
 3. Gate completo verde; auditoria dos prints `whatsapp-triagem-vazio-*`, `automacoes-tarefa-whatsapp-*` (sem Saída/e-mail) e `notificacoes-*`.
-4. Teste navegado curto na 0.25.1 instalada (sessão nova): os 9 pontos acima mais o caminho "Abrir Automações" do estado pausado.
+4. Teste navegado curto na 0.26.1 instalada (sessão nova): os 9 pontos acima mais o caminho "Abrir Automações" do estado pausado.

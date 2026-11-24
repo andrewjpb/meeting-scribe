@@ -1,4 +1,4 @@
-# Contrato 171 — Correções do teste navegado da triagem (0.25.1)
+# Contrato 171 — Correções do teste navegado da triagem (0.26.1)
 
 Feature: notificacoes-triagem-correcoes  ·  Wave: 1  ·  Depende de: — (base `8b55751`)
 

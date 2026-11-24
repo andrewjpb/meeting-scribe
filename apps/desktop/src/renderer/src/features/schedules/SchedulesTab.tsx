@@ -188,10 +188,13 @@ function TaskRow({ task, agentName, onEdit, onDuplicate }: { task: ScheduledTask
       </td>
       <td className="py-0.5">
         <div className="-mr-2 flex flex-wrap justify-end gap-1">
-          <button type="button" data-action="task-run-now" onClick={() => void runNow()} className={QUIET_BUTTON}>
-            <Icon icon={Play} size={14} />
-            Rodar agora
-          </button>
+          {/* Contrato 171 (C4): a triagem roda por conversa, pelo motor dela; sem "Rodar agora". */}
+          {task.schedule.kind !== 'whatsapp-message' && (
+            <button type="button" data-action="task-run-now" onClick={() => void runNow()} className={QUIET_BUTTON}>
+              <Icon icon={Play} size={14} />
+              Rodar agora
+            </button>
+          )}
           <button type="button" data-action="task-edit" onClick={onEdit} className={QUIET_BUTTON}>
             <Icon icon={Pencil} size={14} />
             Editar

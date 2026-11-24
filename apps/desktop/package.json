@@ -1,7 +1,7 @@
 {
   "name": "@meeting-scribe/desktop",
   "productName": "Meeting Scribe",
-  "version": "0.26.0",
+  "version": "0.26.1",
   "private": true,
   "license": "GPL-3.0-or-later",
   "description": "App desktop do Meeting Scribe (Electron + React)",

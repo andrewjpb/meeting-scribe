@@ -1004,13 +1004,18 @@ function AtendimentoPauseBar() {
 
 /**
  * Contrato 162 (R12): a aba Urgentes, Pessoal ou Profissional sem conversa. Desligada em Configurações > sem agente de
- * triagem ativo > vazia (a ordem do `status.motivo`); ainda sem o status, só a frase.
+ * triagem ativo > vazia (a ordem do `status.motivo`); ainda sem o status, só a frase. Contrato 171 (C1): a tarefa
+ * pausada conta como sem agente ativo, e com a tarefa existente o botão abre Automações em vez de criar outra.
  */
 function TriagemVazia({ status }: { status: TriagemStatus | null }) {
   const navigate = useNavigate()
   const [creating, setCreating] = useState(false)
   const [failure, setFailure] = useState<string | null>(null)
-  const motivo = status?.motivo === 'desligado' ? 'desligado' : status?.motivo === 'sem-agente' ? 'sem-agente' : 'vazio'
+  const motivo = status?.motivo === 'desligado' ? 'desligado' : status?.motivo === 'sem-agente' || status?.motivo === 'pausado' ? 'sem-agente' : 'vazio'
+  const abrirAutomacoes = (): void => {
+    useAutomations.getState().setTab('tarefas')
+    void navigate(ROUTE_PATHS.automacoes)
+  }
   const criar = (): void => {
     if (creating) return
     setCreating(true)
@@ -1025,8 +1030,7 @@ function TriagemVazia({ status }: { status: TriagemStatus | null }) {
             setFailure('Não foi possível criar o agente de triagem.')
             return
           }
-          useAutomations.getState().setTab('tarefas')
-          void navigate(ROUTE_PATHS.automacoes)
+          abrirAutomacoes()
         },
         () => {
           setCreating(false)
@@ -1052,11 +1056,17 @@ function TriagemVazia({ status }: { status: TriagemStatus | null }) {
     )
   }
   return (
-    <div data-triagem-vazio="sem-agente" className="flex flex-col items-start gap-3 px-2 pt-1">
+    <div data-triagem-vazio="sem-agente" data-triagem-vazio-acao={status.tarefaId ? 'abrir' : 'criar'} className="flex flex-col items-start gap-3 px-2 pt-1">
       <p className="text-12 text-text-muted">Nenhum agente de triagem ativo. Um agente das Automações etiqueta cada conversa que recebe mensagem.</p>
-      <Button action="triagem-criar" icon={Plus} data={{ 'data-triagem-criar': '' }} disabled={creating} onClick={criar}>
-        Criar agente de triagem
-      </Button>
+      {status.tarefaId ? (
+        <Button action="triagem-abrir-automacoes" variant="secondary" icon={Bot} data={{ 'data-triagem-abrir-automacoes': '' }} onClick={abrirAutomacoes}>
+          Abrir Automações
+        </Button>
+      ) : (
+        <Button action="triagem-criar" icon={Plus} data={{ 'data-triagem-criar': '' }} disabled={creating} onClick={criar}>
+          Criar agente de triagem
+        </Button>
+      )}
       {failure && (
         <p role="alert" className="text-12 text-rec">
           {failure}

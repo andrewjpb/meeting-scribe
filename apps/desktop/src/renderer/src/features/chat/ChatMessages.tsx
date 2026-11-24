@@ -250,14 +250,14 @@ function AgentActions({ missing }: { missing: boolean }) {
   )
 }
 
-/** Cabeçalho da resposta: "Claude" e o horário; no cartão em curso, o quadrado do logo pulsando (contrato 38). */
-function AssistantHeader({ at, pulse = false }: { at: string; pulse?: boolean }) {
+/** Cabeçalho da resposta: "Claude" (ou o agente da execução, contrato 171) e o horário; no cartão em curso, o quadrado do logo pulsando (contrato 38). */
+function AssistantHeader({ at, pulse = false, author = 'Claude' }: { at: string; pulse?: boolean; author?: string }) {
   const date = at ? new Date(at) : null
   return (
     <p className="flex items-baseline gap-2">
       {/* Parado com movimento reduzido (regra de tokens.css). */}
       {pulse && <span aria-hidden="true" className="chat-live-pulse size-1.5 shrink-0 self-center bg-accent" />}
-      <span className="text-13 font-bold text-title">Claude</span>
+      <span className="text-13 font-bold text-title">{author}</span>
       {date && !Number.isNaN(date.getTime()) && <time className="text-12 text-text-faint tabular">{timeLabel(date)}</time>}
     </p>
   )
@@ -274,10 +274,12 @@ interface AssistantMessageProps {
   index?: number | undefined
   /** Contrato 38: cartão (Assistente). */
   card?: boolean | undefined
+  /** Contrato 171 (C9): o nome no cabeçalho; no detalhe da execução, o do agente. */
+  author?: string | undefined
 }
 
 /** Resposta gravada: cabeçalho, raciocínio e passos (fechado), o texto, o erro, o rodapé e as ações. */
-export function AssistantMessage({ message, meetings, onCopy, onRedo, chatId = null, index, card = false }: AssistantMessageProps) {
+export function AssistantMessage({ message, meetings, onCopy, onRedo, chatId = null, index, card = false, author = 'Claude' }: AssistantMessageProps) {
   const agentLabel = useAgentLabel()
   const [copied, setCopied] = useState(false)
   const copy = (): void => {
@@ -289,7 +291,7 @@ export function AssistantMessage({ message, meetings, onCopy, onRedo, chatId = n
   }
   return (
     <li data-chat-message="assistant" data-chat-error={message.error} className={`flex flex-col gap-2 ${card ? CARD : ''}`}>
-      <AssistantHeader at={message.at} />
+      <AssistantHeader at={message.at} author={author} />
       <Reasoning steps={message.steps ?? []} thinking={message.thinking ?? ''} denied={message.denied ?? 0} plan={message.plan ?? []} live={false} />
       {message.text && (
         <div className="max-w-[72ch] text-14 text-text select-text">

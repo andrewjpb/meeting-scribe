@@ -2327,6 +2327,9 @@ function createAppServices(userData: string): AppServices {
     statusChanged: (status) => {
       if (!lockService?.isLocked()) broadcast(appWindows(), 'scribe:triagem-status-changed', status)
     },
+    done: (chatId, ok) => {
+      if (!lockService?.isLocked()) broadcast(appWindows(), 'scribe:triagem-done', { chatId, ok })
+    },
     locked: () => lockService?.isLocked() ?? false,
     runs: { hojeTrigger: (trigger, exceptError) => automations.hojeTrigger(trigger, exceptError) },
     timeZone,

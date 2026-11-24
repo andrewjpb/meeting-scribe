@@ -152,9 +152,12 @@ function RunDetail({ runId, meetings }: { runId: string; meetings: ChatMeetings 
     <div data-run-detail={shown.id} className="flex max-w-[820px] flex-col gap-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
         {back}
-        <Button action="run-again" variant="secondary" icon={RotateCcw} onClick={() => void again()} disabled={shown.status === 'running'}>
-          Rodar de novo
-        </Button>
+        {/* Contrato 171 (C4): a execução da triagem não se repete daqui (o main também recusa). */}
+        {shown.trigger !== 'whatsapp' && (
+          <Button action="run-again" variant="secondary" icon={RotateCcw} onClick={() => void again()} disabled={shown.status === 'running'}>
+            Rodar de novo
+          </Button>
+        )}
       </div>
       <header className="flex flex-col gap-1">
         <h2 className="text-15 font-bold text-title">{runTitle(shown)}</h2>

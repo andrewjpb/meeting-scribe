@@ -96,6 +96,8 @@ describe('buildTriagemPrompt (contrato 161, CA1)', () => {
     expect(systemPrompt).toContain('"ambito"')
     expect(systemPrompt).toContain('"motivo"')
     expect(systemPrompt).toContain('JSON')
+    // Contrato 171 (C6): o motivo pedido curto; o corte em 160 é a rede.
+    expect(systemPrompt).toContain('"motivo": "por que, em até 120 caracteres"')
     expect(systemPrompt).not.toContain('TEXTO-DA-CONVERSA')
     expect(input).toContain('TEXTO-DA-CONVERSA')
   })
